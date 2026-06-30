@@ -51,15 +51,12 @@ class Settings(BaseSettings):
 
     @property
     def wake_word_list(self) -> list[str]:
+        """Global fallback wake words (per-avatar wake_words usually win)."""
         return [w.strip().lower() for w in self.wake_words.split(",") if w.strip()]
 
     @property
-    def vector_store_path(self) -> Path:
-        return REPO_ROOT / "backend" / "data" / "vector_store.json"
-
-    @property
-    def knowledge_dir(self) -> Path:
-        return REPO_ROOT / "knowledge"
+    def avatars_dir(self) -> Path:
+        return REPO_ROOT / "avatars"
 
 
 settings = Settings()

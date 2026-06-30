@@ -14,6 +14,7 @@ import json
 
 from anthropic import Anthropic
 
+from .avatars import Avatar
 from .config import settings
 from .rag import retrieve, Retrieved
 
@@ -36,10 +37,12 @@ def _format_context(chunks: list[Retrieved]) -> str:
     return "\n\n".join(blocks)
 
 
-ANSWER_SYSTEM = """You are a callable AI process expert that has been invited \
-into a live work meeting. You speak ONLY from the company process documents \
-provided as context. You are concise: this is spoken aloud, so answer in 1-3 \
-short sentences a person can absorb by ear.
+ANSWER_SYSTEM = """{persona}
+
+You are a callable AI process expert that has been invited into a live work \
+meeting. You speak ONLY from the company process documents provided as context. \
+You are concise: this is spoken aloud, so answer in 1-3 short sentences a person \
+can absorb by ear.
 
 Rules:
 - Use ONLY the provided context. Do not invent steps, owners, or approvals.
@@ -56,15 +59,15 @@ Return ONLY a JSON object:
 }"""
 
 
-def answer_question(question: str, *, k: int = 4) -> dict:
-    """Retrieve + answer. Returns dict with answer/citations/confidence."""
-    chunks = retrieve(question, k=k)
+def answer_question(avatar: Avatar, question: str, *, k: int = 4) -> dict:
+    """Retrieve + answer for one avatar. Returns answer/citations/confidence."""
+    chunks = retrieve(avatar, question, k=k)
     context = _format_context(chunks)
 
     msg = _anthropic().messages.create(
         model=settings.brain_model,
         max_tokens=400,
-        system=ANSWER_SYSTEM,
+        system=ANSWER_SYSTEM.format(persona=avatar.persona_prompt),
         messages=[
             {
                 "role": "user",
@@ -107,10 +110,12 @@ Return ONLY a JSON object:
 }"""
 
 
-def post_meeting(transcript_text: str, *, k: int = 6) -> dict:
+def post_meeting(avatar: Avatar, transcript_text: str, *, k: int = 6) -> dict:
     """Summary + gap checklist + draft follow-up email for a finished meeting."""
     # Ground gap-detection in the actual process docs.
-    chunks = retrieve(transcript_text[-3000:] or "process steps owners approvals", k=k)
+    chunks = retrieve(
+        avatar, transcript_text[-3000:] or "process steps owners approvals", k=k
+    )
     context = _format_context(chunks)
 
     msg = _anthropic().messages.create(

@@ -1,14 +1,14 @@
-"""Minimal, transparent RAG over company process docs.
+"""Minimal, transparent RAG — per avatar.
 
-Indexing: chunk each markdown file under knowledge/, embed the chunks, store
-vectors + metadata in a local JSON file.
+Each avatar has its own knowledge folder and its own index, so avatars never
+mix knowledge. Indexing chunks markdown by heading, embeds the chunks, and
+stores vectors + metadata in `avatars/<id>/.index.json`.
 
-Retrieval: embed the query, cosine-rank chunks, return the top-k with their
+Retrieval embeds the query, cosine-ranks chunks, and returns the top-k with
 source filename + section so answers can cite them.
 
-This is deliberately dependency-light (numpy + a JSON file) so the trust-
-critical retrieval path is fully inspectable. For production scale, swap this
-module for Qdrant / pgvector behind the same `retrieve()` signature.
+Dependency-light on purpose (numpy + JSON) so the trust-critical retrieval path
+is fully inspectable. Swap for Qdrant / pgvector behind `retrieve()` for scale.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from dataclasses import dataclass, asdict
 
 import numpy as np
 
+from .avatars import Avatar
 from .config import settings
 from .embeddings import embed
 
@@ -50,19 +51,18 @@ def _chunk_markdown(text: str, source: str) -> list[Chunk]:
     return chunks
 
 
-def build_index() -> int:
-    """(Re)build the vector store from knowledge/*.md. Returns chunk count."""
+def build_index(avatar: Avatar) -> int:
+    """(Re)build one avatar's vector store from its knowledge/*.md. Returns count."""
     all_chunks: list[Chunk] = []
-    for path in sorted(settings.knowledge_dir.glob("*.md")):
+    for path in sorted(avatar.knowledge_dir.glob("*.md")):
         all_chunks.extend(_chunk_markdown(path.read_text(), path.name))
 
     if not all_chunks:
-        raise RuntimeError(f"No .md docs found in {settings.knowledge_dir}")
+        raise RuntimeError(f"No .md docs found in {avatar.knowledge_dir}")
 
     vectors = embed([c.text for c in all_chunks], input_type="document")
 
-    settings.vector_store_path.parent.mkdir(parents=True, exist_ok=True)
-    settings.vector_store_path.write_text(
+    avatar.index_path.write_text(
         json.dumps(
             {
                 "model": settings.embedding_model,
@@ -71,23 +71,25 @@ def build_index() -> int:
             }
         )
     )
+    _CACHE.pop(avatar.id, None)  # invalidate
     return len(all_chunks)
 
 
-_CACHE: dict | None = None
+# avatar.id -> loaded store
+_CACHE: dict[str, dict] = {}
 
 
-def _load() -> dict:
-    global _CACHE
-    if _CACHE is None:
-        if not settings.vector_store_path.exists():
+def _load(avatar: Avatar) -> dict:
+    if avatar.id not in _CACHE:
+        if not avatar.index_path.exists():
             raise RuntimeError(
-                "Vector store missing — run `python backend/scripts/ingest.py` first."
+                f"No index for avatar '{avatar.id}'. "
+                "Run `python backend/scripts/ingest.py` first."
             )
-        raw = json.loads(settings.vector_store_path.read_text())
+        raw = json.loads(avatar.index_path.read_text())
         raw["matrix"] = np.array(raw["vectors"], dtype=np.float32)
-        _CACHE = raw
-    return _CACHE
+        _CACHE[avatar.id] = raw
+    return _CACHE[avatar.id]
 
 
 @dataclass
@@ -98,12 +100,11 @@ class Retrieved:
     score: float
 
 
-def retrieve(query: str, k: int = 4) -> list[Retrieved]:
-    store = _load()
+def retrieve(avatar: Avatar, query: str, k: int = 4) -> list[Retrieved]:
+    store = _load(avatar)
     qv = np.array(embed([query], input_type="query")[0], dtype=np.float32)
 
     matrix = store["matrix"]
-    # Cosine similarity.
     denom = np.linalg.norm(matrix, axis=1) * np.linalg.norm(qv) + 1e-9
     scores = matrix @ qv / denom
     top = np.argsort(-scores)[:k]

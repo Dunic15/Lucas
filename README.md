@@ -39,6 +39,46 @@ command via `echo`. That keeps the avatar vendor swappable — if Tavus changes
 pricing or you prefer Anam/HeyGen, only `tavus_client.py` + `avatar.html`
 change.
 
+## Project layout
+
+```
+Lucas/
+├── avatars/                  ← THE EDITABLE PART (no code to add an avatar)
+│   ├── README.md             ← "how to add an avatar in 3 steps"
+│   └── sofia/
+│       ├── avatar.yaml       ← name, wake words, persona, face, voice
+│       └── knowledge/        ← markdown process docs Sofia answers from
+├── backend/
+│   ├── app/
+│   │   ├── main.py           ← API routes + the meeting flow (wiring)
+│   │   ├── avatars.py        ← loads avatars/<id>/ into an Avatar object
+│   │   ├── decision.py       ← when-to-speak gate (wake word, confidence)
+│   │   ├── brain.py          ← Claude: grounded answers + post-meeting
+│   │   ├── rag.py            ← retrieval over an avatar's knowledge
+│   │   ├── recall_client.py  ← Recall.ai (ears + camera)
+│   │   ├── tavus_client.py   ← Tavus face + ElevenLabs voice
+│   │   ├── embeddings.py     ← Voyage embeddings (swappable)
+│   │   ├── store.py          ← in-memory session state
+│   │   └── config.py         ← all env settings in one place
+│   ├── scripts/ingest.py     ← build the RAG index
+│   └── tests/                ← pure-logic tests (no keys needed)
+├── frontend/avatar.html      ← the page Recall renders as the bot's camera
+├── .env.example              ← copy to .env, add keys
+└── requirements.txt
+```
+
+**Where do I change X?**
+
+| I want to… | Edit |
+|---|---|
+| Add / change an avatar's behaviour | `avatars/<id>/avatar.yaml` |
+| Add process knowledge | drop `.md` in `avatars/<id>/knowledge/`, re-run ingest |
+| Add a whole new avatar | copy `avatars/sofia/` → see `avatars/README.md` |
+| Tune when it speaks | `backend/app/decision.py` (or per-avatar yaml) |
+| Change how answers are phrased | `ANSWER_SYSTEM` in `backend/app/brain.py` |
+| Swap the avatar/voice vendor | `backend/app/tavus_client.py` + `frontend/avatar.html` |
+| Add a key / setting | `.env` + `backend/app/config.py` |
+
 | Layer | Tool | Where |
 |---|---|---|
 | Meeting entry + transcript (ears) | Recall.ai | `backend/app/recall_client.py` |
@@ -47,6 +87,7 @@ change.
 | Reasoning (brain) | Claude | `backend/app/brain.py` |
 | Knowledge retrieval (RAG) | Voyage embeddings + local store | `backend/app/rag.py` |
 | When-to-speak gate | — | `backend/app/decision.py` |
+| Avatar definitions (editable) | YAML + markdown | `avatars/<id>/` |
 
 ---
 
@@ -85,10 +126,10 @@ cp .env.example .env        # then fill in keys
 
 ### 2. Build the knowledge index (RAG)
 ```bash
-python backend/scripts/ingest.py
+python backend/scripts/ingest.py          # indexes every avatar
 ```
-This embeds `knowledge/*.md` into `backend/data/vector_store.json`. Edit /
-add process docs and re-run to refresh.
+This embeds each avatar's `knowledge/*.md` into `avatars/<id>/.index.json`.
+Edit / add process docs and re-run to refresh.
 
 ### 3. Start the backend
 ```bash
@@ -110,6 +151,7 @@ curl -X POST http://127.0.0.1:8000/sessions/start \
 # -> returns bot_id
 ```
 In the call, say: **"Sofia, what are we missing for this onboarding?"**
+(Call a different avatar with `"avatar_id": "<id>"` — see `avatars/README.md`.)
 
 ### 6. End + get the artifact
 ```bash

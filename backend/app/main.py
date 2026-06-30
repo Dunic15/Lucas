@@ -20,7 +20,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import store, recall_client, tavus_client
+from . import avatars, store, recall_client, tavus_client
 from .brain import answer_question, post_meeting
 from .config import settings
 from .decision import detect_wake, passes_confidence
@@ -37,20 +37,36 @@ def health() -> dict:
         "status": "ok",
         "active_sessions": len(store.all_sessions()),
         "brain_model": settings.brain_model,
-        "wake_words": settings.wake_word_list,
+        "avatars": avatars.list_ids(),
     }
+
+
+@app.get("/avatars")
+def list_avatars() -> dict:
+    """List installed avatars (one folder each under avatars/)."""
+    out = []
+    for aid in avatars.list_ids():
+        a = avatars.load(aid)
+        out.append({"id": a.id, "name": a.name, "role": a.role,
+                    "wake_words": a.wake_words})
+    return {"avatars": out}
 
 
 # ──────────────────────── session lifecycle ────────────────────────
 class StartRequest(BaseModel):
     meeting_url: str
+    avatar_id: str = "sofia"
 
 
 @app.post("/sessions/start")
 async def start_session(req: StartRequest) -> JSONResponse:
+    avatar = avatars.load(req.avatar_id)  # raises if unknown
+
     # 1. Avatar: persona (ElevenLabs voice) + live conversation (Daily room).
-    persona_id = await run_in_threadpool(tavus_client.ensure_persona)
-    convo = await run_in_threadpool(tavus_client.create_conversation, persona_id)
+    persona_id = await run_in_threadpool(tavus_client.create_persona, avatar)
+    convo = await run_in_threadpool(
+        tavus_client.create_conversation, avatar, persona_id
+    )
 
     # 2. Avatar page URL the Recall bot will render as its camera.
     #    The page keys its websocket on conversation_id (the only id it knows
@@ -68,7 +84,9 @@ async def start_session(req: StartRequest) -> JSONResponse:
         recall_client.create_bot, req.meeting_url, avatar_url
     )
 
-    session = store.create(bot_id=bot["id"], meeting_url=req.meeting_url)
+    session = store.create(
+        bot_id=bot["id"], meeting_url=req.meeting_url, avatar_id=avatar.id
+    )
     session.tavus_conversation_id = convo["conversation_id"]
     session.tavus_conversation_url = convo["conversation_url"]
     store.register_conversation(convo["conversation_id"], bot["id"])
@@ -99,7 +117,8 @@ async def end_session(bot_id: str) -> JSONResponse:
 
     artifact: dict = {"summary": "", "checklist": [], "follow_up_email": {}}
     if transcript_text.strip():
-        artifact = await run_in_threadpool(post_meeting, transcript_text)
+        avatar = avatars.load(session.avatar_id)
+        artifact = await run_in_threadpool(post_meeting, avatar, transcript_text)
 
     store.remove(bot_id)
     return JSONResponse(artifact)
@@ -157,16 +176,17 @@ async def recall_webhook(request: Request) -> JSONResponse:
         return JSONResponse({"ok": True})
 
     session.add_utterance(speaker, text)
+    avatar = avatars.load(session.avatar_id)
 
     # ── when-to-speak gate ──
-    called, question = detect_wake(text)
+    called, question = detect_wake(avatar, text)
     if not called:
         return JSONResponse({"ok": True, "spoke": False, "reason": "not called"})
-    if session.in_cooldown(settings.speak_cooldown_seconds):
+    if session.in_cooldown(avatar.speak_cooldown_seconds):
         return JSONResponse({"ok": True, "spoke": False, "reason": "cooldown"})
 
-    result = await run_in_threadpool(answer_question, question or text)
-    if not passes_confidence(result):
+    result = await run_in_threadpool(answer_question, avatar, question or text)
+    if not passes_confidence(avatar, result):
         return JSONResponse(
             {"ok": True, "spoke": False, "reason": "low confidence", "result": result}
         )
