@@ -1,11 +1,12 @@
 """Avatar registry.
 
-An avatar is a folder under `avatars/<id>/` containing:
+Sofia is a folder under `avatars/sofia/` containing:
   - avatar.yaml   (the editable config)
   - knowledge/    (markdown process docs)
 
-This module turns that folder into an `Avatar` object the rest of the code
-uses. Adding an avatar = adding a folder. No code changes. See avatars/README.md.
+This module turns Sofia's folder into an `Avatar` object the rest of the code
+uses. It keeps the folder-based shape so a second agent can be added later
+without changing the meeting flow.
 """
 from __future__ import annotations
 
@@ -24,8 +25,9 @@ class Avatar:
     role: str
     wake_words: list[str]
     persona_prompt: str
-    tavus_replica_id: str
-    elevenlabs_voice_id: str
+    anam_avatar_id: str
+    anam_avatar_model: str
+    anam_voice_id: str
     min_confidence: float
     speak_cooldown_seconds: float
     dir: Path
@@ -62,10 +64,11 @@ def load(avatar_id: str) -> Avatar:
         role=raw.get("role", "AI Process Expert"),
         wake_words=wake,
         persona_prompt=(raw.get("persona_prompt") or "").strip(),
-        tavus_replica_id=_coalesce(raw.get("tavus_replica_id"), settings.tavus_replica_id),
-        elevenlabs_voice_id=_coalesce(
-            raw.get("elevenlabs_voice_id"), settings.elevenlabs_voice_id
+        anam_avatar_id=_coalesce(raw.get("anam_avatar_id"), settings.anam_avatar_id),
+        anam_avatar_model=_coalesce(
+            raw.get("anam_avatar_model"), settings.anam_avatar_model
         ),
+        anam_voice_id=_coalesce(raw.get("anam_voice_id"), settings.anam_voice_id),
         min_confidence=float(_coalesce(raw.get("min_confidence"), settings.min_confidence)),
         speak_cooldown_seconds=float(
             _coalesce(raw.get("speak_cooldown_seconds"), settings.speak_cooldown_seconds)

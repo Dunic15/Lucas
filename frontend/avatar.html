@@ -3,100 +3,411 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Sofia — AI Process Expert</title>
+  <title>Sofia -- AI Process Expert</title>
   <style>
-    html, body { margin: 0; height: 100%; background: #0b1020; overflow: hidden; }
-    #stage { position: fixed; inset: 0; }
-    #stage iframe { width: 100%; height: 100%; border: 0; }
-    #badge {
-      position: fixed; left: 16px; bottom: 16px; z-index: 10;
-      font: 600 14px/1.2 system-ui, sans-serif; color: #cfe0ff;
-      background: rgba(11,16,32,.6); padding: 8px 12px; border-radius: 999px;
-      backdrop-filter: blur(6px);
+    :root {
+      color-scheme: dark;
+      --bg: #090b0f;
+      --panel: rgba(9, 11, 15, .72);
+      --panel-strong: rgba(9, 11, 15, .88);
+      --line: rgba(216, 226, 240, .18);
+      --text: #edf5ff;
+      --muted: #9bb0c9;
+      --accent: #29d391;
+      --warn: #f7b955;
+      --error: #ff6f7d;
     }
-    #badge .dot { display:inline-block; width:8px; height:8px; border-radius:50%;
-      background:#3ad29f; margin-right:8px; vertical-align:middle; }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      overflow: hidden;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", sans-serif;
+    }
+
+    #stage {
+      position: fixed;
+      inset: 0;
+      background: linear-gradient(135deg, #090b0f 0%, #142018 52%, #090b0f 100%);
+    }
+
+    #avatar-video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #090b0f;
+      display: block;
+    }
+
+    #chrome {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    .pill {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 10px 32px rgba(0, 0, 0, .22);
+    }
+
+    .pill .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--warn);
+      box-shadow: 0 0 0 0 rgba(247, 185, 85, .3);
+    }
+
+    .pill[data-state="live"] .dot,
+    #badge[data-speaking="true"] .dot {
+      background: var(--accent);
+    }
+
+    .pill[data-state="error"] .dot {
+      background: var(--error);
+    }
+
+    #badge {
+      position: absolute;
+      left: 16px;
+      bottom: 16px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 38px;
+      max-width: min(420px, calc(100vw - 32px));
+      padding: 9px 13px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel);
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.15;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 10px 32px rgba(0, 0, 0, .22);
+    }
+
+    #badge .dot {
+      flex: 0 0 auto;
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: var(--muted);
+    }
+
+    #badge[data-speaking="true"] .dot {
+      animation: pulse 1s ease-in-out infinite;
+    }
+
+    #caption {
+      position: absolute;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%);
+      width: min(760px, calc(100vw - 32px));
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-strong);
+      color: var(--text);
+      text-align: center;
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.25;
+      text-wrap: balance;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 12px 36px rgba(0, 0, 0, .32);
+    }
+
+    #caption[data-empty="true"] {
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    #empty {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      padding: 24px;
+      color: var(--text);
+      text-align: center;
+    }
+
+    #empty .panel {
+      width: min(520px, 100%);
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-strong);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, .3);
+    }
+
+    #empty h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    #empty p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    body.missing #stage,
+    body.missing #chrome {
+      display: none;
+    }
+
+    body.missing #empty {
+      display: grid;
+    }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(41, 211, 145, .42); }
+      70% { box-shadow: 0 0 0 9px rgba(41, 211, 145, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(41, 211, 145, 0); }
+    }
+
+    @media (max-width: 1100px) {
+      #badge {
+        max-width: calc(50vw - 18px);
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+
+      #caption {
+        bottom: 68px;
+      }
+    }
+
+    @media (max-width: 720px) {
+      #caption {
+        font-size: 15px;
+      }
+    }
   </style>
 </head>
 <body>
   <!--
     This page is what the Recall.ai bot renders as its camera in the meeting.
-    It embeds the Tavus conversation (the avatar's face, voiced by ElevenLabs)
-    and opens a websocket to our backend. When the backend's "brain" decides
-    the avatar should speak, it sends {type:"speak", text}; we forward that to
-    Tavus as an `echo` interaction so the avatar speaks those exact words.
-
-    INTEGRATION SEAM TO VERIFY against current Tavus + Daily docs:
-      - the echo app-message schema (message_type/event_type/properties.text)
-      - that Recall captures the embedded Daily iframe's audio.
-    Both are isolated in speak() below — adjust there if a vendor changes.
+    It opens an Anam WebRTC stream and a websocket to our backend. When the
+    backend sends {type:"speak", text}, speak(text) calls anamClient.talk(text).
   -->
-  <div id="stage"></div>
-  <div id="badge"><span class="dot"></span>Sofia · AI Process Expert</div>
+  <div id="stage">
+    <video id="avatar-video" autoplay playsinline></video>
+  </div>
 
-  <!-- Pinned version to limit supply-chain surface. For production, add a
-       verified Subresource Integrity hash: integrity="sha384-..." -->
-  <script src="https://unpkg.com/@daily-co/daily-js@0.72.2/dist/daily-iframe.js"
-          crossorigin="anonymous"></script>
-  <script>
+  <div id="chrome">
+    <div id="status-pill" class="pill" data-state="connecting">
+      <span class="dot" aria-hidden="true"></span>
+      <span id="status-text">Connecting...</span>
+    </div>
+    <div id="caption" data-empty="true">Waiting for Sofia</div>
+    <div id="badge" data-speaking="false">
+      <span class="dot" aria-hidden="true"></span>
+      <span>Sofia · AI Process Expert</span>
+    </div>
+  </div>
+
+  <div id="empty">
+    <div class="panel">
+      <h1>Missing avatar session</h1>
+      <p>Start a backend session first so Recall can render this page with an Anam session id.</p>
+    </div>
+  </div>
+
+  <script type="module">
+    import { createClient, AnamEvent } from "https://esm.sh/@anam-ai/js-sdk@4.17.1";
+
     const params = new URLSearchParams(location.search);
-    const conversationUrl = params.get("conversation_url");
-    const conversationId  = params.get("conversation_id");
+    const anamSessionId = params.get("anam_session_id");
 
-    let callFrame = null;
+    const videoEl = document.getElementById("avatar-video");
+    const statusPill = document.getElementById("status-pill");
+    const statusText = document.getElementById("status-text");
+    const caption = document.getElementById("caption");
+    const badge = document.getElementById("badge");
 
-    function joinAvatarRoom() {
-      callFrame = window.DailyIframe.createFrame(
-        document.getElementById("stage"),
-        {
-          showLeaveButton: false,
-          showFullscreenButton: false,
-          iframeStyle: { width: "100%", height: "100%", border: "0" },
-        }
-      );
-      callFrame.join({ url: conversationUrl });
+    let anamClient = null;
+    let ws = null;
+    let heartbeatId = null;
+    let reconnectId = null;
+    let speakingId = null;
+    let anamLive = false;
+    let backendLive = false;
+
+    function setStatus(text, state = "connecting") {
+      statusText.textContent = text;
+      statusPill.dataset.state = state;
     }
 
-    // Make the Tavus avatar say `text` via an echo interaction.
-    function speak(text) {
-      if (!callFrame) return;
-      callFrame.sendAppMessage(
-        {
-          message_type: "conversation",
-          event_type: "conversation.echo",
-          conversation_id: conversationId,
-          properties: { text },
-        },
-        "*"
-      );
+    function refreshStatus() {
+      if (anamLive && backendLive) {
+        setStatus("Live", "live");
+      } else if (anamLive) {
+        setStatus("Connecting backend...", "connecting");
+      } else {
+        setStatus("Connecting...", "connecting");
+      }
+    }
+
+    function setCaption(text) {
+      caption.textContent = text || "Waiting for Sofia";
+      caption.dataset.empty = text ? "false" : "true";
+    }
+
+    function markSpeaking(text) {
+      badge.dataset.speaking = "true";
+      clearTimeout(speakingId);
+      const duration = Math.max(1800, Math.min(9000, text.length * 55));
+      speakingId = setTimeout(() => {
+        badge.dataset.speaking = "false";
+      }, duration);
+    }
+
+    function renderLine(text) {
+      setCaption(text);
+      markSpeaking(text);
+    }
+
+    // Manual caption test: after the page loads, run this in DevTools:
+    // window.__testSpeak("Sofia, this is a caption test.");
+    window.__testSpeak = (text) => renderLine(text || "Sofia, this is a caption test.");
+
+    async function speak(text) {
+      renderLine(text);
+      if (!anamClient || typeof anamClient.talk !== "function") return;
+      await anamClient.talk(text);
+    }
+
+    function addAnamListener(eventName, handler) {
+      if (eventName && anamClient?.addListener) {
+        anamClient.addListener(eventName, handler);
+      }
+    }
+
+    async function startAnam() {
+      const response = await fetch(`/anam/session-token/${encodeURIComponent(anamSessionId)}`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || "Unable to create Anam session token");
+      }
+
+      const { sessionToken } = await response.json();
+      anamClient = createClient(sessionToken, { disableInputAudio: true });
+
+      addAnamListener(AnamEvent.CONNECTION_ESTABLISHED, () => {
+        anamLive = true;
+        refreshStatus();
+      });
+      addAnamListener(AnamEvent.SESSION_READY, () => {
+        anamLive = true;
+        refreshStatus();
+      });
+      addAnamListener(AnamEvent.CONNECTION_CLOSED, () => {
+        anamLive = false;
+        refreshStatus();
+      });
+
+      await anamClient.streamToVideoElement("avatar-video");
+      anamLive = true;
+      videoEl.muted = false;
+      refreshStatus();
     }
 
     function connectBackend() {
       const wsProto = location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(`${wsProto}://${location.host}/ws/${conversationId}`);
+      ws = new WebSocket(`${wsProto}://${location.host}/ws/${anamSessionId}`);
 
-      ws.onopen = () => setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) ws.send("ping");
-      }, 15000);
-
-      ws.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(ev.data);
-          if (msg.type === "speak" && msg.text) speak(msg.text);
-        } catch (_) { /* ignore non-JSON */ }
+      ws.onopen = () => {
+        backendLive = true;
+        refreshStatus();
+        clearInterval(heartbeatId);
+        heartbeatId = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) ws.send("ping");
+        }, 15000);
       };
 
-      // Reconnect if the socket drops mid-meeting.
-      ws.onclose = () => setTimeout(connectBackend, 2000);
+      ws.onmessage = async (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === "speak" && msg.text) await speak(msg.text);
+        } catch (_) {
+          /* ignore non-JSON websocket messages */
+        }
+      };
+
+      ws.onerror = () => {
+        backendLive = false;
+        refreshStatus();
+      };
+
+      ws.onclose = () => {
+        backendLive = false;
+        clearInterval(heartbeatId);
+        refreshStatus();
+        clearTimeout(reconnectId);
+        reconnectId = setTimeout(connectBackend, 2000);
+      };
     }
 
-    if (!conversationUrl || !conversationId) {
-      document.getElementById("badge").textContent =
-        "Missing conversation params";
-    } else {
-      joinAvatarRoom();
-      connectBackend();
+    async function boot() {
+      if (!anamSessionId) {
+        document.body.classList.add("missing");
+        return;
+      }
+
+      try {
+        await startAnam();
+        connectBackend();
+      } catch (error) {
+        console.error("Avatar page failed to start:", error);
+        setStatus("Connection failed", "error");
+        setCaption(error.message || "Unable to start avatar");
+      }
     }
+
+    window.addEventListener("pagehide", () => {
+      clearInterval(heartbeatId);
+      clearTimeout(reconnectId);
+      if (ws) ws.close();
+      if (anamClient) anamClient.stopStreaming();
+    });
+
+    boot();
   </script>
 </body>
 </html>

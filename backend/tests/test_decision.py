@@ -20,8 +20,9 @@ def _avatar(**over) -> Avatar:
         role="AI Process Expert",
         wake_words=["sofia"],
         persona_prompt="",
-        tavus_replica_id="r1",
-        elevenlabs_voice_id="v1",
+        anam_avatar_id="a1",
+        anam_avatar_model="cara-4",
+        anam_voice_id="v1",
         min_confidence=0.55,
         speak_cooldown_seconds=8.0,
         dir=Path("."),
@@ -49,7 +50,7 @@ def test_wake_word_must_be_whole_token():
 
 
 def test_custom_wake_words():
-    called, _ = detect_wake(_avatar(wake_words=["marcus", "it expert"]), "hey Marcus?")
+    called, _ = detect_wake(_avatar(wake_words=["expert", "process lead"]), "hey expert?")
     assert called is True
 
 

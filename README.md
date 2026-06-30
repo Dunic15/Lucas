@@ -1,6 +1,6 @@
-# Callable AI Process Avatars
+# Callable AI Process Avatar
 
-> We turn company processes into real-time AI avatars that can join meetings and guide teams live.
+> We turn company processes into a real-time AI avatar that can join meetings and guide teams live.
 
 **Sofia** is the first avatar: an AI Process Expert you can *call into* a Zoom /
 Meet / Teams meeting. She listens, and when addressed by name she answers from
@@ -20,43 +20,42 @@ Meeting (Zoom/Meet/Teams)
    │
    │  Recall.ai bot joins ──────────────► renders /avatar as its camera
    │        │                                     │
-   │        │ transcript.data (webhook)           │ embeds Tavus conversation
+   │        │ transcript.data (webhook)           │ opens Anam WebRTC video
    ▼        ▼                                     ▼  (the FACE)
-        backend  ◄───────────────────────────  Tavus replica
-        (the BRAIN)                             voiced by ElevenLabs (the VOICE)
+        backend  ◄───────────────────────────  Anam avatar
+        (the BRAIN)                             Anam voice (the VOICE)
         ├─ when-to-speak gate (wake word + cooldown + confidence)
         ├─ RAG over knowledge/*.md  (Voyage embeddings → cosine retrieval)
         ├─ Claude: grounded, cited answer
-        └─ on "speak" ─► websocket ─► avatar page ─► Tavus echo ─► avatar talks
+        └─ on "speak" ─► websocket ─► avatar page ─► Anam talk() ─► avatar talks
    │
    ▼
    POST /sessions/{id}/end ─► Claude: summary + gap checklist + follow-up email
 ```
 
 **Separation of concerns (the moat-preserving choice):** the *brain* lives in
-our backend, driven by Recall's transcript. Tavus is only a *mouth + face* we
-command via `echo`. That keeps the avatar vendor swappable — if Tavus changes
-pricing or you prefer Anam/HeyGen, only `tavus_client.py` + `avatar.html`
-change.
+our backend, driven by Recall's transcript. Anam is the realtime *mouth + face*
+we command with `talk(text)`. That keeps the AI process logic in our code while
+letting Anam handle photorealistic video, voice, and lip sync.
 
 ## Project layout
 
 ```
 Lucas/
-├── avatars/                  ← THE EDITABLE PART (no code to add an avatar)
-│   ├── README.md             ← "how to add an avatar in 3 steps"
+├── avatars/                  ← Sofia's editable agent config + knowledge
+│   ├── README.md             ← how to edit Sofia
 │   └── sofia/
 │       ├── avatar.yaml       ← name, wake words, persona, face, voice
 │       └── knowledge/        ← markdown process docs Sofia answers from
 ├── backend/
 │   ├── app/
 │   │   ├── main.py           ← API routes + the meeting flow (wiring)
-│   │   ├── avatars.py        ← loads avatars/<id>/ into an Avatar object
+│   │   ├── avatars.py        ← loads avatars/sofia/ into an Avatar object
 │   │   ├── decision.py       ← when-to-speak gate (wake word, confidence)
 │   │   ├── brain.py          ← Claude: grounded answers + post-meeting
 │   │   ├── rag.py            ← retrieval over an avatar's knowledge
 │   │   ├── recall_client.py  ← Recall.ai (ears + camera)
-│   │   ├── tavus_client.py   ← Tavus face + ElevenLabs voice
+│   │   ├── anam_client.py    ← Anam session-token client
 │   │   ├── embeddings.py     ← Voyage embeddings (swappable)
 │   │   ├── store.py          ← in-memory session state
 │   │   └── config.py         ← all env settings in one place
@@ -71,23 +70,21 @@ Lucas/
 
 | I want to… | Edit |
 |---|---|
-| Add / change an avatar's behaviour | `avatars/<id>/avatar.yaml` |
-| Add process knowledge | drop `.md` in `avatars/<id>/knowledge/`, re-run ingest |
-| Add a whole new avatar | copy `avatars/sofia/` → see `avatars/README.md` |
+| Change Sofia's behaviour | `avatars/sofia/avatar.yaml` |
+| Add process knowledge | drop `.md` in `avatars/sofia/knowledge/`, re-run ingest |
 | Tune when it speaks | `backend/app/decision.py` (or per-avatar yaml) |
 | Change how answers are phrased | `ANSWER_SYSTEM` in `backend/app/brain.py` |
-| Swap the avatar/voice vendor | `backend/app/tavus_client.py` + `frontend/avatar.html` |
+| Change Anam face/voice settings | `.env` or `avatars/sofia/avatar.yaml` |
 | Add a key / setting | `.env` + `backend/app/config.py` |
 
 | Layer | Tool | Where |
 |---|---|---|
 | Meeting entry + transcript (ears) | Recall.ai | `backend/app/recall_client.py` |
-| Face | Tavus replica | `backend/app/tavus_client.py`, `frontend/avatar.html` |
-| Voice | ElevenLabs | configured as Tavus TTS layer in `tavus_client.py` |
+| Face + voice | Anam | `backend/app/anam_client.py`, `frontend/avatar.html` |
 | Reasoning (brain) | Claude | `backend/app/brain.py` |
 | Knowledge retrieval (RAG) | Voyage embeddings + local store | `backend/app/rag.py` |
 | When-to-speak gate | — | `backend/app/decision.py` |
-| Avatar definitions (editable) | YAML + markdown | `avatars/<id>/` |
+| Agent definition (editable) | YAML + markdown | `avatars/sofia/` |
 
 ---
 
@@ -105,12 +102,12 @@ This follows the staged plan. Honest state today:
 | 7 | Controlled proactive intervention | **Not built yet** — deliberate next step |
 
 **Integration seams that need a live run to confirm** (marked in-code):
-- the Tavus `echo` app-message schema and that Recall captures the embedded
-  Daily iframe audio (`frontend/avatar.html → speak()`);
+- Anam session-token creation and Recall capture of the Anam video/audio stream
+  (`frontend/avatar.html -> speak() -> anamClient.talk(text)`);
 - exact Recall Create-Bot field shapes for your API version
   (`recall_client.py`, isolated in one body).
 
-Nothing here has been run against live Recall/Tavus/ElevenLabs accounts yet —
+Nothing here has been run against live Recall/Anam accounts yet —
 it is a faithful implementation of the verified architecture, ready for keys.
 
 ---
@@ -126,9 +123,9 @@ cp .env.example .env        # then fill in keys
 
 ### 2. Build the knowledge index (RAG)
 ```bash
-python backend/scripts/ingest.py          # indexes every avatar
+python backend/scripts/ingest.py          # indexes Sofia's knowledge
 ```
-This embeds each avatar's `knowledge/*.md` into `avatars/<id>/.index.json`.
+This embeds Sofia's `knowledge/*.md` into `avatars/sofia/.index.json`.
 Edit / add process docs and re-run to refresh.
 
 ### 3. Start the backend
@@ -151,7 +148,6 @@ curl -X POST http://127.0.0.1:8000/sessions/start \
 # -> returns bot_id
 ```
 In the call, say: **"Sofia, what are we missing for this onboarding?"**
-(Call a different avatar with `"avatar_id": "<id>"` — see `avatars/README.md`.)
 
 ### 6. End + get the artifact
 ```bash
@@ -178,13 +174,15 @@ truly testable in live pilots.
 ## Configuration
 
 All via `.env` (see `.env.example`). Keys needed for a full live run: Anthropic,
-Voyage, Recall.ai, Tavus (+ a replica id), ElevenLabs (+ a voice id), and a
-public URL. The RAG layer (steps 4) runs with just Anthropic + Voyage.
+Voyage, Recall.ai, Anam (`ANAM_API_KEY`, `ANAM_AVATAR_ID`,
+`ANAM_VOICE_ID`), and a public URL. The RAG layer (steps 4) runs with just
+Anthropic + Voyage.
 
 ## Security / cost notes
 
 - **No secrets in git.** `.env` is gitignored; only `.env.example` is tracked.
-- **Per-minute avatar billing.** `/sessions/{id}/end` ends both the Recall bot
-  and the Tavus conversation to stop the meter — always end sessions.
+- **Per-minute avatar billing.** `/sessions/{id}/end` removes the Recall bot;
+  the rendered Anam browser stream closes when the page unloads. Always end
+  sessions.
 - **PII.** Transcripts contain personal data; this MVP keeps them in memory only
   and never logs them. Don't add transcript logging without a retention policy.

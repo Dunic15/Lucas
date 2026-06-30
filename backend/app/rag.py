@@ -2,7 +2,7 @@
 
 Each avatar has its own knowledge folder and its own index, so avatars never
 mix knowledge. Indexing chunks markdown by heading, embeds the chunks, and
-stores vectors + metadata in `avatars/<id>/.index.json`.
+stores vectors + metadata in `avatars/sofia/.index.json` for the first agent.
 
 Retrieval embeds the query, cosine-ranks chunks, and returns the top-k with
 source filename + section so answers can cite them.

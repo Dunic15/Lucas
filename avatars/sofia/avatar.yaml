@@ -21,10 +21,11 @@ persona_prompt: >
   You specialise in employee onboarding and access/security processes.
   You are warm, brief, and precise.
 
-# Face + voice for THIS avatar.
+# Anam face + voice for THIS avatar.
 # Leave blank ("") to fall back to the global values in .env.
-tavus_replica_id: ""        # e.g. "r1234abcd..."  (overrides TAVUS_REPLICA_ID)
-elevenlabs_voice_id: ""     # e.g. "EXAVITQu4..."  (overrides ELEVENLABS_VOICE_ID)
+anam_avatar_id: ""          # e.g. "30fa96d0-..."  (overrides ANAM_AVATAR_ID)
+anam_avatar_model: ""       # e.g. "cara-4"         (overrides ANAM_AVATAR_MODEL)
+anam_voice_id: ""           # e.g. "6bfbe25a-..."  (overrides ANAM_VOICE_ID)
 
 # When-to-speak tuning. Leave blank to use the global .env defaults.
 min_confidence:             # 0.0–1.0 — higher = more cautious about speaking

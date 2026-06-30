@@ -51,7 +51,7 @@ def create_bot(meeting_url: str, avatar_page_url: str) -> dict:
                     "events": ["transcript.data"],
                 }
             ],
-            # The bot's camera renders our avatar page (Tavus face lives inside).
+            # The bot's camera renders our avatar page (Anam video lives inside).
             "output_media": {
                 "kind": "webpage",
                 "url": avatar_page_url,

@@ -28,14 +28,12 @@ class Settings(BaseSettings):
     recall_api_key: str = ""
     recall_api_base: str = "https://us-west-2.recall.ai"
 
-    # Tavus (face)
-    tavus_api_key: str = ""
-    tavus_replica_id: str = ""
-    tavus_persona_id: str = ""
-
-    # ElevenLabs (voice)
-    elevenlabs_api_key: str = ""
-    elevenlabs_voice_id: str = ""
+    # Anam (face + voice)
+    anam_api_key: str = ""
+    anam_avatar_id: str = ""
+    anam_avatar_model: str = "cara-4"
+    anam_voice_id: str = ""
+    anam_llm_id: str = "CUSTOMER_CLIENT_V1"
 
     # Public URL of this server (Recall must reach our webhook + avatar page)
     public_base_url: str = "http://127.0.0.1:8000"
