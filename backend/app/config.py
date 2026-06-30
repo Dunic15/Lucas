@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     anam_avatar_model: str = "cara-4"
     anam_voice_id: str = ""
     anam_llm_id: str = "CUSTOMER_CLIENT_V1"
+    # Optional Anam voiceGenerationOptions for ElevenLabs v1/v2 voices.
+    anam_voice_stability: float | None = None
+    anam_voice_similarity_boost: float | None = None
+    anam_voice_speed: float | None = None
+    anam_voice_use_speaker_boost: bool | None = None
+    anam_voice_style: float | None = None
 
     # Public URL of this server (Recall must reach our webhook + avatar page)
     public_base_url: str = "http://127.0.0.1:8000"

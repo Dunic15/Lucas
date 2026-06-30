@@ -27,6 +27,22 @@ def _headers() -> dict:
     }
 
 
+def _voice_generation_options() -> dict:
+    """Optional ElevenLabs voice tuning passed through Anam."""
+    options = {}
+    if settings.anam_voice_stability is not None:
+        options["stability"] = settings.anam_voice_stability
+    if settings.anam_voice_similarity_boost is not None:
+        options["similarityBoost"] = settings.anam_voice_similarity_boost
+    if settings.anam_voice_speed is not None:
+        options["speed"] = settings.anam_voice_speed
+    if settings.anam_voice_use_speaker_boost is not None:
+        options["useSpeakerBoost"] = settings.anam_voice_use_speaker_boost
+    if settings.anam_voice_style is not None:
+        options["style"] = settings.anam_voice_style
+    return options
+
+
 def create_session_token(avatar: Avatar) -> str:
     """Create a short-lived browser token for one Anam persona session."""
     if not avatar.anam_avatar_id:
@@ -40,17 +56,22 @@ def create_session_token(avatar: Avatar) -> str:
             "(set anam_voice_id in avatar.yaml or ANAM_VOICE_ID in .env)."
         )
 
-    body = {
-        "personaConfig": {
-            "name": avatar.name,
-            "avatarId": avatar.anam_avatar_id,
-            "avatarModel": avatar.anam_avatar_model,
-            "voiceId": avatar.anam_voice_id,
-            # Our backend decides what to say; the browser sends it via talk().
-            "llmId": settings.anam_llm_id or CLIENT_CONTROLLED_LLM,
-            "systemPrompt": avatar.persona_prompt,
-        }
+    persona_config = {
+        "name": avatar.name,
+        "avatarId": avatar.anam_avatar_id,
+        "avatarModel": avatar.anam_avatar_model,
+        # Use an Anam voice id. For ElevenLabs, import/select the voice in
+        # Anam Lab and put the resulting Anam voice id in ANAM_VOICE_ID.
+        "voiceId": avatar.anam_voice_id,
+        # Our backend decides what to say; the browser sends it via talk().
+        "llmId": settings.anam_llm_id or CLIENT_CONTROLLED_LLM,
+        "systemPrompt": avatar.persona_prompt,
     }
+    voice_options = _voice_generation_options()
+    if voice_options:
+        persona_config["voiceGenerationOptions"] = voice_options
+
+    body = {"personaConfig": persona_config}
     resp = httpx.post(
         f"{ANAM_BASE}/auth/session-token", headers=_headers(), json=body, timeout=60.0
     )

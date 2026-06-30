@@ -25,7 +25,7 @@ persona_prompt: >
 # Leave blank ("") to fall back to the global values in .env.
 anam_avatar_id: ""          # e.g. "30fa96d0-..."  (overrides ANAM_AVATAR_ID)
 anam_avatar_model: ""       # e.g. "cara-4"         (overrides ANAM_AVATAR_MODEL)
-anam_voice_id: ""           # e.g. "6bfbe25a-..."  (overrides ANAM_VOICE_ID)
+anam_voice_id: ""           # Anam voice id; prefer an ElevenLabs-backed voice
 
 # When-to-speak tuning. Leave blank to use the global .env defaults.
 min_confidence:             # 0.0–1.0 — higher = more cautious about speaking

@@ -80,7 +80,7 @@ Lucas/
 | Layer | Tool | Where |
 |---|---|---|
 | Meeting entry + transcript (ears) | Recall.ai | `backend/app/recall_client.py` |
-| Face + voice | Anam | `backend/app/anam_client.py`, `frontend/avatar.html` |
+| Face + voice | Anam with an ElevenLabs-backed voice | `backend/app/anam_client.py`, `frontend/avatar.html` |
 | Reasoning (brain) | Claude | `backend/app/brain.py` |
 | Knowledge retrieval (RAG) | Voyage embeddings + local store | `backend/app/rag.py` |
 | When-to-speak gate | — | `backend/app/decision.py` |
@@ -175,8 +175,9 @@ truly testable in live pilots.
 
 All via `.env` (see `.env.example`). Keys needed for a full live run: Anthropic,
 Voyage, Recall.ai, Anam (`ANAM_API_KEY`, `ANAM_AVATAR_ID`,
-`ANAM_VOICE_ID`), and a public URL. The RAG layer (steps 4) runs with just
-Anthropic + Voyage.
+`ANAM_VOICE_ID`), and a public URL. For the voice, prefer an ElevenLabs-backed
+voice selected or imported inside Anam Lab, then use the resulting Anam voice id
+as `ANAM_VOICE_ID`. The RAG layer (steps 4) runs with just Anthropic + Voyage.
 
 ## Security / cost notes
 

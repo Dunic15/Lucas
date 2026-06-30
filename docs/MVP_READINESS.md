@@ -27,7 +27,7 @@ The first MVP is working when this exact path succeeds:
 |---|---|
 | One demo agent | Sofia exists under `avatars/sofia/` with synthetic SOP docs. |
 | Meeting bot wiring | `recall_client.py` creates a Recall bot with realtime transcript webhook and webpage camera output. |
-| Avatar face/voice | PR #1 switches the camera page to Anam session tokens + JS SDK `talk()`. |
+| Avatar face/voice | PR #1 switches the camera page to Anam session tokens + JS SDK `talk()`. Use an ElevenLabs-backed Anam voice id for Sofia's voice. |
 | When-to-speak gate | `decision.py` only speaks when Sofia is called by wake word and confidence passes threshold. |
 | RAG | `rag.py` chunks markdown by heading and retrieves cited sections from Sofia's local index. |
 | Post-meeting artifact | `brain.py` returns summary, gap checklist, and follow-up email JSON. |
@@ -38,7 +38,7 @@ The first MVP is working when this exact path succeeds:
 | Priority | Missing item | Why it matters | Owner / file |
 |---|---|---|---|
 | P0 | Finish and merge the backend provider work | Current `main` still hardcodes Anthropic/Voyage. The dirty local work in `/Users/duccioo/Desktop/Lucas` adds local/free provider seams but is not committed yet. | `backend/app/brain.py`, `backend/app/embeddings.py`, `backend/app/llm.py`, `backend/app/config.py` |
-| P0 | Real service credentials | A live meeting needs Recall + Anam keys, plus either Anthropic/Voyage or completed local providers. | `.env` from `.env.example` |
+| P0 | Real service credentials | A live meeting needs Recall + Anam keys, plus either Anthropic/Voyage or completed local providers. Use an ElevenLabs-backed voice in Anam for `ANAM_VOICE_ID`. | `.env` from `.env.example` |
 | P0 | Build Sofia's index | Without `avatars/sofia/.index.json`, live questions fail before the brain can answer. | `python backend/scripts/ingest.py sofia` |
 | P0 | Live Recall/Anam integration test | The only unproven part is media in a real meeting: Recall rendering the Anam page, Anam audio reaching the call, and websocket speech timing. | test call |
 | P1 | Recall webhook verification | For anything beyond a private demo, reject unsigned/untrusted webhook traffic. | `backend/app/main.py` |
@@ -57,6 +57,37 @@ The first MVP is working when this exact path succeeds:
 | Slack/Jira/Notion/Gmail actions | Not needed for MVP. Return draft JSON/email first; add real writes only after human approval flows are designed. |
 | Proactive interventions | Defer. The first demo should speak only when called by name. |
 
+## Recall MCP
+
+Recall's MCP server is useful for the builder/operator, not for the runtime
+product. It gives Codex or another AI coding agent read access to Recall
+workspace state, bots, logs, docs, and status pages so we can debug live meeting
+failures faster.
+
+For this repo, use the MCP after you have a Recall API key and region:
+
+```bash
+codex mcp add recall-ai --url https://us-west-2.recall.ai/mcp
+```
+
+For an autonomous local agent, configure the API token as a header in
+`~/.codex/config.toml`:
+
+```toml
+[mcp_servers.recall-ai]
+url = "https://us-west-2.recall.ai/mcp"
+http_headers = { "Authorization" = "Bearer <API_KEY>"}
+```
+
+Choose the URL that matches the Recall workspace region:
+
+| Region | MCP URL |
+|---|---|
+| US East | `https://us-east-1.recall.ai/mcp` |
+| US West | `https://us-west-2.recall.ai/mcp` |
+| Europe | `https://eu-central-1.recall.ai/mcp` |
+| Asia Pacific | `https://ap-northeast-1.recall.ai/mcp` |
+
 ## Recommended next sequence
 
 1. Merge PR #1 or continue from `codex/content-and-ui` so Anam is the active
@@ -64,23 +95,28 @@ The first MVP is working when this exact path succeeds:
 2. Finish the backend provider work already started in the original checkout:
    local/stub brain, local embeddings, and an offline simulator if you want a
    no-key demo path.
-3. Fill `.env` with live Recall + Anam credentials:
+3. In Anam Lab, select a stock ElevenLabs voice or import your ElevenLabs
+   custom voice. Put the resulting Anam voice id in `ANAM_VOICE_ID`. Do not put
+   an ElevenLabs API key in this app for the MVP path.
+4. Fill `.env` with live Recall + Anam credentials:
    `RECALL_API_KEY`, `PUBLIC_BASE_URL`, `ANAM_API_KEY`, `ANAM_AVATAR_ID`,
    `ANAM_VOICE_ID`.
-4. Build the index:
+5. Optional but recommended for debugging: connect Recall MCP for the same
+   region as your workspace so you can inspect bots and logs from Codex.
+6. Build the index:
 
    ```bash
    python backend/scripts/ingest.py sofia
    ```
 
-5. Run the backend and expose it:
+7. Run the backend and expose it:
 
    ```bash
    uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
    ngrok http 8000
    ```
 
-6. Start a test meeting session:
+8. Start a test meeting session:
 
    ```bash
    curl -X POST http://127.0.0.1:8000/sessions/start \
@@ -88,8 +124,8 @@ The first MVP is working when this exact path succeeds:
      -d '{"meeting_url": "https://meet.google.com/your-test-call"}'
    ```
 
-7. In the meeting, say: "Sofia, what are we missing?"
-8. End the session:
+9. In the meeting, say: "Sofia, what are we missing?"
+10. End the session:
 
    ```bash
    curl -X POST http://127.0.0.1:8000/sessions/<bot_id>/end
@@ -103,5 +139,9 @@ The first MVP is working when this exact path succeeds:
 - The Anam JS SDK supports `streamToVideoElement()` and `talk()`:
   <https://anam.ai/docs/javascript-sdk/reference/basic-usage> and
   <https://anam.ai/docs/javascript-sdk/reference/talk-commands>
+- Anam voice generation options support ElevenLabs voice tuning, and custom
+  ElevenLabs voices can be imported into Anam Lab:
+  <https://anam.ai/docs/personas/voices/configuration> and
+  <https://anam.ai/docs/personas/voices/custom-voices>
 - Recall's realtime transcript webhook is the current MVP input path:
   <https://docs.recall.ai/docs/real-time-transcription>
