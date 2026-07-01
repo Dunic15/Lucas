@@ -15,3 +15,6 @@ anthropic>=0.40
 
 # PDF ingestion (drop a PDF into an avatar knowledge/ folder)
 pypdf>=4.0
+
+# Local semantic embeddings (EMBEDDING_PROVIDER=local) — free, no API key.
+fastembed>=0.3

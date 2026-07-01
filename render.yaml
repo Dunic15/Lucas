@@ -15,7 +15,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: EMBEDDING_PROVIDER
-        value: hash
+        value: local
       - key: RECALL_API_KEY
         sync: false
       - key: RECALL_API_BASE
