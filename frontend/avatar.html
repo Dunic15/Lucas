@@ -7,8 +7,8 @@
   <style>
     html, body { margin: 0; height: 100%; background: #0b1020; overflow: hidden;
       font: 600 14px/1.3 system-ui, sans-serif; color: #cfe0ff; }
-    #stage { position: fixed; inset: 0; }
-    #stage iframe { width: 100%; height: 100%; border: 0; }
+    #avatar-video { position: fixed; inset: 0; width: 100%; height: 100%;
+      object-fit: cover; background: #0b1020; }
 
     /* identity badge (bottom-left) */
     #badge {
@@ -18,7 +18,6 @@
     }
     #badge .dot { display:inline-block; width:8px; height:8px; border-radius:50%;
       background:#3ad29f; margin-right:8px; vertical-align:middle; }
-    /* the dot pulses while a line is being spoken */
     #badge.speaking .dot { animation: pulse 1s ease-in-out infinite; }
     @keyframes pulse {
       0%,100% { box-shadow: 0 0 0 0 rgba(58,210,159,.7); transform: scale(1); }
@@ -37,7 +36,7 @@
     #status.live       .sdot { background:#3ad29f; }
     #status.error      .sdot { background:#ff8a8a; }
 
-    /* caption bar (bottom-center) — shows the latest line the avatar said */
+    /* caption bar (bottom-center) */
     #caption {
       position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
       z-index: 10; max-width: min(80vw, 720px); text-align: center;
@@ -51,118 +50,99 @@
 <body>
   <!--
     This page is what the Recall.ai bot renders as its camera in the meeting.
-    It embeds the avatar conversation (the face, voiced by ElevenLabs) and opens
-    a websocket to our backend. When the backend's "brain" decides the avatar
-    should speak, it sends {type:"speak", text}; we forward that to the avatar as
-    an `echo` interaction so it speaks those exact words, and mirror it as a caption.
+    It streams the Anam avatar (the face, voiced by ElevenLabs) into the <video>
+    below and opens a websocket to our backend. When the backend's "brain" decides
+    the avatar should speak, it sends {type:"speak", text}; we forward that to Anam
+    via client.talk(text) so the avatar speaks those exact words, and mirror it as
+    a caption.
 
-    INTEGRATION SEAM TO VERIFY against current vendor docs:
-      - the echo app-message schema (message_type/event_type/properties.text)
-      - that Recall captures the embedded Daily iframe's audio.
-    Both are isolated in speak() below — adjust there if a vendor changes.
+    HOW THE PIECES CONNECT:
+      - ?conversation_url=<Anam sessionToken>  (minted by backend anam_client.py)
+      - ?conversation_id=<our routing id>      (keys the backend websocket)
 
-    Manually test a caption without a live backend: open devtools console and run
+    INTEGRATION SEAM TO VERIFY on a first live run:
+      - the Anam SDK export/method names (createClient / streamToVideoElement /
+        talk) against the current @anam-ai/js-sdk;
+      - that Recall captures the <video> element's audio+video.
+    All isolated below — adjust if the vendor changes.
+
+    Manually test the caption without a backend: open devtools and run
       speak("Testing the caption bar.")
-    — the caption should appear and the badge dot should pulse briefly.
   -->
-  <div id="stage"></div>
+  <video id="avatar-video" autoplay playsinline></video>
   <div id="badge"><span class="dot"></span>Sofia · AI Process Expert</div>
   <div id="status" class="connecting"><span class="sdot"></span><span id="statusText">Connecting…</span></div>
   <div id="caption"></div>
 
-  <!-- Pinned version to limit supply-chain surface. For production, add a
-       verified Subresource Integrity hash: integrity="sha384-..." -->
-  <script src="https://unpkg.com/@daily-co/daily-js@0.72.2/dist/daily-iframe.js"
-          crossorigin="anonymous"></script>
-  <script>
-    const params = new URLSearchParams(location.search);
-    const conversationUrl = params.get("conversation_url");
-    const conversationId  = params.get("conversation_id");
+  <script type="module">
+    // Pinned SDK to limit supply-chain surface.
+    import { createClient } from "https://esm.sh/@anam-ai/js-sdk@3";
 
-    let callFrame = null;
+    const params = new URLSearchParams(location.search);
+    const sessionToken   = params.get("conversation_url");   // Anam session token
+    const conversationId = params.get("conversation_id");    // backend ws key
+
+    let anam = null;
     let captionTimer = null;
 
     // ── UI helpers ──────────────────────────────────────────────────
     function setStatus(state, text) {
-      const el = document.getElementById("status");
-      el.className = state;                          // connecting | live | error
+      document.getElementById("status").className = state;   // connecting|live|error
       document.getElementById("statusText").textContent = text;
     }
-
     function showCaption(text) {
       const cap = document.getElementById("caption");
-      cap.textContent = text;
-      cap.classList.add("show");
+      cap.textContent = text; cap.classList.add("show");
       clearTimeout(captionTimer);
       captionTimer = setTimeout(() => cap.classList.remove("show"), 6000);
     }
-
     function setSpeaking(on) {
       document.getElementById("badge").classList.toggle("speaking", on);
     }
 
-    // ── Daily embed (the avatar's face) ─────────────────────────────
-    function joinAvatarRoom() {
-      callFrame = window.DailyIframe.createFrame(
-        document.getElementById("stage"),
-        {
-          showLeaveButton: false,
-          showFullscreenButton: false,
-          iframeStyle: { width: "100%", height: "100%", border: "0" },
-        }
-      );
-      callFrame.join({ url: conversationUrl });
+    // ── Anam stream (the avatar's face) ─────────────────────────────
+    async function joinAvatar() {
+      anam = createClient(sessionToken);
+      await anam.streamToVideoElement("avatar-video");
+      setStatus("live", "Live");
     }
 
-    // Make the avatar say `text` via an echo interaction, and caption it.
-    // (Unchanged integration contract — plus caption/pulse UI feedback.)
+    // Make the avatar say `text`, and caption it. Kept as the single entrypoint
+    // the backend drives via the websocket (unchanged protocol).
     function speak(text) {
       showCaption(text);
       setSpeaking(true);
       setTimeout(() => setSpeaking(false), Math.min(6000, 1200 + text.length * 45));
-      if (!callFrame) return;
-      callFrame.sendAppMessage(
-        {
-          message_type: "conversation",
-          event_type: "conversation.echo",
-          conversation_id: conversationId,
-          properties: { text },
-        },
-        "*"
-      );
+      if (anam && typeof anam.talk === "function") anam.talk(text);
     }
+    window.speak = speak;   // exposed for manual devtools testing
 
-    // ── Backend websocket ───────────────────────────────────────────
+    // ── Backend websocket (unchanged contract) ──────────────────────
     function connectBackend() {
       const wsProto = location.protocol === "https:" ? "wss" : "ws";
       const ws = new WebSocket(`${wsProto}://${location.host}/ws/${conversationId}`);
-
-      ws.onopen = () => {
-        setStatus("live", "Live");
-        setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) ws.send("ping");
-        }, 15000);
-      };
-
+      ws.onopen = () => setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.send("ping");
+      }, 15000);
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);
           if (msg.type === "speak" && msg.text) speak(msg.text);
         } catch (_) { /* ignore non-JSON */ }
       };
-
-      // Reconnect if the socket drops mid-meeting.
-      ws.onclose = () => { setStatus("connecting", "Reconnecting…"); setTimeout(connectBackend, 2000); };
-      ws.onerror = () => setStatus("error", "Connection error");
+      ws.onclose = () => setTimeout(connectBackend, 2000);
     }
 
     // ── boot / graceful degradation ─────────────────────────────────
-    if (!conversationUrl || !conversationId) {
+    if (!sessionToken || !conversationId) {
       setStatus("error", "Missing conversation params");
       document.getElementById("badge").innerHTML =
         '<span class="dot" style="background:#ff8a8a"></span>Waiting for a session…';
     } else {
-      joinAvatarRoom();
+      joinAvatar().catch((e) => {
+        console.error(e);
+        setStatus("error", "Avatar stream failed");
+      });
       connectBackend();
     }
   </script>
