@@ -46,6 +46,16 @@ class Session:
 _sessions: dict[str, Session] = {}
 # anam_conversation_id -> bot_id  (the avatar page only knows the conversation)
 _by_conversation: dict[str, str] = {}
+# bot_id -> finished post-meeting artifact (kept after the session is removed)
+_artifacts: dict[str, dict] = {}
+
+
+def save_artifact(bot_id: str, artifact: dict) -> None:
+    _artifacts[bot_id] = artifact
+
+
+def get_artifact(bot_id: str) -> dict | None:
+    return _artifacts.get(bot_id)
 
 
 def create(bot_id: str, meeting_url: str, avatar_id: str = "lucas") -> Session:

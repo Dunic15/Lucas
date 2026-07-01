@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from . import avatars, store, recall_client, anam_client, granola_client
 from .brain import answer_question, post_meeting, effective_provider
 from .config import settings
-from .decision import detect_wake, passes_confidence
+from .decision import detect_wake
 from .rag import ensure_index
 
 app = FastAPI(title="Callable AI Process Avatar")
@@ -238,11 +238,15 @@ async def start_session(req: StartRequest) -> JSONResponse:
     )
 
 
-@app.post("/sessions/{bot_id}/end")
-async def end_session(bot_id: str) -> JSONResponse:
+async def _finalize_session(bot_id: str) -> dict | None:
+    """End a session once: stop both vendors, build + store the artifact.
+
+    Idempotent — if the session is already gone, returns the stored artifact (or
+    None). Safe to call from the manual endpoint AND the auto end-of-meeting hook.
+    """
     session = store.get(bot_id)
     if session is None:
-        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
+        return store.get_artifact(bot_id)
 
     transcript_text = session.transcript_text()
 
@@ -258,8 +262,29 @@ async def end_session(bot_id: str) -> JSONResponse:
         avatar = avatars.load(session.avatar_id)
         artifact = await run_in_threadpool(post_meeting, avatar, transcript_text)
 
+    store.save_artifact(bot_id, artifact)
     store.remove(bot_id)
+    return artifact
+
+
+@app.post("/sessions/{bot_id}/end")
+async def end_session(bot_id: str) -> JSONResponse:
+    artifact = await _finalize_session(bot_id)
+    if artifact is None:
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     return JSONResponse(artifact)
+
+
+@app.get("/sessions/{bot_id}/artifact")
+def session_artifact(bot_id: str) -> JSONResponse:
+    """Retrieve a finished session's artifact (summary + checklist + email)."""
+    live = store.get(bot_id)
+    if live is not None:
+        return JSONResponse({"status": "in_progress", "bot_id": bot_id})
+    artifact = store.get_artifact(bot_id)
+    if artifact is None:
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
+    return JSONResponse({"status": "done", **artifact})
 
 
 # ───────────────────────── avatar page + ws ─────────────────────────
@@ -291,6 +316,12 @@ async def _make_avatar_speak(session: store.Session, text: str) -> None:
         session.mark_spoke()
 
 
+async def _ask_avatar_persona(session: store.Session, text: str) -> None:
+    if session.ws is not None:
+        await session.ws.send_json({"type": "ask", "text": text})
+        session.mark_spoke()
+
+
 # ───────────────────────── recall webhook ──────────────────────────
 @app.post("/webhooks/recall")
 async def recall_webhook(request: Request) -> JSONResponse:
@@ -304,8 +335,24 @@ async def recall_webhook(request: Request) -> JSONResponse:
     event = payload.get("event", "")
 
     if event != "transcript.data":
-        # Other events (bot status, participant join/leave) ignored for MVP.
-        return JSONResponse({"ok": True, "ignored": event})
+        # Auto end-of-meeting: when Recall reports the call is over / bot done,
+        # finalize the session (stop billing on both vendors + build the artifact).
+        # NOTE: bot status-change events are delivered to the webhook configured
+        # in the Recall dashboard — point it at PUBLIC_BASE_URL/webhooks/recall.
+        TERMINAL = {"done", "call_ended", "fatal", "bot.call_ended", "bot.done"}
+        status_code = (
+            payload.get("data", {}).get("status", {}).get("code")
+            or payload.get("data", {}).get("code")
+            or ""
+        )
+        term = event in TERMINAL or status_code in TERMINAL
+        bid = payload.get("data", {}).get("bot", {}).get("id", "") or payload.get(
+            "data", {}
+        ).get("bot_id", "")
+        if term and bid and store.get(bid) is not None:
+            await _finalize_session(bid)
+            return JSONResponse({"ok": True, "finalized": bid})
+        return JSONResponse({"ok": True, "ignored": event or status_code})
 
     data = payload.get("data", {}).get("data", {})
     bot_id = payload.get("data", {}).get("bot", {}).get("id", "")
@@ -329,14 +376,5 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if session.in_cooldown(avatar.speak_cooldown_seconds):
         return JSONResponse({"ok": True, "spoke": False, "reason": "cooldown"})
 
-    result = await run_in_threadpool(answer_question, avatar, question or text)
-    if not passes_confidence(avatar, result):
-        return JSONResponse(
-            {"ok": True, "spoke": False, "reason": "low confidence", "result": result}
-        )
-
-    await _make_avatar_speak(session, result["answer"])
-    return JSONResponse(
-        {"ok": True, "spoke": True, "answer": result["answer"],
-         "citations": result.get("citations", [])}
-    )
+    await _ask_avatar_persona(session, question or text)
+    return JSONResponse({"ok": True, "spoke": True, "question": question or text})

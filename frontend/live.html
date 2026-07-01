@@ -51,7 +51,10 @@
     </div>
     <label class="muted" for="q">Ask Lucas (answers from your thesis)</label>
     <textarea id="q">What is the AI buffer in your thesis, and why does it matter for product managers?</textarea>
-    <button id="ask" disabled>Ask &amp; speak</button>
+    <div style="display:flex; gap:8px">
+      <button id="ask" disabled style="flex:1">Ask &amp; speak</button>
+      <button id="stop" class="muted" style="background:#2a1420;color:#ff9a9a;border:1px solid #5a2030">End session</button>
+    </div>
     <div id="out"></div>
     <p class="muted" id="hint">Waiting for the avatar to connect…</p>
   </div>
@@ -122,6 +125,15 @@
       setTimeout(()=>{ $("ask").disabled = false; }, 1500);
     }
     $("ask").onclick = ask;
+
+    // Session hygiene: stop the Anam stream when leaving/refreshing the page so
+    // we don't keep burning avatar minutes on a dangling session.
+    function stopSession(){ try { anam && anam.stopStreaming && anam.stopStreaming(); } catch(_){} }
+    $("stop").onclick = () => { stopSession(); pill("", "ended"); $("ask").disabled = true;
+      $("hint").textContent = "Session ended. Refresh to start a new one."; };
+    window.addEventListener("pagehide", stopSession);
+    window.addEventListener("beforeunload", stopSession);
+
     boot();
   </script>
 </body>

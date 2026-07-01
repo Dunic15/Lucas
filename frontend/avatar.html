@@ -51,10 +51,10 @@
   <!--
     This page is what the Recall.ai bot renders as its camera in the meeting.
     It streams the Anam avatar (the face, voiced by ElevenLabs) into the <video>
-    below and opens a websocket to our backend. When the backend's "brain" decides
-    the avatar should speak, it sends {type:"speak", text}; we forward that to Anam
-    via client.talk(text) so the avatar speaks those exact words, and mirror it as
-    a caption.
+    below and opens a websocket to our backend. When Recall transcribes a wake-word
+    question, the backend sends {type:"ask", text}; we forward that to Anam via
+    client.sendUserMessage(text) so Liv answers from her own thesis knowledge.
+    The older {type:"speak", text} path is kept for direct backend-driven speech.
 
     HOW THE PIECES CONNECT:
       - ?conversation_url=<Anam sessionToken>  (minted by backend anam_client.py)
@@ -62,7 +62,7 @@
 
     INTEGRATION SEAM TO VERIFY on a first live run:
       - the Anam SDK export/method names (createClient / streamToVideoElement /
-        talk) against the current @anam-ai/js-sdk;
+        sendUserMessage / talk) against the current @anam-ai/js-sdk;
       - that Recall captures the <video> element's audio+video.
     All isolated below — adjust if the vendor changes.
 
@@ -76,7 +76,7 @@
 
   <script type="module">
     // Pinned SDK to limit supply-chain surface.
-    import { createClient } from "https://esm.sh/@anam-ai/js-sdk@4.17.1";
+    import { createClient, AnamEvent } from "https://esm.sh/@anam-ai/js-sdk@4.17.1";
 
     const params = new URLSearchParams(location.search);
     const sessionToken   = params.get("conversation_url");   // Anam session token
@@ -84,6 +84,8 @@
 
     let anam = null;
     let captionTimer = null;
+    let streamId = null;
+    let streamText = "";
 
     // ── UI helpers ──────────────────────────────────────────────────
     function setStatus(state, text) {
@@ -103,6 +105,18 @@
     // ── Anam stream (the avatar's face) ─────────────────────────────
     async function joinAvatar() {
       anam = createClient(sessionToken);
+      anam.addListener(AnamEvent.MESSAGE_STREAM_EVENT_RECEIVED, (e) => {
+        if (!e || e.role !== "persona") return;
+        if (e.id !== streamId) { streamId = e.id; streamText = ""; }
+        streamText += e.content || "";
+        if (streamText.trim()) {
+          showCaption(streamText);
+          setSpeaking(true);
+        }
+        if (e.endOfSpeech) setSpeaking(false);
+      });
+      anam.addListener(AnamEvent.TOOL_CALL_STARTED, () => showCaption("Searching thesis knowledge..."));
+      anam.addListener(AnamEvent.VIDEO_PLAY_STARTED, () => setStatus("live", "Live"));
       await anam.streamToVideoElement("avatar-video");
       setStatus("live", "Live");
     }
@@ -117,6 +131,16 @@
     }
     window.speak = speak;   // exposed for manual devtools testing
 
+    function askPersona(text) {
+      showCaption("Thinking...");
+      setSpeaking(true);
+      streamId = null;
+      streamText = "";
+      if (anam && typeof anam.sendUserMessage === "function") {
+        anam.sendUserMessage(text);
+      }
+    }
+
     // ── Backend websocket (unchanged contract) ──────────────────────
     function connectBackend() {
       const wsProto = location.protocol === "https:" ? "wss" : "ws";
@@ -128,6 +152,7 @@
         try {
           const msg = JSON.parse(ev.data);
           if (msg.type === "speak" && msg.text) speak(msg.text);
+          if (msg.type === "ask" && msg.text) askPersona(msg.text);
         } catch (_) { /* ignore non-JSON */ }
       };
       ws.onclose = () => setTimeout(connectBackend, 2000);
@@ -144,6 +169,10 @@
         setStatus("error", "Avatar stream failed");
       });
       connectBackend();
+      // Stop the Anam stream when the bot leaves / page unloads (stop billing).
+      const stop = () => { try { anam && anam.stopStreaming && anam.stopStreaming(); } catch(_){} };
+      window.addEventListener("pagehide", stop);
+      window.addEventListener("beforeunload", stop);
     }
   </script>
 </body>
