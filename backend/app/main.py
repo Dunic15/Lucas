@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from . import avatars, store, recall_client, anam_client, granola_client
 from .brain import answer_question, post_meeting, effective_provider
 from .config import settings
-from .decision import detect_wake
+from .decision import detect_wake, passes_confidence
 from .rag import ensure_index
 
 app = FastAPI(title="Callable AI Process Avatar")
@@ -310,9 +310,14 @@ async def avatar_ws(websocket: WebSocket, conversation_id: str) -> None:
             session.ws = None
 
 
-async def _make_avatar_speak(session: store.Session, text: str) -> None:
+async def _make_avatar_speak(
+    session: store.Session, text: str, citations: list | None = None
+) -> None:
+    """Backend-as-brain: send the exact words for the avatar to speak (Anam talk)."""
     if session.ws is not None:
-        await session.ws.send_json({"type": "speak", "text": text})
+        await session.ws.send_json(
+            {"type": "speak", "text": text, "citations": citations or []}
+        )
         session.mark_spoke()
 
 
@@ -376,5 +381,23 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if session.in_cooldown(avatar.speak_cooldown_seconds):
         return JSONResponse({"ok": True, "spoke": False, "reason": "cooldown"})
 
-    await _ask_avatar_persona(session, question or text)
-    return JSONResponse({"ok": True, "spoke": True, "question": question or text})
+    # Backend is the brain: answer from OUR knowledge (RAG) with the recent
+    # meeting conversation as context, and only speak if grounded + confident.
+    history = session.recent_transcript(n=8)
+    result = await run_in_threadpool(
+        answer_question, avatar, question or text, history=history
+    )
+    if not passes_confidence(avatar, result):
+        return JSONResponse(
+            {"ok": True, "spoke": False, "reason": "low confidence",
+             "confidence": result.get("confidence"), "result": result}
+        )
+
+    answer = result["answer"]
+    citations = result.get("citations", [])
+    if citations:  # speak the source so the team can trust/verify it
+        answer = f"{answer} — per {citations[0]}"
+    await _make_avatar_speak(session, answer, citations)
+    return JSONResponse(
+        {"ok": True, "spoke": True, "answer": answer, "citations": citations}
+    )

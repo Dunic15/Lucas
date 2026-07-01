@@ -81,17 +81,25 @@ Return ONLY a JSON object:
 }}"""
 
 
-def answer_question(avatar: Avatar, question: str, *, k: int = 4) -> dict:
-    """Retrieve + answer for one avatar. Returns answer/citations/confidence."""
+def answer_question(
+    avatar: Avatar, question: str, *, history: str = "", k: int = 4
+) -> dict:
+    """Retrieve + answer for one avatar. Returns answer/citations/confidence.
+
+    `history` is the recent meeting conversation (last few "Speaker: line" turns)
+    so the avatar understands *this* discussion, not just the isolated question.
+    """
     chunks = retrieve(avatar, question, k=k)
 
     if _is_stub():
         result = _stub_answer(chunks)
     else:
+        convo = f"Recent meeting conversation:\n{history}\n\n" if history.strip() else ""
         raw = llm.complete(
             ANSWER_SYSTEM.format(persona=avatar.persona_prompt),
             (
                 f"Company process context:\n\n{_format_context(chunks)}\n\n"
+                f"{convo}"
                 f"Someone in the meeting asked:\n{question}\n\n"
                 "Respond with the JSON object only."
             ),

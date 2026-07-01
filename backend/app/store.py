@@ -35,6 +35,10 @@ class Session:
     def transcript_text(self) -> str:
         return "\n".join(f"{u.speaker}: {u.text}" for u in self.transcript)
 
+    def recent_transcript(self, n: int = 8) -> str:
+        """The last n turns, so the avatar has the immediate meeting context."""
+        return "\n".join(f"{u.speaker}: {u.text}" for u in self.transcript[-n:])
+
     def in_cooldown(self, cooldown_seconds: float) -> bool:
         return (time.time() - self.last_spoke_at) < cooldown_seconds
 
