@@ -14,17 +14,19 @@ Flow:
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import avatars, store, recall_client, anam_client, granola_client
-from .brain import answer_question, post_meeting, effective_provider
+from . import avatars, store, recall_client, anam_client, granola_client, actions
+from .brain import answer_question, post_meeting, proactive_flag, effective_provider
 from .config import settings
-from .decision import detect_wake, passes_confidence
+from .decision import detect_wake, detect_closing, passes_confidence
 from .rag import ensure_index
 
 app = FastAPI(title="Callable AI Process Avatar")
@@ -183,6 +185,7 @@ def granola_transcript(note_id: str) -> JSONResponse:
 class StartRequest(BaseModel):
     meeting_url: str
     avatar_id: str = "lucas"
+    join_at: Optional[str] = None  # ISO 8601; set (>=10 min out) to schedule the bot
 
 
 @app.post("/sessions/start")
@@ -194,30 +197,21 @@ async def start_session(req: StartRequest) -> JSONResponse:
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-    # 1. Avatar: persona (ElevenLabs voice) + live session (Anam session token).
-    try:
-        persona_id = await run_in_threadpool(anam_client.create_persona, avatar)
-        convo = await run_in_threadpool(
-            anam_client.create_conversation, avatar, persona_id
-        )
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+    # 1. Stable avatar-page URL the Recall bot renders as its camera. The page
+    #    mints its OWN fresh Anam token at render time (needed for scheduled bots),
+    #    and keys its websocket on this conversation_id.
+    import uuid as _uuid
 
-    # 2. Avatar page URL the Recall bot will render as its camera.
-    #    The page keys its websocket on conversation_id (the only id it knows
-    #    at render time — the bot id doesn't exist yet here).
-    from urllib.parse import quote
-
+    conversation_id = _uuid.uuid4().hex
     avatar_url = (
         f"{settings.public_base_url.rstrip('/')}/avatar"
-        f"?conversation_url={quote(convo['conversation_url'], safe='')}"
-        f"&conversation_id={convo['conversation_id']}"
+        f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
     )
 
-    # 3. Send the bot in.
+    # 2. Send the bot in (now, or scheduled via join_at for calendar auto-join).
     try:
         bot = await run_in_threadpool(
-            recall_client.create_bot, req.meeting_url, avatar_url
+            recall_client.create_bot, req.meeting_url, avatar_url, req.join_at
         )
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
@@ -225,15 +219,15 @@ async def start_session(req: StartRequest) -> JSONResponse:
     session = store.create(
         bot_id=bot["id"], meeting_url=req.meeting_url, avatar_id=avatar.id
     )
-    session.anam_conversation_id = convo["conversation_id"]
-    session.anam_conversation_url = convo["conversation_url"]
-    store.register_conversation(convo["conversation_id"], bot["id"])
+    session.anam_conversation_id = conversation_id
+    store.register_conversation(conversation_id, bot["id"])
 
     return JSONResponse(
         {
             "bot_id": bot["id"],
-            "anam_conversation_id": convo["conversation_id"],
+            "conversation_id": conversation_id,
             "avatar_page_url": avatar_url,
+            "scheduled_for": req.join_at,
         }
     )
 
@@ -273,6 +267,33 @@ async def end_session(bot_id: str) -> JSONResponse:
     if artifact is None:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     return JSONResponse(artifact)
+
+
+class DeliverRequest(BaseModel):
+    to: list[str] = []
+    slack: bool = True
+
+
+@app.post("/sessions/{bot_id}/deliver")
+async def deliver_artifact(bot_id: str, req: DeliverRequest) -> JSONResponse:
+    """Actually send the finished meeting's follow-up email + post it to Slack."""
+    artifact = store.get_artifact(bot_id)
+    if artifact is None:
+        return JSONResponse({"error": "no artifact for this bot_id"}, status_code=404)
+
+    avatar = avatars.load(store.get(bot_id).avatar_id) if store.get(bot_id) else None
+    name = avatar.name if avatar else "Lucas"
+    email = artifact.get("follow_up_email", {}) or {}
+
+    email_res = await run_in_threadpool(
+        actions.send_email, req.to, email.get("subject", ""), email.get("body", "")
+    )
+    slack_res = {"sent": False, "reason": "disabled"}
+    if req.slack:
+        slack_res = await run_in_threadpool(
+            actions.post_to_slack, actions.artifact_to_slack_text(name, artifact)
+        )
+    return JSONResponse({"email": email_res, "slack": slack_res})
 
 
 @app.get("/sessions/{bot_id}/artifact")
@@ -327,6 +348,58 @@ async def _ask_avatar_persona(session: store.Session, text: str) -> None:
         session.mark_spoke()
 
 
+# ─────────────────── calendar auto-join webhook ────────────────────
+# Point a Recall calendar webhook (or your own calendar sync) at this endpoint.
+# For each upcoming event that has a meeting link, we SCHEDULE Lucas to join it.
+# See docs/CALENDAR.md for the one-time OAuth setup. Payload shapes vary by
+# provider, so parsing here is defensive — adjust `_extract_events` if needed.
+def _extract_events(payload: dict) -> list[dict]:
+    evs = (
+        payload.get("events")
+        or payload.get("data", {}).get("events")
+        or ([payload.get("event")] if payload.get("event") else [])
+        or ([payload.get("data")] if payload.get("data") else [])
+    )
+    return [e for e in evs if isinstance(e, dict)]
+
+
+@app.post("/webhooks/recall-calendar")
+async def recall_calendar_webhook(request: Request) -> JSONResponse:
+    payload = await request.json()
+    scheduled = []
+    for ev in _extract_events(payload):
+        eid = str(ev.get("id") or ev.get("event_id") or "")
+        url = (
+            ev.get("meeting_url")
+            or ev.get("meeting_link")
+            or (ev.get("conference") or {}).get("url")
+            or ""
+        )
+        start = ev.get("start_time") or ev.get("start") or ev.get("join_at")
+        avatar_id = ev.get("avatar_id") or "lucas"
+        if not url or not start or (eid and store.is_scheduled(eid)):
+            continue
+        try:
+            avatar = avatars.load(avatar_id)
+            conversation_id = uuid.uuid4().hex
+            avatar_url = (
+                f"{settings.public_base_url.rstrip('/')}/avatar"
+                f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
+            )
+            bot = await run_in_threadpool(
+                recall_client.create_bot, url, avatar_url, start
+            )
+            s = store.create(bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id)
+            s.anam_conversation_id = conversation_id
+            store.register_conversation(conversation_id, bot["id"])
+            if eid:
+                store.mark_scheduled(eid)
+            scheduled.append({"event": eid, "bot_id": bot["id"], "join_at": start})
+        except Exception as e:  # one bad event shouldn't drop the webhook
+            scheduled.append({"event": eid, "error": str(e)})
+    return JSONResponse({"ok": True, "scheduled": scheduled})
+
+
 # ───────────────────────── recall webhook ──────────────────────────
 @app.post("/webhooks/recall")
 async def recall_webhook(request: Request) -> JSONResponse:
@@ -374,7 +447,25 @@ async def recall_webhook(request: Request) -> JSONResponse:
     session.add_utterance(speaker, text)
     avatar = avatars.load(session.avatar_id)
 
-    # ── when-to-speak gate ──
+    # ── proactive intervention (fires once, as the meeting wraps up) ──
+    if (
+        settings.proactive_enabled
+        and not session.proactive_done
+        and detect_closing(text)
+        and not session.in_cooldown(avatar.speak_cooldown_seconds)
+    ):
+        flag = await run_in_threadpool(
+            proactive_flag, avatar, session.transcript_text()
+        )
+        conf = float(flag.get("confidence", 0.0))
+        if flag.get("should_speak") and flag.get("line") and conf >= settings.proactive_min_confidence:
+            session.proactive_done = True
+            cits = flag.get("citations", [])
+            line = flag["line"] + (f" — per {cits[0]}" if cits else "")
+            await _make_avatar_speak(session, line, cits)
+            return JSONResponse({"ok": True, "spoke": True, "proactive": True, "line": line})
+
+    # ── when-to-speak gate (called by name) ──
     called, question = detect_wake(avatar, text)
     if not called:
         return JSONResponse({"ok": True, "spoke": False, "reason": "not called"})

@@ -174,9 +174,13 @@ def verify_webhook(raw_body: bytes, headers: Mapping[str, str]) -> None:
     raise RuntimeError("Recall webhook signature verification failed.")
 
 
-def create_bot(meeting_url: str, avatar_page_url: str) -> dict:
+def create_bot(
+    meeting_url: str, avatar_page_url: str, join_at: str | None = None
+) -> dict:
     """Send a bot into `meeting_url` showing `avatar_page_url` on its camera.
 
+    If `join_at` (ISO 8601, >=10 min in the future) is given, Recall SCHEDULES the
+    bot to join then — this is how calendar auto-join dispatches bots ahead of time.
     Returns the created bot object (includes its `id`).
     """
     webhook_url = f"{settings.public_base_url.rstrip('/')}/webhooks/recall"
@@ -211,6 +215,8 @@ def create_bot(meeting_url: str, avatar_page_url: str) -> dict:
             }
         },
     }
+    if join_at:  # schedule the bot to join at this time instead of now
+        body["join_at"] = join_at
 
     resp = httpx.post(
         f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/",

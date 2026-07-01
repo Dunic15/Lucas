@@ -27,6 +27,7 @@ class Session:
     anam_conversation_url: str = ""
     transcript: list[Utterance] = field(default_factory=list)
     last_spoke_at: float = 0.0
+    proactive_done: bool = False  # the one proactive flag fires at most once
     ws: WebSocket | None = None
 
     def add_utterance(self, speaker: str, text: str) -> None:
@@ -52,6 +53,18 @@ _sessions: dict[str, Session] = {}
 _by_conversation: dict[str, str] = {}
 # bot_id -> finished post-meeting artifact (kept after the session is removed)
 _artifacts: dict[str, dict] = {}
+
+
+# calendar event ids we've already scheduled a bot for (avoid double-booking)
+_scheduled_events: set[str] = set()
+
+
+def is_scheduled(event_id: str) -> bool:
+    return event_id in _scheduled_events
+
+
+def mark_scheduled(event_id: str) -> None:
+    _scheduled_events.add(event_id)
 
 
 def save_artifact(bot_id: str, artifact: dict) -> None:

@@ -1,0 +1,36 @@
+# One-click-ish deploy to Render (free tier works for a pilot). This gives you a
+# permanent https://<name>.onrender.com URL to use as PUBLIC_BASE_URL — replacing
+# the cloudflared quick-tunnel. Set the secret env vars in the Render dashboard.
+services:
+  - type: web
+    name: lucas-avatar
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PUBLIC_BASE_URL
+        sync: false          # set to your https://<name>.onrender.com after first deploy
+      - key: BRAIN_PROVIDER
+        value: anthropic
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: EMBEDDING_PROVIDER
+        value: hash
+      - key: RECALL_API_KEY
+        sync: false
+      - key: RECALL_API_BASE
+        value: https://eu-central-1.recall.ai
+      - key: RECALL_WEBHOOK_SECRET
+        sync: false
+      - key: ANAM_API_KEY
+        sync: false
+      - key: ANAM_AVATAR_ID
+        sync: false
+      - key: WAKE_WORDS
+        value: lucas
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: SLACK_WEBHOOK_URL
+        sync: false

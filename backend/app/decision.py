@@ -42,3 +42,16 @@ def passes_confidence(avatar: Avatar, result: dict) -> bool:
     if not result.get("sufficient_context", False):
         return False
     return float(result.get("confidence", 0.0)) >= avatar.min_confidence
+
+
+_CLOSING = re.compile(
+    r"\b(wrap(ping)? up|that'?s (it|everything|all)|anything else|any other|"
+    r"before we (go|close|end|wrap)|to summari[sz]e|let'?s (close|end|wrap)|"
+    r"we'?re done|any final|last thing)\b",
+    re.IGNORECASE,
+)
+
+
+def detect_closing(utterance: str) -> bool:
+    """True if the utterance sounds like the meeting is wrapping up."""
+    return bool(_CLOSING.search(utterance))

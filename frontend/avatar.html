@@ -79,8 +79,8 @@
     import { createClient, AnamEvent } from "https://esm.sh/@anam-ai/js-sdk@4.17.1";
 
     const params = new URLSearchParams(location.search);
-    const sessionToken   = params.get("conversation_url");   // Anam session token
-    const conversationId = params.get("conversation_id");    // backend ws key
+    const avatarId       = params.get("avatar_id") || "lucas"; // which persona
+    const conversationId = params.get("conversation_id");      // backend ws key
 
     let anam = null;
     let captionTimer = null;
@@ -104,7 +104,14 @@
 
     // ── Anam stream (the avatar's face) ─────────────────────────────
     async function joinAvatar() {
-      anam = createClient(sessionToken);
+      // Mint a FRESH Anam token at render time (so scheduled/calendar bots work —
+      // a token baked into the URL would expire before a future meeting starts).
+      const tr = await fetch("/live/token", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ avatar_id: avatarId }) });
+      const tok = await tr.json();
+      if (tok.error) throw new Error(tok.error);
+      anam = createClient(tok.session_token);
       anam.addListener(AnamEvent.MESSAGE_STREAM_EVENT_RECEIVED, (e) => {
         if (!e || e.role !== "persona") return;
         if (e.id !== streamId) { streamId = e.id; streamText = ""; }
@@ -159,7 +166,7 @@
     }
 
     // ── boot / graceful degradation ─────────────────────────────────
-    if (!sessionToken || !conversationId) {
+    if (!conversationId) {
       setStatus("error", "Missing conversation params");
       document.getElementById("badge").innerHTML =
         '<span class="dot" style="background:#ff8a8a"></span>Waiting for a session…';

@@ -51,14 +51,49 @@ def _chunk_markdown(text: str, source: str) -> list[Chunk]:
     return chunks
 
 
+def _chunk_plain(text: str, source: str, size: int = 900) -> list[Chunk]:
+    """Chunk headingless text (PDF/txt) into ~size-char passages on paragraph breaks."""
+    chunks: list[Chunk] = []
+    buf = ""
+    for para in text.split("\n\n"):
+        para = para.strip()
+        if not para:
+            continue
+        if len(buf) + len(para) > size and buf:
+            chunks.append(Chunk(text=buf.strip(), source=source, section=""))
+            buf = ""
+        buf += para + "\n\n"
+    if buf.strip():
+        chunks.append(Chunk(text=buf.strip(), source=source, section=""))
+    return chunks
+
+
+def _read_pdf(path: Path) -> str:
+    """Extract text from a PDF so you can drop a thesis/policy PDF into knowledge/."""
+    try:
+        from pypdf import PdfReader
+    except ImportError as e:
+        raise RuntimeError(
+            "Reading PDFs needs pypdf: pip install pypdf (or drop a .md/.txt)."
+        ) from e
+    return "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
+
+
 def build_index(avatar: Avatar) -> int:
-    """(Re)build one avatar's vector store from its knowledge/*.md. Returns count."""
+    """(Re)build one avatar's vector store from its knowledge/ docs (.md/.txt/.pdf)."""
     all_chunks: list[Chunk] = []
-    for path in sorted(avatar.knowledge_dir.glob("*.md")):
-        all_chunks.extend(_chunk_markdown(path.read_text(), path.name))
+    for path in sorted(avatar.knowledge_dir.glob("*")):
+        if path.suffix.lower() == ".md":
+            all_chunks.extend(_chunk_markdown(path.read_text(), path.name))
+        elif path.suffix.lower() == ".txt":
+            all_chunks.extend(_chunk_plain(path.read_text(), path.name))
+        elif path.suffix.lower() == ".pdf":
+            all_chunks.extend(_chunk_plain(_read_pdf(path), path.name))
 
     if not all_chunks:
-        raise RuntimeError(f"No .md docs found in {avatar.knowledge_dir}")
+        raise RuntimeError(
+            f"No .md/.txt/.pdf docs found in {avatar.knowledge_dir}"
+        )
 
     vectors = embed([c.text for c in all_chunks], input_type="document")
 

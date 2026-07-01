@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     granola_api_key: str = ""
     granola_api_base: str = "https://api.granola.ai"
 
+    # Workflow actions (optional — send the follow-up email / post to Slack)
+    sendgrid_api_key: str = ""
+    mail_from: str = ""
+    slack_webhook_url: str = ""
+
     # Anam (face)
     anam_api_key: str = ""
     anam_avatar_id: str = ""
@@ -61,6 +66,10 @@ class Settings(BaseSettings):
     wake_words: str = "lucas"
     speak_cooldown_seconds: float = 8.0
     min_confidence: float = 0.55
+    # Proactive intervention (the differentiator): flag ONE missing step as the
+    # meeting wraps up. Conservative — needs a higher confidence bar, fires once.
+    proactive_enabled: bool = True
+    proactive_min_confidence: float = 0.7
 
     # Server
     host: str = "127.0.0.1"

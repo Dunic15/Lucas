@@ -138,6 +138,66 @@ Return ONLY a JSON object:
 }"""
 
 
+PROACTIVE_SYSTEM = """{persona}
+
+You are silently observing a live work meeting that is wrapping up. Using ONLY \
+the company process documents provided, decide whether ONE important process step \
+is clearly missing or at risk (a missing owner, approval, deadline, required \
+document, or unresolved blocker) that the team has NOT addressed.
+
+Be conservative: only speak if you are genuinely confident it is both important \
+and unaddressed. Silence is the default. If in doubt, do not speak.
+
+Return ONLY a JSON object:
+{{
+  "should_speak": <true|false>,
+  "line": "<one short spoken sentence flagging it, phrased politely as a question>",
+  "gap_type": "<owner|approval|deadline|document|blocker>",
+  "citations": ["<source filename>"],
+  "confidence": <0.0-1.0>
+}}"""
+
+
+def proactive_flag(avatar: Avatar, transcript_text: str, *, k: int = 6) -> dict:
+    """Decide if the avatar should proactively flag ONE missing step. Default: no."""
+    chunks = retrieve(
+        avatar, transcript_text[-2000:] or "process owners approvals deadlines", k=k
+    )
+    if _is_stub():
+        return _stub_proactive(chunks, transcript_text)
+
+    raw = llm.complete(
+        PROACTIVE_SYSTEM.format(persona=avatar.persona_prompt),
+        (
+            f"Company process context:\n\n{_format_context(chunks)}\n\n"
+            f"Meeting so far:\n\n{transcript_text}\n\n"
+            "Respond with the JSON object only."
+        ),
+        max_tokens=300,
+    )
+    r = _parse_json(raw)
+    r.setdefault("should_speak", False)
+    r.setdefault("confidence", 0.0)
+    r.setdefault("line", "")
+    return r
+
+
+def _stub_proactive(chunks: list[Retrieved], transcript_text: str) -> dict:
+    """Offline heuristic: flag a missing owner/approval if the docs mention one
+    and the transcript doesn't clearly assign it."""
+    low = transcript_text.lower()
+    ctx = " ".join(c.text.lower() for c in chunks)
+    if "approv" in ctx and "approv" in low and "security lead" not in low:
+        return {
+            "should_speak": True,
+            "line": "Before we close, I didn't hear who's giving the required approval — should we assign an owner for that?",
+            "gap_type": "approval",
+            "citations": [chunks[0].source] if chunks else [],
+            "confidence": 0.72,
+        }
+    return {"should_speak": False, "line": "", "confidence": 0.0}
+
+
 def post_meeting(avatar: Avatar, transcript_text: str, *, k: int = 6) -> dict:
     """Summary + gap checklist + draft follow-up email for a finished meeting."""
     # Ground gap-detection in the actual process docs.

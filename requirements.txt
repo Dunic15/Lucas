@@ -12,3 +12,6 @@ pyyaml>=6.0
 # Optional — only needed for the "best quality" brain (BRAIN_PROVIDER=anthropic).
 # The free stub/ollama paths and the whole demo run without it.
 anthropic>=0.40
+
+# PDF ingestion (drop a PDF into an avatar knowledge/ folder)
+pypdf>=4.0
