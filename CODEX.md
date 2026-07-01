@@ -1,5 +1,11 @@
 # Codex task brief — Callable AI Process Avatars
 
+> **Status: no open Codex tasks.** All three items below were completed by Claude
+> Code and merged to `main` (Anam face-vendor swap + avatar-page polish; the
+> second avatar "Marcus" was descoped by the owner). This file is kept for
+> reference / future parallel work. Nothing here needs redoing — do not reopen
+> these tasks or you'll conflict with `main`.
+
 You are working **in parallel with Claude Code** on this repo. Read
 [README.md](README.md) first (especially the demo), then
 [avatars/README.md](avatars/README.md) for the avatar format.
