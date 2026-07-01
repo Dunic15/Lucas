@@ -1,5 +1,5 @@
 import { ArrowRight, FileText, Mic, Video, Users, MessageSquare, PhoneOff } from "lucide-react";
-import avatarImg from "@/assets/laura-avatar.jpg";
+import meetingStartImg from "@/assets/laura-meeting-start.png";
 import { Button } from "@/components/ui/button";
 import { DEMO_LINK, Eyebrow, Reveal } from "./primitives";
 
@@ -83,10 +83,10 @@ function HeroMockup() {
         {/* main speaker tile */}
         <div className="relative mx-3 aspect-video overflow-hidden rounded-xl ring-2 ring-primary/70">
           <img
-            src={avatarImg}
-            alt="Laura speaking on a live video call"
-            width={1024}
-            height={768}
+            src={meetingStartImg}
+            alt="Realistic hybrid meeting with Laura joining as an AI expert"
+            width={1792}
+            height={1024}
             className="h-full w-full object-cover"
           />
           {/* live caption (question to Laura) */}
