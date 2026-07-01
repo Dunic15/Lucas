@@ -65,6 +65,7 @@ def build_index(avatar: Avatar) -> int:
     avatar.index_path.write_text(
         json.dumps(
             {
+                "provider": settings.embedding_provider,
                 "model": settings.embedding_model,
                 "chunks": [asdict(c) for c in all_chunks],
                 "vectors": vectors,
@@ -79,13 +80,25 @@ def build_index(avatar: Avatar) -> int:
 _CACHE: dict[str, dict] = {}
 
 
+def ensure_index(avatar: Avatar) -> None:
+    """Build the index if it's missing or was built with a different embedder.
+
+    Lets the demo 'just work' with no manual ingest step. Rebuilding is free and
+    instant with the default hash embedder; other providers rebuild on switch.
+    """
+    if avatar.index_path.exists():
+        try:
+            provider = json.loads(avatar.index_path.read_text()).get("provider")
+        except (json.JSONDecodeError, OSError):
+            provider = None
+        if provider == settings.embedding_provider:
+            return
+    build_index(avatar)
+
+
 def _load(avatar: Avatar) -> dict:
     if avatar.id not in _CACHE:
-        if not avatar.index_path.exists():
-            raise RuntimeError(
-                f"No index for avatar '{avatar.id}'. "
-                "Run `python backend/scripts/ingest.py` first."
-            )
+        ensure_index(avatar)
         raw = json.loads(avatar.index_path.read_text())
         raw["matrix"] = np.array(raw["vectors"], dtype=np.float32)
         _CACHE[avatar.id] = raw

@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Callable AI Process Avatar — Demo Console</title>
+  <style>
+    :root { --bg:#0b1020; --panel:#141b31; --panel2:#1b2440; --line:#28324f;
+      --text:#e6ecff; --muted:#93a1c8; --accent:#5b8cff; --good:#3ad29f; --warn:#ffcf6b; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text);
+      font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; }
+    header { padding:20px 24px; border-bottom:1px solid var(--line);
+      display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+    header h1 { font-size:18px; margin:0; }
+    header .sub { color:var(--muted); font-size:13px; }
+    .pill { margin-left:auto; display:flex; gap:8px; align-items:center;
+      font-size:12px; color:var(--muted); }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
+    .dot.free { background:var(--warn); } .dot.live { background:var(--good); }
+    main { max-width:1100px; margin:0 auto; padding:24px; display:grid;
+      grid-template-columns:1fr 1fr; gap:20px; }
+    @media (max-width:860px){ main{ grid-template-columns:1fr; } }
+    .card { background:var(--panel); border:1px solid var(--line);
+      border-radius:14px; padding:18px; }
+    .card h2 { font-size:15px; margin:0 0 4px; }
+    .card p.hint { color:var(--muted); font-size:13px; margin:0 0 14px; }
+    label { display:block; font-size:12px; color:var(--muted); margin:12px 0 6px; }
+    select, textarea, input { width:100%; background:var(--panel2);
+      color:var(--text); border:1px solid var(--line); border-radius:9px;
+      padding:10px 12px; font:inherit; }
+    textarea { resize:vertical; min-height:96px; }
+    .row { display:flex; gap:10px; align-items:center; margin-top:14px; }
+    button { background:var(--accent); color:#fff; border:0; border-radius:9px;
+      padding:10px 16px; font:600 14px system-ui; cursor:pointer; }
+    button.ghost { background:transparent; border:1px solid var(--line); color:var(--muted); }
+    button:disabled { opacity:.5; cursor:default; }
+    .out { margin-top:16px; }
+    .answer { background:var(--panel2); border:1px solid var(--line);
+      border-left:3px solid var(--accent); border-radius:9px; padding:14px; }
+    .meter { height:8px; background:var(--panel2); border-radius:6px; overflow:hidden; margin:8px 0; }
+    .meter > i { display:block; height:100%; background:var(--good); }
+    .tags span { display:inline-block; background:var(--panel2); border:1px solid var(--line);
+      color:var(--muted); border-radius:6px; padding:3px 8px; margin:3px 4px 0 0; font-size:12px; }
+    table { width:100%; border-collapse:collapse; margin-top:10px; font-size:13px; }
+    th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { color:var(--muted); font-weight:600; }
+    .gap { font-size:11px; padding:2px 7px; border-radius:20px; background:#3a2140; color:var(--warn); }
+    .gap.none { background:#173a2e; color:var(--good); }
+    .email { white-space:pre-wrap; background:var(--panel2); border:1px solid var(--line);
+      border-radius:9px; padding:14px; font-size:13px; margin-top:10px; }
+    .muted { color:var(--muted); font-size:12px; }
+    .err { color:#ff8a8a; font-size:13px; margin-top:10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Callable AI Process Avatar — Demo Console</h1>
+      <div class="sub">Ask an avatar from your process docs, or turn a meeting transcript into an action list. No meeting software required.</div>
+    </div>
+    <div class="pill"><span id="statusDot" class="dot"></span><span id="statusText">connecting…</span></div>
+  </header>
+
+  <main>
+    <!-- ── Ask panel ───────────────────────────────────────────── -->
+    <section class="card">
+      <h2>Ask the avatar</h2>
+      <p class="hint">A grounded, cited answer straight from the avatar's process documents.</p>
+
+      <label for="avatar">Avatar</label>
+      <select id="avatar"></select>
+
+      <label for="question">Question</label>
+      <textarea id="question" placeholder="e.g. What are we missing for onboarding?">What approvals are required before IT provisions access?</textarea>
+
+      <div class="row">
+        <button id="askBtn">Ask</button>
+        <span id="askMsg" class="muted"></span>
+      </div>
+
+      <div id="askOut" class="out"></div>
+    </section>
+
+    <!-- ── Post-meeting panel ──────────────────────────────────── -->
+    <section class="card">
+      <h2>Post-meeting artifact</h2>
+      <p class="hint">Summary, a gap checklist (missing owner / approval / deadline…), and a draft follow-up email.</p>
+
+      <label for="transcript">Meeting transcript</label>
+      <textarea id="transcript" style="min-height:150px" placeholder="Speaker: line…"></textarea>
+
+      <div class="row">
+        <button id="postBtn">Analyze meeting</button>
+        <button id="sampleBtn" class="ghost">Load sample</button>
+        <span id="postMsg" class="muted"></span>
+      </div>
+
+      <div id="postOut" class="out"></div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => (s ?? "").replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
+
+    async function api(path, body) {
+      const opt = body ? { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(body) } : {};
+      const r = await fetch(path, opt);
+      if (!r.ok) throw new Error((await r.json().catch(()=>({}))).error || `HTTP ${r.status}`);
+      return r.json();
+    }
+
+    // ── boot: health + avatar list ──
+    async function boot() {
+      try {
+        const h = await api("/health");
+        const free = h.brain_provider === "stub";
+        $("statusDot").className = "dot " + (free ? "free" : "live");
+        $("statusText").textContent = free
+          ? "free offline mode (stub brain)"
+          : `brain: ${h.brain_provider} · ${h.brain_model}`;
+        const list = (await api("/avatars")).avatars;
+        $("avatar").innerHTML = list.map(a => `<option value="${a.id}">${esc(a.name)} — ${esc(a.role)}</option>`).join("");
+      } catch (e) {
+        $("statusDot").className = "dot"; $("statusText").textContent = "backend unreachable";
+      }
+    }
+
+    // ── ask ──
+    $("askBtn").onclick = async () => {
+      const btn = $("askBtn"); btn.disabled = true; $("askMsg").textContent = "thinking…"; $("askOut").innerHTML = "";
+      try {
+        const r = await api("/demo/ask", { avatar_id: $("avatar").value, question: $("question").value });
+        const conf = Math.round((r.confidence || 0) * 100);
+        $("askOut").innerHTML = `
+          <div class="answer">${esc(r.answer)}</div>
+          <div class="muted" style="margin-top:10px">confidence ${conf}% · ${r.sufficient_context ? "grounded" : "insufficient context"}</div>
+          <div class="meter"><i style="width:${conf}%"></i></div>
+          <div class="tags"><b class="muted">cited:</b> ${(r.citations||[]).map(c=>`<span>${esc(c)}</span>`).join("") || '<span>none</span>'}</div>
+          <div class="tags"><b class="muted">retrieved:</b> ${(r.retrieved||[]).map(x=>`<span>${esc(x.source)} · ${esc(x.section)} (${x.score})</span>`).join("")}</div>`;
+        $("askMsg").textContent = "";
+      } catch (e) { $("askOut").innerHTML = `<div class="err">${esc(e.message)}</div>`; $("askMsg").textContent = ""; }
+      btn.disabled = false;
+    };
+
+    // ── load sample ──
+    $("sampleBtn").onclick = async () => {
+      try { $("transcript").value = (await api("/demo/sample?avatar_id=" + encodeURIComponent($("avatar").value))).transcript || ""; }
+      catch (e) { $("postMsg").textContent = e.message; }
+    };
+
+    // ── post-meeting ──
+    $("postBtn").onclick = async () => {
+      const btn = $("postBtn"); btn.disabled = true; $("postMsg").textContent = "analyzing…"; $("postOut").innerHTML = "";
+      try {
+        const r = await api("/demo/post_meeting", { avatar_id: $("avatar").value, transcript: $("transcript").value });
+        const rows = (r.checklist||[]).map(c => `
+          <tr><td>${esc(c.item)}</td><td>${esc(c.owner)}</td>
+          <td><span class="gap ${c.gap_type==='none'?'none':''}">${esc(c.gap_type||'none')}</span></td></tr>`).join("");
+        const em = r.follow_up_email || {};
+        $("postOut").innerHTML = `
+          <div class="answer">${esc(r.summary)}</div>
+          <table><thead><tr><th>Action item</th><th>Owner</th><th>Gap</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="3" class="muted">No items detected.</td></tr>'}</tbody></table>
+          <label>Draft follow-up email</label>
+          <div class="email"><b>Subject:</b> ${esc(em.subject)}\n\n${esc(em.body)}</div>`;
+        $("postMsg").textContent = "";
+      } catch (e) { $("postOut").innerHTML = `<div class="err">${esc(e.message)}</div>`; $("postMsg").textContent = ""; }
+      btn.disabled = false;
+    };
+
+    boot();
+  </script>
+</body>
+</html>

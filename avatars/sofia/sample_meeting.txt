@@ -1,0 +1,12 @@
+Priya: Okay, let's run through onboarding for the two new hires starting next week.
+Daniel: The offers are signed and in the ATS, and I confirmed both start dates yesterday.
+Priya: Good. Did we file the equipment requests? They start Monday.
+Daniel: Not yet, I'll do the laptops today.
+Priya: Sofia, are we missing anything for the onboarding process?
+Sofia: You still need the hiring manager to approve the access level before IT provisions accounts, and both new hires need a named onboarding buddy.
+Daniel: Right, one of them needs elevated access to the production dashboard.
+Priya: Who's approving that? Can IT just turn it on?
+Daniel: I think we can just grant it, it's faster.
+Priya: Let's also get the first-week training on their calendars.
+Daniel: And we still need the signed policy acknowledgments.
+Priya: Okay, I think that's everything. Let's wrap up.

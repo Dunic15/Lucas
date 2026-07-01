@@ -7,9 +7,46 @@ Meet / Teams meeting. She listens, and when addressed by name she answers from
 your company's process docs — grounded and cited. After the call she drafts a
 summary, a gap checklist, and a follow-up email.
 
-This repo is the **MVP** of that idea, built to the "fail cheap, in order"
-plan: prove the pipeline, then grounded answers, then the hard part
-(knowing when to speak).
+---
+
+## ⚡ 60-second demo (no keys needed)
+
+You do **not** need any API keys to see it work. The demo console runs the real
+brain + retrieval over the sample process docs, fully offline and free.
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env                     # leave it as-is to run free
+uvicorn backend.app.main:app --port 8000
+```
+
+Open **http://127.0.0.1:8000** → ask Sofia a question, or load the sample
+meeting and get an action checklist + follow-up email.
+
+### Want real Claude-quality answers? Insert one key.
+
+Open `.env`, paste your key into `ANTHROPIC_API_KEY=` (get one at
+[console.anthropic.com](https://console.anthropic.com/)), restart. **That's the
+whole setup** — the app auto-detects the key and upgrades from the free stub to
+Claude. Nothing else changes.
+
+> The full **live-in-a-real-meeting** experience (a talking face in a Zoom call)
+> additionally needs Recall.ai + Anam + ElevenLabs — see [Live meeting](#live-meeting-optional).
+
+---
+
+## What runs with what
+
+| You have… | Brain | Embeddings | You get |
+|---|---|---|---|
+| **nothing** (default) | free `stub` | free `hash` | working demo, extractive grounded answers |
+| **1 key** (Anthropic) | Claude | free `hash` | real reasoning, real summaries ← recommended |
+| Ollama installed | local `llama3.2` | free | real reasoning, 100% local & free |
+| all vendor keys | Claude | Voyage | live talking avatar in real meetings |
+
+Switch any layer in `.env`: `BRAIN_PROVIDER` (`stub|ollama|anthropic`) and
+`EMBEDDING_PROVIDER` (`hash|local|voyage`). See [docs/FREE_TIER.md](docs/FREE_TIER.md).
 
 ---
 
@@ -20,24 +57,24 @@ Meeting (Zoom/Meet/Teams)
    │
    │  Recall.ai bot joins ──────────────► renders /avatar as its camera
    │        │                                     │
-   │        │ transcript.data (webhook)           │ embeds Tavus conversation
+   │        │ transcript.data (webhook)           │ embeds Anam conversation
    ▼        ▼                                     ▼  (the FACE)
-        backend  ◄───────────────────────────  Tavus replica
+        backend  ◄───────────────────────────  Anam replica
         (the BRAIN)                             voiced by ElevenLabs (the VOICE)
         ├─ when-to-speak gate (wake word + cooldown + confidence)
-        ├─ RAG over knowledge/*.md  (Voyage embeddings → cosine retrieval)
-        ├─ Claude: grounded, cited answer
-        └─ on "speak" ─► websocket ─► avatar page ─► Tavus echo ─► avatar talks
+        ├─ RAG over knowledge/*.md  (pluggable embeddings → cosine retrieval)
+        ├─ Brain (Claude / Ollama / stub): grounded, cited answer
+        └─ on "speak" ─► websocket ─► avatar page ─► Anam echo ─► avatar talks
    │
    ▼
-   POST /sessions/{id}/end ─► Claude: summary + gap checklist + follow-up email
+   POST /sessions/{id}/end ─► Brain: summary + gap checklist + follow-up email
 ```
 
 **Separation of concerns (the moat-preserving choice):** the *brain* lives in
-our backend, driven by Recall's transcript. Tavus is only a *mouth + face* we
-command via `echo`. That keeps the avatar vendor swappable — if Tavus changes
-pricing or you prefer Anam/HeyGen, only `tavus_client.py` + `avatar.html`
-change.
+our backend, driven by Recall's transcript. The avatar vendor (Anam) is only a
+*mouth + face* we command via `echo`. That keeps it swappable — if you prefer
+Tavus/HeyGen, only the face-client + `avatar.html` change. The same brain also
+powers the offline **demo console**, which needs no meeting vendor at all.
 
 ## Project layout
 
@@ -47,23 +84,31 @@ Lucas/
 │   ├── README.md             ← "how to add an avatar in 3 steps"
 │   └── sofia/
 │       ├── avatar.yaml       ← name, wake words, persona, face, voice
-│       └── knowledge/        ← markdown process docs Sofia answers from
+│       ├── knowledge/        ← markdown process docs Sofia answers from
+│       └── sample_meeting.txt← demo transcript for the post-meeting artifact
 ├── backend/
 │   ├── app/
-│   │   ├── main.py           ← API routes + the meeting flow (wiring)
+│   │   ├── main.py           ← API routes: demo console + live meeting flow
 │   │   ├── avatars.py        ← loads avatars/<id>/ into an Avatar object
 │   │   ├── decision.py       ← when-to-speak gate (wake word, confidence)
-│   │   ├── brain.py          ← Claude: grounded answers + post-meeting
+│   │   ├── brain.py          ← grounded answers + post-meeting (+ free stub)
+│   │   ├── llm.py            ← pluggable brain: anthropic | ollama | stub
 │   │   ├── rag.py            ← retrieval over an avatar's knowledge
+│   │   ├── embeddings.py     ← pluggable embeddings: hash | local | voyage
 │   │   ├── recall_client.py  ← Recall.ai (ears + camera)
-│   │   ├── tavus_client.py   ← Tavus face + ElevenLabs voice
-│   │   ├── embeddings.py     ← Voyage embeddings (swappable)
+│   │   ├── tavus_client.py   ← the avatar FACE (Anam) + ElevenLabs voice
 │   │   ├── store.py          ← in-memory session state
 │   │   └── config.py         ← all env settings in one place
-│   ├── scripts/ingest.py     ← build the RAG index
+│   ├── scripts/
+│   │   ├── ingest.py         ← build the RAG index
+│   │   ├── ask.py            ← ask an avatar from the CLI (offline)
+│   │   └── simulate.py       ← run the post-meeting brain on a transcript
 │   └── tests/                ← pure-logic tests (no keys needed)
-├── frontend/avatar.html      ← the page Recall renders as the bot's camera
-├── .env.example              ← copy to .env, add keys
+├── frontend/
+│   ├── demo.html             ← the offline demo console (served at /)
+│   └── avatar.html           ← the page Recall renders as the bot's camera
+├── .claude/agents/           ← helper subagents (run/ingest/author/deploy)
+├── .env.example              ← copy to .env; the demo runs with it unchanged
 └── requirements.txt
 ```
 
@@ -72,8 +117,10 @@ Lucas/
 | I want to… | Edit |
 |---|---|
 | Add / change an avatar's behaviour | `avatars/<id>/avatar.yaml` |
-| Add process knowledge | drop `.md` in `avatars/<id>/knowledge/`, re-run ingest |
+| Add process knowledge | drop `.md` in `avatars/<id>/knowledge/`, restart (auto re-indexes) |
 | Add a whole new avatar | copy `avatars/sofia/` → see `avatars/README.md` |
+| Switch the brain (Claude/Ollama/free) | `BRAIN_PROVIDER` in `.env` |
+| Switch embeddings | `EMBEDDING_PROVIDER` in `.env` |
 | Tune when it speaks | `backend/app/decision.py` (or per-avatar yaml) |
 | Change how answers are phrased | `ANSWER_SYSTEM` in `backend/app/brain.py` |
 | Swap the avatar/voice vendor | `backend/app/tavus_client.py` + `frontend/avatar.html` |
@@ -82,81 +129,46 @@ Lucas/
 | Layer | Tool | Where |
 |---|---|---|
 | Meeting entry + transcript (ears) | Recall.ai | `backend/app/recall_client.py` |
-| Face | Tavus replica | `backend/app/tavus_client.py`, `frontend/avatar.html` |
-| Voice | ElevenLabs | configured as Tavus TTS layer in `tavus_client.py` |
-| Reasoning (brain) | Claude | `backend/app/brain.py` |
-| Knowledge retrieval (RAG) | Voyage embeddings + local store | `backend/app/rag.py` |
+| Face | Anam replica | `backend/app/tavus_client.py`, `frontend/avatar.html` |
+| Voice | ElevenLabs | configured as the face's TTS layer |
+| Reasoning (brain) | Claude / Ollama / stub | `backend/app/brain.py`, `llm.py` |
+| Knowledge retrieval (RAG) | pluggable embeddings + local store | `backend/app/rag.py`, `embeddings.py` |
 | When-to-speak gate | — | `backend/app/decision.py` |
 | Avatar definitions (editable) | YAML + markdown | `avatars/<id>/` |
 
 ---
 
-## Build status (what's proven vs. scaffold)
+## Try it from the command line
 
-This follows the staged plan. Honest state today:
+```bash
+# Ask a question (offline; add ANTHROPIC_API_KEY to .env for Claude answers)
+python backend/scripts/ask.py "What approvals are needed before provisioning?"
 
-| Stage | What | Status |
-|---|---|---|
-| 1–2 | Pipeline: a face in a meeting that can speak | **Code complete, needs live keys to verify** |
-| 3 | Live transcript → backend | **Code complete** (`/webhooks/recall`) |
-| 4 | RAG with citations | **Code complete + locally runnable** (needs `VOYAGE_API_KEY`) |
-| 5 | Answer-when-called (speak only when named) | **Code complete** |
-| 6 | Post-meeting summary + checklist + email | **Code complete** |
-| 7 | Controlled proactive intervention | **Not built yet** — deliberate next step |
-
-**Integration seams that need a live run to confirm** (marked in-code):
-- the Tavus `echo` app-message schema and that Recall captures the embedded
-  Daily iframe audio (`frontend/avatar.html → speak()`);
-- exact Recall Create-Bot field shapes for your API version
-  (`recall_client.py`, isolated in one body).
-
-Nothing here has been run against live Recall/Tavus/ElevenLabs accounts yet —
-it is a faithful implementation of the verified architecture, ready for keys.
+# Turn a transcript into a summary + gap checklist + follow-up email
+python backend/scripts/simulate.py            # uses sofia's sample_meeting.txt
+```
 
 ---
 
-## Run it
+## Live meeting (optional)
 
-### 1. Install
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env        # then fill in keys
-```
+The live path puts a talking face in a real call. It needs trial/paid vendor
+keys (Recall.ai, Anam, ElevenLabs) — see [docs/FREE_TIER.md](docs/FREE_TIER.md)
+and the demo runbook in [docs/DEMO.md](docs/DEMO.md).
 
-### 2. Build the knowledge index (RAG)
 ```bash
-python backend/scripts/ingest.py          # indexes every avatar
-```
-This embeds each avatar's `knowledge/*.md` into `avatars/<id>/.index.json`.
-Edit / add process docs and re-run to refresh.
+# 1. Expose the server so Recall can reach the webhook + avatar page
+ngrok http 8000     # put the https URL in .env as PUBLIC_BASE_URL, restart
 
-### 3. Start the backend
-```bash
-uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
-```
-Health check: <http://127.0.0.1:8000/health>
-
-### 4. Expose it (Recall must reach your webhook + avatar page)
-```bash
-ngrok http 8000
-# put the https URL in .env as PUBLIC_BASE_URL, restart uvicorn
-```
-
-### 5. Call Sofia into a meeting
-```bash
+# 2. Call Sofia into a meeting
 curl -X POST http://127.0.0.1:8000/sessions/start \
   -H 'Content-Type: application/json' \
-  -d '{"meeting_url": "https://meet.google.com/your-test-call"}'
-# -> returns bot_id
-```
-In the call, say: **"Sofia, what are we missing for this onboarding?"**
-(Call a different avatar with `"avatar_id": "<id>"` — see `avatars/README.md`.)
+  -d '{"meeting_url": "https://meet.google.com/your-test-call"}'   # -> bot_id
 
-### 6. End + get the artifact
-```bash
+# 3. In the call, say: "Sofia, what are we missing for this onboarding?"
+
+# 4. End + get the artifact
 curl -X POST http://127.0.0.1:8000/sessions/<bot_id>/end
-# -> summary + gap checklist + draft follow-up email
 ```
 
 ---
@@ -165,26 +177,18 @@ curl -X POST http://127.0.0.1:8000/sessions/<bot_id>/end
 
 The MVP is **conservative on purpose**: Sofia speaks *only* when called by a
 wake word (`WAKE_WORDS`, default `sofia`), never within `SPEAK_COOLDOWN_SECONDS`
-of her last line, and only if Claude's grounded confidence ≥ `MIN_CONFIDENCE`.
+of her last line, and only if the brain's grounded confidence ≥ `MIN_CONFIDENCE`.
 If the docs don't support an answer, she says so rather than guessing.
 
-**Stage 7 (next):** one controlled proactive intervention — e.g. at meeting end,
-if a required owner/approval is missing, Sofia says a single line. Gate it behind
-high confidence; default to silence. This is the real differentiator and is only
-truly testable in live pilots.
-
----
-
-## Configuration
-
-All via `.env` (see `.env.example`). Keys needed for a full live run: Anthropic,
-Voyage, Recall.ai, Tavus (+ a replica id), ElevenLabs (+ a voice id), and a
-public URL. The RAG layer (steps 4) runs with just Anthropic + Voyage.
+**Next (Stage 7):** one controlled proactive intervention — e.g. at meeting end,
+if a required owner/approval is missing, Sofia says a single line. Gated behind
+high confidence; default to silence.
 
 ## Security / cost notes
 
 - **No secrets in git.** `.env` is gitignored; only `.env.example` is tracked.
 - **Per-minute avatar billing.** `/sessions/{id}/end` ends both the Recall bot
-  and the Tavus conversation to stop the meter — always end sessions.
+  and the avatar conversation to stop the meter — always end sessions.
 - **PII.** Transcripts contain personal data; this MVP keeps them in memory only
   and never logs them. Don't add transcript logging without a retention policy.
+- The **demo console** touches none of the paid vendors and stores nothing.

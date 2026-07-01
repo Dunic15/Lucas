@@ -16,11 +16,23 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Reasoning
+    # Reasoning (the brain) — pick a provider:
+    #   anthropic (best quality, needs ANTHROPIC_API_KEY)  ← default
+    #   ollama    (free, local, needs Ollama running)
+    #   stub      (free, offline, no model — deterministic, for a zero-key demo)
+    brain_provider: str = "anthropic"
     anthropic_api_key: str = ""
     brain_model: str = "claude-sonnet-4-6"
 
-    # Embeddings
+    # Ollama (only used when BRAIN_PROVIDER=ollama)
+    ollama_host: str = "http://localhost:11434"
+    ollama_model: str = "llama3.2"
+
+    # Embeddings for RAG — pick a provider:
+    #   hash   (free, offline, zero-dependency keyword vectors)  ← default
+    #   local  (free, real semantic embeddings via fastembed)
+    #   voyage (best quality, needs VOYAGE_API_KEY)
+    embedding_provider: str = "hash"
     voyage_api_key: str = ""
     embedding_model: str = "voyage-3"
 

@@ -21,13 +21,27 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from . import avatars, store, recall_client, tavus_client
-from .brain import answer_question, post_meeting
+from .brain import answer_question, post_meeting, effective_provider
 from .config import settings
 from .decision import detect_wake, passes_confidence
+from .rag import ensure_index
 
 app = FastAPI(title="Callable AI Process Avatar")
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+
+
+@app.on_event("startup")
+def _prebuild_indexes() -> None:
+    """Build each avatar's RAG index on boot so the demo works with no setup.
+
+    Free & instant with the default hash embedder; skipped if already current.
+    """
+    for aid in avatars.list_ids():
+        try:
+            ensure_index(avatars.load(aid))
+        except Exception as e:  # a bad avatar shouldn't stop the server
+            print(f"[startup] could not index avatar '{aid}': {e}")
 
 
 # ───────────────────────────── health ──────────────────────────────
@@ -36,7 +50,9 @@ def health() -> dict:
     return {
         "status": "ok",
         "active_sessions": len(store.all_sessions()),
+        "brain_provider": effective_provider(),
         "brain_model": settings.brain_model,
+        "embedding_provider": settings.embedding_provider,
         "avatars": avatars.list_ids(),
     }
 
@@ -50,6 +66,50 @@ def list_avatars() -> dict:
         out.append({"id": a.id, "name": a.name, "role": a.role,
                     "wake_words": a.wake_words})
     return {"avatars": out}
+
+
+# ─────────────────────────── demo console ──────────────────────────
+# Everything below runs WITHOUT the live-meeting vendors (Recall/Anam/Tavus/
+# ElevenLabs). It exercises the brain + RAG directly so you can prove the value
+# with zero keys (BRAIN_PROVIDER=stub) or one key (BRAIN_PROVIDER=anthropic).
+@app.get("/")
+def demo_page() -> FileResponse:
+    return FileResponse(FRONTEND_DIR / "demo.html")
+
+
+class AskRequest(BaseModel):
+    question: str
+    avatar_id: str = "sofia"
+
+
+@app.post("/demo/ask")
+async def demo_ask(req: AskRequest) -> JSONResponse:
+    """Ask an avatar a question → grounded, cited answer (no meeting needed)."""
+    avatar = avatars.load(req.avatar_id)  # raises if unknown
+    result = await run_in_threadpool(answer_question, avatar, req.question)
+    return JSONResponse(result)
+
+
+class PostMeetingRequest(BaseModel):
+    transcript: str
+    avatar_id: str = "sofia"
+
+
+@app.post("/demo/post_meeting")
+async def demo_post_meeting(req: PostMeetingRequest) -> JSONResponse:
+    """Turn a meeting transcript into summary + gap checklist + follow-up email."""
+    avatar = avatars.load(req.avatar_id)
+    artifact = await run_in_threadpool(post_meeting, avatar, req.transcript)
+    return JSONResponse(artifact)
+
+
+@app.get("/demo/sample")
+def demo_sample(avatar_id: str = "sofia") -> JSONResponse:
+    """A sample transcript to load into the post-meeting demo, if the avatar has one."""
+    avatar = avatars.load(avatar_id)
+    sample = avatar.dir / "sample_meeting.txt"
+    text = sample.read_text() if sample.exists() else ""
+    return JSONResponse({"avatar_id": avatar_id, "transcript": text})
 
 
 # ──────────────────────── session lifecycle ────────────────────────
