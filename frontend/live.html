@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Lucas — Live Avatar Preview</title>
+  <title>Lucas — Live Avatar (Anam persona + your thesis)</title>
   <style>
     :root { --bg:#0b1020; --panel:#141b31; --line:#28324f; --text:#e6ecff;
       --muted:#93a1c8; --accent:#5b8cff; --good:#3ad29f; --warn:#ffcf6b; }
@@ -12,26 +12,25 @@
       font:15px/1.5 system-ui,-apple-system,sans-serif; height:100vh;
       display:grid; grid-template-columns:1fr 380px; }
     @media (max-width:820px){ body{ grid-template-columns:1fr; grid-template-rows:1fr auto; } }
-
     #stage { position:relative; background:#05070f; }
     #avatar-video { width:100%; height:100%; object-fit:cover; background:#05070f; }
     #pill { position:absolute; left:14px; top:14px; display:flex; gap:8px; align-items:center;
       background:rgba(11,16,32,.6); padding:6px 12px; border-radius:999px; font-size:12px; color:var(--muted); }
     #pill .d { width:8px; height:8px; border-radius:50%; background:var(--warn); }
     #pill.live .d { background:var(--good); } #pill.err .d { background:#ff8a8a; }
+    #sound { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+      background:rgba(5,7,15,.55); cursor:pointer; z-index:5; font-size:16px; }
+    #sound span { background:var(--accent); padding:12px 20px; border-radius:12px; font-weight:600; }
     #cap { position:absolute; left:50%; bottom:20px; transform:translateX(-50%);
-      max-width:80%; text-align:center; background:rgba(11,16,32,.75); padding:10px 16px;
+      max-width:82%; text-align:center; background:rgba(11,16,32,.78); padding:10px 16px;
       border-radius:12px; opacity:0; transition:opacity .25s; font-weight:500; }
     #cap.show { opacity:1; }
-
     #panel { border-left:1px solid var(--line); padding:20px; display:flex; flex-direction:column; gap:12px; overflow:auto; }
     h1 { font-size:16px; margin:0; } .sub { color:var(--muted); font-size:13px; margin:0; }
     textarea { width:100%; min-height:80px; background:var(--panel); color:var(--text);
       border:1px solid var(--line); border-radius:9px; padding:10px; font:inherit; resize:vertical; }
     button { background:var(--accent); color:#fff; border:0; border-radius:9px; padding:10px 16px;
       font:600 14px system-ui; cursor:pointer; } button:disabled { opacity:.5; cursor:default; }
-    .chip { display:inline-block; background:var(--panel); border:1px solid var(--line); color:var(--muted);
-      border-radius:8px; padding:5px 9px; margin:3px 4px 0 0; font-size:12px; cursor:pointer; }
     .answer { background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--accent);
       border-radius:9px; padding:12px; font-size:14px; }
     .muted { color:var(--muted); font-size:12px; } .err { color:#ff8a8a; font-size:13px; }
@@ -39,72 +38,90 @@
 </head>
 <body>
   <div id="stage">
-    <video id="avatar-video" autoplay playsinline></video>
+    <video id="avatar-video" autoplay playsinline muted></video>
     <div id="pill"><span class="d"></span><span id="pillText">starting…</span></div>
+    <div id="sound"><span>🔊 Tap to start &amp; enable sound</span></div>
     <div id="cap"></div>
   </div>
 
   <div id="panel">
     <div>
-      <h1>Lucas — live avatar preview</h1>
-      <p class="sub">The Anam face speaks Claude's grounded answers from the process docs. No meeting software needed.</p>
+      <h1>Lucas — live avatar</h1>
+      <p class="sub">This is your Anam persona “Liv”. She answers with her own brain and the knowledge you uploaded (your thesis).</p>
     </div>
-    <label class="muted" for="q">Ask Lucas</label>
-    <textarea id="q">What approvals are required before IT provisions elevated access?</textarea>
-    <div>
-      <span class="chip" data-q="What are the required onboarding steps?">onboarding steps</span>
-      <span class="chip" data-q="Who owns the access approval?">who approves access</span>
-      <span class="chip" data-q="What are common gaps teams forget?">common gaps</span>
-    </div>
-    <button id="ask">Ask &amp; speak</button>
+    <label class="muted" for="q">Ask Lucas (answers from your thesis)</label>
+    <textarea id="q">What is the AI buffer in your thesis, and why does it matter for product managers?</textarea>
+    <button id="ask" disabled>Ask &amp; speak</button>
     <div id="out"></div>
-    <p class="muted" id="hint">Tip: allow autoplay/audio if the avatar is muted.</p>
+    <p class="muted" id="hint">Waiting for the avatar to connect…</p>
   </div>
 
   <script type="module">
-    import { createClient } from "https://esm.sh/@anam-ai/js-sdk@3";
+    import { createClient, AnamEvent } from "https://esm.sh/@anam-ai/js-sdk@4.17.1";
     const $ = (id) => document.getElementById(id);
     const AVATAR = "lucas";
     let anam = null, capTimer = null;
 
     function pill(state, text){ $("pill").className = state; $("pillText").textContent = text; }
     function caption(t){ const c=$("cap"); c.textContent=t; c.classList.add("show");
-      clearTimeout(capTimer); capTimer=setTimeout(()=>c.classList.remove("show"),8000); }
+      clearTimeout(capTimer); capTimer=setTimeout(()=>c.classList.remove("show"),9000); }
+    function report(where, e){
+      const message=(e&&(e.message||e.reason||e.toString()))||String(e);
+      fetch("/live/error",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({where,message,stack:(e&&e.stack)||""})}).catch(()=>{});
+    }
+    window.addEventListener("error", e => report("window.error", e.error||e.message));
+    window.addEventListener("unhandledrejection", e => report("unhandledrejection", e.reason));
 
     async function api(path, body){
-      const r = await fetch(path, body ? {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)} : {});
-      const j = await r.json().catch(()=>({}));
-      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      return j;
+      const r = await fetch(path, body?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:{});
+      const j = await r.json().catch(()=>({})); if(!r.ok) throw new Error(j.error||`HTTP ${r.status}`); return j;
     }
 
     async function boot(){
       try {
-        pill("", "minting Anam session…");
+        pill("", "minting session…");
         const { session_token } = await api("/live/token", { avatar_id: AVATAR });
-        pill("", "connecting to Anam…");
         anam = createClient(session_token);
-        await anam.streamToVideoElement("avatar-video");
-        pill("live", "Live");
-      } catch(e){ pill("err", "avatar error"); $("out").innerHTML = `<div class="err">${e.message}</div>`; }
+        window.anam = anam; window.AnamEvent = AnamEvent;   // for debugging
+        // Stream the persona's spoken answer live (accumulate chunks per message).
+        let curId = null, curText = "";
+        function showAnswer(t){ const o=$("out"); o.innerHTML="";
+          const d=document.createElement("div"); d.className="answer"; d.textContent=t; o.appendChild(d); }
+        anam.addListener(AnamEvent.MESSAGE_STREAM_EVENT_RECEIVED, (e) => {
+          if (!e || e.role !== "persona") return;
+          if (e.id !== curId) { curId = e.id; curText = ""; }
+          curText += e.content || "";
+          if (curText.trim()) { showAnswer(curText); caption(curText); }
+        });
+        anam.addListener(AnamEvent.TOOL_CALL_STARTED, () => $("hint").textContent = "🔎 Searching your thesis…");
+        anam.addListener(AnamEvent.VIDEO_PLAY_STARTED, () => pill("live","Live"));
+        pill("", "connecting to Anam…");
+        await anam.streamToVideoElement("avatar-video");   // starts muted (autoplay-safe)
+        pill("live","Live");
+        $("ask").disabled = false;
+        $("hint").textContent = "Connected. Tap the video once to enable sound, then ask.";
+      } catch(e){
+        console.error(e); pill("err","avatar error"); report("boot", e);
+        $("out").innerHTML = `<div class="err">Avatar failed: ${(e&&e.message)||e}</div>`;
+      }
     }
+
+    // Autoplay-safe: video starts muted so the face shows immediately; the first
+    // tap unmutes it (browsers require a user gesture before playing audio).
+    $("sound").onclick = () => {
+      const v = $("avatar-video"); v.muted = false; v.play().catch(()=>{});
+      $("sound").style.display = "none";
+    };
 
     async function ask(){
-      const q = $("q").value.trim(); if(!q) return;
-      $("ask").disabled = true; $("out").innerHTML = '<span class="muted">thinking…</span>';
-      try {
-        const r = await api("/demo/ask", { avatar_id: AVATAR, question: q });
-        $("out").innerHTML = `<div class="answer">${r.answer}</div>
-          <div class="muted" style="margin-top:8px">cited: ${(r.citations||[]).join(", ")||"none"} · confidence ${Math.round((r.confidence||0)*100)}%</div>`;
-        caption(r.answer);
-        if (anam && typeof anam.talk === "function") anam.talk(r.answer);
-        else $("hint").textContent = "Avatar not connected — showing text only.";
-      } catch(e){ $("out").innerHTML = `<div class="err">${e.message}</div>`; }
-      $("ask").disabled = false;
+      const q = $("q").value.trim(); if(!q || !anam) return;
+      $("ask").disabled = true; $("out").innerHTML = '<span class="muted">Lucas is thinking (searching your thesis)…</span>';
+      try { anam.sendUserMessage(q); }   // Liv answers with her own brain + knowledge
+      catch(e){ $("out").innerHTML = `<div class="err">${e.message}</div>`; report("ask", e); }
+      setTimeout(()=>{ $("ask").disabled = false; }, 1500);
     }
-
     $("ask").onclick = ask;
-    document.querySelectorAll(".chip").forEach(c => c.onclick = () => { $("q").value = c.dataset.q; ask(); });
     boot();
   </script>
 </body>

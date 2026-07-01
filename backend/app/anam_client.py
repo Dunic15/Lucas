@@ -63,6 +63,32 @@ def create_persona(avatar: Avatar) -> str:
     return avatar.anam_avatar_id
 
 
+def _expand_persona(persona_id: str) -> dict:
+    """Turn a SAVED Anam persona into an inline personaConfig.
+
+    SDK v4 rejects `personaId` session tokens ("legacy") — the token must carry a
+    full personaConfig. We fetch the saved persona (built in the Anam dashboard,
+    with its face, voice, LLM, system prompt and knowledge tools) and re-emit it
+    inline, so the persona's knowledge (e.g. an uploaded thesis) comes along.
+    """
+    p = httpx.get(f"{ANAM_BASE}/personas/{persona_id}", headers=_headers(), timeout=30.0)
+    p.raise_for_status()
+    d = p.json()
+    cfg = {
+        "name": d.get("name") or "Assistant",
+        "avatarId": (d.get("avatar") or {}).get("id"),
+        "voiceId": (d.get("voice") or {}).get("id"),
+        "llmId": d.get("llmId"),
+        "systemPrompt": (d.get("brain") or {}).get("systemPrompt")
+        or d.get("systemPrompt")
+        or "",
+    }
+    if d.get("tools"):  # carry the knowledge (RAG) tools, e.g. the thesis
+        cfg["tools"] = d["tools"]
+    # Drop empties so we don't send nulls Anam may reject.
+    return {k: v for k, v in cfg.items() if v}
+
+
 def create_conversation(avatar: Avatar, persona_id: str) -> dict:
     """Mint an Anam session token for this avatar.
 
@@ -71,17 +97,7 @@ def create_conversation(avatar: Avatar, persona_id: str) -> dict:
                           return one; we generate it and the page echoes it back).
       - conversation_url: the Anam sessionToken the avatar page joins with.
     """
-    persona_config = {
-        "name": f"{avatar.name} — {avatar.role}",
-        "avatarId": persona_id,                        # which face
-        # We drive speech from our backend via the page's talk()/echo, so the
-        # persona's own LLM is not the source of truth. systemPrompt kept for
-        # tone; omit/replace llmId per your Anam setup.
-        "systemPrompt": avatar.persona_prompt or f"You are {avatar.name}.",
-    }
-    if avatar.elevenlabs_voice_id:                     # else Anam's default voice
-        persona_config["voiceId"] = avatar.elevenlabs_voice_id
-    body = {"personaConfig": persona_config}
+    body = {"personaConfig": _expand_persona(persona_id)}
     resp = httpx.post(
         f"{ANAM_BASE}/auth/session-token",
         headers=_headers(),

@@ -124,6 +124,19 @@ class LiveTokenRequest(BaseModel):
     avatar_id: str = "lucas"
 
 
+class LiveError(BaseModel):
+    where: str = ""
+    message: str = ""
+    stack: str = ""
+
+
+@app.post("/live/error")
+async def live_error(e: LiveError) -> JSONResponse:
+    """The avatar page reports client-side Anam errors here so we can see them."""
+    print(f"\n[LIVE-ERROR] {e.where}: {e.message}\n{(e.stack or '')[:1500]}\n", flush=True)
+    return JSONResponse({"ok": True})
+
+
 @app.post("/live/token")
 async def live_token(req: LiveTokenRequest) -> JSONResponse:
     """Mint a fresh Anam session token for the browser to stream the avatar."""
