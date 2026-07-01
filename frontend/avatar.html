@@ -5,34 +5,70 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Sofia — AI Process Expert</title>
   <style>
-    html, body { margin: 0; height: 100%; background: #0b1020; overflow: hidden; }
+    html, body { margin: 0; height: 100%; background: #0b1020; overflow: hidden;
+      font: 600 14px/1.3 system-ui, sans-serif; color: #cfe0ff; }
     #stage { position: fixed; inset: 0; }
     #stage iframe { width: 100%; height: 100%; border: 0; }
+
+    /* identity badge (bottom-left) */
     #badge {
       position: fixed; left: 16px; bottom: 16px; z-index: 10;
-      font: 600 14px/1.2 system-ui, sans-serif; color: #cfe0ff;
       background: rgba(11,16,32,.6); padding: 8px 12px; border-radius: 999px;
       backdrop-filter: blur(6px);
     }
     #badge .dot { display:inline-block; width:8px; height:8px; border-radius:50%;
       background:#3ad29f; margin-right:8px; vertical-align:middle; }
+    /* the dot pulses while a line is being spoken */
+    #badge.speaking .dot { animation: pulse 1s ease-in-out infinite; }
+    @keyframes pulse {
+      0%,100% { box-shadow: 0 0 0 0 rgba(58,210,159,.7); transform: scale(1); }
+      50%     { box-shadow: 0 0 0 7px rgba(58,210,159,0); transform: scale(1.25); }
+    }
+
+    /* connection-status pill (top-right) */
+    #status {
+      position: fixed; right: 16px; top: 16px; z-index: 10;
+      background: rgba(11,16,32,.6); padding: 6px 12px; border-radius: 999px;
+      backdrop-filter: blur(6px); font-size: 12px; color: #93a1c8;
+      display: flex; align-items: center; gap: 7px;
+    }
+    #status .sdot { width:8px; height:8px; border-radius:50%; background:#93a1c8; }
+    #status.connecting .sdot { background:#ffcf6b; }
+    #status.live       .sdot { background:#3ad29f; }
+    #status.error      .sdot { background:#ff8a8a; }
+
+    /* caption bar (bottom-center) — shows the latest line the avatar said */
+    #caption {
+      position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+      z-index: 10; max-width: min(80vw, 720px); text-align: center;
+      background: rgba(11,16,32,.72); padding: 10px 16px; border-radius: 12px;
+      backdrop-filter: blur(6px); color: #e6ecff; font-weight: 500;
+      opacity: 0; transition: opacity .25s ease;
+    }
+    #caption.show { opacity: 1; }
   </style>
 </head>
 <body>
   <!--
     This page is what the Recall.ai bot renders as its camera in the meeting.
-    It embeds the Tavus conversation (the avatar's face, voiced by ElevenLabs)
-    and opens a websocket to our backend. When the backend's "brain" decides
-    the avatar should speak, it sends {type:"speak", text}; we forward that to
-    Tavus as an `echo` interaction so the avatar speaks those exact words.
+    It embeds the avatar conversation (the face, voiced by ElevenLabs) and opens
+    a websocket to our backend. When the backend's "brain" decides the avatar
+    should speak, it sends {type:"speak", text}; we forward that to the avatar as
+    an `echo` interaction so it speaks those exact words, and mirror it as a caption.
 
-    INTEGRATION SEAM TO VERIFY against current Tavus + Daily docs:
+    INTEGRATION SEAM TO VERIFY against current vendor docs:
       - the echo app-message schema (message_type/event_type/properties.text)
       - that Recall captures the embedded Daily iframe's audio.
     Both are isolated in speak() below — adjust there if a vendor changes.
+
+    Manually test a caption without a live backend: open devtools console and run
+      speak("Testing the caption bar.")
+    — the caption should appear and the badge dot should pulse briefly.
   -->
   <div id="stage"></div>
   <div id="badge"><span class="dot"></span>Sofia · AI Process Expert</div>
+  <div id="status" class="connecting"><span class="sdot"></span><span id="statusText">Connecting…</span></div>
+  <div id="caption"></div>
 
   <!-- Pinned version to limit supply-chain surface. For production, add a
        verified Subresource Integrity hash: integrity="sha384-..." -->
@@ -44,7 +80,28 @@
     const conversationId  = params.get("conversation_id");
 
     let callFrame = null;
+    let captionTimer = null;
 
+    // ── UI helpers ──────────────────────────────────────────────────
+    function setStatus(state, text) {
+      const el = document.getElementById("status");
+      el.className = state;                          // connecting | live | error
+      document.getElementById("statusText").textContent = text;
+    }
+
+    function showCaption(text) {
+      const cap = document.getElementById("caption");
+      cap.textContent = text;
+      cap.classList.add("show");
+      clearTimeout(captionTimer);
+      captionTimer = setTimeout(() => cap.classList.remove("show"), 6000);
+    }
+
+    function setSpeaking(on) {
+      document.getElementById("badge").classList.toggle("speaking", on);
+    }
+
+    // ── Daily embed (the avatar's face) ─────────────────────────────
     function joinAvatarRoom() {
       callFrame = window.DailyIframe.createFrame(
         document.getElementById("stage"),
@@ -57,8 +114,12 @@
       callFrame.join({ url: conversationUrl });
     }
 
-    // Make the Tavus avatar say `text` via an echo interaction.
+    // Make the avatar say `text` via an echo interaction, and caption it.
+    // (Unchanged integration contract — plus caption/pulse UI feedback.)
     function speak(text) {
+      showCaption(text);
+      setSpeaking(true);
+      setTimeout(() => setSpeaking(false), Math.min(6000, 1200 + text.length * 45));
       if (!callFrame) return;
       callFrame.sendAppMessage(
         {
@@ -71,13 +132,17 @@
       );
     }
 
+    // ── Backend websocket ───────────────────────────────────────────
     function connectBackend() {
       const wsProto = location.protocol === "https:" ? "wss" : "ws";
       const ws = new WebSocket(`${wsProto}://${location.host}/ws/${conversationId}`);
 
-      ws.onopen = () => setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) ws.send("ping");
-      }, 15000);
+      ws.onopen = () => {
+        setStatus("live", "Live");
+        setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) ws.send("ping");
+        }, 15000);
+      };
 
       ws.onmessage = (ev) => {
         try {
@@ -87,12 +152,15 @@
       };
 
       // Reconnect if the socket drops mid-meeting.
-      ws.onclose = () => setTimeout(connectBackend, 2000);
+      ws.onclose = () => { setStatus("connecting", "Reconnecting…"); setTimeout(connectBackend, 2000); };
+      ws.onerror = () => setStatus("error", "Connection error");
     }
 
+    // ── boot / graceful degradation ─────────────────────────────────
     if (!conversationUrl || !conversationId) {
-      document.getElementById("badge").textContent =
-        "Missing conversation params";
+      setStatus("error", "Missing conversation params");
+      document.getElementById("badge").innerHTML =
+        '<span class="dot" style="background:#ff8a8a"></span>Waiting for a session…';
     } else {
       joinAvatarRoom();
       connectBackend();
