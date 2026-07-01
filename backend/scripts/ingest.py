@@ -2,7 +2,7 @@
 
 Usage:
     python backend/scripts/ingest.py            # index every avatar
-    python backend/scripts/ingest.py lucas      # index just one avatar
+    python backend/scripts/ingest.py laura      # index just one avatar
 """
 from __future__ import annotations
 

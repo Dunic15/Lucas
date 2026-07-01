@@ -14,8 +14,8 @@ Steps:
    `.venv/bin/uvicorn backend.app.main:app --port 8000` (set `BRAIN_PROVIDER=stub EMBEDDING_PROVIDER=hash` if you want to force free mode).
 3. Poll `GET /health` until it returns 200. Confirm `brain_provider` and `avatars` look right.
 4. Smoke-test:
-   - `POST /demo/ask` with `{"question":"What approvals are needed before provisioning?","avatar_id":"lucas"}` → expect a non-empty `answer` and `citations`.
-   - `POST /demo/post_meeting` with the sample transcript from `GET /demo/sample?avatar_id=lucas` → expect `summary`, `checklist`, `follow_up_email`.
+   - `POST /demo/ask` with `{"question":"What approvals are needed before provisioning?","avatar_id":"laura"}` → expect a non-empty `answer` and `citations`.
+   - `POST /demo/post_meeting` with the sample transcript from `GET /demo/sample?avatar_id=laura` → expect `summary`, `checklist`, `follow_up_email`.
    - `GET /` → expect HTTP 200 text/html.
 5. Kill the server. Report a concise pass/fail with the actual responses.
 

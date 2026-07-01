@@ -4,8 +4,8 @@
 #
 #   ./scripts/serve.sh          # start / restart everything
 #   pm2 status                  # see the processes
-#   pm2 logs lucas-api          # tail server logs
-#   pm2 stop lucas-api lucas-tunnel   # stop
+#   pm2 logs laura-api          # tail server logs
+#   pm2 stop laura-api laura-tunnel   # stop
 #
 # NOTE: free cloudflared "quick tunnels" get a NEW random URL each restart, so
 # this script rewrites PUBLIC_BASE_URL in .env every run. For a permanent URL,
@@ -19,21 +19,21 @@ command -v cloudflared >/dev/null || { echo "cloudflared not installed (brew ins
 [ -x ".venv/bin/uvicorn" ] || { echo "no .venv — run: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"; exit 1; }
 
 echo "→ (re)starting tunnel…"
-pm2 delete lucas-tunnel lucas-api >/dev/null 2>&1 || true
-: > "$HOME/.pm2/logs/lucas-tunnel-out.log" 2>/dev/null || true
-: > "$HOME/.pm2/logs/lucas-tunnel-error.log" 2>/dev/null || true
-pm2 start cloudflared --name lucas-tunnel -- tunnel --url "http://localhost:$PORT" >/dev/null
+pm2 delete laura-tunnel laura-api >/dev/null 2>&1 || true
+: > "$HOME/.pm2/logs/laura-tunnel-out.log" 2>/dev/null || true
+: > "$HOME/.pm2/logs/laura-tunnel-error.log" 2>/dev/null || true
+pm2 start cloudflared --name laura-tunnel -- tunnel --url "http://localhost:$PORT" >/dev/null
 
 echo "→ waiting for the tunnel URL…"
 URL=""
 for i in $(seq 1 30); do
   # cloudflared prints the quick-tunnel URL to stderr → pm2 error log
   URL=$(grep -hoE 'https://[a-z0-9-]+\.trycloudflare\.com' \
-        "$HOME/.pm2/logs/lucas-tunnel-error.log" \
-        "$HOME/.pm2/logs/lucas-tunnel-out.log" 2>/dev/null | head -1)
+        "$HOME/.pm2/logs/laura-tunnel-error.log" \
+        "$HOME/.pm2/logs/laura-tunnel-out.log" 2>/dev/null | head -1)
   [ -n "$URL" ] && break; sleep 1
 done
-[ -n "$URL" ] || { echo "could not get tunnel URL; check: pm2 logs lucas-tunnel"; exit 1; }
+[ -n "$URL" ] || { echo "could not get tunnel URL; check: pm2 logs laura-tunnel"; exit 1; }
 
 echo "→ writing PUBLIC_BASE_URL=$URL into .env"
 python3 - "$URL" <<'PY'
@@ -48,7 +48,7 @@ p.write_text(t)
 PY
 
 echo "→ starting API…"
-pm2 start "$ROOT/.venv/bin/uvicorn" --name lucas-api --interpreter none -- \
+pm2 start "$ROOT/.venv/bin/uvicorn" --name laura-api --interpreter none -- \
   backend.app.main:app --host 127.0.0.1 --port "$PORT" >/dev/null
 pm2 save >/dev/null 2>&1 || true
 

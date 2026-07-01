@@ -15,7 +15,7 @@ cp .env.example .env
 ```bash
 uvicorn backend.app.main:app --port 8000
 ```
-Open **http://127.0.0.1:8000**. Ask Lucas a question or click **Load sample →
+Open **http://127.0.0.1:8000**. Ask Laura a question or click **Load sample →
 Analyze meeting**. This runs offline in free "stub" mode — no keys, no cost.
 
 ## 3. Insert your key → real Claude answers

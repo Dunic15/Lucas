@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     public_base_url: str = "http://127.0.0.1:8000"
 
     # Behaviour
-    wake_words: str = "lucas"
+    wake_words: str = "laura"
     speak_cooldown_seconds: float = 8.0
     min_confidence: float = 0.55
     # Proactive intervention (the differentiator): flag ONE missing step as the

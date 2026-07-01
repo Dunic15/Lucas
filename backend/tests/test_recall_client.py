@@ -37,7 +37,7 @@ def test_readiness_requires_public_https_url(monkeypatch):
 
 def test_readiness_accepts_api_key_and_public_https_url(monkeypatch):
     monkeypatch.setattr(settings, "recall_api_key", "real-looking-key")
-    monkeypatch.setattr(settings, "public_base_url", "https://lucas.ngrok.app")
+    monkeypatch.setattr(settings, "public_base_url", "https://laura.ngrok.app")
 
     status = recall_client.readiness()
 

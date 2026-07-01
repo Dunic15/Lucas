@@ -25,11 +25,11 @@ using it) the **calendar webhook** at:
 Uses your **Cloudflare $100k credits** + a domain. One-time:
 ```bash
 cloudflared tunnel login                      # authorize (opens browser)
-cloudflared tunnel create lucas               # creates a named tunnel
-cloudflared tunnel route dns lucas lucas.yourdomain.com
-cloudflared tunnel run --url http://localhost:8000 lucas
+cloudflared tunnel create laura               # creates a named tunnel
+cloudflared tunnel route dns laura laura.yourdomain.com
+cloudflared tunnel run --url http://localhost:8000 laura
 ```
-Set `PUBLIC_BASE_URL=https://lucas.yourdomain.com`. This URL never changes.
+Set `PUBLIC_BASE_URL=https://laura.yourdomain.com`. This URL never changes.
 
 ## Local, non-permanent (what `./scripts/serve.sh` does)
 Fine for quick demos only — the URL changes each run.

@@ -187,7 +187,7 @@ def create_bot(
 
     body = {
         "meeting_url": meeting_url,
-        "bot_name": "Lucas",
+        "bot_name": "Laura",
         "recording_config": {
             "transcript": {
                 "provider": {

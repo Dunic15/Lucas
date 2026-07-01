@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Lucas — Live Avatar (Anam persona + your thesis)</title>
+  <title>Laura — Live Avatar (Anam persona + your thesis)</title>
   <style>
     :root { --bg:#0b1020; --panel:#141b31; --line:#28324f; --text:#e6ecff;
       --muted:#93a1c8; --accent:#5b8cff; --good:#3ad29f; --warn:#ffcf6b; }
@@ -46,10 +46,10 @@
 
   <div id="panel">
     <div>
-      <h1>Lucas — live avatar</h1>
+      <h1>Laura — live avatar</h1>
       <p class="sub">This is your Anam persona “Liv”. She answers with her own brain and the knowledge you uploaded (your thesis).</p>
     </div>
-    <label class="muted" for="q">Ask Lucas (answers from your thesis)</label>
+    <label class="muted" for="q">Ask Laura (answers from your thesis)</label>
     <textarea id="q">What is the AI buffer in your thesis, and why does it matter for product managers?</textarea>
     <div style="display:flex; gap:8px">
       <button id="ask" disabled style="flex:1">Ask &amp; speak</button>
@@ -62,7 +62,7 @@
   <script type="module">
     import { createClient, AnamEvent } from "https://esm.sh/@anam-ai/js-sdk@4.17.1";
     const $ = (id) => document.getElementById(id);
-    const AVATAR = "lucas";
+    const AVATAR = "laura";
     let anam = null, capTimer = null;
 
     function pill(state, text){ $("pill").className = state; $("pillText").textContent = text; }
@@ -119,7 +119,7 @@
 
     async function ask(){
       const q = $("q").value.trim(); if(!q || !anam) return;
-      $("ask").disabled = true; $("out").innerHTML = '<span class="muted">Lucas is thinking (searching your thesis)…</span>';
+      $("ask").disabled = true; $("out").innerHTML = '<span class="muted">Laura is thinking (searching your thesis)…</span>';
       try { anam.sendUserMessage(q); }   // Liv answers with her own brain + knowledge
       catch(e){ $("out").innerHTML = `<div class="err">${e.message}</div>`; report("ask", e); }
       setTimeout(()=>{ $("ask").disabled = false; }, 1500);

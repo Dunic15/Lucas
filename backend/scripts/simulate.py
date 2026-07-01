@@ -1,9 +1,9 @@
 """Run the post-meeting brain over a transcript file (offline meeting simulator).
 
 Usage:
-    python backend/scripts/simulate.py                       # uses Lucas's sample
+    python backend/scripts/simulate.py                       # uses Laura's sample
     python backend/scripts/simulate.py path/to/transcript.txt
-    python backend/scripts/simulate.py --avatar lucas meeting.txt
+    python backend/scripts/simulate.py --avatar laura meeting.txt
 
 Prints the summary, gap checklist, and draft follow-up email — the same
 artifact POST /sessions/{id}/end returns after a real meeting. Works offline
@@ -23,7 +23,7 @@ from app.brain import post_meeting  # noqa: E402
 
 def main() -> None:
     args = sys.argv[1:]
-    avatar_id = "lucas"
+    avatar_id = "laura"
     if args and args[0] == "--avatar":
         avatar_id, args = args[1], args[2:]
 

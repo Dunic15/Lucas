@@ -82,7 +82,7 @@ def demo_page() -> FileResponse:
 
 class AskRequest(BaseModel):
     question: str
-    avatar_id: str = "lucas"
+    avatar_id: str = "laura"
 
 
 @app.post("/demo/ask")
@@ -95,7 +95,7 @@ async def demo_ask(req: AskRequest) -> JSONResponse:
 
 class PostMeetingRequest(BaseModel):
     transcript: str
-    avatar_id: str = "lucas"
+    avatar_id: str = "laura"
 
 
 @app.post("/demo/post_meeting")
@@ -107,7 +107,7 @@ async def demo_post_meeting(req: PostMeetingRequest) -> JSONResponse:
 
 
 @app.get("/demo/sample")
-def demo_sample(avatar_id: str = "lucas") -> JSONResponse:
+def demo_sample(avatar_id: str = "laura") -> JSONResponse:
     """A sample transcript to load into the post-meeting demo, if the avatar has one."""
     avatar = avatars.load(avatar_id)
     sample = avatar.dir / "sample_meeting.txt"
@@ -123,7 +123,7 @@ def live_page() -> FileResponse:
 
 
 class LiveTokenRequest(BaseModel):
-    avatar_id: str = "lucas"
+    avatar_id: str = "laura"
 
 
 class LiveError(BaseModel):
@@ -184,7 +184,7 @@ def granola_transcript(note_id: str) -> JSONResponse:
 # ──────────────────────── session lifecycle ────────────────────────
 class StartRequest(BaseModel):
     meeting_url: str
-    avatar_id: str = "lucas"
+    avatar_id: str = "laura"
     join_at: Optional[str] = None  # ISO 8601; set (>=10 min out) to schedule the bot
 
 
@@ -282,7 +282,7 @@ async def deliver_artifact(bot_id: str, req: DeliverRequest) -> JSONResponse:
         return JSONResponse({"error": "no artifact for this bot_id"}, status_code=404)
 
     avatar = avatars.load(store.get(bot_id).avatar_id) if store.get(bot_id) else None
-    name = avatar.name if avatar else "Lucas"
+    name = avatar.name if avatar else "Laura"
     email = artifact.get("follow_up_email", {}) or {}
 
     email_res = await run_in_threadpool(
@@ -350,7 +350,7 @@ async def _ask_avatar_persona(session: store.Session, text: str) -> None:
 
 # ─────────────────── calendar auto-join webhook ────────────────────
 # Point a Recall calendar webhook (or your own calendar sync) at this endpoint.
-# For each upcoming event that has a meeting link, we SCHEDULE Lucas to join it.
+# For each upcoming event that has a meeting link, we SCHEDULE Laura to join it.
 # See docs/CALENDAR.md for the one-time OAuth setup. Payload shapes vary by
 # provider, so parsing here is defensive — adjust `_extract_events` if needed.
 def _extract_events(payload: dict) -> list[dict]:
@@ -376,7 +376,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             or ""
         )
         start = ev.get("start_time") or ev.get("start") or ev.get("join_at")
-        avatar_id = ev.get("avatar_id") or "lucas"
+        avatar_id = ev.get("avatar_id") or "laura"
         if not url or not start or (eid and store.is_scheduled(eid)):
             continue
         try:

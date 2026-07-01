@@ -3,7 +3,7 @@
 # the cloudflared quick-tunnel. Set the secret env vars in the Render dashboard.
 services:
   - type: web
-    name: lucas-avatar
+    name: laura-avatar
     runtime: docker
     plan: free
     healthCheckPath: /health
@@ -27,7 +27,7 @@ services:
       - key: ANAM_AVATAR_ID
         sync: false
       - key: WAKE_WORDS
-        value: lucas
+        value: laura
       - key: SENDGRID_API_KEY
         sync: false
       - key: MAIL_FROM

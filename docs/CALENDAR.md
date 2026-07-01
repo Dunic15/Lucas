@@ -1,12 +1,12 @@
-# Calendar auto-join — Lucas joins meetings like a colleague
+# Calendar auto-join — Laura joins meetings like a colleague
 
-Goal: employees add Lucas to a meeting (or he watches a shared calendar) and he
+Goal: employees add Laura to a meeting (or he watches a shared calendar) and he
 **auto-joins on time** — no one has to send an API call.
 
 There are two ways, from simplest to fullest.
 
 ## 1. Manual / scheduled (works today, no OAuth)
-Send Lucas in now, or schedule him for later with `join_at` (ISO 8601, ≥10 min out):
+Send Laura in now, or schedule him for later with `join_at` (ISO 8601, ≥10 min out):
 ```bash
 curl -X POST https://YOUR_URL/sessions/start -H 'Content-Type: application/json' -d '{
   "meeting_url": "https://meet.google.com/abc-defg-hij",
@@ -29,14 +29,14 @@ One-time setup:
    `https://YOUR_URL/webhooks/recall-calendar`
 
 Then this backend does the rest: for each upcoming event that has a meeting link,
-it **schedules Lucas** (deduped by event id). See `/webhooks/recall-calendar` in
+it **schedules Laura** (deduped by event id). See `/webhooks/recall-calendar` in
 `backend/app/main.py` — the payload parser (`_extract_events`) is defensive;
 adjust the field names to match your Recall calendar payload on the first live run.
 
 ### Rules (who gets an avatar)
-Right now every event with a meeting link gets Lucas. To scope it, filter in the
-webhook by: attendee list (only if `lucas@yourco` is invited), a title keyword
-(e.g. "[lucas]"), or a per-calendar `avatar_id`.
+Right now every event with a meeting link gets Laura. To scope it, filter in the
+webhook by: attendee list (only if `laura@yourco` is invited), a title keyword
+(e.g. "[laura]"), or a per-calendar `avatar_id`.
 
 > Needs your Google/Microsoft OAuth app — that's the only part I can't set up for
 > you. The backend side is ready.

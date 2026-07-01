@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Lucas — AI Process Expert</title>
+  <title>Laura — AI Process Expert</title>
   <style>
     html, body { margin: 0; height: 100%; background: #0b1020; overflow: hidden;
       font: 600 14px/1.3 system-ui, sans-serif; color: #cfe0ff; }
@@ -70,7 +70,7 @@
       speak("Testing the caption bar.")
   -->
   <video id="avatar-video" autoplay playsinline></video>
-  <div id="badge"><span class="dot"></span>Lucas · AI Process Expert</div>
+  <div id="badge"><span class="dot"></span>Laura · AI Process Expert</div>
   <div id="status" class="connecting"><span class="sdot"></span><span id="statusText">Connecting…</span></div>
   <div id="caption"></div>
 
@@ -79,7 +79,7 @@
     import { createClient, AnamEvent } from "https://esm.sh/@anam-ai/js-sdk@4.17.1";
 
     const params = new URLSearchParams(location.search);
-    const avatarId       = params.get("avatar_id") || "lucas"; // which persona
+    const avatarId       = params.get("avatar_id") || "laura"; // which persona
     const conversationId = params.get("conversation_id");      // backend ws key
 
     let anam = null;

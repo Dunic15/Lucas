@@ -2,9 +2,9 @@
 
 > We turn company processes into real-time AI avatars that can join meetings and guide teams live.
 
-**Lucas** is the first avatar: an AI Process Expert you can *call into* a Zoom /
-Meet / Teams meeting. Lucas listens and, when addressed by name, answers from
-your company's process docs — grounded and cited. After the call Lucas drafts
+**Laura** is the first avatar: an AI Process Expert you can *call into* a Zoom /
+Meet / Teams meeting. Laura listens and, when addressed by name, answers from
+your company's process docs — grounded and cited. After the call Laura drafts
 a summary, a gap checklist, and a follow-up email.
 
 ---
@@ -21,7 +21,7 @@ cp .env.example .env                     # leave it as-is to run free
 uvicorn backend.app.main:app --port 8000
 ```
 
-Open **http://127.0.0.1:8000** → ask Lucas a question, or load the sample
+Open **http://127.0.0.1:8000** → ask Laura a question, or load the sample
 meeting and get an action checklist + follow-up email.
 
 ### Want real Claude-quality answers? Insert one key.
@@ -79,12 +79,12 @@ powers the offline **demo console**, which needs no meeting vendor at all.
 ## Project layout
 
 ```
-Lucas/
+Laura/
 ├── avatars/                  ← THE EDITABLE PART (no code to add an avatar)
 │   ├── README.md             ← "how to add an avatar in 3 steps"
-│   └── lucas/
+│   └── laura/
 │       ├── avatar.yaml       ← name, wake words, persona, face, voice
-│       ├── knowledge/        ← markdown process docs Lucas answers from
+│       ├── knowledge/        ← markdown process docs Laura answers from
 │       └── sample_meeting.txt← demo transcript for the post-meeting artifact
 ├── backend/
 │   ├── app/
@@ -120,7 +120,7 @@ Lucas/
 |---|---|
 | Add / change an avatar's behaviour | `avatars/<id>/avatar.yaml` |
 | Add process knowledge | drop `.md` in `avatars/<id>/knowledge/`, restart (auto re-indexes) |
-| Add a whole new avatar | copy `avatars/lucas/` → see `avatars/README.md` |
+| Add a whole new avatar | copy `avatars/laura/` → see `avatars/README.md` |
 | Switch the brain (Claude/Ollama/free) | `BRAIN_PROVIDER` in `.env` |
 | Switch embeddings | `EMBEDDING_PROVIDER` in `.env` |
 | Tune when it speaks | `backend/app/decision.py` (or per-avatar yaml) |
@@ -147,7 +147,7 @@ Lucas/
 python backend/scripts/ask.py "What approvals are needed before provisioning?"
 
 # Turn a transcript into a summary + gap checklist + follow-up email
-python backend/scripts/simulate.py            # uses Lucas's sample_meeting.txt
+python backend/scripts/simulate.py            # uses Laura's sample_meeting.txt
 
 # Pull a REAL finished transcript from Granola and analyze it (needs GRANOLA_API_KEY)
 python backend/scripts/granola.py list
@@ -165,8 +165,8 @@ the live agent.
 
 ## Live meeting workflow (optional)
 
-Yes: after the live keys are set, you can send Lucas into a real meeting and
-call on the agent by saying `Lucas`. The server must be running and reachable
+Yes: after the live keys are set, you can send Laura into a real meeting and
+call on the agent by saying `Laura`. The server must be running and reachable
 from the public internet so Recall.ai can post transcripts to the webhook and
 render the avatar page.
 
@@ -180,7 +180,7 @@ ANAM_AVATAR_ID=...
 ELEVENLABS_API_KEY=...
 ELEVENLABS_VOICE_ID=...
 PUBLIC_BASE_URL=https://your-public-ngrok-or-deploy-url
-WAKE_WORDS=lucas
+WAKE_WORDS=laura
 ```
 
 `RECALL_API_KEY` must be a Recall API key, not a `whsec_...` workspace/webhook
@@ -203,12 +203,12 @@ ngrok http 8000
 
 # 3. Put the ngrok HTTPS URL in .env as PUBLIC_BASE_URL, then restart uvicorn
 
-# 4. Call Lucas into a meeting
+# 4. Call Laura into a meeting
 curl -X POST http://127.0.0.1:8000/sessions/start \
   -H 'Content-Type: application/json' \
   -d '{"meeting_url": "https://meet.google.com/your-test-call"}'
 
-# 5. In the call, say: "Lucas, what are we missing for this onboarding?"
+# 5. In the call, say: "Laura, what are we missing for this onboarding?"
 
 # 6. End the session and get the summary/checklist/email artifact
 curl -X POST http://127.0.0.1:8000/sessions/<bot_id>/end
@@ -224,13 +224,13 @@ runbook in [docs/DEMO.md](docs/DEMO.md).
 
 ## When-to-speak policy
 
-The MVP is **conservative on purpose**: Lucas speaks *only* when called by a
-wake word (`WAKE_WORDS`, default `lucas`), never within `SPEAK_COOLDOWN_SECONDS`
+The MVP is **conservative on purpose**: Laura speaks *only* when called by a
+wake word (`WAKE_WORDS`, default `laura`), never within `SPEAK_COOLDOWN_SECONDS`
 of its last line, and only if the brain's grounded confidence ≥ `MIN_CONFIDENCE`.
-If the docs don't support an answer, Lucas says so rather than guessing.
+If the docs don't support an answer, Laura says so rather than guessing.
 
 **Next (Stage 7):** one controlled proactive intervention — e.g. at meeting end,
-if a required owner/approval is missing, Lucas says a single line. Gated behind
+if a required owner/approval is missing, Laura says a single line. Gated behind
 high confidence; default to silence.
 
 ## Security / cost notes

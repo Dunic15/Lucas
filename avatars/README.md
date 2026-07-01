@@ -4,7 +4,7 @@ Each folder here is **one callable avatar**. An avatar is just:
 
 ```
 avatars/
-  lucas/
+  laura/
     avatar.yaml          ← the knobs (name, wake words, persona, face, voice)
     knowledge/           ← the process docs the avatar answers from
       onboarding_sop.md
@@ -15,7 +15,7 @@ You do **not** need to touch any Python to add or change an avatar.
 
 ## Add a new avatar in 3 steps
 
-1. **Copy the folder.** Duplicate `avatars/lucas/` and rename it, e.g.
+1. **Copy the folder.** Duplicate `avatars/laura/` and rename it, e.g.
    `avatars/marcus/` (for an "AI IT/Security Expert").
 2. **Edit `avatar.yaml`.** Set `id` (must match the folder name), `name`,
    `role`, `wake_words`, and the `persona_prompt`. Optionally give it its own
@@ -32,7 +32,7 @@ curl -X POST http://127.0.0.1:8000/sessions/start \
   -H 'Content-Type: application/json' \
   -d '{"meeting_url": "...", "avatar_id": "marcus"}'
 ```
-(`avatar_id` defaults to `lucas` if omitted.)
+(`avatar_id` defaults to `laura` if omitted.)
 
 ## Field reference (`avatar.yaml`)
 

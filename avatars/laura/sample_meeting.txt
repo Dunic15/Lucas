@@ -2,8 +2,8 @@ Priya: Okay, let's run through onboarding for the two new hires starting next we
 Daniel: The offers are signed and in the ATS, and I confirmed both start dates yesterday.
 Priya: Good. Did we file the equipment requests? They start Monday.
 Daniel: Not yet, I'll do the laptops today.
-Priya: Lucas, are we missing anything for the onboarding process?
-Lucas: You still need the hiring manager to approve the access level before IT provisions accounts, and both new hires need a named onboarding buddy.
+Priya: Laura, are we missing anything for the onboarding process?
+Laura: You still need the hiring manager to approve the access level before IT provisions accounts, and both new hires need a named onboarding buddy.
 Daniel: Right, one of them needs elevated access to the production dashboard.
 Priya: Who's approving that? Can IT just turn it on?
 Daniel: I think we can just grant it, it's faster.

@@ -1,19 +1,19 @@
 ---
 name: avatar-author
-description: Scaffolds a new callable avatar (folder + avatar.yaml + synthetic knowledge SOPs) following the Lucas template, then rebuilds the RAG index. Use when asked to add or author a new avatar/persona.
+description: Scaffolds a new callable avatar (folder + avatar.yaml + synthetic knowledge SOPs) following the Laura template, then rebuilds the RAG index. Use when asked to add or author a new avatar/persona.
 tools: Read, Write, Edit, Bash
 model: sonnet
 ---
 
 You create a new avatar by adding a folder — no backend code changes. Follow the
-existing shape exactly (read `avatars/lucas/` and `avatars/README.md` first).
+existing shape exactly (read `avatars/laura/` and `avatars/README.md` first).
 
 Given a name/role/domain, produce:
 1. `avatars/<id>/avatar.yaml` — `id` MUST equal the folder name. Set `name`,
    `role`, `wake_words` (lowercase), and a tight `persona_prompt`. Leave
    `anam_avatar_id` / `elevenlabs_voice_id` / `min_confidence` /
    `speak_cooldown_seconds` blank so they fall back to global `.env` defaults.
-2. `avatars/<id>/knowledge/*.md` — 2–3 **synthetic** SOPs. Match Lucas's heading
+2. `avatars/<id>/knowledge/*.md` — 2–3 **synthetic** SOPs. Match Laura's heading
    structure (*Required steps*, *Approvals required*, *Owners*, *Definition of
    done*, *Common gaps*). Headings become retrieval sections and get cited, so
    keep one concept per heading.
