@@ -183,6 +183,7 @@ def create_bot(meeting_url: str, avatar_page_url: str) -> dict:
 
     body = {
         "meeting_url": meeting_url,
+        "bot_name": "Lucas",
         "recording_config": {
             "transcript": {
                 "provider": {
@@ -200,11 +201,14 @@ def create_bot(meeting_url: str, avatar_page_url: str) -> dict:
                     "events": ["transcript.data"],
                 }
             ],
-            # The bot's camera renders our avatar page (Anam face lives inside).
-            "output_media": {
+        },
+        # Top-level: the bot's camera renders our avatar page (Anam face inside).
+        # Shape per Recall's Output Media API: camera → kind=webpage → config.url.
+        "output_media": {
+            "camera": {
                 "kind": "webpage",
-                "url": avatar_page_url,
-            },
+                "config": {"url": avatar_page_url},
+            }
         },
     }
 
