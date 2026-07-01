@@ -14,13 +14,16 @@ Flow:
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlencode
 
+import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from . import avatars, store, recall_client, anam_client, granola_client, actions
@@ -32,6 +35,37 @@ from .rag import ensure_index
 app = FastAPI(title="Callable AI Process Avatar")
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+GOOGLE_CALENDAR_SCOPES = (
+    "https://www.googleapis.com/auth/calendar.events.readonly",
+    "https://www.googleapis.com/auth/userinfo.email",
+)
+EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
+ATTENDEE_CONTAINER_KEYS = {
+    "attendee",
+    "attendees",
+    "participant",
+    "participants",
+    "guest",
+    "guests",
+    "invitee",
+    "invitees",
+    "recipient",
+    "recipients",
+}
+
+
+def _split_emails(raw: str) -> set[str]:
+    return {e.lower() for e in EMAIL_RE.findall(raw or "")}
+
+
+def _calendar_target_emails() -> set[str]:
+    return _split_emails(settings.calendar_invite_emails)
+
+
+def _google_redirect_uri() -> str:
+    return settings.google_calendar_redirect_uri.strip() or (
+        f"{settings.public_base_url.rstrip('/')}/oauth/google/callback"
+    )
 
 
 @app.on_event("startup")
@@ -161,6 +195,135 @@ def recall_status(check_auth: bool = False) -> JSONResponse:
     """Report Recall setup state without returning any secret values."""
     status = recall_client.auth_check() if check_auth else recall_client.readiness()
     return JSONResponse(status, status_code=200 if status["ready"] else 400)
+
+
+# ── Google Calendar OAuth: connect Laura's calendar to Recall Calendar V2 ──
+@app.get("/oauth/google/connect")
+def google_oauth_connect():
+    """Start Google OAuth for the calendar account that should invite Laura."""
+    if not settings.google_calendar_client_id:
+        return JSONResponse(
+            {"error": "GOOGLE_CALENDAR_CLIENT_ID is not set."}, status_code=400
+        )
+
+    params = {
+        "client_id": settings.google_calendar_client_id,
+        "redirect_uri": _google_redirect_uri(),
+        "response_type": "code",
+        "scope": " ".join(GOOGLE_CALENDAR_SCOPES),
+        "access_type": "offline",
+        "prompt": "consent",
+        "include_granted_scopes": "true",
+    }
+    if settings.calendar_oauth_state:
+        params["state"] = settings.calendar_oauth_state
+
+    url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
+    return RedirectResponse(url)
+
+
+@app.get("/oauth/google/callback")
+async def google_oauth_callback(
+    code: str = "", state: str = "", error: str = ""
+) -> JSONResponse:
+    """Finish Google OAuth, then create the Recall calendar connection."""
+    if error:
+        return JSONResponse({"error": error}, status_code=400)
+    if not code:
+        return JSONResponse({"error": "Missing Google OAuth code."}, status_code=400)
+    if settings.calendar_oauth_state and state != settings.calendar_oauth_state:
+        return JSONResponse({"error": "Invalid OAuth state."}, status_code=400)
+    if not settings.google_calendar_client_id:
+        return JSONResponse(
+            {"error": "GOOGLE_CALENDAR_CLIENT_ID is not set."}, status_code=400
+        )
+    if not settings.google_calendar_client_secret:
+        return JSONResponse(
+            {"error": "GOOGLE_CALENDAR_CLIENT_SECRET is not set."}, status_code=400
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            token_resp = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": settings.google_calendar_client_id,
+                    "client_secret": settings.google_calendar_client_secret,
+                    "redirect_uri": _google_redirect_uri(),
+                    "grant_type": "authorization_code",
+                },
+            )
+            token_resp.raise_for_status()
+            token = token_resp.json()
+
+            refresh_token = token.get("refresh_token", "")
+            if not refresh_token:
+                return JSONResponse(
+                    {
+                        "error": (
+                            "Google did not return a refresh_token. Re-open "
+                            "/oauth/google/connect and approve with prompt=consent; "
+                            "if needed, revoke the app in Google settings first."
+                        )
+                    },
+                    status_code=400,
+                )
+
+            oauth_email = ""
+            access_token = token.get("access_token", "")
+            if access_token:
+                profile_resp = await client.get(
+                    "https://www.googleapis.com/oauth2/v2/userinfo",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                if 200 <= profile_resp.status_code < 300:
+                    oauth_email = profile_resp.json().get("email", "").lower()
+    except httpx.HTTPStatusError as e:
+        return JSONResponse(
+            {"error": "Google OAuth token exchange failed.", "status": e.response.status_code},
+            status_code=400,
+        )
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    targets = _calendar_target_emails()
+    if targets and oauth_email not in targets:
+        return JSONResponse(
+            {
+                "error": "Wrong Google account connected.",
+                "connected_email": oauth_email or None,
+                "expected_email": sorted(targets),
+            },
+            status_code=400,
+        )
+
+    try:
+        calendar = await run_in_threadpool(
+            lambda: recall_client.create_calendar(
+                oauth_client_id=settings.google_calendar_client_id,
+                oauth_client_secret=settings.google_calendar_client_secret,
+                oauth_refresh_token=refresh_token,
+                oauth_email=oauth_email,
+                metadata={
+                    "avatar_id": "laura",
+                    "invite_filter": ",".join(sorted(targets)),
+                },
+            )
+        )
+    except Exception as e:
+        return JSONResponse({"error": f"Recall calendar creation failed: {e}"}, status_code=400)
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "calendar_id": calendar.get("id"),
+            "calendar_status": calendar.get("status"),
+            "connected_email": oauth_email or None,
+            "invite_filter": sorted(targets),
+            "webhook_url": f"{settings.public_base_url.rstrip('/')}/webhooks/recall-calendar",
+        }
+    )
 
 
 # ── Granola: pull a real finished transcript (post-meeting only) ──
@@ -363,21 +526,146 @@ def _extract_events(payload: dict) -> list[dict]:
     return [e for e in evs if isinstance(e, dict)]
 
 
+async def _calendar_events_from_payload(payload: dict) -> list[dict]:
+    if payload.get("event") != "calendar.sync_events":
+        return _extract_events(payload)
+
+    data = payload.get("data", {})
+    calendar_id = str(data.get("calendar_id") or "")
+    if not calendar_id:
+        return []
+    updated_at_gte = str(data.get("last_updated_ts") or "")
+    return await run_in_threadpool(
+        lambda: recall_client.list_calendar_events(
+            calendar_id=calendar_id,
+            updated_at_gte=updated_at_gte,
+        )
+    )
+
+
+def _calendar_event_id(event: dict) -> str:
+    return str(
+        event.get("id")
+        or event.get("event_id")
+        or event.get("calendar_event_id")
+        or event.get("ical_uid")
+        or ""
+    )
+
+
+def _calendar_event_start(event: dict) -> str:
+    raw = event.get("raw") if isinstance(event.get("raw"), dict) else {}
+    start = event.get("start_time") or event.get("start") or event.get("join_at")
+    if isinstance(start, dict):
+        start = start.get("dateTime") or start.get("date") or ""
+    if not start and isinstance(raw, dict):
+        raw_start = raw.get("start")
+        if isinstance(raw_start, dict):
+            start = raw_start.get("dateTime") or raw_start.get("date") or ""
+    return str(start or "")
+
+
+def _calendar_event_meeting_url(event: dict) -> str:
+    raw = event.get("raw") if isinstance(event.get("raw"), dict) else {}
+    conference = event.get("conference") or raw.get("conferenceData") or {}
+    online_meeting = event.get("online_meeting") or event.get("onlineMeeting") or {}
+    raw_online_meeting = raw.get("onlineMeeting") or {}
+
+    url = (
+        event.get("meeting_url")
+        or event.get("meeting_link")
+        or event.get("join_url")
+        or (conference if isinstance(conference, dict) else {}).get("url")
+        or (online_meeting if isinstance(online_meeting, dict) else {}).get("joinUrl")
+        or (raw_online_meeting if isinstance(raw_online_meeting, dict) else {}).get("joinUrl")
+        or (raw if isinstance(raw, dict) else {}).get("hangoutLink")
+        or ""
+    )
+    if url:
+        return str(url)
+
+    entry_points = (conference if isinstance(conference, dict) else {}).get(
+        "entryPoints", []
+    )
+    for entry in entry_points:
+        if isinstance(entry, dict) and entry.get("uri"):
+            return str(entry["uri"])
+    return ""
+
+
+def _emails_under(value: object) -> set[str]:
+    emails: set[str] = set()
+    if isinstance(value, str):
+        return _split_emails(value)
+    if isinstance(value, dict):
+        for child in value.values():
+            emails.update(_emails_under(child))
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            emails.update(_emails_under(child))
+    return emails
+
+
+def _extract_invite_emails(event: dict) -> set[str]:
+    """Extract attendee emails from provider/Recall calendar payload variants."""
+    emails: set[str] = set()
+
+    def walk(value: object) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                key_norm = key.lower().replace("_", "").replace("-", "")
+                is_attendee_field = (
+                    key_norm in ATTENDEE_CONTAINER_KEYS
+                    or key_norm.endswith("attendees")
+                    or key_norm.endswith("participants")
+                    or key_norm.endswith("invitees")
+                    or key_norm.endswith("guests")
+                    or key_norm.endswith("recipients")
+                    or key_norm in {"attendeeemail", "participantemail", "inviteeemail"}
+                )
+                if is_attendee_field:
+                    emails.update(_emails_under(child))
+                elif isinstance(child, (dict, list, tuple)):
+                    walk(child)
+        elif isinstance(value, (list, tuple)):
+            for child in value:
+                walk(child)
+
+    walk(event)
+    return emails
+
+
+def _calendar_event_targets_avatar(event: dict) -> bool:
+    target_emails = _calendar_target_emails()
+    if not target_emails:
+        return True
+    return bool(_extract_invite_emails(event) & target_emails)
+
+
 @app.post("/webhooks/recall-calendar")
 async def recall_calendar_webhook(request: Request) -> JSONResponse:
-    payload = await request.json()
+    raw_body = await request.body()
+    try:
+        recall_client.verify_webhook(raw_body, request.headers)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=401)
+
+    payload = json.loads(raw_body or b"{}")
+    try:
+        events = await _calendar_events_from_payload(payload)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
     scheduled = []
-    for ev in _extract_events(payload):
-        eid = str(ev.get("id") or ev.get("event_id") or "")
-        url = (
-            ev.get("meeting_url")
-            or ev.get("meeting_link")
-            or (ev.get("conference") or {}).get("url")
-            or ""
-        )
-        start = ev.get("start_time") or ev.get("start") or ev.get("join_at")
+    for ev in events:
+        eid = _calendar_event_id(ev)
+        url = _calendar_event_meeting_url(ev)
+        start = _calendar_event_start(ev)
         avatar_id = ev.get("avatar_id") or "laura"
         if not url or not start or (eid and store.is_scheduled(eid)):
+            continue
+        if not _calendar_event_targets_avatar(ev):
+            scheduled.append({"event": eid, "skipped": "invite_email_missing"})
             continue
         try:
             avatar = avatars.load(avatar_id)

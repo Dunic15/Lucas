@@ -22,6 +22,14 @@ services:
         value: https://eu-central-1.recall.ai
       - key: RECALL_WEBHOOK_SECRET
         sync: false
+      - key: GOOGLE_CALENDAR_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CALENDAR_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_CALENDAR_REDIRECT_URI
+        value: https://laura-avatar.onrender.com/oauth/google/callback
+      - key: CALENDAR_INVITE_EMAILS
+        value: laura.ai.122222@gmail.com
       - key: ANAM_API_KEY
         sync: false
       - key: ANAM_AVATAR_ID

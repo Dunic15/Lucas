@@ -237,6 +237,69 @@ def create_bot(
     return resp.json()
 
 
+def create_calendar(
+    *,
+    oauth_client_id: str,
+    oauth_client_secret: str,
+    oauth_refresh_token: str,
+    oauth_email: str = "",
+    metadata: dict | None = None,
+) -> dict:
+    """Create a Recall Calendar V2 connection from Google OAuth credentials."""
+    body = {
+        "platform": "google_calendar",
+        "oauth_client_id": oauth_client_id,
+        "oauth_client_secret": oauth_client_secret,
+        "oauth_refresh_token": oauth_refresh_token,
+    }
+    if oauth_email:
+        body["oauth_email"] = oauth_email
+    if metadata:
+        body["metadata"] = metadata
+
+    resp = httpx.post(
+        f"{settings.recall_api_base.rstrip('/')}/api/v2/calendars/",
+        headers=_headers(),
+        json=body,
+        timeout=60.0,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def list_calendar_events(
+    *, calendar_id: str, updated_at_gte: str = "", is_deleted: bool = False
+) -> list[dict]:
+    """Fetch Recall Calendar V2 events for a sync webhook."""
+    params: dict[str, object] = {
+        "calendar_id": calendar_id,
+        "is_deleted": str(is_deleted).lower(),
+    }
+    if updated_at_gte:
+        params["updated_at__gte"] = updated_at_gte
+
+    events: list[dict] = []
+    url = f"{settings.recall_api_base.rstrip('/')}/api/v2/calendar-events/"
+    while url:
+        resp = httpx.get(url, headers=_headers(), params=params, timeout=60.0)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list):
+            events.extend(e for e in data if isinstance(e, dict))
+            break
+
+        rows = (
+            data.get("results")
+            or data.get("calendar_events")
+            or data.get("data")
+            or []
+        )
+        events.extend(e for e in rows if isinstance(e, dict))
+        url = data.get("next") or ""
+        params = {}
+    return events
+
+
 def leave_call(bot_id: str) -> None:
     """Remove the bot from the meeting (stops avatar streaming → stops billing)."""
     httpx.post(

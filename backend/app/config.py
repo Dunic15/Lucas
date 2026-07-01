@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     recall_api_base: str = "https://us-west-2.recall.ai"
     recall_webhook_secret: str = ""
 
+    # Calendar auto-join (Google OAuth -> Recall Calendar V2)
+    google_calendar_client_id: str = ""
+    google_calendar_client_secret: str = ""
+    google_calendar_redirect_uri: str = ""
+    calendar_oauth_state: str = ""
+    calendar_invite_emails: str = "laura.ai.122222@gmail.com"
+
     # Granola (post-meeting transcript source — optional alternative to Recall
     # for the summary/checklist path; it can't power the live in-call agent)
     granola_api_key: str = ""
