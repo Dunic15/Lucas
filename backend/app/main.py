@@ -13,6 +13,7 @@ Flow:
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -139,6 +140,14 @@ async def live_token(req: LiveTokenRequest) -> JSONResponse:
     )
 
 
+# ── Recall diagnostics: non-secret readiness/auth check for live meetings ──
+@app.get("/recall/status")
+def recall_status(check_auth: bool = False) -> JSONResponse:
+    """Report Recall setup state without returning any secret values."""
+    status = recall_client.auth_check() if check_auth else recall_client.readiness()
+    return JSONResponse(status, status_code=200 if status["ready"] else 400)
+
+
 # ── Granola: pull a real finished transcript (post-meeting only) ──
 @app.get("/granola/notes")
 def granola_notes(limit: int = 20) -> JSONResponse:
@@ -167,11 +176,19 @@ class StartRequest(BaseModel):
 async def start_session(req: StartRequest) -> JSONResponse:
     avatar = avatars.load(req.avatar_id)  # raises if unknown
 
+    try:
+        recall_client.assert_ready()
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
     # 1. Avatar: persona (ElevenLabs voice) + live session (Anam session token).
-    persona_id = await run_in_threadpool(anam_client.create_persona, avatar)
-    convo = await run_in_threadpool(
-        anam_client.create_conversation, avatar, persona_id
-    )
+    try:
+        persona_id = await run_in_threadpool(anam_client.create_persona, avatar)
+        convo = await run_in_threadpool(
+            anam_client.create_conversation, avatar, persona_id
+        )
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
     # 2. Avatar page URL the Recall bot will render as its camera.
     #    The page keys its websocket on conversation_id (the only id it knows
@@ -185,9 +202,12 @@ async def start_session(req: StartRequest) -> JSONResponse:
     )
 
     # 3. Send the bot in.
-    bot = await run_in_threadpool(
-        recall_client.create_bot, req.meeting_url, avatar_url
-    )
+    try:
+        bot = await run_in_threadpool(
+            recall_client.create_bot, req.meeting_url, avatar_url
+        )
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
     session = store.create(
         bot_id=bot["id"], meeting_url=req.meeting_url, avatar_id=avatar.id
@@ -261,7 +281,13 @@ async def _make_avatar_speak(session: store.Session, text: str) -> None:
 # ───────────────────────── recall webhook ──────────────────────────
 @app.post("/webhooks/recall")
 async def recall_webhook(request: Request) -> JSONResponse:
-    payload = await request.json()
+    raw_body = await request.body()
+    try:
+        recall_client.verify_webhook(raw_body, request.headers)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=401)
+
+    payload = json.loads(raw_body or b"{}")
     event = payload.get("event", "")
 
     if event != "transcript.data":

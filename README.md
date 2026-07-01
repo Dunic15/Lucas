@@ -183,6 +183,14 @@ PUBLIC_BASE_URL=https://your-public-ngrok-or-deploy-url
 WAKE_WORDS=lucas
 ```
 
+`RECALL_API_KEY` must be a Recall API key, not a `whsec_...` workspace/webhook
+secret. You can check the local setup without exposing secrets:
+
+```bash
+curl http://127.0.0.1:8000/recall/status
+curl http://127.0.0.1:8000/recall/status?check_auth=true
+```
+
 Start the workflow:
 
 ```bash

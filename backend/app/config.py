@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     # Recall.ai (live meeting entry: ears + camera)
     recall_api_key: str = ""
     recall_api_base: str = "https://us-west-2.recall.ai"
+    recall_webhook_secret: str = ""
 
     # Granola (post-meeting transcript source — optional alternative to Recall
     # for the summary/checklist path; it can't power the live in-call agent)
