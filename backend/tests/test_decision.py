@@ -20,7 +20,7 @@ def _avatar(**over) -> Avatar:
         role="AI Process Expert",
         wake_words=["sofia"],
         persona_prompt="",
-        tavus_replica_id="r1",
+        anam_avatar_id="r1",
         elevenlabs_voice_id="v1",
         min_confidence=0.55,
         speak_cooldown_seconds=8.0,

@@ -24,7 +24,7 @@ class Avatar:
     role: str
     wake_words: list[str]
     persona_prompt: str
-    tavus_replica_id: str
+    anam_avatar_id: str
     elevenlabs_voice_id: str
     min_confidence: float
     speak_cooldown_seconds: float
@@ -62,7 +62,10 @@ def load(avatar_id: str) -> Avatar:
         role=raw.get("role", "AI Process Expert"),
         wake_words=wake,
         persona_prompt=(raw.get("persona_prompt") or "").strip(),
-        tavus_replica_id=_coalesce(raw.get("tavus_replica_id"), settings.tavus_replica_id),
+        anam_avatar_id=_coalesce(
+            raw.get("anam_avatar_id") or raw.get("tavus_replica_id"),  # back-compat
+            settings.anam_avatar_id,
+        ),
         elevenlabs_voice_id=_coalesce(
             raw.get("elevenlabs_voice_id"), settings.elevenlabs_voice_id
         ),

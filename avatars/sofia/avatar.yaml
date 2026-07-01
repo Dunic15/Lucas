@@ -23,7 +23,7 @@ persona_prompt: >
 
 # Face + voice for THIS avatar.
 # Leave blank ("") to fall back to the global values in .env.
-tavus_replica_id: ""        # e.g. "r1234abcd..."  (overrides TAVUS_REPLICA_ID)
+anam_avatar_id: ""          # e.g. "abc123..."     (overrides ANAM_AVATAR_ID)
 elevenlabs_voice_id: ""     # e.g. "EXAVITQu4..."  (overrides ELEVENLABS_VOICE_ID)
 
 # When-to-speak tuning. Leave blank to use the global .env defaults.

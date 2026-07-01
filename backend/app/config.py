@@ -36,14 +36,18 @@ class Settings(BaseSettings):
     voyage_api_key: str = ""
     embedding_model: str = "voyage-3"
 
-    # Recall.ai
+    # Recall.ai (live meeting entry: ears + camera)
     recall_api_key: str = ""
     recall_api_base: str = "https://us-west-2.recall.ai"
 
-    # Tavus (face)
-    tavus_api_key: str = ""
-    tavus_replica_id: str = ""
-    tavus_persona_id: str = ""
+    # Granola (post-meeting transcript source — optional alternative to Recall
+    # for the summary/checklist path; it can't power the live in-call agent)
+    granola_api_key: str = ""
+    granola_api_base: str = "https://api.granola.ai"
+
+    # Anam (face)
+    anam_api_key: str = ""
+    anam_avatar_id: str = ""
 
     # ElevenLabs (voice)
     elevenlabs_api_key: str = ""

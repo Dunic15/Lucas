@@ -96,6 +96,12 @@
         <span id="postMsg" class="muted"></span>
       </div>
 
+      <label for="granolaId">…or pull a real transcript from Granola (needs GRANOLA_API_KEY)</label>
+      <div class="row">
+        <input id="granolaId" placeholder="Granola note id" style="flex:1" />
+        <button id="granolaBtn" class="ghost">Fetch from Granola</button>
+      </div>
+
       <div id="postOut" class="out"></div>
     </section>
   </main>
@@ -148,6 +154,18 @@
     $("sampleBtn").onclick = async () => {
       try { $("transcript").value = (await api("/demo/sample?avatar_id=" + encodeURIComponent($("avatar").value))).transcript || ""; }
       catch (e) { $("postMsg").textContent = e.message; }
+    };
+
+    // ── fetch a real transcript from Granola ──
+    $("granolaBtn").onclick = async () => {
+      const id = $("granolaId").value.trim();
+      if (!id) { $("postMsg").textContent = "enter a Granola note id"; return; }
+      $("postMsg").textContent = "fetching from Granola…";
+      try {
+        const r = await api("/granola/transcript?note_id=" + encodeURIComponent(id));
+        $("transcript").value = r.transcript || "";
+        $("postMsg").textContent = r.transcript ? "loaded" : "no transcript on that note";
+      } catch (e) { $("postMsg").textContent = e.message; }
     };
 
     // ── post-meeting ──

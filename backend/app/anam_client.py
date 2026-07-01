@@ -1,8 +1,6 @@
 """Anam client — the avatar's FACE, voiced by ElevenLabs.
 
-(The module keeps its historical filename `tavus_client.py` so the rest of the
-backend imports it unchanged; the vendor behind it is now Anam. Swapping the face
-vendor only ever touches this file + frontend/avatar.html.)
+Swapping the face vendor only ever touches this file + frontend/avatar.html.
 
 We use Anam only as a mouth+face we fully control:
   - Anam's model is a *session token*: you POST a personaConfig (which face, which
@@ -19,10 +17,8 @@ To preserve the three-function contract the rest of the app expects, we map:
   end_conversation(id)          -> no-op (the Anam stream ends when the page/bot
                                    leaves; Recall.leave_call already does that)
 
-Secrets come from .env via `settings`; the per-avatar identity (face/voice) comes
-from avatar.yaml. NOTE: the Anam credentials are read from the existing
-TAVUS_* settings to keep this swap contained to one file — rename to ANAM_* in
-config.py/.env whenever convenient.
+Secrets come from .env via `settings` (ANAM_API_KEY); the per-avatar identity
+(face/voice) comes from avatar.yaml (anam_avatar_id / elevenlabs_voice_id).
 
 INTEGRATION SEAM TO VERIFY on a first live Anam run:
   - the exact personaConfig field names (avatarId / voiceId / llmId / systemPrompt);
@@ -42,11 +38,10 @@ ANAM_BASE = "https://api.anam.ai/v1"
 
 
 def _headers() -> dict:
-    # settings.tavus_api_key holds the ANAM API key (see module note above).
-    if not settings.tavus_api_key:
-        raise RuntimeError("ANAM API key is not set (TAVUS_API_KEY in .env).")
+    if not settings.anam_api_key:
+        raise RuntimeError("ANAM_API_KEY is not set.")
     return {
-        "Authorization": f"Bearer {settings.tavus_api_key}",
+        "Authorization": f"Bearer {settings.anam_api_key}",
         "Content-Type": "application/json",
     }
 
@@ -58,17 +53,17 @@ def create_persona(avatar: Avatar) -> str:
     is no separate persona-create API call — we just validate and return the face
     id here to keep the create_persona → create_conversation flow intact.
     """
-    if not avatar.tavus_replica_id:
+    if not avatar.anam_avatar_id:
         raise RuntimeError(
             f"Avatar '{avatar.id}' has no Anam avatar id "
-            "(set tavus_replica_id in avatar.yaml or TAVUS_REPLICA_ID in .env)."
+            "(set anam_avatar_id in avatar.yaml or ANAM_AVATAR_ID in .env)."
         )
     if not avatar.elevenlabs_voice_id:
         raise RuntimeError(
             f"Avatar '{avatar.id}' has no voice "
             "(set elevenlabs_voice_id in avatar.yaml or ELEVENLABS_VOICE_ID in .env)."
         )
-    return avatar.tavus_replica_id
+    return avatar.anam_avatar_id
 
 
 def create_conversation(avatar: Avatar, persona_id: str) -> dict:

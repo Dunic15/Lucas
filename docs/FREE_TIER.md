@@ -23,7 +23,8 @@
 | **fastembed** (`EMBEDDING_PROVIDER=local`) | Real semantic embeddings, local | Free, `pip install fastembed` |
 | **Anthropic Claude** | Best-quality brain | Paid per-token; no standing free tier |
 | **Voyage AI** | Best-quality embeddings | Has a free token allowance — verify current limit |
-| **Recall.ai** | Meeting entry (ears + camera) | Paid (~per-hour); trial credits — verify |
+| **Recall.ai** | Live meeting entry (ears + camera) — required for the in-call agent | Paid (~per-hour); trial credits — verify |
+| **Granola** | Post-meeting transcripts (summary/checklist path only; can't join calls) | Notetaker app; API key from the app — verify plan |
 | **Anam** | Avatar face | Trial minutes — verify current allowance |
 | **ElevenLabs** | Voice | Free monthly credit tier — verify |
 

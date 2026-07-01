@@ -95,14 +95,16 @@ Lucas/
 │   │   ├── llm.py            ← pluggable brain: anthropic | ollama | stub
 │   │   ├── rag.py            ← retrieval over an avatar's knowledge
 │   │   ├── embeddings.py     ← pluggable embeddings: hash | local | voyage
-│   │   ├── recall_client.py  ← Recall.ai (ears + camera)
-│   │   ├── tavus_client.py   ← the avatar FACE (Anam) + ElevenLabs voice
+│   │   ├── recall_client.py  ← Recall.ai (ears + camera, live meetings)
+│   │   ├── granola_client.py ← Granola (finished transcripts, post-meeting)
+│   │   ├── anam_client.py    ← the avatar FACE (Anam) + ElevenLabs voice
 │   │   ├── store.py          ← in-memory session state
 │   │   └── config.py         ← all env settings in one place
 │   ├── scripts/
 │   │   ├── ingest.py         ← build the RAG index
 │   │   ├── ask.py            ← ask an avatar from the CLI (offline)
-│   │   └── simulate.py       ← run the post-meeting brain on a transcript
+│   │   ├── simulate.py       ← run the post-meeting brain on a transcript
+│   │   └── granola.py        ← pull a Granola transcript and analyze it
 │   └── tests/                ← pure-logic tests (no keys needed)
 ├── frontend/
 │   ├── demo.html             ← the offline demo console (served at /)
@@ -123,13 +125,13 @@ Lucas/
 | Switch embeddings | `EMBEDDING_PROVIDER` in `.env` |
 | Tune when it speaks | `backend/app/decision.py` (or per-avatar yaml) |
 | Change how answers are phrased | `ANSWER_SYSTEM` in `backend/app/brain.py` |
-| Swap the avatar/voice vendor | `backend/app/tavus_client.py` + `frontend/avatar.html` |
+| Swap the avatar/voice vendor | `backend/app/anam_client.py` + `frontend/avatar.html` |
 | Add a key / setting | `.env` + `backend/app/config.py` |
 
 | Layer | Tool | Where |
 |---|---|---|
-| Meeting entry + transcript (ears) | Recall.ai | `backend/app/recall_client.py` |
-| Face | Anam replica | `backend/app/tavus_client.py`, `frontend/avatar.html` |
+| Meeting entry + transcript (ears) | Recall.ai (live) / Granola (post-meeting) | `recall_client.py`, `granola_client.py` |
+| Face | Anam replica | `backend/app/anam_client.py`, `frontend/avatar.html` |
 | Voice | ElevenLabs | configured as the face's TTS layer |
 | Reasoning (brain) | Claude / Ollama / stub | `backend/app/brain.py`, `llm.py` |
 | Knowledge retrieval (RAG) | pluggable embeddings + local store | `backend/app/rag.py`, `embeddings.py` |
@@ -146,7 +148,18 @@ python backend/scripts/ask.py "What approvals are needed before provisioning?"
 
 # Turn a transcript into a summary + gap checklist + follow-up email
 python backend/scripts/simulate.py            # uses sofia's sample_meeting.txt
+
+# Pull a REAL finished transcript from Granola and analyze it (needs GRANOLA_API_KEY)
+python backend/scripts/granola.py list
+python backend/scripts/granola.py analyze <note_id>
 ```
+
+**Where do transcripts come from?** For the **live** in-call agent, Recall.ai
+streams the transcript in real time (and renders the avatar). For the
+**post-meeting** artifact you can instead pull a finished transcript from
+[Granola](https://docs.granola.ai/) — no Recall/Anam needed. Granola is
+post-meeting only: it can't join a call or render the avatar, so it can't power
+the live agent.
 
 ---
 

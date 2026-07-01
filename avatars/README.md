@@ -19,7 +19,7 @@ You do **not** need to touch any Python to add or change an avatar.
    `avatars/marcus/` (for an "AI IT/Security Expert").
 2. **Edit `avatar.yaml`.** Set `id` (must match the folder name), `name`,
    `role`, `wake_words`, and the `persona_prompt`. Optionally give it its own
-   Tavus face and ElevenLabs voice; leave those blank to use the global `.env`.
+   Anam face and ElevenLabs voice; leave those blank to use the global `.env`.
 3. **Add its knowledge.** Drop the relevant `.md` process docs into the new
    `knowledge/` folder, then build the index:
    ```bash
@@ -43,7 +43,7 @@ curl -X POST http://127.0.0.1:8000/sessions/start \
 | `role` | yes | Short description of expertise. |
 | `wake_words` | yes | List of names that call the avatar to speak. |
 | `persona_prompt` | yes | How the avatar introduces itself; injected into the system prompt. |
-| `tavus_replica_id` | no | Per-avatar face. Blank → global `TAVUS_REPLICA_ID`. |
+| `anam_avatar_id` | no | Per-avatar face. Blank → global `ANAM_AVATAR_ID`. |
 | `elevenlabs_voice_id` | no | Per-avatar voice. Blank → global `ELEVENLABS_VOICE_ID`. |
 | `min_confidence` | no | Speak threshold 0–1. Blank → global `MIN_CONFIDENCE`. |
 | `speak_cooldown_seconds` | no | Quiet time after speaking. Blank → global default. |

@@ -11,7 +11,7 @@ existing shape exactly (read `avatars/sofia/` and `avatars/README.md` first).
 Given a name/role/domain, produce:
 1. `avatars/<id>/avatar.yaml` — `id` MUST equal the folder name. Set `name`,
    `role`, `wake_words` (lowercase), and a tight `persona_prompt`. Leave
-   `tavus_replica_id` / `elevenlabs_voice_id` / `min_confidence` /
+   `anam_avatar_id` / `elevenlabs_voice_id` / `min_confidence` /
    `speak_cooldown_seconds` blank so they fall back to global `.env` defaults.
 2. `avatars/<id>/knowledge/*.md` — 2–3 **synthetic** SOPs. Match sofia's heading
    structure (*Required steps*, *Approvals required*, *Owners*, *Definition of

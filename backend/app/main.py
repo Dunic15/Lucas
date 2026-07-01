@@ -1,13 +1,13 @@
 """Callable AI Process Avatar — backend.
 
 Flow:
-  POST /sessions/start  -> create Tavus avatar (ElevenLabs voice) + send Recall
+  POST /sessions/start  -> create Anam avatar (ElevenLabs voice) + send Recall
                            bot into the meeting rendering our avatar page.
   Recall  --transcript.data-->  POST /webhooks/recall
                            -> store utterance, run the when-to-speak gate.
                            -> if the avatar is called & confident, push the
                               answer over the websocket to the avatar page,
-                              which makes Tavus speak it (echo interaction).
+                              which makes the avatar speak it (Anam echo/talk).
   POST /sessions/{id}/end -> remove bot, end avatar, return post-meeting
                              summary + gap checklist + draft follow-up email.
 """
@@ -20,7 +20,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import avatars, store, recall_client, tavus_client
+from . import avatars, store, recall_client, anam_client, granola_client
 from .brain import answer_question, post_meeting, effective_provider
 from .config import settings
 from .decision import detect_wake, passes_confidence
@@ -69,7 +69,7 @@ def list_avatars() -> dict:
 
 
 # ─────────────────────────── demo console ──────────────────────────
-# Everything below runs WITHOUT the live-meeting vendors (Recall/Anam/Tavus/
+# Everything below runs WITHOUT the live-meeting vendors (Recall/Anam/
 # ElevenLabs). It exercises the brain + RAG directly so you can prove the value
 # with zero keys (BRAIN_PROVIDER=stub) or one key (BRAIN_PROVIDER=anthropic).
 @app.get("/")
@@ -112,6 +112,24 @@ def demo_sample(avatar_id: str = "sofia") -> JSONResponse:
     return JSONResponse({"avatar_id": avatar_id, "transcript": text})
 
 
+# ── Granola: pull a real finished transcript (post-meeting only) ──
+@app.get("/granola/notes")
+def granola_notes(limit: int = 20) -> JSONResponse:
+    """List recent Granola notes to pick from (needs GRANOLA_API_KEY)."""
+    if not settings.granola_api_key:
+        return JSONResponse({"error": "GRANOLA_API_KEY not set"}, status_code=400)
+    return JSONResponse({"notes": granola_client.list_notes(limit)})
+
+
+@app.get("/granola/transcript")
+def granola_transcript(note_id: str) -> JSONResponse:
+    """Fetch one Granola note's transcript as 'Speaker: text' lines."""
+    if not settings.granola_api_key:
+        return JSONResponse({"error": "GRANOLA_API_KEY not set"}, status_code=400)
+    return JSONResponse({"note_id": note_id,
+                         "transcript": granola_client.get_transcript(note_id)})
+
+
 # ──────────────────────── session lifecycle ────────────────────────
 class StartRequest(BaseModel):
     meeting_url: str
@@ -122,10 +140,10 @@ class StartRequest(BaseModel):
 async def start_session(req: StartRequest) -> JSONResponse:
     avatar = avatars.load(req.avatar_id)  # raises if unknown
 
-    # 1. Avatar: persona (ElevenLabs voice) + live conversation (Daily room).
-    persona_id = await run_in_threadpool(tavus_client.create_persona, avatar)
+    # 1. Avatar: persona (ElevenLabs voice) + live session (Anam session token).
+    persona_id = await run_in_threadpool(anam_client.create_persona, avatar)
     convo = await run_in_threadpool(
-        tavus_client.create_conversation, avatar, persona_id
+        anam_client.create_conversation, avatar, persona_id
     )
 
     # 2. Avatar page URL the Recall bot will render as its camera.
@@ -147,14 +165,14 @@ async def start_session(req: StartRequest) -> JSONResponse:
     session = store.create(
         bot_id=bot["id"], meeting_url=req.meeting_url, avatar_id=avatar.id
     )
-    session.tavus_conversation_id = convo["conversation_id"]
-    session.tavus_conversation_url = convo["conversation_url"]
+    session.anam_conversation_id = convo["conversation_id"]
+    session.anam_conversation_url = convo["conversation_url"]
     store.register_conversation(convo["conversation_id"], bot["id"])
 
     return JSONResponse(
         {
             "bot_id": bot["id"],
-            "tavus_conversation_id": convo["conversation_id"],
+            "anam_conversation_id": convo["conversation_id"],
             "avatar_page_url": avatar_url,
         }
     )
@@ -170,9 +188,9 @@ async def end_session(bot_id: str) -> JSONResponse:
 
     # Stop billing on both vendors.
     await run_in_threadpool(recall_client.leave_call, bot_id)
-    if session.tavus_conversation_id:
+    if session.anam_conversation_id:
         await run_in_threadpool(
-            tavus_client.end_conversation, session.tavus_conversation_id
+            anam_client.end_conversation, session.anam_conversation_id
         )
 
     artifact: dict = {"summary": "", "checklist": [], "follow_up_email": {}}

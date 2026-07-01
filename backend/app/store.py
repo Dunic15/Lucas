@@ -23,8 +23,8 @@ class Session:
     bot_id: str
     meeting_url: str
     avatar_id: str = "sofia"
-    tavus_conversation_id: str = ""
-    tavus_conversation_url: str = ""
+    anam_conversation_id: str = ""
+    anam_conversation_url: str = ""
     transcript: list[Utterance] = field(default_factory=list)
     last_spoke_at: float = 0.0
     ws: WebSocket | None = None
@@ -44,7 +44,7 @@ class Session:
 
 # bot_id -> Session
 _sessions: dict[str, Session] = {}
-# tavus_conversation_id -> bot_id  (the avatar page only knows the conversation)
+# anam_conversation_id -> bot_id  (the avatar page only knows the conversation)
 _by_conversation: dict[str, str] = {}
 
 
@@ -73,5 +73,5 @@ def all_sessions() -> list[Session]:
 
 def remove(bot_id: str) -> None:
     s = _sessions.pop(bot_id, None)
-    if s and s.tavus_conversation_id:
-        _by_conversation.pop(s.tavus_conversation_id, None)
+    if s and s.anam_conversation_id:
+        _by_conversation.pop(s.anam_conversation_id, None)
