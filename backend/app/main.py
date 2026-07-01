@@ -112,6 +112,33 @@ def demo_sample(avatar_id: str = "lucas") -> JSONResponse:
     return JSONResponse({"avatar_id": avatar_id, "transcript": text})
 
 
+# ── live avatar preview (Anam face + Claude brain, NO meeting vendor) ──
+# Lets you SEE the talking avatar answer from the docs without Recall/ngrok.
+@app.get("/live")
+def live_page() -> FileResponse:
+    return FileResponse(FRONTEND_DIR / "live.html")
+
+
+class LiveTokenRequest(BaseModel):
+    avatar_id: str = "lucas"
+
+
+@app.post("/live/token")
+async def live_token(req: LiveTokenRequest) -> JSONResponse:
+    """Mint a fresh Anam session token for the browser to stream the avatar."""
+    avatar = avatars.load(req.avatar_id)
+    try:
+        persona_id = await run_in_threadpool(anam_client.create_persona, avatar)
+        convo = await run_in_threadpool(
+            anam_client.create_conversation, avatar, persona_id
+        )
+    except Exception as e:  # surface a clean message to the page
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return JSONResponse(
+        {"avatar_id": avatar.id, "session_token": convo["conversation_url"]}
+    )
+
+
 # ── Granola: pull a real finished transcript (post-meeting only) ──
 @app.get("/granola/notes")
 def granola_notes(limit: int = 20) -> JSONResponse:

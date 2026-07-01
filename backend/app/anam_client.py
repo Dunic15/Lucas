@@ -58,11 +58,8 @@ def create_persona(avatar: Avatar) -> str:
             f"Avatar '{avatar.id}' has no Anam avatar id "
             "(set anam_avatar_id in avatar.yaml or ANAM_AVATAR_ID in .env)."
         )
-    if not avatar.elevenlabs_voice_id:
-        raise RuntimeError(
-            f"Avatar '{avatar.id}' has no voice "
-            "(set elevenlabs_voice_id in avatar.yaml or ELEVENLABS_VOICE_ID in .env)."
-        )
+    # Voice is optional: if no voice id is set, Anam uses the persona's default
+    # voice ("use Anam voice for now"). Set ELEVENLABS_VOICE_ID to override.
     return avatar.anam_avatar_id
 
 
@@ -74,17 +71,17 @@ def create_conversation(avatar: Avatar, persona_id: str) -> dict:
                           return one; we generate it and the page echoes it back).
       - conversation_url: the Anam sessionToken the avatar page joins with.
     """
-    body = {
-        "personaConfig": {
-            "name": f"{avatar.name} — {avatar.role}",
-            "avatarId": persona_id,                    # which face
-            "voiceId": avatar.elevenlabs_voice_id,     # which voice
-            # We drive speech from our backend via the page's talk()/echo, so the
-            # persona's own LLM is not the source of truth. systemPrompt kept for
-            # tone; omit/replace llmId per your Anam setup.
-            "systemPrompt": avatar.persona_prompt or f"You are {avatar.name}.",
-        }
+    persona_config = {
+        "name": f"{avatar.name} — {avatar.role}",
+        "avatarId": persona_id,                        # which face
+        # We drive speech from our backend via the page's talk()/echo, so the
+        # persona's own LLM is not the source of truth. systemPrompt kept for
+        # tone; omit/replace llmId per your Anam setup.
+        "systemPrompt": avatar.persona_prompt or f"You are {avatar.name}.",
     }
+    if avatar.elevenlabs_voice_id:                     # else Anam's default voice
+        persona_config["voiceId"] = avatar.elevenlabs_voice_id
+    body = {"personaConfig": persona_config}
     resp = httpx.post(
         f"{ANAM_BASE}/auth/session-token",
         headers=_headers(),
