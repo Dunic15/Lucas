@@ -16,10 +16,10 @@ from .avatars import Avatar
 def detect_wake(avatar: Avatar, utterance: str) -> tuple[bool, str]:
     """If the utterance calls the avatar by a wake word, return (True, question).
 
-    Examples that trigger (wake word "sofia"):
-        "Sofia, what are we missing?"   -> "what are we missing?"
-        "Hey Sofia what's the process"  -> "what's the process"
-        "Can you check, Sofia?"         -> "Can you check?"
+    Examples that trigger (wake word "lucas"):
+        "Lucas, what are we missing?"   -> "what are we missing?"
+        "Hey Lucas what's the process"  -> "what's the process"
+        "Can you check, Lucas?"         -> "Can you check?"
     """
     lower = utterance.lower()
     for wake in avatar.wake_words:

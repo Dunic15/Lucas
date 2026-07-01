@@ -2,7 +2,7 @@
 
 Usage:
     python backend/scripts/ask.py "What approvals are needed before provisioning?"
-    python backend/scripts/ask.py --avatar sofia "What are we missing for onboarding?"
+    python backend/scripts/ask.py --avatar lucas "What are we missing for onboarding?"
 
 Runs the same brain + RAG the live avatar uses. Works fully offline with
 BRAIN_PROVIDER=stub; set BRAIN_PROVIDER=anthropic (+ key) for real answers.
@@ -20,7 +20,7 @@ from app.brain import answer_question  # noqa: E402
 
 def main() -> None:
     args = sys.argv[1:]
-    avatar_id = "sofia"
+    avatar_id = "lucas"
     if args and args[0] == "--avatar":
         avatar_id, args = args[1], args[2:]
     question = " ".join(args).strip()

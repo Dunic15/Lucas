@@ -10,6 +10,15 @@ You are working **in parallel with Claude Code** on this repo. Read
 [README.md](README.md) first (especially the demo), then
 [avatars/README.md](avatars/README.md) for the avatar format.
 
+## Claude handoff note — Lucas rename
+
+Codex renamed the default avatar identity to Lucas across README, avatar config,
+defaults, scripts, tests, and Claude agent instructions. This is
+not a demo behavior change: the offline demo still starts with the same command,
+still uses free stub/hash mode without keys, and still exercises `/demo/ask`,
+`/demo/sample`, and `/demo/post_meeting`; the default `avatar_id` and wake word
+are now `lucas`.
+
 Work on a branch and open a PR — **do not commit to `main`:**
 
 ```bash
@@ -44,7 +53,7 @@ apply that one line — don't edit `main.py` yourself.
 
 ## Task 1 — Second avatar: "Marcus — AI IT/Security Expert"
 
-Prove "add an avatar = add a folder." Copy the shape of `avatars/sofia/`.
+Prove "add an avatar = add a folder." Copy the shape of `avatars/lucas/`.
 
 Create:
 - `avatars/marcus/avatar.yaml` — `id: marcus`, `name: Marcus`,
@@ -53,11 +62,11 @@ Create:
   face/voice/threshold fields blank (they fall back to global `.env`).
 - `avatars/marcus/knowledge/` — 2–3 **synthetic** SOPs
   (`access_provisioning_sop.md`, `offboarding_security_sop.md`,
-  `incident_response_sop.md`). Match sofia's heading structure — headings become
+  `incident_response_sop.md`). Match Lucas's heading structure — headings become
   cited retrieval sections, so keep one concept per heading.
 - `avatars/marcus/sample_meeting.txt` — a short transcript with a couple of gaps.
 
-**Synthetic data only.** Acceptance: same shape as `avatars/sofia/`; valid YAML;
+**Synthetic data only.** Acceptance: same shape as `avatars/lucas/`; valid YAML;
 `id` equals the folder name. Verify: `python backend/scripts/ask.py --avatar marcus "<question>"`.
 
 ## Task 2 — Polish the live avatar page (`frontend/avatar.html`)

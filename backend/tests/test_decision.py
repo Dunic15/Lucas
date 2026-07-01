@@ -15,10 +15,10 @@ from app.decision import detect_wake, passes_confidence  # noqa: E402
 
 def _avatar(**over) -> Avatar:
     base = dict(
-        id="sofia",
-        name="Sofia",
+        id="lucas",
+        name="Lucas",
         role="AI Process Expert",
-        wake_words=["sofia"],
+        wake_words=["lucas"],
         persona_prompt="",
         anam_avatar_id="r1",
         elevenlabs_voice_id="v1",
@@ -31,7 +31,7 @@ def _avatar(**over) -> Avatar:
 
 
 def test_wake_triggers_and_strips_name():
-    called, q = detect_wake(_avatar(), "Sofia, what are we missing?")
+    called, q = detect_wake(_avatar(), "Lucas, what are we missing?")
     assert called is True
     assert q.lower() == "what are we missing"
 
@@ -43,8 +43,8 @@ def test_no_wake_word_stays_silent():
 
 
 def test_wake_word_must_be_whole_token():
-    # "sofiable" should NOT trigger the "sofia" wake word.
-    called, _ = detect_wake(_avatar(), "this is unsofiable behaviour")
+    # "lucaslike" should NOT trigger the "lucas" wake word.
+    called, _ = detect_wake(_avatar(), "this is lucaslike behaviour")
     assert called is False
 
 

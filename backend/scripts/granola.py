@@ -3,7 +3,7 @@
 Usage:
     python backend/scripts/granola.py list                 # list recent notes
     python backend/scripts/granola.py analyze <note_id>     # transcript -> artifact
-    python backend/scripts/granola.py analyze <note_id> --avatar sofia
+    python backend/scripts/granola.py analyze <note_id> --avatar lucas
 
 Needs GRANOLA_API_KEY in .env (Granola app → Settings → Connectors → API keys).
 The analysis uses the same brain as everything else (free stub, or Claude/Ollama).
@@ -34,7 +34,7 @@ def main() -> None:
 
     if cmd == "analyze" and len(args) >= 2:
         note_id = args[1]
-        avatar_id = "sofia"
+        avatar_id = "lucas"
         if "--avatar" in args:
             avatar_id = args[args.index("--avatar") + 1]
         transcript = granola_client.get_transcript(note_id)

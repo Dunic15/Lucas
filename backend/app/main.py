@@ -79,7 +79,7 @@ def demo_page() -> FileResponse:
 
 class AskRequest(BaseModel):
     question: str
-    avatar_id: str = "sofia"
+    avatar_id: str = "lucas"
 
 
 @app.post("/demo/ask")
@@ -92,7 +92,7 @@ async def demo_ask(req: AskRequest) -> JSONResponse:
 
 class PostMeetingRequest(BaseModel):
     transcript: str
-    avatar_id: str = "sofia"
+    avatar_id: str = "lucas"
 
 
 @app.post("/demo/post_meeting")
@@ -104,7 +104,7 @@ async def demo_post_meeting(req: PostMeetingRequest) -> JSONResponse:
 
 
 @app.get("/demo/sample")
-def demo_sample(avatar_id: str = "sofia") -> JSONResponse:
+def demo_sample(avatar_id: str = "lucas") -> JSONResponse:
     """A sample transcript to load into the post-meeting demo, if the avatar has one."""
     avatar = avatars.load(avatar_id)
     sample = avatar.dir / "sample_meeting.txt"
@@ -133,7 +133,7 @@ def granola_transcript(note_id: str) -> JSONResponse:
 # ──────────────────────── session lifecycle ────────────────────────
 class StartRequest(BaseModel):
     meeting_url: str
-    avatar_id: str = "sofia"
+    avatar_id: str = "lucas"
 
 
 @app.post("/sessions/start")

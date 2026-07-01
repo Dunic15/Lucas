@@ -22,7 +22,7 @@ class Utterance:
 class Session:
     bot_id: str
     meeting_url: str
-    avatar_id: str = "sofia"
+    avatar_id: str = "lucas"
     anam_conversation_id: str = ""
     anam_conversation_url: str = ""
     transcript: list[Utterance] = field(default_factory=list)
@@ -48,7 +48,7 @@ _sessions: dict[str, Session] = {}
 _by_conversation: dict[str, str] = {}
 
 
-def create(bot_id: str, meeting_url: str, avatar_id: str = "sofia") -> Session:
+def create(bot_id: str, meeting_url: str, avatar_id: str = "lucas") -> Session:
     s = Session(bot_id=bot_id, meeting_url=meeting_url, avatar_id=avatar_id)
     _sessions[bot_id] = s
     return s

@@ -17,13 +17,13 @@ Open **http://127.0.0.1:8000** and walk through:
 
 1. **Ask the avatar** — e.g. *"What approvals are required before IT provisions
    access?"* → a grounded answer with the source document cited and a confidence
-   bar. Ask something not in the docs → she declines instead of hallucinating.
+   bar. Ask something not in the docs → the avatar declines instead of hallucinating.
 2. **Post-meeting artifact** — click **Load sample → Analyze meeting**. You get a
    summary, a checklist with flagged gaps (missing approval / owner / deadline),
    and a draft follow-up email.
 
 Talking points:
-- The brain answers **only** from `avatars/sofia/knowledge/*.md`, and cites.
+- The brain answers **only** from `avatars/lucas/knowledge/*.md`, and cites.
 - Adding an avatar = adding a folder (`avatars/README.md`). No code.
 - This same brain drives the live meeting avatar — the demo just skips the face.
 
@@ -49,13 +49,13 @@ keys, `ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID`. See
 ngrok http 8000
 # put the https URL in .env as PUBLIC_BASE_URL, restart uvicorn
 
-# 2. Start a test call (Google Meet is easiest) and send Sofia in
+# 2. Start a test call (Google Meet is easiest) and send Lucas in
 curl -X POST http://127.0.0.1:8000/sessions/start \
   -H 'Content-Type: application/json' \
   -d '{"meeting_url": "https://meet.google.com/your-test-call"}'
 
 # 3. In the call, say the wake word:
-#    "Sofia, what are we missing for this onboarding?"
+#    "Lucas, what are we missing for this onboarding?"
 
 # 4. End the session and collect the artifact (also stops billing)
 curl -X POST http://127.0.0.1:8000/sessions/<bot_id>/end
