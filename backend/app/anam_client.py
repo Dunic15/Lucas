@@ -104,9 +104,16 @@ def _expand_persona(persona_id: str) -> dict:
         "llmId": d.get("llmId"),  # required by Anam for a non-legacy token
         "systemPrompt": _MOUTH_SYSTEM_PROMPT,  # neutralized: never speaks on its own
         "skipGreeting": True,
+        # Fully passive: 0 disables the idle "please say something" nudge AND the
+        # auto-disconnect on silence, so she only ever speaks lines we drive.
+        "voiceDetectionOptions": {
+            "silenceBeforeSkipTurnSeconds": 0,
+            "silenceBeforeSessionEndSeconds": 0,
+        },
     }
-    # Drop empties so we don't send nulls Anam may reject.
-    return {k: v for k, v in cfg.items() if v}
+    # Drop empty/None values so we don't send nulls Anam may reject (but keep the
+    # voiceDetectionOptions dict, whose 0 values are meaningful).
+    return {k: v for k, v in cfg.items() if v or k == "voiceDetectionOptions"}
 
 
 def create_conversation(avatar: Avatar, persona_id: str) -> dict:
