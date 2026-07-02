@@ -164,6 +164,11 @@ def live_page() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "live.html")
 
 
+@app.get("/join")
+def join_page() -> FileResponse:
+    return FileResponse(FRONTEND_DIR / "join.html")
+
+
 class LiveTokenRequest(BaseModel):
     avatar_id: str = "laura"
 

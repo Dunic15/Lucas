@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Send Laura to a Meeting</title>
+  <style>
+    :root {
+      --bg: #0b1020; --panel: #141b31; --panel2: #1b2440; --line: #28324f;
+      --text: #e6ecff; --muted: #93a1c8; --accent: #5b8cff; --good: #3ad29f;
+      --warn: #ffcf6b; --bad: #ff8a8a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
+    }
+    header {
+      padding: 20px 24px; border-bottom: 1px solid var(--line);
+      display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    }
+    h1 { font-size: 18px; margin: 0; }
+    .sub { color: var(--muted); font-size: 13px; }
+    main { max-width: 760px; margin: 0 auto; padding: 24px; }
+    .card {
+      background: var(--panel); border: 1px solid var(--line);
+      border-radius: 8px; padding: 18px; margin-bottom: 16px;
+    }
+    h2 { font-size: 15px; margin: 0 0 4px; }
+    p { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+    label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 6px; }
+    input, select {
+      width: 100%; background: var(--panel2); color: var(--text);
+      border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+      font: inherit;
+    }
+    .row { display: flex; gap: 10px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+    button, .button-link {
+      background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+      padding: 10px 16px; font: 600 14px system-ui; cursor: pointer;
+      text-decoration: none; display: inline-block;
+    }
+    button.ghost, .button-link.ghost {
+      background: transparent; border: 1px solid var(--line); color: var(--muted);
+    }
+    button.danger { background: transparent; border: 1px solid #5c2c38; color: var(--bad); }
+    button:disabled { opacity: .5; cursor: default; }
+    .result {
+      background: var(--panel2); border: 1px solid var(--line);
+      border-left: 3px solid var(--accent); border-radius: 8px; padding: 14px;
+      margin-top: 16px; overflow-wrap: anywhere;
+    }
+    .muted { color: var(--muted); font-size: 12px; }
+    .ok { color: var(--good); }
+    .warn { color: var(--warn); }
+    .err { color: var(--bad); }
+    code {
+      display: block; background: #0f1528; border: 1px solid var(--line);
+      color: var(--text); border-radius: 8px; padding: 10px; overflow-x: auto;
+      font-size: 12px; white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Send Laura to a Meeting</h1>
+      <div class="sub">Manual join for live calls. Use this when calendar auto-join is not enough.</div>
+    </div>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Join Now</h2>
+      <p>Paste a Google Meet, Zoom, or Teams URL. Laura will join through Recall and render the avatar page as her camera.</p>
+
+      <label for="meetingUrl">Meeting URL</label>
+      <input id="meetingUrl" placeholder="https://meet.google.com/abc-defg-hij" autocomplete="off" />
+
+      <label for="avatarId">Avatar</label>
+      <select id="avatarId"><option value="laura">Laura</option></select>
+
+      <div class="row">
+        <button id="sendBtn">Send Laura</button>
+        <button id="stopBtn" class="danger" disabled>Stop Laura</button>
+        <span id="msg" class="muted"></span>
+      </div>
+
+      <div id="result"></div>
+    </section>
+
+    <section class="card">
+      <h2>Shortcut</h2>
+      <p>Drag this button to your bookmarks bar. When you are inside a Meet tab, click it to open this console with the meeting link already filled.</p>
+      <a id="bookmarklet" class="button-link ghost" href="#">Send Laura</a>
+      <div style="margin-top:12px">
+        <code id="bookmarkletCode"></code>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => (s ?? "").replace(/[&<>"]/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;"
+    }[c]));
+
+    let currentBotId = "";
+
+    function setMessage(text, cls = "muted") {
+      $("msg").className = cls;
+      $("msg").textContent = text;
+    }
+
+    async function api(path, body) {
+      const r = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      return data;
+    }
+
+    function normalizeMeetingUrl(raw) {
+      const value = raw.trim();
+      if (!value) return "";
+      try {
+        const url = new URL(value);
+        if (url.hostname === "meet.google.com") {
+          url.search = "";
+          url.hash = "";
+        }
+        return url.toString();
+      } catch (_) {
+        return value;
+      }
+    }
+
+    function renderResult(data) {
+      currentBotId = data.bot_id || "";
+      $("stopBtn").disabled = !currentBotId;
+      $("result").innerHTML = `
+        <div class="result">
+          <div class="ok"><b>Laura was sent.</b></div>
+          <div class="muted">If this is Google Meet, the host may still need to admit her from the waiting room.</div>
+          <p><b>bot_id</b><br>${esc(data.bot_id)}</p>
+          <p><b>avatar page</b><br><a href="${esc(data.avatar_page_url)}" target="_blank" rel="noreferrer">${esc(data.avatar_page_url)}</a></p>
+        </div>
+      `;
+    }
+
+    $("sendBtn").onclick = async () => {
+      const meetingUrl = normalizeMeetingUrl($("meetingUrl").value);
+      if (!meetingUrl) {
+        setMessage("Paste a meeting URL first.", "err");
+        return;
+      }
+      $("meetingUrl").value = meetingUrl;
+      $("sendBtn").disabled = true;
+      setMessage("sending Laura...");
+      $("result").innerHTML = "";
+      try {
+        const data = await api("/sessions/start", {
+          meeting_url: meetingUrl,
+          avatar_id: $("avatarId").value
+        });
+        renderResult(data);
+        setMessage("sent", "ok");
+      } catch (e) {
+        setMessage(e.message, "err");
+      } finally {
+        $("sendBtn").disabled = false;
+      }
+    };
+
+    $("stopBtn").onclick = async () => {
+      if (!currentBotId) return;
+      $("stopBtn").disabled = true;
+      setMessage("stopping Laura...");
+      try {
+        await api(`/sessions/${encodeURIComponent(currentBotId)}/end`, {});
+        setMessage("stopped", "ok");
+        $("result").innerHTML += `<div class="result warn">Laura was stopped for bot ${esc(currentBotId)}.</div>`;
+        currentBotId = "";
+      } catch (e) {
+        setMessage(e.message, "err");
+        $("stopBtn").disabled = false;
+      }
+    };
+
+    async function boot() {
+      const params = new URLSearchParams(location.search);
+      const meetingUrl = params.get("meeting_url") || params.get("url") || "";
+      if (meetingUrl) $("meetingUrl").value = normalizeMeetingUrl(meetingUrl);
+
+      try {
+        const r = await fetch("/avatars");
+        const data = await r.json();
+        $("avatarId").innerHTML = (data.avatars || []).map(a =>
+          `<option value="${esc(a.id)}">${esc(a.name)} — ${esc(a.role)}</option>`
+        ).join("") || '<option value="laura">Laura</option>';
+      } catch (_) {}
+
+      const base = `${location.origin}/join?meeting_url=`;
+      const js = `javascript:(()=>{location.href='${base}'+encodeURIComponent(location.href)})()`;
+      $("bookmarklet").href = js;
+      $("bookmarkletCode").textContent = js;
+    }
+
+    boot();
+  </script>
+</body>
+</html>
