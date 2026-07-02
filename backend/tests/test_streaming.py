@@ -1,0 +1,88 @@
+"""Streaming answer contract tests. No network calls or API keys."""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app import brain  # noqa: E402
+from app.avatars import Avatar  # noqa: E402
+from app.rag import Retrieved  # noqa: E402
+
+
+def _avatar() -> Avatar:
+    return Avatar(
+        id="laura",
+        name="Laura",
+        role="AI Process Expert",
+        wake_words=["laura"],
+        persona_prompt="",
+        anam_avatar_id="r1",
+        elevenlabs_voice_id="v1",
+        min_confidence=0.55,
+        speak_cooldown_seconds=8.0,
+        dir=Path("."),
+    )
+
+
+def _retrieved() -> list[Retrieved]:
+    return [
+        Retrieved(
+            text="Provisioning access requires manager approval before IT acts.",
+            source="access_security_sop.md",
+            section="Provisioning",
+            score=0.91,
+        )
+    ]
+
+
+def _force_streaming_provider(monkeypatch) -> None:
+    monkeypatch.setattr(brain.settings, "brain_provider", "anthropic")
+    monkeypatch.setattr(brain.settings, "anthropic_api_key", "test-key")
+    monkeypatch.setattr(brain, "retrieve", lambda *args, **kwargs: _retrieved())
+
+
+def test_streaming_answer_yields_sentences_and_citation(monkeypatch):
+    _force_streaming_provider(monkeypatch)
+    monkeypatch.setattr(
+        brain.llm,
+        "stream_complete",
+        lambda *args, **kwargs: iter(
+            ["Managers approve access first. ", "Then IT provisions it."]
+        ),
+    )
+
+    out = list(brain.answer_question_stream(_avatar(), "What is the access flow?"))
+
+    assert out == [
+        "Managers approve access first.",
+        "Then IT provisions it.",
+        "— per access_security_sop.md",
+    ]
+
+
+def test_streaming_skip_sentinel_stays_silent(monkeypatch):
+    _force_streaming_provider(monkeypatch)
+    monkeypatch.setattr(
+        brain.llm,
+        "stream_complete",
+        lambda *args, **kwargs: iter(["SK", "IP"]),
+    )
+
+    out = list(brain.answer_question_stream(_avatar(), "Unknown policy?"))
+
+    assert out == []
+
+
+def test_streaming_skip_prefix_inside_word_is_not_sentinel(monkeypatch):
+    _force_streaming_provider(monkeypatch)
+    monkeypatch.setattr(
+        brain.llm,
+        "stream_complete",
+        lambda *args, **kwargs: iter(["Skipping is not used here."]),
+    )
+
+    out = list(brain.answer_question_stream(_avatar(), "What should we avoid?"))
+
+    assert out == ["Skipping is not used here.", "— per access_security_sop.md"]
