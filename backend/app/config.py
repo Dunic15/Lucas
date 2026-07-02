@@ -51,6 +51,14 @@ class Settings(BaseSettings):
     calendar_oauth_state: str = ""
     calendar_invite_emails: str = "laura.ai.122222@gmail.com"
 
+    # Gmail watcher: auto-join when Laura is added to a live Meet via "Add people"
+    # (Google emails her the link — no calendar event is created). Needs the
+    # gmail.readonly scope on the same Google OAuth. The refresh token is read from
+    # here if set, otherwise from the connected Recall calendar.
+    google_refresh_token: str = ""
+    gmail_watch_enabled: bool = True
+    gmail_poll_seconds: float = 15.0
+
     # Granola (post-meeting transcript source — optional alternative to Recall
     # for the summary/checklist path; it can't power the live in-call agent)
     granola_api_key: str = ""

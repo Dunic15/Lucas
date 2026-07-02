@@ -13,6 +13,7 @@ Flow:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -28,7 +29,15 @@ from starlette.concurrency import iterate_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
-from . import avatars, store, recall_client, anam_client, granola_client, actions
+from . import (
+    avatars,
+    store,
+    recall_client,
+    anam_client,
+    granola_client,
+    actions,
+    gmail_watcher,
+)
 from .brain import (
     answer_question,
     answer_question_stream,
@@ -46,6 +55,9 @@ FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 GOOGLE_CALENDAR_SCOPES = (
     "https://www.googleapis.com/auth/calendar.events.readonly",
     "https://www.googleapis.com/auth/userinfo.email",
+    # Read Laura's inbox so "Add people" invites (which email her a Meet link,
+    # with no calendar event) can auto-join the meeting. See gmail_watcher.py.
+    "https://www.googleapis.com/auth/gmail.readonly",
 )
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 ATTENDEE_CONTAINER_KEYS = {
@@ -87,6 +99,74 @@ def _prebuild_indexes() -> None:
             ensure_index(avatars.load(aid))
         except Exception as e:  # a bad avatar shouldn't stop the server
             print(f"[startup] could not index avatar '{aid}': {e}")
+
+
+# ─────────────── Gmail watcher: "Add people" → auto-join ────────────────
+# Poll Laura's inbox for Google Meet invitation emails (sent by Meet's native
+# "Add people") and send the bot into that meeting. See gmail_watcher.py.
+_gmail_seen_ids: set[str] = set()
+_gmail_state = {"last_poll": 0.0, "last_error": "", "joined": []}
+
+
+async def _gmail_watch_loop() -> None:
+    seeded = False  # first pass only records existing mail; never joins old meetings
+    while True:
+        await asyncio.sleep(settings.gmail_poll_seconds)
+        if not settings.gmail_watch_enabled:
+            continue
+        try:
+            rt = await run_in_threadpool(gmail_watcher.refresh_token)
+            if not rt:
+                _gmail_state["last_error"] = (
+                    "no refresh token — run /oauth/google/connect (with gmail scope)"
+                )
+                continue
+            token = await run_in_threadpool(gmail_watcher.access_token, rt)
+            new = await run_in_threadpool(
+                gmail_watcher.poll_new_invites, token, _gmail_seen_ids
+            )
+            _gmail_state["last_poll"] = time.time()
+            _gmail_state["last_error"] = ""
+            if not seeded:
+                seeded = True
+                continue
+            for _mid, url in new:
+                if store.is_scheduled(url):
+                    continue
+                try:
+                    res = await _start_avatar_session(url, "laura")
+                    store.mark_scheduled(url)
+                    _gmail_state["joined"].append(
+                        {"meeting_url": url, "bot_id": res["bot_id"], "at": time.time()}
+                    )
+                    print(f"[gmail-watch] joined {url} via bot {res['bot_id']}", flush=True)
+                except Exception as e:
+                    print(f"[gmail-watch] failed to join {url}: {e}", flush=True)
+        except Exception as e:
+            _gmail_state["last_error"] = str(e)
+
+
+@app.on_event("startup")
+async def _launch_gmail_watch() -> None:
+    if settings.gmail_watch_enabled:
+        asyncio.create_task(_gmail_watch_loop())
+
+
+@app.get("/gmail/status")
+def gmail_status() -> JSONResponse:
+    """Non-secret health of the Gmail 'Add people' auto-join watcher."""
+    has_rt = bool(gmail_watcher.refresh_token())
+    last = _gmail_state["last_poll"]
+    return JSONResponse(
+        {
+            "enabled": settings.gmail_watch_enabled,
+            "has_refresh_token": has_rt,
+            "poll_seconds": settings.gmail_poll_seconds,
+            "seconds_since_last_poll": round(time.time() - last, 1) if last else None,
+            "last_error": _gmail_state["last_error"],
+            "recent_joins": _gmail_state["joined"][-5:],
+        }
+    )
 
 
 # ───────────────────────────── health ──────────────────────────────
@@ -364,48 +444,48 @@ class StartRequest(BaseModel):
     join_at: Optional[str] = None  # ISO 8601; set (>=10 min out) to schedule the bot
 
 
-@app.post("/sessions/start")
-async def start_session(req: StartRequest) -> JSONResponse:
-    avatar = avatars.load(req.avatar_id)  # raises if unknown
+async def _start_avatar_session(
+    meeting_url: str, avatar_id: str = "laura", join_at: Optional[str] = None
+) -> dict:
+    """Send a Recall bot (rendering the avatar page as its camera) into a meeting.
 
-    try:
-        recall_client.assert_ready()
-    except RuntimeError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-
-    # 1. Stable avatar-page URL the Recall bot renders as its camera. The page
-    #    mints its OWN fresh Anam token at render time (needed for scheduled bots),
-    #    and keys its websocket on this conversation_id.
-    import uuid as _uuid
-
-    conversation_id = _uuid.uuid4().hex
+    Shared by the manual /sessions/start endpoint, the calendar auto-join webhook,
+    and the Gmail watcher. Raises on failure. The avatar page mints its own fresh
+    Anam token at render time and keys its websocket on the conversation_id.
+    """
+    avatar = avatars.load(avatar_id)  # raises if unknown
+    conversation_id = uuid.uuid4().hex
     avatar_url = (
         f"{settings.public_base_url.rstrip('/')}/avatar"
         f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
     )
-
-    # 2. Send the bot in (now, or scheduled via join_at for calendar auto-join).
-    try:
-        bot = await run_in_threadpool(
-            recall_client.create_bot, req.meeting_url, avatar_url, req.join_at
-        )
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-
+    bot = await run_in_threadpool(
+        recall_client.create_bot, meeting_url, avatar_url, join_at
+    )
     session = store.create(
-        bot_id=bot["id"], meeting_url=req.meeting_url, avatar_id=avatar.id
+        bot_id=bot["id"], meeting_url=meeting_url, avatar_id=avatar.id
     )
     session.anam_conversation_id = conversation_id
     store.register_conversation(conversation_id, bot["id"])
+    return {
+        "bot_id": bot["id"],
+        "conversation_id": conversation_id,
+        "avatar_page_url": avatar_url,
+        "scheduled_for": join_at,
+    }
 
-    return JSONResponse(
-        {
-            "bot_id": bot["id"],
-            "conversation_id": conversation_id,
-            "avatar_page_url": avatar_url,
-            "scheduled_for": req.join_at,
-        }
-    )
+
+@app.post("/sessions/start")
+async def start_session(req: StartRequest) -> JSONResponse:
+    try:
+        recall_client.assert_ready()
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    try:
+        result = await _start_avatar_session(req.meeting_url, req.avatar_id, req.join_at)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return JSONResponse(result)
 
 
 async def _finalize_session(bot_id: str) -> dict | None:
