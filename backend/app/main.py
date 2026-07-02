@@ -107,6 +107,43 @@ def _prebuild_indexes() -> None:
 _gmail_seen_ids: set[str] = set()
 _gmail_state = {"last_poll": 0.0, "last_error": "", "joined": []}
 
+_MEET_CODE_RE = re.compile(r"meet\.google\.com/([a-z-]+)")
+_BOT_TERMINAL = {"call_ended", "done", "fatal"}
+
+
+def _meeting_code(url: str) -> str:
+    m = _MEET_CODE_RE.search(url or "")
+    return m.group(1) if m else (url or "")
+
+
+def _meeting_has_active_bot(meeting_url: str) -> bool:
+    """True if Recall already has a non-terminal bot in this meeting.
+
+    Durable, cross-instance dedup: the in-memory / per-process guards can miss a
+    duplicate across a deploy overlap or a second invite email, so we check
+    Recall itself (the source of truth) before dispatching another bot.
+    """
+    code = _meeting_code(meeting_url)
+    if not code:
+        return False
+    try:
+        r = httpx.get(
+            f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/",
+            headers={"Authorization": f"Token {settings.recall_api_key}"},
+            timeout=20.0,
+        )
+        r.raise_for_status()
+        for bot in (r.json().get("results") or [])[:25]:
+            mu = bot.get("meeting_url")
+            mid = mu.get("meeting_id") if isinstance(mu, dict) else mu
+            if mid and code in str(mid):
+                status = (bot.get("status_changes") or [{}])[-1].get("code")
+                if status not in _BOT_TERMINAL:
+                    return True
+    except Exception:
+        pass
+    return False
+
 
 async def _gmail_watch_loop() -> None:
     seeded = False  # first pass only records existing mail; never joins old meetings
@@ -132,6 +169,10 @@ async def _gmail_watch_loop() -> None:
                 continue
             for _mid, url in new:
                 if store.is_scheduled(url):
+                    continue
+                # Durable cross-instance guard against duplicate bots.
+                if await run_in_threadpool(_meeting_has_active_bot, url):
+                    store.mark_scheduled(url)
                     continue
                 try:
                     res = await _start_avatar_session(url, "laura")
@@ -759,6 +800,13 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             continue
         if not _calendar_event_targets_avatar(ev):
             scheduled.append({"event": eid, "skipped": "invite_email_missing"})
+            continue
+        # Durable cross-instance guard: don't add a second bot to a meeting that
+        # already has one (deploy overlap, webhook retry, or Gmail path overlap).
+        if await run_in_threadpool(_meeting_has_active_bot, url):
+            if eid:
+                store.mark_scheduled(eid)
+            scheduled.append({"event": eid, "skipped": "already_has_bot"})
             continue
         try:
             avatar = avatars.load(avatar_id)
