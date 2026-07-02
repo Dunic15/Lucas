@@ -116,6 +116,41 @@ def _meeting_code(url: str) -> str:
     return m.group(1) if m else (url or "")
 
 
+def _reconcile_duplicate_bots(meeting_url: str, my_bot_id: str) -> None:
+    """If a race (deploy overlap: two instances polling) put more than one bot in
+    the meeting, deterministically keep the earliest-created one and make the rest
+    leave. Both instances compute the same "keep earliest", so the duplicate
+    resolves no matter which one wins the race."""
+    code = _meeting_code(meeting_url)
+    if not code:
+        return
+    try:
+        r = httpx.get(
+            f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/",
+            headers={"Authorization": f"Token {settings.recall_api_key}"},
+            timeout=20.0,
+        )
+        r.raise_for_status()
+        active = []
+        for bot in (r.json().get("results") or [])[:25]:
+            mu = bot.get("meeting_url")
+            mid = mu.get("meeting_id") if isinstance(mu, dict) else mu
+            if mid and code in str(mid):
+                status = (bot.get("status_changes") or [{}])[-1].get("code")
+                if status not in _BOT_TERMINAL:
+                    active.append((bot.get("created_at") or "", bot.get("id")))
+        if len(active) <= 1:
+            return
+        active.sort()  # earliest created_at first — keep it, remove the rest
+        for _created, bid in active[1:]:
+            try:
+                recall_client.leave_call(bid)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def _meeting_has_active_bot(meeting_url: str) -> bool:
     """True if Recall already has a non-terminal bot in this meeting.
 
@@ -181,6 +216,10 @@ async def _gmail_watch_loop() -> None:
                         {"meeting_url": url, "bot_id": res["bot_id"], "at": time.time()}
                     )
                     print(f"[gmail-watch] joined {url} via bot {res['bot_id']}", flush=True)
+                    # Resolve any deploy-overlap duplicate: let a racing bot register,
+                    # then keep the earliest and drop the rest.
+                    await asyncio.sleep(4)
+                    await run_in_threadpool(_reconcile_duplicate_bots, url, res["bot_id"])
                 except Exception as e:
                     print(f"[gmail-watch] failed to join {url}: {e}", flush=True)
         except Exception as e:
