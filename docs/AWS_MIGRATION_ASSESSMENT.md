@@ -2,6 +2,18 @@
 
 _Assessment date: 2026-07-02. Author: Claude (Opus 4.8), from the actual codebase._
 
+## Current status
+
+Laura is now running on AWS App Runner in `eu-central-1`:
+
+- Backend URL: `https://dhfgfe6yw6.eu-central-1.awsapprunner.com`
+- Runtime size: `1 vCPU / 3 GB RAM`
+- Live-answer model: `claude-haiku-4-5-20251001`
+- Recall calendar webhook: `https://dhfgfe6yw6.eu-central-1.awsapprunner.com/webhooks/recall-calendar`
+
+Keep this assessment as the migration rationale and risk log. The active deploy
+notes now live in [docs/DEPLOY.md](DEPLOY.md).
+
 ## TL;DR
 
 - **Serverless (Lambda + API Gateway + DynamoDB):** a **2–4 week rewrite**, not a
@@ -119,13 +131,12 @@ long-term.
 
 ---
 
-## Recommendation
+## Current recommendation
 
-1. **Today:** Render → Settings → Instance Type → **Standard (2 GB)**. Five minutes,
-   removes OOM/restart glitches, keeps `local` retrieval quality, zero migration
-   risk.
-2. **Measure** the `[latency] llm usage` line from one live call to settle whether
-   the 2–4s is prompt size (code) or Anthropic tier (Console).
-3. **AWS later, deliberately, if you want it** — as the **container** option in
-   **eu-central-1**, not serverless. Spend the $100 credit on a **staging copy** or
-   experiments, not on betting the live avatar on a rushed migration.
+1. Keep testing the AWS App Runner backend at `1 vCPU / 3 GB`.
+2. Keep Haiku on the live-answer path; reserve larger Claude models for async
+   summaries or offline analysis.
+3. Watch the `[latency]` lines from one real call before increasing CPU. If the
+   delay is still first-token latency, more AWS CPU/RAM will not fix it.
+4. Pause App Runner when not testing, and connect the custom domain only after
+   the live Recall/Anam flow is stable.

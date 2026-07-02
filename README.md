@@ -191,16 +191,26 @@ call on the agent by saying `Laura`. The server must be running and reachable
 from the public internet so Recall.ai can post transcripts to the webhook and
 render the avatar page.
 
+Current AWS test backend:
+
+```text
+https://dhfgfe6yw6.eu-central-1.awsapprunner.com
+```
+
+Open `/join` on that URL to send Laura manually, or use it as the Chrome
+extension backend URL until the custom domain is connected.
+
 Required `.env` values for the live workflow:
 
 ```bash
 ANTHROPIC_API_KEY=...
+BRAIN_MODEL=claude-haiku-4-5-20251001
 RECALL_API_KEY=...
 ANAM_API_KEY=...
 ANAM_AVATAR_ID=...
 ELEVENLABS_API_KEY=...
 ELEVENLABS_VOICE_ID=...
-PUBLIC_BASE_URL=https://your-public-ngrok-or-deploy-url
+PUBLIC_BASE_URL=https://dhfgfe6yw6.eu-central-1.awsapprunner.com
 WAKE_WORDS=laura
 ```
 

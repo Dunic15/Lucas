@@ -6,6 +6,20 @@ breaks `PUBLIC_BASE_URL` and any webhooks. For real use, pick ONE permanent URL.
 ## Option A — Deploy the backend (recommended)
 A container host gives you a stable `https://…` URL and runs 24/7.
 
+**Current AWS App Runner backend:**
+- URL: `https://dhfgfe6yw6.eu-central-1.awsapprunner.com`
+- Region: `eu-central-1` (Frankfurt)
+- Runtime size for testing: `1 vCPU / 3 GB RAM`
+- Live model: `BRAIN_MODEL=claude-haiku-4-5-20251001`
+- Join page: `https://dhfgfe6yw6.eu-central-1.awsapprunner.com/join`
+
+Use the AWS URL as `PUBLIC_BASE_URL` and point Recall webhooks at:
+- `https://dhfgfe6yw6.eu-central-1.awsapprunner.com/webhooks/recall`
+- `https://dhfgfe6yw6.eu-central-1.awsapprunner.com/webhooks/recall-calendar`
+
+App Runner does not scale to zero automatically. Pause the service when you are
+done testing, and resume it before using Laura again.
+
 **Render (free tier, easiest):**
 1. Push this repo to GitHub (done).
 2. Render → New → Blueprint → pick this repo (it reads `render.yaml`).

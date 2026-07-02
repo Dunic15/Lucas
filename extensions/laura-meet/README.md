@@ -21,11 +21,12 @@ For Google Meet, the host may still need to admit Laura from the waiting room.
 The default backend is:
 
 ```text
-https://laura-avatar.onrender.com
+https://dhfgfe6yw6.eu-central-1.awsapprunner.com
 ```
 
-To use a custom production domain later, open the extension's **Details** page in
-Chrome, click **Extension options**, and save the new HTTPS backend URL.
+If Chrome already saved the old Render URL, open the extension's **Details** page,
+click **Extension options**, and save the AWS URL above. To use a custom
+production domain later, save the new HTTPS backend URL in the same options page.
 
 The extension requests HTTPS host permission so it can keep working after the
-backend moves from Render to the custom domain.
+backend moves from AWS App Runner to the custom domain.

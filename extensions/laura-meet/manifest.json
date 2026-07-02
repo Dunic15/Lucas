@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Laura for Google Meet",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Adds an in-meeting control that sends Laura to the current Google Meet call.",
   "permissions": ["storage"],
   "host_permissions": ["https://*/*"],

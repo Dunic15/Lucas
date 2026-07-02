@@ -1,4 +1,5 @@
-const DEFAULT_API_BASE = "https://laura-avatar.onrender.com";
+const DEFAULT_API_BASE = "https://dhfgfe6yw6.eu-central-1.awsapprunner.com";
+const LEGACY_DEFAULT_API_BASE = "https://laura-avatar.onrender.com";
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message.type !== "string") return false;
@@ -77,7 +78,12 @@ async function handleMessage(message) {
 
 async function getApiBase() {
   const result = await chrome.storage.sync.get({ apiBase: DEFAULT_API_BASE });
-  return sanitizeApiBase(result.apiBase || DEFAULT_API_BASE);
+  const apiBase = sanitizeApiBase(result.apiBase || DEFAULT_API_BASE);
+  if (apiBase === LEGACY_DEFAULT_API_BASE) {
+    await chrome.storage.sync.set({ apiBase: DEFAULT_API_BASE });
+    return DEFAULT_API_BASE;
+  }
+  return apiBase;
 }
 
 async function getSessions() {
