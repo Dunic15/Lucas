@@ -903,10 +903,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
             await _make_avatar_speak(session, line, cits)
             return JSONResponse({"ok": True, "spoke": True, "proactive": True, "line": line})
 
-    # ── when-to-speak gate (called by name) ──
+    # ── when-to-speak gate ──
+    # By default (require_wake_word=False) she answers any grounded question; the
+    # SKIP sentinel + cooldown keep her from interjecting on things she can't ground.
     called, question = detect_wake(avatar, text)
-    if not called:
+    if settings.require_wake_word and not called:
         return JSONResponse({"ok": True, "spoke": False, "reason": "not called"})
+    question = question or text  # no wake word → treat the whole utterance as the ask
     if session.in_cooldown(avatar.speak_cooldown_seconds):
         return JSONResponse({"ok": True, "spoke": False, "reason": "cooldown"})
 

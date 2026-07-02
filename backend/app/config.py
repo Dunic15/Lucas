@@ -82,6 +82,9 @@ class Settings(BaseSettings):
 
     # Behaviour
     wake_words: str = "laura"
+    # When False, the avatar answers any grounded question without needing to be
+    # called by name first (the SKIP gate + cooldown still keep her from spamming).
+    require_wake_word: bool = False
     speak_cooldown_seconds: float = 8.0
     min_confidence: float = 0.55
     # Proactive intervention (the differentiator): flag ONE missing step as the
