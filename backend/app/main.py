@@ -23,13 +23,20 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
+from starlette.concurrency import iterate_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from . import avatars, store, recall_client, anam_client, granola_client, actions
-from .brain import answer_question, post_meeting, proactive_flag, effective_provider
+from .brain import (
+    answer_question,
+    answer_question_stream,
+    post_meeting,
+    proactive_flag,
+    effective_provider,
+)
 from .config import settings
-from .decision import detect_wake, detect_closing, passes_confidence
+from .decision import detect_wake, detect_closing
 from .rag import ensure_index
 
 app = FastAPI(title="Callable AI Process Avatar")
@@ -761,22 +768,21 @@ async def recall_webhook(request: Request) -> JSONResponse:
         return JSONResponse({"ok": True, "spoke": False, "reason": "cooldown"})
 
     # Backend is the brain: answer from OUR knowledge (RAG) with the recent
-    # meeting conversation as context, and only speak if grounded + confident.
+    # meeting conversation as context. Streamed sentence-by-sentence so the avatar
+    # starts speaking on the first sentence instead of waiting for the whole
+    # answer. Grounding is enforced by the SKIP sentinel inside the stream: if the
+    # context is insufficient the generator yields nothing and the avatar stays
+    # silent (the streaming equivalent of the old confidence gate).
     history = session.recent_transcript(n=8)
-    result = await run_in_threadpool(
-        answer_question, avatar, question or text, history=history
-    )
-    if not passes_confidence(avatar, result):
-        return JSONResponse(
-            {"ok": True, "spoke": False, "reason": "low confidence",
-             "confidence": result.get("confidence"), "result": result}
-        )
+    spoke_any = False
+    async for sentence in iterate_in_threadpool(
+        answer_question_stream(avatar, question or text, history=history)
+    ):
+        await _make_avatar_speak(session, sentence)
+        spoke_any = True
 
-    answer = result["answer"]
-    citations = result.get("citations", [])
-    if citations:  # speak the source so the team can trust/verify it
-        answer = f"{answer} — per {citations[0]}"
-    await _make_avatar_speak(session, answer, citations)
-    return JSONResponse(
-        {"ok": True, "spoke": True, "answer": answer, "citations": citations}
-    )
+    if not spoke_any:
+        return JSONResponse(
+            {"ok": True, "spoke": False, "reason": "insufficient context (SKIP)"}
+        )
+    return JSONResponse({"ok": True, "spoke": True, "streamed": True})

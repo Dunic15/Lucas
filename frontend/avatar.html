@@ -130,11 +130,26 @@
 
     // Make the avatar say `text`, and caption it. Kept as the single entrypoint
     // the backend drives via the websocket (unchanged protocol).
+    //
+    // The backend now STREAMS answers one sentence per "speak" message so the
+    // avatar can start talking before the full answer is generated. Queue them so
+    // they play in order rather than interrupting each other. Pacing is estimated
+    // from sentence length; tune it once Anam's talk-complete behavior is
+    // confirmed on a live run (an SDK "speech finished" event would be exact).
+    let speakQueue = [];
+    let draining = false;
     function speak(text) {
+      speakQueue.push(text);
+      if (!draining) drainSpeak();
+    }
+    function drainSpeak() {
+      const text = speakQueue.shift();
+      if (text === undefined) { draining = false; setSpeaking(false); return; }
+      draining = true;
       showCaption(text);
       setSpeaking(true);
-      setTimeout(() => setSpeaking(false), Math.min(6000, 1200 + text.length * 45));
       if (anam && typeof anam.talk === "function") anam.talk(text);
+      setTimeout(drainSpeak, Math.min(7000, 900 + text.length * 55));
     }
     window.speak = speak;   // exposed for manual devtools testing
 

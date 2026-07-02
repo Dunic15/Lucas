@@ -14,9 +14,22 @@ Pick the provider with BRAIN_PROVIDER in .env:
 """
 from __future__ import annotations
 
+from typing import Iterator
+
 from .config import settings
 
 _anthropic_client = None  # lazy singleton
+
+
+def _ensure_anthropic():
+    global _anthropic_client
+    if _anthropic_client is None:
+        from anthropic import Anthropic
+
+        if not settings.anthropic_api_key:
+            raise RuntimeError("BRAIN_PROVIDER=anthropic needs ANTHROPIC_API_KEY.")
+        _anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
+    return _anthropic_client
 
 
 def complete(
@@ -38,21 +51,38 @@ def complete(
 def _complete_anthropic(
     system: str, user: str, max_tokens: int, model: str | None = None
 ) -> str:
-    global _anthropic_client
-    if _anthropic_client is None:
-        from anthropic import Anthropic
-
-        if not settings.anthropic_api_key:
-            raise RuntimeError("BRAIN_PROVIDER=anthropic needs ANTHROPIC_API_KEY.")
-        _anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
-
-    msg = _anthropic_client.messages.create(
+    client = _ensure_anthropic()
+    msg = client.messages.create(
         model=model or settings.brain_model,
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": user}],
     )
     return msg.content[0].text
+
+
+def stream_complete(
+    system: str, user: str, *, max_tokens: int = 800, model: str | None = None
+) -> Iterator[str]:
+    """Yield the model's answer as text deltas, for low-latency spoken output.
+
+    Anthropic streams token-by-token. Other providers have no streaming path here,
+    so they yield the full answer as a single chunk (still correct, just not early).
+    """
+    provider = settings.brain_provider.lower()
+    if provider == "anthropic":
+        client = _ensure_anthropic()
+        with client.messages.stream(
+            model=model or settings.brain_model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        ) as stream:
+            for text in stream.text_stream:
+                yield text
+        return
+    # Fallback: no incremental streaming for this provider.
+    yield complete(system, user, max_tokens=max_tokens, model=model)
 
 
 def _complete_ollama(system: str, user: str, max_tokens: int) -> str:

@@ -118,6 +118,107 @@ def answer_question(
     return result
 
 
+# ─────────────────── live answers (streamed) ────────────────────────
+# Same trust contract as answer_question, but streamed for low latency: the
+# avatar starts speaking the first sentence while the model is still generating
+# the rest. The confidence JSON can't stream, so grounding is enforced with a
+# SKIP sentinel — the model replies with exactly "SKIP" when the context is
+# insufficient, and we stay silent (the streaming equivalent of the confidence
+# gate). Citations are known up front from retrieval and spoken at the end.
+ANSWER_STREAM_SYSTEM = """{persona}
+
+You are a callable AI process expert invited into a live work meeting. You speak \
+ONLY from the company process documents provided as context. This is spoken aloud, \
+so answer in 1-3 short sentences a person can absorb by ear.
+
+Rules:
+- Use ONLY the provided context. Do not invent steps, owners, or approvals.
+- If the context does NOT contain the answer, reply with exactly the single word \
+SKIP and nothing else.
+- Otherwise reply with the spoken answer only: plain text, no markdown, no bullet \
+symbols, no headings, no JSON, no preamble."""
+
+
+def _is_skip(head: str) -> bool:
+    """True if `head` is a standalone SKIP sentinel (not a word like 'Skipping')."""
+    return head[:4].upper() == "SKIP" and (len(head) == 4 or not head[4].isalpha())
+
+
+def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", k: int = 4):
+    """Yield spoken sentences as they are generated. Yields nothing (stays silent)
+    when the model judges the context insufficient (SKIP) — same as a failed
+    confidence gate in the non-streaming path."""
+    chunks = retrieve(avatar, question, k=k)
+    citation = chunks[0].source if chunks else ""
+
+    if _is_stub():
+        r = _stub_answer(chunks)
+        if r.get("sufficient_context"):
+            yield r["answer"]
+            if citation:
+                yield f"— per {citation}"
+        return
+
+    convo = f"Recent meeting conversation:\n{history}\n\n" if history.strip() else ""
+    system = ANSWER_STREAM_SYSTEM.format(persona=avatar.persona_prompt)
+    user = (
+        f"Company process context:\n\n{_format_context(chunks)}\n\n"
+        f"{convo}"
+        f"Someone in the meeting asked:\n{question}\n\n"
+        "Answer in spoken style, or reply SKIP if the context is insufficient."
+    )
+
+    pending = ""      # confirmed answer text not yet flushed as a whole sentence
+    decided = False   # whether we've ruled out the SKIP sentinel
+    spoke_any = False
+    for delta in llm.stream_complete(
+        system, user, max_tokens=400, model=settings.brain_model_fast
+    ):
+        pending += delta
+        if not decided:
+            head = pending.lstrip()
+            # Wait until we have enough characters to distinguish SKIP from a real
+            # answer that merely starts with those letters (e.g. "Skipping ...").
+            if len(head) < 5 and head.upper() != "SKIP":
+                continue
+            if _is_skip(head):
+                return  # insufficient context — stay silent
+            decided = True
+
+        pending, sentences = _split_sentences(pending)
+        for s in sentences:
+            yield s
+            spoke_any = True
+
+    tail = pending.strip()
+    if not decided:
+        # Very short answer that never crossed the decision threshold.
+        if tail and not _is_skip(tail):
+            yield tail
+            spoke_any = True
+    elif tail:
+        yield tail
+        spoke_any = True
+
+    if spoke_any and citation:
+        yield f"— per {citation}"
+
+
+def _split_sentences(buf: str) -> tuple[str, list[str]]:
+    """Pull all complete sentences out of `buf`; return (remainder, sentences)."""
+    sentences: list[str] = []
+    while True:
+        m = _SENTENCE.search(buf)
+        if not m:
+            break
+        cut = m.end()
+        s = buf[:cut].strip()
+        buf = buf[cut:]
+        if s:
+            sentences.append(s)
+    return buf, sentences
+
+
 # ───────────────────────── post-meeting ─────────────────────────────
 POSTMEETING_SYSTEM = """You analyze a meeting transcript against company \
 process knowledge. Produce a crisp post-meeting artifact a team can act on.
