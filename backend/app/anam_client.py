@@ -70,18 +70,29 @@ def create_persona(avatar: Avatar) -> str:
     return avatar.anam_avatar_id
 
 
-def _expand_persona(persona_id: str) -> dict:
-    """Turn a SAVED Anam persona into an inline personaConfig for a PURE-MOUTH
-    session: face + voice ONLY, with no LLM / brain / knowledge tools.
+# Keep the Anam avatar passive: our backend (RAG + Claude) is the single brain and
+# drives every spoken line via talk(). Anam still REQUIRES an llmId + systemPrompt to
+# mint a modern (non-legacy) session token, so we can't drop the brain — instead we
+# neutralize it with a system prompt that tells it to never speak on its own. It only
+# says what we send it.
+_MOUTH_SYSTEM_PROMPT = (
+    "You are a video avatar whose speech is controlled entirely by an external "
+    "system. Never start talking, never greet, and never answer questions on your "
+    "own initiative. Do not respond to anything you see or hear. Remain silent at "
+    "all times unless the controlling system explicitly sends you exact words to "
+    "speak, in which case say only those words verbatim and nothing else."
+)
 
-    SDK v4 rejects `personaId` session tokens ("legacy") — the token must carry a
-    full personaConfig, so we fetch the saved persona and re-emit its face + voice
-    inline. We deliberately DROP the persona's `llmId`, `systemPrompt`, and `tools`:
-    carrying them makes the Anam avatar an autonomous agent that listens, thinks
-    with its own LLM, and speaks on its own — fighting our backend (RAG + Claude),
-    which drives speech via talk() over the websocket. Our backend is the single
-    brain; Anam is only the mouth + face. (Verified: Anam mints a session token
-    from avatar+voice alone.)
+
+def _expand_persona(persona_id: str) -> dict:
+    """Turn a SAVED Anam persona into an inline personaConfig.
+
+    Anam requires `avatarId`, `voiceId`, `llmId`, and `systemPrompt` for a modern
+    (non-legacy) session token — omitting the llmId/systemPrompt makes Anam fall
+    back to a legacy token, which the SDK now rejects. So we re-emit the persona's
+    face + voice + its llmId, but OVERRIDE the system prompt with a keep-silent
+    instruction and drop its knowledge tools: the avatar won't autonomously answer
+    (that fought our backend), it just speaks the exact lines we drive via talk().
     """
     p = _client.get(f"{ANAM_BASE}/personas/{persona_id}", headers=_headers(), timeout=30.0)
     p.raise_for_status()
@@ -90,6 +101,9 @@ def _expand_persona(persona_id: str) -> dict:
         "name": d.get("name") or "Assistant",
         "avatarId": (d.get("avatar") or {}).get("id"),
         "voiceId": (d.get("voice") or {}).get("id"),
+        "llmId": d.get("llmId"),  # required by Anam for a non-legacy token
+        "systemPrompt": _MOUTH_SYSTEM_PROMPT,  # neutralized: never speaks on its own
+        "skipGreeting": True,
     }
     # Drop empties so we don't send nulls Anam may reject.
     return {k: v for k, v in cfg.items() if v}
