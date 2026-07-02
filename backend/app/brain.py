@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 
 from . import llm
 from .avatars import Avatar
@@ -148,7 +149,9 @@ def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", 
     """Yield spoken sentences as they are generated. Yields nothing (stays silent)
     when the model judges the context insufficient (SKIP) — same as a failed
     confidence gate in the non-streaming path."""
+    _t0 = time.perf_counter()
     chunks = retrieve(avatar, question, k=k)
+    _retrieve_ms = (time.perf_counter() - _t0) * 1000
     citation = chunks[0].source if chunks else ""
 
     if _is_stub():
@@ -171,9 +174,12 @@ def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", 
     pending = ""      # confirmed answer text not yet flushed as a whole sentence
     decided = False   # whether we've ruled out the SKIP sentinel
     spoke_any = False
+    _first_token_ms = None
     for delta in llm.stream_complete(
         system, user, max_tokens=400, model=settings.brain_model_fast
     ):
+        if _first_token_ms is None:
+            _first_token_ms = (time.perf_counter() - _t0) * 1000
         pending += delta
         if not decided:
             head = pending.lstrip()
@@ -187,6 +193,14 @@ def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", 
 
         pending, sentences = _split_sentences(pending)
         for s in sentences:
+            if not spoke_any:
+                _first_sentence_ms = (time.perf_counter() - _t0) * 1000
+                print(
+                    f"[latency] answer_stream retrieve={_retrieve_ms:.0f}ms "
+                    f"first_token={_first_token_ms:.0f}ms "
+                    f"first_sentence={_first_sentence_ms:.0f}ms",
+                    flush=True,
+                )
             yield s
             spoke_any = True
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -774,10 +775,17 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # context is insufficient the generator yields nothing and the avatar stays
     # silent (the streaming equivalent of the old confidence gate).
     history = session.recent_transcript(n=8)
+    _t_wake = time.perf_counter()
     spoke_any = False
     async for sentence in iterate_in_threadpool(
         answer_question_stream(avatar, question or text, history=history)
     ):
+        if not spoke_any:
+            print(
+                f"[latency] wake->first_speak="
+                f"{(time.perf_counter() - _t_wake) * 1000:.0f}ms",
+                flush=True,
+            )
         await _make_avatar_speak(session, sentence)
         spoke_any = True
 
