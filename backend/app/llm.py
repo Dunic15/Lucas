@@ -72,14 +72,37 @@ def stream_complete(
     provider = settings.brain_provider.lower()
     if provider == "anthropic":
         client = _ensure_anthropic()
+        # Cache the (byte-identical) system prompt so repeat calls skip
+        # re-processing it. Note: Haiku's minimum cacheable prefix is 4096 tokens
+        # — if the persona prompt is shorter, this silently won't cache (harmless);
+        # the usage log below tells us whether it engaged.
         with client.messages.stream(
             model=model or settings.brain_model,
             max_tokens=max_tokens,
-            system=system,
+            system=[
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             messages=[{"role": "user", "content": user}],
         ) as stream:
             for text in stream.text_stream:
                 yield text
+            # After the stream drains, log token usage so we can see the real
+            # input size and whether the system-prompt cache is being hit.
+            try:
+                u = stream.get_final_message().usage
+                print(
+                    f"[latency] llm usage input={u.input_tokens} "
+                    f"cache_read={getattr(u, 'cache_read_input_tokens', 0)} "
+                    f"cache_write={getattr(u, 'cache_creation_input_tokens', 0)} "
+                    f"output={u.output_tokens}",
+                    flush=True,
+                )
+            except Exception:
+                pass
         return
     # Fallback: no incremental streaming for this provider.
     yield complete(system, user, max_tokens=max_tokens, model=model)

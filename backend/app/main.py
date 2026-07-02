@@ -47,7 +47,7 @@ from .brain import (
 )
 from .config import settings
 from .decision import detect_wake, detect_closing
-from .rag import ensure_index
+from .rag import ensure_index, warm as warm_index
 
 app = FastAPI(title="Callable AI Process Avatar")
 
@@ -96,7 +96,11 @@ def _prebuild_indexes() -> None:
     """
     for aid in avatars.list_ids():
         try:
-            ensure_index(avatars.load(aid))
+            avatar = avatars.load(aid)
+            ensure_index(avatar)
+            # Load the index into cache + warm the embedder now, so the first
+            # LIVE question doesn't pay the cold-start (1-3s) on the meeting path.
+            warm_index(avatar)
         except Exception as e:  # a bad avatar shouldn't stop the server
             print(f"[startup] could not index avatar '{aid}': {e}")
 

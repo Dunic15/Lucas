@@ -145,7 +145,7 @@ def _is_skip(head: str) -> bool:
     return head[:4].upper() == "SKIP" and (len(head) == 4 or not head[4].isalpha())
 
 
-def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", k: int = 4):
+def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", k: int = 3):
     """Yield spoken sentences as they are generated. Yields nothing (stays silent)
     when the model judges the context insufficient (SKIP) — same as a failed
     confidence gate in the non-streaming path."""

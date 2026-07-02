@@ -275,6 +275,19 @@ def _lexical_boost(query_terms: set[str], chunk: dict) -> float:
     return min(0.18, overlap * 0.18)
 
 
+def warm(avatar: Avatar) -> None:
+    """Pre-load the index into cache and warm the embedder at startup.
+
+    Without this the FIRST live question pays the one-off cost of lazy-loading
+    the embedding model (fastembed ONNX) plus reading/parsing the index — easily
+    1-3s tacked onto the first answer. A throwaway retrieve does both eagerly.
+    """
+    try:
+        retrieve(avatar, "warmup", k=1)
+    except Exception as e:  # never let warm-up crash boot
+        print(f"[startup] warm-up failed for '{avatar.id}': {e}", flush=True)
+
+
 def retrieve(avatar: Avatar, query: str, k: int = 4) -> list[Retrieved]:
     store = _load(avatar)
     qv = np.array(embed([query], input_type="query")[0], dtype=np.float32)
