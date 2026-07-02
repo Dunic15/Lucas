@@ -53,9 +53,17 @@ Switch any layer in `.env`: `BRAIN_PROVIDER` (`stub|ollama|anthropic`) and
 ## Architecture
 
 ```
+Entry points
+   ├─ Chrome extension inside Google Meet
+   ├─ Manual /join page
+   ├─ Calendar invite / Gmail Meet invite watcher
+   └─ Direct API call: POST /sessions/start
+   │
+   │
+   ▼
 Meeting (Zoom/Meet/Teams)
    │
-   │  Recall.ai bot joins ──────────────► renders /avatar as its camera
+   │  Recall.ai bot joins ─────────────► renders /avatar as its camera
    │        │                                     │
    │        │ transcript.data (webhook)           │ embeds Anam conversation
    ▼        ▼                                     ▼  (the FACE)
@@ -64,7 +72,8 @@ Meeting (Zoom/Meet/Teams)
         ├─ when-to-speak gate (wake word + cooldown + confidence)
         ├─ RAG over knowledge/*.md  (pluggable embeddings → cosine retrieval)
         ├─ Brain (Claude / Ollama / stub): grounded, cited answer
-        └─ on "speak" ─► websocket ─► avatar page ─► Anam echo ─► avatar talks
+        ├─ SQLite session store (bots, routing, artifacts, dedupe)
+        └─ on "speak" ─► websocket ─► avatar page ─► Anam talks
    │
    ▼
    POST /sessions/{id}/end ─► Brain: summary + gap checklist + follow-up email
@@ -96,10 +105,12 @@ Laura/
 │   │   ├── rag.py            ← retrieval over an avatar's knowledge
 │   │   ├── embeddings.py     ← pluggable embeddings: hash | local | voyage
 │   │   ├── recall_client.py  ← Recall.ai (ears + camera, live meetings)
+│   │   ├── gmail_watcher.py  ← watches Gmail Meet invites for live auto-join
 │   │   ├── granola_client.py ← Granola (finished transcripts, post-meeting)
 │   │   ├── anam_client.py    ← the avatar FACE (Anam) + ElevenLabs voice
-│   │   ├── store.py          ← in-memory session state
+│   │   ├── store.py          ← SQLite session state + transient websockets
 │   │   └── config.py         ← all env settings in one place
+│   ├── data/                 ← local SQLite store in development
 │   ├── scripts/
 │   │   ├── ingest.py         ← build the RAG index
 │   │   ├── ask.py            ← ask an avatar from the CLI (offline)
@@ -108,8 +119,14 @@ Laura/
 │   └── tests/                ← pure-logic tests (no keys needed)
 ├── frontend/
 │   ├── demo.html             ← the offline demo console (served at /)
+│   ├── live.html             ← local live avatar/test page
+│   ├── join.html             ← manual "send Laura to a meeting" console
 │   └── avatar.html           ← the page Recall renders as the bot's camera
+├── extensions/
+│   └── laura-meet/           ← Chrome extension: Send Laura from Google Meet
+├── docs/                     ← setup, demo, calendar, and deployment notes
 ├── .claude/agents/           ← helper subagents (run/ingest/author/deploy)
+├── render.yaml               ← Render deployment blueprint
 ├── .env.example              ← copy to .env; the demo runs with it unchanged
 └── requirements.txt
 ```
@@ -126,16 +143,20 @@ Laura/
 | Tune when it speaks | `backend/app/decision.py` (or per-avatar yaml) |
 | Change how answers are phrased | `ANSWER_SYSTEM` in `backend/app/brain.py` |
 | Swap the avatar/voice vendor | `backend/app/anam_client.py` + `frontend/avatar.html` |
+| Send Laura from inside Google Meet | `extensions/laura-meet/` |
+| Change the manual join page | `frontend/join.html` |
 | Add a key / setting | `.env` + `backend/app/config.py` |
 
 | Layer | Tool | Where |
 |---|---|---|
+| Meeting entry controls | Chrome extension / `/join` / calendar-Gmail watcher | `extensions/laura-meet/`, `frontend/join.html`, `main.py`, `gmail_watcher.py` |
 | Meeting entry + transcript (ears) | Recall.ai (live) / Granola (post-meeting) | `recall_client.py`, `granola_client.py` |
 | Face | Anam replica | `backend/app/anam_client.py`, `frontend/avatar.html` |
 | Voice | ElevenLabs | configured as the face's TTS layer |
 | Reasoning (brain) | Claude / Ollama / stub | `backend/app/brain.py`, `llm.py` |
 | Knowledge retrieval (RAG) | pluggable embeddings + local store | `backend/app/rag.py`, `embeddings.py` |
 | When-to-speak gate | — | `backend/app/decision.py` |
+| Persistence | SQLite + in-memory websockets | `backend/app/store.py` |
 | Avatar definitions (editable) | YAML + markdown | `avatars/<id>/` |
 
 ---
@@ -183,6 +204,17 @@ PUBLIC_BASE_URL=https://your-public-ngrok-or-deploy-url
 WAKE_WORDS=laura
 ```
 
+You can send Laura into a live meeting in four ways:
+
+1. **From Google Meet itself:** install the Chrome extension in
+   `extensions/laura-meet/`, join a Meet call, then click **Send Laura**.
+2. **From the manual web page:** open `/join`, paste a meeting URL, then click
+   **Send Laura**.
+3. **From calendar/Gmail:** invite `laura.ai.122222@gmail.com` to a real Google
+   Calendar event, or add her from Google Meet's **Add people** flow if the Gmail
+   watcher is configured.
+4. **From the API:** call `POST /sessions/start` with the meeting URL.
+
 `RECALL_API_KEY` must be a Recall API key, not a `whsec_...` workspace/webhook
 secret. You can check the local setup without exposing secrets:
 
@@ -203,7 +235,7 @@ ngrok http 8000
 
 # 3. Put the ngrok HTTPS URL in .env as PUBLIC_BASE_URL, then restart uvicorn
 
-# 4. Call Laura into a meeting
+# 4. Call Laura into a meeting, or use /join / the Chrome extension
 curl -X POST http://127.0.0.1:8000/sessions/start \
   -H 'Content-Type: application/json' \
   -d '{"meeting_url": "https://meet.google.com/your-test-call"}'
