@@ -17,6 +17,7 @@ avatars/*/.index*.json
 backend/data/
 data/
 *.log
+.playwright-mcp/
 
 # Node (avatar page tooling, if added later)
 node_modules/
@@ -24,6 +25,7 @@ node_modules/
 
 # Local Lovable editor checkout copied into lovable/laura-meeting-expert for git
 lovable/lucas-live-expert/
+lovable/laura-meeting-expert/package-lock.json
 
 # OS / editor
 .DS_Store

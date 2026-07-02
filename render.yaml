@@ -1,6 +1,6 @@
-# One-click-ish deploy to Render (free tier works for a pilot). This gives you a
-# permanent https://<name>.onrender.com URL to use as PUBLIC_BASE_URL — replacing
-# the cloudflared quick-tunnel. Set the secret env vars in the Render dashboard.
+# One-click-ish deploy to Render. This gives you a permanent
+# https://<name>.onrender.com URL to use as PUBLIC_BASE_URL — replacing the
+# cloudflared quick-tunnel. Set the secret env vars in the Render dashboard.
 services:
   - type: web
     name: laura-avatar
@@ -12,6 +12,8 @@ services:
         sync: false          # set to your https://<name>.onrender.com after first deploy
       - key: BRAIN_PROVIDER
         value: anthropic
+      - key: BRAIN_MODEL
+        value: claude-haiku-4-5-20251001
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: EMBEDDING_PROVIDER

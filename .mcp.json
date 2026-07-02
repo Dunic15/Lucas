@@ -9,7 +9,7 @@
       "args": ["awslabs.aws-api-mcp-server@latest"],
       "env": {
         "AWS_REGION": "eu-central-1",
-        "READ_OPERATIONS_ONLY": "true"
+        "READ_OPERATIONS_ONLY": "false"
       }
     }
   }
