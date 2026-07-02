@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Laura for Google Meet",
+  "version": "0.1.0",
+  "description": "Adds an in-meeting control that sends Laura to the current Google Meet call.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Laura for Google Meet"
+  }
+}
