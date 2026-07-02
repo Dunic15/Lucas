@@ -71,12 +71,17 @@ def create_persona(avatar: Avatar) -> str:
 
 
 def _expand_persona(persona_id: str) -> dict:
-    """Turn a SAVED Anam persona into an inline personaConfig.
+    """Turn a SAVED Anam persona into an inline personaConfig for a PURE-MOUTH
+    session: face + voice ONLY, with no LLM / brain / knowledge tools.
 
     SDK v4 rejects `personaId` session tokens ("legacy") — the token must carry a
-    full personaConfig. We fetch the saved persona (built in the Anam dashboard,
-    with its face, voice, LLM, system prompt and knowledge tools) and re-emit it
-    inline, so the persona's knowledge (e.g. an uploaded thesis) comes along.
+    full personaConfig, so we fetch the saved persona and re-emit its face + voice
+    inline. We deliberately DROP the persona's `llmId`, `systemPrompt`, and `tools`:
+    carrying them makes the Anam avatar an autonomous agent that listens, thinks
+    with its own LLM, and speaks on its own — fighting our backend (RAG + Claude),
+    which drives speech via talk() over the websocket. Our backend is the single
+    brain; Anam is only the mouth + face. (Verified: Anam mints a session token
+    from avatar+voice alone.)
     """
     p = _client.get(f"{ANAM_BASE}/personas/{persona_id}", headers=_headers(), timeout=30.0)
     p.raise_for_status()
@@ -85,13 +90,7 @@ def _expand_persona(persona_id: str) -> dict:
         "name": d.get("name") or "Assistant",
         "avatarId": (d.get("avatar") or {}).get("id"),
         "voiceId": (d.get("voice") or {}).get("id"),
-        "llmId": d.get("llmId"),
-        "systemPrompt": (d.get("brain") or {}).get("systemPrompt")
-        or d.get("systemPrompt")
-        or "",
     }
-    if d.get("tools"):  # carry the knowledge (RAG) tools, e.g. the thesis
-        cfg["tools"] = d["tools"]
     # Drop empties so we don't send nulls Anam may reject.
     return {k: v for k, v in cfg.items() if v}
 
