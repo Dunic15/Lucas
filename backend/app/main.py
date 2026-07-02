@@ -833,10 +833,19 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
 @app.post("/webhooks/recall")
 async def recall_webhook(request: Request) -> JSONResponse:
     raw_body = await request.body()
-    try:
-        recall_client.verify_webhook(raw_body, request.headers)
-    except RuntimeError as e:
-        return JSONResponse({"error": str(e)}, status_code=401)
+    # Realtime transcript webhooks (from the bot's realtime_endpoints) arrive
+    # UNSIGNED — unlike the Svix-signed calendar/dashboard webhooks. If we required
+    # a signature we'd 401 every transcript and the avatar would never hear its
+    # wake word. So verify only when a signature is actually present (still reject
+    # a bad one); accept unsigned realtime transcripts.
+    has_signature = any(
+        h in request.headers for h in ("webhook-signature", "svix-signature")
+    )
+    if has_signature:
+        try:
+            recall_client.verify_webhook(raw_body, request.headers)
+        except RuntimeError as e:
+            return JSONResponse({"error": str(e)}, status_code=401)
 
     payload = json.loads(raw_body or b"{}")
     event = payload.get("event", "")
