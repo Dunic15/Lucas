@@ -5,7 +5,7 @@ services:
   - type: web
     name: laura-avatar
     runtime: docker
-    plan: free
+    plan: starter          # always-on (no free-tier cold starts) — matches the dashboard
     healthCheckPath: /health
     envVars:
       - key: PUBLIC_BASE_URL
