@@ -19,10 +19,12 @@ from .config import settings
 _anthropic_client = None  # lazy singleton
 
 
-def complete(system: str, user: str, *, max_tokens: int = 800) -> str:
+def complete(
+    system: str, user: str, *, max_tokens: int = 800, model: str | None = None
+) -> str:
     provider = settings.brain_provider.lower()
     if provider == "anthropic":
-        return _complete_anthropic(system, user, max_tokens)
+        return _complete_anthropic(system, user, max_tokens, model)
     if provider == "ollama":
         return _complete_ollama(system, user, max_tokens)
     if provider == "stub":
@@ -33,7 +35,9 @@ def complete(system: str, user: str, *, max_tokens: int = 800) -> str:
     raise RuntimeError(f"Unknown BRAIN_PROVIDER '{provider}'.")
 
 
-def _complete_anthropic(system: str, user: str, max_tokens: int) -> str:
+def _complete_anthropic(
+    system: str, user: str, max_tokens: int, model: str | None = None
+) -> str:
     global _anthropic_client
     if _anthropic_client is None:
         from anthropic import Anthropic
@@ -43,7 +47,7 @@ def _complete_anthropic(system: str, user: str, max_tokens: int) -> str:
         _anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
 
     msg = _anthropic_client.messages.create(
-        model=settings.brain_model,
+        model=model or settings.brain_model,
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": user}],

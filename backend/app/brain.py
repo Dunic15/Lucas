@@ -104,6 +104,7 @@ def answer_question(
                 "Respond with the JSON object only."
             ),
             max_tokens=400,
+            model=settings.brain_model_fast,  # latency-critical: fast model
         )
         result = _parse_json(raw)
 
@@ -174,6 +175,7 @@ def proactive_flag(avatar: Avatar, transcript_text: str, *, k: int = 6) -> dict:
             "Respond with the JSON object only."
         ),
         max_tokens=300,
+        model=settings.brain_model_fast,  # latency-critical: fast model
     )
     r = _parse_json(raw)
     r.setdefault("should_speak", False)

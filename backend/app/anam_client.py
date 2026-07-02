@@ -36,6 +36,13 @@ from .config import settings
 
 ANAM_BASE = "https://api.anam.ai/v1"
 
+# Reuse one connection pool across calls so we don't pay a fresh TLS handshake
+# on every persona fetch / session-token mint (shaves latency off session start).
+_client = httpx.Client(
+    timeout=60.0,
+    limits=httpx.Limits(max_keepalive_connections=10, keepalive_expiry=60.0),
+)
+
 
 def _headers() -> dict:
     if not settings.anam_api_key:
@@ -71,7 +78,7 @@ def _expand_persona(persona_id: str) -> dict:
     with its face, voice, LLM, system prompt and knowledge tools) and re-emit it
     inline, so the persona's knowledge (e.g. an uploaded thesis) comes along.
     """
-    p = httpx.get(f"{ANAM_BASE}/personas/{persona_id}", headers=_headers(), timeout=30.0)
+    p = _client.get(f"{ANAM_BASE}/personas/{persona_id}", headers=_headers(), timeout=30.0)
     p.raise_for_status()
     d = p.json()
     cfg = {
@@ -98,7 +105,7 @@ def create_conversation(avatar: Avatar, persona_id: str) -> dict:
       - conversation_url: the Anam sessionToken the avatar page joins with.
     """
     body = {"personaConfig": _expand_persona(persona_id)}
-    resp = httpx.post(
+    resp = _client.post(
         f"{ANAM_BASE}/auth/session-token",
         headers=_headers(),
         json=body,

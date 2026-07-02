@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     brain_provider: str = "anthropic"
     anthropic_api_key: str = ""
     brain_model: str = "claude-sonnet-4-6"
+    # Latency-critical live-answer path uses a faster/cheaper model; the quality
+    # model above is reserved for the non-realtime post-meeting summary.
+    brain_model_fast: str = "claude-haiku-4-5"
 
     # Ollama (only used when BRAIN_PROVIDER=ollama)
     ollama_host: str = "http://localhost:11434"
