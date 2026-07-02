@@ -7,6 +7,8 @@ import hmac
 import sys
 from pathlib import Path
 
+import httpx
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import recall_client  # noqa: E402
@@ -84,3 +86,25 @@ def test_verify_webhook_rejects_bad_signature(monkeypatch):
         assert "verification failed" in str(e)
     else:
         raise AssertionError("bad webhook signature was accepted")
+
+
+def test_request_retries_retryable_status(monkeypatch):
+    request = httpx.Request("GET", "https://example.test")
+    responses = [
+        httpx.Response(429, request=request),
+        httpx.Response(200, request=request),
+    ]
+    calls = []
+
+    class FakeClient:
+        def request(self, method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            return responses.pop(0)
+
+    monkeypatch.setattr(recall_client, "_CLIENT", FakeClient())
+    monkeypatch.setattr(recall_client.time, "sleep", lambda delay: None)
+
+    resp = recall_client._request("GET", "https://example.test", retry=True)
+
+    assert resp.status_code == 200
+    assert len(calls) == 2

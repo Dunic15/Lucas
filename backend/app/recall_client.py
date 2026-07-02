@@ -14,12 +14,21 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import time
 from collections.abc import Mapping
 from urllib.parse import urlparse
 
 import httpx
 
 from .config import settings
+
+
+_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
+_CLIENT = httpx.Client(
+    timeout=_TIMEOUT,
+    limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+)
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
 
 
 def readiness() -> dict:
@@ -95,6 +104,46 @@ def _headers() -> dict:
     }
 
 
+def _retry_delay(resp: httpx.Response | None, attempt: int) -> float:
+    if resp is not None:
+        retry_after = resp.headers.get("retry-after")
+        if retry_after:
+            try:
+                return min(float(retry_after), 5.0)
+            except ValueError:
+                pass
+    return min(0.5 * (2 ** attempt), 4.0)
+
+
+def _request(
+    method: str,
+    url: str,
+    *,
+    retry: bool = False,
+    **kwargs,
+) -> httpx.Response:
+    attempts = 3 if retry else 1
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        resp: httpx.Response | None = None
+        try:
+            resp = _CLIENT.request(method, url, **kwargs)
+        except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException) as e:
+            last_exc = e
+            if attempt == attempts - 1:
+                raise
+        else:
+            if resp.status_code not in _RETRY_STATUSES or attempt == attempts - 1:
+                return resp
+            resp.close()
+
+        time.sleep(_retry_delay(resp, attempt))
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Recall request failed without a response.")
+
+
 def auth_check() -> dict:
     """Make a safe read-only API call to confirm Recall authentication."""
     status = readiness()
@@ -102,13 +151,13 @@ def auth_check() -> dict:
         return {**status, "auth": "skipped"}
 
     try:
-        resp = httpx.get(
+        resp = _request(
+            "GET",
             f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/",
             headers={
                 "Authorization": _api_key(),
                 "Content-Type": "application/json",
             },
-            timeout=15.0,
         )
     except Exception as e:
         return {**status, "ready": False, "auth": "error", "error": str(e)}
@@ -218,11 +267,12 @@ def create_bot(
     if join_at:  # schedule the bot to join at this time instead of now
         body["join_at"] = join_at
 
-    resp = httpx.post(
+    resp = _request(
+        "POST",
         f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/",
         headers=_headers(),
         json=body,
-        timeout=60.0,
+        retry=True,
     )
     try:
         resp.raise_for_status()
@@ -257,11 +307,11 @@ def create_calendar(
     if metadata:
         body["metadata"] = metadata
 
-    resp = httpx.post(
+    resp = _request(
+        "POST",
         f"{settings.recall_api_base.rstrip('/')}/api/v2/calendars/",
         headers=_headers(),
         json=body,
-        timeout=60.0,
     )
     resp.raise_for_status()
     return resp.json()
@@ -281,7 +331,7 @@ def list_calendar_events(
     events: list[dict] = []
     url = f"{settings.recall_api_base.rstrip('/')}/api/v2/calendar-events/"
     while url:
-        resp = httpx.get(url, headers=_headers(), params=params, timeout=60.0)
+        resp = _request("GET", url, headers=_headers(), params=params, retry=True)
         resp.raise_for_status()
         data = resp.json()
         if isinstance(data, list):
@@ -302,8 +352,8 @@ def list_calendar_events(
 
 def leave_call(bot_id: str) -> None:
     """Remove the bot from the meeting (stops avatar streaming → stops billing)."""
-    httpx.post(
+    _request(
+        "POST",
         f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/{bot_id}/leave_call/",
         headers=_headers(),
-        timeout=30.0,
     )
