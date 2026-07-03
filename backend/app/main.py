@@ -434,6 +434,13 @@ def join_page() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "join.html")
 
 
+@app.get("/talk")
+def talk_page() -> FileResponse:
+    """Open-source avatar page (TalkingHead + our TTS) — the Anam replacement.
+    Recall will render this instead of avatar.html once it's proven out."""
+    return FileResponse(FRONTEND_DIR / "talk.html")
+
+
 class LiveTokenRequest(BaseModel):
     avatar_id: str = "laura"
 

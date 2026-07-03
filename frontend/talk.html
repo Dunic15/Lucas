@@ -1,0 +1,155 @@
+<!--
+  Laura — open-source avatar page (Anam replacement, Stage 1).
+
+  Runs ENTIRELY in the browser: TalkingHead (3D avatar, Three.js/WebGL) renders a
+  Ready Player Me character and lip-syncs to audio we feed it. No Anam, no GPU
+  server. Recall's web_gpu bot renders this page as the meeting camera.
+
+  Pipeline:
+    meeting question --(backend transcript)--> we call /live/ask (RAG + Groq)
+      --> answer text --> TTS (audio) --> head.speakAudio(...) --> lip-synced speech
+      --> Recall captures this page's canvas+audio --> streamed into the meeting
+
+  TESTING STAGES (open this file via the backend, e.g. http://localhost:8000/talk):
+    1. Avatar RENDERS (idle: breathing, blinking).            [no backend TTS needed]
+    2. Type text + "Speak"  -> she lip-syncs it.               [needs /tts endpoint]
+    3. Ask a question       -> she pulls a grounded answer.    [needs /tts + /live/ask]
+
+  Swap AVATAR_URL for your own Laura model from https://readyplayer.me
+  (export as GLB; the morphTargets query params below add the visemes TalkingHead
+  needs for lip-sync).
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #0d1014; }
+  #stage { position: fixed; inset: 0; }
+  #hud {
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+    display: flex; gap: 8px; align-items: center; z-index: 10;
+    font: 14px/1.4 system-ui, sans-serif;
+  }
+  #hud input {
+    width: 320px; max-width: 60vw; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid #2a2f37; background: #171b21; color: #e8ecf1;
+  }
+  #hud button {
+    padding: 10px 14px; border-radius: 10px; border: 0; cursor: pointer;
+    background: #2f6df6; color: #fff; font-weight: 600;
+  }
+  #hud button.alt { background: #2a2f37; }
+  #status {
+    position: fixed; left: 14px; top: 12px; z-index: 10; color: #9aa4b1;
+    font: 12px/1.4 ui-monospace, monospace; background: #131720cc;
+    padding: 6px 10px; border-radius: 8px; max-width: 70vw;
+  }
+</style>
+
+<div id="stage"></div>
+<div id="status">loading…</div>
+<div id="hud">
+  <input id="q" placeholder="Type something for Laura to say…" />
+  <button id="speakBtn">Speak</button>
+  <button id="askBtn" class="alt">Ask (grounded)</button>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+    "talkinghead": "https://cdn.jsdelivr.net/gh/met4citizen/TalkingHead@1.4/modules/talkinghead.mjs"
+  }
+}
+</script>
+
+<script type="module">
+  import { TalkingHead } from "talkinghead";
+
+  // A professional female Ready Player Me avatar (placeholder — swap for "Laura").
+  // The query params add the ARKit + Oculus viseme morph targets TalkingHead needs.
+  const AVATAR_URL =
+    "https://models.readyplayer.me/64bfa15f0e72c63d7c3934a6.glb" +
+    "?morphTargets=ARKit,Oculus+Visemes&textureAtlas=1024&pose=A&lod=1";
+
+  const params = new URLSearchParams(location.search);
+  const avatarId = params.get("avatar_id") || "laura";
+  const status = (t) => (document.getElementById("status").textContent = t);
+
+  const head = new TalkingHead(document.getElementById("stage"), {
+    // No ttsEndpoint on purpose — we drive audio ourselves via speakAudio() so the
+    // TTS stays free/self-hosted. speakText() would require Google TTS.
+    lipsyncModules: ["en"],
+    cameraView: "upper",
+    cameraDistance: 0,
+    avatarMood: "neutral",
+    modelPixelRatio: 1,
+  });
+
+  try {
+    status("loading avatar…");
+    await head.showAvatar({ url: AVATAR_URL, body: "F", lipsyncLang: "en" });
+    head.start();
+    status("live — avatar rendering ✅ (type + Speak to test lip-sync)");
+  } catch (e) {
+    status("avatar failed to load: " + (e?.message || e) + " — try a different AVATAR_URL");
+    console.error(e);
+  }
+
+  // ── TTS: turn text into { audio, words, wtimes, wdurations } for speakAudio ──
+  // Stage 1 uses a backend /tts endpoint (Piper/Kokoro on AWS, free). We evenly
+  // distribute word timings across the clip — good enough for lip-sync; we can
+  // upgrade to real per-word timings later.
+  async function synthesize(text) {
+    const r = await fetch("/tts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, avatar_id: avatarId }),
+    });
+    if (!r.ok) throw new Error("/tts not available yet (" + r.status + ")");
+    const buf = await r.arrayBuffer();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const audio = await ctx.decodeAudioData(buf);
+    const words = text.trim().split(/\s+/);
+    const per = (audio.duration * 1000) / Math.max(words.length, 1);
+    const wtimes = words.map((_, i) => Math.round(i * per));
+    const wdurations = words.map(() => Math.round(per * 0.9));
+    return { audio, words, wtimes, wdurations };
+  }
+
+  async function say(text) {
+    if (!text.trim()) return;
+    try {
+      status("synthesizing…");
+      const a = await synthesize(text);
+      head.speakAudio(a);
+      status("speaking: " + text.slice(0, 60));
+    } catch (e) {
+      status("speak failed: " + (e?.message || e));
+      console.error(e);
+    }
+  }
+
+  // ── grounded answer: pull from /live/ask (RAG + Groq), then speak it ──
+  async function ask(question) {
+    status("thinking…");
+    const r = await fetch("/live/ask", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ avatar_id: avatarId, question }),
+    });
+    const text = await r.text(); // SSE: data: {"content": "..."} lines
+    const parts = [...text.matchAll(/data: (\{.*?\})/g)].map((m) => {
+      try { return JSON.parse(m[1]).content; } catch { return ""; }
+    });
+    const answer = parts.join(" ").trim();
+    if (answer) await say(answer);
+    else status("(she stayed silent — not in her knowledge)");
+  }
+
+  document.getElementById("speakBtn").onclick = () =>
+    say(document.getElementById("q").value);
+  document.getElementById("askBtn").onclick = () =>
+    ask(document.getElementById("q").value);
+
+  // Backend can also drive her via a "speak" message (kept for the Recall path).
+  window.speak = say;
+</script>
