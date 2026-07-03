@@ -772,15 +772,42 @@ async def avatar_ws(websocket: WebSocket, conversation_id: str) -> None:
             session.ws = None
 
 
+@app.get("/avatar/messages/{conversation_id}")
+def avatar_messages(conversation_id: str) -> JSONResponse:
+    """HTTP fallback for platforms that block/strip WebSocket upgrades.
+
+    AWS App Runner can reject WebSocket handshakes at the edge; Recall's browser
+    can still fetch this endpoint, so the avatar page polls it and plays queued
+    speak messages through Anam.
+    """
+    session = store.get_by_conversation(conversation_id)
+    if session is None:
+        return JSONResponse(
+            {"messages": []},
+            headers={"Cache-Control": "no-store"},
+        )
+    return JSONResponse(
+        {"messages": store.drain_avatar_messages(session)},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 async def _make_avatar_speak(
     session: store.Session, text: str, citations: list | None = None
 ) -> None:
     """Backend-as-brain: send the exact words for the avatar to speak (Anam talk)."""
+    message = {"type": "speak", "text": text, "citations": citations or []}
     if session.ws is not None:
-        await session.ws.send_json(
-            {"type": "speak", "text": text, "citations": citations or []}
-        )
-        session.mark_spoke()
+        try:
+            await session.ws.send_json(message)
+            session.mark_spoke()
+            return
+        except Exception as e:
+            print(f"[avatar] websocket send failed; queued speak: {e}", flush=True)
+            session.ws = None
+    store.queue_avatar_message(session, message)
+    session.mark_spoke()
+    print("[avatar] queued speak for HTTP polling", flush=True)
 
 
 async def _ask_avatar_persona(session: store.Session, text: str) -> None:

@@ -148,7 +148,12 @@
       draining = true;
       showCaption(text);
       setSpeaking(true);
-      if (anam && typeof anam.talk === "function") anam.talk(text);
+      if (!anam || typeof anam.talk !== "function") {
+        speakQueue.unshift(text);
+        setTimeout(drainSpeak, 300);
+        return;
+      }
+      anam.talk(text);
       setTimeout(drainSpeak, Math.min(7000, 900 + text.length * 55));
     }
     window.speak = speak;   // exposed for manual devtools testing
@@ -163,6 +168,11 @@
       }
     }
 
+    function handleBackendMessage(msg) {
+      if (msg.type === "speak" && msg.text) speak(msg.text);
+      if (msg.type === "ask" && msg.text) askPersona(msg.text);
+    }
+
     // ── Backend websocket (unchanged contract) ──────────────────────
     function connectBackend() {
       const wsProto = location.protocol === "https:" ? "wss" : "ws";
@@ -173,11 +183,26 @@
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);
-          if (msg.type === "speak" && msg.text) speak(msg.text);
-          if (msg.type === "ask" && msg.text) askPersona(msg.text);
+          handleBackendMessage(msg);
         } catch (_) { /* ignore non-JSON */ }
       };
       ws.onclose = () => setTimeout(connectBackend, 2000);
+    }
+
+    // App Runner currently rejects WebSocket upgrades for this service. Poll as
+    // a production-safe fallback; if the websocket works later, this endpoint is
+    // usually empty because messages are delivered over the socket first.
+    async function pollBackendMessages() {
+      try {
+        const r = await fetch(`/avatar/messages/${encodeURIComponent(conversationId)}`, {
+          cache: "no-store",
+        });
+        if (r.ok) {
+          const data = await r.json();
+          for (const msg of data.messages || []) handleBackendMessage(msg);
+        }
+      } catch (_) { /* keep polling */ }
+      setTimeout(pollBackendMessages, 500);
     }
 
     // ── boot / graceful degradation ─────────────────────────────────
@@ -191,6 +216,7 @@
         setStatus("error", "Avatar stream failed");
       });
       connectBackend();
+      pollBackendMessages();
       // Stop the Anam stream when the bot leaves / page unloads (stop billing).
       const stop = () => { try { anam && anam.stopStreaming && anam.stopStreaming(); } catch(_){} };
       window.addEventListener("pagehide", stop);

@@ -1,4 +1,4 @@
-"""Anam client — the avatar's FACE, voiced by ElevenLabs.
+"""Anam client — the avatar's face and voice.
 
 Swapping the face vendor only ever touches this file + frontend/avatar.html.
 
@@ -18,7 +18,7 @@ To preserve the three-function contract the rest of the app expects, we map:
                                    leaves; Recall.leave_call already does that)
 
 Secrets come from .env via `settings` (ANAM_API_KEY); the per-avatar identity
-(face/voice) comes from avatar.yaml (anam_avatar_id / elevenlabs_voice_id).
+comes from avatar.yaml / Anam (anam_avatar_id).
 
 INTEGRATION SEAM TO VERIFY on a first live Anam run:
   - the exact personaConfig field names (avatarId / voiceId / llmId / systemPrompt);
@@ -65,8 +65,6 @@ def create_persona(avatar: Avatar) -> str:
             f"Avatar '{avatar.id}' has no Anam avatar id "
             "(set anam_avatar_id in avatar.yaml or ANAM_AVATAR_ID in .env)."
         )
-    # Voice is optional: if no voice id is set, Anam uses the persona's default
-    # voice ("use Anam voice for now"). Set ELEVENLABS_VOICE_ID to override.
     return avatar.anam_avatar_id
 
 
@@ -125,13 +123,6 @@ def create_conversation(avatar: Avatar, persona_id: str) -> dict:
       - conversation_url: the Anam sessionToken the avatar page joins with.
     """
     persona_config = _expand_persona(persona_id)
-    # Override the persona's default voice with the configured ElevenLabs voice,
-    # if one is set (ELEVENLABS_VOICE_ID / avatar.yaml). Falls back to the Anam
-    # persona's own voice when unset. NOTE: Anam must have this voice available to
-    # the account; if it rejects the id, the session-token call 4xxs — verify on a
-    # local test before deploying.
-    if avatar.elevenlabs_voice_id:
-        persona_config["voiceId"] = avatar.elevenlabs_voice_id
     body = {"personaConfig": persona_config}
     resp = _client.post(
         f"{ANAM_BASE}/auth/session-token",

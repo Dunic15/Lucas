@@ -58,7 +58,6 @@ def test_streaming_answer_yields_sentences_and_citation(monkeypatch):
     assert out == [
         "Managers approve access first.",
         "Then IT provisions it.",
-        "— per access_security_sop.md",
     ]
 
 
@@ -85,7 +84,7 @@ def test_streaming_skip_prefix_inside_word_is_not_sentinel(monkeypatch):
 
     out = list(brain.answer_question_stream(_avatar(), "What should we avoid?"))
 
-    assert out == ["Skipping is not used here.", "— per access_security_sop.md"]
+    assert out == ["Skipping is not used here."]
 
 
 def test_streaming_retrieval_uses_recent_history(monkeypatch):

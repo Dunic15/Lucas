@@ -56,6 +56,7 @@ class Session:
     last_spoke_at: float = 0.0
     proactive_done: bool = False  # the one proactive flag fires at most once
     ws: WebSocket | None = None
+    pending_messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
     _persist_enabled: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -313,6 +314,18 @@ def get(bot_id: str) -> Session | None:
 def get_by_conversation(conversation_id: str) -> Session | None:
     bot_id = _by_conversation.get(conversation_id)
     return _sessions.get(bot_id) if bot_id else None
+
+
+def queue_avatar_message(session: Session, message: dict[str, Any]) -> None:
+    with _LOCK:
+        session.pending_messages.append(message)
+
+
+def drain_avatar_messages(session: Session) -> list[dict[str, Any]]:
+    with _LOCK:
+        messages = list(session.pending_messages)
+        session.pending_messages.clear()
+        return messages
 
 
 def all_sessions() -> list[Session]:

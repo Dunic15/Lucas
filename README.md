@@ -24,15 +24,15 @@ uvicorn backend.app.main:app --port 8000
 Open **http://127.0.0.1:8000** → ask Laura a question, or load the sample
 meeting and get an action checklist + follow-up email.
 
-### Want real Claude-quality answers? Insert one key.
+### Want real model answers? Insert one key.
 
-Open `.env`, paste your key into `ANTHROPIC_API_KEY=` (get one at
-[console.anthropic.com](https://console.anthropic.com/)), restart. **That's the
-whole setup** — the app auto-detects the key and upgrades from the free stub to
-Claude. Nothing else changes.
+Open `.env`, choose `BRAIN_PROVIDER=groq` or `BRAIN_PROVIDER=anthropic`, paste
+the matching API key, and restart. Production currently uses Groq with
+`llama-3.3-70b-versatile` for the live path because first-token latency matters
+more than long-form writing quality inside a meeting.
 
 > The full **live-in-a-real-meeting** experience (a talking face in a Zoom call)
-> additionally needs Recall.ai + Anam + ElevenLabs — see [Live meeting workflow](#live-meeting-workflow-optional).
+> additionally needs Recall.ai + Anam — see [Live meeting workflow](#live-meeting-workflow-optional).
 
 ---
 
@@ -41,11 +41,12 @@ Claude. Nothing else changes.
 | You have… | Brain | Embeddings | You get |
 |---|---|---|---|
 | **nothing** (default) | free `stub` | free `hash` | working demo, extractive grounded answers |
-| **1 key** (Anthropic) | Claude | free `hash` | real reasoning, real summaries ← recommended |
+| **1 key** (Groq) | Llama 3.3 70B | free `hash` | fast live answers |
+| **1 key** (Anthropic) | Claude | free `hash` | higher-quality long-form reasoning |
 | Ollama installed | local `llama3.2` | free | real reasoning, 100% local & free |
-| all vendor keys | Claude | Voyage | live talking avatar in real meetings |
+| live vendor keys | Groq/Claude | local/Voyage | talking Anam avatar in real meetings |
 
-Switch any layer in `.env`: `BRAIN_PROVIDER` (`stub|ollama|anthropic`) and
+Switch any layer in `.env`: `BRAIN_PROVIDER` (`stub|ollama|anthropic|groq`) and
 `EMBEDDING_PROVIDER` (`hash|local|voyage`). See [docs/FREE_TIER.md](docs/FREE_TIER.md).
 
 ---
@@ -68,12 +69,12 @@ Meeting (Zoom/Meet/Teams)
    │        │ transcript.data (webhook)           │ embeds Anam conversation
    ▼        ▼                                     ▼  (the FACE)
         backend  ◄───────────────────────────  Anam replica
-        (the BRAIN)                             voiced by ElevenLabs (the VOICE)
+        (the BRAIN)                             Anam face + voice
         ├─ when-to-speak gate (wake word + cooldown + confidence)
         ├─ RAG over knowledge/*.md  (pluggable embeddings → cosine retrieval)
-        ├─ Brain (Claude / Ollama / stub): grounded, cited answer
+        ├─ Brain (Groq / Claude / Ollama / stub): grounded answer
         ├─ SQLite session store (bots, routing, artifacts, dedupe)
-        └─ on "speak" ─► websocket ─► avatar page ─► Anam talks
+        └─ on "speak" ─► websocket or HTTP polling ─► avatar page ─► Anam talks
    │
    ▼
    POST /sessions/{id}/end ─► Brain: summary + gap checklist + follow-up email
@@ -81,7 +82,7 @@ Meeting (Zoom/Meet/Teams)
 
 **Separation of concerns (the moat-preserving choice):** the *brain* lives in
 our backend, driven by Recall's transcript. The avatar vendor (Anam) is only a
-*mouth + face* we command via `echo`. That keeps it swappable — if you prefer
+*mouth + face* we command with exact text. That keeps it swappable — if you prefer
 Tavus/HeyGen, only the face-client + `avatar.html` change. The same brain also
 powers the offline **demo console**, which needs no meeting vendor at all.
 
@@ -101,14 +102,14 @@ Laura/
 │   │   ├── avatars.py        ← loads avatars/<id>/ into an Avatar object
 │   │   ├── decision.py       ← when-to-speak gate (wake word, confidence)
 │   │   ├── brain.py          ← grounded answers + post-meeting (+ free stub)
-│   │   ├── llm.py            ← pluggable brain: anthropic | ollama | stub
+│   │   ├── llm.py            ← pluggable brain: groq | anthropic | ollama | stub
 │   │   ├── rag.py            ← retrieval over an avatar's knowledge
 │   │   ├── embeddings.py     ← pluggable embeddings: hash | local | voyage
 │   │   ├── recall_client.py  ← Recall.ai (ears + camera, live meetings)
 │   │   ├── gmail_watcher.py  ← watches Gmail Meet invites for live auto-join
 │   │   ├── granola_client.py ← Granola (finished transcripts, post-meeting)
-│   │   ├── anam_client.py    ← the avatar FACE (Anam) + ElevenLabs voice
-│   │   ├── store.py          ← SQLite session state + transient websockets
+│   │   ├── anam_client.py    ← Anam face + voice session tokens
+│   │   ├── store.py          ← SQLite session state + transient speech queue
 │   │   └── config.py         ← all env settings in one place
 │   ├── data/                 ← local SQLite store in development
 │   ├── scripts/
@@ -152,11 +153,11 @@ Laura/
 | Meeting entry controls | Chrome extension / `/join` / calendar-Gmail watcher | `extensions/laura-meet/`, `frontend/join.html`, `main.py`, `gmail_watcher.py` |
 | Meeting entry + transcript (ears) | Recall.ai (live) / Granola (post-meeting) | `recall_client.py`, `granola_client.py` |
 | Face | Anam replica | `backend/app/anam_client.py`, `frontend/avatar.html` |
-| Voice | ElevenLabs | configured as the face's TTS layer |
-| Reasoning (brain) | Claude / Ollama / stub | `backend/app/brain.py`, `llm.py` |
+| Voice | Anam persona voice | configured in Anam |
+| Reasoning (brain) | Groq / Claude / Ollama / stub | `backend/app/brain.py`, `llm.py` |
 | Knowledge retrieval (RAG) | pluggable embeddings + local store | `backend/app/rag.py`, `embeddings.py` |
 | When-to-speak gate | — | `backend/app/decision.py` |
-| Persistence | SQLite + in-memory websockets | `backend/app/store.py` |
+| Persistence | SQLite + in-memory speech queue | `backend/app/store.py` |
 | Avatar definitions (editable) | YAML + markdown | `avatars/<id>/` |
 
 ---
@@ -203,16 +204,33 @@ extension backend URL until the custom domain is connected.
 Required `.env` values for the live workflow:
 
 ```bash
-ANTHROPIC_API_KEY=...
-BRAIN_MODEL=claude-haiku-4-5-20251001
+BRAIN_PROVIDER=groq
+GROQ_API_KEY=...
+BRAIN_MODEL=llama-3.3-70b-versatile
+BRAIN_MODEL_FAST=llama-3.3-70b-versatile
 RECALL_API_KEY=...
+RECALL_API_BASE=https://eu-central-1.recall.ai
+RECALL_TRANSCRIPTION_PROVIDER=recallai
+RECALL_TRANSCRIPTION_MODE=prioritize_low_latency
+RECALL_TRANSCRIPTION_LANGUAGE_CODE=en
 ANAM_API_KEY=...
 ANAM_AVATAR_ID=...
-ELEVENLABS_API_KEY=...
-ELEVENLABS_VOICE_ID=...
 PUBLIC_BASE_URL=https://dhfgfe6yw6.eu-central-1.awsapprunner.com
 WAKE_WORDS=laura
 ```
+
+Current production notes:
+
+- AWS App Runner runs the backend in `eu-central-1`.
+- Recall uses the EU API base and tries `web_gpu` first, then falls back to
+  `web_4_core`/default if Recall rejects the premium variant.
+- Live transcription uses Recall's built-in `recallai_streaming` low-latency
+  English mode.
+- Live speech uses Anam's persona voice. ElevenLabs is not required for the
+  current live meeting path.
+- App Runner rejects the WebSocket upgrade for this service, so the avatar page
+  also polls `/avatar/messages/{conversation_id}` every 500ms and speaks queued
+  backend messages through Anam.
 
 You can send Laura into a live meeting in four ways:
 
