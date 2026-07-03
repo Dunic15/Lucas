@@ -124,7 +124,15 @@ def create_conversation(avatar: Avatar, persona_id: str) -> dict:
                           return one; we generate it and the page echoes it back).
       - conversation_url: the Anam sessionToken the avatar page joins with.
     """
-    body = {"personaConfig": _expand_persona(persona_id)}
+    persona_config = _expand_persona(persona_id)
+    # Override the persona's default voice with the configured ElevenLabs voice,
+    # if one is set (ELEVENLABS_VOICE_ID / avatar.yaml). Falls back to the Anam
+    # persona's own voice when unset. NOTE: Anam must have this voice available to
+    # the account; if it rejects the id, the session-token call 4xxs — verify on a
+    # local test before deploying.
+    if avatar.elevenlabs_voice_id:
+        persona_config["voiceId"] = avatar.elevenlabs_voice_id
+    body = {"personaConfig": persona_config}
     resp = _client.post(
         f"{ANAM_BASE}/auth/session-token",
         headers=_headers(),
