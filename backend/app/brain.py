@@ -69,7 +69,10 @@ can absorb by ear.
 
 Rules:
 - Use ONLY the provided context. Do not invent steps, owners, or approvals.
-- If the context does not contain the answer, say so plainly and do not guess.
+- If the context only partly answers the question, give the supported part first,
+  then say what is missing. Do not refuse a useful partial answer.
+- If the context does not contain the answer, say so plainly and ask for the
+  smallest missing detail. Do not guess.
 - Cite the source document you relied on.
 - Spoken style: no markdown, no bullet symbols, no headings.
 
@@ -122,10 +125,9 @@ def answer_question(
 # ─────────────────── live answers (streamed) ────────────────────────
 # Same trust contract as answer_question, but streamed for low latency: the
 # avatar starts speaking the first sentence while the model is still generating
-# the rest. The confidence JSON can't stream, so grounding is enforced with a
-# SKIP sentinel — the model replies with exactly "SKIP" when the context is
-# insufficient, and we stay silent (the streaming equivalent of the confidence
-# gate). Citations are known up front from retrieval and spoken at the end.
+# the rest. The confidence JSON can't stream, so the model may use a SKIP
+# sentinel only when the speech is not addressed to Laura. Missing context should
+# produce a useful partial answer or a brief "I don't have that" response.
 ANSWER_STREAM_SYSTEM = """{persona}
 
 You are Laura, a warm, helpful AI assistant in a live spoken conversation. Keep \
@@ -145,6 +147,9 @@ context, and don't invent specific steps, owners, or approvals that aren't there
 If the context only partly covers it, give the useful part. When your answer comes \
 from a company document, name it briefly and naturally in your sentence (e.g. "per \
 the onboarding SOP"). For greetings and general chat, do NOT cite anything.
+- If the context is weak but the person is clearly asking you, do NOT skip. Give \
+the safest useful answer: state what you can tell from the context, then say what \
+you would check next.
 - Live transcripts may be noisy — infer the likely intent and respond to what the \
 person most likely meant.
 - Reply with the single word SKIP (and nothing else) ONLY when the speech is \
@@ -169,8 +174,7 @@ def _retrieval_query(question: str, history: str = "") -> str:
 
 def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", k: int = 6):
     """Yield spoken sentences as they are generated. Yields nothing (stays silent)
-    when the model judges the context insufficient (SKIP) — same as a failed
-    confidence gate in the non-streaming path."""
+    only when the model judges the speech was not addressed to Laura (SKIP)."""
     _t0 = time.perf_counter()
     chunks = retrieve(avatar, _retrieval_query(question, history), k=k)
     _retrieve_ms = (time.perf_counter() - _t0) * 1000
@@ -190,7 +194,7 @@ def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", 
         f"Company process context:\n\n{_format_context(chunks)}\n\n"
         f"{convo}"
         f"Someone in the meeting asked:\n{question}\n\n"
-        "Answer in spoken style, or reply SKIP if the context is insufficient."
+        "Answer in spoken style. Reply SKIP only if this was clearly not directed at Laura."
     )
 
     pending = ""      # confirmed answer text not yet flushed as a whole sentence

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, asdict
+from pathlib import Path
 
 import numpy as np
 
@@ -23,9 +24,9 @@ from .config import settings
 from .embeddings import embed
 
 
-INDEX_VERSION = 2
-CHUNK_TARGET_CHARS = 900
-CHUNK_OVERLAP_CHARS = 180
+INDEX_VERSION = 3
+CHUNK_TARGET_CHARS = 760
+CHUNK_OVERLAP_CHARS = 160
 _WORD = re.compile(r"[a-z0-9][a-z0-9_-]+", re.I)
 _STOPWORDS = {
     "about",
@@ -34,7 +35,10 @@ _STOPWORDS = {
     "before",
     "being",
     "could",
+    "did",
+    "didn",
     "does",
+    "doesn",
     "during",
     "from",
     "have",
@@ -55,6 +59,35 @@ _STOPWORDS = {
     "which",
     "with",
     "would",
+}
+_ALIASES = {
+    "api_base": {"base", "region", "recall_api_base"},
+    "apprunner": {"app_runner", "aws", "backend"},
+    "auth": {"authentication", "key", "401"},
+    "avatar": {"face", "mouth", "anam", "renderer"},
+    "bot": {"recall", "meeting", "join"},
+    "cloudflare": {"cloudflared", "tunnel"},
+    "cloudflared": {"cloudflare", "tunnel"},
+    "cost": {"price", "pricing", "billing", "meter"},
+    "doesnt": {"not", "fail", "failed"},
+    "eleven": {"elevenlabs", "voice"},
+    "elevenlabs": {"eleven", "voice"},
+    "gpu": {"web_gpu", "webgpu"},
+    "grok": {"groq", "llm", "model"},
+    "groq": {"grok", "llm", "model"},
+    "join": {"arrive", "coming", "meeting"},
+    "latency": {"slow", "lag", "laggy", "speed"},
+    "mouth": {"avatar", "speak", "voice"},
+    "recall": {"bot", "meeting", "webhook"},
+    "recallai": {"recall", "transcription"},
+    "speak": {"talk", "talking", "voice", "mouth"},
+    "stt": {"transcription", "transcript", "speech"},
+    "talk": {"speak", "speaking", "voice"},
+    "talking": {"speak", "speaking", "voice"},
+    "transcription": {"stt", "transcript", "speech"},
+    "web_gpu": {"webgpu", "gpu", "variant"},
+    "webgpu": {"web_gpu", "gpu", "variant"},
+    "webhook": {"callback", "recall"},
 }
 
 
@@ -258,21 +291,74 @@ class Retrieved:
 
 
 def _terms(text: str) -> set[str]:
-    return {
-        m.group(0).lower()
+    terms: set[str] = set()
+    for m in _WORD.finditer(text):
+        raw = m.group(0).lower()
+        if raw in _STOPWORDS or len(raw) <= 2:
+            continue
+        variants = {raw, raw.replace("-", "_")}
+        if "_" in raw or "-" in raw:
+            variants.update(p for p in re.split(r"[_-]+", raw) if len(p) > 2)
+        for term in variants:
+            if term in _STOPWORDS:
+                continue
+            terms.add(term)
+            terms.update(_stem_terms(term))
+
+    expanded = set(terms)
+    for term in terms:
+        expanded.update(_ALIASES.get(term, set()))
+    return expanded
+
+
+def _stem_terms(term: str) -> set[str]:
+    stems: set[str] = set()
+    for suffix in ("ing", "ers", "er", "ed", "es", "s"):
+        if len(term) > len(suffix) + 3 and term.endswith(suffix):
+            stems.add(term[: -len(suffix)])
+    return stems
+
+
+def _phrases(text: str) -> set[str]:
+    tokens = [
+        m.group(0).lower().replace("_", " ")
         for m in _WORD.finditer(text)
         if m.group(0).lower() not in _STOPWORDS and len(m.group(0)) > 2
-    }
+    ]
+    out: set[str] = set()
+    for n in (2, 3, 4):
+        out.update(" ".join(tokens[i : i + n]) for i in range(len(tokens) - n + 1))
+    return out
 
 
-def _lexical_boost(query_terms: set[str], chunk: dict) -> float:
+def _lexical_score(query: str, query_terms: set[str], chunk: dict) -> float:
     if not query_terms:
         return 0.0
-    haystack = " ".join(
-        str(chunk.get(key, "")) for key in ("source", "section", "text")
+    source_section = " ".join(
+        str(chunk.get(key, "")) for key in ("source", "section")
     )
-    overlap = len(query_terms & _terms(haystack)) / len(query_terms)
-    return min(0.18, overlap * 0.18)
+    text = str(chunk.get("text", ""))
+    text_terms = _terms(text)
+    section_terms = _terms(source_section)
+
+    text_overlap = query_terms & text_terms
+    section_overlap = query_terms & section_terms
+    coverage = len(text_overlap | section_overlap) / len(query_terms)
+    section_coverage = len(section_overlap) / len(query_terms)
+
+    query_phrases = _phrases(query)
+    phrase_overlap = query_phrases & _phrases(f"{source_section}\n{text}")
+    phrase_score = min(1.0, len(phrase_overlap) / max(1, min(4, len(query_phrases))))
+
+    # Keep the score interpretable: 0 means no lexical support, 1 means strong
+    # term + phrase coverage, especially in the source/heading.
+    return min(
+        1.0,
+        (0.62 * coverage)
+        + (0.18 * section_coverage)
+        + (0.16 * phrase_score)
+        + min(0.04, len(text_overlap) * 0.01),
+    )
 
 
 def warm(avatar: Avatar) -> None:
@@ -294,15 +380,23 @@ def retrieve(avatar: Avatar, query: str, k: int = 4) -> list[Retrieved]:
 
     matrix = store["matrix"]
     denom = np.linalg.norm(matrix, axis=1) * np.linalg.norm(qv) + 1e-9
-    scores = matrix @ qv / denom
+    vector_scores = np.maximum(matrix @ qv / denom, 0.0)
     query_terms = _terms(query)
-    combined = np.array(
+    lexical_scores = np.array(
         [
-            float(score) + _lexical_boost(query_terms, chunk)
-            for score, chunk in zip(scores, store["chunks"])
+            _lexical_score(query, query_terms, chunk)
+            for chunk in store["chunks"]
         ],
         dtype=np.float32,
     )
+    combined = np.array(
+        [
+            (0.72 * float(vector_score)) + (0.28 * float(lexical_score))
+            for vector_score, lexical_score in zip(vector_scores, lexical_scores)
+        ],
+        dtype=np.float32,
+    )
+    combined += np.where(lexical_scores >= 0.55, 0.06, 0.0).astype(np.float32)
     top = np.argsort(-combined)[:k]
 
     out: list[Retrieved] = []
