@@ -18,3 +18,7 @@ pypdf>=4.0
 
 # Local semantic embeddings (EMBEDDING_PROVIDER=local) — free, no API key.
 fastembed>=0.3
+
+# Free avatar voice (TTS) for the open-source avatar page (/talk) — no key, no GPU.
+# Replaces Anam's per-minute voice. Swappable for self-hosted Piper/Kokoro later.
+edge-tts>=6.1

@@ -30,6 +30,7 @@ from fastapi.responses import (
     FileResponse,
     JSONResponse,
     RedirectResponse,
+    Response,
     StreamingResponse,
 )
 from pydantic import BaseModel
@@ -439,6 +440,39 @@ def talk_page() -> FileResponse:
     """Open-source avatar page (TalkingHead + our TTS) — the Anam replacement.
     Recall will render this instead of avatar.html once it's proven out."""
     return FileResponse(FRONTEND_DIR / "talk.html")
+
+
+class TtsRequest(BaseModel):
+    text: str
+    avatar_id: str = "laura"
+    voice: str = ""
+
+
+# Free, keyless TTS for the open-source avatar page — replaces Anam's voice.
+# edge-tts hits Microsoft's public Read-Aloud service (no key, no GPU); the avatar
+# page decodes the MP3 and lip-syncs it via TalkingHead.speakAudio(). Swappable for
+# self-hosted Piper/Kokoro later without touching the page contract.
+_TTS_DEFAULT_VOICE = "en-US-AriaNeural"
+
+
+@app.post("/tts")
+async def tts(req: TtsRequest) -> Response:
+    import edge_tts
+
+    text = (req.text or "").strip()[:2000]
+    if not text:
+        return Response(status_code=204)
+    voice = (req.voice or "").strip() or _TTS_DEFAULT_VOICE
+    audio = bytearray()
+    try:
+        async for chunk in edge_tts.Communicate(text, voice).stream():
+            if chunk["type"] == "audio":
+                audio.extend(chunk["data"])
+    except Exception as e:
+        return JSONResponse({"error": f"tts failed: {e}"}, status_code=502)
+    if not audio:
+        return JSONResponse({"error": "tts produced no audio"}, status_code=502)
+    return Response(content=bytes(audio), media_type="audio/mpeg")
 
 
 class LiveTokenRequest(BaseModel):
