@@ -94,6 +94,12 @@ class Settings(BaseSettings):
     # Public URL of this server (Recall must reach our webhook + avatar page)
     public_base_url: str = "http://127.0.0.1:8000"
 
+    # Which avatar page Recall renders as the bot camera:
+    #   "avatar" = Anam (paid face+voice)   "talk" = open-source (TalkingHead + free TTS)
+    # Flip to "talk" (AVATAR_PAGE=talk) once /talk is validated in a browser — no
+    # code change, no Anam cost. Both pages use the same {type:"speak"} ws contract.
+    avatar_page: str = "avatar"
+
     # Behaviour
     wake_words: str = "laura"
     # When False, the avatar answers any grounded question without needing to be

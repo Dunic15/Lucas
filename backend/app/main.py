@@ -682,7 +682,7 @@ async def _start_avatar_session(
     avatar = avatars.load(avatar_id)  # raises if unknown
     conversation_id = uuid.uuid4().hex
     avatar_url = (
-        f"{settings.public_base_url.rstrip('/')}/avatar"
+        f"{settings.public_base_url.rstrip('/')}/{settings.avatar_page.strip('/')}"
         f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
     )
     bot = await run_in_threadpool(
@@ -1024,7 +1024,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             avatar = avatars.load(avatar_id)
             conversation_id = uuid.uuid4().hex
             avatar_url = (
-                f"{settings.public_base_url.rstrip('/')}/avatar"
+                f"{settings.public_base_url.rstrip('/')}/{settings.avatar_page.strip('/')}"
                 f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
             )
             bot = await run_in_threadpool(
