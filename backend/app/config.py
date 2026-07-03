@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
 
+    # Groq (fast, cheap open models via an OpenAI-compatible API).
+    # BRAIN_PROVIDER=groq; set BRAIN_MODEL / BRAIN_MODEL_FAST to a Groq model id
+    # (e.g. llama-3.3-70b-versatile). ~0.2-0.4s first token, no latency spikes.
+    groq_api_key: str = ""
+    groq_base: str = "https://api.groq.com/openai/v1"
+
     # Embeddings for RAG — pick a provider:
     #   hash   (free, offline, zero-dependency keyword vectors)  ← default
     #   local  (free, real semantic embeddings via fastembed)
