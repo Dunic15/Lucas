@@ -139,6 +139,11 @@ def test_create_bot_uses_default_recallai_low_latency_transcription(monkeypatch)
             "language_code": "en",
         }
     }
+    assert captured["json"]["variant"] == {
+        "zoom": "web_gpu",
+        "google_meet": "web_gpu",
+        "microsoft_teams": "web_gpu",
+    }
 
 
 def test_create_bot_can_use_elevenlabs_streaming_transcription(monkeypatch):

@@ -294,16 +294,14 @@ def create_bot(
                 "config": {"url": avatar_page_url},
             }
         },
-        # The default 'web' bot variant has only 250 millicores / 750MB — not
-        # enough to render the live avatar video, so it DROPS FRAMES and looks
-        # laggy/choppy in the meeting. web_4_core = 2250 millicores / 5250MB,
-        # which renders the avatar smoothly. Cost ~$0.60/hr. Note: this does NOT
-        # change the fixed 1280x720 @ 15fps output cap or the meeting platform's
-        # own compression — those set the resolution ceiling regardless.
+        # Use Recall's max output-media bot variant for the avatar browser.
+        # web_gpu = 6000 millicores / 13250MB + WebGL support. It can reduce
+        # dropped frames/choppy rendering, but it does NOT change the fixed
+        # 1280x720 @ 15fps output cap or the meeting platform's compression.
         "variant": {
-            "zoom": "web_4_core",
-            "google_meet": "web_4_core",
-            "microsoft_teams": "web_4_core",
+            "zoom": "web_gpu",
+            "google_meet": "web_gpu",
+            "microsoft_teams": "web_gpu",
         },
     }
     if join_at:  # schedule the bot to join at this time instead of now
