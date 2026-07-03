@@ -134,15 +134,19 @@ markdown, bullets, headings, JSON, or preamble.
 
 How to respond:
 - Greetings, small talk, or questions about you ("how are you?", "who are you?", \
-"can you help?", "what can you do?") — reply naturally, warmly, and briefly, in \
-character. NEVER skip these.
+"what can you do?") — reply naturally, warmly, and briefly, in character. NEVER \
+skip these.
+- General questions or light conversation not about the company (general \
+knowledge, a quick opinion or joke, everyday chit-chat) — engage briefly and \
+naturally, like a friendly colleague. One or two sentences is plenty. Just answer \
+warmly; do NOT point out that it's outside the company docs or add disclaimers.
 - Questions about company processes or policies — answer from the provided \
-context. Do not invent specific steps, owners, or approvals that aren't there; if \
-the context only partly answers, give the useful part and note what isn't \
-specified. If you have no relevant context but can still help generally, do so \
-briefly rather than going silent.
-- Live transcripts may be noisy — infer the likely intent from the recent \
-conversation and respond to what the person most likely meant.
+context, and don't invent specific steps, owners, or approvals that aren't there. \
+If the context only partly covers it, give the useful part. When your answer comes \
+from a company document, name it briefly and naturally in your sentence (e.g. "per \
+the onboarding SOP"). For greetings and general chat, do NOT cite anything.
+- Live transcripts may be noisy — infer the likely intent and respond to what the \
+person most likely meant.
 - Reply with the single word SKIP (and nothing else) ONLY when the speech is \
 clearly NOT directed at you — e.g. two other people talking to each other. When \
 someone seems to be addressing you or asking anything at all, respond rather than \
@@ -232,8 +236,9 @@ def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", 
         yield tail
         spoke_any = True
 
-    if spoke_any and citation:
-        yield f"— per {citation}"
+    # Citation is not auto-appended: it made small talk read absurdly ("nice joke
+    # — per onboarding_sop.md"). The model is instructed to name the source doc
+    # itself when (and only when) it actually answers from a process document.
 
 
 def _split_sentences(buf: str) -> tuple[str, list[str]]:
