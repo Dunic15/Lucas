@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     recall_api_key: str = ""
     recall_api_base: str = "https://us-west-2.recall.ai"
     recall_webhook_secret: str = ""
+    # Live transcription provider for Recall bots:
+    #   recallai   = fastest built-in path, but low-latency mode is English-only
+    #   elevenlabs = better multilingual/accent handling when configured in Recall
+    recall_transcription_provider: str = "recallai"
+    recall_transcription_mode: str = "prioritize_low_latency"
+    recall_transcription_language_code: str = "en"
+    elevenlabs_transcription_model: str = "scribe_v2_realtime"
+    elevenlabs_transcription_language_code: str = ""
 
     # Calendar auto-join (Google OAuth -> Recall Calendar V2)
     google_calendar_client_id: str = ""

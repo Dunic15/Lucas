@@ -181,6 +181,42 @@ def auth_check() -> dict:
     }
 
 
+def _transcript_provider_config() -> dict:
+    """Return the Recall recording_config.transcript.provider payload."""
+    provider = settings.recall_transcription_provider.strip().lower()
+
+    if provider in {"elevenlabs", "elevenlabs_streaming"}:
+        config = {
+            "model_id": (
+                settings.elevenlabs_transcription_model.strip()
+                or "scribe_v2_realtime"
+            )
+        }
+        language_code = settings.elevenlabs_transcription_language_code.strip()
+        if language_code:
+            config["language_code"] = language_code
+        return {"elevenlabs_streaming": config}
+
+    if provider in {"recallai", "recallai_streaming"}:
+        return {
+            "recallai_streaming": {
+                "mode": (
+                    settings.recall_transcription_mode.strip()
+                    or "prioritize_low_latency"
+                ),
+                "language_code": (
+                    settings.recall_transcription_language_code.strip() or "en"
+                ),
+            }
+        }
+
+    raise RuntimeError(
+        "Unknown RECALL_TRANSCRIPTION_PROVIDER "
+        f"'{settings.recall_transcription_provider}'. "
+        "Use 'recallai' or 'elevenlabs'."
+    )
+
+
 def verify_webhook(raw_body: bytes, headers: Mapping[str, str]) -> None:
     """Verify a Recall webhook if RECALL_WEBHOOK_SECRET is configured.
 
@@ -239,12 +275,7 @@ def create_bot(
         "bot_name": "Laura",
         "recording_config": {
             "transcript": {
-                "provider": {
-                    "recallai_streaming": {
-                        "mode": "prioritize_low_latency",
-                        "language_code": "en",
-                    }
-                },
+                "provider": _transcript_provider_config(),
             },
             # Real-time transcript utterances delivered here.
             "realtime_endpoints": [

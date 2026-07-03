@@ -118,6 +118,11 @@ _gmail_state = {"last_poll": 0.0, "last_error": "", "joined": []}
 
 _MEET_CODE_RE = re.compile(r"meet\.google\.com/([a-z-]+)")
 _BOT_TERMINAL = {"call_ended", "done", "fatal"}
+_BOT_VARIANT_RANK = {
+    "web_gpu": 0,
+    "web_4_core": 1,
+    "web": 3,
+}
 
 
 def _meeting_code(url: str) -> str:
@@ -125,18 +130,41 @@ def _meeting_code(url: str) -> str:
     return m.group(1) if m else (url or "")
 
 
+def _recall_list_headers() -> dict[str, str]:
+    return {
+        "Authorization": settings.recall_api_key.strip(),
+        "Content-Type": "application/json",
+    }
+
+
+def _bot_variant_rank(bot: dict) -> int:
+    """Lower is better: GPU, then 4-core, then unknown paid variants, then default."""
+    variant = bot.get("variant") or {}
+    if isinstance(variant, dict):
+        values = [str(v) for v in variant.values() if v]
+    else:
+        values = [str(variant)] if variant else []
+    if not values:
+        return _BOT_VARIANT_RANK["web"]
+    return min(_BOT_VARIANT_RANK.get(v, 2) for v in values)
+
+
 def _reconcile_duplicate_bots(meeting_url: str, my_bot_id: str) -> None:
     """If a race (deploy overlap: two instances polling) put more than one bot in
-    the meeting, deterministically keep the earliest-created one and make the rest
-    leave. Both instances compute the same "keep earliest", so the duplicate
-    resolves no matter which one wins the race."""
+    the meeting, keep the best bot and make the rest leave.
+
+    Best means the higher-powered output-media variant (web_gpu/web_4_core) over
+    the default 250m web bot; ties are broken by earliest-created. Both instances
+    compute the same ranking from the same Recall data, so the duplicate resolves
+    deterministically and the survivor is the smooth bot, not the laggy default.
+    """
     code = _meeting_code(meeting_url)
     if not code:
         return
     try:
         r = httpx.get(
             f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/",
-            headers={"Authorization": f"Token {settings.recall_api_key}"},
+            headers=_recall_list_headers(),
             timeout=20.0,
         )
         r.raise_for_status()
@@ -147,11 +175,19 @@ def _reconcile_duplicate_bots(meeting_url: str, my_bot_id: str) -> None:
             if mid and code in str(mid):
                 status = (bot.get("status_changes") or [{}])[-1].get("code")
                 if status not in _BOT_TERMINAL:
-                    active.append((bot.get("created_at") or "", bot.get("id")))
+                    active.append(
+                        (
+                            _bot_variant_rank(bot),
+                            bot.get("created_at") or "",
+                            bot.get("id"),
+                        )
+                    )
         if len(active) <= 1:
             return
-        active.sort()  # earliest created_at first — keep it, remove the rest
-        for _created, bid in active[1:]:
+        active.sort()  # best variant first, then earliest; keep [0], evict the rest
+        for _rank, _created, bid in active[1:]:
+            if not bid:
+                continue
             try:
                 recall_client.leave_call(bid)
             except Exception:
@@ -173,7 +209,7 @@ def _meeting_has_active_bot(meeting_url: str) -> bool:
     try:
         r = httpx.get(
             f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/",
-            headers={"Authorization": f"Token {settings.recall_api_key}"},
+            headers=_recall_list_headers(),
             timeout=20.0,
         )
         r.raise_for_status()
@@ -226,7 +262,7 @@ async def _gmail_watch_loop() -> None:
                     )
                     print(f"[gmail-watch] joined {url} via bot {res['bot_id']}", flush=True)
                     # Resolve any deploy-overlap duplicate: let a racing bot register,
-                    # then keep the earliest and drop the rest.
+                    # then keep the best Recall variant and drop the rest.
                     await asyncio.sleep(4)
                     await run_in_threadpool(_reconcile_duplicate_bots, url, res["bot_id"])
                 except Exception as e:

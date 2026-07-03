@@ -108,3 +108,64 @@ def test_request_retries_retryable_status(monkeypatch):
 
     assert resp.status_code == 200
     assert len(calls) == 2
+
+
+def test_create_bot_uses_default_recallai_low_latency_transcription(monkeypatch):
+    monkeypatch.setattr(settings, "public_base_url", "https://laura.example")
+    monkeypatch.setattr(settings, "recall_api_base", "https://eu-central-1.recall.ai")
+    monkeypatch.setattr(settings, "recall_transcription_provider", "recallai")
+    monkeypatch.setattr(settings, "recall_transcription_mode", "prioritize_low_latency")
+    monkeypatch.setattr(settings, "recall_transcription_language_code", "en")
+    monkeypatch.setattr(recall_client, "_headers", lambda: {"Authorization": "key"})
+
+    captured = {}
+
+    def fake_request(method, url, **kwargs):
+        captured.update({"method": method, "url": url, **kwargs})
+        request = httpx.Request(method, url)
+        return httpx.Response(201, json={"id": "bot_1"}, request=request)
+
+    monkeypatch.setattr(recall_client, "_request", fake_request)
+
+    recall_client.create_bot(
+        "https://meet.google.com/abc-defg-hij",
+        "https://laura.example/avatar",
+    )
+
+    provider = captured["json"]["recording_config"]["transcript"]["provider"]
+    assert provider == {
+        "recallai_streaming": {
+            "mode": "prioritize_low_latency",
+            "language_code": "en",
+        }
+    }
+
+
+def test_create_bot_can_use_elevenlabs_streaming_transcription(monkeypatch):
+    monkeypatch.setattr(settings, "public_base_url", "https://laura.example")
+    monkeypatch.setattr(settings, "recall_api_base", "https://eu-central-1.recall.ai")
+    monkeypatch.setattr(settings, "recall_transcription_provider", "elevenlabs")
+    monkeypatch.setattr(settings, "elevenlabs_transcription_model", "scribe_v2_realtime")
+    monkeypatch.setattr(settings, "elevenlabs_transcription_language_code", "")
+    monkeypatch.setattr(recall_client, "_headers", lambda: {"Authorization": "key"})
+
+    captured = {}
+
+    def fake_request(method, url, **kwargs):
+        captured.update({"method": method, "url": url, **kwargs})
+        request = httpx.Request(method, url)
+        return httpx.Response(201, json={"id": "bot_1"}, request=request)
+
+    monkeypatch.setattr(recall_client, "_request", fake_request)
+
+    recall_client.create_bot(
+        "https://meet.google.com/abc-defg-hij",
+        "https://laura.example/avatar",
+    )
+
+    provider = captured["json"]["recording_config"]["transcript"]["provider"]
+    assert provider == {
+        "elevenlabs_streaming": {
+            "model_id": "scribe_v2_realtime",
+        }
+    }

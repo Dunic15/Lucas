@@ -24,6 +24,14 @@ services:
         value: https://eu-central-1.recall.ai
       - key: RECALL_WEBHOOK_SECRET
         sync: false
+      - key: RECALL_TRANSCRIPTION_PROVIDER
+        value: recallai
+      - key: RECALL_TRANSCRIPTION_MODE
+        value: prioritize_low_latency
+      - key: RECALL_TRANSCRIPTION_LANGUAGE_CODE
+        value: en
+      - key: ELEVENLABS_TRANSCRIPTION_MODEL
+        value: scribe_v2_realtime
       - key: GOOGLE_CALENDAR_CLIENT_ID
         sync: false
       - key: GOOGLE_CALENDAR_CLIENT_SECRET
