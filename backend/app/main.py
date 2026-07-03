@@ -26,7 +26,12 @@ import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from starlette.concurrency import iterate_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from pydantic import BaseModel
 
 from . import (
@@ -297,6 +302,27 @@ async def demo_ask(req: AskRequest) -> JSONResponse:
     avatar = avatars.load(req.avatar_id)  # raises if unknown
     result = await run_in_threadpool(answer_question, avatar, req.question)
     return JSONResponse(result)
+
+
+@app.post("/live/ask")
+async def live_ask(req: AskRequest) -> StreamingResponse:
+    """Stream a grounded answer as SSE for the DIRECT 'talk to Laura' web avatar.
+
+    In that mode Anam captures the user's mic + does STT/TTS/lip-sync, and calls
+    THIS endpoint as its brain. Reuses the RAG + Groq streaming path — each
+    grounded sentence is emitted as `data: {"content": "..."}` (and `[DONE]` at
+    the end). Stays silent (no content, just [DONE]) when the SKIP gate fires.
+    """
+    avatar = avatars.load(req.avatar_id)
+
+    async def gen():
+        async for sentence in iterate_in_threadpool(
+            answer_question_stream(avatar, req.question)
+        ):
+            yield f"data: {json.dumps({'content': sentence})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 class PostMeetingRequest(BaseModel):

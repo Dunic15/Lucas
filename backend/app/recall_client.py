@@ -263,6 +263,17 @@ def create_bot(
                 "config": {"url": avatar_page_url},
             }
         },
+        # The default 'web' bot variant has only 250 millicores / 750MB — not
+        # enough to render the live avatar video, so it DROPS FRAMES and looks
+        # laggy/choppy in the meeting. web_4_core = 2250 millicores / 5250MB,
+        # which renders the avatar smoothly. Cost ~$0.60/hr. Note: this does NOT
+        # change the fixed 1280x720 @ 15fps output cap or the meeting platform's
+        # own compression — those set the resolution ceiling regardless.
+        "variant": {
+            "zoom": "web_4_core",
+            "google_meet": "web_4_core",
+            "microsoft_teams": "web_4_core",
+        },
     }
     if join_at:  # schedule the bot to join at this time instead of now
         body["join_at"] = join_at
