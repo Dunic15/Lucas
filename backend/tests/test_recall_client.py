@@ -174,3 +174,71 @@ def test_create_bot_can_use_elevenlabs_streaming_transcription(monkeypatch):
             "model_id": "scribe_v2_realtime",
         }
     }
+
+
+def test_create_bot_falls_back_from_web_gpu_to_web_4_core(monkeypatch):
+    monkeypatch.setattr(settings, "public_base_url", "https://laura.example")
+    monkeypatch.setattr(settings, "recall_api_base", "https://eu-central-1.recall.ai")
+    monkeypatch.setattr(settings, "recall_transcription_provider", "recallai")
+    monkeypatch.setattr(settings, "recall_transcription_mode", "prioritize_low_latency")
+    monkeypatch.setattr(settings, "recall_transcription_language_code", "en")
+    monkeypatch.setattr(recall_client, "_headers", lambda: {"Authorization": "key"})
+
+    calls = []
+
+    def fake_request(method, url, **kwargs):
+        calls.append(kwargs["json"])
+        request = httpx.Request(method, url)
+        if len(calls) == 1:
+            return httpx.Response(400, json={"detail": "variant rejected"}, request=request)
+        return httpx.Response(201, json={"id": "bot_2"}, request=request)
+
+    monkeypatch.setattr(recall_client, "_request", fake_request)
+
+    result = recall_client.create_bot(
+        "https://meet.google.com/abc-defg-hij",
+        "https://laura.example/avatar",
+    )
+
+    assert result["id"] == "bot_2"
+    assert calls[0]["variant"]["google_meet"] == "web_gpu"
+    assert calls[1]["variant"]["google_meet"] == "web_4_core"
+
+
+def test_create_bot_falls_back_from_elevenlabs_to_recallai(monkeypatch):
+    monkeypatch.setattr(settings, "public_base_url", "https://laura.example")
+    monkeypatch.setattr(settings, "recall_api_base", "https://eu-central-1.recall.ai")
+    monkeypatch.setattr(settings, "recall_transcription_provider", "elevenlabs")
+    monkeypatch.setattr(settings, "elevenlabs_transcription_model", "scribe_v2_realtime")
+    monkeypatch.setattr(settings, "elevenlabs_transcription_language_code", "")
+    monkeypatch.setattr(settings, "recall_transcription_mode", "prioritize_low_latency")
+    monkeypatch.setattr(settings, "recall_transcription_language_code", "en")
+    monkeypatch.setattr(recall_client, "_headers", lambda: {"Authorization": "key"})
+
+    calls = []
+
+    def fake_request(method, url, **kwargs):
+        calls.append(kwargs["json"])
+        request = httpx.Request(method, url)
+        if len(calls) <= 2:
+            return httpx.Response(400, json={"detail": "provider rejected"}, request=request)
+        return httpx.Response(201, json={"id": "bot_3"}, request=request)
+
+    monkeypatch.setattr(recall_client, "_request", fake_request)
+
+    result = recall_client.create_bot(
+        "https://meet.google.com/abc-defg-hij",
+        "https://laura.example/avatar",
+    )
+
+    assert result["id"] == "bot_3"
+    assert "elevenlabs_streaming" in calls[0]["recording_config"]["transcript"]["provider"]
+    assert "elevenlabs_streaming" in calls[1]["recording_config"]["transcript"]["provider"]
+    provider = calls[2]["recording_config"]["transcript"]["provider"]
+    assert provider == {
+        "recallai_streaming": {
+            "mode": "prioritize_low_latency",
+            "language_code": "en",
+        }
+    }
+    assert calls[2]["variant"]["google_meet"] == "web_4_core"

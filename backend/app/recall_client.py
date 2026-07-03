@@ -29,6 +29,7 @@ _CLIENT = httpx.Client(
     limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
 )
 _RETRY_STATUSES = {429, 500, 502, 503, 504}
+_OUTPUT_VARIANTS = ("web_gpu", "web_4_core")
 
 
 def readiness() -> dict:
@@ -181,9 +182,9 @@ def auth_check() -> dict:
     }
 
 
-def _transcript_provider_config() -> dict:
+def _transcript_provider_config(provider_override: str | None = None) -> dict:
     """Return the Recall recording_config.transcript.provider payload."""
-    provider = settings.recall_transcription_provider.strip().lower()
+    provider = (provider_override or settings.recall_transcription_provider).strip().lower()
 
     if provider in {"elevenlabs", "elevenlabs_streaming"}:
         config = {
@@ -215,6 +216,125 @@ def _transcript_provider_config() -> dict:
         f"'{settings.recall_transcription_provider}'. "
         "Use 'recallai' or 'elevenlabs'."
     )
+
+
+def _variant_payload(variant: str | None) -> dict[str, str] | None:
+    if not variant:
+        return None
+    return {
+        "zoom": variant,
+        "google_meet": variant,
+        "microsoft_teams": variant,
+    }
+
+
+def _create_bot_body(
+    meeting_url: str,
+    avatar_page_url: str,
+    *,
+    join_at: str | None,
+    provider: dict,
+    variant: str | None,
+) -> dict:
+    webhook_url = f"{settings.public_base_url.rstrip('/')}/webhooks/recall"
+
+    body = {
+        "meeting_url": meeting_url,
+        "bot_name": "Laura",
+        "recording_config": {
+            "transcript": {
+                "provider": provider,
+            },
+            # Real-time transcript utterances delivered here.
+            "realtime_endpoints": [
+                {
+                    "type": "webhook",
+                    "url": webhook_url,
+                    "events": ["transcript.data"],
+                }
+            ],
+        },
+        # Top-level: the bot's camera renders our avatar page (Anam face inside).
+        # Shape per Recall's Output Media API: camera → kind=webpage → config.url.
+        "output_media": {
+            "camera": {
+                "kind": "webpage",
+                "config": {"url": avatar_page_url},
+            }
+        },
+    }
+    variant_payload = _variant_payload(variant)
+    if variant_payload:
+        body["variant"] = variant_payload
+    if join_at:  # schedule the bot to join at this time instead of now
+        body["join_at"] = join_at
+    return body
+
+
+def _create_bot_attempts(
+    meeting_url: str, avatar_page_url: str, join_at: str | None
+) -> list[tuple[str, dict]]:
+    configured_provider = _transcript_provider_config()
+    attempts: list[tuple[str, dict]] = []
+
+    for variant in _OUTPUT_VARIANTS:
+        attempts.append(
+            (
+                f"{variant}/configured-transcription",
+                _create_bot_body(
+                    meeting_url,
+                    avatar_page_url,
+                    join_at=join_at,
+                    provider=configured_provider,
+                    variant=variant,
+                ),
+            )
+        )
+
+    # If Recall rejects a premium transcription provider that is not enabled in
+    # the Recall workspace, still get Laura into the meeting with Recall's
+    # built-in low-latency English transcription instead of failing the invite.
+    if "elevenlabs_streaming" in configured_provider:
+        recallai_provider = _transcript_provider_config("recallai")
+        attempts.append(
+            (
+                "web_4_core/recallai-transcription",
+                _create_bot_body(
+                    meeting_url,
+                    avatar_page_url,
+                    join_at=join_at,
+                    provider=recallai_provider,
+                    variant="web_4_core",
+                ),
+            )
+        )
+        attempts.append(
+            (
+                "default-web/recallai-transcription",
+                _create_bot_body(
+                    meeting_url,
+                    avatar_page_url,
+                    join_at=join_at,
+                    provider=recallai_provider,
+                    variant=None,
+                ),
+            )
+        )
+    else:
+        attempts.append(
+            (
+                "default-web/configured-transcription",
+                _create_bot_body(
+                    meeting_url,
+                    avatar_page_url,
+                    join_at=join_at,
+                    provider=configured_provider,
+                    variant=None,
+                ),
+            )
+        )
+
+    return attempts
 
 
 def verify_webhook(raw_body: bytes, headers: Mapping[str, str]) -> None:
@@ -268,63 +388,39 @@ def create_bot(
     bot to join then — this is how calendar auto-join dispatches bots ahead of time.
     Returns the created bot object (includes its `id`).
     """
-    webhook_url = f"{settings.public_base_url.rstrip('/')}/webhooks/recall"
+    attempts = _create_bot_attempts(meeting_url, avatar_page_url, join_at)
+    last_error: httpx.HTTPStatusError | None = None
 
-    body = {
-        "meeting_url": meeting_url,
-        "bot_name": "Laura",
-        "recording_config": {
-            "transcript": {
-                "provider": _transcript_provider_config(),
-            },
-            # Real-time transcript utterances delivered here.
-            "realtime_endpoints": [
-                {
-                    "type": "webhook",
-                    "url": webhook_url,
-                    "events": ["transcript.data"],
-                }
-            ],
-        },
-        # Top-level: the bot's camera renders our avatar page (Anam face inside).
-        # Shape per Recall's Output Media API: camera → kind=webpage → config.url.
-        "output_media": {
-            "camera": {
-                "kind": "webpage",
-                "config": {"url": avatar_page_url},
-            }
-        },
-        # Use Recall's max output-media bot variant for the avatar browser.
-        # web_gpu = 6000 millicores / 13250MB + WebGL support. It can reduce
-        # dropped frames/choppy rendering, but it does NOT change the fixed
-        # 1280x720 @ 15fps output cap or the meeting platform's compression.
-        "variant": {
-            "zoom": "web_gpu",
-            "google_meet": "web_gpu",
-            "microsoft_teams": "web_gpu",
-        },
-    }
-    if join_at:  # schedule the bot to join at this time instead of now
-        body["join_at"] = join_at
+    for idx, (label, body) in enumerate(attempts):
+        resp = _request(
+            "POST",
+            f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/",
+            headers=_headers(),
+            json=body,
+            retry=True,
+        )
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                raise RuntimeError(
+                    "Recall rejected RECALL_API_KEY with 401. Make sure it is the "
+                    "API Key, not a whsec_ workspace/webhook secret, and that "
+                    "RECALL_API_BASE matches the key's region."
+                ) from e
+            if e.response.status_code == 400 and idx < len(attempts) - 1:
+                last_error = e
+                print(
+                    f"[recall] create_bot rejected {label}; trying fallback",
+                    flush=True,
+                )
+                continue
+            raise
+        return resp.json()
 
-    resp = _request(
-        "POST",
-        f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/",
-        headers=_headers(),
-        json=body,
-        retry=True,
-    )
-    try:
-        resp.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 401:
-            raise RuntimeError(
-                "Recall rejected RECALL_API_KEY with 401. Make sure it is the "
-                "API Key, not a whsec_ workspace/webhook secret, and that "
-                "RECALL_API_BASE matches the key's region."
-            ) from e
-        raise
-    return resp.json()
+    if last_error:
+        raise last_error
+    raise RuntimeError("Recall create_bot failed without a response.")
 
 
 def create_calendar(
