@@ -86,3 +86,33 @@ def test_streaming_skip_prefix_inside_word_is_not_sentinel(monkeypatch):
     out = list(brain.answer_question_stream(_avatar(), "What should we avoid?"))
 
     assert out == ["Skipping is not used here.", "— per access_security_sop.md"]
+
+
+def test_streaming_retrieval_uses_recent_history(monkeypatch):
+    monkeypatch.setattr(brain.settings, "brain_provider", "anthropic")
+    monkeypatch.setattr(brain.settings, "anthropic_api_key", "test-key")
+    seen = {}
+
+    def fake_retrieve(_avatar, query, *, k):
+        seen["query"] = query
+        seen["k"] = k
+        return _retrieved()
+
+    monkeypatch.setattr(brain, "retrieve", fake_retrieve)
+    monkeypatch.setattr(
+        brain.llm,
+        "stream_complete",
+        lambda *args, **kwargs: iter(["Managers approve access."]),
+    )
+
+    list(
+        brain.answer_question_stream(
+            _avatar(),
+            "what about that?",
+            history="Alice: We need laptop access for the new hire.",
+        )
+    )
+
+    assert "laptop access" in seen["query"]
+    assert "Current ask: what about that?" in seen["query"]
+    assert seen["k"] == 6

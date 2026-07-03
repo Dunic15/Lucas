@@ -123,6 +123,12 @@ _BOT_VARIANT_RANK = {
     "web_4_core": 1,
     "web": 3,
 }
+_LIVE_REPAIR_RE = re.compile(
+    r"\b(can you hear|do you hear|hear me|are you there|hello|hi laura|"
+    r"doesn'?t work|not working|is broken|no response|answer me|"
+    r"what can you do|help me)\b",
+    re.IGNORECASE,
+)
 
 
 def _meeting_code(url: str) -> str:
@@ -147,6 +153,18 @@ def _bot_variant_rank(bot: dict) -> int:
     if not values:
         return _BOT_VARIANT_RANK["web"]
     return min(_BOT_VARIANT_RANK.get(v, 2) for v in values)
+
+
+def _should_repair_silent_answer(called: bool, text: str) -> bool:
+    return called or bool(_LIVE_REPAIR_RE.search(text or ""))
+
+
+def _silent_answer_repair_line(avatar: avatars.Avatar) -> str:
+    topics = "onboarding, access/security, or the AI Buffer thesis"
+    return (
+        f"I can hear you, but I need a specific question about {topics}. "
+        f"Try: {avatar.name}, what approval step is required?"
+    )
 
 
 def _reconcile_duplicate_bots(meeting_url: str, my_bot_id: str) -> None:
@@ -1040,6 +1058,17 @@ async def recall_webhook(request: Request) -> JSONResponse:
         spoke_any = True
 
     if not spoke_any:
+        if _should_repair_silent_answer(called, text):
+            line = _silent_answer_repair_line(avatar)
+            await _make_avatar_speak(session, line)
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": True,
+                    "reason": "repair_after_skip",
+                    "line": line,
+                }
+            )
         return JSONResponse(
             {"ok": True, "spoke": False, "reason": "insufficient context (SKIP)"}
         )

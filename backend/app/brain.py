@@ -136,6 +136,11 @@ Rules:
 - Use ONLY the provided context. Do not invent steps, owners, or approvals.
 - If the context does NOT contain the answer, reply with exactly the single word \
 SKIP and nothing else.
+- Live transcripts may be imperfect. Infer the likely intent from the recent \
+conversation when the wording is noisy, but only answer if the documents still \
+support that interpretation.
+- If the context partly answers the question, give the useful partial answer and \
+say what is not specified instead of skipping.
 - Otherwise reply with the spoken answer only: plain text, no markdown, no bullet \
 symbols, no headings, no JSON, no preamble."""
 
@@ -145,12 +150,21 @@ def _is_skip(head: str) -> bool:
     return head[:4].upper() == "SKIP" and (len(head) == 4 or not head[4].isalpha())
 
 
-def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", k: int = 3):
+def _retrieval_query(question: str, history: str = "") -> str:
+    """Retrieve against the ask plus recent context so vague live speech works."""
+    question = (question or "").strip()
+    history = (history or "").strip()
+    if not history:
+        return question
+    return f"{history[-1200:]}\n\nCurrent ask: {question}"
+
+
+def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", k: int = 6):
     """Yield spoken sentences as they are generated. Yields nothing (stays silent)
     when the model judges the context insufficient (SKIP) — same as a failed
     confidence gate in the non-streaming path."""
     _t0 = time.perf_counter()
-    chunks = retrieve(avatar, question, k=k)
+    chunks = retrieve(avatar, _retrieval_query(question, history), k=k)
     _retrieve_ms = (time.perf_counter() - _t0) * 1000
     citation = chunks[0].source if chunks else ""
 
