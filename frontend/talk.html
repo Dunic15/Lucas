@@ -152,4 +152,27 @@
 
   // Backend can also drive her via a "speak" message (kept for the Recall path).
   window.speak = say;
+
+  // ── Meeting mode: same contract as avatar.html so /talk is a drop-in for the
+  // Anam page. When a conversation_id is present (Recall renders us with one), we
+  // open the backend websocket and speak whatever {type:"speak",text} it pushes —
+  // exactly what _make_avatar_speak sends. Only the RENDERER changed (Anam -> our
+  // TalkingHead + free TTS); the backend brain/contract are untouched.
+  const conversationId = params.get("conversation_id");
+  if (conversationId) {
+    const connect = () => {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(`${proto}://${location.host}/ws/${conversationId}`);
+      ws.onopen = () =>
+        setInterval(() => ws.readyState === 1 && ws.send("ping"), 15000);
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === "speak" && msg.text) say(msg.text);
+        } catch (_) { /* ignore non-JSON */ }
+      };
+      ws.onclose = () => setTimeout(connect, 2000);
+    };
+    connect();
+  }
 </script>
