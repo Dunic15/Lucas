@@ -115,6 +115,10 @@ def _prebuild_indexes() -> None:
 # "Add people") and send the bot into that meeting. See gmail_watcher.py.
 _gmail_seen_ids: set[str] = set()
 _gmail_state = {"last_poll": 0.0, "last_error": "", "joined": []}
+# Set when the instance is being drained (deploy/rollout). The Gmail watcher stops
+# dispatching bots the moment this flips, so a draining OLD instance never races the
+# NEW instance to put a second bot in the same meeting during a deploy overlap.
+_shutting_down = False
 
 _MEET_CODE_RE = re.compile(r"meet\.google\.com/([a-z-]+)")
 _BOT_TERMINAL = {"call_ended", "done", "fatal"}
@@ -246,8 +250,11 @@ def _meeting_has_active_bot(meeting_url: str) -> bool:
 async def _gmail_watch_loop() -> None:
     seeded = False  # first pass only records existing mail; never joins old meetings
     while True:
+        if _shutting_down:
+            print("[gmail-watch] instance draining — watcher stopped", flush=True)
+            return
         await asyncio.sleep(settings.gmail_poll_seconds)
-        if not settings.gmail_watch_enabled:
+        if not settings.gmail_watch_enabled or _shutting_down:
             continue
         try:
             rt = await run_in_threadpool(gmail_watcher.refresh_token)
@@ -266,6 +273,8 @@ async def _gmail_watch_loop() -> None:
                 seeded = True
                 continue
             for _mid, url in new:
+                if _shutting_down:
+                    break  # draining — don't start new bots
                 if store.is_scheduled(url):
                     continue
                 # Durable cross-instance guard against duplicate bots.
@@ -293,6 +302,18 @@ async def _gmail_watch_loop() -> None:
 async def _launch_gmail_watch() -> None:
     if settings.gmail_watch_enabled:
         asyncio.create_task(_gmail_watch_loop())
+
+
+@app.on_event("shutdown")
+async def _drain_gmail_watch() -> None:
+    """On a deploy/rollout App Runner sends SIGTERM to the old instance; flip the
+    drain flag so its Gmail watcher stops dispatching at once. Combined with the
+    per-dispatch Recall pre-check and the variant-aware reconcile, this stops the
+    old + new instances from both putting a bot in the same meeting during overlap.
+    """
+    global _shutting_down
+    _shutting_down = True
+    print("[gmail-watch] shutdown signal — watcher draining", flush=True)
 
 
 @app.get("/gmail/status")
