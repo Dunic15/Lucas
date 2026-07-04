@@ -5,10 +5,10 @@
   Ready Player Me character and lip-syncs to audio we feed it. No Anam, no GPU
   server. Recall's web_gpu bot renders this page as the meeting camera.
 
-  Pipeline:
-    meeting question --(backend transcript)--> we call /live/ask (RAG + Groq)
-      --> answer text --> TTS (audio) --> head.speakAudio(...) --> lip-synced speech
-      --> Recall captures this page's canvas+audio --> streamed into the meeting
+  Pipeline (arrows written as -> on purpose: a dash-dash-gt sequence closes a comment):
+    meeting question -> (backend transcript) -> we call /live/ask (RAG + Groq)
+      -> answer text -> TTS (audio) -> head.speakAudio(...) -> lip-synced speech
+      -> Recall captures this page's canvas+audio -> streamed into the meeting
 
   TESTING STAGES (open this file via the backend, e.g. http://localhost:8000/talk):
     1. Avatar RENDERS (idle: breathing, blinking).            [no backend TTS needed]
@@ -79,8 +79,11 @@
   const status = (t) => (document.getElementById("status").textContent = t);
 
   const head = new TalkingHead(document.getElementById("stage"), {
-    // No ttsEndpoint on purpose — we drive audio ourselves via speakAudio() so the
-    // TTS stays free/self-hosted. speakText() would require Google TTS.
+    // TalkingHead's constructor THROWS if ttsEndpoint is missing — even though we
+    // never call speakText(). We drive audio ourselves via speakAudio() with our own
+    // free /tts, so this is a harmless dummy that is never actually fetched. (Without
+    // it, the constructor throws at load and the whole page dies: no avatar, dead HUD.)
+    ttsEndpoint: "/gtts-unused",
     lipsyncModules: ["en"],
     cameraView: "upper",
     cameraDistance: 0,
