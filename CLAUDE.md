@@ -1,0 +1,52 @@
+# CLAUDE.md — working in the Laura repo
+
+Laura is a **Callable AI Process Avatar** (joins Zoom/Meet/Teams, answers grounded
+from process docs, drafts post-meeting artifacts). Full context:
+[`.claude/CONTEXT.md`](.claude/CONTEXT.md). Architecture + seams: `README.md`.
+Parallel-work + integration contract: `CODEX.md`.
+
+**Hard constraints (never violate):** don't break the live-meeting contract
+(`ws/<conversation_id>`, `{type:"speak",text}`, `recall_client`/`anam_client`
+signatures); demo runs key-free (`stub`+`hash`); no secrets in git; end sessions to
+stop the per-minute meter; synthetic data only in `avatars/*/knowledge`; transcripts
+are PII (memory only, never logged); latency is the product on the live path.
+
+---
+
+## When to use the agent team (auto-routing)
+
+The specialized agents live in [`.claude/agents/`](.claude/agents/). **Route to an
+agent when a task clearly matches its domain AND is a substantial, self-contained
+piece of work that produces a durable artifact.** Otherwise do it inline.
+
+**Delegate to an agent when the task is…**
+
+| The task is about… | Use agent |
+|---|---|
+| Scoping an idea/complaint into a spec, or a roadmap/prioritization call | **product-strategist** |
+| Reviewing a diff/branch/PR before merge (contract, latency, PII, meter safety) | **code-reviewer** |
+| A deploy issue, latency regression, prod error, or cost/infra tuning | **backend-infra** |
+| Positioning, ICP, messaging, landing/demo copy, outreach | **growth-gtm** |
+| Competitor teardown, market map, "who else does this", defensibility | **market-intel** |
+| Pitch narrative, deck outline, TAM/SAM/SOM, investor updates | **fundraise-narrative** |
+| Pricing, gross margin, break-even, per-minute cost model | **finance-unit-economics** |
+| Scaffolding a **new avatar** (folder + synthetic SOPs) | **avatar-author** |
+| Running the test suite / offline pipeline checks | **backend-tester** |
+| Smoke-testing the demo end-to-end | **demo-runner** |
+
+**Do it INLINE (no agent) when…**
+- It's a **quick edit or one-file change** you can finish in a few tool calls.
+- You're **mid-task and already hold the context** — spawning restarts cold and
+  re-derives what you already know (the expensive path).
+- It's **debugging / a direct question / a small fix** — faster inline.
+- The task **spans several agents' domains at once** — handle it yourself and only
+  pull in an agent for a genuinely separable chunk.
+
+**Rule of thumb:** a *substantial, single-domain deliverable* (a GTM doc, a market
+analysis, a fundraise section, a pre-merge review, a new avatar) → agent. A *tweak,
+a debug, or something you're already in the middle of* → inline. When unsure, do it
+inline and mention the relevant agent as an option.
+
+Every agent reads `.claude/CONTEXT.md` first and obeys the golden rules in
+[`.claude/agents/README.md`](.claude/agents/README.md). Agents don't commit/push
+unless asked; they prefer writing artifacts to `docs/`.
