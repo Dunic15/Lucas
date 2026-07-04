@@ -179,6 +179,94 @@ def _stream_groq(
                 yield delta
 
 
+def complete_with_tools(
+    system: str,
+    user: str,
+    tools: list[dict],
+    dispatch,
+    *,
+    max_tokens: int = 600,
+    model: str | None = None,
+    max_rounds: int = 3,
+) -> tuple[str, list[dict]]:
+    """Answer WITH tool use (the 'act' layer). Returns (final_text, tools_used).
+
+    Runs the OpenAI/Groq function-calling loop: the model may ask to call tools;
+    we execute each via `dispatch(name, args)`, feed the results back, and let it
+    answer. Only wired for Groq today (OpenAI-compatible). For other providers we
+    fall back to a normal completion with no tools, so nothing breaks — the caller
+    still gets a sensible answer, just without acting.
+    """
+    provider = settings.brain_provider.lower()
+    if provider != "groq":
+        return complete(system, user, max_tokens=max_tokens, model=model), []
+
+    import json as _json
+
+    import httpx
+
+    if not settings.groq_api_key:
+        raise RuntimeError("BRAIN_PROVIDER=groq needs GROQ_API_KEY.")
+
+    url = f"{settings.groq_base.rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {settings.groq_api_key}"}
+    messages: list[dict] = _groq_messages(system, user)
+    used: list[dict] = []
+
+    with httpx.Client(timeout=120.0) as client:
+        for _ in range(max_rounds):
+            resp = client.post(
+                url,
+                headers=headers,
+                json={
+                    "model": model or settings.brain_model,
+                    "max_tokens": max_tokens,
+                    "messages": messages,
+                    "tools": tools,
+                    "tool_choice": "auto",
+                },
+            )
+            resp.raise_for_status()
+            msg = resp.json()["choices"][0]["message"]
+            tool_calls = msg.get("tool_calls")
+            if not tool_calls:
+                return (msg.get("content") or "").strip(), used
+
+            # Record the assistant turn that requested tools, then run each call.
+            messages.append(
+                {"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls}
+            )
+            for tc in tool_calls:
+                fn = tc.get("function", {}).get("name", "")
+                try:
+                    args = _json.loads(tc.get("function", {}).get("arguments") or "{}")
+                except ValueError:
+                    args = {}
+                result = dispatch(fn, args)
+                used.append({"tool": fn, "args": args, "result": result})
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", ""),
+                        "name": fn,
+                        "content": str(result),
+                    }
+                )
+
+        # Out of rounds — force a final answer with the tool results in hand.
+        resp = client.post(
+            url,
+            headers=headers,
+            json={
+                "model": model or settings.brain_model,
+                "max_tokens": max_tokens,
+                "messages": messages,
+            },
+        )
+        resp.raise_for_status()
+        return (resp.json()["choices"][0]["message"].get("content") or "").strip(), used
+
+
 def _complete_ollama(system: str, user: str, max_tokens: int) -> str:
     import httpx
 

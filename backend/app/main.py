@@ -47,6 +47,7 @@ from . import (
 from .brain import (
     answer_question,
     answer_question_stream,
+    answer_with_tools,
     post_meeting,
     proactive_flag,
     effective_provider,
@@ -396,6 +397,32 @@ async def live_ask(req: AskRequest) -> StreamingResponse:
             answer_question_stream(avatar, req.question)
         ):
             yield f"data: {json.dumps({'content': sentence})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.post("/live/act")
+async def live_act(req: AskRequest) -> StreamingResponse:
+    """Grounded answer that can ACT — the model may call tools (calculate, check a
+    deadline, look up a record) before answering. Same SSE shape as /live/ask so
+    the avatar page is unchanged: the final spoken answer is emitted as
+    `data: {"content": "..."}` then `[DONE]`. Which tools ran is surfaced as an SSE
+    comment line (`: tools_used ...`) for transparency — clients ignore it.
+
+    Kept OFF the streaming meeting hot path on purpose: tool use needs a round-trip
+    first, so this is for the direct web avatar / demo.
+    """
+    avatar = avatars.load(req.avatar_id)
+
+    async def gen():
+        result = await run_in_threadpool(answer_with_tools, avatar, req.question)
+        used = result.get("tools_used") or []
+        if used:
+            yield f": tools_used {', '.join(u['tool'] for u in used)}\n\n"
+        answer = (result.get("answer") or "").strip()
+        if answer:
+            yield f"data: {json.dumps({'content': answer})}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")

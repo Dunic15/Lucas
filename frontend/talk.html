@@ -48,7 +48,7 @@
 <div id="hud">
   <input id="q" placeholder="Type something for Laura to say…" />
   <button id="speakBtn">Speak</button>
-  <button id="askBtn" class="alt">Ask (grounded)</button>
+  <button id="askBtn" class="alt">Ask (grounded + acts)</button>
 </div>
 
 <script type="importmap">
@@ -135,10 +135,11 @@
     }
   }
 
-  // ── grounded answer: pull from /live/ask (RAG + Groq), then speak it ──
+  // ── grounded answer that can ACT: /live/act (RAG + Groq + tools), then speak ──
+  // She may calculate, check a deadline, or look up a record before answering.
   async function ask(question) {
     status("thinking…");
-    const r = await fetch("/live/ask", {
+    const r = await fetch("/live/act", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ avatar_id: avatarId, question }),

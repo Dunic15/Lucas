@@ -20,7 +20,7 @@ import json
 import re
 import time
 
-from . import llm
+from . import llm, tools
 from .avatars import Avatar
 from .config import settings
 from .rag import retrieve, Retrieved
@@ -258,6 +258,60 @@ def _split_sentences(buf: str) -> tuple[str, list[str]]:
         if s:
             sentences.append(s)
     return buf, sentences
+
+
+# ───────────────────── live answers WITH tools (the 'act' layer) ─────────
+# Same grounding as answer_question, but the model can CALL tools to do things:
+# calculate, reason about a deadline, or look up a record. Not streamed — tool
+# use needs a round-trip first — so this is for the direct web avatar / demo,
+# not (yet) the latency-critical meeting path. Falls back to a plain grounded
+# answer when tools aren't available (stub/offline), so nothing breaks.
+ANSWER_TOOLS_SYSTEM = """{persona}
+
+You are Laura, a warm, helpful AI assistant in a live spoken conversation. Keep \
+replies to 1-3 short sentences a person can absorb by ear. Plain text only — no \
+markdown, bullets, headings, or preamble.
+
+You can USE TOOLS to do things, not just recall from documents:
+- calculator — for ANY arithmetic (percentages, totals, per-seat cost, annualizing).
+- date_math — today's date, or how many days until a deadline/renewal.
+- lookup_record — check a customer account (plan, seats, MRR, renewal, owner).
+
+Call a tool whenever it makes your answer more concrete or accurate; you may chain \
+them (e.g. look up a renewal date, then compute the days until it). Ground company \
+process facts in the provided context and name the source doc when you use one. When \
+you calculated or looked something up, state the concrete result plainly."""
+
+
+def answer_with_tools(
+    avatar: Avatar, question: str, *, history: str = "", k: int = 6
+) -> dict:
+    """Grounded answer that may CALL tools to act. Returns answer + tools_used."""
+    chunks = retrieve(avatar, _retrieval_query(question, history), k=k)
+
+    if _is_stub():
+        # No tool use offline — fall back to the deterministic grounded answer.
+        r = _stub_answer(chunks)
+        return {"answer": r["answer"], "tools_used": [], "citations": r.get("citations", [])}
+
+    convo = f"Recent meeting conversation:\n{history}\n\n" if history.strip() else ""
+    system = ANSWER_TOOLS_SYSTEM.format(persona=avatar.persona_prompt)
+    user = (
+        f"Company process context:\n\n{_format_context(chunks)}\n\n"
+        f"{convo}"
+        f"Someone asked:\n{question}\n\n"
+        "Use tools if they'd help, then answer in spoken style."
+    )
+    text, used = llm.complete_with_tools(
+        system, user, tools.TOOL_SPECS, tools.dispatch, model=settings.brain_model_fast
+    )
+    if used:
+        print(f"[tools] {question[:60]!r} -> " + ", ".join(u["tool"] for u in used), flush=True)
+    return {
+        "answer": (text or "").strip(),
+        "tools_used": used,
+        "citations": [chunks[0].source] if chunks else [],
+    }
 
 
 # ───────────────────────── post-meeting ─────────────────────────────
