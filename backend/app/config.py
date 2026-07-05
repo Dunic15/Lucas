@@ -87,9 +87,12 @@ class Settings(BaseSettings):
     anam_api_key: str = ""
     anam_avatar_id: str = ""
 
-    # ElevenLabs (voice)
+    # ElevenLabs (voice). When elevenlabs_api_key is set, /tts uses ElevenLabs
+    # with-timestamps (real per-word timings -> accurate lip-sync) instead of the
+    # free edge-tts fallback.
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = ""
+    elevenlabs_tts_model: str = "eleven_flash_v2_5"
 
     # Public URL of this server (Recall must reach our webhook + avatar page)
     public_base_url: str = "http://127.0.0.1:8000"

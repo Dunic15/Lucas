@@ -487,20 +487,87 @@ class TtsRequest(BaseModel):
     voice: str = ""
 
 
-# Free, keyless TTS for the open-source avatar page — replaces Anam's voice.
-# edge-tts hits Microsoft's public Read-Aloud service (no key, no GPU); the avatar
-# page decodes the MP3 and lip-syncs it via TalkingHead.speakAudio(). Swappable for
-# self-hosted Piper/Kokoro later without touching the page contract.
+# TTS for the open-source avatar page — replaces Anam's voice.
+# Preferred: ElevenLabs with-timestamps (set ELEVENLABS_API_KEY) — premium voice
+# AND character-level timing alignment, which the page turns into accurate
+# per-word lip-sync. Fallback: edge-tts (free, keyless; page spreads word timings
+# evenly — approximate lip-sync). Response is JSON either way:
+#   {"audio": <base64 mp3>, "words": [...]|null, "wtimes": [ms]|null,
+#    "wdurations": [ms]|null, "engine": "elevenlabs"|"edge"}
 _TTS_DEFAULT_VOICE = "en-US-AriaNeural"
+
+
+def _words_from_alignment(alignment: dict) -> tuple[list, list, list]:
+    """Character alignment -> per-word (words, start_ms, duration_ms) for lip-sync."""
+    chars = alignment.get("characters") or []
+    starts = alignment.get("character_start_times_seconds") or []
+    ends = alignment.get("character_end_times_seconds") or []
+    words, wtimes, wdurs = [], [], []
+    cur, w_start, w_end = "", 0.0, 0.0
+    for ch, s, e in zip(chars, starts, ends):
+        if ch.isspace():
+            if cur:
+                words.append(cur)
+                wtimes.append(int(w_start * 1000))
+                wdurs.append(max(1, int((w_end - w_start) * 1000)))
+                cur = ""
+        else:
+            if not cur:
+                w_start = s
+            cur += ch
+            w_end = e
+    if cur:
+        words.append(cur)
+        wtimes.append(int(w_start * 1000))
+        wdurs.append(max(1, int((w_end - w_start) * 1000)))
+    return words, wtimes, wdurs
+
+
+async def _tts_elevenlabs(text: str) -> dict | None:
+    """ElevenLabs with-timestamps. Returns the JSON payload, or None to fall back."""
+    import httpx
+
+    if not settings.elevenlabs_api_key:
+        return None
+    voice_id = settings.elevenlabs_voice_id or "FGY2WhTYpPnrIDTdsKH5"  # "Laura"
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+                "/with-timestamps?output_format=mp3_44100_128",
+                headers={"xi-api-key": settings.elevenlabs_api_key},
+                json={"text": text, "model_id": settings.elevenlabs_tts_model},
+            )
+            r.raise_for_status()
+            data = r.json()
+        alignment = data.get("normalized_alignment") or data.get("alignment") or {}
+        words, wtimes, wdurs = _words_from_alignment(alignment)
+        return {
+            "audio": data["audio_base64"],
+            "words": words or None,
+            "wtimes": wtimes or None,
+            "wdurations": wdurs or None,
+            "engine": "elevenlabs",
+        }
+    except Exception as e:  # noqa: BLE001 — any EL failure degrades to edge-tts
+        print(f"[tts] elevenlabs failed, falling back to edge-tts: {e}", flush=True)
+        return None
 
 
 @app.post("/tts")
 async def tts(req: TtsRequest) -> Response:
+    import base64
+
     import edge_tts
 
     text = (req.text or "").strip()[:2000]
     if not text:
         return Response(status_code=204)
+
+    el = await _tts_elevenlabs(text)
+    if el is not None:
+        return JSONResponse(el, headers={"Cache-Control": "no-store"})
+
     voice = (req.voice or "").strip() or _TTS_DEFAULT_VOICE
     audio = bytearray()
     try:
@@ -511,7 +578,16 @@ async def tts(req: TtsRequest) -> Response:
         return JSONResponse({"error": f"tts failed: {e}"}, status_code=502)
     if not audio:
         return JSONResponse({"error": "tts produced no audio"}, status_code=502)
-    return Response(content=bytes(audio), media_type="audio/mpeg")
+    return JSONResponse(
+        {
+            "audio": base64.b64encode(bytes(audio)).decode(),
+            "words": None,
+            "wtimes": None,
+            "wdurations": None,
+            "engine": "edge",
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 class LiveTokenRequest(BaseModel):

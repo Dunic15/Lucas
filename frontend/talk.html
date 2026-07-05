@@ -21,16 +21,15 @@
   Avaturn or MetaPerson/AvatarSDK exports are compatible.
 -->
 <style>
-  html, body { margin: 0; height: 100%; background: #10161d; }
-  /* Soft studio backdrop — she should look like a person on a webcam, not a
-     model floating in a void. The canvas is transparent so this shows through. */
+  html, body { margin: 0; height: 100%; background: #dfe6ec; }
+  /* Light studio backdrop — she should look like a person on a webcam, not a
+     model floating in a void. The canvas is transparent so this shows through.
+     Framing is done with the 3D camera (see below), NOT a CSS transform: CSS
+     scaling magnifies rendered pixels and blurs her; camera zoom stays sharp. */
   #stage {
     position: fixed; inset: 0;
-    background: radial-gradient(120% 90% at 50% 20%, #33404f 0%, #1d2733 45%, #10161d 100%);
+    background: radial-gradient(120% 90% at 50% 20%, #f7f9fb 0%, #e8edf2 45%, #d4dce4 100%);
   }
-  /* Webcam framing: tighten to head-and-shoulders and center the face
-     (tuned at 1280x720 — what Recall captures). */
-  #stage canvas { transform-origin: 50% 30%; transform: translateX(2%) scale(1.15); }
   /* MEETING MODE (?conversation_id= present): she must look like just another
      participant — no buttons, no status text, nothing but her. */
   body.meeting #hud, body.meeting #status { display: none; }
@@ -107,6 +106,13 @@
     status("loading avatar…");
     await head.showAvatar({ url: AVATAR_URL, body: "F", lipsyncLang: "en" });
     head.start();
+    // Webcam framing: head-and-shoulders, face centered — values tuned live at
+    // 1280x720 (Recall's capture size). Direct camera control renders at native
+    // resolution (sharp), unlike CSS scaling.
+    try {
+      head.camera.position.set(0, 1.62, 3.15);
+      if (head.controls) { head.controls.target.set(0, 1.62, 0); head.controls.update?.(); }
+    } catch (_) { /* keep default view if internals change */ }
     status("live — avatar rendering ✅ (type + Speak to test lip-sync)");
   } catch (e) {
     status("avatar failed to load: " + (e?.message || e) + " — try a different AVATAR_URL");
@@ -114,9 +120,9 @@
   }
 
   // ── TTS: turn text into { audio, words, wtimes, wdurations } for speakAudio ──
-  // Stage 1 uses a backend /tts endpoint (Piper/Kokoro on AWS, free). We evenly
-  // distribute word timings across the clip — good enough for lip-sync; we can
-  // upgrade to real per-word timings later.
+  // /tts returns JSON: base64 mp3 + (with ElevenLabs) REAL per-word timings from
+  // character-level alignment — that's what makes the lips match the voice. If
+  // timings are absent (edge-tts fallback), spread words evenly as approximation.
   async function synthesize(text) {
     const r = await fetch("/tts", {
       method: "POST",
@@ -124,13 +130,18 @@
       body: JSON.stringify({ text, avatar_id: avatarId }),
     });
     if (!r.ok) throw new Error("/tts not available yet (" + r.status + ")");
-    const buf = await r.arrayBuffer();
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    const bin = Uint8Array.from(atob(j.audio), (c) => c.charCodeAt(0));
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const audio = await ctx.decodeAudioData(buf);
-    const words = text.trim().split(/\s+/);
-    const per = (audio.duration * 1000) / Math.max(words.length, 1);
-    const wtimes = words.map((_, i) => Math.round(i * per));
-    const wdurations = words.map(() => Math.round(per * 0.9));
+    const audio = await ctx.decodeAudioData(bin.buffer);
+    let { words, wtimes, wdurations } = j;
+    if (!words || !words.length) {
+      words = text.trim().split(/\s+/);
+      const per = (audio.duration * 1000) / Math.max(words.length, 1);
+      wtimes = words.map((_, i) => Math.round(i * per));
+      wdurations = words.map(() => Math.round(per * 0.9));
+    }
     return { audio, words, wtimes, wdurations };
   }
 
