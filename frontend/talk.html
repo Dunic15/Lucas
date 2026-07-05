@@ -108,11 +108,17 @@
     head.start();
     // Webcam framing: head-and-shoulders, face centered — values tuned live at
     // 1280x720 (Recall's capture size). Direct camera control renders at native
-    // resolution (sharp), unlike CSS scaling.
-    try {
-      head.camera.position.set(0, 1.62, 3.15);
-      if (head.controls) { head.controls.target.set(0, 1.62, 0); head.controls.update?.(); }
-    } catch (_) { /* keep default view if internals change */ }
+    // resolution (sharp), unlike CSS scaling. TalkingHead re-frames the camera
+    // shortly after start(), so assert our framing several times to win the race.
+    window.__head = head; // handy for live debugging/tuning
+    const frameCamera = () => {
+      try {
+        head.camera.position.set(0, 1.62, 3.15);
+        if (head.controls) { head.controls.target.set(0, 1.62, 0); head.controls.update?.(); }
+      } catch (_) { /* keep default view if internals change */ }
+    };
+    frameCamera();
+    for (const ms of [500, 1200, 2500, 5000]) setTimeout(frameCamera, ms);
     status("live — avatar rendering ✅ (type + Speak to test lip-sync)");
   } catch (e) {
     status("avatar failed to load: " + (e?.message || e) + " — try a different AVATAR_URL");
