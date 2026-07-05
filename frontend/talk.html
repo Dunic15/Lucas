@@ -15,9 +15,10 @@
     2. Type text + "Speak"  -> she lip-syncs it.               [needs /tts endpoint]
     3. Ask a question       -> she pulls a grounded answer.    [needs /tts + /live/ask]
 
-  Swap AVATAR_URL for your own Laura model from https://readyplayer.me
-  (export as GLB; the morphTargets query params below add the visemes TalkingHead
-  needs for lip-sync).
+  The model is /laura.glb — an HD photorealistic avatar vendored into this repo
+  (Ready Player Me shut down Jan 2026, so we self-host). To try another model:
+  ?avatar_url=<glb-url> (needs ARKit + Oculus viseme morph targets). Sources:
+  Avaturn or MetaPerson/AvatarSDK exports are compatible.
 -->
 <style>
   html, body { margin: 0; height: 100%; background: #0d1014; }
@@ -49,6 +50,7 @@
   <input id="q" placeholder="Type something for Laura to say…" />
   <button id="speakBtn">Speak</button>
   <button id="askBtn" class="alt">Ask (grounded + acts)</button>
+  <button id="micBtn" class="alt" title="Talk to Laura by voice">🎤 Talk</button>
 </div>
 
 <script type="importmap">
@@ -67,14 +69,13 @@
 <script type="module">
   import { TalkingHead } from "talkinghead";
 
-  // TalkingHead's own bundled female avatar (already rigged with the ARKit +
-  // Oculus visemes it needs — guaranteed to load). Swap for a custom "Laura" later:
-  // make one at https://readyplayer.me, export GLB with
-  // ?morphTargets=ARKit,Oculus+Visemes and host it somewhere reachable.
-  const AVATAR_URL =
-    "https://cdn.jsdelivr.net/gh/met4citizen/TalkingHead@1.4/avatars/brunette.glb";
-
   const params = new URLSearchParams(location.search);
+
+  // HD photorealistic model (Avaturn sample from the TalkingHead repo), vendored
+  // into OUR repo and served same-origin: Ready Player Me's CDN shutdown
+  // (Jan 2026) killed the previous third-party URL — never again. Override for
+  // A/B tests with ?avatar_url=<glb url> (must have ARKit+Oculus viseme morphs).
+  const AVATAR_URL = params.get("avatar_url") || "/laura.glb";
   const avatarId = params.get("avatar_id") || "laura";
   const status = (t) => (document.getElementById("status").textContent = t);
 
@@ -127,6 +128,7 @@
     try {
       status("synthesizing…");
       const a = await synthesize(text);
+      pauseMicWhileSpeaking(a.audio.duration);
       head.speakAudio(a);
       status("speaking: " + text.slice(0, 60));
     } catch (e) {
@@ -157,6 +159,64 @@
     say(document.getElementById("q").value);
   document.getElementById("askBtn").onclick = () =>
     ask(document.getElementById("q").value);
+
+  // ── voice input: talk to Laura with your mic (Web Speech API, free, Chrome) ──
+  // Click 🎤 to toggle. What you say is transcribed in-browser and sent to the
+  // grounded+tools brain (/live/act); she answers out loud. While SHE speaks the
+  // mic pauses so she doesn't hear herself. Meeting mode doesn't use this (Recall
+  // pipes the meeting transcript through the backend websocket instead).
+  const micBtn = document.getElementById("micBtn");
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let micOn = false, micPaused = false, rec = null, micResumeTimer = null;
+
+  function pauseMicWhileSpeaking(durationSec) {
+    if (!micOn || !rec) return;
+    micPaused = true;
+    try { rec.stop(); } catch (_) {}
+    clearTimeout(micResumeTimer);
+    micResumeTimer = setTimeout(() => {
+      micPaused = false;
+      if (micOn) { try { rec.start(); } catch (_) {} }
+    }, (durationSec + 0.8) * 1000);
+  }
+
+  if (!SR) {
+    micBtn.disabled = true;
+    micBtn.title = "Voice input needs Chrome/Edge (Web Speech API)";
+  } else {
+    rec = new SR();
+    rec.lang = "en-US";
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.onresult = (ev) => {
+      const heard = ev.results[ev.results.length - 1][0].transcript.trim();
+      if (!heard) return;
+      document.getElementById("q").value = heard;
+      status("heard: " + heard);
+      ask(heard); // grounded + tools, spoken back
+    };
+    // Chrome ends recognition on silence — restart while toggled on (not while
+    // she's speaking: pauseMicWhileSpeaking owns the restart in that window).
+    rec.onend = () => { if (micOn && !micPaused) { try { rec.start(); } catch (_) {} } };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed") { micOn = false; micBtn.textContent = "🎤 Talk"; status("mic blocked — allow microphone access"); }
+    };
+    micBtn.onclick = () => {
+      micOn = !micOn;
+      if (micOn) {
+        try { rec.start(); } catch (_) {}
+        micBtn.textContent = "🔴 Listening…";
+        micBtn.style.background = "#c0392b";
+        status("listening — just talk to Laura");
+      } else {
+        clearTimeout(micResumeTimer); micPaused = false;
+        try { rec.stop(); } catch (_) {}
+        micBtn.textContent = "🎤 Talk";
+        micBtn.style.background = "";
+        status("mic off");
+      }
+    };
+  }
 
   // Backend can also drive her via a "speak" message (kept for the Recall path).
   window.speak = say;

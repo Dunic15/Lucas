@@ -469,6 +469,18 @@ def talk_page() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "talk.html")
 
 
+@app.get("/laura.glb")
+def talk_avatar_model() -> FileResponse:
+    """The 3D avatar model for /talk, served same-origin on purpose: Ready Player
+    Me's CDN shutdown (Jan 2026) killed our previous third-party model URL, so the
+    HD model (Avaturn sample from the TalkingHead repo) is vendored into the repo."""
+    return FileResponse(
+        FRONTEND_DIR / "laura.glb",
+        media_type="model/gltf-binary",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 class TtsRequest(BaseModel):
     text: str
     avatar_id: str = "laura"
