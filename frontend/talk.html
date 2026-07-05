@@ -21,8 +21,19 @@
   Avaturn or MetaPerson/AvatarSDK exports are compatible.
 -->
 <style>
-  html, body { margin: 0; height: 100%; background: #0d1014; }
-  #stage { position: fixed; inset: 0; }
+  html, body { margin: 0; height: 100%; background: #10161d; }
+  /* Soft studio backdrop — she should look like a person on a webcam, not a
+     model floating in a void. The canvas is transparent so this shows through. */
+  #stage {
+    position: fixed; inset: 0;
+    background: radial-gradient(120% 90% at 50% 20%, #33404f 0%, #1d2733 45%, #10161d 100%);
+  }
+  /* Webcam framing: tighten to head-and-shoulders and center the face
+     (tuned at 1280x720 — what Recall captures). */
+  #stage canvas { transform-origin: 50% 30%; transform: translateX(2%) scale(1.15); }
+  /* MEETING MODE (?conversation_id= present): she must look like just another
+     participant — no buttons, no status text, nothing but her. */
+  body.meeting #hud, body.meeting #status { display: none; }
   #hud {
     position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
     display: flex; gap: 8px; align-items: center; z-index: 10;
@@ -123,7 +134,7 @@
     return { audio, words, wtimes, wdurations };
   }
 
-  async function say(text) {
+  async function _speakNow(text) {
     if (!text.trim()) return;
     try {
       status("synthesizing…");
@@ -135,6 +146,15 @@
       status("speak failed: " + (e?.message || e));
       console.error(e);
     }
+  }
+
+  // Sentences stream in one message each; parallel TTS fetches can finish out of
+  // order, which would make her speak sentence 2 before sentence 1. Chain them so
+  // synthesis (and thus speakAudio queueing) happens strictly in arrival order.
+  let _sayChain = Promise.resolve();
+  function say(text) {
+    _sayChain = _sayChain.then(() => _speakNow(text)).catch(() => {});
+    return _sayChain;
   }
 
   // ── grounded answer that can ACT: /live/act (RAG + Groq + tools), then speak ──
@@ -223,24 +243,54 @@
 
   // ── Meeting mode: same contract as avatar.html so /talk is a drop-in for the
   // Anam page. When a conversation_id is present (Recall renders us with one), we
-  // open the backend websocket and speak whatever {type:"speak",text} it pushes —
-  // exactly what _make_avatar_speak sends. Only the RENDERER changed (Anam -> our
-  // TalkingHead + free TTS); the backend brain/contract are untouched.
+  // listen for {type:"speak",text} from the backend — exactly what
+  // _make_avatar_speak sends. Only the RENDERER changed (Anam -> our TalkingHead
+  // + free TTS); the backend brain/contract are untouched.
   const conversationId = params.get("conversation_id");
   if (conversationId) {
+    document.body.classList.add("meeting"); // hide all UI — just her
+
+    // The Recall bot browser never clicks, and browsers may start AudioContexts
+    // suspended without a gesture — resume defensively or she speaks silently.
+    const unlockAudio = () => {
+      try { head.audioCtx?.resume?.(); } catch (_) {}
+      try { head.audioContext?.resume?.(); } catch (_) {}
+    };
+    unlockAudio();
+
+    const handleBackendMessage = (msg) => {
+      if (msg && msg.type === "speak" && msg.text) { unlockAudio(); say(msg.text); }
+    };
+
+    // Path 1: websocket (lowest latency when the platform allows the upgrade).
     const connect = () => {
       const proto = location.protocol === "https:" ? "wss" : "ws";
       const ws = new WebSocket(`${proto}://${location.host}/ws/${conversationId}`);
       ws.onopen = () =>
         setInterval(() => ws.readyState === 1 && ws.send("ping"), 15000);
       ws.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(ev.data);
-          if (msg.type === "speak" && msg.text) say(msg.text);
-        } catch (_) { /* ignore non-JSON */ }
+        try { handleBackendMessage(JSON.parse(ev.data)); } catch (_) { /* non-JSON */ }
       };
       ws.onclose = () => setTimeout(connect, 2000);
     };
     connect();
+
+    // Path 2: HTTP polling fallback — REQUIRED on App Runner, which rejects
+    // WebSocket upgrades at the edge. Without this the backend queues her answers
+    // ("[avatar] queued speak for HTTP polling") and she sits silent in the
+    // meeting. Same endpoint avatar.html polls; backend guarantees each message
+    // goes down exactly one path, so ws + polling never double-speak.
+    const poll = async () => {
+      try {
+        const r = await fetch(`/avatar/messages/${encodeURIComponent(conversationId)}`,
+                              { cache: "no-store" });
+        if (r.ok) {
+          const data = await r.json();
+          for (const msg of data.messages || []) handleBackendMessage(msg);
+        }
+      } catch (_) { /* keep polling */ }
+      setTimeout(poll, 500);
+    };
+    poll();
   }
 </script>
