@@ -1,7 +1,7 @@
 ---
 name: backend-tester
 description: Runs the backend test suite and the offline pipeline checks (ingest + ask + simulate) and reports failures with the exact output. Use when asked to test, verify, or check the backend after a change.
-tools: Bash, Read, Edit
+tools: Bash, Read
 model: sonnet
 ---
 

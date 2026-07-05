@@ -50,3 +50,26 @@ inline and mention the relevant agent as an option.
 Every agent reads `.claude/CONTEXT.md` first and obeys the golden rules in
 [`.claude/agents/README.md`](.claude/agents/README.md). Agents don't commit/push
 unless asked; they prefer writing artifacts to `docs/`.
+
+---
+
+## Claude Code guardrails (mechanical, not prose)
+
+- **AWS write access is deliberate but gated.** `.mcp.json` keeps
+  `READ_OPERATIONS_ONLY=false` because Claude drives App Runner deploys/config
+  here — but `.claude/settings.json` puts `mcp__aws-api__call_aws` under
+  `permissions.ask`, so every AWS call (read or write) requires explicit
+  approval. Don't remove the gate without replacing it.
+- **PreToolUse hooks** (`.claude/hooks/guard.py`) mechanically enforce the two
+  rules that cost money or leak PII: commits are blocked if the staged diff
+  contains an API-key-shaped string; edits/commits are blocked if they add
+  `print`/`logger` calls on transcript content. Docs (`.md`/`.txt`) and files
+  outside the repo are exempt. The guard fails open (a crash never blocks work).
+- **Permissions** deny `git push --force` and `rm -rf` outright; safe repetitive
+  commands (`pytest`, `git diff/log/status`, `uvicorn`, localhost `curl`) are
+  pre-allowed; `.env` reads prompt first.
+- **Slash commands** for the recurring asks: `/code-review` (working-diff review
+  against the contract/latency/PII/meter checklist), `/smoke-demo`,
+  `/test-backend`, `/check-sessions` (orphaned billing sessions).
+- **Verification agents can't edit**: `backend-tester` and `demo-runner` are
+  Bash+Read only — they run and report; fixes go through the main session.

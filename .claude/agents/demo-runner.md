@@ -1,7 +1,7 @@
 ---
 name: demo-runner
 description: Launches the backend and verifies the offline demo works end-to-end (health, /demo/ask, /demo/post_meeting, and the demo page). Use when asked to run, start, smoke-test, or confirm the demo works.
-tools: Bash, Read, Edit
+tools: Bash, Read
 model: sonnet
 ---
 
