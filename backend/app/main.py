@@ -44,6 +44,7 @@ from . import (
     actions,
     gmail_watcher,
     gpu_runtime,
+    ledger,
     meeting_state,
 )
 from .brain import (
@@ -859,6 +860,11 @@ async def _start_avatar_session(
     )
     session.anam_conversation_id = conversation_id
     store.register_conversation(conversation_id, bot["id"])
+    # Cross-meeting memory: what previous sessions of this meeting link left
+    # open. One sqlite read at start; "" when the meeting has no history.
+    session.memory_brief = await run_in_threadpool(
+        ledger.carryover_brief, meeting_url
+    )
     # Photoreal only: wake the GPU box for this meeting (fire-and-forget; the
     # page runs on the static-portrait fallback until the stream comes up).
     gpu_runtime.on_session_started()
@@ -922,6 +928,15 @@ async def _finalize_session(bot_id: str) -> dict | None:
     artifact["transcript"] = transcript_text
 
     store.save_artifact(bot_id, artifact)
+    # Cross-meeting memory: fold this meeting's extracted facts into the
+    # ledger. Best-effort — memory must never block the cleanup below
+    # (session removal + GPU meter signal), so a ledger hiccup is swallowed.
+    try:
+        await run_in_threadpool(
+            ledger.record_meeting, session.meeting_url, session.avatar_id, bot_id, artifact
+        )
+    except Exception:
+        pass
     store.remove(bot_id)
     # Photoreal only: last session out turns off the GPU meter (after a grace
     # window, in case another meeting starts right away).
@@ -962,6 +977,20 @@ async def deliver_artifact(bot_id: str, req: DeliverRequest) -> JSONResponse:
             actions.post_to_slack, actions.artifact_to_slack_text(name, artifact)
         )
     return JSONResponse({"email": email_res, "slack": slack_res})
+
+
+@app.get("/ledger")
+def ledger_view(meeting_url: str) -> JSONResponse:
+    """Cross-meeting memory for a meeting link: every ledger item plus the
+    carryover brief the avatar gets injected at the next session."""
+    key = ledger.meeting_key(meeting_url)
+    return JSONResponse(
+        {
+            "meeting_key": key,
+            "brief": ledger.carryover_brief(meeting_url),
+            "items": ledger.items(key),
+        }
+    )
 
 
 @app.get("/sessions/{bot_id}/artifact")
@@ -1322,6 +1351,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # and the post-meeting artifact.
     state = meeting_state.observe(session, avatar, speaker, text)
 
+    # Cross-meeting memory: lazily (re)load after a process restart.
+    if session.memory_brief is None:
+        session.memory_brief = await run_in_threadpool(
+            ledger.carryover_brief, session.meeting_url
+        )
+    memory = session.memory_brief or ""
+
     # ── proactive intervention (fires once, as the meeting wraps up) ──
     if (
         settings.proactive_enabled
@@ -1330,7 +1366,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         and not session.in_cooldown(avatar.speak_cooldown_seconds)
     ):
         flag = await run_in_threadpool(
-            proactive_flag, avatar, session.transcript_text(), state=state
+            proactive_flag, avatar, session.transcript_text(), state=state, memory=memory
         )
         conf = float(flag.get("confidence", 0.0))
         if flag.get("should_speak") and flag.get("line") and conf >= settings.proactive_min_confidence:
@@ -1360,7 +1396,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     _t_wake = time.perf_counter()
     spoke_any = False
     async for sentence in iterate_in_threadpool(
-        answer_question_stream(avatar, question or text, history=history)
+        answer_question_stream(avatar, question or text, history=history, memory=memory)
     ):
         if not spoke_any:
             print(
