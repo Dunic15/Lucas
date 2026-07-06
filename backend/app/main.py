@@ -1213,6 +1213,13 @@ async def _make_avatar_stop(session: store.Session) -> None:
     store.queue_avatar_message(session, message)
 
 
+def _is_own_speech(avatar_name: str, speaker: str) -> bool:
+    """True when a transcript line is the avatar's OWN voice — the meeting bot
+    hears Laura too. Matches the avatar's configured name AND the Recall bot's
+    display name (hardcoded "Laura" in recall_client.create_bot)."""
+    return speaker.strip().lower() in (avatar_name.strip().lower(), "laura")
+
+
 def _should_barge_in(session: store.Session, avatar_name: str, speaker: str, text: str) -> bool:
     """A human talked while Laura is (estimated) still speaking -> interrupt her.
 
@@ -1221,10 +1228,7 @@ def _should_barge_in(session: store.Session, avatar_name: str, speaker: str, tex
     """
     if not settings.barge_in_enabled:
         return False
-    # Never let her own transcribed voice interrupt her: match the avatar's
-    # configured name AND the Recall bot's display name (hardcoded "Laura" in
-    # recall_client.create_bot — they coincide today, but don't rely on it).
-    if speaker.strip().lower() in (avatar_name.strip().lower(), "laura"):
+    if _is_own_speech(avatar_name, speaker):
         return False
     if len(text.split()) < 3:
         return False
@@ -1490,6 +1494,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # latency to the live path — and informs both the closing intervention below
     # and the post-meeting artifact.
     state = meeting_state.observe(session, avatar, speaker, text)
+
+    # ── never converse with yourself ──
+    # The bot transcribes Laura's own speech too. Answering it creates greeting
+    # loops ("I'm doing well…" -> hears it -> replies -> …). Her lines stay in
+    # the transcript and state above, but never reach the speak gates below.
+    if _is_own_speech(avatar.name, speaker):
+        return JSONResponse({"ok": True, "spoke": False, "reason": "own speech"})
 
     # Cross-meeting memory: lazily (re)load after a process restart.
     if session.memory_brief is None:
