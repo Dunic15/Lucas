@@ -1,0 +1,21 @@
+{
+  "scenario": "dpa_missing",
+  "expected_missing_steps": [
+    "dpa_confirmation"
+  ],
+  "expected_readiness_score": {
+    "min": 80,
+    "max": 80
+  },
+  "expected_actions": [
+    {
+      "contains": "The DPA is still pending with legal",
+      "owner": "UNASSIGNED",
+      "gap_type": "deadline"
+    }
+  ],
+  "expected_risks": [
+    "legal review delays onboarding"
+  ],
+  "should_proceed": false
+}

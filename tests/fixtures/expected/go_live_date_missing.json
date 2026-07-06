@@ -1,0 +1,21 @@
+{
+  "scenario": "go_live_date_missing",
+  "expected_missing_steps": [
+    "go_live_date"
+  ],
+  "expected_readiness_score": {
+    "min": 80,
+    "max": 80
+  },
+  "expected_actions": [
+    {
+      "contains": "We need to set the go-live date",
+      "owner": "UNASSIGNED",
+      "gap_type": "none"
+    }
+  ],
+  "expected_risks": [
+    "launch could slip"
+  ],
+  "should_proceed": false
+}

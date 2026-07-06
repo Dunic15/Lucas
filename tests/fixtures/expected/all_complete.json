@@ -1,0 +1,17 @@
+{
+  "scenario": "all_complete",
+  "expected_missing_steps": [],
+  "expected_readiness_score": {
+    "min": 100,
+    "max": 100
+  },
+  "expected_actions": [
+    {
+      "contains": "Nina should send the launch checklist by Friday",
+      "owner": "UNASSIGNED",
+      "gap_type": "deadline"
+    }
+  ],
+  "expected_risks": [],
+  "should_proceed": true
+}
