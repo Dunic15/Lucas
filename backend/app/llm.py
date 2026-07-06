@@ -33,9 +33,10 @@ def _ensure_anthropic():
 
 
 def complete(
-    system: str, user: str, *, max_tokens: int = 800, model: str | None = None
+    system: str, user: str, *, max_tokens: int = 800, model: str | None = None,
+    provider: str | None = None,
 ) -> str:
-    provider = settings.brain_provider.lower()
+    provider = (provider or settings.brain_provider).lower()
     if provider == "anthropic":
         return _complete_anthropic(system, user, max_tokens, model)
     if provider == "groq":

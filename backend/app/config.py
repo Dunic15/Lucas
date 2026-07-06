@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     brain_provider: str = "anthropic"
     anthropic_api_key: str = ""
     brain_model: str = "claude-sonnet-5"
+    # Post-meeting provider override: the live path keeps BRAIN_PROVIDER (speed),
+    # while the artifact/summary can use a different provider for quality —
+    # e.g. BRAIN_PROVIDER=groq + BRAIN_PROVIDER_POST=anthropic +
+    # BRAIN_MODEL=claude-sonnet-5. Empty = same provider everywhere.
+    brain_provider_post: str = ""
     # Latency-critical live-answer path uses a faster/cheaper model; the quality
     # model above is reserved for the non-realtime post-meeting summary.
     brain_model_fast: str = "claude-haiku-4-5"
