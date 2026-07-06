@@ -1,12 +1,12 @@
-Priya: Okay, let's run through onboarding for the two new hires starting next week.
-Daniel: The offers are signed and in the ATS, and I confirmed both start dates yesterday.
-Priya: Good. Did we file the equipment requests? They start Monday.
-Daniel: Not yet, I'll do the laptops today.
-Priya: Laura, are we missing anything for the onboarding process?
-Laura: You still need the hiring manager to approve the access level before IT provisions accounts, and both new hires need a named onboarding buddy.
-Daniel: Right, one of them needs elevated access to the production dashboard.
-Priya: Who's approving that? Can IT just turn it on?
-Daniel: I think we can just grant it, it's faster.
-Priya: Let's also get the first-week training on their calendars.
-Daniel: And we still need the signed policy acknowledgments.
-Priya: Okay, I think that's everything. Let's wrap up.
+Priya: Alright, this is the kickoff to onboard Meridian Retail onto the platform — thanks for joining, Daniel.
+Daniel: Glad to be here. Our side's ready to move; the contract is countersigned.
+Priya: Let's lock the go-live date — we're targeting August 4 for launch.
+Daniel: August 4 works for us, we can commit to that launch date.
+Priya: Good. The customer handoff to your success manager is scheduled for the week after launch.
+Daniel: On the DPA — legal is still reviewing it, so it isn't signed yet.
+Priya: And the security review — where do we stand on that?
+Daniel: It hasn't started; we still need to book the security assessment.
+Priya: That's a gap to close before we provision anything — it could delay go-live if we don't. Laura, are we missing anything?
+Laura: You still don't have security approval or a signed DPA, and I didn't hear who owns the implementation on your side.
+Daniel: Fair — we'll name the implementation owner internally and get security moving this week.
+Priya: Perfect. Let's wrap up and I'll send the recap.

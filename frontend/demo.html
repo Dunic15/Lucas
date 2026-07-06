@@ -6,7 +6,7 @@
   <title>Callable AI Process Avatar — Demo Console</title>
   <style>
     :root { --bg:#0b1020; --panel:#141b31; --panel2:#1b2440; --line:#28324f;
-      --text:#e6ecff; --muted:#93a1c8; --accent:#5b8cff; --good:#3ad29f; --warn:#ffcf6b; }
+      --text:#e6ecff; --muted:#93a1c8; --accent:#5b8cff; --good:#3ad29f; --warn:#ffcf6b; --bad:#ff6b6b; }
     * { box-sizing: border-box; }
     body { margin:0; background:var(--bg); color:var(--text);
       font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; }
@@ -51,6 +51,21 @@
       border-radius:9px; padding:14px; font-size:13px; margin-top:10px; }
     .muted { color:var(--muted); font-size:12px; }
     .err { color:#ff8a8a; font-size:13px; margin-top:10px; }
+    /* readiness hero: the one-glance process verdict */
+    .readiness { background:var(--panel2); border:1px solid var(--line); border-radius:12px;
+      padding:14px 16px; margin-bottom:12px; }
+    .readiness .top { display:flex; align-items:baseline; gap:10px; }
+    .readiness .num { font-size:32px; font-weight:700; line-height:1; }
+    .readiness .of { color:var(--muted); font-size:14px; }
+    .readiness .what { margin-left:auto; color:var(--muted); font-size:12px; }
+    .meter.big { height:10px; margin:10px 0 4px; }
+    .missing { margin:0 0 12px; }
+    .missing .step { display:inline-block; background:#3a2140; color:var(--warn);
+      border:1px solid #513058; border-radius:20px; padding:4px 11px; margin:4px 6px 0 0; font-size:13px; }
+    .risks li { margin:4px 0; font-size:13px; }
+    details.transcript { margin-top:14px; }
+    details.transcript summary { cursor:pointer; color:var(--muted); font-size:13px; }
+    details.transcript .email { max-height:260px; overflow:auto; }
   </style>
 </head>
 <body>
@@ -85,7 +100,7 @@
     <!-- ── Post-meeting panel ──────────────────────────────────── -->
     <section class="card">
       <h2>Post-meeting artifact</h2>
-      <p class="hint">Summary, a gap checklist (missing owner / approval / deadline…), and a draft follow-up email.</p>
+      <p class="hint">Process readiness score, the required steps the meeting never covered, actions with owners, risks, and a draft follow-up email.</p>
 
       <label for="transcript">Meeting transcript</label>
       <textarea id="transcript" style="min-height:150px" placeholder="Speaker: line…"></textarea>
@@ -169,20 +184,59 @@
     };
 
     // ── post-meeting ──
+    // "dpa_confirmation" -> "DPA confirmation" (mirrors backend humanize_step)
+    const ACRONYMS = new Set(["dpa","sla","sso","mfa","sow","poc"]);
+    const stepName = (id) => String(id||"").split("_")
+      .map(w => ACRONYMS.has(w) ? w.toUpperCase() : w).join(" ");
+    const meterColor = (n) => n < 50 ? "var(--bad)" : n < 80 ? "var(--warn)" : "var(--good)";
+
     $("postBtn").onclick = async () => {
       const btn = $("postBtn"); btn.disabled = true; $("postMsg").textContent = "analyzing…"; $("postOut").innerHTML = "";
       try {
         const r = await api("/demo/post_meeting", { avatar_id: $("avatar").value, transcript: $("transcript").value });
-        const rows = (r.checklist||[]).map(c => `
+
+        // Readiness verdict — only when a process template matched this meeting
+        // (a score of 0 on a random chat would be noise, not a verdict).
+        let readiness = "";
+        if (r.meeting_type && typeof r.readiness_score === "number") {
+          const n = Math.max(0, Math.min(100, r.readiness_score));
+          readiness = `
+            <div class="readiness">
+              <div class="top"><span class="num" style="color:${meterColor(n)}">${n}</span>
+                <span class="of">/ 100 process readiness</span>
+                <span class="what">${esc(stepName(r.meeting_type))} · required steps covered</span></div>
+              <div class="meter big"><i style="width:${n}%; background:${meterColor(n)}"></i></div>
+            </div>`;
+        }
+
+        const missing = (r.missing_steps||[]).map(s => `<span class="step">${esc(stepName(s))}</span>`).join("");
+        const missingBlock = missing ? `
+          <div class="missing"><b class="muted">Still to cover before go-live:</b><br>${missing}</div>` : "";
+
+        // actions is the new name; checklist is the back-compat alias — accept either.
+        const rows = (r.actions || r.checklist || []).map(c => `
           <tr><td>${esc(c.item)}</td><td>${esc(c.owner)}</td>
           <td><span class="gap ${c.gap_type==='none'?'none':''}">${esc(c.gap_type||'none')}</span></td></tr>`).join("");
+
+        const risks = (r.risks||[]).length ? `
+          <label>Risks raised</label>
+          <ul class="risks">${r.risks.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+
         const em = r.follow_up_email || {};
+        const transcript = r.transcript ? `
+          <details class="transcript"><summary>Transcript</summary>
+          <div class="email">${esc(r.transcript)}</div></details>` : "";
+
         $("postOut").innerHTML = `
+          ${readiness}
+          ${missingBlock}
           <div class="answer">${esc(r.summary)}</div>
           <table><thead><tr><th>Action item</th><th>Owner</th><th>Gap</th></tr></thead>
           <tbody>${rows || '<tr><td colspan="3" class="muted">No items detected.</td></tr>'}</tbody></table>
+          ${risks}
           <label>Draft follow-up email</label>
-          <div class="email"><b>Subject:</b> ${esc(em.subject)}\n\n${esc(em.body)}</div>`;
+          <div class="email"><b>Subject:</b> ${esc(em.subject)}\n\n${esc(em.body)}</div>
+          ${transcript}`;
         $("postMsg").textContent = "";
       } catch (e) { $("postOut").innerHTML = `<div class="err">${esc(e.message)}</div>`; $("postMsg").textContent = ""; }
       btn.disabled = false;

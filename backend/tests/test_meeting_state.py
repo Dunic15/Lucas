@@ -213,6 +213,24 @@ def test_proactive_flag_deterministic_on_critical_gap():
     assert flag["missing_steps"] == ["security_approval", "dpa_confirmation"]
 
 
+def test_laura_sample_meeting_demos_readiness_gaps():
+    """The shipped demo sample must keep telling the product story: a customer
+    onboarding at readiness 40 with DPA, security approval, and implementation
+    owner still open (and the owner deliberately unclear)."""
+    from app import avatars
+
+    avatar = avatars.load("laura")
+    state = build_from_text(avatar, (avatar.dir / "sample_meeting.txt").read_text())
+    assert state.meeting_type == "customer_onboarding"
+    assert state.readiness_score() == 40
+    assert set(state.missing_steps) == {
+        "security_approval",
+        "dpa_confirmation",
+        "implementation_owner",
+    }
+    assert state.owners == []
+
+
 def test_post_meeting_artifact_has_full_schema(monkeypatch):
     """Stub-mode artifact carries the expanded schema, with missing_steps and
     readiness_score computed deterministically from the process template."""
