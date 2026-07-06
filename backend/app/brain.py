@@ -143,32 +143,31 @@ def answer_question(
 # produce a useful partial answer or a brief "I don't have that" response.
 ANSWER_STREAM_SYSTEM = """{persona}
 
-You are Laura, a warm, helpful AI assistant in a live spoken conversation. Keep \
-replies to 1-3 short sentences a person can absorb by ear. Plain text only — no \
-markdown, bullets, headings, JSON, or preamble.
+You are Laura, a warm, sharp AI assistant participating in a live spoken \
+conversation. You are a capable general assistant FIRST — answer any \
+question the way a smart, well-read colleague would — and a company/fund \
+expert when the question touches the provided documents. Keep replies to 1-3 \
+short sentences a person can absorb by ear. Plain text only — no markdown, \
+bullets, headings, JSON, or preamble.
 
 How to respond:
-- Greetings, small talk, or questions about you ("how are you?", "who are you?", \
-"what can you do?") — reply naturally, warmly, and briefly, in character. NEVER \
-skip these.
-- General questions or light conversation not about the company (general \
-knowledge, a quick opinion or joke, everyday chit-chat) — engage briefly and \
-naturally, like a friendly colleague. One or two sentences is plenty. Just answer \
-warmly; do NOT point out that it's outside the company docs or add disclaimers.
-- Questions about company processes or policies — answer from the provided \
-context, and don't invent specific steps, owners, or approvals that aren't there. \
-If the context only partly covers it, give the useful part. When your answer comes \
-from a company document, name it briefly and naturally in your sentence (e.g. "per \
-the onboarding SOP"). For greetings and general chat, do NOT cite anything.
-- If the context is weak but the person is clearly asking you, do NOT skip. Give \
-the safest useful answer: state what you can tell from the context, then say what \
-you would check next.
-- Live transcripts may be noisy — infer the likely intent and respond to what the \
+- General questions (world knowledge, advice, explanations, opinions, news, \
+math, small talk, jokes): answer directly and naturally from your own \
+knowledge. Do NOT mention documents, context, or what you were given. Never \
+refuse just because it isn't in the documents.
+- Questions about the company's processes, the SFF fund, or its portfolio: \
+ground your answer in the provided context and name the source doc briefly \
+and naturally (e.g. "per the onboarding SOP"). Don't invent specific steps, \
+owners, or approvals that aren't there; if the context only partly covers \
+it, give the useful part and say what you'd check.
+- If you were given web search results or used search, answer from them and \
+mention it's from a quick search.
+- Live transcripts are noisy — infer the likely intent and answer what the \
 person most likely meant.
 - Reply with the single word SKIP (and nothing else) ONLY when the speech is \
-clearly NOT directed at you — e.g. two other people talking to each other. When \
-someone seems to be addressing you or asking anything at all, respond rather than \
-skip. When in doubt, respond."""
+clearly NOT directed at you — e.g. two other people talking to each other. \
+When someone seems to be addressing you or asking anything at all, respond. \
+When in doubt, respond."""
 
 
 def _is_skip(head: str) -> bool:
@@ -185,6 +184,28 @@ def _retrieval_query(question: str, history: str = "") -> str:
     return f"{history[-1200:]}\n\nCurrent ask: {question}"
 
 
+# Questions that want FRESH information from the internet — routed to the
+# compound model with built-in server-side web search (Groq only).
+_SEARCH_INTENT = re.compile(
+    r"\b(search|look up|google|on the internet|online|web|latest|news|"
+    r"today|tonight|yesterday|currently|right now|this (week|month|year)|"
+    r"price of|stock|weather|score|who won|happened|202[5-9])\b",
+    re.IGNORECASE,
+)
+
+
+def _live_model(question: str) -> str:
+    """Model for one live answer: the fast default, or the web-search-capable
+    compound model when the question asks for fresh information."""
+    if (
+        settings.live_search_enabled
+        and settings.brain_provider.lower() == "groq"
+        and _SEARCH_INTENT.search(question or "")
+    ):
+        return settings.live_search_model
+    return settings.brain_model_fast
+
+
 def answer_question_stream(
     avatar: Avatar, question: str, *, history: str = "", memory: str = "", k: int = 6
 ):
@@ -198,6 +219,10 @@ def answer_question_stream(
     _t0 = time.perf_counter()
     chunks = retrieve(avatar, _retrieval_query(question, history), k=k)
     _retrieve_ms = (time.perf_counter() - _t0) * 1000
+    # Only ground in the docs when they actually match the question —
+    # irrelevant chunks bias the model into doc-quoting general answers.
+    if chunks and chunks[0].score < settings.rag_min_context_score:
+        chunks = []
     citation = chunks[0].source if chunks else ""
 
     if _is_stub():
@@ -214,9 +239,14 @@ def answer_question_stream(
         if memory.strip()
         else ""
     )
+    context_block = (
+        f"Company/fund document context (relevant to this question):\n\n{_format_context(chunks)}\n\n"
+        if chunks
+        else ""
+    )
     system = ANSWER_STREAM_SYSTEM.format(persona=avatar.persona_prompt)
     user = (
-        f"Company process context:\n\n{_format_context(chunks)}\n\n"
+        f"{context_block}"
         f"{remembered}"
         f"{convo}"
         f"Someone in the meeting asked:\n{question}\n\n"
@@ -227,8 +257,43 @@ def answer_question_stream(
     decided = False   # whether we've ruled out the SKIP sentinel
     spoke_any = False
     _first_token_ms = None
+    _model = _live_model(question)
+    if _model == settings.live_search_model:
+        # Web-search answers go NON-streamed: compound's streaming reliably
+        # returns reasoning/tool deltas but (verified live, repeatedly) often
+        # ends without any content, while non-streaming completes every time.
+        # Search asks are rare; a dependable ~4s answer beats a broken stream.
+        try:
+            raw = llm.complete(
+                "You answer in 1-3 short spoken sentences, no markdown. Use web "
+                "search for current information and mention it's from a quick search.",
+                f"{convo}Use web search, then answer briefly:\n{question}",
+                max_tokens=2048,
+                model=_model,
+            )
+        except Exception:
+            raw = ""
+        head = (raw or "").strip()
+        _search_failed = (not head) or re.search(
+            r"(not able to browse|can'?t browse|cannot browse|"
+            r"don'?t have (live|real-?time|internet|web) access)",
+            head,
+            re.IGNORECASE,
+        )
+        if head and not _is_skip(head) and not _search_failed:
+            buf, sentences = _split_sentences(head + " ")
+            for sent in sentences:
+                yield sent
+            if buf.strip():
+                yield buf.strip()
+            return
+        # Search flaked (compound is beta-grade: sometimes refuses or returns
+        # nothing) — fall THROUGH to the fast model so she still answers from
+        # her own knowledge instead of going silent.
+        question = f"{question} (You could not search the web just now — answer from your knowledge and say it may not be current.)"
+    _max_tokens = 400
     for delta in llm.stream_complete(
-        system, user, max_tokens=400, model=settings.brain_model_fast
+        system, user, max_tokens=_max_tokens, model=_model
     ):
         if _first_token_ms is None:
             _first_token_ms = (time.perf_counter() - _t0) * 1000
