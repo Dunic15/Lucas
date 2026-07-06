@@ -589,19 +589,48 @@ def _get_el_client() -> httpx.AsyncClient:
     return _el_client
 
 
+_EL_STOCK_VOICE = "FGY2WhTYpPnrIDTdsKH5"  # ElevenLabs stock "Laura"
+# Configured voices that failed hard (403/402/404: plan tier, licensing, or a
+# deleted voice). Remembered per-process so we don't pay a doomed round-trip on
+# every sentence; cleared on restart/deploy so an upgraded plan is retried.
+_el_broken_voices: set[str] = set()
+
+
+async def _el_synthesize(voice_id: str, text: str) -> httpx.Response:
+    r = await _get_el_client().post(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+        "/with-timestamps?output_format=mp3_44100_128",
+        headers={"xi-api-key": settings.elevenlabs_api_key},
+        json={"text": text, "model_id": settings.elevenlabs_tts_model},
+    )
+    r.raise_for_status()
+    return r
+
+
 async def _tts_elevenlabs(text: str) -> dict | None:
-    """ElevenLabs with-timestamps. Returns the JSON payload, or None to fall back."""
+    """ElevenLabs with-timestamps. Returns the JSON payload, or None to fall back.
+
+    Voice fallback chain: configured voice -> stock ElevenLabs voice -> None
+    (edge-tts). A custom voice blocked by the account's plan (402) or licensing
+    must degrade to the STOCK ElevenLabs voice — same engine, real word timings
+    — not all the way down to robotic edge-tts.
+    """
     if not settings.elevenlabs_api_key:
         return None
-    voice_id = settings.elevenlabs_voice_id or "FGY2WhTYpPnrIDTdsKH5"  # "Laura"
+    voice_id = settings.elevenlabs_voice_id or _EL_STOCK_VOICE
+    if voice_id in _el_broken_voices:
+        voice_id = _EL_STOCK_VOICE
     try:
-        r = await _get_el_client().post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-            "/with-timestamps?output_format=mp3_44100_128",
-            headers={"xi-api-key": settings.elevenlabs_api_key},
-            json={"text": text, "model_id": settings.elevenlabs_tts_model},
-        )
-        r.raise_for_status()
+        try:
+            r = await _el_synthesize(voice_id, text)
+        except httpx.HTTPStatusError as e:
+            if voice_id == _EL_STOCK_VOICE:
+                raise
+            status = e.response.status_code
+            if status in (402, 403, 404):  # plan tier / licensing / deleted voice
+                _el_broken_voices.add(voice_id)
+            print(f"[tts] voice {voice_id} unavailable (HTTP {status}) — using stock voice", flush=True)
+            r = await _el_synthesize(_EL_STOCK_VOICE, text)
         data = r.json()
         alignment = data.get("normalized_alignment") or data.get("alignment") or {}
         words, wtimes, wdurs = _words_from_alignment(alignment)
