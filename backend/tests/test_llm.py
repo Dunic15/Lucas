@@ -53,3 +53,45 @@ def test_anthropic_extraction_empty_when_no_text_block(monkeypatch):
 
     monkeypatch.setattr(llm, "_ensure_anthropic", lambda: Client())
     assert llm._complete_anthropic("sys", "user", 100, None) == ""
+
+
+def test_post_provider_split(monkeypatch):
+    """BRAIN_PROVIDER_POST routes only the post-meeting path; live keeps
+    BRAIN_PROVIDER. Unset -> same provider; anthropic without key -> stub."""
+    from app import brain
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "brain_provider", "groq")
+    monkeypatch.setattr(settings, "brain_provider_post", "")
+    assert brain.post_provider() == "groq"
+
+    monkeypatch.setattr(settings, "brain_provider_post", "anthropic")
+    monkeypatch.setattr(settings, "anthropic_api_key", "k")
+    assert brain.post_provider() == "anthropic"
+    assert brain.effective_provider() == "groq"  # live path untouched
+
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    assert brain.post_provider() == "stub"  # never crash keyless
+
+
+def test_post_meeting_uses_post_provider(monkeypatch):
+    """post_meeting sends its completion through the post provider."""
+    from app import avatars, brain, llm
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "brain_provider", "groq")
+    monkeypatch.setattr(settings, "brain_provider_post", "anthropic")
+    monkeypatch.setattr(settings, "anthropic_api_key", "k")
+
+    seen = {}
+
+    def fake_complete(system, user, *, max_tokens=800, model=None, provider=None):
+        seen["provider"] = provider
+        return '{"summary": "s", "decisions": [], "actions": [], "risks": [], "follow_up_email": {}}'
+
+    monkeypatch.setattr(brain.llm, "complete", fake_complete)
+    monkeypatch.setattr(brain, "retrieve", lambda avatar, q, k=6: [])
+    avatar = avatars.load("laura")
+    artifact = brain.post_meeting(avatar, "Ana: kickoff for the Acme onboarding.")
+    assert seen["provider"] == "anthropic"
+    assert artifact["summary"] == "s"

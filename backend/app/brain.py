@@ -59,6 +59,19 @@ def _is_stub() -> bool:
     return effective_provider() == "stub"
 
 
+def post_provider() -> str:
+    """Provider for the NON-realtime post-meeting path.
+
+    BRAIN_PROVIDER_POST lets the artifact use a quality model while the live
+    path stays on the fast provider. Falls back to the live provider when
+    unset, and to the stub when anthropic is chosen without a key.
+    """
+    p = (settings.brain_provider_post or settings.brain_provider).lower()
+    if p == "anthropic" and not settings.anthropic_api_key:
+        return "stub"
+    return p
+
+
 # ─────────────────────────── live answers ───────────────────────────
 ANSWER_SYSTEM = """{persona}
 
@@ -458,7 +471,7 @@ def post_meeting(avatar: Avatar, transcript_text: str, *, k: int = 6) -> dict:
     """
     state = meeting_state.build_from_text(avatar, transcript_text)
 
-    if _is_stub():
+    if post_provider() == "stub":
         artifact = _stub_post_meeting(avatar, transcript_text, state)
     else:
         # Ground gap-detection in the actual process docs.
@@ -475,6 +488,7 @@ def post_meeting(avatar: Avatar, transcript_text: str, *, k: int = 6) -> dict:
                 "Respond with the JSON object only."
             ),
             max_tokens=1200,
+            provider=post_provider(),
         )
         artifact = _parse_json(raw)
 
