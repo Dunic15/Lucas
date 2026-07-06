@@ -1,3 +1,5 @@
+> **Archived:** this document may be stale and is kept only for reference.
+
 # Deploy — get a permanent URL (kill the quick-tunnel)
 
 The `cloudflared` quick tunnel gets a **new random URL every restart**, which

@@ -1,3 +1,5 @@
+> **Archived:** this document may be stale and is kept only for reference.
+
 # Laura → AWS Migration Assessment
 
 _Assessment date: 2026-07-02. Author: Claude (Opus 4.8), from the actual codebase._
