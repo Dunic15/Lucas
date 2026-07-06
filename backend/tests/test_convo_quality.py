@@ -105,3 +105,8 @@ def test_own_speech_helper():
     assert main._is_own_speech("Laura SFF Expert", "laura") is True  # Recall bot label
     assert main._is_own_speech("Laura", " LAURA ") is True
     assert main._is_own_speech("Laura", "Priya") is False
+
+
+def test_ack_lines_are_short_and_varied():
+    assert len(main._ACK_LINES) >= 3
+    assert all(len(l.split()) <= 4 for l in main._ACK_LINES)
