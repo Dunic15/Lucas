@@ -145,6 +145,16 @@ class Settings(BaseSettings):
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.
     proactive_enabled: bool = True
     proactive_min_confidence: float = 0.7
+    # General intelligence on the live path:
+    #  - questions that ask for fresh/web info route to a Groq compound model
+    #    with built-in server-side web search (same key, streamed);
+    #  - retrieved doc context is only injected when it actually matches the
+    #    question (score >= rag_min_context_score), so general questions get
+    #    the model's own knowledge instead of doc-quoting.
+    live_search_enabled: bool = True
+    live_search_model: str = "groq/compound-mini"
+    rag_min_context_score: float = 0.10
+
     # Conversation quality: stop speaking the moment a human talks over her
     # (barge-in), and never repeat the same spoken line within the window.
     barge_in_enabled: bool = True
