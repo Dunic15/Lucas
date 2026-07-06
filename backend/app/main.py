@@ -190,10 +190,10 @@ def _should_repair_silent_answer(called: bool, text: str) -> bool:
 
 
 def _silent_answer_repair_line(avatar: avatars.Avatar) -> str:
-    topics = "onboarding, access/security, or the AI Buffer thesis"
     return (
-        f"I can hear you, but I need a specific question about {topics}. "
-        f"Try: {avatar.name}, what approval step is required?"
+        f"I can hear you, but I didn't catch a clear question. "
+        f"Ask me about our processes or the portfolio — for example: "
+        f"{avatar.name}, what are we missing before go-live?"
     )
 
 
@@ -1110,22 +1110,88 @@ def avatar_messages(conversation_id: str) -> JSONResponse:
     )
 
 
+_SPEECH_WORDS_PER_SECOND = 2.6  # ~ElevenLabs/edge-tts pace, for the barge-in window
+
+
+def _norm_line(text: str) -> str:
+    return re.sub(r"\W+", " ", (text or "").lower()).strip()
+
+
+def _is_repeat(session: store.Session, text: str) -> bool:
+    """Repetition guard: True if this exact line was already spoken recently.
+    Saying the same sentence twice in a couple of minutes is never useful — it
+    reads as a glitch (looping repair lines, identical stub answers)."""
+    norm = _norm_line(text)
+    if not norm:
+        return True
+    now = time.time()
+    window = settings.repeat_suppress_seconds
+    recent = session._recent_lines
+    # prune expired entries so the dict stays tiny
+    for k in [k for k, ts in recent.items() if now - ts > window]:
+        recent.pop(k, None)
+    if norm in recent:
+        return True
+    recent[norm] = now
+    return False
+
+
 async def _make_avatar_speak(
     session: store.Session, text: str, citations: list | None = None
-) -> None:
-    """Backend-as-brain: send the exact words for the avatar to speak (Anam talk)."""
+) -> bool:
+    """Backend-as-brain: send the exact words for the avatar to speak (Anam talk).
+
+    Returns False when the line was suppressed by the repetition guard. Also
+    extends the estimated speaking window that powers barge-in.
+    """
+    if _is_repeat(session, text):
+        return False
     message = {"type": "speak", "text": text, "citations": citations or []}
+    # Estimate how long this line keeps her talking; queued lines extend it.
+    est = max(1.0, len(text.split()) / _SPEECH_WORDS_PER_SECOND)
+    session.speaking_until = max(session.speaking_until, time.time()) + est
     if session.ws is not None:
         try:
             await session.ws.send_json(message)
             session.mark_spoke()
-            return
+            return True
         except Exception as e:
             print(f"[avatar] websocket send failed; queued speak: {e}", flush=True)
             session.ws = None
     store.queue_avatar_message(session, message)
     session.mark_spoke()
     print("[avatar] queued speak for HTTP polling", flush=True)
+    return True
+
+
+async def _make_avatar_stop(session: store.Session) -> None:
+    """Barge-in: tell the avatar page to stop the current speech immediately
+    (TalkingHead cancels audio + queue). Same delivery contract as speak —
+    additive message type; pages that don't know it ignore it."""
+    session.speaking_until = 0.0
+    message = {"type": "stop"}
+    if session.ws is not None:
+        try:
+            await session.ws.send_json(message)
+            return
+        except Exception:
+            session.ws = None
+    store.queue_avatar_message(session, message)
+
+
+def _should_barge_in(session: store.Session, avatar_name: str, speaker: str, text: str) -> bool:
+    """A human talked while Laura is (estimated) still speaking -> interrupt her.
+
+    Not her own transcribed speech (the meeting bot hears her too), and not a
+    2-word backchannel ("yeah", "ok right") — those shouldn't cut her off.
+    """
+    if not settings.barge_in_enabled:
+        return False
+    if speaker.strip().lower() == avatar_name.strip().lower():
+        return False
+    if len(text.split()) < 3:
+        return False
+    return time.time() < session.speaking_until
 
 
 async def _ask_avatar_persona(session: store.Session, text: str) -> None:
@@ -1375,6 +1441,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
     session.add_utterance(speaker, text)
     avatar = avatars.load(session.avatar_id)
 
+    # ── barge-in: never talk over a human ──
+    # If someone starts speaking while Laura is still talking, stop her mouth
+    # first (the page cancels TTS instantly), then process what they said.
+    if _should_barge_in(session, avatar.name, speaker, text):
+        await _make_avatar_stop(session)
+
     # ── silent intelligence layer ──
     # Fold this line into the structured MeetingState (steps covered, decisions,
     # owners, deadlines, risks) BEFORE any speak decision. Pure regex — adds no
@@ -1435,8 +1507,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 f"{(time.perf_counter() - _t_wake) * 1000:.0f}ms",
                 flush=True,
             )
-        await _make_avatar_speak(session, sentence)
-        spoke_any = True
+        spoke_any = await _make_avatar_speak(session, sentence) or spoke_any
 
     if not spoke_any:
         if _should_repair_silent_answer(called, text):

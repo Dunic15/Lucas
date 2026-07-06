@@ -144,14 +144,22 @@
     // times to win the race — and keep #stage hidden until the first assert so
     // the far full-body default view is NEVER visible (no far->close jump).
     window.__head = head; // handy for live debugging/tuning
+    // Head-and-shoulders framing with full headroom: the previous close-up
+    // (z=1.55) cropped the top of her hair and felt uncomfortably near. z=1.9
+    // shows the complete head + shoulders like a well-framed webcam. Tune live
+    // without code changes via ?cam_z= (distance) ?cam_y= (camera height)
+    // ?cam_ty= (look-at height).
+    const CAM_Z = parseFloat(params.get("cam_z")) || 2.0;
+    const CAM_Y = parseFloat(params.get("cam_y")) || 1.675;
+    const CAM_TY = parseFloat(params.get("cam_ty")) || 1.705;
     const frameCamera = () => {
       try {
         // TalkingHead's OrbitControls clamp minDistance=2.0 — any closer framing
         // silently snaps back to z=2.0 (this was why she never got truly close).
         // Release the clamp, then place the camera.
         if (head.controls) head.controls.minDistance = 0.3;
-        head.camera.position.set(0, 1.665, 1.55);
-        if (head.controls) { head.controls.target.set(0, 1.655, 0); head.controls.update?.(); }
+        head.camera.position.set(0, CAM_Y, CAM_Z);
+        if (head.controls) { head.controls.target.set(0, CAM_TY, 0); head.controls.update?.(); }
       } catch (_) { /* keep default view if internals change */ }
     };
     // She should look INTO the camera like a person on a call, not into the
@@ -163,12 +171,22 @@
     // camera on its own schedule (observed a drift to z=2.0 seconds after load),
     // so one-shot asserts always eventually lose. Setting three floats per frame
     // is free and makes the close-up rock-solid.
-    (function pinFraming() { frameCamera(); requestAnimationFrame(pinFraming); })();
+    let pinnedFrames = 0, revealed = false;
+    const reveal = () => { if (!revealed) { revealed = true; document.getElementById("stage").classList.add("live"); } };
+    (function pinFraming() {
+      frameCamera();
+      // Reveal only after the camera has verifiably held OUR framing for a few
+      // consecutive frames — never show the far default view, not even one frame.
+      if (!revealed) {
+        pinnedFrames = Math.abs(head.camera?.position?.z - CAM_Z) < 0.01 ? pinnedFrames + 1 : 0;
+        if (pinnedFrames >= 3) reveal();
+      }
+      requestAnimationFrame(pinFraming);
+    })();
     gazeAtCamera();
     for (const ms of [600, 1500, 3000]) setTimeout(gazeAtCamera, ms);
     setInterval(gazeAtCamera, 25000);
-    // Reveal only after the close-up is pinned (never show the far default view).
-    setTimeout(() => document.getElementById("stage").classList.add("live"), 300);
+    setTimeout(reveal, 1200); // fallback: never leave the stage hidden
     status("live — avatar rendering ✅ (type + Speak to test lip-sync)");
   } catch (e) {
     status("avatar failed to load: " + (e?.message || e) + " — try a different AVATAR_URL");
@@ -222,13 +240,26 @@
   // sentences), but hand audio to speakAudio strictly in arrival order so she
   // never speaks out of sequence. TalkingHead queues speakAudio internally.
   let _sayChain = Promise.resolve();
+  let _sayGen = 0; // bumped on interrupt: queued sentences from before are dropped
+  // Barge-in: a human started talking over her — stop the mouth NOW (TalkingHead
+  // stopSpeaking cancels current audio + its internal queue) and drop anything
+  // we queued but haven't synthesized/handed over yet.
+  function interruptSpeech() {
+    _sayGen++;
+    _sayChain = Promise.resolve();
+    try { head.stopSpeaking(); } catch (_) {}
+    status("(interrupted — listening)");
+  }
+  window.interruptSpeech = interruptSpeech;
   function say(text) {
     if (!text || !text.trim()) return _sayChain;
     unlockAudio();
     const synth = synthesize(text); // prefetch NOW, in parallel
+    const gen = _sayGen;
     _sayChain = _sayChain.then(async () => {
       try {
         const a = await synth;
+        if (gen !== _sayGen) return; // interrupted while synthesizing — drop it
         extendMicPause(a.audio.duration);
         head.speakAudio(a);
         status("speaking: " + text.slice(0, 60));
@@ -340,7 +371,9 @@
     unlockAudio();
 
     const handleBackendMessage = (msg) => {
-      if (msg && msg.type === "speak" && msg.text) { unlockAudio(); say(msg.text); }
+      if (!msg) return;
+      if (msg.type === "speak" && msg.text) { unlockAudio(); say(msg.text); }
+      else if (msg.type === "stop") interruptSpeech(); // barge-in: human is talking
     };
 
     // Path 1: SSE push — App Runner 403s WebSocket upgrades at the edge but

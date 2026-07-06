@@ -65,6 +65,12 @@ class Session:
     # Cross-meeting carryover brief (ledger.carryover_brief). In-memory only:
     # None = not loaded yet (load lazily), "" = loaded, no history.
     memory_brief: Any = field(default=None, repr=False, compare=False)
+    # Until when (epoch seconds) the avatar is estimated to still be speaking —
+    # drives barge-in (a human talking inside this window interrupts her).
+    speaking_until: float = field(default=0.0, repr=False, compare=False)
+    # Recently spoken lines (normalized text -> epoch seconds) for the
+    # repetition guard: never say the same line twice within the window.
+    _recent_lines: dict = field(default_factory=dict, repr=False, compare=False)
     # In-meeting map: anonymous participant id -> stable "Guest N" label. In-memory
     # only (like ws/pending_messages); on a mid-meeting restart numbering may
     # restart, which is harmless — distinct callers still stay distinct.

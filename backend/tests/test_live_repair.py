@@ -36,13 +36,14 @@ def test_repair_triggers_for_live_check_in_phrases():
     assert main._should_repair_silent_answer(False, "it doesn't work")
 
 
-def test_repair_line_names_supported_topics():
+def test_repair_line_prompts_for_a_clear_question():
     line = main._silent_answer_repair_line(_avatar())
 
     assert "I can hear you" in line
-    assert "onboarding" in line
-    assert "access/security" in line
-    assert "AI Buffer" in line
+    # generic invitation (knowledge packs change; the line must not hardcode
+    # doc titles) + a concrete example she can actually answer
+    assert "processes" in line and "portfolio" in line
+    assert "Laura," in line
 
 
 def test_avatar_speech_queues_when_websocket_is_missing():
