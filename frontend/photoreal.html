@@ -1,0 +1,151 @@
+<!--
+  Laura - PHOTOREAL avatar page (Stage 2). Renders video frames streamed from
+  the GPU box (gpu/server.py: MuseTalk lip-sync, or its stub engine) instead of
+  the 3D TalkingHead model. Same backend contract as talk.html: SSE push +
+  slow-poll of speak messages, /tts for the voice - only the RENDERER differs.
+
+  Flow per utterance:
+    backend speak msg -> /tts (ElevenLabs mp3) -> send audio_b64 to GPU ws
+      -> GPU replies talk_start + lip-synced JPEG frames -> page plays the mp3
+      -> mouth and sound line up -> Recall captures canvas+audio
+
+  Fallbacks, in order: GPU unreachable -> static reference portrait + audio
+  still plays (she keeps answering, face just doesn't move). No /tts -> silent.
+
+  Config: fetches /photoreal/config for the GPU stream URL (backend env
+  GPU_STREAM_URL, e.g. wss://gpu.lauravatar.com/stream). ?stream_url= overrides
+  for testing.
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #10161d; }
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #10161d; }
+  #frame { width: 100%; height: 100%; object-fit: cover; }
+  #hud {
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+    display: flex; gap: 8px; align-items: center; z-index: 10;
+    font: 14px/1.4 system-ui, sans-serif;
+  }
+  #hud input {
+    width: 320px; max-width: 60vw; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid #2a2f37; background: #171b21; color: #e8ecf1;
+  }
+  #hud button {
+    padding: 10px 14px; border-radius: 10px; border: 0; cursor: pointer;
+    background: #2f6df6; color: #fff; font-weight: 600;
+  }
+  #status {
+    position: fixed; left: 14px; top: 12px; z-index: 10; color: #9aa4b1;
+    font: 12px/1.4 ui-monospace, monospace; background: #131720cc;
+    padding: 6px 10px; border-radius: 8px; max-width: 70vw;
+  }
+  body.meeting #hud, body.meeting #status { display: none; }
+</style>
+
+<div id="stage"><img id="frame" alt="" /></div>
+<div id="status">connecting…</div>
+<div id="hud">
+  <input id="q" placeholder="Type something for Laura to say…" />
+  <button id="speakBtn">Speak</button>
+</div>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  const avatarId = params.get("avatar_id") || "laura";
+  const conversationId = params.get("conversation_id");
+  const status = (t) => (document.getElementById("status").textContent = t);
+  const frameEl = document.getElementById("frame");
+  frameEl.src = "/laura-reference.jpg"; // static portrait until the stream is up
+
+  // ── GPU frame stream ─────────────────────────────────────────────────────
+  let gpu = null;          // websocket to gpu/server.py
+  let gpuReady = false;
+  let lastUrl = null;      // revoke previous blob URL to avoid leaking
+  let pendingAudio = [];   // audio clips awaiting talk_start (play-on-signal)
+
+  async function connectGpu() {
+    let streamUrl = params.get("stream_url");
+    if (!streamUrl) {
+      try {
+        const r = await fetch("/photoreal/config");
+        streamUrl = (await r.json()).stream_url;
+      } catch (_) { /* backend unreachable */ }
+    }
+    if (!streamUrl) { status("no GPU stream configured — static portrait mode"); return; }
+    const ws = new WebSocket(streamUrl);
+    ws.binaryType = "blob";
+    ws.onopen = () => { gpu = ws; status("GPU stream connected"); };
+    ws.onmessage = (ev) => {
+      if (typeof ev.data === "string") {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === "hello") { gpuReady = true; status(`live — ${msg.mode} engine @ ${msg.fps}fps`); }
+          if (msg.type === "talk_start" && pendingAudio.length) playClip(pendingAudio.shift());
+        } catch (_) {}
+        return;
+      }
+      const url = URL.createObjectURL(ev.data);
+      frameEl.src = url;
+      if (lastUrl) URL.revokeObjectURL(lastUrl);
+      lastUrl = url;
+    };
+    ws.onclose = () => { gpu = null; gpuReady = false; status("GPU stream lost — retrying"); setTimeout(connectGpu, 3000); };
+  }
+  connectGpu();
+
+  // ── audio playback (the page is the meeting's audio source) ─────────────
+  const actx = new (window.AudioContext || window.webkitAudioContext)();
+  const unlockAudio = () => { try { actx.resume(); } catch (_) {} };
+  async function playClip(buf) {
+    unlockAudio();
+    const audio = await actx.decodeAudioData(buf.slice(0));
+    const src = actx.createBufferSource();
+    src.buffer = audio; src.connect(actx.destination); src.start();
+  }
+
+  // ── speak: TTS -> GPU (frames) + local playback, serialized in order ────
+  let chain = Promise.resolve();
+  function say(text) {
+    if (!text || !text.trim()) return chain;
+    const synth = (async () => {
+      const r = await fetch("/tts", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text, avatar_id: avatarId }),
+      });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      return j.audio; // base64 mp3
+    })();
+    chain = chain.then(async () => {
+      try {
+        const audioB64 = await synth;
+        const bytes = Uint8Array.from(atob(audioB64), (c) => c.charCodeAt(0)).buffer;
+        if (gpu && gpuReady) {
+          pendingAudio.push(bytes);                 // played on talk_start
+          gpu.send(JSON.stringify({ type: "speak", audio_b64: audioB64 }));
+        } else {
+          await playClip(bytes);                    // static-portrait fallback
+        }
+        status("speaking: " + text.slice(0, 60));
+      } catch (e) { status("speak failed: " + (e?.message || e)); }
+    });
+    return chain;
+  }
+  document.getElementById("speakBtn").onclick = () => say(document.getElementById("q").value);
+  window.speak = say;
+
+  // ── meeting mode: identical to talk.html (SSE push + slow poll) ─────────
+  if (conversationId) {
+    document.body.classList.add("meeting");
+    const handle = (msg) => { if (msg && msg.type === "speak" && msg.text) { unlockAudio(); say(msg.text); } };
+    const es = new EventSource(`/avatar/stream/${encodeURIComponent(conversationId)}`);
+    es.onmessage = (ev) => { try { handle(JSON.parse(ev.data)); } catch (_) {} };
+    const poll = async () => {
+      try {
+        const r = await fetch(`/avatar/messages/${encodeURIComponent(conversationId)}`, { cache: "no-store" });
+        if (r.ok) for (const m of (await r.json()).messages || []) handle(m);
+      } catch (_) {}
+      setTimeout(poll, 2000);
+    };
+    poll();
+  }
+</script>

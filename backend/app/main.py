@@ -59,6 +59,7 @@ from .rag import ensure_index, warm as warm_index
 app = FastAPI(title="Callable AI Process Avatar")
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+REPO_ROOT_DIR = Path(__file__).resolve().parents[2]
 GOOGLE_CALENDAR_SCOPES = (
     "https://www.googleapis.com/auth/calendar.events.readonly",
     "https://www.googleapis.com/auth/userinfo.email",
@@ -467,6 +468,33 @@ def talk_page() -> FileResponse:
     """Open-source avatar page (TalkingHead + our TTS) — the Anam replacement.
     Recall will render this instead of avatar.html once it's proven out."""
     return FileResponse(FRONTEND_DIR / "talk.html")
+
+
+@app.get("/photoreal")
+def photoreal_page() -> FileResponse:
+    """Photoreal avatar page (Stage 2): GPU-streamed MuseTalk face. Same speak
+    contract as /talk; flip meetings onto it with AVATAR_PAGE=photoreal once
+    the GPU box is live (see gpu/README.md)."""
+    return FileResponse(FRONTEND_DIR / "photoreal.html")
+
+
+@app.get("/photoreal/config")
+def photoreal_config() -> JSONResponse:
+    """Where the photoreal page finds the GPU frame stream (empty = fallback)."""
+    return JSONResponse(
+        {"stream_url": settings.gpu_stream_url},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/laura-reference.jpg")
+def photoreal_reference() -> FileResponse:
+    """Static reference portrait — the photoreal page's no-GPU fallback face."""
+    return FileResponse(
+        REPO_ROOT_DIR / "gpu" / "assets" / "reference.jpg",
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.get("/laura.glb")

@@ -97,6 +97,11 @@ class Settings(BaseSettings):
     # Public URL of this server (Recall must reach our webhook + avatar page)
     public_base_url: str = "http://127.0.0.1:8000"
 
+    # Photoreal avatar (Stage 2): websocket URL of the GPU streaming server
+    # (gpu/server.py), e.g. wss://gpu.lauravatar.com/stream. Empty = the
+    # photoreal page falls back to a static portrait (still speaks).
+    gpu_stream_url: str = ""
+
     # Which avatar page Recall renders as the bot camera:
     #   "avatar" = Anam (paid face+voice)   "talk" = open-source (TalkingHead + free TTS)
     # Flip to "talk" (AVATAR_PAGE=talk) once /talk is validated in a browser — no
