@@ -43,6 +43,7 @@ from . import (
     granola_client,
     actions,
     gmail_watcher,
+    meeting_state,
 )
 from .brain import (
     answer_question,
@@ -1285,6 +1286,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
 
     session.add_utterance(speaker, text)
     avatar = avatars.load(session.avatar_id)
+
+    # ── silent intelligence layer ──
+    # Fold this line into the structured MeetingState (steps covered, decisions,
+    # owners, deadlines, risks) BEFORE any speak decision. Pure regex — adds no
+    # latency to the live path — and informs both the closing intervention below
+    # and the post-meeting artifact.
+    state = meeting_state.observe(session, avatar, speaker, text)
 
     # ── proactive intervention (fires once, as the meeting wraps up) ──
     if (
