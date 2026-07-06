@@ -21,20 +21,33 @@
   Avaturn or MetaPerson/AvatarSDK exports are compatible.
 -->
 <style>
-  html, body { margin: 0; height: 100%; background: #dfe6ec; }
-  /* Office backdrop, webcam depth-of-field style: warm window glow right, cool
-     window left, plant + furniture blobs low, wall-to-desk vertical ramp. The
-     canvas is transparent so this shows through. Framing is done with the 3D
-     camera (see below), NOT a CSS transform: CSS scaling magnifies rendered
-     pixels and blurs her; camera zoom stays sharp. */
+  html, body { margin: 0; height: 100%; background: #141a22; }
+  /* Office-at-dusk backdrop, webcam depth-of-field style: deep blue-gray wall,
+     warm window glow right, cool daylight left, soft out-of-focus bokeh lights.
+     Dark tones make her lit face pop (perceived sharpness) instead of washing
+     into a pale wall. The canvas is transparent so this shows through. Framing
+     is done with the 3D camera (see below), NOT a CSS transform: CSS scaling
+     magnifies rendered pixels and blurs her; camera zoom stays sharp. */
   #stage {
     position: fixed; inset: 0;
+    /* Hidden until the close-up camera is asserted, so the page NEVER shows the
+       far full-body default view — she appears already framed like a webcam. */
+    opacity: 0; transition: opacity .45s ease;
     background:
-      radial-gradient(45% 60% at 80% 28%, rgba(255,234,196,.6) 0%, rgba(255,234,196,0) 70%),
-      radial-gradient(38% 48% at 12% 32%, rgba(186,214,236,.55) 0%, rgba(186,214,236,0) 70%),
-      radial-gradient(22% 28% at 6% 82%, rgba(122,152,120,.4) 0%, rgba(122,152,120,0) 70%),
-      radial-gradient(18% 22% at 93% 78%, rgba(205,185,160,.4) 0%, rgba(205,185,160,0) 70%),
-      linear-gradient(180deg, #f0f3f7 0%, #e6ebf1 52%, #d3dbe3 76%, #bcc7d1 100%);
+      radial-gradient(42% 55% at 82% 30%, rgba(255,190,120,.30) 0%, rgba(255,190,120,0) 70%),
+      radial-gradient(36% 46% at 12% 34%, rgba(120,160,210,.24) 0%, rgba(120,160,210,0) 70%),
+      radial-gradient(3.5% 6% at 70% 20%, rgba(255,214,150,.38) 0%, rgba(255,214,150,0) 100%),
+      radial-gradient(2.5% 4.5% at 88% 46%, rgba(255,214,150,.30) 0%, rgba(255,214,150,0) 100%),
+      radial-gradient(3% 5% at 79% 66%, rgba(180,200,230,.22) 0%, rgba(180,200,230,0) 100%),
+      radial-gradient(2% 3.5% at 8% 62%, rgba(160,190,225,.24) 0%, rgba(160,190,225,0) 100%),
+      radial-gradient(2.8% 5% at 16% 16%, rgba(200,220,245,.20) 0%, rgba(200,220,245,0) 100%),
+      linear-gradient(180deg, #2b3542 0%, #232c38 45%, #1b222c 78%, #141a22 100%);
+  }
+  #stage.live { opacity: 1; }
+  /* Soft vignette pulls the eye to her face, like a real webcam lens. */
+  #stage::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(120% 90% at 50% 42%, rgba(0,0,0,0) 55%, rgba(10,14,19,.55) 100%);
   }
   /* MEETING MODE (?conversation_id= present): she must look like just another
      participant — no buttons, no status text, nothing but her. */
@@ -105,7 +118,12 @@
     cameraView: "upper",
     cameraDistance: 0,
     avatarMood: "happy",          // subtle smile — reads far more human than neutral
-    modelPixelRatio: 1.5,         // supersample: sharper face/hair at 720p capture
+    // Supersampling: 2x in the demo (a human's browser, sharpness is the point),
+    // but keep the proven 1.5 on the Recall bot browser (web_4_core has no GPU
+    // guarantee — an unverified +78% render load on the LIVE camera isn't worth
+    // it when the close-up framing already added face pixels). Meeting mode is
+    // detectable here: Recall always renders us with ?conversation_id=.
+    modelPixelRatio: params.get("conversation_id") ? 1.5 : 2,
     // Warm 3-point-ish light: sells skin as skin (values tuned live in-browser;
     // brighter blows out the cheeks, dimmer goes corpse-gray).
     lightAmbientColor: "#fff3e6",
@@ -118,23 +136,46 @@
     status("loading avatar…");
     await head.showAvatar({ url: AVATAR_URL, body: "F", lipsyncLang: "en" });
     head.start();
-    // Webcam framing: head-and-shoulders, face centered — values tuned live at
-    // 1280x720 (Recall's capture size). Direct camera control renders at native
-    // resolution (sharp), unlike CSS scaling. TalkingHead re-frames the camera
-    // shortly after start(), so assert our framing several times to win the race.
+    // Meeting-webcam framing: CLOSE face shot, eyes on the upper third, a hint
+    // of shoulders — like a participant sitting near their camera. Values tuned
+    // live in-browser at 1280x720 (Recall's capture size). Direct camera control
+    // renders at native resolution (sharp), unlike CSS scaling. TalkingHead
+    // re-frames the camera shortly after start(), so assert our framing several
+    // times to win the race — and keep #stage hidden until the first assert so
+    // the far full-body default view is NEVER visible (no far->close jump).
     window.__head = head; // handy for live debugging/tuning
     const frameCamera = () => {
       try {
-        head.camera.position.set(0, 1.62, 3.15);
-        if (head.controls) { head.controls.target.set(0, 1.62, 0); head.controls.update?.(); }
+        // TalkingHead's OrbitControls clamp minDistance=2.0 — any closer framing
+        // silently snaps back to z=2.0 (this was why she never got truly close).
+        // Release the clamp, then place the camera.
+        if (head.controls) head.controls.minDistance = 0.3;
+        head.camera.position.set(0, 1.665, 1.55);
+        if (head.controls) { head.controls.target.set(0, 1.655, 0); head.controls.update?.(); }
       } catch (_) { /* keep default view if internals change */ }
     };
-    frameCamera();
-    for (const ms of [500, 1200, 2500, 5000]) setTimeout(frameCamera, ms);
+    // She should look INTO the camera like a person on a call, not into the
+    // distance. makeEyeContact expires, so renew it on an interval.
+    const gazeAtCamera = () => {
+      try { head.lookAtCamera(600); head.makeEyeContact(30000); } catch (_) {}
+    };
+    // PIN the framing every animation frame: TalkingHead keeps re-framing the
+    // camera on its own schedule (observed a drift to z=2.0 seconds after load),
+    // so one-shot asserts always eventually lose. Setting three floats per frame
+    // is free and makes the close-up rock-solid.
+    (function pinFraming() { frameCamera(); requestAnimationFrame(pinFraming); })();
+    gazeAtCamera();
+    for (const ms of [600, 1500, 3000]) setTimeout(gazeAtCamera, ms);
+    setInterval(gazeAtCamera, 25000);
+    // Reveal only after the close-up is pinned (never show the far default view).
+    setTimeout(() => document.getElementById("stage").classList.add("live"), 300);
     status("live — avatar rendering ✅ (type + Speak to test lip-sync)");
   } catch (e) {
     status("avatar failed to load: " + (e?.message || e) + " — try a different AVATAR_URL");
     console.error(e);
+    // Still reveal the stage: a load failure should show the office backdrop
+    // ("empty room"), never a permanently blank black frame in a meeting.
+    document.getElementById("stage").classList.add("live");
   }
 
   // ── TTS: turn text into { audio, words, wtimes, wdurations } for speakAudio ──
@@ -163,6 +204,19 @@
     return { audio, words, wtimes, wdurations };
   }
 
+  // Browsers start AudioContexts suspended until a user gesture — and TalkingHead
+  // plays speech through ITS OWN context created at page load. Without this
+  // resume, the demo is SILENT: lips move, no sound. (Meeting mode always had a
+  // defensive resume; the demo path didn't — that was the "she's not talking"
+  // bug.) Resume on every speak AND on the first gesture, both harmless no-ops
+  // once the context is running.
+  const unlockAudio = () => {
+    try { head.audioCtx?.resume?.(); } catch (_) {}
+    try { head.audioContext?.resume?.(); } catch (_) {}
+  };
+  document.addEventListener("pointerdown", unlockAudio, { once: true });
+  document.addEventListener("keydown", unlockAudio, { once: true });
+
   // Pipelined speech: START synthesis the moment a sentence arrives (so sentence
   // 2's audio is being fetched while sentence 1 plays — no gaps between
   // sentences), but hand audio to speakAudio strictly in arrival order so she
@@ -170,6 +224,7 @@
   let _sayChain = Promise.resolve();
   function say(text) {
     if (!text || !text.trim()) return _sayChain;
+    unlockAudio();
     const synth = synthesize(text); // prefetch NOW, in parallel
     _sayChain = _sayChain.then(async () => {
       try {
@@ -280,12 +335,8 @@
   if (conversationId) {
     document.body.classList.add("meeting"); // hide all UI — just her
 
-    // The Recall bot browser never clicks, and browsers may start AudioContexts
-    // suspended without a gesture — resume defensively or she speaks silently.
-    const unlockAudio = () => {
-      try { head.audioCtx?.resume?.(); } catch (_) {}
-      try { head.audioContext?.resume?.(); } catch (_) {}
-    };
+    // The Recall bot browser never clicks — resume defensively on load too
+    // (same shared unlockAudio as the demo path).
     unlockAudio();
 
     const handleBackendMessage = (msg) => {
