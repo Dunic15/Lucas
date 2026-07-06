@@ -371,10 +371,26 @@
     // (same shared unlockAudio as the demo path).
     unlockAudio();
 
+    // Optional generation ids (additive, backward compatible): if the backend
+    // ever stamps messages with generation_id, a stop invalidates every speak
+    // from the same-or-older generation — so a speak that raced the stop over
+    // the wire can never un-mute her. Messages without ids behave as before.
+    let staleBefore = -Infinity;
+    const genOf = (msg) => {
+      const g = msg.generation_id ?? msg.speech_generation_id ?? msg.generation;
+      return typeof g === "number" ? g : null;
+    };
     const handleBackendMessage = (msg) => {
       if (!msg) return;
-      if (msg.type === "speak" && msg.text) { unlockAudio(); say(msg.text); }
-      else if (msg.type === "stop") interruptSpeech(); // barge-in: human is talking
+      if (msg.type === "speak" && msg.text) {
+        const g = genOf(msg);
+        if (g !== null && g <= staleBefore) return; // stale: superseded by a stop
+        unlockAudio(); say(msg.text);
+      } else if (msg.type === "stop") { // barge-in: human is talking
+        const g = genOf(msg);
+        if (g !== null) staleBefore = Math.max(staleBefore, g);
+        interruptSpeech();
+      }
     };
 
     // Path 1: SSE push — App Runner 403s WebSocket upgrades at the edge but
