@@ -24,6 +24,13 @@ auto-routes by the `description` field; you can also name an agent explicitly.
   Anything outside your column: report it, don't edit it. Cross-cutting changes go
   through the main session (the coordinator) or an explicit owner handoff.
 
+- **repo-orchestrator is the referee.** Run it **before** starting parallel work
+  (it assigns branches + file ownership and flags overlap), and **before** merging
+  any PR (it checks changed files against ownership, finds cross-PR conflicts,
+  confirms code-reviewer + tests happened, and recommends a merge order). It
+  never writes code, never merges, never pushes — it produces an Orchestration
+  Report the sessions act on.
+
 ## Golden rules (all agents obey)
 
 - **Contract-safe:** never break the live-meeting integration contract (CODEX.md):
@@ -45,6 +52,7 @@ auto-routes by the `description` field; you can also name an agent explicitly.
 
 | Agent | Trigger it for… | Model |
 |---|---|---|
+| **repo-orchestrator** | before parallel work or any merge: branch/file ownership, cross-PR conflict risk, merge order | sonnet |
 | **product-strategist** | scoping an idea/complaint into a PRD, roadmap, prioritization | opus |
 | **code-reviewer** | reviewing a diff/PR for contract/latency/PII/meter safety before merge | sonnet |
 | **backend-infra** | deploy issues, latency regressions, prod errors, cost/infra tuning | sonnet |
@@ -63,7 +71,7 @@ and report; fixes go through the owning session.
 - product-strategist → `docs/product/`
 - growth-gtm, market-intel → `docs/gtm/` (market-intel also `docs/research/`)
 - fundraise-narrative, finance-unit-economics → `docs/fundraise/`
-- code-reviewer, backend-infra → no docs of their own (review/run against the repo)
+- code-reviewer, backend-infra, repo-orchestrator → no docs of their own (review/run against the repo)
 
 ## Example prompts
 
