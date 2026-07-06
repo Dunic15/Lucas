@@ -199,7 +199,7 @@ def _live_model(question: str) -> str:
     compound model when the question asks for fresh information."""
     if (
         settings.live_search_enabled
-        and settings.brain_provider.lower() == "groq"
+        and settings.groq_api_key  # compound runs on Groq regardless of live provider
         and _SEARCH_INTENT.search(question or "")
     ):
         return settings.live_search_model
@@ -270,6 +270,7 @@ def answer_question_stream(
                 f"{convo}Use web search, then answer briefly:\n{question}",
                 max_tokens=2048,
                 model=_model,
+                provider="groq",  # compound lives on Groq even when live brain is Claude
             )
         except Exception:
             raw = ""
