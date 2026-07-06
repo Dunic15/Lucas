@@ -17,6 +17,7 @@ Owner: Claude 1 (docs/repo hygiene session).
 | `avatars/**` | the editable product surface (incl. `process_templates/`) |
 | `.claude/**` | agents, hooks, commands, context — the operating system |
 | `extensions/laura-meet/` | Chrome-extension entry point (still a documented entry path) |
+| `backend/app/granola_client.py`, `backend/scripts/granola.py` | Granola post-meeting-only transcript source — optional (`GRANOLA_API_KEY`), functional, no Recall/Anam needed |
 | `lovable/laura-meeting-expert/` | marketing-site source (lauravatar.com Cloudflare Worker) |
 | `docs/research/meeting-agent-landscape.md` | current (2026-07-06) |
 | `docs/CALENDAR.md`, `docs/DEMO.md`, `docs/FREE_TIER.md` | mostly accurate setup notes (spot-check on next touch) |
@@ -44,7 +45,7 @@ Owner: Claude 1 (docs/repo hygiene session).
 
 | Path | Why it's clutter |
 |---|---|
-| **16 lookdev screenshots at repo root** — `avatarsdk-hd.jpeg`, `avaturn-hd.jpeg`, `deployed-office-look.jpeg`, `final-frame-check.jpeg`, `final-meeting-view.jpeg`, `laura-hd-speaking.jpeg`, `lookdev-final.jpeg`, `lookdev-office.jpeg`, `meeting-final.jpeg`, `meeting-look-v1.jpeg`, `meeting-look-v2.jpeg`, `talk-avatar-live.jpeg`, `talk-avatar-test.jpeg`, `tune-v1-head.jpeg`, `tune-v2-upper-close.jpeg`, `tune-v3.jpeg`, `tune-v5-direct.jpeg` | avatar look-dev iteration artifacts, all tracked in git; if any matter, move the keepers to `docs/lookdev/` and drop the rest |
+| **17 lookdev screenshots at repo root** — `avatarsdk-hd.jpeg`, `avaturn-hd.jpeg`, `deployed-office-look.jpeg`, `final-frame-check.jpeg`, `final-meeting-view.jpeg`, `laura-hd-speaking.jpeg`, `lookdev-final.jpeg`, `lookdev-office.jpeg`, `meeting-final.jpeg`, `meeting-look-v1.jpeg`, `meeting-look-v2.jpeg`, `talk-avatar-live.jpeg`, `talk-avatar-test.jpeg`, `tune-v1-head.jpeg`, `tune-v2-upper-close.jpeg`, `tune-v3.jpeg`, `tune-v5-direct.jpeg` | avatar look-dev iteration artifacts, all tracked in git; if any matter, move the keepers to `docs/lookdev/` and drop the rest |
 | `photoreal-e2e-proof.png` (untracked) | session test artifact; screenshot preserved in issue/PR history |
 | `QUICKSTART.md` | fold into README (already done in the rewrite) and delete |
 | stale remote branches `codex/content-and-ui`, `optimize-cscs-latency-hop-metrics` | both superseded by `main` (verified 2026-07-06) |

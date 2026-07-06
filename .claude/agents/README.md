@@ -28,8 +28,9 @@ auto-routes by the `description` field; you can also name an agent explicitly.
 
 - **Contract-safe:** never break the live-meeting integration contract (CODEX.md):
   `ws/<conversation_id>` + SSE `/avatar/stream/<id>` + poll `/avatar/messages/<id>`,
-  the `{type:"speak", text}` message handling, and the `recall_client` /
-  `anam_client` signatures.
+  the `{type:"speak", text}` message handling, the `speak()` echo + pinned
+  face-SDK embed in `avatar.html`, and the `recall_client` / `anam_client`
+  signatures.
 - **Demo key-free:** the offline demo must always run in `stub` + `hash` with no keys.
 - **No secrets in git** (`.env*` gitignored; only `.env.example` tracked).
 - **Meters off:** end sessions (Recall per-minute), and never leave the photoreal

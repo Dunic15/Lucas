@@ -53,6 +53,9 @@ This is the contract the whole team codes against — hard constraint 1 in
   `GET /avatar/messages/<conversation_id>`. A message is routed down exactly one
   path (ws if connected, else queued for SSE/poll) so pages never double-speak.
 - The message shape: `{"type": "speak", "text": "..."}`.
+- On the legacy Anam page (`frontend/avatar.html`): the `speak()` echo entry
+  point and the **pinned** face-SDK embed (`@anam-ai/js-sdk@4.17.1`, pinned to
+  limit supply-chain surface — do not unpin or refactor away).
 - The `recall_client` / `anam_client` function signatures
   (`create_persona`, `create_conversation`, `end_conversation`, `create_bot`,
   `leave_call`).

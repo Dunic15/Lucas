@@ -79,8 +79,9 @@ verticalization**, NOT the meeting plumbing (which is commoditizing).
 1. **Never break the live-meeting integration CONTRACT** (see CODEX.md): the
    `ws://<host>/ws/<conversation_id>` channel **and** its App-Runner-safe twins
    (SSE `/avatar/stream/<id>` + poll `/avatar/messages/<id>`), the
-   `{type:"speak", text}` message handling, and the `recall_client` /
-   `anam_client` function signatures.
+   `{type:"speak", text}` message handling, the `speak()` echo entry point and
+   the **pinned** face-SDK embed in `frontend/avatar.html`, and the
+   `recall_client` / `anam_client` function signatures.
 2. **The offline demo must always run with ZERO API keys** (stub brain + hash
    embeddings). Never make the demo require a key.
 3. **No secrets in git.** `.env` (and every `.env.*` variant except
