@@ -172,9 +172,16 @@ def _retrieval_query(question: str, history: str = "") -> str:
     return f"{history[-1200:]}\n\nCurrent ask: {question}"
 
 
-def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", k: int = 6):
+def answer_question_stream(
+    avatar: Avatar, question: str, *, history: str = "", memory: str = "", k: int = 6
+):
     """Yield spoken sentences as they are generated. Yields nothing (stays silent)
-    only when the model judges the speech was not addressed to Laura (SKIP)."""
+    only when the model judges the speech was not addressed to Laura (SKIP).
+
+    `memory` is the cross-meeting carryover brief (ledger.carryover_brief):
+    what previous sessions of this same meeting left open or decided. Empty
+    for first-time meetings — the prompt then carries no memory block at all.
+    """
     _t0 = time.perf_counter()
     chunks = retrieve(avatar, _retrieval_query(question, history), k=k)
     _retrieve_ms = (time.perf_counter() - _t0) * 1000
@@ -189,9 +196,15 @@ def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", 
         return
 
     convo = f"Recent meeting conversation:\n{history}\n\n" if history.strip() else ""
+    remembered = (
+        f"What Laura remembers from previous meetings of this series:\n{memory}\n\n"
+        if memory.strip()
+        else ""
+    )
     system = ANSWER_STREAM_SYSTEM.format(persona=avatar.persona_prompt)
     user = (
         f"Company process context:\n\n{_format_context(chunks)}\n\n"
+        f"{remembered}"
         f"{convo}"
         f"Someone in the meeting asked:\n{question}\n\n"
         "Answer in spoken style. Reply SKIP only if this was clearly not directed at Laura."
@@ -362,6 +375,7 @@ def proactive_flag(
     transcript_text: str,
     *,
     state: "meeting_state.MeetingState | None" = None,
+    memory: str = "",
     k: int = 6,
 ) -> dict:
     """Decide if the avatar should proactively flag ONE missing step. Default: no.
@@ -393,11 +407,17 @@ def proactive_flag(
         if state is not None
         else ""
     )
+    memory_block = (
+        f"Carried over from previous meetings of this series (may still be unaddressed):\n{memory}\n\n"
+        if memory.strip()
+        else ""
+    )
     raw = llm.complete(
         PROACTIVE_SYSTEM.format(persona=avatar.persona_prompt),
         (
             f"Company process context:\n\n{_format_context(chunks)}\n\n"
             f"{state_block}"
+            f"{memory_block}"
             f"Meeting so far:\n\n{transcript_text}\n\n"
             "Respond with the JSON object only."
         ),
