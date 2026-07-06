@@ -57,6 +57,12 @@ class Session:
     proactive_done: bool = False  # the one proactive flag fires at most once
     ws: WebSocket | None = None
     pending_messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    # In-meeting map: anonymous participant id -> stable "Guest N" label. In-memory
+    # only (like ws/pending_messages); on a mid-meeting restart numbering may
+    # restart, which is harmless — distinct callers still stay distinct.
+    _anon_labels: dict[str, str] = field(
+        default_factory=dict, repr=False, compare=False
+    )
     _persist_enabled: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -68,6 +74,28 @@ class Session:
             self, "_persist_enabled", False
         ):
             _persist_session(self)
+
+    def resolve_speaker(self, name: str | None, participant_id: Any = None) -> str:
+        """Human-readable speaker label for a transcript utterance.
+
+        Named participants keep their real name (Recall gets it from the meeting
+        platform login — stable across meetings, no voice ID needed). Anonymous
+        participants (phone dial-ins, unnamed guests) have no name but DO carry a
+        stable per-meeting participant id, so map each distinct id to its own
+        "Guest N" — otherwise two silent callers both collapse into one label and
+        the avatar can't tell them apart.
+        """
+        name = (name or "").strip()
+        if name:
+            return name
+        key = "" if participant_id is None else str(participant_id)
+        if not key:
+            return "Guest"
+        label = self._anon_labels.get(key)
+        if label is None:
+            label = f"Guest {len(self._anon_labels) + 1}"
+            self._anon_labels[key] = label
+        return label
 
     def add_utterance(self, speaker: str, text: str) -> None:
         utterance = Utterance(speaker=speaker, text=text, ts=time.time())

@@ -1245,7 +1245,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
 
     words = data.get("words", [])
     text = " ".join(w.get("text", "") for w in words).strip()
-    speaker = (data.get("participant") or {}).get("name") or "Unknown"
+    participant = data.get("participant") or {}
+    speaker = session.resolve_speaker(participant.get("name"), participant.get("id"))
     if not text:
         return JSONResponse({"ok": True})
 
