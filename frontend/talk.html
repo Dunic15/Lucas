@@ -22,13 +22,19 @@
 -->
 <style>
   html, body { margin: 0; height: 100%; background: #dfe6ec; }
-  /* Light studio backdrop — she should look like a person on a webcam, not a
-     model floating in a void. The canvas is transparent so this shows through.
-     Framing is done with the 3D camera (see below), NOT a CSS transform: CSS
-     scaling magnifies rendered pixels and blurs her; camera zoom stays sharp. */
+  /* Office backdrop, webcam depth-of-field style: warm window glow right, cool
+     window left, plant + furniture blobs low, wall-to-desk vertical ramp. The
+     canvas is transparent so this shows through. Framing is done with the 3D
+     camera (see below), NOT a CSS transform: CSS scaling magnifies rendered
+     pixels and blurs her; camera zoom stays sharp. */
   #stage {
     position: fixed; inset: 0;
-    background: radial-gradient(120% 90% at 50% 20%, #f7f9fb 0%, #e8edf2 45%, #d4dce4 100%);
+    background:
+      radial-gradient(45% 60% at 80% 28%, rgba(255,234,196,.6) 0%, rgba(255,234,196,0) 70%),
+      radial-gradient(38% 48% at 12% 32%, rgba(186,214,236,.55) 0%, rgba(186,214,236,0) 70%),
+      radial-gradient(22% 28% at 6% 82%, rgba(122,152,120,.4) 0%, rgba(122,152,120,0) 70%),
+      radial-gradient(18% 22% at 93% 78%, rgba(205,185,160,.4) 0%, rgba(205,185,160,0) 70%),
+      linear-gradient(180deg, #f0f3f7 0%, #e6ebf1 52%, #d3dbe3 76%, #bcc7d1 100%);
   }
   /* MEETING MODE (?conversation_id= present): she must look like just another
      participant — no buttons, no status text, nothing but her. */
@@ -98,8 +104,14 @@
     lipsyncModules: ["en"],
     cameraView: "upper",
     cameraDistance: 0,
-    avatarMood: "neutral",
-    modelPixelRatio: 1,
+    avatarMood: "happy",          // subtle smile — reads far more human than neutral
+    modelPixelRatio: 1.5,         // supersample: sharper face/hair at 720p capture
+    // Warm 3-point-ish light: sells skin as skin (values tuned live in-browser;
+    // brighter blows out the cheeks, dimmer goes corpse-gray).
+    lightAmbientColor: "#fff3e6",
+    lightAmbientIntensity: 2.1,
+    lightDirectColor: "#ffe4c8",
+    lightDirectIntensity: 26,
   });
 
   try {
@@ -151,26 +163,25 @@
     return { audio, words, wtimes, wdurations };
   }
 
-  async function _speakNow(text) {
-    if (!text.trim()) return;
-    try {
-      status("synthesizing…");
-      const a = await synthesize(text);
-      pauseMicWhileSpeaking(a.audio.duration);
-      head.speakAudio(a);
-      status("speaking: " + text.slice(0, 60));
-    } catch (e) {
-      status("speak failed: " + (e?.message || e));
-      console.error(e);
-    }
-  }
-
-  // Sentences stream in one message each; parallel TTS fetches can finish out of
-  // order, which would make her speak sentence 2 before sentence 1. Chain them so
-  // synthesis (and thus speakAudio queueing) happens strictly in arrival order.
+  // Pipelined speech: START synthesis the moment a sentence arrives (so sentence
+  // 2's audio is being fetched while sentence 1 plays — no gaps between
+  // sentences), but hand audio to speakAudio strictly in arrival order so she
+  // never speaks out of sequence. TalkingHead queues speakAudio internally.
   let _sayChain = Promise.resolve();
   function say(text) {
-    _sayChain = _sayChain.then(() => _speakNow(text)).catch(() => {});
+    if (!text || !text.trim()) return _sayChain;
+    const synth = synthesize(text); // prefetch NOW, in parallel
+    _sayChain = _sayChain.then(async () => {
+      try {
+        const a = await synth;
+        extendMicPause(a.audio.duration);
+        head.speakAudio(a);
+        status("speaking: " + text.slice(0, 60));
+      } catch (e) {
+        status("speak failed: " + (e?.message || e));
+        console.error(e);
+      }
+    });
     return _sayChain;
   }
 
@@ -205,16 +216,18 @@
   const micBtn = document.getElementById("micBtn");
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   let micOn = false, micPaused = false, rec = null, micResumeTimer = null;
+  let micPauseUntil = 0; // cumulative: queued sentences extend the pause window
 
-  function pauseMicWhileSpeaking(durationSec) {
+  function extendMicPause(durationSec) {
     if (!micOn || !rec) return;
     micPaused = true;
     try { rec.stop(); } catch (_) {}
+    micPauseUntil = Math.max(micPauseUntil, performance.now()) + (durationSec + 0.8) * 1000;
     clearTimeout(micResumeTimer);
     micResumeTimer = setTimeout(() => {
       micPaused = false;
       if (micOn) { try { rec.start(); } catch (_) {} }
-    }, (durationSec + 0.8) * 1000);
+    }, micPauseUntil - performance.now());
   }
 
   if (!SR) {
@@ -279,24 +292,18 @@
       if (msg && msg.type === "speak" && msg.text) { unlockAudio(); say(msg.text); }
     };
 
-    // Path 1: websocket (lowest latency when the platform allows the upgrade).
-    const connect = () => {
-      const proto = location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(`${proto}://${location.host}/ws/${conversationId}`);
-      ws.onopen = () =>
-        setInterval(() => ws.readyState === 1 && ws.send("ping"), 15000);
-      ws.onmessage = (ev) => {
-        try { handleBackendMessage(JSON.parse(ev.data)); } catch (_) { /* non-JSON */ }
-      };
-      ws.onclose = () => setTimeout(connect, 2000);
+    // Path 1: SSE push — App Runner 403s WebSocket upgrades at the edge but
+    // streams SSE fine, so speak messages arrive within ~100ms instead of
+    // waiting out a poll interval. EventSource auto-reconnects when App Runner
+    // recycles the request (~2min), and the slow poll below covers the gap.
+    const es = new EventSource(`/avatar/stream/${encodeURIComponent(conversationId)}`);
+    es.onmessage = (ev) => {
+      try { handleBackendMessage(JSON.parse(ev.data)); } catch (_) { /* non-JSON */ }
     };
-    connect();
 
-    // Path 2: HTTP polling fallback — REQUIRED on App Runner, which rejects
-    // WebSocket upgrades at the edge. Without this the backend queues her answers
-    // ("[avatar] queued speak for HTTP polling") and she sits silent in the
-    // meeting. Same endpoint avatar.html polls; backend guarantees each message
-    // goes down exactly one path, so ws + polling never double-speak.
+    // Path 2: slow HTTP polling as belt-and-braces (2s — SSE does the real-time
+    // work). Both paths drain the same backend queue, so a message is only ever
+    // delivered once; whichever path gets there first wins.
     const poll = async () => {
       try {
         const r = await fetch(`/avatar/messages/${encodeURIComponent(conversationId)}`,
@@ -306,7 +313,7 @@
           for (const msg of data.messages || []) handleBackendMessage(msg);
         }
       } catch (_) { /* keep polling */ }
-      setTimeout(poll, 500);
+      setTimeout(poll, 2000);
     };
     poll();
   }

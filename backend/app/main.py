@@ -523,23 +523,32 @@ def _words_from_alignment(alignment: dict) -> tuple[list, list, list]:
     return words, wtimes, wdurs
 
 
+# Persistent connection to ElevenLabs: a fresh TLS handshake per sentence costs
+# ~150ms on every utterance. One keep-alive client removes it permanently.
+_el_client: httpx.AsyncClient | None = None
+
+
+def _get_el_client() -> httpx.AsyncClient:
+    global _el_client
+    if _el_client is None:
+        _el_client = httpx.AsyncClient(timeout=20.0)
+    return _el_client
+
+
 async def _tts_elevenlabs(text: str) -> dict | None:
     """ElevenLabs with-timestamps. Returns the JSON payload, or None to fall back."""
-    import httpx
-
     if not settings.elevenlabs_api_key:
         return None
     voice_id = settings.elevenlabs_voice_id or "FGY2WhTYpPnrIDTdsKH5"  # "Laura"
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.post(
-                f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-                "/with-timestamps?output_format=mp3_44100_128",
-                headers={"xi-api-key": settings.elevenlabs_api_key},
-                json={"text": text, "model_id": settings.elevenlabs_tts_model},
-            )
-            r.raise_for_status()
-            data = r.json()
+        r = await _get_el_client().post(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+            "/with-timestamps?output_format=mp3_44100_128",
+            headers={"xi-api-key": settings.elevenlabs_api_key},
+            json={"text": text, "model_id": settings.elevenlabs_tts_model},
+        )
+        r.raise_for_status()
+        data = r.json()
         alignment = data.get("normalized_alignment") or data.get("alignment") or {}
         words, wtimes, wdurs = _words_from_alignment(alignment)
         return {
@@ -926,6 +935,37 @@ async def avatar_ws(websocket: WebSocket, conversation_id: str) -> None:
     except WebSocketDisconnect:
         if session.ws is websocket:
             session.ws = None
+
+
+@app.get("/avatar/stream/{conversation_id}")
+async def avatar_stream(conversation_id: str) -> StreamingResponse:
+    """SSE push channel for speak messages — the low-latency replacement for the
+    500ms polling loop. App Runner rejects WebSocket upgrades at the edge but
+    streams SSE fine (same mechanism as /live/ask), so queued messages are pushed
+    within ~100ms instead of waiting out a poll interval. The page's EventSource
+    auto-reconnects when App Runner recycles the request, and the 2s poll fallback
+    below still catches anything in between — both drain the same queue, so a
+    message is only ever delivered once.
+    """
+
+    async def gen():
+        yield ": connected\n\n"
+        last_beat = time.monotonic()
+        while True:
+            session = store.get_by_conversation(conversation_id)
+            if session is not None:
+                for msg in store.drain_avatar_messages(session):
+                    yield f"data: {json.dumps(msg)}\n\n"
+            if time.monotonic() - last_beat > 15:
+                yield ": ping\n\n"  # keep-alive through proxies
+                last_beat = time.monotonic()
+            await asyncio.sleep(0.1)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/avatar/messages/{conversation_id}")
