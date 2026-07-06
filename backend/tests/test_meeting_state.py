@@ -213,10 +213,43 @@ def test_proactive_flag_deterministic_on_critical_gap():
     assert flag["missing_steps"] == ["security_approval", "dpa_confirmation"]
 
 
+def test_post_meeting_artifact_has_full_schema(monkeypatch):
+    """Stub-mode artifact carries the expanded schema, with missing_steps and
+    readiness_score computed deterministically from the process template."""
+    import app.brain as brain
+
+    monkeypatch.setattr(brain, "effective_provider", lambda: "stub")
+    text = (
+        "Ana: Kickoff for the Acme onboarding.\n"
+        "Ben: Security review is approved and cleared.\n"
+        "Ana: We agreed to go with the standard rollout plan.\n"
+        "Ben: I'm worried the data migration is a risk.\n"
+    )
+    artifact = brain.post_meeting(_FakeAvatar(), text)
+    for key in (
+        "summary",
+        "decisions",
+        "actions",
+        "checklist",
+        "missing_steps",
+        "readiness_score",
+        "risks",
+        "follow_up_email",
+    ):
+        assert key in artifact, key
+    assert artifact["readiness_score"] == 20  # 1 of 5 steps covered
+    assert "security_approval" not in artifact["missing_steps"]
+    assert "dpa_confirmation" in artifact["missing_steps"]
+    assert artifact["decisions"]
+    assert artifact["risks"]
+    assert artifact["checklist"] == artifact["actions"]  # back-compat alias
+
+
 class _FakeAvatar:
-    """Just enough Avatar surface for build_from_text/templates_for."""
+    """Just enough Avatar surface for build_from_text / stub post_meeting."""
 
     id = "_fake_meeting_state_test"
+    name = "Laura"
     wake_words = ["laura"]
 
     def __init__(self):

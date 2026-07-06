@@ -886,7 +886,16 @@ async def _finalize_session(bot_id: str) -> dict | None:
             anam_client.end_conversation, session.anam_conversation_id
         )
 
-    artifact: dict = {"summary": "", "checklist": [], "follow_up_email": {}}
+    artifact: dict = {
+        "summary": "",
+        "decisions": [],
+        "actions": [],
+        "checklist": [],
+        "missing_steps": [],
+        "readiness_score": 0,
+        "risks": [],
+        "follow_up_email": {},
+    }
     if transcript_text.strip():
         avatar = avatars.load(session.avatar_id)
         artifact = await run_in_threadpool(post_meeting, avatar, transcript_text)

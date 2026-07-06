@@ -325,9 +325,11 @@ gap if it is genuinely implied by the discussion; do not pad the list.
 Return ONLY a JSON object:
 {
   "summary": "<3-5 sentence plain summary of what was discussed and decided>",
-  "checklist": [
-    {"item": "<action>", "owner": "<name or 'UNASSIGNED'>", "gap_type": "<owner|deadline|approval|document|blocker|none>"}
+  "decisions": ["<each decision the group actually reached, one short line>"],
+  "actions": [
+    {"item": "<action>", "owner": "<name or 'UNASSIGNED'>", "deadline": "<stated deadline or ''>", "gap_type": "<owner|deadline|approval|document|blocker|none>"}
   ],
+  "risks": ["<each risk or unresolved blocker raised, one short line>"],
   "follow_up_email": {
     "subject": "<subject line>",
     "body": "<short professional email body summarizing decisions and next steps>"
@@ -426,25 +428,57 @@ def _stub_proactive(chunks: list[Retrieved], transcript_text: str) -> dict:
 
 
 def post_meeting(avatar: Avatar, transcript_text: str, *, k: int = 6) -> dict:
-    """Summary + gap checklist + draft follow-up email for a finished meeting."""
-    # Ground gap-detection in the actual process docs.
-    chunks = retrieve(
-        avatar, transcript_text[-3000:] or "process steps owners approvals", k=k
-    )
+    """Full post-meeting artifact: summary, decisions, actions, missing process
+    steps, readiness score, risks, and a draft follow-up email.
+
+    The tracked MeetingState (rebuilt from the transcript) supplies the
+    deterministic parts — missing_steps and readiness_score come from the
+    process template, not model judgement — and backfills decisions/risks when
+    the model returns none.
+    """
+    state = meeting_state.build_from_text(avatar, transcript_text)
 
     if _is_stub():
-        return _stub_post_meeting(avatar, transcript_text)
+        artifact = _stub_post_meeting(avatar, transcript_text, state)
+    else:
+        # Ground gap-detection in the actual process docs.
+        chunks = retrieve(
+            avatar, transcript_text[-3000:] or "process steps owners approvals", k=k
+        )
+        raw = llm.complete(
+            POSTMEETING_SYSTEM,
+            (
+                f"Relevant company process context:\n\n{_format_context(chunks)}\n\n"
+                f"Structured meeting state (tracked during the meeting):\n"
+                f"{meeting_state.state_summary(state)}\n\n"
+                f"Meeting transcript:\n\n{transcript_text}\n\n"
+                "Respond with the JSON object only."
+            ),
+            max_tokens=1200,
+        )
+        artifact = _parse_json(raw)
 
-    raw = llm.complete(
-        POSTMEETING_SYSTEM,
-        (
-            f"Relevant company process context:\n\n{_format_context(chunks)}\n\n"
-            f"Meeting transcript:\n\n{transcript_text}\n\n"
-            "Respond with the JSON object only."
-        ),
-        max_tokens=1200,
-    )
-    return _parse_json(raw)
+    return _finish_artifact(artifact, state)
+
+
+def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dict:
+    """Normalize to the full artifact schema; state fills the deterministic
+    fields and backfills anything the model left out."""
+    artifact.setdefault("summary", "")
+    artifact.setdefault("follow_up_email", {})
+    if not artifact.get("decisions"):
+        artifact["decisions"] = [d["decision"] for d in state.decisions]
+    if not artifact.get("risks"):
+        artifact["risks"] = [r["risk"] for r in state.risks]
+    # Old consumers (demo page, Slack formatter) read "checklist"; new schema
+    # calls it "actions". Keep both pointing at the same list.
+    actions = artifact.get("actions") or artifact.get("checklist") or []
+    artifact["actions"] = actions
+    artifact["checklist"] = actions
+    artifact["missing_steps"] = list(state.missing_steps)
+    artifact["readiness_score"] = state.readiness_score()
+    artifact["meeting_type"] = state.meeting_type
+    return artifact
 
 
 # ─────────────────── stub (free, offline) reasoning ─────────────────
@@ -474,7 +508,9 @@ def _stub_answer(chunks: list[Retrieved]) -> dict:
     }
 
 
-def _stub_post_meeting(avatar: Avatar, transcript_text: str) -> dict:
+def _stub_post_meeting(
+    avatar: Avatar, transcript_text: str, state: "meeting_state.MeetingState"
+) -> dict:
     """Deterministic post-meeting artifact from simple transcript heuristics."""
     lines = [ln.strip() for ln in transcript_text.splitlines() if ln.strip()]
     speakers = []
@@ -510,8 +546,16 @@ def _stub_post_meeting(avatar: Avatar, transcript_text: str) -> dict:
         "by keyword heuristics (offline stub mode — enable a real brain for a "
         "true summary)."
     )
+    if state.meeting_type:
+        summary += (
+            f" Detected a {state.meeting_type.replace('_', ' ')} meeting: "
+            f"{len(state.completed_steps)}/{len(state.required_steps)} required "
+            "process steps covered."
+        )
     return {
         "summary": summary,
+        "decisions": [d["decision"] for d in state.decisions],
+        "risks": [r["risk"] for r in state.risks],
         "checklist": checklist[:12],
         "follow_up_email": {
             "subject": f"Follow-up & open items from today's session ({avatar.name})",
