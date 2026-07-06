@@ -442,9 +442,12 @@ class PostMeetingRequest(BaseModel):
 
 @app.post("/demo/post_meeting")
 async def demo_post_meeting(req: PostMeetingRequest) -> JSONResponse:
-    """Turn a meeting transcript into summary + gap checklist + follow-up email."""
+    """Turn a meeting transcript into the full post-meeting artifact."""
     avatar = avatars.load(req.avatar_id)
     artifact = await run_in_threadpool(post_meeting, avatar, req.transcript)
+    # Echo the transcript so the demo artifact matches the live one
+    # (_finalize_session does the same); the page shows it in a transcript tab.
+    artifact["transcript"] = req.transcript
     return JSONResponse(artifact)
 
 
