@@ -890,6 +890,11 @@ async def _finalize_session(bot_id: str) -> dict | None:
         avatar = avatars.load(session.avatar_id)
         artifact = await run_in_threadpool(post_meeting, avatar, transcript_text)
 
+    # The transcript is the raw material of the artifact — persist it so the
+    # product output is complete (transcript + summary + checklist + email).
+    # It lives only in the artifact store (PII: never logged).
+    artifact["transcript"] = transcript_text
+
     store.save_artifact(bot_id, artifact)
     store.remove(bot_id)
     return artifact
