@@ -124,6 +124,15 @@ class Settings(BaseSettings):
     require_wake_word: bool = False
     speak_cooldown_seconds: float = 8.0
     min_confidence: float = 0.55
+    # Autopilot (acts between meetings; every flag defaults OFF — the zero-key
+    # demo never sends anything). See backend/app/autopilot.py.
+    autopilot_deliver: bool = False        # auto-send artifact email+Slack at finalize
+    autopilot_deliver_to: str = ""         # comma-separated recipients
+    autopilot_brief: bool = False          # pre-meeting carryover brief email+Slack
+    autopilot_brief_to: str = ""           # falls back to autopilot_deliver_to
+    autopilot_nudge: bool = False          # periodic Slack digest of open ledger items
+    autopilot_nudge_hours: float = 24.0
+
     # Proactive intervention (the differentiator): flag ONE missing step as the
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.
     proactive_enabled: bool = True

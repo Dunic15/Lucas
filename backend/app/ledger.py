@@ -171,6 +171,19 @@ def items(meeting_key_: str, status: str = "") -> list[dict[str, Any]]:
         return [dict(row) for row in conn.execute(q, args).fetchall()]
 
 
+def open_by_meeting() -> dict[str, list[dict[str, Any]]]:
+    """Every open item across all meetings, grouped by meeting_key (for the
+    autopilot nudge digest)."""
+    with store._LOCK, store._connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM ledger_items WHERE status='open' ORDER BY meeting_key, id"
+        ).fetchall()
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row["meeting_key"], []).append(dict(row))
+    return grouped
+
+
 def resolve_item(item_id: int, bot_id: str = "") -> bool:
     with store._LOCK, store._connect() as conn:
         cur = conn.execute(
