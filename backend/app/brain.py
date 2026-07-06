@@ -20,7 +20,7 @@ import json
 import re
 import time
 
-from . import llm, tools
+from . import llm, meeting_state, tools
 from .avatars import Avatar
 from .config import settings
 from .rag import retrieve, Retrieved
@@ -355,18 +355,47 @@ Return ONLY a JSON object:
 }}"""
 
 
-def proactive_flag(avatar: Avatar, transcript_text: str, *, k: int = 6) -> dict:
-    """Decide if the avatar should proactively flag ONE missing step. Default: no."""
+def proactive_flag(
+    avatar: Avatar,
+    transcript_text: str,
+    *,
+    state: "meeting_state.MeetingState | None" = None,
+    k: int = 6,
+) -> dict:
+    """Decide if the avatar should proactively flag ONE missing step. Default: no.
+
+    When the tracked MeetingState says a critical required process step never
+    happened, this is deterministic — the templated intervention line goes out
+    with no model call (reliable in stub AND Claude mode, zero extra latency).
+    Otherwise the model judges from the transcript, with the structured state
+    as extra grounding.
+    """
+    if state is not None and state.missing_critical():
+        return {
+            "should_speak": True,
+            "line": meeting_state.intervention_line(state),
+            "gap_type": "process_step",
+            "citations": [],
+            "missing_steps": state.missing_critical(),
+            "confidence": 0.95,
+        }
+
     chunks = retrieve(
         avatar, transcript_text[-2000:] or "process owners approvals deadlines", k=k
     )
     if _is_stub():
         return _stub_proactive(chunks, transcript_text)
 
+    state_block = (
+        f"Structured meeting state (tracked silently):\n{meeting_state.state_summary(state)}\n\n"
+        if state is not None
+        else ""
+    )
     raw = llm.complete(
         PROACTIVE_SYSTEM.format(persona=avatar.persona_prompt),
         (
             f"Company process context:\n\n{_format_context(chunks)}\n\n"
+            f"{state_block}"
             f"Meeting so far:\n\n{transcript_text}\n\n"
             "Respond with the JSON object only."
         ),

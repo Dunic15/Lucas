@@ -195,6 +195,24 @@ def test_to_dict_has_issue_schema_keys():
         assert expected in keys
 
 
+def test_proactive_flag_deterministic_on_critical_gap():
+    """Critical gap at wrap-up -> templated line, no model, no retrieval."""
+    from app.brain import proactive_flag
+
+    state = _feed(
+        MeetingState(),
+        ("Ana", "Kickoff for the Acme onboarding."),
+        ("Ben", "Sara will own implementation."),
+        ("Ana", "Anything else before we wrap up?"),
+    )
+    flag = proactive_flag(_FakeAvatar(), "", state=state)
+    assert flag["should_speak"] is True
+    assert flag["confidence"] >= 0.9
+    assert flag["line"].startswith("Before we close, I didn't hear")
+    assert flag["citations"] == []  # spoken line must not get a doc suffix
+    assert flag["missing_steps"] == ["security_approval", "dpa_confirmation"]
+
+
 class _FakeAvatar:
     """Just enough Avatar surface for build_from_text/templates_for."""
 

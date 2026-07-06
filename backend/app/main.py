@@ -1302,7 +1302,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         and not session.in_cooldown(avatar.speak_cooldown_seconds)
     ):
         flag = await run_in_threadpool(
-            proactive_flag, avatar, session.transcript_text()
+            proactive_flag, avatar, session.transcript_text(), state=state
         )
         conf = float(flag.get("confidence", 0.0))
         if flag.get("should_speak") and flag.get("line") and conf >= settings.proactive_min_confidence:
