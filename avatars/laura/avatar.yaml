@@ -33,5 +33,12 @@ elevenlabs_voice_id: ""     # e.g. "EXAVITQu4..."  (overrides ELEVENLABS_VOICE_I
 min_confidence:             # 0.0–1.0 — higher = more cautious about speaking
 speak_cooldown_seconds:     # seconds of silence to keep after speaking
 
+# Extra knowledge packs: other avatar folders whose knowledge/ is indexed
+# into Laura too. The SFF fund/portfolio pack lives ONLY in avatars/sff/
+# (owner-provided public data) — referenced here, never copied, so the
+# laura knowledge folder itself stays synthetic.
+knowledge_packs:
+  - sff
+
 # Knowledge lives in:  avatars/laura/knowledge/*.md
 # Drop more .md files there and re-run:  python backend/scripts/ingest.py

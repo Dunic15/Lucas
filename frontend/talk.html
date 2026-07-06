@@ -149,9 +149,10 @@
     // shows the complete head + shoulders like a well-framed webcam. Tune live
     // without code changes via ?cam_z= (distance) ?cam_y= (camera height)
     // ?cam_ty= (look-at height).
-    const CAM_Z = parseFloat(params.get("cam_z")) || 2.0;
-    const CAM_Y = parseFloat(params.get("cam_y")) || 1.675;
-    const CAM_TY = parseFloat(params.get("cam_ty")) || 1.705;
+    const camParam = (k, d) => { const v = parseFloat(params.get(k)); return Number.isNaN(v) ? d : v; };
+    const CAM_Z = camParam("cam_z", 2.0);
+    const CAM_Y = camParam("cam_y", 1.675);
+    const CAM_TY = camParam("cam_ty", 1.705);
     const frameCamera = () => {
       try {
         // TalkingHead's OrbitControls clamp minDistance=2.0 — any closer framing

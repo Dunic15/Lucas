@@ -1137,14 +1137,16 @@ def _is_repeat(session: store.Session, text: str) -> bool:
 
 
 async def _make_avatar_speak(
-    session: store.Session, text: str, citations: list | None = None
+    session: store.Session, text: str, citations: list | None = None, *, force: bool = False
 ) -> bool:
     """Backend-as-brain: send the exact words for the avatar to speak (Anam talk).
 
-    Returns False when the line was suppressed by the repetition guard. Also
+    Returns False when the line was suppressed by the repetition guard.
+    `force=True` bypasses the guard (someone re-asking Laura BY NAME deserves
+    the answer again, even verbatim) while still refreshing the window. Also
     extends the estimated speaking window that powers barge-in.
     """
-    if _is_repeat(session, text):
+    if _is_repeat(session, text) and not force:
         return False
     message = {"type": "speak", "text": text, "citations": citations or []}
     # Estimate how long this line keeps her talking; queued lines extend it.
@@ -1187,7 +1189,10 @@ def _should_barge_in(session: store.Session, avatar_name: str, speaker: str, tex
     """
     if not settings.barge_in_enabled:
         return False
-    if speaker.strip().lower() == avatar_name.strip().lower():
+    # Never let her own transcribed voice interrupt her: match the avatar's
+    # configured name AND the Recall bot's display name (hardcoded "Laura" in
+    # recall_client.create_bot — they coincide today, but don't rely on it).
+    if speaker.strip().lower() in (avatar_name.strip().lower(), "laura"):
         return False
     if len(text.split()) < 3:
         return False
@@ -1498,6 +1503,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     history = session.recent_transcript(n=8)
     _t_wake = time.perf_counter()
     spoke_any = False
+    suppressed_any = False
     async for sentence in iterate_in_threadpool(
         answer_question_stream(avatar, question or text, history=history, memory=memory)
     ):
@@ -1507,19 +1513,32 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 f"{(time.perf_counter() - _t_wake) * 1000:.0f}ms",
                 flush=True,
             )
-        spoke_any = await _make_avatar_speak(session, sentence) or spoke_any
+        # Called by name -> answer even if it repeats a recent line; an
+        # unaddressed duplicate is suppressed (and reported honestly below).
+        spoke = await _make_avatar_speak(session, sentence, force=called)
+        spoke_any = spoke or spoke_any
+        suppressed_any = suppressed_any or not spoke
 
     if not spoke_any:
+        if suppressed_any:
+            # She had an answer but already said exactly this recently —
+            # stay silent and say so, instead of claiming she spoke.
+            return JSONResponse(
+                {"ok": True, "spoke": False, "reason": "duplicate answer suppressed"}
+            )
         if _should_repair_silent_answer(called, text):
             line = _silent_answer_repair_line(avatar)
-            await _make_avatar_speak(session, line)
+            if await _make_avatar_speak(session, line):
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "spoke": True,
+                        "reason": "repair_after_skip",
+                        "line": line,
+                    }
+                )
             return JSONResponse(
-                {
-                    "ok": True,
-                    "spoke": True,
-                    "reason": "repair_after_skip",
-                    "line": line,
-                }
+                {"ok": True, "spoke": False, "reason": "repair suppressed (said recently)"}
             )
         return JSONResponse(
             {"ok": True, "spoke": False, "reason": "insufficient context (SKIP)"}

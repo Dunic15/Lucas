@@ -18,10 +18,8 @@ def _session(bot_id: str = "convo-bot") -> store.Session:
     return s
 
 
-def _speak(session, text):
-    return asyncio.get_event_loop().run_until_complete(
-        main._make_avatar_speak(session, text)
-    )
+def _speak(session, text, **kw):
+    return asyncio.run(main._make_avatar_speak(session, text, **kw))
 
 
 def test_repetition_guard_suppresses_identical_line():
@@ -75,7 +73,28 @@ def test_barge_in_ignores_self_and_backchannel():
 def test_stop_message_queued_and_window_reset():
     s = _session()
     _speak(s, "a fairly long sentence that keeps her talking for a while now")
-    asyncio.get_event_loop().run_until_complete(main._make_avatar_stop(s))
+    asyncio.run(main._make_avatar_stop(s))
     assert s.speaking_until == 0.0
     types = [m["type"] for m in s.pending_messages]
     assert types[-1] == "stop"
+
+
+def test_force_bypasses_repetition_guard():
+    """Re-asking Laura BY NAME must answer again, even verbatim (review #2)."""
+    s = _session()
+    assert _speak(s, "Security approval is still missing.") is True
+    assert _speak(s, "Security approval is still missing.") is False
+    assert _speak(s, "Security approval is still missing.", force=True) is True
+
+
+def test_repair_line_suppression_is_visible():
+    """The repair line suppressed as a repeat returns False so the webhook can
+    report spoke=false instead of lying (review #2)."""
+    s = _session()
+
+    class _A:  # minimal avatar surface for the repair line
+        name = "Laura"
+
+    line = main._silent_answer_repair_line(_A())
+    assert _speak(s, line) is True
+    assert _speak(s, line) is False
