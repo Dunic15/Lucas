@@ -57,6 +57,11 @@ class Session:
     proactive_done: bool = False  # the one proactive flag fires at most once
     ws: WebSocket | None = None
     pending_messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    # Live MeetingState (see meeting_state.py). In-memory only — it is derived
+    # entirely from the persisted transcript, so after a restart it is rebuilt
+    # by replaying the utterances rather than persisted (transcript is PII;
+    # one copy in the DB is enough).
+    meeting_state: Any = field(default=None, repr=False, compare=False)
     # In-meeting map: anonymous participant id -> stable "Guest N" label. In-memory
     # only (like ws/pending_messages); on a mid-meeting restart numbering may
     # restart, which is harmless — distinct callers still stay distinct.
