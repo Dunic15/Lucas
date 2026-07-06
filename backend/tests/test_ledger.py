@@ -119,3 +119,29 @@ def test_different_meeting_type_does_not_resolve_steps():
     ledger.record_meeting(url, "laura", "bot-2", _artifact(missing=[], meeting_type=""))
     key = ledger.meeting_key(url)
     assert [i["item"] for i in ledger.items(key, status="open")] == ["security_approval"]
+
+
+def test_ledger_failure_never_blocks_finalize(monkeypatch):
+    """A ledger write error must not skip session cleanup (meter safety)."""
+    import asyncio
+
+    from app import anam_client, main, recall_client, store
+
+    monkeypatch.setattr(recall_client, "leave_call", lambda bot_id: None)
+    monkeypatch.setattr(anam_client, "end_conversation", lambda cid: None)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("ledger down")
+
+    monkeypatch.setattr(main.ledger, "record_meeting", _boom)
+
+    gpu_calls = []
+    monkeypatch.setattr(main.gpu_runtime, "on_session_ended", lambda n: gpu_calls.append(n))
+
+    store.create(bot_id="finalize-guard-bot", meeting_url=MEET, avatar_id="laura")
+    artifact = asyncio.get_event_loop().run_until_complete(
+        main._finalize_session("finalize-guard-bot")
+    )
+    assert artifact is not None
+    assert store.get("finalize-guard-bot") is None  # session removed despite error
+    assert gpu_calls, "GPU meter signal must still fire"
