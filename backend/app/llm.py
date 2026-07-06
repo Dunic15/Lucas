@@ -60,7 +60,9 @@ def _complete_anthropic(
         system=system,
         messages=[{"role": "user", "content": user}],
     )
-    return msg.content[0].text
+    # Models with adaptive thinking (Sonnet 5+) put a thinking block FIRST —
+    # content[0] is not necessarily text. Return the first text block.
+    return next((b.text for b in msg.content if b.type == "text"), "")
 
 
 def stream_complete(
