@@ -929,10 +929,14 @@ async def _finalize_session(bot_id: str) -> dict | None:
 
     store.save_artifact(bot_id, artifact)
     # Cross-meeting memory: fold this meeting's extracted facts into the
-    # ledger (resolves process steps that earlier sessions left open).
-    await run_in_threadpool(
-        ledger.record_meeting, session.meeting_url, session.avatar_id, bot_id, artifact
-    )
+    # ledger. Best-effort — memory must never block the cleanup below
+    # (session removal + GPU meter signal), so a ledger hiccup is swallowed.
+    try:
+        await run_in_threadpool(
+            ledger.record_meeting, session.meeting_url, session.avatar_id, bot_id, artifact
+        )
+    except Exception:
+        pass
     store.remove(bot_id)
     # Photoreal only: last session out turns off the GPU meter (after a grace
     # window, in case another meeting starts right away).
