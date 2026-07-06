@@ -1,3 +1,5 @@
+> **Archived:** this document may be stale and is kept only for reference.
+
 # Quickstart — the "insert one API key and it works" path
 
 ## 0. Requirements

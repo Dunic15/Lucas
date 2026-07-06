@@ -5,8 +5,9 @@ tools: Read, Grep, Glob, Write, Edit, WebSearch
 model: sonnet
 ---
 
-Read `.claude/CONTEXT.md`, `README.md`, `CODEX.md`, and
-`docs/AWS_MIGRATION_ASSESSMENT.md` before acting.
+Read `.claude/CONTEXT.md`, `README.md`, and `CODEX.md` before acting (the
+historical AWS-migration cost notes are archived in
+`docs/archive/AWS_MIGRATION_ASSESSMENT.md`).
 
 You own the economics. Show inputs; never hand-wave margins.
 

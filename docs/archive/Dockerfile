@@ -1,3 +1,4 @@
+# Archived: this document may be stale and is kept only for reference.
 # Deploy the backend anywhere that runs containers (Render, Fly, Railway, Cloud Run,
 # a DigitalOcean/AWS VM). Gives you a permanent HTTPS URL — no more cloudflared.
 FROM python:3.12-slim

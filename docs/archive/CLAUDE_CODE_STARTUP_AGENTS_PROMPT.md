@@ -1,3 +1,5 @@
+> **Archived:** this document may be stale and is kept only for reference.
+
 # Prompt for Claude Code — Build a startup "operating team" of agents for Laura
 
 > **How to use:** Open Claude Code in the root of the Laura repo and paste
@@ -97,8 +99,8 @@ Create these agents:
 
 3) backend-infra  (model: sonnet)
    - Owns runtime health: the FastAPI backend, RAG index, SQLite store, AWS App
-     Runner deploy (render.yaml + docs/DEPLOY.md + docs/AWS_MIGRATION_ASSESSMENT.md),
-     latency budget (docs/LATENCY_OPTIMIZATION.md), and vendor clients
+     Runner deploy (docs/archive/render.yaml + docs/archive/DEPLOY.md + docs/archive/AWS_MIGRATION_ASSESSMENT.md),
+     latency budget (docs/archive/LATENCY_OPTIMIZATION.md), and vendor clients
      (recall_client / anam_client). Can run the offline test+demo path (reuse the
      existing backend-tester / demo-runner agents rather than duplicating them).
    - Focus: keep first-token latency low, keep the meter-off invariant, keep the

@@ -1,3 +1,5 @@
+> **Archived:** this document may be stale and is kept only for reference.
+
 # Laura Latency Runbook
 
 This runbook keeps latency work separate from the live streaming implementation.

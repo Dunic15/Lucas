@@ -5,8 +5,10 @@ tools: Read, Grep, Glob, Bash, Edit
 model: sonnet
 ---
 
-Read `.claude/CONTEXT.md`, `README.md`, `CODEX.md`, `docs/DEPLOY.md`,
-`docs/AWS_MIGRATION_ASSESSMENT.md`, and `docs/LATENCY_OPTIMIZATION.md` before acting.
+Read `.claude/CONTEXT.md`, `README.md`, `CODEX.md`, and `gpu/README.md` before
+acting. Historical deploy/latency context (Render-era, pre-Groq — stale but
+useful for the "why" trail) is archived in `docs/archive/DEPLOY.md`,
+`docs/archive/AWS_MIGRATION_ASSESSMENT.md`, and `docs/archive/LATENCY_OPTIMIZATION.md`.
 
 You keep Laura running and cheap. The backend is the brain; treat production as
 real (it bills per minute and per token).
