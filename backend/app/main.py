@@ -43,6 +43,7 @@ from . import (
     granola_client,
     actions,
     gmail_watcher,
+    autopilot,
     gpu_runtime,
     ledger,
     meeting_state,
@@ -118,6 +119,21 @@ def _prebuild_indexes() -> None:
             warm_index(avatar)
         except Exception as e:  # a bad avatar shouldn't stop the server
             print(f"[startup] could not index avatar '{aid}': {e}")
+
+
+@app.on_event("startup")
+async def _start_autopilot_nudges() -> None:
+    """Periodic Slack digest of open ledger items (AUTOPILOT_NUDGE=true only)."""
+    if not settings.autopilot_nudge:
+        return
+
+    async def _loop() -> None:
+        while not _shutting_down:
+            if autopilot.nudge_due():
+                await run_in_threadpool(autopilot.run_nudge)
+            await asyncio.sleep(60)
+
+    asyncio.create_task(_loop())
 
 
 # ─────────────── Gmail watcher: "Add people" → auto-join ────────────────
@@ -865,6 +881,12 @@ async def _start_avatar_session(
     session.memory_brief = await run_in_threadpool(
         ledger.carryover_brief, meeting_url
     )
+    if settings.autopilot_brief and session.memory_brief:
+        # Autopilot: mail/Slack "what's still open from last time" to the
+        # owner as the bot joins. Fire-and-forget — never delays the join.
+        asyncio.create_task(
+            run_in_threadpool(autopilot.maybe_send_brief, meeting_url, avatar.name)
+        )
     # Photoreal only: wake the GPU box for this meeting (fire-and-forget; the
     # page runs on the static-portrait fallback until the stream comes up).
     gpu_runtime.on_session_started()
@@ -933,6 +955,11 @@ async def _finalize_session(bot_id: str) -> dict | None:
     await run_in_threadpool(
         ledger.record_meeting, session.meeting_url, session.avatar_id, bot_id, artifact
     )
+    if settings.autopilot_deliver:
+        # Autopilot: send the drafted follow-up + Slack summary now, without
+        # holding up the finalize response (meter is already stopped above).
+        name = avatars.load(session.avatar_id).name
+        asyncio.create_task(run_in_threadpool(autopilot.maybe_deliver, name, artifact))
     store.remove(bot_id)
     # Photoreal only: last session out turns off the GPU meter (after a grace
     # window, in case another meeting starts right away).
