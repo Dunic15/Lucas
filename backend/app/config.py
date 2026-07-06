@@ -153,7 +153,12 @@ class Settings(BaseSettings):
     #    the model's own knowledge instead of doc-quoting.
     live_search_enabled: bool = True
     live_search_model: str = "groq/compound-mini"
-    rag_min_context_score: float = 0.10
+    # 0.28: real process/SFF questions score 0.6+, unrelated chatter ~0.1 —
+    # below the bar she answers from her own intelligence, no doc flavor.
+    rag_min_context_score: float = 0.28
+    # Spoken acknowledgment the instant she's addressed by name, while the
+    # answer generates — kills the dead air that reads as lag.
+    ack_enabled: bool = True
 
     # Conversation quality: stop speaking the moment a human talks over her
     # (barge-in), and never repeat the same spoken line within the window.

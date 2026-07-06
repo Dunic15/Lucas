@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import re
 import time
 import uuid
@@ -1142,6 +1143,8 @@ def avatar_messages(conversation_id: str) -> JSONResponse:
     )
 
 
+_ACK_LINES = ["Mm-hm.", "Sure —", "On it.", "Let me think —", "Good one —"]
+
 _SPEECH_WORDS_PER_SECOND = 2.6  # ~ElevenLabs/edge-tts pace, for the barge-in window
 
 
@@ -1536,6 +1539,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
     question = question or text  # no wake word → treat the whole utterance as the ask
     if session.in_cooldown(avatar.speak_cooldown_seconds):
         return JSONResponse({"ok": True, "spoke": False, "reason": "cooldown"})
+
+    # ── instant acknowledgment ──
+    # She was addressed BY NAME, so she will answer — say so immediately while
+    # the model generates. Sub-second social feedback is what makes the
+    # conversation feel fluent instead of laggy.
+    if settings.ack_enabled and called:
+        await _make_avatar_speak(session, random.choice(_ACK_LINES), force=True)
 
     # Backend is the brain: answer from OUR knowledge (RAG) with the recent
     # meeting conversation as context. Streamed sentence-by-sentence so the avatar
