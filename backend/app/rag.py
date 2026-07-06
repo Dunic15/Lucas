@@ -214,7 +214,8 @@ def _read_pdf(path: Path) -> str:
 def build_index(avatar: Avatar) -> int:
     """(Re)build one avatar's vector store from its knowledge/ docs (.md/.txt/.pdf)."""
     all_chunks: list[Chunk] = []
-    for path in sorted(avatar.knowledge_dir.glob("*")):
+    paths = [p for d in avatar.knowledge_dirs for p in sorted(d.glob("*"))]
+    for path in paths:
         if path.suffix.lower() == ".md":
             all_chunks.extend(_chunk_markdown(path.read_text(), path.name))
         elif path.suffix.lower() == ".txt":

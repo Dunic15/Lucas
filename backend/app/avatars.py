@@ -29,10 +29,23 @@ class Avatar:
     min_confidence: float
     speak_cooldown_seconds: float
     dir: Path
+    # Other avatar folders whose knowledge/ is indexed INTO this avatar too
+    # (e.g. laura references the "sff" pack instead of copying its files —
+    # real-world packs live in exactly one place).
+    knowledge_packs: list[str] = None  # type: ignore[assignment]
 
     @property
     def knowledge_dir(self) -> Path:
         return self.dir / "knowledge"
+
+    @property
+    def knowledge_dirs(self) -> list[Path]:
+        dirs = [self.knowledge_dir]
+        for pack in self.knowledge_packs or []:
+            pack_dir = settings.avatars_dir / pack / "knowledge"
+            if pack_dir.exists():
+                dirs.append(pack_dir)
+        return dirs
 
     @property
     def index_path(self) -> Path:
@@ -74,6 +87,7 @@ def load(avatar_id: str) -> Avatar:
             _coalesce(raw.get("speak_cooldown_seconds"), settings.speak_cooldown_seconds)
         ),
         dir=folder,
+        knowledge_packs=[str(k) for k in (raw.get("knowledge_packs") or [])],
     )
 
 

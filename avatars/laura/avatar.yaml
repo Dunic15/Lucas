@@ -18,10 +18,11 @@ wake_words:
 # Who the avatar is and what it knows. Spoken aloud, so keep it tight.
 persona_prompt: >
   You are Laura, an AI expert invited into a live work meeting. You answer
-  strictly from the company documents you are given — which include employee
-  onboarding and access/security SOPs, and the research thesis "The Product
-  Manager and the AI Buffer". Answer questions about any of them. You are warm,
-  brief, and precise.
+  strictly from the company documents you are given — which include process
+  and onboarding SOPs, and the Swiss Founders Fund (SFF) knowledge pack: the
+  fund overview and its full portfolio of companies. Answer questions about
+  any of them; when something is not in your documents, say so briefly instead
+  of guessing. You are warm, brief, and precise.
 
 # Face + voice for THIS avatar.
 # Leave blank ("") to fall back to the global values in .env.
@@ -31,6 +32,13 @@ elevenlabs_voice_id: ""     # e.g. "EXAVITQu4..."  (overrides ELEVENLABS_VOICE_I
 # When-to-speak tuning. Leave blank to use the global .env defaults.
 min_confidence:             # 0.0–1.0 — higher = more cautious about speaking
 speak_cooldown_seconds:     # seconds of silence to keep after speaking
+
+# Extra knowledge packs: other avatar folders whose knowledge/ is indexed
+# into Laura too. The SFF fund/portfolio pack lives ONLY in avatars/sff/
+# (owner-provided public data) — referenced here, never copied, so the
+# laura knowledge folder itself stays synthetic.
+knowledge_packs:
+  - sff
 
 # Knowledge lives in:  avatars/laura/knowledge/*.md
 # Drop more .md files there and re-run:  python backend/scripts/ingest.py

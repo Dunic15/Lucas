@@ -139,9 +139,7 @@ def test_ledger_failure_never_blocks_finalize(monkeypatch):
     monkeypatch.setattr(main.gpu_runtime, "on_session_ended", lambda n: gpu_calls.append(n))
 
     store.create(bot_id="finalize-guard-bot", meeting_url=MEET, avatar_id="laura")
-    artifact = asyncio.get_event_loop().run_until_complete(
-        main._finalize_session("finalize-guard-bot")
-    )
+    artifact = asyncio.run(main._finalize_session("finalize-guard-bot"))
     assert artifact is not None
     assert store.get("finalize-guard-bot") is None  # session removed despite error
     assert gpu_calls, "GPU meter signal must still fire"

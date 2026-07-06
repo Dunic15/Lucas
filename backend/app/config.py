@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     #   stub      (free, offline, no model — deterministic, for a zero-key demo)
     brain_provider: str = "anthropic"
     anthropic_api_key: str = ""
-    brain_model: str = "claude-sonnet-4-6"
+    brain_model: str = "claude-sonnet-5"
     # Latency-critical live-answer path uses a faster/cheaper model; the quality
     # model above is reserved for the non-realtime post-meeting summary.
     brain_model_fast: str = "claude-haiku-4-5"
@@ -137,6 +137,10 @@ class Settings(BaseSettings):
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.
     proactive_enabled: bool = True
     proactive_min_confidence: float = 0.7
+    # Conversation quality: stop speaking the moment a human talks over her
+    # (barge-in), and never repeat the same spoken line within the window.
+    barge_in_enabled: bool = True
+    repeat_suppress_seconds: float = 120.0
 
     # Server
     host: str = "127.0.0.1"
