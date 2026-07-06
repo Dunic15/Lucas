@@ -34,6 +34,7 @@ import json
 import math
 import os
 import time
+from collections import deque
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -44,7 +45,44 @@ REFERENCE_IMAGE = os.environ.get("REFERENCE_IMAGE", "assets/reference.jpg")
 FPS = int(os.environ.get("STREAM_FPS", "12" if ENGINE == "stub" else "25"))
 JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "82"))
 
+# Cost controls (issue #3). Idle watchdog: if no page is connected for this many
+# minutes, run GPU_SHUTDOWN_CMD (EBS-backed EC2: shutdown -h == STOP, meter off).
+# 0 disables it — the local/dev default; setup.sh sets it on the real box.
+IDLE_SHUTDOWN_MINUTES = int(os.environ.get("GPU_IDLE_SHUTDOWN_MINUTES", "0"))
+SHUTDOWN_CMD = os.environ.get("GPU_SHUTDOWN_CMD", "sudo shutdown -h now")
+HOURLY_USD = float(os.environ.get("GPU_HOURLY_USD", "1.006"))
+
+# ── metrics state: counters and timings ONLY — never transcript/audio/content ─
+STARTED_AT = time.time()
+CLIENTS = 0
+IDLE_SINCE: float | None = STARTED_AT  # None while >=1 client is connected
+FRAMES_SENT = 0
+FRAME_TIMES: deque = deque(maxlen=240)     # rolling window -> actual fps
+FIRST_FRAME_MS: deque = deque(maxlen=50)   # speak received -> first frame out
+
 app = FastAPI()
+
+
+def _note_frame() -> None:
+    global FRAMES_SENT
+    FRAMES_SENT += 1
+    FRAME_TIMES.append(time.time())
+
+
+async def _idle_watchdog() -> None:
+    """Stops the box when nobody is watching. Second layer of the dead-man pair:
+    launch.sh arms a hard TTL for the whole window; this catches the earlier
+    'meeting ended / page crashed and nothing reconnected' case."""
+    while True:
+        await asyncio.sleep(30)
+        if IDLE_SHUTDOWN_MINUTES <= 0 or IDLE_SINCE is None:
+            continue
+        idle_min = (time.time() - IDLE_SINCE) / 60
+        if idle_min >= IDLE_SHUTDOWN_MINUTES:
+            print(f"[gpu-avatar] no clients for {idle_min:.0f} min "
+                  f"(limit {IDLE_SHUTDOWN_MINUTES}) — shutting down", flush=True)
+            os.system(SHUTDOWN_CMD)
+            return
 
 
 class StubEngine:
@@ -128,7 +166,9 @@ engine = (MuseTalkEngine if ENGINE == "musetalk" else StubEngine)(REFERENCE_IMAG
 @app.on_event("startup")
 async def _warmup() -> None:
     await engine.start()
-    print(f"[gpu-avatar] engine={ENGINE} fps={FPS} ref={REFERENCE_IMAGE}", flush=True)
+    asyncio.create_task(_idle_watchdog())
+    print(f"[gpu-avatar] engine={ENGINE} fps={FPS} ref={REFERENCE_IMAGE} "
+          f"idle_shutdown={IDLE_SHUTDOWN_MINUTES}min", flush=True)
 
 
 @app.get("/health")
@@ -136,9 +176,38 @@ def health() -> JSONResponse:
     return JSONResponse({"ok": True, "engine": ENGINE, "fps": FPS})
 
 
+@app.get("/metrics")
+def metrics() -> JSONResponse:
+    """Operational numbers only (issue #3) — no transcript, no user content."""
+    now = time.time()
+    fps_actual = 0.0
+    if len(FRAME_TIMES) >= 2:
+        span = FRAME_TIMES[-1] - FRAME_TIMES[0]
+        if span > 0:
+            fps_actual = round((len(FRAME_TIMES) - 1) / span, 1)
+    uptime_s = int(now - STARTED_AT)
+    return JSONResponse({
+        "uptime_s": uptime_s,
+        "engine": ENGINE,
+        "fps_target": FPS,
+        "fps_actual": fps_actual,
+        "clients": CLIENTS,
+        "frames_sent": FRAMES_SENT,
+        "first_frame_ms_last": round(FIRST_FRAME_MS[-1], 1) if FIRST_FRAME_MS else None,
+        "first_frame_ms_avg": (round(sum(FIRST_FRAME_MS) / len(FIRST_FRAME_MS), 1)
+                               if FIRST_FRAME_MS else None),
+        "est_cost_usd": round(uptime_s / 3600 * HOURLY_USD, 3),
+        "idle_shutdown_minutes": IDLE_SHUTDOWN_MINUTES,
+        "idle_for_s": int(now - IDLE_SINCE) if IDLE_SINCE is not None else 0,
+    })
+
+
 @app.websocket("/stream")
 async def stream(ws: WebSocket) -> None:
+    global CLIENTS, IDLE_SINCE
     await ws.accept()
+    CLIENTS += 1
+    IDLE_SINCE = None
     await ws.send_text(json.dumps({"type": "hello", "mode": ENGINE, "fps": FPS}))
     speak_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
@@ -158,10 +227,16 @@ async def stream(ws: WebSocket) -> None:
                 audio = None
 
             if audio is not None:
+                t_speak = time.perf_counter()
                 await ws.send_text(json.dumps({"type": "talk_start"}))
+                first_frame = True
                 async for frame in engine.talk_frames(audio):
                     t0 = time.perf_counter()
                     await ws.send_bytes(frame)
+                    _note_frame()
+                    if first_frame:
+                        FIRST_FRAME_MS.append((t0 - t_speak) * 1000)
+                        first_frame = False
                     # keep real-time pacing even if generation is faster
                     delay = frame_interval - (time.perf_counter() - t0)
                     if delay > 0:
@@ -169,11 +244,16 @@ async def stream(ws: WebSocket) -> None:
                 await ws.send_text(json.dumps({"type": "talk_end"}))
             else:
                 await ws.send_bytes(engine.next_idle_frame())
+                _note_frame()
                 await asyncio.sleep(frame_interval)
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
         reader_task.cancel()
+        CLIENTS -= 1
+        if CLIENTS <= 0:
+            CLIENTS = 0
+            IDLE_SINCE = time.time()
 
 
 if __name__ == "__main__":

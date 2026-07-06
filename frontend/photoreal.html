@@ -56,6 +56,16 @@
   const frameEl = document.getElementById("frame");
   frameEl.src = "/laura-reference.jpg"; // static portrait until the stream is up
 
+  // Fallback chain (issue #3): GPU stream -> static portrait -> /talk avatar.
+  // If even the static portrait can't load (and no stream is feeding frames),
+  // hand the meeting to the 3D /talk page so she always has a face.
+  frameEl.onerror = () => {
+    if (!gpuReady && frameEl.src.includes("/laura-reference.jpg")) {
+      status("static portrait unavailable — falling back to /talk");
+      location.replace("/talk" + location.search);
+    }
+  };
+
   // ── GPU frame stream ─────────────────────────────────────────────────────
   let gpu = null;          // websocket to gpu/server.py
   let gpuReady = false;

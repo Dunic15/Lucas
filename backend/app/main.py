@@ -43,6 +43,7 @@ from . import (
     granola_client,
     actions,
     gmail_watcher,
+    gpu_runtime,
     meeting_state,
 )
 from .brain import (
@@ -58,6 +59,10 @@ from .decision import detect_wake, detect_closing
 from .rag import ensure_index, warm as warm_index
 
 app = FastAPI(title="Callable AI Process Avatar")
+
+# Meeting-bound GPU runtime re-checks the live session count before it stops
+# the photoreal box (a new meeting may have started during the grace window).
+gpu_runtime.configure(lambda: len(store.all_sessions()))
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 REPO_ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -602,8 +607,12 @@ async def tts(req: TtsRequest) -> Response:
     if not text:
         return Response(status_code=204)
 
+    # tts_ms: synthesis latency for the metrics picture (issue #3). A duration
+    # only — the text itself is never logged or exported.
+    t0 = time.perf_counter()
     el = await _tts_elevenlabs(text)
     if el is not None:
+        el["tts_ms"] = int((time.perf_counter() - t0) * 1000)
         return JSONResponse(el, headers={"Cache-Control": "no-store"})
 
     voice = (req.voice or "").strip() or _TTS_DEFAULT_VOICE
@@ -623,6 +632,7 @@ async def tts(req: TtsRequest) -> Response:
             "wtimes": None,
             "wdurations": None,
             "engine": "edge",
+            "tts_ms": int((time.perf_counter() - t0) * 1000),
         },
         headers={"Cache-Control": "no-store"},
     )
@@ -846,6 +856,9 @@ async def _start_avatar_session(
     )
     session.anam_conversation_id = conversation_id
     store.register_conversation(conversation_id, bot["id"])
+    # Photoreal only: wake the GPU box for this meeting (fire-and-forget; the
+    # page runs on the static-portrait fallback until the stream comes up).
+    gpu_runtime.on_session_started()
     return {
         "bot_id": bot["id"],
         "conversation_id": conversation_id,
@@ -907,6 +920,9 @@ async def _finalize_session(bot_id: str) -> dict | None:
 
     store.save_artifact(bot_id, artifact)
     store.remove(bot_id)
+    # Photoreal only: last session out turns off the GPU meter (after a grace
+    # window, in case another meeting starts right away).
+    gpu_runtime.on_session_ended(len(store.all_sessions()))
     return artifact
 
 

@@ -102,6 +102,15 @@ class Settings(BaseSettings):
     # photoreal page falls back to a static portrait (still speaks).
     gpu_stream_url: str = ""
 
+    # Meeting-bound GPU runtime (issue #3): when set AND avatar_page="photoreal",
+    # the backend starts this EC2 instance when a session begins and stops it
+    # gpu_idle_stop_minutes after the last one ends. Keep the box STOPPED (not
+    # terminated) for this to work. Needs gpu/iam-backend-gpu-policy.json on the
+    # App Runner instance role. Empty = feature off (manual gpu/launch.sh only).
+    gpu_instance_id: str = ""
+    gpu_aws_region: str = "eu-central-1"
+    gpu_idle_stop_minutes: int = 10
+
     # Which avatar page Recall renders as the bot camera:
     #   "avatar" = Anam (paid face+voice)   "talk" = open-source (TalkingHead + free TTS)
     # Flip to "talk" (AVATAR_PAGE=talk) once /talk is validated in a browser — no

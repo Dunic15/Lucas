@@ -22,3 +22,7 @@ fastembed>=0.3
 # Free avatar voice (TTS) for the open-source avatar page (/talk) — no key, no GPU.
 # Replaces Anam's per-minute voice. Swappable for self-hosted Piper/Kokoro later.
 edge-tts>=6.1
+
+# Meeting-bound GPU runtime (issue #3): start/stop the photoreal EC2 box around
+# meetings. Only exercised when GPU_INSTANCE_ID is set; import is guarded.
+boto3>=1.34
