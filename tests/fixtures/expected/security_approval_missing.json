@@ -1,0 +1,21 @@
+{
+  "scenario": "security_approval_missing",
+  "expected_missing_steps": [
+    "security_approval"
+  ],
+  "expected_readiness_score": {
+    "min": 80,
+    "max": 80
+  },
+  "expected_actions": [
+    {
+      "contains": "Security approval is still pending",
+      "owner": "UNASSIGNED",
+      "gap_type": "approval"
+    }
+  ],
+  "expected_risks": [
+    "Provisioning is at risk"
+  ],
+  "should_proceed": false
+}

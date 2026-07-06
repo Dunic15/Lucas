@@ -1,0 +1,9 @@
+Ana: Kickoff for Northstar customer onboarding.
+Ben: Security review is cleared and sign-off is done.
+Clara: The DPA is signed and confirmed.
+Maya: Maya will own implementation for this account.
+Ana: Customer handoff is complete with support and success.
+Ben: We agreed to go with the standard rollout plan.
+Clara: We need to set the go-live date after data migration validation.
+Maya: The launch could slip if the date stays open.
+Ana: Anything else before we wrap up?

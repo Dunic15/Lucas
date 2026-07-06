@@ -1,0 +1,21 @@
+{
+  "scenario": "implementation_owner_missing",
+  "expected_missing_steps": [
+    "implementation_owner"
+  ],
+  "expected_readiness_score": {
+    "min": 80,
+    "max": 80
+  },
+  "expected_actions": [
+    {
+      "contains": "We still need to assign the implementation owner",
+      "owner": "UNASSIGNED",
+      "gap_type": "owner"
+    }
+  ],
+  "expected_risks": [
+    "rollout risk"
+  ],
+  "should_proceed": false
+}
