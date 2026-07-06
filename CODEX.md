@@ -1,98 +1,67 @@
-# Codex task brief — Callable AI Process Avatars
+# Codex brief — Callable AI Process Avatars
 
-> **Status: no open Codex tasks.** All three items below were completed by Claude
-> Code and merged to `main` (Anam face-vendor swap + avatar-page polish; the
-> second avatar "Marcus" was descoped by the owner). This file is kept for
-> reference / future parallel work. Nothing here needs redoing — do not reopen
-> these tasks or you'll conflict with `main`.
+You are working **in parallel with two Claude Code sessions** on this repo.
+Read [`.claude/CONTEXT.md`](.claude/CONTEXT.md) first (product truth), then
+[README.md](README.md). Session ownership lives in
+[`.claude/agents/README.md`](.claude/agents/README.md):
+**Claude 1 = docs/repo hygiene · Claude 2 = demo UI/product surface · Codex = tests/evals.**
 
-You are working **in parallel with Claude Code** on this repo. Read
-[README.md](README.md) first (especially the demo), then
-[avatars/README.md](avatars/README.md) for the avatar format.
+## Your scope (current)
 
-## Claude handoff note — Laura rename
+**Codex owns tests and evals ONLY, for now:**
 
-Codex renamed the default avatar identity to Laura across README, avatar config,
-defaults, scripts, tests, and Claude agent instructions. This is
-not a demo behavior change: the offline demo still starts with the same command,
-still uses free stub/hash mode without keys, and still exercises `/demo/ask`,
-`/demo/sample`, and `/demo/post_meeting`; the default `avatar_id` and wake word
-are now `laura`.
+- `backend/tests/**` — the unit/logic test suite (pure logic, no keys needed).
+- `tests/**` — the eval harness (e.g. `tests/eval_laura_onboarding.py`,
+  `tests/test_laura_onboarding_eval.py`, `tests/fixtures/`): scenario transcripts →
+  expected MeetingState/artifact outcomes.
 
-Work on a branch and open a PR — **do not commit to `main`:**
+**Out of scope unless explicitly asked:**
 
-```bash
-git checkout -b codex/content-and-face
-# ...do the tasks...
-git push -u origin codex/content-and-face
-```
+- **No backend runtime changes** (`backend/app/**`) — if a test exposes a bug,
+  write the failing test + a note in the PR; the owning Claude session fixes it.
+- **No GPU work** (`gpu/**`, `backend/app/gpu_runtime.py`) and **no MeetingState
+  implementation changes** (`backend/app/meeting_state.py`,
+  `avatars/*/process_templates/`) — testing them is in scope, changing them is not.
+- No `frontend/**`, no `docs/**`, no `.claude/**`, no `README.md`.
 
----
+## Rules
 
-## ⚠️ File ownership (do not cross)
+1. **Branch required — never commit to `main`:**
 
-Claude has just landed the **offline demo** (brain providers, RAG auto-index,
-`/demo/*` routes, `frontend/demo.html`, docs, `.claude/agents`). **Do NOT touch:**
+   ```bash
+   git checkout -b codex/<topic>
+   # ...work...
+   git push -u origin codex/<topic>   # then open a PR
+   ```
 
-- `backend/app/{main.py,brain.py,llm.py,embeddings.py,rag.py,config.py,decision.py,store.py,avatars.py,recall_client.py}`
-- `backend/scripts/**`, `backend/tests/**`
-- `frontend/demo.html`
-- `requirements.txt`, `.env.example`, `README.md`, `QUICKSTART.md`, `docs/**`, `.claude/**`
+   Every PR gets a code-reviewer pass before merge.
 
-**You own exactly these:**
+2. **Synthetic, audit-safe data only** — test fixtures and eval transcripts must
+   contain no real PII or customer names.
 
-- `backend/app/tavus_client.py` — the FACE-vendor client (see Task 3, Anam swap)
-- `avatars/marcus/**` — a new second avatar (new files only)
-- `frontend/avatar.html` — the live-meeting avatar page (UI polish)
+3. Tests must run key-free (`stub` brain + `hash` embeddings), like the demo.
 
-If you must change any other backend file (e.g. the `tavus_client` import line in
-`main.py` for the rename), **leave a note in the PR description** and Claude will
-apply that one line — don't edit `main.py` yourself.
+4. Match existing tone and style. Small, focused commits.
 
----
+## Live-meeting integration CONTRACT (never break, and test against it)
 
-## Task 1 — Second avatar: "Marcus — AI IT/Security Expert"
+This is the contract the whole team codes against — hard constraint 1 in
+`.claude/CONTEXT.md`:
 
-Prove "add an avatar = add a folder." Copy the shape of `avatars/laura/`.
+- The avatar page speak channel: `ws://<host>/ws/<conversation_id>` **and** its
+  App-Runner-safe twins — SSE `GET /avatar/stream/<conversation_id>` + HTTP poll
+  `GET /avatar/messages/<conversation_id>`. A message is routed down exactly one
+  path (ws if connected, else queued for SSE/poll) so pages never double-speak.
+- The message shape: `{"type": "speak", "text": "..."}`.
+- The `recall_client` / `anam_client` function signatures
+  (`create_persona`, `create_conversation`, `end_conversation`, `create_bot`,
+  `leave_call`).
+- The GPU stream protocol (photoreal): client sends
+  `{"type":"speak","audio_b64":<mp3>}`; server replies `hello`/`talk_start`/
+  `talk_end` JSON frames + binary JPEG frames (`gpu/README.md`).
 
-Create:
-- `avatars/marcus/avatar.yaml` — `id: marcus`, `name: Marcus`,
-  `role: AI IT & Security Expert`, `wake_words: [marcus]`, a `persona_prompt`
-  about access provisioning, SSO, security reviews, and offboarding. Leave the
-  face/voice/threshold fields blank (they fall back to global `.env`).
-- `avatars/marcus/knowledge/` — 2–3 **synthetic** SOPs
-  (`access_provisioning_sop.md`, `offboarding_security_sop.md`,
-  `incident_response_sop.md`). Match Laura's heading structure — headings become
-  cited retrieval sections, so keep one concept per heading.
-- `avatars/marcus/sample_meeting.txt` — a short transcript with a couple of gaps.
+## History
 
-**Synthetic data only.** Acceptance: same shape as `avatars/laura/`; valid YAML;
-`id` equals the folder name. Verify: `python backend/scripts/ask.py --avatar marcus "<question>"`.
-
-## Task 2 — Polish the live avatar page (`frontend/avatar.html`)
-
-This is what the Recall bot renders as its camera. Improve UX **without breaking
-the integration contract**:
-- connection-status pill (Connecting… → Live), a caption bar showing the last
-  spoken line, a subtle "speaking" pulse, and a clean state when params missing.
-- **Do NOT change:** the `ws://<host>/ws/<conversation_id>` connection, the
-  `{type:"speak", text}` message handling, the `speak()` echo app-message, or the
-  pinned face-SDK `<script>` + iframe embed.
-
-## Task 3 — Face vendor: finish the Tavus → **Anam** swap (`tavus_client.py` only)
-
-The face vendor is Anam now. In **`backend/app/tavus_client.py` only**:
-- Update the docstring/comments and the vendor calls to Anam's API while keeping
-  the **exact same function signatures** (`create_persona`, `create_conversation`,
-  `end_conversation`) so `main.py` needs no change beyond the import name.
-- In the PR description, give Claude the one line to change in `main.py`
-  (`from . import ... tavus_client` → your new module name) if you rename the file.
-- Update `frontend/avatar.html` comments to say Anam.
-
-Keep `config.py` env var names as they are unless you note the change for Claude.
-
-## Conventions
-- Synthetic, audit-safe data only. No secrets, no real PII.
-- Match existing tone and style. Small, focused commits.
-- PR title: `Codex: Marcus avatar + avatar page polish + Anam face client`.
-  List what you changed and any one-line backend edits you want Claude to apply.
+Earlier Codex tasks (Marcus avatar, avatar-page polish, Tavus→Anam swap) are done
+or descoped — merged via `main` long ago; the old `codex/content-and-ui` branch is
+stale and superseded. Don't reopen them.
