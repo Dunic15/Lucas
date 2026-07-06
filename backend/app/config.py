@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = ""
     elevenlabs_tts_model: str = "eleven_flash_v2_5"
+    # Voice used when the primary ELEVENLABS_VOICE_ID can't synthesize (plan
+    # tier / licensing / deleted). Default: ElevenLabs stock "Laura".
+    elevenlabs_fallback_voice_id: str = "FGY2WhTYpPnrIDTdsKH5"
 
     # Public URL of this server (Recall must reach our webhook + avatar page)
     public_base_url: str = "http://127.0.0.1:8000"
