@@ -98,3 +98,10 @@ def test_repair_line_suppression_is_visible():
     line = main._silent_answer_repair_line(_A())
     assert _speak(s, line) is True
     assert _speak(s, line) is False
+
+
+def test_own_speech_helper():
+    assert main._is_own_speech("Laura", "Laura") is True
+    assert main._is_own_speech("Laura SFF Expert", "laura") is True  # Recall bot label
+    assert main._is_own_speech("Laura", " LAURA ") is True
+    assert main._is_own_speech("Laura", "Priya") is False
