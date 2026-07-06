@@ -118,9 +118,12 @@
     cameraView: "upper",
     cameraDistance: 0,
     avatarMood: "happy",          // subtle smile — reads far more human than neutral
-    modelPixelRatio: 2,           // supersample: sharper face/hair (was 1.5; the
-                                  // close-up framing puts more pixels on her face,
-                                  // so the extra resolution is actually visible)
+    // Supersampling: 2x in the demo (a human's browser, sharpness is the point),
+    // but keep the proven 1.5 on the Recall bot browser (web_4_core has no GPU
+    // guarantee — an unverified +78% render load on the LIVE camera isn't worth
+    // it when the close-up framing already added face pixels). Meeting mode is
+    // detectable here: Recall always renders us with ?conversation_id=.
+    modelPixelRatio: params.get("conversation_id") ? 1.5 : 2,
     // Warm 3-point-ish light: sells skin as skin (values tuned live in-browser;
     // brighter blows out the cheeks, dimmer goes corpse-gray).
     lightAmbientColor: "#fff3e6",
@@ -170,6 +173,9 @@
   } catch (e) {
     status("avatar failed to load: " + (e?.message || e) + " — try a different AVATAR_URL");
     console.error(e);
+    // Still reveal the stage: a load failure should show the office backdrop
+    // ("empty room"), never a permanently blank black frame in a meeting.
+    document.getElementById("stage").classList.add("live");
   }
 
   // ── TTS: turn text into { audio, words, wtimes, wdurations } for speakAudio ──
