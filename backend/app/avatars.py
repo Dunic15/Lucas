@@ -29,6 +29,10 @@ class Avatar:
     min_confidence: float
     speak_cooldown_seconds: float
     dir: Path
+    # Spoken hint of what this avatar can actually help with — used in the live
+    # repair line when someone is talking to it but hasn't asked something it can
+    # ground. Per-avatar so the SFF fund expert doesn't offer onboarding topics.
+    topics_hint: str = ""
 
     @property
     def knowledge_dir(self) -> Path:
@@ -74,6 +78,7 @@ def load(avatar_id: str) -> Avatar:
             _coalesce(raw.get("speak_cooldown_seconds"), settings.speak_cooldown_seconds)
         ),
         dir=folder,
+        topics_hint=(raw.get("topics_hint") or "").strip(),
     )
 
 

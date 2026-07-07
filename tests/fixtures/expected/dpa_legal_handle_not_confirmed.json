@@ -1,0 +1,21 @@
+{
+  "scenario": "dpa_legal_handle_not_confirmed",
+  "expected_missing_steps": [
+    "dpa_confirmation"
+  ],
+  "expected_readiness_score": {
+    "min": 80,
+    "max": 80
+  },
+  "expected_actions": [
+    {
+      "contains": "Nina should follow up with legal by Friday",
+      "owner": "UNASSIGNED",
+      "gap_type": "deadline"
+    }
+  ],
+  "expected_risks": [
+    "legal timing delays onboarding"
+  ],
+  "should_proceed": false
+}

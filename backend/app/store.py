@@ -57,6 +57,23 @@ class Session:
     proactive_done: bool = False  # the one proactive flag fires at most once
     ws: WebSocket | None = None
     pending_messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    # ── live speaking / interruption state (in-memory only) ──
+    # Ephemeral by design: after a restart there is no in-flight speech to resume,
+    # and none of it is PII. Drives transcript-triggered barge-in: a new user line
+    # while the avatar is speaking bumps the generation id + emits a stop message,
+    # and any still-streaming chunk from the superseded turn is dropped.
+    assistant_speaking: bool = field(default=False, repr=False, compare=False)
+    user_speaking: bool = field(default=False, repr=False, compare=False)
+    assistant_interrupted: bool = field(default=False, repr=False, compare=False)
+    speech_generation_id: int = field(default=0, repr=False, compare=False)
+    last_interruption_at: float = field(default=0.0, repr=False, compare=False)
+    # ── repetition guard (in-memory only) ──
+    # Normalized gists of what the avatar has actually spoken, and the questions
+    # it has already answered (speaker + normalized text). Bounded; never persisted.
+    spoken_gists: list[str] = field(default_factory=list, repr=False, compare=False)
+    answered_log: list[dict[str, str]] = field(
+        default_factory=list, repr=False, compare=False
+    )
     # Live MeetingState (see meeting_state.py). In-memory only — it is derived
     # entirely from the persisted transcript, so after a restart it is rebuilt
     # by replaying the utterances rather than persisted (transcript is PII;
@@ -119,6 +136,65 @@ class Session:
 
     def mark_spoke(self) -> None:
         self.last_spoke_at = time.time()
+
+    # ── speaking / interruption ──
+    def begin_speaking(self) -> int:
+        """Start a new speech turn: bump the generation id and clear interruption.
+        Returns the id so the streaming loop can detect if it gets superseded."""
+        self.speech_generation_id += 1
+        self.assistant_interrupted = False
+        self.assistant_speaking = True
+        return self.speech_generation_id
+
+    def is_speaking(self, window_seconds: float) -> bool:
+        """True while the avatar is likely still talking. The backend finishes
+        SENDING chunks well before the client finishes PLAYING the audio, and it
+        can't observe the client's playback, so we treat the window after the last
+        chunk as 'still speaking' — long enough to catch a real barge-in. The flag
+        stays set until interrupt() (or the window lapses); a spurious stop when she
+        isn't actually talking is a harmless no-op on the page."""
+        return self.assistant_speaking and (
+            (time.time() - self.last_spoke_at) < window_seconds
+        )
+
+    def interrupt(self) -> int:
+        """Barge-in: mark the current turn interrupted and clear the cooldown so a
+        genuine follow-up can be answered. Returns the interrupted generation id."""
+        self.assistant_interrupted = True
+        self.assistant_speaking = False
+        self.last_interruption_at = time.time()
+        self.last_spoke_at = 0.0
+        return self.speech_generation_id
+
+    def is_stale(self, generation_id: int) -> bool:
+        """True if a chunk from `generation_id` should be dropped — either the turn
+        was interrupted or a newer turn has taken over."""
+        return self.assistant_interrupted or self.speech_generation_id != generation_id
+
+    # ── repetition guard ──
+    def record_spoken(self, text: str) -> None:
+        from .decision import normalize_text  # local import: avoid cycle
+
+        gist = normalize_text(text)
+        if not gist:
+            return
+        self.spoken_gists.append(gist)
+        del self.spoken_gists[:-8]  # keep the last 8
+
+    def record_question(self, speaker: str, question: str) -> None:
+        from .decision import normalize_text
+
+        self.answered_log.append(
+            {"speaker": speaker or "", "question": normalize_text(question)}
+        )
+        del self.answered_log[:-12]
+
+    def prior_questions(self, speaker: str | None = None) -> list[str]:
+        return [
+            e["question"]
+            for e in self.answered_log
+            if speaker is None or e["speaker"] == (speaker or "")
+        ]
 
 
 _LOCK = threading.RLock()
@@ -359,6 +435,13 @@ def drain_avatar_messages(session: Session) -> list[dict[str, Any]]:
         messages = list(session.pending_messages)
         session.pending_messages.clear()
         return messages
+
+
+def clear_avatar_messages(session: Session) -> None:
+    """Drop any queued speak messages — used on barge-in so stale, now-interrupted
+    speech from a superseded turn never reaches the avatar page."""
+    with _LOCK:
+        session.pending_messages.clear()
 
 
 def all_sessions() -> list[Session]:

@@ -168,7 +168,20 @@
       }
     }
 
+    // Barge-in: backend sends {type:"stop"} when a new user line arrives while
+    // she's speaking. Drop the queued-sentence backlog immediately so she doesn't
+    // keep talking over the person. NOTE: this cancels PENDING sentences; the one
+    // already handed to anam.talk() plays out (Anam has no per-utterance interrupt
+    // wired here — stopStreaming() would kill the whole face, so we don't use it).
+    function stopSpeaking() {
+      speakQueue = [];
+      draining = false;
+      setSpeaking(false);
+    }
+
     function handleBackendMessage(msg) {
+      if (!msg) return;
+      if (msg.type === "stop") { stopSpeaking(); return; }
       if (msg.type === "speak" && msg.text) speak(msg.text);
       if (msg.type === "ask" && msg.text) askPersona(msg.text);
     }

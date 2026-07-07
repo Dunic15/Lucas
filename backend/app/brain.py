@@ -131,10 +131,12 @@ def answer_question(
 ANSWER_STREAM_SYSTEM = """{persona}
 
 You are Laura, a warm, helpful AI assistant in a live spoken conversation. Keep \
-replies to 1-3 short sentences a person can absorb by ear. Plain text only — no \
+replies to 1-2 short sentences a person can absorb by ear. Plain text only — no \
 markdown, bullets, headings, JSON, or preamble.
 
 How to respond:
+- Get straight to the answer. Do NOT open with "Great question", "Sure", "Of \
+course", or similar filler, and do NOT restate the question back.
 - Greetings, small talk, or questions about you ("how are you?", "who are you?", \
 "what can you do?") — reply naturally, warmly, and briefly, in character. NEVER \
 skip these.
@@ -147,6 +149,8 @@ context, and don't invent specific steps, owners, or approvals that aren't there
 If the context only partly covers it, give the useful part. When your answer comes \
 from a company document, name it briefly and naturally in your sentence (e.g. "per \
 the onboarding SOP"). For greetings and general chat, do NOT cite anything.
+- NEVER invent facts, numbers, dates, companies, approvals, exits, or fund/\
+portfolio claims. If you don't have it, say so plainly.
 - If the context is weak but the person is clearly asking you, do NOT skip. Give \
 the safest useful answer: state what you can tell from the context, then say what \
 you would check next.
@@ -156,6 +160,29 @@ person most likely meant.
 clearly NOT directed at you — e.g. two other people talking to each other. When \
 someone seems to be addressing you or asking anything at all, respond rather than \
 skip. When in doubt, respond."""
+
+
+# Stricter variant for the LIVE MEETING path (Recall). In a real meeting the
+# avatar is one of many voices, so the default bias flips: silence unless clearly
+# addressed. The when-to-speak gate already filtered for a wake word or an
+# on-topic question before we get here, so the model's remaining job is a tight,
+# grounded answer — and to SKIP if the line turns out not to be for it.
+ANSWER_STREAM_SYSTEM_MEETING = """{persona}
+
+You are Laura, an AI expert sitting in a live work meeting with several people. \
+You are NOT the host — you speak only when addressed or asked something you can \
+answer from the documents. Plain spoken text only — no markdown, no preamble.
+
+Rules:
+- Answer in AT MOST 1-2 short sentences. Get straight to it — no "Great question", \
+no "Sure", no filler, and never restate the question.
+- Answer ONLY from the provided context. NEVER invent facts, numbers, dates, \
+owners, approvals, exits, companies, or fund/portfolio claims. If the documents \
+don't cover it, say so in one sentence and stop.
+- When your answer comes from a document, name it briefly and naturally.
+- Reply with the single word SKIP (and nothing else) whenever the speech is not \
+clearly directed at you, is two other people talking, or is chit-chat you'd only \
+be interrupting. Prefer SKIP over speaking when you are unsure — silence is safe."""
 
 
 def _is_skip(head: str) -> bool:
@@ -172,9 +199,28 @@ def _retrieval_query(question: str, history: str = "") -> str:
     return f"{history[-1200:]}\n\nCurrent ask: {question}"
 
 
-def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", k: int = 6):
+def answer_question_stream(
+    avatar: Avatar,
+    question: str,
+    *,
+    history: str = "",
+    k: int = 6,
+    live: bool = False,
+    max_sentences: int | None = None,
+    min_chars: int = 0,
+):
     """Yield spoken sentences as they are generated. Yields nothing (stays silent)
-    only when the model judges the speech was not addressed to Laura (SKIP)."""
+    only when the model judges the speech was not addressed to Laura (SKIP).
+
+    `live=True` uses the stricter meeting system prompt (silence-biased). \
+    `max_sentences` mechanically caps the spoken length — not just via the prompt \
+    — so a rambling generation is truncated to what a person can absorb by ear. \
+    `min_chars>0` coalesces tiny sentences ("Yes." "Sure.") into a chunk of at \
+    least that many characters before yielding, so the TTS voice flows instead of \
+    stuttering one fragment at a time (a touch more first-audio latency for \
+    smoother prosody). The first chunk still streams as soon as it reaches the \
+    threshold or the answer ends.
+    """
     _t0 = time.perf_counter()
     chunks = retrieve(avatar, _retrieval_query(question, history), k=k)
     _retrieve_ms = (time.perf_counter() - _t0) * 1000
@@ -184,12 +230,13 @@ def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", 
         r = _stub_answer(chunks)
         if r.get("sufficient_context"):
             yield r["answer"]
-            if citation:
+            if citation and max_sentences != 1:
                 yield f"— per {citation}"
         return
 
     convo = f"Recent meeting conversation:\n{history}\n\n" if history.strip() else ""
-    system = ANSWER_STREAM_SYSTEM.format(persona=avatar.persona_prompt)
+    template = ANSWER_STREAM_SYSTEM_MEETING if live else ANSWER_STREAM_SYSTEM
+    system = template.format(persona=avatar.persona_prompt)
     user = (
         f"Company process context:\n\n{_format_context(chunks)}\n\n"
         f"{convo}"
@@ -198,9 +245,21 @@ def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", 
     )
 
     pending = ""      # confirmed answer text not yet flushed as a whole sentence
+    outbuf = ""       # whole sentences merged toward a min_chars chunk (cadence)
     decided = False   # whether we've ruled out the SKIP sentinel
     spoke_any = False
+    said = 0          # sentences seen so far (for the max_sentences cap)
     _first_token_ms = None
+
+    def _log_first() -> None:
+        if not spoke_any:
+            print(
+                f"[latency] answer_stream retrieve={_retrieve_ms:.0f}ms "
+                f"first_token={_first_token_ms:.0f}ms "
+                f"first_sentence={(time.perf_counter() - _t0) * 1000:.0f}ms",
+                flush=True,
+            )
+
     for delta in llm.stream_complete(
         system, user, max_tokens=400, model=settings.brain_model_fast
     ):
@@ -219,25 +278,28 @@ def answer_question_stream(avatar: Avatar, question: str, *, history: str = "", 
 
         pending, sentences = _split_sentences(pending)
         for s in sentences:
-            if not spoke_any:
-                _first_sentence_ms = (time.perf_counter() - _t0) * 1000
-                print(
-                    f"[latency] answer_stream retrieve={_retrieve_ms:.0f}ms "
-                    f"first_token={_first_token_ms:.0f}ms "
-                    f"first_sentence={_first_sentence_ms:.0f}ms",
-                    flush=True,
-                )
-            yield s
-            spoke_any = True
+            said += 1
+            cap_hit = max_sentences is not None and said >= max_sentences
+            if min_chars > 0:
+                outbuf = f"{outbuf} {s}".strip()
+                if len(outbuf) >= min_chars or cap_hit:
+                    _log_first()
+                    yield outbuf
+                    spoke_any = True
+                    outbuf = ""
+            else:
+                _log_first()
+                yield s
+                spoke_any = True
+            if cap_hit:
+                return  # mechanical length cap — drop the rest
 
+    # Flush whatever is left: buffered whole sentences plus any partial tail.
     tail = pending.strip()
-    if not decided:
-        # Very short answer that never crossed the decision threshold.
-        if tail and not _is_skip(tail):
-            yield tail
-            spoke_any = True
-    elif tail:
-        yield tail
+    remainder = f"{outbuf} {tail}".strip() if min_chars > 0 else tail
+    if remainder and (decided or not _is_skip(remainder)):
+        _log_first()
+        yield remainder
         spoke_any = True
 
     # Citation is not auto-appended: it made small talk read absurdly ("nice joke

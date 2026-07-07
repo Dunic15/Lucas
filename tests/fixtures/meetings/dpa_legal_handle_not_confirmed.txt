@@ -1,0 +1,9 @@
+Ana: Kickoff for Northstar customer onboarding.
+Ben: Security review is cleared and sign-off is done.
+Maya: Maya will own implementation for this account.
+Ana: Customer handoff is complete with support and success.
+Ben: Go-live is scheduled for August 15.
+Clara: Legal will handle the DPA, but it is not yet signed or confirmed.
+Ana: Nina should follow up with legal by Friday.
+Ben: There is a risk legal timing delays onboarding.
+Ana: Anything else before we wrap up?

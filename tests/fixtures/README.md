@@ -19,6 +19,9 @@ The synthetic transcript fixtures live in `tests/fixtures/meetings/`:
 - `implementation_owner_missing.txt`
 - `go_live_date_missing.txt`
 - `all_complete.txt`
+- `ambiguous_owner_not_assigned.txt`
+- `dpa_legal_handle_not_confirmed.txt`
+- `security_approval_completed.txt`
 
 Expected outputs live in `tests/fixtures/expected/` with matching JSON file
 names. Each expected file defines `expected_missing_steps`, an

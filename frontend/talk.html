@@ -182,6 +182,11 @@
   // /tts returns JSON: base64 mp3 + (with ElevenLabs) REAL per-word timings from
   // character-level alignment — that's what makes the lips match the voice. If
   // timings are absent (edge-tts fallback), spread words evenly as approximation.
+  // ONE reusable AudioContext for decoding: browsers hard-cap ~6 live contexts,
+  // and a long meeting synthesizes many sentences — a fresh context per sentence
+  // eventually throws and the avatar goes silent. Lazily created, never closed.
+  let _decodeCtx = null;
+  const decodeCtx = () => (_decodeCtx ||= new (window.AudioContext || window.webkitAudioContext)());
   async function synthesize(text) {
     const r = await fetch("/tts", {
       method: "POST",
@@ -192,8 +197,7 @@
     const j = await r.json();
     if (j.error) throw new Error(j.error);
     const bin = Uint8Array.from(atob(j.audio), (c) => c.charCodeAt(0));
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const audio = await ctx.decodeAudioData(bin.buffer);
+    const audio = await decodeCtx().decodeAudioData(bin.buffer);
     let { words, wtimes, wdurations } = j;
     if (!words || !words.length) {
       words = text.trim().split(/\s+/);
@@ -221,14 +225,20 @@
   // 2's audio is being fetched while sentence 1 plays — no gaps between
   // sentences), but hand audio to speakAudio strictly in arrival order so she
   // never speaks out of sequence. TalkingHead queues speakAudio internally.
+  // Bumped on every barge-in stop. Any say() continuation queued before the stop
+  // checks its captured generation and bails instead of speaking over the new turn.
+  let _sayGen = 0;
   let _sayChain = Promise.resolve();
   function say(text) {
     if (!text || !text.trim()) return _sayChain;
     unlockAudio();
+    const myGen = _sayGen;
     const synth = synthesize(text); // prefetch NOW, in parallel
     _sayChain = _sayChain.then(async () => {
+      if (myGen !== _sayGen) return;        // superseded by a stop before our turn
       try {
         const a = await synth;
+        if (myGen !== _sayGen) return;       // stop landed while we were synthesizing
         extendMicPause(a.audio.duration);
         head.speakAudio(a);
         status("speaking: " + text.slice(0, 60));
@@ -238,6 +248,16 @@
       }
     });
     return _sayChain;
+  }
+
+  // Barge-in: the backend sends {type:"stop"} when a new user line arrives while
+  // she's speaking. Cut current + queued speech at once: bump the generation so
+  // pending say() continuations bail, drop the pipeline, and clear TalkingHead's
+  // internal audio queue.
+  function stopSpeaking() {
+    _sayGen++;
+    _sayChain = Promise.resolve();
+    try { head.stopSpeaking?.(); } catch (_) {}
   }
 
   // ── grounded answer that can ACT: /live/act (RAG + Groq + tools), then speak ──
@@ -340,7 +360,9 @@
     unlockAudio();
 
     const handleBackendMessage = (msg) => {
-      if (msg && msg.type === "speak" && msg.text) { unlockAudio(); say(msg.text); }
+      if (!msg) return;
+      if (msg.type === "stop") { stopSpeaking(); return; }
+      if (msg.type === "speak" && msg.text) { unlockAudio(); say(msg.text); }
     };
 
     // Path 1: SSE push — App Runner 403s WebSocket upgrades at the edge but

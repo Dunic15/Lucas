@@ -38,5 +38,9 @@ elevenlabs_voice_id: ""
 min_confidence:
 speak_cooldown_seconds:
 
+# What this avatar can actually help with — spoken back if someone talks to her
+# but hasn't asked a groundable question (the live "repair" line).
+topics_hint: the portfolio, the fund thesis, or the mentor/bootcamp process
+
 # Knowledge lives in:  avatars/sff/knowledge/*.md
 # Drop more .md files there and re-run:  python backend/scripts/ingest.py

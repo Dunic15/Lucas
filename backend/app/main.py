@@ -18,6 +18,7 @@ import json
 import re
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
@@ -30,7 +31,6 @@ from fastapi.responses import (
     FileResponse,
     JSONResponse,
     RedirectResponse,
-    Response,
     StreamingResponse,
 )
 from pydantic import BaseModel
@@ -45,6 +45,7 @@ from . import (
     gmail_watcher,
     gpu_runtime,
     meeting_state,
+    tts,
 )
 from .brain import (
     answer_question,
@@ -55,10 +56,37 @@ from .brain import (
     effective_provider,
 )
 from .config import settings
-from .decision import detect_wake, detect_closing
+from .decision import (
+    detect_wake,
+    detect_closing,
+    is_direct_question,
+    is_near_duplicate,
+)
 from .rag import ensure_index, warm as warm_index
 
-app = FastAPI(title="Callable AI Process Avatar")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Startup/shutdown for the app (replaces the deprecated @app.on_event hooks).
+
+    Startup: build+warm each avatar's RAG index so the first live question skips
+    the cold start, and launch the Gmail 'Add people' auto-join watcher. Shutdown:
+    on a deploy/rollout App Runner sends SIGTERM to the old instance; flipping the
+    drain flag stops its Gmail watcher from dispatching at once, so the old + new
+    instances don't both put a bot in the same meeting during the overlap.
+    """
+    _prebuild_indexes()
+    if settings.gmail_watch_enabled:
+        asyncio.create_task(_gmail_watch_loop())
+    try:
+        yield
+    finally:
+        global _shutting_down
+        _shutting_down = True
+        print("[gmail-watch] shutdown signal — watcher draining", flush=True)
+
+
+app = FastAPI(title="Callable AI Process Avatar", lifespan=_lifespan)
+app.include_router(tts.router)  # POST /tts (open-source avatar voice)
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).
@@ -102,7 +130,6 @@ def _google_redirect_uri() -> str:
     )
 
 
-@app.on_event("startup")
 def _prebuild_indexes() -> None:
     """Build each avatar's RAG index on boot so the demo works with no setup.
 
@@ -128,6 +155,12 @@ _gmail_state = {"last_poll": 0.0, "last_error": "", "joined": []}
 # dispatching bots the moment this flips, so a draining OLD instance never races the
 # NEW instance to put a second bot in the same meeting during a deploy overlap.
 _shutting_down = False
+
+# How long after her last spoken chunk we still treat the avatar as "speaking"
+# for barge-in purposes. The backend can't see the client finish playing audio,
+# so this approximates the play-out of a 1-2 sentence answer. Deliberately
+# decoupled from speak_cooldown_seconds (which is a shorter no-repeat window).
+_BARGE_IN_WINDOW_SECONDS = 6.0
 
 _MEET_CODE_RE = re.compile(r"meet\.google\.com/([a-z-]+)")
 _BOT_TERMINAL = {"call_ended", "done", "fatal"}
@@ -173,10 +206,10 @@ def _should_repair_silent_answer(called: bool, text: str) -> bool:
 
 
 def _silent_answer_repair_line(avatar: avatars.Avatar) -> str:
-    topics = "onboarding, access/security, or the AI Buffer thesis"
+    topics = avatar.topics_hint or "the process documents I was given"
     return (
         f"I can hear you, but I need a specific question about {topics}. "
-        f"Try: {avatar.name}, what approval step is required?"
+        f'Try asking me by name, like "{avatar.name}, what should we cover?"'
     )
 
 
@@ -305,24 +338,6 @@ async def _gmail_watch_loop() -> None:
                     print(f"[gmail-watch] failed to join {url}: {e}", flush=True)
         except Exception as e:
             _gmail_state["last_error"] = str(e)
-
-
-@app.on_event("startup")
-async def _launch_gmail_watch() -> None:
-    if settings.gmail_watch_enabled:
-        asyncio.create_task(_gmail_watch_loop())
-
-
-@app.on_event("shutdown")
-async def _drain_gmail_watch() -> None:
-    """On a deploy/rollout App Runner sends SIGTERM to the old instance; flip the
-    drain flag so its Gmail watcher stops dispatching at once. Combined with the
-    per-dispatch Recall pre-check and the variant-aware reconcile, this stops the
-    old + new instances from both putting a bot in the same meeting during overlap.
-    """
-    global _shutting_down
-    _shutting_down = True
-    print("[gmail-watch] shutdown signal — watcher draining", flush=True)
 
 
 @app.get("/gmail/status")
@@ -518,127 +533,8 @@ def talk_avatar_model() -> FileResponse:
     )
 
 
-class TtsRequest(BaseModel):
-    text: str
-    avatar_id: str = "laura"
-    voice: str = ""
-
-
-# TTS for the open-source avatar page — replaces Anam's voice.
-# Preferred: ElevenLabs with-timestamps (set ELEVENLABS_API_KEY) — premium voice
-# AND character-level timing alignment, which the page turns into accurate
-# per-word lip-sync. Fallback: edge-tts (free, keyless; page spreads word timings
-# evenly — approximate lip-sync). Response is JSON either way:
-#   {"audio": <base64 mp3>, "words": [...]|null, "wtimes": [ms]|null,
-#    "wdurations": [ms]|null, "engine": "elevenlabs"|"edge"}
-_TTS_DEFAULT_VOICE = "en-US-AriaNeural"
-
-
-def _words_from_alignment(alignment: dict) -> tuple[list, list, list]:
-    """Character alignment -> per-word (words, start_ms, duration_ms) for lip-sync."""
-    chars = alignment.get("characters") or []
-    starts = alignment.get("character_start_times_seconds") or []
-    ends = alignment.get("character_end_times_seconds") or []
-    words, wtimes, wdurs = [], [], []
-    cur, w_start, w_end = "", 0.0, 0.0
-    for ch, s, e in zip(chars, starts, ends):
-        if ch.isspace():
-            if cur:
-                words.append(cur)
-                wtimes.append(int(w_start * 1000))
-                wdurs.append(max(1, int((w_end - w_start) * 1000)))
-                cur = ""
-        else:
-            if not cur:
-                w_start = s
-            cur += ch
-            w_end = e
-    if cur:
-        words.append(cur)
-        wtimes.append(int(w_start * 1000))
-        wdurs.append(max(1, int((w_end - w_start) * 1000)))
-    return words, wtimes, wdurs
-
-
-# Persistent connection to ElevenLabs: a fresh TLS handshake per sentence costs
-# ~150ms on every utterance. One keep-alive client removes it permanently.
-_el_client: httpx.AsyncClient | None = None
-
-
-def _get_el_client() -> httpx.AsyncClient:
-    global _el_client
-    if _el_client is None:
-        _el_client = httpx.AsyncClient(timeout=20.0)
-    return _el_client
-
-
-async def _tts_elevenlabs(text: str) -> dict | None:
-    """ElevenLabs with-timestamps. Returns the JSON payload, or None to fall back."""
-    if not settings.elevenlabs_api_key:
-        return None
-    voice_id = settings.elevenlabs_voice_id or "FGY2WhTYpPnrIDTdsKH5"  # "Laura"
-    try:
-        r = await _get_el_client().post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-            "/with-timestamps?output_format=mp3_44100_128",
-            headers={"xi-api-key": settings.elevenlabs_api_key},
-            json={"text": text, "model_id": settings.elevenlabs_tts_model},
-        )
-        r.raise_for_status()
-        data = r.json()
-        alignment = data.get("normalized_alignment") or data.get("alignment") or {}
-        words, wtimes, wdurs = _words_from_alignment(alignment)
-        return {
-            "audio": data["audio_base64"],
-            "words": words or None,
-            "wtimes": wtimes or None,
-            "wdurations": wdurs or None,
-            "engine": "elevenlabs",
-        }
-    except Exception as e:  # noqa: BLE001 — any EL failure degrades to edge-tts
-        print(f"[tts] elevenlabs failed, falling back to edge-tts: {e}", flush=True)
-        return None
-
-
-@app.post("/tts")
-async def tts(req: TtsRequest) -> Response:
-    import base64
-
-    import edge_tts
-
-    text = (req.text or "").strip()[:2000]
-    if not text:
-        return Response(status_code=204)
-
-    # tts_ms: synthesis latency for the metrics picture (issue #3). A duration
-    # only — the text itself is never logged or exported.
-    t0 = time.perf_counter()
-    el = await _tts_elevenlabs(text)
-    if el is not None:
-        el["tts_ms"] = int((time.perf_counter() - t0) * 1000)
-        return JSONResponse(el, headers={"Cache-Control": "no-store"})
-
-    voice = (req.voice or "").strip() or _TTS_DEFAULT_VOICE
-    audio = bytearray()
-    try:
-        async for chunk in edge_tts.Communicate(text, voice).stream():
-            if chunk["type"] == "audio":
-                audio.extend(chunk["data"])
-    except Exception as e:
-        return JSONResponse({"error": f"tts failed: {e}"}, status_code=502)
-    if not audio:
-        return JSONResponse({"error": "tts produced no audio"}, status_code=502)
-    return JSONResponse(
-        {
-            "audio": base64.b64encode(bytes(audio)).decode(),
-            "words": None,
-            "wtimes": None,
-            "wdurations": None,
-            "engine": "edge",
-            "tts_ms": int((time.perf_counter() - t0) * 1000),
-        },
-        headers={"Cache-Control": "no-store"},
-    )
+# TTS for the open-source avatar page lives in its own router (tts.py) — a
+# self-contained concern with no coupling to the live meeting path.
 
 
 class LiveTokenRequest(BaseModel):
@@ -1068,6 +964,22 @@ async def _make_avatar_speak(
     print("[avatar] queued speak for HTTP polling", flush=True)
 
 
+async def _make_avatar_stop(session: store.Session, generation_id: int) -> None:
+    """Barge-in: tell the avatar page to stop the current speech. Additive to the
+    contract — a new {"type":"stop"} message alongside {"type":"speak"}; pages
+    that don't know it simply ignore it. Queued stale speak chunks are cleared by
+    the caller so nothing from the interrupted turn slips through afterwards."""
+    message = {"type": "stop", "generation_id": generation_id}
+    if session.ws is not None:
+        try:
+            await session.ws.send_json(message)
+            return
+        except Exception as e:
+            print(f"[avatar] websocket send failed; queued stop: {e}", flush=True)
+            session.ws = None
+    store.queue_avatar_message(session, message)
+
+
 async def _ask_avatar_persona(session: store.Session, text: str) -> None:
     if session.ws is not None:
         await session.ws.send_json({"type": "ask", "text": text})
@@ -1315,6 +1227,18 @@ async def recall_webhook(request: Request) -> JSONResponse:
     session.add_utterance(speaker, text)
     avatar = avatars.load(session.avatar_id)
 
+    # ── transcript-triggered barge-in ──
+    # A new user line arriving while the avatar is mid-speech means someone talked
+    # over it. Emit an additive stop message, drop any still-queued stale speech,
+    # and mark the turn interrupted (the streaming loop below checks is_stale and
+    # won't push chunks from a superseded turn). Then fall through to normal
+    # processing — the interrupting line may itself be a question for her.
+    session.user_speaking = True
+    if session.is_speaking(_BARGE_IN_WINDOW_SECONDS):
+        gen = session.interrupt()
+        store.clear_avatar_messages(session)
+        await _make_avatar_stop(session, gen)
+
     # ── silent intelligence layer ──
     # Fold this line into the structured MeetingState (steps covered, decisions,
     # owners, deadlines, risks) BEFORE any speak decision. Pure regex — adds no
@@ -1337,31 +1261,70 @@ async def recall_webhook(request: Request) -> JSONResponse:
             session.proactive_done = True
             cits = flag.get("citations", [])
             line = flag["line"] + (f" — per {cits[0]}" if cits else "")
+            session.begin_speaking()
             await _make_avatar_speak(session, line, cits)
+            session.record_spoken(line)
             return JSONResponse({"ok": True, "spoke": True, "proactive": True, "line": line})
 
     # ── when-to-speak gate ──
-    # By default (require_wake_word=False) she answers any grounded question; the
-    # SKIP sentinel + cooldown keep her from interjecting on things she can't ground.
+    # Live meetings require the name by default (require_wake_word=True). If she
+    # wasn't called, she still answers a clear ON-TOPIC question (is_direct_question)
+    # — but otherwise stays silent. The reported-speech guard inside detect_wake
+    # means "as Laura said…" / "Laura mentioned…" never counts as being called.
     called, question = detect_wake(avatar, text)
-    if settings.require_wake_word and not called:
+    direct = (not called) and is_direct_question(avatar, text)
+    if settings.require_wake_word and not called and not direct:
         return JSONResponse({"ok": True, "spoke": False, "reason": "not called"})
     question = question or text  # no wake word → treat the whole utterance as the ask
-    if session.in_cooldown(avatar.speak_cooldown_seconds):
+    # Being called by name overrides the cooldown — natural back-and-forth when
+    # she's directly addressed. The cooldown only throttles unnamed on-topic
+    # questions so she doesn't chain-answer the room.
+    if not called and session.in_cooldown(avatar.speak_cooldown_seconds):
         return JSONResponse({"ok": True, "spoke": False, "reason": "cooldown"})
+
+    # ── repetition guard ──
+    # Don't repeat within the same meeting. If she's already answered essentially
+    # this question: when NOT directly called, stay silent (don't volunteer a
+    # repeat); when the same speaker asks again (or she's called), answer briefly
+    # with a "Same as before —" lead-in instead of re-explaining in full.
+    prior_same_speaker = session.prior_questions(speaker)
+    prior_any = session.prior_questions()
+    repeated = is_near_duplicate(question, prior_any)
+    repeat_same_speaker = is_near_duplicate(question, prior_same_speaker)
+    if repeated and not called and not repeat_same_speaker:
+        session.record_question(speaker, question)
+        return JSONResponse({"ok": True, "spoke": False, "reason": "repetition"})
+    repeat_prefix = "Same as before — " if (repeated and (called or repeat_same_speaker)) else ""
+    session.record_question(speaker, question)
 
     # Backend is the brain: answer from OUR knowledge (RAG) with the recent
     # meeting conversation as context. Streamed sentence-by-sentence so the avatar
     # starts speaking on the first sentence instead of waiting for the whole
     # answer. Grounding is enforced by the SKIP sentinel inside the stream: if the
     # context is insufficient the generator yields nothing and the avatar stays
-    # silent (the streaming equivalent of the old confidence gate).
+    # silent (the streaming equivalent of the old confidence gate). Chunks from a
+    # turn that gets interrupted mid-stream (is_stale) are dropped, not spoken.
     history = session.recent_transcript(n=8)
     _t_wake = time.perf_counter()
+    gen = session.begin_speaking()
     spoke_any = False
+    spoken_parts: list[str] = []
+    if repeat_prefix:
+        await _make_avatar_speak(session, repeat_prefix.strip())
+        spoken_parts.append(repeat_prefix)
+        spoke_any = True
     async for sentence in iterate_in_threadpool(
-        answer_question_stream(avatar, question or text, history=history)
+        answer_question_stream(
+            avatar,
+            question or text,
+            history=history,
+            live=True,
+            max_sentences=2,
+            min_chars=45,  # coalesce tiny fragments so the TTS voice flows
+        )
     ):
+        if session.is_stale(gen):
+            break  # a newer user line interrupted this turn — stop speaking
         if not spoke_any:
             print(
                 f"[latency] wake->first_speak="
@@ -1369,20 +1332,25 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 flush=True,
             )
         await _make_avatar_speak(session, sentence)
+        spoken_parts.append(sentence)
         spoke_any = True
+    if spoken_parts:
+        session.record_spoken(" ".join(spoken_parts))
 
     if not spoke_any:
         if _should_repair_silent_answer(called, text):
             line = _silent_answer_repair_line(avatar)
-            await _make_avatar_speak(session, line)
-            return JSONResponse(
-                {
-                    "ok": True,
-                    "spoke": True,
-                    "reason": "repair_after_skip",
-                    "line": line,
-                }
-            )
+            if not is_near_duplicate(line, session.spoken_gists):
+                await _make_avatar_speak(session, line)
+                session.record_spoken(line)
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "spoke": True,
+                        "reason": "repair_after_skip",
+                        "line": line,
+                    }
+                )
         return JSONResponse(
             {"ok": True, "spoke": False, "reason": "insufficient context (SKIP)"}
         )

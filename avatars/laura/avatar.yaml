@@ -32,5 +32,9 @@ elevenlabs_voice_id: ""     # e.g. "EXAVITQu4..."  (overrides ELEVENLABS_VOICE_I
 min_confidence:             # 0.0–1.0 — higher = more cautious about speaking
 speak_cooldown_seconds:     # seconds of silence to keep after speaking
 
+# What Laura can actually help with — spoken back if someone talks to her but
+# hasn't asked a groundable question (the live "repair" line).
+topics_hint: onboarding, access/security, or the AI Buffer thesis
+
 # Knowledge lives in:  avatars/laura/knowledge/*.md
 # Drop more .md files there and re-run:  python backend/scripts/ingest.py

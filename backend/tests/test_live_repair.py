@@ -24,6 +24,7 @@ def _avatar() -> Avatar:
         min_confidence=0.55,
         speak_cooldown_seconds=8.0,
         dir=Path("."),
+        topics_hint="onboarding, access/security, or the AI Buffer thesis",
     )
 
 

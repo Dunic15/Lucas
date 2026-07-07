@@ -53,8 +53,11 @@ def test_laura_onboarding_template_loads_required_steps():
 
 def test_missing_step_detection_on_synthetic_scenarios():
     expected_missing = {
+        "ambiguous_owner_not_assigned": ["implementation_owner"],
         "dpa_missing": ["dpa_confirmation"],
+        "dpa_legal_handle_not_confirmed": ["dpa_confirmation"],
         "security_approval_missing": ["security_approval"],
+        "security_approval_completed": [],
         "implementation_owner_missing": ["implementation_owner"],
         "go_live_date_missing": ["go_live_date"],
         "all_complete": [],

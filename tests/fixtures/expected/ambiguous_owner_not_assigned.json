@@ -1,0 +1,21 @@
+{
+  "scenario": "ambiguous_owner_not_assigned",
+  "expected_missing_steps": [
+    "implementation_owner"
+  ],
+  "expected_readiness_score": {
+    "min": 80,
+    "max": 80
+  },
+  "expected_actions": [
+    {
+      "contains": "We should decide who owns implementation",
+      "owner": "UNASSIGNED",
+      "gap_type": "owner"
+    }
+  ],
+  "expected_risks": [
+    "Ownership risk could delay onboarding"
+  ],
+  "should_proceed": false
+}

@@ -119,10 +119,15 @@ class Settings(BaseSettings):
 
     # Behaviour
     wake_words: str = "laura"
-    # When False, the avatar answers any grounded question without needing to be
-    # called by name first (the SKIP gate + cooldown still keep her from spamming).
-    require_wake_word: bool = False
-    speak_cooldown_seconds: float = 8.0
+    # Real meetings default to requiring the name: the avatar is one of many
+    # voices, so it stays silent unless directly addressed (a wake word) OR asked
+    # a clear on-topic question (see decision.is_direct_question). Set
+    # REQUIRE_WAKE_WORD=false to fall back to the old answer-anything behaviour.
+    require_wake_word: bool = True
+    # Silence to keep after speaking before she'll volunteer again. Kept low so a
+    # named follow-up feels responsive; being called by name skips it entirely
+    # (see the gate in main.py), and the repetition guard stops her repeating.
+    speak_cooldown_seconds: float = 4.0
     min_confidence: float = 0.55
     # Proactive intervention (the differentiator): flag ONE missing step as the
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.
