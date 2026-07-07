@@ -95,3 +95,49 @@ def test_post_meeting_uses_post_provider(monkeypatch):
     artifact = brain.post_meeting(avatar, "Ana: kickoff for the Acme onboarding.")
     assert seen["provider"] == "anthropic"
     assert artifact["summary"] == "s"
+
+
+def test_complete_falls_back_to_haiku_when_groq_fails(monkeypatch):
+    """Groq 429 (rate limit) on the default path must fall back to Claude Haiku,
+    not crash — so the avatar never goes dark."""
+    monkeypatch.setattr(llm.settings, "brain_provider", "groq")
+    monkeypatch.setattr(llm.settings, "anthropic_api_key", "k")
+
+    def boom(*a, **k):
+        raise RuntimeError("429 Too Many Requests")
+
+    seen = {}
+
+    def fake_anthropic(system, user, max_tokens, model=None):
+        seen["model"] = model
+        return "haiku answer"
+
+    monkeypatch.setattr(llm, "_complete_groq", boom)
+    monkeypatch.setattr(llm, "_complete_anthropic", fake_anthropic)
+
+    assert llm.complete("s", "u") == "haiku answer"
+    assert seen["model"] == llm._FALLBACK_MODEL
+
+
+def test_explicit_provider_does_not_fall_back(monkeypatch):
+    """An explicit provider= (e.g. the web-search compound call) must NOT be
+    silently answered by the non-searching fallback — it should raise."""
+    monkeypatch.setattr(llm.settings, "anthropic_api_key", "k")
+    monkeypatch.setattr(llm, "_complete_groq", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("429")))
+    import pytest
+    with pytest.raises(RuntimeError):
+        llm.complete("s", "u", provider="groq")
+
+
+def test_stream_falls_back_to_haiku_when_groq_fails(monkeypatch):
+    monkeypatch.setattr(llm.settings, "brain_provider", "groq")
+    monkeypatch.setattr(llm.settings, "anthropic_api_key", "k")
+
+    def boom(*a, **k):
+        raise RuntimeError("429 Too Many Requests")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(llm, "_stream_groq", boom)
+    monkeypatch.setattr(llm, "_stream_anthropic", lambda s, u, mt, m: iter(["hi from haiku"]))
+
+    assert list(llm.stream_complete("s", "u")) == ["hi from haiku"]

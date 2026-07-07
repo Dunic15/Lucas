@@ -36,11 +36,15 @@ def _ensure_anthropic():
     return _anthropic_client
 
 
-def complete(
-    system: str, user: str, *, max_tokens: int = 800, model: str | None = None,
-    provider: str | None = None,
+# Resilient fallback model: if the primary provider fails (e.g. Groq
+# decommissions a model overnight, or rate-limits), we drop to Claude Haiku so
+# the avatar never goes dark. Anthropic key is already provisioned in prod.
+_FALLBACK_MODEL = "claude-haiku-4-5"
+
+
+def _dispatch_complete(
+    provider: str, system: str, user: str, max_tokens: int, model: str | None
 ) -> str:
-    provider = (provider or settings.brain_provider).lower()
     if provider == "anthropic":
         return _complete_anthropic(system, user, max_tokens, model)
     if provider == "groq":
@@ -53,6 +57,23 @@ def complete(
             "This path should not be reached."
         )
     raise RuntimeError(f"Unknown BRAIN_PROVIDER '{provider}'.")
+
+
+def complete(
+    system: str, user: str, *, max_tokens: int = 800, model: str | None = None,
+    provider: str | None = None,
+) -> str:
+    resolved = (provider or settings.brain_provider).lower()
+    try:
+        return _dispatch_complete(resolved, system, user, max_tokens, model)
+    except Exception as e:  # noqa: BLE001
+        # Only auto-fall-back for the DEFAULT live/post path. An explicit provider=
+        # (e.g. the web-search compound call) has its own handling and must not be
+        # silently answered by a non-searching model.
+        if provider is None and resolved != "anthropic" and settings.anthropic_api_key:
+            print(f"[llm] {resolved} failed ({e}); falling back to {_FALLBACK_MODEL}", flush=True)
+            return _complete_anthropic(system, user, max_tokens, _FALLBACK_MODEL)
+        raise
 
 
 def _complete_anthropic(
@@ -80,44 +101,53 @@ def stream_complete(
     """
     provider = settings.brain_provider.lower()
     if provider == "anthropic":
-        client = _ensure_anthropic()
-        # Cache the (byte-identical) system prompt so repeat calls skip
-        # re-processing it. Note: Haiku's minimum cacheable prefix is 4096 tokens
-        # — if the persona prompt is shorter, this silently won't cache (harmless);
-        # the usage log below tells us whether it engaged.
-        with client.messages.stream(
-            model=model or settings.brain_model,
-            max_tokens=max_tokens,
-            system=[
-                {
-                    "type": "text",
-                    "text": system,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            messages=[{"role": "user", "content": user}],
-        ) as stream:
-            for text in stream.text_stream:
+        yield from _stream_anthropic(system, user, max_tokens, model)
+        return
+    # Non-anthropic primary (groq/…): if it fails BEFORE producing any output
+    # (e.g. Groq decommissioned the model), fall back to Claude Haiku so she never
+    # goes silent. If it already streamed something, don't fall back (avoid dupes).
+    yielded = False
+    try:
+        if provider == "groq":
+            for text in _stream_groq(system, user, max_tokens, model):
+                yielded = True
                 yield text
-            # After the stream drains, log token usage so we can see the real
-            # input size and whether the system-prompt cache is being hit.
-            try:
-                u = stream.get_final_message().usage
-                print(
-                    f"[latency] llm usage input={u.input_tokens} "
-                    f"cache_read={getattr(u, 'cache_read_input_tokens', 0)} "
-                    f"cache_write={getattr(u, 'cache_creation_input_tokens', 0)} "
-                    f"output={u.output_tokens}",
-                    flush=True,
-                )
-            except Exception:
-                pass
-        return
-    if provider == "groq":
-        yield from _stream_groq(system, user, max_tokens, model)
-        return
-    # Fallback: no incremental streaming for this provider.
-    yield complete(system, user, max_tokens=max_tokens, model=model)
+        else:
+            yielded = True
+            yield complete(system, user, max_tokens=max_tokens, model=model)
+    except Exception as e:  # noqa: BLE001
+        if yielded or not settings.anthropic_api_key:
+            raise
+        print(f"[llm] stream {provider} failed ({e}); falling back to {_FALLBACK_MODEL}", flush=True)
+        yield from _stream_anthropic(system, user, max_tokens, _FALLBACK_MODEL)
+
+
+def _stream_anthropic(
+    system: str, user: str, max_tokens: int, model: str | None
+) -> Iterator[str]:
+    client = _ensure_anthropic()
+    # Cache the (byte-identical) system prompt so repeat calls skip re-processing
+    # it. Note: Haiku's minimum cacheable prefix is 4096 tokens — if the persona
+    # prompt is shorter, this silently won't cache (harmless).
+    with client.messages.stream(
+        model=model or settings.brain_model,
+        max_tokens=max_tokens,
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": user}],
+    ) as stream:
+        for text in stream.text_stream:
+            yield text
+        try:
+            u = stream.get_final_message().usage
+            print(
+                f"[latency] llm usage input={u.input_tokens} "
+                f"cache_read={getattr(u, 'cache_read_input_tokens', 0)} "
+                f"cache_write={getattr(u, 'cache_creation_input_tokens', 0)} "
+                f"output={u.output_tokens}",
+                flush=True,
+            )
+        except Exception:
+            pass
 
 
 def _groq_messages(system: str, user: str) -> list[dict]:
