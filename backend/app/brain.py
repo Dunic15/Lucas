@@ -209,6 +209,44 @@ def _live_model(question: str) -> str:
     return settings.brain_model_fast
 
 
+def _wants_web_search(question: str) -> bool:
+    return _live_model(question) == settings.live_search_model
+
+
+_SEARCH_FAIL_RE = re.compile(
+    r"(not able to browse|can'?t browse|cannot browse|"
+    r"don'?t have (live|real-?time|internet|web) access)",
+    re.IGNORECASE,
+)
+
+
+def _web_search_answer(question: str, convo: str = "") -> str:
+    """One web-search answer via the compound model (Groq, built-in web search).
+
+    Returns the spoken answer text, or "" if search errored, refused, or returned
+    nothing — so the caller can fall back to normal reasoning instead of going
+    silent. NON-streamed on purpose: compound's stream reliably returns tool /
+    reasoning deltas but often ends with no content, while the non-streaming call
+    completes every time. Search asks are rare; a dependable ~4s answer beats a
+    broken stream. Shared by the meeting path and the interactive /live/act path.
+    """
+    try:
+        raw = llm.complete(
+            "You answer in 1-3 short spoken sentences, no markdown. Use web "
+            "search for current information and mention it's from a quick search.",
+            f"{convo}Use web search, then answer briefly:\n{question}",
+            max_tokens=2048,
+            model=settings.live_search_model,
+            provider="groq",  # compound lives on Groq even when the live brain is Claude
+        )
+    except Exception:
+        return ""
+    head = (raw or "").strip()
+    if not head or _is_skip(head) or _SEARCH_FAIL_RE.search(head):
+        return ""
+    return head
+
+
 def answer_question_stream(
     avatar: Avatar,
     question: str,
@@ -285,30 +323,9 @@ def answer_question_stream(
 
     _model = _live_model(question)
     if _model == settings.live_search_model:
-        # Web-search answers go NON-streamed: compound's streaming reliably
-        # returns reasoning/tool deltas but (verified live, repeatedly) often
-        # ends without any content, while non-streaming completes every time.
-        # Search asks are rare; a dependable ~4s answer beats a broken stream.
-        try:
-            raw = llm.complete(
-                "You answer in 1-3 short spoken sentences, no markdown. Use web "
-                "search for current information and mention it's from a quick search.",
-                f"{convo}Use web search, then answer briefly:\n{question}",
-                max_tokens=2048,
-                model=_model,
-                provider="groq",  # compound lives on Groq even when live brain is Claude
-            )
-        except Exception:
-            raw = ""
-        head = (raw or "").strip()
-        _search_failed = (not head) or re.search(
-            r"(not able to browse|can'?t browse|cannot browse|"
-            r"don'?t have (live|real-?time|internet|web) access)",
-            head,
-            re.IGNORECASE,
-        )
-        if head and not _is_skip(head) and not _search_failed:
-            buf, sentences = _split_sentences(head + " ")
+        answer = _web_search_answer(question, convo)
+        if answer:
+            buf, sentences = _split_sentences(answer + " ")
             for sent in sentences:
                 yield sent
             if buf.strip():
@@ -318,6 +335,7 @@ def answer_question_stream(
         # nothing) — fall THROUGH to the fast model so she still answers from
         # her own knowledge instead of going silent.
         question = f"{question} (You could not search the web just now — answer from your knowledge and say it may not be current.)"
+        _model = settings.brain_model_fast  # don't re-run search on the fallback
     _max_tokens = 400
     for delta in llm.stream_complete(
         system, user, max_tokens=_max_tokens, model=_model
@@ -412,6 +430,21 @@ def answer_with_tools(
     avatar: Avatar, question: str, *, history: str = "", k: int = 6
 ) -> dict:
     """Grounded answer that may CALL tools to act. Returns answer + tools_used."""
+    convo = f"Recent conversation:\n{history}\n\n" if history.strip() else ""
+
+    # Web search for questions that want fresh/current info — same compound model
+    # (Groq, built-in web search) the meeting path uses. Falls through to normal
+    # tool-using reasoning if search is unavailable, errors, or returns nothing.
+    if not _is_stub() and _wants_web_search(question):
+        answer = _web_search_answer(question, convo)
+        if answer:
+            print(f"[search] {question[:60]!r} -> answered from web", flush=True)
+            return {
+                "answer": answer,
+                "tools_used": [{"tool": "web_search", "args": {}, "result": ""}],
+                "citations": [],
+            }
+
     chunks = retrieve(avatar, _retrieval_query(question, history), k=k)
     # Only inject docs when they actually match the question — otherwise irrelevant
     # chunks framed as "context" bias her into doc-quoting a general/opinion ask.
@@ -422,8 +455,6 @@ def answer_with_tools(
         # No tool use offline — fall back to the deterministic grounded answer.
         r = _stub_answer(chunks)
         return {"answer": r["answer"], "tools_used": [], "citations": r.get("citations", [])}
-
-    convo = f"Recent conversation:\n{history}\n\n" if history.strip() else ""
     context_block = (
         f"Context you may draw on if it fits the question:\n\n{_format_context(chunks)}\n\n"
         if chunks
