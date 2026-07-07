@@ -76,9 +76,16 @@ _LEAVE_IMPERATIVE = re.compile(
 _LEAVE_PERMISSION = re.compile(
     # "you can leave [the meeting] [now]" — the verb must end the clause, so
     # "you can leave time for Q&A" / "you can go to the next slide" never match.
-    r"\byou (?:can|may|should|are free to) (?:leave|go|drop off|hop off|head out)"
+    # Bare "go" is how a host hands over the floor ("your turn — you can go"),
+    # i.e. an invitation to SPEAK, so "go" only counts with an explicit
+    # dismissal marker after it; "free to go" is unambiguous on its own.
+    r"\byou (?:"
+    r"(?:can|may|should) (?:leave|drop off|hop off|head out"
+    r"|go(?=\s+(?:now|home)\b|\s+(?:the|this)\s+(?:meeting|call|room)))"
+    r"|are free to (?:leave|go|drop off|head out)"
+    r")"
     r"(?:\s+(?:the|this)\s+(?:meeting|call|room))?"
-    r"(?:\s+(?:now|please|thanks|thank you|if you want|whenever))*"
+    r"(?:\s+(?:now|home|please|thanks|thank you|if you want|whenever))*"
     r"\s*(?:[.!?,;]|$)",
     re.IGNORECASE,
 )

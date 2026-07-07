@@ -1557,8 +1557,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
             )
             await asyncio.sleep(settings.leave_grace_seconds)
         except Exception:
-            pass
-        await _finalize_session(bot_id)
+            pass  # goodbye is best-effort
+        finally:
+            # finally, not just except: CancelledError (deploy/restart killing
+            # this request mid-goodbye) is a BaseException and would otherwise
+            # skip the finalize — leaving the bot in the call, meter running.
+            await _finalize_session(bot_id)
         return JSONResponse(
             {"ok": True, "spoke": True, "left": True, "reason": "leave_command"}
         )
