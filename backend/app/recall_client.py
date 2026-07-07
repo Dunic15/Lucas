@@ -198,6 +198,16 @@ def _transcript_provider_config(provider_override: str | None = None) -> dict:
             config["language_code"] = language_code
         return {"elevenlabs_streaming": config}
 
+    if provider in {"deepgram", "deepgram_streaming"}:
+        # Deepgram nova-3 with language=multi: automatic language detection +
+        # code-switching (Italian/English mixed meetings). The Deepgram API key
+        # + project id live in the RECALL DASHBOARD (per-region), not here.
+        config = {"model": settings.deepgram_model.strip() or "nova-3"}
+        language = settings.deepgram_language.strip()
+        if language:
+            config["language"] = language
+        return {"deepgram_streaming": config}
+
     if provider in {"recallai", "recallai_streaming"}:
         return {
             "recallai_streaming": {
@@ -214,7 +224,7 @@ def _transcript_provider_config(provider_override: str | None = None) -> dict:
     raise RuntimeError(
         "Unknown RECALL_TRANSCRIPTION_PROVIDER "
         f"'{settings.recall_transcription_provider}'. "
-        "Use 'recallai' or 'elevenlabs'."
+        "Use 'recallai', 'elevenlabs' or 'deepgram'."
     )
 
 
@@ -294,9 +304,10 @@ def _create_bot_attempts(
         )
 
     # If Recall rejects a premium transcription provider that is not enabled in
-    # the Recall workspace, still get Laura into the meeting with Recall's
-    # built-in low-latency English transcription instead of failing the invite.
-    if "elevenlabs_streaming" in configured_provider:
+    # the Recall workspace (no vendor key in the Recall dashboard, plan tier),
+    # still get Laura into the meeting with Recall's built-in low-latency
+    # English transcription instead of failing the invite.
+    if "recallai_streaming" not in configured_provider:
         recallai_provider = _transcript_provider_config("recallai")
         attempts.append(
             (

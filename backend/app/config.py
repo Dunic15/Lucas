@@ -64,8 +64,14 @@ class Settings(BaseSettings):
     recall_webhook_secret: str = ""
     # Live transcription provider for Recall bots:
     #   recallai   = fastest built-in path, but low-latency mode is English-only
-    #   elevenlabs = better multilingual/accent handling when configured in Recall
+    #              (accuracy mode does Italian but is minutes late — dead for live)
+    #   deepgram   = nova-3 streaming, language detection + code-switching
+    #              (Italian/English mixed). API key + project id go in the
+    #              RECALL DASHBOARD (eu-central-1), not in our env.
+    #   elevenlabs = scribe realtime, multilingual, needs the EL plan to cover it
     recall_transcription_provider: str = "recallai"
+    deepgram_model: str = "nova-3"
+    deepgram_language: str = "multi"
     recall_transcription_mode: str = "prioritize_low_latency"
     recall_transcription_language_code: str = "en"
     elevenlabs_transcription_model: str = "scribe_v2_realtime"
