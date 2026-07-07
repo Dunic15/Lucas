@@ -260,6 +260,16 @@
     _sayGen++;
     _sayChain = Promise.resolve();
     try { head.stopSpeaking(); } catch (_) {}
+    // Kill the in-flight brain request too: chunks that arrived AFTER a human cut
+    // her off used to be spoken anyway (stop, then resume with the next streamed
+    // chunk) — an interrupt must cancel the whole turn, not just the current audio.
+    if (_askController) { try { _askController.abort(); } catch (_) {} }
+    _thinking = false;
+    // Collapse the "she is speaking" window: the audio it covered was just
+    // cancelled. A stale window kept the echo filter armed for seconds after an
+    // interrupt, swallowing real follow-up questions as "her own echo".
+    speakingUntil = 0;
+    herText = "";
     status("(interrupted — listening)");
   }
   window.interruptSpeech = interruptSpeech;
@@ -286,14 +296,17 @@
   // ── grounded answer that can ACT: /live/act (RAG + Groq + tools), then speak ──
   // She may calculate, check a deadline, or look up a record before answering.
   let _askController = null;
+  let _thinking = false; // a /live/act request is in flight (thinking or searching)
   async function ask(question) {
+    // A new user turn cuts off whatever she's saying now AND aborts any older
+    // in-flight request (a web search can take ~15s) — she's never "blocked"
+    // waiting on the old search.
+    interruptSpeech();
     status("thinking…");
-    interruptSpeech(); // a new user turn cuts off whatever she's saying now
-    // Cancel any in-flight request (a web search can take ~15s) so a NEW question
-    // supersedes it right away — she's never "blocked" waiting on the old search.
-    if (_askController) { try { _askController.abort(); } catch (_) {} }
     const ctrl = new AbortController();
     _askController = ctrl;
+    _thinking = true;
+    const genAtStart = _sayGen; // an interrupt mid-stream bumps this — stop speaking
     let r;
     try {
       r = await fetch("/live/act", {
@@ -303,7 +316,8 @@
         signal: ctrl.signal,
       });
     } catch (e) {
-      if (e && e.name === "AbortError") return; // superseded by a newer question
+      if (ctrl === _askController) _thinking = false;
+      if (e && e.name === "AbortError") return; // superseded or stopped by the user
       status("ask failed: " + (e?.message || e));
       return;
     }
@@ -316,7 +330,7 @@
     try {
       for (;;) {
         const { done, value } = await reader.read();
-        if (done || ctrl.signal.aborted) break;
+        if (done || ctrl.signal.aborted || _sayGen !== genAtStart) break;
         buf += dec.decode(value, { stream: true });
         let nl;
         while ((nl = buf.indexOf("\n\n")) >= 0) {
@@ -324,10 +338,11 @@
           const m = evt.match(/^data: (\{.*\})$/m);
           if (!m) continue;
           let content; try { content = JSON.parse(m[1]).content; } catch { continue; }
-          if (content && !ctrl.signal.aborted) { say(content); saidAny = true; }
+          if (content && !ctrl.signal.aborted && _sayGen === genAtStart) { say(content); saidAny = true; }
         }
       }
     } catch (e) { if (!(e && e.name === "AbortError")) console.error(e); }
+    if (ctrl === _askController) _thinking = false;
     if (!saidAny && !ctrl.signal.aborted) status("(she stayed silent)");
   }
 
@@ -339,7 +354,8 @@
   // ── voice input: talk to Laura with your mic (Web Speech API, free, Chrome) ──
   // Click 🎤 to toggle. What you say is transcribed in-browser and sent to the
   // grounded+tools brain (/live/act); she answers out loud. The mic keeps
-  // LISTENING while she talks so you can barge in ("wait Laura") and cut her off;
+  // LISTENING while she talks so you can barge in ("wait Laura") and cut her off —
+  // stop commands also cancel a THINKING/SEARCHING turn, not just her voice;
   // her own voice bleeding into the mic is filtered out by comparing what's heard
   // against what she's currently saying. (Headphones make barge-in bulletproof.)
   // Meeting mode doesn't use this (Recall pipes the transcript over the websocket).
@@ -366,6 +382,37 @@
   }
   window.markSpeaking = markSpeaking;
 
+  // Stop commands: "Laura wait", "stop", "hold on"… obeyed INSTANTLY — even on a
+  // partial transcript, even while she's mid-search — and NEVER forwarded to the
+  // brain as a question. STRICT match: the utterance must be nothing but stop
+  // vocabulary (+ her name / politeness), so a real question that merely contains
+  // a stop word ("when do we stop the meter?") still reaches the brain. And only
+  // when she isn't currently saying that stop word herself — otherwise her own
+  // "hold on, let me check…" leaking into the mic would self-interrupt.
+  // Longest-first so "one second" wins over "one sec" (a shorter prefix match
+  // would leave a garbage remainder and break the strict whole-utterance test).
+  const STOP_PHRASES = ["give me a second", "give me a moment", "give me a minute", "give me a sec", "that s enough", "stop talking", "one second", "one moment", "one minute", "never mind", "nevermind", "forget it", "be quiet", "hold on", "hang on", "shut up", "stop it", "one sec"].sort((a, b) => b.length - a.length);
+  const STOP_WORDS = new Set(["stop", "wait", "pause", "quiet", "silence", "enough", "hush", "shush"]);
+  const POLITE_WORDS = new Set(["ok", "okay", "no", "hey", "please", "laura", "now", "just", "a", "one", "sec", "second", "moment", "minute", "thanks", "thank", "you"]);
+  function stopWordIn(h) {
+    for (const p of STOP_PHRASES) if (h.includes(p)) return p;
+    for (const w of h.split(" ")) if (STOP_WORDS.has(w)) return w;
+    return null;
+  }
+  // Loose test: contains a stop word SHE isn't saying right now. Used to catch a
+  // stop buried in a garbled echo-mix transcript (her words + yours interleaved).
+  function containsStopWord(heard) {
+    const w = stopWordIn(_norm(heard));
+    return !!w && !herText.includes(w);
+  }
+  // Strict test: the WHOLE utterance is stop vocabulary — this one gets swallowed.
+  function isStopCommand(heard) {
+    let h = _norm(heard);
+    if (!h || !containsStopWord(heard)) return false;
+    for (const p of STOP_PHRASES) h = h.split(p).join(" ");
+    return h.split(" ").filter(Boolean).every((w) => STOP_WORDS.has(w) || POLITE_WORDS.has(w));
+  }
+
   if (!SR) {
     micBtn.disabled = true;
     micBtn.title = "Voice input needs Chrome/Edge (Web Speech API)";
@@ -378,10 +425,28 @@
       const res = ev.results[ev.results.length - 1];
       const heard = (res[0] && res[0].transcript || "").trim();
       if (!heard) return;
-      const sheSpeaking = performance.now() < speakingUntil;
-      if (sheSpeaking && looksLikeEcho(heard)) return; // her own voice — ignore
+      // Estimated window OR the renderer's live flag — the estimate alone ended
+      // early sometimes (queue lag), leaving a window where talking over her did
+      // nothing until your sentence finalized.
+      const sheSpeaking = performance.now() < speakingUntil || !!head.isSpeaking;
+      // "Laura stop" while she's talking, thinking, or searching: obey NOW
+      // (partials included) and swallow it — it's a command, not a question.
+      if ((sheSpeaking || _thinking) && isStopCommand(heard)) {
+        interruptSpeech();
+        status("(stopped — listening)");
+        return;
+      }
+      if (sheSpeaking && looksLikeEcho(heard)) {
+        // A stop buried in an echo-mix transcript (her leaked audio + your
+        // "stop") still stops her — but a garbled mix is never a question.
+        if (containsStopWord(heard)) interruptSpeech();
+        return;
+      }
       if (sheSpeaking) interruptSpeech();              // real human over her — STOP
       if (!res.isFinal) { status("hearing: " + heard); return; }
+      // A bare "stop"/"wait" when she's already idle: nothing to stop, and the
+      // brain must not answer it as if it were a question.
+      if (isStopCommand(heard)) { status("(listening)"); return; }
       document.getElementById("q").value = heard;
       status("heard: " + heard);
       ask(heard); // grounded + tools, spoken back
