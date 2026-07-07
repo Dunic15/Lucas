@@ -79,6 +79,33 @@ def test_stop_message_queued_and_window_reset():
     assert types[-1] == "stop"
 
 
+def test_stop_kills_the_whole_turn():
+    """A stop must cancel the WHOLE turn, not just the audio playing now:
+    queued speaks are purged, the generation goes stale (so a sentence still
+    streaming when the stop landed is dropped), and the stop message carries
+    the stale generation for the page-side filter."""
+    s = _session()
+    gen = s.speech_generation
+    _speak(s, "sentence one of a long answer that is still going")
+    _speak(s, "sentence two of a long answer that is still going")
+    asyncio.run(main._make_avatar_stop(s))
+    assert s.speech_generation == gen + 1
+    assert [m["type"] for m in s.pending_messages] == ["stop"]
+    assert s.pending_messages[-1]["generation_id"] == gen
+    # A late sentence from the cancelled turn is dropped, not spoken.
+    assert _speak(s, "sentence three arriving after the stop", generation=gen) is False
+    # The next turn (current generation) speaks normally.
+    assert _speak(s, "a brand new answer for a new question") is True
+
+
+def test_speak_messages_carry_generation_id():
+    s = _session()
+    _speak(s, "hello there everyone in the meeting")
+    msg = s.pending_messages[-1]
+    assert msg["type"] == "speak"
+    assert msg["generation_id"] == s.speech_generation
+
+
 def test_force_bypasses_repetition_guard():
     """Re-asking Laura BY NAME must answer again, even verbatim (review #2)."""
     s = _session()

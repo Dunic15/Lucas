@@ -245,12 +245,14 @@ def _create_bot_body(
             "transcript": {
                 "provider": provider,
             },
-            # Real-time transcript utterances delivered here.
+            # Real-time transcript utterances delivered here. Partials arrive
+            # WHILE someone is still talking — they power barge-in and the
+            # instant ack; finals (transcript.data) drive the actual answers.
             "realtime_endpoints": [
                 {
                     "type": "webhook",
                     "url": webhook_url,
-                    "events": ["transcript.data"],
+                    "events": ["transcript.data", "transcript.partial_data"],
                 }
             ],
         },

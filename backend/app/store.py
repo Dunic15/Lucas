@@ -68,6 +68,23 @@ class Session:
     # Until when (epoch seconds) the avatar is estimated to still be speaking —
     # drives barge-in (a human talking inside this window interrupts her).
     speaking_until: float = field(default=0.0, repr=False, compare=False)
+    # Monotonic speech-turn counter. Every stop (barge-in) and every new answer
+    # turn bumps it; speak messages are stamped with the generation they belong
+    # to, so a cancelled turn's late sentences can be dropped on BOTH sides
+    # (the streaming loop breaks, the page discards stale generations).
+    # In-memory only: a restart naturally cancels any in-flight turn.
+    speech_generation: int = field(default=0, repr=False, compare=False)
+    # Running notes of the meeting OLDER than the recent-history window, kept
+    # fresh in the background (see main._refresh_rolling_summary). Gives the
+    # live brain the whole meeting's arc without widening the hot-path prompt.
+    # In-memory only — derived from the persisted transcript (PII stays put).
+    rolling_summary: str = field(default="", repr=False, compare=False)
+    summary_upto: int = field(default=0, repr=False, compare=False)
+    summarizing: bool = field(default=False, repr=False, compare=False)
+    # When she last spoke an acknowledgment ("Mm-hm.") — set by the partial-
+    # transcript path so the final-utterance path doesn't ack the same turn
+    # twice. In-memory only: an ack is worthless across a restart.
+    last_ack_at: float = field(default=0.0, repr=False, compare=False)
     # Recently spoken lines (normalized text -> epoch seconds) for the
     # repetition guard: never say the same line twice within the window.
     _recent_lines: dict = field(default_factory=dict, repr=False, compare=False)
@@ -329,6 +346,24 @@ def get_artifact(bot_id: str) -> dict | None:
     return _artifacts.get(bot_id)
 
 
+def list_artifacts() -> list[dict]:
+    """Every saved artifact with its metadata, newest first (meetings page).
+    Reads the DB (not the in-memory cache) so it sees rows written by other
+    processes — e.g. tests or scripts seeding the store."""
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            "SELECT bot_id, artifact_json, saved_at FROM artifacts ORDER BY saved_at DESC"
+        ).fetchall()
+    out = []
+    for r in rows:
+        try:
+            artifact = json.loads(r["artifact_json"])
+        except (TypeError, ValueError):
+            artifact = {}
+        out.append({"bot_id": r["bot_id"], "saved_at": r["saved_at"], "artifact": artifact})
+    return out
+
+
 def create(bot_id: str, meeting_url: str, avatar_id: str = "laura") -> Session:
     s = Session(bot_id=bot_id, meeting_url=meeting_url, avatar_id=avatar_id)
     _sessions[bot_id] = s
@@ -368,6 +403,23 @@ def drain_avatar_messages(session: Session) -> list[dict[str, Any]]:
         messages = list(session.pending_messages)
         session.pending_messages.clear()
         return messages
+
+
+def bump_speech_generation(session: Session) -> int:
+    """Start a new speech turn (or cancel the current one). Returns the new
+    generation; older turns' speak messages become stale everywhere."""
+    with _LOCK:
+        session.speech_generation += 1
+        return session.speech_generation
+
+
+def purge_pending_speaks(session: Session) -> None:
+    """Drop queued-but-undelivered speak messages (a stop must silence the queue
+    too, not just the audio already playing). Non-speak messages survive."""
+    with _LOCK:
+        session.pending_messages[:] = [
+            m for m in session.pending_messages if m.get("type") != "speak"
+        ]
 
 
 def all_sessions() -> list[Session]:

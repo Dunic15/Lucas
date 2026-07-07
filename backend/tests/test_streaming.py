@@ -143,3 +143,27 @@ def test_streaming_retrieval_uses_recent_history(monkeypatch):
     assert "laptop access" in seen["query"]
     assert "Current ask: what about that?" in seen["query"]
     assert seen["k"] == 6
+
+
+def test_streaming_search_route_announces_before_answer(monkeypatch):
+    _force_streaming_provider(monkeypatch)
+    monkeypatch.setattr(brain.settings, "live_search_enabled", True)
+    monkeypatch.setattr(
+        brain, "_web_search_answer", lambda q, convo="": "The round closed yesterday."
+    )
+
+    out = list(
+        brain.answer_question_stream(_avatar(), "What is the latest news on the fund?")
+    )
+
+    assert out[0] in brain._SEARCH_ANNOUNCE
+    assert "The round closed yesterday." in out[1:]
+
+
+def test_wants_deep_thought_gates_on_intent_and_key(monkeypatch):
+    monkeypatch.setattr(brain.settings, "anthropic_api_key", "test-key")
+    assert brain.wants_deep_thought("Should we hire, what are the trade-offs?")
+    assert not brain.wants_deep_thought("What is the first onboarding step?")
+    # No Anthropic key -> the complex route can't run, so no announce either.
+    monkeypatch.setattr(brain.settings, "anthropic_api_key", "")
+    assert not brain.wants_deep_thought("Should we hire, what are the trade-offs?")

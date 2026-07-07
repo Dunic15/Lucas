@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Laura — Meetings archive</title>
+  <style>
+    :root { --bg:#0b1020; --panel:#141b31; --line:#28324f; --text:#e6ecff;
+      --muted:#93a1c8; --accent:#5b8cff; --good:#3ad29f; --warn:#ffcf6b; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text);
+      font:15px/1.5 system-ui,-apple-system,sans-serif; }
+    header { padding:22px 24px 6px; max-width:900px; margin:0 auto; }
+    h1 { font-size:18px; margin:0; }
+    .sub { color:var(--muted); font-size:13px; margin:4px 0 0; }
+    main { max-width:900px; margin:0 auto; padding:14px 24px 60px;
+      display:flex; flex-direction:column; gap:14px; }
+    .meeting { background:var(--panel); border:1px solid var(--line);
+      border-radius:12px; padding:16px 18px; }
+    .meeting .head { display:flex; justify-content:space-between; gap:10px;
+      align-items:baseline; flex-wrap:wrap; }
+    .when { font-weight:600; }
+    .bot { color:var(--muted); font:12px ui-monospace,monospace; }
+    .score { color:var(--good); font-size:13px; }
+    .summary { margin:10px 0 0; font-size:14px; }
+    ul.checklist { margin:10px 0 0; padding-left:20px; font-size:14px; }
+    ul.checklist li.missing { color:var(--warn); }
+    details { margin-top:12px; }
+    summary { cursor:pointer; color:var(--muted); font-size:13px; }
+    pre.transcript { background:#0d1326; border:1px solid var(--line);
+      border-radius:9px; padding:12px; font:12.5px/1.6 ui-monospace,monospace;
+      white-space:pre-wrap; max-height:420px; overflow:auto; margin:8px 0 0; }
+    .email { background:#0d1326; border:1px solid var(--line); border-radius:9px;
+      padding:12px; font-size:13.5px; margin:8px 0 0; white-space:pre-wrap; }
+    .empty { color:var(--muted); text-align:center; padding:60px 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Meetings archive</h1>
+    <p class="sub">Every meeting Laura attended — summary, checklist, follow-up email and full transcript.</p>
+  </header>
+  <main id="list"><p class="empty">Loading…</p></main>
+
+  <script>
+    const esc = (s) => (s || "").replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+    function render(meetings) {
+      const root = document.getElementById("list");
+      if (!meetings.length) {
+        root.innerHTML = '<p class="empty">No meetings yet — artifacts appear here when a session ends.</p>';
+        return;
+      }
+      root.innerHTML = meetings.map(({ bot_id, saved_at, artifact: a }) => {
+        const when = new Date(saved_at * 1000).toLocaleString();
+        const items = (a.checklist || []).map(c => {
+          const label = typeof c === "string" ? c : (c.step || c.item || JSON.stringify(c));
+          const done = typeof c === "object" && (c.done || c.status === "done");
+          return `<li class="${done ? "" : "missing"}">${esc(label)}</li>`;
+        }).join("");
+        const email = a.follow_up_email || {};
+        const emailBlock = email.subject
+          ? `<details><summary>Follow-up email</summary>
+               <div class="email"><b>${esc(email.subject)}</b>\n\n${esc(email.body || "")}</div>
+             </details>` : "";
+        const transcriptBlock = a.transcript
+          ? `<details><summary>Transcript (${a.transcript.split("\n").length} lines)</summary>
+               <pre class="transcript">${esc(a.transcript)}</pre>
+             </details>`
+          : '<p class="sub">No transcript captured.</p>';
+        return `<section class="meeting">
+          <div class="head">
+            <span class="when">${esc(when)}</span>
+            <span class="score">${a.readiness_score ? "readiness " + esc(String(a.readiness_score)) + "/100" : ""}</span>
+            <span class="bot">${esc(bot_id)}</span>
+          </div>
+          ${a.summary ? `<p class="summary">${esc(a.summary)}</p>` : ""}
+          ${items ? `<ul class="checklist">${items}</ul>` : ""}
+          ${emailBlock}
+          ${transcriptBlock}
+        </section>`;
+      }).join("");
+    }
+
+    fetch("/meetings/list")
+      .then(r => r.json())
+      .then(d => render(d.meetings || []))
+      .catch(e => { document.getElementById("list").innerHTML =
+        `<p class="empty">Could not load meetings: ${esc(String(e))}</p>`; });
+  </script>
+</body>
+</html>

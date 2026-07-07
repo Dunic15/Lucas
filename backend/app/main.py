@@ -54,6 +54,8 @@ from .brain import (
     answer_question,
     answer_question_stream,
     answer_with_tools,
+    rolling_summary,
+    wants_deep_thought,
     wants_web_search,
     post_meeting,
     proactive_flag,
@@ -964,6 +966,19 @@ def session_artifact(bot_id: str) -> JSONResponse:
     return JSONResponse({"status": "done", **artifact})
 
 
+@app.get("/meetings")
+def meetings_page() -> FileResponse:
+    """Archive UI: every finished meeting's artifact, transcript included."""
+    return FileResponse(FRONTEND_DIR / "meetings.html")
+
+
+@app.get("/meetings/list")
+def meetings_list() -> JSONResponse:
+    """All saved artifacts, newest first, for the /meetings page. Transcripts
+    are PII: they may be *served* (that's the product) but never logged."""
+    return JSONResponse({"meetings": store.list_artifacts()})
+
+
 # ───────────────────────── avatar page + ws ─────────────────────────
 @app.get("/avatar")
 def avatar_page() -> FileResponse:
@@ -1038,7 +1053,91 @@ def avatar_messages(conversation_id: str) -> JSONResponse:
     )
 
 
+class SpeakingReport(BaseModel):
+    speaking: bool
+
+
+@app.post("/avatar/speaking/{conversation_id}")
+def avatar_speaking(conversation_id: str, rep: SpeakingReport) -> JSONResponse:
+    """The avatar page reports its REAL speaking state (audio playing or queued).
+
+    The backend's barge-in window is otherwise a words-per-second estimate that
+    drifts both ways on long answers. True = heartbeat (extend the window a beat
+    past the next report); false = she actually finished — close the window now,
+    unless a speak was sent so recently the page may not have received it yet
+    (keep a short grace so barge-in still covers the delivery gap)."""
+    session = store.get_by_conversation(conversation_id)
+    if session is None:
+        return JSONResponse({"ok": False}, status_code=404)
+    now = time.time()
+    if rep.speaking:
+        session.speaking_until = max(session.speaking_until, now + 1.6)
+    elif now - session.last_spoke_at > 2.5:
+        session.speaking_until = 0.0
+    else:
+        session.speaking_until = min(session.speaking_until, now + 2.5)
+    return JSONResponse({"ok": True})
+
+
+# ─────────────── rolling meeting notes (background refresh) ───────────────
+_SUMMARY_KEEP_RECENT = 8    # lines the live history window already carries
+_SUMMARY_EVERY_LINES = 20   # fold into the notes every this-many new lines
+# Strong references to in-flight refresh tasks: the event loop holds tasks
+# weakly, and a GC'd task would leave session.summarizing stuck True (notes
+# frozen for the rest of the meeting).
+_summary_tasks: set = set()
+
+
+def _maybe_refresh_rolling_summary(
+    session: store.Session, avatar: avatars.Avatar
+) -> None:
+    """Kick a background fold of older transcript lines into running notes.
+
+    Fire-and-forget and self-throttling: at most one refresh in flight per
+    session, only every _SUMMARY_EVERY_LINES lines, never on the stub (keyless
+    demo). Zero cost on the live path — the model call runs in a worker thread.
+    """
+    if effective_provider() == "stub":
+        return
+    fresh = len(session.transcript) - session.summary_upto
+    if fresh < _SUMMARY_EVERY_LINES + _SUMMARY_KEEP_RECENT or session.summarizing:
+        return
+    session.summarizing = True
+    task = asyncio.create_task(_refresh_rolling_summary(session, avatar))
+    _summary_tasks.add(task)
+    task.add_done_callback(_summary_tasks.discard)
+
+
+async def _refresh_rolling_summary(
+    session: store.Session, avatar: avatars.Avatar
+) -> None:
+    try:
+        cutoff = max(0, len(session.transcript) - _SUMMARY_KEEP_RECENT)
+        lines = session.transcript[session.summary_upto : cutoff]
+        if not lines:
+            return
+        text = "\n".join(f"{u.speaker}: {u.text}" for u in lines)
+        notes = await run_in_threadpool(
+            rolling_summary, avatar, session.rolling_summary, text
+        )
+        if notes:
+            session.rolling_summary = notes
+            session.summary_upto = cutoff
+    except Exception:
+        pass  # notes are a bonus — never let them disturb the live path
+    finally:
+        session.summarizing = False
+
+
 _ACK_LINES = ["Mm-hm.", "Sure —", "On it.", "Let me think —", "Good one —"]
+
+# Ack for questions routed to the slower 'complex' Claude path: a line that
+# JUSTIFIES the extra beat of latency instead of leaving it unexplained.
+_THINK_LINES = [
+    "Good question — give me a second to think it through.",
+    "Let me reason through that for a moment.",
+    "Hmm — let me think about that properly.",
+]
 
 # Spoken when dismissed by voice — short enough to finish inside
 # settings.leave_grace_seconds before the bot disconnects.
@@ -1076,7 +1175,12 @@ def _is_repeat(session: store.Session, text: str) -> bool:
 
 
 async def _make_avatar_speak(
-    session: store.Session, text: str, citations: list | None = None, *, force: bool = False
+    session: store.Session,
+    text: str,
+    citations: list | None = None,
+    *,
+    force: bool = False,
+    generation: int | None = None,
 ) -> bool:
     """Backend-as-brain: send the exact words for the avatar to speak (Anam talk).
 
@@ -1084,10 +1188,25 @@ async def _make_avatar_speak(
     `force=True` bypasses the guard (someone re-asking Laura BY NAME deserves
     the answer again, even verbatim) while still refreshing the window. Also
     extends the estimated speaking window that powers barge-in.
+
+    `generation` ties the line to one speech turn: if a stop (barge-in) or a
+    newer turn bumped the session's generation while this sentence was still
+    being generated, the line is dropped instead of un-muting her. Every
+    message carries its generation_id so the page can drop a stale speak that
+    raced a stop over the wire (additive — pages that don't know it ignore it).
     """
+    if generation is not None and generation != session.speech_generation:
+        return False  # turn was cancelled while this sentence was in flight
     if _is_repeat(session, text) and not force:
         return False
-    message = {"type": "speak", "text": text, "citations": citations or []}
+    message = {
+        "type": "speak",
+        "text": text,
+        "citations": citations or [],
+        "generation_id": (
+            generation if generation is not None else session.speech_generation
+        ),
+    }
     # Estimate how long this line keeps her talking; queued lines extend it.
     est = max(1.0, len(text.split()) / _SPEECH_WORDS_PER_SECOND)
     session.speaking_until = max(session.speaking_until, time.time()) + est
@@ -1108,9 +1227,18 @@ async def _make_avatar_speak(
 async def _make_avatar_stop(session: store.Session) -> None:
     """Barge-in: tell the avatar page to stop the current speech immediately
     (TalkingHead cancels audio + queue). Same delivery contract as speak —
-    additive message type; pages that don't know it ignore it."""
+    additive message type; pages that don't know it ignore it.
+
+    A stop kills the WHOLE turn, not just the audio playing right now, via
+    three layers: queued-but-undelivered speaks are purged, the generation
+    bump makes the still-streaming answer loop break (so she doesn't resume
+    the old answer at the next sentence), and the stop carries the stale
+    generation so the page drops any speak that raced it over the wire."""
+    stale = session.speech_generation
+    store.bump_speech_generation(session)
+    store.purge_pending_speaks(session)
     session.speaking_until = 0.0
-    message = {"type": "stop"}
+    message = {"type": "stop", "generation_id": stale}
     if session.ws is not None:
         try:
             await session.ws.send_json(message)
@@ -1353,6 +1481,49 @@ async def recall_webhook(request: Request) -> JSONResponse:
     payload = json.loads(raw_body or b"{}")
     event = payload.get("event", "")
 
+    if event == "transcript.partial_data":
+        # Partials arrive WHILE someone is still talking; finals only land after
+        # endpointing (~1-2s later). Two fluency wins here, but NO speak
+        # decisions — answers, transcript, and MeetingState are finals-only
+        # (partials repeat and get revised):
+        #   - barge-in fires the instant a human talks over her
+        #   - the ack fires the moment her name is heard, not when the
+        #     sentence ends
+        data = payload.get("data", {}).get("data", {})
+        bot_id = payload.get("data", {}).get("bot", {}).get("id", "")
+        session = store.get(bot_id)
+        if session is None:
+            return JSONResponse({"ok": True, "note": "no session"})
+        words = data.get("words", [])
+        text = " ".join(w.get("text", "") for w in words).strip()
+        participant = data.get("participant") or {}
+        speaker = session.resolve_speaker(participant.get("name"), participant.get("id"))
+        if not text:
+            return JSONResponse({"ok": True})
+        avatar = avatars.load(session.avatar_id)
+        if _should_barge_in(session, avatar.name, speaker, text):
+            await _make_avatar_stop(session)
+        if _is_own_speech(avatar.name, speaker):
+            return JSONResponse({"ok": True, "partial": True})
+        called, question = detect_wake(avatar, text)
+        acked = False
+        if (
+            settings.ack_enabled
+            and called
+            # Search questions are announced by the answer stream itself.
+            and not wants_web_search(question or text)
+            # One ack per turn: partial streams repeat the same growing text.
+            and time.time() - session.last_ack_at > 6.0
+        ):
+            session.last_ack_at = time.time()
+            line = (
+                random.choice(_THINK_LINES)
+                if wants_deep_thought(question or text)
+                else random.choice(_ACK_LINES)
+            )
+            acked = await _make_avatar_speak(session, line, force=True)
+        return JSONResponse({"ok": True, "partial": True, "acked": acked})
+
     if event != "transcript.data":
         # Auto end-of-meeting: when Recall reports the call is over / bot done,
         # finalize the session (stop billing on both vendors + build the artifact).
@@ -1401,6 +1572,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # latency to the live path — and informs both the closing intervention below
     # and the post-meeting artifact.
     state = meeting_state.observe(session, avatar, speaker, text)
+
+    # ── rolling meeting notes (background) ──
+    # Every ~20 lines, fold the transcript older than the live history window
+    # into short running notes (fast model, off the hot path) so her context
+    # is the WHOLE meeting, not just the last 8 lines.
+    _maybe_refresh_rolling_summary(session, avatar)
 
     # ── never converse with yourself ──
     # The bot transcribes Laura's own speech too. Answering it creates greeting
@@ -1465,20 +1642,48 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if settings.require_wake_word and not called:
         return JSONResponse({"ok": True, "spoke": False, "reason": "not called"})
     question = question or text  # no wake word → treat the whole utterance as the ask
-    if session.in_cooldown(avatar.speak_cooldown_seconds):
+    # Cooldown throttles UNPROMPTED interjections. Being addressed by name is a
+    # direct ask — follow-ups right after her answer are what a fluent
+    # conversation is made of, so `called` bypasses it.
+    if not called and session.in_cooldown(avatar.speak_cooldown_seconds):
         return JSONResponse({"ok": True, "spoke": False, "reason": "cooldown"})
+
+    # This is a NEW speech turn: bump the generation so an older turn that is
+    # still streaming (slow model, long answer) stops queueing sentences under
+    # her — its loop sees the newer generation and breaks. Barge-in stops
+    # already bumped; this covers the no-audio overlap case (she was silent but
+    # a previous answer was still generating).
+    turn_gen = store.bump_speech_generation(session)
 
     # ── instant acknowledgment ──
     # She was addressed BY NAME, so she will answer — say so immediately while
     # the model generates. Sub-second social feedback is what makes the
-    # conversation feel fluent instead of laggy.
-    if settings.ack_enabled and called:
-        await _make_avatar_speak(session, random.choice(_ACK_LINES), force=True)
+    # conversation feel fluent instead of laggy. Slow routes get a line that
+    # justifies their pause; search questions are announced by the stream
+    # itself (brain._SEARCH_ANNOUNCE), so no ack here — she'd say two openers.
+    # Usually the partial-transcript path already acked this turn (it hears the
+    # name ~1-2s before this final lands) — last_ack_at dedupes the two paths.
+    if (
+        settings.ack_enabled
+        and called
+        and not wants_web_search(question)
+        and time.time() - session.last_ack_at > 6.0
+    ):
+        session.last_ack_at = time.time()
+        line = (
+            random.choice(_THINK_LINES)
+            if wants_deep_thought(question)
+            else random.choice(_ACK_LINES)
+        )
+        await _make_avatar_speak(session, line, force=True, generation=turn_gen)
 
     # Backend is the brain: answer from OUR knowledge (RAG) with the recent
-    # meeting conversation as context. Streamed sentence-by-sentence so the avatar
-    # starts speaking on the first sentence instead of waiting for the whole
-    # answer. Grounding is enforced by the SKIP sentinel inside the stream: if the
+    # meeting conversation as context, plus the silent MeetingState tracker and
+    # the rolling notes of everything older than the history window — so "what
+    # did we decide / who owns X / what's missing?" answers from what she
+    # actually tracked. Streamed sentence-by-sentence so the avatar starts
+    # speaking on the first sentence instead of waiting for the whole answer.
+    # Grounding is enforced by the SKIP sentinel inside the stream: if the
     # context is insufficient the generator yields nothing and the avatar stays
     # silent (the streaming equivalent of the old confidence gate).
     history = session.recent_transcript(n=8)
@@ -1491,9 +1696,18 @@ async def recall_webhook(request: Request) -> JSONResponse:
             question or text,
             history=history,
             memory=memory,
+            state=state,
+            summary=session.rolling_summary,
             min_chars=45,  # coalesce tiny fragments so the TTS voice flows
         )
     ):
+        # Interrupted (barge-in) or superseded by a newer turn while this
+        # sentence was generating: abandon the rest of the answer. The page
+        # already dropped the stale generation; don't keep paying for tokens.
+        if session.speech_generation != turn_gen:
+            return JSONResponse(
+                {"ok": True, "spoke": spoke_any, "interrupted": True}
+            )
         if not spoke_any:
             print(
                 f"[latency] wake->first_speak="
@@ -1502,9 +1716,16 @@ async def recall_webhook(request: Request) -> JSONResponse:
             )
         # Called by name -> answer even if it repeats a recent line; an
         # unaddressed duplicate is suppressed (and reported honestly below).
-        spoke = await _make_avatar_speak(session, sentence, force=called)
+        spoke = await _make_avatar_speak(
+            session, sentence, force=called, generation=turn_gen
+        )
         spoke_any = spoke or spoke_any
         suppressed_any = suppressed_any or not spoke
+
+    if session.speech_generation != turn_gen:
+        # The turn died between the last sentence and here — report it honestly
+        # and skip the repair line (a human is talking; silence is correct).
+        return JSONResponse({"ok": True, "spoke": spoke_any, "interrupted": True})
 
     if not spoke_any:
         if suppressed_any:

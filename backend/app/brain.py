@@ -17,6 +17,7 @@ The actual model is pluggable (see llm.py / BRAIN_PROVIDER):
 from __future__ import annotations
 
 import json
+import random
 import re
 import time
 
@@ -167,6 +168,8 @@ it, give the useful part and say what you'd check.
 mention it's from a quick search.
 - Live transcripts are noisy — infer the likely intent and answer what the \
 person most likely meant.
+- Reply in the language the person spoke to you in — an Italian question gets \
+an Italian answer. Follow the conversation if it switches language.
 - Reply with the single word SKIP (and nothing else) ONLY when the speech is \
 clearly NOT directed at you — e.g. two other people talking to each other. \
 When someone seems to be addressing you or asking anything at all, respond. \
@@ -176,6 +179,24 @@ When in doubt, respond."""
 def _is_skip(head: str) -> bool:
     """True if `head` is a standalone SKIP sentinel (not a word like 'Skipping')."""
     return head[:4].upper() == "SKIP" and (len(head) == 4 or not head[4].isalpha())
+
+
+# First streamed chunk can be shorter than min_chars: the opening words are the
+# perceived latency, and a slightly clipped first breath beats half a second
+# more of silence. Later chunks keep the caller's min_chars for prosody.
+_FIRST_CHUNK_MIN_CHARS = 24
+
+
+def _state_has_signal(state: "meeting_state.MeetingState") -> bool:
+    """True when the tracker actually captured something worth prompting with."""
+    return bool(
+        state.required_steps
+        or state.decisions
+        or state.owners
+        or state.deadlines
+        or state.risks
+        or state.open_questions
+    )
 
 
 def _retrieval_query(question: str, history: str = "") -> str:
@@ -231,6 +252,12 @@ _COMPLEX_INTENT = re.compile(
 )
 
 
+def wants_deep_thought(question: str) -> bool:
+    """True when _live_route will pick the slower 'complex' Claude path —
+    callers can announce the pause ('let me think') before the answer starts."""
+    return bool(settings.anthropic_api_key and _COMPLEX_INTENT.search(question or ""))
+
+
 def _live_route(question: str) -> tuple[str, str]:
     """(provider, model) for one live answer:
       - web search (fresh info)       -> Claude + native web_search tool (the
@@ -241,9 +268,20 @@ def _live_route(question: str) -> tuple[str, str]:
     """
     if _wants_search(question):
         return "search", settings.live_search_model
-    if settings.anthropic_api_key and _COMPLEX_INTENT.search(question or ""):
+    if wants_deep_thought(question):
         return "anthropic", settings.brain_model_complex
     return settings.brain_provider, settings.brain_model_fast
+
+
+# Spoken BEFORE the (slow) web-search call: a few seconds of silence reads as a
+# bug, an announced lookup reads as diligence. Varied so the repeat guard never
+# suppresses it. Safe to say unconditionally: the search path never SKIPs, so an
+# announced answer always follows.
+_SEARCH_ANNOUNCE = (
+    "One moment — let me look that up online.",
+    "Give me a second, I'll check the latest on that.",
+    "Let me search for that quickly.",
+)
 
 
 _SEARCH_FAIL_RE = re.compile(
@@ -283,6 +321,8 @@ def answer_question_stream(
     *,
     history: str = "",
     memory: str = "",
+    state: "meeting_state.MeetingState | None" = None,
+    summary: str = "",
     k: int = 6,
     min_chars: int = 0,
 ):
@@ -293,11 +333,21 @@ def answer_question_stream(
     what previous sessions of this same meeting left open or decided. Empty
     for first-time meetings — the prompt then carries no memory block at all.
 
+    `state` is the live MeetingState tracker (regex-built, already in memory —
+    zero latency cost). It holds exactly what "what did we decide / who owns X /
+    what's missing?" questions need, which the recent-history window alone can't
+    answer. Injected only when it has signal, so quiet meetings add no noise.
+
+    `summary` is the rolling notes of the meeting OLDER than the recent-history
+    window (kept fresh in the background) — the whole meeting's arc without
+    widening the hot-path prompt.
+
     `min_chars>0` coalesces tiny sentences ("Yes." "Sure.") into a chunk of at
     least that many characters before yielding, so the TTS voice flows instead of
     stuttering one fragment at a time (a touch more first-audio latency for
-    smoother prosody). The first chunk still streams as soon as it crosses the
-    threshold or the answer ends.
+    smoother prosody). The FIRST chunk uses a lower threshold — the opening words
+    are what the room is waiting on — and later chunks keep the full min_chars
+    for smooth prosody.
     """
     _t0 = time.perf_counter()
     chunks = retrieve(avatar, _retrieval_query(question, history), k=k)
@@ -322,6 +372,21 @@ def answer_question_stream(
         if memory.strip()
         else ""
     )
+    # The silent tracker: decisions, owners, deadlines, covered/missing process
+    # steps. Only injected when it actually tracked something — an empty scaffold
+    # ("type: unknown") would just bias her toward process-speak on small talk.
+    state_block = (
+        f"Laura's own silent meeting notes (tracked live — trust these):\n"
+        f"{meeting_state.state_summary(state)}\n\n"
+        if state is not None and _state_has_signal(state)
+        else ""
+    )
+    summary_block = (
+        f"Running summary of this meeting so far (before the recent lines below):\n"
+        f"{summary}\n\n"
+        if summary.strip()
+        else ""
+    )
     context_block = (
         f"Company/fund document context (relevant to this question):\n\n{_format_context(chunks)}\n\n"
         if chunks
@@ -330,6 +395,8 @@ def answer_question_stream(
     system = ANSWER_STREAM_SYSTEM.format(persona=avatar.persona_prompt)
     user = (
         f"{context_block}"
+        f"{state_block}"
+        f"{summary_block}"
         f"{remembered}"
         f"{convo}"
         f"Someone in the meeting asked:\n{question}\n\n"
@@ -353,6 +420,9 @@ def answer_question_stream(
 
     _provider, _model = _live_route(question)
     if _provider == "search":
+        # Announce the lookup BEFORE the slow web call — it buys the search its
+        # seconds honestly instead of leaving dead air.
+        yield random.choice(_SEARCH_ANNOUNCE)
         answer = _web_search_answer(question, convo)
         if answer:
             buf, sentences = _split_sentences(answer + " ")
@@ -387,7 +457,10 @@ def answer_question_stream(
         for s in sentences:
             if min_chars > 0:
                 outbuf = f"{outbuf} {s}".strip()
-                if len(outbuf) >= min_chars:
+                # First chunk: lower bar — those opening words are the perceived
+                # latency. Later chunks keep min_chars for smooth prosody.
+                need = min_chars if spoke_any else min(min_chars, _FIRST_CHUNK_MIN_CHARS)
+                if len(outbuf) >= need:
                     _log_first()
                     yield outbuf
                     spoke_any = True
@@ -408,6 +481,40 @@ def answer_question_stream(
     # Citation is not auto-appended: it made small talk read absurdly ("nice joke
     # — per onboarding_sop.md"). The model is instructed to name the source doc
     # itself when (and only when) it actually answers from a process document.
+
+
+# ─────────────────── rolling meeting notes (background) ───────────────────
+# Keeps the live brain aware of the WHOLE meeting: the hot-path prompt carries
+# only the last few lines, so everything older is folded into short running
+# notes off the hot path (fast model, called from a background task in main).
+ROLLING_SUMMARY_SYSTEM = """You maintain running notes of a live work meeting \
+for an assistant who is in the room. Merge the existing notes with the new \
+transcript lines into ONE updated set of notes, at most 120 words. Keep only \
+what stays useful later: topics discussed, decisions, owners, deadlines, \
+numbers, blockers, and open questions. Drop small talk and filler. Plain \
+text, no markdown, no preamble — return the updated notes only."""
+
+
+def rolling_summary(avatar: Avatar, prior: str, new_lines: str) -> str:
+    """Fold new transcript lines into the running notes. Returns the updated
+    notes, or "" on stub/error (the caller then keeps the old notes)."""
+    if _is_stub():
+        return ""  # keyless demo: no model — the recent-history window suffices
+    try:
+        raw = llm.complete(
+            ROLLING_SUMMARY_SYSTEM,
+            (
+                f"Existing notes:\n{prior.strip() or '(none yet)'}\n\n"
+                f"New transcript lines:\n{new_lines}\n\n"
+                "Updated notes:"
+            ),
+            max_tokens=260,
+            model=settings.brain_model_fast,
+        )
+    except Exception as e:  # noqa: BLE001 — notes are a bonus, never a failure
+        print(f"[notes] rolling summary failed: {e}", flush=True)
+        return ""
+    return (raw or "").strip()[:1600]
 
 
 def _split_sentences(buf: str) -> tuple[str, list[str]]:

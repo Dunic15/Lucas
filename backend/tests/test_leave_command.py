@@ -153,7 +153,7 @@ def _run_webhook(monkeypatch, tmp_path, bot_id: str, text: str) -> tuple[dict, d
     _stub_vendors(monkeypatch, tmp_path, calls)
     _make_session(bot_id)
 
-    async def fake_speak(session, line, citations=None, force=False):
+    async def fake_speak(session, line, citations=None, force=False, generation=None):
         calls["spoken"].append(line)
         return True
 
