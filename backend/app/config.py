@@ -159,7 +159,9 @@ class Settings(BaseSettings):
     #    question (score >= rag_min_context_score), so general questions get
     #    the model's own knowledge instead of doc-quoting.
     live_search_enabled: bool = True
-    live_search_model: str = "claude-sonnet-5"
+    # Haiku (not Sonnet) for web search: much faster on the live spoken path, still
+    # answers current-info questions well. Set to claude-sonnet-5 for deeper search.
+    live_search_model: str = "claude-haiku-4-5"
     # 0.28: real process/SFF questions score 0.6+, unrelated chatter ~0.1 —
     # below the bar she answers from her own intelligence, no doc flavor.
     rag_min_context_score: float = 0.28

@@ -129,6 +129,21 @@ def test_interactive_path_never_silent_on_empty_tool_answer(monkeypatch):
     assert r["answer"] == "Here's a plain answer."  # retried plain, not silent
 
 
+def test_interactive_path_survives_tool_endpoint_error(monkeypatch):
+    """Groq's tool endpoint 429s with no fallback — answer_with_tools must catch it
+    and retry a plain answer (Haiku-capable), not raise and go silent."""
+    _force_groq(monkeypatch)
+    monkeypatch.setattr(brain, "retrieve", lambda *a, **k: [])
+
+    def boom(*a, **k):
+        raise RuntimeError("429 Too Many Requests")
+
+    monkeypatch.setattr(brain.llm, "complete_with_tools", boom)
+    monkeypatch.setattr(brain.llm, "complete", lambda *a, **k: "Plain fallback answer.")
+    r = brain.answer_with_tools(_avatar(), "tell me a joke")
+    assert r["answer"] == "Plain fallback answer."
+
+
 def test_interactive_path_no_search_for_normal_question(monkeypatch):
     _force_groq(monkeypatch)
     called = {"search": False}

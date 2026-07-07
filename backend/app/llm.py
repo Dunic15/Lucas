@@ -160,11 +160,21 @@ def web_search(
             b.text for b in (msg.content if msg else []) if getattr(b, "type", None) == "text"
         ).strip()
 
+    # Dynamic-filtering tool (web_search_20260209) needs Sonnet/Opus; Haiku and
+    # smaller models use the basic web_search_20250305. Pick the right one first so
+    # we don't waste a round-trip, and fall back to the other on error.
+    is_big = any(m in (model or "").lower() for m in ("sonnet", "opus"))
+    primary = "web_search_20260209" if is_big else "web_search_20250305"
+    fallback = "web_search_20250305" if is_big else "web_search_20260209"
     try:
-        return _run("web_search_20260209")  # dynamic filtering (Sonnet/Opus)
-    except Exception as e:  # noqa: BLE001 — older/smaller models: basic tool
-        print(f"[search] web_search_20260209 failed ({e}); trying basic tool", flush=True)
-        return _run("web_search_20250305")
+        return _run(primary)
+    except Exception as e:  # noqa: BLE001
+        print(f"[search] {primary} failed ({e}); trying {fallback}", flush=True)
+        try:
+            return _run(fallback)
+        except Exception as e2:  # noqa: BLE001
+            print(f"[search] {fallback} failed ({e2})", flush=True)
+            return ""
 
 
 def _stream_anthropic(
