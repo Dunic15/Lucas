@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Any
 
 os.environ["BRAIN_PROVIDER"] = "stub"
+# The post-meeting path gates on BRAIN_PROVIDER_POST (per-path provider split), so
+# pin it too — otherwise a real post-provider in .env makes this eval non-
+# deterministic. build_post_meeting_artifact also force-overrides the function, so
+# this holds even when settings were already constructed by an earlier import.
+os.environ["BRAIN_PROVIDER_POST"] = "stub"
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_DIR = REPO_ROOT / "backend"
@@ -64,12 +69,18 @@ def load_scenarios() -> list[tuple[str, str, dict[str, Any]]]:
 def build_post_meeting_artifact(transcript: str) -> dict[str, Any]:
     """Run the real post-meeting path offline and mirror final stored schema."""
     avatar = avatars.load("laura")
-    original_provider = brain.effective_provider
+    # post_meeting() gates on post_provider(); force both provider hooks to the
+    # deterministic stub so the eval is provider-independent regardless of what
+    # keys / BRAIN_PROVIDER_POST are set in the environment.
+    original_effective = brain.effective_provider
+    original_post = brain.post_provider
     brain.effective_provider = lambda: "stub"
+    brain.post_provider = lambda: "stub"
     try:
         artifact = brain.post_meeting(avatar, transcript)
     finally:
-        brain.effective_provider = original_provider
+        brain.effective_provider = original_effective
+        brain.post_provider = original_post
     artifact["transcript"] = transcript
     return artifact
 
