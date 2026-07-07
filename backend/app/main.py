@@ -54,6 +54,7 @@ from .brain import (
     answer_question,
     answer_question_stream,
     answer_with_tools,
+    wants_web_search,
     post_meeting,
     proactive_flag,
     effective_provider,
@@ -165,6 +166,13 @@ _gmail_state = {"last_poll": 0.0, "last_error": "", "joined": []}
 # dispatching bots the moment this flips, so a draining OLD instance never races the
 # NEW instance to put a second bot in the same meeting during a deploy overlap.
 _shutting_down = False
+
+# Spoken the instant she decides to web-search, so the ~4s search isn't dead air.
+_SEARCH_FILLERS = (
+    "Sure, let me look that up — one sec.",
+    "Let me quickly check the web on that — one moment.",
+    "Good one — give me a sec to search that.",
+)
 
 _MEET_CODE_RE = re.compile(r"meet\.google\.com/([a-z-]+)")
 _BOT_TERMINAL = {"call_ended", "done", "fatal"}
@@ -442,6 +450,11 @@ async def live_act(req: AskRequest) -> StreamingResponse:
     avatar = avatars.load(req.avatar_id)
 
     async def gen():
+        # A web search is a ~4s break. Speak a quick filler FIRST (streamed as its
+        # own chunk so the page says it immediately) so the conversation doesn't
+        # stall in silence while she searches.
+        if wants_web_search(req.question):
+            yield f"data: {json.dumps({'content': random.choice(_SEARCH_FILLERS)})}\n\n"
         result = await run_in_threadpool(answer_with_tools, avatar, req.question)
         used = result.get("tools_used") or []
         if used:

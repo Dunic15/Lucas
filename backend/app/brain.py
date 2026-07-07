@@ -211,7 +211,7 @@ def _live_model(question: str) -> str:
     return settings.brain_model_fast
 
 
-def _wants_web_search(question: str) -> bool:
+def wants_web_search(question: str) -> bool:
     return _live_model(question) == settings.live_search_model
 
 
@@ -437,7 +437,7 @@ def answer_with_tools(
     # Web search for questions that want fresh/current info — same compound model
     # (Groq, built-in web search) the meeting path uses. Falls through to normal
     # tool-using reasoning if search is unavailable, errors, or returns nothing.
-    if not _is_stub() and _wants_web_search(question):
+    if not _is_stub() and wants_web_search(question):
         answer = _web_search_answer(question, convo)
         if answer:
             print(f"[search] {question[:60]!r} -> answered from web", flush=True)
