@@ -236,7 +236,10 @@ def test_post_meeting_artifact_has_full_schema(monkeypatch):
     readiness_score computed deterministically from the process template."""
     import app.brain as brain
 
+    # post_meeting() gates on post_provider() (per-path provider split), so pin
+    # that too — patching only effective_provider let a real key drive the model.
     monkeypatch.setattr(brain, "effective_provider", lambda: "stub")
+    monkeypatch.setattr(brain, "post_provider", lambda: "stub")
     text = (
         "Ana: Kickoff for the Acme onboarding.\n"
         "Ben: Security review is approved and cleared.\n"
