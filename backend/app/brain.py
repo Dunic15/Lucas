@@ -237,7 +237,7 @@ def _web_search_answer(question: str, convo: str = "") -> str:
             "You answer in 1-3 short spoken sentences, no markdown. Use web "
             "search for current information and mention it's from a quick search.",
             f"{convo}Use web search, then answer briefly:\n{question}",
-            max_tokens=2048,
+            max_tokens=512,  # shorter answer = faster; the search itself is the cost
             model=settings.live_search_model,
             provider="groq",  # compound lives on Groq even when the live brain is Claude
         )

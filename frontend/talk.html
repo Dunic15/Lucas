@@ -157,8 +157,9 @@
       try {
         // TalkingHead's OrbitControls clamp minDistance=2.0 — any closer framing
         // silently snaps back to z=2.0 (this was why she never got truly close).
-        // Release the clamp, then place the camera.
-        if (head.controls) head.controls.minDistance = 0.3;
+        // Release the clamp, then place the camera. enableDamping=false so any
+        // camera move is INSTANT, never a smooth far->close glide on load.
+        if (head.controls) { head.controls.minDistance = 0.3; head.controls.enableDamping = false; }
         head.camera.position.set(0, CAM_Y, CAM_Z);
         if (head.controls) { head.controls.target.set(0, CAM_TY, 0); head.controls.update?.(); }
       } catch (_) { /* keep default view if internals change */ }
@@ -284,37 +285,50 @@
 
   // ── grounded answer that can ACT: /live/act (RAG + Groq + tools), then speak ──
   // She may calculate, check a deadline, or look up a record before answering.
+  let _askController = null;
   async function ask(question) {
     status("thinking…");
     interruptSpeech(); // a new user turn cuts off whatever she's saying now
+    // Cancel any in-flight request (a web search can take ~15s) so a NEW question
+    // supersedes it right away — she's never "blocked" waiting on the old search.
+    if (_askController) { try { _askController.abort(); } catch (_) {} }
+    const ctrl = new AbortController();
+    _askController = ctrl;
     let r;
     try {
       r = await fetch("/live/act", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ avatar_id: avatarId, question }),
+        signal: ctrl.signal,
       });
-    } catch (e) { status("ask failed: " + (e?.message || e)); return; }
+    } catch (e) {
+      if (e && e.name === "AbortError") return; // superseded by a newer question
+      status("ask failed: " + (e?.message || e));
+      return;
+    }
     // Stream the SSE and speak each chunk as it arrives — so the "let me search"
     // filler plays immediately and the searched answer follows when it's ready,
     // instead of dead air until the whole thing is done.
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = "", saidAny = false;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let nl;
-      while ((nl = buf.indexOf("\n\n")) >= 0) {
-        const evt = buf.slice(0, nl); buf = buf.slice(nl + 2);
-        const m = evt.match(/^data: (\{.*\})$/m);
-        if (!m) continue;
-        let content; try { content = JSON.parse(m[1]).content; } catch { continue; }
-        if (content) { say(content); saidAny = true; }
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done || ctrl.signal.aborted) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n\n")) >= 0) {
+          const evt = buf.slice(0, nl); buf = buf.slice(nl + 2);
+          const m = evt.match(/^data: (\{.*\})$/m);
+          if (!m) continue;
+          let content; try { content = JSON.parse(m[1]).content; } catch { continue; }
+          if (content && !ctrl.signal.aborted) { say(content); saidAny = true; }
+        }
       }
-    }
-    if (!saidAny) status("(she stayed silent)");
+    } catch (e) { if (!(e && e.name === "AbortError")) console.error(e); }
+    if (!saidAny && !ctrl.signal.aborted) status("(she stayed silent)");
   }
 
   document.getElementById("speakBtn").onclick = () =>
