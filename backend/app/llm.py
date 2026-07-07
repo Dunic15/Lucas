@@ -124,6 +124,49 @@ def stream_complete(
         yield from _stream_anthropic(system, user, max_tokens, _FALLBACK_MODEL)
 
 
+def web_search(
+    system: str, user: str, *, model: str, max_tokens: int = 2048, max_rounds: int = 4
+) -> str:
+    """Answer using Claude's native server-side web_search tool.
+
+    Returns the final spoken text, or "" if nothing came back. The tool runs on
+    Anthropic's side (no client execution); the server may pause after its own tool
+    rounds with stop_reason 'pause_turn' — re-send the turn to continue. `web_search`
+    with dynamic filtering needs a capable model (Sonnet/Opus); the older basic tool
+    is used automatically for smaller models via the try/except fallback below.
+    """
+    client = _ensure_anthropic()
+
+    def _run(tool_type: str) -> str:
+        messages: list[dict] = [{"role": "user", "content": user}]
+        msg = None
+        for _ in range(max_rounds):
+            msg = client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=messages,
+                tools=[{"type": tool_type, "name": "web_search"}],
+            )
+            if msg.stop_reason == "pause_turn":
+                # Server hit its tool-round limit — resend to let it continue.
+                messages = [
+                    {"role": "user", "content": user},
+                    {"role": "assistant", "content": msg.content},
+                ]
+                continue
+            break
+        return "".join(
+            b.text for b in (msg.content if msg else []) if getattr(b, "type", None) == "text"
+        ).strip()
+
+    try:
+        return _run("web_search_20260209")  # dynamic filtering (Sonnet/Opus)
+    except Exception as e:  # noqa: BLE001 — older/smaller models: basic tool
+        print(f"[search] web_search_20260209 failed ({e}); trying basic tool", flush=True)
+        return _run("web_search_20250305")
+
+
 def _stream_anthropic(
     system: str, user: str, max_tokens: int, model: str | None
 ) -> Iterator[str]:

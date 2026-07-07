@@ -152,13 +152,14 @@ class Settings(BaseSettings):
     proactive_enabled: bool = True
     proactive_min_confidence: float = 0.7
     # General intelligence on the live path:
-    #  - questions that ask for fresh/web info route to a Groq compound model
-    #    with built-in server-side web search (same key, streamed);
+    #  - questions that ask for fresh/web info route to Claude's native web_search
+    #    tool on this model (Sonnet: strong at search + dynamic result filtering,
+    #    and not subject to Groq's rate limits). Needs ANTHROPIC_API_KEY.
     #  - retrieved doc context is only injected when it actually matches the
     #    question (score >= rag_min_context_score), so general questions get
     #    the model's own knowledge instead of doc-quoting.
     live_search_enabled: bool = True
-    live_search_model: str = "groq/compound-mini"
+    live_search_model: str = "claude-sonnet-5"
     # 0.28: real process/SFF questions score 0.6+, unrelated chatter ~0.1 —
     # below the bar she answers from her own intelligence, no doc flavor.
     rag_min_context_score: float = 0.28
