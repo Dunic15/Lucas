@@ -201,6 +201,11 @@
   // /tts returns JSON: base64 mp3 + (with ElevenLabs) REAL per-word timings from
   // character-level alignment — that's what makes the lips match the voice. If
   // timings are absent (edge-tts fallback), spread words evenly as approximation.
+  // ONE reusable AudioContext for decoding: browsers hard-cap ~6 live contexts,
+  // and a long meeting synthesizes many sentences — a fresh context per sentence
+  // eventually throws and the avatar goes silent. Lazily created, never closed.
+  let _decodeCtx = null;
+  const decodeCtx = () => (_decodeCtx ||= new (window.AudioContext || window.webkitAudioContext)());
   async function synthesize(text) {
     const r = await fetch("/tts", {
       method: "POST",
@@ -211,8 +216,7 @@
     const j = await r.json();
     if (j.error) throw new Error(j.error);
     const bin = Uint8Array.from(atob(j.audio), (c) => c.charCodeAt(0));
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const audio = await ctx.decodeAudioData(bin.buffer);
+    const audio = await decodeCtx().decodeAudioData(bin.buffer);
     let { words, wtimes, wdurations } = j;
     if (!words || !words.length) {
       words = text.trim().split(/\s+/);

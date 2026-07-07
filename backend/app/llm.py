@@ -2,13 +2,17 @@
 
 Pick the provider with BRAIN_PROVIDER in .env:
 
-  stub    (default) — no model at all. Deterministic, offline, zero-cost.
-                      Used to prove the end-to-end pipeline for free; the
-                      stub answers live in brain.py (they need the retrieved
-                      chunks), so this module only handles *real* models.
+  anthropic (default) — Claude (best quality). Needs ANTHROPIC_API_KEY. With no
+                      key present, brain.effective_provider() transparently falls
+                      back to `stub` so the demo still runs.
+  groq              — fast, cheap open models via an OpenAI-compatible API.
+                      Streams + supports tool use. Needs GROQ_API_KEY.
   ollama            — a local model via Ollama (free, runs on your machine).
                       `ollama run llama3.2` then BRAIN_PROVIDER=ollama.
-  anthropic         — Claude (best quality). Needs ANTHROPIC_API_KEY.
+  stub              — no model at all. Deterministic, offline, zero-cost. Used to
+                      prove the end-to-end pipeline for free; the stub answers
+                      live in brain.py (they need the retrieved chunks), so this
+                      module only handles *real* models.
 
 `complete()` returns the model's raw text. brain.py prompts for JSON and parses.
 """

@@ -210,7 +210,13 @@ def _live_model(question: str) -> str:
 
 
 def answer_question_stream(
-    avatar: Avatar, question: str, *, history: str = "", memory: str = "", k: int = 6
+    avatar: Avatar,
+    question: str,
+    *,
+    history: str = "",
+    memory: str = "",
+    k: int = 6,
+    min_chars: int = 0,
 ):
     """Yield spoken sentences as they are generated. Yields nothing (stays silent)
     only when the model judges the speech was not addressed to Laura (SKIP).
@@ -218,6 +224,12 @@ def answer_question_stream(
     `memory` is the cross-meeting carryover brief (ledger.carryover_brief):
     what previous sessions of this same meeting left open or decided. Empty
     for first-time meetings — the prompt then carries no memory block at all.
+
+    `min_chars>0` coalesces tiny sentences ("Yes." "Sure.") into a chunk of at
+    least that many characters before yielding, so the TTS voice flows instead of
+    stuttering one fragment at a time (a touch more first-audio latency for
+    smoother prosody). The first chunk still streams as soon as it crosses the
+    threshold or the answer ends.
     """
     _t0 = time.perf_counter()
     chunks = retrieve(avatar, _retrieval_query(question, history), k=k)
@@ -257,9 +269,20 @@ def answer_question_stream(
     )
 
     pending = ""      # confirmed answer text not yet flushed as a whole sentence
+    outbuf = ""       # whole sentences merged toward a min_chars chunk (cadence)
     decided = False   # whether we've ruled out the SKIP sentinel
     spoke_any = False
     _first_token_ms = None
+
+    def _log_first() -> None:
+        if not spoke_any:
+            print(
+                f"[latency] answer_stream retrieve={_retrieve_ms:.0f}ms "
+                f"first_token={_first_token_ms:.0f}ms "
+                f"first_sentence={(time.perf_counter() - _t0) * 1000:.0f}ms",
+                flush=True,
+            )
+
     _model = _live_model(question)
     if _model == settings.live_search_model:
         # Web-search answers go NON-streamed: compound's streaming reliably
@@ -314,25 +337,24 @@ def answer_question_stream(
 
         pending, sentences = _split_sentences(pending)
         for s in sentences:
-            if not spoke_any:
-                _first_sentence_ms = (time.perf_counter() - _t0) * 1000
-                print(
-                    f"[latency] answer_stream retrieve={_retrieve_ms:.0f}ms "
-                    f"first_token={_first_token_ms:.0f}ms "
-                    f"first_sentence={_first_sentence_ms:.0f}ms",
-                    flush=True,
-                )
-            yield s
-            spoke_any = True
+            if min_chars > 0:
+                outbuf = f"{outbuf} {s}".strip()
+                if len(outbuf) >= min_chars:
+                    _log_first()
+                    yield outbuf
+                    spoke_any = True
+                    outbuf = ""
+            else:
+                _log_first()
+                yield s
+                spoke_any = True
 
+    # Flush whatever is left: buffered whole sentences plus any partial tail.
     tail = pending.strip()
-    if not decided:
-        # Very short answer that never crossed the decision threshold.
-        if tail and not _is_skip(tail):
-            yield tail
-            spoke_any = True
-    elif tail:
-        yield tail
+    remainder = f"{outbuf} {tail}".strip() if min_chars > 0 else tail
+    if remainder and (decided or not _is_skip(remainder)):
+        _log_first()
+        yield remainder
         spoke_any = True
 
     # Citation is not auto-appended: it made small talk read absurdly ("nice joke

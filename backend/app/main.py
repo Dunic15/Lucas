@@ -19,6 +19,7 @@ import random
 import re
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
@@ -31,7 +32,6 @@ from fastapi.responses import (
     FileResponse,
     JSONResponse,
     RedirectResponse,
-    Response,
     StreamingResponse,
 )
 from pydantic import BaseModel
@@ -48,6 +48,7 @@ from . import (
     gpu_runtime,
     ledger,
     meeting_state,
+    tts,
 )
 from .brain import (
     answer_question,
@@ -61,7 +62,41 @@ from .config import settings
 from .decision import detect_wake, detect_closing, detect_leave_command
 from .rag import ensure_index, warm as warm_index
 
-app = FastAPI(title="Callable AI Process Avatar")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Startup/shutdown for the app (replaces the deprecated @app.on_event hooks).
+
+    Startup: prebuild+warm each avatar's RAG index (so the first live question
+    skips the cold start), start the autopilot nudge loop (if enabled), and launch
+    the Gmail 'Add people' auto-join watcher. Shutdown: on a deploy/rollout App
+    Runner SIGTERMs the old instance; flipping the drain flag stops its Gmail
+    watcher from dispatching at once, so the old + new instances don't both put a
+    bot in the same meeting during the overlap.
+    """
+    _prebuild_indexes()
+
+    if settings.autopilot_nudge:
+        async def _nudge_loop() -> None:
+            while not _shutting_down:
+                if autopilot.nudge_due():
+                    await run_in_threadpool(autopilot.run_nudge)
+                await asyncio.sleep(60)
+
+        asyncio.create_task(_nudge_loop())
+
+    if settings.gmail_watch_enabled:
+        asyncio.create_task(_gmail_watch_loop())
+
+    try:
+        yield
+    finally:
+        global _shutting_down
+        _shutting_down = True
+        print("[gmail-watch] shutdown signal — watcher draining", flush=True)
+
+
+app = FastAPI(title="Callable AI Process Avatar", lifespan=_lifespan)
+app.include_router(tts.router)  # POST /tts (open-source avatar voice)
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).
@@ -105,7 +140,6 @@ def _google_redirect_uri() -> str:
     )
 
 
-@app.on_event("startup")
 def _prebuild_indexes() -> None:
     """Build each avatar's RAG index on boot so the demo works with no setup.
 
@@ -120,21 +154,6 @@ def _prebuild_indexes() -> None:
             warm_index(avatar)
         except Exception as e:  # a bad avatar shouldn't stop the server
             print(f"[startup] could not index avatar '{aid}': {e}")
-
-
-@app.on_event("startup")
-async def _start_autopilot_nudges() -> None:
-    """Periodic Slack digest of open ledger items (AUTOPILOT_NUDGE=true only)."""
-    if not settings.autopilot_nudge:
-        return
-
-    async def _loop() -> None:
-        while not _shutting_down:
-            if autopilot.nudge_due():
-                await run_in_threadpool(autopilot.run_nudge)
-            await asyncio.sleep(60)
-
-    asyncio.create_task(_loop())
 
 
 # ─────────────── Gmail watcher: "Add people" → auto-join ────────────────
@@ -323,24 +342,6 @@ async def _gmail_watch_loop() -> None:
                     print(f"[gmail-watch] failed to join {url}: {e}", flush=True)
         except Exception as e:
             _gmail_state["last_error"] = str(e)
-
-
-@app.on_event("startup")
-async def _launch_gmail_watch() -> None:
-    if settings.gmail_watch_enabled:
-        asyncio.create_task(_gmail_watch_loop())
-
-
-@app.on_event("shutdown")
-async def _drain_gmail_watch() -> None:
-    """On a deploy/rollout App Runner sends SIGTERM to the old instance; flip the
-    drain flag so its Gmail watcher stops dispatching at once. Combined with the
-    per-dispatch Recall pre-check and the variant-aware reconcile, this stops the
-    old + new instances from both putting a bot in the same meeting during overlap.
-    """
-    global _shutting_down
-    _shutting_down = True
-    print("[gmail-watch] shutdown signal — watcher draining", flush=True)
 
 
 @app.get("/gmail/status")
@@ -536,159 +537,8 @@ def talk_avatar_model() -> FileResponse:
     )
 
 
-class TtsRequest(BaseModel):
-    text: str
-    avatar_id: str = "laura"
-    voice: str = ""
-
-
-# TTS for the open-source avatar page — replaces Anam's voice.
-# Preferred: ElevenLabs with-timestamps (set ELEVENLABS_API_KEY) — premium voice
-# AND character-level timing alignment, which the page turns into accurate
-# per-word lip-sync. Fallback: edge-tts (free, keyless; page spreads word timings
-# evenly — approximate lip-sync). Response is JSON either way:
-#   {"audio": <base64 mp3>, "words": [...]|null, "wtimes": [ms]|null,
-#    "wdurations": [ms]|null, "engine": "elevenlabs"|"edge"}
-_TTS_DEFAULT_VOICE = "en-US-AriaNeural"
-
-
-def _words_from_alignment(alignment: dict) -> tuple[list, list, list]:
-    """Character alignment -> per-word (words, start_ms, duration_ms) for lip-sync."""
-    chars = alignment.get("characters") or []
-    starts = alignment.get("character_start_times_seconds") or []
-    ends = alignment.get("character_end_times_seconds") or []
-    words, wtimes, wdurs = [], [], []
-    cur, w_start, w_end = "", 0.0, 0.0
-    for ch, s, e in zip(chars, starts, ends):
-        if ch.isspace():
-            if cur:
-                words.append(cur)
-                wtimes.append(int(w_start * 1000))
-                wdurs.append(max(1, int((w_end - w_start) * 1000)))
-                cur = ""
-        else:
-            if not cur:
-                w_start = s
-            cur += ch
-            w_end = e
-    if cur:
-        words.append(cur)
-        wtimes.append(int(w_start * 1000))
-        wdurs.append(max(1, int((w_end - w_start) * 1000)))
-    return words, wtimes, wdurs
-
-
-# Persistent connection to ElevenLabs: a fresh TLS handshake per sentence costs
-# ~150ms on every utterance. One keep-alive client removes it permanently.
-_el_client: httpx.AsyncClient | None = None
-
-
-def _get_el_client() -> httpx.AsyncClient:
-    global _el_client
-    if _el_client is None:
-        _el_client = httpx.AsyncClient(timeout=20.0)
-    return _el_client
-
-
-def _el_fallback_voice() -> str:
-    """Voice to use when the configured one is blocked (settings-driven so the
-    owner can pick e.g. Sarah while a premium voice waits on a plan upgrade)."""
-    return settings.elevenlabs_fallback_voice_id or "FGY2WhTYpPnrIDTdsKH5"
-# Configured voices that failed hard (403/402/404: plan tier, licensing, or a
-# deleted voice). Remembered per-process so we don't pay a doomed round-trip on
-# every sentence; cleared on restart/deploy so an upgraded plan is retried.
-_el_broken_voices: set[str] = set()
-
-
-async def _el_synthesize(voice_id: str, text: str) -> httpx.Response:
-    r = await _get_el_client().post(
-        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-        "/with-timestamps?output_format=mp3_44100_128",
-        headers={"xi-api-key": settings.elevenlabs_api_key},
-        json={"text": text, "model_id": settings.elevenlabs_tts_model},
-    )
-    r.raise_for_status()
-    return r
-
-
-async def _tts_elevenlabs(text: str) -> dict | None:
-    """ElevenLabs with-timestamps. Returns the JSON payload, or None to fall back.
-
-    Voice fallback chain: configured voice -> stock ElevenLabs voice -> None
-    (edge-tts). A custom voice blocked by the account's plan (402) or licensing
-    must degrade to the STOCK ElevenLabs voice — same engine, real word timings
-    — not all the way down to robotic edge-tts.
-    """
-    if not settings.elevenlabs_api_key:
-        return None
-    voice_id = settings.elevenlabs_voice_id or _el_fallback_voice()
-    if voice_id in _el_broken_voices:
-        voice_id = _el_fallback_voice()
-    try:
-        try:
-            r = await _el_synthesize(voice_id, text)
-        except httpx.HTTPStatusError as e:
-            if voice_id == _el_fallback_voice():
-                raise
-            status = e.response.status_code
-            if status in (402, 403, 404):  # plan tier / licensing / deleted voice
-                _el_broken_voices.add(voice_id)
-            print(f"[tts] voice {voice_id} unavailable (HTTP {status}) — using stock voice", flush=True)
-            r = await _el_synthesize(_el_fallback_voice(), text)
-        data = r.json()
-        alignment = data.get("normalized_alignment") or data.get("alignment") or {}
-        words, wtimes, wdurs = _words_from_alignment(alignment)
-        return {
-            "audio": data["audio_base64"],
-            "words": words or None,
-            "wtimes": wtimes or None,
-            "wdurations": wdurs or None,
-            "engine": "elevenlabs",
-        }
-    except Exception as e:  # noqa: BLE001 — any EL failure degrades to edge-tts
-        print(f"[tts] elevenlabs failed, falling back to edge-tts: {e}", flush=True)
-        return None
-
-
-@app.post("/tts")
-async def tts(req: TtsRequest) -> Response:
-    import base64
-
-    import edge_tts
-
-    text = (req.text or "").strip()[:2000]
-    if not text:
-        return Response(status_code=204)
-
-    # tts_ms: synthesis latency for the metrics picture (issue #3). A duration
-    # only — the text itself is never logged or exported.
-    t0 = time.perf_counter()
-    el = await _tts_elevenlabs(text)
-    if el is not None:
-        el["tts_ms"] = int((time.perf_counter() - t0) * 1000)
-        return JSONResponse(el, headers={"Cache-Control": "no-store"})
-
-    voice = (req.voice or "").strip() or _TTS_DEFAULT_VOICE
-    audio = bytearray()
-    try:
-        async for chunk in edge_tts.Communicate(text, voice).stream():
-            if chunk["type"] == "audio":
-                audio.extend(chunk["data"])
-    except Exception as e:
-        return JSONResponse({"error": f"tts failed: {e}"}, status_code=502)
-    if not audio:
-        return JSONResponse({"error": "tts produced no audio"}, status_code=502)
-    return JSONResponse(
-        {
-            "audio": base64.b64encode(bytes(audio)).decode(),
-            "words": None,
-            "wtimes": None,
-            "wdurations": None,
-            "engine": "edge",
-            "tts_ms": int((time.perf_counter() - t0) * 1000),
-        },
-        headers={"Cache-Control": "no-store"},
-    )
+# TTS for the open-source avatar page lives in its own router (tts.py) — a
+# self-contained concern with no coupling to the live meeting path.
 
 
 class LiveTokenRequest(BaseModel):
@@ -1591,7 +1441,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
     spoke_any = False
     suppressed_any = False
     async for sentence in iterate_in_threadpool(
-        answer_question_stream(avatar, question or text, history=history, memory=memory)
+        answer_question_stream(
+            avatar,
+            question or text,
+            history=history,
+            memory=memory,
+            min_chars=45,  # coalesce tiny fragments so the TTS voice flows
+        )
     ):
         if not spoke_any:
             print(
