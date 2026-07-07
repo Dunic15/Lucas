@@ -15,8 +15,9 @@ backed by clear thinking, not inflated numbers.
   decisions, skipped approvals, missed steps.
 - **Why now:** meeting-bot infra (Recall) + cheap fast LLMs (Groq) + real-time
   avatars make a *callable, grounded expert* newly possible and cheap.
-- **Wedge:** a vertical, cited process expert that speaks only when called — not a
-  notetaker, not a horizontal copilot.
+- **Wedge:** a live process agent that makes meetings ready before they start,
+  complete before they end, and actionable after — tracks silently, speaks only when
+  it matters (missing step, direct question). Not a notetaker, not a horizontal copilot.
 - **Moat:** knowledge ingestion + answer accuracy + verticalization; the plumbing is
   bought and swappable, so we compound on the expert layer.
 - **Business:** per-seat/company SaaS over a per-minute variable cost (see
