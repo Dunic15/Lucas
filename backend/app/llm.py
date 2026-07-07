@@ -92,14 +92,16 @@ def _complete_anthropic(
 
 
 def stream_complete(
-    system: str, user: str, *, max_tokens: int = 800, model: str | None = None
+    system: str, user: str, *, max_tokens: int = 800, model: str | None = None,
+    provider: str | None = None,
 ) -> Iterator[str]:
     """Yield the model's answer as text deltas, for low-latency spoken output.
 
     Anthropic streams token-by-token. Other providers have no streaming path here,
     so they yield the full answer as a single chunk (still correct, just not early).
+    `provider` overrides BRAIN_PROVIDER for this call (tiered routing picks it).
     """
-    provider = settings.brain_provider.lower()
+    provider = (provider or settings.brain_provider).lower()
     if provider == "anthropic":
         yield from _stream_anthropic(system, user, max_tokens, model)
         return

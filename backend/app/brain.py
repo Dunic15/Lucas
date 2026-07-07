@@ -215,6 +215,31 @@ def wants_web_search(question: str) -> bool:
     return _live_model(question) == settings.live_search_model
 
 
+# Clearly-analytical asks — worth the more reliable/capable Claude model even on
+# the live path (Groq llama is weakest exactly here, and rate-limits under load).
+_COMPLEX_INTENT = re.compile(
+    r"\b(analy[sz]e|analysis|compare|comparison|versus|trade[- ]?offs?|"
+    r"pros and cons|strateg|evaluate|assess|recommend|draft|write (a|an|me|up)|"
+    r"step[- ]by[- ]step|in detail|break (it|this) down|walk me through|"
+    r"should (i|we|they)|explain why|reason through|think through)\b",
+    re.IGNORECASE,
+)
+
+
+def _live_route(question: str) -> tuple[str, str]:
+    """(provider, model) for one live answer:
+      - web search (fresh info)       -> Groq compound (does the browsing)
+      - clearly-complex reasoning     -> Claude (brain_model_complex): reliable +
+                                         capable, and it dodges Groq's rate limits
+      - everything else (chat/simple) -> the fast default provider (Groq llama)
+    """
+    if _live_model(question) == settings.live_search_model:
+        return "groq", settings.live_search_model
+    if settings.anthropic_api_key and _COMPLEX_INTENT.search(question or ""):
+        return "anthropic", settings.brain_model_complex
+    return settings.brain_provider, settings.brain_model_fast
+
+
 _SEARCH_FAIL_RE = re.compile(
     r"(not able to browse|can'?t browse|cannot browse|"
     r"don'?t have (live|real-?time|internet|web) access)",
@@ -323,7 +348,7 @@ def answer_question_stream(
                 flush=True,
             )
 
-    _model = _live_model(question)
+    _provider, _model = _live_route(question)
     if _model == settings.live_search_model:
         answer = _web_search_answer(question, convo)
         if answer:
@@ -337,10 +362,10 @@ def answer_question_stream(
         # nothing) — fall THROUGH to the fast model so she still answers from
         # her own knowledge instead of going silent.
         question = f"{question} (You could not search the web just now — answer from your knowledge and say it may not be current.)"
-        _model = settings.brain_model_fast  # don't re-run search on the fallback
+        _provider, _model = settings.brain_provider, settings.brain_model_fast
     _max_tokens = 400
     for delta in llm.stream_complete(
-        system, user, max_tokens=_max_tokens, model=_model
+        system, user, max_tokens=_max_tokens, model=_model, provider=_provider
     ):
         if _first_token_ms is None:
             _first_token_ms = (time.perf_counter() - _t0) * 1000
