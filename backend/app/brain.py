@@ -496,18 +496,23 @@ def answer_with_tools(
         f"Someone asked:\n{question}\n\n"
         "Use tools if they'd help, then answer in spoken style."
     )
-    text, used = llm.complete_with_tools(
-        system, user, tools.TOOL_SPECS, tools.dispatch, model=settings.brain_model_fast
-    )
+    used: list = []
+    try:
+        text, used = llm.complete_with_tools(
+            system, user, tools.TOOL_SPECS, tools.dispatch, model=settings.brain_model_fast
+        )
+    except Exception as e:  # noqa: BLE001 — Groq tool endpoint 429s/errors have no fallback
+        print(f"[tools] complete_with_tools failed ({e}); plain answer", flush=True)
+        text = ""
     if used:
         print(f"[tools] {question[:60]!r} -> " + ", ".join(u["tool"] for u in used), flush=True)
     answer = (text or "").strip()
     if not answer:
-        # The tool loop can end without a final answer (model spent its rounds on
-        # tool calls, or the fast model just returned empty — Groq llama does this
-        # intermittently). Never go silent on the interactive avatar: retry once as
-        # a plain answer, and if THAT is empty too, say something rather than
-        # leaving dead air.
+        # The tool path can raise (Groq's tool endpoint rate-limits with no
+        # fallback) or return empty (Groq llama does this intermittently). Never go
+        # silent on the interactive avatar: retry as a PLAIN answer — llm.complete
+        # falls back to Claude Haiku when Groq fails — and if that's still empty,
+        # say something rather than leaving dead air.
         try:
             answer = (llm.complete(system, user, model=settings.brain_model_fast) or "").strip()
         except Exception:
