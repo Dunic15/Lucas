@@ -1,4 +1,5 @@
-"""Knowledge packs: laura's index includes the sff pack; no invented facts."""
+"""Knowledge packs: the pack mechanism still works; laura no longer bundles the
+sff pack (she answers SFF from web search now); sff avatar keeps no invented facts."""
 from __future__ import annotations
 
 import sys
@@ -9,12 +10,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import avatars  # noqa: E402
 
 
-def test_laura_references_sff_pack():
+def test_laura_no_longer_bundles_sff_pack():
+    # SFF was moved to web search — laura's index must NOT pull the sff docs in.
     laura = avatars.load("laura")
-    assert "sff" in (laura.knowledge_packs or [])
-    dirs = laura.knowledge_dirs
-    assert laura.knowledge_dir in dirs
-    assert any(d.name == "knowledge" and d.parent.name == "sff" for d in dirs)
+    assert "sff" not in (laura.knowledge_packs or [])
+    assert laura.knowledge_dirs == [laura.knowledge_dir]
 
 
 def test_missing_pack_is_ignored_not_fatal():

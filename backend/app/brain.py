@@ -192,7 +192,9 @@ def _retrieval_query(question: str, history: str = "") -> str:
 _SEARCH_INTENT = re.compile(
     r"\b(search|look up|google|on the internet|online|web|latest|news|"
     r"today|tonight|yesterday|currently|right now|this (week|month|year)|"
-    r"price of|stock|weather|score|who won|happened|202[5-9])\b",
+    r"price of|stock|weather|score|who won|happened|202[5-9]|"
+    # SFF/fund questions now come from the web too (no local pack) — see persona.
+    r"sff|swiss founders fund|founders fund|portfolio)\b",
     re.IGNORECASE,
 )
 
@@ -475,12 +477,16 @@ def answer_with_tools(
     answer = (text or "").strip()
     if not answer:
         # The tool loop can end without a final answer (model spent its rounds on
-        # tool calls, or returned empty). Never go silent on the interactive
-        # avatar — retry once as a plain answer with no tools.
+        # tool calls, or the fast model just returned empty — Groq llama does this
+        # intermittently). Never go silent on the interactive avatar: retry once as
+        # a plain answer, and if THAT is empty too, say something rather than
+        # leaving dead air.
         try:
             answer = (llm.complete(system, user, model=settings.brain_model_fast) or "").strip()
         except Exception:
             answer = ""
+        if not answer:
+            answer = "Sorry, I didn't catch that — could you say it again?"
     return {
         "answer": answer,
         "tools_used": used,
