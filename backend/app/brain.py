@@ -647,14 +647,18 @@ def _stub_proactive(chunks: list[Retrieved], transcript_text: str) -> dict:
     return {"should_speak": False, "line": "", "confidence": 0.0}
 
 
-def post_meeting(avatar: Avatar, transcript_text: str, *, k: int = 6) -> dict:
+def post_meeting(
+    avatar: Avatar, transcript_text: str, *, k: int = 6, context: str = ""
+) -> dict:
     """Full post-meeting artifact: summary, decisions, actions, missing process
     steps, readiness score, risks, and a draft follow-up email.
 
     The tracked MeetingState (rebuilt from the transcript) supplies the
     deterministic parts — missing_steps and readiness_score come from the
     process template, not model judgement — and backfills decisions/risks when
-    the model returns none.
+    the model returns none. `context` is an optional pre-meeting brief (the
+    orchestrator's agenda/participants/open items) so the summary understands
+    what the meeting was FOR.
     """
     state = meeting_state.build_from_text(avatar, transcript_text)
 
@@ -665,9 +669,15 @@ def post_meeting(avatar: Avatar, transcript_text: str, *, k: int = 6) -> dict:
         chunks = retrieve(
             avatar, transcript_text[-3000:] or "process steps owners approvals", k=k
         )
+        brief_block = (
+            f"Pre-meeting brief (agenda, participants, open items):\n\n{context}\n\n"
+            if context.strip()
+            else ""
+        )
         raw = llm.complete(
             POSTMEETING_SYSTEM,
             (
+                f"{brief_block}"
                 f"Relevant company process context:\n\n{_format_context(chunks)}\n\n"
                 f"Structured meeting state (tracked during the meeting):\n"
                 f"{meeting_state.state_summary(state)}\n\n"

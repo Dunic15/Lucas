@@ -14,6 +14,7 @@ Flow:
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import random
 import re
@@ -41,6 +42,7 @@ from . import (
     store,
     recall_client,
     anam_client,
+    cedric_callback,
     granola_client,
     actions,
     gmail_watcher,
@@ -348,7 +350,7 @@ async def _gmail_watch_loop() -> None:
                     store.mark_scheduled(url)
                     continue
                 try:
-                    res = await _start_avatar_session(url, "laura")
+                    res = await _start_avatar_session(url, settings.default_avatar_id)
                     store.mark_scheduled(url)
                     _gmail_state["joined"].append(
                         {"meeting_url": url, "bot_id": res["bot_id"], "at": time.time()}
@@ -775,14 +777,45 @@ def granola_transcript(note_id: str) -> JSONResponse:
 
 
 # ──────────────────────── session lifecycle ────────────────────────
+# Meeting briefs are markdown from the orchestrator; cap so a runaway payload
+# can't blow up prompts (the orchestrator summarizes down, we never truncate).
+_MAX_BRIEF_BYTES = 32 * 1024
+
+
+class MeetingContext(BaseModel):
+    meeting: dict = {}          # title, starts_at, ends_at, organizer, attendees
+    brief_markdown: str = ""    # the assembled pre-meeting brief
+
+
 class StartRequest(BaseModel):
     meeting_url: str
-    avatar_id: str = "laura"
+    avatar_id: str = ""  # empty -> settings.default_avatar_id
     join_at: Optional[str] = None  # ISO 8601; set (>=10 min out) to schedule the bot
+    # Orchestrator (Cedric) integration — all optional; see the Cedric X Laura
+    # project's docs/04-api-contract.md.
+    context: Optional[MeetingContext] = None
+    callback_url: Optional[str] = None   # where session.status/.ended events go
+    context_url: Optional[str] = None    # re-fetched at join time for a fresh brief
+    external_ref: Optional[dict] = None  # opaque, echoed verbatim in callbacks
+
+
+def _auth_error(request: Request) -> Optional[JSONResponse]:
+    """Bearer-token gate for the session API. API_AUTH_TOKEN unset = open
+    (preserves the zero-key local demo); set it in any real deployment."""
+    token = settings.api_auth_token.strip()
+    if not token:
+        return None
+    provided = request.headers.get("authorization", "")
+    if hmac.compare_digest(provided, f"Bearer {token}"):
+        return None
+    return JSONResponse({"error": "unauthorized"}, status_code=401)
 
 
 async def _start_avatar_session(
-    meeting_url: str, avatar_id: str = "laura", join_at: Optional[str] = None
+    meeting_url: str,
+    avatar_id: str = "",
+    join_at: Optional[str] = None,
+    integration: Optional[dict] = None,
 ) -> dict:
     """Send a Recall bot (rendering the avatar page as its camera) into a meeting.
 
@@ -790,18 +823,20 @@ async def _start_avatar_session(
     and the Gmail watcher. Raises on failure. The avatar page mints its own fresh
     Anam token at render time and keys its websocket on the conversation_id.
     """
-    avatar = avatars.load(avatar_id)  # raises if unknown
+    avatar = avatars.load(avatar_id or settings.default_avatar_id)  # raises if unknown
     conversation_id = uuid.uuid4().hex
     avatar_url = (
         f"{settings.public_base_url.rstrip('/')}/{settings.avatar_page.strip('/')}"
         f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
     )
     bot = await run_in_threadpool(
-        recall_client.create_bot, meeting_url, avatar_url, join_at
+        recall_client.create_bot, meeting_url, avatar_url, join_at, avatar.name
     )
     session = store.create(
         bot_id=bot["id"], meeting_url=meeting_url, avatar_id=avatar.id
     )
+    if integration:
+        session.integration = integration
     session.anam_conversation_id = conversation_id
     store.register_conversation(conversation_id, bot["id"])
     # Cross-meeting memory: what previous sessions of this meeting link left
@@ -827,13 +862,46 @@ async def _start_avatar_session(
 
 
 @app.post("/sessions/start")
-async def start_session(req: StartRequest) -> JSONResponse:
+async def start_session(req: StartRequest, request: Request) -> JSONResponse:
+    if err := _auth_error(request):
+        return err
     try:
         recall_client.assert_ready()
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+
+    brief = req.context.brief_markdown if req.context else ""
+    if len(brief.encode()) > _MAX_BRIEF_BYTES:
+        return JSONResponse(
+            {"error": f"context.brief_markdown exceeds {_MAX_BRIEF_BYTES} bytes"},
+            status_code=400,
+        )
+    # One live/scheduled booking per meeting URL: rebooking must cancel first
+    # (otherwise two bots — and two per-minute meters — end up in one call).
+    for existing in store.all_sessions():
+        if existing.meeting_url == req.meeting_url:
+            return JSONResponse(
+                {
+                    "error": "a session already exists for this meeting_url",
+                    "bot_id": existing.bot_id,
+                },
+                status_code=409,
+            )
+
+    integration = None
+    if req.callback_url or req.context_url or req.external_ref or brief:
+        integration = {
+            "callback_url": req.callback_url or "",
+            "context_url": req.context_url or "",
+            "external_ref": req.external_ref or {},
+            "brief": brief,
+            "meeting": (req.context.meeting if req.context else {}) or {},
+            "context_refreshed": False,
+        }
     try:
-        result = await _start_avatar_session(req.meeting_url, req.avatar_id, req.join_at)
+        result = await _start_avatar_session(
+            req.meeting_url, req.avatar_id, req.join_at, integration
+        )
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse(result)
@@ -868,9 +936,16 @@ async def _finalize_session(bot_id: str) -> dict | None:
         "risks": [],
         "follow_up_email": {},
     }
+    integration = dict(session.integration) if session.integration else None
     if transcript_text.strip():
         avatar = avatars.load(session.avatar_id)
-        artifact = await run_in_threadpool(post_meeting, avatar, transcript_text)
+        artifact = await run_in_threadpool(
+            lambda: post_meeting(
+                avatar,
+                transcript_text,
+                context=(integration or {}).get("brief", ""),
+            )
+        )
 
     # The transcript is the raw material of the artifact — persist it so the
     # product output is complete (transcript + summary + checklist + email).
@@ -887,7 +962,16 @@ async def _finalize_session(bot_id: str) -> dict | None:
         )
     except Exception:
         pass
-    if settings.autopilot_deliver:
+    if integration and integration.get("callback_url"):
+        # Orchestrated session: deliver the artifact to the orchestrator's
+        # webhook (retried inside send_ended). Fire-and-forget — the artifact
+        # is already saved, and the orchestrator polls as fallback. Autopilot
+        # delivery is intentionally skipped: the orchestrator owns delivery
+        # (approval-gated email + Slack) for its sessions.
+        asyncio.create_task(
+            run_in_threadpool(cedric_callback.send_ended, integration, bot_id, artifact)
+        )
+    elif settings.autopilot_deliver:
         # Autopilot: send the drafted follow-up + Slack summary now, without
         # holding up the finalize response (meter is already stopped above).
         # Best-effort like the ledger — never blocks the cleanup below.
@@ -904,11 +988,47 @@ async def _finalize_session(bot_id: str) -> dict | None:
 
 
 @app.post("/sessions/{bot_id}/end")
-async def end_session(bot_id: str) -> JSONResponse:
+async def end_session(bot_id: str, request: Request) -> JSONResponse:
+    if err := _auth_error(request):
+        return err
     artifact = await _finalize_session(bot_id)
     if artifact is None:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     return JSONResponse(artifact)
+
+
+@app.post("/sessions/{bot_id}/cancel")
+async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
+    """Cancel a scheduled bot / abort a live one WITHOUT building an artifact.
+
+    Used by the orchestrator when a calendar event moves or is cancelled (it
+    rebooks afterwards). `end` keeps its meaning: finalize + artifact.
+    """
+    if err := _auth_error(request):
+        return err
+    session = store.get(bot_id)
+    if session is None:
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
+    # Stop the meter: works for live bots; scheduled bots may reject leave_call,
+    # so fall back to deleting the scheduled bot. Best-effort on both — the
+    # session is removed either way and never produces an artifact.
+    try:
+        await run_in_threadpool(recall_client.leave_call, bot_id)
+    except Exception:
+        try:
+            await run_in_threadpool(recall_client.delete_bot, bot_id)
+        except Exception as e:  # noqa: BLE001 — surface but don't fail the cancel
+            print(f"[sessions] cancel: recall cleanup failed: {e}", flush=True)
+    if session.anam_conversation_id:
+        try:
+            await run_in_threadpool(
+                anam_client.end_conversation, session.anam_conversation_id
+            )
+        except Exception:
+            pass
+    store.remove(bot_id)
+    gpu_runtime.on_session_ended(len(store.all_sessions()))
+    return JSONResponse({"cancelled": True, "bot_id": bot_id})
 
 
 class DeliverRequest(BaseModel):
@@ -917,14 +1037,16 @@ class DeliverRequest(BaseModel):
 
 
 @app.post("/sessions/{bot_id}/deliver")
-async def deliver_artifact(bot_id: str, req: DeliverRequest) -> JSONResponse:
+async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -> JSONResponse:
     """Actually send the finished meeting's follow-up email + post it to Slack."""
+    if err := _auth_error(request):
+        return err
     artifact = store.get_artifact(bot_id)
     if artifact is None:
         return JSONResponse({"error": "no artifact for this bot_id"}, status_code=404)
 
     avatar = avatars.load(store.get(bot_id).avatar_id) if store.get(bot_id) else None
-    name = avatar.name if avatar else "Laura"
+    name = avatar.name if avatar else avatars.load(settings.default_avatar_id).name
     email = artifact.get("follow_up_email", {}) or {}
 
     email_res = await run_in_threadpool(
@@ -939,9 +1061,11 @@ async def deliver_artifact(bot_id: str, req: DeliverRequest) -> JSONResponse:
 
 
 @app.get("/ledger")
-def ledger_view(meeting_url: str) -> JSONResponse:
+def ledger_view(meeting_url: str, request: Request) -> JSONResponse:
     """Cross-meeting memory for a meeting link: every ledger item plus the
     carryover brief the avatar gets injected at the next session."""
+    if err := _auth_error(request):
+        return err
     key = ledger.meeting_key(meeting_url)
     return JSONResponse(
         {
@@ -953,8 +1077,10 @@ def ledger_view(meeting_url: str) -> JSONResponse:
 
 
 @app.get("/sessions/{bot_id}/artifact")
-def session_artifact(bot_id: str) -> JSONResponse:
+def session_artifact(bot_id: str, request: Request) -> JSONResponse:
     """Retrieve a finished session's artifact (summary + checklist + email)."""
+    if err := _auth_error(request):
+        return err
     live = store.get(bot_id)
     if live is not None:
         return JSONResponse({"status": "in_progress", "bot_id": bot_id})
@@ -1122,9 +1248,11 @@ async def _make_avatar_stop(session: store.Session) -> None:
 
 def _is_own_speech(avatar_name: str, speaker: str) -> bool:
     """True when a transcript line is the avatar's OWN voice — the meeting bot
-    hears Laura too. Matches the avatar's configured name AND the Recall bot's
-    display name (hardcoded "Laura" in recall_client.create_bot)."""
-    return speaker.strip().lower() in (avatar_name.strip().lower(), "laura")
+    hears the avatar too. The Recall bot's display name is the avatar's name
+    (recall_client.create_bot(bot_name=avatar.name)), so one comparison covers
+    both; no hardcoded persona name, so a human participant who shares a name
+    with a DIFFERENT avatar is never silenced."""
+    return speaker.strip().lower() == avatar_name.strip().lower()
 
 
 def _should_barge_in(session: store.Session, avatar_name: str, speaker: str, text: str) -> bool:
@@ -1298,7 +1426,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
         eid = _calendar_event_id(ev)
         url = _calendar_event_meeting_url(ev)
         start = _calendar_event_start(ev)
-        avatar_id = ev.get("avatar_id") or "laura"
+        avatar_id = ev.get("avatar_id") or settings.default_avatar_id
         if not url or not start or (eid and store.is_scheduled(eid)):
             continue
         if not _calendar_event_targets_avatar(ev):
@@ -1368,9 +1496,57 @@ async def recall_webhook(request: Request) -> JSONResponse:
         bid = payload.get("data", {}).get("bot", {}).get("id", "") or payload.get(
             "data", {}
         ).get("bot_id", "")
-        if term and bid and store.get(bid) is not None:
+        session = store.get(bid) if bid else None
+        if term and session is not None:
+            if session.integration and status_code in {"fatal"}:
+                # A fatal never reached "live": tell the orchestrator the join
+                # failed (best-effort) — finalize still runs for cleanup.
+                asyncio.create_task(
+                    run_in_threadpool(
+                        cedric_callback.send_status,
+                        dict(session.integration),
+                        bid,
+                        "failed",
+                        status_code,
+                    )
+                )
             await _finalize_session(bid)
             return JSONResponse({"ok": True, "finalized": bid})
+        # Non-terminal bot status: relay join progress to the orchestrator and
+        # refresh the meeting brief once the bot is actually in the call (a
+        # booking made days ago has a stale brief by now). Both best-effort.
+        if session is not None and session.integration and status_code:
+            status_map = {
+                "joining_call": "joining",
+                "in_waiting_room": "joining",
+                "in_call": "live",
+                "in_call_not_recording": "live",
+                "in_call_recording": "live",
+            }
+            mapped = status_map.get(status_code)
+            if mapped:
+                asyncio.create_task(
+                    run_in_threadpool(
+                        cedric_callback.send_status,
+                        dict(session.integration),
+                        bid,
+                        mapped,
+                        status_code,
+                    )
+                )
+            if mapped == "live" and not session.integration.get("context_refreshed"):
+                integration = dict(session.integration)
+                integration["context_refreshed"] = True
+                session.integration = integration  # persist: refresh runs once
+                fresh = await run_in_threadpool(
+                    cedric_callback.fetch_context, integration
+                )
+                if fresh and isinstance(fresh.get("brief_markdown"), str):
+                    integration = dict(integration)
+                    integration["brief"] = fresh["brief_markdown"]
+                    if isinstance(fresh.get("meeting"), dict):
+                        integration["meeting"] = fresh["meeting"]
+                    session.integration = integration
         return JSONResponse({"ok": True, "ignored": event or status_code})
 
     data = payload.get("data", {}).get("data", {})
@@ -1415,6 +1591,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
             ledger.carryover_brief, session.meeting_url
         )
     memory = session.memory_brief or ""
+    # Orchestrator meeting brief (agenda, participants, open items) is the most
+    # specific context this session has — it rides the same `memory` channel
+    # into the live prompts, ahead of the cross-meeting carryover.
+    cedric_brief = (session.integration or {}).get("brief", "")
+    if cedric_brief:
+        memory = f"MEETING BRIEF (from the orchestrator):\n{cedric_brief}\n\n{memory}".strip()
 
     # ── proactive intervention (fires once, as the meeting wraps up) ──
     if (

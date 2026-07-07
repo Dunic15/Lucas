@@ -235,12 +235,13 @@ def _create_bot_body(
     join_at: str | None,
     provider: dict,
     variant: str | None,
+    bot_name: str = "Laura",
 ) -> dict:
     webhook_url = f"{settings.public_base_url.rstrip('/')}/webhooks/recall"
 
     body = {
         "meeting_url": meeting_url,
-        "bot_name": "Laura",
+        "bot_name": bot_name or "Laura",
         "recording_config": {
             "transcript": {
                 "provider": provider,
@@ -272,7 +273,10 @@ def _create_bot_body(
 
 
 def _create_bot_attempts(
-    meeting_url: str, avatar_page_url: str, join_at: str | None
+    meeting_url: str,
+    avatar_page_url: str,
+    join_at: str | None,
+    bot_name: str = "Laura",
 ) -> list[tuple[str, dict]]:
     configured_provider = _transcript_provider_config()
     attempts: list[tuple[str, dict]] = []
@@ -287,6 +291,7 @@ def _create_bot_attempts(
                     join_at=join_at,
                     provider=configured_provider,
                     variant=variant,
+                    bot_name=bot_name,
                 ),
             )
         )
@@ -305,6 +310,7 @@ def _create_bot_attempts(
                     join_at=join_at,
                     provider=recallai_provider,
                     variant="web_4_core",
+                    bot_name=bot_name,
                 ),
             )
         )
@@ -317,6 +323,7 @@ def _create_bot_attempts(
                     join_at=join_at,
                     provider=recallai_provider,
                     variant=None,
+                    bot_name=bot_name,
                 ),
             )
         )
@@ -330,6 +337,7 @@ def _create_bot_attempts(
                     join_at=join_at,
                     provider=configured_provider,
                     variant=None,
+                    bot_name=bot_name,
                 ),
             )
         )
@@ -379,8 +387,23 @@ def verify_webhook(raw_body: bytes, headers: Mapping[str, str]) -> None:
     raise RuntimeError("Recall webhook signature verification failed.")
 
 
+def delete_bot(bot_id: str) -> None:
+    """Delete a SCHEDULED bot (one that has not joined yet). Live bots reject
+    this — use leave_call for them; the cancel endpoint tries both."""
+    resp = _request(
+        "DELETE",
+        f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/{bot_id}/",
+        headers=_headers(),
+        retry=True,
+    )
+    resp.raise_for_status()
+
+
 def create_bot(
-    meeting_url: str, avatar_page_url: str, join_at: str | None = None
+    meeting_url: str,
+    avatar_page_url: str,
+    join_at: str | None = None,
+    bot_name: str = "Laura",
 ) -> dict:
     """Send a bot into `meeting_url` showing `avatar_page_url` on its camera.
 
@@ -388,7 +411,7 @@ def create_bot(
     bot to join then — this is how calendar auto-join dispatches bots ahead of time.
     Returns the created bot object (includes its `id`).
     """
-    attempts = _create_bot_attempts(meeting_url, avatar_page_url, join_at)
+    attempts = _create_bot_attempts(meeting_url, avatar_page_url, join_at, bot_name)
     last_error: httpx.HTTPStatusError | None = None
 
     for idx, (label, body) in enumerate(attempts):
