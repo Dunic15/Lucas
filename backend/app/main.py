@@ -174,6 +174,18 @@ _SEARCH_FILLERS = (
     "Good one — give me a sec to search that.",
 )
 
+# Spoken when a NON-search answer is taking a beat (tool round-trips, slow
+# provider) — an acknowledgment beats dead air on the interactive avatar.
+_ACK_FILLERS = (
+    "Give me a second to think about that.",
+    "One sec — let me work that out.",
+    "Hmm, give me a moment on that one.",
+)
+
+# How long a /live/act answer may take before she speaks an acknowledgment
+# filler. Below this, a filler is just noise in front of an instant answer.
+_ACK_FILLER_AFTER_S = 1.2
+
 _MEET_CODE_RE = re.compile(r"meet\.google\.com/([a-z-]+)")
 _BOT_TERMINAL = {"call_ended", "done", "fatal"}
 _BOT_VARIANT_RANK = {
@@ -450,12 +462,27 @@ async def live_act(req: AskRequest) -> StreamingResponse:
     avatar = avatars.load(req.avatar_id)
 
     async def gen():
-        # A web search is a ~4s break. Speak a quick filler FIRST (streamed as its
-        # own chunk so the page says it immediately) so the conversation doesn't
-        # stall in silence while she searches.
+        # Start the answer immediately, then never leave dead air while it cooks:
+        # a web search gets its filler up front (it's a ~4s+ break by definition);
+        # any other answer that takes more than a beat gets a spoken
+        # acknowledgment so she visibly "took the question" instead of freezing.
+        task = asyncio.ensure_future(
+            run_in_threadpool(answer_with_tools, avatar, req.question)
+        )
         if wants_web_search(req.question):
             yield f"data: {json.dumps({'content': random.choice(_SEARCH_FILLERS)})}\n\n"
-        result = await run_in_threadpool(answer_with_tools, avatar, req.question)
+        else:
+            done, _ = await asyncio.wait({task}, timeout=_ACK_FILLER_AFTER_S)
+            if not done:
+                yield f"data: {json.dumps({'content': random.choice(_ACK_FILLERS)})}\n\n"
+        try:
+            result = await task
+        except Exception as e:  # noqa: BLE001 — a failed lookup must never end in silence
+            print(f"[live/act] answer failed: {e}", flush=True)
+            fail = "Sorry — that one failed on me. Mind asking again?"
+            yield f"data: {json.dumps({'content': fail})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
         used = result.get("tools_used") or []
         if used:
             yield f": tools_used {', '.join(u['tool'] for u in used)}\n\n"
