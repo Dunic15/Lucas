@@ -175,19 +175,25 @@
     let pinnedFrames = 0, revealed = false;
     const reveal = () => { if (!revealed) { revealed = true; document.getElementById("stage").classList.add("live"); } };
     (function pinFraming() {
+      // Where TalkingHead left the camera since our last assert. During its
+      // intro zoom-in this is still far from our close-up; once it settles it
+      // sits at (our) CAM_Z because nothing else moves it.
+      const beforeZ = head.camera?.position?.z;
       frameCamera();
-      // Reveal only after the camera has verifiably held OUR framing for a few
-      // consecutive frames — never show the far default view, not even one frame.
+      // Reveal only once TalkingHead has STOPPED pulling the camera off our
+      // close-up for a few consecutive frames — so the first VISIBLE frame is
+      // already the tight webcam shot, never a far->close zoom. (Checking the
+      // value we just set would reveal instantly, mid-zoom — that was the bug.)
       if (!revealed) {
-        pinnedFrames = Math.abs(head.camera?.position?.z - CAM_Z) < 0.01 ? pinnedFrames + 1 : 0;
-        if (pinnedFrames >= 3) reveal();
+        pinnedFrames = (beforeZ != null && Math.abs(beforeZ - CAM_Z) < 0.03) ? pinnedFrames + 1 : 0;
+        if (pinnedFrames >= 4) reveal();
       }
       requestAnimationFrame(pinFraming);
     })();
     gazeAtCamera();
     for (const ms of [600, 1500, 3000]) setTimeout(gazeAtCamera, ms);
     setInterval(gazeAtCamera, 25000);
-    setTimeout(reveal, 1200); // fallback: never leave the stage hidden
+    setTimeout(reveal, 2500); // fallback: never leave the stage hidden, even if it never settles
     status("live — avatar rendering ✅ (type + Speak to test lip-sync)");
   } catch (e) {
     status("avatar failed to load: " + (e?.message || e) + " — try a different AVATAR_URL");
@@ -265,7 +271,7 @@
       try {
         const a = await synth;
         if (gen !== _sayGen) return; // interrupted while synthesizing — drop it
-        extendMicPause(a.audio.duration);
+        markSpeaking(a.audio.duration, text);
         head.speakAudio(a);
         status("speaking: " + text.slice(0, 60));
       } catch (e) {
@@ -280,18 +286,35 @@
   // She may calculate, check a deadline, or look up a record before answering.
   async function ask(question) {
     status("thinking…");
-    const r = await fetch("/live/act", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ avatar_id: avatarId, question }),
-    });
-    const text = await r.text(); // SSE: data: {"content": "..."} lines
-    const parts = [...text.matchAll(/data: (\{.*?\})/g)].map((m) => {
-      try { return JSON.parse(m[1]).content; } catch { return ""; }
-    });
-    const answer = parts.join(" ").trim();
-    if (answer) await say(answer);
-    else status("(she stayed silent — not in her knowledge)");
+    interruptSpeech(); // a new user turn cuts off whatever she's saying now
+    let r;
+    try {
+      r = await fetch("/live/act", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ avatar_id: avatarId, question }),
+      });
+    } catch (e) { status("ask failed: " + (e?.message || e)); return; }
+    // Stream the SSE and speak each chunk as it arrives — so the "let me search"
+    // filler plays immediately and the searched answer follows when it's ready,
+    // instead of dead air until the whole thing is done.
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "", saidAny = false;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n\n")) >= 0) {
+        const evt = buf.slice(0, nl); buf = buf.slice(nl + 2);
+        const m = evt.match(/^data: (\{.*\})$/m);
+        if (!m) continue;
+        let content; try { content = JSON.parse(m[1]).content; } catch { continue; }
+        if (content) { say(content); saidAny = true; }
+      }
+    }
+    if (!saidAny) status("(she stayed silent)");
   }
 
   document.getElementById("speakBtn").onclick = () =>
@@ -301,25 +324,33 @@
 
   // ── voice input: talk to Laura with your mic (Web Speech API, free, Chrome) ──
   // Click 🎤 to toggle. What you say is transcribed in-browser and sent to the
-  // grounded+tools brain (/live/act); she answers out loud. While SHE speaks the
-  // mic pauses so she doesn't hear herself. Meeting mode doesn't use this (Recall
-  // pipes the meeting transcript through the backend websocket instead).
+  // grounded+tools brain (/live/act); she answers out loud. The mic keeps
+  // LISTENING while she talks so you can barge in ("wait Laura") and cut her off;
+  // her own voice bleeding into the mic is filtered out by comparing what's heard
+  // against what she's currently saying. (Headphones make barge-in bulletproof.)
+  // Meeting mode doesn't use this (Recall pipes the transcript over the websocket).
   const micBtn = document.getElementById("micBtn");
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let micOn = false, micPaused = false, rec = null, micResumeTimer = null;
-  let micPauseUntil = 0; // cumulative: queued sentences extend the pause window
+  let micOn = false, rec = null;
+  let speakingUntil = 0;   // performance.now() until which SHE is considered speaking
+  let herText = "";        // normalized words she's currently saying (echo filter)
 
-  function extendMicPause(durationSec) {
-    if (!micOn || !rec) return;
-    micPaused = true;
-    try { rec.stop(); } catch (_) {}
-    micPauseUntil = Math.max(micPauseUntil, performance.now()) + (durationSec + 0.8) * 1000;
-    clearTimeout(micResumeTimer);
-    micResumeTimer = setTimeout(() => {
-      micPaused = false;
-      if (micOn) { try { rec.start(); } catch (_) {} }
-    }, micPauseUntil - performance.now());
+  const _norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  // While she speaks, ignore transcripts that are mostly HER words (mic echo).
+  function looksLikeEcho(heard) {
+    const words = _norm(heard).split(" ").filter(Boolean);
+    if (!words.length) return true;
+    const her = new Set(herText.split(" ").filter(Boolean));
+    if (!her.size) return false;
+    return words.filter((w) => her.has(w)).length / words.length >= 0.5;
   }
+  // Called from say() when audio starts: mark the speaking window + echo text.
+  // (No longer stops the recognizer — we WANT to keep hearing the human.)
+  function markSpeaking(durationSec, text) {
+    speakingUntil = Math.max(speakingUntil, performance.now()) + (durationSec + 0.6) * 1000;
+    herText = _norm(text);
+  }
+  window.markSpeaking = markSpeaking;
 
   if (!SR) {
     micBtn.disabled = true;
@@ -328,17 +359,21 @@
     rec = new SR();
     rec.lang = "en-US";
     rec.continuous = true;
-    rec.interimResults = false;
+    rec.interimResults = true; // partials let us cut her off the instant you speak
     rec.onresult = (ev) => {
-      const heard = ev.results[ev.results.length - 1][0].transcript.trim();
+      const res = ev.results[ev.results.length - 1];
+      const heard = (res[0] && res[0].transcript || "").trim();
       if (!heard) return;
+      const sheSpeaking = performance.now() < speakingUntil;
+      if (sheSpeaking && looksLikeEcho(heard)) return; // her own voice — ignore
+      if (sheSpeaking) interruptSpeech();              // real human over her — STOP
+      if (!res.isFinal) { status("hearing: " + heard); return; }
       document.getElementById("q").value = heard;
       status("heard: " + heard);
       ask(heard); // grounded + tools, spoken back
     };
-    // Chrome ends recognition on silence — restart while toggled on (not while
-    // she's speaking: pauseMicWhileSpeaking owns the restart in that window).
-    rec.onend = () => { if (micOn && !micPaused) { try { rec.start(); } catch (_) {} } };
+    // Chrome ends recognition on silence — restart while toggled on.
+    rec.onend = () => { if (micOn) { try { rec.start(); } catch (_) {} } };
     rec.onerror = (e) => {
       if (e.error === "not-allowed") { micOn = false; micBtn.textContent = "🎤 Talk"; status("mic blocked — allow microphone access"); }
     };
@@ -348,9 +383,8 @@
         try { rec.start(); } catch (_) {}
         micBtn.textContent = "🔴 Listening…";
         micBtn.style.background = "#c0392b";
-        status("listening — just talk to Laura");
+        status("listening — talk to Laura (say 'wait Laura' to cut her off)");
       } else {
-        clearTimeout(micResumeTimer); micPaused = false;
         try { rec.stop(); } catch (_) {}
         micBtn.textContent = "🎤 Talk";
         micBtn.style.background = "";
