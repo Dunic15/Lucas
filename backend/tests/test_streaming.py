@@ -87,6 +87,34 @@ def test_streaming_skip_prefix_inside_word_is_not_sentinel(monkeypatch):
     assert out == ["Skipping is not used here."]
 
 
+def test_streaming_min_chars_coalesces_tiny_sentences(monkeypatch):
+    _force_streaming_provider(monkeypatch)
+    monkeypatch.setattr(
+        brain.llm,
+        "stream_complete",
+        lambda *a, **k: iter(["Yes. ", "Sure. ", "The security lead signs off first."]),
+    )
+
+    out = list(brain.answer_question_stream(_avatar(), "q", min_chars=20))
+
+    # Tiny fragments are merged into one flowing chunk instead of stuttering.
+    assert out == ["Yes. Sure. The security lead signs off first."]
+    assert all(len(chunk) >= 20 for chunk in out)
+
+
+def test_streaming_min_chars_zero_keeps_per_sentence(monkeypatch):
+    _force_streaming_provider(monkeypatch)
+    monkeypatch.setattr(
+        brain.llm,
+        "stream_complete",
+        lambda *a, **k: iter(["One sentence here. ", "Two sentence there."]),
+    )
+
+    out = list(brain.answer_question_stream(_avatar(), "q"))  # min_chars defaults to 0
+
+    assert out == ["One sentence here.", "Two sentence there."]
+
+
 def test_streaming_retrieval_uses_recent_history(monkeypatch):
     monkeypatch.setattr(brain.settings, "brain_provider", "anthropic")
     monkeypatch.setattr(brain.settings, "anthropic_api_key", "test-key")

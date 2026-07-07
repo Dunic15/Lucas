@@ -12,6 +12,45 @@ import re
 
 from .avatars import Avatar
 
+# Third-person verbs that follow a wake word when someone is talking ABOUT the
+# avatar, not TO it: "Laura said…", "Laura mentioned…", "Laura was saying…".
+_REPORTED_TRAILING = (
+    r"said|says|saying|mentioned|meant|means|told|thinks|thought|noted|"
+    r"pointed|explained|suggested|asked|wanted|raised|flagged|had|was|were|'s"
+)
+# Subordinating / referential words that precede a wake word in reported speech:
+# "as Laura…", "what did Laura…", "about Laura…", "according to Laura…".
+_REPORTED_LEADING = (
+    r"as|what|when|whatever|like|because|since|that|did|does|per|about|"
+    r"regarding|according to|from|for|with"
+)
+
+
+def _is_reported_reference(lower: str, wake: str) -> bool:
+    """True when the wake word appears ONLY as a third-person reference to the
+    avatar (talking about it), with no vocative signal that it's being addressed.
+
+    "Laura mentioned the deadline"      -> reported (do not wake)
+    "as Laura said earlier, we should"  -> reported (do not wake)
+    "Laura, what are we missing?"        -> vocative (wake)
+    "Laura, what did Laura mean?"        -> vocative wins (wake)
+    """
+    w = re.escape(wake)
+    reported = bool(
+        re.search(rf"\b{w}\s+(?:{_REPORTED_TRAILING})\b", lower)
+        or re.search(rf"\b(?:{_REPORTED_LEADING})\s+{w}\b", lower)
+    )
+    if not reported:
+        return False
+    # A vocative signal means the speaker is addressing the avatar directly, which
+    # overrides an incidental third-person mention elsewhere in the same line.
+    vocative = bool(
+        re.search(rf"\b(?:hey|hi|hello|ok|okay|yo)\s+{w}\b", lower)
+        or re.search(rf"(?:^|[,.;:!?]\s*){w}\s*[,:]", lower)   # "Laura, …" / "Laura:"
+        or re.search(rf",\s*{w}\b[^a-z]*$", lower)             # "…, Laura?" (end)
+    )
+    return not vocative
+
 
 def detect_wake(avatar: Avatar, utterance: str) -> tuple[bool, str]:
     """If the utterance calls the avatar by a wake word, return (True, question).
@@ -20,11 +59,18 @@ def detect_wake(avatar: Avatar, utterance: str) -> tuple[bool, str]:
         "Laura, what are we missing?"   -> "what are we missing?"
         "Hey Laura what's the process"  -> "what's the process"
         "Can you check, Laura?"         -> "Can you check?"
+
+    Examples that do NOT trigger (the avatar is only being talked about):
+        "as Laura said earlier, we should ship"
+        "what did Laura mean by handoff?"
+        "Laura mentioned the deadline"
     """
     lower = utterance.lower()
     for wake in avatar.wake_words:
         # Match the wake word as a standalone token.
         if re.search(rf"\b{re.escape(wake)}\b", lower):
+            if _is_reported_reference(lower, wake):
+                return False, ""
             return True, _strip_wake(utterance, wake)
     return False, ""
 
