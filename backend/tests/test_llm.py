@@ -120,8 +120,8 @@ def test_complete_falls_back_to_haiku_when_groq_fails(monkeypatch):
 
 
 def test_explicit_provider_does_not_fall_back(monkeypatch):
-    """An explicit provider= (e.g. the web-search compound call) must NOT be
-    silently answered by the non-searching fallback — it should raise."""
+    """An explicit provider= (e.g. a caller pinning Groq) must NOT be silently
+    answered by the fallback model — it should raise."""
     monkeypatch.setattr(llm.settings, "anthropic_api_key", "k")
     monkeypatch.setattr(llm, "_complete_groq", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("429")))
     import pytest

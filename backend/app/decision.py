@@ -1,10 +1,15 @@
-"""The when-to-speak gate.
+"""The when-to-speak gate — wake detection, closing detection, dismissal.
 
-MVP policy (intentionally conservative): the avatar speaks ONLY when called by
-name. Proactive speech is a deliberate later step — see README "when-to-speak".
+Laura tracks the WHOLE meeting silently (see meeting_state.py) no matter what.
+The wake word is optional and only gates *speaking*: with REQUIRE_WAKE_WORD
+false (the default) she answers any groundable question without her name, and
+the in-stream SKIP sentinel (brain.answer_question_stream) is what actually
+enforces grounding. `detect_wake` here just recognises when she's addressed by
+name (so a direct question always gets an answer) and separates a vocative
+("Laura, …") from a third-person mention ("as Laura said").
 
-This module decides whether an utterance *addresses* a given avatar and, if so,
-extracts the question to answer. All thresholds come from the avatar's config.
+This module also detects meeting close (for the proactive wrap-up) and the
+"you can leave" dismissal. Thresholds come from the avatar's config.
 """
 from __future__ import annotations
 
@@ -84,7 +89,9 @@ def _strip_wake(utterance: str, wake: str) -> str:
 
 
 def passes_confidence(avatar: Avatar, result: dict) -> bool:
-    """Speak only if the model had enough grounded confidence for this avatar."""
+    """LEGACY — not used on the live streaming path (the in-stream SKIP sentinel
+    replaced it). Kept for back-compat + unit tests. Speak only if the model had
+    enough grounded confidence for this avatar."""
     if not result.get("sufficient_context", False):
         return False
     return float(result.get("confidence", 0.0)) >= avatar.min_confidence

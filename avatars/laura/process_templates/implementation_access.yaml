@@ -1,0 +1,16 @@
+# Process template: an implementation / technical-kickoff meeting MUST leave the
+# team able to actually START — access, an owner, and a working environment.
+# MeetingState (backend/app/meeting_state.py) tracks these silently; critical_gaps
+# still missing at wrap-up trigger Laura's one polite closing intervention.
+id: implementation_access
+name: Implementation Access
+required_steps:
+  - access_granted        # credentials / system access provisioned
+  - technical_owner       # who owns the build on the customer/technical side
+  - environment_ready     # sandbox / staging / test environment stood up
+  - integration_scope     # which systems integrate, scope agreed
+  - kickoff_scheduled     # when the build actually starts
+critical_gaps:
+  - access_granted
+  - technical_owner
+  - environment_ready

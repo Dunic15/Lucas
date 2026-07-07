@@ -2,36 +2,32 @@
 
 > We turn company processes into real-time AI avatars that join meetings and guide teams live.
 
-**Laura** is an AI process expert you can *call into* a Zoom / Meet / Teams
-meeting. She listens, answers questions grounded + cited from your process docs,
-silently tracks the meeting against a process checklist, and speaks up **once**
-if a critical step is missing as the call wraps up. Afterwards she delivers the
-full artifact: transcript, summary, decisions, actions, missing steps, a
-**readiness score**, and a draft follow-up email.
+**Laura** is a live **AI process agent** you can *call into* a Zoom / Meet /
+Teams meeting — not an avatar toy, not a notetaker. She makes meetings **ready
+before they start, complete before they end, and actionable after they finish**:
+she listens, answers questions grounded + cited from your process docs, silently
+tracks the call against your process, and speaks up **once** if a critical step
+is missing as the call wraps up.
+
+## What Laura does
+
+| Phase | In the meeting | Output |
+|---|---|---|
+| **Before — ready** | tracks whether the meeting/decision has what it needs to run (objective, owners, access, decisions to make) | a readiness read the moment it matters |
+| **During — complete** | silently tracks required process steps, decisions, owners, risks; answers grounded questions live; flags a missing **critical** step *once* at wrap-up | in-meeting answers + one intervention |
+| **After — actionable** | delivers the artifact: summary, decisions, actions, **missing steps**, a **readiness score (0–100)**, draft follow-up email | post-meeting execution |
+
+The differentiators, in order: **process tracking → missing-step prevention →
+readiness score → follow-up execution.** The avatar face is just the mouth (modes
+are [below](#avatar-modes)).
 
 ## Why not just a notetaker?
 
 Notetakers (Otter, Fireflies, Granola, the native Zoom/Meet AI) tell you *after*
-the meeting what was said. Laura is **in** the meeting: she answers process
-questions live, knows what the process requires *while the decision is being
-made*, and warns before the gap becomes a skipped approval. Her artifact is a
-readiness assessment against your actual process — not minutes.
-
-## Avatar modes
-
-The face is a swappable page rendered by the Recall.ai bot as its camera,
-selected with `AVATAR_PAGE`:
-
-| Mode | Page | Face | Face cost |
-|---|---|---|---|
-| `talk` — **production default** | `frontend/talk.html` | open-source 3D avatar (TalkingHead WebGL, vendored `laura.glb`) + `/tts` voice | **$0/min** |
-| `photoreal` — Stage 2 | `frontend/photoreal.html` | GPU-streamed MuseTalk face (`gpu/server.py`; stub engine needs no GPU) | ~$0.017/min, only while the GPU box runs |
-| `avatar` — legacy | `frontend/avatar.html` | Anam (paid vendor) | per-minute vendor billing |
-
-Photoreal degrades gracefully: **GPU stream → static portrait → `/talk`** — the
-meeting always has a face. The GPU box is never always-on: four independent
-auto-stop layers (launch TTL, boot TTL, idle watchdog, meeting-bound start/stop)
-are documented in [gpu/README.md](gpu/README.md).
+the meeting what was said. Laura is **in** the meeting: she knows what the process
+requires *while the decision is being made*, warns before a gap becomes a skipped
+approval, and her artifact is a readiness assessment against your actual process —
+not minutes.
 
 ## Meeting intelligence (MeetingState)
 
@@ -45,6 +41,13 @@ added): meeting type, stage, required/completed/missing steps (from
   so, once.
 - **The readiness score** — `readiness_score` (0–100) in the post-meeting
   artifact, computed from completed vs. required steps.
+
+**Process templates** live in `avatars/<id>/process_templates/*.yaml` (id, name,
+`required_steps`, `critical_gaps`) — add a template by dropping in a file, no code.
+Laura ships four: `customer_onboarding`, `implementation_access` (can the team
+actually start — access, technical owner, environment), `decision_quality` (did we
+truly decide — options, decision, owner, next step), and `meeting_readiness`
+(objective, agenda, right people, pre-read, decisions to make).
 
 The artifact returned by `POST /sessions/{id}/end`:
 `summary, decisions, actions (+ checklist alias), risks, missing_steps,
@@ -63,10 +66,13 @@ Open **http://127.0.0.1:8000** → ask Laura a question, or load the sample
 meeting to get the full artifact. The demo runs the real brain + retrieval
 offline (`stub` brain + `hash` embeddings) — **no API keys, ever**.
 
-Want real model answers? Set `BRAIN_PROVIDER=groq` (or `anthropic`) plus its key
-in `.env` and restart. Production uses Groq `llama-3.3-70b-versatile` on the
-live path because first-token latency (~0.4s) matters more in a meeting than
-long-form writing quality.
+Want real model answers? Set `BRAIN_PROVIDER=anthropic` plus `ANTHROPIC_API_KEY`
+in `.env` and restart. Production runs **Claude Haiku** on the live path — it's
+fast (~0.4s first token) and, unlike Groq's free tier, isn't rate-limited, so it's
+the stable default for demos/production. Groq (`BRAIN_PROVIDER=groq`) is an
+optional faster provider; when its free tier 429s, a circuit breaker routes live
+answers to Haiku automatically. The post-meeting summary uses Claude Sonnet
+(`BRAIN_PROVIDER_POST=anthropic`) for quality.
 
 ```bash
 # CLI, offline:
@@ -102,13 +108,30 @@ curl -X POST .../sessions/<bot_id>/end
 photoreal path the GPU box costs money while running — `gpu/stop.sh` /
 `gpu/status.sh` are the manual controls; the auto-stop layers are the safety net.
 
+## Avatar modes
+
+The face is just the mouth — the brain lives in the backend. The face is a
+swappable page rendered by the Recall.ai bot as its camera, selected with
+`AVATAR_PAGE`:
+
+| Mode | Page | Face | Face cost |
+|---|---|---|---|
+| `talk` — **production default** | `frontend/talk.html` | open-source 3D avatar (TalkingHead WebGL, vendored `laura.glb`) + `/tts` voice | **$0/min** |
+| `photoreal` — Stage 2 | `frontend/photoreal.html` | GPU-streamed MuseTalk face (`gpu/server.py`; stub engine needs no GPU) | ~$0.017/min, only while the GPU box runs |
+| `avatar` — legacy | `frontend/avatar.html` | Anam (paid vendor) | per-minute vendor billing |
+
+Photoreal degrades gracefully: **GPU stream → static portrait → `/talk`** — the
+meeting always has a face. The GPU box is never always-on: four independent
+auto-stop layers (launch TTL, boot TTL, idle watchdog, meeting-bound start/stop)
+are documented in [gpu/README.md](gpu/README.md).
+
 ## Environment variables (the ones that matter)
 
 Everything lives in `backend/app/config.py` (env var = UPPER_CASE field name).
 
 | Group | Vars |
 |---|---|
-| Brain | `BRAIN_PROVIDER` (`stub\|groq\|anthropic\|ollama`), `GROQ_API_KEY`, `BRAIN_MODEL`, `BRAIN_MODEL_FAST` |
+| Brain | `BRAIN_PROVIDER` (`anthropic`(default)`\|groq\|ollama\|stub`), `ANTHROPIC_API_KEY`, `BRAIN_MODEL` (Sonnet, post-meeting), `BRAIN_MODEL_FAST`/`BRAIN_MODEL_COMPLEX` (Haiku, live), `GROQ_API_KEY` (optional fast path) |
 | Retrieval | `EMBEDDING_PROVIDER` (`hash\|local\|voyage`) |
 | Meeting (ears) | `RECALL_API_KEY`, `RECALL_API_BASE` (use `https://eu-central-1.recall.ai`), `RECALL_TRANSCRIPTION_*` |
 | Face | `AVATAR_PAGE` (`talk\|photoreal\|avatar`), `ANAM_API_KEY`/`ANAM_AVATAR_ID` (legacy only) |
@@ -133,7 +156,7 @@ Meeting (Zoom/Meet/Teams)
         ├─ MeetingState: silent per-line process tracker (regex, no latency)
         ├─ when-to-speak: in-stream SKIP gate + cooldown (+ optional wake word)
         ├─ RAG over avatars/<id>/knowledge/*.md → cited answers
-        ├─ Brain: Groq / Claude / Ollama / stub   ├─ /tts: ElevenLabs | edge-tts
+        ├─ Brain: Claude Haiku (live) / Sonnet (post) / Groq* / stub  ├─ /tts: ElevenLabs | edge-tts
         ├─ gpu_runtime: start/stop the photoreal box around meetings
         └─ SQLite store: sessions, routing, artifacts
    │
@@ -148,6 +171,10 @@ see [avatars/README.md](avatars/README.md)); no backend code.
 
 ## Deeper docs
 
+- [docs/product/WEDGE.md](docs/product/WEDGE.md) — the wedge: what Laura is, who
+  it's for, why it wins (single source of truth for positioning)
+- [docs/ARCHITECTURE_CURRENT.md](docs/ARCHITECTURE_CURRENT.md) — how it actually
+  works today: paths, models, providers, deploy (single source of truth for architecture)
 - [.claude/CONTEXT.md](.claude/CONTEXT.md) — company brief, hard constraints (start here)
 - [gpu/README.md](gpu/README.md) — photoreal GPU track: launch runbook + cost controls
 - [avatars/README.md](avatars/README.md) — add an avatar in 3 steps
