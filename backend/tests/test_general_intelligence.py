@@ -29,12 +29,12 @@ def _avatar() -> Avatar:
 def _force_groq(monkeypatch) -> None:
     monkeypatch.setattr(settings, "brain_provider", "groq")
     monkeypatch.setattr(settings, "groq_api_key", "k")
+    monkeypatch.setattr(settings, "anthropic_api_key", "k")  # web search runs on Claude now
     monkeypatch.setattr(settings, "live_search_enabled", True)
 
 
-def test_search_questions_route_to_compound(monkeypatch):
-    monkeypatch.setattr(settings, "brain_provider", "groq")
-    monkeypatch.setattr(settings, "groq_api_key", "k")
+def test_search_questions_route_to_search_model(monkeypatch):
+    monkeypatch.setattr(settings, "anthropic_api_key", "k")
     monkeypatch.setattr(settings, "live_search_enabled", True)
     assert brain._live_model("search the internet for the latest AI news") == settings.live_search_model
     assert brain._live_model("what's the weather today in Milan?") == settings.live_search_model
@@ -43,37 +43,35 @@ def test_search_questions_route_to_compound(monkeypatch):
 
 def test_normal_questions_keep_fast_model(monkeypatch):
     monkeypatch.setattr(settings, "brain_provider", "groq")
-    monkeypatch.setattr(settings, "groq_api_key", "k")
+    monkeypatch.setattr(settings, "anthropic_api_key", "k")
     monkeypatch.setattr(settings, "live_search_enabled", True)
     assert brain._live_model("what are we missing before go-live?") == settings.brain_model_fast
     assert brain._live_model("explain what a DPA is") == settings.brain_model_fast
 
 
 def test_search_routes_regardless_of_live_provider(monkeypatch):
-    """Search runs on Groq compound even when the live brain is Claude."""
-    monkeypatch.setattr(settings, "brain_provider", "anthropic")
-    monkeypatch.setattr(settings, "groq_api_key", "k")
+    """Web search runs on Claude regardless of the fast-path BRAIN_PROVIDER."""
+    monkeypatch.setattr(settings, "brain_provider", "groq")
+    monkeypatch.setattr(settings, "anthropic_api_key", "k")
     monkeypatch.setattr(settings, "live_search_enabled", True)
     assert brain._live_model("latest news please") == settings.live_search_model
 
 
 def test_search_routing_respects_flag_and_key(monkeypatch):
-    monkeypatch.setattr(settings, "brain_provider", "groq")
-    monkeypatch.setattr(settings, "groq_api_key", "")
+    monkeypatch.setattr(settings, "anthropic_api_key", "")  # no Claude -> no search
     assert brain._live_model("latest news please") == settings.brain_model_fast
-    monkeypatch.setattr(settings, "groq_api_key", "k")
+    monkeypatch.setattr(settings, "anthropic_api_key", "k")
     monkeypatch.setattr(settings, "live_search_enabled", False)
     assert brain._live_model("latest news please") == settings.brain_model_fast
 
 
 def test_live_route_tiers_by_task(monkeypatch):
     _force_groq(monkeypatch)
-    monkeypatch.setattr(settings, "anthropic_api_key", "k")
     monkeypatch.setattr(settings, "brain_model_complex", "claude-haiku-4-5")
     # simple/chat -> fast Groq
     assert brain._live_route("how are you?") == ("groq", settings.brain_model_fast)
-    # web search -> Groq compound
-    assert brain._live_route("what is the latest news today?") == ("groq", settings.live_search_model)
+    # web search -> Claude native web_search (the "search" pseudo-provider)
+    assert brain._live_route("what is the latest news today?") == ("search", settings.live_search_model)
     # complex reasoning -> Claude
     assert brain._live_route("compare bootstrapping vs raising a seed round") == ("anthropic", "claude-haiku-4-5")
     assert brain._live_route("analyze the tradeoffs here") == ("anthropic", "claude-haiku-4-5")
@@ -94,11 +92,11 @@ def test_prompt_is_assistant_first():
 
 # ── web search on the interactive /live/act path (phase 2) ──
 def test_web_search_answer_empty_on_refusal_or_blank(monkeypatch):
-    monkeypatch.setattr(brain.llm, "complete", lambda *a, **k: "I'm not able to browse the web right now.")
+    monkeypatch.setattr(brain.llm, "web_search", lambda *a, **k: "I'm not able to browse the web right now.")
     assert brain._web_search_answer("latest news") == ""
-    monkeypatch.setattr(brain.llm, "complete", lambda *a, **k: "")
+    monkeypatch.setattr(brain.llm, "web_search", lambda *a, **k: "")
     assert brain._web_search_answer("latest news") == ""
-    monkeypatch.setattr(brain.llm, "complete", lambda *a, **k: "Milan is sunny, 24°C — from a quick search.")
+    monkeypatch.setattr(brain.llm, "web_search", lambda *a, **k: "Milan is sunny, 24°C — from a quick search.")
     assert "quick search" in brain._web_search_answer("weather Milan today")
 
 

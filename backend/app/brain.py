@@ -199,20 +199,24 @@ _SEARCH_INTENT = re.compile(
 )
 
 
-def _live_model(question: str) -> str:
-    """Model for one live answer: the fast default, or the web-search-capable
-    compound model when the question asks for fresh information."""
-    if (
+def _wants_search(question: str) -> bool:
+    """True if this asks for fresh/current info we should look up on the web.
+    Web search now runs on Claude (Anthropic's native web_search tool), so it's
+    gated on the Anthropic key, not Groq."""
+    return bool(
         settings.live_search_enabled
-        and settings.groq_api_key  # compound runs on Groq regardless of live provider
+        and settings.anthropic_api_key
         and _SEARCH_INTENT.search(question or "")
-    ):
-        return settings.live_search_model
-    return settings.brain_model_fast
+    )
+
+
+def _live_model(question: str) -> str:
+    """The model for one live answer (web-search model for fresh-info asks)."""
+    return settings.live_search_model if _wants_search(question) else settings.brain_model_fast
 
 
 def wants_web_search(question: str) -> bool:
-    return _live_model(question) == settings.live_search_model
+    return _wants_search(question)
 
 
 # Clearly-analytical asks — worth the more reliable/capable Claude model even on
@@ -228,13 +232,14 @@ _COMPLEX_INTENT = re.compile(
 
 def _live_route(question: str) -> tuple[str, str]:
     """(provider, model) for one live answer:
-      - web search (fresh info)       -> Groq compound (does the browsing)
+      - web search (fresh info)       -> Claude + native web_search tool (the
+                                         "search" pseudo-provider routes to it)
       - clearly-complex reasoning     -> Claude (brain_model_complex): reliable +
                                          capable, and it dodges Groq's rate limits
       - everything else (chat/simple) -> the fast default provider (Groq llama)
     """
-    if _live_model(question) == settings.live_search_model:
-        return "groq", settings.live_search_model
+    if _wants_search(question):
+        return "search", settings.live_search_model
     if settings.anthropic_api_key and _COMPLEX_INTENT.search(question or ""):
         return "anthropic", settings.brain_model_complex
     return settings.brain_provider, settings.brain_model_fast
@@ -248,25 +253,22 @@ _SEARCH_FAIL_RE = re.compile(
 
 
 def _web_search_answer(question: str, convo: str = "") -> str:
-    """One web-search answer via the compound model (Groq, built-in web search).
+    """One web-search answer via Claude's native web_search tool (live_search_model,
+    default Sonnet — strong at search + dynamic result filtering).
 
     Returns the spoken answer text, or "" if search errored, refused, or returned
     nothing — so the caller can fall back to normal reasoning instead of going
-    silent. NON-streamed on purpose: compound's stream reliably returns tool /
-    reasoning deltas but often ends with no content, while the non-streaming call
-    completes every time. Search asks are rare; a dependable ~4s answer beats a
-    broken stream. Shared by the meeting path and the interactive /live/act path.
+    silent. Shared by the meeting path and the interactive /live/act path.
     """
     try:
-        raw = llm.complete(
-            "You answer in 1-3 short spoken sentences, no markdown. Use web "
-            "search for current information and mention it's from a quick search.",
+        raw = llm.web_search(
+            "You answer in 1-3 short spoken sentences, no markdown. Use web search "
+            "for current information and mention it's from a quick search.",
             f"{convo}Use web search, then answer briefly:\n{question}",
-            max_tokens=512,  # shorter answer = faster; the search itself is the cost
             model=settings.live_search_model,
-            provider="groq",  # compound lives on Groq even when the live brain is Claude
         )
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        print(f"[search] web_search failed: {e}", flush=True)
         return ""
     head = (raw or "").strip()
     if not head or _is_skip(head) or _SEARCH_FAIL_RE.search(head):
@@ -349,7 +351,7 @@ def answer_question_stream(
             )
 
     _provider, _model = _live_route(question)
-    if _model == settings.live_search_model:
+    if _provider == "search":
         answer = _web_search_answer(question, convo)
         if answer:
             buf, sentences = _split_sentences(answer + " ")
