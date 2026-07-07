@@ -55,3 +55,64 @@ _CLOSING = re.compile(
 def detect_closing(utterance: str) -> bool:
     """True if the utterance sounds like the meeting is wrapping up."""
     return bool(_CLOSING.search(utterance))
+
+
+# Dismissal ("Laura, you can leave"). Only ever checked on the wake-stripped
+# question of an utterance that addressed her BY NAME, so the patterns can stay
+# tight. Two shapes: an imperative aimed at her at the start of the ask, or an
+# explicit "you can/may …" permission anywhere in it. Deliberately narrow —
+# a missed command costs a repeat ask; a false positive kills the meeting bot.
+_LEAVE_IMPERATIVE = re.compile(
+    # The imperative must be the WHOLE ask ("leave", "please leave the call
+    # now") — anything else after the verb ("leave the pricing for later",
+    # "leave it with me") means a topic, not the meeting.
+    r"^(?:please\s+|now\s+|just\s+|kindly\s+|go ahead and\s+)*"
+    r"(?:leave|exit|drop off|hop off|hang up|disconnect)"
+    r"(?:\s+(?:the|this)\s+(?:meeting|call|room))?"
+    r"(?:\s+(?:now|please|thanks|thank you))*"
+    r"[.!?\s]*$",
+    re.IGNORECASE,
+)
+_LEAVE_PERMISSION = re.compile(
+    # "you can leave [the meeting] [now]" — the verb must end the clause, so
+    # "you can leave time for Q&A" / "you can go to the next slide" never match.
+    # Bare "go" is how a host hands over the floor ("your turn — you can go"),
+    # i.e. an invitation to SPEAK, so "go" only counts with an explicit
+    # dismissal marker after it; "free to go" is unambiguous on its own.
+    r"\byou (?:"
+    r"(?:can|may|should) (?:leave|drop off|hop off|head out"
+    r"|go(?=\s+(?:now|home)\b|\s+(?:the|this)\s+(?:meeting|call|room)))"
+    r"|are free to (?:leave|go|drop off|head out)"
+    r")"
+    r"(?:\s+(?:the|this)\s+(?:meeting|call|room))?"
+    r"(?:\s+(?:now|home|please|thanks|thank you|if you want|whenever))*"
+    r"\s*(?:[.!?,;]|$)",
+    re.IGNORECASE,
+)
+# The whole ask is just a farewell ("Laura, bye!", "goodbye Laura").
+_LEAVE_FAREWELL = re.compile(
+    r"^(?:(?:good)?bye(?:\s*bye)?|ciao|see you(?: later| soon| next time)?|"
+    r"thanks,?\s*(?:good)?bye)[.!\s]*$",
+    re.IGNORECASE,
+)
+# Negation / hypothetical right before the verb ("don't leave", "before you
+# leave the meeting…") — never a command.
+_LEAVE_BLOCKED = re.compile(
+    r"\b(?:don'?t|do not|never|shouldn'?t|won'?t|before|unless|until|if|when|"
+    r"why(?: did| would)?|instead of)\b[^.?!]{0,24}\b(?:leave|go|drop|hop|exit)\b",
+    re.IGNORECASE,
+)
+
+
+def detect_leave_command(question: str) -> bool:
+    """True if the (wake-stripped) ask tells the avatar to leave the meeting."""
+    q = (question or "").strip()
+    if not q:
+        return False
+    if _LEAVE_BLOCKED.search(q):
+        return False
+    return bool(
+        _LEAVE_IMPERATIVE.search(q)
+        or _LEAVE_PERMISSION.search(q)
+        or _LEAVE_FAREWELL.match(q)
+    )

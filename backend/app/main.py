@@ -58,7 +58,7 @@ from .brain import (
     effective_provider,
 )
 from .config import settings
-from .decision import detect_wake, detect_closing
+from .decision import detect_wake, detect_closing, detect_leave_command
 from .rag import ensure_index, warm as warm_index
 
 app = FastAPI(title="Callable AI Process Avatar")
@@ -1145,6 +1145,15 @@ def avatar_messages(conversation_id: str) -> JSONResponse:
 
 _ACK_LINES = ["Mm-hm.", "Sure —", "On it.", "Let me think —", "Good one —"]
 
+# Spoken when dismissed by voice — short enough to finish inside
+# settings.leave_grace_seconds before the bot disconnects.
+_GOODBYE_LINES = [
+    "Sure — bye everyone!",
+    "Okay, leaving now. Bye!",
+    "Got it — see you next time!",
+    "Alright, I'll drop off. Bye!",
+]
+
 _SPEECH_WORDS_PER_SECOND = 2.6  # ~ElevenLabs/edge-tts pace, for the barge-in window
 
 
@@ -1534,6 +1543,30 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # By default (require_wake_word=False) she answers any grounded question; the
     # SKIP sentinel + cooldown keep her from interjecting on things she can't ground.
     called, question = detect_wake(avatar, text)
+
+    # ── voice dismissal ("Laura, you can leave") ──
+    # Addressed by name + an explicit leave command → say goodbye, then end the
+    # session exactly like a natural meeting end: bot leaves the call, the
+    # post-meeting artifact is built, billing stops on both vendors. The
+    # goodbye is best-effort — leaving (= stopping the meter) must never be
+    # blocked by a TTS hiccup.
+    if called and settings.leave_on_command and detect_leave_command(question):
+        try:
+            await _make_avatar_speak(
+                session, random.choice(_GOODBYE_LINES), force=True
+            )
+            await asyncio.sleep(settings.leave_grace_seconds)
+        except Exception:
+            pass  # goodbye is best-effort
+        finally:
+            # finally, not just except: CancelledError (deploy/restart killing
+            # this request mid-goodbye) is a BaseException and would otherwise
+            # skip the finalize — leaving the bot in the call, meter running.
+            await _finalize_session(bot_id)
+        return JSONResponse(
+            {"ok": True, "spoke": True, "left": True, "reason": "leave_command"}
+        )
+
     if settings.require_wake_word and not called:
         return JSONResponse({"ok": True, "spoke": False, "reason": "not called"})
     question = question or text  # no wake word → treat the whole utterance as the ask

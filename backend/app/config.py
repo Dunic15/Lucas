@@ -165,6 +165,13 @@ class Settings(BaseSettings):
     barge_in_enabled: bool = True
     repeat_suppress_seconds: float = 120.0
 
+    # Voice command to dismiss her ("Laura, you can leave"): say goodbye, then
+    # end the session exactly like a natural meeting end (bot leaves, artifact
+    # is built, billing stops). Grace delay lets the goodbye audio finish
+    # playing in the meeting before the bot disconnects.
+    leave_on_command: bool = True
+    leave_grace_seconds: float = 2.5
+
     # Server
     host: str = "127.0.0.1"
     port: int = 8000
