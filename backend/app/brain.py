@@ -385,19 +385,27 @@ def _split_sentences(buf: str) -> tuple[str, list[str]]:
 # answer when tools aren't available (stub/offline), so nothing breaks.
 ANSWER_TOOLS_SYSTEM = """{persona}
 
-You are Laura, a warm, helpful AI assistant in a live spoken conversation. Keep \
-replies to 1-3 short sentences a person can absorb by ear. Plain text only — no \
-markdown, bullets, headings, or preamble.
+You are Laura in a live spoken conversation — a capable general assistant FIRST \
+(think ChatGPT or Claude), and an SFF/company expert only when the question \
+actually touches that. Default to 1-2 short spoken sentences (3 max); sound like \
+a real person, never restate the question, and never open with filler like \
+"great question". Plain text only — no markdown, bullets, headings, or preamble. \
+NEVER mention documents, context, a knowledge base, or your "system architecture" \
+unless the person specifically asks how you work.
 
-You can USE TOOLS to do things, not just recall from documents:
-- calculator — for ANY arithmetic (percentages, totals, per-seat cost, annualizing).
-- date_math — today's date, or how many days until a deadline/renewal.
+How to respond:
+- General questions, opinions, advice, small talk, jokes: answer directly and \
+naturally from your own knowledge. If someone asks what you think, give a real \
+take. Don't steer the conversation back to SFF.
+- SFF / company / portfolio questions: use what you know, stay concrete, and \
+don't invent specific numbers, companies, or facts that aren't there.
+
+You can also USE TOOLS when they make an answer more concrete:
+- calculator — for any arithmetic (percentages, totals, per-seat cost, annualizing).
+- date_math — today's date, or days until a deadline/renewal.
 - lookup_record — check a customer account (plan, seats, MRR, renewal, owner).
-
-Call a tool whenever it makes your answer more concrete or accurate; you may chain \
-them (e.g. look up a renewal date, then compute the days until it). Ground company \
-process facts in the provided context and name the source doc when you use one. When \
-you calculated or looked something up, state the concrete result plainly."""
+Call a tool whenever it helps — you may chain them — then state the concrete \
+result plainly in a sentence or two."""
 
 
 def answer_with_tools(
@@ -405,16 +413,25 @@ def answer_with_tools(
 ) -> dict:
     """Grounded answer that may CALL tools to act. Returns answer + tools_used."""
     chunks = retrieve(avatar, _retrieval_query(question, history), k=k)
+    # Only inject docs when they actually match the question — otherwise irrelevant
+    # chunks framed as "context" bias her into doc-quoting a general/opinion ask.
+    if chunks and chunks[0].score < settings.rag_min_context_score:
+        chunks = []
 
     if _is_stub():
         # No tool use offline — fall back to the deterministic grounded answer.
         r = _stub_answer(chunks)
         return {"answer": r["answer"], "tools_used": [], "citations": r.get("citations", [])}
 
-    convo = f"Recent meeting conversation:\n{history}\n\n" if history.strip() else ""
+    convo = f"Recent conversation:\n{history}\n\n" if history.strip() else ""
+    context_block = (
+        f"Context you may draw on if it fits the question:\n\n{_format_context(chunks)}\n\n"
+        if chunks
+        else ""
+    )
     system = ANSWER_TOOLS_SYSTEM.format(persona=avatar.persona_prompt)
     user = (
-        f"Company process context:\n\n{_format_context(chunks)}\n\n"
+        f"{context_block}"
         f"{convo}"
         f"Someone asked:\n{question}\n\n"
         "Use tools if they'd help, then answer in spoken style."
