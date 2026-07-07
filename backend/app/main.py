@@ -507,8 +507,13 @@ def join_page() -> FileResponse:
 @app.get("/talk")
 def talk_page() -> FileResponse:
     """Open-source avatar page (TalkingHead + our TTS) — the Anam replacement.
-    Recall will render this instead of avatar.html once it's proven out."""
-    return FileResponse(FRONTEND_DIR / "talk.html")
+    Recall will render this instead of avatar.html once it's proven out.
+
+    no-store: the page's JS changes often (framing, barge-in, streaming) — without
+    this browsers serve a stale cached copy and users see old behaviour."""
+    return FileResponse(
+        FRONTEND_DIR / "talk.html", headers={"Cache-Control": "no-store"}
+    )
 
 
 @app.get("/photoreal")
