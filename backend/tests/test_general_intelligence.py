@@ -66,6 +66,25 @@ def test_search_routing_respects_flag_and_key(monkeypatch):
     assert brain._live_model("latest news please") == settings.brain_model_fast
 
 
+def test_live_route_tiers_by_task(monkeypatch):
+    _force_groq(monkeypatch)
+    monkeypatch.setattr(settings, "anthropic_api_key", "k")
+    monkeypatch.setattr(settings, "brain_model_complex", "claude-haiku-4-5")
+    # simple/chat -> fast Groq
+    assert brain._live_route("how are you?") == ("groq", settings.brain_model_fast)
+    # web search -> Groq compound
+    assert brain._live_route("what is the latest news today?") == ("groq", settings.live_search_model)
+    # complex reasoning -> Claude
+    assert brain._live_route("compare bootstrapping vs raising a seed round") == ("anthropic", "claude-haiku-4-5")
+    assert brain._live_route("analyze the tradeoffs here") == ("anthropic", "claude-haiku-4-5")
+
+
+def test_live_route_no_anthropic_key_stays_on_fast(monkeypatch):
+    _force_groq(monkeypatch)
+    monkeypatch.setattr(settings, "anthropic_api_key", "")  # no Claude available
+    assert brain._live_route("compare these two options in detail") == ("groq", settings.brain_model_fast)
+
+
 def test_prompt_is_assistant_first():
     p = brain.ANSWER_STREAM_SYSTEM
     assert "capable general assistant FIRST" in p

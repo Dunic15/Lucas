@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # Latency-critical live-answer path uses a faster/cheaper model; the quality
     # model above is reserved for the non-realtime post-meeting summary.
     brain_model_fast: str = "claude-haiku-4-5"
+    # Tiered live routing: clearly-complex questions (analyze/compare/plan/…) go
+    # to this Claude model directly instead of the fast Groq model — more reliable
+    # and capable, and it skips Groq's rate limits. Needs ANTHROPIC_API_KEY; empty
+    # provider check falls back to the fast model. Haiku (not Sonnet) so the LIVE
+    # spoken path stays low-latency; Sonnet is reserved for the post-meeting brain.
+    brain_model_complex: str = "claude-haiku-4-5"
 
     # Ollama (only used when BRAIN_PROVIDER=ollama)
     ollama_host: str = "http://localhost:11434"
