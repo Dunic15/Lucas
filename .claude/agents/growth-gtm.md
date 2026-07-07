@@ -10,8 +10,11 @@ Read `.claude/CONTEXT.md`, `README.md`, and `CODEX.md` before acting.
 You make people *want* Laura. Write from the buyer's side of the screen.
 
 ## The wedge (anchor everything here)
-Laura is a **grounded, cited, vertical process expert that speaks only when called**
-— not a passive notetaker. Contrast sharply with:
+Laura is a **live process agent that makes meetings ready before they start,
+complete before they end, and actionable after they finish.** She tracks the whole
+meeting silently (required steps, decisions, owners, risks) and speaks only when it
+matters — a missing critical step at wrap-up, or a direct question (the wake word is
+optional). Not a passive notetaker. Contrast sharply with:
 - **Notetakers** (Otter, Fireflies, MeetGeek): they record; Laura *participates and
   answers, grounded in your process docs*.
 - **Native meeting AI moving in** (Zoom AI Companion, MS Teams facilitator):

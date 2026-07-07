@@ -63,14 +63,20 @@ Cross-references updated: `.claude/agents/backend-infra.md` and
 | local `.env`, `.env.filled`, `.env.qa-backup-20260706` | untracked + gitignored, may hold live keys — never git-managed |
 | `backend/app/decision.py` docstring | still says "speaks ONLY when called by name" (false since the SKIP-gate rewrite) — a **code** change for the backend owner, not a docs pass |
 
-## Known doc-vs-code drift accepted for now
+## Resolved by the repo-alignment pass (2026-07-07)
 
-- `AVATAR_PAGE` **code default is `"avatar"`** (Anam) while production runs `talk`.
-  Changing the default is a product-behavior change — flagged for the owner.
-- `RECALL_API_BASE` code default is `us-west-2` while everything real uses
-  `eu-central-1` (same reasoning).
-- `MIN_CONFIDENCE` / `decision.passes_confidence()` is dead on the live streaming
-  path (superseded by the in-stream SKIP gate) — candidate for removal by the
-  backend owner.
-- `.env.example` doesn't mention `AVATAR_PAGE` or the `GPU_*` vars — worth adding
-  next time the backend owner touches env plumbing.
+The drift below was flagged here and is now fixed on branch `claude/repo-alignment`.
+Single source of truth going forward: [`ARCHITECTURE_CURRENT.md`](ARCHITECTURE_CURRENT.md)
+(how it works) + [`product/WEDGE.md`](product/WEDGE.md) (why it wins).
+
+- `AVATAR_PAGE` code default → **`talk`** (was `avatar`); matches prod.
+- `RECALL_API_BASE` code default → **`eu-central-1`** (was `us-west-2`).
+- `MIN_CONFIDENCE` / `decision.passes_confidence()` — now **clearly labelled LEGACY**
+  in code + `.env.example` (dead on the live streaming path; kept for back-compat).
+- `decision.py` docstring no longer says "speaks ONLY when called by name" — it now
+  states the real behavior (silent tracking always; wake word optional).
+- `.env.example` now documents `AVATAR_PAGE`, `GROQ_API_KEY`/`GROQ_BASE`,
+  `BRAIN_MODEL_COMPLEX`, and the `GPU_*` vars; web-search text is Claude-native
+  (the stale Groq-`compound` references are gone).
+- Live default is **Claude Haiku**; Groq is optional behind a 429 circuit breaker.
+- **PR #1** (`codex/content-and-ui`, Anam-first) — **closed without merging.**

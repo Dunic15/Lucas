@@ -18,6 +18,7 @@ Pick the provider with BRAIN_PROVIDER in .env:
 """
 from __future__ import annotations
 
+import time
 from typing import Iterator
 
 from .config import settings
@@ -42,6 +43,49 @@ def _ensure_anthropic():
 _FALLBACK_MODEL = "claude-haiku-4-5"
 
 
+# ── Groq circuit breaker ───────────────────────────────────────────────
+# Groq's free tier rate-limits (HTTP 429) under load. Rather than hammer it on
+# every request — eating the failure + fallback latency each time — we trip a
+# breaker on failure: for a cooldown window (the 429's Retry-After if present,
+# else a default) live answers skip Groq entirely and go straight to Claude
+# Haiku. The breaker is process-local and self-heals when the window elapses.
+_GROQ_COOLDOWN_DEFAULT = 30.0
+_GROQ_COOLDOWN_MAX = 300.0
+_groq_blocked_until = 0.0  # monotonic timestamp; 0 = breaker closed
+
+
+def _groq_breaker_open() -> bool:
+    """True while the breaker is tripped — skip Groq, use the Haiku fallback."""
+    return time.monotonic() < _groq_blocked_until
+
+
+def _trip_groq_breaker(exc: Exception) -> None:
+    """Open the breaker after a Groq failure, honouring Retry-After on a 429."""
+    global _groq_blocked_until
+    cooldown = _GROQ_COOLDOWN_DEFAULT
+    resp = getattr(exc, "response", None)
+    if resp is not None and getattr(resp, "status_code", None) == 429:
+        retry_after = (getattr(resp, "headers", {}) or {}).get("retry-after")
+        if retry_after:
+            try:
+                cooldown = max(cooldown, float(retry_after))
+            except (TypeError, ValueError):
+                pass  # Retry-After can be an HTTP-date; the default covers it
+    cooldown = min(cooldown, _GROQ_COOLDOWN_MAX)
+    _groq_blocked_until = time.monotonic() + cooldown
+    print(
+        f"[llm] Groq breaker OPEN {cooldown:.0f}s ({exc}); "
+        f"routing live answers to {_FALLBACK_MODEL}",
+        flush=True,
+    )
+
+
+def _reset_groq_breaker() -> None:
+    """Close the breaker immediately (used by tests)."""
+    global _groq_blocked_until
+    _groq_blocked_until = 0.0
+
+
 def _dispatch_complete(
     provider: str, system: str, user: str, max_tokens: int, model: str | None
 ) -> str:
@@ -64,11 +108,16 @@ def complete(
     provider: str | None = None,
 ) -> str:
     resolved = (provider or settings.brain_provider).lower()
+    # Circuit breaker: while Groq is in cooldown, skip it and answer on Haiku.
+    if resolved == "groq" and _groq_breaker_open() and settings.anthropic_api_key:
+        return _complete_anthropic(system, user, max_tokens, _FALLBACK_MODEL)
     try:
         return _dispatch_complete(resolved, system, user, max_tokens, model)
     except Exception as e:  # noqa: BLE001
+        if resolved == "groq":
+            _trip_groq_breaker(e)
         # Only auto-fall-back for the DEFAULT live/post path. An explicit provider=
-        # (e.g. the web-search compound call) has its own handling and must not be
+        # (e.g. the native web_search call) has its own handling and must not be
         # silently answered by a non-searching model.
         if provider is None and resolved != "anthropic" and settings.anthropic_api_key:
             print(f"[llm] {resolved} failed ({e}); falling back to {_FALLBACK_MODEL}", flush=True)
@@ -105,6 +154,11 @@ def stream_complete(
     if provider == "anthropic":
         yield from _stream_anthropic(system, user, max_tokens, model)
         return
+    # Circuit breaker: while Groq is in cooldown after a 429, don't even try it —
+    # stream Haiku directly so the spoken path stays fast and never goes silent.
+    if provider == "groq" and _groq_breaker_open() and settings.anthropic_api_key:
+        yield from _stream_anthropic(system, user, max_tokens, _FALLBACK_MODEL)
+        return
     # Non-anthropic primary (groq/…): if it fails BEFORE producing any output
     # (e.g. Groq decommissioned the model), fall back to Claude Haiku so she never
     # goes silent. If it already streamed something, don't fall back (avoid dupes).
@@ -118,6 +172,8 @@ def stream_complete(
             yielded = True
             yield complete(system, user, max_tokens=max_tokens, model=model)
     except Exception as e:  # noqa: BLE001
+        if provider == "groq":
+            _trip_groq_breaker(e)
         if yielded or not settings.anthropic_api_key:
             raise
         print(f"[llm] stream {provider} failed ({e}); falling back to {_FALLBACK_MODEL}", flush=True)
@@ -285,12 +341,13 @@ def complete_with_tools(
 
     Runs the OpenAI/Groq function-calling loop: the model may ask to call tools;
     we execute each via `dispatch(name, args)`, feed the results back, and let it
-    answer. Only wired for Groq today (OpenAI-compatible). For other providers we
-    fall back to a normal completion with no tools, so nothing breaks — the caller
-    still gets a sensible answer, just without acting.
+    answer. Only wired for Groq today (OpenAI-compatible). For other providers —
+    or while the Groq breaker is open — we fall back to a normal completion with
+    no tools (which itself routes to Haiku), so nothing breaks: the caller still
+    gets a sensible answer, just without acting.
     """
     provider = settings.brain_provider.lower()
-    if provider != "groq":
+    if provider != "groq" or _groq_breaker_open():
         return complete(system, user, max_tokens=max_tokens, model=model), []
 
     import json as _json
@@ -305,8 +362,48 @@ def complete_with_tools(
     messages: list[dict] = _groq_messages(system, user)
     used: list[dict] = []
 
-    with httpx.Client(timeout=120.0) as client:
-        for _ in range(max_rounds):
+    try:
+        with httpx.Client(timeout=120.0) as client:
+            for _ in range(max_rounds):
+                resp = client.post(
+                    url,
+                    headers=headers,
+                    json={
+                        "model": model or settings.brain_model,
+                        "max_tokens": max_tokens,
+                        "messages": messages,
+                        "tools": tools,
+                        "tool_choice": "auto",
+                    },
+                )
+                resp.raise_for_status()
+                msg = resp.json()["choices"][0]["message"]
+                tool_calls = msg.get("tool_calls")
+                if not tool_calls:
+                    return (msg.get("content") or "").strip(), used
+
+                # Record the assistant turn that requested tools, then run each call.
+                messages.append(
+                    {"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls}
+                )
+                for tc in tool_calls:
+                    fn = tc.get("function", {}).get("name", "")
+                    try:
+                        args = _json.loads(tc.get("function", {}).get("arguments") or "{}")
+                    except ValueError:
+                        args = {}
+                    result = dispatch(fn, args)
+                    used.append({"tool": fn, "args": args, "result": result})
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", ""),
+                            "name": fn,
+                            "content": str(result),
+                        }
+                    )
+
+            # Out of rounds — force a final answer with the tool results in hand.
             resp = client.post(
                 url,
                 headers=headers,
@@ -314,49 +411,13 @@ def complete_with_tools(
                     "model": model or settings.brain_model,
                     "max_tokens": max_tokens,
                     "messages": messages,
-                    "tools": tools,
-                    "tool_choice": "auto",
                 },
             )
             resp.raise_for_status()
-            msg = resp.json()["choices"][0]["message"]
-            tool_calls = msg.get("tool_calls")
-            if not tool_calls:
-                return (msg.get("content") or "").strip(), used
-
-            # Record the assistant turn that requested tools, then run each call.
-            messages.append(
-                {"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls}
-            )
-            for tc in tool_calls:
-                fn = tc.get("function", {}).get("name", "")
-                try:
-                    args = _json.loads(tc.get("function", {}).get("arguments") or "{}")
-                except ValueError:
-                    args = {}
-                result = dispatch(fn, args)
-                used.append({"tool": fn, "args": args, "result": result})
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.get("id", ""),
-                        "name": fn,
-                        "content": str(result),
-                    }
-                )
-
-        # Out of rounds — force a final answer with the tool results in hand.
-        resp = client.post(
-            url,
-            headers=headers,
-            json={
-                "model": model or settings.brain_model,
-                "max_tokens": max_tokens,
-                "messages": messages,
-            },
-        )
-        resp.raise_for_status()
-        return (resp.json()["choices"][0]["message"].get("content") or "").strip(), used
+            return (resp.json()["choices"][0]["message"].get("content") or "").strip(), used
+    except Exception as e:  # noqa: BLE001 — trip the breaker so the caller's plain
+        _trip_groq_breaker(e)  # -answer fallback routes to Haiku, not back to Groq
+        raise
 
 
 def _complete_ollama(system: str, user: str, max_tokens: int) -> str:

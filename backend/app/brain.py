@@ -187,8 +187,9 @@ def _retrieval_query(question: str, history: str = "") -> str:
     return f"{history[-1200:]}\n\nCurrent ask: {question}"
 
 
-# Questions that want FRESH information from the internet — routed to the
-# compound model with built-in server-side web search (Groq only).
+# Questions that want FRESH information from the internet — routed to Claude's
+# native web_search tool (llm.web_search on live_search_model). Provider-neutral:
+# it never depends on Groq.
 _SEARCH_INTENT = re.compile(
     r"\b(search|look up|google|on the internet|online|web|latest|news|"
     r"today|tonight|yesterday|currently|right now|this (week|month|year)|"
@@ -360,9 +361,9 @@ def answer_question_stream(
             if buf.strip():
                 yield buf.strip()
             return
-        # Search flaked (compound is beta-grade: sometimes refuses or returns
-        # nothing) — fall THROUGH to the fast model so she still answers from
-        # her own knowledge instead of going silent.
+        # Search flaked (returned nothing / refused) — fall THROUGH to the fast
+        # model so she still answers from her own knowledge instead of going
+        # silent.
         question = f"{question} (You could not search the web just now — answer from your knowledge and say it may not be current.)"
         _provider, _model = settings.brain_provider, settings.brain_model_fast
     _max_tokens = 400
@@ -461,9 +462,9 @@ def answer_with_tools(
     """Grounded answer that may CALL tools to act. Returns answer + tools_used."""
     convo = f"Recent conversation:\n{history}\n\n" if history.strip() else ""
 
-    # Web search for questions that want fresh/current info — same compound model
-    # (Groq, built-in web search) the meeting path uses. Falls through to normal
-    # tool-using reasoning if search is unavailable, errors, or returns nothing.
+    # Web search for questions that want fresh/current info — Claude's native
+    # web_search tool (same provider-neutral path the meeting path uses). Falls
+    # through to normal tool-using reasoning if search errors or returns nothing.
     if not _is_stub() and wants_web_search(question):
         answer = _web_search_answer(question, convo)
         if answer:

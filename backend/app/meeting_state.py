@@ -112,6 +112,24 @@ _TYPE_HINTS: dict[str, re.Pattern] = {
         r"\bnew (customer|client)\b|\bimplementation (plan|timeline)\b",
         re.IGNORECASE,
     ),
+    "implementation_access": re.compile(
+        r"\b(grant|granting|get|getting|set up|setting up|need)\b[^.?!]*\baccess\b|"
+        r"\bcredential\w*|\btechnical (owner|lead|contact|poc)\b|"
+        r"\b(sandbox|staging) (environment|access|setup)\b|"
+        r"\benvironment (access|setup|set-up)\b",
+        re.IGNORECASE,
+    ),
+    "decision_quality": re.compile(
+        r"\bdecision (meeting|review|time)\b|\bmake (a|the|our) (final )?decision\b|"
+        r"\bdecide (on|between|which)\b|\bwhich (option|approach|vendor|path|direction)\b|"
+        r"\bweigh\w* (the )?(options|trade)\b",
+        re.IGNORECASE,
+    ),
+    "meeting_readiness": re.compile(
+        r"\bmeeting readiness\b|\breadiness\b|\bready for (the|our|next|this|tomorrow)\b|"
+        r"\bagenda for\b|\bpre[- ]?read\b|\bprep\w* for (the|our|next|this|tomorrow)\b",
+        re.IGNORECASE,
+    ),
 }
 
 
@@ -127,7 +145,13 @@ def _type_hint(template: ProcessTemplate) -> re.Pattern:
 _DONE = re.compile(
     r"\b(approved|approves|signed(\s+off)?|sign[- ]off|confirmed|cleared|done|"
     r"completed|complete|finished|finalized|in place|all set|good to go|"
-    r"green[- ]?light\w*|received|sorted)\b",
+    r"green[- ]?light\w*|received|sorted|granted|provisioned)\b",
+    re.IGNORECASE,
+)
+# "It's ready / set up / stood up" — completion phrasing for things that get
+# stood up rather than approved (an environment, access).
+_READY = re.compile(
+    r"\b(ready|set up|set-up|spun up|stood up|provisioned|available|live|in place)\b",
     re.IGNORECASE,
 )
 _PENDING = re.compile(
@@ -167,6 +191,11 @@ _OWNER_PATTERNS = [
     re.compile(r"\bassign(?:ed|ing)?\s+(?:it\s+|this\s+|that\s+)?to\s+([A-Z][a-z]+)\b"),
     re.compile(r"\b([A-Z][a-z]+)\s+owns\b"),
     re.compile(r"\b([A-Z][a-z]+)\s+is\s+(?:the\s+)?owner\b"),
+    # "Priya will be the technical owner" / "Sam is the decision owner / lead / POC"
+    re.compile(
+        r"\b([A-Z][a-z]+)\s+(?:will\s+be|is|is\s+going\s+to\s+be)\s+(?:the\s+)?"
+        r"(?:technical\s+|decision\s+)?(?:owner|lead|poc|contact)\b"
+    ),
 ]
 _SELF_OWNER = re.compile(
     r"\bI[’']?ll\s+(?:own|take|handle|lead|drive)\b|"
@@ -182,6 +211,7 @@ _PROCESS_QUESTION = re.compile(
 # Step topic vocabulary for the known template steps. Unknown step ids fall
 # back to matching their own words ("customer_handoff" -> customer\W+handoff).
 _STEP_TOPICS: dict[str, re.Pattern] = {
+    # customer_onboarding
     "security_approval": re.compile(r"\bsecurity\b", re.IGNORECASE),
     "dpa_confirmation": re.compile(
         r"\bdpa\b|\bdata processing (agreement|addendum)\b", re.IGNORECASE
@@ -189,6 +219,71 @@ _STEP_TOPICS: dict[str, re.Pattern] = {
     "implementation_owner": re.compile(r"\bimplement\w*\b", re.IGNORECASE),
     "customer_handoff": re.compile(r"\bhand[- ]?(off|over)\b", re.IGNORECASE),
     "go_live_date": re.compile(r"\bgo[- ]?live\b|\blaunch\b", re.IGNORECASE),
+    # implementation_access
+    "access_granted": re.compile(
+        r"\baccess\b|\bcredential\w*|\blogin\b|\bpermission\w*|\bapi key\b|\bprovision\w*",
+        re.IGNORECASE,
+    ),
+    "technical_owner": re.compile(
+        r"\btechnical (owner|lead|contact|poc)\b|\beng(ineer)?\w* (owner|lead)\b|"
+        r"\bdev (owner|lead)\b",
+        re.IGNORECASE,
+    ),
+    "environment_ready": re.compile(
+        r"\benvironment\b|\bsandbox\b|\bstaging\b|\btest env\w*|\binstance\b", re.IGNORECASE
+    ),
+    "integration_scope": re.compile(
+        r"\bintegrat\w*|\bwebhook\w*|\bendpoint\w*|\bapi\b", re.IGNORECASE
+    ),
+    "kickoff_scheduled": re.compile(
+        r"\bkick[- ]?off\b|\bstart date\b|\bstart the (build|work|implementation)\b",
+        re.IGNORECASE,
+    ),
+    # decision_quality
+    "options_considered": re.compile(
+        r"\boptions?\b|\balternativ\w*|\btrade[- ]?offs?\b|\bconsider\w*|\bevaluat\w*",
+        re.IGNORECASE,
+    ),
+    "decision_made": re.compile(
+        r"\bdecid\w*|\bdecision\b|\bgo with\b|\bchoose\b|\bchosen\b|\bpick\b", re.IGNORECASE
+    ),
+    "decision_owner": re.compile(
+        r"\b(decision )?owner\b|\bowns\b|\bwho (owns|decides|is deciding|signs off)\b|"
+        r"\bfinal say\b",
+        re.IGNORECASE,
+    ),
+    "success_criteria": re.compile(
+        r"\bsuccess criteria\b|\bcriteria\b|\bmetric\w*|\bmeasure\w*|"
+        r"\bdefinition of done\b|\bkpi\w*",
+        re.IGNORECASE,
+    ),
+    "next_step_defined": re.compile(
+        r"\bnext step\w*|\baction item\w*|\bfollow[- ]?up\w*|\bwho[’']?s doing\b|"
+        r"\bwhat[’']?s next\b",
+        re.IGNORECASE,
+    ),
+    # meeting_readiness
+    "agenda_set": re.compile(r"\bagenda\b", re.IGNORECASE),
+    "objective_clear": re.compile(
+        r"\bobjective\w*|\bgoal\w*|\bpurpose\b|\boutcome\w*|"
+        r"\bwhat.{0,20}(achieve|accomplish|trying to do)\b",
+        re.IGNORECASE,
+    ),
+    "right_attendees": re.compile(
+        r"\battend\w*|\bstakeholder\w*|\bright people\b|\binvite\w*|"
+        r"\bwho (should|needs to) (be|join|attend)\b",
+        re.IGNORECASE,
+    ),
+    "pre_read_shared": re.compile(
+        r"\bpre[- ]?read\w*|\bpre[- ]?work\b|\bmaterials?\b|"
+        r"\bshared? (the )?(doc|deck|agenda|brief)\b|\bsent (it |them )?(ahead|in advance|round)\b",
+        re.IGNORECASE,
+    ),
+    "decisions_needed_listed": re.compile(
+        r"\bdecisions? (we need|needed|to make|to be made|on the table|required)\b|"
+        r"\bneed to decide\b|\bwhat.{0,20}deciding\b",
+        re.IGNORECASE,
+    ),
 }
 _step_topic_cache: dict[str, re.Pattern] = {}
 
@@ -199,6 +294,9 @@ _ACRONYMS = {"dpa", "sla", "sso", "mfa", "sow", "poc"}
 # generic-but-safe closer.
 _INTERVENTION_TAILS = {
     "customer_onboarding": "Should we assign owners before provisioning?",
+    "implementation_access": "Should we sort access and an owner before the team starts?",
+    "decision_quality": "Should we lock the decision and its owner before we move on?",
+    "meeting_readiness": "Should we nail down the objective and the decisions to make first?",
 }
 _DEFAULT_INTERVENTION_TAIL = "Should we assign owners before we close this out?"
 
@@ -220,14 +318,42 @@ def _step_topic(step: str) -> re.Pattern:
     return pattern
 
 
+# "Readiness/discussion" steps are covered simply by being STATED in the meeting
+# (an objective named, an agenda set, options weighed) — not by an approval cue.
+# A question about them ("what's the agenda?") does not count as covering them.
+_DISCUSSION_STEPS = {
+    "objective_clear", "agenda_set", "right_attendees", "pre_read_shared",
+    "decisions_needed_listed", "options_considered", "success_criteria",
+}
+
+
 def _step_completed(step: str, text: str) -> bool:
     """Called only when the step's topic appears and nothing sounds pending."""
-    if step == "implementation_owner":
+    # Readiness/discussion steps: covered when actually stated, not just asked.
+    if step in _DISCUSSION_STEPS:
+        return not text.rstrip().endswith("?")
+    # Steps that are "done" when a person is put on them.
+    if step in ("implementation_owner", "technical_owner", "decision_owner"):
         return bool(_extract_owner(text) or _SELF_OWNER.search(text))
-    if step == "go_live_date":
+    # Steps that are "done" when a date/schedule is set.
+    if step in ("go_live_date", "kickoff_scheduled"):
         return bool(_DATE.search(text) or _SCHEDULED.search(text))
     if step == "customer_handoff":
         return bool(_DONE.search(text) or _SCHEDULED.search(text))
+    # A decision counts only when a real decision cue fires (not just "done").
+    if step == "decision_made":
+        return bool(_DECISION.search(text) or _DONE.search(text))
+    # A next step is defined once there's an owner, a date, or a completion cue.
+    if step == "next_step_defined":
+        return bool(
+            _extract_owner(text)
+            or _SELF_OWNER.search(text)
+            or _DATE.search(text)
+            or _DONE.search(text)
+        )
+    # An environment/access is "done" when it's stood up/ready, not just approved.
+    if step == "environment_ready":
+        return bool(_READY.search(text) or _DONE.search(text))
     return bool(_DONE.search(text))
 
 

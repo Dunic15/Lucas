@@ -58,7 +58,9 @@ class Settings(BaseSettings):
 
     # Recall.ai (live meeting entry: ears + camera)
     recall_api_key: str = ""
-    recall_api_base: str = "https://us-west-2.recall.ai"
+    # eu-central-1 is where the real Recall workspace + bots live (prod runs there);
+    # override per-workspace with RECALL_API_BASE.
+    recall_api_base: str = "https://eu-central-1.recall.ai"
     recall_webhook_secret: str = ""
     # Live transcription provider for Recall bots:
     #   recallai   = fastest built-in path, but low-latency mode is English-only
@@ -126,17 +128,25 @@ class Settings(BaseSettings):
     gpu_idle_stop_minutes: int = 10
 
     # Which avatar page Recall renders as the bot camera:
-    #   "avatar" = Anam (paid face+voice)   "talk" = open-source (TalkingHead + free TTS)
-    # Flip to "talk" (AVATAR_PAGE=talk) once /talk is validated in a browser — no
-    # code change, no Anam cost. Both pages use the same {type:"speak"} ws contract.
-    avatar_page: str = "avatar"
+    #   "talk" = open-source (TalkingHead + free TTS)  ← default   "avatar" = Anam (paid face+voice)
+    # "talk" is the default face: no Anam cost, key-free, and what prod runs. Set
+    # AVATAR_PAGE=avatar to use the paid Anam face. Both pages use the same
+    # {type:"speak"} ws contract, so switching is env-only, no code change.
+    avatar_page: str = "talk"
 
     # Behaviour
     wake_words: str = "laura"
-    # When False, the avatar answers any grounded question without needing to be
-    # called by name first (the SKIP gate + cooldown still keep her from spamming).
+    # Laura tracks the whole meeting silently (MeetingState) regardless of the wake
+    # word. The wake word is optional and only gates *speaking*: when
+    # require_wake_word is False (default) she answers any groundable question
+    # without needing her name — the in-stream SKIP gate + cooldown keep her from
+    # interjecting on things she can't ground. Set True to require her name first.
     require_wake_word: bool = False
     speak_cooldown_seconds: float = 8.0
+    # LEGACY — dead on the live streaming path. The old decision.passes_confidence()
+    # gate was superseded by the in-stream SKIP sentinel (brain.answer_question_stream
+    # decides grounding itself). Kept only for per-avatar config back-compat and the
+    # decision.py unit tests; changing it has no effect on live meetings.
     min_confidence: float = 0.55
     # Autopilot (acts between meetings; every flag defaults OFF — the zero-key
     # demo never sends anything). See backend/app/autopilot.py.
@@ -152,9 +162,10 @@ class Settings(BaseSettings):
     proactive_enabled: bool = True
     proactive_min_confidence: float = 0.7
     # General intelligence on the live path:
-    #  - questions that ask for fresh/web info route to Claude's native web_search
-    #    tool on this model (Sonnet: strong at search + dynamic result filtering,
-    #    and not subject to Groq's rate limits). Needs ANTHROPIC_API_KEY.
+    #  - questions that ask for fresh/web info route to Claude's NATIVE web_search
+    #    tool (not Groq) on live_search_model — Haiku by default for a low-latency
+    #    spoken answer, and never subject to Groq's rate limits. Needs
+    #    ANTHROPIC_API_KEY.
     #  - retrieved doc context is only injected when it actually matches the
     #    question (score >= rag_min_context_score), so general questions get
     #    the model's own knowledge instead of doc-quoting.
