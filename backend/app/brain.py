@@ -472,8 +472,17 @@ def answer_with_tools(
     )
     if used:
         print(f"[tools] {question[:60]!r} -> " + ", ".join(u["tool"] for u in used), flush=True)
+    answer = (text or "").strip()
+    if not answer:
+        # The tool loop can end without a final answer (model spent its rounds on
+        # tool calls, or returned empty). Never go silent on the interactive
+        # avatar — retry once as a plain answer with no tools.
+        try:
+            answer = (llm.complete(system, user, model=settings.brain_model_fast) or "").strip()
+        except Exception:
+            answer = ""
     return {
-        "answer": (text or "").strip(),
+        "answer": answer,
         "tools_used": used,
         "citations": [chunks[0].source] if chunks else [],
     }

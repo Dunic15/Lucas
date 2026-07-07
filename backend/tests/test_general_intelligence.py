@@ -103,6 +103,15 @@ def test_interactive_path_falls_back_when_search_flakes(monkeypatch):
     assert not r["tools_used"]
 
 
+def test_interactive_path_never_silent_on_empty_tool_answer(monkeypatch):
+    _force_groq(monkeypatch)
+    monkeypatch.setattr(brain, "retrieve", lambda *a, **k: [])
+    monkeypatch.setattr(brain.llm, "complete_with_tools", lambda *a, **k: ("", []))  # tool loop gave nothing
+    monkeypatch.setattr(brain.llm, "complete", lambda *a, **k: "Here's a plain answer.")
+    r = brain.answer_with_tools(_avatar(), "who's in the SFF portfolio?")
+    assert r["answer"] == "Here's a plain answer."  # retried plain, not silent
+
+
 def test_interactive_path_no_search_for_normal_question(monkeypatch):
     _force_groq(monkeypatch)
     called = {"search": False}
