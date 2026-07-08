@@ -51,10 +51,12 @@ from . import (
     tts,
 )
 from .brain import (
+    SEARCH_ANNOUNCE_LINES,
     answer_question,
     answer_question_stream,
     answer_with_tools,
     rolling_summary,
+    sounds_italian,
     wants_deep_thought,
     wants_web_search,
     post_meeting,
@@ -184,6 +186,11 @@ _SEARCH_FILLERS = (
     "Let me quickly check the web on that — one moment.",
     "Good one — give me a sec to search that.",
 )
+_SEARCH_FILLERS_IT = (
+    "Certo, lo cerco subito — un attimo.",
+    "Do un'occhiata veloce sul web — un momento.",
+    "Bella domanda — un secondo che cerco.",
+)
 
 # Spoken when a NON-search answer is taking a beat (tool round-trips, slow
 # provider) — an acknowledgment beats dead air on the interactive avatar.
@@ -191,6 +198,11 @@ _ACK_FILLERS = (
     "Give me a second to think about that.",
     "One sec — let me work that out.",
     "Hmm, give me a moment on that one.",
+)
+_ACK_FILLERS_IT = (
+    "Dammi un secondo per pensarci.",
+    "Un attimo — ci ragiono.",
+    "Mmm, dammi un momento su questa.",
 )
 
 # How long a /live/act answer may take before she speaks an acknowledgment
@@ -481,11 +493,13 @@ async def live_act(req: AskRequest) -> StreamingResponse:
             run_in_threadpool(answer_with_tools, avatar, req.question)
         )
         if wants_web_search(req.question):
-            yield f"data: {json.dumps({'content': random.choice(_SEARCH_FILLERS)})}\n\n"
+            filler = _line_for(req.question, list(_SEARCH_FILLERS), list(_SEARCH_FILLERS_IT))
+            yield f"data: {json.dumps({'content': filler})}\n\n"
         else:
             done, _ = await asyncio.wait({task}, timeout=_ACK_FILLER_AFTER_S)
             if not done:
-                yield f"data: {json.dumps({'content': random.choice(_ACK_FILLERS)})}\n\n"
+                filler = _line_for(req.question, list(_ACK_FILLERS), list(_ACK_FILLERS_IT))
+                yield f"data: {json.dumps({'content': filler})}\n\n"
         try:
             result = await task
         except Exception as e:  # noqa: BLE001 — a failed lookup must never end in silence
@@ -1138,7 +1152,11 @@ async def _refresh_rolling_summary(
         session.summarizing = False
 
 
+# Fixed spoken furniture, in TWO languages: an English "let me think" in the
+# middle of an Italian meeting breaks the illusion instantly. _line_for picks
+# the pool matching what was just heard; the ANSWER language is the model's job.
 _ACK_LINES = ["Mm-hm.", "Sure —", "On it.", "Let me think —", "Good one —"]
+_ACK_LINES_IT = ["Mm-hm.", "Certo —", "Subito.", "Vediamo —", "Arrivo —"]
 
 # Ack for questions routed to the slower 'complex' Claude path: a line that
 # JUSTIFIES the extra beat of latency instead of leaving it unexplained.
@@ -1147,11 +1165,22 @@ _THINK_LINES = [
     "Let me reason through that for a moment.",
     "Hmm — let me think about that properly.",
 ]
+_THINK_LINES_IT = [
+    "Bella domanda — dammi un secondo per pensarci.",
+    "Fammi ragionare un attimo.",
+    "Mmm — fammici pensare bene.",
+]
 
 # Listening cues spoken WHILE a human is mid-monologue (backchanneling, the
 # thing that makes a listener feel present). Two syllables max — anything
 # longer becomes an interruption instead of a nod.
 _BACKCHANNEL_LINES = ["Mm-hm.", "Mm.", "Right."]
+_BACKCHANNEL_LINES_IT = ["Mm-hm.", "Mm.", "Capito."]
+
+
+def _line_for(heard: str, en: list, it: list) -> str:
+    """A random line from the pool matching the language of what was heard."""
+    return random.choice(it if sounds_italian(heard) else en)
 
 
 def _should_backchannel(session: store.Session, text: str) -> bool:
@@ -1181,19 +1210,35 @@ _GOODBYE_LINES = [
     "Got it — see you next time!",
     "Alright, I'll drop off. Bye!",
 ]
+_GOODBYE_LINES_IT = [
+    "Certo — ciao a tutti!",
+    "Va bene, esco. Ciao!",
+    "D'accordo, vi lascio. A presto!",
+]
 
 _SPEECH_WORDS_PER_SECOND = 2.6  # ~ElevenLabs/edge-tts pace, for the barge-in window
 
 
 async def _prewarm_tts_cache() -> None:
     """Pre-synthesize the fixed lines (acks, think lines, backchannels,
-    goodbyes) into the TTS cache at boot. Sequential trickle, best-effort —
-    vendor trouble here just means the live path warms lazily as before.
-    Two consecutive misses = key/vendor trouble; stop burning boot-time calls.
+    goodbyes, search announces — both languages) into the TTS cache at boot.
+    Sequential trickle, best-effort — vendor trouble here just means the live
+    path warms lazily as before. Two consecutive misses = key/vendor trouble;
+    stop burning boot-time calls.
     """
     warmed = 0
     misses = 0
-    for line in (*_ACK_LINES, *_THINK_LINES, *_BACKCHANNEL_LINES, *_GOODBYE_LINES):
+    for line in (
+        *_ACK_LINES,
+        *_ACK_LINES_IT,
+        *_THINK_LINES,
+        *_THINK_LINES_IT,
+        *_BACKCHANNEL_LINES,
+        *_BACKCHANNEL_LINES_IT,
+        *_GOODBYE_LINES,
+        *_GOODBYE_LINES_IT,
+        *SEARCH_ANNOUNCE_LINES,
+    ):
         try:
             if await tts.synthesize_cached(line) is not None:
                 warmed += 1
@@ -1638,9 +1683,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
         ):
             session.last_ack_at = time.time()
             line = (
-                random.choice(_THINK_LINES)
+                _line_for(question or text, _THINK_LINES, _THINK_LINES_IT)
                 if wants_deep_thought(question or text)
-                else random.choice(_ACK_LINES)
+                else _line_for(question or text, _ACK_LINES, _ACK_LINES_IT)
             )
             # cached_payload: attach the voice only if it's already synthesized
             # (prewarmed at boot) — an ack must never wait on a vendor call.
@@ -1653,7 +1698,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # refreshes the cooldown, so a real question right after still answers.
         if not called and not acked and _should_backchannel(session, text):
             session.last_backchannel_at = time.time()
-            bc = random.choice(_BACKCHANNEL_LINES)
+            bc = _line_for(text, _BACKCHANNEL_LINES, _BACKCHANNEL_LINES_IT)
             await _make_avatar_speak(
                 session,
                 bc,
@@ -1764,7 +1809,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # blocked by a TTS hiccup.
     if called and settings.leave_on_command and detect_leave_command(question):
         try:
-            goodbye = random.choice(_GOODBYE_LINES)
+            goodbye = _line_for(question or text, _GOODBYE_LINES, _GOODBYE_LINES_IT)
             await _make_avatar_speak(
                 session, goodbye, force=True, audio=tts.cached_payload(goodbye)
             )
@@ -1812,9 +1857,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
     ):
         session.last_ack_at = time.time()
         line = (
-            random.choice(_THINK_LINES)
+            _line_for(question, _THINK_LINES, _THINK_LINES_IT)
             if wants_deep_thought(question)
-            else random.choice(_ACK_LINES)
+            else _line_for(question, _ACK_LINES, _ACK_LINES_IT)
         )
         await _make_avatar_speak(
             session,

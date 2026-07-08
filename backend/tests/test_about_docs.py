@@ -22,8 +22,13 @@ def test_about_intent_detection():
         "who built you?",
         "are you an AI?",
         "what's your architecture like",
+        "what model are you built on?",
+        "are you built with Groq?",
+        "what LLM are you using?",
         "Laura come funzioni?",
         "cosa sai fare?",
+        "che modello usi?",
+        "su che tecnologia sei fatta?",
         "chi sei?",
     ]
     no = [
