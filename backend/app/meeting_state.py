@@ -621,7 +621,7 @@ def state_summary(state: MeetingState) -> str:
         if p["risks"]:
             frags.append("flagged: " + p["risks"][-1])
         if frags:
-            person_bits.append(f"{name} — " + "; ".join(frags))
+            person_bits.append(f"{name} ({p['lines']} turns) — " + "; ".join(frags))
     if person_bits:
         lines.append("Per person:\n  " + "\n  ".join(person_bits[:6]))
     return "\n".join(lines)

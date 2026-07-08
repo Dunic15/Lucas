@@ -210,6 +210,11 @@ class Settings(BaseSettings):
     # yields silently (humans get first right of reply to room-open
     # questions). Direct asks by name are never deferred. 0 disables.
     deference_seconds: float = 1.8
+    # Engaged follow-up: a question arriving within this window after SHE
+    # spoke is almost always a follow-up to her answer — it bypasses the
+    # cooldown and the deference wait (dialogue context is a first-class
+    # addressee signal). 0 disables.
+    followup_window_seconds: float = 15.0
     # Footing: greet a participant who joins an already-running meeting, and
     # nudge one silent participant once as the meeting wraps up.
     greet_joiners: bool = True
