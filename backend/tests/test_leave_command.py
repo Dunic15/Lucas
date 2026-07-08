@@ -178,7 +178,7 @@ def _stub_vendors(monkeypatch, tmp_path, calls: dict) -> None:
     )
     monkeypatch.setattr(
         main, "post_meeting",
-        lambda avatar, transcript: {"summary": "s", "actions": [], "checklist": []},
+        lambda avatar, transcript, **kw: {"summary": "s", "actions": [], "checklist": []},
     )
     monkeypatch.setattr(main.ledger, "record_meeting", lambda *a, **k: None)
 

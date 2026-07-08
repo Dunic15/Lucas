@@ -32,6 +32,7 @@ from fastapi.responses import (
     FileResponse,
     JSONResponse,
     RedirectResponse,
+    Response,
     StreamingResponse,
 )
 from pydantic import BaseModel
@@ -41,6 +42,7 @@ from . import (
     store,
     recall_client,
     anam_client,
+    cedric,
     granola_client,
     actions,
     gmail_watcher,
@@ -48,6 +50,8 @@ from . import (
     gpu_runtime,
     ledger,
     meeting_state,
+    org_api,
+    tools,
     tts,
 )
 from .brain import (
@@ -57,6 +61,7 @@ from .brain import (
     answer_with_tools,
     rolling_summary,
     sounds_italian,
+    wants_action_capture,
     wants_deep_thought,
     wants_web_search,
     post_meeting,
@@ -114,6 +119,7 @@ async def _lifespan(app: FastAPI):
 
 app = FastAPI(title="Callable AI Process Avatar", lifespan=_lifespan)
 app.include_router(tts.router)  # POST /tts (open-source avatar voice)
+app.include_router(org_api.router)  # /org/* — org-memory seam for surfaces (#48)
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).
@@ -377,7 +383,7 @@ async def _gmail_watch_loop() -> None:
                     store.mark_scheduled(url)
                     continue
                 try:
-                    res = await _start_avatar_session(url, "laura")
+                    res = await _start_avatar_session(url, settings.default_avatar_id)
                     store.mark_scheduled(url)
                     _gmail_state["joined"].append(
                         {"meeting_url": url, "bot_id": res["bot_id"], "at": time.time()}
@@ -601,13 +607,24 @@ def photoreal_reference() -> FileResponse:
     )
 
 
-@app.get("/laura.glb")
-def talk_avatar_model() -> FileResponse:
-    """The 3D avatar model for /talk, served same-origin on purpose: Ready Player
-    Me's CDN shutdown (Jan 2026) killed our previous third-party model URL, so the
-    HD model (Avaturn sample from the TalkingHead repo) is vendored into the repo."""
+@app.api_route("/{avatar_id}.glb", methods=["GET", "HEAD"])
+def talk_avatar_model(avatar_id: str) -> Response:
+    """Per-avatar 3D model for /talk (laura.glb, cedric.glb, …), served
+    same-origin on purpose: Ready Player Me's CDN shutdown (Jan 2026) killed our
+    previous third-party model URL, so the models (TalkingHead-repo samples) are
+    vendored into frontend/. /talk HEAD-probes /{avatar_id}.glb and falls back to
+    /laura.glb, so a missing model 404s here without ever breaking the page.
+    HEAD must be explicit — FastAPI's @app.get alone 405s it, which would have
+    silently defeated the probe (curl -I caught this; FileResponse handles HEAD
+    natively). Whitelisted to simple ids resolving to real files — never a
+    path traversal."""
+    if not re.fullmatch(r"[a-z0-9_-]{1,64}", avatar_id):
+        return JSONResponse({"error": "unknown model"}, status_code=404)
+    model_path = FRONTEND_DIR / f"{avatar_id}.glb"
+    if not model_path.is_file():
+        return JSONResponse({"error": "unknown model"}, status_code=404)
     return FileResponse(
-        FRONTEND_DIR / "laura.glb",
+        model_path,
         media_type="model/gltf-binary",
         headers={"Cache-Control": "public, max-age=86400"},
     )
@@ -808,12 +825,21 @@ def granola_transcript(note_id: str) -> JSONResponse:
 # ──────────────────────── session lifecycle ────────────────────────
 class StartRequest(BaseModel):
     meeting_url: str
-    avatar_id: str = "laura"
+    avatar_id: str = ""  # empty -> settings.default_avatar_id
     join_at: Optional[str] = None  # ISO 8601; set (>=10 min out) to schedule the bot
+    # CEDRIC: orchestrator integration fields — all optional; models, the auth
+    # gate, and validation live in the `cedric` package (docs/04-api-contract.md).
+    context: Optional[cedric.MeetingContext] = None
+    callback_url: Optional[str] = None   # where session.status/.ended events go
+    context_url: Optional[str] = None    # re-fetched at join time for a fresh brief
+    external_ref: Optional[dict] = None  # opaque, echoed verbatim in callbacks
 
 
 async def _start_avatar_session(
-    meeting_url: str, avatar_id: str = "laura", join_at: Optional[str] = None
+    meeting_url: str,
+    avatar_id: str = "",
+    join_at: Optional[str] = None,
+    integration: Optional[dict] = None,
 ) -> dict:
     """Send a Recall bot (rendering the avatar page as its camera) into a meeting.
 
@@ -821,18 +847,21 @@ async def _start_avatar_session(
     and the Gmail watcher. Raises on failure. The avatar page mints its own fresh
     Anam token at render time and keys its websocket on the conversation_id.
     """
-    avatar = avatars.load(avatar_id)  # raises if unknown
+    avatar = avatars.load(avatar_id or settings.default_avatar_id)  # raises if unknown
     conversation_id = uuid.uuid4().hex
     avatar_url = (
         f"{settings.public_base_url.rstrip('/')}/{settings.avatar_page.strip('/')}"
         f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
+        f"&body={avatar.talk_body}"
     )
     bot = await run_in_threadpool(
-        recall_client.create_bot, meeting_url, avatar_url, join_at
+        recall_client.create_bot, meeting_url, avatar_url, join_at, avatar.name
     )
     session = store.create(
         bot_id=bot["id"], meeting_url=meeting_url, avatar_id=avatar.id
     )
+    if integration:
+        session.integration = integration
     session.anam_conversation_id = conversation_id
     store.register_conversation(conversation_id, bot["id"])
     # Cross-meeting memory: what previous sessions of this meeting link left
@@ -858,16 +887,76 @@ async def _start_avatar_session(
 
 
 @app.post("/sessions/start")
-async def start_session(req: StartRequest) -> JSONResponse:
+async def start_session(req: StartRequest, request: Request) -> JSONResponse:
+    if err := cedric.auth_error(request):  # CEDRIC
+        return err
     try:
         recall_client.assert_ready()
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+
+    brief = req.context.brief_markdown if req.context else ""  # CEDRIC
+    if err := cedric.brief_too_large(brief):  # CEDRIC
+        return err
+    # One live/scheduled booking per meeting URL: rebooking must cancel first
+    # (otherwise two bots — and two per-minute meters — end up in one call).
+    for existing in store.all_sessions():
+        if existing.meeting_url == req.meeting_url:
+            return JSONResponse(
+                {
+                    "error": "a session already exists for this meeting_url",
+                    "bot_id": existing.bot_id,
+                },
+                status_code=409,
+            )
+
+    integration = cedric.build_integration(req, brief)  # CEDRIC
     try:
-        result = await _start_avatar_session(req.meeting_url, req.avatar_id, req.join_at)
+        result = await _start_avatar_session(
+            req.meeting_url, req.avatar_id, req.join_at, integration
+        )
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse(result)
+
+
+def _norm_action_text(text: str) -> str:
+    """Normalization for action-item dedupe (mirrors ledger._norm's intent)."""
+    return re.sub(r"\W+", " ", (text or "").lower()).strip()
+
+
+def _merge_action_items(queued: list, extracted: list) -> list:
+    """Artifact actions[] = live-captured queue_action items first, then the
+    summarizer's extraction, deduped on normalized item text. A live capture
+    wins a collision — it is the wording the room actually asked for — and
+    ledger.record_meeting dedupes again on insert, so double-merging is safe."""
+    merged: list = []
+    seen: set[str] = set()
+    for q in queued or []:
+        text = (q.get("action") or "").strip()
+        key = _norm_action_text(text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        owner = (q.get("owner") or "").strip()
+        merged.append(
+            {
+                "item": text,
+                "owner": owner or "UNASSIGNED",
+                "deadline": (q.get("due") or "").strip(),
+                "gap_type": "none" if owner else "owner",
+                "requested_live": True,  # additive marker: asked out loud in-meeting
+            }
+        )
+    for a in extracted or []:
+        text = a.get("item", "") if isinstance(a, dict) else str(a)
+        key = _norm_action_text(text)
+        if key in seen:
+            continue
+        if key:
+            seen.add(key)
+        merged.append(a)
+    return merged
 
 
 async def _finalize_session(bot_id: str) -> dict | None:
@@ -899,9 +988,28 @@ async def _finalize_session(bot_id: str) -> dict | None:
         "risks": [],
         "follow_up_email": {},
     }
+    integration = dict(session.integration) if session.integration else None  # CEDRIC
     if transcript_text.strip():
         avatar = avatars.load(session.avatar_id)
-        artifact = await run_in_threadpool(post_meeting, avatar, transcript_text)
+        artifact = await run_in_threadpool(
+            lambda: post_meeting(
+                avatar,
+                transcript_text,
+                context=(integration or {}).get("brief", ""),  # CEDRIC: brief-grounded summary
+            )
+        )
+
+    # Live-captured action requests (tools.queue_action): fold them into the
+    # artifact's actions[] ahead of the summarizer's extraction, deduped on
+    # normalized item text. Runs BEFORE save_artifact and ledger.record_meeting
+    # so every consumer — stored artifact, wire artifact, ledger, autopilot —
+    # sees the same merged list. Plain non-orchestrated sessions benefit too.
+    queued_actions = list(getattr(session, "queued_actions", None) or [])
+    if queued_actions:
+        artifact["actions"] = _merge_action_items(
+            queued_actions, artifact.get("actions") or []
+        )
+        artifact["checklist"] = artifact["actions"]  # legacy alias, same list
 
     # The transcript is the raw material of the artifact — persist it so the
     # product output is complete (transcript + summary + checklist + email).
@@ -918,7 +1026,9 @@ async def _finalize_session(bot_id: str) -> dict | None:
         )
     except Exception:
         pass
-    if settings.autopilot_deliver:
+    if cedric.deliver_ended(integration, bot_id, artifact):  # CEDRIC
+        pass  # orchestrated session: the orchestrator owns delivery, skip autopilot
+    elif settings.autopilot_deliver:
         # Autopilot: send the drafted follow-up + Slack summary now, without
         # holding up the finalize response (meter is already stopped above).
         # Best-effort like the ledger — never blocks the cleanup below.
@@ -935,11 +1045,47 @@ async def _finalize_session(bot_id: str) -> dict | None:
 
 
 @app.post("/sessions/{bot_id}/end")
-async def end_session(bot_id: str) -> JSONResponse:
+async def end_session(bot_id: str, request: Request) -> JSONResponse:
+    if err := cedric.auth_error(request):  # CEDRIC
+        return err
     artifact = await _finalize_session(bot_id)
     if artifact is None:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    return JSONResponse(artifact)
+    return JSONResponse(cedric.wire_artifact(artifact))  # CEDRIC: PII stays home
+
+
+@app.post("/sessions/{bot_id}/cancel")
+async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
+    """Cancel a scheduled bot / abort a live one WITHOUT building an artifact.
+
+    Used by the orchestrator when a calendar event moves or is cancelled (it
+    rebooks afterwards). `end` keeps its meaning: finalize + artifact.
+    """
+    if err := cedric.auth_error(request):  # CEDRIC
+        return err
+    session = store.get(bot_id)
+    if session is None:
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
+    # Stop the meter: works for live bots; scheduled bots may reject leave_call,
+    # so fall back to deleting the scheduled bot. Best-effort on both — the
+    # session is removed either way and never produces an artifact.
+    try:
+        await run_in_threadpool(recall_client.leave_call, bot_id)
+    except Exception:
+        try:
+            await run_in_threadpool(recall_client.delete_bot, bot_id)
+        except Exception as e:  # noqa: BLE001 — surface but don't fail the cancel
+            print(f"[sessions] cancel: recall cleanup failed: {e}", flush=True)
+    if session.anam_conversation_id:
+        try:
+            await run_in_threadpool(
+                anam_client.end_conversation, session.anam_conversation_id
+            )
+        except Exception:
+            pass
+    store.remove(bot_id)
+    gpu_runtime.on_session_ended(len(store.all_sessions()))
+    return JSONResponse({"cancelled": True, "bot_id": bot_id})
 
 
 class DeliverRequest(BaseModel):
@@ -948,14 +1094,16 @@ class DeliverRequest(BaseModel):
 
 
 @app.post("/sessions/{bot_id}/deliver")
-async def deliver_artifact(bot_id: str, req: DeliverRequest) -> JSONResponse:
+async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -> JSONResponse:
     """Actually send the finished meeting's follow-up email + post it to Slack."""
+    if err := cedric.auth_error(request):  # CEDRIC
+        return err
     artifact = store.get_artifact(bot_id)
     if artifact is None:
         return JSONResponse({"error": "no artifact for this bot_id"}, status_code=404)
 
     avatar = avatars.load(store.get(bot_id).avatar_id) if store.get(bot_id) else None
-    name = avatar.name if avatar else "Laura"
+    name = avatar.name if avatar else avatars.load(settings.default_avatar_id).name
     email = artifact.get("follow_up_email", {}) or {}
 
     email_res = await run_in_threadpool(
@@ -970,9 +1118,11 @@ async def deliver_artifact(bot_id: str, req: DeliverRequest) -> JSONResponse:
 
 
 @app.get("/ledger")
-def ledger_view(meeting_url: str) -> JSONResponse:
+def ledger_view(meeting_url: str, request: Request) -> JSONResponse:
     """Cross-meeting memory for a meeting link: every ledger item plus the
     carryover brief the avatar gets injected at the next session."""
+    if err := cedric.auth_error(request):  # CEDRIC
+        return err
     key = ledger.meeting_key(meeting_url)
     return JSONResponse(
         {
@@ -984,15 +1134,17 @@ def ledger_view(meeting_url: str) -> JSONResponse:
 
 
 @app.get("/sessions/{bot_id}/artifact")
-def session_artifact(bot_id: str) -> JSONResponse:
+def session_artifact(bot_id: str, request: Request) -> JSONResponse:
     """Retrieve a finished session's artifact (summary + checklist + email)."""
+    if err := cedric.auth_error(request):  # CEDRIC
+        return err
     live = store.get(bot_id)
     if live is not None:
         return JSONResponse({"status": "in_progress", "bot_id": bot_id})
     artifact = store.get_artifact(bot_id)
     if artifact is None:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    return JSONResponse({"status": "done", **artifact})
+    return JSONResponse({"status": "done", **cedric.wire_artifact(artifact)})  # CEDRIC: PII stays home
 
 
 @app.get("/meetings")
@@ -1197,6 +1349,19 @@ _THINK_LINES_IT = [
     "Un secondo che ci ragiono.",
 ]
 
+# Confirmation for a captured action request (queue_action seam): promises
+# follow-up after the call, never execution. Fixed lines so they're TTS-
+# prewarmed — the confirmation must land as fast as an ack.
+_QUEUE_LINES = [
+    "Got it — I'll queue that for approval in Slack right after the call.",
+    "Noted — I'll line that up for approval in Slack once we wrap.",
+    "On it — it goes to Slack for approval right after this meeting.",
+]
+_QUEUE_LINES_IT = [
+    "Ricevuto — lo metto in coda su Slack per l'approvazione appena finiamo.",
+    "Segnato — parte su Slack per l'approvazione subito dopo la call.",
+]
+
 # Listening cues spoken WHILE a human is mid-monologue (backchanneling, the
 # thing that makes a listener feel present). Two syllables max — anything
 # longer becomes an interruption instead of a nod.
@@ -1285,6 +1450,8 @@ async def _prewarm_tts_cache() -> None:
         *_ACK_LINES_IT,
         *_THINK_LINES,
         *_THINK_LINES_IT,
+        *_QUEUE_LINES,
+        *_QUEUE_LINES_IT,
         *_BACKCHANNEL_LINES,
         *_BACKCHANNEL_LINES_IT,
         *_GOODBYE_LINES,
@@ -1468,9 +1635,11 @@ async def _make_avatar_stop(session: store.Session) -> None:
 
 def _is_own_speech(avatar_name: str, speaker: str) -> bool:
     """True when a transcript line is the avatar's OWN voice — the meeting bot
-    hears Laura too. Matches the avatar's configured name AND the Recall bot's
-    display name (hardcoded "Laura" in recall_client.create_bot)."""
-    return speaker.strip().lower() in (avatar_name.strip().lower(), "laura")
+    hears the avatar too. The Recall bot's display name is the avatar's name
+    (recall_client.create_bot(bot_name=avatar.name)), so one comparison covers
+    both; no hardcoded persona name, so a human participant who shares a name
+    with a DIFFERENT avatar is never silenced."""
+    return speaker.strip().lower() == avatar_name.strip().lower()
 
 
 def _is_echo(session: store.Session, text: str) -> bool:
@@ -1675,7 +1844,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
         eid = _calendar_event_id(ev)
         url = _calendar_event_meeting_url(ev)
         start = _calendar_event_start(ev)
-        avatar_id = ev.get("avatar_id") or "laura"
+        avatar_id = ev.get("avatar_id") or settings.default_avatar_id
         if not url or not start or (eid and store.is_scheduled(eid)):
             continue
         if not _calendar_event_targets_avatar(ev):
@@ -1694,9 +1863,10 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             avatar_url = (
                 f"{settings.public_base_url.rstrip('/')}/{settings.avatar_page.strip('/')}"
                 f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
+                f"&body={avatar.talk_body}"
             )
             bot = await run_in_threadpool(
-                recall_client.create_bot, url, avatar_url, start
+                recall_client.create_bot, url, avatar_url, start, avatar.name
             )
             s = store.create(bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id)
             s.anam_conversation_id = conversation_id
@@ -1865,9 +2035,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
         bid = payload.get("data", {}).get("bot", {}).get("id", "") or payload.get(
             "data", {}
         ).get("bot_id", "")
-        if term and bid and store.get(bid) is not None:
+        session = store.get(bid) if bid else None
+        if term and session is not None:
+            cedric.notify_failed(session, bid, status_code)  # CEDRIC
             await _finalize_session(bid)
             return JSONResponse({"ok": True, "finalized": bid})
+        # CEDRIC: relay non-terminal join progress to the orchestrator + a
+        # one-time meeting-brief refresh once the bot is actually in the call.
+        await cedric.handle_webhook_status(session, bid, status_code)
         return JSONResponse({"ok": True, "ignored": event or status_code})
 
     data = payload.get("data", {}).get("data", {})
@@ -1924,6 +2099,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             ledger.carryover_brief, session.meeting_url
         )
     memory = session.memory_brief or ""
+    memory = cedric.inject_brief(session, memory)  # CEDRIC: brief ahead of carryover
 
     # ── proactive intervention (fires once, as the meeting wraps up) ──
     if (
@@ -2060,6 +2236,35 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # already bumped; this covers the no-audio overlap case (she was silent but
     # a previous answer was still generating).
     turn_gen = store.bump_speech_generation(session)
+
+    # ── action requests: capture, never execute (queue_action platform seam) ──
+    # "Cedric, can you send the recap?" is a request to DO something. Capture is
+    # DETERMINISTIC — no LLM call, no tool loop, nothing slower than an ack: the
+    # utterance itself becomes the queued action (the finalize summarizer and
+    # the orchestrator's approval card refine it), the spoken confirmation is a
+    # fixed line (cached TTS ⇒ instant), and action.requested fires OFF the
+    # live path for orchestrated sessions. wants_action_capture is deliberately
+    # narrow — content questions ("can you check if…") stay on the streamed
+    # path, and search intents keep their announced streamed answer. Placed
+    # BEFORE the generic ack: this confirmation IS the reply for the turn.
+    # Only when addressed by name: an unaddressed "someone should send X" is
+    # the summarizer's job at finalize.
+    if called and wants_action_capture(question) and not wants_web_search(question):
+        # detect_wake already stripped the wake word: `question` is the ask
+        # itself ("please schedule a follow-up with Marco on Friday").
+        tools.capture_action(session, question.strip())
+        if session.speech_generation != turn_gen:  # barge-in since the final landed
+            return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
+        line = _line_for(question, _QUEUE_LINES, _QUEUE_LINES_IT)
+        session.last_ack_at = time.time()  # the confirmation doubles as the ack
+        spoke = await _make_avatar_speak(
+            session,
+            line,
+            force=True,
+            generation=turn_gen,
+            audio=tts.cached_payload(line),
+        )
+        return JSONResponse({"ok": True, "spoke": bool(spoke), "action_capture": True})
 
     # ── instant acknowledgment ──
     # She was addressed BY NAME, so she will answer — say so immediately while

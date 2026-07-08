@@ -362,6 +362,44 @@ def wants_deep_thought(question: str) -> bool:
     return bool(settings.anthropic_api_key and _COMPLEX_INTENT.search(question or ""))
 
 
+# Direct asks for the avatar to DO something asynchronous ("can you send the
+# recap…", "please book a follow-up") — main.py captures these DETERMINISTICALLY
+# on the live path (no LLM, no tool loop) and promises follow-up after the call.
+# Deliberately NARROW: only verbs that unambiguously request an act performed
+# AFTER the meeting. Content-query verbs (check/verify/look/see/find out,
+# controllare/verificare/guardare/cercare) are EXCLUDED on purpose — "can you
+# check if X" is a question the streamed path answers live, and hijacking it
+# would trade away streaming latency (the forbidden trade) AND answer wrongly.
+# "remind" matches only the "remind me/us to …" form ("remind me what we
+# decided" is a memory question). A missed match still reaches the artifact via
+# the post-meeting summarizer; a false positive wrongly promises a follow-up.
+_ACTION_VERBS = (
+    r"(?:send|schedule|book|set\s+up|draft|prepare|email|invite|"
+    r"follow\s+up|organi[sz]e|arrange|"
+    r"remind\s+(?:me|us|him|her|them)\s+to|"
+    r"(?:create|open)\s+(?:a\s+|an\s+|the\s+)?(?:ticket|task|issue|doc(?:ument)?|event|meeting|invite)|"
+    r"add\s+(?:\w+\s+)?to\s+(?:the\s+|my\s+|our\s+)?calendar)"
+)
+_ACTION_INTENT = re.compile(
+    rf"\b(?:can|could|will|would)\s+you\s+(?:please\s+)?{_ACTION_VERBS}\b"
+    rf"|\bplease\s+{_ACTION_VERBS}\b"
+    # Italian: "puoi/potresti mandare…", "mi mandi/prenoti…", "ricordami di…"
+    r"|\b(?:puoi|potresti|riesci\s+a)\s+(?:mandar|inviar|prenotar|fissar|"
+    r"organizzar|preparar)\w*\b"
+    r"|\b(?:puoi|potresti)\s+ricordar(?:mi|ci)\s+di\b"
+    r"|\bmi\s+(?:mandi|invii|prenoti|fissi|prepari)\b"
+    r"|\bricorda(?:mi|ci)\s+di\b",
+    re.IGNORECASE,
+)
+
+
+def wants_action_capture(question: str) -> bool:
+    """True when the utterance directly asks the avatar to DO something after
+    the call — main.py's live loop captures it (queue_action seam) and speaks
+    a fixed confirmation instead of routing the turn to an answer path."""
+    return bool(_ACTION_INTENT.search(question or ""))
+
+
 def _live_route(question: str) -> tuple[str, str]:
     """(provider, model) for one live answer:
       - web search (fresh info)       -> Claude + native web_search tool (the
@@ -670,7 +708,7 @@ def _split_sentences(buf: str) -> tuple[str, list[str]]:
 # answer when tools aren't available (stub/offline), so nothing breaks.
 ANSWER_TOOLS_SYSTEM = """{persona}
 
-You are Laura in a live spoken conversation — a capable general assistant FIRST \
+You are in a live spoken conversation — a capable general assistant FIRST \
 (think ChatGPT or Claude), and a company/process expert only when the question \
 actually touches that. Default to 1-2 short spoken sentences (3 max); sound like \
 a real person, never restate the question, and never open with filler like \
@@ -689,14 +727,21 @@ You can also USE TOOLS when they make an answer more concrete:
 - calculator — for any arithmetic (percentages, totals, per-seat cost, annualizing).
 - date_math — today's date, or days until a deadline/renewal.
 - lookup_record — check a customer account (plan, seats, MRR, renewal, owner).
+- queue_action — when someone asks YOU to do something (send, schedule, book, \
+create, check, remind): queue it. Actions run AFTER the call behind an approval \
+— confirm it's queued, and NEVER claim it was already done.
 Call a tool whenever it helps — you may chain them — then state the concrete \
 result plainly in a sentence or two."""
 
 
 def answer_with_tools(
-    avatar: Avatar, question: str, *, history: str = "", k: int = 6
+    avatar: Avatar, question: str, *, history: str = "", k: int = 6, session=None
 ) -> dict:
-    """Grounded answer that may CALL tools to act. Returns answer + tools_used."""
+    """Grounded answer that may CALL tools to act. Returns answer + tools_used.
+
+    `session` (optional) is the live store.Session: it is threaded into the
+    tool dispatch so session-aware tools (queue_action) can capture onto it —
+    session=None keeps the exact pre-existing behavior."""
     convo = f"Recent conversation:\n{history}\n\n" if history.strip() else ""
 
     # Web search for questions that want fresh/current info — Claude's native
@@ -705,7 +750,8 @@ def answer_with_tools(
     if not _is_stub() and wants_web_search(question):
         answer = _web_search_answer(question, convo)
         if answer:
-            print(f"[search] {question[:60]!r} -> answered from web", flush=True)
+            # Route name only — the question is live-meeting content (PII).
+            print("[search] tool-path question answered from web", flush=True)
             return {
                 "answer": answer,
                 "tools_used": [{"tool": "web_search", "args": {}, "result": ""}],
@@ -737,13 +783,18 @@ def answer_with_tools(
     used: list = []
     try:
         text, used = llm.complete_with_tools(
-            system, user, tools.TOOL_SPECS, tools.dispatch, model=settings.brain_model_fast
+            system,
+            user,
+            tools.TOOL_SPECS,
+            tools.dispatch_for(session),
+            model=settings.brain_model_fast,
         )
     except Exception as e:  # noqa: BLE001 — Groq tool endpoint 429s/errors have no fallback
         print(f"[tools] complete_with_tools failed ({e}); plain answer", flush=True)
         text = ""
     if used:
-        print(f"[tools] {question[:60]!r} -> " + ", ".join(u["tool"] for u in used), flush=True)
+        # Tool names only — the question is live-meeting content (PII).
+        print("[tools] used: " + ", ".join(u["tool"] for u in used), flush=True)
     answer = (text or "").strip()
     if not answer:
         # The tool path can raise (Groq's tool endpoint rate-limits with no
@@ -884,14 +935,18 @@ def _stub_proactive(chunks: list[Retrieved], transcript_text: str) -> dict:
     return {"should_speak": False, "line": "", "confidence": 0.0}
 
 
-def post_meeting(avatar: Avatar, transcript_text: str, *, k: int = 6) -> dict:
+def post_meeting(
+    avatar: Avatar, transcript_text: str, *, k: int = 6, context: str = ""
+) -> dict:
     """Full post-meeting artifact: summary, decisions, actions, missing process
     steps, readiness score, risks, and a draft follow-up email.
 
     The tracked MeetingState (rebuilt from the transcript) supplies the
     deterministic parts — missing_steps and readiness_score come from the
     process template, not model judgement — and backfills decisions/risks when
-    the model returns none.
+    the model returns none. `context` is an optional pre-meeting brief (the
+    orchestrator's agenda/participants/open items) so the summary understands
+    what the meeting was FOR.
     """
     state = meeting_state.build_from_text(avatar, transcript_text)
 
@@ -902,9 +957,15 @@ def post_meeting(avatar: Avatar, transcript_text: str, *, k: int = 6) -> dict:
         chunks = retrieve(
             avatar, transcript_text[-3000:] or "process steps owners approvals", k=k
         )
+        brief_block = (
+            f"Pre-meeting brief (agenda, participants, open items):\n\n{context}\n\n"
+            if context.strip()
+            else ""
+        )
         raw = llm.complete(
             POSTMEETING_SYSTEM,
             (
+                f"{brief_block}"
                 f"Relevant company process context:\n\n{_format_context(chunks)}\n\n"
                 f"Structured meeting state (tracked during the meeting):\n"
                 f"{meeting_state.state_summary(state)}\n\n"

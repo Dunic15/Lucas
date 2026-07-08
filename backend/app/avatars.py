@@ -33,6 +33,11 @@ class Avatar:
     # (e.g. laura references the "sff" pack instead of copying its files —
     # real-world packs live in exactly one place).
     knowledge_packs: list[str] = None  # type: ignore[assignment]
+    # Pose/gesture set for the /talk renderer ("F" | "M") — appended to the bot
+    # page URL as ?body=; TalkingHead picks its masculine vs feminine idle set.
+    # Defaulted so existing avatars (and tests building Avatar directly) are
+    # untouched; the loader normalizes whatever avatar.yaml says.
+    talk_body: str = "F"
 
     @property
     def knowledge_dir(self) -> Path:
@@ -109,6 +114,11 @@ def load(avatar_id: str) -> Avatar:
         min_confidence=float(_coalesce(raw.get("min_confidence"), settings.min_confidence)),
         speak_cooldown_seconds=float(
             _coalesce(raw.get("speak_cooldown_seconds"), settings.speak_cooldown_seconds)
+        ),
+        talk_body=(
+            "M"
+            if str(_coalesce(raw.get("talk_body"), "F")).strip().upper().startswith("M")
+            else "F"
         ),
         dir=folder,
         knowledge_packs=[str(k) for k in (raw.get("knowledge_packs") or [])],
