@@ -38,6 +38,9 @@ class Avatar:
     # Defaulted so existing avatars (and tests building Avatar directly) are
     # untouched; the loader normalizes whatever avatar.yaml says.
     talk_body: str = "F"
+    # Google Drive folder this avatar reads at session start (drive_client):
+    # its docs become part of the pre-meeting brief. "" = no folder.
+    drive_folder_id: str = ""
 
     @property
     def knowledge_dir(self) -> Path:
@@ -120,6 +123,7 @@ def load(avatar_id: str) -> Avatar:
             if str(_coalesce(raw.get("talk_body"), "F")).strip().upper().startswith("M")
             else "F"
         ),
+        drive_folder_id=str(_coalesce(raw.get("drive_folder_id"), "")).strip(),
         dir=folder,
         knowledge_packs=[str(k) for k in (raw.get("knowledge_packs") or [])],
     )

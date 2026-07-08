@@ -43,6 +43,7 @@ from . import (
     recall_client,
     anam_client,
     cedric,
+    drive_client,
     granola_client,
     actions,
     gmail_watcher,
@@ -133,6 +134,10 @@ GOOGLE_CALENDAR_SCOPES = (
     # Read Laura's inbox so "Add people" invites (which email her a Meet link,
     # with no calendar event) can auto-join the meeting. See gmail_watcher.py.
     "https://www.googleapis.com/auth/gmail.readonly",
+    # Read shared Drive folders so an avatar with drive_folder_id walks into
+    # meetings knowing the team's docs. See drive_client.py. Adding a scope
+    # means reconnecting once via /oauth/google/connect.
+    "https://www.googleapis.com/auth/drive.readonly",
 )
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 ATTENDEE_CONTAINER_KEYS = {
@@ -877,6 +882,19 @@ async def _start_avatar_session(
     session.memory_brief = await run_in_threadpool(
         ledger.carryover_brief, meeting_url
     )
+    # Drive connector: the avatar's shared folder (avatar.yaml drive_folder_id)
+    # becomes part of the same brief channel. Fetched HERE — session start,
+    # off the live path, cached in drive_client — and best-effort: any failure
+    # returns "" and the join proceeds without it.
+    if avatar.drive_folder_id:
+        folder = await run_in_threadpool(
+            drive_client.folder_brief, avatar.drive_folder_id
+        )
+        if folder:
+            session.memory_brief = (
+                f"[Shared Drive folder — current team docs]\n{folder}\n\n"
+                + (session.memory_brief or "")
+            )
     if settings.autopilot_brief and session.memory_brief:
         # Autopilot: mail/Slack "what's still open from last time" to the
         # owner as the bot joins. Fire-and-forget — never delays the join.
