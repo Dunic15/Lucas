@@ -163,6 +163,16 @@ class Settings(BaseSettings):
     autopilot_nudge: bool = False          # periodic Slack digest of open ledger items
     autopilot_nudge_hours: float = 24.0
 
+    # Autonomous EXECUTION (the AI-employee path): the avatar does the
+    # post-meeting work itself from the connected Google account — recap email
+    # (Gmail API, no SendGrid) + a notes doc in its Drive folder. Off by
+    # default; needs the gmail.send / drive.file scopes (one reconnect).
+    # See backend/app/google_actions.py + autopilot.maybe_execute.
+    execute_enabled: bool = False
+    execute_recap_email: bool = True       # (within execute_enabled) send the recap
+    execute_recap_to: str = ""             # recipients; blank → meeting attendees
+    execute_drive_notes: bool = True       # (within execute_enabled) file notes in Drive
+
     # Proactive intervention (the differentiator): flag ONE missing step as the
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.
     proactive_enabled: bool = True
