@@ -102,6 +102,14 @@ class Session:
     # In-memory only; after a restart roster() falls back to transcript
     # speakers until the next join/leave event re-seeds it.
     participants: dict = field(default_factory=dict, repr=False, compare=False)
+    # When a HUMAN partial transcript last arrived — the deference window
+    # checks it to see whether someone started answering a room-open question
+    # while she politely waited. In-memory only.
+    last_human_partial_at: float = field(default=0.0, repr=False, compare=False)
+    # One-shot flag: the wrap-up nudge to a silent participant fires at most
+    # once per meeting. In-memory only (a restart forgiving a second nudge is
+    # harmless).
+    quiet_nudge_done: bool = field(default=False, repr=False, compare=False)
     _persist_enabled: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:

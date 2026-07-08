@@ -60,6 +60,58 @@ def _is_reported_reference(lower: str, wake: str) -> bool:
     return not vocative
 
 
+# ── fuzzy name matching ──
+# ASR mangles spoken names ("Laura" -> "Lara"/"Lora"/"Loura"); benchmarks show
+# explicit-name cue response drops from ~94% to ~68% under phonetic corruption
+# (docs/research/multiparty-meeting-intelligence.md). Guarded tightly: same
+# first letter, similar length, and edit distance 1 — or distance 2 only when
+# the consonant skeleton matches exactly ("lora"→"lr" == "laura"→"lr", while
+# "libra"→"lbr" stays out, and "clara" fails the first-letter check).
+_VOWELS = set("aeiou")
+# Real dictionary words that sit within fuzzy range of a wake word but are
+# never a name. "laurea/lauree" (Italian: degree) is edit distance 1 from
+# "laura" — without this, every graduation mention would wake her.
+_FUZZY_EXCLUDE = {"laurea", "lauree", "lauro"}
+
+
+def _levenshtein(a: str, b: str) -> int:
+    if abs(len(a) - len(b)) > 2:
+        return 3  # caller only cares about <=2
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[-1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def fuzzy_name_match(token: str, name: str) -> bool:
+    """True when `token` is (a close ASR corruption of) the spoken `name`."""
+    token, name = token.lower(), name.lower()
+    if token == name:
+        return True
+    if token in _FUZZY_EXCLUDE:
+        return False
+    if len(token) < 3 or len(name) < 4 or token[0] != name[0]:
+        return False
+    d = _levenshtein(token, name)
+    if d <= 1:
+        return True
+    if d == 2:
+        skel = lambda s: "".join(c for c in s if c not in _VOWELS)  # noqa: E731
+        return skel(token) == skel(name)
+    return False
+
+
+def _fuzzy_wake_token(lower: str, wake: str) -> str:
+    """The token in `lower` that fuzzy-matches `wake` ("" when none)."""
+    for token in re.findall(r"[a-z]+", lower):
+        if fuzzy_name_match(token, wake):
+            return token
+    return ""
+
+
 def detect_wake(avatar: Avatar, utterance: str) -> tuple[bool, str]:
     """If the utterance calls the avatar by a wake word, return (True, question).
 
@@ -67,6 +119,7 @@ def detect_wake(avatar: Avatar, utterance: str) -> tuple[bool, str]:
         "Laura, what are we missing?"   -> "what are we missing?"
         "Hey Laura what's the process"  -> "what's the process"
         "Can you check, Laura?"         -> "Can you check?"
+        "Lara, what's the next step?"   -> ASR-corrupted name still wakes
 
     Examples that do NOT trigger (the avatar is only being talked about):
         "as Laura said earlier, we should ship"
@@ -75,11 +128,14 @@ def detect_wake(avatar: Avatar, utterance: str) -> tuple[bool, str]:
     """
     lower = utterance.lower()
     for wake in avatar.wake_words:
-        # Match the wake word as a standalone token.
-        if re.search(rf"\b{re.escape(wake)}\b", lower):
-            if _is_reported_reference(lower, wake):
+        # Exact standalone token first; then a fuzzy ASR-corruption of it.
+        # The matched TOKEN (not the canonical wake word) drives the reported-
+        # speech check and the strip, since that's what's actually in the text.
+        matched = wake if re.search(rf"\b{re.escape(wake)}\b", lower) else _fuzzy_wake_token(lower, wake)
+        if matched:
+            if _is_reported_reference(lower, matched):
                 return False, ""
-            return True, _strip_wake(utterance, wake)
+            return True, _strip_wake(utterance, matched)
     return False, ""
 
 
@@ -108,16 +164,21 @@ def addressed_to_other(utterance: str, roster: list[str]) -> bool:
     lower = (utterance or "").lower()
     if not lower:
         return False
+    # Tokens sitting in a vocative position: "X, …" / "hey X …" / "…, X?".
+    # Fuzzy-compared against roster first names so an ASR-mangled "Marko,
+    # can you…" still reads as Marco's turn.
+    candidates = set(
+        re.findall(r"(?:^|[,.;:!?]\s+)([a-z]+)\s*[,:]", lower)
+        + re.findall(r"\b(?:hey|hi|hello|ok|okay|yo|ehi|ciao|senti|scusa|allora)\s+([a-z]+)\b", lower)
+        + re.findall(r",\s*([a-z]+)[^a-z]*$", lower)
+    )
+    if not candidates:
+        return False
     for name in roster:
         first = (name or "").strip().split()[0].lower().rstrip(",.")
         if len(first) < 3 or first in _NON_VOCATIVE:
             continue
-        n = re.escape(first)
-        if (
-            re.search(rf"\b(?:hey|hi|hello|ok|okay|yo|ehi|ciao|senti|scusa|allora)\s+{n}\b", lower)
-            or re.search(rf"(?:^|[,.;:!?]\s+){n}\s*[,:]", lower)  # "Marco, …"
-            or re.search(rf",\s*{n}\b[^a-z]*$", lower)            # "…, Marco?"
-        ):
+        if any(fuzzy_name_match(tok, first) for tok in candidates):
             return True
     return False
 

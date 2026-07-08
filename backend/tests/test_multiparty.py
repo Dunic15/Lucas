@@ -146,3 +146,183 @@ def test_not_addressed_to_other():
 
 def test_addressed_to_other_ignores_unknown_names():
     assert not addressed_to_other("Giulia, can you take this?", ROSTER)
+
+
+# ── fuzzy name matching (ASR-corrupted names) ──
+
+from app import avatars  # noqa: E402
+from app.decision import detect_wake, fuzzy_name_match  # noqa: E402
+
+
+def test_fuzzy_wake_on_asr_corrupted_name():
+    avatar = avatars.load("laura")
+    for utterance in [
+        "Lara, what's the next step?",
+        "hey Lora can you help us",
+        "Loura what do you think?",
+    ]:
+        called, _ = detect_wake(avatar, utterance)
+        assert called, f"corrupted name should wake: {utterance!r}"
+
+
+def test_fuzzy_wake_does_not_fire_on_lookalike_words():
+    avatar = avatars.load("laura")
+    for utterance in [
+        "ho preso la laurea l'anno scorso",  # IT: degree — dist 1, excluded
+        "Clara said the deadline moved",     # different first letter
+        "loro hanno già firmato il contratto",  # IT: "they" — too far
+        "we discussed the launch timeline",
+        "a che ora è la riunione di domani",  # "l'ora" must not tokenize into lora
+    ]:
+        called, _ = detect_wake(avatar, utterance)
+        assert not called, f"must NOT wake: {utterance!r}"
+
+
+def test_fuzzy_wake_reported_speech_still_suppressed():
+    avatar = avatars.load("laura")
+    called, _ = detect_wake(avatar, "as Lara said earlier, we should ship")
+    assert not called, "reported speech with corrupted name must not wake"
+
+
+def test_addressed_to_other_fuzzy_name():
+    assert addressed_to_other("Marko, can you take this?", ROSTER)
+    assert addressed_to_other("what's your view on this, Marcko?", ROSTER)
+
+
+def test_fuzzy_name_match_unit():
+    assert fuzzy_name_match("lara", "laura")
+    assert fuzzy_name_match("lora", "laura")  # dist 2, same consonant skeleton
+    assert not fuzzy_name_match("libra", "laura")  # dist 2, skeleton differs
+    assert not fuzzy_name_match("clara", "laura")
+    assert not fuzzy_name_match("laurea", "laura")  # excluded dictionary word
+
+
+# ── deference window: humans get first right of reply ──
+
+
+def test_deference_yields_when_a_human_answers(tmp_path, monkeypatch):
+    from app.config import settings
+
+    s = _session(tmp_path, monkeypatch, bot_id="defer-bot-1")
+    s.memory_brief = ""
+    monkeypatch.setattr(settings, "deference_seconds", 0.05)
+    # seed enough transcript that the line isn't the meeting opener
+    s.add_utterance("Duccio", "let's get started")
+
+    real_sleep = asyncio.sleep
+
+    async def sleep_and_interject(seconds):
+        # a human starts answering while she politely waits
+        s.add_utterance("Marco", "I can take that one")
+        await real_sleep(0)
+
+    monkeypatch.setattr(main.asyncio, "sleep", sleep_and_interject)
+    spoken = []
+
+    async def fake_speak(session, line, citations=None, **kw):
+        spoken.append(line)
+        return True
+
+    monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+    body = _post(_line_payload(s.bot_id, "Duccio", "who can take the rollout?"))
+    assert body.get("reason") == "deferred to human"
+    assert not spoken
+    store.remove(s.bot_id)
+
+
+def test_no_deference_when_called_by_name(tmp_path, monkeypatch):
+    from app.config import settings
+
+    s = _session(tmp_path, monkeypatch, bot_id="defer-bot-2")
+    s.memory_brief = ""
+    monkeypatch.setattr(settings, "deference_seconds", 30.0)  # would hang if hit
+
+    def instant_answer(*a, **k):
+        yield "The next step is the security review."
+
+    monkeypatch.setattr(main, "answer_question_stream", instant_answer)
+
+    async def fake_speak(session, line, citations=None, **kw):
+        return True
+
+    monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+    body = _post(_line_payload(s.bot_id, "Duccio", "Laura, what's the next step?"))
+    assert body.get("reason") != "deferred to human"
+    store.remove(s.bot_id)
+
+
+def _line_payload(bot_id: str, speaker: str, text: str) -> dict:
+    return {
+        "event": "transcript.data",
+        "data": {
+            "bot": {"id": bot_id},
+            "data": {
+                "words": [{"text": w} for w in text.split()],
+                "participant": {"name": speaker, "id": 1},
+            },
+        },
+    }
+
+
+# ── footing: greet late joiners, nudge quiet participants ──
+
+
+def test_greets_new_joiner_mid_meeting(tmp_path, monkeypatch):
+    s = _session(tmp_path, monkeypatch, bot_id="greet-bot-1")
+    for i in range(4):
+        s.add_utterance("Duccio", f"point number {i} about the onboarding")
+    spoken = []
+
+    async def fake_speak(session, line, citations=None, **kw):
+        spoken.append(line)
+        return True
+
+    monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+    _post(_participant_payload(s.bot_id, "participant_events.join", "Anna", 7))
+    assert spoken and "Anna" in spoken[0]
+    # the same join event again must not greet twice
+    spoken.clear()
+    _post(_participant_payload(s.bot_id, "participant_events.join", "Anna", 7))
+    assert not spoken
+    store.remove(s.bot_id)
+
+
+def test_no_greeting_at_meeting_start(tmp_path, monkeypatch):
+    s = _session(tmp_path, monkeypatch, bot_id="greet-bot-2")
+    spoken = []
+
+    async def fake_speak(session, line, citations=None, **kw):
+        spoken.append(line)
+        return True
+
+    monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+    _post(_participant_payload(s.bot_id, "participant_events.join", "Anna", 7))
+    assert not spoken  # transcript empty: everyone is greeting anyway
+    store.remove(s.bot_id)
+
+
+def test_quiet_participant_nudged_at_wrapup(tmp_path, monkeypatch):
+    from app.config import settings
+
+    s = _session(tmp_path, monkeypatch, bot_id="nudge-bot-1")
+    s.memory_brief = ""
+    # isolate the nudge: the proactive gap intervention wins the wrap-up slot
+    monkeypatch.setattr(settings, "proactive_enabled", False)
+    s.participant_event("Anna", 3, here=True)  # in the room, never spoke
+    for i in range(12):
+        s.add_utterance("Duccio" if i % 2 else "Marco", f"working point {i}")
+    spoken = []
+
+    async def fake_speak(session, line, citations=None, **kw):
+        spoken.append(line)
+        return True
+
+    monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+    body = _post(_line_payload(s.bot_id, "Duccio", "okay, anything else before we wrap up?"))
+    assert body.get("quiet_nudge") is True
+    assert spoken and "Anna" in spoken[0]
+    # one-shot: a second closing cue must not nudge again
+    spoken.clear()
+    body = _post(_line_payload(s.bot_id, "Duccio", "alright, let's wrap up then"))
+    assert body.get("quiet_nudge") is None
+    store.remove(s.bot_id)

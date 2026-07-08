@@ -1246,6 +1246,28 @@ _GOODBYE_LINES_IT = [
     "Perfetto, vado. Buon lavoro!",
 ]
 
+# Footing (see docs/research/multiparty-meeting-intelligence.md): acknowledging
+# people by name measurably drives liking and participation. {name} slots the
+# joiner's / quiet participant's first name — dynamic, so never TTS-prewarmed.
+_WELCOME_LINES = [
+    "Hi {name}, welcome!",
+    "Hey {name} — good to have you.",
+    "Welcome, {name}!",
+]
+_WELCOME_LINES_IT = [
+    # gender-neutral on purpose ("benvenuto/a" would have to guess)
+    "Ciao {name}, che bello averti qui!",
+    "Ciao {name} — piacere di averti qui.",
+]
+_QUIET_NUDGE_LINES = [
+    "Before we close — {name}, anything from your side?",
+    "One thing before we wrap up: {name}, anything you'd add?",
+]
+_QUIET_NUDGE_LINES_IT = [
+    "Prima di chiudere — {name}, qualcosa da aggiungere?",
+    "Un attimo prima di chiudere: {name}, tutto chiaro dal tuo lato?",
+]
+
 _SPEECH_WORDS_PER_SECOND = 2.6  # ~ElevenLabs/edge-tts pace, for the barge-in window
 
 
@@ -1701,6 +1723,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
             await _make_avatar_stop(session)
         if _is_own_speech(avatar.name, speaker):
             return JSONResponse({"ok": True, "partial": True})
+        # A human is audibly talking right now — any deference window waiting
+        # on the final-transcript path sees this and yields to them.
+        session.last_human_partial_at = time.time()
         called, question = detect_wake(avatar, text)
         # "Laura, stop / aspetta / basta" — obey on the PARTIAL, before the
         # sentence even finalizes. Complements barge-in (which needs 3+ words):
@@ -1757,10 +1782,30 @@ async def recall_webhook(request: Request) -> JSONResponse:
             label = session.resolve_speaker(p.get("name"), p.get("id"))
             avatar = avatars.load(session.avatar_id)
             if not _is_own_speech(avatar.name, label):  # the bot joins too
+                key = str(p.get("id")) if p.get("id") is not None else label
+                is_new = key not in session.participants
                 session.participant_event(
                     p.get("name"), p.get("id"),
                     here=(event == "participant_events.join"),
                 )
+                # ── footing: greet a late joiner by name ──
+                # Only when the meeting is genuinely underway (start-of-call
+                # joins greet each other anyway), only for NEW named humans,
+                # and never over her own voice. Cheap acknowledgment has an
+                # outsized social payoff (research doc).
+                if (
+                    event == "participant_events.join"
+                    and settings.greet_joiners
+                    and is_new
+                    and len(session.transcript) >= 4
+                    and not label.lower().startswith("guest")
+                    and time.time() > session.speaking_until
+                ):
+                    heard = session.recent_transcript(3)
+                    line = _line_for(heard, _WELCOME_LINES, _WELCOME_LINES_IT).format(
+                        name=label.split()[0]
+                    )
+                    await _make_avatar_speak(session, line, force=True)
         return JSONResponse({"ok": True})
 
     if event != "transcript.data":
@@ -1886,6 +1931,35 @@ async def recall_webhook(request: Request) -> JSONResponse:
             {"ok": True, "spoke": True, "left": True, "reason": "leave_command"}
         )
 
+    # ── footing: quiet-participant nudge (fires once, at wrap-up) ──
+    # She knows who is in the room (roster) and who has spoken (transcript).
+    # As the meeting wraps up — and she wasn't addressed directly — invite ONE
+    # silent participant in: the verbal analogue of turn-yielding gaze, which
+    # no shipping meeting-AI does by voice (research doc). Placed after the
+    # proactive intervention (critical process gaps win the wrap-up slot).
+    if (
+        settings.quiet_nudge_enabled
+        and not called
+        and not session.quiet_nudge_done
+        and detect_closing(text)
+        and len(session.transcript) >= 12
+        and not session.in_cooldown(avatar.speak_cooldown_seconds)
+    ):
+        spoken_names = {u.speaker.strip().lower() for u in session.transcript}
+        quiet = [
+            n
+            for n in session.roster(avatar.name)
+            if n.strip().lower() not in spoken_names
+            and not n.lower().startswith("guest")
+        ]
+        if quiet:
+            session.quiet_nudge_done = True
+            nudge = _line_for(
+                text, _QUIET_NUDGE_LINES, _QUIET_NUDGE_LINES_IT
+            ).format(name=quiet[0].split()[0])
+            await _make_avatar_speak(session, nudge, force=True)
+            return JSONResponse({"ok": True, "spoke": True, "quiet_nudge": True})
+
     if settings.require_wake_word and not called:
         return JSONResponse({"ok": True, "spoke": False, "reason": "not called"})
     question = question or text  # no wake word → treat the whole utterance as the ask
@@ -1901,6 +1975,23 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # conversation is made of, so `called` bypasses it.
     if not called and session.in_cooldown(avatar.speak_cooldown_seconds):
         return JSONResponse({"ok": True, "spoke": False, "reason": "cooldown"})
+
+    # ── deference window ──
+    # Nobody addressed her by name, so this is at best a room-open question:
+    # humans get first right of reply. Wait briefly; if anyone starts talking
+    # (a partial lands or the transcript grows), yield silently. Deliberately
+    # AFTER the cheap gates — a line that would be skipped anyway never waits.
+    if not called and settings.deference_seconds > 0:
+        _defer_mark = len(session.transcript)
+        _defer_t0 = time.time()
+        await asyncio.sleep(settings.deference_seconds)
+        if (
+            len(session.transcript) > _defer_mark
+            or session.last_human_partial_at > _defer_t0
+        ):
+            return JSONResponse(
+                {"ok": True, "spoke": False, "reason": "deferred to human"}
+            )
 
     # This is a NEW speech turn: bump the generation so an older turn that is
     # still streaming (slow model, long answer) stops queueing sentences under

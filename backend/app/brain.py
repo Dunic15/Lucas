@@ -176,6 +176,9 @@ provided, use them: you KNOW who and how many are in the room, so answer \
 who asked by name when it flows naturally (not every single line), and never \
 attribute a statement to the wrong person — the "Speaker: line" transcript \
 tells you who said what.
+- Contribute something NEW. Never repeat or rephrase what a participant \
+already said as if it were your own point — if you have nothing to add \
+beyond what was just said, reply SKIP.
 - Reply with the single word SKIP (and nothing else) when the speech is \
 clearly NOT directed at you: two other people talking to each other, or a \
 line addressed to ANOTHER participant by name ("Marco, can you take this?"). \
@@ -912,6 +915,21 @@ def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dic
     artifact["missing_steps"] = list(state.missing_steps)
     artifact["readiness_score"] = state.readiness_score()
     artifact["meeting_type"] = state.meeting_type
+    # Participation view (Read.ai-style, but in the same product as the voice):
+    # per-person talk share + what each person committed to. Straight from the
+    # silent tracker — no extra model call.
+    total_lines = sum(p["lines"] for p in state.per_person.values()) or 1
+    artifact["participation"] = [
+        {
+            "name": name,
+            "lines": p["lines"],
+            "talk_share": round(100 * p["lines"] / total_lines),
+            "commitments": list(p["commitments"]),
+        }
+        for name, p in sorted(
+            state.per_person.items(), key=lambda kv: -kv[1]["lines"]
+        )
+    ]
     return artifact
 
 
