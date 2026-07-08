@@ -85,6 +85,9 @@ class Session:
     # transcript path so the final-utterance path doesn't ack the same turn
     # twice. In-memory only: an ack is worthless across a restart.
     last_ack_at: float = field(default=0.0, repr=False, compare=False)
+    # When she last backchanneled ("Mm-hm." while a human talks) — keeps the
+    # listening cue rare. In-memory only, like the ack timestamp.
+    last_backchannel_at: float = field(default=0.0, repr=False, compare=False)
     # Recently spoken lines (normalized text -> epoch seconds) for the
     # repetition guard: never say the same line twice within the window.
     _recent_lines: dict = field(default_factory=dict, repr=False, compare=False)

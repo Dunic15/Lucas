@@ -24,7 +24,7 @@ import time
 from . import llm, meeting_state, tools
 from .avatars import Avatar
 from .config import settings
-from .rag import retrieve, Retrieved
+from .rag import retrieve, retrieve_about, Retrieved
 
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 # Words in a meeting line that hint at an actionable / gap-prone item (stub mode).
@@ -107,7 +107,7 @@ def answer_question(
     `history` is the recent meeting conversation (last few "Speaker: line" turns)
     so the avatar understands *this* discussion, not just the isolated question.
     """
-    chunks = retrieve(avatar, question, k=k)
+    chunks = _retrieve_for(avatar, question, history, k)
 
     if _is_stub():
         result = _stub_answer(chunks)
@@ -159,8 +159,8 @@ How to respond:
 math, small talk, jokes): answer directly and naturally from your own \
 knowledge. Do NOT mention documents, context, or what you were given. Never \
 refuse just because it isn't in the documents.
-- Questions about the company's processes, the SFF fund, or its portfolio: \
-ground your answer in the provided context and name the source doc briefly \
+- Questions about the company's processes or anything covered by the provided \
+documents: ground your answer in that context and name the source doc briefly \
 and naturally (e.g. "per the onboarding SOP"). Don't invent specific steps, \
 owners, or approvals that aren't there; if the context only partly covers \
 it, give the useful part and say what you'd check.
@@ -206,6 +206,36 @@ def _retrieval_query(question: str, history: str = "") -> str:
     if not history:
         return question
     return f"{history[-1200:]}\n\nCurrent ask: {question}"
+
+
+# Self-questions — someone asking about the AVATAR herself ("how do you
+# work?", "chi sei?"). These ground in the about/ meta docs, which are kept
+# OUT of process retrieval (a real "what's missing for go-live?" must never
+# pull Laura's own playbook). Deliberately specific: generic words like
+# "your cost" alone don't match, or project questions would misroute.
+_ABOUT_INTENT = re.compile(
+    r"\b(how (do|does) (you|laura) work|what (can|do) you (do|know)\b|"
+    r"who (are|built|made|created) you\b|what are you\b|"
+    r"are you (an? )?(ai|bot|robot|human|real)\b|"
+    r"(your|laura'?s) (architecture|brain|stack|pipeline|tech stack)\b|"
+    r"how (were|are) you (built|made|designed|trained)\b|"
+    r"come funzioni\b|come sei fatt\w+|cosa (sai|puoi) fare|"
+    r"chi (sei|ti ha creat\w+|ti ha fatt\w+)|sei (un[ao]? )?(ai|robot|bot|uman\w+))\b",
+    re.IGNORECASE,
+)
+
+
+def _is_about_avatar(question: str) -> bool:
+    return bool(_ABOUT_INTENT.search(question or ""))
+
+
+def _retrieve_for(avatar: Avatar, question: str, history: str, k: int) -> list[Retrieved]:
+    """Route retrieval: self-questions hit the about/ pack, everything else the
+    real knowledge docs. Self-questions retrieve on the bare ask (they're
+    direct), process questions keep the history-augmented query."""
+    if _is_about_avatar(question):
+        return retrieve_about(avatar, question, k=k)
+    return retrieve(avatar, _retrieval_query(question, history), k=k)
 
 
 # Questions that want FRESH information from the internet — routed to Claude's
@@ -350,7 +380,7 @@ def answer_question_stream(
     for smooth prosody.
     """
     _t0 = time.perf_counter()
-    chunks = retrieve(avatar, _retrieval_query(question, history), k=k)
+    chunks = _retrieve_for(avatar, question, history, k)
     _retrieve_ms = (time.perf_counter() - _t0) * 1000
     # Only ground in the docs when they actually match the question —
     # irrelevant chunks bias the model into doc-quoting general answers.
@@ -541,7 +571,7 @@ def _split_sentences(buf: str) -> tuple[str, list[str]]:
 ANSWER_TOOLS_SYSTEM = """{persona}
 
 You are Laura in a live spoken conversation — a capable general assistant FIRST \
-(think ChatGPT or Claude), and an SFF/company expert only when the question \
+(think ChatGPT or Claude), and a company/process expert only when the question \
 actually touches that. Default to 1-2 short spoken sentences (3 max); sound like \
 a real person, never restate the question, and never open with filler like \
 "great question". Plain text only — no markdown, bullets, headings, or preamble. \
@@ -551,8 +581,8 @@ unless the person specifically asks how you work.
 How to respond:
 - General questions, opinions, advice, small talk, jokes: answer directly and \
 naturally from your own knowledge. If someone asks what you think, give a real \
-take. Don't steer the conversation back to SFF.
-- SFF / company / portfolio questions: use what you know, stay concrete, and \
+take. Don't steer the conversation toward work topics nobody asked about.
+- Company / process / portfolio questions: use what you know, stay concrete, and \
 don't invent specific numbers, companies, or facts that aren't there.
 
 You can also USE TOOLS when they make an answer more concrete:
@@ -582,7 +612,7 @@ def answer_with_tools(
                 "citations": [],
             }
 
-    chunks = retrieve(avatar, _retrieval_query(question, history), k=k)
+    chunks = _retrieve_for(avatar, question, history, k)
     # Only inject docs when they actually match the question — otherwise irrelevant
     # chunks framed as "context" bias her into doc-quoting a general/opinion ask.
     if chunks and chunks[0].score < settings.rag_min_context_score:

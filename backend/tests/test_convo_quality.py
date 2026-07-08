@@ -79,6 +79,41 @@ def test_stop_message_queued_and_window_reset():
     assert types[-1] == "stop"
 
 
+def test_backchannel_only_on_long_quiet_monologue(monkeypatch):
+    """Backchannel = rare listening cue: long partials only, one per gap
+    window, never while she speaks or right after she spoke."""
+    long_text = " ".join(["word"] * 30)
+    s = _session()
+    s.last_spoke_at = time.time() - 60
+    assert main._should_backchannel(s, long_text) is True
+    # too short an utterance
+    assert main._should_backchannel(s, "a short remark") is False
+    # gap window not elapsed since the last backchannel
+    s2 = _session("bc-2"); s2.last_spoke_at = time.time() - 60
+    s2.last_backchannel_at = time.time()
+    assert main._should_backchannel(s2, long_text) is False
+    # she's currently speaking
+    s3 = _session("bc-3"); s3.last_spoke_at = time.time() - 60
+    s3.speaking_until = time.time() + 5
+    assert main._should_backchannel(s3, long_text) is False
+    # she spoke moments ago (ack/answer) — stay quiet
+    s4 = _session("bc-4"); s4.last_spoke_at = time.time() - 2
+    assert main._should_backchannel(s4, long_text) is False
+    # kill switch
+    monkeypatch.setattr(settings, "backchannel_enabled", False)
+    assert main._should_backchannel(s, long_text) is False
+
+
+def test_backchannel_speak_does_not_refresh_cooldown():
+    """A backchannel is not a turn: it must never push the speak cooldown and
+    silence a real answer seconds later."""
+    s = _session()
+    before = s.last_spoke_at
+    assert _speak(s, "Mm-hm.", force=True, backchannel=True) is True
+    assert s.last_spoke_at == before  # cooldown untouched
+    assert _speak(s, "A real answer right after.") is True
+
+
 def test_stop_kills_the_whole_turn():
     """A stop must cancel the WHOLE turn, not just the audio playing now:
     queued speaks are purged, the generation goes stale (so a sentence still

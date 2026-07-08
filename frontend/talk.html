@@ -154,6 +154,14 @@
     const CAM_TY = camParam("cam_ty", 1.705);
     const frameCamera = () => {
       try {
+        // Kill TalkingHead's own camera GLIDE at the source: after setView its
+        // animate loop eases the camera toward ITS view for 1000ms (while
+        // cameraClock < 1000, talkinghead.mjs ~L2459) — and since its loop runs
+        // interleaved with ours, that glide is the visible far->close zoom on
+        // load, no matter how often we re-assert our framing. cameraClock=1000
+        // ends any glide instantly; a no-op setView stops it ever restarting.
+        head.cameraClock = 1000;
+        head.setView = () => {};
         // TalkingHead's OrbitControls clamp minDistance=2.0 — any closer framing
         // silently snaps back to z=2.0 (this was why she never got truly close).
         // Release the clamp, then place the camera. enableDamping=false so any

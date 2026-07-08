@@ -55,11 +55,12 @@ unless asked; they prefer writing artifacts to `docs/`.
 
 ## Claude Code guardrails (mechanical, not prose)
 
-- **AWS write access is deliberate but gated.** `.mcp.json` keeps
+- **AWS access is deliberate and pre-approved.** `.mcp.json` keeps
   `READ_OPERATIONS_ONLY=false` because Claude drives App Runner deploys/config
-  here — but `.claude/settings.json` puts `mcp__aws-api__call_aws` under
-  `permissions.ask`, so every AWS call (read or write) requires explicit
-  approval. Don't remove the gate without replacing it.
+  here, and `mcp__aws-api__call_aws` sits in `permissions.allow` — the owner
+  asked (2026-07-08) to never be prompted for AWS calls. The safety bar moves
+  to behavior: destructive/irreversible AWS ops (deletes, teardown of running
+  services) still deserve a heads-up in chat before running.
 - **PreToolUse hooks** (`.claude/hooks/guard.py`) mechanically enforce the two
   rules that cost money or leak PII: commits are blocked if the staged diff
   contains an API-key-shaped string; edits/commits are blocked if they add

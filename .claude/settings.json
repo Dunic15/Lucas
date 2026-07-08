@@ -12,7 +12,8 @@
       "Bash(uvicorn*)",
       "Bash(python3 -m uvicorn*)",
       "Bash(curl -s http://localhost*)",
-      "Bash(curl -s http://127.0.0.1*)"
+      "Bash(curl -s http://127.0.0.1*)",
+      "mcp__aws-api__call_aws"
     ],
     "deny": [
       "Bash(git push --force*)",
@@ -22,7 +23,6 @@
       "Bash(rm -rf .*)"
     ],
     "ask": [
-      "mcp__aws-api__call_aws",
       "Read(./.env)",
       "Read(./.env.*)"
     ]

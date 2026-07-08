@@ -63,7 +63,7 @@ from .brain import (
 )
 from .config import settings
 from .decision import detect_wake, detect_closing, detect_leave_command
-from .rag import ensure_index, warm as warm_index
+from .rag import ensure_about_index, ensure_index, warm as warm_index
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
@@ -152,6 +152,9 @@ def _prebuild_indexes() -> None:
         try:
             avatar = avatars.load(aid)
             ensure_index(avatar)
+            # Self-knowledge pack (about/): separate index, only consulted for
+            # self-questions. No-op for avatars without an about/ folder.
+            ensure_about_index(avatar)
             # Load the index into cache + warm the embedder now, so the first
             # LIVE question doesn't pay the cold-start (1-3s) on the meeting path.
             warm_index(avatar)
@@ -1139,6 +1142,31 @@ _THINK_LINES = [
     "Hmm — let me think about that properly.",
 ]
 
+# Listening cues spoken WHILE a human is mid-monologue (backchanneling, the
+# thing that makes a listener feel present). Two syllables max — anything
+# longer becomes an interruption instead of a nod.
+_BACKCHANNEL_LINES = ["Mm-hm.", "Mm.", "Right."]
+
+
+def _should_backchannel(session: store.Session, text: str) -> bool:
+    """A human is deep into a long utterance and she's been silent a while —
+    one tiny cue ("Mm-hm.") reads as listening. Deliberately rare: long
+    partials only, one per gap window, never while (or right after) she talks,
+    so it stays a nod and never becomes chatter."""
+    if not settings.backchannel_enabled:
+        return False
+    if len(text.split()) < settings.backchannel_min_words:
+        return False
+    now = time.time()
+    if now < session.speaking_until:
+        return False  # she's talking — that's not listening
+    if now - session.last_backchannel_at < settings.backchannel_gap_seconds:
+        return False
+    if now - session.last_spoke_at < 12.0:
+        return False  # just spoke/acked — another sound now reads as noise
+    return True
+
+
 # Spoken when dismissed by voice — short enough to finish inside
 # settings.leave_grace_seconds before the bot disconnects.
 _GOODBYE_LINES = [
@@ -1181,6 +1209,7 @@ async def _make_avatar_speak(
     *,
     force: bool = False,
     generation: int | None = None,
+    backchannel: bool = False,
 ) -> bool:
     """Backend-as-brain: send the exact words for the avatar to speak (Anam talk).
 
@@ -1194,6 +1223,10 @@ async def _make_avatar_speak(
     being generated, the line is dropped instead of un-muting her. Every
     message carries its generation_id so the page can drop a stale speak that
     raced a stop over the wire (additive — pages that don't know it ignore it).
+
+    `backchannel=True` marks a listening cue ("Mm-hm." while a human talks):
+    it must NOT refresh the speak cooldown — a backchannel is not a turn, and
+    it must never suppress a real answer seconds later.
     """
     if generation is not None and generation != session.speech_generation:
         return False  # turn was cancelled while this sentence was in flight
@@ -1213,13 +1246,15 @@ async def _make_avatar_speak(
     if session.ws is not None:
         try:
             await session.ws.send_json(message)
-            session.mark_spoke()
+            if not backchannel:
+                session.mark_spoke()
             return True
         except Exception as e:
             print(f"[avatar] websocket send failed; queued speak: {e}", flush=True)
             session.ws = None
     store.queue_avatar_message(session, message)
-    session.mark_spoke()
+    if not backchannel:
+        session.mark_spoke()
     print("[avatar] queued speak for HTTP polling", flush=True)
     return True
 
@@ -1522,6 +1557,19 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 else random.choice(_ACK_LINES)
             )
             acked = await _make_avatar_speak(session, line, force=True)
+        # ── backchanneling ──
+        # Nobody called her, someone is deep into a long point: one tiny
+        # "Mm-hm." makes her feel present in the room. Not a turn: it never
+        # refreshes the cooldown, so a real question right after still answers.
+        if not called and not acked and _should_backchannel(session, text):
+            session.last_backchannel_at = time.time()
+            await _make_avatar_speak(
+                session,
+                random.choice(_BACKCHANNEL_LINES),
+                force=True,
+                backchannel=True,
+            )
+            return JSONResponse({"ok": True, "partial": True, "backchannel": True})
         return JSONResponse({"ok": True, "partial": True, "acked": acked})
 
     if event != "transcript.data":
@@ -1698,6 +1746,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             memory=memory,
             state=state,
             summary=session.rolling_summary,
+            k=4,  # leaner context: input tokens ARE first-token latency live
             min_chars=45,  # coalesce tiny fragments so the TTS voice flows
         )
     ):
