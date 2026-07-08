@@ -53,6 +53,7 @@ or unknown tag → `DEFAULT_AVATAR_ID`.
 | `elevenlabs_voice_id` | no | Per-avatar voice. Blank → global `ELEVENLABS_VOICE_ID`. |
 | `knowledge_packs` | no | List of OTHER avatar ids whose `knowledge/` this avatar also retrieves from (e.g. cedric reuses the `sff` pack) — packs live in one place, never copied. |
 | `talk_body` | no | `F` (default) or `M` — TalkingHead pose/gesture set on the /talk renderer. The 3D model is `frontend/<id>.glb`, falling back to `laura.glb`. |
+| `drive_folder_id` | no | Google Drive folder read at session start (drive_client): its docs become part of the avatar's pre-meeting brief. Needs the `drive.readonly` scope on the connected Google account. |
 | `min_confidence` | no | Speak threshold 0–1. Blank → global `MIN_CONFIDENCE`. |
 | `speak_cooldown_seconds` | no | Quiet time after speaking. Blank → global default. |
 

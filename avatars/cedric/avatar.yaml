@@ -41,6 +41,11 @@ persona_prompt: >
 knowledge_packs:
   - sff
 
+# Google Drive folder Cedric reads at session start (the "Cedric Test" folder
+# in Duccio's Drive) — its docs join his pre-meeting brief. Requires the
+# drive.readonly scope on the connected Google account (/oauth/google/connect).
+drive_folder_id: "1X_CD6ARfWskpNKZbWLtwaDWn7izGVKZH"
+
 # Face + voice for THIS avatar.
 # Leave blank ("") to fall back to the global values in .env
 # (ELEVENLABS_VOICE_ID = the chosen Cedric voice).
