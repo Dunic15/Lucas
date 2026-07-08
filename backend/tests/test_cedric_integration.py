@@ -13,6 +13,7 @@ import os
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -208,6 +209,36 @@ def test_status_callback_is_single_attempt(monkeypatch):
     )
     assert ok is False
     assert len(attempts) == 1
+
+
+def test_post_follows_permanent_redirect_reapplying_auth(monkeypatch):
+    # Vercel 308s apex→www; httpx's own follow_redirects would drop the
+    # Authorization header on the cross-host hop, so _post re-posts manually
+    # with the full signed headers.
+    monkeypatch.setattr(settings, "cedric_webhook_token", "tok")
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((str(request.url), request.headers.get("authorization")))
+        if request.url.host == "cedric.example":
+            return httpx.Response(
+                308, headers={"location": "https://www.cedric.example/cb"}
+            )
+        return httpx.Response(200)
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        httpx, "Client", lambda **kw: real_client(transport=transport, **kw)
+    )
+
+    resp = cedric_callback._post("https://cedric.example/cb", {"x": 1})
+    assert resp.status_code == 200
+    assert [u for u, _ in seen] == [
+        "https://cedric.example/cb",
+        "https://www.cedric.example/cb",
+    ]
+    assert seen[1][1] == "Bearer tok"
 
 
 def test_no_callback_url_means_no_delivery(monkeypatch):

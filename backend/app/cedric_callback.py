@@ -48,10 +48,27 @@ def _signature_headers(body: bytes) -> dict[str, str]:
     return headers
 
 
+# Redirect statuses that preserve the request method (plus 301, which most
+# hosts use interchangeably with 308 for apex→www).
+_REDIRECTS = (301, 307, 308)
+
+
+def _redirect_target(resp: httpx.Response) -> str | None:
+    loc = resp.headers.get("location")
+    return str(resp.url.join(loc)) if resp.status_code in _REDIRECTS and loc else None
+
+
 def _post(url: str, payload: dict) -> httpx.Response:
     body = json.dumps(payload).encode()
+    # A redirect (e.g. Vercel apex→www) is followed manually for one hop:
+    # httpx's follow_redirects strips Authorization when the host changes, so
+    # the auth + signature headers must be re-applied to the new URL.
     with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
-        return client.post(url, content=body, headers=_signature_headers(body))
+        resp = client.post(url, content=body, headers=_signature_headers(body))
+        target = _redirect_target(resp)
+        if target:
+            resp = client.post(target, content=body, headers=_signature_headers(body))
+        return resp
 
 
 def _now_iso() -> str:
@@ -136,6 +153,9 @@ def fetch_context(integration: dict | None) -> dict | None:
     try:
         with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
             resp = client.get(url, headers=headers)
+            target = _redirect_target(resp)
+            if target:
+                resp = client.get(target, headers=headers)
         resp.raise_for_status()
         context = resp.json().get("context")
         return context if isinstance(context, dict) else None
