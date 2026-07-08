@@ -74,3 +74,10 @@ unless asked; they prefer writing artifacts to `docs/`.
   `/test-backend`, `/check-sessions` (orphaned billing sessions).
 - **Verification agents can't edit**: `backend-tester` and `demo-runner` are
   Bash+Read only — they run and report; fixes go through the main session.
+- **Laura's self-knowledge stays current.** `avatars/laura/about/` is how Laura
+  answers "how were you built / what's your stack?" in meetings. Any change that
+  alters her architecture, vendors, tools, or meeting behaviour must update the
+  relevant `about/` doc (usually `laura_architecture.md`, bump *Last reviewed*)
+  **in the same change**, then rebuild: `python3 backend/scripts/ingest.py laura`.
+  The index does not detect doc edits on its own (freshness check is
+  embedder/version only).

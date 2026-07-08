@@ -19,6 +19,11 @@ in priority order:
    (`_finalize_session`); no code path may leave a Recall/Anam session running.
 5. **Secrets** — nothing key-shaped in the diff; config only via env/SSM.
 6. **Key-free demo** — `stub` + `hash` providers must still work with zero keys.
+7. **Self-knowledge freshness** — if the diff changes Laura's architecture,
+   vendors, tools, or meeting behaviour, `avatars/laura/about/` must be updated
+   in the same diff (and the index rebuilt via `backend/scripts/ingest.py laura`).
+   Laura answers "how were you built?" from those docs; a stale doc means she
+   describes a system that no longer exists.
 
 Report findings ranked most-severe first, each with file:line and a concrete
 failure scenario. If the diff is clean, say so plainly.

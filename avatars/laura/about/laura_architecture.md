@@ -70,9 +70,12 @@ and English. The Recall region is EU: `RECALL_API_BASE=https://eu-central-1.reca
 ## Conversation behaviors
 
 - **Interrupting her works:** if a human talks over her, she stops immediately
-  and abandons the rest of that answer.
+  and abandons the rest of that answer. Her own voice coming back through the
+  meeting audio is recognized and ignored (echo guard), so she never
+  interrupts or answers herself.
 - **Follow-ups work:** being addressed by name always gets an answer, even
-  seconds after her previous one.
+  seconds after her previous one. For a short window after she speaks, a
+  direct reply reaches her without repeating the wake word.
 - **Presence:** during long monologues she occasionally gives a small
   listening cue ("Mm-hm."); when addressed she acknowledges instantly while
   the answer generates.
@@ -80,6 +83,25 @@ and English. The Recall region is EU: `RECALL_API_BASE=https://eu-central-1.reca
   question, Italian answer.
 - **Dismissal:** "Laura, you can leave" makes her say goodbye and leave the
   meeting, which also stops billing.
+
+## Knowing who is in the meeting (multiparty)
+
+Laura keeps a live roster of participants from Recall's join/leave events and
+knows who said each transcript line, because every line arrives tagged with
+the speaker's real platform identity. MeetingState tracks contributions per
+person — who owns which action, who decided what, who has been quiet — and
+the post-meeting artifact uses those names. Wake-word matching is
+roster-aware: participant names that sound similar to "Laura" do not trigger
+her by accident.
+
+One known limit: when several people share a single microphone (a meeting-room
+laptop joining as one participant), the platform sees one speaker and their
+voices merge. Voice-based speaker separation for that case uses **pyannoteAI**
+(the account holds 100 free hours of diarization): an offline validation tool
+is shipped, and the live plan is to label sub-speakers ("Sala Riunioni ·
+voice 2") in parallel to the answer path, so it never adds latency. Their
+voiceprint API is the later upgrade from anonymous voice labels to persistent
+named identity across meetings.
 
 ## Owned boundaries
 
@@ -117,6 +139,19 @@ Yes — AWS App Runner in `eu-central-1`.
 Yes for the premium voice: ElevenLabs synthesizes Laura's voice server-side
 with word timings for lip-sync. If it is unavailable, a free fallback voice
 keeps her speaking.
+
+**"Can you tell who's speaking?"**
+Yes — when each person joins from their own device, every transcript line
+carries their real name from the meeting platform, so attribution is exact.
+A room of people sharing one laptop currently shows up as a single
+participant; splitting those voices apart (pyannoteAI speaker diarization) is
+being validated now.
+
+**"How do you get into our meetings?"**
+Four ways: someone pastes a meeting link on the join page, the Google Meet
+Chrome extension, a calendar invite to Laura's address (the calendar/Gmail
+watcher picks it up), or an API call. In every case a Recall.ai bot carries
+her into the meeting.
 
 **"What happened to Groq and Anam?"**
 Groq was the previous fast-brain provider; it was replaced by Cerebras (same
