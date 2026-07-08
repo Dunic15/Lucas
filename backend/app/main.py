@@ -64,7 +64,12 @@ from .brain import (
     effective_provider,
 )
 from .config import settings
-from .decision import detect_wake, detect_closing, detect_leave_command
+from .decision import (
+    detect_wake,
+    detect_closing,
+    detect_leave_command,
+    detect_stop_command,
+)
 from .rag import ensure_about_index, ensure_index, warm as warm_index
 
 @asynccontextmanager
@@ -1155,8 +1160,24 @@ async def _refresh_rolling_summary(
 # Fixed spoken furniture, in TWO languages: an English "let me think" in the
 # middle of an Italian meeting breaks the illusion instantly. _line_for picks
 # the pool matching what was just heard; the ANSWER language is the model's job.
-_ACK_LINES = ["Mm-hm.", "Sure —", "On it.", "Let me think —", "Good one —"]
-_ACK_LINES_IT = ["Mm-hm.", "Certo —", "Subito.", "Vediamo —", "Arrivo —"]
+_ACK_LINES = [
+    "Mm-hm.",
+    "Sure —",
+    "On it.",
+    "Let me think —",
+    "Good one —",
+    "Okay —",
+    "Got it —",
+]
+_ACK_LINES_IT = [
+    "Mm-hm.",
+    "Certo —",
+    "Subito.",
+    "Vediamo —",
+    "Arrivo —",
+    "Ok —",
+    "Ci penso io —",
+]
 
 # Ack for questions routed to the slower 'complex' Claude path: a line that
 # JUSTIFIES the extra beat of latency instead of leaving it unexplained.
@@ -1164,11 +1185,15 @@ _THINK_LINES = [
     "Good question — give me a second to think it through.",
     "Let me reason through that for a moment.",
     "Hmm — let me think about that properly.",
+    "Interesting one — give me a moment.",
+    "Let me take a second on that.",
 ]
 _THINK_LINES_IT = [
     "Bella domanda — dammi un secondo per pensarci.",
     "Fammi ragionare un attimo.",
     "Mmm — fammici pensare bene.",
+    "Interessante — dammi un momento.",
+    "Un secondo che ci ragiono.",
 ]
 
 # Listening cues spoken WHILE a human is mid-monologue (backchanneling, the
@@ -1209,11 +1234,15 @@ _GOODBYE_LINES = [
     "Okay, leaving now. Bye!",
     "Got it — see you next time!",
     "Alright, I'll drop off. Bye!",
+    "Thanks everyone — bye!",
+    "Okay, heading out. Take care!",
 ]
 _GOODBYE_LINES_IT = [
     "Certo — ciao a tutti!",
     "Va bene, esco. Ciao!",
     "D'accordo, vi lascio. A presto!",
+    "Grazie a tutti — ciao!",
+    "Perfetto, vado. Buon lavoro!",
 ]
 
 _SPEECH_WORDS_PER_SECOND = 2.6  # ~ElevenLabs/edge-tts pace, for the barge-in window
@@ -1672,6 +1701,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if _is_own_speech(avatar.name, speaker):
             return JSONResponse({"ok": True, "partial": True})
         called, question = detect_wake(avatar, text)
+        # "Laura, stop / aspetta / basta" — obey on the PARTIAL, before the
+        # sentence even finalizes. Complements barge-in (which needs 3+ words):
+        # a two-word "Laura stop" must cut her off instantly, not get answered.
+        if called and detect_stop_command(question):
+            await _make_avatar_stop(session)
+            return JSONResponse({"ok": True, "partial": True, "stopped": True})
         acked = False
         if (
             settings.ack_enabled
@@ -1800,6 +1835,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # By default (require_wake_word=False) she answers any grounded question; the
     # SKIP sentinel + cooldown keep her from interjecting on things she can't ground.
     called, question = detect_wake(avatar, text)
+
+    # ── voice stop ("Laura, stop / aspetta") ──
+    # A stop is a command, never a question: cut the current turn and answer
+    # nothing. (The partial path usually catches it first; this is the net.)
+    if called and detect_stop_command(question):
+        await _make_avatar_stop(session)
+        return JSONResponse({"ok": True, "spoke": False, "stopped": True})
 
     # ── voice dismissal ("Laura, you can leave") ──
     # Addressed by name + an explicit leave command → say goodbye, then end the

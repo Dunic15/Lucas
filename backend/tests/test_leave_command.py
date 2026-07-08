@@ -43,8 +43,17 @@ LEAVE_ASKS = [
     "puoi lasciarci, grazie",
     "esci pure",
     "vai pure",
+    "vai via",
     "abbandona la call",
     "sei libera di andare",
+    "non ci servi più",
+    # go-out family
+    "go out of the meeting",
+    "get out",
+    "go away",
+    "you can log off now",
+    "you can sign off",
+    "you can hang up now",
 ]
 
 
