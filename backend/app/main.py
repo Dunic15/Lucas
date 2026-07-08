@@ -50,6 +50,7 @@ from . import (
     ledger,
     meeting_state,
     org_api,
+    tools,
     tts,
 )
 from .brain import (
@@ -59,6 +60,7 @@ from .brain import (
     answer_with_tools,
     rolling_summary,
     sounds_italian,
+    wants_action_capture,
     wants_deep_thought,
     wants_web_search,
     post_meeting,
@@ -905,6 +907,45 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
+def _norm_action_text(text: str) -> str:
+    """Normalization for action-item dedupe (mirrors ledger._norm's intent)."""
+    return re.sub(r"\W+", " ", (text or "").lower()).strip()
+
+
+def _merge_action_items(queued: list, extracted: list) -> list:
+    """Artifact actions[] = live-captured queue_action items first, then the
+    summarizer's extraction, deduped on normalized item text. A live capture
+    wins a collision — it is the wording the room actually asked for — and
+    ledger.record_meeting dedupes again on insert, so double-merging is safe."""
+    merged: list = []
+    seen: set[str] = set()
+    for q in queued or []:
+        text = (q.get("action") or "").strip()
+        key = _norm_action_text(text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        owner = (q.get("owner") or "").strip()
+        merged.append(
+            {
+                "item": text,
+                "owner": owner or "UNASSIGNED",
+                "deadline": (q.get("due") or "").strip(),
+                "gap_type": "none" if owner else "owner",
+                "requested_live": True,  # additive marker: asked out loud in-meeting
+            }
+        )
+    for a in extracted or []:
+        text = a.get("item", "") if isinstance(a, dict) else str(a)
+        key = _norm_action_text(text)
+        if key in seen:
+            continue
+        if key:
+            seen.add(key)
+        merged.append(a)
+    return merged
+
+
 async def _finalize_session(bot_id: str) -> dict | None:
     """End a session once: stop both vendors, build + store the artifact.
 
@@ -944,6 +985,18 @@ async def _finalize_session(bot_id: str) -> dict | None:
                 context=(integration or {}).get("brief", ""),  # CEDRIC: brief-grounded summary
             )
         )
+
+    # Live-captured action requests (tools.queue_action): fold them into the
+    # artifact's actions[] ahead of the summarizer's extraction, deduped on
+    # normalized item text. Runs BEFORE save_artifact and ledger.record_meeting
+    # so every consumer — stored artifact, wire artifact, ledger, autopilot —
+    # sees the same merged list. Plain non-orchestrated sessions benefit too.
+    queued_actions = list(getattr(session, "queued_actions", None) or [])
+    if queued_actions:
+        artifact["actions"] = _merge_action_items(
+            queued_actions, artifact.get("actions") or []
+        )
+        artifact["checklist"] = artifact["actions"]  # legacy alias, same list
 
     # The transcript is the raw material of the artifact — persist it so the
     # product output is complete (transcript + summary + checklist + email).
@@ -1283,6 +1336,19 @@ _THINK_LINES_IT = [
     "Un secondo che ci ragiono.",
 ]
 
+# Confirmation for a captured action request (queue_action seam): promises
+# follow-up after the call, never execution. Fixed lines so they're TTS-
+# prewarmed — the confirmation must land as fast as an ack.
+_QUEUE_LINES = [
+    "Got it — I'll queue that for approval in Slack right after the call.",
+    "Noted — I'll line that up for approval in Slack once we wrap.",
+    "On it — it goes to Slack for approval right after this meeting.",
+]
+_QUEUE_LINES_IT = [
+    "Ricevuto — lo metto in coda su Slack per l'approvazione appena finiamo.",
+    "Segnato — parte su Slack per l'approvazione subito dopo la call.",
+]
+
 # Listening cues spoken WHILE a human is mid-monologue (backchanneling, the
 # thing that makes a listener feel present). Two syllables max — anything
 # longer becomes an interruption instead of a nod.
@@ -1371,6 +1437,8 @@ async def _prewarm_tts_cache() -> None:
         *_ACK_LINES_IT,
         *_THINK_LINES,
         *_THINK_LINES_IT,
+        *_QUEUE_LINES,
+        *_QUEUE_LINES_IT,
         *_BACKCHANNEL_LINES,
         *_BACKCHANNEL_LINES_IT,
         *_GOODBYE_LINES,
@@ -2154,6 +2222,35 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # already bumped; this covers the no-audio overlap case (she was silent but
     # a previous answer was still generating).
     turn_gen = store.bump_speech_generation(session)
+
+    # ── action requests: capture, never execute (queue_action platform seam) ──
+    # "Cedric, can you send the recap?" is a request to DO something. Capture is
+    # DETERMINISTIC — no LLM call, no tool loop, nothing slower than an ack: the
+    # utterance itself becomes the queued action (the finalize summarizer and
+    # the orchestrator's approval card refine it), the spoken confirmation is a
+    # fixed line (cached TTS ⇒ instant), and action.requested fires OFF the
+    # live path for orchestrated sessions. wants_action_capture is deliberately
+    # narrow — content questions ("can you check if…") stay on the streamed
+    # path, and search intents keep their announced streamed answer. Placed
+    # BEFORE the generic ack: this confirmation IS the reply for the turn.
+    # Only when addressed by name: an unaddressed "someone should send X" is
+    # the summarizer's job at finalize.
+    if called and wants_action_capture(question) and not wants_web_search(question):
+        # detect_wake already stripped the wake word: `question` is the ask
+        # itself ("please schedule a follow-up with Marco on Friday").
+        tools.capture_action(session, question.strip())
+        if session.speech_generation != turn_gen:  # barge-in since the final landed
+            return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
+        line = _line_for(question, _QUEUE_LINES, _QUEUE_LINES_IT)
+        session.last_ack_at = time.time()  # the confirmation doubles as the ack
+        spoke = await _make_avatar_speak(
+            session,
+            line,
+            force=True,
+            generation=turn_gen,
+            audio=tts.cached_payload(line),
+        )
+        return JSONResponse({"ok": True, "spoke": bool(spoke), "action_capture": True})
 
     # ── instant acknowledgment ──
     # She was addressed BY NAME, so she will answer — say so immediately while

@@ -16,6 +16,7 @@ Public surface:
   - deliver_ended       — hand the finished artifact to the orchestrator
   - wire_artifact       — orchestrator-facing artifact copy (no transcript)
   - handle_webhook_status / notify_failed — relay Recall bot status
+  - notify_action_requested — fire action.requested when queue_action captures
   - inject_brief        — fold the meeting brief into the live prompt memory
 """
 from __future__ import annotations
@@ -31,6 +32,7 @@ from .integration import (  # noqa: F401
     deliver_ended,
     handle_webhook_status,
     inject_brief,
+    notify_action_requested,
     notify_failed,
     wire_artifact,
 )

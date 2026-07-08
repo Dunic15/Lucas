@@ -9,6 +9,8 @@ Deliberately tiny, deterministic, and KEY-FREE so the demo runs offline:
   - calculator    : safe arithmetic (percentages, totals, per-seat costs, splits)
   - date_math     : today's date, or how many days until a deadline
   - lookup_record : a SYNTHETIC in-memory 'system of record' (demo data only)
+  - queue_action  : capture a requested action for approval AFTER the call
+                    (in-memory on the live session — instant, zero I/O)
 
 Safety: the calculator parses an AST and only allows numeric arithmetic (never
 eval()); lookup_record returns SYNTHETIC data only — no real PII, matching the
@@ -112,6 +114,66 @@ def lookup_record(record_id: str = "", query: str = "") -> str:
     return f"error: no record for '{record_id or query}'. Known demo accounts: {known}"
 
 
+# ─────────────────────────── queue_action ─────────────────────────────
+# The "do something" bridge — a PLATFORM tool every avatar gets. A live
+# meeting is where actions are REQUESTED, never where they execute (execution
+# lives behind an approval after the call — e.g. Cedric's Slack cards, or
+# Laura's autopilot follow-up). When someone asks the avatar to DO something
+# ("send the recap", "book a follow-up"), this captures {action, owner, due}
+# on the live session, in memory only: no network, no disk, no sqlite —
+# latency is the product on the live path. Captured items are merged into the
+# post-meeting artifact's actions[] at finalize (main._finalize_session) and,
+# for orchestrated sessions, announced immediately via the action.requested
+# webhook (fired OFF the live path by cedric.notify_action_requested).
+def capture_action(session, action: str, owner: str = "", due: str = "") -> dict:
+    """The one capture primitive, shared by the queue_action tool handler and
+    main.py's deterministic live-path branch: append {action, owner, due} to
+    the session's in-memory list and fire the (off-path) webhook. Instant —
+    no network, no disk, no sqlite here.
+    """
+    item = {
+        "action": " ".join((action or "").split())[:300],
+        "owner": " ".join((owner or "").split())[:100],
+        "due": " ".join((due or "").split())[:100],
+    }
+    queued = getattr(session, "queued_actions", None)
+    if queued is None:
+        # In-memory only by design: "queued_actions" is not a persisted Session
+        # field, so this never touches sqlite on the live path. Items survive in
+        # the session object until finalize folds them into the artifact.
+        queued = []
+        session.queued_actions = queued
+    queued.append(item)
+    try:
+        # Orchestrated sessions get the action.requested webhook NOW (so the
+        # approval card is ready before the meeting ends). notify_ is a no-op
+        # for plain sessions and always dispatches off the live path. Lazy
+        # import keeps this module import-light and dependency-free offline.
+        from .cedric import notify_action_requested
+
+        notify_action_requested(session, session.bot_id, item)
+    except Exception:  # noqa: BLE001 — the webhook is a bonus; capture never fails
+        pass
+    return item
+
+
+def queue_action(
+    action: str = "", owner: str = "", due: str = "", session=None
+) -> str:
+    """Capture a requested action on the live session. Instant, in-memory."""
+    if not (action or "").strip():
+        return "error: 'action' is required — one short line saying what should be done"
+    if session is None:
+        # No live meeting session behind this conversation (e.g. the direct
+        # web-avatar page): be honest — nothing gets queued here.
+        return (
+            "note: there is no live meeting session, so nothing was queued — "
+            "tell the person you can only queue actions during a meeting."
+        )
+    capture_action(session, action, owner, due)
+    return "Noted — I'll queue that for approval in Slack right after the call."
+
+
 # ─────────────────────── registry (OpenAI/Groq format) ─────────────────
 # The `tools` array sent to the model. Descriptions matter: they're how the
 # model decides *when* to call each tool — keep them concrete.
@@ -178,21 +240,76 @@ TOOL_SPECS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "queue_action",
+            "description": (
+                "Queue a REQUESTED action for approval after the call. Use whenever "
+                "someone asks you to DO something: send an email or recap, schedule "
+                "or book a follow-up, create a ticket or doc, check on something, "
+                "remind someone, invite someone. This only captures the request — "
+                "it is executed AFTER the meeting behind an approval, never during "
+                "the call. NEVER claim the action was already done; confirm it is "
+                "queued for approval right after the call."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "One short line: what should be done.",
+                    },
+                    "owner": {
+                        "type": "string",
+                        "description": "Who should own or do it (a name), if stated.",
+                    },
+                    "due": {
+                        "type": "string",
+                        "description": "Deadline or timeframe if stated, e.g. 'Friday' or '2026-07-15'.",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
 ]
 
 _DISPATCH = {
     "calculator": calculator,
     "date_math": date_math,
     "lookup_record": lookup_record,
+    "queue_action": queue_action,
 }
 
+# Tools that receive the live session (to capture onto it). Everything else
+# keeps its plain signature — the session seam is strictly additive.
+_SESSION_TOOLS = {"queue_action"}
 
-def dispatch(name: str, args: dict) -> str:
-    """Run a tool by name with keyword args; always returns a string for the model."""
+
+def dispatch(name: str, args: dict, session=None) -> str:
+    """Run a tool by name with keyword args; always returns a string for the model.
+
+    `session` (optional) is the live store.Session — threaded only into the
+    tools listed in _SESSION_TOOLS so they can capture onto it.
+    """
     fn = _DISPATCH.get(name)
     if fn is None:
         return f"error: unknown tool '{name}'"
     try:
+        if name in _SESSION_TOOLS:
+            return str(fn(**(args or {}), session=session))
         return str(fn(**(args or {})))
     except TypeError as e:
         return f"error: bad arguments for '{name}' ({e})"
+
+
+def dispatch_for(session):
+    """`dispatch` bound to a live session — the same (name, args) callable the
+    LLM tool loop expects, but session-aware tools capture onto the session.
+    dispatch_for(None) behaves exactly like plain dispatch."""
+
+    def _dispatch(name: str, args: dict) -> str:
+        return dispatch(name, args, session=session)
+
+    return _dispatch
