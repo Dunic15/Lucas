@@ -1784,7 +1784,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
             )
             bot = await run_in_threadpool(
-                recall_client.create_bot, url, avatar_url, start
+                recall_client.create_bot, url, avatar_url, start, avatar.name
             )
             s = store.create(bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id)
             s.anam_conversation_id = conversation_id

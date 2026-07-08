@@ -99,6 +99,36 @@ def test_oversized_brief_is_400(client, recall_stubbed):
     assert client.post("/sessions/start", json=body).status_code == 400
 
 
+def test_calendar_autojoin_carries_avatar_bot_name(client, recall_stubbed, monkeypatch):
+    """Calendar-booked bots must join under the avatar's name — the echo guard
+    matches speaker == avatar.name, so a 'Laura'-labelled cedric bot would
+    answer its own transcribed speech (the self-conversation bug class)."""
+    monkeypatch.setattr(
+        main_module.recall_client, "verify_webhook", lambda body, headers: None
+    )
+    monkeypatch.setattr(settings, "calendar_invite_emails", "")
+    event = {
+        "avatar_id": "cedric",
+        "raw": {
+            "start": {"dateTime": "2099-07-02T15:00:00+02:00"},
+            "conferenceData": {
+                "entryPoints": [
+                    {"entryPointType": "video", "uri": "https://meet.google.com/cal-bot-name"}
+                ]
+            },
+        },
+    }
+
+    async def fake_events(payload):
+        return [event]
+
+    monkeypatch.setattr(main_module, "_calendar_events_from_payload", fake_events)
+    resp = client.post("/webhooks/recall-calendar", json={})
+    assert resp.status_code == 200, resp.text
+    assert recall_stubbed, resp.json()
+    assert recall_stubbed[-1]["bot_name"] == "Cedric"
+
+
 def test_auth_required_when_token_set(client, recall_stubbed, monkeypatch):
     monkeypatch.setattr(settings, "laura_api_token", "sekrit")
     assert client.post("/sessions/start", json=START_BODY).status_code == 401
