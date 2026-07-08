@@ -372,6 +372,29 @@ def test_live_route_async_ask_captures_and_confirms(
     assert integration["external_ref"] == {"team": "T1", "meet_session_id": "ms_1"}
 
 
+def test_live_route_capture_continuation_extends_item(
+    client, recall_stubbed, spoken, monkeypatch
+):
+    monkeypatch.setattr(cedric_callback, "send_action_requested", lambda *a: True)
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+
+    # First final captures; the same speaker's immediate follow-up (no wake
+    # word) extends the SAME item rather than becoming a new utterance.
+    _post_final(client, bot_id, "Ben", "Cedric, please send the recap")
+    body2 = _post_final(client, bot_id, "Ben", "to the whole team by Friday")
+    assert body2.get("capture_extended") is True
+
+    session = store.get(bot_id)
+    assert len(session.queued_actions) == 1  # still one action, just longer
+    action = session.queued_actions[0]["action"].lower()
+    assert "send the recap" in action and "by friday" in action
+
+    # A DIFFERENT speaker's next line is NOT swallowed into the capture.
+    session.last_capture = (session.queued_actions[0], "Ben", time.time())
+    body3 = _post_final(client, bot_id, "Marco", "I think Tuesday is better")
+    assert body3.get("capture_extended") is None
+
+
 def test_live_route_content_question_is_not_captured(
     client, recall_stubbed, spoken, monkeypatch
 ):

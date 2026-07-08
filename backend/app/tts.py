@@ -21,6 +21,7 @@ from fastapi import APIRouter, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from . import avatars
 from .config import settings
 
 router = APIRouter()
@@ -108,6 +109,14 @@ def _el_fallback_voice() -> str:
 _el_broken_voices: set[str] = set()
 
 
+def _norm_voice(el_voice: str) -> str:
+    """Normalize an avatar's ElevenLabs voice for cache keys: the global
+    default collapses to "" so prewarmed lines are shared across every avatar
+    that uses it (the pre-existing empty-voice key)."""
+    v = (el_voice or "").strip()
+    return "" if v == (settings.elevenlabs_voice_id or "").strip() else v
+
+
 async def _el_synthesize(voice_id: str, text: str) -> httpx.Response:
     r = await _get_el_client().post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
@@ -119,7 +128,7 @@ async def _el_synthesize(voice_id: str, text: str) -> httpx.Response:
     return r
 
 
-async def _tts_elevenlabs(text: str) -> dict | None:
+async def _tts_elevenlabs(text: str, el_voice: str = "") -> dict | None:
     """ElevenLabs with-timestamps. Returns the JSON payload, or None to fall back.
 
     Voice fallback chain: configured voice -> stock ElevenLabs voice -> None
@@ -129,7 +138,7 @@ async def _tts_elevenlabs(text: str) -> dict | None:
     """
     if not settings.elevenlabs_api_key:
         return None
-    voice_id = settings.elevenlabs_voice_id or _el_fallback_voice()
+    voice_id = el_voice or settings.elevenlabs_voice_id or _el_fallback_voice()
     if voice_id in _el_broken_voices:
         voice_id = _el_fallback_voice()
     try:
@@ -166,7 +175,7 @@ async def _tts_elevenlabs(text: str) -> dict | None:
 # fillers) cost zero after the first synth — see _prewarm in main.py.
 
 
-async def synthesize_cached(text: str) -> dict | None:
+async def synthesize_cached(text: str, el_voice: str = "") -> dict | None:
     """ElevenLabs payload (audio+timings) through the cache. None when
     ElevenLabs is unavailable or failed — callers then leave the speak message
     audio-less and the page falls back to POST /tts (which still has the free
@@ -174,7 +183,8 @@ async def synthesize_cached(text: str) -> dict | None:
     text = (text or "").strip()[:2000]
     if not text:
         return None
-    cache_key = f"|{text}"
+    el_voice = _norm_voice(el_voice)
+    cache_key = f"{el_voice}|{text}"
     cacheable = len(text) <= _CACHE_TEXT_MAX_CHARS
     if cacheable:
         cached = _cache_get(cache_key)
@@ -183,7 +193,7 @@ async def synthesize_cached(text: str) -> dict | None:
     if not settings.elevenlabs_api_key:
         return None
     t0 = time.perf_counter()
-    el = await _tts_elevenlabs(text)
+    el = await _tts_elevenlabs(text, el_voice)
     if el is None:
         return None
     if cacheable:
@@ -192,10 +202,10 @@ async def synthesize_cached(text: str) -> dict | None:
     return el
 
 
-def cached_payload(text: str) -> dict | None:
+def cached_payload(text: str, el_voice: str = "") -> dict | None:
     """Cache-only lookup — zero network, zero waiting. For lines whose SEND
     must never block on synthesis (acks, backchannels, the goodbye)."""
-    payload = _cache_get(f"|{(text or '').strip()[:2000]}")
+    payload = _cache_get(f"{_norm_voice(el_voice)}|{(text or '').strip()[:2000]}")
     return {**payload, "tts_ms": 0} if payload is not None else None
 
 
@@ -209,13 +219,23 @@ async def tts(req: TtsRequest) -> Response:
 
     import edge_tts
 
+    # THIS avatar's ElevenLabs voice (cedric speaks Eric, not the global
+    # default) — resolved from avatar.yaml; any load failure falls back to
+    # the global voice rather than failing the request.
+    try:
+        el_voice = avatars.load(req.avatar_id).elevenlabs_voice_id or ""
+    except Exception:  # noqa: BLE001 — unknown avatar id from the page
+        el_voice = ""
+    el_voice = _norm_voice(el_voice)
+
     # Cache hit: a short line we've already synthesized (ack/filler/goodbye) —
-    # instant, no vendor round-trip. Keyed on the requested voice too, so a
-    # voice override never plays another voice's audio.
-    cache_key = f"{(req.voice or '').strip()}|{text}"
+    # instant, no vendor round-trip. Keyed on the voice, so one avatar's line
+    # never plays in another avatar's voice.
+    cache_key = f"{el_voice}|{text}"
+    edge_key = f"edge:{(req.voice or '').strip()}|{text}"
     cacheable = len(text) <= _CACHE_TEXT_MAX_CHARS
     if cacheable:
-        cached = _cache_get(cache_key)
+        cached = _cache_get(cache_key) or _cache_get(edge_key)
         if cached is not None:
             return JSONResponse(
                 {**cached, "tts_ms": 0}, headers={"Cache-Control": "no-store"}
@@ -224,7 +244,7 @@ async def tts(req: TtsRequest) -> Response:
     # tts_ms: synthesis latency for the metrics picture (issue #3). A duration
     # only — the text itself is never logged or exported.
     t0 = time.perf_counter()
-    el = await _tts_elevenlabs(text)
+    el = await _tts_elevenlabs(text, el_voice)
     if el is not None:
         if cacheable:
             _cache_put(cache_key, dict(el))
@@ -252,7 +272,7 @@ async def tts(req: TtsRequest) -> Response:
         # Cache the edge voice only when it IS the configured voice. With an
         # ElevenLabs key present, landing here means a transient EL failure —
         # caching would freeze the robotic fallback in for the fixed lines
-        # long after ElevenLabs recovers.
-        _cache_put(cache_key, dict(payload))
+        # long after ElevenLabs recovers. Keyed apart from ElevenLabs entries.
+        _cache_put(edge_key, dict(payload))
     payload["tts_ms"] = int((time.perf_counter() - t0) * 1000)
     return JSONResponse(payload, headers={"Cache-Control": "no-store"})

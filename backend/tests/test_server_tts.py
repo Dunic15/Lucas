@@ -114,7 +114,7 @@ def test_stale_generation_skips_synth_and_send(monkeypatch):
 def test_synthesize_cached_and_cached_payload(monkeypatch):
     calls = {"n": 0}
 
-    async def fake_el(text):
+    async def fake_el(text, el_voice=""):
         calls["n"] += 1
         return {k: v for k, v in _PAYLOAD.items() if k != "tts_ms"}
 
