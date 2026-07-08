@@ -39,7 +39,11 @@ knowledge_packs:
 # Leave blank ("") to fall back to the global values in .env
 # (ELEVENLABS_VOICE_ID = the chosen Cedric voice).
 anam_avatar_id: ""
-elevenlabs_voice_id: ""
+# George — warm, captivating British male (ElevenLabs stock). Swap the id to
+# rebrand Cedric's voice; other good male options: Brian nPczCjzI2devNBz1zQrb
+# (deep American), Eric cjVigY5qzO86Huf0OWal (smooth American), Daniel
+# onwK4e9ZLuTAKqWW03F9 (British broadcaster).
+elevenlabs_voice_id: "JBFqnCBsd6RMkjVDRZzb"
 
 # When-to-speak tuning. Leave blank to use the global .env defaults.
 # (min_confidence is legacy — dead on the live path; SKIP gate rules.)
