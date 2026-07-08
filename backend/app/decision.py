@@ -121,7 +121,10 @@ def _fuzzy_wake_token(lower: str, wake: str, excluded: set[str]) -> str:
 
 
 def detect_wake(
-    avatar: Avatar, utterance: str, exclude_names: Iterable[str] = ()
+    avatar: Avatar,
+    utterance: str,
+    exclude_names: Iterable[str] = (),
+    fuzzy: bool = True,
 ) -> tuple[bool, str]:
     """If the utterance calls the avatar by a wake word, return (True, question).
 
@@ -151,7 +154,7 @@ def detect_wake(
         matched = (
             wake
             if re.search(rf"\b{re.escape(wake)}\b", lower)
-            else _fuzzy_wake_token(lower, wake, excluded)
+            else (_fuzzy_wake_token(lower, wake, excluded) if fuzzy else "")
         )
         if matched:
             if _is_reported_reference(lower, matched):

@@ -427,3 +427,78 @@ def test_roster_block_lists_quiet_participants():
     update(state, "Anna", "agreed", wake_words=["laura"])
     block = _roster_block(avatar, ["Duccio", "Marco Rossi", "Anna"], state)
     assert "Not yet heard from" not in block
+
+
+# ── echo guard + ack discipline (live-test fixes) ──
+
+
+def _partial_line_payload(bot_id: str, speaker: str, text: str) -> dict:
+    p = _line_payload(bot_id, speaker, text)
+    p["event"] = "transcript.partial_data"
+    return p
+
+
+def test_echo_final_line_not_answered_not_stored(tmp_path, monkeypatch):
+    s = _session(tmp_path, monkeypatch, bot_id="echo-bot-1")
+    s.memory_brief = ""
+    # she spoke this 2s ago (recorded by the repetition guard)
+    spoken_line = "The DPA confirmation comes right after the security review."
+    s._recent_lines[main._norm_line(spoken_line)] = _time.time() - 2
+    before = len(s.transcript)
+    body = _post(_line_payload(s.bot_id, "Duccio", spoken_line))
+    assert body.get("reason") == "echo"
+    assert len(s.transcript) == before, "echo must not pollute the transcript"
+    store.remove(s.bot_id)
+
+
+def test_echo_partial_does_not_barge_or_stamp(tmp_path, monkeypatch):
+    s = _session(tmp_path, monkeypatch, bot_id="echo-bot-2")
+    spoken_line = "The DPA confirmation comes right after the security review."
+    s._recent_lines[main._norm_line(spoken_line)] = _time.time() - 1
+    s.speaking_until = _time.time() + 5  # she's mid-answer
+    stopped = []
+
+    async def fake_stop(session):
+        stopped.append(True)
+
+    monkeypatch.setattr(main, "_make_avatar_stop", fake_stop)
+    # echo partial: a chunk of her own sentence, attributed to a human
+    body = _post(_partial_line_payload(s.bot_id, "Duccio", "The DPA confirmation comes right after"))
+    assert body.get("echo") is True
+    assert not stopped, "her own echo must never barge in on her"
+    assert s.last_human_partial_at == 0.0, "echo must not cancel deference"
+    store.remove(s.bot_id)
+
+
+def test_filler_partial_does_not_barge_in(tmp_path, monkeypatch):
+    s = _session(tmp_path, monkeypatch, bot_id="filler-bot-1")
+    s.speaking_until = _time.time() + 5
+    assert not main._should_barge_in(s, "Laura", "Duccio", "yeah yeah okay")
+    assert not main._should_barge_in(s, "Laura", "Duccio", "sì sì va bene")
+    assert main._should_barge_in(s, "Laura", "Duccio", "wait I have a question")
+    store.remove(s.bot_id)
+
+
+def test_partial_ack_requires_exact_name_and_a_forming_question(tmp_path, monkeypatch):
+    from app.config import settings
+
+    s = _session(tmp_path, monkeypatch, bot_id="ack-bot-1")
+    spoken = []
+
+    async def fake_speak(session, line, citations=None, **kw):
+        spoken.append(line)
+        return True
+
+    monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+    monkeypatch.setattr(settings, "backchannel_enabled", False)
+
+    # bare name: no ack yet (the question hasn't formed)
+    _post(_partial_line_payload(s.bot_id, "Duccio", "Laura"))
+    assert not spoken
+    # fuzzy/corrupted name on a partial: never an audible ack
+    _post(_partial_line_payload(s.bot_id, "Duccio", "Lara what's the process"))
+    assert not spoken
+    # exact name + question forming: ack fires
+    _post(_partial_line_payload(s.bot_id, "Duccio", "Laura what's the process"))
+    assert spoken, "exact name with 3+ words should ack"
+    store.remove(s.bot_id)

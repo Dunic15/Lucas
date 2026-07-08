@@ -1473,17 +1473,48 @@ def _is_own_speech(avatar_name: str, speaker: str) -> bool:
     return speaker.strip().lower() in (avatar_name.strip().lower(), "laura")
 
 
+def _is_echo(session: store.Session, text: str) -> bool:
+    """True when a 'human' line is actually HER OWN voice re-entering through a
+    participant's mic (open speakers, no headphones): the transcribed text is a
+    chunk of something she spoke seconds ago. Without this, her echo barges in
+    on herself (she stops mid-answer 'on noise') and the final line even gets
+    answered as if a human said it."""
+    norm = _norm_line(text)
+    if len(norm) < 12 or len(norm.split()) < 3:
+        return False  # too short to attribute — leave it to the other gates
+    now = time.time()
+    return any(
+        now - ts < 45.0 and norm in spoken
+        for spoken, ts in session._recent_lines.items()
+    )
+
+
+# Partials made ONLY of filler/backchannel tokens ("yeah yeah", "uh uh ok",
+# "sì sì va bene") — listening noises, never an interruption.
+_FILLER_ONLY = re.compile(
+    r"^(?:\s*(?:uh|um|mm+|hm+|eh|ah|oh|yeah|yep|yes|no|ok(?:ay)?|right|sure|"
+    r"sì|si|già|va bene|bene|certo|ecco|beh|cioè|esatto|capito|giusto)"
+    r"\b[\s,.!?]*)+$",
+    re.IGNORECASE,
+)
+
+
 def _should_barge_in(session: store.Session, avatar_name: str, speaker: str, text: str) -> bool:
     """A human talked while Laura is (estimated) still speaking -> interrupt her.
 
-    Not her own transcribed speech (the meeting bot hears her too), and not a
-    2-word backchannel ("yeah", "ok right") — those shouldn't cut her off.
+    Not her own transcribed speech (the meeting bot hears her too), not her own
+    ECHO through someone's open mic, and not filler/backchannels ("yeah yeah",
+    "ok right") — those shouldn't cut her off.
     """
     if not settings.barge_in_enabled:
         return False
     if _is_own_speech(avatar_name, speaker):
         return False
     if len(text.split()) < 3:
+        return False
+    if _FILLER_ONLY.match(text):
+        return False
+    if _is_echo(session, text):
         return False
     return time.time() < session.speaking_until
 
@@ -1723,6 +1754,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
             await _make_avatar_stop(session)
         if _is_own_speech(avatar.name, speaker):
             return JSONResponse({"ok": True, "partial": True})
+        # Her own echo through an open mic is not a human talking: it must not
+        # ack, backchannel, or (via the stamp below) cancel a deference wait.
+        if _is_echo(session, text):
+            return JSONResponse({"ok": True, "partial": True, "echo": True})
         # A human is audibly talking right now — any deference window waiting
         # on the final-transcript path sees this and yields to them.
         session.last_human_partial_at = time.time()
@@ -1737,6 +1772,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if (
             settings.ack_enabled
             and called
+            # Ack discipline: partials are noisy half-words, so the ack (an
+            # audible "Sure —") needs the EXACT name — a fuzzy match on a
+            # partial fragment must never make her speak. And wait until a
+            # question is actually forming (3+ words): a bare "Laura…" pause
+            # acked instantly reads as talking over the person.
+            and len(text.split()) >= 3
+            and detect_wake(avatar, text, session.present_names(), fuzzy=False)[0]
             # Search questions are announced by the answer stream itself.
             and not wants_web_search(question or text)
             # One ack per turn: partial streams repeat the same growing text.
@@ -1840,6 +1882,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
     speaker = session.resolve_speaker(participant.get("name"), participant.get("id"))
     if not text:
         return JSONResponse({"ok": True})
+
+    # Her own voice re-entering through a participant's open mic: not a human
+    # line. Keep it out of the transcript (it would pollute per-person
+    # tracking and could even get ANSWERED as if a person said it).
+    if _is_echo(session, text):
+        return JSONResponse({"ok": True, "spoke": False, "reason": "echo"})
 
     session.add_utterance(speaker, text)
     avatar = avatars.load(session.avatar_id)
