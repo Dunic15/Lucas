@@ -99,12 +99,29 @@
 
   const params = new URLSearchParams(location.search);
 
-  // HD photorealistic model (Avaturn sample from the TalkingHead repo), vendored
+  // HD photorealistic models (samples from the TalkingHead repo), vendored
   // into OUR repo and served same-origin: Ready Player Me's CDN shutdown
   // (Jan 2026) killed the previous third-party URL — never again. Override for
   // A/B tests with ?avatar_url=<glb url> (must have ARKit+Oculus viseme morphs).
-  const AVATAR_URL = params.get("avatar_url") || "/laura.glb";
   const avatarId = params.get("avatar_id") || "laura";
+  // Per-avatar model convention: an explicit ?avatar_url= always wins; otherwise
+  // a non-laura avatar_id probes same-origin /{avatar_id}.glb (e.g. /cedric.glb)
+  // and uses it if the backend serves one, falling back to /laura.glb. The HEAD
+  // probe is fired NOW, unawaited, so it overlaps Three.js/TalkingHead init
+  // below; Laura herself never probes — zero added latency on today's live path.
+  const explicitAvatarUrl = params.get("avatar_url");
+  const avatarUrlPromise = (async () => {
+    if (explicitAvatarUrl) return explicitAvatarUrl;
+    if (avatarId === "laura" || !/^[a-z0-9_-]+$/i.test(avatarId)) return "/laura.glb";
+    try {
+      const probe = await fetch(`/${avatarId}.glb`, { method: "HEAD" });
+      if (probe.ok) return `/${avatarId}.glb`;
+    } catch (_) { /* backend doesn't serve one — fall back */ }
+    return "/laura.glb";
+  })();
+  // TalkingHead pose/gesture set ("F" | "M"). "F" is the historical default
+  // (Laura); male avatars pass ?body=M until gender travels with avatar config.
+  const BODY = (params.get("body") || "F").toUpperCase() === "M" ? "M" : "F";
   const status = (t) => (document.getElementById("status").textContent = t);
 
   const head = new TalkingHead(document.getElementById("stage"), {
@@ -133,7 +150,45 @@
 
   try {
     status("loading avatar…");
-    await head.showAvatar({ url: AVATAR_URL, body: "F", lipsyncLang: "en" });
+    const AVATAR_URL = await avatarUrlPromise;
+    await head.showAvatar({ url: AVATAR_URL, body: BODY, lipsyncLang: "en" });
+    // Some avatar sources (e.g. MetaPerson — cedric.glb) ship per-eye eyeLook*
+    // morphs but NOT the aggregate eyesLookUp/eyesLookDown that TalkingHead's
+    // eye-contact system writes every frame. The missing key made animate()
+    // throw per-frame: no blinking, no breathing, head frozen mid-pose.
+    // Create the aggregates as INERT SINKS (they exist to be written, drive no
+    // morphs): the vertical-gaze compensation that feeds them is calibrated to
+    // RPM bind poses and computes garbage on this rig (~0.9 "look down" for a
+    // level head). Forwarding even a capped value to the per-eye lookDown
+    // morphs drooped his upper lids — he sat in meetings with his eyes shut.
+    // Horizontal eye contact still works via the native eyeLookIn/Out morphs;
+    // the camera sits at eye height, so vertical tracking loses nothing.
+    const sinkEyeMorph = (agg, likeKey) => {
+      if (head.mtAvatar?.[agg] || !head.mtAvatar?.[likeKey]) return;
+      head.mtAvatar[agg] = Object.assign({}, head.mtAvatar[likeKey], {
+        ms: [], is: [],
+        value: 0, applied: 0, needsUpdate: false,
+        system: null, fixed: null, newvalue: null, base: null, limit: null,
+      });
+      // The blink limiter reads the sink's value and would pin his lids
+      // >= eyesLookDown/2 — the same garbage signal by another path. Blink
+      // anims write the eyeBlink morphs directly, so dropping the limiter
+      // only removes the bogus floor, never real blinks.
+      for (const k of ["eyeBlinkLeft", "eyeBlinkRight"]) {
+        if (head.mtAvatar[k]) head.mtAvatar[k].limit = null;
+      }
+    };
+    sinkEyeMorph("eyesLookDown", "eyeLookDownLeft");
+    sinkEyeMorph("eyesLookUp", "eyeLookUpLeft");
+    // MetaPerson skeletons carry different bind orientations than the RPM/
+    // Avaturn rigs TalkingHead's pose templates were authored on — untouched,
+    // the head lands pitched ~25° down staring at the floor. A small fixed
+    // baseline levels it (values tuned live against cedric.glb). Keyed on the
+    // rig's AvatarHead mesh, so laura.glb (Avaturn, no such node) is untouched.
+    if (head.armature?.getObjectByName?.("AvatarHead")) {
+      head.setBaselineValue("headRotateX", -0.45);
+      head.setBaselineValue("headRotateY", 0.08);
+    }
     head.start();
     // Meeting-webcam framing: CLOSE face shot, eyes on the upper third, a hint
     // of shoulders — like a participant sitting near their camera. Values tuned

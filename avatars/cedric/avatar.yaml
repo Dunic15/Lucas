@@ -45,11 +45,15 @@ knowledge_packs:
 # Leave blank ("") to fall back to the global values in .env
 # (ELEVENLABS_VOICE_ID = the chosen Cedric voice).
 anam_avatar_id: ""
-# George — warm, captivating British male (ElevenLabs stock). Swap the id to
-# rebrand Cedric's voice; other good male options: Brian nPczCjzI2devNBz1zQrb
-# (deep American), Eric cjVigY5qzO86Huf0OWal (smooth American), Daniel
-# onwK4e9ZLuTAKqWW03F9 (British broadcaster).
-elevenlabs_voice_id: "JBFqnCBsd6RMkjVDRZzb"
+# Eric — smooth, trustworthy American male (ElevenLabs stock, conversational),
+# owner's pick 2026-07-08 from the voice-previews/ shortlist. Runners-up:
+# George JBFqnCBsd6RMkjVDRZzb (warm British storyteller, Ben's placeholder),
+# Daniel onwK4e9ZLuTAKqWW03F9 (British broadcaster), Brian nPczCjzI2devNBz1zQrb
+# (deep American).
+elevenlabs_voice_id: "cjVigY5qzO86Huf0OWal"
+# His face is frontend/cedric.glb (served at /cedric.glb; /talk finds it by
+# avatar id). "M" picks TalkingHead's masculine pose/gesture set on /talk.
+talk_body: M
 
 # When-to-speak tuning. Leave blank to use the global .env defaults.
 # (min_confidence is legacy — dead on the live path; SKIP gate rules.)

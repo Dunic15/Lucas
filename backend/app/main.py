@@ -32,6 +32,7 @@ from fastapi.responses import (
     FileResponse,
     JSONResponse,
     RedirectResponse,
+    Response,
     StreamingResponse,
 )
 from pydantic import BaseModel
@@ -606,13 +607,24 @@ def photoreal_reference() -> FileResponse:
     )
 
 
-@app.get("/laura.glb")
-def talk_avatar_model() -> FileResponse:
-    """The 3D avatar model for /talk, served same-origin on purpose: Ready Player
-    Me's CDN shutdown (Jan 2026) killed our previous third-party model URL, so the
-    HD model (Avaturn sample from the TalkingHead repo) is vendored into the repo."""
+@app.api_route("/{avatar_id}.glb", methods=["GET", "HEAD"])
+def talk_avatar_model(avatar_id: str) -> Response:
+    """Per-avatar 3D model for /talk (laura.glb, cedric.glb, …), served
+    same-origin on purpose: Ready Player Me's CDN shutdown (Jan 2026) killed our
+    previous third-party model URL, so the models (TalkingHead-repo samples) are
+    vendored into frontend/. /talk HEAD-probes /{avatar_id}.glb and falls back to
+    /laura.glb, so a missing model 404s here without ever breaking the page.
+    HEAD must be explicit — FastAPI's @app.get alone 405s it, which would have
+    silently defeated the probe (curl -I caught this; FileResponse handles HEAD
+    natively). Whitelisted to simple ids resolving to real files — never a
+    path traversal."""
+    if not re.fullmatch(r"[a-z0-9_-]{1,64}", avatar_id):
+        return JSONResponse({"error": "unknown model"}, status_code=404)
+    model_path = FRONTEND_DIR / f"{avatar_id}.glb"
+    if not model_path.is_file():
+        return JSONResponse({"error": "unknown model"}, status_code=404)
     return FileResponse(
-        FRONTEND_DIR / "laura.glb",
+        model_path,
         media_type="model/gltf-binary",
         headers={"Cache-Control": "public, max-age=86400"},
     )
@@ -840,6 +852,7 @@ async def _start_avatar_session(
     avatar_url = (
         f"{settings.public_base_url.rstrip('/')}/{settings.avatar_page.strip('/')}"
         f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
+        f"&body={avatar.talk_body}"
     )
     bot = await run_in_threadpool(
         recall_client.create_bot, meeting_url, avatar_url, join_at, avatar.name
@@ -1850,6 +1863,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             avatar_url = (
                 f"{settings.public_base_url.rstrip('/')}/{settings.avatar_page.strip('/')}"
                 f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
+                f"&body={avatar.talk_body}"
             )
             bot = await run_in_threadpool(
                 recall_client.create_bot, url, avatar_url, start, avatar.name
