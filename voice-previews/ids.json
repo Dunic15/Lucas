@@ -1,0 +1,25 @@
+{
+  "laura": {
+    "description": "Warm, confident Italian professional woman in her early thirties. Clear, friendly, naturally conversational — an AI meeting assistant who sounds like a smart, easygoing colleague. Slight Italian accent, composed energy, never robotic or salesy.",
+    "sample": "Ciao a tutti, sono Laura, piacere di conoscervi! Before we close, I didn't hear who owns the security review — should we assign an owner before go-live? Perfetto, allora procediamo così: vi mando io il riepilogo con le azioni e le scadenze, e ci sentiamo la prossima settimana.",
+    "ids": {
+      "candidate-1": "fnMLG1wQq6MF1clLx5uT",
+      "candidate-2": "4EHVY1sz4Hnq973IgO56",
+      "candidate-3": "ecyYUw5v5WnmEZ37Dcdv"
+    }
+  },
+  "cedric": {
+    "description": "Warm, professional man — an AI chief-of-staff who joins meetings prepared: composed, trustworthy, quietly confident, never salesy. ElevenLabs STOCK voices only (custom/plan-tier voices 402 on this account). Pick to beat: George (JBFqnCBsd6RMkjVDRZzb), Ben's placeholder in avatars/cedric/avatar.yaml. Synthesized with eleven_flash_v2_5 (the production TTS model) so previews sound like the live product.",
+    "sample": "Hi, I'm Cedric — I've read the brief, and I had a look at what last week's meeting left open. Ready when you are.",
+    "ids": {
+      "candidate-1": "onwK4e9ZLuTAKqWW03F9",
+      "candidate-2": "cjVigY5qzO86Huf0OWal",
+      "candidate-3": "nPczCjzI2devNBz1zQrb"
+    },
+    "notes": {
+      "candidate-1": "Daniel — British, middle-aged, steady broadcaster. The direct alternative to George: same accent family, more newsroom-crisp, less storyteller-soft.",
+      "candidate-2": "Eric — American, middle-aged, smooth and trustworthy; ElevenLabs' purpose-built conversational voice. Warmest of the three.",
+      "candidate-3": "Brian — American, middle-aged, deep, resonant, comforting. The most gravitas; reads slightly more 'narrator' than colleague."
+    }
+  }
+}
