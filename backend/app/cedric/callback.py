@@ -111,7 +111,9 @@ def send_ended(integration: dict | None, bot_id: str, artifact: dict) -> bool:
         "bot_id": bot_id,
         "external_ref": (integration or {}).get("external_ref") or {},
         "ended_at": _now_iso(),
-        "artifact": artifact,
+        # Belt and braces: callers pass the wire copy already, but raw
+        # transcripts are PII and must never leave regardless of the caller.
+        "artifact": {k: v for k, v in artifact.items() if k != "transcript"},
     }
     attempts = len(ENDED_BACKOFF) + 1
     for attempt in range(attempts):

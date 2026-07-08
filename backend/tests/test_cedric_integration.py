@@ -139,13 +139,27 @@ def test_end_delivers_ended_callback(client, recall_stubbed, monkeypatch):
     resp = client.post(f"/sessions/{bot_id}/end")
     assert resp.status_code == 200
     artifact = resp.json()
-    assert "transcript" in artifact and "summary" in artifact
+    # The wire artifact is distilled: transcripts are PII and stay home.
+    assert "transcript" not in artifact
+    assert "summary" in artifact
+    assert artifact["artifact_version"] == 1
 
     assert len(delivered) == 1
     integration, delivered_bot, delivered_artifact = delivered[0]
     assert delivered_bot == bot_id
     assert integration["external_ref"]["meet_session_id"] == "ms_1"
-    assert delivered_artifact["transcript"] == artifact["transcript"]
+    assert "transcript" not in delivered_artifact
+    assert delivered_artifact["artifact_version"] == 1
+    assert delivered_artifact["summary"] == artifact["summary"]
+    # The full artifact (transcript included) is still served by the LOCAL
+    # meetings archive — the PII boundary is the orchestrator API, not disk.
+    stored = client.get("/meetings/list").json()["meetings"]
+    assert any("transcript" in m.get("artifact", {}) for m in stored)
+    # And the orchestrator's poll endpoint serves the same distilled copy.
+    polled = client.get(f"/sessions/{bot_id}/artifact").json()
+    assert polled["status"] == "done"
+    assert "transcript" not in polled
+    assert polled["artifact_version"] == 1
 
 
 def test_ended_callback_payload_signature_and_retries(monkeypatch):
@@ -174,7 +188,9 @@ def test_ended_callback_payload_signature_and_retries(monkeypatch):
     assert payload["event"] == "session.ended"
     assert payload["bot_id"] == "bot_9"
     assert payload["external_ref"] == {"a": 1}
-    assert payload["artifact"]["transcript"] == "t"
+    assert payload["artifact"]["summary"] == "s"
+    # Even when a caller hands the transport a raw artifact, PII never ships.
+    assert "transcript" not in payload["artifact"]
 
 
 def test_signature_headers_hmac(monkeypatch):

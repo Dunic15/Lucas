@@ -49,6 +49,7 @@ from . import (
     gpu_runtime,
     ledger,
     meeting_state,
+    org_api,
     tts,
 )
 from .brain import (
@@ -115,6 +116,7 @@ async def _lifespan(app: FastAPI):
 
 app = FastAPI(title="Callable AI Process Avatar", lifespan=_lifespan)
 app.include_router(tts.router)  # POST /tts (open-source avatar voice)
+app.include_router(org_api.router)  # /org/* — org-memory seam for surfaces (#48)
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).
@@ -983,7 +985,7 @@ async def end_session(bot_id: str, request: Request) -> JSONResponse:
     artifact = await _finalize_session(bot_id)
     if artifact is None:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    return JSONResponse(artifact)
+    return JSONResponse(cedric.wire_artifact(artifact))  # CEDRIC: PII stays home
 
 
 @app.post("/sessions/{bot_id}/cancel")
@@ -1076,7 +1078,7 @@ def session_artifact(bot_id: str, request: Request) -> JSONResponse:
     artifact = store.get_artifact(bot_id)
     if artifact is None:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    return JSONResponse({"status": "done", **artifact})
+    return JSONResponse({"status": "done", **cedric.wire_artifact(artifact)})  # CEDRIC: PII stays home
 
 
 @app.get("/meetings")

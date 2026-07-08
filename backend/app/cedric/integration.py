@@ -82,6 +82,21 @@ def build_integration(req: Any, brief: str) -> Optional[dict]:
     }
 
 
+# Transcripts are PII: they live in the local artifact store (served only by
+# the local /meetings archive) and NEVER cross the orchestrator API — webhooks
+# and the session endpoints get the distilled artifact. The version marker lets
+# clients parse additively as fields are added.
+ARTIFACT_VERSION = 1
+
+
+def wire_artifact(artifact: dict) -> dict:
+    """The orchestrator-facing copy of an artifact: distilled fields only, no
+    raw transcript, stamped with ``artifact_version``."""
+    wire = {k: v for k, v in artifact.items() if k != "transcript"}
+    wire["artifact_version"] = ARTIFACT_VERSION
+    return wire
+
+
 def deliver_ended(integration: Optional[dict], bot_id: str, artifact: dict) -> bool:
     """Hand the finished artifact to the orchestrator's webhook (retried inside
     send_ended). Fire-and-forget — the artifact is already saved and the
@@ -90,7 +105,9 @@ def deliver_ended(integration: Optional[dict], bot_id: str, artifact: dict) -> b
     approval-gated email + Slack for its sessions)."""
     if integration and integration.get("callback_url"):
         asyncio.create_task(
-            run_in_threadpool(callback.send_ended, integration, bot_id, artifact)
+            run_in_threadpool(
+                callback.send_ended, integration, bot_id, wire_artifact(artifact)
+            )
         )
         return True
     return False
