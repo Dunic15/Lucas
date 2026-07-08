@@ -15,14 +15,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import avatars  # noqa: E402
-from app.rag import build_index, retrieve  # noqa: E402
+from app.rag import build_about_index, build_index, retrieve  # noqa: E402
 
 
 SMOKE_QUERIES = [
-    "why is Laura not talking",
-    "what is RECALL_API_BASE",
-    "does web_gpu improve quality",
-    "should we change Groq",
+    "what are we missing before go-live",
+    "who approves security review",
+    "what accounts does a new hire need",
+    "when is the DPA required",
 ]
 
 
@@ -83,6 +83,13 @@ def main() -> None:
             print(f"    - {doc.name}")
         count = build_index(avatar)
         print(f"  {avatar.id:<12} indexed {count} chunks -> {avatar.index_path}")
+        # Self-knowledge pack (about/): separate index, self-questions only.
+        about_count = build_about_index(avatar)
+        if about_count:
+            print(
+                f"  {avatar.id:<12} about-indexed {about_count} chunks -> "
+                f"{avatar.about_index_path}"
+            )
         if args.check:
             _run_checks(avatar, args.query)
 

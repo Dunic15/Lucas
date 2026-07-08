@@ -41,6 +41,10 @@ class MeetingState:
     deadlines: list[dict] = field(default_factory=list)
     risks: list[dict] = field(default_factory=list)
     open_questions: list[str] = field(default_factory=list)
+    # Per-person view of the meeting: name -> {"lines", "commitments",
+    # "questions", "risks"}. Powers "what did Marco commit to?" live and the
+    # by-owner action list in the artifact. Avatar's own lines are excluded.
+    per_person: dict[str, dict] = field(default_factory=dict)
     should_intervene: bool = False
     intervention_reason: str = ""
 
@@ -65,6 +69,7 @@ class MeetingState:
             "deadlines": list(self.deadlines),
             "risks": list(self.risks),
             "open_questions": list(self.open_questions),
+            "per_person": {k: dict(v) for k, v in self.per_person.items()},
             "should_intervene": self.should_intervene,
             "intervention_reason": self.intervention_reason,
         }
@@ -301,6 +306,7 @@ _INTERVENTION_TAILS = {
 _DEFAULT_INTERVENTION_TAIL = "Should we assign owners before we close this out?"
 
 _LIST_CAP = 20  # keep state lists bounded no matter how long the meeting runs
+_PERSON_CAP = 8  # per-person list bound (commitments/questions/risks each)
 
 
 def humanize_step(step: str) -> str:
@@ -363,6 +369,34 @@ def _extract_owner(text: str) -> str:
         if m:
             return m.group(1)
     return ""
+
+
+def _person(state: MeetingState, name: str) -> dict | None:
+    """The per-person entry for `name`, merging by first name so an extracted
+    owner ("Marco") lands on the platform speaker ("Marco Rossi"). Returns
+    None when the roster cap is hit (state stays bounded on huge calls)."""
+    key = (name or "").strip()
+    if not key:
+        return None
+    first = key.split()[0].lower()
+    for existing, entry in state.per_person.items():
+        if existing.split()[0].lower() == first:
+            return entry
+    if len(state.per_person) >= _LIST_CAP:
+        return None
+    entry = {"lines": 0, "commitments": [], "questions": [], "risks": []}
+    state.per_person[key] = entry
+    return entry
+
+
+def _person_append(entries: list, text: str) -> None:
+    """Append a per-person snippet with dedupe and a tight cap."""
+    norm = text.strip().lower()
+    if len(entries) >= _PERSON_CAP:
+        return
+    if any(str(e).strip().lower() == norm for e in entries):
+        return
+    entries.append(text)
 
 
 def _append(entries: list, entry: Any, key: str | None = None) -> None:
@@ -449,6 +483,27 @@ def update(
         and _PROCESS_QUESTION.search(text)
     ):
         _append(state.open_questions, text[:160])
+
+    # ── per-person tracking ──
+    # Fold this line into the speaker's own view (talk share, self-commitments,
+    # questions, risks). The avatar's lines are excluded — its name is the wake
+    # word. An extracted owner is credited even when someone ELSE assigned it
+    # ("Marco will own the rollout" credits Marco, whoever said it).
+    wake_set = {str(w).strip().lower() for w in wake_words}
+    if speaker and speaker.strip().lower() not in wake_set:
+        p = _person(state, speaker)
+        if p is not None:
+            p["lines"] += 1
+            if _SELF_OWNER.search(text):
+                _person_append(p["commitments"], text[:120])
+            if text.rstrip().endswith("?") and not addressed_to_avatar:
+                _person_append(p["questions"], text[:120])
+            if _RISK.search(text):
+                _person_append(p["risks"], text[:120])
+    if owner and owner.strip().lower() not in wake_set:
+        target = _person(state, owner)
+        if target is not None:
+            _person_append(target["commitments"], text[:120])
 
     if detect_closing(text):
         state.stage = "wrapping_up"
@@ -554,4 +609,19 @@ def state_summary(state: MeetingState) -> str:
         lines.append("Risks: " + "; ".join(r["risk"] for r in state.risks[:5]))
     if state.open_questions:
         lines.append("Open questions: " + "; ".join(state.open_questions[:5]))
+    # Per-person block: only people with actual content (a bare line count is
+    # noise), capped tight — this goes into the latency-critical live prompt.
+    person_bits = []
+    for name, p in state.per_person.items():
+        frags = []
+        if p["commitments"]:
+            frags.append("committed to: " + " / ".join(p["commitments"][:2]))
+        if p["questions"]:
+            frags.append("asked: " + p["questions"][-1])
+        if p["risks"]:
+            frags.append("flagged: " + p["risks"][-1])
+        if frags:
+            person_bits.append(f"{name} ({p['lines']} turns) — " + "; ".join(frags))
+    if person_bits:
+        lines.append("Per person:\n  " + "\n  ".join(person_bits[:6]))
     return "\n".join(lines)

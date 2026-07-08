@@ -54,5 +54,10 @@ def test_avatar_speech_queues_when_websocket_is_missing():
 
     assert session.ws is None
     assert store.drain_avatar_messages(session) == [
-        {"type": "speak", "text": "Hello from Laura.", "citations": []}
+        {
+            "type": "speak",
+            "text": "Hello from Laura.",
+            "citations": [],
+            "generation_id": 0,
+        }
     ]

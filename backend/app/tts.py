@@ -14,6 +14,7 @@ meeting path, so it lives behind its own APIRouter.
 from __future__ import annotations
 
 import time
+from collections import OrderedDict
 
 import httpx
 from fastapi import APIRouter, Response
@@ -25,6 +26,30 @@ from .config import settings
 router = APIRouter()
 
 _TTS_DEFAULT_VOICE = "en-US-AriaNeural"
+
+# Synthesis cache for SHORT lines. The fixed conversational furniture — acks
+# ("Mm-hm."), search/think fillers, goodbyes, repair lines — repeats constantly,
+# and each repeat used to pay a full vendor round-trip (~300-800ms) right where
+# perceived latency matters most (the ack is the FIRST thing the room hears).
+# In-memory only (transcript-adjacent text is PII: never on disk, never logged),
+# capped, cleared on restart/deploy.
+_CACHE_MAX_ENTRIES = 64
+_CACHE_TEXT_MAX_CHARS = 160
+_tts_cache: OrderedDict[str, dict] = OrderedDict()
+
+
+def _cache_get(key: str) -> dict | None:
+    payload = _tts_cache.get(key)
+    if payload is not None:
+        _tts_cache.move_to_end(key)
+    return payload
+
+
+def _cache_put(key: str, payload: dict) -> None:
+    _tts_cache[key] = payload
+    _tts_cache.move_to_end(key)
+    while len(_tts_cache) > _CACHE_MAX_ENTRIES:
+        _tts_cache.popitem(last=False)
 
 
 class TtsRequest(BaseModel):
@@ -133,6 +158,47 @@ async def _tts_elevenlabs(text: str) -> dict | None:
         return None
 
 
+# ── server-side synthesis (the live path rides the speak message) ──
+# The meeting backend synthesizes each sentence ITSELF and attaches the audio
+# (+ word timings) to the {type:"speak"} message, so the avatar page skips its
+# whole /tts round-trip and speaks the moment the message lands. Shares the
+# LRU cache with the /tts endpoint (empty-voice key), so fixed lines (acks,
+# fillers) cost zero after the first synth — see _prewarm in main.py.
+
+
+async def synthesize_cached(text: str) -> dict | None:
+    """ElevenLabs payload (audio+timings) through the cache. None when
+    ElevenLabs is unavailable or failed — callers then leave the speak message
+    audio-less and the page falls back to POST /tts (which still has the free
+    edge-tts fallback), so nothing ever goes silent."""
+    text = (text or "").strip()[:2000]
+    if not text:
+        return None
+    cache_key = f"|{text}"
+    cacheable = len(text) <= _CACHE_TEXT_MAX_CHARS
+    if cacheable:
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return {**cached, "tts_ms": 0}
+    if not settings.elevenlabs_api_key:
+        return None
+    t0 = time.perf_counter()
+    el = await _tts_elevenlabs(text)
+    if el is None:
+        return None
+    if cacheable:
+        _cache_put(cache_key, dict(el))
+    el["tts_ms"] = int((time.perf_counter() - t0) * 1000)
+    return el
+
+
+def cached_payload(text: str) -> dict | None:
+    """Cache-only lookup — zero network, zero waiting. For lines whose SEND
+    must never block on synthesis (acks, backchannels, the goodbye)."""
+    payload = _cache_get(f"|{(text or '').strip()[:2000]}")
+    return {**payload, "tts_ms": 0} if payload is not None else None
+
+
 @router.post("/tts")
 async def tts(req: TtsRequest) -> Response:
     text = (req.text or "").strip()[:2000]
@@ -143,11 +209,25 @@ async def tts(req: TtsRequest) -> Response:
 
     import edge_tts
 
+    # Cache hit: a short line we've already synthesized (ack/filler/goodbye) —
+    # instant, no vendor round-trip. Keyed on the requested voice too, so a
+    # voice override never plays another voice's audio.
+    cache_key = f"{(req.voice or '').strip()}|{text}"
+    cacheable = len(text) <= _CACHE_TEXT_MAX_CHARS
+    if cacheable:
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return JSONResponse(
+                {**cached, "tts_ms": 0}, headers={"Cache-Control": "no-store"}
+            )
+
     # tts_ms: synthesis latency for the metrics picture (issue #3). A duration
     # only — the text itself is never logged or exported.
     t0 = time.perf_counter()
     el = await _tts_elevenlabs(text)
     if el is not None:
+        if cacheable:
+            _cache_put(cache_key, dict(el))
         el["tts_ms"] = int((time.perf_counter() - t0) * 1000)
         return JSONResponse(el, headers={"Cache-Control": "no-store"})
 
@@ -161,14 +241,18 @@ async def tts(req: TtsRequest) -> Response:
         return JSONResponse({"error": f"tts failed: {e}"}, status_code=502)
     if not audio:
         return JSONResponse({"error": "tts produced no audio"}, status_code=502)
-    return JSONResponse(
-        {
-            "audio": base64.b64encode(bytes(audio)).decode(),
-            "words": None,
-            "wtimes": None,
-            "wdurations": None,
-            "engine": "edge",
-            "tts_ms": int((time.perf_counter() - t0) * 1000),
-        },
-        headers={"Cache-Control": "no-store"},
-    )
+    payload = {
+        "audio": base64.b64encode(bytes(audio)).decode(),
+        "words": None,
+        "wtimes": None,
+        "wdurations": None,
+        "engine": "edge",
+    }
+    if cacheable and not settings.elevenlabs_api_key:
+        # Cache the edge voice only when it IS the configured voice. With an
+        # ElevenLabs key present, landing here means a transient EL failure —
+        # caching would freeze the robotic fallback in for the fixed lines
+        # long after ElevenLabs recovers.
+        _cache_put(cache_key, dict(payload))
+    payload["tts_ms"] = int((time.perf_counter() - t0) * 1000)
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})

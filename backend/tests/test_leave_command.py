@@ -34,8 +34,45 @@ LEAVE_ASKS = [
     "bye",
     "goodbye",
     "bye bye",
-    "ciao",
+    "ciao ciao",
+    "arrivederci",
     "see you later",
+    # Italian dismissals
+    "puoi andare",
+    "puoi uscire dalla riunione",
+    "puoi lasciarci, grazie",
+    "esci pure",
+    "vai pure",
+    "vai via",
+    "abbandona la call",
+    "sei libera di andare",
+    "non ci servi più",
+    # go-out family
+    "go out of the meeting",
+    "get out",
+    "go away",
+    "you can log off now",
+    "you can sign off",
+    "you can hang up now",
+    # non-native / ASR-noisy prepositions
+    "go out from the meeting",
+    "go out the meeting",
+    "you can go out of the meeting",
+    "exit from the call",
+    # the polite QUESTION form ("Laura, can you leave the meeting?")
+    "can you leave the meeting",
+    "can you leave the meeting?",
+    "could you please leave the call",
+    "would you leave the meeting now",
+    "can you go out of the meeting",
+    "will you hang up now",
+    # Italian round 2
+    "lascia la riunione",
+    "lasciaci pure la call",
+    "vai fuori dalla riunione",
+    "potresti uscire dalla call",
+    "puoi andartene",
+    "te ne puoi andare",
 ]
 
 
@@ -47,6 +84,14 @@ def test_leave_commands_detected():
 # ── detection: normal meeting talk that must NEVER kill the bot ──
 
 NOT_LEAVE_ASKS = [
+    # Italian: "ciao" alone is a GREETING ("Laura, ciao!"), never a dismissal;
+    # "puoi andare avanti" means "go ahead", not "leave".
+    "ciao",
+    "ciao come stai",
+    "puoi andare avanti",
+    "puoi andare più veloce",
+    "non andare via",
+    "prima di uscire fai il riepilogo",
     "what did we leave open last time",
     "leave the pricing discussion for next week",
     "leave it with me",
@@ -68,6 +113,19 @@ NOT_LEAVE_ASKS = [
     "goodbye emails should go out on Friday",
     "what's the process",
     "",
+    # question-form near misses: a topic after the verb is never a dismissal
+    "can you leave the pricing for next week",
+    "can you leave time for Q&A",
+    "could you leave room for questions",
+    "can you go out and check the numbers",
+    "would you go through the numbers",
+    "can you go over the agenda",
+    "will you leave the company retreat planning to Sam",
+    # Italian near misses
+    "lascia stare",
+    "lascia perdere il punto due",
+    "puoi andare al prossimo punto",
+    "potresti andare più veloce",
 ]
 
 
@@ -153,7 +211,7 @@ def _run_webhook(monkeypatch, tmp_path, bot_id: str, text: str) -> tuple[dict, d
     _stub_vendors(monkeypatch, tmp_path, calls)
     _make_session(bot_id)
 
-    async def fake_speak(session, line, citations=None, force=False):
+    async def fake_speak(session, line, citations=None, **kw):
         calls["spoken"].append(line)
         return True
 

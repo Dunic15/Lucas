@@ -14,20 +14,24 @@ This module also detects meeting close (for the proactive wrap-up) and the
 from __future__ import annotations
 
 import re
+from typing import Iterable
 
 from .avatars import Avatar
 
 # Third-person verbs that follow a wake word when someone is talking ABOUT the
-# avatar, not TO it: "Laura said…", "Laura mentioned…", "Laura was saying…".
+# avatar, not TO it: "Laura said…", "Laura mentioned…", "Laura ha detto…".
 _REPORTED_TRAILING = (
     r"said|says|saying|mentioned|meant|means|told|thinks|thought|noted|"
-    r"pointed|explained|suggested|asked|wanted|raised|flagged|had|was|were|'s"
+    r"pointed|explained|suggested|asked|wanted|raised|flagged|had|was|were|'s|"
+    # Italian: "Laura ha detto…", "Laura diceva…", "Laura intendeva…"
+    r"ha|aveva|dice|diceva|intende|intendeva|pensa|pensava|sosteneva|suggeriva"
 )
 # Subordinating / referential words that precede a wake word in reported speech:
-# "as Laura…", "what did Laura…", "about Laura…", "according to Laura…".
+# "as Laura…", "what did Laura…", "secondo Laura…", "come diceva Laura…".
 _REPORTED_LEADING = (
     r"as|what|when|whatever|like|because|since|that|did|does|per|about|"
-    r"regarding|according to|from|for|with"
+    r"regarding|according to|from|for|with|"
+    r"secondo|come (?:ha detto|diceva|dice)|quello che|cosa (?:ha detto|diceva)|di"
 )
 
 
@@ -50,33 +54,112 @@ def _is_reported_reference(lower: str, wake: str) -> bool:
     # A vocative signal means the speaker is addressing the avatar directly, which
     # overrides an incidental third-person mention elsewhere in the same line.
     vocative = bool(
-        re.search(rf"\b(?:hey|hi|hello|ok|okay|yo)\s+{w}\b", lower)
+        re.search(rf"\b(?:hey|hi|hello|ok|okay|yo|ehi|ciao|senti|scusa)\s+{w}\b", lower)
         or re.search(rf"(?:^|[,.;:!?]\s*){w}\s*[,:]", lower)   # "Laura, …" / "Laura:"
         or re.search(rf",\s*{w}\b[^a-z]*$", lower)             # "…, Laura?" (end)
     )
     return not vocative
 
 
-def detect_wake(avatar: Avatar, utterance: str) -> tuple[bool, str]:
+# ── fuzzy name matching ──
+# ASR mangles spoken names ("Laura" -> "Lara"/"Lora"/"Loura"); benchmarks show
+# explicit-name cue response drops from ~94% to ~68% under phonetic corruption
+# (docs/research/multiparty-meeting-intelligence.md). Guarded tightly: same
+# first letter, similar length, and edit distance 1 — or distance 2 only when
+# the consonant skeleton matches exactly ("lora"→"lr" == "laura"→"lr", while
+# "libra"→"lbr" stays out, and "clara" fails the first-letter check).
+_VOWELS = set("aeiou")
+# Real dictionary words that sit within fuzzy range of a wake word but are
+# never a name. "laurea/lauree" (Italian: degree) is edit distance 1 from
+# "laura" — without this, every graduation mention would wake her.
+_FUZZY_EXCLUDE = {"laurea", "lauree", "lauro"}
+
+
+def _levenshtein(a: str, b: str) -> int:
+    if abs(len(a) - len(b)) > 2:
+        return 3  # caller only cares about <=2
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[-1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def fuzzy_name_match(token: str, name: str) -> bool:
+    """True when `token` is (a close ASR corruption of) the spoken `name`."""
+    token, name = token.lower(), name.lower()
+    if token == name:
+        return True
+    if token in _FUZZY_EXCLUDE:
+        return False
+    if len(token) < 3 or len(name) < 4 or token[0] != name[0]:
+        return False
+    d = _levenshtein(token, name)
+    if d <= 1:
+        return True
+    if d == 2:
+        skel = lambda s: "".join(c for c in s if c not in _VOWELS)  # noqa: E731
+        return skel(token) == skel(name)
+    return False
+
+
+def _fuzzy_wake_token(lower: str, wake: str, excluded: set[str]) -> str:
+    """The token in `lower` that fuzzy-matches `wake` ("" when none).
+
+    `excluded` holds first names of OTHER people in the meeting: a token that
+    IS someone's actual name ("Lara" when a Lara is on the call) is them being
+    addressed, never a corruption of the avatar's name.
+    """
+    for token in re.findall(r"[a-z]+", lower):
+        if token in excluded:
+            continue
+        if fuzzy_name_match(token, wake):
+            return token
+    return ""
+
+
+def detect_wake(
+    avatar: Avatar,
+    utterance: str,
+    exclude_names: Iterable[str] = (),
+    fuzzy: bool = True,
+) -> tuple[bool, str]:
     """If the utterance calls the avatar by a wake word, return (True, question).
 
     Examples that trigger (wake word "laura"):
         "Laura, what are we missing?"   -> "what are we missing?"
         "Hey Laura what's the process"  -> "what's the process"
         "Can you check, Laura?"         -> "Can you check?"
+        "Lara, what's the next step?"   -> ASR-corrupted name still wakes
 
     Examples that do NOT trigger (the avatar is only being talked about):
         "as Laura said earlier, we should ship"
         "what did Laura mean by handoff?"
         "Laura mentioned the deadline"
+
+    `exclude_names` (other meeting participants) suppresses only the FUZZY
+    path: with a real Lara in the room, "Lara, …" is her turn — while an
+    exact wake word always wins.
     """
     lower = utterance.lower()
+    excluded = {
+        n.strip().split()[0].lower() for n in exclude_names if n and n.strip()
+    }
     for wake in avatar.wake_words:
-        # Match the wake word as a standalone token.
-        if re.search(rf"\b{re.escape(wake)}\b", lower):
-            if _is_reported_reference(lower, wake):
+        # Exact standalone token first; then a fuzzy ASR-corruption of it.
+        # The matched TOKEN (not the canonical wake word) drives the reported-
+        # speech check and the strip, since that's what's actually in the text.
+        matched = (
+            wake
+            if re.search(rf"\b{re.escape(wake)}\b", lower)
+            else (_fuzzy_wake_token(lower, wake, excluded) if fuzzy else "")
+        )
+        if matched:
+            if _is_reported_reference(lower, matched):
                 return False, ""
-            return True, _strip_wake(utterance, wake)
+            return True, _strip_wake(utterance, matched)
     return False, ""
 
 
@@ -86,6 +169,42 @@ def _strip_wake(utterance: str, wake: str) -> str:
     cleaned = re.sub(r"\b(hey|ok|okay|hi)\b", "", cleaned, flags=re.IGNORECASE)
     cleaned = cleaned.strip(" ,.?!-—\t")
     return cleaned or utterance.strip()
+
+
+# Vocative labels that are never real spoken names (anonymous roster entries).
+_NON_VOCATIVE = {"guest", "everyone", "all", "team", "folks", "guys", "ragazzi"}
+
+
+def addressed_to_other(utterance: str, roster: list[str]) -> bool:
+    """True when the line is a vocative aimed at ANOTHER participant by name
+    ("Marco, can you take this?", "hey Marco…", "…right, Marco?") — even in
+    no-wake-word mode that's their turn, not the avatar's. Callers must check
+    the wake word FIRST: a line naming both ("Laura, tell Marco…") is hers.
+
+    Deliberately conservative: only a clear vocative counts. Merely mentioning
+    a name mid-sentence ("Marco will own the rollout") is normal meeting talk
+    the avatar may still answer about.
+    """
+    lower = (utterance or "").lower()
+    if not lower:
+        return False
+    # Tokens sitting in a vocative position: "X, …" / "hey X …" / "…, X?".
+    # Fuzzy-compared against roster first names so an ASR-mangled "Marko,
+    # can you…" still reads as Marco's turn.
+    candidates = set(
+        re.findall(r"(?:^|[,.;:!?]\s+)([a-z]+)\s*[,:]", lower)
+        + re.findall(r"\b(?:hey|hi|hello|ok|okay|yo|ehi|ciao|senti|scusa|allora)\s+([a-z]+)\b", lower)
+        + re.findall(r",\s*([a-z]+)[^a-z]*$", lower)
+    )
+    if not candidates:
+        return False
+    for name in roster:
+        first = (name or "").strip().split()[0].lower().rstrip(",.")
+        if len(first) < 3 or first in _NON_VOCATIVE:
+            continue
+        if any(fuzzy_name_match(tok, first) for tok in candidates):
+            return True
+    return False
 
 
 def passes_confidence(avatar: Avatar, result: dict) -> bool:
@@ -100,7 +219,14 @@ def passes_confidence(avatar: Avatar, result: dict) -> bool:
 _CLOSING = re.compile(
     r"\b(wrap(ping)? up|that'?s (it|everything|all)|anything else|any other|"
     r"before we (go|close|end|wrap)|to summari[sz]e|let'?s (close|end|wrap)|"
-    r"we'?re done|any final|last thing)\b",
+    r"we'?re done|any final|last thing|"
+    # Italian — without these the proactive wrap-up never fires in an Italian
+    # meeting (and the MeetingState stage never reaches "wrapping_up").
+    r"per riassumere|riassumendo|prima di (chiudere|concludere|salutarci)|"
+    r"direi che (abbiamo finito|è tutto)|abbiamo finito|è tutto per oggi|"
+    r"qualcos'?altro|altro da (aggiungere|dire|discutere)|"
+    r"chiudiamo|concludiamo|ci (aggiorniamo|sentiamo|risentiamo|vediamo)|"
+    r"un'?ultima cosa|per concludere|tiriamo le somme)\b",
     re.IGNORECASE,
 )
 
@@ -110,6 +236,34 @@ def detect_closing(utterance: str) -> bool:
     return bool(_CLOSING.search(utterance))
 
 
+# ── stop command ("Laura, stop / aspetta / basta") ──
+# Only checked on the wake-stripped ask of an utterance addressed BY NAME, so
+# it can stay strict: the WHOLE ask must be stop vocabulary (+ politeness).
+# "Laura, stop the deploy" is a request, not a stop; "Laura, aspetta" is a stop.
+# This is the short-command complement to barge-in, which needs 3+ words.
+_STOP_WORDS = (
+    r"stop|wait|pause|hold on|hang on|shut up|be quiet|quiet|silence|enough|"
+    r"one (?:sec|second|moment|minute)|give me a (?:sec|second|moment|minute)|"
+    r"never ?mind|forget it|stop talking|that's enough|"
+    # Italian
+    r"aspetta|fermati|ferma|zitta|silenzio|basta|taci|un attimo|un secondo|"
+    r"un momento|lascia (?:stare|perdere)|non importa|smettila|basta così"
+)
+_STOP_COMMAND = re.compile(
+    rf"^(?:ok(?:ay)?\s+|no\s+|hey\s+|ehi\s+|per favore\s+|please\s+|just\s+)*"
+    rf"(?:{_STOP_WORDS})"
+    rf"(?:\s+(?:please|per favore|grazie|thanks|now|ora|adesso|a moment|un attimo))*"
+    rf"[.!?\s]*$",
+    re.IGNORECASE,
+)
+
+
+def detect_stop_command(question: str) -> bool:
+    """True if the (wake-stripped) ask tells the avatar to stop talking NOW."""
+    q = (question or "").strip()
+    return bool(q) and bool(_STOP_COMMAND.match(q))
+
+
 # Dismissal ("Laura, you can leave"). Only ever checked on the wake-stripped
 # question of an utterance that addressed her BY NAME, so the patterns can stay
 # tight. Two shapes: an imperative aimed at her at the start of the ask, or an
@@ -117,11 +271,26 @@ def detect_closing(utterance: str) -> bool:
 # a missed command costs a repeat ask; a false positive kills the meeting bot.
 _LEAVE_IMPERATIVE = re.compile(
     # The imperative must be the WHOLE ask ("leave", "please leave the call
-    # now") — anything else after the verb ("leave the pricing for later",
-    # "leave it with me") means a topic, not the meeting.
+    # now", "go out of the meeting") — anything else after the verb ("leave
+    # the pricing for later", "go out and check X") means a topic, not the
+    # meeting. Non-native/ASR-noisy prepositions are all accepted ("go out
+    # FROM the meeting", "go out the meeting").
     r"^(?:please\s+|now\s+|just\s+|kindly\s+|go ahead and\s+)*"
-    r"(?:leave|exit|drop off|hop off|hang up|disconnect)"
-    r"(?:\s+(?:the|this)\s+(?:meeting|call|room))?"
+    r"(?:leave|exit|go out|get out|go away|drop off|hop off|hang up|disconnect|log off|sign off)"
+    r"(?:\s+(?:(?:of|from|off)\s+)?(?:the|this|our)\s+(?:meeting|call|room))?"
+    r"(?:\s+(?:now|please|thanks|thank you))*"
+    r"[.!?\s]*$",
+    re.IGNORECASE,
+)
+# The polite QUESTION form of the dismissal ("Laura, can you leave the
+# meeting?"). Same guard as the imperative: the verb phrase must be the whole
+# ask, so "can you leave the pricing for next week" / "could you go over the
+# numbers" never match.
+_LEAVE_REQUEST = re.compile(
+    r"^(?:ok(?:ay)?\s+|so\s+|now\s+|please\s+)*"
+    r"(?:can|could|would|will) you (?:please\s+)?"
+    r"(?:leave|exit|go out|get out|go away|drop off|hop off|hang up|disconnect|log off|sign off)"
+    r"(?:\s+(?:(?:of|from|off)\s+)?(?:the|this|our)\s+(?:meeting|call|room))?"
     r"(?:\s+(?:now|please|thanks|thank you))*"
     r"[.!?\s]*$",
     re.IGNORECASE,
@@ -132,27 +301,55 @@ _LEAVE_PERMISSION = re.compile(
     # Bare "go" is how a host hands over the floor ("your turn — you can go"),
     # i.e. an invitation to SPEAK, so "go" only counts with an explicit
     # dismissal marker after it; "free to go" is unambiguous on its own.
-    r"\byou (?:"
-    r"(?:can|may|should) (?:leave|drop off|hop off|head out"
-    r"|go(?=\s+(?:now|home)\b|\s+(?:the|this)\s+(?:meeting|call|room)))"
+    r"\b(?:you|she) (?:"
+    r"(?:can|may|should) (?:leave|exit|go out|get out|drop off|hop off|head out|log off|sign off"
+    r"|disconnect|hang up|go(?=\s+(?:now|home)\b|\s+(?:the|this)\s+(?:meeting|call|room)))"
     r"|are free to (?:leave|go|drop off|head out)"
     r")"
-    r"(?:\s+(?:the|this)\s+(?:meeting|call|room))?"
+    r"(?:\s+(?:(?:of|from|off)\s+)?(?:the|this|our)\s+(?:meeting|call|room))?"
     r"(?:\s+(?:now|home|please|thanks|thank you|if you want|whenever))*"
-    r"\s*(?:[.!?,;]|$)",
+    r"\s*(?:[.!?,;]|$)"
+    # "we don't need you anymore" / "we're all set, thanks Laura"
+    r"|\bwe (?:don'?t|no longer) need you\b"
+    r"|\bnon (?:ci|ti) (?:servi|serve) più\b"
+    r"|\bnon abbiamo più bisogno di te\b",
     re.IGNORECASE,
 )
 # The whole ask is just a farewell ("Laura, bye!", "goodbye Laura").
+# NOTE: bare "ciao" is deliberately NOT here — in Italian it's also a GREETING
+# ("Laura, ciao!" at the start of a meeting must never make her leave).
+# "ciao ciao" and "arrivederci" are unambiguous farewells.
 _LEAVE_FAREWELL = re.compile(
-    r"^(?:(?:good)?bye(?:\s*bye)?|ciao|see you(?: later| soon| next time)?|"
-    r"thanks,?\s*(?:good)?bye)[.!\s]*$",
+    r"^(?:(?:good)?bye(?:\s*bye)?|ciao\s+ciao|arrivederci|see you(?: later| soon| next time)?|"
+    r"thanks,?\s*(?:good)?bye|grazie,?\s*ciao\s*ciao)[.!\s]*$",
+    re.IGNORECASE,
+)
+# Italian dismissals, mirroring the English shapes: a whole-ask imperative
+# ("esci pure", "lascia la riunione") or an explicit permission ("puoi
+# andare"). Same guard as English: the verb must END the clause, so "puoi
+# andare avanti" (= go ahead / continue) never matches.
+_LEAVE_IT = re.compile(
+    r"^(?:per favore\s+|ora\s+|adesso\s+|pure\s+|ok\s+)*"
+    # "lascia" only with the meeting as object ("lascia la riunione") — bare
+    # "lascia pure/stare" means "never mind", not a dismissal.
+    r"(?:esci(?:\s+fuori)?|vattene|vai via|vai fuori|scollegati|abbandona|vai pure|"
+    r"lascia(?:ci)?(?=\s+(?:pure\s+)?(?:la|questa)\s+(?:riunione|call|chiamata|meeting)))"
+    r"(?:\s+pure)?"
+    r"(?:\s+(?:dalla|da questa|la|questa)\s+(?:riunione|call|chiamata|meeting))?"
+    r"(?:\s+(?:ora|adesso|pure|grazie))*[.!?\s]*$"
+    r"|\b(?:puoi|potresti|potete)\s+(?:andare|andartene|uscire|lasciarci|abbandonare|scollegarti)"
+    r"(?:\s+(?:dalla|da questa|la|questa)\s+(?:riunione|call|chiamata|meeting))?"
+    r"(?:\s+(?:ora|adesso|pure|grazie))*\s*(?:[.!?,;]|$)"
+    r"|\bte ne puoi andare\b|\bve ne potete andare\b"
+    r"|\bsei liber[ao] di andare\b",
     re.IGNORECASE,
 )
 # Negation / hypothetical right before the verb ("don't leave", "before you
-# leave the meeting…") — never a command.
+# leave the meeting…", "non andare", "prima di uscire…") — never a command.
 _LEAVE_BLOCKED = re.compile(
     r"\b(?:don'?t|do not|never|shouldn'?t|won'?t|before|unless|until|if|when|"
-    r"why(?: did| would)?|instead of)\b[^.?!]{0,24}\b(?:leave|go|drop|hop|exit)\b",
+    r"why(?: did| would)?|instead of|non|prima di|se|quando|perch[eé])\b"
+    r"[^.?!]{0,24}\b(?:leave|go|drop|hop|exit|andare|uscire|esci|vattene|lasciare)\b",
     re.IGNORECASE,
 )
 
@@ -166,6 +363,8 @@ def detect_leave_command(question: str) -> bool:
         return False
     return bool(
         _LEAVE_IMPERATIVE.search(q)
+        or _LEAVE_REQUEST.search(q)
         or _LEAVE_PERMISSION.search(q)
+        or _LEAVE_IT.search(q)
         or _LEAVE_FAREWELL.match(q)
     )

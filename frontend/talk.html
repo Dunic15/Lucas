@@ -21,33 +21,32 @@
   Avaturn or MetaPerson/AvatarSDK exports are compatible.
 -->
 <style>
-  html, body { margin: 0; height: 100%; background: #141a22; }
-  /* Office-at-dusk backdrop, webcam depth-of-field style: deep blue-gray wall,
-     warm window glow right, cool daylight left, soft out-of-focus bokeh lights.
-     Dark tones make her lit face pop (perceived sharpness) instead of washing
-     into a pale wall. The canvas is transparent so this shows through. Framing
-     is done with the 3D camera (see below), NOT a CSS transform: CSS scaling
-     magnifies rendered pixels and blurs her; camera zoom stays sharp. */
+  html, body { margin: 0; height: 100%; background: #dfe3e8; }
+  /* Bright-office backdrop, webcam depth-of-field style: pale warm wall, soft
+     daylight from the left, a hint of warm interior light right, faint
+     out-of-focus depth. Light and clean — reads as a tidy office on webcam.
+     The canvas is transparent so this shows through. Framing is done with the
+     3D camera (see below), NOT a CSS transform: CSS scaling magnifies rendered
+     pixels and blurs her; camera zoom stays sharp. */
   #stage {
     position: fixed; inset: 0;
     /* Hidden until the close-up camera is asserted, so the page NEVER shows the
        far full-body default view — she appears already framed like a webcam. */
     opacity: 0; transition: opacity .45s ease;
     background:
-      radial-gradient(42% 55% at 82% 30%, rgba(255,190,120,.30) 0%, rgba(255,190,120,0) 70%),
-      radial-gradient(36% 46% at 12% 34%, rgba(120,160,210,.24) 0%, rgba(120,160,210,0) 70%),
-      radial-gradient(3.5% 6% at 70% 20%, rgba(255,214,150,.38) 0%, rgba(255,214,150,0) 100%),
-      radial-gradient(2.5% 4.5% at 88% 46%, rgba(255,214,150,.30) 0%, rgba(255,214,150,0) 100%),
-      radial-gradient(3% 5% at 79% 66%, rgba(180,200,230,.22) 0%, rgba(180,200,230,0) 100%),
-      radial-gradient(2% 3.5% at 8% 62%, rgba(160,190,225,.24) 0%, rgba(160,190,225,0) 100%),
-      radial-gradient(2.8% 5% at 16% 16%, rgba(200,220,245,.20) 0%, rgba(200,220,245,0) 100%),
-      linear-gradient(180deg, #2b3542 0%, #232c38 45%, #1b222c 78%, #141a22 100%);
+      radial-gradient(46% 60% at 14% 30%, rgba(255,255,255,.55) 0%, rgba(255,255,255,0) 70%),
+      radial-gradient(40% 50% at 84% 28%, rgba(255,226,190,.34) 0%, rgba(255,226,190,0) 70%),
+      radial-gradient(30% 42% at 78% 74%, rgba(196,210,224,.30) 0%, rgba(196,210,224,0) 70%),
+      radial-gradient(3% 5% at 88% 40%, rgba(255,238,210,.45) 0%, rgba(255,238,210,0) 100%),
+      radial-gradient(2.4% 4% at 71% 22%, rgba(255,244,224,.40) 0%, rgba(255,244,224,0) 100%),
+      linear-gradient(180deg, #f5f3ef 0%, #ece9e5 42%, #dfdfdf 75%, #d2d7dd 100%);
   }
   #stage.live { opacity: 1; }
-  /* Soft vignette pulls the eye to her face, like a real webcam lens. */
+  /* Soft vignette pulls the eye to her face, like a real webcam lens —
+     kept very light so the office stays bright. */
   #stage::after {
     content: ""; position: absolute; inset: 0; pointer-events: none;
-    background: radial-gradient(120% 90% at 50% 42%, rgba(0,0,0,0) 55%, rgba(10,14,19,.55) 100%);
+    background: radial-gradient(120% 90% at 50% 42%, rgba(0,0,0,0) 60%, rgba(90,104,122,.20) 100%);
   }
   /* MEETING MODE (?conversation_id= present): she must look like just another
      participant — no buttons, no status text, nothing but her. */
@@ -155,6 +154,14 @@
     const CAM_TY = camParam("cam_ty", 1.705);
     const frameCamera = () => {
       try {
+        // Kill TalkingHead's own camera GLIDE at the source: after setView its
+        // animate loop eases the camera toward ITS view for 1000ms (while
+        // cameraClock < 1000, talkinghead.mjs ~L2459) — and since its loop runs
+        // interleaved with ours, that glide is the visible far->close zoom on
+        // load, no matter how often we re-assert our framing. cameraClock=1000
+        // ends any glide instantly; a no-op setView stops it ever restarting.
+        head.cameraClock = 1000;
+        head.setView = () => {};
         // TalkingHead's OrbitControls clamp minDistance=2.0 — any closer framing
         // silently snaps back to z=2.0 (this was why she never got truly close).
         // Release the clamp, then place the camera. enableDamping=false so any
@@ -213,15 +220,11 @@
   // eventually throws and the avatar goes silent. Lazily created, never closed.
   let _decodeCtx = null;
   const decodeCtx = () => (_decodeCtx ||= new (window.AudioContext || window.webkitAudioContext)());
-  async function synthesize(text) {
-    const r = await fetch("/tts", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text, avatar_id: avatarId }),
-    });
-    if (!r.ok) throw new Error("/tts not available yet (" + r.status + ")");
-    const j = await r.json();
-    if (j.error) throw new Error(j.error);
+  // Decode a TTS payload ({audio: base64 mp3, words?, wtimes?, wdurations?})
+  // into what speakAudio wants. Shared by the /tts fetch path AND the
+  // server-attached-audio path (the backend now ships the voice inside the
+  // speak message itself, so no /tts round-trip is needed for those).
+  async function payloadToAudio(j, text) {
     const bin = Uint8Array.from(atob(j.audio), (c) => c.charCodeAt(0));
     const audio = await decodeCtx().decodeAudioData(bin.buffer);
     let { words, wtimes, wdurations } = j;
@@ -232,6 +235,17 @@
       wdurations = words.map(() => Math.round(per * 0.9));
     }
     return { audio, words, wtimes, wdurations };
+  }
+  async function synthesize(text) {
+    const r = await fetch("/tts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, avatar_id: avatarId }),
+    });
+    if (!r.ok) throw new Error("/tts not available yet (" + r.status + ")");
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    return payloadToAudio(j, text);
   }
 
   // Browsers start AudioContexts suspended until a user gesture — and TalkingHead
@@ -273,11 +287,18 @@
     status("(interrupted — listening)");
   }
   window.interruptSpeech = interruptSpeech;
-  function say(text) {
+  // Sentences accepted but not yet handed to the mouth (fetching/queued). Lets
+  // the speaking-state reporter below treat "about to speak" as speaking, so a
+  // finished-audio gap between two queued sentences never reads as silence.
+  let _pendingSay = 0;
+  function say(text, pre) {
     if (!text || !text.trim()) return _sayChain;
     unlockAudio();
-    const synth = synthesize(text); // prefetch NOW, in parallel
+    // Server-attached audio (pre.audio) skips the whole /tts round-trip —
+    // the voice arrived inside the speak message. Otherwise fetch as before.
+    const synth = pre && pre.audio ? payloadToAudio(pre, text) : synthesize(text);
     const gen = _sayGen;
+    _pendingSay++;
     _sayChain = _sayChain.then(async () => {
       try {
         const a = await synth;
@@ -288,6 +309,8 @@
       } catch (e) {
         status("speak failed: " + (e?.message || e));
         console.error(e);
+      } finally {
+        _pendingSay = Math.max(0, _pendingSay - 1);
       }
     });
     return _sayChain;
@@ -391,9 +414,13 @@
   // "hold on, let me check…" leaking into the mic would self-interrupt.
   // Longest-first so "one second" wins over "one sec" (a shorter prefix match
   // would leave a garbage remainder and break the strict whole-utterance test).
-  const STOP_PHRASES = ["give me a second", "give me a moment", "give me a minute", "give me a sec", "that s enough", "stop talking", "one second", "one moment", "one minute", "never mind", "nevermind", "forget it", "be quiet", "hold on", "hang on", "shut up", "stop it", "one sec"].sort((a, b) => b.length - a.length);
-  const STOP_WORDS = new Set(["stop", "wait", "pause", "quiet", "silence", "enough", "hush", "shush"]);
-  const POLITE_WORDS = new Set(["ok", "okay", "no", "hey", "please", "laura", "now", "just", "a", "one", "sec", "second", "moment", "minute", "thanks", "thank", "you"]);
+  const STOP_PHRASES = ["give me a second", "give me a moment", "give me a minute", "give me a sec", "that s enough", "stop talking", "one second", "one moment", "one minute", "never mind", "nevermind", "forget it", "be quiet", "hold on", "hang on", "shut up", "stop it", "one sec",
+    // Italian
+    "lascia stare", "lascia perdere", "non importa", "basta cos", "un attimo", "un secondo", "un momento"].sort((a, b) => b.length - a.length);
+  const STOP_WORDS = new Set(["stop", "wait", "pause", "quiet", "silence", "enough", "hush", "shush",
+    "aspetta", "fermati", "ferma", "zitta", "basta", "taci", "silenzio", "smettila"]);
+  const POLITE_WORDS = new Set(["ok", "okay", "no", "hey", "please", "laura", "now", "just", "a", "one", "sec", "second", "moment", "minute", "thanks", "thank", "you",
+    "per", "favore", "grazie", "un", "attimo", "secondo", "momento", "ora", "adesso", "ehi", "dai"]);
   function stopWordIn(h) {
     for (const p of STOP_PHRASES) if (h.includes(p)) return p;
     for (const w of h.split(" ")) if (STOP_WORDS.has(w)) return w;
@@ -502,7 +529,7 @@
       if (msg.type === "speak" && msg.text) {
         const g = genOf(msg);
         if (g !== null && g <= staleBefore) return; // stale: superseded by a stop
-        unlockAudio(); say(msg.text);
+        unlockAudio(); say(msg.text, msg); // msg may carry server-synthesized audio
       } else if (msg.type === "stop") { // barge-in: human is talking
         const g = genOf(msg);
         if (g !== null) staleBefore = Math.max(staleBefore, g);
@@ -534,5 +561,23 @@
       setTimeout(poll, 2000);
     };
     poll();
+
+    // Report the REAL speaking state to the backend: its barge-in window is
+    // otherwise a words-per-second estimate that drifts both ways on long
+    // answers. True = heartbeat while anything is playing or queued (the
+    // backend extends the window a beat past the next report); one false on
+    // the transition closes the window the moment she actually goes quiet.
+    let reportedSpeaking = false;
+    setInterval(() => {
+      const speaking =
+        _pendingSay > 0 || !!head.isSpeaking || performance.now() < speakingUntil;
+      if (!speaking && !reportedSpeaking) return; // idle→idle: nothing to report
+      reportedSpeaking = speaking;
+      fetch(`/avatar/speaking/${encodeURIComponent(conversationId)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ speaking }),
+      }).catch(() => {});
+    }, 700);
   }
 </script>

@@ -74,6 +74,26 @@ class Session:
     # Until when (epoch seconds) the avatar is estimated to still be speaking —
     # drives barge-in (a human talking inside this window interrupts her).
     speaking_until: float = field(default=0.0, repr=False, compare=False)
+    # Monotonic speech-turn counter. Every stop (barge-in) and every new answer
+    # turn bumps it; speak messages are stamped with the generation they belong
+    # to, so a cancelled turn's late sentences can be dropped on BOTH sides
+    # (the streaming loop breaks, the page discards stale generations).
+    # In-memory only: a restart naturally cancels any in-flight turn.
+    speech_generation: int = field(default=0, repr=False, compare=False)
+    # Running notes of the meeting OLDER than the recent-history window, kept
+    # fresh in the background (see main._refresh_rolling_summary). Gives the
+    # live brain the whole meeting's arc without widening the hot-path prompt.
+    # In-memory only — derived from the persisted transcript (PII stays put).
+    rolling_summary: str = field(default="", repr=False, compare=False)
+    summary_upto: int = field(default=0, repr=False, compare=False)
+    summarizing: bool = field(default=False, repr=False, compare=False)
+    # When she last spoke an acknowledgment ("Mm-hm.") — set by the partial-
+    # transcript path so the final-utterance path doesn't ack the same turn
+    # twice. In-memory only: an ack is worthless across a restart.
+    last_ack_at: float = field(default=0.0, repr=False, compare=False)
+    # When she last backchanneled ("Mm-hm." while a human talks) — keeps the
+    # listening cue rare. In-memory only, like the ack timestamp.
+    last_backchannel_at: float = field(default=0.0, repr=False, compare=False)
     # Recently spoken lines (normalized text -> epoch seconds) for the
     # repetition guard: never say the same line twice within the window.
     _recent_lines: dict = field(default_factory=dict, repr=False, compare=False)
@@ -83,6 +103,19 @@ class Session:
     _anon_labels: dict[str, str] = field(
         default_factory=dict, repr=False, compare=False
     )
+    # Live roster from Recall participant_events: participant id -> {"name",
+    # "here"}. Covers people who never speak (the transcript alone can't).
+    # In-memory only; after a restart roster() falls back to transcript
+    # speakers until the next join/leave event re-seeds it.
+    participants: dict = field(default_factory=dict, repr=False, compare=False)
+    # When a HUMAN partial transcript last arrived — the deference window
+    # checks it to see whether someone started answering a room-open question
+    # while she politely waited. In-memory only.
+    last_human_partial_at: float = field(default=0.0, repr=False, compare=False)
+    # One-shot flag: the wrap-up nudge to a silent participant fires at most
+    # once per meeting. In-memory only (a restart forgiving a second nudge is
+    # harmless).
+    quiet_nudge_done: bool = field(default=False, repr=False, compare=False)
     _persist_enabled: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -116,6 +149,45 @@ class Session:
             label = f"Guest {len(self._anon_labels) + 1}"
             self._anon_labels[key] = label
         return label
+
+    def participant_event(
+        self, name: str | None, participant_id: Any, *, here: bool
+    ) -> str:
+        """Fold a Recall participant_events.join/leave into the live roster."""
+        label = self.resolve_speaker(name, participant_id)
+        key = str(participant_id) if participant_id is not None else label
+        self.participants[key] = {"name": label, "here": here}
+        return label
+
+    def present_names(self) -> list[str]:
+        """Names currently in the room per the EVENT roster only — cheap (small
+        dict, no transcript scan), safe to call on the partial hot path. Used
+        to keep the fuzzy wake from swallowing a real participant's name."""
+        return [p["name"] for p in self.participants.values() if p.get("here")]
+
+    def roster(self, avatar_name: str = "") -> list[str]:
+        """Who is in the meeting right now, besides the avatar itself.
+
+        Prefers the event-driven roster (it sees silent participants); merges in
+        transcript speakers as a net for missed events / process restarts.
+        """
+        skip = {avatar_name.strip().lower(), "laura", ""}
+        names: list[str] = []
+        for p in self.participants.values():
+            if p.get("here") and p["name"].strip().lower() not in skip:
+                names.append(p["name"])
+        gone = {
+            p["name"].strip().lower()
+            for p in self.participants.values()
+            if not p.get("here")
+        }
+        seen = {n.strip().lower() for n in names}
+        for u in self.transcript:
+            low = u.speaker.strip().lower()
+            if low not in skip and low not in seen and low not in gone:
+                seen.add(low)
+                names.append(u.speaker)
+        return names
 
     def add_utterance(self, speaker: str, text: str) -> None:
         utterance = Utterance(speaker=speaker, text=text, ts=time.time())
@@ -354,6 +426,24 @@ def get_artifact(bot_id: str) -> dict | None:
     return _artifacts.get(bot_id)
 
 
+def list_artifacts() -> list[dict]:
+    """Every saved artifact with its metadata, newest first (meetings page).
+    Reads the DB (not the in-memory cache) so it sees rows written by other
+    processes — e.g. tests or scripts seeding the store."""
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            "SELECT bot_id, artifact_json, saved_at FROM artifacts ORDER BY saved_at DESC"
+        ).fetchall()
+    out = []
+    for r in rows:
+        try:
+            artifact = json.loads(r["artifact_json"])
+        except (TypeError, ValueError):
+            artifact = {}
+        out.append({"bot_id": r["bot_id"], "saved_at": r["saved_at"], "artifact": artifact})
+    return out
+
+
 def create(bot_id: str, meeting_url: str, avatar_id: str = "laura") -> Session:
     s = Session(bot_id=bot_id, meeting_url=meeting_url, avatar_id=avatar_id)
     _sessions[bot_id] = s
@@ -393,6 +483,23 @@ def drain_avatar_messages(session: Session) -> list[dict[str, Any]]:
         messages = list(session.pending_messages)
         session.pending_messages.clear()
         return messages
+
+
+def bump_speech_generation(session: Session) -> int:
+    """Start a new speech turn (or cancel the current one). Returns the new
+    generation; older turns' speak messages become stale everywhere."""
+    with _LOCK:
+        session.speech_generation += 1
+        return session.speech_generation
+
+
+def purge_pending_speaks(session: Session) -> None:
+    """Drop queued-but-undelivered speak messages (a stop must silence the queue
+    too, not just the audio already playing). Non-speak messages survive."""
+    with _LOCK:
+        session.pending_messages[:] = [
+            m for m in session.pending_messages if m.get("type") != "speak"
+        ]
 
 
 def all_sessions() -> list[Session]:

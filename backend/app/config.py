@@ -64,8 +64,14 @@ class Settings(BaseSettings):
     recall_webhook_secret: str = ""
     # Live transcription provider for Recall bots:
     #   recallai   = fastest built-in path, but low-latency mode is English-only
-    #   elevenlabs = better multilingual/accent handling when configured in Recall
+    #              (accuracy mode does Italian but is minutes late — dead for live)
+    #   deepgram   = nova-3 streaming, language detection + code-switching
+    #              (Italian/English mixed). API key + project id go in the
+    #              RECALL DASHBOARD (eu-central-1), not in our env.
+    #   elevenlabs = scribe realtime, multilingual, needs the EL plan to cover it
     recall_transcription_provider: str = "recallai"
+    deepgram_model: str = "nova-3"
+    deepgram_language: str = "multi"
     recall_transcription_mode: str = "prioritize_low_latency"
     recall_transcription_language_code: str = "en"
     elevenlabs_transcription_model: str = "scribe_v2_realtime"
@@ -184,6 +190,13 @@ class Settings(BaseSettings):
     # (barge-in), and never repeat the same spoken line within the window.
     barge_in_enabled: bool = True
     repeat_suppress_seconds: float = 120.0
+    # Backchanneling (Retell-style presence): a tiny "Mm-hm." while a human is
+    # mid-monologue, so she reads as listening instead of frozen. Deliberately
+    # rare — long utterances only, one per gap window, never while she speaks
+    # or right after she spoke.
+    backchannel_enabled: bool = True
+    backchannel_min_words: int = 25
+    backchannel_gap_seconds: float = 45.0
 
     # Voice command to dismiss her ("Laura, you can leave"): say goodbye, then
     # end the session exactly like a natural meeting end (bot leaves, artifact
@@ -191,6 +204,21 @@ class Settings(BaseSettings):
     # playing in the meeting before the bot disconnects.
     leave_on_command: bool = True
     leave_grace_seconds: float = 2.5
+
+    # Multi-party turn-taking: on a line NOT addressed to her by name, wait
+    # this long before answering — if a human starts talking meanwhile, she
+    # yields silently (humans get first right of reply to room-open
+    # questions). Direct asks by name are never deferred. 0 disables.
+    deference_seconds: float = 1.8
+    # Engaged follow-up: a question arriving within this window after SHE
+    # spoke is almost always a follow-up to her answer — it bypasses the
+    # cooldown and the deference wait (dialogue context is a first-class
+    # addressee signal). 0 disables.
+    followup_window_seconds: float = 15.0
+    # Footing: greet a participant who joins an already-running meeting, and
+    # nudge one silent participant once as the meeting wraps up.
+    greet_joiners: bool = True
+    quiet_nudge_enabled: bool = True
 
     # Server
     host: str = "127.0.0.1"

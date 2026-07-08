@@ -58,3 +58,76 @@ def test_confidence_gate():
     assert passes_confidence(a, {"sufficient_context": True, "confidence": 0.7})
     assert not passes_confidence(a, {"sufficient_context": True, "confidence": 0.5})
     assert not passes_confidence(a, {"sufficient_context": False, "confidence": 0.9})
+
+
+# ── stop command ("Laura, stop / aspetta") ──
+from app.decision import detect_stop_command  # noqa: E402
+
+STOP_ASKS = [
+    "stop",
+    "wait",
+    "hold on",
+    "one sec",
+    "okay stop please",
+    "never mind",
+    "stop talking",
+    "that's enough",
+    "aspetta",
+    "fermati",
+    "un attimo per favore",
+    "basta così",
+    "zitta",
+    "lascia stare",
+]
+
+NOT_STOP_ASKS = [
+    "stop the deploy",
+    "when do we stop the meter",
+    "wait for the client to confirm",
+    "can you pause the recording",
+    "aspetta il cliente prima di mandare la mail",
+    "basta parlare del budget, passiamo oltre",
+    "what happens if we stop paying",
+]
+
+
+def test_stop_commands_detected():
+    for ask in STOP_ASKS:
+        assert detect_stop_command(ask), f"should stop: {ask!r}"
+
+
+def test_stop_not_triggered_by_normal_talk():
+    for ask in NOT_STOP_ASKS:
+        assert not detect_stop_command(ask), f"must NOT stop: {ask!r}"
+
+
+def test_italian_closing_detected():
+    from app.decision import detect_closing
+    for line in (
+        "per riassumere, direi che ci siamo",
+        "prima di chiudere, un'ultima cosa",
+        "abbiamo finito per oggi",
+        "qualcos'altro da discutere?",
+        "ci aggiorniamo la prossima settimana",
+    ):
+        assert detect_closing(line), line
+
+
+def test_italian_reported_speech_does_not_wake():
+    from app.avatars import Avatar
+    from app.decision import detect_wake
+    from pathlib import Path
+    a = Avatar(id="laura", name="Laura", role="x", wake_words=["laura"],
+               persona_prompt="", anam_avatar_id="", elevenlabs_voice_id="",
+               min_confidence=0.5, speak_cooldown_seconds=8.0, dir=Path("."))
+    for line in (
+        "come ha detto Laura, il DPA manca",
+        "secondo Laura dovremmo aspettare",
+        "Laura ha detto che il deadline è venerdì",
+        "Laura diceva una cosa simile",
+    ):
+        called, _ = detect_wake(a, line)
+        assert not called, line
+    # vocative still wakes
+    called, q = detect_wake(a, "Laura, cosa ne pensi?")
+    assert called and q

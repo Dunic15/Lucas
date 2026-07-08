@@ -39,6 +39,13 @@ class Avatar:
         return self.dir / "knowledge"
 
     @property
+    def about_dir(self) -> Path:
+        """Meta docs about the avatar ITSELF (architecture, playbook, costs).
+        Indexed separately and retrieved only for self-questions ("how do you
+        work?") — they must never pollute real process retrieval."""
+        return self.dir / "about"
+
+    @property
     def knowledge_dirs(self) -> list[Path]:
         dirs = [self.knowledge_dir]
         for pack in self.knowledge_packs or []:
@@ -51,10 +58,22 @@ class Avatar:
     def index_path(self) -> Path:
         return self.dir / ".index.json"
 
+    @property
+    def about_index_path(self) -> Path:
+        return self.dir / ".about-index.json"
+
 
 def _coalesce(value, fallback):
     """yaml blank fields parse to None/'' — fall back to the global default."""
     return fallback if value in (None, "") else value
+
+
+# Config cache. The live webhook loads the avatar on EVERY transcript event —
+# and partial events arrive several times a second while anyone talks — so an
+# uncached YAML read is sync disk I/O on the hot path. Keyed by path + mtime:
+# an edited avatar.yaml or a freshly scaffolded avatar is picked up without a
+# restart, and tests that point avatars_dir elsewhere never collide.
+_load_cache: dict[str, tuple[float, Avatar]] = {}
 
 
 def load(avatar_id: str) -> Avatar:
@@ -66,10 +85,15 @@ def load(avatar_id: str) -> Avatar:
             f"Available: {', '.join(list_ids()) or 'none'}"
         )
 
+    mtime = cfg_path.stat().st_mtime
+    cached = _load_cache.get(str(cfg_path))
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+
     raw = yaml.safe_load(cfg_path.read_text()) or {}
     wake = [str(w).lower() for w in (raw.get("wake_words") or [avatar_id])]
 
-    return Avatar(
+    avatar = Avatar(
         id=raw.get("id", avatar_id),
         name=raw.get("name", avatar_id.title()),
         role=raw.get("role", "AI Process Expert"),
@@ -89,6 +113,8 @@ def load(avatar_id: str) -> Avatar:
         dir=folder,
         knowledge_packs=[str(k) for k in (raw.get("knowledge_packs") or [])],
     )
+    _load_cache[str(cfg_path)] = (mtime, avatar)
+    return avatar
 
 
 def list_ids() -> list[str]:
