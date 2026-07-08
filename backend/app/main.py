@@ -373,7 +373,7 @@ async def _gmail_watch_loop() -> None:
             if not seeded:
                 seeded = True
                 continue
-            for _mid, url in new:
+            for _mid, url, invite_addrs in new:
                 if _shutting_down:
                     break  # draining — don't start new bots
                 if store.is_scheduled(url):
@@ -383,7 +383,15 @@ async def _gmail_watch_loop() -> None:
                     store.mark_scheduled(url)
                     continue
                 try:
-                    res = await _start_avatar_session(url, settings.default_avatar_id)
+                    # A plus-tagged recipient (laura.ai.122222+cedric@…) is
+                    # that avatar's email — route the invite to it.
+                    aid = (
+                        avatars.from_invite_email(
+                            invite_addrs, _calendar_target_emails()
+                        )
+                        or settings.default_avatar_id
+                    )
+                    res = await _start_avatar_session(url, aid)
                     store.mark_scheduled(url)
                     _gmail_state["joined"].append(
                         {"meeting_url": url, "bot_id": res["bot_id"], "at": time.time()}
@@ -1822,7 +1830,12 @@ def _calendar_event_targets_avatar(event: dict) -> bool:
     target_emails = _calendar_target_emails()
     if not target_emails:
         return True
-    return bool(_extract_invite_emails(event) & target_emails)
+    # Plus-aliases of a target inbox count as the inbox: an invite to
+    # laura.ai.122222+cedric@gmail.com targets us (and names the avatar —
+    # resolved separately via avatars.from_invite_email).
+    targets = {avatars._email_parts(t)[::2] for t in target_emails}
+    invited = {avatars._email_parts(e)[::2] for e in _extract_invite_emails(event)}
+    return bool(invited & targets)
 
 
 @app.post("/webhooks/recall-calendar")
@@ -1844,7 +1857,15 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
         eid = _calendar_event_id(ev)
         url = _calendar_event_meeting_url(ev)
         start = _calendar_event_start(ev)
-        avatar_id = ev.get("avatar_id") or settings.default_avatar_id
+        # Which avatar: explicit field > plus-tagged invite address
+        # (laura.ai.122222+cedric@… = Cedric's email) > the default.
+        avatar_id = (
+            ev.get("avatar_id")
+            or avatars.from_invite_email(
+                _extract_invite_emails(ev), _calendar_target_emails()
+            )
+            or settings.default_avatar_id
+        )
         if not url or not start or (eid and store.is_scheduled(eid)):
             continue
         if not _calendar_event_targets_avatar(ev):

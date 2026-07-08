@@ -1,0 +1,16 @@
+# Process template: what a customer-onboarding meeting MUST cover.
+# MeetingState (backend/app/meeting_state.py) tracks these silently during the
+# meeting; critical_gaps still missing at wrap-up trigger Laura's one polite
+# closing intervention. Add more templates by dropping more .yaml files here.
+id: customer_onboarding
+name: Customer Onboarding
+required_steps:
+  - security_approval
+  - dpa_confirmation
+  - implementation_owner
+  - customer_handoff
+  - go_live_date
+critical_gaps:
+  - security_approval
+  - dpa_confirmation
+  - implementation_owner

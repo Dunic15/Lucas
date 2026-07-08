@@ -132,3 +132,34 @@ def list_ids() -> list[str]:
     if not root.exists():
         return []
     return sorted(p.name for p in root.iterdir() if (p / "avatar.yaml").exists())
+
+
+# ── every avatar gets an email address, for free ──────────────────────
+# The platform watches ONE inbox (the calendar/Gmail account). Gmail plus-
+# aliases make that inbox an address PER AVATAR with zero extra accounts:
+# inviting  laura.ai.122222+cedric@gmail.com  is "Cedric's email" — same
+# inbox, and the +tag names the avatar that should join. The bare address
+# (or an unknown tag) stays the default avatar.
+
+def _email_parts(address: str) -> tuple[str, str, str]:
+    """lowercase (local-without-tag, tag, domain) of an email address."""
+    addr = (address or "").strip().lower()
+    local, _, domain = addr.partition("@")
+    base, _, tag = local.partition("+")
+    return base, tag, domain
+
+
+def from_invite_email(addresses, bases) -> str | None:
+    """The avatar id named by a plus-tagged invite address, or None.
+
+    `addresses` are the invite/recipient emails seen on the event or message;
+    `bases` the configured inbox address(es). Only a tag that matches an
+    installed avatar id counts — anything else falls back to the caller's
+    default, so a typo'd tag can never summon a ghost."""
+    known = set(list_ids())
+    base_keys = {(_email_parts(b)[0], _email_parts(b)[2]) for b in bases if b}
+    for address in addresses or ():
+        base, tag, domain = _email_parts(address)
+        if tag and (base, domain) in base_keys and tag in known:
+            return tag
+    return None

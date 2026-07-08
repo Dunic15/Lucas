@@ -1,0 +1,16 @@
+# Process template: a decision meeting MUST actually reach a good decision —
+# options weighed, a decision made, an owner, success criteria, and a next step.
+# MeetingState tracks these silently; critical_gaps still open at wrap-up trigger
+# Laura's one polite closing intervention ("we never actually decided…").
+id: decision_quality
+name: Decision Quality
+required_steps:
+  - options_considered    # alternatives / trade-offs were weighed
+  - decision_made         # a decision was actually reached
+  - decision_owner        # who owns the decision / has the final say
+  - success_criteria      # how we'll know it worked (metric / definition of done)
+  - next_step_defined     # concrete next action after the decision
+critical_gaps:
+  - decision_made
+  - decision_owner
+  - next_step_defined
