@@ -8,8 +8,8 @@ A session started with a `callback_url` gets two kinds of events POSTed back
                       means the orchestrator has to fall back to polling.
 
 Requests are signed with `X-Laura-Signature: t=<unix_ts>,v1=<hmac_sha256_hex>`
-over `t + "." + raw_body` using CEDRIC_WEBHOOK_SECRET (Slack/Stripe-style), and
-carry `Authorization: Bearer CEDRIC_WEBHOOK_TOKEN` as a cheap first-line check.
+over `t + "." + raw_body` using LAURA_WEBHOOK_SECRET (Slack/Stripe-style), and
+carry `Authorization: Bearer LAURA_WEBHOOK_TOKEN` as a cheap first-line check.
 
 Everything here is best-effort by design: a callback failure must NEVER block
 or fail the meeting lifecycle (finalize already saved the artifact — the
@@ -35,10 +35,10 @@ ENDED_BACKOFF: tuple[float, ...] = (5.0, 25.0, 120.0)
 
 def _signature_headers(body: bytes) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    token = settings.cedric_webhook_token.strip()
+    token = settings.laura_webhook_token.strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    secret = settings.cedric_webhook_secret.strip()
+    secret = settings.laura_webhook_secret.strip()
     if secret:
         ts = str(int(time.time()))
         mac = hmac.new(
@@ -147,7 +147,7 @@ def fetch_context(integration: dict | None) -> dict | None:
     if not url:
         return None
     headers = {}
-    token = settings.cedric_context_token.strip()
+    token = settings.laura_context_token.strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:

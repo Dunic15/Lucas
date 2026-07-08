@@ -100,7 +100,7 @@ def test_oversized_brief_is_400(client, recall_stubbed):
 
 
 def test_auth_required_when_token_set(client, recall_stubbed, monkeypatch):
-    monkeypatch.setattr(settings, "api_auth_token", "sekrit")
+    monkeypatch.setattr(settings, "laura_api_token", "sekrit")
     assert client.post("/sessions/start", json=START_BODY).status_code == 401
     assert client.get("/ledger", params={"meeting_url": "x"}).status_code == 401
     assert client.get("/sessions/whatever/artifact").status_code == 401
@@ -178,8 +178,8 @@ def test_ended_callback_payload_signature_and_retries(monkeypatch):
 
 
 def test_signature_headers_hmac(monkeypatch):
-    monkeypatch.setattr(settings, "cedric_webhook_secret", "topsecret")
-    monkeypatch.setattr(settings, "cedric_webhook_token", "tok")
+    monkeypatch.setattr(settings, "laura_webhook_secret", "topsecret")
+    monkeypatch.setattr(settings, "laura_webhook_token", "tok")
     body = json.dumps({"x": 1}).encode()
     headers = cedric_callback._signature_headers(body)
 
@@ -216,7 +216,7 @@ def test_post_follows_permanent_redirect_reapplying_auth(monkeypatch):
     # Vercel 308s apex→www; httpx's own follow_redirects would drop the
     # Authorization header on the cross-host hop, so _post re-posts manually
     # with the full signed headers.
-    monkeypatch.setattr(settings, "cedric_webhook_token", "tok")
+    monkeypatch.setattr(settings, "laura_webhook_token", "tok")
     seen: list[tuple[str, str | None]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:

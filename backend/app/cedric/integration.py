@@ -46,9 +46,9 @@ class MeetingContext(BaseModel):
 
 
 def auth_error(request: Request) -> Optional[JSONResponse]:
-    """Bearer-token gate for the session API. API_AUTH_TOKEN unset = open
+    """Bearer-token gate for the session API. LAURA_API_TOKEN unset = open
     (preserves the zero-key local demo); set it in any real deployment."""
-    token = settings.api_auth_token.strip()
+    token = settings.laura_api_token.strip()
     if not token:
         return None
     provided = request.headers.get("authorization", "")
