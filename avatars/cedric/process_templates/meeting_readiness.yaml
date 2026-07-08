@@ -1,0 +1,16 @@
+# Process template: a meeting that PLANS another meeting (or a kickoff) MUST leave
+# it ready to run — a clear objective, an agenda, the right people, a pre-read, and
+# the decisions it needs to make. This is the "ready before it starts" half of the
+# wedge. MeetingState tracks these silently; critical_gaps still open at wrap-up
+# trigger Laura's one polite closing intervention.
+id: meeting_readiness
+name: Meeting Readiness
+required_steps:
+  - objective_clear          # the goal / outcome of the meeting is defined
+  - agenda_set               # there is an agenda
+  - right_attendees          # the people who need to be there are identified
+  - pre_read_shared          # materials / pre-read sent ahead
+  - decisions_needed_listed  # the decisions the meeting must make are named
+critical_gaps:
+  - objective_clear
+  - decisions_needed_listed

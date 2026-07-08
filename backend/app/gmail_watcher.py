@@ -79,8 +79,23 @@ def _extract_meet_urls(text: str) -> set[str]:
     return {f"https://meet.google.com/{code}" for code in _MEET_RE.findall(text or "")}
 
 
-def _message_meet_urls(token: str, msg_id: str) -> set[str]:
-    """Fetch one message and pull any Meet links from its snippet + body."""
+# Address-bearing headers: To/Cc name the invited alias; Delivered-To keeps the
+# plus-tag even when a forward rewrites To. Enough to resolve which avatar an
+# invite addressed (see avatars.from_invite_email).
+_ADDRESS_HEADERS = ("to", "cc", "delivered-to", "x-original-to")
+_ADDR_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+
+
+def _recipient_addresses(msg: dict) -> set[str]:
+    out: set[str] = set()
+    for h in (msg.get("payload") or {}).get("headers", []) or []:
+        if str(h.get("name", "")).lower() in _ADDRESS_HEADERS:
+            out.update(a.lower() for a in _ADDR_RE.findall(h.get("value") or ""))
+    return out
+
+
+def _message_meet_urls(token: str, msg_id: str) -> tuple[set[str], set[str]]:
+    """Fetch one message: (meet urls in snippet+body, recipient addresses)."""
     r = _client.get(
         f"{GMAIL_API}/messages/{msg_id}",
         params={"format": "full"},
@@ -104,14 +119,16 @@ def _message_meet_urls(token: str, msg_id: str) -> set[str]:
             walk(child)
 
     walk(msg.get("payload") or {})
-    return urls
+    return urls, _recipient_addresses(msg)
 
 
-def poll_new_invites(token: str, seen_ids: set[str]) -> list[tuple[str, str]]:
-    """Return [(message_id, meet_url)] for Meet-invite emails not seen yet.
+def poll_new_invites(token: str, seen_ids: set[str]) -> list[tuple[str, str, set[str]]]:
+    """Return [(message_id, meet_url, recipient_addresses)] for unseen invites.
 
     Only looks at very recent mail so we react to a live "Add people" invite, not
-    stale ones. `seen_ids` is mutated to record everything we've processed.
+    stale ones. `seen_ids` is mutated to record everything we've processed. The
+    recipient addresses let the caller route a plus-tagged alias (an avatar's
+    email) to its avatar.
     """
     r = _client.get(
         f"{GMAIL_API}/messages",
@@ -119,15 +136,16 @@ def poll_new_invites(token: str, seen_ids: set[str]) -> list[tuple[str, str]]:
         headers={"Authorization": f"Bearer {token}"},
     )
     r.raise_for_status()
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, set[str]]] = []
     for m in r.json().get("messages", []) or []:
         mid = m.get("id")
         if not mid or mid in seen_ids:
             continue
         seen_ids.add(mid)
         try:
-            for url in _message_meet_urls(token, mid):
-                out.append((mid, url))
+            urls, addrs = _message_meet_urls(token, mid)
+            for url in urls:
+                out.append((mid, url, addrs))
         except Exception:
             pass
     return out

@@ -34,6 +34,12 @@ curl -X POST http://127.0.0.1:8000/sessions/start \
 ```
 (`avatar_id` defaults to `laura` if omitted.)
 
+**Every avatar also gets its own email, for free.** The watched inbox
+(`CALENDAR_INVITE_EMAILS`) answers to plus-aliases: invite
+`laura.ai.122222+marcus@gmail.com` to a calendar event — or add it via Meet's
+"Add people" — and *marcus* joins instead of the default avatar. Bare address
+or unknown tag → `DEFAULT_AVATAR_ID`.
+
 ## Field reference (`avatar.yaml`)
 
 | Field | Required | Meaning |
