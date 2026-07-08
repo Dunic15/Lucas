@@ -90,6 +90,12 @@ async def _lifespan(app: FastAPI):
     if settings.gmail_watch_enabled:
         asyncio.create_task(_gmail_watch_loop())
 
+    if settings.elevenlabs_api_key:
+        # Pre-synthesize the fixed conversational furniture so the FIRST
+        # ack/backchannel/goodbye of a meeting comes from cache, not a
+        # vendor round-trip. Fire-and-forget; never delays boot.
+        asyncio.create_task(_prewarm_tts_cache())
+
     try:
         yield
     finally:
@@ -1179,6 +1185,28 @@ _GOODBYE_LINES = [
 _SPEECH_WORDS_PER_SECOND = 2.6  # ~ElevenLabs/edge-tts pace, for the barge-in window
 
 
+async def _prewarm_tts_cache() -> None:
+    """Pre-synthesize the fixed lines (acks, think lines, backchannels,
+    goodbyes) into the TTS cache at boot. Sequential trickle, best-effort —
+    vendor trouble here just means the live path warms lazily as before.
+    Two consecutive misses = key/vendor trouble; stop burning boot-time calls.
+    """
+    warmed = 0
+    misses = 0
+    for line in (*_ACK_LINES, *_THINK_LINES, *_BACKCHANNEL_LINES, *_GOODBYE_LINES):
+        try:
+            if await tts.synthesize_cached(line) is not None:
+                warmed += 1
+                misses = 0
+            else:
+                misses += 1
+                if misses >= 2:
+                    break
+        except Exception:  # noqa: BLE001
+            break
+    print(f"[startup] tts cache prewarmed: {warmed} fixed lines", flush=True)
+
+
 def _norm_line(text: str) -> str:
     return re.sub(r"\W+", " ", (text or "").lower()).strip()
 
@@ -1210,6 +1238,7 @@ async def _make_avatar_speak(
     force: bool = False,
     generation: int | None = None,
     backchannel: bool = False,
+    audio: dict | None = None,
 ) -> bool:
     """Backend-as-brain: send the exact words for the avatar to speak (Anam talk).
 
@@ -1227,6 +1256,12 @@ async def _make_avatar_speak(
     `backchannel=True` marks a listening cue ("Mm-hm." while a human talks):
     it must NOT refresh the speak cooldown — a backchannel is not a turn, and
     it must never suppress a real answer seconds later.
+
+    `audio` is an optional server-synthesized voice payload (the
+    tts.synthesize_cached shape: base64 mp3 + word timings). When present it
+    rides along in the speak message and the page skips its whole /tts
+    round-trip; pages that don't know the fields ignore them and POST /tts as
+    before — the contract stays additive.
     """
     if generation is not None and generation != session.speech_generation:
         return False  # turn was cancelled while this sentence was in flight
@@ -1240,8 +1275,18 @@ async def _make_avatar_speak(
             generation if generation is not None else session.speech_generation
         ),
     }
+    if audio and audio.get("audio"):
+        message["audio"] = audio["audio"]
+        message["words"] = audio.get("words")
+        message["wtimes"] = audio.get("wtimes")
+        message["wdurations"] = audio.get("wdurations")
+        message["engine"] = audio.get("engine")
     # Estimate how long this line keeps her talking; queued lines extend it.
+    # With server-synthesized audio the REAL duration is known from the last
+    # word's timings — barge-in stops estimating and starts knowing.
     est = max(1.0, len(text.split()) / _SPEECH_WORDS_PER_SECOND)
+    if audio and audio.get("wtimes") and audio.get("wdurations"):
+        est = max(1.0, (audio["wtimes"][-1] + audio["wdurations"][-1]) / 1000 + 0.3)
     session.speaking_until = max(session.speaking_until, time.time()) + est
     if session.ws is not None:
         try:
@@ -1257,6 +1302,47 @@ async def _make_avatar_speak(
         session.mark_spoke()
     print("[avatar] queued speak for HTTP polling", flush=True)
     return True
+
+
+async def _speak_with_audio(
+    session: store.Session,
+    text: str,
+    *,
+    force: bool,
+    generation: int,
+    prev: "asyncio.Task | None",
+    t0: float | None = None,
+) -> bool:
+    """Synthesize server-side, then speak — pipelined across sentences.
+
+    Each sentence's synthesis runs CONCURRENTLY with the still-streaming
+    answer (sentence N+1 generates while N synthesizes); awaiting `prev`
+    before sending keeps the spoken order strict. Synthesis failure (or no
+    ElevenLabs key) degrades to an audio-less speak — the page then does its
+    own /tts with the edge fallback, exactly as before this feature.
+
+    `t0` (set on the turn's first sentence) logs the wake->first_speak
+    latency at the moment the first line is actually SENT.
+    """
+    payload = None
+    try:
+        if generation == session.speech_generation:
+            payload = await tts.synthesize_cached(text)
+    except Exception:  # noqa: BLE001 — synth is an optimization, never a blocker
+        payload = None
+    if prev is not None:
+        try:
+            await prev
+        except Exception:  # noqa: BLE001 — a failed older send must not mute the rest
+            pass
+    if t0 is not None:
+        print(
+            f"[latency] wake->first_speak={(time.perf_counter() - t0) * 1000:.0f}ms",
+            flush=True,
+        )
+    return await _make_avatar_speak(
+        session, text, force=force, generation=generation, audio=payload
+    )
 
 
 async def _make_avatar_stop(session: store.Session) -> None:
@@ -1556,18 +1642,24 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 if wants_deep_thought(question or text)
                 else random.choice(_ACK_LINES)
             )
-            acked = await _make_avatar_speak(session, line, force=True)
+            # cached_payload: attach the voice only if it's already synthesized
+            # (prewarmed at boot) — an ack must never wait on a vendor call.
+            acked = await _make_avatar_speak(
+                session, line, force=True, audio=tts.cached_payload(line)
+            )
         # ── backchanneling ──
         # Nobody called her, someone is deep into a long point: one tiny
         # "Mm-hm." makes her feel present in the room. Not a turn: it never
         # refreshes the cooldown, so a real question right after still answers.
         if not called and not acked and _should_backchannel(session, text):
             session.last_backchannel_at = time.time()
+            bc = random.choice(_BACKCHANNEL_LINES)
             await _make_avatar_speak(
                 session,
-                random.choice(_BACKCHANNEL_LINES),
+                bc,
                 force=True,
                 backchannel=True,
+                audio=tts.cached_payload(bc),
             )
             return JSONResponse({"ok": True, "partial": True, "backchannel": True})
         return JSONResponse({"ok": True, "partial": True, "acked": acked})
@@ -1672,8 +1764,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # blocked by a TTS hiccup.
     if called and settings.leave_on_command and detect_leave_command(question):
         try:
+            goodbye = random.choice(_GOODBYE_LINES)
             await _make_avatar_speak(
-                session, random.choice(_GOODBYE_LINES), force=True
+                session, goodbye, force=True, audio=tts.cached_payload(goodbye)
             )
             await asyncio.sleep(settings.leave_grace_seconds)
         except Exception:
@@ -1723,7 +1816,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
             if wants_deep_thought(question)
             else random.choice(_ACK_LINES)
         )
-        await _make_avatar_speak(session, line, force=True, generation=turn_gen)
+        await _make_avatar_speak(
+            session,
+            line,
+            force=True,
+            generation=turn_gen,
+            audio=tts.cached_payload(line),
+        )
 
     # Backend is the brain: answer from OUR knowledge (RAG) with the recent
     # meeting conversation as context, plus the silent MeetingState tracker and
@@ -1738,6 +1837,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
     _t_wake = time.perf_counter()
     spoke_any = False
     suppressed_any = False
+    interrupted = False
+    speak_tasks: list[asyncio.Task] = []
+    prev_task: asyncio.Task | None = None
     async for sentence in iterate_in_threadpool(
         answer_question_stream(
             avatar,
@@ -1754,26 +1856,33 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # sentence was generating: abandon the rest of the answer. The page
         # already dropped the stale generation; don't keep paying for tokens.
         if session.speech_generation != turn_gen:
-            return JSONResponse(
-                {"ok": True, "spoke": spoke_any, "interrupted": True}
-            )
-        if not spoke_any:
-            print(
-                f"[latency] wake->first_speak="
-                f"{(time.perf_counter() - _t_wake) * 1000:.0f}ms",
-                flush=True,
-            )
+            interrupted = True
+            break
         # Called by name -> answer even if it repeats a recent line; an
         # unaddressed duplicate is suppressed (and reported honestly below).
-        spoke = await _make_avatar_speak(
-            session, sentence, force=called, generation=turn_gen
+        # Speaking is pipelined: sentence N synthesizes server-side while
+        # N+1 is still generating; the prev-chain keeps the spoken order.
+        prev_task = asyncio.create_task(
+            _speak_with_audio(
+                session,
+                sentence,
+                force=called,
+                generation=turn_gen,
+                prev=prev_task,
+                t0=_t_wake if not speak_tasks else None,
+            )
         )
-        spoke_any = spoke or spoke_any
-        suppressed_any = suppressed_any or not spoke
+        speak_tasks.append(prev_task)
 
-    if session.speech_generation != turn_gen:
-        # The turn died between the last sentence and here — report it honestly
-        # and skip the repair line (a human is talking; silence is correct).
+    if not interrupted and speak_tasks:
+        results = await asyncio.gather(*speak_tasks, return_exceptions=True)
+        spoke_any = any(r is True for r in results)
+        suppressed_any = any(r is not True for r in results)
+
+    if interrupted or session.speech_generation != turn_gen:
+        # The turn died mid-answer — report it honestly and skip the repair
+        # line (a human is talking; silence is correct). Any still-pending
+        # speak tasks drop themselves via the generation check.
         return JSONResponse({"ok": True, "spoke": spoke_any, "interrupted": True})
 
     if not spoke_any:
