@@ -1395,6 +1395,16 @@ _BACKCHANNEL_LINES = ["Mm-hm.", "Mm.", "Right."]
 _BACKCHANNEL_LINES_IT = ["Mm-hm.", "Mm.", "Capito."]
 
 
+def _avatar_voice(session: "store.Session") -> str:
+    """The session avatar's ElevenLabs voice for TTS. avatars.load is
+    mtime-cached (hot-path safe); any failure falls back to the global voice
+    ("" keeps the shared prewarm cache key)."""
+    try:
+        return avatars.load(session.avatar_id).elevenlabs_voice_id or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _line_for(heard: str, en: list, it: list) -> str:
     """A random line from the pool matching the language of what was heard."""
     return random.choice(it if sounds_italian(heard) else en)
@@ -1471,6 +1481,15 @@ async def _prewarm_tts_cache() -> None:
     """
     warmed = 0
     misses = 0
+    # One pass per DISTINCT avatar voice: "" (the global default) plus each
+    # avatar.yaml override (e.g. cedric's Eric) — so his acks/confirmations are
+    # as instant as Laura's.
+    voices = {""}
+    for aid in avatars.list_ids():
+        try:
+            voices.add(tts._norm_voice(avatars.load(aid).elevenlabs_voice_id or ""))
+        except Exception:  # noqa: BLE001
+            pass
     for line in (
         *_ACK_LINES,
         *_ACK_LINES_IT,
@@ -1484,15 +1503,18 @@ async def _prewarm_tts_cache() -> None:
         *_GOODBYE_LINES_IT,
         *SEARCH_ANNOUNCE_LINES,
     ):
-        try:
-            if await tts.synthesize_cached(line) is not None:
-                warmed += 1
-                misses = 0
-            else:
+        for voice in voices:
+            try:
+                if await tts.synthesize_cached(line, voice) is not None:
+                    warmed += 1
+                    misses = 0
+                else:
+                    misses += 1
+            except Exception:  # noqa: BLE001
                 misses += 1
-                if misses >= 2:
-                    break
-        except Exception:  # noqa: BLE001
+        # Bail once ElevenLabs looks down for a whole line across all voices
+        # (no key / outage) — no point paying the rest of the round-trips.
+        if misses >= 2 * len(voices):
             break
     print(f"[startup] tts cache prewarmed: {warmed} fixed lines", flush=True)
 
@@ -1617,7 +1639,7 @@ async def _speak_with_audio(
     payload = None
     try:
         if generation == session.speech_generation:
-            payload = await tts.synthesize_cached(text)
+            payload = await tts.synthesize_cached(text, _avatar_voice(session))
     except Exception:  # noqa: BLE001 — synth is an optimization, never a blocker
         payload = None
     if prev is not None:
@@ -2006,7 +2028,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # cached_payload: attach the voice only if it's already synthesized
             # (prewarmed at boot) — an ack must never wait on a vendor call.
             acked = await _make_avatar_speak(
-                session, line, force=True, audio=tts.cached_payload(line)
+                session, line, force=True, audio=tts.cached_payload(line, _avatar_voice(session))
             )
         # ── backchanneling ──
         # Nobody called her, someone is deep into a long point: one tiny
@@ -2020,7 +2042,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 bc,
                 force=True,
                 backchannel=True,
-                audio=tts.cached_payload(bc),
+                audio=tts.cached_payload(bc, _avatar_voice(session)),
             )
             return JSONResponse({"ok": True, "partial": True, "backchannel": True})
         return JSONResponse({"ok": True, "partial": True, "acked": acked})
@@ -2167,6 +2189,19 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # SKIP sentinel + cooldown keep her from interjecting on things she can't ground.
     called, question = detect_wake(avatar, text, session.present_names())
 
+    # ── action-capture continuation ──
+    # A same-speaker follow-up right after a captured action (and NOT a new
+    # wake) extends the captured item's text, so the artifact/ledger get the
+    # whole ask even when ASR split it across finals. Short window only.
+    pending = getattr(session, "last_capture", None)
+    if pending is not None:
+        p_item, p_speaker, p_ts = pending
+        if not called and speaker == p_speaker and time.time() - p_ts < 4.0:
+            p_item["action"] = " ".join((p_item["action"] + " " + text).split())[:300]
+            session.last_capture = (p_item, p_speaker, time.time())
+            return JSONResponse({"ok": True, "spoke": False, "capture_extended": True})
+        session.last_capture = None
+
     # ── voice stop ("Laura, stop / aspetta") ──
     # A stop is a command, never a question: cut the current turn and answer
     # nothing. (The partial path usually catches it first; this is the net.)
@@ -2184,7 +2219,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         try:
             goodbye = _line_for(question or text, _GOODBYE_LINES, _GOODBYE_LINES_IT)
             await _make_avatar_speak(
-                session, goodbye, force=True, audio=tts.cached_payload(goodbye)
+                session, goodbye, force=True, audio=tts.cached_payload(goodbye, _avatar_voice(session))
             )
             await asyncio.sleep(settings.leave_grace_seconds)
         except Exception:
@@ -2295,7 +2330,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if called and wants_action_capture(question) and not wants_web_search(question):
         # detect_wake already stripped the wake word: `question` is the ask
         # itself ("please schedule a follow-up with Marco on Friday").
-        tools.capture_action(session, question.strip())
+        item = tools.capture_action(session, question.strip())
+        # ASR often splits one ask across finals ("Cedric, can you send" +
+        # "the recap by Friday"). Remember this capture so a same-speaker
+        # follow-up within a few seconds extends its text (see the
+        # continuation check after wake detection).
+        session.last_capture = (item, speaker, time.time())
         if session.speech_generation != turn_gen:  # barge-in since the final landed
             return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
         line = _line_for(question, _QUEUE_LINES, _QUEUE_LINES_IT)
@@ -2305,7 +2345,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             line,
             force=True,
             generation=turn_gen,
-            audio=tts.cached_payload(line),
+            audio=tts.cached_payload(line, _avatar_voice(session)),
         )
         return JSONResponse({"ok": True, "spoke": bool(spoke), "action_capture": True})
 
@@ -2334,7 +2374,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             line,
             force=True,
             generation=turn_gen,
-            audio=tts.cached_payload(line),
+            audio=tts.cached_payload(line, _avatar_voice(session)),
         )
 
     # Backend is the brain: answer from OUR knowledge (RAG) with the recent
