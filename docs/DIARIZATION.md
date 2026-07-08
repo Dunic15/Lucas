@@ -17,11 +17,29 @@ to matter for real users:
 
 ## Stage 0 — validate offline (SHIPPED: `scripts/diarize_recording.py`)
 
-Run the open-source model on recordings of real meetings with a shared-mic
-room. Compare its speaker timeline against what the transcript claimed.
-Decision gate: does per-person attribution actually improve enough to change
-the artifact/answers? Deps (torch ~2GB) stay OUT of the deploy image; the
-script runs on a laptop, CPU is fine offline.
+Run diarization on recordings of real meetings with a shared-mic room.
+Compare the speaker timeline against what the transcript claimed. Decision
+gate: does per-person attribution actually improve enough to change the
+artifact/answers? The script supports two backends with identical output:
+
+- `--backend hosted` (default when `PYANNOTE_API_KEY` is set): pyannoteAI
+  API, Precision-2 model — zero installs, spends the free 100 hours. Audio
+  is uploaded to their temporary storage (~24h retention), so use consented
+  recordings only.
+- `--backend local`: open-source 3.1 on the laptop (torch ~2GB stays OUT of
+  the deploy image; CPU is fine offline). Run both on the same recording to
+  see whether the paid model's edge matters for our case.
+
+> **Account status (2026-07-08):** pyannoteAI account created with **100 free
+> hours** of diarization. That removes the cost gate on stages 0–1: validation
+> and the first live pilots can run entirely on the free allowance. API key is
+> NOT in the repo — goes to `.env` locally / SSM on App Runner when stage 1
+> lands. Relevant hosted features (docs.pyannote.ai): batch `diarize` jobs +
+> webhooks + media upload (stage 0/1 batch), a **realtime streaming API**
+> (create-stream / stream-audio — makes stage 1 simpler than the DIY diart
+> plan below), and **voiceprint + identify** jobs (enroll a speaker once,
+> recognize them across meetings — upgrade path from "Sala Riunioni · voice 2"
+> to a persistent named identity).
 
 ## Stage 1 — live, pay-per-use (when stage 0 says yes AND a prospect has
 shared-mic rooms)
