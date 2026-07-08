@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import threading
 from typing import Any, Optional
 
 from fastapi import Request
@@ -111,6 +112,37 @@ def deliver_ended(integration: Optional[dict], bot_id: str, artifact: dict) -> b
         )
         return True
     return False
+
+
+def notify_action_requested(session: Any, bot_id: str, item: dict) -> None:
+    """An action request was captured live (tools.queue_action): tell the
+    orchestrator NOW, so the Slack approval card is ready before the meeting
+    ends. No-ops unless the session is orchestrated (integration with a
+    callback_url). Fire-and-forget and OFF the live path — the artifact's
+    actions[] at finalize stays the authoritative copy, so a lost event costs
+    nothing. PII rule: only the distilled action/owner/due leave — never
+    transcript content."""
+    if session is None or not session.integration:
+        return
+    integration = dict(session.integration)
+    if not integration.get("callback_url"):
+        return
+    wire_item = {k: (item or {}).get(k, "") for k in ("action", "owner", "due")}
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # Tool dispatch runs inside run_in_threadpool — no event loop in this
+        # worker thread, so create_task would raise. A daemon thread keeps the
+        # POST just as fire-and-forget and off the live path.
+        threading.Thread(
+            target=callback.send_action_requested,
+            args=(integration, bot_id, wire_item),
+            daemon=True,
+        ).start()
+        return
+    asyncio.create_task(
+        run_in_threadpool(callback.send_action_requested, integration, bot_id, wire_item)
+    )
 
 
 def notify_failed(session: Any, bot_id: str, status_code: str) -> None:

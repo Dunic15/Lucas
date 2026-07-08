@@ -59,6 +59,7 @@ from .brain import (
     answer_with_tools,
     rolling_summary,
     sounds_italian,
+    wants_action_capture,
     wants_deep_thought,
     wants_web_search,
     post_meeting,
@@ -905,6 +906,45 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
+def _norm_action_text(text: str) -> str:
+    """Normalization for action-item dedupe (mirrors ledger._norm's intent)."""
+    return re.sub(r"\W+", " ", (text or "").lower()).strip()
+
+
+def _merge_action_items(queued: list, extracted: list) -> list:
+    """Artifact actions[] = live-captured queue_action items first, then the
+    summarizer's extraction, deduped on normalized item text. A live capture
+    wins a collision — it is the wording the room actually asked for — and
+    ledger.record_meeting dedupes again on insert, so double-merging is safe."""
+    merged: list = []
+    seen: set[str] = set()
+    for q in queued or []:
+        text = (q.get("action") or "").strip()
+        key = _norm_action_text(text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        owner = (q.get("owner") or "").strip()
+        merged.append(
+            {
+                "item": text,
+                "owner": owner or "UNASSIGNED",
+                "deadline": (q.get("due") or "").strip(),
+                "gap_type": "none" if owner else "owner",
+                "requested_live": True,  # additive marker: asked out loud in-meeting
+            }
+        )
+    for a in extracted or []:
+        text = a.get("item", "") if isinstance(a, dict) else str(a)
+        key = _norm_action_text(text)
+        if key in seen:
+            continue
+        if key:
+            seen.add(key)
+        merged.append(a)
+    return merged
+
+
 async def _finalize_session(bot_id: str) -> dict | None:
     """End a session once: stop both vendors, build + store the artifact.
 
@@ -944,6 +984,18 @@ async def _finalize_session(bot_id: str) -> dict | None:
                 context=(integration or {}).get("brief", ""),  # CEDRIC: brief-grounded summary
             )
         )
+
+    # Live-captured action requests (tools.queue_action): fold them into the
+    # artifact's actions[] ahead of the summarizer's extraction, deduped on
+    # normalized item text. Runs BEFORE save_artifact and ledger.record_meeting
+    # so every consumer — stored artifact, wire artifact, ledger, autopilot —
+    # sees the same merged list. Plain non-orchestrated sessions benefit too.
+    queued_actions = list(getattr(session, "queued_actions", None) or [])
+    if queued_actions:
+        artifact["actions"] = _merge_action_items(
+            queued_actions, artifact.get("actions") or []
+        )
+        artifact["checklist"] = artifact["actions"]  # legacy alias, same list
 
     # The transcript is the raw material of the artifact — persist it so the
     # product output is complete (transcript + summary + checklist + email).
@@ -2182,6 +2234,41 @@ async def recall_webhook(request: Request) -> JSONResponse:
             generation=turn_gen,
             audio=tts.cached_payload(line),
         )
+
+    # ── action requests: capture, never execute (queue_action platform tool) ──
+    # "Cedric, can you send the recap?" is a request to DO something. The
+    # streamed path can't call tools, so a direct action ask routes through the
+    # tool loop with the SESSION threaded in: queue_action captures
+    # {action, owner, due} in-memory (instant), fires action.requested for
+    # orchestrated sessions (off the live path), and the spoken reply promises
+    # follow-up after the call — never execution. The instant ack above already
+    # covered the tool round-trip's pause. Only when addressed by name: an
+    # unaddressed "someone should send X" is the summarizer's job at finalize.
+    if called and wants_action_capture(question):
+        try:
+            result = await run_in_threadpool(
+                lambda: answer_with_tools(
+                    avatar,
+                    question,
+                    history=session.recent_transcript(n=8),
+                    session=session,
+                )
+            )
+            line = (result.get("answer") or "").strip()
+        except Exception as e:  # noqa: BLE001 — fall back to the streamed answer
+            print(f"[queue_action] tool answer failed: {e}", flush=True)
+            line = ""
+        if session.speech_generation != turn_gen:  # barge-in while it cooked
+            return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
+        if line:
+            spoke = await _make_avatar_speak(
+                session, line, force=True, generation=turn_gen
+            )
+            return JSONResponse(
+                {"ok": True, "spoke": bool(spoke), "action_capture": True}
+            )
+        # No answer from the tool path (stub/offline or provider hiccup): fall
+        # through to the normal streamed answer — never dead air on a direct ask.
 
     # Backend is the brain: answer from OUR knowledge (RAG) with the recent
     # meeting conversation as context, plus the silent MeetingState tracker and

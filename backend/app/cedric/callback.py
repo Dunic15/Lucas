@@ -1,11 +1,14 @@
 """Callbacks to the orchestrator (Cedric) that booked a session.
 
-A session started with a `callback_url` gets two kinds of events POSTed back
+A session started with a `callback_url` gets three kinds of events POSTed back
 (see the Cedric X Laura project's docs/04-api-contract.md):
 
-  - session.status  — best-effort, single attempt (joining / live / failed).
-  - session.ended   — the full artifact; retried with backoff because losing it
-                      means the orchestrator has to fall back to polling.
+  - session.status    — best-effort, single attempt (joining / live / failed).
+  - session.ended     — the full artifact; retried with backoff because losing
+                        it means the orchestrator has to fall back to polling.
+  - action.requested  — someone asked the avatar to DO something mid-meeting
+                        (tools.queue_action); best-effort, single attempt —
+                        the artifact's actions[] is the authoritative list.
 
 Requests are signed with `X-Laura-Signature: t=<unix_ts>,v1=<hmac_sha256_hex>`
 over `t + "." + raw_body` using LAURA_WEBHOOK_SECRET (Slack/Stripe-style), and
@@ -96,6 +99,33 @@ def send_status(
         return 200 <= resp.status_code < 300
     except Exception as e:  # noqa: BLE001 — never let a callback break the call
         print(f"[cedric-callback] status '{status}' delivery failed: {e}", flush=True)
+        return False
+
+
+def send_action_requested(integration: dict | None, bot_id: str, item: dict) -> bool:
+    """POST an action.requested event the moment the avatar queues an action
+    request live (tools.queue_action), so the orchestrator's approval card is
+    ready before the meeting ends. Same discipline as session.status: single
+    attempt, best-effort — the artifact's actions[] in session.ended is the
+    authoritative, complete list. PII rule: only the distilled action text /
+    owner / due ever leave — never transcript content."""
+    url = (integration or {}).get("callback_url") or ""
+    if not url:
+        return False
+    payload = {
+        "event": "action.requested",
+        "bot_id": bot_id,
+        "external_ref": (integration or {}).get("external_ref") or {},
+        "action": (item or {}).get("action", ""),
+        "owner": (item or {}).get("owner", ""),
+        "due": (item or {}).get("due", ""),
+        "at": _now_iso(),
+    }
+    try:
+        resp = _post(url, payload)
+        return 200 <= resp.status_code < 300
+    except Exception as e:  # noqa: BLE001 — never let a callback break the call
+        print(f"[cedric-callback] action.requested delivery failed: {e}", flush=True)
         return False
 
 
