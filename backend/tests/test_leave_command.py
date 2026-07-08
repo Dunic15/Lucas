@@ -34,8 +34,17 @@ LEAVE_ASKS = [
     "bye",
     "goodbye",
     "bye bye",
-    "ciao",
+    "ciao ciao",
+    "arrivederci",
     "see you later",
+    # Italian dismissals
+    "puoi andare",
+    "puoi uscire dalla riunione",
+    "puoi lasciarci, grazie",
+    "esci pure",
+    "vai pure",
+    "abbandona la call",
+    "sei libera di andare",
 ]
 
 
@@ -47,6 +56,14 @@ def test_leave_commands_detected():
 # ── detection: normal meeting talk that must NEVER kill the bot ──
 
 NOT_LEAVE_ASKS = [
+    # Italian: "ciao" alone is a GREETING ("Laura, ciao!"), never a dismissal;
+    # "puoi andare avanti" means "go ahead", not "leave".
+    "ciao",
+    "ciao come stai",
+    "puoi andare avanti",
+    "puoi andare più veloce",
+    "non andare via",
+    "prima di uscire fai il riepilogo",
     "what did we leave open last time",
     "leave the pricing discussion for next week",
     "leave it with me",

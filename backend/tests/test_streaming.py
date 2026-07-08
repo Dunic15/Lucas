@@ -156,7 +156,7 @@ def test_streaming_search_route_announces_before_answer(monkeypatch):
         brain.answer_question_stream(_avatar(), "What is the latest news on the fund?")
     )
 
-    assert out[0] in brain._SEARCH_ANNOUNCE
+    assert out[0] in brain.SEARCH_ANNOUNCE_LINES
     assert "The round closed yesterday." in out[1:]
 
 

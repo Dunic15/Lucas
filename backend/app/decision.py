@@ -143,16 +143,35 @@ _LEAVE_PERMISSION = re.compile(
     re.IGNORECASE,
 )
 # The whole ask is just a farewell ("Laura, bye!", "goodbye Laura").
+# NOTE: bare "ciao" is deliberately NOT here — in Italian it's also a GREETING
+# ("Laura, ciao!" at the start of a meeting must never make her leave).
+# "ciao ciao" and "arrivederci" are unambiguous farewells.
 _LEAVE_FAREWELL = re.compile(
-    r"^(?:(?:good)?bye(?:\s*bye)?|ciao|see you(?: later| soon| next time)?|"
-    r"thanks,?\s*(?:good)?bye)[.!\s]*$",
+    r"^(?:(?:good)?bye(?:\s*bye)?|ciao\s+ciao|arrivederci|see you(?: later| soon| next time)?|"
+    r"thanks,?\s*(?:good)?bye|grazie,?\s*ciao\s*ciao)[.!\s]*$",
+    re.IGNORECASE,
+)
+# Italian dismissals, mirroring the English shapes: a whole-ask imperative
+# ("esci pure", "lascia la riunione") or an explicit permission ("puoi
+# andare"). Same guard as English: the verb must END the clause, so "puoi
+# andare avanti" (= go ahead / continue) never matches.
+_LEAVE_IT = re.compile(
+    r"^(?:per favore\s+|ora\s+|adesso\s+|pure\s+)*"
+    r"(?:esci|vattene|scollegati|abbandona|vai pure)"
+    r"(?:\s+(?:dalla|da questa|la|questa)\s+(?:riunione|call|chiamata|meeting))?"
+    r"(?:\s+(?:ora|adesso|pure|grazie))*[.!?\s]*$"
+    r"|\bpuoi\s+(?:andare|uscire|lasciarci|abbandonare|scollegarti)"
+    r"(?:\s+(?:dalla|da questa|la|questa)\s+(?:riunione|call|chiamata|meeting))?"
+    r"(?:\s+(?:ora|adesso|pure|grazie))*\s*(?:[.!?,;]|$)"
+    r"|\bsei liber[ao] di andare\b",
     re.IGNORECASE,
 )
 # Negation / hypothetical right before the verb ("don't leave", "before you
-# leave the meeting…") — never a command.
+# leave the meeting…", "non andare", "prima di uscire…") — never a command.
 _LEAVE_BLOCKED = re.compile(
     r"\b(?:don'?t|do not|never|shouldn'?t|won'?t|before|unless|until|if|when|"
-    r"why(?: did| would)?|instead of)\b[^.?!]{0,24}\b(?:leave|go|drop|hop|exit)\b",
+    r"why(?: did| would)?|instead of|non|prima di|se|quando|perch[eé])\b"
+    r"[^.?!]{0,24}\b(?:leave|go|drop|hop|exit|andare|uscire|esci|vattene|lasciare)\b",
     re.IGNORECASE,
 )
 
@@ -167,5 +186,6 @@ def detect_leave_command(question: str) -> bool:
     return bool(
         _LEAVE_IMPERATIVE.search(q)
         or _LEAVE_PERMISSION.search(q)
+        or _LEAVE_IT.search(q)
         or _LEAVE_FAREWELL.match(q)
     )

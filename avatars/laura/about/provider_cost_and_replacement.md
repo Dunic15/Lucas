@@ -1,21 +1,22 @@
 # Provider Cost and Replacement Notes
 
 **Owner:** Product/engineering
-**Applies to:** Decisions about Groq, Recall, Anam, ElevenLabs, and open-source alternatives
-**Last reviewed:** 2026-07-03
+**Applies to:** Decisions about Cerebras, Claude, Recall, ElevenLabs, Deepgram, and open-source alternatives
+**Last reviewed:** 2026-07-08
 
 ## Cost structure
 
 The main live meeting cost drivers are:
 
 - Recall.ai bot time and output media variant
-- avatar/voice provider minutes
 - backend compute while the service is running
-- LLM token usage
-- transcription provider usage if not using built-in Recall transcription
+- LLM token usage (small)
+- transcription provider usage (Deepgram)
+- ElevenLabs characters (effectively free at current volume: the plan covers
+  millions of characters per month and a 30-minute meeting uses a few thousand)
 
-LLM tokens are usually not the dominant cost for a 30-minute meeting. The avatar
-provider and always-on backend compute are usually larger cost drivers.
+A 30-minute meeting costs roughly $0.40-0.80 all-in. There is no per-minute
+face vendor cost: the avatar is an open-source in-browser renderer.
 
 ## Current provider roles
 
@@ -23,56 +24,58 @@ Recall.ai is the meeting transport: it joins Zoom, Google Meet, and Microsoft
 Teams, receives meeting data, and streams Laura's output media back into the
 meeting.
 
-Groq is the current live brain provider. It is used for low first-token latency
-with `llama-3.3-70b-versatile`.
+**Cerebras** is the current live brain provider (`gemma-4-31b` through an
+OpenAI-compatible API), chosen for very low first-token latency. **Claude**
+covers the rest: Haiku for clearly complex questions and as the automatic
+fallback if Cerebras fails, Claude with native web search for fresh-information
+questions, and Sonnet for the post-meeting artifact.
 
-Anam is the current face and voice provider. In the current stack it should be
-treated as a swappable mouth, not as the brain.
+The **face** is the open-source TalkingHead WebGL avatar (the `/talk` page) —
+free, no vendor. Anam (the previous paid face vendor) is kept only as a
+fallback page. The **voice** is ElevenLabs, synthesized server-side with word
+timings for lip-sync; free edge-tts is the fallback. **Transcription** is
+Deepgram nova-3 multilingual through Recall.
 
-ElevenLabs is not required for the current live meeting path. The current live
-voice is Anam's persona voice.
+## Replacing a provider
 
-## Replacing Anam
+Replacing any vendor should not require rewriting the backend brain. The
+contract stays: the brain produces text, the avatar page turns it into
+audible/visible speech.
 
-Replacing Anam should not require rewriting the backend brain. The replacement
-should keep the same contract: the brain produces text, and the avatar page or
-renderer turns that text into audible/visible speech.
-
-The lowest-risk replacement path is:
+The lowest-risk path for face upgrades (e.g. photoreal):
 
 1. Keep Recall.ai for meeting entry and output media.
-2. Replace the Anam avatar page with a self-hosted avatar renderer.
+2. Swap the avatar page (`AVATAR_PAGE` env var selects `/talk`, `/photoreal`,
+   or `/avatar`).
 3. Keep the existing RAG and brain pipeline unchanged.
 4. Test answer quality separately from visual quality.
 
-Open-source options previously identified as candidates include browser 3D
-avatars with real-time lip sync, MuseTalk-style GPU lip-sync, and NVIDIA
-Audio2Face-style 3D animation. Those are avatar-rendering decisions and should
-not change how Laura retrieves knowledge or writes answers.
+A photoreal GPU track (MuseTalk-based, streaming a real face) is already built
+and validated end-to-end on a stub engine; it costs about $1/hour only while a
+meeting runs.
 
 ## Model quality decisions
 
 If Laura misunderstands the question, first check transcription quality and
-retrieval. If Laura retrieves the wrong chunk, changing Groq to another model
-will not fix the root cause.
+retrieval. If Laura retrieves the wrong chunk, changing the LLM provider will
+not fix the root cause.
 
-If retrieval is correct but the reasoning is weak, then compare models. Groq is
-optimized for speed. Claude or another stronger model may provide better
-reasoning, but could increase latency and cost.
+If retrieval is correct but the reasoning is weak, then compare models.
+Cerebras is optimized for speed; complex questions already route to Claude.
+The providers are pluggable by configuration, so swaps are cheap to test.
 
 ## Common questions
 
-**"Can we lower cost by removing Anam?"**
-Yes, removing paid avatar minutes is likely the largest savings opportunity, but
-the replacement still needs TTS, lip sync, rendering, hosting, and operations.
+**"How much does a meeting cost?"**
+Roughly $0.40-0.80 for 30 minutes, dominated by the Recall bot. The brain
+tokens and voice characters are minor at current volume.
 
 **"Can we rebuild Recall ourselves?"**
 Technically possible, but not recommended for the current stage. Recreating
 cross-platform meeting entry, transcript capture, output media, reconnects,
-calendar handling, and platform quirks is much larger than replacing the avatar
-renderer.
+calendar handling, and platform quirks is much larger than replacing the
+avatar renderer.
 
 **"Should we run everything on AWS?"**
-The backend can run on AWS App Runner, but GPU avatar rendering should use a GPU
-service such as ECS/EC2 GPU instances or a dedicated GPU host. App Runner is not
-the right place for heavy GPU inference.
+The backend runs on AWS App Runner (`eu-central-1`). GPU avatar rendering
+(photoreal) should use a dedicated GPU host, not App Runner.

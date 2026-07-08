@@ -219,7 +219,10 @@ _ABOUT_INTENT = re.compile(
     r"are you (an? )?(ai|bot|robot|human|real)\b|"
     r"(your|laura'?s) (architecture|brain|stack|pipeline|tech stack)\b|"
     r"how (were|are) you (built|made|designed|trained)\b|"
+    r"(you|laura) (built|made|powered|based) (on|with|by)\b|"
+    r"what (model|llm|models)\b.{0,24}\b(you|use|using|run)|"
     r"come funzioni\b|come sei fatt\w+|cosa (sai|puoi) fare|"
+    r"che modell[oi]\b|su che (modello|tecnologia)|con che (modello|tecnologia)|"
     r"chi (sei|ti ha creat\w+|ti ha fatt\w+)|sei (un[ao]? )?(ai|robot|bot|uman\w+))\b",
     re.IGNORECASE,
 )
@@ -238,13 +241,38 @@ def _retrieve_for(avatar: Avatar, question: str, history: str, k: int) -> list[R
     return retrieve(avatar, _retrieval_query(question, history), k=k)
 
 
+# Cheap language sniff for a live utterance: enough Italian function words →
+# treat the turn as Italian (drives announce/ack/filler language — the ANSWER
+# language is handled by the model itself via the prompt).
+_IT_HINT = re.compile(
+    r"\b(che|chi|come|cosa|cos'è|quanto|quando|perch[eé]|dove|sono|sei|siamo|"
+    r"questo|questa|quali|della|delle|degli|nella|sulla|puoi|potresti|"
+    r"dovremmo|anche|però|già|più|grazie|ciao|allora|cerca|dimmi|fammi|"
+    r"oggi|ieri|domani|notizie|ultime|adesso|ancora|sempre|qualcosa|tutto|"
+    r"fare|dire|dicono|vorrei|serve|abbiamo|avete|possiamo|riunione|settimana|"
+    r"[a-z]+zione|[a-z]+mente)\b|[àèéìòù]",
+    re.IGNORECASE,
+)
+
+
+def sounds_italian(text: str) -> bool:
+    """True when the utterance reads as Italian (2+ Italian word/accent hits)."""
+    return len(_IT_HINT.findall(text or "")) >= 2
+
+
 # Questions that want FRESH information from the internet — routed to Claude's
 # native web_search tool (llm.web_search on live_search_model). Provider-neutral:
-# it never depends on Groq.
+# it never depends on the fast provider. English + Italian triggers: Laura's
+# meetings are bilingual, and an intent regex that only speaks English silently
+# disables the feature (and its spoken announce) for Italian speakers.
 _SEARCH_INTENT = re.compile(
     r"\b(search|look up|google|on the internet|online|web|latest|news|"
     r"today|tonight|yesterday|currently|right now|this (week|month|year)|"
     r"price of|stock|weather|score|who won|happened|202[5-9]|"
+    # Italian
+    r"cerca\w*|cercami|su internet|ultime notizie|notizie|oggi|stasera|ieri|"
+    r"attualmente|in questo momento|questa settimana|questo mese|quest.anno|"
+    r"prezzo di|quanto costa|meteo|che tempo fa|chi ha vinto|successo ieri|"
     # SFF/fund questions now come from the web too (no local pack) — see persona.
     r"sff|swiss founders fund|founders fund|portfolio)\b",
     re.IGNORECASE,
@@ -277,7 +305,11 @@ _COMPLEX_INTENT = re.compile(
     r"\b(analy[sz]e|analysis|compare|comparison|versus|trade[- ]?offs?|"
     r"pros and cons|strateg|evaluate|assess|recommend|draft|write (a|an|me|up)|"
     r"step[- ]by[- ]step|in detail|break (it|this) down|walk me through|"
-    r"should (i|we|they)|explain why|reason through|think through)\b",
+    r"should (i|we|they)|explain why|reason through|think through|"
+    # Italian
+    r"analizza\w*|confronta\w*|paragona\w*|valuta\w*|consiglia\w*|consiglieresti|"
+    r"raccomand\w+|scrivi(mi)?|redigi|spiega(mi)? perch[eé]|ragiona\w*|"
+    r"passo (per|dopo) passo|nel dettaglio|dovremmo|conviene|pro e contro)\b",
     re.IGNORECASE,
 )
 
@@ -304,14 +336,26 @@ def _live_route(question: str) -> tuple[str, str]:
 
 
 # Spoken BEFORE the (slow) web-search call: a few seconds of silence reads as a
-# bug, an announced lookup reads as diligence. Varied so the repeat guard never
-# suppresses it. Safe to say unconditionally: the search path never SKIPs, so an
-# announced answer always follows.
-_SEARCH_ANNOUNCE = (
+# bug, an announced lookup reads as diligence. Two language pools, picked by the
+# question's language; 5+ variants each so the repeat guard (120s window) never
+# silently swallows the announce during back-to-back searches. Safe to say
+# unconditionally: the search path never SKIPs, so an answer always follows.
+_SEARCH_ANNOUNCE_EN = (
     "One moment — let me look that up online.",
     "Give me a second, I'll check the latest on that.",
     "Let me search for that quickly.",
+    "Hang on, checking the web for you.",
+    "Let me pull that up — one sec.",
 )
+_SEARCH_ANNOUNCE_IT = (
+    "Un attimo — lo cerco online.",
+    "Dammi un secondo, controllo le ultime su questo.",
+    "Vado a cercarlo, un momento.",
+    "Aspetta, guardo sul web.",
+    "Un secondo che controllo.",
+)
+# Every announce line, for the boot-time TTS prewarm.
+SEARCH_ANNOUNCE_LINES = _SEARCH_ANNOUNCE_EN + _SEARCH_ANNOUNCE_IT
 
 
 _SEARCH_FAIL_RE = re.compile(
@@ -451,8 +495,10 @@ def answer_question_stream(
     _provider, _model = _live_route(question)
     if _provider == "search":
         # Announce the lookup BEFORE the slow web call — it buys the search its
-        # seconds honestly instead of leaving dead air.
-        yield random.choice(_SEARCH_ANNOUNCE)
+        # seconds honestly instead of leaving dead air. In the asker's language.
+        yield random.choice(
+            _SEARCH_ANNOUNCE_IT if sounds_italian(question) else _SEARCH_ANNOUNCE_EN
+        )
         answer = _web_search_answer(question, convo)
         if answer:
             buf, sentences = _split_sentences(answer + " ")

@@ -52,7 +52,8 @@ the next check.
 Live meeting transcripts can mishear product names. Treat these as equivalent
 when context supports it:
 
-- "grok" usually means Groq, the LLM provider.
+- "grok" or "groq" usually means the fast LLM provider tier (currently
+  Cerebras via an OpenAI-compatible API; Groq was the previous provider).
 - "recall base", "recall region", or "API base" usually means
   `RECALL_API_BASE`.
 - "cloud flare", "cloudflared", and "tunnel" usually refer to the public tunnel
@@ -83,11 +84,12 @@ irrelevant or generic, improve the knowledge docs, retrieval ranking, and prompt
 
 **"Make her smarter."**
 First improve the knowledge base and retrieval. Then consider model quality only
-after retrieval returns the right evidence. Groq is already chosen for low
-latency in live meetings; switching models may help reasoning but will not fix a
-bad index or missing process docs.
+after retrieval returns the right evidence. The fast tier (Cerebras) is chosen
+for low latency in live meetings, and complex questions already route to
+Claude; switching models will not fix a bad index or missing process docs.
 
-**"Can we use open source instead of Anam?"**
-That is an avatar rendering decision, not an answer-quality decision. The brain
-can keep working the same way if the avatar page changes from Anam to an
-open-source renderer.
+**"Can we use open source instead of a paid avatar vendor?"**
+Already done: the current face IS the open-source renderer (TalkingHead on the
+/talk page), and a photoreal GPU track exists for the next visual step. Avatar
+rendering decisions never change how Laura retrieves knowledge or writes
+answers.
