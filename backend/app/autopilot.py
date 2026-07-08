@@ -26,12 +26,101 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from . import actions, ledger
+from . import actions, google_actions, ledger
 from .config import settings
 
 
 def _recipients(raw: str) -> list[str]:
     return [e.strip() for e in (raw or "").split(",") if e.strip()]
+
+
+# ─────────── finalize: autonomous EXECUTION (the AI-employee path) ───────────
+# When EXECUTE_ENABLED is on, an avatar does the post-meeting work ITSELF from
+# the connected Google account: emails the recap, files a notes doc in its
+# Drive folder. Independent of the orchestrator/Slack path and of SendGrid —
+# it uses the Gmail/Drive OAuth already connected. All best-effort, off the
+# live path (called from _finalize_session in a background task).
+
+def _recap_email(avatar_name: str, artifact: dict[str, Any]) -> tuple[str, str]:
+    """Compose (subject, body) for the recap from the distilled artifact —
+    prefers the model-drafted follow_up_email, else builds one from the
+    summary + actions + decisions. Never touches the transcript."""
+    email = artifact.get("follow_up_email") or {}
+    if email.get("subject") and email.get("body"):
+        return email["subject"], email["body"] + f"\n\n— {avatar_name}"
+    lines = [artifact.get("summary", "").strip(), ""]
+    decisions = artifact.get("decisions") or []
+    if decisions:
+        lines.append("Decisions:")
+        lines += [f"  • {d}" for d in decisions]
+        lines.append("")
+    actions_list = artifact.get("actions") or []
+    if actions_list:
+        lines.append("Action items:")
+        for a in actions_list:
+            if isinstance(a, dict):
+                who = a.get("owner") or "unassigned"
+                due = f" — due {a['deadline']}" if a.get("deadline") else ""
+                lines.append(f"  • {a.get('item','')} ({who}){due}")
+            else:
+                lines.append(f"  • {a}")
+        lines.append("")
+    lines.append(f"— {avatar_name}")
+    return "Meeting recap & next steps", "\n".join(lines).strip()
+
+
+def _notes_doc(avatar_name: str, artifact: dict[str, Any]) -> tuple[str, str]:
+    """A meeting-notes document title + markdown body for the Drive folder."""
+    mtype = (artifact.get("meeting_type") or "Meeting").replace("_", " ").title()
+    title = f"{mtype} notes — {avatar_name}"
+    subj, body = _recap_email(avatar_name, artifact)
+    risks = artifact.get("risks") or []
+    extra = ("\n\nRisks / watch-outs:\n" + "\n".join(f"  • {r}" for r in risks)) if risks else ""
+    return title, f"# {title}\n\n{body}{extra}"
+
+
+def _artifact_is_empty(artifact: dict[str, Any]) -> bool:
+    return not (
+        (artifact.get("summary") or "").strip()
+        or artifact.get("decisions")
+        or artifact.get("actions")
+    )
+
+
+def maybe_execute(
+    avatar_name: str, artifact: dict[str, Any], drive_folder_id: str = "",
+    attendee_emails: list[str] | None = None,
+) -> dict[str, Any]:
+    """Do the post-meeting work autonomously if EXECUTE_ENABLED. Returns a
+    status dict; never raises. Recap → EXPLICIT recipients only
+    (EXECUTE_RECAP_TO); notes → the avatar's Drive folder.
+
+    Recipient safety: the recap contains decisions/pricing/etc, so it is sent
+    ONLY to the operator-configured EXECUTE_RECAP_TO — never silently to
+    orchestrator-supplied meeting attendees (who may be external). A caller
+    that wants attendee delivery must put those addresses in EXECUTE_RECAP_TO
+    (or approve them via the orchestrator/Slack path)."""
+    if not settings.execute_enabled:
+        return {"executed": False, "reason": "disabled"}
+    if _artifact_is_empty(artifact):
+        return {"executed": False, "reason": "empty artifact"}
+    out: dict[str, Any] = {"executed": True}
+    try:
+        if settings.execute_recap_email:
+            to = _recipients(settings.execute_recap_to)
+            if to:
+                subject, body = _recap_email(avatar_name, artifact)
+                out["email"] = google_actions.send_gmail(to, subject, body)
+            else:
+                # No configured recipients → do NOT fall back to (possibly
+                # external) meeting attendees. Explicit allowlist only.
+                out["email"] = {"sent": False, "reason": "EXECUTE_RECAP_TO not set"}
+        if settings.execute_drive_notes and drive_folder_id:
+            title, content = _notes_doc(avatar_name, artifact)
+            out["drive"] = google_actions.write_drive_note(drive_folder_id, title, content)
+    except Exception as e:  # never block finalize
+        return {"executed": False, "reason": type(e).__name__}
+    return out
 
 
 # ─────────────────────── finalize: auto-deliver ───────────────────────

@@ -138,6 +138,14 @@ GOOGLE_CALENDAR_SCOPES = (
     # meetings knowing the team's docs. See drive_client.py. Adding a scope
     # means reconnecting once via /oauth/google/connect.
     "https://www.googleapis.com/auth/drive.readonly",
+    # Autonomous execution (google_actions.py, all off by default): send the
+    # recap email + file a Drive notes doc from the connected account. Only the
+    # two scopes the SHIPPED features use — calendar.events is intentionally NOT
+    # requested until create_calendar_event is wired behind its own flag (keeps
+    # the grant least-privilege while the OAuth client secret rotation is
+    # pending).
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/drive.file",
 )
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 ATTENDEE_CONTAINER_KEYS = {
@@ -1052,7 +1060,8 @@ async def _finalize_session(bot_id: str) -> dict | None:
         )
     except Exception:
         pass
-    if cedric.deliver_ended(integration, bot_id, artifact):  # CEDRIC
+    orchestrated = cedric.deliver_ended(integration, bot_id, artifact)  # CEDRIC
+    if orchestrated:
         pass  # orchestrated session: the orchestrator owns delivery, skip autopilot
     elif settings.autopilot_deliver:
         # Autopilot: send the drafted follow-up + Slack summary now, without
@@ -1061,6 +1070,27 @@ async def _finalize_session(bot_id: str) -> dict | None:
         try:
             name = avatars.load(session.avatar_id).name
             asyncio.create_task(run_in_threadpool(autopilot.maybe_deliver, name, artifact))
+        except Exception:
+            pass
+    # Autonomous EXECUTION (the AI-employee path): the avatar itself emails the
+    # recap and files notes in its Drive folder. Runs for non-orchestrated
+    # sessions (an orchestrator owns its own delivery). Off unless
+    # EXECUTE_ENABLED; best-effort, off the finalize-response path.
+    if not orchestrated and settings.execute_enabled:
+        try:
+            av = avatars.load(session.avatar_id)
+            meeting_ctx = (integration or {}).get("meeting") or {}
+            attendee_emails = [
+                a.get("email", "")
+                for a in (meeting_ctx.get("attendees") or [])
+                if isinstance(a, dict) and a.get("email")
+            ]
+            asyncio.create_task(
+                run_in_threadpool(
+                    autopilot.maybe_execute, av.name, artifact,
+                    av.drive_folder_id, attendee_emails,
+                )
+            )
         except Exception:
             pass
     store.remove(bot_id)
