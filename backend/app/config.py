@@ -205,6 +205,16 @@ class Settings(BaseSettings):
     leave_on_command: bool = True
     leave_grace_seconds: float = 2.5
 
+    # Multi-party turn-taking: on a line NOT addressed to her by name, wait
+    # this long before answering — if a human starts talking meanwhile, she
+    # yields silently (humans get first right of reply to room-open
+    # questions). Direct asks by name are never deferred. 0 disables.
+    deference_seconds: float = 1.8
+    # Footing: greet a participant who joins an already-running meeting, and
+    # nudge one silent participant once as the meeting wraps up.
+    greet_joiners: bool = True
+    quiet_nudge_enabled: bool = True
+
     # Server
     host: str = "127.0.0.1"
     port: int = 8000

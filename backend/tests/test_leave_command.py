@@ -54,6 +54,25 @@ LEAVE_ASKS = [
     "you can log off now",
     "you can sign off",
     "you can hang up now",
+    # non-native / ASR-noisy prepositions
+    "go out from the meeting",
+    "go out the meeting",
+    "you can go out of the meeting",
+    "exit from the call",
+    # the polite QUESTION form ("Laura, can you leave the meeting?")
+    "can you leave the meeting",
+    "can you leave the meeting?",
+    "could you please leave the call",
+    "would you leave the meeting now",
+    "can you go out of the meeting",
+    "will you hang up now",
+    # Italian round 2
+    "lascia la riunione",
+    "lasciaci pure la call",
+    "vai fuori dalla riunione",
+    "potresti uscire dalla call",
+    "puoi andartene",
+    "te ne puoi andare",
 ]
 
 
@@ -94,6 +113,19 @@ NOT_LEAVE_ASKS = [
     "goodbye emails should go out on Friday",
     "what's the process",
     "",
+    # question-form near misses: a topic after the verb is never a dismissal
+    "can you leave the pricing for next week",
+    "can you leave time for Q&A",
+    "could you leave room for questions",
+    "can you go out and check the numbers",
+    "would you go through the numbers",
+    "can you go over the agenda",
+    "will you leave the company retreat planning to Sam",
+    # Italian near misses
+    "lascia stare",
+    "lascia perdere il punto due",
+    "puoi andare al prossimo punto",
+    "potresti andare più veloce",
 ]
 
 
