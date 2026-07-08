@@ -1,10 +1,12 @@
 """Google actions the avatar performs ITSELF (autonomous execution).
 
-This is the "AI employee that does the work" path: at meeting end an avatar can
+This is the "AI employee that does the work" path: at meeting end an avatar
 — from the connected Google account (the same OAuth calendar/Gmail/Drive
-already use) — send the recap email, file a meeting-notes doc in its Drive
-folder, and book follow-up events. It complements, and is independent of, the
-Cedric-in-Slack approval path (an orchestrator can still own delivery).
+already use) — sends the recap email and files a meeting-notes doc in its Drive
+folder. It complements, and is independent of, the Cedric-in-Slack approval
+path (an orchestrator can still own delivery). `create_calendar_event` is
+shipped for a future follow-up-booking flow but is not yet wired into finalize
+(and its calendar.events scope is intentionally not requested until it is).
 
 Discipline (identical to the rest of the connectors):
 - NEVER on the live path — only called at finalize, in a threadpool.
@@ -19,6 +21,8 @@ Discipline (identical to the rest of the connectors):
 from __future__ import annotations
 
 import base64
+import json
+import uuid
 from email.mime.text import MIMEText
 from typing import Any
 
@@ -112,11 +116,12 @@ def write_drive_note(folder_id: str, title: str, content: str) -> dict[str, Any]
             "parents": [folder_id],
             "mimeType": "application/vnd.google-apps.document",
         }
-        # multipart/related: JSON metadata part + the text body part.
-        boundary = "laura-drive-boundary"
+        # multipart/related: JSON metadata part + the text body part. A random
+        # boundary can't collide with anything in the content.
+        boundary = f"laura-{uuid.uuid4().hex}"
         parts = (
             f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
-            + __import__("json").dumps(meta)
+            + json.dumps(meta)
             + f"\r\n--{boundary}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n"
             + (content or "")
             + f"\r\n--{boundary}--"

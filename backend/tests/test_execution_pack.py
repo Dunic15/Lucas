@@ -91,7 +91,9 @@ def test_execute_prefers_drafted_email(monkeypatch):
     assert subj == "Q3 recap" and "As discussed" in body
 
 
-def test_execute_falls_back_to_attendee_emails(monkeypatch):
+def test_execute_never_emails_attendees_without_allowlist(monkeypatch):
+    # Recipient safety: blank EXECUTE_RECAP_TO must NOT fall back to
+    # orchestrator-supplied (possibly external) attendees.
     monkeypatch.setattr(settings, "execute_enabled", True)
     monkeypatch.setattr(settings, "execute_recap_to", "")  # no configured list
     monkeypatch.setattr(settings, "execute_drive_notes", False)
@@ -99,8 +101,22 @@ def test_execute_falls_back_to_attendee_emails(monkeypatch):
     monkeypatch.setattr(
         google_actions, "send_gmail", lambda to, s, b: got.append(to) or {"sent": True}
     )
-    autopilot.maybe_execute("Cedric", ARTIFACT, "", attendee_emails=["a@co.com", "bad", "b@co.com"])
-    assert got == [["a@co.com", "b@co.com"]]  # invalid entry dropped
+    out = autopilot.maybe_execute(
+        "Cedric", ARTIFACT, "", attendee_emails=["a@co.com", "b@co.com"]
+    )
+    assert got == []  # nothing sent
+    assert out["email"]["sent"] is False and "EXECUTE_RECAP_TO" in out["email"]["reason"]
+
+
+def test_execute_skips_empty_artifact(monkeypatch):
+    monkeypatch.setattr(settings, "execute_enabled", True)
+    monkeypatch.setattr(settings, "execute_recap_to", "x@y.com")
+    sent = []
+    monkeypatch.setattr(google_actions, "send_gmail", lambda *a: sent.append(a) or {"sent": True})
+    empty = {"summary": "", "decisions": [], "actions": [], "follow_up_email": {}}
+    out = autopilot.maybe_execute("Cedric", empty, "f")
+    assert out["executed"] is False and out["reason"] == "empty artifact"
+    assert sent == []
 
 
 def test_execute_never_raises(monkeypatch):
@@ -180,3 +196,29 @@ def test_finalize_triggers_execution_for_plain_session(client, monkeypatch):
     time.sleep(0.2)
     assert len(calls) == 1  # execution fired for the autonomous session
     assert calls[0][0] == "Cedric"  # avatar name threaded
+
+
+def test_finalize_skips_execution_for_orchestrated_session(client, monkeypatch):
+    """An orchestrated session (callback_url set) must NOT autonomously execute
+    — the orchestrator owns delivery. Guards against double-send."""
+    monkeypatch.setattr(settings, "execute_enabled", True)
+    monkeypatch.setattr(main_module.recall_client, "assert_ready", lambda: None)
+    monkeypatch.setattr(main_module.recall_client, "create_bot", lambda *a, **k: {"id": "bot_orc"})
+    monkeypatch.setattr(main_module.recall_client, "leave_call", lambda b: None)
+    monkeypatch.setattr(main_module.anam_client, "end_conversation", lambda c: None)
+    # Orchestrated delivery is stubbed to succeed (returns True = "I own it").
+    monkeypatch.setattr(main_module.cedric, "deliver_ended", lambda integ, bot, art: True)
+
+    calls = []
+    monkeypatch.setattr(autopilot, "maybe_execute", lambda *a, **k: calls.append(a))
+
+    client.post("/sessions/start", json={
+        "meeting_url": "https://meet.google.com/exe-orc-run",
+        "avatar_id": "cedric",
+        "callback_url": "https://cedric.example/cb",
+        "external_ref": {"team": "T1"},
+    })
+    store.get("bot_orc").add_utterance("Ben", "Shipped.")
+    assert client.post("/sessions/bot_orc/end").status_code == 200
+    time.sleep(0.2)
+    assert calls == []  # execution did NOT fire — no double delivery

@@ -139,11 +139,13 @@ GOOGLE_CALENDAR_SCOPES = (
     # means reconnecting once via /oauth/google/connect.
     "https://www.googleapis.com/auth/drive.readonly",
     # Autonomous execution (google_actions.py, all off by default): send the
-    # recap email, file a Drive notes doc, book follow-ups — from the connected
-    # account. Superset scopes; harmless until EXECUTE_ENABLED is set.
+    # recap email + file a Drive notes doc from the connected account. Only the
+    # two scopes the SHIPPED features use — calendar.events is intentionally NOT
+    # requested until create_calendar_event is wired behind its own flag (keeps
+    # the grant least-privilege while the OAuth client secret rotation is
+    # pending).
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/calendar.events",
 )
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 ATTENDEE_CONTAINER_KEYS = {
