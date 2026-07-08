@@ -211,10 +211,8 @@ def _read_pdf(path: Path) -> str:
     return "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
 
 
-def build_index(avatar: Avatar) -> int:
-    """(Re)build one avatar's vector store from its knowledge/ docs (.md/.txt/.pdf)."""
+def _collect_chunks(paths: list[Path]) -> list[Chunk]:
     all_chunks: list[Chunk] = []
-    paths = [p for d in avatar.knowledge_dirs for p in sorted(d.glob("*"))]
     for path in paths:
         if path.suffix.lower() == ".md":
             all_chunks.extend(_chunk_markdown(path.read_text(), path.name))
@@ -222,25 +220,34 @@ def build_index(avatar: Avatar) -> int:
             all_chunks.extend(_chunk_plain(path.read_text(), path.name))
         elif path.suffix.lower() == ".pdf":
             all_chunks.extend(_chunk_plain(_read_pdf(path), path.name))
+    return all_chunks
 
-    if not all_chunks:
-        raise RuntimeError(
-            f"No .md/.txt/.pdf docs found in {avatar.knowledge_dir}"
-        )
 
-    vectors = embed([c.text for c in all_chunks], input_type="document")
-
-    avatar.index_path.write_text(
+def _write_index(index_path: Path, chunks: list[Chunk]) -> None:
+    vectors = embed([c.text for c in chunks], input_type="document")
+    index_path.write_text(
         json.dumps(
             {
                 "provider": settings.embedding_provider,
                 "model": settings.embedding_model,
                 "version": INDEX_VERSION,
-                "chunks": [asdict(c) for c in all_chunks],
+                "chunks": [asdict(c) for c in chunks],
                 "vectors": vectors,
             }
         )
     )
+
+
+def build_index(avatar: Avatar) -> int:
+    """(Re)build one avatar's vector store from its knowledge/ docs (.md/.txt/.pdf)."""
+    all_chunks = _collect_chunks(
+        [p for d in avatar.knowledge_dirs for p in sorted(d.glob("*"))]
+    )
+    if not all_chunks:
+        raise RuntimeError(
+            f"No .md/.txt/.pdf docs found in {avatar.knowledge_dir}"
+        )
+    _write_index(avatar.index_path, all_chunks)
     _CACHE.pop(avatar.id, None)  # invalidate
     return len(all_chunks)
 
@@ -249,29 +256,79 @@ def build_index(avatar: Avatar) -> int:
 _CACHE: dict[str, dict] = {}
 
 
+def _index_is_current(index_path: Path) -> bool:
+    """True when the on-disk index matches the configured embedder + format."""
+    if not index_path.exists():
+        return False
+    try:
+        raw = json.loads(index_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return False
+    return (
+        raw.get("provider") == settings.embedding_provider
+        and raw.get("model") == settings.embedding_model
+        and raw.get("version") == INDEX_VERSION
+    )
+
+
 def ensure_index(avatar: Avatar) -> None:
     """Build the index if it's missing or was built with a different embedder.
 
     Lets the demo 'just work' with no manual ingest step. Rebuilding is free and
     instant with the default hash embedder; other providers rebuild on switch.
     """
-    if avatar.index_path.exists():
-        try:
-            raw = json.loads(avatar.index_path.read_text())
-            provider = raw.get("provider")
-            model = raw.get("model")
-            version = raw.get("version")
-        except (json.JSONDecodeError, OSError):
-            provider = None
-            model = None
-            version = None
-        if (
-            provider == settings.embedding_provider
-            and model == settings.embedding_model
-            and version == INDEX_VERSION
-        ):
-            return
+    if _index_is_current(avatar.index_path):
+        return
     build_index(avatar)
+
+
+# ─────────────── "about" docs: self-knowledge, separate index ───────────────
+# Meta docs about the avatar ITSELF (architecture, playbook, runbook, costs)
+# used to live in knowledge/ and polluted process retrieval — a real "what's
+# missing before go-live?" question pulled Laura's own playbook. They now live
+# in avatars/<id>/about/ with their own index, consulted only when someone asks
+# about the avatar herself (brain._is_about_avatar). No about/ folder = no
+# index = retrieve_about returns [] — the feature is fully optional per avatar.
+_ABOUT_CACHE: dict[str, dict] = {}
+
+
+def _about_paths(avatar: Avatar) -> list[Path]:
+    if not avatar.about_dir.exists():
+        return []
+    return [
+        p
+        for p in sorted(avatar.about_dir.glob("*"))
+        if p.suffix.lower() in (".md", ".txt", ".pdf")
+    ]
+
+
+def build_about_index(avatar: Avatar) -> int:
+    chunks = _collect_chunks(_about_paths(avatar))
+    if not chunks:
+        return 0
+    _write_index(avatar.about_index_path, chunks)
+    _ABOUT_CACHE.pop(avatar.id, None)
+    return len(chunks)
+
+
+def ensure_about_index(avatar: Avatar) -> None:
+    if not _about_paths(avatar):
+        return
+    if _index_is_current(avatar.about_index_path):
+        return
+    build_about_index(avatar)
+
+
+def retrieve_about(avatar: Avatar, query: str, k: int = 4) -> list[Retrieved]:
+    """Top-k from the avatar's about/ docs; [] when the avatar has none."""
+    ensure_about_index(avatar)
+    if not avatar.about_index_path.exists():
+        return []
+    if avatar.id not in _ABOUT_CACHE:
+        raw = json.loads(avatar.about_index_path.read_text())
+        raw["matrix"] = np.array(raw["vectors"], dtype=np.float32)
+        _ABOUT_CACHE[avatar.id] = raw
+    return _rank(_ABOUT_CACHE[avatar.id], query, k)
 
 
 def _load(avatar: Avatar) -> dict:
@@ -376,7 +433,10 @@ def warm(avatar: Avatar) -> None:
 
 
 def retrieve(avatar: Avatar, query: str, k: int = 4) -> list[Retrieved]:
-    store = _load(avatar)
+    return _rank(_load(avatar), query, k)
+
+
+def _rank(store: dict, query: str, k: int) -> list[Retrieved]:
     qv = np.array(embed([query], input_type="query")[0], dtype=np.float32)
 
     matrix = store["matrix"]

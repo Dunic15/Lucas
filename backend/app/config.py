@@ -190,6 +190,13 @@ class Settings(BaseSettings):
     # (barge-in), and never repeat the same spoken line within the window.
     barge_in_enabled: bool = True
     repeat_suppress_seconds: float = 120.0
+    # Backchanneling (Retell-style presence): a tiny "Mm-hm." while a human is
+    # mid-monologue, so she reads as listening instead of frozen. Deliberately
+    # rare — long utterances only, one per gap window, never while she speaks
+    # or right after she spoke.
+    backchannel_enabled: bool = True
+    backchannel_min_words: int = 25
+    backchannel_gap_seconds: float = 45.0
 
     # Voice command to dismiss her ("Laura, you can leave"): say goodbye, then
     # end the session exactly like a natural meeting end (bot leaves, artifact

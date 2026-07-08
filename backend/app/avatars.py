@@ -39,6 +39,13 @@ class Avatar:
         return self.dir / "knowledge"
 
     @property
+    def about_dir(self) -> Path:
+        """Meta docs about the avatar ITSELF (architecture, playbook, costs).
+        Indexed separately and retrieved only for self-questions ("how do you
+        work?") — they must never pollute real process retrieval."""
+        return self.dir / "about"
+
+    @property
     def knowledge_dirs(self) -> list[Path]:
         dirs = [self.knowledge_dir]
         for pack in self.knowledge_packs or []:
@@ -50,6 +57,10 @@ class Avatar:
     @property
     def index_path(self) -> Path:
         return self.dir / ".index.json"
+
+    @property
+    def about_index_path(self) -> Path:
+        return self.dir / ".about-index.json"
 
 
 def _coalesce(value, fallback):
