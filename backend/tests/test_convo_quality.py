@@ -164,9 +164,13 @@ def test_repair_line_suppression_is_visible():
 
 def test_own_speech_helper():
     assert main._is_own_speech("Laura", "Laura") is True
-    assert main._is_own_speech("Laura SFF Expert", "laura") is True  # Recall bot label
     assert main._is_own_speech("Laura", " LAURA ") is True
+    assert main._is_own_speech("Cedric", "Cedric") is True
     assert main._is_own_speech("Laura", "Priya") is False
+    # The Recall bot label now IS the avatar name (create_bot bot_name=avatar.name),
+    # so a HUMAN participant named like a different avatar is never silenced.
+    assert main._is_own_speech("Laura SFF Expert", "laura") is False
+    assert main._is_own_speech("Cedric", "Laura") is False
 
 
 def test_ack_lines_are_short_and_varied():

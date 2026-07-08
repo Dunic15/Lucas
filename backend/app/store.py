@@ -42,6 +42,7 @@ _PERSISTED_SESSION_FIELDS = {
     "anam_conversation_url",
     "last_spoke_at",
     "proactive_done",
+    "integration",
 }
 
 
@@ -55,6 +56,11 @@ class Session:
     transcript: list[Utterance] = field(default_factory=list)
     last_spoke_at: float = 0.0
     proactive_done: bool = False  # the one proactive flag fires at most once
+    # Orchestrator (Cedric) integration state for this session:
+    # {callback_url, context_url, external_ref, brief, meeting, context_refreshed}.
+    # None = plain session with no orchestrator attached. Persisted as JSON so a
+    # mid-meeting restart still knows where to deliver the artifact.
+    integration: dict | None = None
     ws: WebSocket | None = None
     pending_messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
     # Live MeetingState (see meeting_state.py). In-memory only — it is derived
@@ -235,6 +241,7 @@ def _init_db() -> None:
                 anam_conversation_url TEXT NOT NULL DEFAULT '',
                 last_spoke_at REAL NOT NULL DEFAULT 0,
                 proactive_done INTEGER NOT NULL DEFAULT 0,
+                integration_json TEXT NOT NULL DEFAULT '',
                 updated_at REAL NOT NULL
             );
 
@@ -268,9 +275,23 @@ def _init_db() -> None:
             );
             """
         )
+        # Migration for stores created before the Cedric integration column.
+        try:
+            conn.execute(
+                "ALTER TABLE sessions "
+                "ADD COLUMN integration_json TEXT NOT NULL DEFAULT ''"
+            )
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 def _session_from_row(row: sqlite3.Row, utterances: list[Utterance]) -> Session:
+    integration = None
+    if "integration_json" in row.keys() and row["integration_json"]:
+        try:
+            integration = json.loads(row["integration_json"])
+        except json.JSONDecodeError:
+            integration = None
     session = Session(
         bot_id=row["bot_id"],
         meeting_url=row["meeting_url"],
@@ -279,6 +300,7 @@ def _session_from_row(row: sqlite3.Row, utterances: list[Utterance]) -> Session:
         anam_conversation_url=row["anam_conversation_url"],
         last_spoke_at=float(row["last_spoke_at"]),
         proactive_done=bool(row["proactive_done"]),
+        integration=integration,
     )
     object.__setattr__(session, "transcript", utterances)
     object.__setattr__(session, "ws", None)
@@ -330,9 +352,10 @@ def _persist_session(session: Session) -> None:
             """
             INSERT INTO sessions (
                 bot_id, meeting_url, avatar_id, anam_conversation_id,
-                anam_conversation_url, last_spoke_at, proactive_done, updated_at
+                anam_conversation_url, last_spoke_at, proactive_done,
+                integration_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(bot_id) DO UPDATE SET
                 meeting_url=excluded.meeting_url,
                 avatar_id=excluded.avatar_id,
@@ -340,6 +363,7 @@ def _persist_session(session: Session) -> None:
                 anam_conversation_url=excluded.anam_conversation_url,
                 last_spoke_at=excluded.last_spoke_at,
                 proactive_done=excluded.proactive_done,
+                integration_json=excluded.integration_json,
                 updated_at=excluded.updated_at
             """,
             (
@@ -350,6 +374,7 @@ def _persist_session(session: Session) -> None:
                 session.anam_conversation_url,
                 float(session.last_spoke_at),
                 int(session.proactive_done),
+                json.dumps(session.integration) if session.integration else "",
                 time.time(),
             ),
         )

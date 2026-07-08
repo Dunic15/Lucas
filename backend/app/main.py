@@ -41,6 +41,7 @@ from . import (
     store,
     recall_client,
     anam_client,
+    cedric,
     granola_client,
     actions,
     gmail_watcher,
@@ -48,6 +49,7 @@ from . import (
     gpu_runtime,
     ledger,
     meeting_state,
+    org_api,
     tts,
 )
 from .brain import (
@@ -114,6 +116,7 @@ async def _lifespan(app: FastAPI):
 
 app = FastAPI(title="Callable AI Process Avatar", lifespan=_lifespan)
 app.include_router(tts.router)  # POST /tts (open-source avatar voice)
+app.include_router(org_api.router)  # /org/* — org-memory seam for surfaces (#48)
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).
@@ -377,7 +380,7 @@ async def _gmail_watch_loop() -> None:
                     store.mark_scheduled(url)
                     continue
                 try:
-                    res = await _start_avatar_session(url, "laura")
+                    res = await _start_avatar_session(url, settings.default_avatar_id)
                     store.mark_scheduled(url)
                     _gmail_state["joined"].append(
                         {"meeting_url": url, "bot_id": res["bot_id"], "at": time.time()}
@@ -808,12 +811,21 @@ def granola_transcript(note_id: str) -> JSONResponse:
 # ──────────────────────── session lifecycle ────────────────────────
 class StartRequest(BaseModel):
     meeting_url: str
-    avatar_id: str = "laura"
+    avatar_id: str = ""  # empty -> settings.default_avatar_id
     join_at: Optional[str] = None  # ISO 8601; set (>=10 min out) to schedule the bot
+    # CEDRIC: orchestrator integration fields — all optional; models, the auth
+    # gate, and validation live in the `cedric` package (docs/04-api-contract.md).
+    context: Optional[cedric.MeetingContext] = None
+    callback_url: Optional[str] = None   # where session.status/.ended events go
+    context_url: Optional[str] = None    # re-fetched at join time for a fresh brief
+    external_ref: Optional[dict] = None  # opaque, echoed verbatim in callbacks
 
 
 async def _start_avatar_session(
-    meeting_url: str, avatar_id: str = "laura", join_at: Optional[str] = None
+    meeting_url: str,
+    avatar_id: str = "",
+    join_at: Optional[str] = None,
+    integration: Optional[dict] = None,
 ) -> dict:
     """Send a Recall bot (rendering the avatar page as its camera) into a meeting.
 
@@ -821,18 +833,20 @@ async def _start_avatar_session(
     and the Gmail watcher. Raises on failure. The avatar page mints its own fresh
     Anam token at render time and keys its websocket on the conversation_id.
     """
-    avatar = avatars.load(avatar_id)  # raises if unknown
+    avatar = avatars.load(avatar_id or settings.default_avatar_id)  # raises if unknown
     conversation_id = uuid.uuid4().hex
     avatar_url = (
         f"{settings.public_base_url.rstrip('/')}/{settings.avatar_page.strip('/')}"
         f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
     )
     bot = await run_in_threadpool(
-        recall_client.create_bot, meeting_url, avatar_url, join_at
+        recall_client.create_bot, meeting_url, avatar_url, join_at, avatar.name
     )
     session = store.create(
         bot_id=bot["id"], meeting_url=meeting_url, avatar_id=avatar.id
     )
+    if integration:
+        session.integration = integration
     session.anam_conversation_id = conversation_id
     store.register_conversation(conversation_id, bot["id"])
     # Cross-meeting memory: what previous sessions of this meeting link left
@@ -858,13 +872,34 @@ async def _start_avatar_session(
 
 
 @app.post("/sessions/start")
-async def start_session(req: StartRequest) -> JSONResponse:
+async def start_session(req: StartRequest, request: Request) -> JSONResponse:
+    if err := cedric.auth_error(request):  # CEDRIC
+        return err
     try:
         recall_client.assert_ready()
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+
+    brief = req.context.brief_markdown if req.context else ""  # CEDRIC
+    if err := cedric.brief_too_large(brief):  # CEDRIC
+        return err
+    # One live/scheduled booking per meeting URL: rebooking must cancel first
+    # (otherwise two bots — and two per-minute meters — end up in one call).
+    for existing in store.all_sessions():
+        if existing.meeting_url == req.meeting_url:
+            return JSONResponse(
+                {
+                    "error": "a session already exists for this meeting_url",
+                    "bot_id": existing.bot_id,
+                },
+                status_code=409,
+            )
+
+    integration = cedric.build_integration(req, brief)  # CEDRIC
     try:
-        result = await _start_avatar_session(req.meeting_url, req.avatar_id, req.join_at)
+        result = await _start_avatar_session(
+            req.meeting_url, req.avatar_id, req.join_at, integration
+        )
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse(result)
@@ -899,9 +934,16 @@ async def _finalize_session(bot_id: str) -> dict | None:
         "risks": [],
         "follow_up_email": {},
     }
+    integration = dict(session.integration) if session.integration else None  # CEDRIC
     if transcript_text.strip():
         avatar = avatars.load(session.avatar_id)
-        artifact = await run_in_threadpool(post_meeting, avatar, transcript_text)
+        artifact = await run_in_threadpool(
+            lambda: post_meeting(
+                avatar,
+                transcript_text,
+                context=(integration or {}).get("brief", ""),  # CEDRIC: brief-grounded summary
+            )
+        )
 
     # The transcript is the raw material of the artifact — persist it so the
     # product output is complete (transcript + summary + checklist + email).
@@ -918,7 +960,9 @@ async def _finalize_session(bot_id: str) -> dict | None:
         )
     except Exception:
         pass
-    if settings.autopilot_deliver:
+    if cedric.deliver_ended(integration, bot_id, artifact):  # CEDRIC
+        pass  # orchestrated session: the orchestrator owns delivery, skip autopilot
+    elif settings.autopilot_deliver:
         # Autopilot: send the drafted follow-up + Slack summary now, without
         # holding up the finalize response (meter is already stopped above).
         # Best-effort like the ledger — never blocks the cleanup below.
@@ -935,11 +979,47 @@ async def _finalize_session(bot_id: str) -> dict | None:
 
 
 @app.post("/sessions/{bot_id}/end")
-async def end_session(bot_id: str) -> JSONResponse:
+async def end_session(bot_id: str, request: Request) -> JSONResponse:
+    if err := cedric.auth_error(request):  # CEDRIC
+        return err
     artifact = await _finalize_session(bot_id)
     if artifact is None:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    return JSONResponse(artifact)
+    return JSONResponse(cedric.wire_artifact(artifact))  # CEDRIC: PII stays home
+
+
+@app.post("/sessions/{bot_id}/cancel")
+async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
+    """Cancel a scheduled bot / abort a live one WITHOUT building an artifact.
+
+    Used by the orchestrator when a calendar event moves or is cancelled (it
+    rebooks afterwards). `end` keeps its meaning: finalize + artifact.
+    """
+    if err := cedric.auth_error(request):  # CEDRIC
+        return err
+    session = store.get(bot_id)
+    if session is None:
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
+    # Stop the meter: works for live bots; scheduled bots may reject leave_call,
+    # so fall back to deleting the scheduled bot. Best-effort on both — the
+    # session is removed either way and never produces an artifact.
+    try:
+        await run_in_threadpool(recall_client.leave_call, bot_id)
+    except Exception:
+        try:
+            await run_in_threadpool(recall_client.delete_bot, bot_id)
+        except Exception as e:  # noqa: BLE001 — surface but don't fail the cancel
+            print(f"[sessions] cancel: recall cleanup failed: {e}", flush=True)
+    if session.anam_conversation_id:
+        try:
+            await run_in_threadpool(
+                anam_client.end_conversation, session.anam_conversation_id
+            )
+        except Exception:
+            pass
+    store.remove(bot_id)
+    gpu_runtime.on_session_ended(len(store.all_sessions()))
+    return JSONResponse({"cancelled": True, "bot_id": bot_id})
 
 
 class DeliverRequest(BaseModel):
@@ -948,14 +1028,16 @@ class DeliverRequest(BaseModel):
 
 
 @app.post("/sessions/{bot_id}/deliver")
-async def deliver_artifact(bot_id: str, req: DeliverRequest) -> JSONResponse:
+async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -> JSONResponse:
     """Actually send the finished meeting's follow-up email + post it to Slack."""
+    if err := cedric.auth_error(request):  # CEDRIC
+        return err
     artifact = store.get_artifact(bot_id)
     if artifact is None:
         return JSONResponse({"error": "no artifact for this bot_id"}, status_code=404)
 
     avatar = avatars.load(store.get(bot_id).avatar_id) if store.get(bot_id) else None
-    name = avatar.name if avatar else "Laura"
+    name = avatar.name if avatar else avatars.load(settings.default_avatar_id).name
     email = artifact.get("follow_up_email", {}) or {}
 
     email_res = await run_in_threadpool(
@@ -970,9 +1052,11 @@ async def deliver_artifact(bot_id: str, req: DeliverRequest) -> JSONResponse:
 
 
 @app.get("/ledger")
-def ledger_view(meeting_url: str) -> JSONResponse:
+def ledger_view(meeting_url: str, request: Request) -> JSONResponse:
     """Cross-meeting memory for a meeting link: every ledger item plus the
     carryover brief the avatar gets injected at the next session."""
+    if err := cedric.auth_error(request):  # CEDRIC
+        return err
     key = ledger.meeting_key(meeting_url)
     return JSONResponse(
         {
@@ -984,15 +1068,17 @@ def ledger_view(meeting_url: str) -> JSONResponse:
 
 
 @app.get("/sessions/{bot_id}/artifact")
-def session_artifact(bot_id: str) -> JSONResponse:
+def session_artifact(bot_id: str, request: Request) -> JSONResponse:
     """Retrieve a finished session's artifact (summary + checklist + email)."""
+    if err := cedric.auth_error(request):  # CEDRIC
+        return err
     live = store.get(bot_id)
     if live is not None:
         return JSONResponse({"status": "in_progress", "bot_id": bot_id})
     artifact = store.get_artifact(bot_id)
     if artifact is None:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    return JSONResponse({"status": "done", **artifact})
+    return JSONResponse({"status": "done", **cedric.wire_artifact(artifact)})  # CEDRIC: PII stays home
 
 
 @app.get("/meetings")
@@ -1468,9 +1554,11 @@ async def _make_avatar_stop(session: store.Session) -> None:
 
 def _is_own_speech(avatar_name: str, speaker: str) -> bool:
     """True when a transcript line is the avatar's OWN voice — the meeting bot
-    hears Laura too. Matches the avatar's configured name AND the Recall bot's
-    display name (hardcoded "Laura" in recall_client.create_bot)."""
-    return speaker.strip().lower() in (avatar_name.strip().lower(), "laura")
+    hears the avatar too. The Recall bot's display name is the avatar's name
+    (recall_client.create_bot(bot_name=avatar.name)), so one comparison covers
+    both; no hardcoded persona name, so a human participant who shares a name
+    with a DIFFERENT avatar is never silenced."""
+    return speaker.strip().lower() == avatar_name.strip().lower()
 
 
 def _is_echo(session: store.Session, text: str) -> bool:
@@ -1675,7 +1763,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
         eid = _calendar_event_id(ev)
         url = _calendar_event_meeting_url(ev)
         start = _calendar_event_start(ev)
-        avatar_id = ev.get("avatar_id") or "laura"
+        avatar_id = ev.get("avatar_id") or settings.default_avatar_id
         if not url or not start or (eid and store.is_scheduled(eid)):
             continue
         if not _calendar_event_targets_avatar(ev):
@@ -1696,7 +1784,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
             )
             bot = await run_in_threadpool(
-                recall_client.create_bot, url, avatar_url, start
+                recall_client.create_bot, url, avatar_url, start, avatar.name
             )
             s = store.create(bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id)
             s.anam_conversation_id = conversation_id
@@ -1865,9 +1953,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
         bid = payload.get("data", {}).get("bot", {}).get("id", "") or payload.get(
             "data", {}
         ).get("bot_id", "")
-        if term and bid and store.get(bid) is not None:
+        session = store.get(bid) if bid else None
+        if term and session is not None:
+            cedric.notify_failed(session, bid, status_code)  # CEDRIC
             await _finalize_session(bid)
             return JSONResponse({"ok": True, "finalized": bid})
+        # CEDRIC: relay non-terminal join progress to the orchestrator + a
+        # one-time meeting-brief refresh once the bot is actually in the call.
+        await cedric.handle_webhook_status(session, bid, status_code)
         return JSONResponse({"ok": True, "ignored": event or status_code})
 
     data = payload.get("data", {}).get("data", {})
@@ -1924,6 +2017,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             ledger.carryover_brief, session.meeting_url
         )
     memory = session.memory_brief or ""
+    memory = cedric.inject_brief(session, memory)  # CEDRIC: brief ahead of carryover
 
     # ── proactive intervention (fires once, as the meeting wraps up) ──
     if (

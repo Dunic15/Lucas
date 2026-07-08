@@ -224,6 +224,24 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
 
+    # ── Cedric integration (docs/ in the Cedric X Laura project) ──
+    # Avatar used when a session/dispatch doesn't name one explicitly.
+    default_avatar_id: str = "laura"
+    # Static bearer token for the session API (/sessions/*, /ledger). Empty =
+    # open (preserves the zero-key local demo); set in any real deployment.
+    laura_api_token: str = ""
+    # HMAC key for signing callbacks POSTed to a session's callback_url
+    # (X-Laura-Signature: t=<ts>,v1=<hex>). Shared with the orchestrator.
+    laura_webhook_secret: str = ""
+    # Bearer presented on those callbacks (the orchestrator's cheap first-line
+    # check before HMAC verification).
+    laura_webhook_token: str = ""
+    # Bearer presented when fetching a session's context_url at join time.
+    laura_context_token: str = ""
+    # Per-attempt timeout for callback/context HTTP calls.
+    callback_timeout_seconds: float = 10.0
+    # ── end Cedric integration ──
+
     @property
     def wake_word_list(self) -> list[str]:
         """Global fallback wake words (per-avatar wake_words usually win)."""
