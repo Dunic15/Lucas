@@ -214,6 +214,33 @@ def _state_has_signal(state: "meeting_state.MeetingState") -> bool:
     )
 
 
+def _roster_block(
+    avatar: Avatar,
+    roster: "list[str] | None",
+    state: "meeting_state.MeetingState | None",
+) -> str:
+    """One compact prompt line: who is in the room, and who hasn't spoken yet.
+
+    Quiet detection compares roster names with the per-person tracker (first
+    names, so 'Marco' from diarization matches 'Marco Rossi' from the roster).
+    Lets her answer "who's here / who hasn't spoken?" and address the room
+    accurately — at the cost of one short line, latency-neutral.
+    """
+    if not roster:
+        return ""
+    block = (
+        f"In the meeting right now, besides {avatar.name}: "
+        f"{', '.join(roster)} ({len(roster)} "
+        f"{'person' if len(roster) == 1 else 'people'})."
+    )
+    if state is not None and len(roster) > 1:
+        spoke = {n.split()[0].lower() for n in state.per_person}
+        quiet = [n for n in roster if n.split()[0].lower() not in spoke]
+        if quiet:
+            block += f" Not yet heard from: {', '.join(quiet)}."
+    return block + "\n\n"
+
+
 def _retrieval_query(question: str, history: str = "") -> str:
     """Retrieve against the ask plus recent context so vague live speech works."""
     question = (question or "").strip()
@@ -490,13 +517,7 @@ def answer_question_stream(
     )
     # Live roster (Recall participant events): includes people who never spoke,
     # which the transcript alone can't see. One short line — latency-neutral.
-    roster_block = (
-        f"In the meeting right now, besides {avatar.name}: "
-        f"{', '.join(roster)} ({len(roster)} "
-        f"{'person' if len(roster) == 1 else 'people'}).\n\n"
-        if roster
-        else ""
-    )
+    roster_block = _roster_block(avatar, roster, state)
     asker = (speaker or "").strip() or "Someone"
     system = ANSWER_STREAM_SYSTEM.format(persona=avatar.persona_prompt)
     user = (

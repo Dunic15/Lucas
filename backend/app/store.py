@@ -153,6 +153,12 @@ class Session:
         self.participants[key] = {"name": label, "here": here}
         return label
 
+    def present_names(self) -> list[str]:
+        """Names currently in the room per the EVENT roster only — cheap (small
+        dict, no transcript scan), safe to call on the partial hot path. Used
+        to keep the fuzzy wake from swallowing a real participant's name."""
+        return [p["name"] for p in self.participants.values() if p.get("here")]
+
     def roster(self, avatar_name: str = "") -> list[str]:
         """Who is in the meeting right now, besides the avatar itself.
 

@@ -326,3 +326,104 @@ def test_quiet_participant_nudged_at_wrapup(tmp_path, monkeypatch):
     body = _post(_line_payload(s.bot_id, "Duccio", "alright, let's wrap up then"))
     assert body.get("quiet_nudge") is None
     store.remove(s.bot_id)
+
+
+# ── round 3: engaged follow-up, quiet-awareness, fuzzy exclusion ──
+
+import time as _time  # noqa: E402
+
+
+def test_followup_question_bypasses_cooldown_and_deference(tmp_path, monkeypatch):
+    """She just answered; a nameless follow-up question must be answered
+    immediately — no cooldown block, no deference wait."""
+    from app.config import settings
+
+    s = _session(tmp_path, monkeypatch, bot_id="followup-bot-1")
+    s.memory_brief = ""
+    s.add_utterance("Duccio", "Laura what's the next onboarding step?")
+    s.mark_spoke()  # she just answered (inside cooldown AND followup window)
+    monkeypatch.setattr(settings, "deference_seconds", 30.0)  # would hang if hit
+
+    def instant_answer(*a, **k):
+        yield "The DPA comes right after security review."
+
+    monkeypatch.setattr(main, "answer_question_stream", instant_answer)
+    spoken = []
+
+    async def fake_speak(session, line, citations=None, **kw):
+        spoken.append(line)
+        return True
+
+    monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+    body = _post(_line_payload(s.bot_id, "Duccio", "and what about the deadline?"))
+    assert body.get("reason") not in ("cooldown", "deferred to human"), body
+    assert spoken, "follow-up question must be answered"
+    store.remove(s.bot_id)
+
+
+def test_followup_statement_still_respects_cooldown(tmp_path, monkeypatch):
+    """Only QUESTIONS ride the follow-up window; a statement right after her
+    answer stays throttled by the cooldown."""
+    s = _session(tmp_path, monkeypatch, bot_id="followup-bot-2")
+    s.memory_brief = ""
+    s.mark_spoke()
+    body = _post(_line_payload(s.bot_id, "Duccio", "ok that makes sense to me"))
+    assert body.get("reason") == "cooldown"
+    store.remove(s.bot_id)
+
+
+def test_old_answer_does_not_open_followup_window(tmp_path, monkeypatch):
+    """A question long after she spoke is a room question again: deference on."""
+    from app.config import settings
+
+    s = _session(tmp_path, monkeypatch, bot_id="followup-bot-3")
+    s.memory_brief = ""
+    s.last_spoke_at = _time.time() - 60  # spoke a minute ago; window is 15s
+    monkeypatch.setattr(settings, "deference_seconds", 0.05)
+
+    real_sleep = asyncio.sleep
+
+    async def sleep_and_interject(seconds):
+        s.add_utterance("Marco", "I think it's Friday")
+        await real_sleep(0)
+
+    monkeypatch.setattr(main.asyncio, "sleep", sleep_and_interject)
+    body = _post(_line_payload(s.bot_id, "Duccio", "when is the deadline?"))
+    assert body.get("reason") == "deferred to human"
+    store.remove(s.bot_id)
+
+
+def test_fuzzy_wake_excluded_for_real_participant_named_lara(tmp_path, monkeypatch):
+    avatar = avatars.load("laura")
+    # Without a Lara in the room, "Lara" is an ASR corruption -> wakes.
+    called, _ = detect_wake(avatar, "Lara, what's the next step?")
+    assert called
+    # With a real Lara present, it's HER being addressed -> silent.
+    called, _ = detect_wake(
+        avatar, "Lara, what's the next step?", exclude_names=["Lara Bianchi"]
+    )
+    assert not called
+    # The exact wake word still always wins, even with a Lara present.
+    called, _ = detect_wake(
+        avatar, "Laura, what's the next step?", exclude_names=["Lara Bianchi"]
+    )
+    assert called
+
+
+def test_roster_block_lists_quiet_participants():
+    from app.brain import _roster_block
+    from app.meeting_state import MeetingState, update
+
+    avatar = avatars.load("laura")
+    state = MeetingState()
+    update(state, "Duccio", "let's review the onboarding", wake_words=["laura"])
+    block = _roster_block(avatar, ["Duccio", "Marco Rossi", "Anna"], state)
+    assert "3 people" in block
+    assert "Not yet heard from" in block
+    assert "Marco Rossi" in block and "Anna" in block
+    assert "Duccio" in block.split("Not yet heard from")[0]
+    # everyone spoke -> no quiet line
+    update(state, "Marco Rossi", "sounds good", wake_words=["laura"])
+    update(state, "Anna", "agreed", wake_words=["laura"])
+    block = _roster_block(avatar, ["Duccio", "Marco Rossi", "Anna"], state)
+    assert "Not yet heard from" not in block

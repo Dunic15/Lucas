@@ -14,6 +14,7 @@ This module also detects meeting close (for the proactive wrap-up) and the
 from __future__ import annotations
 
 import re
+from typing import Iterable
 
 from .avatars import Avatar
 
@@ -104,15 +105,24 @@ def fuzzy_name_match(token: str, name: str) -> bool:
     return False
 
 
-def _fuzzy_wake_token(lower: str, wake: str) -> str:
-    """The token in `lower` that fuzzy-matches `wake` ("" when none)."""
+def _fuzzy_wake_token(lower: str, wake: str, excluded: set[str]) -> str:
+    """The token in `lower` that fuzzy-matches `wake` ("" when none).
+
+    `excluded` holds first names of OTHER people in the meeting: a token that
+    IS someone's actual name ("Lara" when a Lara is on the call) is them being
+    addressed, never a corruption of the avatar's name.
+    """
     for token in re.findall(r"[a-z]+", lower):
+        if token in excluded:
+            continue
         if fuzzy_name_match(token, wake):
             return token
     return ""
 
 
-def detect_wake(avatar: Avatar, utterance: str) -> tuple[bool, str]:
+def detect_wake(
+    avatar: Avatar, utterance: str, exclude_names: Iterable[str] = ()
+) -> tuple[bool, str]:
     """If the utterance calls the avatar by a wake word, return (True, question).
 
     Examples that trigger (wake word "laura"):
@@ -125,13 +135,24 @@ def detect_wake(avatar: Avatar, utterance: str) -> tuple[bool, str]:
         "as Laura said earlier, we should ship"
         "what did Laura mean by handoff?"
         "Laura mentioned the deadline"
+
+    `exclude_names` (other meeting participants) suppresses only the FUZZY
+    path: with a real Lara in the room, "Lara, …" is her turn — while an
+    exact wake word always wins.
     """
     lower = utterance.lower()
+    excluded = {
+        n.strip().split()[0].lower() for n in exclude_names if n and n.strip()
+    }
     for wake in avatar.wake_words:
         # Exact standalone token first; then a fuzzy ASR-corruption of it.
         # The matched TOKEN (not the canonical wake word) drives the reported-
         # speech check and the strip, since that's what's actually in the text.
-        matched = wake if re.search(rf"\b{re.escape(wake)}\b", lower) else _fuzzy_wake_token(lower, wake)
+        matched = (
+            wake
+            if re.search(rf"\b{re.escape(wake)}\b", lower)
+            else _fuzzy_wake_token(lower, wake, excluded)
+        )
         if matched:
             if _is_reported_reference(lower, matched):
                 return False, ""

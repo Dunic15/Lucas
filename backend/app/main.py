@@ -1726,7 +1726,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # A human is audibly talking right now — any deference window waiting
         # on the final-transcript path sees this and yields to them.
         session.last_human_partial_at = time.time()
-        called, question = detect_wake(avatar, text)
+        called, question = detect_wake(avatar, text, session.present_names())
         # "Laura, stop / aspetta / basta" — obey on the PARTIAL, before the
         # sentence even finalizes. Complements barge-in (which needs 3+ words):
         # a two-word "Laura stop" must cut her off instantly, not get answered.
@@ -1898,7 +1898,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # ── when-to-speak gate ──
     # By default (require_wake_word=False) she answers any grounded question; the
     # SKIP sentinel + cooldown keep her from interjecting on things she can't ground.
-    called, question = detect_wake(avatar, text)
+    called, question = detect_wake(avatar, text, session.present_names())
 
     # ── voice stop ("Laura, stop / aspetta") ──
     # A stop is a command, never a question: cut the current turn and answer
@@ -1970,10 +1970,23 @@ async def recall_webhook(request: Request) -> JSONResponse:
     roster = session.roster(avatar.name)
     if not called and addressed_to_other(text, roster):
         return JSONResponse({"ok": True, "spoke": False, "reason": "addressed to other"})
+    # ── engaged follow-up ──
+    # She JUST spoke and someone asks a question without her name — in a live
+    # conversation that's almost always a follow-up to HER answer ("and what
+    # about the deadline?"). Dialogue context is a first-class addressee
+    # signal (research doc), so it bypasses the cooldown and the deference
+    # wait below. The in-stream SKIP gate still protects the misfires.
+    followup = (
+        not called
+        and settings.followup_window_seconds > 0
+        and (time.time() - session.last_spoke_at) < settings.followup_window_seconds
+        and text.rstrip().endswith("?")
+    )
+
     # Cooldown throttles UNPROMPTED interjections. Being addressed by name is a
     # direct ask — follow-ups right after her answer are what a fluent
-    # conversation is made of, so `called` bypasses it.
-    if not called and session.in_cooldown(avatar.speak_cooldown_seconds):
+    # conversation is made of, so `called` (and `followup`) bypass it.
+    if not called and not followup and session.in_cooldown(avatar.speak_cooldown_seconds):
         return JSONResponse({"ok": True, "spoke": False, "reason": "cooldown"})
 
     # ── deference window ──
@@ -1981,7 +1994,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # humans get first right of reply. Wait briefly; if anyone starts talking
     # (a partial lands or the transcript grows), yield silently. Deliberately
     # AFTER the cheap gates — a line that would be skipped anyway never waits.
-    if not called and settings.deference_seconds > 0:
+    if not called and not followup and settings.deference_seconds > 0:
         _defer_mark = len(session.transcript)
         _defer_t0 = time.time()
         await asyncio.sleep(settings.deference_seconds)
