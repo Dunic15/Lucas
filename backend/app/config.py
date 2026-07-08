@@ -240,6 +240,7 @@ class Settings(BaseSettings):
     cedric_context_token: str = ""
     # Per-attempt timeout for callback/context HTTP calls.
     callback_timeout_seconds: float = 10.0
+    # ── end Cedric integration ──
 
     @property
     def wake_word_list(self) -> list[str]:

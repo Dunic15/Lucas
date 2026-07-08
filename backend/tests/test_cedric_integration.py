@@ -21,7 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app import cedric_callback, ledger, store
+from app import ledger, store
+from app.cedric import callback as cedric_callback
 from app.config import settings
 
 

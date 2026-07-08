@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from .config import settings
+from ..config import settings
 
 # Retry schedule for session.ended (seconds between attempts). Module-level so
 # tests can monkeypatch it to zeros.

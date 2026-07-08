@@ -14,7 +14,6 @@ Flow:
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
 import random
 import re
@@ -42,7 +41,7 @@ from . import (
     store,
     recall_client,
     anam_client,
-    cedric_callback,
+    cedric,
     granola_client,
     actions,
     gmail_watcher,
@@ -808,38 +807,16 @@ def granola_transcript(note_id: str) -> JSONResponse:
 
 
 # ──────────────────────── session lifecycle ────────────────────────
-# Meeting briefs are markdown from the orchestrator; cap so a runaway payload
-# can't blow up prompts (the orchestrator summarizes down, we never truncate).
-_MAX_BRIEF_BYTES = 32 * 1024
-
-
-class MeetingContext(BaseModel):
-    meeting: dict = {}          # title, starts_at, ends_at, organizer, attendees
-    brief_markdown: str = ""    # the assembled pre-meeting brief
-
-
 class StartRequest(BaseModel):
     meeting_url: str
     avatar_id: str = ""  # empty -> settings.default_avatar_id
     join_at: Optional[str] = None  # ISO 8601; set (>=10 min out) to schedule the bot
-    # Orchestrator (Cedric) integration — all optional; see the Cedric X Laura
-    # project's docs/04-api-contract.md.
-    context: Optional[MeetingContext] = None
+    # CEDRIC: orchestrator integration fields — all optional; models, the auth
+    # gate, and validation live in the `cedric` package (docs/04-api-contract.md).
+    context: Optional[cedric.MeetingContext] = None
     callback_url: Optional[str] = None   # where session.status/.ended events go
     context_url: Optional[str] = None    # re-fetched at join time for a fresh brief
     external_ref: Optional[dict] = None  # opaque, echoed verbatim in callbacks
-
-
-def _auth_error(request: Request) -> Optional[JSONResponse]:
-    """Bearer-token gate for the session API. API_AUTH_TOKEN unset = open
-    (preserves the zero-key local demo); set it in any real deployment."""
-    token = settings.api_auth_token.strip()
-    if not token:
-        return None
-    provided = request.headers.get("authorization", "")
-    if hmac.compare_digest(provided, f"Bearer {token}"):
-        return None
-    return JSONResponse({"error": "unauthorized"}, status_code=401)
 
 
 async def _start_avatar_session(
@@ -894,19 +871,16 @@ async def _start_avatar_session(
 
 @app.post("/sessions/start")
 async def start_session(req: StartRequest, request: Request) -> JSONResponse:
-    if err := _auth_error(request):
+    if err := cedric.auth_error(request):  # CEDRIC
         return err
     try:
         recall_client.assert_ready()
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-    brief = req.context.brief_markdown if req.context else ""
-    if len(brief.encode()) > _MAX_BRIEF_BYTES:
-        return JSONResponse(
-            {"error": f"context.brief_markdown exceeds {_MAX_BRIEF_BYTES} bytes"},
-            status_code=400,
-        )
+    brief = req.context.brief_markdown if req.context else ""  # CEDRIC
+    if err := cedric.brief_too_large(brief):  # CEDRIC
+        return err
     # One live/scheduled booking per meeting URL: rebooking must cancel first
     # (otherwise two bots — and two per-minute meters — end up in one call).
     for existing in store.all_sessions():
@@ -919,16 +893,7 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
                 status_code=409,
             )
 
-    integration = None
-    if req.callback_url or req.context_url or req.external_ref or brief:
-        integration = {
-            "callback_url": req.callback_url or "",
-            "context_url": req.context_url or "",
-            "external_ref": req.external_ref or {},
-            "brief": brief,
-            "meeting": (req.context.meeting if req.context else {}) or {},
-            "context_refreshed": False,
-        }
+    integration = cedric.build_integration(req, brief)  # CEDRIC
     try:
         result = await _start_avatar_session(
             req.meeting_url, req.avatar_id, req.join_at, integration
@@ -967,14 +932,14 @@ async def _finalize_session(bot_id: str) -> dict | None:
         "risks": [],
         "follow_up_email": {},
     }
-    integration = dict(session.integration) if session.integration else None
+    integration = dict(session.integration) if session.integration else None  # CEDRIC
     if transcript_text.strip():
         avatar = avatars.load(session.avatar_id)
         artifact = await run_in_threadpool(
             lambda: post_meeting(
                 avatar,
                 transcript_text,
-                context=(integration or {}).get("brief", ""),
+                context=(integration or {}).get("brief", ""),  # CEDRIC: brief-grounded summary
             )
         )
 
@@ -993,15 +958,8 @@ async def _finalize_session(bot_id: str) -> dict | None:
         )
     except Exception:
         pass
-    if integration and integration.get("callback_url"):
-        # Orchestrated session: deliver the artifact to the orchestrator's
-        # webhook (retried inside send_ended). Fire-and-forget — the artifact
-        # is already saved, and the orchestrator polls as fallback. Autopilot
-        # delivery is intentionally skipped: the orchestrator owns delivery
-        # (approval-gated email + Slack) for its sessions.
-        asyncio.create_task(
-            run_in_threadpool(cedric_callback.send_ended, integration, bot_id, artifact)
-        )
+    if cedric.deliver_ended(integration, bot_id, artifact):  # CEDRIC
+        pass  # orchestrated session: the orchestrator owns delivery, skip autopilot
     elif settings.autopilot_deliver:
         # Autopilot: send the drafted follow-up + Slack summary now, without
         # holding up the finalize response (meter is already stopped above).
@@ -1020,7 +978,7 @@ async def _finalize_session(bot_id: str) -> dict | None:
 
 @app.post("/sessions/{bot_id}/end")
 async def end_session(bot_id: str, request: Request) -> JSONResponse:
-    if err := _auth_error(request):
+    if err := cedric.auth_error(request):  # CEDRIC
         return err
     artifact = await _finalize_session(bot_id)
     if artifact is None:
@@ -1035,7 +993,7 @@ async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
     Used by the orchestrator when a calendar event moves or is cancelled (it
     rebooks afterwards). `end` keeps its meaning: finalize + artifact.
     """
-    if err := _auth_error(request):
+    if err := cedric.auth_error(request):  # CEDRIC
         return err
     session = store.get(bot_id)
     if session is None:
@@ -1070,7 +1028,7 @@ class DeliverRequest(BaseModel):
 @app.post("/sessions/{bot_id}/deliver")
 async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -> JSONResponse:
     """Actually send the finished meeting's follow-up email + post it to Slack."""
-    if err := _auth_error(request):
+    if err := cedric.auth_error(request):  # CEDRIC
         return err
     artifact = store.get_artifact(bot_id)
     if artifact is None:
@@ -1095,7 +1053,7 @@ async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -
 def ledger_view(meeting_url: str, request: Request) -> JSONResponse:
     """Cross-meeting memory for a meeting link: every ledger item plus the
     carryover brief the avatar gets injected at the next session."""
-    if err := _auth_error(request):
+    if err := cedric.auth_error(request):  # CEDRIC
         return err
     key = ledger.meeting_key(meeting_url)
     return JSONResponse(
@@ -1110,7 +1068,7 @@ def ledger_view(meeting_url: str, request: Request) -> JSONResponse:
 @app.get("/sessions/{bot_id}/artifact")
 def session_artifact(bot_id: str, request: Request) -> JSONResponse:
     """Retrieve a finished session's artifact (summary + checklist + email)."""
-    if err := _auth_error(request):
+    if err := cedric.auth_error(request):  # CEDRIC
         return err
     live = store.get(bot_id)
     if live is not None:
@@ -1995,55 +1953,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
         ).get("bot_id", "")
         session = store.get(bid) if bid else None
         if term and session is not None:
-            if session.integration and status_code in {"fatal"}:
-                # A fatal never reached "live": tell the orchestrator the join
-                # failed (best-effort) — finalize still runs for cleanup.
-                asyncio.create_task(
-                    run_in_threadpool(
-                        cedric_callback.send_status,
-                        dict(session.integration),
-                        bid,
-                        "failed",
-                        status_code,
-                    )
-                )
+            cedric.notify_failed(session, bid, status_code)  # CEDRIC
             await _finalize_session(bid)
             return JSONResponse({"ok": True, "finalized": bid})
-        # Non-terminal bot status: relay join progress to the orchestrator and
-        # refresh the meeting brief once the bot is actually in the call (a
-        # booking made days ago has a stale brief by now). Both best-effort.
-        if session is not None and session.integration and status_code:
-            status_map = {
-                "joining_call": "joining",
-                "in_waiting_room": "joining",
-                "in_call": "live",
-                "in_call_not_recording": "live",
-                "in_call_recording": "live",
-            }
-            mapped = status_map.get(status_code)
-            if mapped:
-                asyncio.create_task(
-                    run_in_threadpool(
-                        cedric_callback.send_status,
-                        dict(session.integration),
-                        bid,
-                        mapped,
-                        status_code,
-                    )
-                )
-            if mapped == "live" and not session.integration.get("context_refreshed"):
-                integration = dict(session.integration)
-                integration["context_refreshed"] = True
-                session.integration = integration  # persist: refresh runs once
-                fresh = await run_in_threadpool(
-                    cedric_callback.fetch_context, integration
-                )
-                if fresh and isinstance(fresh.get("brief_markdown"), str):
-                    integration = dict(integration)
-                    integration["brief"] = fresh["brief_markdown"]
-                    if isinstance(fresh.get("meeting"), dict):
-                        integration["meeting"] = fresh["meeting"]
-                    session.integration = integration
+        # CEDRIC: relay non-terminal join progress to the orchestrator + a
+        # one-time meeting-brief refresh once the bot is actually in the call.
+        await cedric.handle_webhook_status(session, bid, status_code)
         return JSONResponse({"ok": True, "ignored": event or status_code})
 
     data = payload.get("data", {}).get("data", {})
@@ -2100,12 +2015,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             ledger.carryover_brief, session.meeting_url
         )
     memory = session.memory_brief or ""
-    # Orchestrator meeting brief (agenda, participants, open items) is the most
-    # specific context this session has — it rides the same `memory` channel
-    # into the live prompts, ahead of the cross-meeting carryover.
-    cedric_brief = (session.integration or {}).get("brief", "")
-    if cedric_brief:
-        memory = f"MEETING BRIEF (from the orchestrator):\n{cedric_brief}\n\n{memory}".strip()
+    memory = cedric.inject_brief(session, memory)  # CEDRIC: brief ahead of carryover
 
     # ── proactive intervention (fires once, as the meeting wraps up) ──
     if (
