@@ -141,7 +141,7 @@ def list_ids() -> list[str]:
 # inbox, and the +tag names the avatar that should join. The bare address
 # (or an unknown tag) stays the default avatar.
 
-def _email_parts(address: str) -> tuple[str, str, str]:
+def email_parts(address: str) -> tuple[str, str, str]:
     """lowercase (local-without-tag, tag, domain) of an email address."""
     addr = (address or "").strip().lower()
     local, _, domain = addr.partition("@")
@@ -149,7 +149,7 @@ def _email_parts(address: str) -> tuple[str, str, str]:
     return base, tag, domain
 
 
-def from_invite_email(addresses, bases) -> str | None:
+def from_invite_email(addresses: "Iterable[str]", bases: "Iterable[str]") -> str | None:
     """The avatar id named by a plus-tagged invite address, or None.
 
     `addresses` are the invite/recipient emails seen on the event or message;
@@ -157,9 +157,13 @@ def from_invite_email(addresses, bases) -> str | None:
     installed avatar id counts — anything else falls back to the caller's
     default, so a typo'd tag can never summon a ghost."""
     known = set(list_ids())
-    base_keys = {(_email_parts(b)[0], _email_parts(b)[2]) for b in bases if b}
+    base_keys = set()
+    for b in bases:
+        if b:
+            base, _tag, domain = email_parts(b)
+            base_keys.add((base, domain))
     for address in addresses or ():
-        base, tag, domain = _email_parts(address)
+        base, tag, domain = email_parts(address)
         if tag and (base, domain) in base_keys and tag in known:
             return tag
     return None

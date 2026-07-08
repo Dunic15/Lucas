@@ -396,7 +396,7 @@ async def _gmail_watch_loop() -> None:
                     _gmail_state["joined"].append(
                         {"meeting_url": url, "bot_id": res["bot_id"], "at": time.time()}
                     )
-                    print(f"[gmail-watch] joined {url} via bot {res['bot_id']}", flush=True)
+                    print(f"[gmail-watch] joined {url} via bot {res['bot_id']} as {aid}", flush=True)
                     # Resolve any deploy-overlap duplicate: let a racing bot register,
                     # then keep the best Recall variant and drop the rest.
                     await asyncio.sleep(4)
@@ -1833,8 +1833,12 @@ def _calendar_event_targets_avatar(event: dict) -> bool:
     # Plus-aliases of a target inbox count as the inbox: an invite to
     # laura.ai.122222+cedric@gmail.com targets us (and names the avatar —
     # resolved separately via avatars.from_invite_email).
-    targets = {avatars._email_parts(t)[::2] for t in target_emails}
-    invited = {avatars._email_parts(e)[::2] for e in _extract_invite_emails(event)}
+    def _base(addr: str) -> tuple[str, str]:
+        base, _tag, domain = avatars.email_parts(addr)
+        return base, domain
+
+    targets = {_base(t) for t in target_emails}
+    invited = {_base(e) for e in _extract_invite_emails(event)}
     return bool(invited & targets)
 
 
