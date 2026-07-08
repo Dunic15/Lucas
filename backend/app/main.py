@@ -65,6 +65,7 @@ from .brain import (
 )
 from .config import settings
 from .decision import (
+    addressed_to_other,
     detect_wake,
     detect_closing,
     detect_leave_command,
@@ -1744,6 +1745,24 @@ async def recall_webhook(request: Request) -> JSONResponse:
             return JSONResponse({"ok": True, "partial": True, "backchannel": True})
         return JSONResponse({"ok": True, "partial": True, "acked": acked})
 
+    if event in ("participant_events.join", "participant_events.leave"):
+        # Live roster: who is in the room, INCLUDING people who never speak.
+        # This is what lets her answer "how many are we?" and address people
+        # by name, and what keeps her out of exchanges between two others.
+        bot_id = payload.get("data", {}).get("bot", {}).get("id", "")
+        session = store.get(bot_id)
+        if session is not None:
+            data = payload.get("data", {}).get("data", {})
+            p = data.get("participant") or {}
+            label = session.resolve_speaker(p.get("name"), p.get("id"))
+            avatar = avatars.load(session.avatar_id)
+            if not _is_own_speech(avatar.name, label):  # the bot joins too
+                session.participant_event(
+                    p.get("name"), p.get("id"),
+                    here=(event == "participant_events.join"),
+                )
+        return JSONResponse({"ok": True})
+
     if event != "transcript.data":
         # Auto end-of-meeting: when Recall reports the call is over / bot done,
         # finalize the session (stop billing on both vendors + build the artifact).
@@ -1870,6 +1889,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if settings.require_wake_word and not called:
         return JSONResponse({"ok": True, "spoke": False, "reason": "not called"})
     question = question or text  # no wake word → treat the whole utterance as the ask
+    # ── multi-party turn-taking ──
+    # A line aimed at ANOTHER participant by name ("Marco, can you take
+    # this?") is their turn, not hers — even in no-wake-word mode. Her own
+    # wake word wins (checked above): "Laura, tell Marco…" still answers.
+    roster = session.roster(avatar.name)
+    if not called and addressed_to_other(text, roster):
+        return JSONResponse({"ok": True, "spoke": False, "reason": "addressed to other"})
     # Cooldown throttles UNPROMPTED interjections. Being addressed by name is a
     # direct ask — follow-ups right after her answer are what a fluent
     # conversation is made of, so `called` bypasses it.
@@ -1935,6 +1961,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
             memory=memory,
             state=state,
             summary=session.rolling_summary,
+            speaker=speaker,
+            roster=roster,
             k=4,  # leaner context: input tokens ARE first-token latency live
             min_chars=45,  # coalesce tiny fragments so the TTS voice flows
         )

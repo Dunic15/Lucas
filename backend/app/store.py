@@ -97,6 +97,11 @@ class Session:
     _anon_labels: dict[str, str] = field(
         default_factory=dict, repr=False, compare=False
     )
+    # Live roster from Recall participant_events: participant id -> {"name",
+    # "here"}. Covers people who never speak (the transcript alone can't).
+    # In-memory only; after a restart roster() falls back to transcript
+    # speakers until the next join/leave event re-seeds it.
+    participants: dict = field(default_factory=dict, repr=False, compare=False)
     _persist_enabled: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -130,6 +135,39 @@ class Session:
             label = f"Guest {len(self._anon_labels) + 1}"
             self._anon_labels[key] = label
         return label
+
+    def participant_event(
+        self, name: str | None, participant_id: Any, *, here: bool
+    ) -> str:
+        """Fold a Recall participant_events.join/leave into the live roster."""
+        label = self.resolve_speaker(name, participant_id)
+        key = str(participant_id) if participant_id is not None else label
+        self.participants[key] = {"name": label, "here": here}
+        return label
+
+    def roster(self, avatar_name: str = "") -> list[str]:
+        """Who is in the meeting right now, besides the avatar itself.
+
+        Prefers the event-driven roster (it sees silent participants); merges in
+        transcript speakers as a net for missed events / process restarts.
+        """
+        skip = {avatar_name.strip().lower(), "laura", ""}
+        names: list[str] = []
+        for p in self.participants.values():
+            if p.get("here") and p["name"].strip().lower() not in skip:
+                names.append(p["name"])
+        gone = {
+            p["name"].strip().lower()
+            for p in self.participants.values()
+            if not p.get("here")
+        }
+        seen = {n.strip().lower() for n in names}
+        for u in self.transcript:
+            low = u.speaker.strip().lower()
+            if low not in skip and low not in seen and low not in gone:
+                seen.add(low)
+                names.append(u.speaker)
+        return names
 
     def add_utterance(self, speaker: str, text: str) -> None:
         utterance = Utterance(speaker=speaker, text=text, ts=time.time())

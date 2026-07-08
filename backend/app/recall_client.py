@@ -255,14 +255,25 @@ def _create_bot_body(
             "transcript": {
                 "provider": provider,
             },
+            # Must be enabled for the participant_events.* realtime events below
+            # to be delivered at all.
+            "participant_events": {},
             # Real-time transcript utterances delivered here. Partials arrive
             # WHILE someone is still talking — they power barge-in and the
             # instant ack; finals (transcript.data) drive the actual answers.
+            # participant_events give the avatar a live roster (who is in the
+            # room, including people who never speak) — without them she can't
+            # know "we are 3 in this meeting" or address people by name.
             "realtime_endpoints": [
                 {
                     "type": "webhook",
                     "url": webhook_url,
-                    "events": ["transcript.data", "transcript.partial_data"],
+                    "events": [
+                        "transcript.data",
+                        "transcript.partial_data",
+                        "participant_events.join",
+                        "participant_events.leave",
+                    ],
                 }
             ],
         },

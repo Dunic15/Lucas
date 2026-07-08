@@ -170,10 +170,18 @@ mention it's from a quick search.
 person most likely meant.
 - Reply in the language the person spoke to you in — an Italian question gets \
 an Italian answer. Follow the conversation if it switches language.
-- Reply with the single word SKIP (and nothing else) ONLY when the speech is \
-clearly NOT directed at you — e.g. two other people talking to each other. \
-When someone seems to be addressing you or asking anything at all, respond. \
-When in doubt, respond."""
+- Meetings often have several people. When a roster and the speaker's name are \
+provided, use them: you KNOW who and how many are in the room, so answer \
+"who's here / how many are we?" directly from the roster. Address the person \
+who asked by name when it flows naturally (not every single line), and never \
+attribute a statement to the wrong person — the "Speaker: line" transcript \
+tells you who said what.
+- Reply with the single word SKIP (and nothing else) when the speech is \
+clearly NOT directed at you: two other people talking to each other, or a \
+line addressed to ANOTHER participant by name ("Marco, can you take this?"). \
+In a 1:1 conversation, when in doubt, respond. With several people in the \
+room, only respond when you're addressed, asked, or the question is clearly \
+open to the room."""
 
 
 def _is_skip(head: str) -> bool:
@@ -196,6 +204,10 @@ def _state_has_signal(state: "meeting_state.MeetingState") -> bool:
         or state.deadlines
         or state.risks
         or state.open_questions
+        or any(
+            p["commitments"] or p["questions"] or p["risks"]
+            for p in state.per_person.values()
+        )
     )
 
 
@@ -397,6 +409,8 @@ def answer_question_stream(
     memory: str = "",
     state: "meeting_state.MeetingState | None" = None,
     summary: str = "",
+    speaker: str = "",
+    roster: "list[str] | None" = None,
     k: int = 6,
     min_chars: int = 0,
 ):
@@ -415,6 +429,11 @@ def answer_question_stream(
     `summary` is the rolling notes of the meeting OLDER than the recent-history
     window (kept fresh in the background) — the whole meeting's arc without
     widening the hot-path prompt.
+
+    `speaker` is who said this line and `roster` who is in the room right now
+    (from Recall participant events — includes people who never spoke). They
+    make her multi-party aware: address the asker by name, answer "how many
+    are we?", and SKIP lines aimed at another named participant.
 
     `min_chars>0` coalesces tiny sentences ("Yes." "Sure.") into a chunk of at
     least that many characters before yielding, so the TTS voice flows instead of
@@ -466,15 +485,26 @@ def answer_question_stream(
         if chunks
         else ""
     )
+    # Live roster (Recall participant events): includes people who never spoke,
+    # which the transcript alone can't see. One short line — latency-neutral.
+    roster_block = (
+        f"In the meeting right now, besides {avatar.name}: "
+        f"{', '.join(roster)} ({len(roster)} "
+        f"{'person' if len(roster) == 1 else 'people'}).\n\n"
+        if roster
+        else ""
+    )
+    asker = (speaker or "").strip() or "Someone"
     system = ANSWER_STREAM_SYSTEM.format(persona=avatar.persona_prompt)
     user = (
         f"{context_block}"
         f"{state_block}"
         f"{summary_block}"
         f"{remembered}"
+        f"{roster_block}"
         f"{convo}"
-        f"Someone in the meeting asked:\n{question}\n\n"
-        "Answer in spoken style. Reply SKIP only if this was clearly not directed at Laura."
+        f"{asker} in the meeting just said:\n{question}\n\n"
+        f"Answer in spoken style. Reply SKIP only if this was clearly not directed at {avatar.name}."
     )
 
     pending = ""      # confirmed answer text not yet flushed as a whole sentence

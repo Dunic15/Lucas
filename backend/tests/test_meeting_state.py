@@ -290,3 +290,66 @@ def _fake_templates(monkeypatch):
         return real(avatar)
 
     monkeypatch.setattr(meeting_state, "templates_for", patched)
+
+
+# ── per-person tracking ──
+
+
+def test_per_person_tracks_commitments_questions_risks():
+    state = _feed(
+        MeetingState(),
+        ("Marco", "I'll take the rollout plan."),
+        ("Anna", "Who owns the security review?"),
+        ("Anna", "I'm worried the timeline could slip."),
+        ("Duccio", "Marco will own the vendor follow-up too."),
+    )
+    marco = state.per_person["Marco"]
+    assert any("rollout" in c for c in marco["commitments"])  # self-commitment
+    assert any("vendor" in c for c in marco["commitments"])   # assigned by Duccio
+    anna = state.per_person["Anna"]
+    assert any("security review" in q for q in anna["questions"])
+    assert any("slip" in r for r in anna["risks"])
+    assert anna["lines"] == 2
+
+
+def test_per_person_merges_owner_first_name_with_full_speaker_name():
+    state = _feed(
+        MeetingState(),
+        ("Marco Rossi", "Happy to help where needed."),
+        ("Duccio", "Let's assign it to Marco please."),
+    )
+    assert "Marco Rossi" in state.per_person
+    assert "Marco" not in state.per_person  # merged, not duplicated
+    assert state.per_person["Marco Rossi"]["commitments"]
+
+
+def test_per_person_excludes_the_avatar_itself():
+    state = _feed(
+        MeetingState(),
+        ("Laura", "I'll take the notes for this meeting."),
+        ("Duccio", "Laura will own the summary."),
+    )
+    assert "Laura" not in state.per_person
+
+
+def test_per_person_in_summary_and_dict():
+    state = _feed(
+        MeetingState(),
+        ("Marco", "I'll handle the DPA follow-up."),
+    )
+    summary = state_summary(state)
+    assert "Per person:" in summary
+    assert "Marco" in summary
+    assert "per_person" in state.to_dict()
+
+
+def test_per_person_lists_stay_bounded():
+    state = MeetingState()
+    for i in range(30):
+        update(
+            state,
+            "Marco",
+            f"I'll take task number {i} for the team.",
+            wake_words=["laura"],
+        )
+    assert len(state.per_person["Marco"]["commitments"]) <= 8
