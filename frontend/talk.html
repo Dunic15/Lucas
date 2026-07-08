@@ -414,9 +414,13 @@
   // "hold on, let me check…" leaking into the mic would self-interrupt.
   // Longest-first so "one second" wins over "one sec" (a shorter prefix match
   // would leave a garbage remainder and break the strict whole-utterance test).
-  const STOP_PHRASES = ["give me a second", "give me a moment", "give me a minute", "give me a sec", "that s enough", "stop talking", "one second", "one moment", "one minute", "never mind", "nevermind", "forget it", "be quiet", "hold on", "hang on", "shut up", "stop it", "one sec"].sort((a, b) => b.length - a.length);
-  const STOP_WORDS = new Set(["stop", "wait", "pause", "quiet", "silence", "enough", "hush", "shush"]);
-  const POLITE_WORDS = new Set(["ok", "okay", "no", "hey", "please", "laura", "now", "just", "a", "one", "sec", "second", "moment", "minute", "thanks", "thank", "you"]);
+  const STOP_PHRASES = ["give me a second", "give me a moment", "give me a minute", "give me a sec", "that s enough", "stop talking", "one second", "one moment", "one minute", "never mind", "nevermind", "forget it", "be quiet", "hold on", "hang on", "shut up", "stop it", "one sec",
+    // Italian
+    "lascia stare", "lascia perdere", "non importa", "basta cos", "un attimo", "un secondo", "un momento"].sort((a, b) => b.length - a.length);
+  const STOP_WORDS = new Set(["stop", "wait", "pause", "quiet", "silence", "enough", "hush", "shush",
+    "aspetta", "fermati", "ferma", "zitta", "basta", "taci", "silenzio", "smettila"]);
+  const POLITE_WORDS = new Set(["ok", "okay", "no", "hey", "please", "laura", "now", "just", "a", "one", "sec", "second", "moment", "minute", "thanks", "thank", "you",
+    "per", "favore", "grazie", "un", "attimo", "secondo", "momento", "ora", "adesso", "ehi", "dai"]);
   function stopWordIn(h) {
     for (const p of STOP_PHRASES) if (h.includes(p)) return p;
     for (const w of h.split(" ")) if (STOP_WORDS.has(w)) return w;

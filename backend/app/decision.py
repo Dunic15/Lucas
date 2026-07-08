@@ -18,16 +18,19 @@ import re
 from .avatars import Avatar
 
 # Third-person verbs that follow a wake word when someone is talking ABOUT the
-# avatar, not TO it: "Laura said…", "Laura mentioned…", "Laura was saying…".
+# avatar, not TO it: "Laura said…", "Laura mentioned…", "Laura ha detto…".
 _REPORTED_TRAILING = (
     r"said|says|saying|mentioned|meant|means|told|thinks|thought|noted|"
-    r"pointed|explained|suggested|asked|wanted|raised|flagged|had|was|were|'s"
+    r"pointed|explained|suggested|asked|wanted|raised|flagged|had|was|were|'s|"
+    # Italian: "Laura ha detto…", "Laura diceva…", "Laura intendeva…"
+    r"ha|aveva|dice|diceva|intende|intendeva|pensa|pensava|sosteneva|suggeriva"
 )
 # Subordinating / referential words that precede a wake word in reported speech:
-# "as Laura…", "what did Laura…", "about Laura…", "according to Laura…".
+# "as Laura…", "what did Laura…", "secondo Laura…", "come diceva Laura…".
 _REPORTED_LEADING = (
     r"as|what|when|whatever|like|because|since|that|did|does|per|about|"
-    r"regarding|according to|from|for|with"
+    r"regarding|according to|from|for|with|"
+    r"secondo|come (?:ha detto|diceva|dice)|quello che|cosa (?:ha detto|diceva)|di"
 )
 
 
@@ -50,7 +53,7 @@ def _is_reported_reference(lower: str, wake: str) -> bool:
     # A vocative signal means the speaker is addressing the avatar directly, which
     # overrides an incidental third-person mention elsewhere in the same line.
     vocative = bool(
-        re.search(rf"\b(?:hey|hi|hello|ok|okay|yo)\s+{w}\b", lower)
+        re.search(rf"\b(?:hey|hi|hello|ok|okay|yo|ehi|ciao|senti|scusa)\s+{w}\b", lower)
         or re.search(rf"(?:^|[,.;:!?]\s*){w}\s*[,:]", lower)   # "Laura, …" / "Laura:"
         or re.search(rf",\s*{w}\b[^a-z]*$", lower)             # "…, Laura?" (end)
     )
@@ -100,7 +103,14 @@ def passes_confidence(avatar: Avatar, result: dict) -> bool:
 _CLOSING = re.compile(
     r"\b(wrap(ping)? up|that'?s (it|everything|all)|anything else|any other|"
     r"before we (go|close|end|wrap)|to summari[sz]e|let'?s (close|end|wrap)|"
-    r"we'?re done|any final|last thing)\b",
+    r"we'?re done|any final|last thing|"
+    # Italian — without these the proactive wrap-up never fires in an Italian
+    # meeting (and the MeetingState stage never reaches "wrapping_up").
+    r"per riassumere|riassumendo|prima di (chiudere|concludere|salutarci)|"
+    r"direi che (abbiamo finito|è tutto)|abbiamo finito|è tutto per oggi|"
+    r"qualcos'?altro|altro da (aggiungere|dire|discutere)|"
+    r"chiudiamo|concludiamo|ci (aggiorniamo|sentiamo|risentiamo|vediamo)|"
+    r"un'?ultima cosa|per concludere|tiriamo le somme)\b",
     re.IGNORECASE,
 )
 
@@ -110,6 +120,34 @@ def detect_closing(utterance: str) -> bool:
     return bool(_CLOSING.search(utterance))
 
 
+# ── stop command ("Laura, stop / aspetta / basta") ──
+# Only checked on the wake-stripped ask of an utterance addressed BY NAME, so
+# it can stay strict: the WHOLE ask must be stop vocabulary (+ politeness).
+# "Laura, stop the deploy" is a request, not a stop; "Laura, aspetta" is a stop.
+# This is the short-command complement to barge-in, which needs 3+ words.
+_STOP_WORDS = (
+    r"stop|wait|pause|hold on|hang on|shut up|be quiet|quiet|silence|enough|"
+    r"one (?:sec|second|moment|minute)|give me a (?:sec|second|moment|minute)|"
+    r"never ?mind|forget it|stop talking|that's enough|"
+    # Italian
+    r"aspetta|fermati|ferma|zitta|silenzio|basta|taci|un attimo|un secondo|"
+    r"un momento|lascia (?:stare|perdere)|non importa|smettila|basta così"
+)
+_STOP_COMMAND = re.compile(
+    rf"^(?:ok(?:ay)?\s+|no\s+|hey\s+|ehi\s+|per favore\s+|please\s+|just\s+)*"
+    rf"(?:{_STOP_WORDS})"
+    rf"(?:\s+(?:please|per favore|grazie|thanks|now|ora|adesso|a moment|un attimo))*"
+    rf"[.!?\s]*$",
+    re.IGNORECASE,
+)
+
+
+def detect_stop_command(question: str) -> bool:
+    """True if the (wake-stripped) ask tells the avatar to stop talking NOW."""
+    q = (question or "").strip()
+    return bool(q) and bool(_STOP_COMMAND.match(q))
+
+
 # Dismissal ("Laura, you can leave"). Only ever checked on the wake-stripped
 # question of an utterance that addressed her BY NAME, so the patterns can stay
 # tight. Two shapes: an imperative aimed at her at the start of the ask, or an
@@ -117,11 +155,12 @@ def detect_closing(utterance: str) -> bool:
 # a missed command costs a repeat ask; a false positive kills the meeting bot.
 _LEAVE_IMPERATIVE = re.compile(
     # The imperative must be the WHOLE ask ("leave", "please leave the call
-    # now") — anything else after the verb ("leave the pricing for later",
-    # "leave it with me") means a topic, not the meeting.
+    # now", "go out of the meeting") — anything else after the verb ("leave
+    # the pricing for later", "go out and check X") means a topic, not the
+    # meeting.
     r"^(?:please\s+|now\s+|just\s+|kindly\s+|go ahead and\s+)*"
-    r"(?:leave|exit|drop off|hop off|hang up|disconnect)"
-    r"(?:\s+(?:the|this)\s+(?:meeting|call|room))?"
+    r"(?:leave|exit|go out|get out|go away|drop off|hop off|hang up|disconnect)"
+    r"(?:\s+(?:of\s+)?(?:the|this)\s+(?:meeting|call|room))?"
     r"(?:\s+(?:now|please|thanks|thank you))*"
     r"[.!?\s]*$",
     re.IGNORECASE,
@@ -132,14 +171,18 @@ _LEAVE_PERMISSION = re.compile(
     # Bare "go" is how a host hands over the floor ("your turn — you can go"),
     # i.e. an invitation to SPEAK, so "go" only counts with an explicit
     # dismissal marker after it; "free to go" is unambiguous on its own.
-    r"\byou (?:"
-    r"(?:can|may|should) (?:leave|drop off|hop off|head out"
-    r"|go(?=\s+(?:now|home)\b|\s+(?:the|this)\s+(?:meeting|call|room)))"
+    r"\b(?:you|she) (?:"
+    r"(?:can|may|should) (?:leave|drop off|hop off|head out|log off|sign off"
+    r"|disconnect|hang up|go(?=\s+(?:now|home)\b|\s+(?:the|this)\s+(?:meeting|call|room)))"
     r"|are free to (?:leave|go|drop off|head out)"
     r")"
-    r"(?:\s+(?:the|this)\s+(?:meeting|call|room))?"
+    r"(?:\s+(?:of\s+)?(?:the|this)\s+(?:meeting|call|room))?"
     r"(?:\s+(?:now|home|please|thanks|thank you|if you want|whenever))*"
-    r"\s*(?:[.!?,;]|$)",
+    r"\s*(?:[.!?,;]|$)"
+    # "we don't need you anymore" / "we're all set, thanks Laura"
+    r"|\bwe (?:don'?t|no longer) need you\b"
+    r"|\bnon (?:ci|ti) (?:servi|serve) più\b"
+    r"|\bnon abbiamo più bisogno di te\b",
     re.IGNORECASE,
 )
 # The whole ask is just a farewell ("Laura, bye!", "goodbye Laura").
@@ -157,7 +200,7 @@ _LEAVE_FAREWELL = re.compile(
 # andare avanti" (= go ahead / continue) never matches.
 _LEAVE_IT = re.compile(
     r"^(?:per favore\s+|ora\s+|adesso\s+|pure\s+)*"
-    r"(?:esci|vattene|scollegati|abbandona|vai pure)"
+    r"(?:esci|vattene|vai via|scollegati|abbandona|vai pure)"
     r"(?:\s+(?:dalla|da questa|la|questa)\s+(?:riunione|call|chiamata|meeting))?"
     r"(?:\s+(?:ora|adesso|pure|grazie))*[.!?\s]*$"
     r"|\bpuoi\s+(?:andare|uscire|lasciarci|abbandonare|scollegarti)"
