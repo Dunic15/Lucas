@@ -220,15 +220,11 @@
   // eventually throws and the avatar goes silent. Lazily created, never closed.
   let _decodeCtx = null;
   const decodeCtx = () => (_decodeCtx ||= new (window.AudioContext || window.webkitAudioContext)());
-  async function synthesize(text) {
-    const r = await fetch("/tts", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text, avatar_id: avatarId }),
-    });
-    if (!r.ok) throw new Error("/tts not available yet (" + r.status + ")");
-    const j = await r.json();
-    if (j.error) throw new Error(j.error);
+  // Decode a TTS payload ({audio: base64 mp3, words?, wtimes?, wdurations?})
+  // into what speakAudio wants. Shared by the /tts fetch path AND the
+  // server-attached-audio path (the backend now ships the voice inside the
+  // speak message itself, so no /tts round-trip is needed for those).
+  async function payloadToAudio(j, text) {
     const bin = Uint8Array.from(atob(j.audio), (c) => c.charCodeAt(0));
     const audio = await decodeCtx().decodeAudioData(bin.buffer);
     let { words, wtimes, wdurations } = j;
@@ -239,6 +235,17 @@
       wdurations = words.map(() => Math.round(per * 0.9));
     }
     return { audio, words, wtimes, wdurations };
+  }
+  async function synthesize(text) {
+    const r = await fetch("/tts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, avatar_id: avatarId }),
+    });
+    if (!r.ok) throw new Error("/tts not available yet (" + r.status + ")");
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    return payloadToAudio(j, text);
   }
 
   // Browsers start AudioContexts suspended until a user gesture — and TalkingHead
@@ -284,10 +291,12 @@
   // the speaking-state reporter below treat "about to speak" as speaking, so a
   // finished-audio gap between two queued sentences never reads as silence.
   let _pendingSay = 0;
-  function say(text) {
+  function say(text, pre) {
     if (!text || !text.trim()) return _sayChain;
     unlockAudio();
-    const synth = synthesize(text); // prefetch NOW, in parallel
+    // Server-attached audio (pre.audio) skips the whole /tts round-trip —
+    // the voice arrived inside the speak message. Otherwise fetch as before.
+    const synth = pre && pre.audio ? payloadToAudio(pre, text) : synthesize(text);
     const gen = _sayGen;
     _pendingSay++;
     _sayChain = _sayChain.then(async () => {
@@ -516,7 +525,7 @@
       if (msg.type === "speak" && msg.text) {
         const g = genOf(msg);
         if (g !== null && g <= staleBefore) return; // stale: superseded by a stop
-        unlockAudio(); say(msg.text);
+        unlockAudio(); say(msg.text, msg); // msg may carry server-synthesized audio
       } else if (msg.type === "stop") { // barge-in: human is talking
         const g = genOf(msg);
         if (g !== null) staleBefore = Math.max(staleBefore, g);

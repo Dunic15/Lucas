@@ -158,6 +158,47 @@ async def _tts_elevenlabs(text: str) -> dict | None:
         return None
 
 
+# ── server-side synthesis (the live path rides the speak message) ──
+# The meeting backend synthesizes each sentence ITSELF and attaches the audio
+# (+ word timings) to the {type:"speak"} message, so the avatar page skips its
+# whole /tts round-trip and speaks the moment the message lands. Shares the
+# LRU cache with the /tts endpoint (empty-voice key), so fixed lines (acks,
+# fillers) cost zero after the first synth — see _prewarm in main.py.
+
+
+async def synthesize_cached(text: str) -> dict | None:
+    """ElevenLabs payload (audio+timings) through the cache. None when
+    ElevenLabs is unavailable or failed — callers then leave the speak message
+    audio-less and the page falls back to POST /tts (which still has the free
+    edge-tts fallback), so nothing ever goes silent."""
+    text = (text or "").strip()[:2000]
+    if not text:
+        return None
+    cache_key = f"|{text}"
+    cacheable = len(text) <= _CACHE_TEXT_MAX_CHARS
+    if cacheable:
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return {**cached, "tts_ms": 0}
+    if not settings.elevenlabs_api_key:
+        return None
+    t0 = time.perf_counter()
+    el = await _tts_elevenlabs(text)
+    if el is None:
+        return None
+    if cacheable:
+        _cache_put(cache_key, dict(el))
+    el["tts_ms"] = int((time.perf_counter() - t0) * 1000)
+    return el
+
+
+def cached_payload(text: str) -> dict | None:
+    """Cache-only lookup — zero network, zero waiting. For lines whose SEND
+    must never block on synthesis (acks, backchannels, the goodbye)."""
+    payload = _cache_get(f"|{(text or '').strip()[:2000]}")
+    return {**payload, "tts_ms": 0} if payload is not None else None
+
+
 @router.post("/tts")
 async def tts(req: TtsRequest) -> Response:
     text = (req.text or "").strip()[:2000]
