@@ -125,24 +125,17 @@ def lookup_record(record_id: str = "", query: str = "") -> str:
 # post-meeting artifact's actions[] at finalize (main._finalize_session) and,
 # for orchestrated sessions, announced immediately via the action.requested
 # webhook (fired OFF the live path by cedric.notify_action_requested).
-def queue_action(
-    action: str = "", owner: str = "", due: str = "", session=None
-) -> str:
-    """Capture a requested action on the live session. Instant, in-memory."""
+def capture_action(session, action: str, owner: str = "", due: str = "") -> dict:
+    """The one capture primitive, shared by the queue_action tool handler and
+    main.py's deterministic live-path branch: append {action, owner, due} to
+    the session's in-memory list and fire the (off-path) webhook. Instant —
+    no network, no disk, no sqlite here.
+    """
     item = {
         "action": " ".join((action or "").split())[:300],
         "owner": " ".join((owner or "").split())[:100],
         "due": " ".join((due or "").split())[:100],
     }
-    if not item["action"]:
-        return "error: 'action' is required — one short line saying what should be done"
-    if session is None:
-        # No live meeting session behind this conversation (e.g. the direct
-        # web-avatar page): be honest — nothing gets queued here.
-        return (
-            "note: there is no live meeting session, so nothing was queued — "
-            "tell the person you can only queue actions during a meeting."
-        )
     queued = getattr(session, "queued_actions", None)
     if queued is None:
         # In-memory only by design: "queued_actions" is not a persisted Session
@@ -158,9 +151,26 @@ def queue_action(
         # import keeps this module import-light and dependency-free offline.
         from .cedric import notify_action_requested
 
-        notify_action_requested(session, getattr(session, "bot_id", ""), item)
+        notify_action_requested(session, session.bot_id, item)
     except Exception:  # noqa: BLE001 — the webhook is a bonus; capture never fails
         pass
+    return item
+
+
+def queue_action(
+    action: str = "", owner: str = "", due: str = "", session=None
+) -> str:
+    """Capture a requested action on the live session. Instant, in-memory."""
+    if not (action or "").strip():
+        return "error: 'action' is required — one short line saying what should be done"
+    if session is None:
+        # No live meeting session behind this conversation (e.g. the direct
+        # web-avatar page): be honest — nothing gets queued here.
+        return (
+            "note: there is no live meeting session, so nothing was queued — "
+            "tell the person you can only queue actions during a meeting."
+        )
+    capture_action(session, action, owner, due)
     return "Noted — I'll queue that for approval in Slack right after the call."
 
 

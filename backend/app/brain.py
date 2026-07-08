@@ -362,30 +362,41 @@ def wants_deep_thought(question: str) -> bool:
     return bool(settings.anthropic_api_key and _COMPLEX_INTENT.search(question or ""))
 
 
-# Direct asks for the avatar to DO something ("can you send the recap…",
-# "please book a follow-up") — the streamed live path can't call tools, so
-# main.py routes these through the tool loop (answer_with_tools) where
-# queue_action captures them. Conservative on purpose: a missed match still
-# reaches the artifact via the post-meeting summarizer; a false positive only
-# costs streaming latency (the tool loop still answers, just unstreamed).
+# Direct asks for the avatar to DO something asynchronous ("can you send the
+# recap…", "please book a follow-up") — main.py captures these DETERMINISTICALLY
+# on the live path (no LLM, no tool loop) and promises follow-up after the call.
+# Deliberately NARROW: only verbs that unambiguously request an act performed
+# AFTER the meeting. Content-query verbs (check/verify/look/see/find out,
+# controllare/verificare/guardare/cercare) are EXCLUDED on purpose — "can you
+# check if X" is a question the streamed path answers live, and hijacking it
+# would trade away streaming latency (the forbidden trade) AND answer wrongly.
+# "remind" matches only the "remind me/us to …" form ("remind me what we
+# decided" is a memory question). A missed match still reaches the artifact via
+# the post-meeting summarizer; a false positive wrongly promises a follow-up.
 _ACTION_VERBS = (
-    r"(?:send|schedule|book|create|set\s+up|draft|prepare|share|check|email|"
-    r"invite|remind|follow\s+up|organi[sz]e|arrange|open|file|ping|queue)"
+    r"(?:send|schedule|book|set\s+up|draft|prepare|email|invite|"
+    r"follow\s+up|organi[sz]e|arrange|"
+    r"remind\s+(?:me|us|him|her|them)\s+to|"
+    r"(?:create|open)\s+(?:a\s+|an\s+|the\s+)?(?:ticket|task|issue|doc(?:ument)?|event|meeting|invite)|"
+    r"add\s+(?:\w+\s+)?to\s+(?:the\s+|my\s+|our\s+)?calendar)"
 )
 _ACTION_INTENT = re.compile(
     rf"\b(?:can|could|will|would)\s+you\s+(?:please\s+)?{_ACTION_VERBS}\b"
     rf"|\bplease\s+{_ACTION_VERBS}\b"
-    # Italian: "puoi/potresti mandare…", "mi mandi/prenoti…"
+    # Italian: "puoi/potresti mandare…", "mi mandi/prenoti…", "ricordami di…"
     r"|\b(?:puoi|potresti|riesci\s+a)\s+(?:mandar|inviar|prenotar|fissar|"
-    r"organizzar|crear|preparar|controllar|ricordar|condivider|aprir)\w*\b"
-    r"|\bmi\s+(?:mandi|invii|prenoti|fissi|crei|prepari|controlli|ricordi|condividi|apri)\b",
+    r"organizzar|preparar)\w*\b"
+    r"|\b(?:puoi|potresti)\s+ricordar(?:mi|ci)\s+di\b"
+    r"|\bmi\s+(?:mandi|invii|prenoti|fissi|prepari)\b"
+    r"|\bricorda(?:mi|ci)\s+di\b",
     re.IGNORECASE,
 )
 
 
 def wants_action_capture(question: str) -> bool:
-    """True when the utterance directly asks the avatar to DO something —
-    callers route it through the tool loop so queue_action can capture it."""
+    """True when the utterance directly asks the avatar to DO something after
+    the call — main.py's live loop captures it (queue_action seam) and speaks
+    a fixed confirmation instead of routing the turn to an answer path."""
     return bool(_ACTION_INTENT.search(question or ""))
 
 
@@ -739,7 +750,8 @@ def answer_with_tools(
     if not _is_stub() and wants_web_search(question):
         answer = _web_search_answer(question, convo)
         if answer:
-            print(f"[search] {question[:60]!r} -> answered from web", flush=True)
+            # Route name only — the question is live-meeting content (PII).
+            print("[search] tool-path question answered from web", flush=True)
             return {
                 "answer": answer,
                 "tools_used": [{"tool": "web_search", "args": {}, "result": ""}],
@@ -781,7 +793,8 @@ def answer_with_tools(
         print(f"[tools] complete_with_tools failed ({e}); plain answer", flush=True)
         text = ""
     if used:
-        print(f"[tools] {question[:60]!r} -> " + ", ".join(u["tool"] for u in used), flush=True)
+        # Tool names only — the question is live-meeting content (PII).
+        print("[tools] used: " + ", ".join(u["tool"] for u in used), flush=True)
     answer = (text or "").strip()
     if not answer:
         # The tool path can raise (Groq's tool endpoint rate-limits with no

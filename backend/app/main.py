@@ -50,6 +50,7 @@ from . import (
     ledger,
     meeting_state,
     org_api,
+    tools,
     tts,
 )
 from .brain import (
@@ -1335,6 +1336,19 @@ _THINK_LINES_IT = [
     "Un secondo che ci ragiono.",
 ]
 
+# Confirmation for a captured action request (queue_action seam): promises
+# follow-up after the call, never execution. Fixed lines so they're TTS-
+# prewarmed — the confirmation must land as fast as an ack.
+_QUEUE_LINES = [
+    "Got it — I'll queue that for approval in Slack right after the call.",
+    "Noted — I'll line that up for approval in Slack once we wrap.",
+    "On it — it goes to Slack for approval right after this meeting.",
+]
+_QUEUE_LINES_IT = [
+    "Ricevuto — lo metto in coda su Slack per l'approvazione appena finiamo.",
+    "Segnato — parte su Slack per l'approvazione subito dopo la call.",
+]
+
 # Listening cues spoken WHILE a human is mid-monologue (backchanneling, the
 # thing that makes a listener feel present). Two syllables max — anything
 # longer becomes an interruption instead of a nod.
@@ -1423,6 +1437,8 @@ async def _prewarm_tts_cache() -> None:
         *_ACK_LINES_IT,
         *_THINK_LINES,
         *_THINK_LINES_IT,
+        *_QUEUE_LINES,
+        *_QUEUE_LINES_IT,
         *_BACKCHANNEL_LINES,
         *_BACKCHANNEL_LINES_IT,
         *_GOODBYE_LINES,
@@ -2207,6 +2223,35 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # a previous answer was still generating).
     turn_gen = store.bump_speech_generation(session)
 
+    # ── action requests: capture, never execute (queue_action platform seam) ──
+    # "Cedric, can you send the recap?" is a request to DO something. Capture is
+    # DETERMINISTIC — no LLM call, no tool loop, nothing slower than an ack: the
+    # utterance itself becomes the queued action (the finalize summarizer and
+    # the orchestrator's approval card refine it), the spoken confirmation is a
+    # fixed line (cached TTS ⇒ instant), and action.requested fires OFF the
+    # live path for orchestrated sessions. wants_action_capture is deliberately
+    # narrow — content questions ("can you check if…") stay on the streamed
+    # path, and search intents keep their announced streamed answer. Placed
+    # BEFORE the generic ack: this confirmation IS the reply for the turn.
+    # Only when addressed by name: an unaddressed "someone should send X" is
+    # the summarizer's job at finalize.
+    if called and wants_action_capture(question) and not wants_web_search(question):
+        # detect_wake already stripped the wake word: `question` is the ask
+        # itself ("please schedule a follow-up with Marco on Friday").
+        tools.capture_action(session, question.strip())
+        if session.speech_generation != turn_gen:  # barge-in since the final landed
+            return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
+        line = _line_for(question, _QUEUE_LINES, _QUEUE_LINES_IT)
+        session.last_ack_at = time.time()  # the confirmation doubles as the ack
+        spoke = await _make_avatar_speak(
+            session,
+            line,
+            force=True,
+            generation=turn_gen,
+            audio=tts.cached_payload(line),
+        )
+        return JSONResponse({"ok": True, "spoke": bool(spoke), "action_capture": True})
+
     # ── instant acknowledgment ──
     # She was addressed BY NAME, so she will answer — say so immediately while
     # the model generates. Sub-second social feedback is what makes the
@@ -2234,41 +2279,6 @@ async def recall_webhook(request: Request) -> JSONResponse:
             generation=turn_gen,
             audio=tts.cached_payload(line),
         )
-
-    # ── action requests: capture, never execute (queue_action platform tool) ──
-    # "Cedric, can you send the recap?" is a request to DO something. The
-    # streamed path can't call tools, so a direct action ask routes through the
-    # tool loop with the SESSION threaded in: queue_action captures
-    # {action, owner, due} in-memory (instant), fires action.requested for
-    # orchestrated sessions (off the live path), and the spoken reply promises
-    # follow-up after the call — never execution. The instant ack above already
-    # covered the tool round-trip's pause. Only when addressed by name: an
-    # unaddressed "someone should send X" is the summarizer's job at finalize.
-    if called and wants_action_capture(question):
-        try:
-            result = await run_in_threadpool(
-                lambda: answer_with_tools(
-                    avatar,
-                    question,
-                    history=session.recent_transcript(n=8),
-                    session=session,
-                )
-            )
-            line = (result.get("answer") or "").strip()
-        except Exception as e:  # noqa: BLE001 — fall back to the streamed answer
-            print(f"[queue_action] tool answer failed: {e}", flush=True)
-            line = ""
-        if session.speech_generation != turn_gen:  # barge-in while it cooked
-            return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
-        if line:
-            spoke = await _make_avatar_speak(
-                session, line, force=True, generation=turn_gen
-            )
-            return JSONResponse(
-                {"ok": True, "spoke": bool(spoke), "action_capture": True}
-            )
-        # No answer from the tool path (stub/offline or provider hiccup): fall
-        # through to the normal streamed answer — never dead air on a direct ask.
 
     # Backend is the brain: answer from OUR knowledge (RAG) with the recent
     # meeting conversation as context, plus the silent MeetingState tracker and

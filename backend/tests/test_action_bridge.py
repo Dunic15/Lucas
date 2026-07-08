@@ -299,6 +299,164 @@ def test_plain_session_no_webhook_but_artifact_and_ledger(
     )
 
 
+# ── live route: the deterministic capture branch in the meeting loop ────
+# These exercise the REAL webhook path (POST /webhooks/recall transcript.data
+# → detect_wake → capture branch), not just the tool layer.
+
+
+def _transcript_payload(bot_id: str, speaker: str, text: str) -> dict:
+    return {
+        "event": "transcript.data",
+        "data": {
+            "bot": {"id": bot_id},
+            "data": {
+                "words": [{"text": w} for w in text.split()],
+                "participant": {"name": speaker, "id": 1},
+            },
+        },
+    }
+
+
+@pytest.fixture
+def spoken(monkeypatch):
+    """Record every line the avatar would speak instead of pushing to a ws."""
+    lines: list[str] = []
+
+    async def fake_speak(session, line, **kwargs):
+        lines.append(line)
+        return True
+
+    monkeypatch.setattr(main_module, "_make_avatar_speak", fake_speak)
+    return lines
+
+
+def _post_final(client, bot_id: str, speaker: str, text: str) -> dict:
+    resp = client.post(
+        "/webhooks/recall", json=_transcript_payload(bot_id, speaker, text)
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_live_route_async_ask_captures_and_confirms(
+    client, recall_stubbed, spoken, monkeypatch
+):
+    fired: list[tuple] = []
+    monkeypatch.setattr(
+        cedric_callback,
+        "send_action_requested",
+        lambda integration, bot_id, item: fired.append((integration, bot_id, item))
+        or True,
+    )
+
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    body = _post_final(
+        client, bot_id, "Ben", "Cedric, please schedule a follow-up with Marco on Friday"
+    )
+    assert body.get("action_capture") is True
+
+    session = store.get(bot_id)
+    assert len(session.queued_actions) == 1
+    # detect_wake stripped the name; the ask itself is the queued action.
+    assert "schedule a follow-up with marco" in session.queued_actions[0]["action"].lower()
+    assert "cedric" not in session.queued_actions[0]["action"].lower()
+
+    # The spoken reply is the fixed confirmation (instant, TTS-prewarmed pool).
+    queue_pool = main_module._QUEUE_LINES + main_module._QUEUE_LINES_IT
+    assert spoken and spoken[-1] in queue_pool
+
+    # Orchestrated session → action.requested fired exactly once, ref echoed.
+    assert _wait_until(lambda: len(fired) == 1)
+    integration, fired_bot, item = fired[0]
+    assert fired_bot == bot_id
+    assert integration["external_ref"] == {"team": "T1", "meet_session_id": "ms_1"}
+
+
+def test_live_route_content_question_is_not_captured(
+    client, recall_stubbed, spoken, monkeypatch
+):
+    fired: list = []
+    monkeypatch.setattr(
+        cedric_callback, "send_action_requested", lambda *a: fired.append(a) or True
+    )
+
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    body = _post_final(
+        client, bot_id, "Ben", "Cedric, can you check if the numbers add up?"
+    )
+    assert body.get("action_capture") is None  # fell through to the answer path
+
+    session = store.get(bot_id)
+    assert getattr(session, "queued_actions", []) == []
+    time.sleep(0.1)
+    assert fired == []
+    queue_pool = main_module._QUEUE_LINES + main_module._QUEUE_LINES_IT
+    assert all(line not in queue_pool for line in spoken)
+
+
+def test_live_route_search_intent_is_not_captured(
+    client, recall_stubbed, spoken, monkeypatch
+):
+    from app.config import settings
+
+    # wants_web_search is gated on a provider key (key-free = never search);
+    # simulate production so the search-vs-capture precedence is exercised —
+    # and stub the streamed answer so no real provider call happens.
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-key")
+
+    def fake_stream(*a, **k):
+        yield "Here's the latest."
+
+    monkeypatch.setattr(main_module, "answer_question_stream", fake_stream)
+    fired: list = []
+    monkeypatch.setattr(
+        cedric_callback, "send_action_requested", lambda *a: fired.append(a) or True
+    )
+
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    _post_final(
+        client, bot_id, "Ben", "Cedric, can you send me the latest news on OpenAI?"
+    )
+
+    session = store.get(bot_id)
+    assert getattr(session, "queued_actions", []) == []
+    time.sleep(0.1)
+    assert fired == []  # search intent keeps its announced streamed answer
+
+
+# ── trigger narrowness: the reviewer's false-positive phrases stay out ──
+
+
+def test_wants_action_capture_is_narrow():
+    from app.brain import wants_action_capture
+
+    for phrase in [
+        "can you check if the numbers add up?",
+        "can you check if that's in the docs",
+        "could you check what our uptime SLA is?",
+        "puoi controllare se i numeri tornano?",
+        "can you share your thoughts on this?",
+        "can you remind me what we decided last week?",
+        "can you open the deck?",
+        "would you go through the numbers",
+    ]:
+        assert not wants_action_capture(phrase), f"must NOT capture: {phrase!r}"
+
+    for phrase in [
+        "can you schedule a follow-up with Marco for Friday?",
+        "please send the recap to the team",
+        "could you book a meeting with Elena next week?",
+        "can you draft an email to the client?",
+        "will you remind me to update the doc tomorrow?",
+        "can you open a ticket for the login bug?",
+        "please add it to the calendar",
+        "puoi mandare il recap a Elena?",
+        "mi fissi una call per giovedì?",
+        "ricordami di aggiornare il documento",
+    ]:
+        assert wants_action_capture(phrase), f"must capture: {phrase!r}"
+
+
 # ── (e) the wire artifact stays transcript-free ────────────────────────
 
 
