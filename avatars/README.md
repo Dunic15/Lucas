@@ -45,6 +45,8 @@ curl -X POST http://127.0.0.1:8000/sessions/start \
 | `persona_prompt` | yes | How the avatar introduces itself; injected into the system prompt. |
 | `anam_avatar_id` | no | Per-avatar face. Blank → global `ANAM_AVATAR_ID`. |
 | `elevenlabs_voice_id` | no | Per-avatar voice. Blank → global `ELEVENLABS_VOICE_ID`. |
+| `knowledge_packs` | no | List of OTHER avatar ids whose `knowledge/` this avatar also retrieves from (e.g. cedric reuses the `sff` pack) — packs live in one place, never copied. |
+| `talk_body` | no | `F` (default) or `M` — TalkingHead pose/gesture set on the /talk renderer. The 3D model is `frontend/<id>.glb`, falling back to `laura.glb`. |
 | `min_confidence` | no | Speak threshold 0–1. Blank → global `MIN_CONFIDENCE`. |
 | `speak_cooldown_seconds` | no | Quiet time after speaking. Blank → global default. |
 

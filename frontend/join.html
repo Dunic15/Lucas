@@ -80,6 +80,9 @@
       <label for="avatarId">Avatar</label>
       <select id="avatarId"><option value="laura">Laura</option></select>
 
+      <label for="apiToken">API token <span class="muted">(only if this server requires one — saved in this browser)</span></label>
+      <input id="apiToken" type="password" placeholder="LAURA_API_TOKEN" autocomplete="off" />
+
       <div class="row">
         <button id="sendBtn">Send Laura</button>
         <button id="stopBtn" class="danger" disabled>Stop Laura</button>
@@ -113,11 +116,13 @@
     }
 
     async function api(path, body) {
-      const r = await fetch(path, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
+      // Hosted instances gate the session API with LAURA_API_TOKEN; the token
+      // lives only in this browser's localStorage and rides as a Bearer header.
+      const token = ($("apiToken").value || "").trim();
+      if (token) localStorage.setItem("laura_api_token", token);
+      const headers = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const r = await fetch(path, { method: "POST", headers, body: JSON.stringify(body) });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
       return data;
@@ -194,6 +199,7 @@
       const params = new URLSearchParams(location.search);
       const meetingUrl = params.get("meeting_url") || params.get("url") || "";
       if (meetingUrl) $("meetingUrl").value = normalizeMeetingUrl(meetingUrl);
+      $("apiToken").value = localStorage.getItem("laura_api_token") || "";
 
       try {
         const r = await fetch("/avatars");

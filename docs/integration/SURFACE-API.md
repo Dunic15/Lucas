@@ -22,12 +22,20 @@ client #1. History and rationale: [`CEDRIC-AVATAR-PLAN.md`](CEDRIC-AVATAR-PLAN.m
 
 - Inbound: `Authorization: Bearer <LAURA_API_TOKEN>` on every mutating or
   data-bearing call. Empty/unset token = open (local dev + demo only — ALWAYS
-  set it on a hosted instance).
+  set it on a hosted instance). Deliberately open even with a token set:
+  `GET /avatars`, the demo console, and the local `/meetings` archive (the
+  archive serves full artifacts incl. transcripts — treat a hosted instance's
+  URL as sensitive until it grows its own gate).
 - Outbound webhooks are signed `X-Laura-Signature: t=<unix>,v1=<hex>` where
   `v1 = HMAC_SHA256(LAURA_WEBHOOK_SECRET, "<t>.<raw_body>")`; reject when
   `|now − t| > 300s`. Plus `Authorization: Bearer <LAURA_WEBHOOK_TOKEN>` when
-  set. Laura follows one permanent-redirect hop, re-applying auth headers.
+  set. When `LAURA_WEBHOOK_SECRET` is unset the webhook still sends but the
+  signature header is ABSENT — receivers must reject unsigned events in prod.
+  Laura follows one redirect hop (301/307/308), re-applying auth headers.
 - `context_url` fetches present `Authorization: Bearer <LAURA_CONTEXT_TOKEN>`.
+- Deployment prerequisite: the Recall dashboard webhook must point at
+  `PUBLIC_BASE_URL/webhooks/recall` — bot status events drive `session.status`,
+  the `context_url` refresh, and auto-finalize on meeting end.
 
 ## Inbound endpoints (orchestrator → Laura)
 
@@ -62,9 +70,15 @@ client #1. History and rationale: [`CEDRIC-AVATAR-PLAN.md`](CEDRIC-AVATAR-PLAN.m
 ```
 
 `200 → {"bot_id", "conversation_id", "avatar_page_url", "scheduled_for"|null}`
-Errors: `400` bad URL / oversized brief · `401` missing/bad token ·
-`409` a session already exists for this `meeting_url` (cancel first — one bot
-per meeting URL, globally).
+Errors: `400` bad URL / oversized brief / upstream (Recall) failure — all
+start-side failures currently surface as 400 · `401` missing/bad token ·
+`409` a session already exists for this `meeting_url` — the body carries the
+existing `bot_id` so you can cancel-then-rebook. (The 409 dedupe is checked
+against THIS instance's session store; treat it as best-effort, not a global
+lock.) `end`/`cancel` return `404 {"error":"unknown bot_id"}` for unknown ids;
+`end` is idempotent and re-returns the stored artifact. The artifact poll
+answers `in_progress` for ANY live session — including a scheduled bot that
+has not joined yet.
 
 The bot's name tile is the avatar's `name` from its `avatar.yaml` (wake words
 too — surface them to end users via `GET /avatars` so nobody calls the wrong
@@ -76,18 +90,24 @@ POSTed to the session's `callback_url`, signed as above, `external_ref` echoed.
 
 | Event | Delivery | Payload core |
 |---|---|---|
-| `session.status` | best-effort, single attempt | `{event, bot_id, external_ref, status: "joining"\|"live"\|"failed", detail?, at}` |
+| `session.status` | best-effort, single attempt | `{event, bot_id, external_ref, status: "joining"\|"live"\|"failed", detail, at}` (`detail` always present, may be `""`; `failed` fires only for a fatal join) |
+| `action.requested` | best-effort, single attempt | `{event, bot_id, external_ref, action, owner, due, at}` — fired the moment someone asks the avatar to DO something mid-meeting, so the approval card is ready before the call ends. The artifact's `actions[]` stays the authoritative list (live captures are flagged `requested_live: true`). |
 | `session.ended` | retried 3× (5s / 25s / 2m), then poll fallback | `{event, bot_id, external_ref, ended_at, artifact}` |
 
 ### The artifact (wire shape, additive)
 
-`{artifact_version: 1, summary, actions[] (owner, item, deadline), checklist,
-decisions[], risks[], missing_steps[], readiness_score, meeting_type,
-follow_up_email{subject, body}, participation[]}`
+`{artifact_version: 1, summary, actions[], checklist, decisions[], risks[],
+missing_steps[], readiness_score, follow_up_email, meeting_type?,
+participation[]?}`
 
 - **No `transcript` field, ever** (see principle 2). The same distilled copy
   is returned by `POST …/end` and `GET …/artifact`.
-- `actions[]` items may be plain strings or `{owner, item, deadline}`.
+- `actions[]` items may be plain strings or `{owner, item, deadline?,
+  gap_type?, requested_live?}` — parse defensively; `deadline` is not
+  guaranteed on every item.
+- `meeting_type` and `participation` appear only when the meeting produced a
+  transcript; a silent/empty meeting yields the seed shape and
+  `follow_up_email` may be `{}`. Parse all fields as optional.
 - New fields will be added; existing ones never change meaning
   (`artifact_version` bumps only on breaking change, which we avoid).
 
@@ -113,7 +133,9 @@ skip autopilot — the orchestrator owns approval-gated delivery.
 
 - Single shared token (client #1 = Cedric). A per-client key registry keeps
   this API shape and lands when a second orchestrator shows up.
-- `action.requested` live event (approval card ready before the meeting ends)
-  — next, see plan §P6.
-- Ledger/artifacts live in sqlite on an ephemeral disk — org memory dies on
-  deploy. Durability decision (Litestream→S3 / Postgres) pending.
+- Ledger/artifacts AND live session state live in sqlite on an ephemeral
+  disk — org memory dies on deploy, and a deploy mid-meeting loses the
+  session (no `session.ended` fires; poll + your watchdog are the backstop).
+  Durability decision (Litestream→S3 / Postgres) pending.
+- `POST /sessions/{bot_id}/deliver` (auth-gated) exists for Laura's own
+  autopilot delivery (email + Slack); orchestrators normally ignore it.
