@@ -64,6 +64,38 @@ def test_transcript_echoed_into_decisions_is_filtered():
     assert out["actions"] == [{"item": "Send doc", "owner": "Marco"}]
 
 
+def test_post_meeting_degraded_model_yields_real_summary(monkeypatch):
+    """The empty-summary bug: when the post model returns unusable output
+    (truncated/non-JSON), post_meeting must rebuild a REAL recap from the
+    deterministic tracker — a non-empty summary + email — never a blank artifact.
+    Before the fix this shipped summary "" with participation intact."""
+    from app import avatars
+    from app.config import settings
+
+    # Force the non-stub post path, then make the model return prose (not JSON),
+    # so _parse_json degrades to {"answer": ...}.
+    monkeypatch.setattr(settings, "brain_provider_post", "anthropic")
+    monkeypatch.setattr(settings, "anthropic_api_key", "k")
+    monkeypatch.setattr(
+        brain.llm, "complete", lambda *a, **k: "Sorry — I couldn't format that as JSON."
+    )
+    monkeypatch.setattr(brain, "retrieve", lambda avatar, q, k=6: [])
+
+    avatar = avatars.load("laura")
+    transcript = (
+        "Ben: Welcome everyone, quick sync.\n"
+        "Ben: Please send the recap to Marco by Friday.\n"
+        "Priya: We should schedule a follow-up next week.\n"
+    )
+    art = brain.post_meeting(avatar, transcript)
+
+    assert art["summary"].strip()  # NEVER empty — this is the whole point
+    assert "incomplete result" in art["summary"]  # degrade mode note, not stub note
+    assert art["follow_up_email"].get("body")  # email is populated too
+    # Participation still comes from the tracker (unchanged behaviour).
+    assert isinstance(art["participation"], list)
+
+
 def test_good_artifact_passes_through():
     art = {
         "summary": "Clean summary.",

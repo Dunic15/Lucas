@@ -125,16 +125,51 @@ def complete(
         raise
 
 
+# Non-streaming completions prompt for a compact JSON object (post-meeting
+# artifact, classification, extraction). Sonnet-5's adaptive extended thinking
+# would otherwise consume the max_tokens budget BEFORE emitting the answer,
+# returning truncated or empty text that the caller reads as a degraded result
+# (the empty-summary bug). Disabling thinking spends the whole budget on the
+# JSON. "disabled" is the only valid shape here — passing budget_tokens 400s on
+# Sonnet-5. The live SPOKEN path uses stream_complete/_stream_anthropic and is
+# unaffected.
+_THINKING_OFF = {"type": "disabled"}
+_thinking_supported = True  # flipped off if a model ever rejects the param
+
+
 def _complete_anthropic(
     system: str, user: str, max_tokens: int, model: str | None = None
 ) -> str:
+    global _thinking_supported
     client = _ensure_anthropic()
-    msg = client.messages.create(
-        model=model or settings.brain_model,
+    model = model or settings.brain_model
+    kwargs = dict(
+        model=model,
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": user}],
     )
+    if _thinking_supported:
+        kwargs["thinking"] = _THINKING_OFF
+    try:
+        msg = client.messages.create(**kwargs)
+    except Exception as e:  # noqa: BLE001
+        # A model/SDK that rejects the thinking param: retry once without it
+        # rather than fail the whole completion (and stop sending it thereafter).
+        if _thinking_supported and "thinking" in str(e).lower():
+            _thinking_supported = False
+            kwargs.pop("thinking", None)
+            msg = client.messages.create(**kwargs)
+        else:
+            raise
+    if getattr(msg, "stop_reason", None) == "max_tokens":
+        # Truncated before the model finished — the JSON is likely invalid, which
+        # the caller degrades to a deterministic recap. Log so it's diagnosable.
+        print(
+            f"[llm] anthropic {model} hit max_tokens={max_tokens}; "
+            "output may be truncated",
+            flush=True,
+        )
     # Models with adaptive thinking (Sonnet 5+) put a thinking block FIRST —
     # content[0] is not necessarily text. Return the first text block.
     return next((b.text for b in msg.content if b.type == "text"), "")

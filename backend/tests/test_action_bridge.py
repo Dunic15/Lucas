@@ -480,6 +480,51 @@ def test_wants_action_capture_is_narrow():
         assert wants_action_capture(phrase), f"must capture: {phrase!r}"
 
 
+def test_wants_action_capture_bare_imperatives():
+    """The 0-actions bug: users speak BARE IMPERATIVES ("schedule…", "send…",
+    "post…") with no "can you/please" carrier. The capture regex must catch the
+    verb leading the (wake-stripped) ask, plus messaging verbs (post/ping/dm/
+    message) the old list lacked — without capturing plain statements."""
+    from app.brain import wants_action_capture
+
+    for phrase in [
+        "schedule a follow-up with Marco",
+        "send Priya an email",
+        "post to Slack",
+        "post the recap to the channel",
+        "ping Marco about the deck",
+        "dm Priya the notes",
+        "message the team the update",
+        "ok, schedule a follow-up with Marco next week",
+        "so send the recap to the team",
+        "also add Marco to the calendar",
+    ]:
+        assert wants_action_capture(phrase), f"must capture: {phrase!r}"
+
+    for phrase in [
+        "we should send the recap at some point",  # statement, not imperative
+        "I'll email him later today",
+        "post-meeting we can review the deck",  # 'post-meeting' is not 'post'
+        "the message from the client was clear",  # 'message' as a noun
+        "so what is the status of the project",
+    ]:
+        assert not wants_action_capture(phrase), f"must NOT capture: {phrase!r}"
+
+
+def test_live_route_bare_imperative_captures(client, recall_stubbed, spoken, monkeypatch):
+    """End-to-end on the real webhook path: a bare-imperative ask with no
+    carrier is captured on the session (this is exactly what failed live)."""
+    monkeypatch.setattr(cedric_callback, "send_action_requested", lambda *a: True)
+
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    body = _post_final(client, bot_id, "Ben", "Cedric, schedule a follow-up with Marco on Friday")
+    assert body.get("action_capture") is True
+
+    session = store.get(bot_id)
+    assert len(session.queued_actions) == 1
+    assert "schedule a follow-up with marco" in session.queued_actions[0]["action"].lower()
+
+
 # ── (e) the wire artifact stays transcript-free ────────────────────────
 
 
