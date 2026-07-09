@@ -84,6 +84,82 @@ def _knowledge_docs(avatar: avatars.Avatar) -> int:
     return count
 
 
+def _prettify(stem: str) -> str:
+    """A file stem → a human topic label ('customer_onboarding' → 'Customer
+    onboarding')."""
+    s = stem.replace("_", " ").replace("-", " ").strip()
+    return (s[:1].upper() + s[1:]) if s else stem
+
+
+def _knowledge_topics(avatar: avatars.Avatar, limit: int = 8) -> list[str]:
+    """What the avatar KNOWS — one label per knowledge doc (its heading if the
+    file starts with '# Title', else the prettified filename)."""
+    topics: list[str] = []
+    seen: set[str] = set()
+    for directory in avatar.knowledge_dirs:
+        if not directory.exists():
+            continue
+        for p in sorted(directory.glob("*.md")):
+            label = _prettify(p.stem)
+            try:
+                first = p.read_text(errors="ignore").lstrip().splitlines()[0]
+                if first.startswith("#"):
+                    label = first.lstrip("#").strip()[:60] or label
+            except Exception:
+                pass
+            key = label.lower()
+            if key not in seen:
+                seen.add(key)
+                topics.append(label)
+            if len(topics) >= limit:
+                return topics
+    return topics
+
+
+def _process_templates(avatar: avatars.Avatar, limit: int = 6) -> list[str]:
+    """The meeting checklists this avatar tracks (process_templates/*.yaml)."""
+    d = avatar.dir / "process_templates"
+    if not d.exists():
+        return []
+    return [_prettify(p.stem) for p in sorted(d.glob("*.yaml"))][:limit]
+
+
+def _capabilities(avatar: avatars.Avatar, knowledge: int) -> list[str]:
+    """What the avatar can DO — derived from its real config, honest about
+    speaking vs silent mode."""
+    caps = ["Joins Zoom, Google Meet & Teams live"]
+    if avatar.silent:
+        caps.append("Listens silently and takes notes (never speaks)")
+    else:
+        caps.append("Answers out loud, grounded in its docs with citations")
+    if knowledge:
+        caps.append(f"Grounded on {knowledge} process doc{'s' if knowledge != 1 else ''}")
+    caps.append("Tracks the meeting checklist & readiness")
+    caps.append("Drafts the post-meeting summary + action items")
+    if avatar.drive_folder_id:
+        caps.append("Reads a shared Google Drive folder")
+    return caps
+
+
+def _hidden(avatar_id: str) -> bool:
+    """Read the avatar.yaml `hidden` flag without depending on the Avatar
+    dataclass (a parallel session may own avatars.py). Knowledge-pack folders
+    set it so they don't appear as callable avatars in the dashboard."""
+    import yaml
+
+    p = settings.avatars_dir / avatar_id / "avatar.yaml"
+    try:
+        return bool((yaml.safe_load(p.read_text()) or {}).get("hidden", False))
+    except Exception:
+        return False
+
+
+# Rough all-in variable cost per live avatar-minute (Recall bot + LLM + TTS +
+# face). A deliberate ESTIMATE for the usage panel — real invoicing is a later
+# track. Kept here so the number has one home.
+EST_COST_PER_MIN = 0.12
+
+
 @router.get("/dashboard")
 def dashboard_page() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "dashboard.html")
@@ -146,23 +222,36 @@ def dashboard_summary(request: Request) -> JSONResponse:
     for aid in avatars.list_ids():
         a = avatars.load(aid)
         drive_connected = drive_connected or bool(a.drive_folder_id)
+        # Knowledge-pack folders (avatar.yaml `hidden: true`, e.g. sff which
+        # Cedric reuses) are not callable avatars — keep them out of the owner
+        # dashboard. Read the flag off the yaml so this stays decoupled from the
+        # Avatar dataclass. `hidden` avatars still list_ids()/load() normally.
+        if _hidden(aid):
+            continue
         mine = by_avatar.get(aid, [])
+        knowledge = _knowledge_docs(a)
+        minutes = round(sum(m["duration_seconds"] for m in mine) / 60)
         avatar_rows.append(
             {
                 "id": a.id,
                 "name": a.name,
                 "role": a.role,
+                "persona": (a.persona_prompt or "")[:220],
                 "wake_words": a.wake_words,
                 "voice_id": a.elevenlabs_voice_id,
                 "talk_body": a.talk_body,
                 "silent": a.silent,
-                "knowledge_docs": _knowledge_docs(a),
+                "knowledge_docs": knowledge,
+                "knowledge_topics": _knowledge_topics(a),
+                "process_templates": _process_templates(a),
+                "capabilities": _capabilities(a, knowledge),
                 "drive_folder": bool(a.drive_folder_id),
                 "live_now": live_by_avatar.get(aid, 0),
                 "meetings_total": len(mine),
                 "meetings_30d": sum(
                     1 for m in mine if now - (m["saved_at"] or 0) <= _30D
                 ),
+                "minutes_total": minutes,
                 "last_meeting_at": mine[0]["saved_at"] if mine else None,
             }
         )
@@ -185,6 +274,26 @@ def dashboard_summary(request: Request) -> JSONResponse:
         "weekly": weekly,
     }
 
+    # Usage & billing. Minutes are REAL (summed from meeting durations); the cost
+    # is a clearly-labelled estimate and per-avatar breakdown is included. Actual
+    # invoicing / plans are a later track (surfaced as "coming soon" in the UI).
+    total_minutes = round(sum(m["duration_seconds"] for m in meetings) / 60)
+    minutes_30d = round(sum(m["duration_seconds"] for m in recent) / 60)
+    per_avatar_min = {}
+    for m in meetings:
+        per_avatar_min[m["avatar_id"]] = per_avatar_min.get(m["avatar_id"], 0) + (
+            m["duration_seconds"] / 60
+        )
+    billing = {
+        "total_minutes": total_minutes,
+        "minutes_30d": minutes_30d,
+        "est_cost_30d": round(minutes_30d * EST_COST_PER_MIN, 2),
+        "rate_per_min": EST_COST_PER_MIN,
+        "by_avatar": {k: round(v) for k, v in per_avatar_min.items()},
+        "plan": "Demo",  # placeholder — no billing system yet
+        "billing_live": False,
+    }
+
     # Booleans only — which integrations are configured, never the secrets.
     connections = {
         "calendar": bool(settings.google_calendar_client_id),
@@ -202,6 +311,7 @@ def dashboard_summary(request: Request) -> JSONResponse:
             "live": live,
             "meetings": meetings[:60],
             "stats": stats,
+            "billing": billing,
             "connections": connections,
             "auth_enabled": auth.enabled(),
             "user": (
