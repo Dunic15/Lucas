@@ -376,3 +376,34 @@ def test_webhook_split_leave_only_on_leave_followup(monkeypatch, tmp_path):
     assert calls["leave"] == 0
     assert store.get(bot_id) is not None
     store.remove(bot_id)
+
+
+def test_webhook_split_leave_ignores_substantive_address(monkeypatch, tmp_path):
+    """Meter safety (code-review repro): a SUBSTANTIVE address ("Cedric hold on a
+    second") must NOT arm the split window, so a later same-speaker aside
+    dismissing someone else ("Sara you can leave now") can never end the bot."""
+    bot_id = "leave-split-4"
+    calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+
+    _post_line_as(bot_id, "Cedric hold on a second", "Duccio")
+    b2 = _post_line_as(bot_id, "Sara you can leave now", "Duccio")
+    assert b2.get("left") is None, "a substantive address must not arm the window"
+    assert calls["leave"] == 0
+    assert store.get(bot_id) is not None
+    store.remove(bot_id)
+
+
+def test_webhook_split_leave_skips_dismissal_of_named_participant(monkeypatch, tmp_path):
+    """Meter safety: even after a BARE address, a follow-up that dismisses another
+    NAMED participant ("Sara, you can leave") is aimed at Sara, not the avatar —
+    it must not end the bot."""
+    bot_id = "leave-split-5"
+    calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+
+    _post_line_as(bot_id, "I think we're just about done", "Sara")  # Sara → roster
+    _post_line_as(bot_id, "Cedric.", "Duccio")                      # bare address → armed
+    b = _post_line_as(bot_id, "Sara you can leave now", "Duccio")
+    assert b.get("left") is None, "dismissing a named participant must not end the bot"
+    assert calls["leave"] == 0
+    assert store.get(bot_id) is not None
+    store.remove(bot_id)

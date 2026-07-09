@@ -2145,6 +2145,45 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "scheduled": scheduled})
 
 
+# ── split-final leave helpers (see the voice-dismissal block below) ──
+_ADDRESS_FILLERS = frozenset(
+    {"hey", "ok", "okay", "hi", "yo", "hello", "so", "well", "um", "uh",
+     "yeah", "please", "thanks"}
+)
+
+
+def _address_is_bare(avatar, text: str) -> bool:
+    """True when an addressed turn is essentially JUST the name ("Cedric.",
+    "hey Cedric") — the interrupted-dismissal shape that can split across ASR
+    finals. A turn carrying real content ("Cedric, can you check the budget")
+    is a complete utterance and must NOT arm the split-leave window, or a later
+    same-speaker aside could end the meeting early (meter safety)."""
+    wake = set(avatar.wake_words)
+    residual = [
+        t
+        for t in re.findall(r"[a-z']+", text.lower())
+        if t not in wake and t not in _ADDRESS_FILLERS
+    ]
+    # 0 residual tokens for an exact bare name; 1 for a fuzzy-corrupted name
+    # (the mis-transcribed token isn't in wake_words) — both are "just the name".
+    return len(residual) <= 1
+
+
+def _names_another_participant(text: str, roster, wake_words) -> bool:
+    """True when the line mentions ANOTHER participant's first name. A leave
+    command in such a line ("Sara, you can leave") is plausibly aimed at that
+    person, so the split-leave window must not read it as the avatar's own
+    dismissal."""
+    tokens = set(re.findall(r"[a-z']+", text.lower()))
+    wake = set(wake_words)
+    for name in roster:
+        parts = name.strip().split()
+        first = parts[0].lower() if parts else ""
+        if first and first not in wake and first in tokens:
+            return True
+    return False
+
+
 # ───────────────────────── recall webhook ──────────────────────────
 @app.post("/webhooks/recall")
 async def recall_webhook(request: Request) -> JSONResponse:
@@ -2435,14 +2474,18 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # blocked by a TTS hiccup.
     #
     # Split-final case: "Cedric." and "you can leave" often arrive as TWO ASR
-    # finals — the first wakes (empty question), the second isn't a wake, so
-    # neither final alone fires the dismissal and a background reconcile poll
-    # ends the meeting late. Mirror the action-capture window above: if the SAME
-    # speaker addressed the avatar in the last few seconds, re-check the leave
-    # command on the CONCATENATED finals. Meter safety is preserved — the split
-    # path STILL requires a real recent address by the same speaker, so a stray
-    # "you can leave" from someone who never named the avatar can never end the
-    # meeting early.
+    # finals — the first wakes (bare name, empty question), the second isn't a
+    # wake, so neither final alone fires the dismissal and a background reconcile
+    # poll ends the meeting late. Complete it: if the SAME speaker addressed the
+    # avatar with a BARE name in the last few seconds, re-check the leave command
+    # on the concatenated finals.
+    #
+    # Meter safety (an early leave kills a live paid meeting) is why the split
+    # path is deliberately narrow. It fires ONLY when: (1) the address turn was
+    # bare — a substantive "Cedric, can you check the budget" never arms it, so a
+    # later same-speaker aside can't end the call — AND (2) the follow-up doesn't
+    # name another participant (a dismissal like "Sara, you can leave" is aimed
+    # at Sara, not the avatar). detect_leave_command's own guards apply on top.
     leave_now = called and detect_leave_command(question)
     if settings.leave_on_command and not leave_now and not called:
         addressed = getattr(session, "last_addressed", None)
@@ -2452,12 +2495,18 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 speaker == a_speaker
                 and time.time() - a_ts < 4.0
                 and detect_leave_command(f"{a_text} {text}")
+                and not _names_another_participant(
+                    text, session.roster(avatar.name), avatar.wake_words
+                )
             ):
                 leave_now = True
-    # Remember an address so the NEXT final can complete a split dismissal; a
-    # new speaker or a stale (>4s) window clears it.
+    # Arm the split window ONLY for a bare address ("Cedric." / "hey Cedric");
+    # a substantive addressed turn, a new speaker, or a stale (>4s) window clears
+    # it, so the window can never linger into unrelated speech.
     if called:
-        session.last_addressed = (speaker, time.time(), text)
+        session.last_addressed = (
+            (speaker, time.time(), text) if _address_is_bare(avatar, text) else None
+        )
     elif getattr(session, "last_addressed", None) is not None and (
         speaker != session.last_addressed[0]
         or time.time() - session.last_addressed[1] >= 4.0
