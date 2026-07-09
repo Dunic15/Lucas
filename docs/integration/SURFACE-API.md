@@ -122,13 +122,15 @@ With `context_url` set, Laura GETs it once when the bot reaches the call and
 swaps in the returned `{context: {meeting, brief_markdown}}` — a fresh brief
 for bookings made days earlier. Any error → the booking-time brief stays.
 
-## Standalone fallback (autonomous mode)
+## Standalone (no orchestrator connected)
 
-`{meeting_url}` alone (+ token): the default avatar joins, no brief, and
-Laura's own autopilot (if enabled via `EXECUTE_*`, off in prod) handles
-delivery. This is the fallback for running with no Cedric connected — see
-[`../ARCHITECTURE.md`](../ARCHITECTURE.md). Orchestrated sessions skip
-autopilot — the orchestrator owns approval-gated delivery.
+`{meeting_url}` alone (+ token): the default avatar joins, no brief. With no
+orchestrator connected Laura still senses and builds the artifact (poll it via
+`GET …/artifact`), but there is **no autonomous execution** — she never acts. The
+optional `AUTOPILOT_*` notetaker can email/Slack a recap when a meeting ends, but
+never executes the agreed actions — see
+[`../ARCHITECTURE.md`](../ARCHITECTURE.md). Orchestrated sessions skip that
+autopilot — Cedric owns approval-gated delivery and all execution.
 
 ## Env vars (server side)
 

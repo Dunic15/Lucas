@@ -145,14 +145,6 @@ GOOGLE_CALENDAR_SCOPES = (
     # meetings knowing the team's docs. See drive_client.py. Adding a scope
     # means reconnecting once via /oauth/google/connect.
     "https://www.googleapis.com/auth/drive.readonly",
-    # Autonomous execution (google_actions.py, all off by default): send the
-    # recap email, file a Drive notes doc, and book action deadlines — from the
-    # connected account. All three are wired behind their own EXECUTE_* flags,
-    # so their scopes are requested. (Reminder: rotate the Google OAuth client
-    # secret — it was exposed via Recall's calendar API.)
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/calendar.events",
 )
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 ATTENDEE_CONTAINER_KEYS = {
@@ -1234,27 +1226,6 @@ async def _finalize_session_locked(
         try:
             name = avatars.load(session.avatar_id).name
             asyncio.create_task(run_in_threadpool(autopilot.maybe_deliver, name, artifact))
-        except Exception:
-            pass
-    # Autonomous EXECUTION (the AI-employee path): the avatar itself emails the
-    # recap and files notes in its Drive folder. Runs for non-orchestrated
-    # sessions (an orchestrator owns its own delivery). Off unless
-    # EXECUTE_ENABLED; best-effort, off the finalize-response path.
-    if not orchestrated and settings.execute_enabled:
-        try:
-            av = avatars.load(session.avatar_id)
-            meeting_ctx = (integration or {}).get("meeting") or {}
-            attendee_emails = [
-                a.get("email", "")
-                for a in (meeting_ctx.get("attendees") or [])
-                if isinstance(a, dict) and a.get("email")
-            ]
-            asyncio.create_task(
-                run_in_threadpool(
-                    autopilot.maybe_execute, av.name, artifact,
-                    av.drive_folder_id, attendee_emails,
-                )
-            )
         except Exception:
             pass
     # PII-safe finalize telemetry: counts + booleans only, NEVER any utterance

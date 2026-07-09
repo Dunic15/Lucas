@@ -59,7 +59,9 @@ Nothing to change for this fix to work end to end:
 - `SURFACE_WEBHOOK_URL = https://www.meet-cedric.com/api/laura/events` ✓ — so the
   Bug #1 fix (email/calendar summons now inherit Model A) engages on deploy.
 - `SURFACE_CONTEXT_URL = https://www.meet-cedric.com/api/laura/context` ✓
-- `EXECUTE_ENABLED = false` ✓ — Model B off; pure Model A hand-off.
+- **Model A only** — the autonomous Model B execution pack (`EXECUTE_*`) was
+  removed, so there's no `EXECUTE_ENABLED` flag to set; every meeting is a pure
+  hand-off to Cedric.
 - SSM secrets wired: `LAURA_WEBHOOK_SECRET` + `LAURA_WEBHOOK_TOKEN` (outbound HMAC
   to Cedric), `LAURA_API_TOKEN`, `LAURA_CONTEXT_TOKEN`, `RECALL_API_KEY`
   (reconcile polling), **`RECALL_WEBHOOK_SECRET`** (verifies inbound Recall

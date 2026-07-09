@@ -58,18 +58,19 @@ def client(tmp_path, monkeypatch):
 
 def test_finalize_routes_to_cedric_and_skips_autonomous(client, monkeypatch):
     # Model A: with SURFACE_WEBHOOK_URL set, a plain email-style session hands
-    # off to Cedric (deliver_ended) and does NOT run Laura's own execution.
+    # off to Cedric (deliver_ended) and does NOT also run Laura's own autopilot
+    # delivery (orchestrated sessions belong to Cedric — no double-send).
     monkeypatch.setattr(settings, "surface_webhook_url", "https://meet-cedric.com/api/laura/events")
-    monkeypatch.setattr(settings, "execute_enabled", True)
+    monkeypatch.setattr(settings, "autopilot_deliver", True)
     monkeypatch.setattr(main_module.recall_client, "assert_ready", lambda: None)
     monkeypatch.setattr(main_module.recall_client, "create_bot", lambda *a, **k: {"id": "bot_a"})
     monkeypatch.setattr(main_module.recall_client, "leave_call", lambda b: None)
     monkeypatch.setattr(main_module.anam_client, "end_conversation", lambda c: None)
 
-    delivered, executed = [], []
+    delivered, autopiloted = [], []
     monkeypatch.setattr(cedric, "deliver_ended",
                         lambda integ, bot, art: delivered.append(bot) or True)
-    monkeypatch.setattr(autopilot, "maybe_execute", lambda *a, **k: executed.append(a))
+    monkeypatch.setattr(autopilot, "maybe_deliver", lambda *a, **k: autopiloted.append(a))
 
     # a bare start — no callback_url in the request
     client.post("/sessions/start", json={"meeting_url": "https://meet.google.com/mod-a-test", "avatar_id": "cedric"})
@@ -77,7 +78,7 @@ def test_finalize_routes_to_cedric_and_skips_autonomous(client, monkeypatch):
     assert client.post("/sessions/bot_a/end").status_code == 200
     time.sleep(0.2)
     assert delivered == ["bot_a"]   # handed off to Cedric
-    assert executed == []           # Laura's own execution skipped (no double-act)
+    assert autopiloted == []        # Laura's own autopilot delivery skipped (no double-act)
 
 
 def test_default_context_url_pulls_pre_meeting(monkeypatch):
