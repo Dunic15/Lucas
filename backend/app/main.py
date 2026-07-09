@@ -1884,6 +1884,18 @@ def _is_own_speech(avatar_name: str, speaker: str) -> bool:
     return speaker.strip().lower() == avatar_name.strip().lower()
 
 
+def _in_opening_grace(session: store.Session) -> bool:
+    """Opening settle-in ("wait to be called"): True while she should stay silent
+    unless DIRECTLY addressed by name. Ends the instant she's first addressed
+    (session.addressed_once) or after settings.opening_grace_seconds from join,
+    whichever comes first — so she never talks over the room while it settles,
+    but engages immediately when named and becomes proactive once things settle
+    even if nobody names her."""
+    if settings.opening_grace_seconds <= 0 or session.addressed_once:
+        return False
+    return (time.time() - session.created_at) < settings.opening_grace_seconds
+
+
 def _is_echo(session: store.Session, text: str) -> bool:
     """True when a 'human' line is actually HER OWN voice re-entering through a
     participant's mic (open speakers, no headphones): the transcribed text is a
@@ -2315,6 +2327,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     and settings.greet_joiners
                     and is_new
                     and len(session.transcript) >= 4
+                    and not _in_opening_grace(session)  # not while the room settles
                     and not label.lower().startswith("guest")
                     and time.time() > session.speaking_until
                 ):
@@ -2445,6 +2458,18 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # By default (require_wake_word=False) she answers any grounded question; the
     # SKIP sentinel + cooldown keep her from interjecting on things she can't ground.
     called, question = detect_wake(avatar, text, session.present_names())
+
+    # ── opening settle-in: wait to be called ──
+    # For the first moments after joining she stays silent unless directly
+    # addressed — the room is still settling (hellos, "can you hear me?", late
+    # joiners) and an unprompted answer/greeting there reads as interrupting.
+    # Being named ONCE wakes her for the rest of the meeting; otherwise the grace
+    # expires on its own. Direct commands (stop/leave) are `called`-gated, so
+    # they still work during the grace — this only suppresses UNADDRESSED speech.
+    if called:
+        session.addressed_once = True
+    elif _in_opening_grace(session):
+        return JSONResponse({"ok": True, "spoke": False, "reason": "opening grace"})
 
     # ── action-capture continuation ──
     # A same-speaker follow-up right after a captured action (and NOT a new
