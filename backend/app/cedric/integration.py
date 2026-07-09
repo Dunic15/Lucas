@@ -79,11 +79,16 @@ def build_integration(req: Any, brief: str) -> Optional[dict]:
     Slack posting + execution with his own tools. Unset = today's behaviour
     (autonomous / Model B)."""
     callback = req.callback_url or settings.surface_webhook_url
-    if not (callback or req.context_url or req.external_ref or brief):
+    # Pre-meeting context pull (Cedric → Laura): a default context_url means
+    # every meeting fetches "who's who + context" from Cedric's memory at join,
+    # so the avatar walks in already knowing the people. Explicit per-session
+    # context_url still wins. Unset = only the local Drive/ledger brief.
+    context_url = req.context_url or settings.surface_context_url
+    if not (callback or context_url or req.external_ref or brief):
         return None
     return {
         "callback_url": callback or "",
-        "context_url": req.context_url or "",
+        "context_url": context_url or "",
         "external_ref": req.external_ref or {},
         "brief": brief,
         "meeting": (req.context.meeting if req.context else {}) or {},

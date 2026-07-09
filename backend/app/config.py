@@ -265,6 +265,10 @@ class Settings(BaseSettings):
     # autonomously (Model B: EXECUTE_* / autopilot). Point at Cedric's
     # {PUBLIC_BASE_URL}/api/laura/events.
     surface_webhook_url: str = ""
+    # Pre-meeting context pull (Cedric → Laura): default context_url for meetings
+    # that don't set their own → the avatar fetches "who's who + context" from
+    # Cedric's memory at join. Point at Cedric's {PUBLIC_BASE_URL}/api/laura/context.
+    surface_context_url: str = ""
     # ── end Cedric integration ──
 
     @property
