@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Laura — Sign in</title>
+<style>
+  :root{
+    --bg:#08090C; --surface:rgba(255,255,255,.035); --line:rgba(255,255,255,.09);
+    --text:#F4F6FB; --dim:#9AA1AC; --faint:#5F6672;
+    --g1:#4D7CFE; --g2:#7EB6FF; --g3:#FFB49A; --g4:#F5484D;
+    --grad:linear-gradient(92deg,var(--g1) 0%,var(--g2) 32%,var(--g3) 64%,var(--g4) 100%);
+    --font:"Geist","Inter",-apple-system,"Segoe UI",system-ui,sans-serif;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;min-height:100vh;background:var(--bg);color:var(--text);
+    font-family:var(--font);-webkit-font-smoothing:antialiased;
+    display:flex;flex-direction:column;
+  }
+  /* ambient gradient field */
+  .field{position:fixed;inset:0;pointer-events:none;overflow:hidden;}
+  .field::before{content:"";position:absolute;width:900px;height:900px;left:50%;top:-30%;
+    transform:translateX(-50%);border-radius:50%;filter:blur(120px);opacity:.16;
+    background:radial-gradient(circle at 35% 40%, var(--g1), transparent 60%),
+               radial-gradient(circle at 70% 60%, var(--g4), transparent 55%);}
+  .field::after{content:"";position:absolute;inset:0;
+    background:radial-gradient(80% 60% at 50% 110%, rgba(77,124,254,.10), transparent 60%);}
+
+  header{position:relative;z-index:2;display:flex;align-items:center;gap:11px;
+    padding:26px clamp(22px,5vw,52px);}
+  .dot{width:12px;height:12px;border-radius:50%;background:var(--grad);position:relative;}
+  .dot::after{content:"";position:absolute;inset:-5px;border-radius:50%;
+    border:1px solid rgba(255,255,255,.22);animation:ring 3.4s ease-out infinite;}
+  header b{font-weight:600;letter-spacing:-.01em;font-size:1.06rem;}
+
+  main{position:relative;z-index:2;flex:1;display:grid;place-items:center;
+    padding:24px clamp(22px,5vw,52px) 60px;}
+  .card{width:100%;max-width:420px;text-align:center;}
+  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.32em;
+    text-transform:uppercase;color:var(--faint);margin:0 0 22px;}
+  h1{font-weight:600;font-size:clamp(2rem,6vw,2.7rem);line-height:1.04;
+    letter-spacing:-.045em;margin:0 0 14px;text-wrap:balance;}
+  h1 .grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;
+    color:transparent;}
+  .sub{color:var(--dim);font-size:1rem;line-height:1.6;margin:0 0 34px;}
+
+  .google{
+    display:flex;align-items:center;justify-content:center;gap:11px;width:100%;
+    padding:15px 20px;border-radius:999px;border:0;cursor:pointer;
+    background:#FAFAFC;color:#0B0C10;font-family:var(--font);
+    font-size:.98rem;font-weight:600;letter-spacing:-.01em;text-decoration:none;
+    transition:transform .15s ease, box-shadow .15s ease;
+    box-shadow:0 0 0 1px rgba(255,255,255,.06), 0 18px 44px -18px rgba(77,124,254,.35);
+  }
+  .google:hover{transform:translateY(-1px);
+    box-shadow:0 0 0 1px rgba(255,255,255,.1), 0 22px 52px -18px rgba(245,72,77,.35);}
+  .google svg{width:18px;height:18px;flex:0 0 auto;}
+
+  .err{margin:18px 0 0;padding:11px 15px;border-radius:12px;font-size:.85rem;
+    background:rgba(245,72,77,.1);border:1px solid rgba(245,72,77,.3);color:#FFB4B6;display:none;}
+  .demo{margin-top:26px;font-size:.85rem;color:var(--faint);}
+  .demo a{color:var(--dim);}
+
+  footer{position:relative;z-index:2;display:flex;justify-content:space-between;gap:12px;
+    padding:0 clamp(22px,5vw,52px) 28px;font-family:var(--mono);
+    font-size:.68rem;letter-spacing:.06em;color:var(--faint);}
+
+  @keyframes ring{0%{transform:scale(1);opacity:.9;}70%{opacity:0;}100%{transform:scale(1.8);opacity:0;}}
+  @media (prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important;}}
+  :focus-visible{outline:2px solid var(--g2);outline-offset:3px;border-radius:8px;}
+</style>
+</head>
+<body>
+  <div class="field" aria-hidden="true"></div>
+  <header><span class="dot"></span><b>Laura</b></header>
+  <main>
+    <div class="card">
+      <p class="eyebrow">Mission control</p>
+      <h1>Your avatars,<br /><span class="grad">under your command.</span></h1>
+      <p class="sub">Sign in to dispatch your avatars into meetings, watch them live, and read everything they did for you.</p>
+      <a class="google" href="/auth/google/start" id="google-btn">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M23.5 12.3c0-.9-.1-1.5-.3-2.2H12v4.4h6.5c-.1 1.1-.8 2.7-2.4 3.8l3.8 2.9c2.3-2.1 3.6-5.2 3.6-8.9z"/><path fill="#34A853" d="M12 24c3.2 0 5.9-1.1 7.9-2.9l-3.8-2.9c-1 .7-2.4 1.2-4.1 1.2-3.1 0-5.8-2.1-6.7-4.9L1.3 17.4C3.3 21.3 7.3 24 12 24z"/><path fill="#FBBC05" d="M5.3 14.5c-.2-.7-.4-1.4-.4-2.2s.1-1.5.4-2.2L1.3 7C.5 8.6 0 10.4 0 12.3s.5 3.7 1.3 5.2l4-3z"/><path fill="#EA4335" d="M12 4.8c1.8 0 3 .8 3.7 1.4l3.4-3.3C17.9 1 15.2 0 12 0 7.3 0 3.3 2.7 1.3 6.9l4 3.1c.9-2.9 3.6-5.2 6.7-5.2z"/></svg>
+        Continue with Google
+      </a>
+      <p class="err" id="err"></p>
+      <p class="demo" id="demo" hidden>Login isn't configured on this deployment — <a href="/dashboard">open the dashboard in demo mode</a>.</p>
+    </div>
+  </main>
+  <footer><span>LAURA — AI PROCESS EXPERT</span><span>lauravatar.com</span></footer>
+  <script>
+    (function(){
+      var q = new URLSearchParams(location.search);
+      var err = q.get("error");
+      var msgs = {
+        not_configured: "", // handled below: show demo mode instead
+        state: "That sign-in attempt expired or was tampered with. Try again.",
+        expired: "That sign-in attempt expired. Try again.",
+        denied: "Google sign-in was cancelled.",
+        exchange: "Google didn't accept the sign-in. Try again.",
+        token: "Could not verify the Google account. Try again."
+      };
+      if (err === "not_configured") {
+        document.getElementById("google-btn").style.display = "none";
+        document.getElementById("demo").hidden = false;
+      } else if (err && msgs[err]) {
+        var el = document.getElementById("err");
+        el.textContent = msgs[err]; el.style.display = "block";
+      }
+      // If login isn't configured at all, offer demo mode proactively.
+      fetch("/auth/me").then(function(r){ return r.json(); }).then(function(d){
+        if (d && d.user) { location.replace("/dashboard"); return; }
+        if (d && d.auth_enabled === false) {
+          document.getElementById("google-btn").style.display = "none";
+          document.getElementById("demo").hidden = false;
+        }
+      }).catch(function(){});
+    })();
+  </script>
+</body>
+</html>

@@ -38,6 +38,7 @@ class Utterance:
 _PERSISTED_SESSION_FIELDS = {
     "meeting_url",
     "avatar_id",
+    "org_id",
     "anam_conversation_id",
     "anam_conversation_url",
     "last_spoke_at",
@@ -51,6 +52,10 @@ class Session:
     bot_id: str
     meeting_url: str
     avatar_id: str = "laura"
+    # Owning tenant (auth.py user's org). "" = shared/service session — the
+    # pre-auth world, calendar auto-join, and orchestrator (Cedric) starts.
+    # org_id == user_id today; the seam is what matters (MULTI-TENANCY.md).
+    org_id: str = ""
     anam_conversation_id: str = ""
     anam_conversation_url: str = ""
     transcript: list[Utterance] = field(default_factory=list)
@@ -282,6 +287,16 @@ def _init_db() -> None:
                 event_id TEXT PRIMARY KEY,
                 marked_at REAL NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL DEFAULT '',
+                picture TEXT NOT NULL DEFAULT '',
+                org_id TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                last_login_at REAL NOT NULL
+            );
             """
         )
         # Migration for stores created before the Cedric integration column.
@@ -289,6 +304,13 @@ def _init_db() -> None:
             conn.execute(
                 "ALTER TABLE sessions "
                 "ADD COLUMN integration_json TEXT NOT NULL DEFAULT ''"
+            )
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        # Migration for stores created before per-user session ownership.
+        try:
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN org_id TEXT NOT NULL DEFAULT ''"
             )
         except sqlite3.OperationalError:
             pass  # column already exists
@@ -305,6 +327,7 @@ def _session_from_row(row: sqlite3.Row, utterances: list[Utterance]) -> Session:
         bot_id=row["bot_id"],
         meeting_url=row["meeting_url"],
         avatar_id=row["avatar_id"],
+        org_id=row["org_id"] if "org_id" in row.keys() else "",
         anam_conversation_id=row["anam_conversation_id"],
         anam_conversation_url=row["anam_conversation_url"],
         last_spoke_at=float(row["last_spoke_at"]),
@@ -360,14 +383,15 @@ def _persist_session(session: Session) -> None:
         conn.execute(
             """
             INSERT INTO sessions (
-                bot_id, meeting_url, avatar_id, anam_conversation_id,
+                bot_id, meeting_url, avatar_id, org_id, anam_conversation_id,
                 anam_conversation_url, last_spoke_at, proactive_done,
                 integration_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(bot_id) DO UPDATE SET
                 meeting_url=excluded.meeting_url,
                 avatar_id=excluded.avatar_id,
+                org_id=excluded.org_id,
                 anam_conversation_id=excluded.anam_conversation_id,
                 anam_conversation_url=excluded.anam_conversation_url,
                 last_spoke_at=excluded.last_spoke_at,
@@ -379,6 +403,7 @@ def _persist_session(session: Session) -> None:
                 session.bot_id,
                 session.meeting_url,
                 session.avatar_id,
+                session.org_id,
                 session.anam_conversation_id,
                 session.anam_conversation_url,
                 float(session.last_spoke_at),
@@ -453,11 +478,60 @@ def list_artifacts() -> list[dict]:
     return out
 
 
-def create(bot_id: str, meeting_url: str, avatar_id: str = "laura") -> Session:
-    s = Session(bot_id=bot_id, meeting_url=meeting_url, avatar_id=avatar_id)
+def create(
+    bot_id: str, meeting_url: str, avatar_id: str = "laura", org_id: str = ""
+) -> Session:
+    s = Session(
+        bot_id=bot_id, meeting_url=meeting_url, avatar_id=avatar_id, org_id=org_id
+    )
     _sessions[bot_id] = s
     _persist_session(s)
     return s
+
+
+# ── users (auth.py) ────────────────────────────────────────────────────
+# user_id is DERIVED from the email (sha256 prefix), so the same person gets
+# the same user_id — and therefore the same org_id and the same artifacts —
+# even if the ephemeral SQLite store is wiped by a redeploy. org_id == user_id
+# today (personal orgs); the column is the multi-tenancy seam.
+
+def user_id_for_email(email: str) -> str:
+    import hashlib
+
+    normalized = (email or "").strip().lower()
+    return "u_" + hashlib.sha256(normalized.encode()).hexdigest()[:16]
+
+
+def upsert_user(email: str, name: str = "", picture: str = "") -> dict:
+    """Create-or-refresh a user row at login. Returns the user dict."""
+    email = (email or "").strip().lower()
+    uid = user_id_for_email(email)
+    now = time.time()
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO users (user_id, email, name, picture, org_id,
+                               created_at, last_login_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                name=excluded.name,
+                picture=excluded.picture,
+                last_login_at=excluded.last_login_at
+            """,
+            (uid, email, name, picture, uid, now, now),
+        )
+    return {"user_id": uid, "email": email, "name": name, "picture": picture,
+            "org_id": uid}
+
+
+def get_user(user_id: str) -> dict | None:
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT user_id, email, name, picture, org_id FROM users "
+            "WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def register_conversation(conversation_id: str, bot_id: str) -> None:

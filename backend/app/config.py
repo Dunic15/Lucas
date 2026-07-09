@@ -246,6 +246,15 @@ class Settings(BaseSettings):
     # Static bearer token for the session API (/sessions/*, /ledger). Empty =
     # open (preserves the zero-key local demo); set in any real deployment.
     laura_api_token: str = ""
+    # HMAC key for signing dashboard login cookies (auth.py). Empty = a random
+    # per-boot key is derived, which just means users re-login after a restart
+    # — fine for now, set a stable value in a real deployment.
+    session_secret: str = ""
+    # Who may sign in to the dashboard. Comma-separated allowlist of exact
+    # emails and/or "@domain" suffixes. Empty = allow any Google account that
+    # can reach the consent screen (in OAuth "testing" mode Google already
+    # restricts that to configured test users). Set it for a locked deployment.
+    dashboard_allowed_emails: str = ""
     # HMAC key for signing callbacks POSTed to a session's callback_url
     # (X-Laura-Signature: t=<ts>,v1=<hex>). Shared with the orchestrator.
     laura_webhook_secret: str = ""

@@ -42,7 +42,9 @@ from . import (
     store,
     recall_client,
     anam_client,
+    auth,
     cedric,
+    dashboard,
     drive_client,
     granola_client,
     actions,
@@ -128,6 +130,8 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title="Callable AI Process Avatar", lifespan=_lifespan)
 app.include_router(tts.router)  # POST /tts (open-source avatar voice)
 app.include_router(org_api.router)  # /org/* — org-memory seam for surfaces (#48)
+app.include_router(auth.router)  # /auth/* — dashboard login (Google Sign-In)
+app.include_router(dashboard.router)  # /dashboard — owner control view
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).
@@ -704,6 +708,13 @@ def join_page() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "join.html")
 
 
+@app.get("/login")
+def login_page() -> FileResponse:
+    """Dashboard sign-in (Google). With no Google client configured the page
+    offers the open demo-mode dashboard instead — key-free demo preserved."""
+    return FileResponse(FRONTEND_DIR / "login.html")
+
+
 @app.get("/talk")
 def talk_page() -> FileResponse:
     """Open-source avatar page (TalkingHead + our TTS) — the Anam replacement.
@@ -976,12 +987,15 @@ async def _start_avatar_session(
     avatar_id: str = "",
     join_at: Optional[str] = None,
     integration: Optional[dict] = None,
+    org_id: str = "",
 ) -> dict:
     """Send a Recall bot (rendering the avatar page as its camera) into a meeting.
 
     Shared by the manual /sessions/start endpoint, the calendar auto-join webhook,
     and the Gmail watcher. Raises on failure. The avatar page mints its own fresh
     Anam token at render time and keys its websocket on the conversation_id.
+    org_id is the owning tenant when a logged-in user dispatched (auth.py);
+    "" for service starts (Cedric, calendar auto-join, Gmail watcher).
     """
     avatar = avatars.load(avatar_id or settings.default_avatar_id)  # raises if unknown
     conversation_id = uuid.uuid4().hex
@@ -994,7 +1008,8 @@ async def _start_avatar_session(
         recall_client.create_bot, meeting_url, avatar_url, join_at, avatar.name
     )
     session = store.create(
-        bot_id=bot["id"], meeting_url=meeting_url, avatar_id=avatar.id
+        bot_id=bot["id"], meeting_url=meeting_url, avatar_id=avatar.id,
+        org_id=org_id,
     )
     # CEDRIC: a summon that didn't carry its own wiring (the Gmail auto-join
     # watcher passes integration=None) still gets the Model A default routing —
@@ -1045,8 +1060,14 @@ async def _start_avatar_session(
 
 @app.post("/sessions/start")
 async def start_session(req: StartRequest, request: Request) -> JSONResponse:
-    if err := cedric.auth_error(request):  # CEDRIC
-        return err
+    # A logged-in human (dashboard cookie) or a machine bearer (Cedric). The
+    # shared auth.gate closes the "login enabled + no token" hole: an anonymous
+    # caller can NOT dispatch a per-minute bot on a login-protected deployment.
+    # A valid cookie stamps the session with the user's org for later scoping.
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
     try:
         recall_client.assert_ready()
     except RuntimeError as e:
@@ -1070,7 +1091,8 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     integration = cedric.build_integration(req, brief)  # CEDRIC
     try:
         result = await _start_avatar_session(
-            req.meeting_url, req.avatar_id, req.join_at, integration
+            req.meeting_url, req.avatar_id, req.join_at, integration,
+            org_id=(user or {}).get("org_id", ""),
         )
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
@@ -1265,6 +1287,19 @@ async def _finalize_session_locked(
     # It lives only in the artifact store (PII: never logged).
     artifact["transcript"] = transcript_text
 
+    # Attribution metadata: the session row is deleted below (store.remove), so
+    # the artifact is the only place that remembers WHICH avatar ran WHICH
+    # meeting — the dashboard groups meetings per avatar from these fields.
+    # Duration is approximated from first-to-last utterance timestamps (counts
+    # only; no utterance text — the guard hook forbids logging transcript).
+    artifact["avatar_id"] = session.avatar_id
+    artifact["org_id"] = session.org_id
+    artifact["meeting_url"] = session.meeting_url
+    if len(session.transcript) >= 2:
+        artifact["duration_seconds"] = int(
+            session.transcript[-1].ts - session.transcript[0].ts
+        )
+
     store.save_artifact(bot_id, artifact)
     # Cross-meeting memory: fold this meeting's extracted facts into the
     # ledger. Best-effort — memory must never block the cleanup below
@@ -1307,8 +1342,18 @@ async def _finalize_session_locked(
 
 @app.post("/sessions/{bot_id}/end")
 async def end_session(bot_id: str, request: Request) -> JSONResponse:
-    if err := cedric.auth_error(request):  # CEDRIC
-        return err
+    # Cookie (dashboard) or bearer (machine). auth.gate blocks an anonymous
+    # caller from force-ending a bot (DoS + meter) on a login-protected
+    # deployment. A logged-in user may end their own org's and unowned/service
+    # sessions — never another org's.
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+    else:
+        live = store.get(bot_id)
+        if live is not None and live.org_id and live.org_id != user["org_id"]:
+            return JSONResponse({"error": "not your session"}, status_code=403)
     artifact = await _finalize_session(bot_id, source="manual")
     if artifact is None:
         # _finalize_session returns None only when the session is already gone
