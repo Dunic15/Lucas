@@ -46,7 +46,9 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 COOKIE_NAME = "laura_session"
+STATE_COOKIE = "laura_oauth_state"  # binds the OAuth flow to THIS browser
 SESSION_TTL_SECONDS = 14 * 24 * 3600  # two weeks
+STATE_TTL_SECONDS = 600  # ten minutes to complete the Google round-trip
 
 # Per-boot fallback signing key (see config.session_secret). Module-level so
 # every worker thread signs/verifies consistently within one process.
@@ -79,29 +81,45 @@ def _unb64(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
-def _sign(payload: str) -> str:
-    return hmac.new(_secret(), payload.encode(), hashlib.sha256).hexdigest()
+def _sign(payload: str, purpose: str) -> str:
+    # `purpose` domain-separates the two things this key signs (session cookie
+    # vs OAuth state) so a token minted for one can never be replayed as the
+    # other. Signing over bytes; the digest is ascii hex.
+    msg = f"{purpose}:{payload}".encode()
+    return hmac.new(_secret(), msg, hashlib.sha256).hexdigest()
+
+
+def _verify(payload: str, signature: str, purpose: str) -> bool:
+    """Constant-time check that is robust to a hostile signature — a non-ASCII
+    byte in an attacker-supplied cookie must not raise (compare_digest on str
+    with non-ASCII does), so we compare encoded bytes and swallow anything."""
+    try:
+        return hmac.compare_digest(
+            signature.encode("utf-8", "ignore"), _sign(payload, purpose).encode()
+        )
+    except Exception:
+        return False
 
 
 def make_cookie(user_id: str, ttl: int = SESSION_TTL_SECONDS) -> str:
     payload = _b64(json.dumps({"uid": user_id, "exp": time.time() + ttl}).encode())
-    return f"{payload}.{_sign(payload)}"
+    return f"{payload}.{_sign(payload, 'session')}"
 
 
 def read_cookie(value: str) -> Optional[str]:
-    """user_id from a valid, unexpired cookie value, else None."""
+    """user_id from a valid, unexpired cookie value, else None. Never raises."""
     if not value or "." not in value:
         return None
-    payload, signature = value.rsplit(".", 1)
-    if not hmac.compare_digest(signature, _sign(payload)):
-        return None
     try:
+        payload, signature = value.rsplit(".", 1)
+        if not _verify(payload, signature, "session"):
+            return None
         data = json.loads(_unb64(payload))
-    except (ValueError, json.JSONDecodeError):
+        if float(data.get("exp", 0)) < time.time():
+            return None
+        return str(data.get("uid") or "") or None
+    except Exception:
         return None
-    if float(data.get("exp", 0)) < time.time():
-        return None
-    return str(data.get("uid") or "") or None
 
 
 def current_user(request: Request) -> Optional[dict]:
@@ -113,22 +131,95 @@ def current_user(request: Request) -> Optional[dict]:
     return store.get_user(uid) if uid else None
 
 
+def email_allowed(email: str) -> bool:
+    """Whether this Google email may sign in. Empty allowlist = allow all
+    (Google's testing-mode test-user list is the gate in that case)."""
+    allow = settings.dashboard_allowed_emails.strip()
+    if not allow:
+        return True
+    email = (email or "").strip().lower()
+    for entry in (e.strip().lower() for e in allow.split(",")):
+        if not entry:
+            continue
+        if entry.startswith("@") and email.endswith(entry):
+            return True
+        if entry == email:
+            return True
+    return False
+
+
+def _login_required() -> JSONResponse:
+    return JSONResponse(
+        {"error": "login_required", "auth_enabled": True}, status_code=401
+    )
+
+
+def gate(request: Request) -> Optional[JSONResponse]:
+    """Access gate shared by the endpoints that used to call cedric.auth_error
+    directly (/dashboard/summary, /sessions/start, /sessions/{id}/end). Returns
+    an error response to send, or None to allow. Truth table for a request that
+    is NOT a logged-in cookie user:
+
+        token set + valid bearer     -> allow (machine caller: Cedric)
+        token set + bad/no bearer:
+            login enabled            -> 401 login_required (browser -> Google)
+            login disabled           -> 401 unauthorized  (browser -> token box)
+        no token + login enabled     -> 401 login_required (browser -> Google)
+        no token + login disabled    -> allow (key-free demo, unchanged)
+    """
+    from . import cedric  # local import: cedric never imports auth (no cycle)
+
+    if current_user(request) is not None:
+        return None  # logged-in humans are handled (and org-scoped) by callers
+    token_set = bool(settings.laura_api_token.strip())
+    bearer_err = cedric.auth_error(request)  # None = valid bearer OR no token
+    if token_set:
+        if bearer_err is None:
+            return None  # valid machine bearer
+        return _login_required() if enabled() else bearer_err
+    return _login_required() if enabled() else None
+
+
 # ── routes ─────────────────────────────────────────────────────────────
 
 @router.get("/auth/google/start")
 def google_start() -> RedirectResponse:
     if not enabled():
         return RedirectResponse("/login?error=not_configured", status_code=302)
-    state = _b64(json.dumps({"n": secrets.token_hex(8), "exp": time.time() + 600}).encode())
+    # Bind this flow to THIS browser: a random nonce lives in an HttpOnly cookie
+    # AND (signed) inside the state param. The callback requires both to match,
+    # so an attacker's pre-obtained signed state can't be planted in a victim's
+    # browser (login CSRF / session fixation). The signed state stays single-use
+    # because the cookie is cleared on the first successful callback.
+    nonce = secrets.token_hex(16)
+    payload = _b64(
+        json.dumps({"n": nonce, "exp": time.time() + STATE_TTL_SECONDS}).encode()
+    )
     params = {
         "client_id": settings.google_calendar_client_id,
         "redirect_uri": _redirect_uri(),
         "response_type": "code",
         "scope": "openid email profile",
-        "state": f"{state}.{_sign(state)}",
+        "state": f"{payload}.{_sign(payload, 'state')}",
         "prompt": "select_account",
     }
-    return RedirectResponse(f"{GOOGLE_AUTH_URL}?{urlencode(params)}", status_code=302)
+    resp = RedirectResponse(f"{GOOGLE_AUTH_URL}?{urlencode(params)}", status_code=302)
+    resp.set_cookie(
+        STATE_COOKIE,
+        nonce,
+        max_age=STATE_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=settings.public_base_url.startswith("https"),
+        path="/auth",
+    )
+    return resp
+
+
+def _err_redirect(reason: str) -> RedirectResponse:
+    resp = RedirectResponse(f"/login?error={reason}", status_code=302)
+    resp.delete_cookie(STATE_COOKIE, path="/auth")
+    return resp
 
 
 @router.get("/auth/google/callback")
@@ -136,42 +227,51 @@ async def google_callback(request: Request) -> RedirectResponse:
     if not enabled():
         return RedirectResponse("/login?error=not_configured", status_code=302)
 
-    # CSRF: the state must be one we signed, and fresh.
+    # CSRF: the state must be one we signed, fresh, AND its nonce must match the
+    # cookie set on THIS browser at /start.
     state = request.query_params.get("state", "")
     payload = state.rsplit(".", 1)[0] if "." in state else ""
-    if not payload or not hmac.compare_digest(
-        state, f"{payload}.{_sign(payload)}"
-    ):
-        return RedirectResponse("/login?error=state", status_code=302)
+    if not payload or not _verify(payload, state.rsplit(".", 1)[-1], "state"):
+        return _err_redirect("state")
     try:
         state_data = json.loads(_unb64(payload))
-    except (ValueError, json.JSONDecodeError):
-        return RedirectResponse("/login?error=state", status_code=302)
+    except Exception:
+        return _err_redirect("state")
     if float(state_data.get("exp", 0)) < time.time():
-        return RedirectResponse("/login?error=expired", status_code=302)
+        return _err_redirect("expired")
+    cookie_nonce = request.cookies.get(STATE_COOKIE, "")
+    if not cookie_nonce or not hmac.compare_digest(
+        cookie_nonce.encode("utf-8", "ignore"),
+        str(state_data.get("n", "")).encode(),
+    ):
+        return _err_redirect("state")
 
     code = request.query_params.get("code", "")
     if not code:
-        return RedirectResponse("/login?error=denied", status_code=302)
+        return _err_redirect("denied")
 
-    async with httpx.AsyncClient(timeout=15) as client:
-        token_resp = await client.post(
-            GOOGLE_TOKEN_URL,
-            data={
-                "code": code,
-                "client_id": settings.google_calendar_client_id,
-                "client_secret": settings.google_calendar_client_secret,
-                "redirect_uri": _redirect_uri(),
-                "grant_type": "authorization_code",
-            },
-        )
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            token_resp = await client.post(
+                GOOGLE_TOKEN_URL,
+                data={
+                    "code": code,
+                    "client_id": settings.google_calendar_client_id,
+                    "client_secret": settings.google_calendar_client_secret,
+                    "redirect_uri": _redirect_uri(),
+                    "grant_type": "authorization_code",
+                },
+            )
+    except Exception:
+        return _err_redirect("exchange")
     if token_resp.status_code != 200:
-        return RedirectResponse("/login?error=exchange", status_code=302)
+        return _err_redirect("exchange")
 
-    id_token = token_resp.json().get("id_token", "")
-    claims = _decode_id_token(id_token)
+    claims = _decode_id_token(token_resp.json().get("id_token", ""))
     if claims is None:
-        return RedirectResponse("/login?error=token", status_code=302)
+        return _err_redirect("token")
+    if not email_allowed(claims["email"]):
+        return _err_redirect("not_allowed")
 
     user = store.upsert_user(
         email=claims["email"],
@@ -188,6 +288,7 @@ async def google_callback(request: Request) -> RedirectResponse:
         secure=settings.public_base_url.startswith("https"),
         path="/",
     )
+    response.delete_cookie(STATE_COOKIE, path="/auth")  # single-use
     return response
 
 
@@ -214,8 +315,23 @@ def _decode_id_token(id_token: str) -> Optional[dict]:
     return claims
 
 
+def _same_origin(request: Request) -> bool:
+    """Reject a cross-site POST (forced-logout CSRF). SameSite=Lax already keeps
+    the cookie off cross-site POSTs, but this is cheap defense-in-depth: allow
+    only same-origin or fetch-metadata same-origin requests."""
+    origin = request.headers.get("origin", "")
+    if origin:
+        return origin.rstrip("/") == settings.public_base_url.rstrip("/")
+    # No Origin header (older browsers / same-origin navigations): fall back to
+    # the fetch-metadata site signal when present.
+    site = request.headers.get("sec-fetch-site", "")
+    return site in ("", "same-origin", "same-site", "none")
+
+
 @router.post("/auth/logout")
-def logout() -> RedirectResponse:
+def logout(request: Request) -> RedirectResponse:
+    if not _same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
     response = RedirectResponse("/login", status_code=302)
     response.delete_cookie(COOKIE_NAME, path="/")
     return response

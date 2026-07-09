@@ -494,7 +494,9 @@
           toast("Session ended — meter stopped. Artifact will appear in Meetings."); setTimeout(load,1200); })
         .catch(function(e){ toast("Could not end: "+e.message,true); b.disabled=false; b.textContent="End session"; }); }); });
 
+    var prevAvatar=$("#dsp-avatar").value;
     $("#dsp-avatar").innerHTML = d.avatars.map(function(a){return '<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>';}).join("");
+    if(prevAvatar) $("#dsp-avatar").value=prevAvatar;  // keep the user's pick across refresh
 
     var T=[["Meetings · 30d",d.stats.meetings_30d],["Hours in calls",d.stats.hours_30d+"h"],
            ["Actions captured",d.stats.actions_30d],["Follow-ups drafted",d.stats.followups_30d],
@@ -620,8 +622,17 @@
 
   $("#refresh").addEventListener("click",load);
   load();
-  // Light auto-refresh: only when the tab is visible and not sitting on a gate.
-  setInterval(function(){ if(document.hidden) return; if(!$("#authgate").hidden) return; load(); }, 15000);
+  // Light auto-refresh: only when the tab is visible, not on a gate, and not
+  // mid-interaction (an open meeting detail or a focused field would be wiped
+  // by the re-render). Manual Refresh always works.
+  setInterval(function(){
+    if(document.hidden) return;
+    if(!$("#authgate").hidden) return;
+    if(document.querySelector("tr.detail:not([hidden])")) return;
+    var el=document.activeElement;
+    if(el && (el.tagName==="INPUT"||el.tagName==="SELECT")) return;
+    load();
+  }, 15000);
 })();
 </script>
 </body>

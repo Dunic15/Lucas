@@ -137,13 +137,10 @@ def test_google_callback_creates_user_and_sets_cookie(
 
     monkeypatch.setattr(auth.httpx, "AsyncClient", FakeClient)
 
-    state = auth._b64(
-        _json.dumps({"n": "x", "exp": time.time() + 600}).encode()
-    )
-    signed_state = f"{state}.{auth._sign(state)}"
+    state = _valid_state(client, nonce="nonce-abc")
     resp = client.get(
         "/auth/google/callback",
-        params={"code": "fake-code", "state": signed_state},
+        params={"code": "fake-code", "state": state},
         follow_redirects=False,
     )
     assert resp.status_code == 302
@@ -155,6 +152,16 @@ def test_google_callback_creates_user_and_sets_cookie(
     assert user["email"] == "new.person@example.com"
 
 
+def _valid_state(client, nonce="nonce-abc", exp_offset=600) -> str:
+    """Build a browser-bound signed state: set the state cookie on the client
+    and return the matching signed state param."""
+    payload = auth._b64(
+        __import__("json").dumps({"n": nonce, "exp": time.time() + exp_offset}).encode()
+    )
+    client.cookies.set(auth.STATE_COOKIE, nonce)
+    return f"{payload}.{auth._sign(payload, 'state')}"
+
+
 def test_google_callback_rejects_forged_state(client, google_on):
     resp = client.get(
         "/auth/google/callback",
@@ -163,6 +170,39 @@ def test_google_callback_rejects_forged_state(client, google_on):
     )
     assert resp.status_code == 302
     assert "error=state" in resp.headers["location"]
+
+
+def test_callback_rejects_state_without_matching_cookie(client, google_on):
+    """A validly-signed state with NO matching browser cookie (login CSRF /
+    session fixation) is rejected."""
+    payload = auth._b64(
+        __import__("json").dumps({"n": "attacker", "exp": time.time() + 600}).encode()
+    )
+    signed = f"{payload}.{auth._sign(payload, 'state')}"
+    # no client.cookies.set(STATE_COOKIE) — the victim never started this flow
+    resp = client.get(
+        "/auth/google/callback",
+        params={"code": "x", "state": signed},
+        follow_redirects=False,
+    )
+    assert "error=state" in resp.headers["location"]
+
+
+def test_callback_rejects_expired_state(client, google_on):
+    state = _valid_state(client, nonce="n1", exp_offset=-5)
+    resp = client.get(
+        "/auth/google/callback",
+        params={"code": "x", "state": state},
+        follow_redirects=False,
+    )
+    assert "error=expired" in resp.headers["location"]
+
+
+def test_state_and_session_signatures_are_domain_separated():
+    """A cookie-purpose signature must not verify as a state-purpose one."""
+    payload = auth._b64(b'{"x":1}')
+    assert not auth._verify(payload, auth._sign(payload, "session"), "state")
+    assert auth._verify(payload, auth._sign(payload, "state"), "state")
 
 
 def test_id_token_wrong_audience_rejected(google_on):
@@ -256,3 +296,95 @@ def test_logout_clears_cookie(client, google_on):
     assert resp.status_code == 302
     client.cookies.clear()
     assert client.get("/dashboard/summary").status_code == 401
+
+
+def test_logout_rejects_cross_site(client, google_on):
+    _login(client, "alice@example.com")
+    resp = client.post(
+        "/auth/logout",
+        headers={"origin": "https://evil.example"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+
+
+# ── review fixes: gate on write endpoints, allowlist, robustness ───────
+
+def test_anonymous_cannot_start_when_login_enabled(client, google_on):
+    """The HIGH finding: login on, no bearer token -> anonymous must NOT be able
+    to dispatch a per-minute bot."""
+    resp = client.post(
+        "/sessions/start", json={"meeting_url": "https://meet.google.com/x"}
+    )
+    assert resp.status_code == 401
+    assert resp.json()["error"] == "login_required"
+
+
+def test_anonymous_cannot_end_when_login_enabled(client, google_on):
+    """Anonymous force-end (DoS + meter) is blocked, and the owned session is
+    left running."""
+    eve = store.upsert_user(email="eve@example.com")
+    store.create("bot_prot", "https://meet.google.com/p", "laura", org_id=eve["org_id"])
+    try:
+        resp = client.post("/sessions/bot_prot/end")
+        assert resp.status_code == 401
+        assert store.get("bot_prot") is not None  # not finalized
+    finally:
+        store.remove("bot_prot")
+
+
+def test_token_plus_login_anonymous_gets_google_gate(client, google_on, monkeypatch):
+    """The MED finding: with BOTH a token and Google login, an anonymous browser
+    must be told to sign in (auth_enabled True), not to paste a token."""
+    monkeypatch.setattr(settings, "laura_api_token", "sesame")
+    resp = client.get("/dashboard/summary")
+    assert resp.status_code == 401
+    assert resp.json().get("auth_enabled") is True
+
+
+def test_logged_in_user_can_end_unowned_session(client, google_on, monkeypatch):
+    """A user may end a legacy/service (org_id == '') session — the by-design
+    branch the original tests never exercised."""
+    from app import cedric
+
+    _login(client, "alice@example.com")
+    store.create("bot_unowned", "https://meet.google.com/u", "laura", org_id="")
+    monkeypatch.setattr(cedric, "wire_artifact", lambda a: a)
+    try:
+        resp = client.post("/sessions/bot_unowned/end")
+        assert resp.status_code in (200, 202)
+    finally:
+        if store.get("bot_unowned"):
+            store.remove("bot_unowned")
+
+
+def test_email_allowlist_blocks_outsider(client, google_on, monkeypatch):
+    monkeypatch.setattr(settings, "dashboard_allowed_emails", "@trusted.com, ceo@acme.io")
+    assert auth.email_allowed("anyone@trusted.com") is True
+    assert auth.email_allowed("ceo@acme.io") is True
+    assert auth.email_allowed("stranger@gmail.com") is False
+
+
+def test_empty_allowlist_allows_all():
+    assert auth.email_allowed("whoever@wherever.com") is True
+
+
+def test_non_ascii_cookie_does_not_crash():
+    """A hostile cookie/state with a non-ASCII byte must not raise (hmac.
+    compare_digest on a non-ASCII str raises TypeError) — it must read as
+    invalid so the caller falls to the login gate, never a 500. Exercised at
+    the unit boundary: httpx's test transport refuses to even send a non-ASCII
+    header, so a live request can't reproduce the server-side path here."""
+    assert auth.read_cookie("abc.\xe9\xff") is None
+    assert auth._verify("abc", "\xe9", "session") is False
+    assert auth.read_cookie("\xe9.\xff") is None
+
+
+def test_stats_scoped_to_org(client, google_on):
+    alice = _login(client, "alice@example.com")
+    store.save_artifact("b1", _artifact(alice["org_id"], "mine one"))
+    store.save_artifact("b2", _artifact(alice["org_id"], "mine two"))
+    bob = store.upsert_user(email="bob@example.com")
+    store.save_artifact("b3", _artifact(bob["org_id"], "bob's"))
+    stats = client.get("/dashboard/summary").json()["stats"]
+    assert stats["meetings_30d"] == 2  # bob's row excluded from the rollup too

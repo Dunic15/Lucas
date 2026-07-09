@@ -19,7 +19,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import auth, avatars, cedric, store
+from . import auth, avatars, store
 from .config import settings
 
 router = APIRouter(tags=["dashboard"])
@@ -91,23 +91,13 @@ def dashboard_page() -> FileResponse:
 
 @router.get("/dashboard/summary")
 def dashboard_summary(request: Request) -> JSONResponse:
-    # Three ways in, in order: a logged-in user (cookie), a machine bearer,
-    # or — when NEITHER auth nor a token is configured — open (key-free demo).
-    # When Google login IS configured, an anonymous browser gets login_required
-    # so the page shows the sign-in gate instead of another tenant's data.
+    # One gate for all three worlds (see auth.gate): logged-in cookie user,
+    # machine bearer, or key-free demo. An anonymous browser on a login-enabled
+    # deployment gets login_required so the page shows the sign-in gate.
     user = auth.current_user(request)
     if user is None:
-        if err := cedric.auth_error(request):
+        if err := auth.gate(request):
             return err
-        # auth_error passing means either a VALID bearer or no token configured
-        # at all. Only the token-less case falls through to the login wall —
-        # a valid machine bearer must keep working when login is enabled.
-        bearer_ok = bool(settings.laura_api_token.strip())
-        if not bearer_ok and auth.enabled():
-            return JSONResponse(
-                {"error": "login_required", "auth_enabled": True},
-                status_code=401,
-            )
 
     # Tenancy scoping (org_id == user_id today): a logged-in user sees their
     # own rows plus unowned ("") rows — the pre-auth/service world of this

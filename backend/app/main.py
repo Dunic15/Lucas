@@ -1060,12 +1060,13 @@ async def _start_avatar_session(
 
 @app.post("/sessions/start")
 async def start_session(req: StartRequest, request: Request) -> JSONResponse:
-    # Two ways in: a logged-in human (dashboard cookie) or a machine bearer
-    # (Cedric / scripts). A valid cookie satisfies the gate and stamps the
-    # session with the user's org so the dashboard can scope it later.
+    # A logged-in human (dashboard cookie) or a machine bearer (Cedric). The
+    # shared auth.gate closes the "login enabled + no token" hole: an anonymous
+    # caller can NOT dispatch a per-minute bot on a login-protected deployment.
+    # A valid cookie stamps the session with the user's org for later scoping.
     user = auth.current_user(request)
     if user is None:
-        if err := cedric.auth_error(request):  # CEDRIC
+        if err := auth.gate(request):
             return err
     try:
         recall_client.assert_ready()
@@ -1330,11 +1331,13 @@ async def _finalize_session_locked(
 
 @app.post("/sessions/{bot_id}/end")
 async def end_session(bot_id: str, request: Request) -> JSONResponse:
-    # Cookie (dashboard) or bearer (machine). A logged-in user may end their
-    # own org's sessions and unowned/service ones — never another org's.
+    # Cookie (dashboard) or bearer (machine). auth.gate blocks an anonymous
+    # caller from force-ending a bot (DoS + meter) on a login-protected
+    # deployment. A logged-in user may end their own org's and unowned/service
+    # sessions — never another org's.
     user = auth.current_user(request)
     if user is None:
-        if err := cedric.auth_error(request):  # CEDRIC
+        if err := auth.gate(request):
             return err
     else:
         live = store.get(bot_id)
