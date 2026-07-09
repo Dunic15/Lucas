@@ -61,6 +61,14 @@ unless asked; they prefer writing artifacts to `docs/`.
   asked (2026-07-08) to never be prompted for AWS calls. The safety bar moves
   to behavior: destructive/irreversible AWS ops (deletes, teardown of running
   services) still deserve a heads-up in chat before running.
+- **Parallel sessions — check before you push/deploy.** No live channel links
+  concurrent Claude/Codex sessions; they share this repo's auto-memory but only
+  async (loaded at session start, not live). Before `git push` to `main` or a
+  prod `update-service`, confirm another session isn't mid-flight: `aws apprunner
+  list-operations` on `laura-backend` (a deploy running?) + `gh pr list`. App
+  Runner serializes deploys and errors on a concurrent op — wait for `RUNNING`,
+  don't fight it. And never restart prod without confirming no live meeting
+  (`GET /health` → `active_sessions:0`, cross-check Recall for in-call bots).
 - **PreToolUse hooks** (`.claude/hooks/guard.py`) mechanically enforce the two
   rules that cost money or leak PII: commits are blocked if the staged diff
   contains an API-key-shaped string; edits/commits are blocked if they add
