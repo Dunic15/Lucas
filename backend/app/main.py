@@ -2484,8 +2484,16 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # path is deliberately narrow. It fires ONLY when: (1) the address turn was
     # bare — a substantive "Cedric, can you check the budget" never arms it, so a
     # later same-speaker aside can't end the call — AND (2) the follow-up doesn't
-    # name another participant (a dismissal like "Sara, you can leave" is aimed
-    # at Sara, not the avatar). detect_leave_command's own guards apply on top.
+    # name another KNOWN participant (a dismissal like "Sara, you can leave" is
+    # aimed at Sara, not the avatar). detect_leave_command's own guards apply on
+    # top.
+    #
+    # Accepted narrow residual: a bare "Cedric." followed within 4s by a
+    # same-speaker dismissal aimed at someone the roster doesn't yet know (a
+    # never-spoken participant) or at no one ("ok you can go now") still fires.
+    # Closing it needs a leading-proper-noun heuristic on ASR-cased text, which
+    # would also swallow the common real dismissal ("You can leave" — leading
+    # capital, no name), so it's left as a documented trade-off, not a bug.
     leave_now = called and detect_leave_command(question)
     if settings.leave_on_command and not leave_now and not called:
         addressed = getattr(session, "last_addressed", None)
