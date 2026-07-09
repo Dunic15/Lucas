@@ -11,6 +11,11 @@ id: sff
 name: Laura SFF Expert
 role: AI Fund & Portfolio Expert
 
+# Knowledge pack, not a standalone callable avatar: Cedric reuses this pack via
+# knowledge_packs:[sff]. Hidden from the owner dashboard's avatar list so only
+# the real callable avatars (Laura, Cedric) show. The folder + knowledge stay.
+hidden: true
+
 # Names that "call" this avatar into the conversation.
 wake_words:
   - laura

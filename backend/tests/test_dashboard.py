@@ -119,6 +119,29 @@ def test_summary_respects_bearer_gate(client, monkeypatch):
     assert ok.status_code == 200
 
 
+def test_hidden_avatar_excluded_and_enriched(client):
+    """sff is a knowledge pack (hidden: true) — not a callable avatar, so it must
+    NOT appear in the dashboard list; Laura/Cedric must, with capabilities."""
+    _seed_artifact()
+    data = client.get("/dashboard/summary").json()
+    ids = {a["id"] for a in data["avatars"]}
+    assert "sff" not in ids
+    assert {"laura", "cedric"} <= ids
+
+    laura = next(a for a in data["avatars"] if a["id"] == "laura")
+    assert isinstance(laura["capabilities"], list) and laura["capabilities"]
+    assert "knowledge_topics" in laura and "process_templates" in laura
+    assert "minutes_total" in laura
+
+
+def test_billing_block_real_minutes(client):
+    _seed_artifact()  # duration_seconds = 1860 => 31 min
+    b = client.get("/dashboard/summary").json()["billing"]
+    assert b["total_minutes"] == 31
+    assert b["billing_live"] is False
+    assert b["est_cost_30d"] == round(31 * b["rate_per_min"], 2)
+
+
 def test_dashboard_page_served(client):
     resp = client.get("/dashboard")
     assert resp.status_code == 200
