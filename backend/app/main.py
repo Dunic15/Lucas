@@ -72,6 +72,7 @@ from .brain import (
 from .config import settings
 from .decision import (
     addressed_to_other,
+    adaptive_deference_seconds,
     detect_wake,
     detect_closing,
     detect_leave_command,
@@ -2517,7 +2518,19 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if not called and not followup and settings.deference_seconds > 0:
         _defer_mark = len(session.transcript)
         _defer_t0 = time.time()
-        await asyncio.sleep(settings.deference_seconds)
+        # Size ONLY the wait — the yield decision below is unchanged. Adaptation
+        # is off by default (returns deference_seconds verbatim).
+        _defer_wait = adaptive_deference_seconds(
+            settings.deference_seconds,
+            enabled=settings.deference_adaptive_enabled,
+            lo=settings.deference_min_seconds,
+            hi=settings.deference_max_seconds,
+            since_partial=_defer_t0 - session.last_human_partial_at,
+            active_partial_seconds=settings.deference_active_partial_seconds,
+            n_humans=len(roster),  # roster excludes the avatar → humans only
+            is_question=text.rstrip().endswith("?"),
+        )
+        await asyncio.sleep(_defer_wait)
         if (
             len(session.transcript) > _defer_mark
             or session.last_human_partial_at > _defer_t0

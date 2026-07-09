@@ -219,6 +219,24 @@ class Settings(BaseSettings):
     # yields silently (humans get first right of reply to room-open
     # questions). Direct asks by name are never deferred. 0 disables.
     deference_seconds: float = 1.8
+    # Adaptive deference: when enabled, the deference wait is SIZED (not decided)
+    # by context instead of the one fixed `deference_seconds` compromise — a
+    # mid-utterance human partial lengthens it toward max, a single-human room
+    # shortens it toward min, a room-open question splits the difference. It only
+    # tunes the wait duration; the post-sleep yield check is unchanged, so it can
+    # never emit unaddressed or double speech. A single explicit boolean gates
+    # it so enable/disable via env is one atomic op (no coupled min<max toggling).
+    #   Default OFF → strict no-op (the fixed deference_seconds path is used).
+    #   Recommended first enablement is LENGTHEN-ONLY (min=deference_seconds=1.8,
+    #   max=2.6) so it only ADDS politeness with zero false-start cost; only
+    #   shorten (min<1.8) after checking the live barge-in false-start rate.
+    #   Keep `deference_active_partial_seconds` strictly below the MINIMUM
+    #   observed Recall endpoint lag so the extend branch never fires on the
+    #   speaker's own trailing partial (which would inflate every turn to max).
+    deference_adaptive_enabled: bool = False
+    deference_min_seconds: float = 1.0
+    deference_max_seconds: float = 2.6
+    deference_active_partial_seconds: float = 0.6
     # Engaged follow-up: a question arriving within this window after SHE
     # spoke is almost always a follow-up to her answer — it bypasses the
     # cooldown and the deference wait (dialogue context is a first-class
