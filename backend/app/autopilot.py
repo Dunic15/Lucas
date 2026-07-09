@@ -23,6 +23,7 @@ post_to_slack, which the operator explicitly configured.
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -122,9 +123,89 @@ def maybe_execute(
             out["calendar"] = _book_deadlines(avatar_name, artifact)
         if settings.execute_slack:
             out["slack"] = actions.post_to_slack(_slack_recap(avatar_name, artifact))
+        if settings.execute_actions:
+            out["actions_run"] = _auto_execute_actions(avatar_name, artifact)
     except Exception as e:  # never block finalize
         return {"executed": False, "reason": type(e).__name__}
     return out
+
+
+# ── auto-execute agreed actions (the meeting agreement IS the approval) ──
+# When someone says in the meeting "let's book another sync" or "send the update
+# to Slack", that action is captured (queue_action / requested_live) and, at the
+# end, Cedric DOES it — no second approval. Safety rails that never bend:
+#   • Calendar: books on the OWN calendar only, NEVER auto-invites external
+#     attendees (a wrong guess must not email a stranger). It's a hold/reminder.
+#   • Slack: posts to the one configured channel.
+#   • Email: sends ONLY to the EXECUTE_RECAP_TO allowlist; an action aimed at
+#     anyone else is downgraded to the recap, never auto-emailed.
+# Classification is keyword-based (EN+IT) and conservative — an unclassified
+# action is left for the recap, not guessed into an outbound action.
+
+_CAL_WORDS = re.compile(
+    r"\b(schedule|book|set ?up|arrange|calendar|meeting|call|sync|appointment|"
+    r"follow[- ]?up|fissa|fissare|organizza|programma|incontro|riunione|"
+    r"chiamata|appuntamento)\b",
+    re.I,
+)
+_SLACK_WORDS = re.compile(
+    r"\b(slack|update|notify|message|post|ping|channel|aggiorna|avvisa|"
+    r"notifica|messaggio)\b",
+    re.I,
+)
+_EMAIL_WORDS = re.compile(r"\b(email|e-mail|mail)\b", re.I)
+_MAX_AUTO_ACTIONS = 8
+
+
+def _classify_action(item: str) -> str:
+    """calendar | slack | email | none — conservative keyword routing."""
+    t = item or ""
+    if _EMAIL_WORDS.search(t):
+        return "email"
+    if _SLACK_WORDS.search(t):
+        return "slack"
+    if _CAL_WORDS.search(t):
+        return "calendar"
+    return "none"
+
+
+def _auto_execute_actions(avatar_name: str, artifact: dict[str, Any]) -> dict[str, Any]:
+    from datetime import date, timedelta
+
+    done: dict[str, int] = {"calendar": 0, "slack": 0, "email": 0, "held": 0}
+    allow = [e for e in _recipients(settings.execute_recap_to) if e]
+    ran = 0
+    for a in (artifact.get("actions") or [])[:20]:
+        item = ((a.get("item") if isinstance(a, dict) else str(a)) or "").strip()
+        if not item or ran >= _MAX_AUTO_ACTIONS:
+            continue
+        kind = _classify_action(item)
+        if kind == "calendar":
+            deadline = a.get("deadline", "") if isinstance(a, dict) else ""
+            due = google_actions.parse_deadline(deadline) or google_actions.parse_deadline(item)
+            if not due:  # no clear date → default a week out as a self-hold
+                due = date.today() + timedelta(days=7)
+            res = google_actions.create_calendar_event(
+                f"[{avatar_name}] {item}",
+                f"{due.isoformat()}T09:00:00", f"{due.isoformat()}T09:30:00",
+                attendees=None,  # own calendar only — never auto-invite externals
+            )
+            done["calendar"] += 1 if res.get("created") else 0
+            ran += 1 if res.get("created") else 0
+        elif kind == "slack":
+            res = actions.post_to_slack(f"*{avatar_name} (from the meeting):* {item}")
+            done["slack"] += 1 if res.get("sent") else 0
+            ran += 1 if res.get("sent") else 0
+        elif kind == "email":
+            if allow:  # allowlist only; never a stranger
+                res = google_actions.send_gmail(allow, "Action from the meeting", item)
+                done["email"] += 1 if res.get("sent") else 0
+                ran += 1 if res.get("sent") else 0
+            else:
+                done["held"] += 1  # aimed outside the allowlist → recap only
+        else:
+            done["held"] += 1
+    return done
 
 
 def _slack_recap(avatar_name: str, artifact: dict[str, Any]) -> str:
