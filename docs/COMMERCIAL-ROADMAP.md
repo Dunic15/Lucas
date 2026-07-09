@@ -16,8 +16,8 @@ That "does the work" wedge is the moat; the roadmap deepens it.
 - **Captures action requests live** → signed webhook → Slack approval card.
 - Post-meeting **artifact**: summary, decisions, actions w/ owners + deadlines,
   risks, readiness score, per-person participation.
-- **Does the work itself** (autonomous): recap email + Drive notes doc, from the
-  connected Google account.
+- **Does the work itself**: the agreed actions (recap email, notes, follow-ups)
+  are handed to Cedric, who executes them with his own Slack tools.
 - Multi-avatar platform (folder = new agent), each with own email
   (`+alias`), voice, face, Drive folder, knowledge.
 - Org-memory API + surface contract (Cedric-in-Slack is client #1).
@@ -25,18 +25,18 @@ That "does the work" wedge is the moat; the roadmap deepens it.
 ## NOW — the shortest path to "a company would pay for this"
 Each is small, self-contained, and rides seams that already exist.
 
-1. **Wire `create_calendar_event`** (already written, unwired). At finalize,
-   book follow-ups for actions that carry a due date, on the connected
-   calendar. Gate behind `EXECUTE_CALENDAR=true` + the `calendar.events` scope
-   (deliberately dropped tonight until wired). *Effort: ~half day.* Value: the
-   "I'll set that up" promise becomes real without Slack.
+1. **Calendar follow-ups (now Cedric's job)** — booking a follow-up hold on the
+   connected calendar for actions that carry a due date is **owned by Cedric**,
+   who holds the calendar tools. Laura's part is to hand the dated actions across
+   cleanly in `session.ended`; the calendar wiring lives on Cedric's side. Value:
+   the "I'll set that up" promise becomes real without Slack.
 2. **Ask-across-meetings endpoint** — `GET /org/search?q=` over the ledger +
    stored artifacts ("what did we decide about pricing last month?"). The data
    exists (ledger + artifacts store); this is a query layer + a small UI card.
    *Effort: ~1 day.* Value: the "employee that remembers" story, demoable.
 3. **CRM push (HubSpot/Salesforce)** for the sales ICP — at finalize, append
-   the recap + action items to the matched deal/contact. Mirror the
-   `google_actions.py` connector shape (best-effort, gated, off-path).
+   the recap + action items to the matched deal/contact. Lands on Cedric's
+   execution side, following his best-effort, gated, off-path connector pattern.
    *Effort: ~1–2 days.* Value: this is what sales teams actually buy.
 4. **Storage durability** (PR #58 pending) — org memory currently dies on every
    deploy (sqlite on ephemeral disk). Fatal for the "remembers" pitch. Ship the
