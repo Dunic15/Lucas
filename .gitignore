@@ -33,3 +33,14 @@ lovable/laura-meeting-expert/package-lock.json
 .DS_Store
 .idea/
 .vscode/
+
+# Local dev/preview scratch dumped at repo root (site design work).
+# Root-scoped only (leading slash) so real assets under docs/assets/ etc. stay tracked:
+#   - Framer/site preview screenshots (hero-*, preview-*, final-*, talk-*, top-*, nav-*, product-*, etc.)
+#   - Framer MCP exports (framer-*.yml) and publish-panel exports
+# These are throwaway captures from iterating on the landing site — commit real assets to docs/assets/.
+/*.jpeg
+/*.jpg
+/*.png
+/framer-*.yml
+/publish-panel.yml
