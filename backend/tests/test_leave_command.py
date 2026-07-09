@@ -54,6 +54,12 @@ LEAVE_ASKS = [
     "you can log off now",
     "you can sign off",
     "you can hang up now",
+    # ASR/common "out" variants of the off-family (live miss candidates)
+    "you can drop out",
+    "you can log out now",
+    "sign out of the meeting",
+    "drop out of the call",
+    "you are free to drop out",
     # non-native / ASR-noisy prepositions
     "go out from the meeting",
     "go out the meeting",
@@ -121,6 +127,10 @@ NOT_LEAVE_ASKS = [
     "would you go through the numbers",
     "can you go over the agenda",
     "will you leave the company retreat planning to Sam",
+    # off/out-family near misses: business idioms, negations, unrelated words
+    "let us sign off on the budget tomorrow",
+    "do not drop out of the program",
+    "the dropout rate is high",
     # Italian near misses
     "lascia stare",
     "lascia perdere il punto due",

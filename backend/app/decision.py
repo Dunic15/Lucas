@@ -291,7 +291,7 @@ _LEAVE_IMPERATIVE = re.compile(
     # meeting. Non-native/ASR-noisy prepositions are all accepted ("go out
     # FROM the meeting", "go out the meeting").
     r"^(?:please\s+|now\s+|just\s+|kindly\s+|go ahead and\s+)*"
-    r"(?:leave|exit|go out|get out|go away|drop off|hop off|hang up|disconnect|log off|sign off)"
+    r"(?:leave|exit|go out|get out|go away|drop (?:off|out)|hop off|hang up|disconnect|log (?:off|out)|sign (?:off|out))"
     r"(?:\s+(?:(?:of|from|off)\s+)?(?:the|this|our)\s+(?:meeting|call|room))?"
     r"(?:\s+(?:now|please|thanks|thank you))*"
     r"[.!?\s]*$",
@@ -304,7 +304,7 @@ _LEAVE_IMPERATIVE = re.compile(
 _LEAVE_REQUEST = re.compile(
     r"^(?:ok(?:ay)?\s+|so\s+|now\s+|please\s+)*"
     r"(?:can|could|would|will) you (?:please\s+)?"
-    r"(?:leave|exit|go out|get out|go away|drop off|hop off|hang up|disconnect|log off|sign off)"
+    r"(?:leave|exit|go out|get out|go away|drop (?:off|out)|hop off|hang up|disconnect|log (?:off|out)|sign (?:off|out))"
     r"(?:\s+(?:(?:of|from|off)\s+)?(?:the|this|our)\s+(?:meeting|call|room))?"
     r"(?:\s+(?:now|please|thanks|thank you))*"
     r"[.!?\s]*$",
@@ -317,9 +317,9 @@ _LEAVE_PERMISSION = re.compile(
     # i.e. an invitation to SPEAK, so "go" only counts with an explicit
     # dismissal marker after it; "free to go" is unambiguous on its own.
     r"\b(?:you|she) (?:"
-    r"(?:can|may|should) (?:leave|exit|go out|get out|drop off|hop off|head out|log off|sign off"
+    r"(?:can|may|should) (?:leave|exit|go out|get out|drop (?:off|out)|hop off|head out|log (?:off|out)|sign (?:off|out)"
     r"|disconnect|hang up|go(?=\s+(?:now|home)\b|\s+(?:the|this)\s+(?:meeting|call|room)))"
-    r"|are free to (?:leave|go|drop off|head out)"
+    r"|are free to (?:leave|go|drop (?:off|out)|head out)"
     r")"
     r"(?:\s+(?:(?:of|from|off)\s+)?(?:the|this|our)\s+(?:meeting|call|room))?"
     r"(?:\s+(?:now|home|please|thanks|thank you|if you want|whenever))*"

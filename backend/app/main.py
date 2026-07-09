@@ -1082,6 +1082,17 @@ def _norm_action_text(text: str) -> str:
     return re.sub(r"\W+", " ", (text or "").lower()).strip()
 
 
+# Telemetry-only (never gates behaviour): a loose "leave-ish word" check used to
+# log that an ADDRESSED line looked like a dismissal but detect_leave_command
+# didn't match — i.e. a phrasing we should probably add. Deliberately broad;
+# it only ever feeds a PII-safe boolean log line.
+_LEAVE_HINT = re.compile(
+    r"\b(?:leave|exit|drop|hang up|disconnect|log ?o(?:ff|ut)|sign ?o(?:ff|ut)|"
+    r"go(?:ne)?|dismiss|esci|uscire|vai|andare|abbandona|scollega|congeda)\b",
+    re.IGNORECASE,
+)
+
+
 # Content-word dedup for actions. The LIVE path stores the raw spoken utterance
 # ("send the rollout doc to Marco by Friday"); the summarizer re-extracts the
 # SAME action but splits the deadline into its own field ("Send the rollout doc
@@ -2581,6 +2592,27 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 )
             ):
                 leave_now = True
+    # ── leave telemetry (PII-safe: booleans only, never the words) ──
+    # A live "didn't leave" report is undiagnosable from the logs today (the
+    # transcript is PII and never logged). Log WHY a leave-shaped line failed:
+    #  - called=False → the phrase was fine but nobody said her name and no
+    #    split window was armed (wake-gate miss);
+    #  - called=True + hint → she was addressed and the line contains a
+    #    leave-ish word, but detect_leave_command didn't match (regex-miss
+    #    candidate — the phrasing needs to be added).
+    if settings.leave_on_command and not leave_now:
+        if not called and detect_leave_command(text):
+            print(
+                "[leave] leave phrase heard but not fired (called=False, "
+                f"split_window_armed={getattr(session, 'last_addressed', None) is not None})",
+                flush=True,
+            )
+        elif called and _LEAVE_HINT.search(question):
+            print(
+                "[leave] addressed line has a leave-ish word but no leave match "
+                "(regex-miss candidate)",
+                flush=True,
+            )
     # Arm the split window ONLY for a bare address ("Cedric." / "hey Cedric");
     # a substantive addressed turn, a new speaker, or a stale (>4s) window clears
     # it, so the window can never linger into unrelated speech.
