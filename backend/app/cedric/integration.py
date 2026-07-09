@@ -96,6 +96,40 @@ def build_integration(req: Any, brief: str) -> Optional[dict]:
     }
 
 
+def default_integration() -> Optional[dict]:
+    """The Model A default routing for summons that DON'T go through
+    ``POST /sessions/start`` — the Gmail 'Add people' auto-join watcher and the
+    calendar sync webhook. Those paths never build a StartRequest, so
+    ``build_integration`` (which reads the SURFACE_* defaults off the request)
+    never runs for them and the meeting silently falls to Model B.
+
+    This is the request-less equivalent: it applies the same SURFACE_WEBHOOK_URL
+    / SURFACE_CONTEXT_URL defaults so EVERY meeting — however summoned — hands
+    its session.status / session.ended / action.requested to Cedric's receiver
+    and pulls his pre-meeting context. Returns None when NEITHER surface var is
+    set (preserving the autonomous / Model B default), so a deployment with no
+    orchestrator is unchanged.
+
+    The returned dict uses the exact same keys as ``build_integration`` so every
+    downstream consumer (deliver_ended, handle_webhook_status, inject_brief,
+    the callback senders) works unchanged. ``external_ref`` / ``brief`` /
+    ``meeting`` start empty because there is no request to carry them; the fresh
+    brief is pulled at join via ``handle_webhook_status`` -> ``fetch_context``
+    when context_url is set."""
+    callback = settings.surface_webhook_url
+    context_url = settings.surface_context_url
+    if not (callback or context_url):
+        return None
+    return {
+        "callback_url": callback or "",
+        "context_url": context_url or "",
+        "external_ref": {},
+        "brief": "",
+        "meeting": {},
+        "context_refreshed": False,
+    }
+
+
 # Transcripts are PII: they live in the local artifact store (served only by
 # the local /meetings archive) and NEVER cross the orchestrator API — webhooks
 # and the session endpoints get the distilled artifact. The version marker lets
