@@ -28,7 +28,8 @@ One-time setup:
      `https://www.googleapis.com/auth/userinfo.email`.
    - Add this authorized redirect URI:
      `https://YOUR_URL/oauth/google/callback`.
-2. **Set env vars** on Render/local:
+2. **Set env vars** on the backend (App Runner service env / SSM secrets under
+   `/laura/prod/*`, or your local `.env`):
    - `GOOGLE_CALENDAR_CLIENT_ID`
    - `GOOGLE_CALENDAR_CLIENT_SECRET`
    - `GOOGLE_CALENDAR_REDIRECT_URI=https://YOUR_URL/oauth/google/callback`

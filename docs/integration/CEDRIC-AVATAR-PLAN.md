@@ -1,8 +1,17 @@
 # Cedric → first product avatar on the Laura platform — integration plan
 
-**Status: PLAN — nothing implemented yet.** Written 2026-07-08 after auditing all
-three repos. Companion contract doc: [`SURFACE-API.md`](SURFACE-API.md) (ours) vs
-Ben's `Laura-API.md` (Slack, 2026-07-08) — reconciled in §4.
+> **SUPERSEDED — historical planning doc (shipped).** Written 2026-07-08 as the
+> plan for folding Cedric into the platform. That work has since **shipped**: the
+> `SFF-Studio/Laura-Cedric` fork was merged back and the repo is now **archived**,
+> and the standalone `laura-cedric` App Runner service has been **retired** (folded
+> into the platform). Kept for rationale and history only. For the current source
+> of truth — system model, phases, hand-off config, standalone fallback — see
+> [`../ARCHITECTURE.md`](../ARCHITECTURE.md); for the live wire contract, see
+> [`SURFACE-API.md`](SURFACE-API.md).
+
+Written 2026-07-08 after auditing all three repos. Companion contract doc:
+[`SURFACE-API.md`](SURFACE-API.md) (ours) vs Ben's `Laura-API.md` (Slack,
+2026-07-08) — reconciled in §4.
 
 ---
 
@@ -11,7 +20,7 @@ Ben's `Laura-API.md` (Slack, 2026-07-08) — reconciled in §4.
 | Repo | State |
 |---|---|
 | `Dunic15/Laura` (main @ `76af313`) | Platform. No inbound auth, no webhooks, `bot_name` hardcoded "Laura" (`recall_client.py:253`), global tool layer (`tools.py`: calculator/date_math/lookup_record), `knowledge_packs` already supported (`avatars.py`). Artifact **stores the raw transcript** (`main.py:909`). |
-| `SFF-Studio/Laura-Cedric` (`cedric-fork` @ `b257f88`) | **Ben is far ahead of "trying".** Fork = *today's* Laura main (`76af313` merged in this morning) + 4 clean commits: `avatars/cedric/` pack, `backend/app/cedric/` package (auth, callbacks, cancel, context-in), 12 offline tests, root Dockerfile. All shared-file edits are one-line `# CEDRIC` hooks. Fold-back is essentially a plain git merge. |
+| `SFF-Studio/Laura-Cedric` (`cedric-fork` @ `b257f88`) — *now merged back and archived* | **Ben was far ahead of "trying".** Fork = *that day's* Laura main (`76af313`) + 4 clean commits: `avatars/cedric/` pack, `backend/app/cedric/` package (auth, callbacks, cancel, context-in), 12 offline tests, root Dockerfile. All shared-file edits are one-line `# CEDRIC` hooks. Fold-back is essentially a plain git merge. |
 | `SFF-Studio/Cedric` (main @ `853097c`) | Slack AI-employee (Next.js/Vercel, Claude Opus, Neon+pgvector, Pipedream, 41 tools). **Zero Laura code**: no `.claude/skills/cedric-laura/` (referenced in Ben's Slack message but absent from the pushed repo), no connector, no webhook receiver. Cedric#4 is still 100% to build. |
 
 **What Ben already built in the fork (fold-back inventory):**
@@ -62,16 +71,18 @@ Cedric with no Laura = today's Slack agent.
 
 ## 3. Phases
 
-### P0 — Coordinate with Ben (before touching anything)
-Laura-Cedric is HIS active workspace. Send him this plan; agree he freezes
-`cedric-fork` (or tells us what's still in flight) before the fold-back merge.
-His last two commits were cleanup/refactor — a good sign the work has settled.
+### P0 — Coordinate with Ben (before touching anything) — *done; `Laura-Cedric` now archived*
+Laura-Cedric was Ben's active workspace at the time. Send him this plan; agree he
+freezes `cedric-fork` (or tells us what's still in flight) before the fold-back
+merge. His last two commits were cleanup/refactor — a good sign the work had
+settled.
 
-### P1 — Fold-back merge (issue #50) — *small, unblocks everything*
-Histories are shared, so in the platform repo:
+### P1 — Fold-back merge (issue #50) — *done*
+Histories were shared, so this ran in the platform repo (the `Laura-Cedric` remote
+is now archived, kept here only as the historical command):
 `git remote add cedric git@github.com:SFF-Studio/Laura-Cedric.git && git fetch
 cedric cedric-fork && git checkout -b claude/cedric-foldback && git merge
-cedric/cedric-fork` → PR to main. Preserves Ben's commits/authorship. Then:
+cedric/cedric-fork` → PR to main. Preserved Ben's commits/authorship. Then:
 run full suite + his 12 tests + `/smoke-demo`; confirm key-free demo unchanged.
 
 ### P2 — Contract closure (rides on P1, same branch or immediate follow-up)
@@ -123,10 +134,11 @@ fallback; the bot renders `talk.html`, hardcoded default `/laura.glb`).
   (he owns channel mapping), summon tool behind `propose_action` (it costs
   money), Laura entry in `lib/tools/connectors.ts`, and the
   `.claude/skills/cedric-laura/` doc his message referenced (not in the repo yet).
-- **Ops:** repoint/retire the `laura-cedric` App Runner service after merge-back
-  (issue #51), archive Laura-Cedric, then decide **storage durability** — sqlite
-  on ephemeral disk wipes org memory every deploy; cheapest fix Litestream→S3
-  sidecar in the (new) Dockerfile. Needs a decision, not code, this week.
+- **Ops:** the standalone `laura-cedric` App Runner service has since been
+  **retired/deleted** (folded into the platform, issue #51) and `Laura-Cedric`
+  **archived**. Still open: **storage durability** — sqlite on ephemeral disk
+  wipes org memory every deploy; cheapest fix Litestream→S3 sidecar in the
+  Dockerfile. Needs a decision, not code.
 
 ---
 

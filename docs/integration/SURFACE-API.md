@@ -1,9 +1,13 @@
 # Laura Surface API — v1 (implemented)
 
 **Status: LIVE contract.** This documents what the code on `main` actually
-serves. Laura is a standalone meeting-avatar service; any number of
-orchestrators drive it over this HTTP API — Cedric (meet-cedric.com) is
-client #1. History and rationale: [`CEDRIC-AVATAR-PLAN.md`](CEDRIC-AVATAR-PLAN.md).
+serves. Laura is the meeting-avatar (senses) half of the **Laura + Cedric
+system**: she senses the meeting and hands the distilled artifact + agreed
+actions to Cedric (the Slack brain/hands) over this HTTP API — Cedric is the
+connected orchestrator (client #1). The API stays open to a second orchestrator,
+and Laura can also run standalone (see the fallback below). System model — one
+system, not two: [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Original planning
+history: [`CEDRIC-AVATAR-PLAN.md`](CEDRIC-AVATAR-PLAN.md) (superseded).
 
 ## Design principles (non-negotiable)
 
@@ -118,11 +122,13 @@ With `context_url` set, Laura GETs it once when the bot reaches the call and
 swaps in the returned `{context: {meeting, brief_markdown}}` — a fresh brief
 for bookings made days earlier. Any error → the booking-time brief stays.
 
-## Autonomous mode
+## Standalone fallback (autonomous mode)
 
 `{meeting_url}` alone (+ token): the default avatar joins, no brief, and
-Laura's own autopilot (if enabled) handles delivery. Orchestrated sessions
-skip autopilot — the orchestrator owns approval-gated delivery.
+Laura's own autopilot (if enabled via `EXECUTE_*`, off in prod) handles
+delivery. This is the fallback for running with no Cedric connected — see
+[`../ARCHITECTURE.md`](../ARCHITECTURE.md). Orchestrated sessions skip
+autopilot — the orchestrator owns approval-gated delivery.
 
 ## Env vars (server side)
 
@@ -132,8 +138,9 @@ skip autopilot — the orchestrator owns approval-gated delivery.
 
 ## Known limits / roadmap
 
-- Single shared token (client #1 = Cedric). A per-client key registry keeps
-  this API shape and lands when a second orchestrator shows up.
+- Single shared token (Cedric is the one connected orchestrator today). A
+  per-client key registry keeps this API shape and lands if a second
+  orchestrator ever shows up.
 - Ledger/artifacts AND live session state live in sqlite on an ephemeral
   disk — org memory dies on deploy, and a deploy mid-meeting loses the
   session (no `session.ended` fires; poll + your watchdog are the backstop).
