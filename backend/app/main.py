@@ -84,8 +84,10 @@ async def _lifespan(app: FastAPI):
     """Startup/shutdown for the app (replaces the deprecated @app.on_event hooks).
 
     Startup: prebuild+warm each avatar's RAG index (so the first live question
-    skips the cold start), start the autopilot nudge loop (if enabled), and launch
-    the Gmail 'Add people' auto-join watcher. Shutdown: on a deploy/rollout App
+    skips the cold start), start the autopilot nudge loop (if enabled), launch
+    the Gmail 'Add people' auto-join watcher, and start the session-reconciliation
+    loop (finalizes bots whose terminal status webhook never arrived). Shutdown:
+    on a deploy/rollout App
     Runner SIGTERMs the old instance; flipping the drain flag stops its Gmail
     watcher from dispatching at once, so the old + new instances don't both put a
     bot in the same meeting during the overlap.
@@ -103,6 +105,11 @@ async def _lifespan(app: FastAPI):
 
     if settings.gmail_watch_enabled:
         asyncio.create_task(_gmail_watch_loop())
+
+    if settings.reconcile_enabled:
+        # Backstop that finalizes sessions whose Recall bot is terminal but whose
+        # status webhook never arrived — keeps the per-minute meter from leaking.
+        asyncio.create_task(_reconcile_sessions_loop())
 
     if settings.elevenlabs_api_key:
         # Pre-synthesize the fixed conversational furniture so the FIRST
@@ -236,6 +243,11 @@ _ACK_FILLER_AFTER_S = 1.2
 
 _MEET_CODE_RE = re.compile(r"meet\.google\.com/([a-z-]+)")
 _BOT_TERMINAL = {"call_ended", "done", "fatal"}
+# bot_ids whose finalize is currently in flight. Recall emits bot.call_ended
+# THEN bot.done (both terminal) as SEPARATE concurrent webhook POSTs, and the
+# reconciliation loop can race them — this in-flight set makes _finalize_session
+# safe to call from all three sources without double-delivering session.ended.
+_finalizing: set[str] = set()
 _BOT_VARIANT_RANK = {
     "web_gpu": 0,
     "web_4_core": 1,
@@ -418,6 +430,117 @@ async def _gmail_watch_loop() -> None:
                     print(f"[gmail-watch] failed to join {url}: {e}", flush=True)
         except Exception as e:
             _gmail_state["last_error"] = str(e)
+
+
+# bot_id -> consecutive GET /bot/{id} 404 count. A lone 404 can be a transient
+# Recall blip or a just-created scheduled bot; only after several in a row do we
+# treat the bot as gone. Pruned every pass for bots that left the store by any
+# path, so it can't accumulate dead entries.
+_reconcile_missing: dict[str, int] = {}
+_RECONCILE_MISSING_LIMIT = 3
+
+
+def _bot_status_code(bot: dict) -> str | None:
+    """Latest Recall status_changes code (done/call_ended/in_call_recording/…)."""
+    return (bot.get("status_changes") or [{}])[-1].get("code")
+
+
+async def _abandon_orphan_session(bot_id: str) -> None:
+    """Drop a local session whose Recall bot no longer exists and that never
+    captured anything — a cancelled or no-show scheduled bot. Stops the Anam
+    conversation if one was opened (best-effort; the Recall bot is already gone,
+    so no Recall meter remains), then removes the session. NO artifact and NO
+    session.ended: the meeting never happened, so the orchestrator must not hear
+    it 'ended' (that would be a phantom completed-meeting signal).
+
+    Runs under the same ``_finalizing`` guard as ``_finalize_session`` so it
+    can't race a concurrent finalize of the same bot: if a real finalize already
+    holds the guard it owns this bot and we no-op; otherwise we hold it across the
+    Anam teardown + remove so no finalize slips past ``store.remove``."""
+    session = store.get(bot_id)
+    if session is None or bot_id in _finalizing:
+        return
+    _finalizing.add(bot_id)
+    try:
+        if session.anam_conversation_id:
+            try:
+                await run_in_threadpool(
+                    anam_client.end_conversation, session.anam_conversation_id
+                )
+            except Exception:
+                pass
+        store.remove(bot_id)
+    finally:
+        _finalizing.discard(bot_id)
+
+
+async def _reconcile_once() -> None:
+    """One reconciliation pass: finalize every active session whose Recall bot is
+    terminal, and drop orphaned sessions whose bot Recall no longer knows about.
+    Extracted from the loop so it is unit-testable without touching asyncio.sleep.
+    Best-effort per session — a bad poll skips that bot, never the whole pass."""
+    active = store.all_sessions()  # a COPY — safe while finalize removes
+    # Prune miss-counters for bots that already left the store by ANY path
+    # (finalized via webhook, cancelled) so the dict can't grow dead entries.
+    live_ids = {s.bot_id for s in active}
+    for gone in [b for b in _reconcile_missing if b not in live_ids]:
+        _reconcile_missing.pop(gone, None)
+    for session in active:
+        if _shutting_down:
+            break
+        bid = session.bot_id
+        try:
+            r = await run_in_threadpool(
+                lambda b=bid: httpx.get(
+                    f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/{b}/",
+                    headers=_recall_list_headers(),
+                    timeout=20.0,
+                )
+            )
+            if r.status_code == 404:
+                misses = _reconcile_missing.get(bid, 0) + 1
+                _reconcile_missing[bid] = misses
+                if misses >= _RECONCILE_MISSING_LIMIT:
+                    _reconcile_missing.pop(bid, None)
+                    # Bot is gone from Recall. If it captured a transcript it was a
+                    # real meeting whose bot got cleaned up -> finalize + deliver.
+                    # If it never produced a line it's a cancelled/no-show
+                    # scheduled bot -> drop the orphan WITHOUT a phantom
+                    # session.ended for a meeting that never happened.
+                    if session.transcript:
+                        await _finalize_session(bid, source="reconcile")
+                    else:
+                        await _abandon_orphan_session(bid)
+                continue
+            r.raise_for_status()
+            _reconcile_missing.pop(bid, None)  # reachable again
+            code = _bot_status_code(r.json())
+            if code in _BOT_TERMINAL:
+                # notify_failed fires ONCE, inside the guarded finalize body, so a
+                # fatal seen by both this poll and the webhook notifies Cedric once.
+                await _finalize_session(bid, source="reconcile", failed_code=code)
+        except Exception:
+            continue  # best-effort: a bad poll must never break the loop
+
+
+async def _reconcile_sessions_loop() -> None:
+    """Backstop for auto-finalize: poll Recall for each active session's bot and
+    finalize any that Recall reports terminal but we still hold live locally.
+
+    Terminal status events reach Laura only via the account status-change webhook
+    (Recall structurally can't put them on the per-bot realtime endpoint). If that
+    webhook is un/mis-configured or a delivery is dropped, the session sticks in
+    'in_progress' forever and the per-minute Anam meter leaks — and a bot.fatal
+    can fail to reach the webhook at all, so this poll is the ONLY guaranteed
+    recovery for it.
+    """
+    while True:
+        if _shutting_down:
+            return
+        await asyncio.sleep(settings.reconcile_poll_seconds)
+        if not settings.reconcile_enabled or _shutting_down:
+            continue
+        await _reconcile_once()
 
 
 @app.get("/gmail/status")
@@ -881,6 +1004,14 @@ async def _start_avatar_session(
     session = store.create(
         bot_id=bot["id"], meeting_url=meeting_url, avatar_id=avatar.id
     )
+    # CEDRIC: a summon that didn't carry its own wiring (the Gmail auto-join
+    # watcher passes integration=None) still gets the Model A default routing —
+    # otherwise an email-summoned meeting silently falls to Model B (no context
+    # pull, no session.ended to Cedric). POST /sessions/start always passes its
+    # own build_integration result, so it keeps winning; default_integration()
+    # returns None when no SURFACE_* is set, leaving plain deployments unchanged.
+    if integration is None:
+        integration = cedric.default_integration()
     if integration:
         session.integration = integration
     session.anam_conversation_id = conversation_id
@@ -993,16 +1124,49 @@ def _merge_action_items(queued: list, extracted: list) -> list:
     return merged
 
 
-async def _finalize_session(bot_id: str) -> dict | None:
+async def _finalize_session(
+    bot_id: str, source: str = "manual", failed_code: str = ""
+) -> dict | None:
     """End a session once: stop both vendors, build + store the artifact.
 
-    Idempotent — if the session is already gone, returns the stored artifact (or
-    None). Safe to call from the manual endpoint AND the auto end-of-meeting hook.
+    Idempotent AND concurrency-safe — safe to call from the manual endpoint, the
+    terminal-status webhook, and the reconciliation loop, even simultaneously.
+    Returns the stored artifact (or None) if the session is already gone.
+
+    ``source`` (manual/webhook/reconcile) is recorded PII-safely for diagnosing
+    which path finalized a meeting; it never affects behaviour. ``failed_code``
+    ('fatal' when the join fatally failed) fires the Cedric join-failed
+    notification ONCE, inside the guard — so a fatal seen by both the webhook and
+    the poll notifies the orchestrator a single time, not twice.
     """
     session = store.get(bot_id)
     if session is None:
         return store.get_artifact(bot_id)
+    # Concurrency guard. store.remove(bot_id) — the thing that makes the
+    # `session is None` check above idempotent — only runs at the very END of
+    # the body, past several awaits (the multi-second post_meeting LLM call
+    # included). So two finalizes racing on the same bot (bot.call_ended +
+    # bot.done arrive as concurrent webhook POSTs; the poll loop is a third
+    # racer) would BOTH pass the None check and BOTH fire session.ended to
+    # Cedric. Check-and-add is synchronous — no await between here and the add —
+    # so it is atomic under asyncio's single-threaded loop.
+    if bot_id in _finalizing:
+        return store.get_artifact(bot_id)
+    _finalizing.add(bot_id)
+    try:
+        return await _finalize_session_locked(bot_id, session, source, failed_code)
+    finally:
+        _finalizing.discard(bot_id)
 
+
+async def _finalize_session_locked(
+    bot_id: str, session: store.Session, source: str, failed_code: str = ""
+) -> dict | None:
+    """The actual finalize body, run under the ``_finalizing`` in-flight guard."""
+    # Join-failed notification (fatal): fire here, under the guard, so it runs at
+    # most once per bot even when the webhook and the poll both observe the fatal.
+    if failed_code == "fatal":
+        cedric.notify_failed(session, bot_id, failed_code)  # CEDRIC
     transcript_text = session.transcript_text()
 
     # Stop billing on both vendors.
@@ -1093,6 +1257,17 @@ async def _finalize_session(bot_id: str) -> dict | None:
             )
         except Exception:
             pass
+    # PII-safe finalize telemetry: counts + booleans only, NEVER any utterance
+    # text (the guard hook enforces this). Lets the next live test see which
+    # path finalized and whether content actually accumulated — the question
+    # left open by the empty-artifact test run.
+    n_lines = len(session.transcript)
+    had_content = bool(transcript_text.strip())
+    print(
+        f"[finalize] bot={bot_id} source={source} lines={n_lines} "
+        f"orchestrated={orchestrated} content={had_content}",
+        flush=True,
+    )
     store.remove(bot_id)
     # Photoreal only: last session out turns off the GPU meter (after a grace
     # window, in case another meeting starts right away).
@@ -1104,8 +1279,16 @@ async def _finalize_session(bot_id: str) -> dict | None:
 async def end_session(bot_id: str, request: Request) -> JSONResponse:
     if err := cedric.auth_error(request):  # CEDRIC
         return err
-    artifact = await _finalize_session(bot_id)
+    artifact = await _finalize_session(bot_id, source="manual")
     if artifact is None:
+        # _finalize_session returns None only when the session is already gone
+        # AND no artifact was stored — i.e. a genuinely unknown bot, OR a
+        # concurrent terminal-webhook/reconcile finalize still in flight (its
+        # artifact isn't saved until late in the body). Distinguish the two: a
+        # bare 404 for a bot Cedric just had live is a misleading signal, so
+        # answer 202 "finalizing" while another path owns it.
+        if bot_id in _finalizing or store.get(bot_id) is not None:
+            return JSONResponse({"ok": True, "finalizing": bot_id}, status_code=202)
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     return JSONResponse(cedric.wire_artifact(artifact))  # CEDRIC: PII stays home
 
@@ -1974,6 +2157,13 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 recall_client.create_bot, url, avatar_url, start, avatar.name
             )
             s = store.create(bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id)
+            # CEDRIC: calendar-summoned (scheduled) bots take this inlined path,
+            # NOT _start_avatar_session, so wire the Model A default here too —
+            # otherwise a calendar invite bypasses the orchestrator exactly like
+            # the email path did. None when no SURFACE_* is set.
+            default_integ = cedric.default_integration()
+            if default_integ:
+                s.integration = default_integ
             s.anam_conversation_id = conversation_id
             store.register_conversation(conversation_id, bot["id"])
             if eid:
@@ -2128,22 +2318,39 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if event != "transcript.data":
         # Auto end-of-meeting: when Recall reports the call is over / bot done,
         # finalize the session (stop billing on both vendors + build the artifact).
-        # NOTE: bot status-change events are delivered to the webhook configured
-        # in the Recall dashboard — point it at PUBLIC_BASE_URL/webhooks/recall.
-        TERMINAL = {"done", "call_ended", "fatal", "bot.call_ended", "bot.done"}
+        # NOTE: terminal status events (bot.done / bot.call_ended / bot.fatal)
+        # CANNOT ride the per-bot realtime webhook — Recall delivers them ONLY to
+        # the account/dashboard (Svix) webhook, so point that at
+        # PUBLIC_BASE_URL/webhooks/recall (see docs/infra/RECALL-WEBHOOK-SETUP.md).
+        # The reconciliation loop (_reconcile_sessions_loop) is the backstop if
+        # that webhook is mis-configured or a delivery is dropped.
+        TERMINAL = {
+            "done", "call_ended", "fatal",
+            "bot.done", "bot.call_ended", "bot.fatal",
+        }
+        # Account status-change payloads carry the short code at data.data.code;
+        # the realtime shape uses data.status.code / data.code. Read all three so
+        # both the terminal check AND notify_failed see the real code.
         status_code = (
             payload.get("data", {}).get("status", {}).get("code")
+            or payload.get("data", {}).get("data", {}).get("code")
             or payload.get("data", {}).get("code")
             or ""
         )
         term = event in TERMINAL or status_code in TERMINAL
+        # Fatal join failure — pass it INTO finalize so the Cedric notify_failed
+        # fires under the guard (once), not here (which would double-fire when the
+        # reconcile poll also sees the fatal). Catch it from either the short code
+        # or the bot.fatal event name.
+        failed = status_code == "fatal" or event == "bot.fatal"
         bid = payload.get("data", {}).get("bot", {}).get("id", "") or payload.get(
             "data", {}
         ).get("bot_id", "")
         session = store.get(bid) if bid else None
         if term and session is not None:
-            cedric.notify_failed(session, bid, status_code)  # CEDRIC
-            await _finalize_session(bid)
+            await _finalize_session(
+                bid, source="webhook", failed_code="fatal" if failed else ""
+            )
             return JSONResponse({"ok": True, "finalized": bid})
         # CEDRIC: relay non-terminal join progress to the orchestrator + a
         # one-time meeting-brief refresh once the bot is actually in the call.

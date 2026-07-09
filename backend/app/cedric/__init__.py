@@ -12,6 +12,7 @@ Public surface:
   - MAX_BRIEF_BYTES     — cap on an injected brief
   - auth_error          — Bearer gate for the session API
   - build_integration   — assemble the per-session integration dict
+  - default_integration — SURFACE_* default routing for non-API summons
   - brief_too_large     — request-validation helper
   - deliver_ended       — hand the finished artifact to the orchestrator
   - wire_artifact       — orchestrator-facing artifact copy (no transcript)
@@ -29,6 +30,7 @@ from .integration import (  # noqa: F401
     auth_error,
     brief_too_large,
     build_integration,
+    default_integration,
     deliver_ended,
     handle_webhook_status,
     inject_brief,

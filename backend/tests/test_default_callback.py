@@ -92,3 +92,58 @@ def test_explicit_context_url_wins(monkeypatch):
     monkeypatch.setattr(settings, "surface_context_url", "https://default/context")
     integ = integration.build_integration(_Req(context_url="https://explicit/ctx"), "")
     assert integ["context_url"] == "https://explicit/ctx"
+
+
+# ── default_integration(): the request-less SURFACE_* routing used by the
+#    Gmail/calendar summon paths (which never build a StartRequest) ──
+
+
+def test_default_integration_none_when_no_surface(monkeypatch):
+    monkeypatch.setattr(settings, "surface_webhook_url", "")
+    monkeypatch.setattr(settings, "surface_context_url", "")
+    assert cedric.default_integration() is None  # stays autonomous / Model B
+
+
+def test_default_integration_applies_webhook(monkeypatch):
+    monkeypatch.setattr(settings, "surface_webhook_url", "https://meet-cedric.com/api/laura/events")
+    monkeypatch.setattr(settings, "surface_context_url", "")
+    integ = cedric.default_integration()
+    assert integ is not None
+    assert integ["callback_url"] == "https://meet-cedric.com/api/laura/events"
+    assert integ["context_url"] == ""
+
+
+def test_default_integration_context_only_no_callback(monkeypatch):
+    # context URL set but no webhook: a valid mode (pre-meeting pull only), but
+    # deliver_ended must return False so Model B delivery still runs.
+    monkeypatch.setattr(settings, "surface_webhook_url", "")
+    monkeypatch.setattr(settings, "surface_context_url", "https://meet-cedric.com/api/laura/context")
+    integ = cedric.default_integration()
+    assert integ is not None
+    assert integ["callback_url"] == ""
+    assert integ["context_url"] == "https://meet-cedric.com/api/laura/context"
+    assert cedric.deliver_ended(integ, "bot_x", {"summary": "s"}) is False
+
+
+def test_default_integration_keys_match_build_integration(monkeypatch):
+    # Downstream consumers index these exact keys; keep parity with build_integration.
+    monkeypatch.setattr(settings, "surface_webhook_url", "https://cb/events")
+    built = integration.build_integration(_Req(), "")
+    default = cedric.default_integration()
+    assert set(default) == set(built)
+
+
+def test_start_avatar_session_applies_default_integration(client, monkeypatch):
+    # The gmail/calendar summon path calls _start_avatar_session(integration=None);
+    # the default must be wired onto the session so Model A engages.
+    import asyncio
+
+    monkeypatch.setattr(settings, "surface_webhook_url", "https://meet-cedric.com/api/laura/events")
+    monkeypatch.setattr(main_module.recall_client, "create_bot", lambda *a, **k: {"id": "bot_gmail"})
+    monkeypatch.setattr(main_module.ledger, "carryover_brief", lambda url: "")
+    monkeypatch.setattr(main_module.drive_client, "folder_brief", lambda fid: "")
+
+    asyncio.run(main_module._start_avatar_session("https://meet.google.com/gmail-summon", "cedric"))
+    s = store.get("bot_gmail")
+    assert s.integration is not None
+    assert s.integration["callback_url"] == "https://meet-cedric.com/api/laura/events"

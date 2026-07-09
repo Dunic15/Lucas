@@ -92,6 +92,15 @@ class Settings(BaseSettings):
     gmail_watch_enabled: bool = True
     gmail_poll_seconds: float = 15.0
 
+    # Reconciliation loop: polls Recall for each active session's bot and
+    # finalizes any whose latest status is terminal (done/call_ended/fatal).
+    # It is the backstop for the account status-change webhook (which is the
+    # ONLY channel that delivers terminal events, and may be un/mis-configured)
+    # and it is the ONLY thing that recovers a bot.fatal that never reached the
+    # webhook — so it keeps the per-minute Anam/Recall meter from leaking.
+    reconcile_enabled: bool = True
+    reconcile_poll_seconds: float = 60.0
+
     # Granola (post-meeting transcript source — optional alternative to Recall
     # for the summary/checklist path; it can't power the live in-call agent)
     granola_api_key: str = ""
