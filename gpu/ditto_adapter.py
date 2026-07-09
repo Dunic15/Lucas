@@ -156,6 +156,15 @@ class DittoPipeline:
             raise RuntimeError("DittoPipeline.warmup() not called")
         self.writer.jpeg_quality = jpeg_quality
 
+        # Flush any stale frames a previous utterance's trailing pipeline work
+        # left in the queue — serving them now would lag the lips behind the
+        # audio (found live: back-to-back clips bled ~30 frames into each other).
+        try:
+            while True:
+                self.writer.frames.get_nowait()
+        except queue.Empty:
+            pass
+
         pcm = await asyncio.to_thread(_mp3_to_pcm16k, audio_mp3)
         n_expected = max(1, len(pcm) // _FRAME)          # native 25fps frames
 
