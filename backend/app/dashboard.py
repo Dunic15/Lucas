@@ -19,7 +19,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import avatars, cedric, store
+from . import auth, avatars, cedric, store
 from .config import settings
 
 router = APIRouter(tags=["dashboard"])
@@ -63,6 +63,7 @@ def _meeting_row(row: dict) -> dict:
         "bot_id": row.get("bot_id"),
         "saved_at": row.get("saved_at"),
         "avatar_id": art.get("avatar_id", ""),
+        "org_id": art.get("org_id", ""),
         "platform": _platform(art.get("meeting_url", "")),
         "meeting_type": art.get("meeting_type", ""),
         "duration_seconds": int(art.get("duration_seconds") or 0),
@@ -90,12 +91,38 @@ def dashboard_page() -> FileResponse:
 
 @router.get("/dashboard/summary")
 def dashboard_summary(request: Request) -> JSONResponse:
-    if err := cedric.auth_error(request):  # same gate as /sessions and /org/*
-        return err
+    # Three ways in, in order: a logged-in user (cookie), a machine bearer,
+    # or — when NEITHER auth nor a token is configured — open (key-free demo).
+    # When Google login IS configured, an anonymous browser gets login_required
+    # so the page shows the sign-in gate instead of another tenant's data.
+    user = auth.current_user(request)
+    if user is None:
+        if err := cedric.auth_error(request):
+            return err
+        # auth_error passing means either a VALID bearer or no token configured
+        # at all. Only the token-less case falls through to the login wall —
+        # a valid machine bearer must keep working when login is enabled.
+        bearer_ok = bool(settings.laura_api_token.strip())
+        if not bearer_ok and auth.enabled():
+            return JSONResponse(
+                {"error": "login_required", "auth_enabled": True},
+                status_code=401,
+            )
+
+    # Tenancy scoping (org_id == user_id today): a logged-in user sees their
+    # own rows plus unowned ("") rows — the pre-auth/service world of this
+    # single-tenant deployment. Strict isolation lands with the Postgres/RLS
+    # track (docs/infra/MULTI-TENANCY.md); the filter seam is already here.
+    def visible(row_org: str) -> bool:
+        return user is None or row_org in ("", user["org_id"])
 
     now = time.time()
     artifact_rows = store.list_artifacts()  # newest first
-    meetings = [_meeting_row(r) for r in artifact_rows]
+    meetings = [
+        m
+        for m in (_meeting_row(r) for r in artifact_rows)
+        if visible(m["org_id"])
+    ]
 
     # Per-avatar rollups (legacy artifacts predate avatar_id stamping → "").
     by_avatar: dict[str, list[dict]] = {}
@@ -105,6 +132,8 @@ def dashboard_summary(request: Request) -> JSONResponse:
     live = []
     live_by_avatar: dict[str, int] = {}
     for s in store.all_sessions():
+        if not visible(s.org_id):
+            continue
         live_by_avatar[s.avatar_id] = live_by_avatar.get(s.avatar_id, 0) + 1
         first_ts = s.transcript[0].ts if s.transcript else 0.0
         last_ts = s.transcript[-1].ts if s.transcript else 0.0
@@ -184,5 +213,11 @@ def dashboard_summary(request: Request) -> JSONResponse:
             "meetings": meetings[:60],
             "stats": stats,
             "connections": connections,
+            "auth_enabled": auth.enabled(),
+            "user": (
+                {k: user[k] for k in ("user_id", "email", "name", "picture")}
+                if user
+                else None
+            ),
         }
     )

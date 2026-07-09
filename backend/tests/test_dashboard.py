@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app import store
+from app import ledger, store
 from app.config import settings
 
 SECRET_LINE = "duccio: the acquisition price is nine million"
@@ -28,6 +28,7 @@ SECRET_LINE = "duccio: the acquisition price is nine million"
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LAURA_STORE_PATH", str(tmp_path / "store.sqlite3"))
     importlib.reload(store)
+    importlib.reload(ledger)  # shares the sqlite file — needs its tables too
     return TestClient(main_module.app)
 
 

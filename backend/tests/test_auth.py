@@ -1,0 +1,258 @@
+"""Dashboard login (auth.py) — cookie signing, Google callback, org scoping.
+
+Key-free like the rest of the suite. Google's token endpoint is mocked; no
+network. The properties under test: the demo stays open when login isn't
+configured, cookies can't be forged or outlive their expiry, the callback
+creates a user and scopes the dashboard, and one org can never see (or end)
+another org's rows.
+"""
+from __future__ import annotations
+
+import importlib
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from fastapi.testclient import TestClient
+
+import app.main as main_module
+from app import auth, ledger, store
+from app.config import settings
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("LAURA_STORE_PATH", str(tmp_path / "store.sqlite3"))
+    importlib.reload(store)
+    importlib.reload(ledger)  # shares the sqlite file — needs its tables too
+    return TestClient(main_module.app)
+
+
+@pytest.fixture
+def google_on(monkeypatch):
+    monkeypatch.setattr(settings, "google_calendar_client_id", "cid-test")
+    monkeypatch.setattr(settings, "google_calendar_client_secret", "csecret-test")
+
+
+def _login(client, email, name="Test User") -> dict:
+    """Create a user + set its session cookie on the client. Returns the user."""
+    user = store.upsert_user(email=email, name=name)
+    client.cookies.set(auth.COOKIE_NAME, auth.make_cookie(user["user_id"]))
+    return user
+
+
+# ── cookie mechanics ───────────────────────────────────────────────────
+
+def test_cookie_roundtrip():
+    assert auth.read_cookie(auth.make_cookie("u_abc")) == "u_abc"
+
+
+def test_cookie_tamper_rejected():
+    good = auth.make_cookie("u_abc")
+    payload, sig = good.rsplit(".", 1)
+    assert auth.read_cookie(payload + "." + "0" * len(sig)) is None
+    assert auth.read_cookie(payload) is None
+    assert auth.read_cookie("") is None
+
+
+def test_cookie_expiry_rejected():
+    assert auth.read_cookie(auth.make_cookie("u_abc", ttl=-5)) is None
+
+
+def test_user_id_is_deterministic_from_email():
+    a = store.user_id_for_email("Duccio@Example.com ")
+    b = store.user_id_for_email("duccio@example.com")
+    assert a == b and a.startswith("u_")
+
+
+# ── demo mode preserved ────────────────────────────────────────────────
+
+def test_summary_open_when_auth_not_configured(client):
+    assert client.get("/dashboard/summary").status_code == 200
+
+
+def test_login_page_served(client):
+    resp = client.get("/login")
+    assert resp.status_code == 200
+    assert "Continue with Google" in resp.text
+
+
+# ── login required when configured ─────────────────────────────────────
+
+def test_summary_requires_login_when_auth_enabled(client, google_on):
+    resp = client.get("/dashboard/summary")
+    assert resp.status_code == 401
+    assert resp.json()["error"] == "login_required"
+
+
+def test_summary_with_cookie_when_auth_enabled(client, google_on):
+    user = _login(client, "owner@example.com")
+    data = client.get("/dashboard/summary").json()
+    assert data["user"]["email"] == "owner@example.com"
+    assert data["auth_enabled"] is True
+    assert user["org_id"] == user["user_id"]
+
+
+def test_bearer_still_works_when_auth_enabled(client, google_on, monkeypatch):
+    monkeypatch.setattr(settings, "laura_api_token", "sesame")
+    ok = client.get(
+        "/dashboard/summary", headers={"Authorization": "Bearer sesame"}
+    )
+    assert ok.status_code == 200
+
+
+# ── google callback (mocked exchange) ──────────────────────────────────
+
+def test_google_callback_creates_user_and_sets_cookie(
+    client, google_on, monkeypatch
+):
+    import base64, json as _json
+
+    claims = {
+        "iss": "https://accounts.google.com",
+        "aud": "cid-test",
+        "exp": time.time() + 600,
+        "email": "New.Person@Example.com",
+        "email_verified": True,
+        "name": "New Person",
+    }
+    body = base64.urlsafe_b64encode(_json.dumps(claims).encode()).decode().rstrip("=")
+    fake_id_token = f"h.{body}.s"
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"id_token": fake_id_token}
+
+    class FakeClient:
+        def __init__(self, *a, **k): ...
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, *a, **k): return FakeResp()
+
+    monkeypatch.setattr(auth.httpx, "AsyncClient", FakeClient)
+
+    state = auth._b64(
+        _json.dumps({"n": "x", "exp": time.time() + 600}).encode()
+    )
+    signed_state = f"{state}.{auth._sign(state)}"
+    resp = client.get(
+        "/auth/google/callback",
+        params={"code": "fake-code", "state": signed_state},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/dashboard"
+    assert auth.COOKIE_NAME in resp.cookies
+
+    uid = auth.read_cookie(resp.cookies[auth.COOKIE_NAME])
+    user = store.get_user(uid)
+    assert user["email"] == "new.person@example.com"
+
+
+def test_google_callback_rejects_forged_state(client, google_on):
+    resp = client.get(
+        "/auth/google/callback",
+        params={"code": "x", "state": "forged.deadbeef"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    assert "error=state" in resp.headers["location"]
+
+
+def test_id_token_wrong_audience_rejected(google_on):
+    import base64, json as _json
+
+    claims = {
+        "iss": "https://accounts.google.com",
+        "aud": "someone-else",
+        "exp": time.time() + 600,
+        "email": "a@b.c",
+        "email_verified": True,
+    }
+    body = base64.urlsafe_b64encode(_json.dumps(claims).encode()).decode().rstrip("=")
+    assert auth._decode_id_token(f"h.{body}.s") is None
+
+
+# ── org scoping ────────────────────────────────────────────────────────
+
+def _artifact(org_id: str, summary: str) -> dict:
+    return {
+        "summary": summary,
+        "actions": [],
+        "readiness_score": 80,
+        "follow_up_email": {},
+        "avatar_id": "laura",
+        "org_id": org_id,
+        "meeting_url": "https://meet.google.com/x",
+    }
+
+
+def test_org_scoping_on_meetings(client, google_on):
+    alice = _login(client, "alice@example.com")
+    store.save_artifact("bot_alice", _artifact(alice["org_id"], "alice meeting"))
+    bob = store.upsert_user(email="bob@example.com")
+    store.save_artifact("bot_bob", _artifact(bob["org_id"], "bob meeting"))
+    store.save_artifact("bot_shared", _artifact("", "legacy shared meeting"))
+
+    data = client.get("/dashboard/summary").json()
+    summaries = {m["summary"] for m in data["meetings"]}
+    assert "alice meeting" in summaries
+    assert "legacy shared meeting" in summaries  # single-tenant migration mode
+    assert "bob meeting" not in summaries
+
+
+def test_org_scoping_on_live_sessions(client, google_on):
+    alice = _login(client, "alice@example.com")
+    store.create("bot_a", "https://meet.google.com/a", "laura", org_id=alice["org_id"])
+    other = store.upsert_user(email="eve@example.com")
+    store.create("bot_e", "https://meet.google.com/e", "laura", org_id=other["org_id"])
+    try:
+        live = client.get("/dashboard/summary").json()["live"]
+        assert {s["bot_id"] for s in live} == {"bot_a"}
+    finally:
+        store.remove("bot_a")
+        store.remove("bot_e")
+
+
+def test_cannot_end_another_orgs_session(client, google_on):
+    _login(client, "alice@example.com")
+    eve = store.upsert_user(email="eve@example.com")
+    store.create("bot_eve", "https://meet.google.com/e2", "laura", org_id=eve["org_id"])
+    try:
+        resp = client.post("/sessions/bot_eve/end")
+        assert resp.status_code == 403
+    finally:
+        store.remove("bot_eve")
+
+
+def test_session_start_stamps_org(client, google_on, monkeypatch):
+    """A logged-in dispatch stamps the user's org on the session (stub Recall)."""
+    from app import recall_client
+
+    monkeypatch.setattr(recall_client, "assert_ready", lambda: None)
+    monkeypatch.setattr(
+        recall_client, "create_bot", lambda *a, **k: {"id": "bot_stamped"}
+    )
+    alice = _login(client, "alice@example.com")
+    resp = client.post(
+        "/sessions/start", json={"meeting_url": "https://meet.google.com/stamp"}
+    )
+    assert resp.status_code == 200, resp.text
+    try:
+        assert store.get("bot_stamped").org_id == alice["org_id"]
+    finally:
+        store.remove("bot_stamped")
+
+
+def test_logout_clears_cookie(client, google_on):
+    _login(client, "alice@example.com")
+    resp = client.post("/auth/logout", follow_redirects=False)
+    assert resp.status_code == 302
+    client.cookies.clear()
+    assert client.get("/dashboard/summary").status_code == 401
