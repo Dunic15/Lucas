@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import uuid
+from datetime import date, datetime, timedelta
 from email.mime.text import MIMEText
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 
@@ -42,6 +44,44 @@ def _token() -> str:
     refresh token). '' when no account is connected."""
     rt = gmail_watcher.refresh_token()
     return gmail_watcher.access_token(rt) if rt else ""
+
+
+_WEEKDAYS = {
+    "monday": 0, "mon": 0, "tuesday": 1, "tue": 1, "tues": 1,
+    "wednesday": 2, "wed": 2, "thursday": 3, "thu": 3, "thurs": 3,
+    "friday": 4, "fri": 4, "saturday": 5, "sat": 5, "sunday": 6, "sun": 6,
+}
+_ISO_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+
+
+def parse_deadline(text: str, ref: Optional[date] = None) -> Optional[date]:
+    """Best-effort, CONSERVATIVE deadline → date. Returns None (skip) unless the
+    date is unambiguous — a wrong calendar date is worse than none. Handles:
+    ISO YYYY-MM-DD, today/tomorrow, a weekday name (next occurrence), next week.
+    Anything vaguer ('soon', 'end of quarter', 'Q3') → None."""
+    if not text:
+        return None
+    ref = ref or date.today()
+    t = text.strip().lower()
+
+    m = _ISO_RE.search(t)
+    if m:
+        try:
+            d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            return d if d >= ref else None  # never book a past deadline
+        except ValueError:
+            return None
+    if "today" in t:
+        return ref
+    if "tomorrow" in t:
+        return ref + timedelta(days=1)
+    if "next week" in t:
+        return ref + timedelta(days=7)
+    for word, wd in _WEEKDAYS.items():
+        if re.search(rf"\b{word}\b", t):
+            ahead = (wd - ref.weekday()) % 7  # 0 = the same weekday → today
+            return ref + timedelta(days=ahead)
+    return None
 
 
 def send_gmail(to: list[str], subject: str, body: str) -> dict[str, Any]:
@@ -70,20 +110,25 @@ def send_gmail(to: list[str], subject: str, body: str) -> dict[str, Any]:
 
 
 def create_calendar_event(
-    summary: str, start_iso: str, end_iso: str, attendees: list[str] | None = None
+    summary: str, start_iso: str, end_iso: str,
+    attendees: list[str] | None = None, tz: str = "",
 ) -> dict[str, Any]:
-    """Create a Calendar event on the primary calendar. start/end are RFC3339.
+    """Create a Calendar event on the primary calendar. start/end are naive
+    RFC3339 (no offset); `tz` (IANA, e.g. 'Europe/Rome') is required by Google
+    when the dateTime has no offset — falls back to settings.execute_timezone.
     Best-effort; needs the calendar.events (write) scope."""
     if not (summary and start_iso and end_iso):
         return {"created": False, "reason": "missing summary/start/end"}
     try:
+        from .config import settings as _s
+        zone = tz or _s.execute_timezone or "UTC"
         token = _token()
         if not token:
             return {"created": False, "reason": "no google account connected"}
         body: dict[str, Any] = {
             "summary": summary[:200],
-            "start": {"dateTime": start_iso},
-            "end": {"dateTime": end_iso},
+            "start": {"dateTime": start_iso, "timeZone": zone},
+            "end": {"dateTime": end_iso, "timeZone": zone},
         }
         emails = [e for e in (attendees or []) if e and "@" in e]
         if emails:
