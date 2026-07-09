@@ -49,6 +49,7 @@ client #1. History and rationale: [`CEDRIC-AVATAR-PLAN.md`](CEDRIC-AVATAR-PLAN.m
 | `GET /ledger?meeting_url=…` | Cross-meeting items + carryover brief for one link |
 | `GET /org/brief?meeting_url=…` | The carryover brief (what past meetings left open) |
 | `GET /org/actions` | Open action items across meetings, grouped by meeting key |
+| `GET /org/search?q=…` | Ask across every meeting — ledger items + meeting snippets mentioning the query ("what did we decide about pricing?") |
 | `POST /org/actions/{id}/resolve` | Close an item from the outside (e.g. ticked in Slack) |
 
 ### `POST /sessions/start`
