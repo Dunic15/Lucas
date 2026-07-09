@@ -97,8 +97,28 @@ resolve_litestream() {
   if [ -n "${LITESTREAM_SHA256:-}" ] && command -v sha256sum >/dev/null 2>&1; then
     echo "${LITESTREAM_SHA256}  ${tgz}" | sha256sum -c - || { log "checksum MISMATCH"; return 1; }
   fi
-  tar -xzf "$tgz" -C "${LITESTREAM_BIN_DIR}" litestream 2>/dev/null \
-    || tar -xzf "$tgz" -C "${LITESTREAM_BIN_DIR}" || { log "extract failed"; return 1; }
+  # Extract the binary. The App Runner managed PYTHON_311 runtime ships NO `tar`,
+  # so fall back to python3 (always present — it IS the runtime), which extracts
+  # the .tar.gz in-process via the stdlib (gzip+tarfile) — no external tar/gunzip.
+  if command -v tar >/dev/null 2>&1; then
+    tar -xzf "$tgz" -C "${LITESTREAM_BIN_DIR}" litestream 2>/dev/null \
+      || tar -xzf "$tgz" -C "${LITESTREAM_BIN_DIR}" || { log "tar extract failed"; return 1; }
+  else
+    log "no tar in this runtime — extracting with ${PYTHON}"
+    "${PYTHON}" - "$tgz" "${LITESTREAM_BIN_DIR}" <<'PY' || { log "python extract failed"; return 1; }
+import os, sys, tarfile
+tgz, dest = sys.argv[1], sys.argv[2]
+with tarfile.open(tgz, "r:gz") as t:
+    for m in t.getmembers():
+        if m.isfile() and os.path.basename(m.name) == "litestream":
+            m.name = "litestream"                       # flatten any leading dirs
+            t.extract(m, dest)
+            os.chmod(os.path.join(dest, "litestream"), 0o755)
+            break
+    else:
+        sys.exit("litestream binary not found in archive")
+PY
+  fi
   [ -x "${LITESTREAM_BIN_DIR}/litestream" ] || { log "binary missing after extract"; return 1; }
   LITESTREAM="${LITESTREAM_BIN_DIR}/litestream"; return 0
 }
