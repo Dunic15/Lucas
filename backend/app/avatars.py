@@ -41,6 +41,11 @@ class Avatar:
     # Google Drive folder this avatar reads at session start (drive_client):
     # its docs become part of the pre-meeting brief. "" = no folder.
     drive_folder_id: str = ""
+    # Silent notetaker mode: the avatar joins, listens, tracks the whole meeting
+    # and builds/delivers the artifact at the end — but NEVER speaks during the
+    # call (no greeting, answers, interventions, or nudges). For "just take
+    # notes and hand off to Slack" rather than a talking participant.
+    silent: bool = False
 
     @property
     def knowledge_dir(self) -> Path:
@@ -124,6 +129,7 @@ def load(avatar_id: str) -> Avatar:
             else "F"
         ),
         drive_folder_id=str(_coalesce(raw.get("drive_folder_id"), "")).strip(),
+        silent=bool(raw.get("silent", False)),
         dir=folder,
         knowledge_packs=[str(k) for k in (raw.get("knowledge_packs") or [])],
     )

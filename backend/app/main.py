@@ -1605,6 +1605,16 @@ async def _make_avatar_speak(
     round-trip; pages that don't know the fields ignore them and POST /tts as
     before — the contract stays additive.
     """
+    # Silent notetaker mode: this avatar never speaks during the meeting — it
+    # only listens, tracks state, and delivers the artifact at the end. One gate
+    # here suppresses EVERY spoken line (greeting, answers, interventions,
+    # nudges, action-capture confirmations); transcript capture + MeetingState
+    # tracking + finalize delivery are separate paths and keep working.
+    try:
+        if avatars.load(session.avatar_id).silent:
+            return False
+    except Exception:  # noqa: BLE001 — never let a config read mute the guard logic
+        pass
     if generation is not None and generation != session.speech_generation:
         return False  # turn was cancelled while this sentence was in flight
     if _is_repeat(session, text) and not force:

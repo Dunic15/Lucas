@@ -49,6 +49,12 @@ knowledge_packs:
 # drive.readonly scope on the connected Google account (/oauth/google/connect).
 drive_folder_id: "1X_CD6ARfWskpNKZbWLtwaDWn7izGVKZH"
 
+# Silent notetaker: Cedric joins the meeting, listens and tracks everything, and
+# at the end summarizes + hands the artifact to Slack (Cedric's Slack app makes
+# the tasks). He does NOT talk during the call. Flip to false to make him a
+# talking, question-answering participant again.
+silent: true
+
 # Face + voice for THIS avatar.
 # Leave blank ("") to fall back to the global values in .env
 # (ELEVENLABS_VOICE_ID = the chosen Cedric voice).
