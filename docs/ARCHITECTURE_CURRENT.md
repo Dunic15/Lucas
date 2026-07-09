@@ -1,8 +1,11 @@
 # Architecture — how Laura actually works today
 
-> Single source of truth for **architecture**. If a comment, README line, or agent
+> Single source of truth for **Laura's internal engine** — request paths, model
+> routing, RAG, avatar face, deploy topology. If a comment, README line, or agent
 > doc disagrees with this file about paths/models/providers, this file is right —
-> fix the other one. Pair with [`product/WEDGE.md`](product/WEDGE.md) (why it wins).
+> fix the other one. For how Laura and Cedric fit together as **one system**
+> (phases, hand-off config, standalone fallback) see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+> Pair with [`product/WEDGE.md`](product/WEDGE.md) (why it wins).
 > Last aligned: repo-alignment pass, 2026-07-07.
 
 ## TL;DR
