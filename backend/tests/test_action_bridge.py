@@ -580,6 +580,58 @@ def test_every_finalized_action_is_id_stamped(client, recall_stubbed, monkeypatc
     assert all(a.get("action_id") for a in actions)  # every one addressable
 
 
+def test_wants_action_capture_italian_bare_imperatives():
+    """Italian bare imperatives ("manda una mail…", "prenota una call…") must be
+    captured live at parity with English — the workflow found they were dropped
+    (only periphrastic "puoi mandare…" matched). Anchored, so mid-sentence
+    indicatives ("dovremmo mandare…") stay out."""
+    from app.brain import wants_action_capture
+
+    for phrase in [
+        "manda una mail a Priya con il riassunto",
+        "allora manda il documento",
+        "prenota una call con Marco venerdì",
+        "invia il recap a Elena",
+        "fissa una riunione giovedì",
+        "mandami il file",
+        "ricordami di chiamare Marco",
+    ]:
+        assert wants_action_capture(phrase), f"must capture: {phrase!r}"
+
+    for phrase in [
+        "dovremmo mandare una mail",       # suggestion, not an imperative
+        "la mail la manda Priya domani",   # 'manda' mid-sentence indicative
+        "controlla se i numeri tornano",   # content query, not an action
+    ]:
+        assert not wants_action_capture(phrase), f"must NOT capture: {phrase!r}"
+
+
+def test_merge_dedupes_summarizer_rephrase_of_a_live_action():
+    """The summarizer re-extracts a live-captured action, rephrased (deadline
+    split into its own field). It must NOT mint a second action_id — the live
+    entry wins and absorbs the structured deadline/owner. Exact-text dedup missed
+    this (two action_ids for one request); semantic dedup catches it. (#84)"""
+    import app.main as main_module
+
+    out = main_module._merge_action_items(
+        [{"action_id": "live1", "action": "send the rollout doc to Marco by Friday",
+          "owner": "", "due": ""}],
+        [{"item": "Send the rollout doc to Marco", "owner": "Ben",
+          "deadline": "Friday", "gap_type": "none"}],
+    )
+    assert len(out) == 1  # one request → one action, not two
+    a = out[0]
+    assert a["requested_live"] is True and a["action_id"] == "live1"  # live wins
+    assert a["deadline"] == "Friday" and a["owner"] == "Ben"  # folded from summarizer
+
+    # Genuinely distinct actions are NOT merged (guard against over-dedup).
+    out2 = main_module._merge_action_items(
+        [{"action_id": "l", "action": "send the deck to Priya", "due": ""}],
+        [{"item": "email Marco the contract"}],
+    )
+    assert len(out2) == 2
+
+
 # ── (e) the wire artifact stays transcript-free ────────────────────────
 
 

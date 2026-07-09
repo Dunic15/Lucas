@@ -383,9 +383,21 @@ _ACTION_VERBS = (
     r"(?:create|open)\s+(?:a\s+|an\s+|the\s+)?(?:ticket|task|issue|doc(?:ument)?|event|meeting|invite)|"
     r"add\s+(?:\w+\s+)?to\s+(?:the\s+|my\s+|our\s+)?(?:calendar|slack|notion|channel))"
 )
-# Optional leading fillers so "Ok, schedule…", "So send…", "Also post…" still
-# read as bare imperatives (real speech rarely starts clean on the verb).
-_ACTION_LEAD = r"(?:(?:ok(?:ay)?|so|and|then|also|now|alright|yeah|hey|please)[,\s]+)*"
+# Optional leading fillers (EN + IT) so "Ok, schedule…", "So send…", "Allora
+# manda…" still read as bare imperatives (real speech rarely starts clean on the
+# verb).
+_ACTION_LEAD = (
+    r"(?:(?:ok(?:ay)?|so|and|then|also|now|alright|yeah|hey|please|"
+    r"allora|quindi|dai|poi)[,\s]+)*"
+)
+# Italian imperative stems (the bare "manda…/prenota…" command form). Kept in
+# sync with the periphrastic Italian branch below; content-query verbs
+# (controlla/verifica/guarda/cerca) are deliberately EXCLUDED, like the English
+# side, so "controlla se…" stays a live question.
+_ACTION_VERBS_IT = (
+    r"(?:manda(?:mi)?|invia(?:mi)?|inoltra|spedisci|prenota|fissa|"
+    r"organi[sz]za|programma|prepara|ricordami\s+di)"
+)
 _ACTION_INTENT = re.compile(
     rf"\b(?:can|could|will|would)\s+you\s+(?:please\s+)?{_ACTION_VERBS}\b"
     rf"|\bplease\s+{_ACTION_VERBS}\b"
@@ -394,7 +406,10 @@ _ACTION_INTENT = re.compile(
     # is the false-positive guard — plain statements ("we should send X", "I'll
     # email him") don't START with the verb.
     rf"|^{_ACTION_LEAD}{_ACTION_VERBS}\b"
-    # Italian: "puoi/potresti mandare…", "mi mandi/prenoti…", "ricordami di…"
+    # Italian bare imperative: "manda una mail…", "prenota una call…" — same ^
+    # anchor so mid-sentence indicatives ("dovremmo mandare…") stay out.
+    rf"|^{_ACTION_LEAD}{_ACTION_VERBS_IT}\b"
+    # Italian periphrastic: "puoi/potresti mandare…", "mi mandi/prenoti…", "ricordami di…"
     r"|\b(?:puoi|potresti|riesci\s+a)\s+(?:mandar|inviar|prenotar|fissar|"
     r"organizzar|preparar)\w*\b"
     r"|\b(?:puoi|potresti)\s+ricordar(?:mi|ci)\s+di\b"
