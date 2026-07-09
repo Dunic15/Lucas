@@ -118,9 +118,43 @@ def maybe_execute(
         if settings.execute_drive_notes and drive_folder_id:
             title, content = _notes_doc(avatar_name, artifact)
             out["drive"] = google_actions.write_drive_note(drive_folder_id, title, content)
+        if settings.execute_calendar:
+            out["calendar"] = _book_deadlines(avatar_name, artifact)
     except Exception as e:  # never block finalize
         return {"executed": False, "reason": type(e).__name__}
     return out
+
+
+# Cap the number of events one meeting can create — never spam the calendar.
+_MAX_CAL_EVENTS = 6
+
+
+def _book_deadlines(avatar_name: str, artifact: dict[str, Any]) -> dict[str, Any]:
+    """Put each action's parseable deadline on the calendar as a 30-min reminder
+    block (09:00 local on the due date). Only UNAMBIGUOUS dates are booked —
+    parse_deadline returns None for anything vague, so nothing lands on a guessed
+    date. Best-effort per event."""
+    booked, skipped = 0, 0
+    for a in (artifact.get("actions") or [])[:20]:
+        if not isinstance(a, dict):
+            continue
+        due = google_actions.parse_deadline(a.get("deadline", ""))
+        item = (a.get("item") or "").strip()
+        if not due or not item:
+            skipped += 1
+            continue
+        if booked >= _MAX_CAL_EVENTS:
+            break
+        start = f"{due.isoformat()}T09:00:00"
+        end = f"{due.isoformat()}T09:30:00"
+        owner = a.get("owner") or ""
+        summary = f"[{avatar_name}] {item}"
+        res = google_actions.create_calendar_event(
+            summary, start, end, attendees=None,
+        )
+        booked += 1 if res.get("created") else 0
+        skipped += 0 if res.get("created") else 1
+    return {"booked": booked, "skipped": skipped}
 
 
 # ─────────────────────── finalize: auto-deliver ───────────────────────
