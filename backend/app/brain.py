@@ -980,15 +980,55 @@ def post_meeting(
     return _finish_artifact(artifact, state)
 
 
+# A decision/risk is one short line. The model occasionally (a) emits malformed
+# JSON — _parse_json then returns an {"answer": <raw>} shape with no summary —
+# or (b) echoes whole transcript chunks into a list field. Either way garbled
+# text must never reach the recap email / notes doc, so list fields are cleaned
+# and a degraded artifact is rebuilt from the deterministic silent tracker.
+_MAX_LINE_CHARS = 240
+_SPEAKER_RE = re.compile(r"[A-Z][a-zA-Z]+:\s")
+
+
+def _clean_lines(items: object) -> list[str]:
+    """Keep only genuine one-liners: strings, non-empty, not transcript-shaped
+    (too long, or carrying multiple 'Speaker:' labels)."""
+    if not isinstance(items, (list, tuple)):
+        return []
+    out: list[str] = []
+    for it in items:
+        s = (it if isinstance(it, str) else str(it)).strip()
+        if not s or len(s) > _MAX_LINE_CHARS or len(_SPEAKER_RE.findall(s)) >= 2:
+            continue
+        out.append(s)
+    return out
+
+
+def _looks_degraded(artifact: dict) -> bool:
+    """A parse-failure fallback ({"answer": ...} with no real summary/actions)."""
+    return (
+        "answer" in artifact
+        and not (artifact.get("summary") or "").strip()
+        and not artifact.get("actions")
+        and not artifact.get("checklist")
+    )
+
+
 def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dict:
     """Normalize to the full artifact schema; state fills the deterministic
-    fields and backfills anything the model left out."""
+    fields and backfills anything the model left out. A degraded model result
+    is discarded in favour of the deterministic tracker so the recap is never
+    garbled."""
+    if _looks_degraded(artifact):
+        artifact = {}  # drop the junk; everything below backfills from state
     artifact.setdefault("summary", "")
     artifact.setdefault("follow_up_email", {})
-    if not artifact.get("decisions"):
-        artifact["decisions"] = [d["decision"] for d in state.decisions]
-    if not artifact.get("risks"):
-        artifact["risks"] = [r["risk"] for r in state.risks]
+    # Clean any model-supplied list fields, then backfill from state when empty.
+    artifact["decisions"] = _clean_lines(artifact.get("decisions")) or [
+        d["decision"] for d in state.decisions
+    ]
+    artifact["risks"] = _clean_lines(artifact.get("risks")) or [
+        r["risk"] for r in state.risks
+    ]
     # Old consumers (demo page, Slack formatter) read "checklist"; new schema
     # calls it "actions". Keep both pointing at the same list.
     actions = artifact.get("actions") or artifact.get("checklist") or []
