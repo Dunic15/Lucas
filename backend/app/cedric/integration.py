@@ -70,11 +70,19 @@ def brief_too_large(brief: str) -> Optional[JSONResponse]:
 
 def build_integration(req: Any, brief: str) -> Optional[dict]:
     """Assemble the per-session integration dict from a StartRequest, or None
-    when the request carries no orchestrator wiring (plain local start)."""
-    if not (req.callback_url or req.context_url or req.external_ref or brief):
+    when the request carries no orchestrator wiring (plain local start).
+
+    Model A default routing: when SURFACE_WEBHOOK_URL is configured, a session
+    that DIDN'T supply its own callback_url still gets one — so EVERY meeting
+    (however summoned: email, calendar, API) hands its session.status /
+    session.ended / action.requested to Cedric's receiver, and Cedric does the
+    Slack posting + execution with his own tools. Unset = today's behaviour
+    (autonomous / Model B)."""
+    callback = req.callback_url or settings.surface_webhook_url
+    if not (callback or req.context_url or req.external_ref or brief):
         return None
     return {
-        "callback_url": req.callback_url or "",
+        "callback_url": callback or "",
         "context_url": req.context_url or "",
         "external_ref": req.external_ref or {},
         "brief": brief,
