@@ -120,9 +120,37 @@ def maybe_execute(
             out["drive"] = google_actions.write_drive_note(drive_folder_id, title, content)
         if settings.execute_calendar:
             out["calendar"] = _book_deadlines(avatar_name, artifact)
+        if settings.execute_slack:
+            out["slack"] = actions.post_to_slack(_slack_recap(avatar_name, artifact))
     except Exception as e:  # never block finalize
         return {"executed": False, "reason": type(e).__name__}
     return out
+
+
+def _slack_recap(avatar_name: str, artifact: dict[str, Any]) -> str:
+    """A Slack-mrkdwn recap: summary, decisions, and action items — with the
+    ones asked out loud in the meeting flagged (they're the approval-worthy
+    'please do X' asks). Distilled data only."""
+    lines = [f"*{avatar_name} — meeting recap*"]
+    if artifact.get("summary"):
+        lines += [artifact["summary"], ""]
+    decisions = artifact.get("decisions") or []
+    if decisions:
+        lines.append("*Decisions*")
+        lines += [f"• {d}" for d in decisions]
+        lines.append("")
+    actions_list = artifact.get("actions") or []
+    if actions_list:
+        lines.append("*Action items*")
+        for a in actions_list:
+            if isinstance(a, dict):
+                who = a.get("owner") or "unassigned"
+                due = f" — due {a['deadline']}" if a.get("deadline") else ""
+                flag = "  :speech_balloon: _asked in meeting_" if a.get("requested_live") else ""
+                lines.append(f"• {a.get('item','')} ({who}){due}{flag}")
+            else:
+                lines.append(f"• {a}")
+    return "\n".join(lines).strip()
 
 
 # Cap the number of events one meeting can create — never spam the calendar.
