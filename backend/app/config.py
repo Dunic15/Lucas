@@ -258,6 +258,13 @@ class Settings(BaseSettings):
     laura_context_token: str = ""
     # Per-attempt timeout for callback/context HTTP calls.
     callback_timeout_seconds: float = 10.0
+    # Model A default routing: a DEFAULT callback_url for sessions that don't
+    # supply their own (email/calendar/API summons) → every meeting hands its
+    # artifact + live actions to Cedric's receiver, and Cedric does the Slack
+    # posting + execution with his own tools. Set = Model A; unset = Laura runs
+    # autonomously (Model B: EXECUTE_* / autopilot). Point at Cedric's
+    # {PUBLIC_BASE_URL}/api/laura/events.
+    surface_webhook_url: str = ""
     # ── end Cedric integration ──
 
     @property
