@@ -87,12 +87,20 @@ async def org_search(q: str, request: Request, limit: int = 20) -> JSONResponse:
     )
 
 
-@router.post("/actions/{item_id}/resolve")
-async def org_resolve(item_id: int, request: Request) -> JSONResponse:
-    """Close a ledger item from the outside (e.g. ticked off in Slack)."""
+@router.post("/actions/{ref}/resolve")
+async def org_resolve(ref: str, request: Request) -> JSONResponse:
+    """Close a ledger item from the outside (e.g. ticked off in Slack).
+
+    ``ref`` is either the numeric ledger row id (as before) OR the stable
+    string ``action_id`` the orchestrator carries from action.requested /
+    session.ended — the natural key for Cedric's ack loop, since it never sees
+    the numeric row id."""
     if err := cedric.auth_error(request):
         return err
-    ok = await run_in_threadpool(ledger.resolve_item, item_id)
+    if ref.isdigit():
+        ok = await run_in_threadpool(ledger.resolve_item, int(ref))
+    else:
+        ok = await run_in_threadpool(ledger.resolve_by_action_id, ref)
     if not ok:
         return JSONResponse({"error": "unknown or already resolved item"}, status_code=404)
-    return JSONResponse({"resolved": True, "id": item_id})
+    return JSONResponse({"resolved": True, "id": ref})

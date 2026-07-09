@@ -115,6 +115,11 @@ def send_action_requested(integration: dict | None, bot_id: str, item: dict) -> 
     payload = {
         "event": "action.requested",
         "bot_id": bot_id,
+        # Stable per-action id: the same value appears on this action inside the
+        # later session.ended artifact, so the orchestrator matches its live
+        # approval card to the final action (and dedupes) on the id — and passes
+        # it back to POST /org/actions/{action_id}/resolve to close the loop.
+        "action_id": (item or {}).get("action_id", ""),
         "external_ref": (integration or {}).get("external_ref") or {},
         "action": (item or {}).get("action", ""),
         "owner": (item or {}).get("owner", ""),

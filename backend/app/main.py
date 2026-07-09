@@ -1086,7 +1086,13 @@ def _merge_action_items(queued: list, extracted: list) -> list:
     """Artifact actions[] = live-captured queue_action items first, then the
     summarizer's extraction, deduped on normalized item text. A live capture
     wins a collision — it is the wording the room actually asked for — and
-    ledger.record_meeting dedupes again on insert, so double-merging is safe."""
+    ledger.record_meeting dedupes again on insert, so double-merging is safe.
+
+    Every returned action carries a stable ``action_id``: a live capture keeps
+    the id assigned at capture time (the same one already sent on its
+    action.requested webhook), and a summarizer-only action — which never fired
+    a live event — gets a fresh id here. The id is what the orchestrator dedupes
+    and resolves on."""
     merged: list = []
     seen: set[str] = set()
     for q in queued or []:
@@ -1098,6 +1104,7 @@ def _merge_action_items(queued: list, extracted: list) -> list:
         owner = (q.get("owner") or "").strip()
         merged.append(
             {
+                "action_id": q.get("action_id") or ledger.new_action_id(),
                 "item": text,
                 "owner": owner or "UNASSIGNED",
                 "deadline": (q.get("due") or "").strip(),
@@ -1112,6 +1119,8 @@ def _merge_action_items(queued: list, extracted: list) -> list:
             continue
         if key:
             seen.add(key)
+        a = dict(a) if isinstance(a, dict) else {"item": text}
+        a.setdefault("action_id", ledger.new_action_id())
         merged.append(a)
     return merged
 
@@ -1194,12 +1203,13 @@ async def _finalize_session_locked(
     # normalized item text. Runs BEFORE save_artifact and ledger.record_meeting
     # so every consumer — stored artifact, wire artifact, ledger, autopilot —
     # sees the same merged list. Plain non-orchestrated sessions benefit too.
+    # Always run the merge (even with no live captures) so EVERY action carries
+    # a stable action_id — the summarizer-only actions get one here too.
     queued_actions = list(getattr(session, "queued_actions", None) or [])
-    if queued_actions:
-        artifact["actions"] = _merge_action_items(
-            queued_actions, artifact.get("actions") or []
-        )
-        artifact["checklist"] = artifact["actions"]  # legacy alias, same list
+    artifact["actions"] = _merge_action_items(
+        queued_actions, artifact.get("actions") or []
+    )
+    artifact["checklist"] = artifact["actions"]  # legacy alias, same list
 
     # The transcript is the raw material of the artifact — persist it so the
     # product output is complete (transcript + summary + checklist + email).

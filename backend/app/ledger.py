@@ -20,11 +20,21 @@ Design constraints:
 from __future__ import annotations
 
 import re
+import sqlite3
 import time
+import uuid
 from typing import Any
 
 from . import store
 from .meeting_state import humanize_step
+
+
+def new_action_id() -> str:
+    """A fresh stable id for one action item. Assigned once (at live capture, or
+    at finalize for a summarizer-only action) and carried through the
+    action.requested webhook, the artifact's actions[], and this ledger row — so
+    the orchestrator correlates + dedupes + resolves on it."""
+    return uuid.uuid4().hex[:16]
 
 _MEET_CODE = re.compile(r"meet\.google\.com/([a-z\-]+)", re.IGNORECASE)
 _ZOOM_CODE = re.compile(r"zoom\.us/j/(\d+)", re.IGNORECASE)
@@ -64,14 +74,25 @@ def _init_db() -> None:
                 meeting_type TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'open',   -- open | done | noted
                 bot_id TEXT NOT NULL DEFAULT '',
+                action_id TEXT NOT NULL DEFAULT '',    -- stable cross-channel id (actions)
                 created_at REAL NOT NULL,
                 resolved_at REAL,
                 resolved_by_bot_id TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_ledger_key_status
                 ON ledger_items(meeting_key, status);
+            CREATE INDEX IF NOT EXISTS idx_ledger_action_id
+                ON ledger_items(action_id);
             """
         )
+        # Migration for stores created before the action_id column.
+        try:
+            conn.execute(
+                "ALTER TABLE ledger_items "
+                "ADD COLUMN action_id TEXT NOT NULL DEFAULT ''"
+            )
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 def _norm(text: str) -> str:
@@ -123,7 +144,8 @@ def record_meeting(
             ).fetchall()
         }
 
-        def _insert(kind: str, item: str, owner: str = "", deadline: str = "", status: str = "open") -> None:
+        def _insert(kind: str, item: str, owner: str = "", deadline: str = "",
+                    status: str = "open", action_id: str = "") -> None:
             nonlocal added
             item = (item or "").strip()[:200]
             if not item or (kind, _norm(item)) in existing:
@@ -131,9 +153,10 @@ def record_meeting(
             conn.execute(
                 """INSERT INTO ledger_items
                    (meeting_key, avatar_id, kind, item, owner, deadline,
-                    meeting_type, status, bot_id, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (key, avatar_id, kind, item, owner, deadline, meeting_type, status, bot_id, now),
+                    meeting_type, status, bot_id, action_id, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (key, avatar_id, kind, item, owner, deadline, meeting_type,
+                 status, bot_id, action_id, now),
             )
             existing.add((kind, _norm(item)))
             added += 1
@@ -141,7 +164,7 @@ def record_meeting(
         for a in artifact.get("actions") or []:
             if isinstance(a, dict):
                 _insert("action", a.get("item", ""), a.get("owner", "") or "",
-                        a.get("deadline", "") or "")
+                        a.get("deadline", "") or "", action_id=a.get("action_id", "") or "")
             else:
                 _insert("action", str(a))
         for step in current_missing:
@@ -207,6 +230,24 @@ def resolve_item(item_id: int, bot_id: str = "") -> bool:
             """UPDATE ledger_items SET status='done', resolved_at=?, resolved_by_bot_id=?
                WHERE id=? AND status='open'""",
             (time.time(), bot_id, item_id),
+        )
+        return cur.rowcount > 0
+
+
+def resolve_by_action_id(action_id: str, bot_id: str = "") -> bool:
+    """Close an action by its stable cross-channel action_id — the id the
+    orchestrator (Cedric) holds from the live action.requested event and the
+    session.ended artifact, so it can ack 'done/approved in Slack' without ever
+    seeing the numeric ledger row id. Only resolves after the meeting finalized
+    (when the row exists); an unknown/already-closed id is a no-op (False)."""
+    aid = (action_id or "").strip()
+    if not aid:
+        return False
+    with store._LOCK, store._connect() as conn:
+        cur = conn.execute(
+            """UPDATE ledger_items SET status='done', resolved_at=?, resolved_by_bot_id=?
+               WHERE action_id=? AND status='open'""",
+            (time.time(), bot_id, aid),
         )
         return cur.rowcount > 0
 
