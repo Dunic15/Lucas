@@ -174,6 +174,9 @@ class Settings(BaseSettings):
     execute_drive_notes: bool = True       # (within execute_enabled) file notes in Drive
     execute_calendar: bool = False         # (within execute_enabled) book action deadlines
     execute_timezone: str = "Europe/Rome"  # IANA tz for booked calendar events
+    execute_slack: bool = False            # (within execute_enabled) post recap to Slack
+                                           #   (needs SLACK_WEBHOOK_URL — the interim, no
+                                           #    dependency on Cedric's Slack app)
 
     # Proactive intervention (the differentiator): flag ONE missing step as the
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.
