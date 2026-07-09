@@ -2427,13 +2427,45 @@ async def recall_webhook(request: Request) -> JSONResponse:
         await _make_avatar_stop(session)
         return JSONResponse({"ok": True, "spoke": False, "stopped": True})
 
-    # ── voice dismissal ("Laura, you can leave") ──
+    # ── voice dismissal ("Cedric, you can leave") ──
     # Addressed by name + an explicit leave command → say goodbye, then end the
     # session exactly like a natural meeting end: bot leaves the call, the
     # post-meeting artifact is built, billing stops on both vendors. The
     # goodbye is best-effort — leaving (= stopping the meter) must never be
     # blocked by a TTS hiccup.
-    if called and settings.leave_on_command and detect_leave_command(question):
+    #
+    # Split-final case: "Cedric." and "you can leave" often arrive as TWO ASR
+    # finals — the first wakes (empty question), the second isn't a wake, so
+    # neither final alone fires the dismissal and a background reconcile poll
+    # ends the meeting late. Mirror the action-capture window above: if the SAME
+    # speaker addressed the avatar in the last few seconds, re-check the leave
+    # command on the CONCATENATED finals. Meter safety is preserved — the split
+    # path STILL requires a real recent address by the same speaker, so a stray
+    # "you can leave" from someone who never named the avatar can never end the
+    # meeting early.
+    leave_now = called and detect_leave_command(question)
+    if settings.leave_on_command and not leave_now and not called:
+        addressed = getattr(session, "last_addressed", None)
+        if addressed is not None:
+            a_speaker, a_ts, a_text = addressed
+            if (
+                speaker == a_speaker
+                and time.time() - a_ts < 4.0
+                and detect_leave_command(f"{a_text} {text}")
+            ):
+                leave_now = True
+    # Remember an address so the NEXT final can complete a split dismissal; a
+    # new speaker or a stale (>4s) window clears it.
+    if called:
+        session.last_addressed = (speaker, time.time(), text)
+    elif getattr(session, "last_addressed", None) is not None and (
+        speaker != session.last_addressed[0]
+        or time.time() - session.last_addressed[1] >= 4.0
+    ):
+        session.last_addressed = None
+
+    if settings.leave_on_command and leave_now:
+        session.last_addressed = None
         try:
             goodbye = _line_for(question or text, _GOODBYE_LINES, _GOODBYE_LINES_IT)
             await _make_avatar_speak(

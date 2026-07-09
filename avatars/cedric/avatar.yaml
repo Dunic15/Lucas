@@ -14,8 +14,15 @@ name: Cedric
 role: AI Colleague & Meeting Assistant (SFF Studio)
 
 # Names that "call" this avatar into the conversation.
+# The soft-C name is mis-transcribed by STT ("Cedric" -> "Sedric"/"Cedrick"),
+# which silently cost Cedric answers (and the "you can leave" dismissal). These
+# ASR spellings hit the EXACT-match path in decision.detect_wake — no fuzzy risk.
 wake_words:
   - cedric
+  - cedrick
+  - sedric
+  - sedrik
+  - sedrick
 
 # Who the avatar is and what it knows. Spoken aloud, so keep it tight.
 persona_prompt: >

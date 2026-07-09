@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.avatars import Avatar  # noqa: E402
-from app.decision import detect_wake, passes_confidence  # noqa: E402
+from app.decision import detect_wake, fuzzy_name_match, passes_confidence  # noqa: E402
 
 
 def _avatar(**over) -> Avatar:
@@ -131,3 +131,36 @@ def test_italian_reported_speech_does_not_wake():
     # vocative still wakes
     called, q = detect_wake(a, "Laura, cosa ne pensi?")
     assert called and q
+
+
+# ── phonetic-initial fuzzy match: STT mangles the soft-C name "Cedric" ──
+# (spoken "Cedric" is transcribed "Sedric"/"Kedric"/"Zedric" — the old literal
+# first-letter gate hard-rejected all of them, silently costing Cedric answers).
+
+
+def test_fuzzy_matches_sibilant_initial_corruptions():
+    for token in ("sedric", "kedric", "zedric"):
+        assert fuzzy_name_match(token, "cedric"), token
+
+
+def test_fuzzy_still_rejects_unrelated_names():
+    # the relaxed initial must NOT open the gate to genuinely different names
+    assert not fuzzy_name_match("frederick", "cedric")
+    assert not fuzzy_name_match("patrick", "cedric")
+    # non-sibilant initials are unaffected — "clara"/"sara" never wake "laura"
+    assert not fuzzy_name_match("clara", "laura")
+    assert not fuzzy_name_match("sara", "laura")
+    # existing Laura behaviour preserved (distance-1 + skeleton rules)
+    assert fuzzy_name_match("lora", "laura")
+    assert not fuzzy_name_match("libra", "laura")
+
+
+def test_detect_wake_cedric_asr_spellings_via_fuzzy():
+    # bare wake word (NO aliases) — proves the fuzzy path alone now resolves the
+    # soft-C corruptions, so this generalises beyond the exact-match aliases.
+    cedric = _avatar(id="cedric", name="Cedric", wake_words=["cedric"])
+    for utt in ("Sedric, what's the plan?", "Kedric, can you check?", "Zedric, hi"):
+        called, _ = detect_wake(cedric, utt)
+        assert called, utt
+    # a genuinely different name must not wake him
+    assert detect_wake(cedric, "Frederick, can you take this?")[0] is False
