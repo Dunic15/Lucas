@@ -54,7 +54,7 @@ history: [`CEDRIC-AVATAR-PLAN.md`](CEDRIC-AVATAR-PLAN.md) (superseded).
 | `GET /org/brief?meeting_url=…` | The carryover brief (what past meetings left open) |
 | `GET /org/actions` | Open action items across meetings, grouped by meeting key |
 | `GET /org/search?q=…` | Ask across every meeting — ledger items + meeting snippets mentioning the query ("what did we decide about pricing?") |
-| `POST /org/actions/{id}/resolve` | Close an item from the outside (e.g. ticked in Slack) |
+| `POST /org/actions/{id}/resolve` | Close an item from the outside (e.g. ticked in Slack). `{id}` is EITHER the numeric ledger row id OR the stable string `action_id` an action carries on `action.requested` / `actions[]` — use the `action_id` to ack an action you executed. `200 {resolved:true}`, `404` unknown/already-resolved (resolves only after the meeting finalized). |
 
 ### `POST /sessions/start`
 
@@ -96,7 +96,7 @@ POSTed to the session's `callback_url`, signed as above, `external_ref` echoed.
 | Event | Delivery | Payload core |
 |---|---|---|
 | `session.status` | best-effort, single attempt | `{event, bot_id, external_ref, status: "joining"\|"live"\|"failed", detail, at}` (`detail` always present, may be `""`; `failed` fires only for a fatal join) |
-| `action.requested` | best-effort, single attempt | `{event, bot_id, external_ref, action, owner, due, at}` — fired the moment someone asks the avatar to DO something mid-meeting, so the approval card is ready before the call ends. The artifact's `actions[]` stays the authoritative list (live captures are flagged `requested_live: true`). |
+| `action.requested` | best-effort, single attempt | `{event, bot_id, external_ref, action_id, action, owner, due, at}` — fired the moment someone asks the avatar to DO something mid-meeting, so the approval card is ready before the call ends. **`action_id`** is a stable id: the SAME action appears in the later `session.ended` `actions[]` carrying the same `action_id`, so **dedupe your live card against the final action on `action_id`, not on text** (the wording can still be extended after this event fired). The artifact's `actions[]` stays the authoritative list (live captures are flagged `requested_live: true`). |
 | `session.ended` | retried 3× (5s / 25s / 2m), then poll fallback | `{event, bot_id, external_ref, ended_at, artifact}` |
 
 ### The artifact (wire shape, additive)
@@ -107,9 +107,12 @@ participation[]?}`
 
 - **No `transcript` field, ever** (see principle 2). The same distilled copy
   is returned by `POST …/end` and `GET …/artifact`.
-- `actions[]` items may be plain strings or `{owner, item, deadline?,
-  gap_type?, requested_live?}` — parse defensively; `deadline` is not
-  guaranteed on every item.
+- `actions[]` items are `{action_id, owner, item, deadline?, gap_type?,
+  requested_live?}` (a legacy item may be a plain string with no id) — parse
+  defensively; `deadline` is not guaranteed on every item. **`action_id`** is
+  the stable key: it matches the `action.requested` you saw live (dedupe on it)
+  and is what you pass back to `POST /org/actions/{action_id}/resolve` to ack an
+  action you executed.
 - `meeting_type` and `participation` appear only when the meeting produced a
   transcript; a silent/empty meeting yields the seed shape and
   `follow_up_email` may be `{}`. Parse all fields as optional.

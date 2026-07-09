@@ -97,20 +97,25 @@ def test_queue_action_dispatch_captures_on_session(client):
     # Spoken confirmation promises follow-up, never execution.
     assert "queue" in out.lower() and "approval" in out.lower()
     assert not out.lower().startswith("error")
-    assert session.queued_actions == [
-        {"action": "Send the recap to Marco", "owner": "Ben", "due": "Friday"}
-    ]
+    assert len(session.queued_actions) == 1
+    a0 = session.queued_actions[0]
+    assert {k: a0[k] for k in ("action", "owner", "due")} == {
+        "action": "Send the recap to Marco", "owner": "Ben", "due": "Friday"
+    }
+    # A stable id is assigned at capture — it rides action.requested and the
+    # artifact so the orchestrator correlates the two.
+    assert a0["action_id"] and isinstance(a0["action_id"], str)
 
     # dispatch_for binds the session with the (name, args) signature the LLM
     # tool loop expects.
     bound = tools.dispatch_for(session)
     bound("queue_action", {"action": "Book a follow-up"})
     assert len(session.queued_actions) == 2
-    assert session.queued_actions[1] == {
-        "action": "Book a follow-up",
-        "owner": "",
-        "due": "",
+    a1 = session.queued_actions[1]
+    assert {k: a1[k] for k in ("action", "owner", "due")} == {
+        "action": "Book a follow-up", "owner": "", "due": ""
     }
+    assert a1["action_id"] and a1["action_id"] != a0["action_id"]  # distinct per action
 
     # Validation: an empty action is rejected and captures nothing.
     err = tools.dispatch("queue_action", {"action": "   "}, session=session)
@@ -207,9 +212,17 @@ def test_orchestrated_capture_fires_action_requested(client, recall_stubbed, mon
     integration, delivered_bot, item = delivered[0]
     assert delivered_bot == bot_id
     assert integration["external_ref"] == {"team": "T1", "meet_session_id": "ms_1"}
-    # PII rule: only the distilled action/owner/due cross — nothing else.
-    assert item == {"action": "Send the recap to Marco", "owner": "Ben", "due": ""}
-    assert delivered[1][2] == {"action": "Book a follow-up", "owner": "", "due": "Friday"}
+    # PII rule: only the distilled action/owner/due cross (+ the non-PII
+    # correlation action_id) — never transcript content.
+    assert {k: item[k] for k in ("action", "owner", "due")} == {
+        "action": "Send the recap to Marco", "owner": "Ben", "due": ""
+    }
+    assert item["action_id"]  # the live event carries the id for correlation
+    d1 = delivered[1][2]
+    assert {k: d1[k] for k in ("action", "owner", "due")} == {
+        "action": "Book a follow-up", "owner": "", "due": "Friday"
+    }
+    assert d1["action_id"] and d1["action_id"] != item["action_id"]
 
 
 def test_action_requested_payload_and_external_ref_echo(monkeypatch):
@@ -523,6 +536,48 @@ def test_live_route_bare_imperative_captures(client, recall_stubbed, spoken, mon
     session = store.get(bot_id)
     assert len(session.queued_actions) == 1
     assert "schedule a follow-up with marco" in session.queued_actions[0]["action"].lower()
+
+
+# ── stable action_id: correlate the live event to the final artifact ───
+
+
+def test_action_id_correlates_live_event_and_artifact(client, recall_stubbed, spoken, monkeypatch):
+    """The SAME action_id rides the live action.requested AND appears on that
+    action in the session.ended artifact — so Cedric dedupes the live approval
+    card against the final action on the id, not on text (the continuation
+    window can extend the text after the live event already fired)."""
+    live_ids: list = []
+    monkeypatch.setattr(
+        cedric_callback,
+        "send_action_requested",
+        lambda integration, bot_id, item: live_ids.append(item.get("action_id")) or True,
+    )
+    monkeypatch.setattr(cedric_callback, "send_ended", lambda *a: True)
+
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    _post_final(client, bot_id, "Ben", "Cedric, schedule a follow-up with Marco on Friday")
+    assert _wait_until(lambda: len(live_ids) == 1)
+    live_id = live_ids[0]
+    assert live_id  # the live event carried a real id
+
+    actions = client.post(f"/sessions/{bot_id}/end").json()["actions"]
+    match = [a for a in actions if a.get("action_id") == live_id]
+    assert len(match) == 1  # correlated across channels by id, exactly once
+    assert "schedule a follow-up with marco" in match[0]["item"].lower()
+    assert match[0]["requested_live"] is True
+
+
+def test_every_finalized_action_is_id_stamped(client, recall_stubbed, monkeypatch):
+    """Even a summarizer-only action (no live queue_action) gets a stable
+    action_id at finalize, so every action Cedric receives is addressable."""
+    monkeypatch.setattr(cedric_callback, "send_ended", lambda *a: True)
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    session = store.get(bot_id)
+    session.add_utterance("Ben", "We need to send the rollout doc to Marco by Friday")
+
+    actions = client.post(f"/sessions/{bot_id}/end").json()["actions"]
+    assert actions  # the stub extracts the "need to…" line as an action
+    assert all(a.get("action_id") for a in actions)  # every one addressable
 
 
 # ── (e) the wire artifact stays transcript-free ────────────────────────

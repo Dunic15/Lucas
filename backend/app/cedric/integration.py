@@ -167,14 +167,17 @@ def notify_action_requested(session: Any, bot_id: str, item: dict) -> None:
     ends. No-ops unless the session is orchestrated (integration with a
     callback_url). Fire-and-forget and OFF the live path — the artifact's
     actions[] at finalize stays the authoritative copy, so a lost event costs
-    nothing. PII rule: only the distilled action/owner/due leave — never
-    transcript content."""
+    nothing. PII rule: only the distilled action/owner/due (plus the stable,
+    non-PII action_id used to correlate this event with the final artifact)
+    leave — never transcript content."""
     if session is None or not session.integration:
         return
     integration = dict(session.integration)
     if not integration.get("callback_url"):
         return
-    wire_item = {k: (item or {}).get(k, "") for k in ("action", "owner", "due")}
+    wire_item = {
+        k: (item or {}).get(k, "") for k in ("action_id", "action", "owner", "due")
+    }
     try:
         asyncio.get_running_loop()
     except RuntimeError:

@@ -22,6 +22,7 @@ from __future__ import annotations
 import ast
 import json
 import operator
+import uuid
 from datetime import date, datetime
 
 # ───────────────────────────── calculator ─────────────────────────────
@@ -132,6 +133,13 @@ def capture_action(session, action: str, owner: str = "", due: str = "") -> dict
     no network, no disk, no sqlite here.
     """
     item = {
+        # Stable id assigned ONCE here, at capture. It rides the live
+        # action.requested webhook AND survives into the artifact's actions[],
+        # so the orchestrator (Cedric) correlates the two — and dedupes — on the
+        # id, not on text (which the ASR-continuation window can still extend
+        # after the webhook already fired). Also the key the /org resolve
+        # endpoint accepts back for the ack loop.
+        "action_id": uuid.uuid4().hex[:16],
         "action": " ".join((action or "").split())[:300],
         "owner": " ".join((owner or "").split())[:100],
         "due": " ".join((due or "").split())[:100],

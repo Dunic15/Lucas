@@ -74,6 +74,31 @@ def test_org_resolve_closes_item(client):
     assert client.post(f"/org/actions/{item_id}/resolve").status_code == 404
 
 
+def test_org_resolve_by_action_id(client):
+    """Cedric closes an action by its stable action_id — the id it holds from the
+    live action.requested event and the session.ended artifact — without ever
+    seeing the numeric ledger row id."""
+    ledger.record_meeting(
+        MEETING_URL,
+        "cedric",
+        "bot_aid",
+        {"actions": [
+            {"item": "Book a follow-up", "owner": "Ben", "deadline": "Fri",
+             "action_id": "aid_abc123"}
+        ]},
+    )
+    key = ledger.meeting_key(MEETING_URL)
+    assert any(i["action_id"] == "aid_abc123" for i in ledger.items(key, status="open"))
+
+    resp = client.post("/org/actions/aid_abc123/resolve")
+    assert resp.status_code == 200 and resp.json()["resolved"] is True
+    assert all(i["action_id"] != "aid_abc123" for i in ledger.items(key, status="open"))
+    # already-resolved / unknown id → clean 404 (idempotent for the caller)
+    assert client.post("/org/actions/aid_abc123/resolve").status_code == 404
+    # the numeric-id path still works alongside it
+    assert client.post("/org/actions/999999/resolve").status_code == 404
+
+
 def test_org_endpoints_respect_bearer_gate(client, monkeypatch):
     monkeypatch.setattr(settings, "laura_api_token", "sekrit")
     assert client.get("/org/brief", params={"meeting_url": MEETING_URL}).status_code == 401
