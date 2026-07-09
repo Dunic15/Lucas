@@ -81,11 +81,14 @@ def _init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_ledger_key_status
                 ON ledger_items(meeting_key, status);
-            CREATE INDEX IF NOT EXISTS idx_ledger_action_id
-                ON ledger_items(action_id);
             """
         )
-        # Migration for stores created before the action_id column.
+        # Migration for stores created before the action_id column. This MUST
+        # run BEFORE the action_id index below: on an EXISTING ledger DB the
+        # CREATE TABLE above is a no-op, so the column doesn't exist yet — and
+        # `CREATE INDEX ON ledger_items(action_id)` would raise "no such column"
+        # and crash the boot. (Fresh-DB tests never hit this ordering because
+        # their CREATE TABLE already includes the column.)
         try:
             conn.execute(
                 "ALTER TABLE ledger_items "
@@ -93,6 +96,11 @@ def _init_db() -> None:
             )
         except sqlite3.OperationalError:
             pass  # column already exists
+        # Column now guaranteed to exist (fresh OR migrated) — safe to index it.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ledger_action_id "
+            "ON ledger_items(action_id)"
+        )
 
 
 def _norm(text: str) -> str:

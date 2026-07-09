@@ -43,6 +43,55 @@ def test_meeting_key_extraction():
     assert ledger.meeting_key("https://example.com/room/7/") == "https://example.com/room/7"
 
 
+def test_init_db_migrates_pre_action_id_ledger():
+    """Regression: booting on an EXISTING ledger DB that predates the action_id
+    column must NOT crash. Prod's DB (restored via Litestream) already had a
+    ledger_items table, so CREATE TABLE IF NOT EXISTS was a no-op and indexing
+    action_id BEFORE the ALTER raised 'no such column' → boot crash → App Runner
+    rollback. Fresh-DB tests miss it (their CREATE TABLE includes the column)."""
+    from app import store
+
+    # Rebuild ledger_items with the OLD (pre-action_id) schema.
+    with store._LOCK, store._connect() as conn:
+        conn.execute("DROP TABLE IF EXISTS ledger_items")
+        conn.execute("DROP INDEX IF EXISTS idx_ledger_action_id")
+        conn.executescript(
+            """
+            CREATE TABLE ledger_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                meeting_key TEXT NOT NULL, avatar_id TEXT NOT NULL,
+                kind TEXT NOT NULL, item TEXT NOT NULL,
+                owner TEXT NOT NULL DEFAULT '', deadline TEXT NOT NULL DEFAULT '',
+                meeting_type TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open',
+                bot_id TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL,
+                resolved_at REAL, resolved_by_bot_id TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO ledger_items (meeting_key, avatar_id, kind, item, created_at)"
+            " VALUES ('k', 'cedric', 'action', 'legacy item', 1.0)"
+        )
+
+    # Boot again on the existing DB — must NOT raise (this is what rolled back).
+    ledger._init_db()
+
+    with store._LOCK, store._connect() as conn:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(ledger_items)").fetchall()]
+        assert "action_id" in cols  # column added by the migration
+        legacy = conn.execute(
+            "SELECT action_id FROM ledger_items WHERE item='legacy item'"
+        ).fetchone()
+        assert legacy[0] == ""  # pre-existing row survives with an empty id
+
+    # …and the full path works after migrating: record + resolve by action_id.
+    ledger.record_meeting(
+        MEET, "cedric", "bot_mig",
+        {"actions": [{"item": "Do X", "owner": "Ben", "action_id": "mig_1"}]},
+    )
+    assert ledger.resolve_by_action_id("mig_1") is True
+
+
 def test_record_and_carryover_and_resolution():
     url = "https://meet.google.com/led-gerte-st1"
     r1 = ledger.record_meeting(
