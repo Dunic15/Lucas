@@ -1,11 +1,13 @@
-"""Silent notetaker mode: a silent avatar never speaks during the meeting, but
-still captures the transcript, tracks state, and can build/deliver the artifact
-at the end. Cedric ships silent. Key-free."""
+"""Silent-mode MECHANISM: an avatar with silent=True never speaks during the
+meeting, but still captures the transcript / builds the artifact. Cedric and
+Laura both ship TALKING (silent=False) — Cedric interacts like a colleague and
+captures tasks in the background. Key-free."""
 from __future__ import annotations
 
 import asyncio
 import importlib
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -19,14 +21,20 @@ def _session(avatar_id: str, bot_id: str = "silent-bot") -> store.Session:
     return s
 
 
-def test_cedric_ships_silent_laura_talks():
-    assert avatars.load("cedric").silent is True
+def test_cedric_and_laura_both_talk():
+    # Both ship talking: Cedric interacts in the meeting AND captures tasks.
+    assert avatars.load("cedric").silent is False
     assert avatars.load("laura").silent is False
 
 
-def test_silent_avatar_never_speaks():
+def test_silent_flag_suppresses_speech(monkeypatch):
+    # The MECHANISM: an avatar configured silent never speaks. Since no shipped
+    # avatar is silent now, drive it with a synthetic silent avatar.
+    real = avatars.load("laura")
+    silent_av = replace(real, silent=True) if hasattr(real, "__dataclass_fields__") else real
+    monkeypatch.setattr(main.avatars, "load", lambda aid: silent_av)
     sent = []
-    s = _session("cedric")
+    s = _session("whoever")
 
     class FakeWS:
         async def send_json(self, m):
