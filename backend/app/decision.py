@@ -65,14 +65,29 @@ def _is_reported_reference(lower: str, wake: str) -> bool:
 # ASR mangles spoken names ("Laura" -> "Lara"/"Lora"/"Loura"); benchmarks show
 # explicit-name cue response drops from ~94% to ~68% under phonetic corruption
 # (docs/research/multiparty-meeting-intelligence.md). Guarded tightly: same
-# first letter, similar length, and edit distance 1 — or distance 2 only when
-# the consonant skeleton matches exactly ("lora"→"lr" == "laura"→"lr", while
-# "libra"→"lbr" stays out, and "clara" fails the first-letter check).
+# first letter (or a phonetically-equivalent sibilant initial — STT hears the
+# soft-C "Cedric" as "Sedric"/"Kedric"), similar length, and edit distance 1 —
+# or distance 2 only when the consonant skeleton matches exactly ("lora"→"lr"
+# == "laura"→"lr", while "libra"→"lbr" stays out, and "clara" still fails:
+# 'c' and 'l' are not equivalent initials).
 _VOWELS = set("aeiou")
 # Real dictionary words that sit within fuzzy range of a wake word but are
 # never a name. "laurea/lauree" (Italian: degree) is edit distance 1 from
 # "laura" — without this, every graduation mention would wake her.
 _FUZZY_EXCLUDE = {"laurea", "lauree", "lauro"}
+
+# Soft-C / sibilant initials ASR confuses: spoken "Cedric" is transcribed
+# "Sedric"/"Kedric"/"Zedric" (soft C ≈ /s/, hard C ≈ /k/). Treating c/s/k/z as
+# one initial class lets those corruptions resolve WITHOUT opening the gate to
+# unrelated names — the length + edit-distance checks still reject the rest, so
+# "Cedric" never matches "Frederick", and non-sibilant names are unaffected
+# ("clara" still fails against "laura": 'c' and 'l' aren't equivalent).
+_SIBILANT_INITIALS = frozenset("cskz")
+
+
+def _initials_equivalent(a: str, b: str) -> bool:
+    """First letters equal, or both phonetically-equivalent sibilant initials."""
+    return a == b or (a in _SIBILANT_INITIALS and b in _SIBILANT_INITIALS)
 
 
 def _levenshtein(a: str, b: str) -> int:
@@ -94,7 +109,7 @@ def fuzzy_name_match(token: str, name: str) -> bool:
         return True
     if token in _FUZZY_EXCLUDE:
         return False
-    if len(token) < 3 or len(name) < 4 or token[0] != name[0]:
+    if len(token) < 3 or len(name) < 4 or not _initials_equivalent(token[0], name[0]):
         return False
     d = _levenshtein(token, name)
     if d <= 1:

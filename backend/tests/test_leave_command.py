@@ -275,3 +275,135 @@ def test_leave_disabled_flag(monkeypatch, tmp_path):
     assert calls["leave"] == 0
     assert store.get(bot_id) is not None
     store.remove(bot_id)
+
+
+# ── Cedric soft-C name: ASR-spelling wake + split-final dismissal ──
+
+
+def test_cedric_asr_spellings_wake_and_leave():
+    """The soft-C name is transcribed "Sedric"/"Cedrick"/"Kedric"; each spelling
+    must still wake Cedric AND carry the leave command through (before this fix
+    "Cedric, you can leave" as "Sedric, …" silently never fired)."""
+    from app import avatars
+
+    cedric = avatars.load("cedric")
+    for utterance in (
+        "Sedric, you can leave",
+        "Sedrick, you can leave now",
+        "Cedrick, you can leave",
+        "Kedric, you can leave",  # not an alias — resolves via the fuzzy path
+    ):
+        called, question = detect_wake(cedric, utterance)
+        assert called, f"Cedric should wake on ASR spelling: {utterance!r}"
+        assert detect_leave_command(question), f"leave should fire: {utterance!r}"
+
+
+def _post_line_as(bot_id: str, text: str, speaker: str) -> dict:
+    class FakeRequest:
+        headers: dict = {}
+
+        async def body(self) -> bytes:
+            import json
+
+            return json.dumps(_transcript_payload(bot_id, speaker, text)).encode()
+
+    import json
+
+    resp = asyncio.run(main.recall_webhook(FakeRequest()))
+    return json.loads(resp.body)
+
+
+def _stub_cedric_webhook(monkeypatch, tmp_path, bot_id: str) -> dict:
+    """A Cedric session with vendors + speak + answer stubbed; returns the call
+    tracker. Lets a test post several finals to the SAME live session."""
+    calls = {"leave": 0, "spoken": []}
+    _stub_vendors(monkeypatch, tmp_path, calls)
+    s = store.create(bot_id, "https://meet.google.com/abc-defg-hij", "cedric")
+    s.memory_brief = ""
+
+    async def fake_speak(session, line, citations=None, **kw):
+        calls["spoken"].append(line)
+        return True
+
+    def no_answer(*a, **k):
+        yield from ()
+
+    monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+    monkeypatch.setattr(main, "answer_question_stream", no_answer)
+    return calls
+
+
+def test_webhook_split_leave_across_finals(monkeypatch, tmp_path):
+    """"Cedric." then "you can leave" arrive as TWO ASR finals — neither alone
+    fires the dismissal (the reported bug: a reconcile poll ended the meeting
+    late). Same speaker within the window must still end it now."""
+    bot_id = "leave-split-1"
+    calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+
+    b1 = _post_line_as(bot_id, "Cedric.", "Duccio")
+    assert b1.get("left") is None, "the bare name alone must NOT end the meeting"
+    assert store.get(bot_id) is not None
+
+    b2 = _post_line_as(bot_id, "you can leave", "Duccio")
+    assert b2.get("left") is True, "split dismissal across finals must fire"
+    assert calls["leave"] == 1, "bot must leave the call (meter stops)"
+    assert store.get(bot_id) is None, "session must be finalized/removed"
+
+
+def test_webhook_split_leave_requires_same_speaker(monkeypatch, tmp_path):
+    """Meter safety: a stray "you can leave" from a DIFFERENT speaker right after
+    someone named the avatar must NEVER end the meeting early."""
+    bot_id = "leave-split-2"
+    calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+
+    _post_line_as(bot_id, "Cedric.", "Duccio")
+    b2 = _post_line_as(bot_id, "you can leave", "Ben")
+    assert b2.get("left") is None
+    assert calls["leave"] == 0
+    assert store.get(bot_id) is not None
+    store.remove(bot_id)
+
+
+def test_webhook_split_leave_only_on_leave_followup(monkeypatch, tmp_path):
+    """Meter safety: addressing the avatar then just talking must not end the
+    meeting — the follow-up itself has to be a leave command."""
+    bot_id = "leave-split-3"
+    calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+
+    _post_line_as(bot_id, "Cedric.", "Duccio")
+    b2 = _post_line_as(bot_id, "let's move on to pricing", "Duccio")
+    assert b2.get("left") is None
+    assert calls["leave"] == 0
+    assert store.get(bot_id) is not None
+    store.remove(bot_id)
+
+
+def test_webhook_split_leave_ignores_substantive_address(monkeypatch, tmp_path):
+    """Meter safety (code-review repro): a SUBSTANTIVE address ("Cedric hold on a
+    second") must NOT arm the split window, so a later same-speaker aside
+    dismissing someone else ("Sara you can leave now") can never end the bot."""
+    bot_id = "leave-split-4"
+    calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+
+    _post_line_as(bot_id, "Cedric hold on a second", "Duccio")
+    b2 = _post_line_as(bot_id, "Sara you can leave now", "Duccio")
+    assert b2.get("left") is None, "a substantive address must not arm the window"
+    assert calls["leave"] == 0
+    assert store.get(bot_id) is not None
+    store.remove(bot_id)
+
+
+def test_webhook_split_leave_skips_dismissal_of_named_participant(monkeypatch, tmp_path):
+    """Meter safety: even after a BARE address, a follow-up that dismisses another
+    NAMED participant ("Sara, you can leave") is aimed at Sara, not the avatar —
+    it must not end the bot."""
+    bot_id = "leave-split-5"
+    calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+
+    _post_line_as(bot_id, "I think we're just about done", "Sara")  # Sara → roster
+    _post_line_as(bot_id, "Cedric.", "Duccio")                      # bare address → armed
+    b = _post_line_as(bot_id, "Sara you can leave now", "Duccio")
+    assert b.get("left") is None, "dismissing a named participant must not end the bot"
+    assert calls["leave"] == 0
+    assert store.get(bot_id) is not None
+    store.remove(bot_id)
