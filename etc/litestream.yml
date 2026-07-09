@@ -1,0 +1,35 @@
+# Litestream config — continuous S3 replication of Laura's org-memory SQLite DB.
+#
+# WHY: sessions/artifacts/ledger live in one SQLite file on App Runner's
+# EPHEMERAL disk, so every deploy wipes cross-meeting memory. Litestream tails
+# the SQLite WAL and ships changes to S3; on boot the wrapper restores from S3
+# before uvicorn starts. See docs/infra/STORAGE-DURABILITY.md (decision) and
+# docs/infra/STORAGE-ROLLOUT.md (owner steps).
+#
+# This file is consumed by scripts/start-with-litestream.sh, NOT by the Python
+# app — the app never imports or knows about Litestream.
+#
+# Values are ENV-EXPANDED at load (Litestream expands ${VAR} in the config).
+# The wrapper exports safe defaults for everything except LITESTREAM_REPLICA_URL,
+# which is the single on/off switch: unset it and the wrapper never invokes
+# Litestream at all (key-free local demo stays untouched).
+#
+#   LAURA_STORE_PATH        absolute path to the SQLite db (app + Litestream agree)
+#   LITESTREAM_REPLICA_URL  e.g. s3://laura-org-memory/store   (REQUIRED to enable)
+#   LITESTREAM_REGION       default eu-central-1  (same residency as Recall)
+#   LITESTREAM_SYNC_INTERVAL default 10s  (≤10s of tail loss on a hard crash)
+#   LITESTREAM_RETENTION    default 168h  (7 days of point-in-time recovery)
+
+dbs:
+  - path: ${LAURA_STORE_PATH}
+    replicas:
+      - url: ${LITESTREAM_REPLICA_URL}
+        region: ${LITESTREAM_REGION}
+        # Sync as often as the WAL changes (only uploads during live meetings).
+        sync-interval: ${LITESTREAM_SYNC_INTERVAL}
+        # Keep a week of history; noncurrent objects also expire via the bucket
+        # lifecycle rule (belt and suspenders — see STORAGE-ROLLOUT.md).
+        retention: ${LITESTREAM_RETENTION}
+        # Credentials come from the App Runner instance role
+        # (LauraAppRunnerInstanceRole) via the container-credentials endpoint —
+        # no access keys in env, no secrets in git.
