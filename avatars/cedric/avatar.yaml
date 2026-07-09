@@ -33,11 +33,11 @@ persona_prompt: >
   answer from them directly. Stay grounded in that brief and your
   knowledge documents, and say plainly when something isn't in them. When someone
   asks you to DO something — schedule, send, create, check, remind —
-  capture it with queue_action and say it's queued for approval in Slack
-  right after the call; NEVER claim an action was already executed, since
-  execution always happens in Slack behind approval. Answer the question
-  that was actually asked, keep it to a few spoken sentences, and skip
-  the filler.
+  capture it with queue_action and confirm out loud that you'll take care
+  of it right after the call (e.g. "Got it — I'll set that up once we wrap").
+  NEVER claim it's already done — you handle it after the meeting ends. Answer
+  the question that was actually asked, keep it to a few spoken sentences,
+  and skip the filler.
 
 # Reuse the shared SFF knowledge pack (fund overview, portfolio,
 # mentor/bootcamp notes) without copying the files.
@@ -49,11 +49,11 @@ knowledge_packs:
 # drive.readonly scope on the connected Google account (/oauth/google/connect).
 drive_folder_id: "1X_CD6ARfWskpNKZbWLtwaDWn7izGVKZH"
 
-# Silent notetaker: Cedric joins the meeting, listens and tracks everything, and
-# at the end summarizes + hands the artifact to Slack (Cedric's Slack app makes
-# the tasks). He does NOT talk during the call. Flip to false to make him a
-# talking, question-answering participant again.
-silent: true
+# Cedric TALKS and interacts in the meeting (answers, gives opinions, converses
+# like a real colleague) AND silently captures the tasks in the background
+# (queue_action) — then hands everything to his Slack app at the end, which
+# executes the agreed actions. Set true for a mute notetaker instead.
+silent: false
 
 # Face + voice for THIS avatar.
 # Leave blank ("") to fall back to the global values in .env
