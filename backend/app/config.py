@@ -228,6 +228,13 @@ class Settings(BaseSettings):
     # nudge one silent participant once as the meeting wraps up.
     greet_joiners: bool = True
     quiet_nudge_enabled: bool = True
+    # Opening settle-in ("wait to be called"): for this long after she joins she
+    # stays silent UNLESS directly addressed by name — no joiner greetings, no
+    # unprompted room-open answers — so she never talks over the room while it
+    # settles (hellos, "can you hear me?", late joiners). The window ends early
+    # the instant she's first addressed by name; after it, normal proactive
+    # behaviour resumes. 0 disables (revert to speaking from the first line).
+    opening_grace_seconds: float = 45.0
 
     # Server
     host: str = "127.0.0.1"

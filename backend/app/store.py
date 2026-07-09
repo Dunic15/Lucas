@@ -116,6 +116,15 @@ class Session:
     # once per meeting. In-memory only (a restart forgiving a second nudge is
     # harmless).
     quiet_nudge_done: bool = field(default=False, repr=False, compare=False)
+    # Opening settle-in ("wait to be called"): she stays silent unless directly
+    # addressed for the first settings.opening_grace_seconds after joining, so
+    # she never talks over the room while it settles (hellos, "can you hear me?",
+    # late joiners). `addressed_once` ends the grace early the instant she's
+    # first named. Both in-memory only: a mid-meeting restart harmlessly
+    # re-applies the short grace (not interrupting right after reconnecting is,
+    # if anything, desirable).
+    created_at: float = field(default_factory=time.time, repr=False, compare=False)
+    addressed_once: bool = field(default=False, repr=False, compare=False)
     _persist_enabled: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:

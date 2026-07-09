@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import main, store  # noqa: E402
+from app.config import settings  # noqa: E402
 from app.decision import addressed_to_other  # noqa: E402
 
 
@@ -18,7 +19,13 @@ from app.decision import addressed_to_other  # noqa: E402
 def _session(tmp_path, monkeypatch, bot_id="roster-bot") -> store.Session:
     monkeypatch.setattr(store, "STORE_PATH", tmp_path / "store.sqlite3")
     store._init_db()
-    return store.create(bot_id, "https://meet.google.com/abc-defg-hij", "laura")
+    s = store.create(bot_id, "https://meet.google.com/abc-defg-hij", "laura")
+    # These scenarios model a meeting already UNDERWAY (roster built, turns
+    # taken). Push past the opening settle-in grace so unaddressed lines exercise
+    # deference / greeting / nudge / follow-up instead of being held silent — the
+    # grace itself is covered on its own in test_opening_grace.py.
+    s.created_at -= settings.opening_grace_seconds + 1
+    return s
 
 
 def test_roster_tracks_joins_and_leaves(tmp_path, monkeypatch):
