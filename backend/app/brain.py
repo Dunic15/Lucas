@@ -375,14 +375,25 @@ def wants_deep_thought(question: str) -> bool:
 # the post-meeting summarizer; a false positive wrongly promises a follow-up.
 _ACTION_VERBS = (
     r"(?:send|schedule|book|set\s+up|draft|prepare|email|invite|"
+    # Messaging/posting verbs. `post(?!-)` so "post-meeting" (a common phrase)
+    # is NOT read as an imperative "post"; "post to Slack" / "post the recap" are.
+    r"ping|dm|message|post(?!-)|"
     r"follow\s+up|organi[sz]e|arrange|"
     r"remind\s+(?:me|us|him|her|them)\s+to|"
     r"(?:create|open)\s+(?:a\s+|an\s+|the\s+)?(?:ticket|task|issue|doc(?:ument)?|event|meeting|invite)|"
-    r"add\s+(?:\w+\s+)?to\s+(?:the\s+|my\s+|our\s+)?calendar)"
+    r"add\s+(?:\w+\s+)?to\s+(?:the\s+|my\s+|our\s+)?(?:calendar|slack|notion|channel))"
 )
+# Optional leading fillers so "Ok, schedule…", "So send…", "Also post…" still
+# read as bare imperatives (real speech rarely starts clean on the verb).
+_ACTION_LEAD = r"(?:(?:ok(?:ay)?|so|and|then|also|now|alright|yeah|hey|please)[,\s]+)*"
 _ACTION_INTENT = re.compile(
     rf"\b(?:can|could|will|would)\s+you\s+(?:please\s+)?{_ACTION_VERBS}\b"
     rf"|\bplease\s+{_ACTION_VERBS}\b"
+    # Bare imperative: the verb leads the (wake-stripped) ask, e.g. "schedule a
+    # follow-up with Marco", "send Priya an email", "post to Slack". The ^ anchor
+    # is the false-positive guard — plain statements ("we should send X", "I'll
+    # email him") don't START with the verb.
+    rf"|^{_ACTION_LEAD}{_ACTION_VERBS}\b"
     # Italian: "puoi/potresti mandare…", "mi mandi/prenoti…", "ricordami di…"
     r"|\b(?:puoi|potresti|riesci\s+a)\s+(?:mandar|inviar|prenotar|fissar|"
     r"organizzar|preparar)\w*\b"
@@ -823,6 +834,12 @@ Detect PROCESS GAPS, specifically any of: missing owner, missing deadline, \
 missing approval, missing required document, unresolved blocker. Only flag a \
 gap if it is genuinely implied by the discussion; do not pad the list.
 
+Capture EVERY action anyone asked for or committed to as an actions[] entry — \
+including brief, in-passing requests ("send the recap", "schedule a follow-up \
+with Marco", "post it to Slack", "email Priya") — even when no owner or deadline \
+was stated (use "UNASSIGNED"/"" and gap_type accordingly). Do not drop an action \
+just because it was said casually.
+
 Return ONLY a JSON object:
 {
   "summary": "<3-5 sentence plain summary of what was discussed and decided>",
@@ -972,10 +989,24 @@ def post_meeting(
                 f"Meeting transcript:\n\n{transcript_text}\n\n"
                 "Respond with the JSON object only."
             ),
-            max_tokens=1200,
+            max_tokens=4000,
             provider=post_provider(),
         )
         artifact = _parse_json(raw)
+        if _looks_degraded(artifact):
+            # The post model returned malformed/empty JSON (e.g. it truncated, or
+            # thinking ate the budget). NEVER ship a blank recap: rebuild
+            # deterministically from the silent tracker so summary + email +
+            # actions are always populated. A model hiccup degrades to a real
+            # (if plainer) artifact, not "".
+            print(
+                "[post_meeting] degraded model output; "
+                "rebuilding recap from the deterministic tracker",
+                flush=True,
+            )
+            artifact = _stub_post_meeting(
+                avatar, transcript_text, state, degraded=True
+            )
 
     return _finish_artifact(artifact, state)
 
@@ -1015,11 +1046,15 @@ def _looks_degraded(artifact: dict) -> bool:
 
 def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dict:
     """Normalize to the full artifact schema; state fills the deterministic
-    fields and backfills anything the model left out. A degraded model result
-    is discarded in favour of the deterministic tracker so the recap is never
-    garbled."""
+    fields and backfills anything the model left out.
+
+    NOTE: post_meeting() already recovers a degraded model result into a real
+    deterministic recap (summary + email + actions) before calling this, so the
+    guard below is now a defensive backstop only. It must not be the primary
+    degrade path — dropping to {} here leaves summary "" (the empty-summary bug);
+    a non-empty recap has to come from post_meeting."""
     if _looks_degraded(artifact):
-        artifact = {}  # drop the junk; everything below backfills from state
+        artifact = {}  # backstop: post_meeting normally intercepts this first
     artifact.setdefault("summary", "")
     artifact.setdefault("follow_up_email", {})
     # Clean any model-supplied list fields, then backfill from state when empty.
@@ -1083,9 +1118,17 @@ def _stub_answer(chunks: list[Retrieved]) -> dict:
 
 
 def _stub_post_meeting(
-    avatar: Avatar, transcript_text: str, state: "meeting_state.MeetingState"
+    avatar: Avatar,
+    transcript_text: str,
+    state: "meeting_state.MeetingState",
+    *,
+    degraded: bool = False,
 ) -> dict:
-    """Deterministic post-meeting artifact from simple transcript heuristics."""
+    """Deterministic post-meeting artifact from simple transcript heuristics.
+
+    `degraded=True` marks a recap built because the real post model returned an
+    unusable result (rather than because we're in offline stub mode) — only the
+    summary's mode note differs."""
     lines = [ln.strip() for ln in transcript_text.splitlines() if ln.strip()]
     speakers = []
     for ln in lines:
@@ -1113,12 +1156,17 @@ def _stub_post_meeting(
                 {"item": body[:160], "owner": "UNASSIGNED", "gap_type": gap}
             )
 
+    mode_note = (
+        "auto-generated from the meeting tracker after the summary model "
+        "returned an incomplete result"
+        if degraded
+        else "offline stub mode — enable a real brain for a true summary"
+    )
     summary = (
         f"{avatar.name} sat in on a meeting with {len(speakers)} participant(s) "
         f"({', '.join(speakers) or 'unknown'}) across {len(lines)} lines. "
         f"{len(checklist)} potential action item(s)/process gap(s) were detected "
-        "by keyword heuristics (offline stub mode — enable a real brain for a "
-        "true summary)."
+        f"by keyword heuristics ({mode_note})."
     )
     if state.meeting_type:
         summary += (

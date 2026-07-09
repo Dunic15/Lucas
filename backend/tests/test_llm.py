@@ -55,6 +55,81 @@ def test_anthropic_extraction_empty_when_no_text_block(monkeypatch):
     assert llm._complete_anthropic("sys", "user", 100, None) == ""
 
 
+def test_anthropic_disables_thinking_on_completions(monkeypatch):
+    """Non-streaming completions must turn extended thinking OFF so Sonnet-5's
+    thinking can't eat the max_tokens budget and truncate the JSON (the
+    empty-summary root cause). budget_tokens is never sent (400s on Sonnet-5)."""
+    seen = {}
+
+    class Msg:
+        content = [type("T", (), {"type": "text", "text": "ok"})()]
+
+    class Messages:
+        @staticmethod
+        def create(**kwargs):
+            seen.update(kwargs)
+            return Msg()
+
+    class Client:
+        messages = Messages()
+
+    monkeypatch.setattr(llm, "_thinking_supported", True)
+    monkeypatch.setattr(llm, "_ensure_anthropic", lambda: Client())
+    assert llm._complete_anthropic("sys", "user", 4000, "claude-sonnet-5") == "ok"
+    assert seen.get("thinking") == {"type": "disabled"}
+    assert "budget_tokens" not in seen
+    assert seen.get("max_tokens") == 4000
+
+
+def test_anthropic_retries_without_thinking_when_rejected(monkeypatch):
+    """A model/SDK that rejects the thinking param must not fail the completion:
+    retry once without it, and stop sending it thereafter."""
+    calls = []
+
+    class Msg:
+        content = [type("T", (), {"type": "text", "text": "ok"})()]
+
+    class Messages:
+        @staticmethod
+        def create(**kwargs):
+            calls.append(dict(kwargs))
+            if "thinking" in kwargs:
+                raise RuntimeError("thinking: unsupported parameter for this model")
+            return Msg()
+
+    class Client:
+        messages = Messages()
+
+    monkeypatch.setattr(llm, "_thinking_supported", True)
+    monkeypatch.setattr(llm, "_ensure_anthropic", lambda: Client())
+    assert llm._complete_anthropic("s", "u", 100, "legacy-model") == "ok"
+    assert len(calls) == 2  # first with thinking (rejected), retry without
+    assert "thinking" not in calls[1]
+    assert llm._thinking_supported is False  # won't try the param again
+
+
+def test_anthropic_logs_on_truncation(monkeypatch, capsys):
+    """stop_reason == max_tokens means the answer was cut off — log it (the
+    caller degrades to a deterministic recap) instead of silently truncating."""
+
+    class Msg:
+        stop_reason = "max_tokens"
+        content = [type("T", (), {"type": "text", "text": "partial"})()]
+
+    class Messages:
+        @staticmethod
+        def create(**kwargs):
+            return Msg()
+
+    class Client:
+        messages = Messages()
+
+    monkeypatch.setattr(llm, "_thinking_supported", True)
+    monkeypatch.setattr(llm, "_ensure_anthropic", lambda: Client())
+    assert llm._complete_anthropic("s", "u", 50, "m") == "partial"
+    assert "max_tokens" in capsys.readouterr().out
+
+
 def test_post_provider_split(monkeypatch):
     """BRAIN_PROVIDER_POST routes only the post-meeting path; live keeps
     BRAIN_PROVIDER. Unset -> same provider; anthropic without key -> stub."""
