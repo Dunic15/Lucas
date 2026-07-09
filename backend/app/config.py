@@ -177,6 +177,9 @@ class Settings(BaseSettings):
     execute_slack: bool = False            # (within execute_enabled) post recap to Slack
                                            #   (needs SLACK_WEBHOOK_URL — the interim, no
                                            #    dependency on Cedric's Slack app)
+    execute_actions: bool = False          # (within execute_enabled) AUTO-RUN the agreed
+                                           #   actions (calendar hold / Slack update; email
+                                           #   only to EXECUTE_RECAP_TO). Meeting = approval.
 
     # Proactive intervention (the differentiator): flag ONE missing step as the
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.
