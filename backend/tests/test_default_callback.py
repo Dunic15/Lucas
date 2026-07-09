@@ -78,3 +78,17 @@ def test_finalize_routes_to_cedric_and_skips_autonomous(client, monkeypatch):
     time.sleep(0.2)
     assert delivered == ["bot_a"]   # handed off to Cedric
     assert executed == []           # Laura's own execution skipped (no double-act)
+
+
+def test_default_context_url_pulls_pre_meeting(monkeypatch):
+    monkeypatch.setattr(settings, "surface_webhook_url", "")
+    monkeypatch.setattr(settings, "surface_context_url", "https://meet-cedric.com/api/laura/context")
+    integ = integration.build_integration(_Req(), "")
+    assert integ is not None
+    assert integ["context_url"] == "https://meet-cedric.com/api/laura/context"
+
+
+def test_explicit_context_url_wins(monkeypatch):
+    monkeypatch.setattr(settings, "surface_context_url", "https://default/context")
+    integ = integration.build_integration(_Req(context_url="https://explicit/ctx"), "")
+    assert integ["context_url"] == "https://explicit/ctx"
