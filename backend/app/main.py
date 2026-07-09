@@ -43,6 +43,7 @@ from . import (
     recall_client,
     anam_client,
     cedric,
+    dashboard,
     drive_client,
     granola_client,
     actions,
@@ -128,6 +129,7 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title="Callable AI Process Avatar", lifespan=_lifespan)
 app.include_router(tts.router)  # POST /tts (open-source avatar voice)
 app.include_router(org_api.router)  # /org/* — org-memory seam for surfaces (#48)
+app.include_router(dashboard.router)  # /dashboard — owner control view
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).
@@ -1253,6 +1255,18 @@ async def _finalize_session_locked(
     # product output is complete (transcript + summary + checklist + email).
     # It lives only in the artifact store (PII: never logged).
     artifact["transcript"] = transcript_text
+
+    # Attribution metadata: the session row is deleted below (store.remove), so
+    # the artifact is the only place that remembers WHICH avatar ran WHICH
+    # meeting — the dashboard groups meetings per avatar from these fields.
+    # Duration is approximated from first-to-last utterance timestamps (counts
+    # only; no utterance text — the guard hook forbids logging transcript).
+    artifact["avatar_id"] = session.avatar_id
+    artifact["meeting_url"] = session.meeting_url
+    if len(session.transcript) >= 2:
+        artifact["duration_seconds"] = int(
+            session.transcript[-1].ts - session.transcript[0].ts
+        )
 
     store.save_artifact(bot_id, artifact)
     # Cross-meeting memory: fold this meeting's extracted facts into the
