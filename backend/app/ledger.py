@@ -184,6 +184,23 @@ def open_by_meeting() -> dict[str, list[dict[str, Any]]]:
     return grouped
 
 
+def search(query: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    """Ledger items matching a free-text query in the item or owner text.
+    Powers 'what did we decide/commit about X across all meetings'."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    like = f"%{q}%"
+    with store._LOCK, store._connect() as conn:
+        rows = conn.execute(
+            """SELECT * FROM ledger_items
+               WHERE item LIKE ? OR owner LIKE ?
+               ORDER BY status='open' DESC, id DESC LIMIT ?""",
+            (like, like, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def resolve_item(item_id: int, bot_id: str = "") -> bool:
     with store._LOCK, store._connect() as conn:
         cur = conn.execute(
