@@ -6,14 +6,17 @@ as the bot camera. The BRAIN and TTS stay on the App Runner backend — this box
 only does face rendering, so it can be stopped whenever no meeting is running
 (GPU idle = money; same rule as the Recall meter).
 
-Two engines behind one seam (pick with AVATAR_ENGINE=stub|musetalk):
+Three engines behind one seam (pick with AVATAR_ENGINE=stub|musetalk|ditto):
 
   stub      — no GPU needed. Streams the reference portrait with a subtle
               breathing sway. Exists so the ENTIRE pipeline (page, websocket,
               framing, audio sync, meeting mode) is testable on a laptop today.
-  musetalk  — the real thing: MuseTalk (open source, Tencent) lip-syncs the
-              reference face to the audio in near-real-time on the GPU.
-              Install via setup.sh; expect launch-day tuning.
+  musetalk  — MuseTalk (open source, Tencent): lip-sync only, head stays
+              still. Install via setup.sh.
+  ditto     — Ditto (open source, Ant Group; Apache-2.0): lip-sync PLUS head
+              motion and expressions — the chosen production face
+              (owner-approved 2026-07-09). TRT online pipeline, Ampere+ GPU.
+              See Dockerfile.ditto + DITTO-LIVE.md; expect launch-day tuning.
 
 WebSocket protocol (single socket, /stream):
   client -> server:  {"type":"speak","audio_b64":"<mp3 base64>"}
@@ -160,7 +163,39 @@ class MuseTalkEngine:
             yield frame
 
 
-engine = (MuseTalkEngine if ENGINE == "musetalk" else StubEngine)(REFERENCE_IMAGE)
+class DittoEngine:
+    """Real engine #2: Ditto (Ant Group) — lip-sync + head motion/expressions.
+
+    Interface-compatible with StubEngine/MuseTalkEngine. The heavy imports
+    happen in start() so the module loads on any machine. The pipeline keeps
+    ONE StreamSDK alive (avatar registered once at warmup) and serves each
+    speak clip as an async stream of JPEG frames — see ditto_adapter.py.
+    """
+
+    def __init__(self, image_path: str) -> None:
+        self.image_path = image_path
+        self.pipeline = None
+        self._stub = StubEngine(image_path)  # idle frames while not talking
+
+    async def start(self) -> None:
+        # Deferred import: only exists on the GPU box (Dockerfile.ditto).
+        from ditto_adapter import DittoPipeline  # noqa: PLC0415
+
+        self.pipeline = DittoPipeline(self.image_path)
+        await asyncio.to_thread(self.pipeline.warmup, JPEG_QUALITY)
+
+    def next_idle_frame(self) -> bytes:
+        return self._stub.next_idle_frame()
+
+    async def talk_frames(self, audio_mp3: bytes):
+        """Yield Ditto-generated JPEG frames for this audio clip."""
+        async for frame in self.pipeline.stream(audio_mp3, fps=FPS,
+                                                jpeg_quality=JPEG_QUALITY):
+            yield frame
+
+
+_ENGINES = {"musetalk": MuseTalkEngine, "ditto": DittoEngine}
+engine = _ENGINES.get(ENGINE, StubEngine)(REFERENCE_IMAGE)
 
 
 @app.on_event("startup")

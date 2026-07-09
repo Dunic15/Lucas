@@ -46,6 +46,20 @@ class Avatar:
     # call (no greeting, answers, interventions, or nudges). For "just take
     # notes and hand off to Slack" rather than a talking participant.
     silent: bool = False
+    # Which face this avatar wears in meetings — the product's two tiers:
+    #   "talk"      -> free 3D model (TalkingHead, renders in the bot browser)
+    #   "photoreal" -> Ultra-HD photoreal face (Ditto on the GPU box)
+    #   ""          -> follow the global default (settings.avatar_page)
+    # Per-avatar so the dashboard can flip a single avatar's tier by writing
+    # this one field (avatar.yaml is mtime-cached: picked up with no restart).
+    face: str = ""
+
+    @property
+    def page(self) -> str:
+        """The renderer page this avatar's bot camera shows — its own `face`
+        tier when set, else the global default. Values match the route names
+        ("talk" | "photoreal" | "avatar")."""
+        return self.face or settings.avatar_page
 
     @property
     def knowledge_dir(self) -> Path:
@@ -130,6 +144,11 @@ def load(avatar_id: str) -> Avatar:
         ),
         drive_folder_id=str(_coalesce(raw.get("drive_folder_id"), "")).strip(),
         silent=bool(raw.get("silent", False)),
+        # face tier: only the known page names pass; anything else falls back
+        # to "" (= global default) rather than producing a 404 camera URL.
+        face=(lambda f: f if f in ("talk", "photoreal", "avatar") else "")(
+            str(_coalesce(raw.get("face"), "")).strip().lower()
+        ),
         dir=folder,
         knowledge_packs=[str(k) for k in (raw.get("knowledge_packs") or [])],
     )

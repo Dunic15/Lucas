@@ -1,0 +1,13 @@
+# EDF (enroot environment) per il test MuseTalk su Clariden — GH200 (aarch64).
+#
+# Copia questo file in ~/.edf/musetalk.toml sul login node di Clariden
+# (i job lo referenziano con --environment=musetalk).
+#
+# NOTE:
+#  - Immagine NGC multi-arch (ha la build arm64 con CUDA + torch preinstallato).
+#    NON installare torch via pip nel container: i wheel cu118 x86 non esistono
+#    su arm64 — si usa il torch dell'immagine.
+#  - EDF vuole percorsi REALI: niente $HOME o ~ (regola CSCS).
+image = "nvcr.io#nvidia/pytorch:25.01-py3"
+mounts = ["/capstor", "/iopsstor", "/users"]
+workdir = "/workspace"
