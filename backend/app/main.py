@@ -1082,6 +1082,29 @@ def _norm_action_text(text: str) -> str:
     return re.sub(r"\W+", " ", (text or "").lower()).strip()
 
 
+# Content-word dedup for actions. The LIVE path stores the raw spoken utterance
+# ("send the rollout doc to Marco by Friday"); the summarizer re-extracts the
+# SAME action but splits the deadline into its own field ("Send the rollout doc
+# to Marco" + deadline="Friday"). Exact-text dedup misses that, so both survive
+# with two action_ids — breaking the #84 dedup contract Cedric relies on.
+# Comparing on content-token subset catches the rephrase.
+_ACTION_STOP = frozenset("a an the to for of in on at by with and or please just".split())
+
+
+def _content_tokens(text: str) -> frozenset:
+    return frozenset(_norm_action_text(text).split()) - _ACTION_STOP
+
+
+def _same_action(a: str, b: str) -> bool:
+    """True when two action lines describe the SAME request — one content-token
+    set is a subset of the other. Requires >=2 shared content tokens so a single
+    shared verb ('send') never over-merges two distinct asks."""
+    ta, tb = _content_tokens(a), _content_tokens(b)
+    if len(ta) < 2 or len(tb) < 2:
+        return False
+    return ta <= tb or tb <= ta
+
+
 def _merge_action_items(queued: list, extracted: list) -> list:
     """Artifact actions[] = live-captured queue_action items first, then the
     summarizer's extraction, deduped on normalized item text. A live capture
@@ -1112,10 +1135,25 @@ def _merge_action_items(queued: list, extracted: list) -> list:
                 "requested_live": True,  # additive marker: asked out loud in-meeting
             }
         )
+    live_items = list(merged)  # everything so far is a live capture
     for a in extracted or []:
         text = a.get("item", "") if isinstance(a, dict) else str(a)
         key = _norm_action_text(text)
         if key in seen:
+            continue
+        # Semantic dedup against the live captures: the summarizer routinely
+        # re-extracts an action the room already asked live, just rephrased (the
+        # deadline split into its own field). Keep the LIVE entry — its action_id
+        # already went out on action.requested — and fold in the summarizer's
+        # structured owner/deadline where the live capture had none. (#84 dedup.)
+        dup = next((m for m in live_items if _same_action(text, m["item"])), None)
+        if dup is not None:
+            if isinstance(a, dict):
+                if not dup.get("deadline") and a.get("deadline"):
+                    dup["deadline"] = a["deadline"]
+                ow = (a.get("owner") or "").strip()
+                if dup.get("owner") in ("", "UNASSIGNED") and ow and ow != "UNASSIGNED":
+                    dup["owner"], dup["gap_type"] = ow, "none"
             continue
         if key:
             seen.add(key)
