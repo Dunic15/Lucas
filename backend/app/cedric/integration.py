@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import threading
 from typing import Any, Optional
 
@@ -68,6 +69,28 @@ def brief_too_large(brief: str) -> Optional[JSONResponse]:
     return None
 
 
+def default_external_ref() -> dict:
+    """SURFACE_EXTERNAL_REF (JSON, e.g. '{"team":"T1","slack_channel":"#cedric",
+    "requested_by":"duccio"}') parsed into the external_ref every session falls
+    back to. Live test 2026-07-10: sessions summoned by email/dashboard reached
+    the surface with external_ref {} — the orchestrator had no Slack channel to
+    route to, so cards and recaps were silently dropped. A configured default
+    makes EVERY meeting routable; a session that carries its own external_ref
+    (a real Cedric summon) still wins. Unset/invalid JSON → {} (old behaviour)."""
+    raw = (settings.surface_external_ref or "").strip()
+    if not raw:
+        return {}
+    try:
+        ref = json.loads(raw)
+        return ref if isinstance(ref, dict) else {}
+    except ValueError:
+        print(
+            "[cedric] SURFACE_EXTERNAL_REF is not valid JSON — ignoring it",
+            flush=True,
+        )
+        return {}
+
+
 def build_integration(req: Any, brief: str) -> Optional[dict]:
     """Assemble the per-session integration dict from a StartRequest, or None
     when the request carries no orchestrator wiring (plain local start).
@@ -89,7 +112,7 @@ def build_integration(req: Any, brief: str) -> Optional[dict]:
     return {
         "callback_url": callback or "",
         "context_url": context_url or "",
-        "external_ref": req.external_ref or {},
+        "external_ref": req.external_ref or default_external_ref(),
         "brief": brief,
         "meeting": (req.context.meeting if req.context else {}) or {},
         "context_refreshed": False,
@@ -123,7 +146,7 @@ def default_integration() -> Optional[dict]:
     return {
         "callback_url": callback or "",
         "context_url": context_url or "",
-        "external_ref": {},
+        "external_ref": default_external_ref(),
         "brief": "",
         "meeting": {},
         "context_refreshed": False,
