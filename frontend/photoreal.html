@@ -159,12 +159,13 @@
     return chunks;
   }
   let chain = Promise.resolve();
-  function say(text) {
+  function say(text, emotion) {
     if (!text || !text.trim()) return chain;
-    for (const piece of sentenceChunks(text)) sayOne(piece);
+    // Whole-answer emotion applies to each sentence clip it's split into.
+    for (const piece of sentenceChunks(text)) sayOne(piece, emotion);
     return chain;
   }
-  function sayOne(text) {
+  function sayOne(text, emotion) {
     const synth = (async () => {
       const r = await fetch("/tts", {
         method: "POST", headers: { "content-type": "application/json" },
@@ -180,7 +181,11 @@
         const bytes = Uint8Array.from(atob(audioB64), (c) => c.charCodeAt(0)).buffer;
         if (gpu && gpuReady) {
           pendingAudio.push(bytes);                 // played on the clip's first frame
-          gpu.send(JSON.stringify({ type: "speak", audio_b64: audioB64 }));
+          // emotion rides the speak message (additive): the GPU maps it to
+          // Ditto's `emo` so the whole face leans, not just the mouth. A
+          // single-mood server ignores the field.
+          gpu.send(JSON.stringify({ type: "speak", audio_b64: audioB64,
+                                    emotion: emotion || "neutral" }));
         } else {
           await playClip(bytes);                    // static-portrait fallback
         }
@@ -195,7 +200,7 @@
   // ── meeting mode: identical to talk.html (SSE push + slow poll) ─────────
   if (conversationId) {
     document.body.classList.add("meeting");
-    const handle = (msg) => { if (msg && msg.type === "speak" && msg.text) { unlockAudio(); say(msg.text); } };
+    const handle = (msg) => { if (msg && msg.type === "speak" && msg.text) { unlockAudio(); say(msg.text, msg.emotion); } };
     const es = new EventSource(`/avatar/stream/${encodeURIComponent(conversationId)}`);
     es.onmessage = (ev) => { try { handle(JSON.parse(ev.data)); } catch (_) {} };
     const poll = async () => {

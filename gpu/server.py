@@ -126,11 +126,12 @@ class StubEngine:
         self.i = (self.i + 1) % len(self.frames)
         return self.frames[self.i]
 
-    async def talk_frames(self, audio_mp3: bytes):
+    async def talk_frames(self, audio_mp3: bytes, emotion: str | None = None):
         """Stub 'talking': same idle loop for the clip's rough duration.
 
         Yields frames at FPS; duration is estimated from mp3 size (~4KB/s at
         32kbps mono — rough is fine, the page ends on talk_end anyway).
+        `emotion` is accepted for interface parity and ignored (no face).
         """
         seconds = max(0.8, len(audio_mp3) / 4000.0)
         for _ in range(int(seconds * FPS)):
@@ -161,8 +162,9 @@ class MuseTalkEngine:
     def next_idle_frame(self) -> bytes:
         return self._stub.next_idle_frame()
 
-    async def talk_frames(self, audio_mp3: bytes):
-        """Yield MuseTalk-generated JPEG frames for this audio clip."""
+    async def talk_frames(self, audio_mp3: bytes, emotion: str | None = None):
+        """Yield MuseTalk-generated JPEG frames for this audio clip.
+        `emotion` is accepted for interface parity (MuseTalk is mouth-only)."""
         async for frame in self.pipeline.stream(audio_mp3, fps=FPS,
                                                 jpeg_quality=JPEG_QUALITY):
             yield frame
@@ -192,10 +194,13 @@ class DittoEngine:
     def next_idle_frame(self) -> bytes:
         return self._stub.next_idle_frame()
 
-    async def talk_frames(self, audio_mp3: bytes):
-        """Yield Ditto-generated JPEG frames for this audio clip."""
+    async def talk_frames(self, audio_mp3: bytes, emotion: str | None = None):
+        """Yield Ditto-generated JPEG frames for this audio clip. The emotion
+        label (backend emotion.py) conditions Ditto's motion generator, so the
+        whole face leans into the line — see ditto_adapter.stream()."""
         async for frame in self.pipeline.stream(audio_mp3, fps=FPS,
-                                                jpeg_quality=JPEG_QUALITY):
+                                                jpeg_quality=JPEG_QUALITY,
+                                                emotion=emotion):
             yield frame
 
 
@@ -271,20 +276,25 @@ async def stream(ws: WebSocket) -> None:
     IDLE_SINCE = None
     await ws.send_text(json.dumps({"type": "hello", "mode": ENGINE, "fps": FPS,
                                    "face": aid if aid in engines else next(iter(engines))}))
-    speak_queue: asyncio.Queue[bytes] = asyncio.Queue()
+    # Each queued item is (audio, emotion|None): the page may tag a clip with
+    # a mood (backend emotion.py) and the engine leans the whole face into it.
+    # Absent/unknown labels render neutral, exactly as before.
+    speak_queue: asyncio.Queue = asyncio.Queue()
 
     async def reader() -> None:
         while True:
             msg = json.loads(await ws.receive_text())
             if msg.get("type") == "speak" and msg.get("audio_b64"):
-                await speak_queue.put(base64.b64decode(msg["audio_b64"]))
+                await speak_queue.put(
+                    (base64.b64decode(msg["audio_b64"]), msg.get("emotion"))
+                )
 
     reader_task = asyncio.create_task(reader())
     frame_interval = 1.0 / FPS
     try:
         while True:
             try:
-                audio = speak_queue.get_nowait()
+                audio, emotion = speak_queue.get_nowait()
             except asyncio.QueueEmpty:
                 audio = None
 
@@ -294,7 +304,7 @@ async def stream(ws: WebSocket) -> None:
                 first_frame = True
                 send_ratio = min(1.0, SEND_FPS / FPS) if SEND_FPS else 1.0
                 send_acc = 1.0  # the first frame always goes out
-                async for frame in eng.talk_frames(audio):
+                async for frame in eng.talk_frames(audio, emotion=emotion):
                     t0 = time.perf_counter()
                     send_acc += send_ratio
                     if send_acc >= 1.0:
