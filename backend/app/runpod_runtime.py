@@ -45,7 +45,12 @@ def _gql(query: str) -> dict:
     req = urllib.request.Request(
         f"{_API}?api_key={settings.runpod_api_key}",
         data=json.dumps({"query": query}).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            # Cloudflare davanti a api.runpod.io banna lo UA di default
+            # "Python-urllib" (403, error 1010): serve uno UA esplicito.
+            "User-Agent": "laura-backend/1.0",
+        },
     )
     with urllib.request.urlopen(req, timeout=20) as r:
         return json.loads(r.read())
@@ -73,7 +78,8 @@ def _resume_pod() -> None:
         print(f"[runpod] resume richiesto: {settings.runpod_pod_id} "
               f"-> {status.get('desiredStatus', out.get('errors'))}", flush=True)
     except Exception as e:  # noqa: BLE001 — solo infra, mai verso il meeting
-        print(f"[runpod] resume fallito ({type(e).__name__}) — la pagina resta "
+        print(f"[runpod] resume fallito ({type(e).__name__} "
+              f"{getattr(e, 'code', '')}) — la pagina resta "
               f"sul fallback", flush=True)
 
 
@@ -105,5 +111,6 @@ def _stop_if_still_idle() -> None:
         )
         print(f"[runpod] stop richiesto: {settings.runpod_pod_id}", flush=True)
     except Exception as e:  # noqa: BLE001
-        print(f"[runpod] stop fallito ({type(e).__name__}) — fermarlo a mano "
+        print(f"[runpod] stop fallito ({type(e).__name__} "
+              f"{getattr(e, 'code', '')}) — fermarlo a mano "
               f"da console.runpod.io", flush=True)
