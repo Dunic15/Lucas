@@ -255,6 +255,26 @@
   .al-addr{font-family:var(--mono);font-size:.9rem;font-weight:600;color:var(--text);word-break:break-all;flex:1;min-width:0;}
   .al-hint{margin-top:7px;font-size:.78rem;color:var(--dim);line-height:1.45;}
 
+  /* connect-the-brain row + status chips */
+  .brain{margin-bottom:10px;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2);}
+  .brain .br-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .brain .bn{font-size:.9rem;font-weight:600;}
+  .brain .bd{font-size:.75rem;color:var(--dim);margin-top:1px;}
+  .stchip{font-family:var(--mono);font-size:.62rem;letter-spacing:.05em;text-transform:uppercase;
+    padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--faint);flex:0 0 auto;}
+  .stchip.connected{color:#54D28F;border-color:rgba(84,210,143,.4);background:rgba(84,210,143,.08);}
+  .stchip.pending{color:#F5C33B;border-color:rgba(245,195,59,.4);background:rgba(245,195,59,.08);}
+  .brainform{display:none;margin-top:10px;gap:8px;flex-wrap:wrap;}
+  .brainform.open{display:flex;}
+  .brainform input{flex:1;min-width:150px;padding:9px 11px;border-radius:10px;border:1px solid var(--line);
+    background:var(--panel);color:var(--text);font-family:var(--font);font-size:.85rem;}
+  .brainform input:focus{outline:none;border-color:rgba(126,182,255,.5);}
+  .exec{font-family:var(--mono);font-size:.58rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 7px;border-radius:999px;margin-left:8px;border:1px solid var(--line);color:var(--faint);white-space:nowrap;}
+  .exec.done{color:#54D28F;border-color:rgba(84,210,143,.4);}
+  .exec.failed,.exec.rejected{color:var(--accent);border-color:rgba(245,72,77,.4);}
+  .exec.proposed,.exec.approved{color:var(--live);border-color:rgba(126,182,255,.4);}
+
   /* usage & billing */
   .usage-hero{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;}
   @media (max-width:640px){ .usage-hero{grid-template-columns:1fr;} }
@@ -593,6 +613,22 @@
       var conns=AV_CONN.map(function(c){
         return '<div class="crow"><div><div class="cn">'+c[1]+'</div><div class="cd">'+c[2]+'</div></div>'+
           '<button class="btn conn-btn" data-conn="'+c[0]+'">Connect</button></div>';}).join("");
+      // Connect the brain — the org→Slack-workspace link that lets Cedric (the
+      // brain repo) execute what this avatar captures in meetings.
+      var bc=(d.org_connections||[]).find(function(x){return x.avatar_id===a.id&&x.provider==="cedric-brain";});
+      var bst=bc?bc.status:"off";
+      var brain='<div class="brain"><div class="br-top"><div style="flex:1;min-width:0">'+
+        '<div class="bn">The brain — Cedric orchestrator</div>'+
+        '<div class="bd">Executes what’s agreed in meetings with its own tools'+
+        (bc&&bc.config&&bc.config.team_id?' · workspace '+esc(bc.config.team_id):'')+'</div></div>'+
+        '<span class="stchip '+esc(bst)+'">'+(bst==="off"?"not connected":esc(bst))+'</span>'+
+        (bst==="connected"||bst==="pending"
+          ?'<button class="btn conn-btn" data-brain-off="'+esc(a.id)+'">Disconnect</button>'
+          :'<button class="btn conn-btn" data-brain-on="'+esc(a.id)+'">Connect</button>')+'</div>'+
+        '<div class="brainform" id="bf-'+esc(a.id)+'">'+
+        '<input id="bf-team-'+esc(a.id)+'" placeholder="Slack team ID (e.g. T0123ABCD)" />'+
+        '<input id="bf-chan-'+esc(a.id)+'" placeholder="#channel for approvals (optional)" />'+
+        '<button class="btn primary" data-brain-save="'+esc(a.id)+'">Link brain</button></div></div>';
       return '<div class="avd"><div class="top">'+
           '<div class="idn"><span class="av" style="background:'+grad(a.id)+'">'+esc(a.name[0]||"?")+'</span>'+
           '<div><div class="nm">'+esc(a.name)+' <span class="pill '+(a.live_now?"live":"idle")+'">'+(a.live_now?"in call":"idle")+'</span></div>'+
@@ -603,7 +639,8 @@
             '<div class="al-hint">Add this address to any calendar invite — '+esc(a.name)+' joins the meeting.</div></div>':'')+
           '<div class="acts"><button class="btn primary" data-dispatch="'+esc(a.id)+'">Send to a meeting</button>'+
           '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a></div></div></div>'+
-          '<div class="cfg"><div class="sm-h">Connections</div><div class="conns-list">'+conns+'</div>'+
+          '<div class="cfg"><div class="sm-h">Configure</div>'+brain+
+          '<div class="conns-list">'+conns+'</div>'+
           '<div class="cnote">Personal connections — the avatar acts on your tools, with your permission. Coming soon.</div>'+
           '</div></div>'+
         '</div>';}).join("") || '<div class="empty">No avatars installed</div>';
@@ -615,6 +652,28 @@
       e.stopPropagation(); var v=b.getAttribute("data-copy");
       if(navigator.clipboard) navigator.clipboard.writeText(v);
       toast("Copied "+v+" — invite it to a meeting to summon this avatar."); }); });
+    // connect-the-brain: reveal the mini-form, save the link, or disconnect
+    $$("#av-grid [data-brain-on]").forEach(function(b){ b.addEventListener("click",function(e){
+      e.stopPropagation(); var f=$("#bf-"+b.getAttribute("data-brain-on")); if(f) f.classList.toggle("open"); }); });
+    $$("#av-grid [data-brain-save]").forEach(function(b){ b.addEventListener("click",function(e){
+      e.stopPropagation(); var id=b.getAttribute("data-brain-save");
+      var team=($("#bf-team-"+id)||{value:""}).value.trim(), chan=($("#bf-chan-"+id)||{value:""}).value.trim();
+      if(!team){ toast("The Slack team ID is required.",true); return; }
+      fetch("/dashboard/connections/brain",{method:"POST",headers:headers(),
+          body:JSON.stringify({avatar_id:id,team_id:team,channel:chan})})
+        .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
+        .then(function(res){ if(!res.ok) throw new Error(res.j.error||"request failed");
+          toast(res.j.status==="connected"
+            ?"Brain linked — meeting actions will flow to your Slack."
+            :"Saved — the link completes when the brain endpoint comes online.");
+          load(); })
+        .catch(function(err){ toast(err.message,true); }); }); });
+    $$("#av-grid [data-brain-off]").forEach(function(b){ b.addEventListener("click",function(e){
+      e.stopPropagation();
+      fetch("/dashboard/connections/brain/"+encodeURIComponent(b.getAttribute("data-brain-off")),
+          {method:"DELETE",headers:headers()})
+        .then(function(r){ if(!r.ok) throw new Error("could not disconnect"); toast("Brain disconnected."); load(); })
+        .catch(function(err){ toast(err.message,true); }); }); });
 
     // meetings tables — clean filterable columns; click a row for AI summary + actions
     function platformsIn(){ var s={}; (d.meetings||[]).forEach(function(m){ if(m.platform&&m.platform!=="—") s[m.platform]=1; }); return Object.keys(s); }
@@ -629,7 +688,7 @@
         '<div><div class="sm-h">AI summary</div><div class="summary">'+(m.summary?esc(m.summary):'<span style="color:var(--faint)">No summary captured.</span>')+'</div>'+
         (m.follow_up_subject?'<div class="sm-h" style="margin-top:12px">Follow-up email</div><div class="summary">'+esc(m.follow_up_subject)+'</div>':'')+'</div>'+
         '<div><div class="sm-h">Actions</div><div class="did">'+
-        (m.actions.length? m.actions.map(function(a){return '<div class="d'+(a.done?"":" attn")+'"><span class="ic">'+(a.done?"✓":"→")+'</span><span>'+esc(a.item)+(a.owner?' <span class="ow">· '+esc(a.owner)+'</span>':'')+'</span></div>';}).join("") : '<div class="empty" style="padding:6px 0;text-align:left">No actions captured.</div>')+
+        (m.actions.length? m.actions.map(function(a){return '<div class="d'+(a.done?"":" attn")+'"><span class="ic">'+(a.done?"✓":"→")+'</span><span>'+esc(a.item)+(a.owner?' <span class="ow">· '+esc(a.owner)+'</span>':'')+(a.execution?'<span class="exec '+esc(a.execution.status)+'" title="'+esc(a.execution.detail||"")+'">'+esc(a.execution.status)+'</span>':'')+'</span></div>';}).join("") : '<div class="empty" style="padding:6px 0;text-align:left">No actions captured.</div>')+
         (m.missing_steps.length?'<div class="sm-h" style="margin-top:12px">Missing steps</div>'+m.missing_steps.map(function(s){return '<div class="d attn"><span class="ic">!</span><span>'+esc(s.replace(/_/g," "))+'</span></div>';}).join(""):'')+
         '</div></div></td></tr>';
     }

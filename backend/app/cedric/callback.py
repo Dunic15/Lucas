@@ -248,3 +248,43 @@ def fetch_context(integration: dict | None) -> dict | None:
     except Exception as e:  # noqa: BLE001 — never block the join on a refresh
         print(f"[cedric-callback] context refresh failed: {e}", flush=True)
         return None
+
+
+def provision_org(
+    org_id: str, team_id: str, channel: str = "", avatar_id: str = ""
+) -> bool | None:
+    """Register a Laura org on the orchestrator (Connect the brain): POST the
+    org→workspace link to CEDRIC_ORGS_URL so Cedric can route this org's events
+    to its Slack team even without external_ref, and mint the org's own
+    webhook credentials on his side.
+
+    Returns True on 2xx, False on refusal/error, None when the endpoint isn't
+    configured yet (the connection stays 'pending' — contract step B, Cedric's
+    /api/laura/orgs, is in flight). Best-effort: any minted credentials in the
+    response are handled by ops (the signing registry env), NEVER stored or
+    logged here."""
+    url = settings.cedric_orgs_url.strip()
+    if not url:
+        return None
+    headers = {"Content-Type": "application/json"}
+    token = settings.cedric_orgs_token.strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    payload = {
+        "org_id": org_id,
+        "team_id": team_id,
+        "default_slack_channel": channel,
+        "avatar_id": avatar_id,
+    }
+    try:
+        with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
+            resp = client.post(url, json=payload, headers=headers)
+            target = _redirect_target(resp)
+            if target:
+                resp = client.post(target, json=payload, headers=headers)
+        ok = 200 <= resp.status_code < 300
+        print(f"[cedric-callback] org provisioning HTTP {resp.status_code}", flush=True)
+        return ok
+    except Exception as e:  # noqa: BLE001 — connection stays pending, retry later
+        print(f"[cedric-callback] org provisioning failed: {e}", flush=True)
+        return False

@@ -19,10 +19,12 @@ Public surface:
   - handle_webhook_status / notify_failed — relay Recall bot status
   - notify_action_requested — fire action.requested when queue_action captures
   - inject_brief        — fold the meeting brief into the live prompt memory
+  - provision_org       — register an org→workspace link (Connect the brain)
 """
 from __future__ import annotations
 
 from . import callback  # noqa: F401
+from .callback import provision_org  # noqa: F401
 from .integration import (  # noqa: F401
     ARTIFACT_VERSION,
     MAX_BRIEF_BYTES,
