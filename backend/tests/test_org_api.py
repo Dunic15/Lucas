@@ -63,15 +63,106 @@ def test_org_actions_groups_open_items(client):
 
 
 def test_org_resolve_closes_item(client):
+    """No body at all — the pre-outcome-contract client shape (Cedric today).
+    Must keep behaving byte-identically: item closes as 'done'."""
     _seed_ledger()
     key = ledger.meeting_key(MEETING_URL)
     item_id = ledger.items(key, status="open")[0]["id"]
 
     resp = client.post(f"/org/actions/{item_id}/resolve")
     assert resp.status_code == 200 and resp.json()["resolved"] is True
+    assert resp.json()["status"] == "done"  # response echoes the applied status
     assert all(i["id"] != item_id for i in ledger.items(key, status="open"))
+    assert ledger.items(key, status="done")[0]["id"] == item_id
     # unknown / already-resolved id → clean 404
     assert client.post(f"/org/actions/{item_id}/resolve").status_code == 404
+
+
+def test_org_resolve_empty_body_still_means_done(client):
+    """An explicitly-empty JSON object is 'done' too (body absent OR empty)."""
+    _seed_ledger()
+    key = ledger.meeting_key(MEETING_URL)
+    item_id = ledger.items(key, status="open")[0]["id"]
+    resp = client.post(f"/org/actions/{item_id}/resolve", json={})
+    assert resp.status_code == 200 and resp.json()["status"] == "done"
+    assert ledger.items(key, status="done")[0]["id"] == item_id
+
+
+def test_org_resolve_outcome_rejected_is_terminal(client):
+    _seed_ledger()
+    key = ledger.meeting_key(MEETING_URL)
+    item_id = ledger.items(key, status="open")[0]["id"]
+
+    resp = client.post(
+        f"/org/actions/{item_id}/resolve",
+        json={"outcome": "rejected", "detail": "owner declined in Slack"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"resolved": True, "id": str(item_id), "status": "rejected"}
+    assert ledger.items(key, status="open") == []  # no longer open
+    row = ledger.items(key, status="rejected")[0]
+    assert row["id"] == item_id
+    assert row["resolution_detail"] == "owner declined in Slack"
+    assert row["resolved_at"] is not None
+    # terminal exactly like done: a second resolve (any outcome) → 404
+    assert client.post(f"/org/actions/{item_id}/resolve").status_code == 404
+    assert (
+        client.post(f"/org/actions/{item_id}/resolve", json={"outcome": "done"}).status_code
+        == 404
+    )
+
+
+def test_org_resolve_outcome_failed_by_action_id(client):
+    """The failed outcome, via the stable action_id ref (Cedric's natural key)."""
+    ledger.record_meeting(
+        MEETING_URL,
+        "cedric",
+        "bot_fail",
+        {"actions": [{"item": "Send the contract", "owner": "Ben",
+                      "action_id": "aid_fail01"}]},
+    )
+    key = ledger.meeting_key(MEETING_URL)
+    resp = client.post(
+        "/org/actions/aid_fail01/resolve",
+        json={"outcome": "failed", "detail": "gmail auth expired"},
+    )
+    assert resp.status_code == 200 and resp.json()["status"] == "failed"
+    row = next(i for i in ledger.items(key) if i["action_id"] == "aid_fail01")
+    assert row["status"] == "failed"
+    assert row["resolution_detail"] == "gmail auth expired"
+    assert ledger.items(key, status="open") == []  # terminal — never reopens
+    assert client.post("/org/actions/aid_fail01/resolve").status_code == 404
+
+
+def test_org_resolve_invalid_outcome_400(client):
+    _seed_ledger()
+    key = ledger.meeting_key(MEETING_URL)
+    item_id = ledger.items(key, status="open")[0]["id"]
+
+    resp = client.post(f"/org/actions/{item_id}/resolve", json={"outcome": "exploded"})
+    assert resp.status_code == 400
+    assert "outcome" in resp.json()["error"]
+    # nothing was applied — the item is still open
+    assert ledger.items(key, status="open")[0]["id"] == item_id
+    # malformed JSON with a non-empty body is a client error too
+    resp = client.post(
+        f"/org/actions/{item_id}/resolve",
+        content=b"not json", headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 400
+    assert ledger.items(key, status="open")[0]["id"] == item_id
+
+
+def test_org_resolve_detail_capped_at_300(client):
+    _seed_ledger()
+    key = ledger.meeting_key(MEETING_URL)
+    item_id = ledger.items(key, status="open")[0]["id"]
+    resp = client.post(
+        f"/org/actions/{item_id}/resolve",
+        json={"outcome": "failed", "detail": "x" * 1000},
+    )
+    assert resp.status_code == 200
+    assert len(ledger.items(key, status="failed")[0]["resolution_detail"]) == 300
 
 
 def test_org_resolve_by_action_id(client):
