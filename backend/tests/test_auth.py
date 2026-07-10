@@ -369,6 +369,22 @@ def test_empty_allowlist_allows_all():
     assert auth.email_allowed("whoever@wherever.com") is True
 
 
+def test_allowed_endpoint_gates_by_email(client, monkeypatch):
+    # No allow-list configured -> not gated, everyone passes (login page shows
+    # Google directly).
+    r = client.get("/auth/allowed").json()
+    assert r["gated"] is False and r["allowed"] is True
+
+    # Allow-list on -> gated; only listed emails / domains may proceed.
+    monkeypatch.setattr(settings, "dashboard_allowed_emails", "vip@acme.com, @trusted.com")
+    assert client.get("/auth/allowed").json()["gated"] is True
+    assert client.get("/auth/allowed", params={"email": "vip@acme.com"}).json()["allowed"] is True
+    assert client.get("/auth/allowed", params={"email": "me@trusted.com"}).json()["allowed"] is True
+    assert client.get("/auth/allowed", params={"email": "stranger@gmail.com"}).json()["allowed"] is False
+    # never leaks the list itself
+    assert "acme" not in str(client.get("/auth/allowed").json())
+
+
 def test_non_ascii_cookie_does_not_crash():
     """A hostile cookie/state with a non-ASCII byte must not raise (hmac.
     compare_digest on a non-ASCII str raises TypeError) — it must read as

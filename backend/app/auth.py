@@ -345,3 +345,20 @@ def me(request: Request) -> JSONResponse:
             {"user": None, "auth_enabled": enabled()}, status_code=401
         )
     return JSONResponse({"user": user, "auth_enabled": enabled()})
+
+
+@router.get("/auth/allowed")
+def allowed(email: str = "") -> JSONResponse:
+    """Private-beta gate check for the login page. `gated` is True when an
+    allowlist is configured at all (DASHBOARD_ALLOWED_EMAILS) — the page skips
+    the email step and goes straight to Google when it isn't. `allowed` says
+    whether THIS email may proceed to Google; a non-allowed email is shown a
+    'coming soon' waitlist message instead of Google's unverified-app wall.
+    Reveals only a boolean, never the list."""
+    return JSONResponse(
+        {
+            "allowed": email_allowed(email),
+            "gated": bool(settings.dashboard_allowed_emails.strip()),
+            "auth_enabled": enabled(),
+        }
+    )
