@@ -315,3 +315,35 @@ def provision_org(
     except Exception as e:  # noqa: BLE001 — connection stays pending, retry later
         print(f"[cedric-callback] org provisioning failed: {e}", flush=True)
         return False
+
+
+def fetch_org_connectors(org_id: str) -> dict | None:
+    """The product bridge, read side: what the brain can touch for this org.
+    GET {orchestrator}/api/laura/connectors?org_id= — returns Cedric's
+    connector catalog with live state (connected / account label /
+    needs-reconnect) plus browser connect_url/manage_url links. PII-light by
+    contract (no account ids or tokens); Laura renders it verbatim in the
+    avatar's Configure tab and never stores it. None when the orchestrator
+    isn't configured/linked or on any failure."""
+    base = settings.cedric_orgs_url.strip()
+    if not base:
+        return None
+    # CEDRIC_ORGS_URL points at .../api/laura/orgs — the sibling route.
+    url = base.rstrip("/").rsplit("/", 1)[0] + "/connectors"
+    headers = {}
+    token = settings.cedric_orgs_token.strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
+            resp = client.get(url, params={"org_id": org_id}, headers=headers)
+            target = _redirect_target(resp)
+            if target:
+                resp = client.get(target, params={"org_id": org_id}, headers=headers)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        return data if isinstance(data, dict) else None
+    except Exception as e:  # noqa: BLE001 — the Configure tab just shows "unavailable"
+        print(f"[cedric-callback] connectors fetch failed: {e}", flush=True)
+        return None

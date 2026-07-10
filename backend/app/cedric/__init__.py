@@ -22,11 +22,12 @@ Public surface:
   - notify_action_requested — fire action.requested when queue_action captures
   - inject_brief        — fold the meeting brief into the live prompt memory
   - provision_org       — register an org→workspace link (Connect the brain)
+  - fetch_org_connectors — what the brain can touch (Configure tab bridge)
 """
 from __future__ import annotations
 
 from . import callback  # noqa: F401
-from .callback import provision_org  # noqa: F401
+from .callback import fetch_org_connectors, provision_org  # noqa: F401
 from .integration import (  # noqa: F401
     ARTIFACT_VERSION,
     MAX_BRIEF_BYTES,

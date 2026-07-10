@@ -401,6 +401,33 @@ async def connect_brain(request: Request) -> JSONResponse:
     )
 
 
+@router.get("/dashboard/connections/brain/connectors")
+async def brain_connectors(request: Request) -> JSONResponse:
+    """The product bridge, Laura side: what the connected brain can touch.
+    Proxies Cedric's GET /api/laura/connectors for the caller's org — live
+    connector catalog (connected / account label / needs-reconnect) plus his
+    browser consent links. PII-light passthrough by contract; nothing stored.
+    Requires the logged-in owner; org not linked yet → {"status":"pending"}."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+
+    from . import cedric  # local import, same reason as connect_brain's
+
+    linked = any(
+        c["provider"] == "cedric-brain" and c["status"] == "connected"
+        for c in store.connections_for_org(user["org_id"])
+    )
+    if not linked:
+        return JSONResponse({"status": "pending", "connectors": []})
+    data = await run_in_threadpool(cedric.fetch_org_connectors, user["org_id"])
+    if data is None:
+        return JSONResponse({"status": "unavailable", "connectors": []})
+    return JSONResponse({"status": "ok", **data})
+
+
 @router.delete("/dashboard/connections/brain/{avatar_id}")
 def disconnect_brain(avatar_id: str, request: Request) -> JSONResponse:
     """Mark the avatar's brain link disconnected (local state; the orchestrator
