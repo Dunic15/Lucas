@@ -161,13 +161,16 @@ EST_COST_PER_MIN = 0.04
 
 
 def _avatar_email(avatar_id: str) -> str:
-    """The avatar's personal address: the watched inbox with a +tag. Inviting
-    it to a meeting/calendar summons THIS avatar (avatars.from_invite_email)."""
+    """The avatar's personal address. The watched inbox IS the default avatar's
+    address (bare, no tag — an untagged invite falls back to it); every other
+    avatar is a +tag alias of it (avatars.from_invite_email routes the tag)."""
     raw = (settings.calendar_invite_emails or "").split(",")[0].strip()
     if "@" not in raw:
         return ""
     local, _, domain = raw.partition("@")
     base = local.split("+")[0]
+    if avatar_id == settings.default_avatar_id:
+        return f"{base}@{domain}"
     return f"{base}+{avatar_id}@{domain}"
 
 
