@@ -249,10 +249,11 @@
   .crow .cd{font-size:.74rem;color:var(--faint);margin-top:1px;}
   .crow .conn-btn{padding:6px 14px;font-size:.78rem;flex:0 0 auto;}
   .cnote{font-size:.76rem;color:var(--faint);margin-top:11px;line-height:1.5;}
-  .alias{margin-top:12px;padding:11px 13px;border:1px solid var(--accent-line);border-radius:12px;background:var(--accent-soft);}
-  .al-lbl{font-family:var(--mono);font-size:.62rem;letter-spacing:.06em;text-transform:uppercase;color:var(--live);margin-bottom:6px;}
+  .alias{margin-top:12px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--live-soft);}
   .al-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
-  .al-addr{font-family:var(--mono);font-size:.84rem;color:var(--text);word-break:break-all;flex:1;min-width:0;}
+  .al-ic{flex:0 0 auto;font-size:1rem;color:var(--live);}
+  .al-addr{font-family:var(--mono);font-size:.9rem;font-weight:600;color:var(--text);word-break:break-all;flex:1;min-width:0;}
+  .al-hint{margin-top:7px;font-size:.78rem;color:var(--dim);line-height:1.45;}
 
   /* usage & billing */
   .usage-hero{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;}
@@ -597,8 +598,9 @@
           '<div><div class="nm">'+esc(a.name)+' <span class="pill '+(a.live_now?"live":"idle")+'">'+(a.live_now?"in call":"idle")+'</span></div>'+
           '<div class="ro">'+esc(a.role)+' · '+a.meetings_total+' meeting'+(a.meetings_total===1?"":"s")+(a.last_meeting_at?' · last '+fmtWhen(a.last_meeting_at):'')+'</div>'+
           (a.persona?'<div class="persona">'+esc(a.persona)+(a.persona.length>=220?"…":"")+'</div>':'')+
-          (a.email?'<div class="alias"><div class="al-lbl">Invite this address to a meeting to summon '+esc(a.name)+'</div>'+
-            '<div class="al-row"><span class="al-addr">'+esc(a.email)+'</span><button class="btn conn-btn" data-copy="'+esc(a.email)+'">Copy</button></div></div>':'')+
+          (a.email?'<div class="alias"><div class="al-row"><span class="al-ic">✉</span>'+
+            '<span class="al-addr">'+esc(a.email)+'</span><button class="btn conn-btn" data-copy="'+esc(a.email)+'">Copy</button></div>'+
+            '<div class="al-hint">Add this address to any calendar invite — '+esc(a.name)+' joins the meeting.</div></div>':'')+
           '<div class="acts"><button class="btn primary" data-dispatch="'+esc(a.id)+'">Send to a meeting</button>'+
           '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a></div></div></div>'+
           '<div class="cfg"><div class="sm-h">Connections</div><div class="conns-list">'+conns+'</div>'+

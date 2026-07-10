@@ -134,6 +134,20 @@ def test_hidden_avatar_excluded_and_enriched(client):
     assert "minutes_total" in laura
 
 
+def test_avatar_email_default_bare_others_tagged(client):
+    """The watched inbox IS the default avatar's address (bare); every other
+    avatar is a +tag alias of it. An untagged invite falls back to the default
+    avatar, so the bare address genuinely summons it."""
+    data = client.get("/dashboard/summary").json()
+    by_id = {a["id"]: a for a in data["avatars"]}
+    raw = settings.calendar_invite_emails.split(",")[0].strip()
+    local, _, domain = raw.partition("@")
+    base = local.split("+")[0]
+    assert by_id[settings.default_avatar_id]["email"] == f"{base}@{domain}"
+    other = next(i for i in by_id if i != settings.default_avatar_id)
+    assert by_id[other]["email"] == f"{base}+{other}@{domain}"
+
+
 def test_billing_block_real_minutes(client):
     _seed_artifact()  # duration_seconds = 1860 => 31 min
     b = client.get("/dashboard/summary").json()["billing"]
