@@ -104,3 +104,28 @@ async def org_resolve(ref: str, request: Request) -> JSONResponse:
     if not ok:
         return JSONResponse({"error": "unknown or already resolved item"}, status_code=404)
     return JSONResponse({"resolved": True, "id": ref})
+
+
+@router.post("/actions/{action_id}/status")
+async def org_action_status(action_id: str, request: Request) -> JSONResponse:
+    """Execution provenance from the orchestrator: where an action stands on
+    the brain's side (proposed → approved/rejected → done/failed), keyed on the
+    stable action_id it received in action.requested / session.ended. Upsert,
+    latest wins; 'done' also closes the ledger item (same as /resolve). The
+    dashboard shows this per action — the meter of 'my avatar's asks actually
+    got executed'. Body: {"status": "...", "detail": "one-liner, optional"}."""
+    if err := cedric.auth_error(request):
+        return err
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    status = str((body or {}).get("status") or "")
+    detail = str((body or {}).get("detail") or "")
+    ok = await run_in_threadpool(ledger.set_action_status, action_id, status, detail)
+    if not ok:
+        return JSONResponse(
+            {"error": f"status must be one of {list(ledger.EXECUTION_STATUSES)}"},
+            status_code=400,
+        )
+    return JSONResponse({"recorded": True, "action_id": action_id, "status": status.lower()})

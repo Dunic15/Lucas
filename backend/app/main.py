@@ -1085,7 +1085,11 @@ async def _start_avatar_session(
     if integration is None:
         integration = cedric.default_integration()
     if integration:
-        session.integration = integration
+        # Tenancy on the wire: every callback event carries the owning org so
+        # the orchestrator can resolve the tenant even when external_ref is
+        # empty (dashboard/email summons) — and the sender can pick a per-org
+        # signing secret. "" for service starts keeps today's behaviour.
+        session.integration = {**integration, "org_id": org_id}
     session.anam_conversation_id = conversation_id
     store.register_conversation(conversation_id, bot["id"])
     # Cross-meeting memory: what previous sessions of this meeting link left

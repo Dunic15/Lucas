@@ -19,7 +19,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import auth, avatars, store
+from . import auth, avatars, ledger, store
 from .config import settings
 
 router = APIRouter(tags=["dashboard"])
@@ -44,14 +44,17 @@ def _platform(meeting_url: str) -> str:
 
 
 def _action_entry(action) -> dict:
-    """Normalize an artifact action (dict or bare string) for the wire."""
+    """Normalize an artifact action (dict or bare string) for the wire.
+    action_id rides along so summary() can decorate each action with the
+    execution state the orchestrator reported back (ledger.action_statuses)."""
     if isinstance(action, dict):
         return {
+            "action_id": str(action.get("action_id") or ""),
             "item": str(action.get("item") or action.get("step") or "")[:300],
             "owner": str(action.get("owner") or "")[:80],
             "done": bool(action.get("done") or action.get("status") == "done"),
         }
-    return {"item": str(action)[:300], "owner": "", "done": False}
+    return {"action_id": "", "item": str(action)[:300], "owner": "", "done": False}
 
 
 def _meeting_row(row: dict) -> dict:
@@ -203,6 +206,16 @@ def dashboard_summary(request: Request) -> JSONResponse:
         for m in (_meeting_row(r) for r in artifact_rows)
         if visible(m["org_id"])
     ]
+
+    # Execution provenance: decorate each action with the state the brain
+    # (Cedric) reported via POST /org/actions/{id}/status — one batched query.
+    all_ids = [a["action_id"] for m in meetings for a in m["actions"] if a["action_id"]]
+    statuses = ledger.action_statuses(all_ids)
+    for m in meetings:
+        for a in m["actions"]:
+            ex = statuses.get(a["action_id"])
+            if ex:
+                a["execution"] = {"status": ex["status"], "detail": ex["detail"][:160]}
 
     # Per-avatar rollups (legacy artifacts predate avatar_id stamping → "").
     by_avatar: dict[str, list[dict]] = {}

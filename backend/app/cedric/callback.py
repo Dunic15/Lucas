@@ -36,12 +36,29 @@ from ..config import settings
 ENDED_BACKOFF: tuple[float, ...] = (5.0, 25.0, 120.0)
 
 
-def _signature_headers(body: bytes) -> dict[str, str]:
+def _secret_for(org_id: str) -> str:
+    """The signing secret for an org: its entry in the per-client registry
+    (LAURA_WEBHOOK_SECRETS_BY_ORG, a JSON object {org_id: secret}) when
+    present, else the global LAURA_WEBHOOK_SECRET. The registry is how each
+    connected workspace gets its own credential (minted by the orchestrator's
+    /api/laura/orgs provisioning) without rotating anyone else's."""
+    raw = settings.laura_webhook_secrets_by_org.strip()
+    if raw and org_id:
+        try:
+            per_org = json.loads(raw).get(org_id, "")
+            if isinstance(per_org, str) and per_org.strip():
+                return per_org.strip()
+        except (ValueError, AttributeError):
+            print("[cedric-callback] LAURA_WEBHOOK_SECRETS_BY_ORG is not valid JSON", flush=True)
+    return settings.laura_webhook_secret.strip()
+
+
+def _signature_headers(body: bytes, org_id: str = "") -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
     token = settings.laura_webhook_token.strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    secret = settings.laura_webhook_secret.strip()
+    secret = _secret_for(org_id)
     if secret:
         ts = str(int(time.time()))
         mac = hmac.new(
@@ -63,14 +80,15 @@ def _redirect_target(resp: httpx.Response) -> str | None:
 
 def _post(url: str, payload: dict) -> httpx.Response:
     body = json.dumps(payload).encode()
+    org_id = str(payload.get("org_id") or "")
     # A redirect (e.g. Vercel apex→www) is followed manually for one hop:
     # httpx's follow_redirects strips Authorization when the host changes, so
     # the auth + signature headers must be re-applied to the new URL.
     with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
-        resp = client.post(url, content=body, headers=_signature_headers(body))
+        resp = client.post(url, content=body, headers=_signature_headers(body, org_id))
         target = _redirect_target(resp)
         if target:
-            resp = client.post(target, content=body, headers=_signature_headers(body))
+            resp = client.post(target, content=body, headers=_signature_headers(body, org_id))
         return resp
 
 
@@ -89,6 +107,7 @@ def send_status(
     payload = {
         "event": "session.status",
         "bot_id": bot_id,
+        "org_id": (integration or {}).get("org_id") or "",
         "external_ref": (integration or {}).get("external_ref") or {},
         "status": status,
         "detail": detail,
@@ -120,6 +139,7 @@ def send_action_requested(integration: dict | None, bot_id: str, item: dict) -> 
         # approval card to the final action (and dedupes) on the id — and passes
         # it back to POST /org/actions/{action_id}/resolve to close the loop.
         "action_id": (item or {}).get("action_id", ""),
+        "org_id": (integration or {}).get("org_id") or "",
         "external_ref": (integration or {}).get("external_ref") or {},
         "action": (item or {}).get("action", ""),
         "owner": (item or {}).get("owner", ""),
@@ -155,6 +175,7 @@ def send_ended(integration: dict | None, bot_id: str, artifact: dict) -> bool:
     payload = {
         "event": "session.ended",
         "bot_id": bot_id,
+        "org_id": (integration or {}).get("org_id") or "",
         "external_ref": (integration or {}).get("external_ref") or {},
         "ended_at": _now_iso(),
         # Belt and braces: callers pass the wire copy already, but raw
