@@ -54,7 +54,9 @@
   const conversationId = params.get("conversation_id");
   const status = (t) => (document.getElementById("status").textContent = t);
   const frameEl = document.getElementById("frame");
-  frameEl.src = "/laura-reference.jpg"; // static portrait until the stream is up
+  // static portrait until the stream is up — per-avatar so the wake-up
+  // window shows the right face (route falls back to Laura if unknown)
+  frameEl.src = "/laura-reference.jpg?avatar_id=" + encodeURIComponent(avatarId);
 
   // Fallback chain (issue #3): GPU stream -> static portrait -> /talk avatar.
   // If even the static portrait can't load (and no stream is feeding frames),
@@ -71,6 +73,22 @@
   let gpuReady = false;
   let lastUrl = null;      // revoke previous blob URL to avoid leaking
   let pendingAudio = [];   // audio clips awaiting talk_start (play-on-signal)
+
+  // Frame pacing: paint at most one frame per display tick, always the NEWEST.
+  // If the network delivers a burst (proxy hiccup), stale frames are dropped
+  // instead of queued — the face skips ahead to stay with the audio rather
+  // than drifting further behind for the rest of the utterance.
+  let nextBlob = null;
+  let paintScheduled = false;
+  function paintLatest() {
+    paintScheduled = false;
+    if (!nextBlob) return;
+    const url = URL.createObjectURL(nextBlob);
+    nextBlob = null;
+    frameEl.src = url;
+    if (lastUrl) URL.revokeObjectURL(lastUrl);
+    lastUrl = url;
+  }
 
   async function connectGpu() {
     let streamUrl = params.get("stream_url");
@@ -96,10 +114,11 @@
         } catch (_) {}
         return;
       }
-      const url = URL.createObjectURL(ev.data);
-      frameEl.src = url;
-      if (lastUrl) URL.revokeObjectURL(lastUrl);
-      lastUrl = url;
+      nextBlob = ev.data;
+      if (!paintScheduled) {
+        paintScheduled = true;
+        requestAnimationFrame(paintLatest);
+      }
     };
     ws.onclose = () => { gpu = null; gpuReady = false; status("GPU stream lost — retrying"); setTimeout(connectGpu, 3000); };
   }

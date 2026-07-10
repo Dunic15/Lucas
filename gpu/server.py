@@ -47,6 +47,11 @@ ENGINE = os.environ.get("AVATAR_ENGINE", "stub").lower()
 REFERENCE_IMAGE = os.environ.get("REFERENCE_IMAGE", "assets/reference.jpg")
 FPS = int(os.environ.get("STREAM_FPS", "12" if ENGINE == "stub" else "25"))
 JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "82"))
+# Frames SENT per second (0 = every generated frame). Recall delivers at most
+# 15fps in-meeting: pushing the full 25fps timeline through the proxy is pure
+# wasted bandwidth, and the backlog is what makes lips drift behind the audio.
+# Generation stays on the FPS timeline (pacing untouched) — we only skip sends.
+SEND_FPS = int(os.environ.get("SEND_FPS", "0"))
 
 # Cost controls (issue #3). Idle watchdog: if no page is connected for this many
 # minutes, run GPU_SHUTDOWN_CMD (EBS-backed EC2: shutdown -h == STOP, meter off).
@@ -287,14 +292,20 @@ async def stream(ws: WebSocket) -> None:
                 t_speak = time.perf_counter()
                 await ws.send_text(json.dumps({"type": "talk_start"}))
                 first_frame = True
+                send_ratio = min(1.0, SEND_FPS / FPS) if SEND_FPS else 1.0
+                send_acc = 1.0  # the first frame always goes out
                 async for frame in eng.talk_frames(audio):
                     t0 = time.perf_counter()
-                    await ws.send_bytes(frame)
-                    _note_frame()
+                    send_acc += send_ratio
+                    if send_acc >= 1.0:
+                        send_acc -= 1.0
+                        await ws.send_bytes(frame)
+                        _note_frame()
                     if first_frame:
                         FIRST_FRAME_MS.append((t0 - t_speak) * 1000)
                         first_frame = False
-                    # keep real-time pacing even if generation is faster
+                    # keep real-time pacing even if generation is faster —
+                    # a skipped frame still burns its slot on the timeline
                     delay = frame_interval - (time.perf_counter() - t0)
                     if delay > 0:
                         await asyncio.sleep(delay)
@@ -302,7 +313,7 @@ async def stream(ws: WebSocket) -> None:
             else:
                 await ws.send_bytes(eng.next_idle_frame())
                 _note_frame()
-                await asyncio.sleep(frame_interval)
+                await asyncio.sleep(1.0 / SEND_FPS if SEND_FPS else frame_interval)
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:

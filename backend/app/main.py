@@ -771,10 +771,16 @@ def photoreal_config() -> JSONResponse:
 
 
 @app.get("/laura-reference.jpg")
-def photoreal_reference() -> FileResponse:
-    """Static reference portrait — the photoreal page's no-GPU fallback face."""
+def photoreal_reference(avatar_id: str = "") -> FileResponse:
+    """Static reference portrait — the photoreal page's no-GPU fallback face.
+    Per-avatar when gpu/assets/reference-<id>.jpg exists (the wake-up window
+    must show the RIGHT face); the legacy Laura file otherwise. The route name
+    predates multi-avatar and is kept for cached pages."""
+    assets = REPO_ROOT_DIR / "gpu" / "assets"
+    safe = "".join(c for c in avatar_id.lower() if c.isalnum() or c in "-_")
+    per_avatar = assets / f"reference-{safe}.jpg"
     return FileResponse(
-        REPO_ROOT_DIR / "gpu" / "assets" / "reference.jpg",
+        per_avatar if safe and per_avatar.exists() else assets / "reference.jpg",
         media_type="image/jpeg",
         headers={"Cache-Control": "public, max-age=86400"},
     )
