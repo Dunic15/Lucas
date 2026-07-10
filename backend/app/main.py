@@ -46,6 +46,7 @@ from . import (
     cedric,
     dashboard,
     drive_client,
+    emotion,
     granola_client,
     actions,
     gmail_watcher,
@@ -1927,6 +1928,7 @@ async def _make_avatar_speak(
     generation: int | None = None,
     backchannel: bool = False,
     audio: dict | None = None,
+    mood: str | None = None,
 ) -> bool:
     """Backend-as-brain: send the exact words for the avatar to speak (Anam talk).
 
@@ -1971,6 +1973,13 @@ async def _make_avatar_speak(
         "citations": citations or [],
         "generation_id": (
             generation if generation is not None else session.speech_generation
+        ),
+        # Per-sentence emotion for the face: the brain's own label when it gave
+        # one (`mood`), else derived from the words. Additive — a page that
+        # doesn't read it renders neutral as before. A backchannel ("Mm-hm.")
+        # stays neutral: a listening cue shouldn't emote. See emotion.py.
+        "emotion": emotion.DEFAULT if backchannel else emotion.normalize(
+            mood if mood else emotion.classify(text)
         ),
     }
     if audio and audio.get("audio"):

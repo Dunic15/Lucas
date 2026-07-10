@@ -346,18 +346,25 @@
   // the speaking-state reporter below treat "about to speak" as speaking, so a
   // finished-audio gap between two queued sentences never reads as silence.
   let _pendingSay = 0;
+  // Per-sentence emotion (backend emotion.py) -> TalkingHead mood. Mirrors the
+  // server's label set; anything unknown stays neutral so the face is never
+  // driven to a mood the model can't show.
+  const MOOD_FOR = { neutral: "neutral", happy: "happy", excited: "happy",
+                     serious: "neutral", concerned: "sad" };
   function say(text, pre) {
     if (!text || !text.trim()) return _sayChain;
     unlockAudio();
     // Server-attached audio (pre.audio) skips the whole /tts round-trip —
     // the voice arrived inside the speak message. Otherwise fetch as before.
     const synth = pre && pre.audio ? payloadToAudio(pre, text) : synthesize(text);
+    const mood = MOOD_FOR[(pre && pre.emotion) || "neutral"] || "neutral";
     const gen = _sayGen;
     _pendingSay++;
     _sayChain = _sayChain.then(async () => {
       try {
         const a = await synth;
         if (gen !== _sayGen) return; // interrupted while synthesizing — drop it
+        try { head.setMood(mood); } catch (_) {} // lean the face into the line
         markSpeaking(a.audio.duration, text);
         head.speakAudio(a);
         status("speaking: " + text.slice(0, 60));
