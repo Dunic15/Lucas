@@ -79,6 +79,17 @@ LEAVE_ASKS = [
     "potresti uscire dalla call",
     "puoi andartene",
     "te ne puoi andare",
+    # Italian masculine articles + "meet" (live regex-miss 2026-07-10:
+    # "meeting" is masculine in Italian — "il/dal meeting", not "la/dalla")
+    "esci dal meeting",
+    "esci dal meet",
+    "lascia il meeting",
+    "abbandona il meeting",
+    "puoi uscire dal meeting",
+    "potresti uscire dal meet",
+    "vai fuori dal meeting",
+    "esci da questo meeting",
+    "leave the meet",
 ]
 
 
@@ -136,6 +147,8 @@ NOT_LEAVE_ASKS = [
     "lascia perdere il punto due",
     "puoi andare al prossimo punto",
     "potresti andare più veloce",
+    "lascia il documento a Marco",  # object is not the meeting
+    "esci dal file e riapri",       # masculine article, wrong noun
 ]
 
 
@@ -389,17 +402,47 @@ def test_webhook_split_leave_only_on_leave_followup(monkeypatch, tmp_path):
 
 
 def test_webhook_split_leave_ignores_substantive_address(monkeypatch, tmp_path):
-    """Meter safety (code-review repro): a SUBSTANTIVE address ("Cedric hold on a
-    second") must NOT arm the split window, so a later same-speaker aside
-    dismissing someone else ("Sara you can leave now") can never end the bot."""
+    """Meter safety (code-review repro): after a substantive address ("Cedric
+    hold on a second"), a same-speaker aside dismissing someone else ("Sara you
+    can leave now") must never end the bot — the follow-up leads with a name,
+    so the addressee guard (plausible_leave_followup) rejects it even though
+    the roster doesn't know Sara."""
     bot_id = "leave-split-4"
     calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
 
     _post_line_as(bot_id, "Cedric hold on a second", "Duccio")
     b2 = _post_line_as(bot_id, "Sara you can leave now", "Duccio")
-    assert b2.get("left") is None, "a substantive address must not arm the window"
+    assert b2.get("left") is None, "a name-led dismissal is never for the avatar"
     assert calls["leave"] == 0
     assert store.get(bot_id) is not None
+    store.remove(bot_id)
+
+
+def test_webhook_split_leave_after_substantive_address(monkeypatch, tmp_path):
+    """Live-test repro (2026-07-10): the dismissal lands a few seconds after a
+    SUBSTANTIVE addressed turn — "Cedric, thanks for that" … "you can leave
+    now". The old bare-only arming missed it ([leave] telemetry: called=False,
+    split_window_armed=False); now any addressed turn arms the window."""
+    bot_id = "leave-split-6"
+    calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+
+    _post_line_as(bot_id, "Cedric, thanks for that", "Duccio")
+    b2 = _post_line_as(bot_id, "you can leave now", "Duccio")
+    assert b2.get("left") is True, "dismissal after a substantive address must fire"
+    assert calls["leave"] == 1
+    store.remove(bot_id)
+
+
+def test_webhook_split_leave_italian_imperative_followup(monkeypatch, tmp_path):
+    """Live-test repro (2026-07-10, Italian): "Cedric, grazie" … "esci dal
+    meeting" — masculine article + follow-up imperative without the name."""
+    bot_id = "leave-split-7"
+    calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+
+    _post_line_as(bot_id, "Cedric, grazie mille", "Duccio")
+    b2 = _post_line_as(bot_id, "esci dal meeting", "Duccio")
+    assert b2.get("left") is True, "Italian imperative follow-up must fire"
+    assert calls["leave"] == 1
     store.remove(bot_id)
 
 

@@ -128,7 +128,18 @@ def send_action_requested(integration: dict | None, bot_id: str, item: dict) -> 
     }
     try:
         resp = _post(url, payload)
-        return 200 <= resp.status_code < 300
+        ok = 200 <= resp.status_code < 300
+        # PII-safe telemetry (action_id + HTTP status only, never the action
+        # text): a live "Cedric said he could but did nothing" report is
+        # undiagnosable otherwise — a non-2xx from the surface used to be
+        # swallowed here (returned False silently, no log).
+        print(
+            "[cedric-callback] action.requested "
+            f"{'delivered' if ok else 'REJECTED by surface'} "
+            f"(action_id={payload['action_id']!r}, HTTP {resp.status_code})",
+            flush=True,
+        )
+        return ok
     except Exception as e:  # noqa: BLE001 — never let a callback break the call
         print(f"[cedric-callback] action.requested delivery failed: {e}", flush=True)
         return False
@@ -155,6 +166,14 @@ def send_ended(integration: dict | None, bot_id: str, artifact: dict) -> bool:
         try:
             resp = _post(url, payload)
             if 200 <= resp.status_code < 300:
+                # Confirms the surface actually ACCEPTED the artifact — the
+                # [finalize] orchestrated=True flag only means a callback_url
+                # was set + the POST was fired, not that Cedric received it.
+                print(
+                    f"[cedric-callback] session.ended delivered (HTTP "
+                    f"{resp.status_code})",
+                    flush=True,
+                )
                 return True
             reason: str = f"HTTP {resp.status_code}"
         except Exception as e:  # noqa: BLE001
@@ -195,7 +214,16 @@ def fetch_context(integration: dict | None) -> dict | None:
                 resp = client.get(target, headers=headers)
         resp.raise_for_status()
         context = resp.json().get("context")
-        return context if isinstance(context, dict) else None
+        got = isinstance(context, dict)
+        # PII-safe telemetry: confirms the join-time context pull actually ran
+        # ("non ha preso il contesto" was undiagnosable — success logged nothing).
+        # A boolean on whether a brief came back, never the brief itself.
+        print(
+            f"[cedric-callback] context fetched (HTTP {resp.status_code}, "
+            f"brief={'yes' if got and context.get('brief_markdown') else 'no'})",
+            flush=True,
+        )
+        return context if got else None
     except Exception as e:  # noqa: BLE001 — never block the join on a refresh
         print(f"[cedric-callback] context refresh failed: {e}", flush=True)
         return None

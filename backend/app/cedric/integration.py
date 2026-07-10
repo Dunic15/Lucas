@@ -170,11 +170,31 @@ def notify_action_requested(session: Any, bot_id: str, item: dict) -> None:
     nothing. PII rule: only the distilled action/owner/due (plus the stable,
     non-PII action_id used to correlate this event with the final artifact)
     leave — never transcript content."""
+    # PII-safe telemetry (action_id only, never the action text): the live
+    # "Cedric said he could but did nothing" report is undiagnosable without
+    # knowing whether the captured action even had a surface to go to. Two
+    # distinct no-op reasons, so a mis-summoned (non-orchestrated) session is
+    # told apart from a genuine send.
+    aid = (item or {}).get("action_id", "")
     if session is None or not session.integration:
+        print(
+            f"[cedric] action captured (action_id={aid!r}) but session is NOT "
+            "orchestrated (no integration) — nothing sent to the surface",
+            flush=True,
+        )
         return
     integration = dict(session.integration)
     if not integration.get("callback_url"):
+        print(
+            f"[cedric] action captured (action_id={aid!r}) but session has no "
+            "callback_url — nothing sent to the surface",
+            flush=True,
+        )
         return
+    print(
+        f"[cedric] action.requested dispatching to surface (action_id={aid!r})",
+        flush=True,
+    )
     wire_item = {
         k: (item or {}).get(k, "") for k in ("action_id", "action", "owner", "due")
     }

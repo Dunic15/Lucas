@@ -272,6 +272,40 @@ def test_action_requested_is_single_attempt_best_effort(monkeypatch):
     assert cedric_callback.send_action_requested({}, "b", {"action": "x"}) is False
 
 
+def test_action_requested_surface_rejection_is_logged(monkeypatch, capsys):
+    """Live-diagnosis (2026-07-10): a non-2xx from the surface used to be
+    swallowed (returned False, no log) — so 'Cedric did nothing' was
+    invisible. It must now log the HTTP status, PII-safe (id + code only)."""
+
+    class Rejected:
+        status_code = 404
+
+    monkeypatch.setattr(cedric_callback, "_post", lambda url, payload: Rejected())
+    ok = cedric_callback.send_action_requested(
+        {"callback_url": "https://cedric.example/cb"},
+        "bot_9",
+        {"action_id": "abc123", "action": "Send the recap"},
+    )
+    assert ok is False
+    out = capsys.readouterr().out
+    assert "REJECTED by surface" in out and "HTTP 404" in out
+    assert "abc123" in out and "Send the recap" not in out  # id yes, content no
+
+
+def test_non_orchestrated_capture_logs_reason(monkeypatch, capsys):
+    """A captured action on a session with no callback_url must say WHY nothing
+    reached the surface — the diagnostic that tells a mis-summoned session
+    (Model B / plain) apart from a real send."""
+    from app import cedric
+
+    session = store.create("bot_noorch", "https://meet.example/x", "cedric")
+    cedric.notify_action_requested(session, "bot_noorch", {"action_id": "z9"})
+    out = capsys.readouterr().out
+    assert "not orchestrated" in out.lower() or "no callback_url" in out.lower()
+    assert "z9" in out
+    store.remove("bot_noorch")
+
+
 # ── (d) plain session: no webhook, but artifact + ledger still get it ──
 
 
