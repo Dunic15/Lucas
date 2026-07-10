@@ -78,6 +78,7 @@ from .decision import (
     detect_closing,
     detect_leave_command,
     detect_stop_command,
+    plausible_leave_followup,
 )
 from .rag import ensure_about_index, ensure_index, warm as warm_index
 
@@ -2605,21 +2606,20 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # blocked by a TTS hiccup.
     #
     # Split-final case: "Cedric." and "you can leave" often arrive as TWO ASR
-    # finals — the first wakes (bare name, empty question), the second isn't a
-    # wake, so neither final alone fires the dismissal and a background reconcile
-    # poll ends the meeting late. Complete it: if the SAME speaker addressed the
-    # avatar with a BARE name in the last few seconds, re-check the leave command
-    # on the concatenated finals.
+    # finals — the first wakes, the second isn't a wake, so neither final alone
+    # fires the dismissal and a background reconcile poll ends the meeting
+    # late. Complete it: if the SAME speaker addressed the avatar in the last
+    # few seconds (bare or substantive turn), re-check the leave command on the
+    # follow-up (and on the concatenated finals for mid-phrase splits).
     #
     # Meter safety (an early leave kills a live paid meeting) is why the split
-    # path is deliberately narrow. It fires ONLY when: (1) the address turn was
-    # bare — a substantive "Cedric, can you check the budget" never arms it, so a
-    # later same-speaker aside can't end the call — AND (2) the follow-up doesn't
-    # name another KNOWN participant (a dismissal like "Sara, you can leave" is
-    # aimed at Sara, not the avatar). detect_leave_command's own guards apply on
-    # top.
+    # path stays guarded: it fires ONLY when the follow-up is a WHOLE-ASK leave
+    # command from the SAME speaker who just addressed the avatar, and it
+    # doesn't name another KNOWN participant (a dismissal like "Sara, you can
+    # leave" is aimed at Sara, not the avatar). detect_leave_command's own
+    # guards apply on top.
     #
-    # Accepted narrow residual: a bare "Cedric." followed within 4s by a
+    # Accepted narrow residual: an addressed turn followed within 8s by a
     # same-speaker dismissal aimed at someone the roster doesn't yet know (a
     # never-spoken participant) or at no one ("ok you can go now") still fires.
     # Closing it needs a leading-proper-noun heuristic on ASR-cased text, which
@@ -2632,8 +2632,20 @@ async def recall_webhook(request: Request) -> JSONResponse:
             a_speaker, a_ts, a_text = addressed
             if (
                 speaker == a_speaker
-                and time.time() - a_ts < 4.0
-                and detect_leave_command(f"{a_text} {text}")
+                and time.time() - a_ts < 8.0
+                # Addressee guard: the follow-up must START like a command
+                # aimed at the avatar ("you can…", "esci…") — a leading name
+                # ("Sara you can leave now") is aimed at that person, known to
+                # the roster or not.
+                and plausible_leave_followup(text)
+                # The follow-up alone is the usual shape ("esci dal meeting" /
+                # "you can leave now" seconds after an addressed turn); the
+                # concatenated form still catches a mid-phrase ASR split
+                # ("Cedric, you can" + "leave the meeting").
+                and (
+                    detect_leave_command(text)
+                    or detect_leave_command(f"{a_text} {text}")
+                )
                 and not _names_another_participant(
                     text, session.roster(avatar.name), avatar.wake_words
                 )
@@ -2660,16 +2672,19 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 "(regex-miss candidate)",
                 flush=True,
             )
-    # Arm the split window ONLY for a bare address ("Cedric." / "hey Cedric");
-    # a substantive addressed turn, a new speaker, or a stale (>4s) window clears
-    # it, so the window can never linger into unrelated speech.
+    # Arm the split window on EVERY addressed turn, bare or substantive
+    # ("Cedric." / "Cedric, thanks for that"). Live testing (2026-07-10,
+    # [leave] telemetry: called=False, split_window_armed=False) showed the
+    # dismissal usually lands a few seconds AFTER a substantive addressed turn
+    # — the old bare-only arming missed it. Meter safety holds because the
+    # follow-up must still be a whole-ask leave command (see the guards above);
+    # a new speaker or a stale (>8s) window clears the arm, so it can never
+    # linger into unrelated speech.
     if called:
-        session.last_addressed = (
-            (speaker, time.time(), text) if _address_is_bare(avatar, text) else None
-        )
+        session.last_addressed = (speaker, time.time(), text)
     elif getattr(session, "last_addressed", None) is not None and (
         speaker != session.last_addressed[0]
-        or time.time() - session.last_addressed[1] >= 4.0
+        or time.time() - session.last_addressed[1] >= 8.0
     ):
         session.last_addressed = None
 

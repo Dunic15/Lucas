@@ -292,7 +292,7 @@ _LEAVE_IMPERATIVE = re.compile(
     # FROM the meeting", "go out the meeting").
     r"^(?:please\s+|now\s+|just\s+|kindly\s+|go ahead and\s+)*"
     r"(?:leave|exit|go out|get out|go away|drop (?:off|out)|hop off|hang up|disconnect|log (?:off|out)|sign (?:off|out))"
-    r"(?:\s+(?:(?:of|from|off)\s+)?(?:the|this|our)\s+(?:meeting|call|room))?"
+    r"(?:\s+(?:(?:of|from|off)\s+)?(?:the|this|our)\s+(?:meeting|meet|call|room))?"
     r"(?:\s+(?:now|please|thanks|thank you))*"
     r"[.!?\s]*$",
     re.IGNORECASE,
@@ -305,7 +305,7 @@ _LEAVE_REQUEST = re.compile(
     r"^(?:ok(?:ay)?\s+|so\s+|now\s+|please\s+)*"
     r"(?:can|could|would|will) you (?:please\s+)?"
     r"(?:leave|exit|go out|get out|go away|drop (?:off|out)|hop off|hang up|disconnect|log (?:off|out)|sign (?:off|out))"
-    r"(?:\s+(?:(?:of|from|off)\s+)?(?:the|this|our)\s+(?:meeting|call|room))?"
+    r"(?:\s+(?:(?:of|from|off)\s+)?(?:the|this|our)\s+(?:meeting|meet|call|room))?"
     r"(?:\s+(?:now|please|thanks|thank you))*"
     r"[.!?\s]*$",
     re.IGNORECASE,
@@ -318,10 +318,10 @@ _LEAVE_PERMISSION = re.compile(
     # dismissal marker after it; "free to go" is unambiguous on its own.
     r"\b(?:you|she) (?:"
     r"(?:can|may|should) (?:leave|exit|go out|get out|drop (?:off|out)|hop off|head out|log (?:off|out)|sign (?:off|out)"
-    r"|disconnect|hang up|go(?=\s+(?:now|home)\b|\s+(?:the|this)\s+(?:meeting|call|room)))"
+    r"|disconnect|hang up|go(?=\s+(?:now|home)\b|\s+(?:the|this)\s+(?:meeting|meet|call|room)))"
     r"|are free to (?:leave|go|drop (?:off|out)|head out)"
     r")"
-    r"(?:\s+(?:(?:of|from|off)\s+)?(?:the|this|our)\s+(?:meeting|call|room))?"
+    r"(?:\s+(?:(?:of|from|off)\s+)?(?:the|this|our)\s+(?:meeting|meet|call|room))?"
     r"(?:\s+(?:now|home|please|thanks|thank you|if you want|whenever))*"
     r"\s*(?:[.!?,;]|$)"
     # "we don't need you anymore" / "we're all set, thanks Laura"
@@ -348,12 +348,12 @@ _LEAVE_IT = re.compile(
     # "lascia" only with the meeting as object ("lascia la riunione") — bare
     # "lascia pure/stare" means "never mind", not a dismissal.
     r"(?:esci(?:\s+fuori)?|vattene|vai via|vai fuori|scollegati|abbandona|vai pure|"
-    r"lascia(?:ci)?(?=\s+(?:pure\s+)?(?:la|questa)\s+(?:riunione|call|chiamata|meeting)))"
+    r"lascia(?:ci)?(?=\s+(?:pure\s+)?(?:la|il|lo|questa|questo)\s+(?:riunione|call|chiamata|meeting|meet)))"
     r"(?:\s+pure)?"
-    r"(?:\s+(?:dalla|da questa|la|questa)\s+(?:riunione|call|chiamata|meeting))?"
+    r"(?:\s+(?:dalla|dal|dallo|da (?:questa|questo|qui)|la|il|lo|questa|questo)\s+(?:riunione|call|chiamata|meeting|meet))?"
     r"(?:\s+(?:ora|adesso|pure|grazie))*[.!?\s]*$"
     r"|\b(?:puoi|potresti|potete)\s+(?:andare|andartene|uscire|lasciarci|abbandonare|scollegarti)"
-    r"(?:\s+(?:dalla|da questa|la|questa)\s+(?:riunione|call|chiamata|meeting))?"
+    r"(?:\s+(?:dalla|dal|dallo|da (?:questa|questo|qui)|la|il|lo|questa|questo)\s+(?:riunione|call|chiamata|meeting|meet))?"
     r"(?:\s+(?:ora|adesso|pure|grazie))*\s*(?:[.!?,;]|$)"
     r"|\bte ne puoi andare\b|\bve ne potete andare\b"
     r"|\bsei liber[ao] di andare\b",
@@ -383,3 +383,32 @@ def detect_leave_command(question: str) -> bool:
         or _LEAVE_IT.search(q)
         or _LEAVE_FAREWELL.match(q)
     )
+
+
+# First tokens a dismissal aimed at THE AVATAR can start with: the leave verbs
+# themselves, second-person pronouns, modals, and politeness/discourse lead-ins
+# — everything the _LEAVE_* shapes actually accept. A follow-up that starts
+# with anything else ("Sara you can leave now") is aimed at whoever was just
+# named, never at the avatar. Used ONLY on the split-window follow-up path,
+# where there is no wake word to disambiguate the addressee.
+_FOLLOWUP_LEADS = frozenset(
+    # EN verbs / pronouns / modals / leads
+    "leave exit go get drop hop hang disconnect log sign you she can could "
+    "would will please now just kindly ok okay so right thanks thank bye "
+    "goodbye see".split()
+    # IT verbs / pronouns / modals / leads
+    + "esci vattene vai scollegati abbandona lascia lasciaci puoi potresti "
+      "potete per ora adesso pure va sì si te ve sei ciao arrivederci grazie "
+      "allora".split()
+)
+
+
+def plausible_leave_followup(text: str) -> bool:
+    """Addressee guard for a split-final dismissal (no wake word in the line):
+    True when the ask STARTS like a command aimed at the avatar. "you can
+    leave now" leads with a pronoun → plausible; "Sara you can leave now"
+    leads with a name → aimed at Sara (even if the roster doesn't know her),
+    so the avatar must stay. A missed dismissal costs a repeat ask; a false
+    positive kills the meeting bot — hence the whitelist direction."""
+    m = re.search(r"[a-zà-ú]+", (text or "").lower())
+    return bool(m) and m.group(0) in _FOLLOWUP_LEADS
