@@ -1,0 +1,43 @@
+{
+  "scenario": "heated_disagreement",
+  "covers": ["heated_disagreement"],
+  "roster": ["Elio West", "Zoya Pine"],
+  "turns": [
+    {
+      "id": "t1", "speaker": "Elio West",
+      "floor_holding": {"expected": "yield", "deference": "base"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": false, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "none"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "concerned", "talk_mood": "sad", "ditto_emo": 5},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t2", "speaker": "Zoya Pine",
+      "floor_holding": {"expected": "yield", "deference": "base"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": false, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "none"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "concerned", "talk_mood": "sad", "ditto_emo": 5},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t3", "speaker": "Elio West",
+      "floor_holding": {"expected": "yield", "deference": "base"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": false, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "none"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "serious", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t4", "speaker": "Zoya Pine",
+      "floor_holding": {"expected": "yield", "deference": "short"},
+      "address_detection": {"expected": "speak", "model_result": {"sufficient_context": true, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "laura"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    }
+  ]
+}

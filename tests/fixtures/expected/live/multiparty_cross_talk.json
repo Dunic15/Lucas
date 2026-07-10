@@ -1,0 +1,52 @@
+{
+  "scenario": "multiparty_cross_talk",
+  "covers": ["multiparty_cross_talk"],
+  "roster": ["Mina Cole", "Teo Vale", "Rafi Sol"],
+  "turns": [
+    {
+      "id": "t1", "speaker": "Mina Cole",
+      "floor_holding": {"expected": "yield", "deference": "short"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": true, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "Teo Vale"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t2", "speaker": "Teo Vale",
+      "floor_holding": {"expected": "hold", "deference": "long"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": true, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "Mina Cole"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t3", "speaker": "Rafi Sol",
+      "floor_holding": {"expected": "yield", "deference": "short"},
+      "address_detection": {"expected": "speak", "model_result": {"sufficient_context": true, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "laura"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t4", "speaker": "Teo Vale",
+      "floor_holding": {"expected": "yield", "deference": "base"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": true, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "Rafi Sol"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t5", "speaker": "Mina Cole",
+      "floor_holding": {"expected": "yield", "deference": "short"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": true, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "Teo Vale"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    }
+  ]
+}

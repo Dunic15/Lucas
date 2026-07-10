@@ -1,0 +1,47 @@
+{
+  "scenario": "must_stay_silent",
+  "covers": ["must_stay_silent"],
+  "roster": ["Lian Park", "Marco Bell"],
+  "turns": [
+    {
+      "id": "t1", "speaker": "Lian Park",
+      "floor_holding": {"expected": "yield", "deference": "base"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": true, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "Marco Bell"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"},
+      "xfail": {
+        "address_detection": "addressed_to_other misses an ASR vocative when punctuation is absent",
+        "multiparty_deference": "addressed_to_other misses an ASR vocative when punctuation is absent"
+      }
+    },
+    {
+      "id": "t2", "speaker": "Marco Bell",
+      "floor_holding": {"expected": "yield", "deference": "short"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": true, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "Lian Park"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t3", "speaker": "Lian Park",
+      "floor_holding": {"expected": "yield", "deference": "base"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": false, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "none"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t4", "speaker": "Marco Bell",
+      "floor_holding": {"expected": "yield", "deference": "base"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": false, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "none"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "scenario": "single_human_qa",
+  "covers": ["single_human_qa"],
+  "roster": ["Ari Nova"],
+  "turns": [
+    {
+      "id": "t1", "speaker": "Ari Nova",
+      "floor_holding": {"expected": "yield", "deference": "short"},
+      "address_detection": {"expected": "speak", "model_result": {"sufficient_context": true, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "laura"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t2", "speaker": "Ari Nova",
+      "floor_holding": {"expected": "yield", "deference": "short"},
+      "address_detection": {"expected": "speak", "model_result": {"sufficient_context": true, "confidence": 0.8}},
+      "multiparty_deference": {"expected": "room"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t3", "speaker": "Ari Nova",
+      "floor_holding": {"expected": "yield", "deference": "short"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": false, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "none"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    }
+  ]
+}

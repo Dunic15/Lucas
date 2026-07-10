@@ -1,0 +1,6 @@
+Orin Blue: This is a synthetic customer onboarding kickoff.
+Mavi Gold: Security approval is cleared and done.
+Orin Blue: The DPA is signed and confirmed.
+Mavi Gold: Customer handoff is complete.
+Orin Blue: Go-live is scheduled for Friday.
+Mavi Gold: Anything else before we wrap up?
