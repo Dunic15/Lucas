@@ -73,18 +73,30 @@ frame Ditto → talk_end. Adapter validato su GPU vera.
   ignorato) — non conta come leva finché non si verifica nel cfg pkl.
 - Ridurre il ritratto (1122→800px) non cambia gli fps (costo nelle fasi interne).
 
-## Per arrivare a ≥25fps (prossima sessione di tuning, in ordine)
-1. **Ricompilare gli engine TRT NATIVI per la GPU target** — la leva più
-   promettente: `python scripts/cvt_onnx_to_trt.py --onnx_dir ./checkpoints/ditto_onnx
-   --trt_dir ./checkpoints/ditto_trt_custom` (serve scaricare anche `ditto_onnx/*`,
-   build ~10-30 min sul pod), poi `data_root=ditto_trt_custom`.
-2. **Profilare la pipeline python** (py-spy da fuori container / con SYS_PTRACE):
-   se è GIL-bound, gli engine nativi non basteranno — servono i knob di coda.
-3. **Tier datacenter** (A100/H100): Ditto dichiara RTF 0.89 su A100 — quasi
-   certamente ≥25fps lì ($1.4-1.9/h → comunque ~$0.05/min a riunione).
-4. **JPEG_QUALITY**: 90 regge (3-6 Mbit a 720p/25).
+## SPERIMENTATO (2026-07-10, sessione notturna completa) — il collo NON è la GPU
+Misure a parità di adapter (~11-12fps SEMPRE):
+| Config | fps |
+|---|---|
+| RTX 3090, engine portabili | 12.1 |
+| RTX 4090, engine portabili | 11.3 |
+| RTX 4090, engine NATIVI (cvt_onnx_to_trt: fatto, funziona) | 11.7 |
+| **A100-SXM4-80GB**, engine nativi-Ampere | **10.8** |
+3× la potenza, 2× la banda → **zero differenza**. Il limite è un passo a COSTO
+FISSO nella pipeline software, non l'hardware.
+
+**Indiziato principale: `wav2feat` (HuBERT)** — chiamato PER-CHUNK dentro
+run_chunk, verosimilmente su CPU: ~450ms per chunk da 5 frame ≈ 11fps, identico
+su ogni GPU. Fix candidati (prossima sessione, su un 3090 ECONOMICO — tanto
+l'hardware non c'entra):
+1. Instrumentare i tempi per stage (wav2feat vs code) e confermare.
+2. **Batch HuBERT sull'intera frase** in un colpo solo (stile offline) invece
+   che per-chunk — o HuBERT su GPU. Se confermato, anche il 3090 da $0.22/h
+   può fare ≥25fps → costo live resta ~$0.02/min. 🎯
+3. In alternativa/parallelo: profilare con py-spy (serve --cap-add SYS_PTRACE
+   o py-spy da root fuori dal processo; nel container standard non funziona).
 NB: finché la generazione è <25fps, l'A/V si sfasa su frasi lunghe — per demo
-brevi (frasi ~5-8s) lo sfasamento è modesto ma visibile sul finale.
+brevi (5-8s) è modesto ma visibile sul finale. First-frame resta ottimo
+(180-550ms) su tutte le config.
 
 ## Poi (fase 2 del live)
 - **Spin-per-meeting**: agganciare start/stop del pod al calendario Recall
