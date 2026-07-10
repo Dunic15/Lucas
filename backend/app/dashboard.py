@@ -154,10 +154,21 @@ def _hidden(avatar_id: str) -> bool:
         return False
 
 
-# Rough all-in variable cost per live avatar-minute (Recall bot + LLM + TTS +
-# face). A deliberate ESTIMATE for the usage panel — real invoicing is a later
-# track. Kept here so the number has one home.
-EST_COST_PER_MIN = 0.12
+# Rough variable cost per live avatar-minute — mostly the Recall bot (~$0.01/min
+# on the web_4_core tier) plus modest LLM/TTS. A deliberate, conservative
+# ESTIMATE for the usage panel; real invoicing is a later track.
+EST_COST_PER_MIN = 0.04
+
+
+def _avatar_email(avatar_id: str) -> str:
+    """The avatar's personal address: the watched inbox with a +tag. Inviting
+    it to a meeting/calendar summons THIS avatar (avatars.from_invite_email)."""
+    raw = (settings.calendar_invite_emails or "").split(",")[0].strip()
+    if "@" not in raw:
+        return ""
+    local, _, domain = raw.partition("@")
+    base = local.split("+")[0]
+    return f"{base}+{avatar_id}@{domain}"
 
 
 @router.get("/dashboard")
@@ -236,6 +247,7 @@ def dashboard_summary(request: Request) -> JSONResponse:
                 "id": a.id,
                 "name": a.name,
                 "role": a.role,
+                "email": _avatar_email(a.id),
                 "persona": (a.persona_prompt or "")[:220],
                 "wake_words": a.wake_words,
                 "voice_id": a.elevenlabs_voice_id,
