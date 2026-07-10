@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 from fastapi import APIRouter, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import auth, avatars, ledger, store
@@ -341,6 +342,12 @@ def dashboard_summary(request: Request) -> JSONResponse:
             "stats": stats,
             "billing": billing,
             "connections": connections,
+            # Per-org avatar connections (the Configure tab): the brain link
+            # and, later, per-avatar Gmail/Calendar/Slack/Drive. Config is
+            # non-secret wiring only.
+            "org_connections": (
+                store.connections_for_org(user["org_id"]) if user else []
+            ),
             "auth_enabled": auth.enabled(),
             "user": (
                 {k: user[k] for k in ("user_id", "email", "name", "picture")}
@@ -349,3 +356,61 @@ def dashboard_summary(request: Request) -> JSONResponse:
             ),
         }
     )
+
+
+@router.post("/dashboard/connections/brain")
+async def connect_brain(request: Request) -> JSONResponse:
+    """Connect an avatar to the orchestrator (Cedric, the brain): store the
+    org→Slack-workspace wiring and provision it on Cedric's side when his
+    /api/laura/orgs is configured. Body: {avatar_id, team_id, channel?}.
+    Requires a logged-in user (the org owner) — machine callers have no org."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required to connect the brain"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    avatar_id = str((body or {}).get("avatar_id") or "").strip()
+    team_id = str((body or {}).get("team_id") or "").strip()
+    channel = str((body or {}).get("channel") or "").strip()
+    if not avatar_id or avatar_id not in avatars.list_ids():
+        return JSONResponse({"error": "unknown avatar_id"}, status_code=400)
+    if not team_id:
+        return JSONResponse({"error": "team_id is required (the Slack workspace id)"}, status_code=400)
+
+    from . import cedric  # local import, same reason as auth.gate's
+
+    provisioned = await run_in_threadpool(
+        cedric.provision_org, user["org_id"], team_id, channel, avatar_id
+    )
+    status = "connected" if provisioned else "pending"
+    store.set_connection(
+        user["org_id"], avatar_id, "cedric-brain", status,
+        {"team_id": team_id, "channel": channel},
+    )
+    return JSONResponse(
+        {
+            "provider": "cedric-brain", "avatar_id": avatar_id, "status": status,
+            # pending == saved here, awaiting the orchestrator's org endpoint
+            # (contract step B) or a failed call worth retrying.
+            "provisioned": bool(provisioned),
+        }
+    )
+
+
+@router.delete("/dashboard/connections/brain/{avatar_id}")
+def disconnect_brain(avatar_id: str, request: Request) -> JSONResponse:
+    """Mark the avatar's brain link disconnected (local state; the orchestrator
+    side is detached by ops/Cedric's DELETE when that route ships)."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    ok = store.set_connection(user["org_id"], avatar_id, "cedric-brain", "disconnected", {})
+    if not ok:
+        return JSONResponse({"error": "unknown avatar_id"}, status_code=400)
+    return JSONResponse({"provider": "cedric-brain", "avatar_id": avatar_id, "status": "disconnected"})

@@ -279,6 +279,12 @@ class Settings(BaseSettings):
     # org's own secret (minted at Connect-the-brain provisioning); orgs not in
     # the map — and service starts — fall back to LAURA_WEBHOOK_SECRET.
     laura_webhook_secrets_by_org: str = ""
+    # Connect-the-brain provisioning: the orchestrator's org endpoint (Cedric's
+    # /api/laura/orgs) and the bearer it expects. Unset → a brain connection
+    # saves locally as "pending" (the dashboard says so); the call goes live
+    # the moment Cedric ships the route.
+    cedric_orgs_url: str = ""
+    cedric_orgs_token: str = ""
     # Bearer presented on those callbacks (the orchestrator's cheap first-line
     # check before HMAC verification).
     laura_webhook_token: str = ""

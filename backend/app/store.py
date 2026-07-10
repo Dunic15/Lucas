@@ -297,6 +297,20 @@ def _init_db() -> None:
                 created_at REAL NOT NULL,
                 last_login_at REAL NOT NULL
             );
+
+            -- Per-org avatar connections (the Configure tab). One row per
+            -- (org, avatar, provider); config_json holds NON-SECRET wiring
+            -- only (e.g. the brain's Slack team_id + default channel) —
+            -- minted credentials live in the env/SSM registry, never here.
+            CREATE TABLE IF NOT EXISTS org_connections (
+                org_id TEXT NOT NULL,
+                avatar_id TEXT NOT NULL,
+                provider TEXT NOT NULL,      -- cedric-brain | gmail | calendar | slack | drive
+                status TEXT NOT NULL,        -- connected | pending | disconnected
+                config_json TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (org_id, avatar_id, provider)
+            );
             """
         )
         # Migration for stores created before the Cedric integration column.
@@ -532,6 +546,70 @@ def get_user(user_id: str) -> dict | None:
             (user_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+# ── org connections (the Configure tab) ──
+
+CONNECTION_PROVIDERS = ("cedric-brain", "gmail", "calendar", "slack", "drive")
+CONNECTION_STATUSES = ("connected", "pending", "disconnected")
+
+
+def set_connection(
+    org_id: str, avatar_id: str, provider: str, status: str, config: dict | None = None
+) -> bool:
+    """Upsert one (org, avatar, provider) connection. config is NON-SECRET
+    wiring only (brain team_id/channel); credentials live in env/SSM. Unknown
+    provider/status or missing ids → no-op (False)."""
+    if (
+        not (org_id or "").strip()
+        or not (avatar_id or "").strip()
+        or provider not in CONNECTION_PROVIDERS
+        or status not in CONNECTION_STATUSES
+    ):
+        return False
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO org_connections (org_id, avatar_id, provider, status,
+                                         config_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(org_id, avatar_id, provider) DO UPDATE SET
+                status=excluded.status,
+                config_json=excluded.config_json,
+                updated_at=excluded.updated_at
+            """,
+            (
+                org_id.strip(), avatar_id.strip(), provider, status,
+                json.dumps(config or {}), time.time(),
+            ),
+        )
+    return True
+
+
+def connections_for_org(org_id: str) -> list[dict]:
+    """Every connection row for an org (all avatars), config parsed."""
+    if not (org_id or "").strip():
+        return []
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            """SELECT avatar_id, provider, status, config_json, updated_at
+               FROM org_connections WHERE org_id = ?""",
+            (org_id.strip(),),
+        ).fetchall()
+    out = []
+    for r in rows:
+        try:
+            config = json.loads(r["config_json"]) if r["config_json"] else {}
+        except ValueError:
+            config = {}
+        out.append(
+            {
+                "avatar_id": r["avatar_id"], "provider": r["provider"],
+                "status": r["status"], "config": config,
+                "updated_at": r["updated_at"],
+            }
+        )
+    return out
 
 
 def register_conversation(conversation_id: str, bot_id: str) -> None:
