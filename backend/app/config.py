@@ -142,6 +142,15 @@ class Settings(BaseSettings):
     gpu_aws_region: str = "eu-central-1"
     gpu_idle_stop_minutes: int = 10
 
+    # Runpod meeting-bound GPU (il gemello Runpod del blocco EC2 qui sopra):
+    # con RUNPOD_API_KEY + RUNPOD_POD_ID impostati, il pod photoreal si
+    # RESUME quando viene invitato un avatar con face: photoreal e si STOPPA
+    # runpod_idle_stop_minutes dopo l'ultima sessione. Gate PER-AVATAR
+    # (Avatar.page), non globale: Cedric in 3D non accende mai la GPU.
+    runpod_api_key: str = ""
+    runpod_pod_id: str = ""
+    runpod_idle_stop_minutes: int = 10
+
     # Which avatar page Recall renders as the bot camera:
     #   "talk" = open-source (TalkingHead + free TTS)  ← default   "avatar" = Anam (paid face+voice)
     # "talk" is the default face: no Anam cost, key-free, and what prod runs. Set

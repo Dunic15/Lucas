@@ -51,6 +51,7 @@ from . import (
     gmail_watcher,
     autopilot,
     gpu_runtime,
+    runpod_runtime,
     ledger,
     meeting_state,
     org_api,
@@ -136,6 +137,7 @@ app.include_router(dashboard.router)  # /dashboard — owner control view
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).
 gpu_runtime.configure(lambda: len(store.all_sessions()))
+runpod_runtime.configure(lambda: len(store.all_sessions()))
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 REPO_ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -1052,6 +1054,7 @@ async def _start_avatar_session(
     # Photoreal only: wake the GPU box for this meeting (fire-and-forget; the
     # page runs on the static-portrait fallback until the stream comes up).
     gpu_runtime.on_session_started()
+    runpod_runtime.on_session_started(avatar.page)
     return {
         "bot_id": bot["id"],
         "conversation_id": conversation_id,
@@ -1339,6 +1342,7 @@ async def _finalize_session_locked(
     # Photoreal only: last session out turns off the GPU meter (after a grace
     # window, in case another meeting starts right away).
     gpu_runtime.on_session_ended(len(store.all_sessions()))
+    runpod_runtime.on_session_ended(len(store.all_sessions()))
     return artifact
 
 
@@ -1401,6 +1405,7 @@ async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
             pass
     store.remove(bot_id)
     gpu_runtime.on_session_ended(len(store.all_sessions()))
+    runpod_runtime.on_session_ended(len(store.all_sessions()))
     return JSONResponse({"cancelled": True, "bot_id": bot_id})
 
 
@@ -2246,6 +2251,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 recall_client.create_bot, url, avatar_url, start, avatar.name
             )
             s = store.create(bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id)
+            runpod_runtime.on_session_started(avatar.page)
             # CEDRIC: calendar-summoned (scheduled) bots take this inlined path,
             # NOT _start_avatar_session, so wire the Model A default here too —
             # otherwise a calendar invite bypasses the orchestrator exactly like

@@ -81,6 +81,3 @@ talk_body: M
 min_confidence:
 speak_cooldown_seconds:
 
-# Volto in riunione: Ultra-HD fotorealistico (Ditto sul GPU pod).
-# Rimuovi o svuota per tornare al 3D gratuito. Cache mtime: niente restart.
-face: photoreal
