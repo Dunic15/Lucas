@@ -17,6 +17,8 @@ Public surface:
   - deliver_ended       — hand the finished artifact to the orchestrator
   - wire_artifact       — orchestrator-facing artifact copy (no transcript)
   - handle_webhook_status / notify_failed — relay Recall bot status
+  - maybe_refresh_context — one-shot pre-meeting context pull (status OR
+                            first-transcript trigger)
   - notify_action_requested — fire action.requested when queue_action captures
   - inject_brief        — fold the meeting brief into the live prompt memory
   - provision_org       — register an org→workspace link (Connect the brain)
@@ -36,6 +38,7 @@ from .integration import (  # noqa: F401
     deliver_ended,
     handle_webhook_status,
     inject_brief,
+    maybe_refresh_context,
     notify_action_requested,
     notify_failed,
     wire_artifact,

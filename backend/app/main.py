@@ -2464,6 +2464,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
         session = store.get(bot_id)
         if session is None:
             return JSONResponse({"ok": True, "note": "no session"})
+        # CEDRIC: fallback context pull — production (2026-07-10) shows the
+        # realtime webhook often carries NO bot-status events (every finalize
+        # arrived via reconcile), so handle_webhook_status's "live" trigger
+        # never fires and the avatar sits in the meeting without Cedric's
+        # brief. The first transcript IS proof the bot is in the call: launch
+        # the same one-shot refresh here. Flag-guarded (runs once per session),
+        # sync dict checks + create_task only — zero latency on the live path.
+        cedric.maybe_refresh_context(session)
         words = data.get("words", [])
         text = " ".join(w.get("text", "") for w in words).strip()
         participant = data.get("participant") or {}
@@ -2619,6 +2627,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
     session = store.get(bot_id)
     if session is None:
         return JSONResponse({"ok": True, "note": "no session"})
+
+    # CEDRIC: fallback context pull — see the partial path above. Finals cover
+    # the (rare) delivery where the session's very first webhook is a final.
+    cedric.maybe_refresh_context(session)
 
     words = data.get("words", [])
     text = " ".join(w.get("text", "") for w in words).strip()

@@ -26,6 +26,7 @@ import hmac
 import json
 import time
 from datetime import datetime, timezone
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -214,13 +215,39 @@ def send_ended(integration: dict | None, bot_id: str, artifact: dict) -> bool:
     return False
 
 
+def _context_request_url(integration: dict | None) -> str:
+    """The context GET URL, with the routing hints Cedric's endpoint needs to
+    locate the brief appended as query params: ``external_ref.team`` ->
+    ``team``, ``external_ref.slack_channel`` -> ``channel`` (his side is
+    "No team => empty brief", so a bare URL comes back empty). Query params
+    already present in the configured URL are preserved, and an explicit
+    ``team``/``channel`` there wins over external_ref (never duplicated).
+    Routing metadata only — transcript content never rides this URL."""
+    url = (integration or {}).get("context_url") or ""
+    ref = (integration or {}).get("external_ref") or {}
+    if not url or not isinstance(ref, dict):
+        return url
+    parts = urlsplit(url)
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    configured = {k for k, _ in query}
+    added = False
+    for ref_key, param in (("team", "team"), ("slack_channel", "channel")):
+        value = str(ref.get(ref_key) or "").strip()
+        if value and param not in configured:
+            query.append((param, value))
+            added = True
+    if not added:
+        return url  # nothing to append: keep the configured URL byte-for-byte
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
 def fetch_context(integration: dict | None) -> dict | None:
     """GET the session's context_url for a fresh brief at join time.
 
     Returns the parsed `context` object ({"meeting": ..., "brief_markdown": ...})
     or None on any failure — the caller keeps the booking-time brief.
     """
-    url = (integration or {}).get("context_url") or ""
+    url = _context_request_url(integration)
     if not url:
         return None
     headers = {}
