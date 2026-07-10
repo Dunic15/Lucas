@@ -57,6 +57,7 @@ from . import (
     org_api,
     tools,
     tts,
+    vendor_health,
 )
 from .brain import (
     SEARCH_ANNOUNCE_LINES,
@@ -109,6 +110,12 @@ async def _lifespan(app: FastAPI):
 
     if settings.gmail_watch_enabled:
         asyncio.create_task(_gmail_watch_loop())
+
+    if settings.vendor_alerts_enabled:
+        # Daily vendor subscription/credit watchdog: ElevenLabs characters,
+        # Google refresh token, Recall/LLM keys, RunPod balance. Posts the
+        # non-ok items to SLACK_WEBHOOK_URL; GET /health/vendors on demand.
+        asyncio.create_task(_vendor_watch_loop())
 
     if settings.reconcile_enabled:
         # Backstop that finalizes sessions whose Recall bot is terminal but whose
@@ -379,6 +386,30 @@ def _meeting_has_active_bot(meeting_url: str) -> bool:
 # (2026-07-10: five in ~40min, each restart ≈ a fresh first pass) a real
 # invite sent mid-deploy was silently marked seen and the bot never joined.
 _GMAIL_SEED_FRESH_SECONDS = 600.0
+
+
+async def _vendor_watch_loop() -> None:
+    """Daily vendor watchdog (see vendor_health.py): run every check, post the
+    non-ok ones to Slack. First run shortly after boot so a dead key or an
+    expired Google token is flagged within minutes of a deploy, not tomorrow."""
+    await asyncio.sleep(120)  # let the instance settle first
+    while True:
+        if _shutting_down:
+            return
+        try:
+            results = await run_in_threadpool(vendor_health.run_checks)
+            text = vendor_health.slack_text(results)
+            if text and settings.slack_webhook_url:
+                await run_in_threadpool(actions.post_to_slack, text)
+            bad = [r for r in results if r["status"] in ("warn", "crit")]
+            print(
+                f"[vendors] check: {len(results) - len(bad)} ok, {len(bad)} "
+                f"da attenzionare{' (postato su Slack)' if text and settings.slack_webhook_url else ''}",
+                flush=True,
+            )
+        except Exception as e:  # noqa: BLE001 — the watchdog never dies
+            print(f"[vendors] check fallito: {e}", flush=True)
+        await asyncio.sleep(max(1.0, settings.vendor_check_hours) * 3600)
 
 
 async def _gmail_watch_loop() -> None:
@@ -1466,6 +1497,22 @@ async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -
             actions.post_to_slack, actions.artifact_to_slack_text(name, artifact)
         )
     return JSONResponse({"email": email_res, "slack": slack_res})
+
+
+@app.get("/health/vendors")
+def vendors_view(request: Request) -> JSONResponse:
+    """On-demand vendor subscription/credit sweep (same checks as the daily
+    Slack watchdog). Auth-gated: statuses reveal which vendors are configured."""
+    if err := cedric.auth_error(request):  # CEDRIC
+        return err
+    results = vendor_health.run_checks()
+    return JSONResponse(
+        {
+            "checked_at": vendor_health.last_run_at,
+            "vendors": results,
+            "alert": vendor_health.slack_text(results) or "tutto ok",
+        }
+    )
 
 
 @app.get("/ledger")

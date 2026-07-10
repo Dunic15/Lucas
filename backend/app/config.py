@@ -245,6 +245,13 @@ class Settings(BaseSettings):
     # behaviour resumes. 0 disables (revert to speaking from the first line).
     opening_grace_seconds: float = 45.0
 
+    # Vendor subscription/credit watchdog (vendor_health.py): daily sweep of
+    # ElevenLabs characters, Google refresh token, Recall/LLM keys, RunPod
+    # balance — non-ok items go to SLACK_WEBHOOK_URL. The checks also serve
+    # GET /health/vendors on demand. Costs one cheap HTTP call per vendor/day.
+    vendor_alerts_enabled: bool = True
+    vendor_check_hours: float = 24.0
+
     # Server
     host: str = "127.0.0.1"
     port: int = 8000
@@ -285,6 +292,12 @@ class Settings(BaseSettings):
     # that don't set their own → the avatar fetches "who's who + context" from
     # Cedric's memory at join. Point at Cedric's {PUBLIC_BASE_URL}/api/laura/context.
     surface_context_url: str = ""
+    # Default external_ref (JSON) for sessions that don't carry their own —
+    # e.g. '{"team":"T1","slack_channel":"#cedric","requested_by":"duccio"}'.
+    # Without it, email/dashboard-summoned meetings reach the orchestrator with
+    # external_ref {} and it has no Slack channel to route cards/recaps to
+    # (live finding 2026-07-10). A real Cedric summon's own external_ref wins.
+    surface_external_ref: str = ""
     # ── end Cedric integration ──
 
     @property
