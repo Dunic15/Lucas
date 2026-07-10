@@ -94,6 +94,47 @@ shapes are bit-for-bit, do not drift).
    Ben agrees; retire Cedric's legacy `/api/meet/*` fail-open path (Ben's
    call); Cedric PR #7 re-implementation as opt-in with provenance wiring.
 
+## The exact keys Codex needs (pull them yourself — don't ask for pastes)
+
+Grab every secret in one shot (writes a local `laura-secrets.env`, values never
+printed to a shared transcript). zsh does NOT treat `#` as a comment, so this
+block is comment-free:
+
+```bash
+aws ssm get-parameters-by-path --path /laura/prod --recursive --with-decryption --region eu-central-1 --query "Parameters[].[Name,Value]" --output text | awk -F'\t' '{n=$1; sub(/.*\//,"",n); print n"="$2}' > laura-secrets.env
+aws ssm get-parameters-by-path --path /laura/staging --recursive --with-decryption --region eu-central-1 --query "Parameters[].[Name,Value]" --output text | awk -F'\t' '{n=$1; sub(/.*\//,"",n); print n"="$2}' >> laura-secrets.env
+```
+
+You should get exactly these **19 keys** (if any are missing, that's a finding):
+
+- **Laura↔Cedric auth (5):** `LAURA_API_TOKEN`, `LAURA_WEBHOOK_SECRET`,
+  `LAURA_WEBHOOK_TOKEN`, `LAURA_CONTEXT_TOKEN`, `LAURA_WEBHOOK_SECRETS_BY_ORG`
+- **Vendors (6):** `RECALL_API_KEY`, `RECALL_WEBHOOK_SECRET`,
+  `ELEVENLABS_API_KEY`, `ANAM_API_KEY`, `ANAM_AVATAR_ID`, `RUNPOD_API_KEY`
+- **Brains (3):** `ANTHROPIC_API_KEY`, `GROQ_API_KEY` (Cerebras-compatible),
+  `CEREBRAS_API_KEY`
+- **Auth/session (3):** `GOOGLE_CALENDAR_CLIENT_ID`,
+  `GOOGLE_CALENDAR_CLIENT_SECRET`, `SESSION_SECRET`
+- **Misc (1):** `SLACK_WEBHOOK_URL`
+- **Staging admin (1):** `CEDRIC_ADMIN_SECRET` (under `/laura/staging/`)
+
+Non-secret runtime config (URLs, allow-list) is separate — dump it with:
+```bash
+aws apprunner describe-service --service-arn arn:aws:apprunner:eu-central-1:836739852304:service/laura-backend/f169c4a486cd47bfac9736ab01367a26 --region eu-central-1 --query 'Service.SourceConfiguration.CodeRepository.CodeConfiguration.CodeConfigurationValues.RuntimeEnvironmentVariables' --output json > laura-config.json
+```
+
+**Keys Codex CANNOT pull from SSM** (get from a human/console):
+- Cedric runtime (Neon `DATABASE_URL`, Slack app tokens, Pipedream, prod
+  `ADMIN_SECRET`) → Vercel projects `cedric` / `cedric-staging` (Ben's team).
+- `VERCEL_TOKEN` for staging deploys → GitHub secret on `SFF-Studio/Cedric`.
+- Google OAuth app + test users → console.cloud.google.com project `868562221752`.
+- Recall billing/credits → dashboard.recall.ai (owner login).
+
+**Best practice: don't paste keys at all.** Give Codex your AWS creds
+(`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, region `eu-central-1`) + `gh` auth
+on both repos, and it reads secrets straight from SSM exactly like these
+handoff steps did — nothing sensitive lands in a prompt.
+
 ## Credentials / API map (names + WHERE — values live in the stores, never here)
 
 | Credential | Where it lives | Used for |
