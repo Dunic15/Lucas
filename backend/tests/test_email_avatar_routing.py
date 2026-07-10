@@ -145,6 +145,7 @@ def test_poll_new_invites_carries_recipient_addresses(monkeypatch):
     listing = {"messages": [{"id": "m1"}]}
     message = {
         "snippet": "Duccio is inviting you: https://meet.google.com/abc-defg-hij",
+        "internalDate": "1783674000000",  # epoch ms, as Gmail returns it
         "payload": {
             "headers": [
                 {"name": "To", "value": "Cedric <laura.ai.122222+cedric@gmail.com>"},
@@ -161,10 +162,28 @@ def test_poll_new_invites_carries_recipient_addresses(monkeypatch):
     seen: set[str] = set()
     out = gmail_watcher.poll_new_invites("tok", seen)
     assert len(out) == 1
-    mid, url, addrs = out[0]
+    mid, url, addrs, received_at = out[0]
     assert mid == "m1" and url == "https://meet.google.com/abc-defg-hij"
+    assert received_at == 1783674000.0  # seconds, for the boot-seeding cutoff
     assert "laura.ai.122222+cedric@gmail.com" in addrs
     # From (the sender) must NOT be treated as a recipient
     assert "duccio@example.com" not in addrs
     # …and the resolver turns it into the avatar id
     assert avatars.from_invite_email(addrs, [BASE]) == "cedric"
+
+
+def test_poll_new_invites_missing_internal_date_is_zero(monkeypatch):
+    """No internalDate → received_at 0.0: the boot-seeding pass treats it as
+    old mail (never join); a normal post-seed pass still processes it."""
+    listing = {"messages": [{"id": "m2"}]}
+    message = {
+        "snippet": "join https://meet.google.com/xyz-abcd-efg",
+        "payload": {"headers": [], "parts": []},
+    }
+
+    def fake_get(url, **kwargs):
+        return _FakeResp(message if "/messages/" in url else listing)
+
+    monkeypatch.setattr(gmail_watcher, "_client", type("C", (), {"get": staticmethod(fake_get)}))
+    out = gmail_watcher.poll_new_invites("tok", set())
+    assert len(out) == 1 and out[0][3] == 0.0

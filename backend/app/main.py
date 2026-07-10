@@ -372,8 +372,17 @@ def _meeting_has_active_bot(meeting_url: str) -> bool:
     return False
 
 
+# Seeding cutoff for the gmail watcher's FIRST poll after boot: mail older
+# than this is history (never join it), mail fresher is a LIVE invite that
+# just happened to land during an instance flip. Before this cutoff existed,
+# the first pass swallowed EVERYTHING — with several deploys back-to-back
+# (2026-07-10: five in ~40min, each restart ≈ a fresh first pass) a real
+# invite sent mid-deploy was silently marked seen and the bot never joined.
+_GMAIL_SEED_FRESH_SECONDS = 600.0
+
+
 async def _gmail_watch_loop() -> None:
-    seeded = False  # first pass only records existing mail; never joins old meetings
+    seeded = False  # first pass records existing mail; only FRESH invites join
     while True:
         if _shutting_down:
             print("[gmail-watch] instance draining — watcher stopped", flush=True)
@@ -396,8 +405,22 @@ async def _gmail_watch_loop() -> None:
             _gmail_state["last_error"] = ""
             if not seeded:
                 seeded = True
-                continue
-            for _mid, url, invite_addrs in new:
+                # Keep only invites received in the last few minutes: a live
+                # "Add people" that landed during the restart still joins,
+                # genuinely old mail stays history. Duplicate joins across the
+                # old/new instance are already prevented downstream by the
+                # durable guards (store.is_scheduled + _meeting_has_active_bot
+                # + _reconcile_duplicate_bots).
+                cutoff = time.time() - _GMAIL_SEED_FRESH_SECONDS
+                fresh = [n for n in new if n[3] and n[3] >= cutoff]
+                if fresh:
+                    print(
+                        f"[gmail-watch] boot seeding: {len(new) - len(fresh)} old "
+                        f"message(s) recorded, {len(fresh)} fresh invite(s) kept",
+                        flush=True,
+                    )
+                new = fresh
+            for _mid, url, invite_addrs, _received_at in new:
                 if _shutting_down:
                     break  # draining — don't start new bots
                 if store.is_scheduled(url):
