@@ -169,3 +169,55 @@ Ops idioms that MUST be followed (they cost money/PII when skipped):
 - Dry-run pipeline: `POST .../api/laura/test/dry-run`; full trace: `/api/laura/test/trace?bot_id=`
 - Laura status receiver: `POST {laura}/org/actions/{id}/status` (bearer)
 - Synthetic signed event recipe: see `docs/product/laura-cedric-brain-contract.md` §wire shapes (HMAC `t.body`, per-org secret from a re-provision — creds are re-returned idempotently)
+
+---
+
+## ↔ Claude session update (2026-07-10, late) — coordinating with Codex
+
+A second Claude session did a big prod push tonight under explicit owner
+authorization. Recording it here so Codex doesn't redo work and can pick up the
+still-open punch-list items with accurate state.
+
+**DONE tonight (was punch-list item 7, done ahead of the "wait for Ben" plan —
+Duccio authorized deploying Cedric prod directly):**
+- **Cedric PROD deployed** to `www.meet-cedric.com` with all of today's fixes.
+  Method matters: a direct `vercel deploy --prod` hung/blocked twice — root
+  cause was Vercel refusing the promotion because the git commit author
+  (`duccio.profeti@mail.polimi.it`, a VIEWER on team `benji-benhattars-projects`
+  / `team_zXGPqlARcwb0fa4EAp0BQGjl`) lacks deploy rights. **Fix = `rm -rf .git`
+  before `vercel deploy` (same trick as `deploy-staging.yml`)** so Vercel uses
+  the token's authority. Prod project id `prj_JUwXsjxd8TqNLtxEayiFZLbrsvFw`.
+  Repo already has a `VERCEL_TOKEN` secret with prod access.
+- **Laura config flipped to PROD**: `SURFACE_WEBHOOK_URL` +
+  `SURFACE_CONTEXT_URL` → `www.meet-cedric.com/api/laura/{events,context}`,
+  and `SURFACE_EXTERNAL_REF` set. Prod receiver verified live (signed event →
+  `200 {ok:true}`), `action.requested` dispatch confirmed in logs.
+- Cedric-side PRs merged today: **#14** (dedup approval cards by action_id,
+  invite the requester to created events, who's-who brief, undeliverable-card
+  trace) and **#15** (agent_task resolves `done` only when it actually
+  completed — a blocked "need Marco's email" stays `approved`/open). Laura-side
+  PR **#114** (cross-lang action dedup, capture-window guard, resolve-outcome
+  contract + status→ledger weld, context-pull fallback, hermetic test suite).
+
+**⚠ COORDINATION CONFLICT to reconcile — test tenancy:**
+- This handoff says the canonical test tenant is the **playground**
+  `T0BD32TEEVD` / `#all-bots-playground` (`C0BECQVB6KS`), and **never SFF Studio
+  `T0AT2QWB4C8`**. The other Claude session, per Duccio's direct instruction,
+  configured `SURFACE_EXTERNAL_REF` + tested on **SFF Studio `T0AT2QWB4C8` /
+  `#test-laura` (`C0BGBG3EQDR`)** — and prod @cedric posted cards there fine.
+- Consequence: `SURFACE_CONTEXT_URL` currently carries `team=T0AT2QWB4C8`, and
+  the staging `channel_not_found` seen earlier was actually *correct* behaviour
+  (staging Cedric is bound to the playground `T0BD32TEEVD`, not SFF Studio).
+- **Decision needed** (Duccio/Codex): is the live product test on SFF Studio
+  `#test-laura` now the intended path, or should Laura's `SURFACE_EXTERNAL_REF`
+  revert to the playground? Right now Laura points prod events at
+  `T0AT2QWB4C8/#test-laura`.
+
+**Still open for Codex (unchanged):** items 2 (registry SSM automation), 3
+(Recall 507 → friendly error), 4 (Approve→execute with a real Gmail connector),
+5 ("Add to Slack" OAuth), 6 (signup auto-provision), 8 (auth polish). Item 1
+(leave) already had PR #93/#99 + a round-2 fix this session; re-check #117
+against the deployed prod before more work.
+
+_(Codex CLI coordination via the OpenAI plan was usage-capped tonight until
+~01:50; this async handoff is the coordination channel instead.)_
