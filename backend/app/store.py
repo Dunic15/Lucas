@@ -517,11 +517,14 @@ def user_id_for_email(email: str) -> str:
 
 
 def upsert_user(email: str, name: str = "", picture: str = "") -> dict:
-    """Create-or-refresh a user row at login. Returns the user dict."""
+    """Create-or-refresh a user row at login. Returns the user dict + created."""
     email = (email or "").strip().lower()
     uid = user_id_for_email(email)
     now = time.time()
     with _LOCK, _connect() as conn:
+        created = conn.execute(
+            "SELECT 1 FROM users WHERE user_id = ?", (uid,)
+        ).fetchone() is None
         conn.execute(
             """
             INSERT INTO users (user_id, email, name, picture, org_id,
@@ -535,7 +538,7 @@ def upsert_user(email: str, name: str = "", picture: str = "") -> dict:
             (uid, email, name, picture, uid, now, now),
         )
     return {"user_id": uid, "email": email, "name": name, "picture": picture,
-            "org_id": uid}
+            "org_id": uid, "created": created}
 
 
 def get_user(user_id: str) -> dict | None:

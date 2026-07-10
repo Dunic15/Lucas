@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -20,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app import auth, ledger, store
+from app import auth, cedric, ledger, store
 from app.config import settings
 
 
@@ -67,6 +68,13 @@ def test_user_id_is_deterministic_from_email():
     a = store.user_id_for_email("Duccio@Example.com ")
     b = store.user_id_for_email("duccio@example.com")
     assert a == b and a.startswith("u_")
+
+
+def test_upsert_user_marks_only_first_login_created(client):
+    first = store.upsert_user("first@example.com")
+    second = store.upsert_user("first@example.com")
+    assert first["created"] is True
+    assert second["created"] is False
 
 
 # ── demo mode preserved ────────────────────────────────────────────────
@@ -136,6 +144,16 @@ def test_google_callback_creates_user_and_sets_cookie(
         async def post(self, *a, **k): return FakeResp()
 
     monkeypatch.setattr(auth.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
+    preprovisioned = threading.Event()
+    provision_args: list[tuple] = []
+
+    def fake_provision(*args):
+        provision_args.append(args)
+        preprovisioned.set()
+        return None
+
+    monkeypatch.setattr(cedric, "provision_org", fake_provision)
 
     state = _valid_state(client, nonce="nonce-abc")
     resp = client.get(
@@ -150,6 +168,8 @@ def test_google_callback_creates_user_and_sets_cookie(
     uid = auth.read_cookie(resp.cookies[auth.COOKIE_NAME])
     user = store.get_user(uid)
     assert user["email"] == "new.person@example.com"
+    assert preprovisioned.wait(1), "first login should enqueue pending org provisioning"
+    assert provision_args == [(uid, None, "", "cedric")]
 
 
 def _valid_state(client, nonce="nonce-abc", exp_offset=600) -> str:

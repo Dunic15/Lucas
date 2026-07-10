@@ -4,10 +4,13 @@ records it locally when not (pending); DELETE marks disconnected; the summary
 exposes org_connections for the logged-in org only. Key-free."""
 from __future__ import annotations
 
+import base64
 import importlib
+import json
 import sys
 import time
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -17,7 +20,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app import auth, cedric, ledger, store
-from app.cedric import callback
+from app.cedric import callback, secret_registry
 from app.config import settings
 
 
@@ -72,10 +75,16 @@ def test_connect_connected_when_provisioning_succeeds(client, monkeypatch):
 
     def fake_provision(org_id, team_id, channel="", avatar_id=""):
         calls.append((org_id, team_id, channel, avatar_id))
-        return True
+        return callback.ProvisionResult(200, "minted-test-secret")
 
     # dashboard.py calls the package re-export, so patch that binding
     monkeypatch.setattr(cedric, "provision_org", fake_provision)
+    registry_calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        secret_registry,
+        "upsert_org_secret",
+        lambda org, secret: registry_calls.append((org, secret)) or True,
+    )
     user = _login(client)
     r = client.post(
         "/dashboard/connections/brain",
@@ -83,7 +92,87 @@ def test_connect_connected_when_provisioning_succeeds(client, monkeypatch):
     )
     assert r.status_code == 200
     assert r.json()["status"] == "connected"
+    assert r.json()["registry_synced"] is True
     assert calls == [(user["org_id"], "T9", "#ops", "cedric")]
+    assert registry_calls == [(user["org_id"], "minted-test-secret")]
+
+
+def test_connect_stays_pending_when_registry_write_fails(client, monkeypatch):
+    monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
+    monkeypatch.setattr(
+        cedric, "provision_org", lambda *a, **k: callback.ProvisionResult(200, "minted")
+    )
+    monkeypatch.setattr(secret_registry, "upsert_org_secret", lambda *a: False)
+    _login(client)
+    r = client.post(
+        "/dashboard/connections/brain",
+        json={"avatar_id": "cedric", "team_id": "T9", "channel": "#ops"},
+    )
+    assert r.status_code == 200
+    assert r.json()["provisioned"] is True
+    assert r.json()["registry_synced"] is False
+    assert r.json()["status"] == "pending"
+
+
+def test_add_to_slack_start_carries_signed_org_state(client, monkeypatch):
+    monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
+    monkeypatch.setattr(settings, "cedric_orgs_token", "shared-test-token")
+    monkeypatch.setattr(settings, "public_base_url", "https://laura.example")
+    user = _login(client)
+
+    response = client.get(
+        "/dashboard/connections/brain/slack/start",
+        params={"avatar_id": "cedric", "channel": "#approvals"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    target = urlsplit(response.headers["location"])
+    assert (target.scheme, target.netloc, target.path) == (
+        "https", "cedric", "/api/slack/install"
+    )
+    state = parse_qs(target.query)["state"][0]
+    payload = state.rsplit(".", 1)[0]
+    data = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    assert data["org_id"] == user["org_id"]
+    assert data["avatar_id"] == "cedric"
+    assert data["channel"] == "#approvals"
+    assert data["return_url"] == "https://laura.example/dashboard"
+
+
+def test_slack_complete_hot_writes_registry_and_connection(client, monkeypatch):
+    monkeypatch.setattr(settings, "laura_api_token", "machine-token")
+    user = store.upsert_user("owner@example.com", "Owner")
+    writes: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        secret_registry,
+        "upsert_org_secret",
+        lambda org, secret: writes.append((org, secret)) or True,
+    )
+
+    response = client.post(
+        "/dashboard/connections/brain/slack/complete",
+        headers={"Authorization": "Bearer machine-token"},
+        json={
+            "org_id": user["org_id"],
+            "avatar_id": "cedric",
+            "team_id": "T_NEW",
+            "channel": "#approvals",
+            "webhook_secret": "minted-test-secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert writes == [(user["org_id"], "minted-test-secret")]
+    row = store.connections_for_org(user["org_id"])[0]
+    assert row["status"] == "connected"
+    assert row["config"] == {"team_id": "T_NEW", "channel": "#approvals"}
+
+
+def test_dashboard_uses_add_to_slack_not_team_id_field():
+    dashboard = (Path(__file__).resolve().parents[2] / "frontend/dashboard.html").read_text()
+    assert "Add to Slack" in dashboard
+    assert "Slack team ID" not in dashboard
 
 
 def test_connect_validates_avatar_and_team(client):
@@ -134,7 +223,10 @@ def test_brain_connectors_pending_until_linked(client):
 
 def test_brain_connectors_proxies_when_linked(client, monkeypatch):
     monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
-    monkeypatch.setattr(cedric, "provision_org", lambda *a, **k: True)
+    monkeypatch.setattr(
+        cedric, "provision_org", lambda *a, **k: callback.ProvisionResult(200, "minted")
+    )
+    monkeypatch.setattr(secret_registry, "upsert_org_secret", lambda *a: True)
     _login(client)
     client.post(
         "/dashboard/connections/brain",

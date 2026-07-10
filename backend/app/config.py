@@ -299,6 +299,14 @@ class Settings(BaseSettings):
     # org's own secret (minted at Connect-the-brain provisioning); orgs not in
     # the map — and service starts — fall back to LAURA_WEBHOOK_SECRET.
     laura_webhook_secrets_by_org: str = ""
+    # SSM is the durable source of truth for that registry.  The env value
+    # above remains the boot-time fallback; successful provisioning merges the
+    # new org into this SecureString and refreshes the in-process cache.
+    laura_webhook_registry_ssm_parameter: str = (
+        "/laura/prod/LAURA_WEBHOOK_SECRETS_BY_ORG"
+    )
+    laura_webhook_registry_refresh_seconds: float = 300.0
+    laura_webhook_registry_aws_region: str = "eu-central-1"
     # Connect-the-brain provisioning: the orchestrator's org endpoint (Cedric's
     # /api/laura/orgs) and the bearer it expects. Unset → a brain connection
     # saves locally as "pending" (the dashboard says so); the call goes live
