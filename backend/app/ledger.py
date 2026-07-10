@@ -312,13 +312,22 @@ def resolve_by_action_id(
 EXECUTION_STATUSES = ("proposed", "approved", "rejected", "done", "failed")
 
 
+# Terminal execution statuses close the ledger item with the matching resolve
+# outcome — one weld point so the provenance channel (/status, what Cedric's
+# own loop reports) and the closure channel (/resolve) can never disagree.
+# 'proposed'/'approved' are in-flight and must NOT close anything.
+_TERMINAL_STATUS_OUTCOME = {"done": "done", "rejected": "rejected", "failed": "failed"}
+
+
 def set_action_status(action_id: str, status: str, detail: str = "") -> bool:
     """Record the orchestrator-reported execution state of an action (upsert,
-    latest wins). A terminal 'done' also closes the ledger item — same effect
-    as the resolve endpoint — so the two reporting paths can't disagree.
-    Unknown status or empty id is a no-op (False). ``detail`` is a distilled
-    one-liner (card link, error class); it is capped, and it is never
-    transcript content by contract."""
+    latest wins). Terminal statuses (done/rejected/failed) also close the
+    ledger item with the matching outcome — same effect as the resolve
+    endpoint — so the two reporting paths can't disagree (live gap 2026-07-10:
+    Cedric's status loop reported 'rejected' but the ledger row stayed open
+    forever). Unknown status or empty id is a no-op (False). ``detail`` is a
+    distilled one-liner (card link, error class); it is capped, and it is
+    never transcript content by contract."""
     aid = (action_id or "").strip()
     st = (status or "").strip().lower()
     if not aid or st not in EXECUTION_STATUSES:
@@ -332,8 +341,9 @@ def set_action_status(action_id: str, status: str, detail: str = "") -> bool:
                  updated_at=excluded.updated_at""",
             (aid, st, (detail or "").strip()[:300], time.time()),
         )
-    if st == "done":
-        resolve_by_action_id(aid)
+    outcome = _TERMINAL_STATUS_OUTCOME.get(st)
+    if outcome:
+        resolve_by_action_id(aid, "", outcome, (detail or "").strip()[:300])
     return True
 
 
