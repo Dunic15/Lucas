@@ -187,6 +187,14 @@
   .tbl{width:100%;min-width:700px;border-collapse:collapse;font-size:.86rem;}
   .tbl thead th{text-align:left;font-family:var(--mono);font-size:.58rem;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:8px 14px;border-bottom:1px solid var(--line-soft);white-space:nowrap;}
   .tbl thead th.r,.tbl td.r{text-align:right;}
+  .hfilter{font-family:var(--mono);font-size:.58rem;letter-spacing:.14em;text-transform:uppercase;font-weight:500;
+    color:var(--faint);background:transparent;border:0;cursor:pointer;padding:0 15px 0 0;max-width:140px;
+    appearance:none;-webkit-appearance:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath d='M1 2.5L4 5.5L7 2.5' stroke='%235F6672' fill='none' stroke-width='1.2'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right center;}
+  .hfilter:hover,.hfilter:focus{color:var(--text);outline:none;}
+  .hfilter.active{color:var(--g2);}
+  .hfilter option{background:var(--raised);color:var(--text);text-transform:none;letter-spacing:0;font-size:.85rem;}
   .tbl tbody tr.row{border-bottom:1px solid var(--line-soft);cursor:pointer;}
   .tbl tbody tr.row:hover{background:var(--panel-2);}
   .tbl td{padding:11px 14px;vertical-align:middle;}
@@ -241,6 +249,10 @@
   .crow .cd{font-size:.74rem;color:var(--faint);margin-top:1px;}
   .crow .conn-btn{padding:6px 14px;font-size:.78rem;flex:0 0 auto;}
   .cnote{font-size:.76rem;color:var(--faint);margin-top:11px;line-height:1.5;}
+  .alias{margin-top:12px;padding:11px 13px;border:1px solid var(--accent-line);border-radius:12px;background:var(--accent-soft);}
+  .al-lbl{font-family:var(--mono);font-size:.62rem;letter-spacing:.06em;text-transform:uppercase;color:var(--live);margin-bottom:6px;}
+  .al-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .al-addr{font-family:var(--mono);font-size:.84rem;color:var(--text);word-break:break-all;flex:1;min-width:0;}
 
   /* usage & billing */
   .usage-hero{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;}
@@ -395,13 +407,11 @@
         <div class="seg" id="seg-when"><button class="on" data-w="past">Past</button><button data-w="upcoming">Upcoming</button></div></div>
       <div id="mt-past">
         <div class="tbl-wrap">
-          <div class="tbl-top"><div class="filters">
-            <select id="f-avatar"><option value="all">All avatars</option></select>
-            <select id="f-platform"><option value="all">All platforms</option></select>
-            <select id="f-when"><option value="all">Any time</option><option value="1">Last 24h</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select>
-          </div></div>
           <div class="scroll"><table class="tbl"><thead><tr>
-            <th>Avatar</th><th>Platform</th><th>When</th><th>Duration</th><th class="r">Action</th><th class="r">Readiness</th>
+            <th><select class="hfilter" id="f-avatar"><option value="all">Avatar</option></select></th>
+            <th><select class="hfilter" id="f-platform"><option value="all">Platform</option></select></th>
+            <th><select class="hfilter" id="f-when"><option value="all">When</option><option value="1">Last 24h</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select></th>
+            <th>Duration</th><th class="r">Action</th><th class="r">Readiness</th>
           </tr></thead><tbody id="tbody-mt"></tbody></table></div>
         </div>
       </div>
@@ -579,10 +589,7 @@
     var AV_CONN=[["gmail","Gmail","Read &amp; send email"],["calendar","Google Calendar","Auto-join &amp; schedule its meetings"],
                  ["slack","Slack","Post updates &amp; take actions"],["drive","Google Drive","Read knowledge"]];
     $("#av-grid").innerHTML = d.avatars.map(function(a){
-      var emailRow = '<div class="crow"><div><div class="cn">Personal email</div>'+
-        '<div class="cd" style="font-family:var(--mono)">'+esc(a.email||"—")+'</div></div>'+
-        (a.email?'<button class="btn conn-btn" data-copy="'+esc(a.email)+'">Copy</button>':'')+'</div>';
-      var conns=emailRow + AV_CONN.map(function(c){
+      var conns=AV_CONN.map(function(c){
         return '<div class="crow"><div><div class="cn">'+c[1]+'</div><div class="cd">'+c[2]+'</div></div>'+
           '<button class="btn conn-btn" data-conn="'+c[0]+'">Connect</button></div>';}).join("");
       return '<div class="avd"><div class="top">'+
@@ -590,6 +597,8 @@
           '<div><div class="nm">'+esc(a.name)+' <span class="pill '+(a.live_now?"live":"idle")+'">'+(a.live_now?"in call":"idle")+'</span></div>'+
           '<div class="ro">'+esc(a.role)+' · '+a.meetings_total+' meeting'+(a.meetings_total===1?"":"s")+(a.last_meeting_at?' · last '+fmtWhen(a.last_meeting_at):'')+'</div>'+
           (a.persona?'<div class="persona">'+esc(a.persona)+(a.persona.length>=220?"…":"")+'</div>':'')+
+          (a.email?'<div class="alias"><div class="al-lbl">Invite this address to a meeting to summon '+esc(a.name)+'</div>'+
+            '<div class="al-row"><span class="al-addr">'+esc(a.email)+'</span><button class="btn conn-btn" data-copy="'+esc(a.email)+'">Copy</button></div></div>':'')+
           '<div class="acts"><button class="btn primary" data-dispatch="'+esc(a.id)+'">Send to a meeting</button>'+
           '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a></div></div></div>'+
           '<div class="cfg"><div class="sm-h">Connections</div><div class="conns-list">'+conns+'</div>'+
@@ -605,15 +614,22 @@
       if(navigator.clipboard) navigator.clipboard.writeText(v);
       toast("Copied "+v+" — invite it to a meeting to summon this avatar."); }); });
 
-    // meetings tables — no expand/click, 6 columns
+    // meetings tables — clean filterable columns; click a row for AI summary + actions
     function platformsIn(){ var s={}; (d.meetings||[]).forEach(function(m){ if(m.platform&&m.platform!=="—") s[m.platform]=1; }); return Object.keys(s); }
-    function rowHTML(m){ var nm=avName(m.avatar_id);
-      return '<tr class="row"><td><div class="cell-av">'+
+    function rowHTML(m,i){ var nm=avName(m.avatar_id);
+      return '<tr class="row" data-i="'+i+'"><td><div class="cell-av">'+
         '<span class="av" style="background:'+(m.avatar_id?grad(m.avatar_id):"var(--faint)")+'">'+esc(nm[0]||"?")+'</span><span>'+esc(nm)+'</span></div></td>'+
         '<td><span class="platc">'+esc(m.platform)+'</span></td>'+
         '<td class="when">'+fmtWhen(m.saved_at)+'</td><td class="dur">'+fmtDur(m.duration_seconds)+'</td>'+
         '<td class="r tnum">'+m.actions.length+'</td>'+
-        '<td class="r"><div class="rd"><div class="track"><div class="fill'+(m.readiness_score<70?" low":"")+'" style="width:'+Math.max(0,Math.min(100,m.readiness_score))+'%"></div></div><span class="pc">'+(m.readiness_score||"—")+'</span></div></td></tr>';
+        '<td class="r"><div class="rd"><div class="track"><div class="fill'+(m.readiness_score<70?" low":"")+'" style="width:'+Math.max(0,Math.min(100,m.readiness_score))+'%"></div></div><span class="pc">'+(m.readiness_score||"—")+'</span></div></td></tr>'+
+        '<tr class="detail" data-d="'+i+'" hidden><td colspan="6"><div class="inner">'+
+        '<div><div class="sm-h">AI summary</div><div class="summary">'+(m.summary?esc(m.summary):'<span style="color:var(--faint)">No summary captured.</span>')+'</div>'+
+        (m.follow_up_subject?'<div class="sm-h" style="margin-top:12px">Follow-up email</div><div class="summary">'+esc(m.follow_up_subject)+'</div>':'')+'</div>'+
+        '<div><div class="sm-h">Actions</div><div class="did">'+
+        (m.actions.length? m.actions.map(function(a){return '<div class="d'+(a.done?"":" attn")+'"><span class="ic">'+(a.done?"✓":"→")+'</span><span>'+esc(a.item)+(a.owner?' <span class="ow">· '+esc(a.owner)+'</span>':'')+'</span></div>';}).join("") : '<div class="empty" style="padding:6px 0;text-align:left">No actions captured.</div>')+
+        (m.missing_steps.length?'<div class="sm-h" style="margin-top:12px">Missing steps</div>'+m.missing_steps.map(function(s){return '<div class="d attn"><span class="ic">!</span><span>'+esc(s.replace(/_/g," "))+'</span></div>';}).join(""):'')+
+        '</div></div></td></tr>';
     }
     function renderRows(sel,opts,limit){ var tb=$(sel), now=Date.now()/1000;
       var rows=(d.meetings||[]).filter(function(m){
@@ -623,6 +639,8 @@
         return true; }).slice(0,limit);
       tb.innerHTML = rows.length ? rows.map(rowHTML).join("")
         : '<tr><td colspan="6"><div class="empty">No meetings match.</div></td></tr>';
+      $$("tr.row",tb).forEach(function(r){ r.addEventListener("click",function(){
+        var dEl=tb.querySelector('tr.detail[data-d="'+r.getAttribute("data-i")+'"]'); if(dEl) dEl.hidden=!dEl.hidden; }); });
     }
     // overview: avatar tabs
     function tabs(el,cur,onpick){ var ids=[["all","All"]].concat(d.avatars.map(function(a){return [a.id,a.name];}));
@@ -631,13 +649,15 @@
         $$("button",el).forEach(function(x){x.classList.remove("on");}); b.classList.add("on"); onpick(b.getAttribute("data-f")); }); }); }
     tabs($("#tabs-ov"),filterOv,function(f){filterOv=f;renderRows("#tbody-ov",{avatar:f},8);});
     renderRows("#tbody-ov",{avatar:filterOv},8);
-    // meetings: excel-style dropdown filters (avatar / platform / when), selection preserved across refresh
+    // meetings: excel-style filters ON the column headers (Avatar / Platform / When)
     (function(){ var fa=$("#f-avatar"), fp=$("#f-platform"), fw=$("#f-when");
       var pa=fa.value||"all", pp=fp.value||"all", pw=fw.value||"all";
-      fa.innerHTML='<option value="all">All avatars</option>'+d.avatars.map(function(a){return '<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>';}).join("");
-      fp.innerHTML='<option value="all">All platforms</option>'+platformsIn().map(function(p){return '<option value="'+esc(p)+'">'+esc(p)+'</option>';}).join("");
+      fa.innerHTML='<option value="all">Avatar</option>'+d.avatars.map(function(a){return '<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>';}).join("");
+      fp.innerHTML='<option value="all">Platform</option>'+platformsIn().map(function(p){return '<option value="'+esc(p)+'">'+esc(p)+'</option>';}).join("");
       fa.value=pa; fp.value=pp; fw.value=pw;
-      function apply(){ renderRows("#tbody-mt",{avatar:fa.value,platform:fp.value,whenDays:(fw.value==="all"?"all":parseInt(fw.value,10))},999); }
+      function mark(s){ s.classList.toggle("active", s.value!=="all"); }
+      function apply(){ [fa,fp,fw].forEach(mark);
+        renderRows("#tbody-mt",{avatar:fa.value,platform:fp.value,whenDays:(fw.value==="all"?"all":parseInt(fw.value,10))},999); }
       fa.onchange=apply; fp.onchange=apply; fw.onchange=apply; apply();
     })();
 
