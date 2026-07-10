@@ -40,4 +40,4 @@ jobs:
           context: gpu
           file: gpu/Dockerfile.ditto
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/laura-ditto:${{ inputs.tag }}
+          tags: ghcr.io/dunic15/laura-ditto:${{ inputs.tag }}
