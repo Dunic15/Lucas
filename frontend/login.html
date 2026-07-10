@@ -159,7 +159,10 @@
       function decideGate(a){
         if (a && a.auth_enabled === false) { showDemo(); return; }
         if (q.get("error")) return;            // an error/coming view is already up
-        if (a && a.gated) showEmailGate(); else showGoogleDirect();
+        // Direct "Continue with Google" as the primary CTA. The private-beta
+        // allow-list is still enforced server-side: the OAuth callback bounces a
+        // non-allowed email to /login?error=not_allowed -> the "coming soon" panel.
+        showGoogleDirect();
       }
 
       // Already signed in? go straight to the dashboard. Else decide which gate.
