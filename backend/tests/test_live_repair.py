@@ -59,5 +59,6 @@ def test_avatar_speech_queues_when_websocket_is_missing():
             "text": "Hello from Laura.",
             "citations": [],
             "generation_id": 0,
+            "emotion": "neutral",  # per-sentence emotion rides every speak
         }
     ]

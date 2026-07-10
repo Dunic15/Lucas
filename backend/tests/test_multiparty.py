@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import main, store  # noqa: E402
 from app.config import settings  # noqa: E402
-from app.decision import addressed_to_other  # noqa: E402
+from app.decision import addressed_to_other, adaptive_deference_seconds  # noqa: E402
 
 
 # ── roster: event-driven, with transcript fallback ──
@@ -202,6 +202,79 @@ def test_fuzzy_name_match_unit():
     assert not fuzzy_name_match("libra", "laura")  # dist 2, skeleton differs
     assert not fuzzy_name_match("clara", "laura")
     assert not fuzzy_name_match("laurea", "laura")  # excluded dictionary word
+
+
+# ── adaptive deference: sizes ONLY the wait, never the yield decision ──
+# Pure-function tests (no Session): the helper takes floats/int/bool and returns
+# a wait length. The single load-bearing invariant is that with adaptation OFF
+# (or a mis-configured range) it returns `base` verbatim, so the existing
+# webhook deference tests below — which monkeypatch a tiny base — are unaffected.
+
+_DEFER_KW = dict(
+    lo=1.0, hi=2.6, since_partial=5.0, active_partial_seconds=0.6,
+    n_humans=3, is_question=False,
+)
+
+
+def test_adaptive_deference_disabled_is_strict_noop():
+    # OFF → base verbatim, regardless of what the range would otherwise pick.
+    assert adaptive_deference_seconds(1.8, enabled=False, **_DEFER_KW) == 1.8
+    # A monkeypatched tiny base (as the webhook tests use) is returned untouched.
+    assert adaptive_deference_seconds(0.05, enabled=False, **_DEFER_KW) == 0.05
+
+
+def test_adaptive_deference_bad_range_falls_back_to_base():
+    # lo >= hi, a negative bound, OR lo == 0 must NOT collapse the yield window.
+    # lo == 0 matters specifically: the single-human branch returns `lo`, so a
+    # zero min would sleep(0) and give a human no chance to take the floor.
+    assert adaptive_deference_seconds(
+        1.8, enabled=True, **{**_DEFER_KW, "lo": 2.6, "hi": 2.6}
+    ) == 1.8
+    assert adaptive_deference_seconds(
+        1.8, enabled=True, **{**_DEFER_KW, "lo": -1.0, "hi": 2.6}
+    ) == 1.8
+    assert adaptive_deference_seconds(
+        1.8, enabled=True, **{**_DEFER_KW, "lo": 0.0, "n_humans": 1}
+    ) == 1.8
+
+
+def test_adaptive_deference_extends_on_mid_utterance_partial():
+    # A human partial landed within the active window → wait the max (give room).
+    assert adaptive_deference_seconds(
+        1.8, enabled=True, **{**_DEFER_KW, "since_partial": 0.2}
+    ) == 2.6
+
+
+def test_adaptive_deference_shortens_for_single_human():
+    # Only one human present → nobody to defer to → respond snappily (min).
+    assert adaptive_deference_seconds(
+        1.8, enabled=True, **{**_DEFER_KW, "n_humans": 1}
+    ) == 1.0
+
+
+def test_adaptive_deference_splits_for_room_open_question():
+    # Several humans + a question → between base and min.
+    assert adaptive_deference_seconds(
+        1.8, enabled=True, **{**_DEFER_KW, "is_question": True}
+    ) == (1.8 + 1.0) / 2.0
+
+
+def test_adaptive_deference_statement_uses_base():
+    # Several humans + a statement (stale partial) → the base wait.
+    assert adaptive_deference_seconds(1.8, enabled=True, **_DEFER_KW) == 1.8
+
+
+def test_adaptive_deference_always_within_bounds():
+    # Whatever the inputs, the result never escapes [lo, hi].
+    for since in (0.0, 0.5, 5.0):
+        for n in (1, 2, 5):
+            for q in (True, False):
+                w = adaptive_deference_seconds(
+                    1.8, enabled=True, lo=1.0, hi=2.6,
+                    since_partial=since, active_partial_seconds=0.6,
+                    n_humans=n, is_question=q,
+                )
+                assert 1.0 <= w <= 2.6, (since, n, q, w)
 
 
 # ── deference window: humans get first right of reply ──

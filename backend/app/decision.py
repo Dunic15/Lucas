@@ -222,6 +222,62 @@ def addressed_to_other(utterance: str, roster: list[str]) -> bool:
     return False
 
 
+def adaptive_deference_seconds(
+    base: float,
+    *,
+    enabled: bool,
+    lo: float,
+    hi: float,
+    since_partial: float,
+    active_partial_seconds: float,
+    n_humans: int,
+    is_question: bool,
+    turn_completeness: float | None = None,
+) -> float:
+    """Size ONLY the deference wait — never the decision of WHETHER she speaks.
+
+    The caller's post-sleep yield check (transcript grew OR a human partial
+    landed) and the in-stream SKIP sentinel are unchanged, so a mis-sized wait
+    can at worst change latency: it can never emit unaddressed or double speech.
+
+    When ``enabled`` is False (the default) this returns ``base`` verbatim — a
+    strict no-op reproducing the fixed ``deference_seconds`` behaviour. The
+    ``0 < lo < hi`` guard makes a mis-configured range (a non-positive or
+    inverted bound) fall back to ``base`` rather than shrink the yield window to
+    zero — a ``lo`` of 0 would let the single-human branch sleep(0) and give a
+    human no chance to take the floor, so it is rejected, not honoured.
+
+    When enabled, the wait adapts to signals already on hand, strongest first:
+      • the utterance sounds MID-THOUGHT (``turn_completeness`` low, from
+        end_of_turn.completeness: trailing conjunction/filler/trail-off) →
+        wait ``hi``: the speaker is still holding the floor, whatever the
+        room's shape — this outranks every other signal;
+      • a human partial is mid-utterance (``since_partial`` small) → wait ``hi``
+        (someone is audibly talking right now);
+      • only one human present → wait ``lo`` (respond snappily, no one to defer
+        to) — trimmed further when their line sounds clearly FINISHED;
+      • a room-open question with several humans → split the difference —
+        trimmed toward ``lo`` when clearly finished (a fully-formed question
+        deserves a snappy answer, someone is waiting for it);
+      • otherwise (a statement) → the ``base`` wait.
+    Result is always clamped to ``[lo, hi]``.
+    """
+    if not enabled or not (0 < lo < hi):
+        return base
+    clearly_done = turn_completeness is not None and turn_completeness >= 0.8
+    if turn_completeness is not None and turn_completeness <= 0.3:
+        wait = hi  # mid-thought: give the speaker room to finish
+    elif since_partial < active_partial_seconds:
+        wait = hi
+    elif n_humans <= 1:
+        wait = lo
+    elif is_question:
+        wait = lo if clearly_done else (base + lo) / 2.0
+    else:
+        wait = base
+    return max(lo, min(hi, wait))
+
+
 def passes_confidence(avatar: Avatar, result: dict) -> bool:
     """LEGACY — not used on the live streaming path (the in-stream SKIP sentinel
     replaced it). Kept for back-compat + unit tests. Speak only if the model had
