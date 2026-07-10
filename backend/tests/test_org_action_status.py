@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app import ledger, store
-from app.cedric import callback
+from app.cedric import callback, secret_registry
 from app.config import settings
 
 
@@ -131,6 +131,10 @@ def test_callback_payloads_carry_org_id(monkeypatch):
 
 
 def test_signing_secret_per_org_with_fallback(monkeypatch):
+    # Pure env-registry behaviour: disable the SSM source so the lookup doesn't
+    # reach a real parameter (the registry now consults SSM on the first call
+    # after boot).
+    monkeypatch.setattr(settings, "laura_webhook_registry_ssm_parameter", "")
     monkeypatch.setattr(settings, "laura_webhook_secret", "global-secret")
     monkeypatch.setattr(
         settings, "laura_webhook_secrets_by_org", json.dumps({"org-42": "org-secret"})
@@ -143,7 +147,33 @@ def test_signing_secret_per_org_with_fallback(monkeypatch):
     assert callback._secret_for("org-42") == "global-secret"
 
 
+def test_ssm_registry_merge_preserves_existing_orgs_and_hot_reloads(monkeypatch):
+    writes: list[dict] = []
+
+    class FakeSsm:
+        def get_parameter(self, **kwargs):
+            assert kwargs["WithDecryption"] is True
+            return {"Parameter": {"Value": json.dumps({"org-old": "old-secret"})}}
+
+        def put_parameter(self, **kwargs):
+            writes.append(kwargs)
+
+    monkeypatch.setattr(secret_registry, "_client", lambda: FakeSsm())
+    monkeypatch.setattr(settings, "laura_webhook_registry_ssm_parameter", "/test/registry")
+    monkeypatch.setattr(settings, "laura_webhook_secrets_by_org", "{}")
+    monkeypatch.setattr(secret_registry, "_env_snapshot", None)
+    monkeypatch.setattr(secret_registry, "_cache", {})
+
+    assert secret_registry.upsert_org_secret("org-new", "new-secret") is True
+    saved = json.loads(writes[0]["Value"])
+    assert saved == {"org-old": "old-secret", "org-new": "new-secret"}
+    assert writes[0]["Type"] == "SecureString"
+    assert writes[0]["Overwrite"] is True
+    assert callback._secret_for("org-new") == "new-secret"
+
+
 def test_signature_differs_by_org_secret(monkeypatch):
+    monkeypatch.setattr(settings, "laura_webhook_registry_ssm_parameter", "")
     monkeypatch.setattr(settings, "laura_webhook_secret", "global-secret")
     monkeypatch.setattr(settings, "laura_webhook_token", "tok")
     monkeypatch.setattr(

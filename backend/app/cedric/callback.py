@@ -25,12 +25,14 @@ import hashlib
 import hmac
 import json
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
 from ..config import settings
+from . import secret_registry
 
 # Retry schedule for session.ended (seconds between attempts). Module-level so
 # tests can monkeypatch it to zeros.
@@ -43,15 +45,27 @@ def _secret_for(org_id: str) -> str:
     present, else the global LAURA_WEBHOOK_SECRET. The registry is how each
     connected workspace gets its own credential (minted by the orchestrator's
     /api/laura/orgs provisioning) without rotating anyone else's."""
-    raw = settings.laura_webhook_secrets_by_org.strip()
-    if raw and org_id:
-        try:
-            per_org = json.loads(raw).get(org_id, "")
-            if isinstance(per_org, str) and per_org.strip():
-                return per_org.strip()
-        except (ValueError, AttributeError):
-            print("[cedric-callback] LAURA_WEBHOOK_SECRETS_BY_ORG is not valid JSON", flush=True)
+    per_org = secret_registry.secret_for(org_id)
+    if per_org:
+        return per_org
     return settings.laura_webhook_secret.strip()
+
+
+@dataclass(frozen=True, repr=False)
+class ProvisionResult:
+    """Provision response kept in memory only; repr deliberately redacts it."""
+
+    status_code: int
+    webhook_secret: str = ""
+
+    def __bool__(self) -> bool:
+        return 200 <= self.status_code < 300
+
+    def __repr__(self) -> str:
+        return (
+            f"ProvisionResult(status_code={self.status_code}, "
+            f"webhook_secret={'<redacted>' if self.webhook_secret else '<missing>'})"
+        )
 
 
 def _signature_headers(body: bytes, org_id: str = "") -> dict[str, str]:
@@ -278,14 +292,16 @@ def fetch_context(integration: dict | None) -> dict | None:
 
 
 def provision_org(
-    org_id: str, team_id: str, channel: str = "", avatar_id: str = ""
-) -> bool | None:
+    org_id: str, team_id: str | None, channel: str = "", avatar_id: str = ""
+) -> ProvisionResult | None:
     """Register a Laura org on the orchestrator (Connect the brain): POST the
     org→workspace link to CEDRIC_ORGS_URL so Cedric can route this org's events
     to its Slack team even without external_ref, and mint the org's own
     webhook credentials on his side.
 
-    Returns True on 2xx, False on refusal/error, None when the endpoint isn't
+    Returns a truthy ProvisionResult on 2xx (including the minted webhook
+    secret for immediate SSM write-through), a falsey result on refusal/error,
+    or None when the endpoint isn't
     configured yet (the connection stays 'pending' — contract step B, Cedric's
     /api/laura/orgs, is in flight). Best-effort: any minted credentials in the
     response are handled by ops (the signing registry env), NEVER stored or
@@ -293,28 +309,41 @@ def provision_org(
     url = settings.cedric_orgs_url.strip()
     if not url:
         return None
+    target_url = f"{url.rstrip('/')}/pending" if not team_id else url
     headers = {"Content-Type": "application/json"}
-    token = settings.cedric_orgs_token.strip()
+    token = settings.cedric_orgs_token.strip() or settings.laura_api_token.strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
     payload = {
         "org_id": org_id,
-        "team_id": team_id,
+        "team_id": team_id or None,
         "default_slack_channel": channel,
         "avatar_id": avatar_id,
     }
     try:
         with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
-            resp = client.post(url, json=payload, headers=headers)
+            resp = client.post(target_url, json=payload, headers=headers)
             target = _redirect_target(resp)
             if target:
                 resp = client.post(target, json=payload, headers=headers)
-        ok = 200 <= resp.status_code < 300
+        secret = ""
+        if 200 <= resp.status_code < 300:
+            try:
+                data = resp.json()
+                credentials = data.get("credentials") if isinstance(data, dict) else None
+                if isinstance(credentials, dict):
+                    candidate = credentials.get("webhook_secret")
+                    secret = candidate.strip() if isinstance(candidate, str) else ""
+            except ValueError:
+                pass
         print(f"[cedric-callback] org provisioning HTTP {resp.status_code}", flush=True)
-        return ok
+        return ProvisionResult(resp.status_code, secret)
     except Exception as e:  # noqa: BLE001 — connection stays pending, retry later
-        print(f"[cedric-callback] org provisioning failed: {e}", flush=True)
-        return False
+        print(
+            f"[cedric-callback] org provisioning failed ({type(e).__name__})",
+            flush=True,
+        )
+        return ProvisionResult(0)
 
 
 def fetch_org_connectors(org_id: str) -> dict | None:
@@ -331,7 +360,7 @@ def fetch_org_connectors(org_id: str) -> dict | None:
     # CEDRIC_ORGS_URL points at .../api/laura/orgs — the sibling route.
     url = base.rstrip("/").rsplit("/", 1)[0] + "/connectors"
     headers = {}
-    token = settings.cedric_orgs_token.strip()
+    token = settings.cedric_orgs_token.strip() or settings.laura_api_token.strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:

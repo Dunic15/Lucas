@@ -18,7 +18,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from . import auth, avatars, ledger, store
 from .config import settings
@@ -382,11 +382,22 @@ async def connect_brain(request: Request) -> JSONResponse:
         return JSONResponse({"error": "team_id is required (the Slack workspace id)"}, status_code=400)
 
     from . import cedric  # local import, same reason as auth.gate's
+    from .cedric import secret_registry
 
     provisioned = await run_in_threadpool(
         cedric.provision_org, user["org_id"], team_id, channel, avatar_id
     )
-    status = "connected" if provisioned else "pending"
+    registry_synced = False
+    if provisioned:
+        minted_secret = getattr(provisioned, "webhook_secret", "")
+        if minted_secret:
+            registry_synced = await run_in_threadpool(
+                secret_registry.upsert_org_secret, user["org_id"], minted_secret
+            )
+    # A Cedric link without its per-org signing key is not operational.  Keep
+    # it pending so retrying Connect repairs SSM; never claim connected and
+    # silently fall back to the global key.
+    status = "connected" if provisioned and registry_synced else "pending"
     store.set_connection(
         user["org_id"], avatar_id, "cedric-brain", status,
         {"team_id": team_id, "channel": channel},
@@ -397,8 +408,78 @@ async def connect_brain(request: Request) -> JSONResponse:
             # pending == saved here, awaiting the orchestrator's org endpoint
             # (contract step B) or a failed call worth retrying.
             "provisioned": bool(provisioned),
+            "registry_synced": registry_synced,
         }
     )
+
+
+@router.get("/dashboard/connections/brain/slack/start")
+def connect_brain_slack_start(
+    request: Request, avatar_id: str = "cedric", channel: str = ""
+) -> Response:
+    """Start Cedric's Slack OAuth install without exposing a team ID field."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not avatar_id or avatar_id not in avatars.list_ids():
+        return JSONResponse({"error": "unknown avatar_id"}, status_code=400)
+
+    from .cedric import install_state
+
+    try:
+        target = install_state.install_url(
+            user["org_id"],
+            avatar_id,
+            channel.strip(),
+            f"{settings.public_base_url.rstrip('/')}/dashboard",
+        )
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=503)
+    return RedirectResponse(target, status_code=302)
+
+
+@router.post("/dashboard/connections/brain/slack/complete")
+async def complete_brain_slack_install(request: Request) -> JSONResponse:
+    """Cedric's OAuth callback writes the minted secret back server-to-server."""
+    from . import cedric
+    from .cedric import secret_registry
+
+    # This endpoint carries a credential. Never inherit the key-free/demo
+    # fail-open behavior used by public session APIs.
+    if not settings.laura_api_token.strip():
+        return JSONResponse({"error": "machine auth is not configured"}, status_code=503)
+    if err := cedric.auth_error(request):
+        return err
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+
+    org_id = str((body or {}).get("org_id") or "").strip()
+    avatar_id = str((body or {}).get("avatar_id") or "").strip()
+    team_id = str((body or {}).get("team_id") or "").strip()
+    channel = str((body or {}).get("channel") or "").strip()
+    webhook_secret = str((body or {}).get("webhook_secret") or "").strip()
+    if not org_id or not avatar_id or not team_id or not webhook_secret:
+        return JSONResponse({"error": "missing required fields"}, status_code=400)
+    if avatar_id not in avatars.list_ids() or store.get_user(org_id) is None:
+        return JSONResponse({"error": "unknown org or avatar"}, status_code=404)
+
+    synced = await run_in_threadpool(
+        secret_registry.upsert_org_secret, org_id, webhook_secret
+    )
+    if not synced:
+        return JSONResponse({"error": "registry update failed"}, status_code=503)
+    store.set_connection(
+        org_id,
+        avatar_id,
+        "cedric-brain",
+        "connected",
+        {"team_id": team_id, "channel": channel},
+    )
+    return JSONResponse({"ok": True, "status": "connected"})
 
 
 @router.get("/dashboard/connections/brain/connectors")

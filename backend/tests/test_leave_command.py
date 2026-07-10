@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -257,6 +258,41 @@ def test_webhook_leave_command_ends_session(monkeypatch, tmp_path):
     assert calls["spoken"], "she should say goodbye before leaving"
     assert store.get(bot_id) is None, "session must be finalized/removed"
     assert store.get_artifact(bot_id) is not None, "post-meeting artifact still built"
+
+
+def test_webhook_leave_command_is_not_swallowed_by_action_continuation(
+    monkeypatch, tmp_path
+):
+    """Issue #117: the normal task -> dismissal flow must leave immediately.
+
+    The action continuation window used to consume an unaddressed dismissal,
+    append it to the approval card, and refresh itself on every repeated ask.
+    """
+    for suffix, text in (
+        ("it", "Cedric puoi uscire"),
+        ("en", "you can leave"),
+    ):
+        bot_id = f"leave-after-capture-{suffix}"
+        calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+        session = store.get(bot_id)
+        item = {
+            "action_id": f"action-{suffix}",
+            "action": "Send the synthetic meeting recap",
+            "owner": "Test Owner",
+            "due": "",
+        }
+        session.queued_actions = [item]
+        session.last_capture = (item, "Test Speaker", time.time())
+        # A task ask has already addressed Cedric, so the opening settle-in
+        # gate is over just as it is in the reported live flow.
+        session.addressed_once = True
+
+        body = _post_line_as(bot_id, text, "Test Speaker")
+
+        assert body.get("left") is True, text
+        assert calls["leave"] == 1, text
+        assert item["action"] == "Send the synthetic meeting recap"
+        assert store.get(bot_id) is None
 
 
 def test_webhook_leave_talk_does_not_end_session(monkeypatch, tmp_path):

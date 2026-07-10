@@ -23,6 +23,10 @@ import httpx
 from .config import settings
 
 
+class AvatarBusyError(RuntimeError):
+    """Recall has no avatar bot capacity available for a new dispatch."""
+
+
 _TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 _CLIENT = httpx.Client(
     timeout=_TIMEOUT,
@@ -454,6 +458,11 @@ def create_bot(
                     "Recall rejected RECALL_API_KEY with 401. Make sure it is the "
                     "API Key, not a whsec_ workspace/webhook secret, and that "
                     "RECALL_API_BASE matches the key's region."
+                ) from e
+            if e.response.status_code == 507:
+                # Do not bubble Recall's raw response body to the product UI.
+                raise AvatarBusyError(
+                    "All avatars are busy right now — retry in a minute."
                 ) from e
             if e.response.status_code == 400 and idx < len(attempts) - 1:
                 last_error = e

@@ -511,6 +511,13 @@
   function headers(){ var h={"Content-Type":"application/json"}; if(token) h["Authorization"]="Bearer "+token; return h; }
   function toast(msg,err){ var t=document.createElement("div"); t.className="toast"+(err?" err":""); t.innerHTML='<span class="dt"></span>'+esc(msg);
     $("#toasts").appendChild(t); setTimeout(function(){ t.style.opacity="0"; t.style.transition="opacity .3s"; setTimeout(function(){t.remove();},300); },3000); }
+  var oauthResult=new URLSearchParams(window.location.search).get("brain");
+  if(oauthResult){
+    toast(oauthResult==="connected"
+      ?"Brain linked — meeting actions will flow to your Slack."
+      :"Slack was installed, but the brain link is still pending.",oauthResult!=="connected");
+    window.history.replaceState({},"",window.location.pathname);
+  }
 
   var DATA=null, filterOv="all", filterMt="all";
 
@@ -625,9 +632,8 @@
             ?'<button class="btn conn-btn" data-brain-off="'+esc(a.id)+'">Disconnect</button>'
             :'<button class="btn conn-btn" data-brain-on="'+esc(a.id)+'">Connect</button>')+'</div>'+
           '<div class="brainform" id="bf-'+esc(a.id)+'">'+
-          '<input id="bf-team-'+esc(a.id)+'" placeholder="Slack team ID (e.g. T0123ABCD)" />'+
           '<input id="bf-chan-'+esc(a.id)+'" placeholder="#channel for approvals (optional)" />'+
-          '<button class="btn primary" data-brain-save="'+esc(a.id)+'">Link brain</button></div></div>'+
+          '<button class="btn primary" data-brain-slack="'+esc(a.id)+'">Add to Slack</button></div></div>'+
           // the brain's own connectors, fetched live once linked
           '<div id="brain-conns" class="conns-list" style="margin-top:10px"></div>';
       }
@@ -651,22 +657,14 @@
       e.stopPropagation(); var v=b.getAttribute("data-copy");
       if(navigator.clipboard) navigator.clipboard.writeText(v);
       toast("Copied "+v+" — invite it to a meeting to summon this avatar."); }); });
-    // connect-the-brain: reveal the mini-form, save the link, or disconnect
+    // connect-the-brain: reveal Slack OAuth, install, or disconnect
     $$("#av-grid [data-brain-on]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); var f=$("#bf-"+b.getAttribute("data-brain-on")); if(f) f.classList.toggle("open"); }); });
-    $$("#av-grid [data-brain-save]").forEach(function(b){ b.addEventListener("click",function(e){
-      e.stopPropagation(); var id=b.getAttribute("data-brain-save");
-      var team=($("#bf-team-"+id)||{value:""}).value.trim(), chan=($("#bf-chan-"+id)||{value:""}).value.trim();
-      if(!team){ toast("The Slack team ID is required.",true); return; }
-      fetch("/dashboard/connections/brain",{method:"POST",headers:headers(),
-          body:JSON.stringify({avatar_id:id,team_id:team,channel:chan})})
-        .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
-        .then(function(res){ if(!res.ok) throw new Error(res.j.error||"request failed");
-          toast(res.j.status==="connected"
-            ?"Brain linked — meeting actions will flow to your Slack."
-            :"Saved — the link completes when the brain endpoint comes online.");
-          load(); })
-        .catch(function(err){ toast(err.message,true); }); }); });
+    $$("#av-grid [data-brain-slack]").forEach(function(b){ b.addEventListener("click",function(e){
+      e.stopPropagation(); var id=b.getAttribute("data-brain-slack");
+      var chan=($("#bf-chan-"+id)||{value:""}).value.trim();
+      window.location.assign("/dashboard/connections/brain/slack/start?avatar_id="+
+        encodeURIComponent(id)+"&channel="+encodeURIComponent(chan)); }); });
     $$("#av-grid [data-brain-off]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation();
       fetch("/dashboard/connections/brain/"+encodeURIComponent(b.getAttribute("data-brain-off")),
@@ -796,7 +794,9 @@
     var b=this; b.disabled=true; b.textContent="Sending…";
     fetch("/sessions/start",{method:"POST",headers:headers(),body:JSON.stringify({meeting_url:url,avatar_id:avatar})})
       .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
-      .then(function(res){ if(!res.ok) throw new Error(res.j.error||res.j.detail||"request failed");
+      .then(function(res){ if(!res.ok){
+          var msg=res.j.error==="avatar_busy" ? res.j.detail : (res.j.error||res.j.detail||"request failed");
+          throw new Error(msg); }
         toast((avatar||"Avatar")+" is joining — admit it from the waiting room if asked.");
         $("#dsp-url").value=""; setTimeout(load,1500); })
       .catch(function(e){ toast("Could not send: "+e.message,true); })

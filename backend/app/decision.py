@@ -346,6 +346,13 @@ def is_capture_continuation(text: str) -> bool:
         return False
     if detect_closing(t):
         return False
+    # A dismissal can land immediately after the task ask (the normal product
+    # flow is "send the recap" -> "you can leave").  Treating it as an ASR
+    # continuation glues the dismissal onto the approval card and refreshes
+    # last_capture, so repeated leave asks can be swallowed forever.  Let the
+    # dedicated leave gate in main.py handle it instead.
+    if detect_leave_command(t):
+        return False
     return True
 
 
