@@ -181,6 +181,8 @@
   .tabs button.on{background:var(--pill-bg);color:var(--pill-ink);font-weight:600;}
   .search{min-width:180px;padding:9px 13px;border-radius:999px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font-size:.85rem;}
   .search::placeholder{color:var(--faint);}
+  .filters{display:flex;gap:8px;flex-wrap:wrap;width:100%;}
+  .filters select{padding:8px 13px;border-radius:999px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font-size:.82rem;cursor:pointer;}
   .scroll{overflow-x:auto;}
   .tbl{width:100%;min-width:700px;border-collapse:collapse;font-size:.86rem;}
   .tbl thead th{text-align:left;font-family:var(--mono);font-size:.58rem;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:8px 14px;border-bottom:1px solid var(--line-soft);white-space:nowrap;}
@@ -374,7 +376,7 @@
       <div class="tbl-wrap">
         <div class="tbl-top"><h2>Recent meetings</h2><div class="tabs" id="tabs-ov"></div></div>
         <div class="scroll"><table class="tbl"><thead><tr>
-          <th>Avatar</th><th>Meeting</th><th>Platform</th><th>When</th><th>Duration</th><th class="r">Actions</th><th class="r">Readiness</th>
+          <th>Avatar</th><th>Platform</th><th>When</th><th>Duration</th><th class="r">Action</th><th class="r">Readiness</th>
         </tr></thead><tbody id="tbody-ov"></tbody></table></div>
       </div>
       <div class="foot">AVATARS ACT AUTONOMOUSLY — THIS IS THE RECORD OF WHAT THEY DID. TRANSCRIPTS NEVER LEAVE THE STORE.</div>
@@ -393,9 +395,13 @@
         <div class="seg" id="seg-when"><button class="on" data-w="past">Past</button><button data-w="upcoming">Upcoming</button></div></div>
       <div id="mt-past">
         <div class="tbl-wrap">
-          <div class="tbl-top"><div class="tabs" id="tabs-mt"></div><input class="search" id="search-mt" placeholder="Search…" /></div>
+          <div class="tbl-top"><div class="filters">
+            <select id="f-avatar"><option value="all">All avatars</option></select>
+            <select id="f-platform"><option value="all">All platforms</option></select>
+            <select id="f-when"><option value="all">Any time</option><option value="1">Last 24h</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select>
+          </div></div>
           <div class="scroll"><table class="tbl"><thead><tr>
-            <th>Avatar</th><th>Meeting</th><th>Platform</th><th>When</th><th>Duration</th><th class="r">Actions</th><th class="r">Readiness</th>
+            <th>Avatar</th><th>Platform</th><th>When</th><th>Duration</th><th class="r">Action</th><th class="r">Readiness</th>
           </tr></thead><tbody id="tbody-mt"></tbody></table></div>
         </div>
       </div>
@@ -573,7 +579,10 @@
     var AV_CONN=[["gmail","Gmail","Read &amp; send email"],["calendar","Google Calendar","Auto-join &amp; schedule its meetings"],
                  ["slack","Slack","Post updates &amp; take actions"],["drive","Google Drive","Read knowledge"]];
     $("#av-grid").innerHTML = d.avatars.map(function(a){
-      var conns=AV_CONN.map(function(c){
+      var emailRow = '<div class="crow"><div><div class="cn">Personal email</div>'+
+        '<div class="cd" style="font-family:var(--mono)">'+esc(a.email||"—")+'</div></div>'+
+        (a.email?'<button class="btn conn-btn" data-copy="'+esc(a.email)+'">Copy</button>':'')+'</div>';
+      var conns=emailRow + AV_CONN.map(function(c){
         return '<div class="crow"><div><div class="cn">'+c[1]+'</div><div class="cd">'+c[2]+'</div></div>'+
           '<button class="btn conn-btn" data-conn="'+c[0]+'">Connect</button></div>';}).join("");
       return '<div class="avd"><div class="top">'+
@@ -591,42 +600,46 @@
       e.stopPropagation(); go("overview"); $("#dsp-avatar").value=b.getAttribute("data-dispatch"); $("#dsp-url").focus(); }); });
     $$("#av-grid [data-conn]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); toast("Personal connections (Gmail · Calendar · Slack) are coming soon."); }); });
+    $$("#av-grid [data-copy]").forEach(function(b){ b.addEventListener("click",function(e){
+      e.stopPropagation(); var v=b.getAttribute("data-copy");
+      if(navigator.clipboard) navigator.clipboard.writeText(v);
+      toast("Copied "+v+" — invite it to a meeting to summon this avatar."); }); });
 
+    // meetings tables — no expand/click, 6 columns
+    function platformsIn(){ var s={}; (d.meetings||[]).forEach(function(m){ if(m.platform&&m.platform!=="—") s[m.platform]=1; }); return Object.keys(s); }
+    function rowHTML(m){ var nm=avName(m.avatar_id);
+      return '<tr class="row"><td><div class="cell-av">'+
+        '<span class="av" style="background:'+(m.avatar_id?grad(m.avatar_id):"var(--faint)")+'">'+esc(nm[0]||"?")+'</span><span>'+esc(nm)+'</span></div></td>'+
+        '<td><span class="platc">'+esc(m.platform)+'</span></td>'+
+        '<td class="when">'+fmtWhen(m.saved_at)+'</td><td class="dur">'+fmtDur(m.duration_seconds)+'</td>'+
+        '<td class="r tnum">'+m.actions.length+'</td>'+
+        '<td class="r"><div class="rd"><div class="track"><div class="fill'+(m.readiness_score<70?" low":"")+'" style="width:'+Math.max(0,Math.min(100,m.readiness_score))+'%"></div></div><span class="pc">'+(m.readiness_score||"—")+'</span></div></td></tr>';
+    }
+    function renderRows(sel,opts,limit){ var tb=$(sel), now=Date.now()/1000;
+      var rows=(d.meetings||[]).filter(function(m){
+        if(opts.avatar&&opts.avatar!=="all"&&m.avatar_id!==opts.avatar) return false;
+        if(opts.platform&&opts.platform!=="all"&&m.platform!==opts.platform) return false;
+        if(opts.whenDays&&opts.whenDays!=="all"&&(now-(m.saved_at||0))>opts.whenDays*86400) return false;
+        return true; }).slice(0,limit);
+      tb.innerHTML = rows.length ? rows.map(rowHTML).join("")
+        : '<tr><td colspan="6"><div class="empty">No meetings match.</div></td></tr>';
+    }
+    // overview: avatar tabs
     function tabs(el,cur,onpick){ var ids=[["all","All"]].concat(d.avatars.map(function(a){return [a.id,a.name];}));
       el.innerHTML = ids.map(function(t){return '<button data-f="'+esc(t[0])+'"'+(t[0]===cur?' class="on"':'')+'>'+esc(t[1])+'</button>';}).join("");
       $$("button",el).forEach(function(b){ b.addEventListener("click",function(){
         $$("button",el).forEach(function(x){x.classList.remove("on");}); b.classList.add("on"); onpick(b.getAttribute("data-f")); }); }); }
-    tabs($("#tabs-ov"),filterOv,function(f){filterOv=f;renderRows("#tbody-ov",f,"",8);});
-    tabs($("#tabs-mt"),filterMt,function(f){filterMt=f;renderRows("#tbody-mt",f,$("#search-mt").value,999);});
-
-    function renderRows(sel,filter,search,limit){
-      var tb=$(sel), q=(search||"").toLowerCase();
-      var rows=(d.meetings||[]).filter(function(m){
-        if(filter!=="all"&&m.avatar_id!==filter) return false;
-        if(q && (title(m)+" "+m.summary+" "+avName(m.avatar_id)).toLowerCase().indexOf(q)<0) return false;
-        return true; }).slice(0,limit);
-      if(!rows.length){ tb.innerHTML='<tr><td colspan="7"><div class="empty">No meetings yet — artifacts appear here when a session ends.</div></td></tr>'; return; }
-      tb.innerHTML = rows.map(function(m,i){
-        var nm=avName(m.avatar_id);
-        return '<tr class="row" data-i="'+i+'"><td><div class="cell-av">'+
-          '<span class="av" style="background:'+(m.avatar_id?grad(m.avatar_id):"var(--faint)")+'">'+esc(nm[0]||"?")+'</span><span>'+esc(nm)+'</span></div></td>'+
-          '<td>'+esc(title(m))+'</td><td><span class="platc">'+esc(m.platform)+'</span></td>'+
-          '<td class="when">'+fmtWhen(m.saved_at)+'</td><td class="dur">'+fmtDur(m.duration_seconds)+'</td>'+
-          '<td class="r tnum">'+m.actions.length+'</td>'+
-          '<td class="r"><div class="rd"><div class="track"><div class="fill'+(m.readiness_score<70?" low":"")+'" style="width:'+Math.max(0,Math.min(100,m.readiness_score))+'%"></div></div><span class="pc">'+(m.readiness_score||"—")+'</span></div></td></tr>'+
-          '<tr class="detail" data-d="'+i+'" hidden><td colspan="7"><div class="inner">'+
-          '<div><div class="sm-h">Summary</div><div class="summary">'+(m.summary?esc(m.summary):'<span style="color:var(--faint)">No summary captured.</span>')+'</div>'+
-          (m.follow_up_subject?'<div class="sm-h" style="margin-top:12px">Follow-up email</div><div class="summary">'+esc(m.follow_up_subject)+'</div>':'')+'</div>'+
-          '<div><div class="sm-h">Actions</div><div class="did">'+
-          (m.actions.length? m.actions.map(function(a){return '<div class="d'+(a.done?"":" attn")+'"><span class="ic">'+(a.done?"✓":"→")+'</span><span>'+esc(a.item)+(a.owner?' <span class="ow">· '+esc(a.owner)+'</span>':'')+'</span></div>';}).join("") : '<div class="empty" style="padding:6px 0;text-align:left">No actions captured.</div>')+
-          (m.missing_steps.length?'<div class="sm-h" style="margin-top:12px">Missing steps</div>'+m.missing_steps.map(function(s){return '<div class="d attn"><span class="ic">!</span><span>'+esc(s.replace(/_/g," "))+'</span></div>';}).join(""):'')+
-          '</div></div></td></tr>'; }).join("");
-      $$("tr.row",tb).forEach(function(r){ r.addEventListener("click",function(){
-        var dEl=tb.querySelector('tr.detail[data-d="'+r.getAttribute("data-i")+'"]'); if(dEl) dEl.hidden=!dEl.hidden; }); });
-    }
-    renderRows("#tbody-ov",filterOv,"",8);
-    renderRows("#tbody-mt",filterMt,$("#search-mt").value,999);
-    $("#search-mt").oninput=function(){ renderRows("#tbody-mt",filterMt,this.value,999); };
+    tabs($("#tabs-ov"),filterOv,function(f){filterOv=f;renderRows("#tbody-ov",{avatar:f},8);});
+    renderRows("#tbody-ov",{avatar:filterOv},8);
+    // meetings: excel-style dropdown filters (avatar / platform / when), selection preserved across refresh
+    (function(){ var fa=$("#f-avatar"), fp=$("#f-platform"), fw=$("#f-when");
+      var pa=fa.value||"all", pp=fp.value||"all", pw=fw.value||"all";
+      fa.innerHTML='<option value="all">All avatars</option>'+d.avatars.map(function(a){return '<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>';}).join("");
+      fp.innerHTML='<option value="all">All platforms</option>'+platformsIn().map(function(p){return '<option value="'+esc(p)+'">'+esc(p)+'</option>';}).join("");
+      fa.value=pa; fp.value=pp; fw.value=pw;
+      function apply(){ renderRows("#tbody-mt",{avatar:fa.value,platform:fp.value,whenDays:(fw.value==="all"?"all":parseInt(fw.value,10))},999); }
+      fa.onchange=apply; fp.onchange=apply; fw.onchange=apply; apply();
+    })();
 
     // usage & billing
     var b=d.billing||{};
@@ -701,7 +714,7 @@
     $$("#seg-when button").forEach(function(x){x.classList.remove("on");}); b.classList.add("on");
     var w=b.getAttribute("data-w");
     $("#mt-past").hidden = (w!=="past"); $("#mt-upcoming").hidden = (w!=="upcoming"); }); });
-  $("#cal-connect").addEventListener("click",function(){ toast("Calendar auto-join & scheduling is coming soon."); });
+  $("#cal-connect").addEventListener("click",function(){ window.location.href="/oauth/google/connect"; });
 
   $("#refresh").addEventListener("click",load);
   load();
