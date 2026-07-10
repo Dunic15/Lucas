@@ -23,10 +23,10 @@ URL is `https://dhfgfe6yw6.eu-central-1.awsapprunner.com`.
 
 The live brain is tiered by question type:
 
-- **Fast live answers: Cerebras running `gemma-4-31b`** through an
-  OpenAI-compatible API (`GROQ_BASE=https://api.cerebras.ai/v1`). Cerebras was
-  chosen for first-token latency (roughly 200-400 ms live) — inside a meeting,
-  fast first-token response matters more than long-form writing quality.
+- **Fast live answers: Cerebras running `gemma-4-31b`** through its
+  OpenAI-compatible API (`BRAIN_PROVIDER=cerebras`, a first-class provider).
+  Cerebras was chosen for first-token latency (roughly 200-400 ms live) — inside
+  a meeting, fast first-token response matters more than long-form writing quality.
 - **Clearly complex questions** (analyze, compare, recommend) route to
   **Claude Haiku**.
 - **Fresh-information questions** route to **Claude with native web search**.

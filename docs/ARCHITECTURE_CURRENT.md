@@ -13,22 +13,24 @@
 FastAPI backend (the **brain**) + a swappable avatar **face** rendered by a
 Recall.ai bot as its meeting camera. The brain does silent process tracking
 (`MeetingState`), grounded/cited answers (RAG), and the post-meeting artifact.
-Live model is **Claude Haiku** (fast, not rate-limited); post-meeting quality is
-**Claude Sonnet**; **Groq is an optional faster live provider** guarded by a
-circuit breaker. Web search is **Claude's native `web_search`** tool. Runs on AWS
-App Runner (eu-central-1), auto-deploys on merge to `main`. The demo runs key-free.
+Live model in prod is **Cerebras `gemma-4-31b`** (fastest first-token, ~0.17s),
+a first-class OpenAI-compatible provider (`BRAIN_PROVIDER=cerebras`); post-meeting
+quality is **Claude Sonnet 5**; **Claude Haiku** is the complex-reasoning tier and
+the circuit-breaker fallback if Cerebras rate-limits. **Groq** is a cheap swap-in
+(identical wire format). Web search is **Claude's native `web_search`** tool. Runs
+on AWS App Runner (eu-central-1), auto-deploys on merge to `main`. Demo runs key-free.
 
 ## Three request paths (do not confuse them)
 
 | Path | Endpoint | Function | Model | Streaming? |
 |---|---|---|---|---|
-| **Live meeting** (spoken) | `POST /live/ask`, meeting webhook | `brain.answer_question_stream` | Haiku (live) · Claude native search · Haiku for complex | yes (token deltas) |
-| **Interactive** (act) | `POST /live/act` | `brain.answer_with_tools` | Haiku; Groq tool-loop only if `BRAIN_PROVIDER=groq` | no |
+| **Live meeting** (spoken) | `POST /live/ask`, meeting webhook | `brain.answer_question_stream` | Cerebras (live) · Claude native search · Haiku for complex | yes (token deltas) |
+| **Interactive** (act) | `POST /live/act` | `brain.answer_with_tools` | Cerebras/Groq tool-loop (OpenAI-compatible); Haiku fallback | no |
 | **Post-meeting** (quality) | `POST /sessions/{id}/end`, `POST /demo/post_meeting` | `brain.post_meeting` | Sonnet (`BRAIN_PROVIDER_POST=anthropic`) | no |
 | **Offline demo** | `POST /demo/ask` | stub brain + hash embeddings | none | no |
 
-Latency is the product on the live path — that's why it's Haiku + streaming, and
-why `MeetingState` is pure regex (no model call per line).
+Latency is the product on the live path — that's why it's Cerebras + streaming,
+and why `MeetingState` is pure regex (no model call per line).
 
 ## Live-meeting contract (never break)
 
@@ -46,23 +48,24 @@ For one live answer, `(provider, model)` is chosen by intent:
 
 - **Fresh/current info** (weather, news, "latest…") → `("search", live_search_model)`
   → Claude's native `web_search` tool (`llm.web_search`). Haiku by default (fast);
-  Sonnet/Opus get the dynamic-filtering tool automatically. **Never Groq.**
+  Sonnet/Opus get the dynamic-filtering tool automatically. **Never the fast provider.**
 - **Clearly analytical** (compare/analyze/plan/…) → `("anthropic", brain_model_complex)`
-  = Haiku direct — more reliable than the fast provider, dodges Groq limits.
-- **Everything else** → `(brain_provider, brain_model_fast)`. In prod `brain_provider=anthropic`,
-  so this is Haiku. If set to `groq`, it's Groq llama with the breaker below.
+  = Haiku direct — more reliable than the fast provider, dodges rate limits.
+- **Everything else** → `(brain_provider, brain_model_fast)`. In prod `brain_provider=cerebras`,
+  so this is Cerebras `gemma-4-31b`. Set `groq`/`anthropic` to swap the fast path.
 
 ## Providers & resilience (`backend/app/llm.py`)
 
-- **Anthropic** — Claude. `_stream_anthropic` streams token-by-token. Live=Haiku,
+- **Anthropic** — Claude. `_stream_anthropic` streams token-by-token. Complex-tier +
   post=Sonnet. Handles adaptive-thinking blocks (first content block may be thinking).
-- **Groq** — optional fast provider (OpenAI-compatible). Streams; supports a
-  function-calling tool loop (`complete_with_tools`).
+- **Cerebras / Groq** — OpenAI-compatible fast providers (one shared impl,
+  `_compat_creds` picks the endpoint+key). Cerebras is prod's live path; both stream
+  and support the function-calling tool loop (`complete_with_tools`).
 - **Claude Haiku fallback** — if the primary live provider errors, `complete` /
   `stream_complete` fall back to `claude-haiku-4-5` so the avatar never goes silent.
-- **Groq circuit breaker** — Groq's free tier 429s under load. On a Groq failure the
-  breaker **opens** for a cooldown (the 429's `Retry-After` if present, else 30s,
-  capped 300s); while open, live answers skip Groq entirely and go straight to Haiku.
+- **Fast-provider circuit breaker** — Cerebras/Groq rate-limit (429) under load. On a
+  failure the breaker **opens** for a cooldown (the 429's `Retry-After` if present, else
+  30s, capped 300s); while open, live answers skip the fast provider and go to Haiku.
   Self-heals when the window elapses. Process-local; reset between tests via
   `_reset_groq_breaker` (see `backend/tests/conftest.py`).
 - **stub** / **ollama** — offline demo brain / local model.
@@ -127,10 +130,13 @@ rebuilds fresh on each deploy**.
   `https://dhfgfe6yw6.eu-central-1.awsapprunner.com`. Auto-deploys on merge to
   `main` (~6–7 min). Render is suspended.
 - **Config:** runtime env vars on the service; **secrets in SSM** under
-  `/laura/prod/*` (Anthropic, Groq, Recall, Google, ElevenLabs, Anam keys).
-- **Prod live-path env:** `BRAIN_PROVIDER=anthropic`, `BRAIN_MODEL_FAST=claude-haiku-4-5`,
+  `/laura/prod/*` (Anthropic, Cerebras, Recall, Google, ElevenLabs, Anam keys).
+- **Prod live-path env:** `BRAIN_PROVIDER=cerebras`, `BRAIN_MODEL_FAST=gemma-4-31b`,
   `BRAIN_MODEL=claude-sonnet-5`, `BRAIN_PROVIDER_POST=anthropic`, `AVATAR_PAGE=talk`,
   `RECALL_API_BASE=https://eu-central-1.recall.ai`, `EMBEDDING_PROVIDER=local`.
+  (Migration pending: prod still carries the legacy `BRAIN_PROVIDER=groq` +
+  `GROQ_BASE=https://api.cerebras.ai/v1` tunnel with the Cerebras key under
+  `GROQ_API_KEY`; flip to the first-class vars above after the code merges.)
 - **Recall:** eu-central-1 workspace. **AWS writes are gated** — every `call_aws`
   needs explicit approval (`.claude/settings.json`).
 

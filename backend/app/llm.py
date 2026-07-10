@@ -5,6 +5,10 @@ Pick the provider with BRAIN_PROVIDER in .env:
   anthropic (default) — Claude (best quality). Needs ANTHROPIC_API_KEY. With no
                       key present, brain.effective_provider() transparently falls
                       back to `stub` so the demo still runs.
+  cerebras          — FASTEST live inference (~0.17s first token). Same
+                      OpenAI-compatible wire format as Groq, different endpoint.
+                      Streams + supports tool use. Needs CEREBRAS_API_KEY. This
+                      is what prod runs on the live spoken path.
   groq              — fast, cheap open models via an OpenAI-compatible API.
                       Streams + supports tool use. Needs GROQ_API_KEY.
   ollama            — a local model via Ollama (free, runs on your machine).
@@ -43,12 +47,33 @@ def _ensure_anthropic():
 _FALLBACK_MODEL = "claude-haiku-4-5"
 
 
-# ── Groq circuit breaker ───────────────────────────────────────────────
-# Groq's free tier rate-limits (HTTP 429) under load. Rather than hammer it on
+# ── OpenAI-compatible fast providers ───────────────────────────────────
+# Groq and Cerebras speak the identical OpenAI /chat/completions wire format —
+# only the endpoint + API key differ. One implementation (_complete_groq /
+# _stream_groq / complete_with_tools) serves both; _compat_creds() picks the
+# right base URL + key for the resolved provider.
+_OPENAI_COMPAT = {"groq", "cerebras"}
+
+
+def _compat_creds(provider: str) -> tuple[str, str]:
+    """(base_url, api_key) for an OpenAI-compatible provider (groq | cerebras)."""
+    if provider == "cerebras":
+        if not settings.cerebras_api_key:
+            raise RuntimeError("BRAIN_PROVIDER=cerebras needs CEREBRAS_API_KEY.")
+        return settings.cerebras_base, settings.cerebras_api_key
+    if not settings.groq_api_key:
+        raise RuntimeError("BRAIN_PROVIDER=groq needs GROQ_API_KEY.")
+    return settings.groq_base, settings.groq_api_key
+
+
+# ── fast-provider circuit breaker ──────────────────────────────────────
+# Groq/Cerebras rate-limit (HTTP 429) under load. Rather than hammer them on
 # every request — eating the failure + fallback latency each time — we trip a
 # breaker on failure: for a cooldown window (the 429's Retry-After if present,
-# else a default) live answers skip Groq entirely and go straight to Claude
-# Haiku. The breaker is process-local and self-heals when the window elapses.
+# else a default) live answers skip the fast provider entirely and go straight
+# to Claude Haiku. The breaker is process-local and self-heals when the window
+# elapses. (Names keep the `groq` prefix for backward compatibility with tests
+# and callers; the breaker is provider-agnostic — a single timestamp gate.)
 _GROQ_COOLDOWN_DEFAULT = 30.0
 _GROQ_COOLDOWN_MAX = 300.0
 _groq_blocked_until = 0.0  # monotonic timestamp; 0 = breaker closed
@@ -74,7 +99,7 @@ def _trip_groq_breaker(exc: Exception) -> None:
     cooldown = min(cooldown, _GROQ_COOLDOWN_MAX)
     _groq_blocked_until = time.monotonic() + cooldown
     print(
-        f"[llm] Groq breaker OPEN {cooldown:.0f}s ({exc}); "
+        f"[llm] fast-provider breaker OPEN {cooldown:.0f}s ({exc}); "
         f"routing live answers to {_FALLBACK_MODEL}",
         flush=True,
     )
@@ -91,8 +116,8 @@ def _dispatch_complete(
 ) -> str:
     if provider == "anthropic":
         return _complete_anthropic(system, user, max_tokens, model)
-    if provider == "groq":
-        return _complete_groq(system, user, max_tokens, model)
+    if provider in _OPENAI_COMPAT:
+        return _complete_groq(system, user, max_tokens, model, provider=provider)
     if provider == "ollama":
         return _complete_ollama(system, user, max_tokens)
     if provider == "stub":
@@ -108,13 +133,13 @@ def complete(
     provider: str | None = None,
 ) -> str:
     resolved = (provider or settings.brain_provider).lower()
-    # Circuit breaker: while Groq is in cooldown, skip it and answer on Haiku.
-    if resolved == "groq" and _groq_breaker_open() and settings.anthropic_api_key:
+    # Circuit breaker: while the fast provider is in cooldown, skip it -> Haiku.
+    if resolved in _OPENAI_COMPAT and _groq_breaker_open() and settings.anthropic_api_key:
         return _complete_anthropic(system, user, max_tokens, _FALLBACK_MODEL)
     try:
         return _dispatch_complete(resolved, system, user, max_tokens, model)
     except Exception as e:  # noqa: BLE001
-        if resolved == "groq":
+        if resolved in _OPENAI_COMPAT:
             _trip_groq_breaker(e)
         # Only auto-fall-back for the DEFAULT live/post path. An explicit provider=
         # (e.g. the native web_search call) has its own handling and must not be
@@ -189,25 +214,25 @@ def stream_complete(
     if provider == "anthropic":
         yield from _stream_anthropic(system, user, max_tokens, model)
         return
-    # Circuit breaker: while Groq is in cooldown after a 429, don't even try it —
-    # stream Haiku directly so the spoken path stays fast and never goes silent.
-    if provider == "groq" and _groq_breaker_open() and settings.anthropic_api_key:
+    # Circuit breaker: while the fast provider is in cooldown after a 429, don't
+    # even try it — stream Haiku directly so the spoken path never goes silent.
+    if provider in _OPENAI_COMPAT and _groq_breaker_open() and settings.anthropic_api_key:
         yield from _stream_anthropic(system, user, max_tokens, _FALLBACK_MODEL)
         return
-    # Non-anthropic primary (groq/…): if it fails BEFORE producing any output
-    # (e.g. Groq decommissioned the model), fall back to Claude Haiku so she never
-    # goes silent. If it already streamed something, don't fall back (avoid dupes).
+    # Non-anthropic primary (cerebras/groq/…): if it fails BEFORE producing any
+    # output (e.g. the model was decommissioned), fall back to Claude Haiku so she
+    # never goes silent. If it already streamed something, don't fall back (dupes).
     yielded = False
     try:
-        if provider == "groq":
-            for text in _stream_groq(system, user, max_tokens, model):
+        if provider in _OPENAI_COMPAT:
+            for text in _stream_groq(system, user, max_tokens, model, provider=provider):
                 yielded = True
                 yield text
         else:
             yielded = True
             yield complete(system, user, max_tokens=max_tokens, model=model)
     except Exception as e:  # noqa: BLE001
-        if provider == "groq":
+        if provider in _OPENAI_COMPAT:
             _trip_groq_breaker(e)
         if yielded or not settings.anthropic_api_key:
             raise
@@ -304,16 +329,16 @@ def _groq_messages(system: str, user: str) -> list[dict]:
 
 
 def _complete_groq(
-    system: str, user: str, max_tokens: int, model: str | None = None
+    system: str, user: str, max_tokens: int, model: str | None = None,
+    provider: str = "groq",
 ) -> str:
-    """Non-streaming Groq call (OpenAI-compatible). Used for post-meeting artifacts."""
+    """Non-streaming OpenAI-compatible call (groq | cerebras). Post-meeting path."""
     import httpx
 
-    if not settings.groq_api_key:
-        raise RuntimeError("BRAIN_PROVIDER=groq needs GROQ_API_KEY.")
+    base, key = _compat_creds(provider)
     resp = httpx.post(
-        f"{settings.groq_base.rstrip('/')}/chat/completions",
-        headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+        f"{base.rstrip('/')}/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
         json={
             "model": model or settings.brain_model,
             "max_tokens": max_tokens,
@@ -326,19 +351,19 @@ def _complete_groq(
 
 
 def _stream_groq(
-    system: str, user: str, max_tokens: int, model: str | None = None
+    system: str, user: str, max_tokens: int, model: str | None = None,
+    provider: str = "groq",
 ) -> Iterator[str]:
-    """Stream text deltas from Groq (OpenAI-compatible SSE) for low-latency speech."""
+    """Stream text deltas from an OpenAI-compatible provider (groq | cerebras)."""
     import json as _json
 
     import httpx
 
-    if not settings.groq_api_key:
-        raise RuntimeError("BRAIN_PROVIDER=groq needs GROQ_API_KEY.")
+    base, key = _compat_creds(provider)
     with httpx.stream(
         "POST",
-        f"{settings.groq_base.rstrip('/')}/chat/completions",
-        headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+        f"{base.rstrip('/')}/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
         json={
             "model": model or settings.brain_model,
             "max_tokens": max_tokens,
@@ -374,26 +399,24 @@ def complete_with_tools(
 ) -> tuple[str, list[dict]]:
     """Answer WITH tool use (the 'act' layer). Returns (final_text, tools_used).
 
-    Runs the OpenAI/Groq function-calling loop: the model may ask to call tools;
-    we execute each via `dispatch(name, args)`, feed the results back, and let it
-    answer. Only wired for Groq today (OpenAI-compatible). For other providers —
-    or while the Groq breaker is open — we fall back to a normal completion with
-    no tools (which itself routes to Haiku), so nothing breaks: the caller still
-    gets a sensible answer, just without acting.
+    Runs the OpenAI function-calling loop: the model may ask to call tools; we
+    execute each via `dispatch(name, args)`, feed the results back, and let it
+    answer. Wired for the OpenAI-compatible providers (cerebras | groq). For other
+    providers — or while the fast-provider breaker is open — we fall back to a
+    normal completion with no tools (which itself routes to Haiku), so nothing
+    breaks: the caller still gets a sensible answer, just without acting.
     """
     provider = settings.brain_provider.lower()
-    if provider != "groq" or _groq_breaker_open():
+    if provider not in _OPENAI_COMPAT or _groq_breaker_open():
         return complete(system, user, max_tokens=max_tokens, model=model), []
 
     import json as _json
 
     import httpx
 
-    if not settings.groq_api_key:
-        raise RuntimeError("BRAIN_PROVIDER=groq needs GROQ_API_KEY.")
-
-    url = f"{settings.groq_base.rstrip('/')}/chat/completions"
-    headers = {"Authorization": f"Bearer {settings.groq_api_key}"}
+    base, key = _compat_creds(provider)
+    url = f"{base.rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {key}"}
     messages: list[dict] = _groq_messages(system, user)
     used: list[dict] = []
 

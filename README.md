@@ -67,12 +67,14 @@ meeting to get the full artifact. The demo runs the real brain + retrieval
 offline (`stub` brain + `hash` embeddings) — **no API keys, ever**.
 
 Want real model answers? Set `BRAIN_PROVIDER=anthropic` plus `ANTHROPIC_API_KEY`
-in `.env` and restart. Production runs **Claude Haiku** on the live path — it's
-fast (~0.4s first token) and, unlike Groq's free tier, isn't rate-limited, so it's
-the stable default for demos/production. Groq (`BRAIN_PROVIDER=groq`) is an
-optional faster provider; when its free tier 429s, a circuit breaker routes live
-answers to Haiku automatically. The post-meeting summary uses Claude Sonnet
-(`BRAIN_PROVIDER_POST=anthropic`) for quality.
+in `.env` and restart — that's the simplest one-vendor setup. **Production runs
+Cerebras** (`BRAIN_PROVIDER=cerebras`, `gemma-4-31b`) on the live path for the
+fastest first token (~0.17s) — latency is the product in a meeting. Both Cerebras
+and Groq (`BRAIN_PROVIDER=groq`) are OpenAI-compatible fast providers sharing one
+implementation; when the fast provider rate-limits (429), a circuit breaker routes
+live answers to **Claude Haiku** automatically, so the avatar never goes silent.
+The post-meeting summary uses Claude Sonnet (`BRAIN_PROVIDER_POST=anthropic`) for
+quality.
 
 ```bash
 # CLI, offline:
@@ -131,7 +133,7 @@ Everything lives in `backend/app/config.py` (env var = UPPER_CASE field name).
 
 | Group | Vars |
 |---|---|
-| Brain | `BRAIN_PROVIDER` (`anthropic`(default)`\|groq\|ollama\|stub`), `ANTHROPIC_API_KEY`, `BRAIN_MODEL` (Sonnet, post-meeting), `BRAIN_MODEL_FAST`/`BRAIN_MODEL_COMPLEX` (Haiku, live), `GROQ_API_KEY` (optional fast path) |
+| Brain | `BRAIN_PROVIDER` (`anthropic`(default)`\|cerebras\|groq\|ollama\|stub`), `ANTHROPIC_API_KEY`, `CEREBRAS_API_KEY` (prod live path), `GROQ_API_KEY` (alt fast path), `BRAIN_MODEL` (Sonnet, post-meeting), `BRAIN_MODEL_FAST`/`BRAIN_MODEL_COMPLEX` |
 | Retrieval | `EMBEDDING_PROVIDER` (`hash\|local\|voyage`) |
 | Meeting (ears) | `RECALL_API_KEY`, `RECALL_API_BASE` (use `https://eu-central-1.recall.ai`), `RECALL_TRANSCRIPTION_*` |
 | Face | `AVATAR_PAGE` (`talk\|photoreal\|avatar`), `ANAM_API_KEY`/`ANAM_AVATAR_ID` (legacy only) |
@@ -156,7 +158,7 @@ Meeting (Zoom/Meet/Teams)
         ├─ MeetingState: silent per-line process tracker (regex, no latency)
         ├─ when-to-speak: in-stream SKIP gate + cooldown (+ optional wake word)
         ├─ RAG over avatars/<id>/knowledge/*.md → cited answers
-        ├─ Brain: Claude Haiku (live) / Sonnet (post) / Groq* / stub  ├─ /tts: ElevenLabs | edge-tts
+        ├─ Brain: Cerebras (live) / Sonnet (post) / Haiku (fallback) / stub  ├─ /tts: ElevenLabs | edge-tts
         ├─ gpu_runtime: start/stop the photoreal box around meetings
         └─ SQLite store: sessions, routing, artifacts
    │
