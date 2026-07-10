@@ -124,3 +124,36 @@ def test_org_connections_scoped_to_owner(client, monkeypatch):
 def test_provision_org_unconfigured_returns_none(monkeypatch):
     monkeypatch.setattr(settings, "cedric_orgs_url", "")
     assert callback.provision_org("org1", "T1") is None
+
+
+def test_brain_connectors_pending_until_linked(client):
+    _login(client)
+    r = client.get("/dashboard/connections/brain/connectors")
+    assert r.status_code == 200 and r.json()["status"] == "pending"
+
+
+def test_brain_connectors_proxies_when_linked(client, monkeypatch):
+    monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
+    monkeypatch.setattr(cedric, "provision_org", lambda *a, **k: True)
+    _login(client)
+    client.post(
+        "/dashboard/connections/brain",
+        json={"avatar_id": "cedric", "team_id": "T1"},
+    )
+    payload = {
+        "org_id": "x", "team_id": "T1", "manage_url": "https://cedric/integrations?team=T1",
+        "connectors": [{"key": "gmail", "name": "Gmail", "connected": False,
+                        "connect_url": "https://cedric/api/connect/google/start?team=T1&app=gmail"}],
+    }
+    monkeypatch.setattr(cedric, "fetch_org_connectors", lambda org: payload)
+    r = client.get("/dashboard/connections/brain/connectors")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["connectors"][0]["key"] == "gmail"
+    assert "manage_url" in body
+
+
+def test_brain_connectors_requires_login(client):
+    r = client.get("/dashboard/connections/brain/connectors")
+    assert r.status_code == 401

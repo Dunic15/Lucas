@@ -606,29 +606,31 @@
         '<div class="stat"><div class="n tnum">'+a.meetings_total+'</div><div class="l">meetings</div></div></div>';}).join("")
       || '<div class="empty">No avatars installed</div>';
 
-    // avatar detail — identity + personal connections (the tools it acts on)
-    var AV_CONN=[["gmail","Gmail","Read &amp; send email"],["calendar","Google Calendar","Auto-join &amp; schedule its meetings"],
-                 ["slack","Slack","Post updates &amp; take actions"],["drive","Google Drive","Read knowledge"]];
+    // avatar detail. Configure lives ONLY on the brain-driven avatar (Cedric):
+    // one real connection — the brain — and, once linked, the brain's OWN
+    // connector catalog (fetched live from Cedric). No per-avatar duplicates:
+    // the brain executes with ITS tools, so Gmail/Calendar wiring lives there.
     $("#av-grid").innerHTML = d.avatars.map(function(a){
-      var conns=AV_CONN.map(function(c){
-        return '<div class="crow"><div><div class="cn">'+c[1]+'</div><div class="cd">'+c[2]+'</div></div>'+
-          '<button class="btn conn-btn" data-conn="'+c[0]+'">Connect</button></div>';}).join("");
-      // Connect the brain — the org→Slack-workspace link that lets Cedric (the
-      // brain repo) execute what this avatar captures in meetings.
-      var bc=(d.org_connections||[]).find(function(x){return x.avatar_id===a.id&&x.provider==="cedric-brain";});
-      var bst=bc?bc.status:"off";
-      var brain='<div class="brain"><div class="br-top"><div style="flex:1;min-width:0">'+
-        '<div class="bn">The brain — Cedric orchestrator</div>'+
-        '<div class="bd">Executes what’s agreed in meetings with its own tools'+
-        (bc&&bc.config&&bc.config.team_id?' · workspace '+esc(bc.config.team_id):'')+'</div></div>'+
-        '<span class="stchip '+esc(bst)+'">'+(bst==="off"?"not connected":esc(bst))+'</span>'+
-        (bst==="connected"||bst==="pending"
-          ?'<button class="btn conn-btn" data-brain-off="'+esc(a.id)+'">Disconnect</button>'
-          :'<button class="btn conn-btn" data-brain-on="'+esc(a.id)+'">Connect</button>')+'</div>'+
-        '<div class="brainform" id="bf-'+esc(a.id)+'">'+
-        '<input id="bf-team-'+esc(a.id)+'" placeholder="Slack team ID (e.g. T0123ABCD)" />'+
-        '<input id="bf-chan-'+esc(a.id)+'" placeholder="#channel for approvals (optional)" />'+
-        '<button class="btn primary" data-brain-save="'+esc(a.id)+'">Link brain</button></div></div>';
+      var hasBrain = a.id==="cedric";
+      var brain="";
+      if(hasBrain){
+        var bc=(d.org_connections||[]).find(function(x){return x.avatar_id===a.id&&x.provider==="cedric-brain";});
+        var bst=bc?bc.status:"off";
+        brain='<div class="brain"><div class="br-top"><div style="flex:1;min-width:0">'+
+          '<div class="bn">The brain — Cedric orchestrator</div>'+
+          '<div class="bd">Executes what’s agreed in meetings with its own tools'+
+          (bc&&bc.config&&bc.config.team_id?' · workspace '+esc(bc.config.team_id):'')+'</div></div>'+
+          '<span class="stchip '+esc(bst)+'">'+(bst==="off"?"not connected":esc(bst))+'</span>'+
+          (bst==="connected"||bst==="pending"
+            ?'<button class="btn conn-btn" data-brain-off="'+esc(a.id)+'">Disconnect</button>'
+            :'<button class="btn conn-btn" data-brain-on="'+esc(a.id)+'">Connect</button>')+'</div>'+
+          '<div class="brainform" id="bf-'+esc(a.id)+'">'+
+          '<input id="bf-team-'+esc(a.id)+'" placeholder="Slack team ID (e.g. T0123ABCD)" />'+
+          '<input id="bf-chan-'+esc(a.id)+'" placeholder="#channel for approvals (optional)" />'+
+          '<button class="btn primary" data-brain-save="'+esc(a.id)+'">Link brain</button></div></div>'+
+          // the brain's own connectors, fetched live once linked
+          '<div id="brain-conns" class="conns-list" style="margin-top:10px"></div>';
+      }
       return '<div class="avd"><div class="top">'+
           '<div class="idn"><span class="av" style="background:'+grad(a.id)+'">'+esc(a.name[0]||"?")+'</span>'+
           '<div><div class="nm">'+esc(a.name)+' <span class="pill '+(a.live_now?"live":"idle")+'">'+(a.live_now?"in call":"idle")+'</span></div>'+
@@ -639,15 +641,12 @@
             '<div class="al-hint">Add this address to any calendar invite — '+esc(a.name)+' joins the meeting.</div></div>':'')+
           '<div class="acts"><button class="btn primary" data-dispatch="'+esc(a.id)+'">Send to a meeting</button>'+
           '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a></div></div></div>'+
-          '<div class="cfg"><div class="sm-h">Configure</div>'+brain+
-          '<div class="conns-list">'+conns+'</div>'+
-          '<div class="cnote">Personal connections — the avatar acts on your tools, with your permission. Coming soon.</div>'+
-          '</div></div>'+
+          (hasBrain?'<div class="cfg"><div class="sm-h">Configure</div>'+brain+'</div>':'')+
+          '</div>'+
         '</div>';}).join("") || '<div class="empty">No avatars installed</div>';
+    if(document.getElementById("brain-conns")) loadBrainConnectors();
     $$("#av-grid [data-dispatch]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); go("overview"); $("#dsp-avatar").value=b.getAttribute("data-dispatch"); $("#dsp-url").focus(); }); });
-    $$("#av-grid [data-conn]").forEach(function(b){ b.addEventListener("click",function(e){
-      e.stopPropagation(); toast("Personal connections (Gmail · Calendar · Slack) are coming soon."); }); });
     $$("#av-grid [data-copy]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); var v=b.getAttribute("data-copy");
       if(navigator.clipboard) navigator.clipboard.writeText(v);
@@ -674,6 +673,31 @@
           {method:"DELETE",headers:headers()})
         .then(function(r){ if(!r.ok) throw new Error("could not disconnect"); toast("Brain disconnected."); load(); })
         .catch(function(err){ toast(err.message,true); }); }); });
+
+    // the brain's own connectors (the product bridge): what Cedric can touch,
+    // fetched live from the orchestrator once the org is linked.
+    function loadBrainConnectors(){
+      var box=document.getElementById("brain-conns"); if(!box) return;
+      fetch("/dashboard/connections/brain/connectors",{headers:headers()})
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if(j.status==="pending"){ box.innerHTML='<div class="cnote">Link the brain to see and connect the tools it executes with.</div>'; return; }
+          if(j.status!=="ok"){ box.innerHTML='<div class="cnote">Brain connectors unavailable right now — retry in a moment.</div>'; return; }
+          box.innerHTML=(j.connectors||[]).map(function(c){
+            var chip=c.connected
+              ?'<span class="stchip '+(c.needs_reconnect?"pending":"connected")+'">'+(c.needs_reconnect?"reconnect":"connected")+'</span>'
+              :'<span class="stchip">not connected</span>';
+            var act=c.connected||!c.connect_url
+              ?''
+              :'<a class="btn conn-btn" style="text-decoration:none" href="'+esc(c.connect_url)+'" target="_blank" rel="noopener">Connect</a>';
+            return '<div class="crow"><div style="min-width:0"><div class="cn">'+esc(c.name)+'</div>'+
+              '<div class="cd">'+esc(c.account?("· "+c.account):c.description)+'</div></div>'+chip+act+'</div>';
+          }).join("")+
+          (j.manage_url?'<div class="cnote">These are the brain’s own connections — it executes with them. '+
+            '<a href="'+esc(j.manage_url)+'" target="_blank" rel="noopener" style="color:var(--live)">Manage in Cedric ↗</a></div>':'');
+        })
+        .catch(function(){ box.innerHTML='<div class="cnote">Brain connectors unavailable right now.</div>'; });
+    }
 
     // meetings tables — clean filterable columns; click a row for AI summary + actions
     function platformsIn(){ var s={}; (d.meetings||[]).forEach(function(m){ if(m.platform&&m.platform!=="—") s[m.platform]=1; }); return Object.keys(s); }
