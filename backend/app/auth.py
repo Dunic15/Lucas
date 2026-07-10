@@ -24,7 +24,6 @@ Deliberate properties:
 """
 from __future__ import annotations
 
-import asyncio
 import base64
 import hashlib
 import hmac
@@ -36,8 +35,8 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Request
-from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, RedirectResponse
+from starlette.background import BackgroundTask
 
 from . import store
 from .config import settings
@@ -280,17 +279,20 @@ async def google_callback(request: Request) -> RedirectResponse:
         name=str(claims.get("name") or ""),
         picture=str(claims.get("picture") or ""),
     )
-    if user.get("created") and settings.cedric_orgs_url.strip():
-        # Signup is not held hostage by Cedric. The idempotent 202 path creates
-        # a pending org row with team_id NULL; Add to Slack fills it later.
+    background = None
+    if settings.cedric_orgs_url.strip():
+        # Run after the redirect is sent, but attach it to the response instead
+        # of spawning an untracked task. The idempotent pending endpoint is
+        # retried on every login, so a transient first-signup failure heals
+        # without an ops step and Add to Slack can fill team_id later.
         from . import cedric
 
-        asyncio.create_task(
-            run_in_threadpool(
-                cedric.provision_org, user["org_id"], None, "", "cedric"
-            )
+        background = BackgroundTask(
+            cedric.provision_org, user["org_id"], None, "", "cedric"
         )
-    response = RedirectResponse("/dashboard", status_code=302)
+    response = RedirectResponse(
+        "/dashboard", status_code=302, background=background
+    )
     response.set_cookie(
         COOKIE_NAME,
         make_cookie(user["user_id"]),

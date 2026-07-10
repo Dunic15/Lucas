@@ -168,8 +168,25 @@ def test_google_callback_creates_user_and_sets_cookie(
     uid = auth.read_cookie(resp.cookies[auth.COOKIE_NAME])
     user = store.get_user(uid)
     assert user["email"] == "new.person@example.com"
-    assert preprovisioned.wait(1), "first login should enqueue pending org provisioning"
+    assert preprovisioned.wait(1), "first login should run pending org provisioning"
     assert provision_args == [(uid, None, "", "cedric")]
+
+    # The endpoint is idempotent and every login retries it. A transient Cedric
+    # failure on signup therefore self-heals without deleting the Laura user or
+    # requiring an operator to replay provisioning.
+    preprovisioned.clear()
+    retry_state = _valid_state(client, nonce="nonce-retry")
+    retry = client.get(
+        "/auth/google/callback",
+        params={"code": "fake-code", "state": retry_state},
+        follow_redirects=False,
+    )
+    assert retry.status_code == 302
+    assert preprovisioned.wait(1), "repeat login should retry pending provisioning"
+    assert provision_args == [
+        (uid, None, "", "cedric"),
+        (uid, None, "", "cedric"),
+    ]
 
 
 def _valid_state(client, nonce="nonce-abc", exp_offset=600) -> str:
