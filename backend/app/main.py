@@ -2633,8 +2633,22 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # capital, no name), so it's left as a documented trade-off, not a bug.
     leave_now = called and detect_leave_command(question)
     if settings.leave_on_command and not leave_now and not called:
+        # ── 1:1 room: an unaddressed dismissal can only be aimed at the avatar ──
+        # With a single human in the roster there is no other possible
+        # addressee, so a whole-ask leave command fires without the name and
+        # without the split window (live test 2026-07-10: the owner naturally
+        # says "esci dal meeting" with no name, later than any window). The
+        # addressee guard still applies — a name-led "Sara you can leave now"
+        # never fires even here (the roster can undercount right after a
+        # mid-meeting restart, when it reseeds from transcript speakers).
+        if (
+            len(session.roster(avatar.name)) <= 1
+            and plausible_leave_followup(text)
+            and detect_leave_command(text)
+        ):
+            leave_now = True
         addressed = getattr(session, "last_addressed", None)
-        if addressed is not None:
+        if not leave_now and addressed is not None:
             a_speaker, a_ts, a_text = addressed
             if (
                 speaker == a_speaker
@@ -2667,15 +2681,24 @@ async def recall_webhook(request: Request) -> JSONResponse:
     #    candidate — the phrasing needs to be added).
     if settings.leave_on_command and not leave_now:
         if not called and detect_leave_command(text):
+            # humans + lead expose WHICH guard blocked it: roster size (the
+            # 1:1 rule), window arming, and the addressee guard's verdict on
+            # the first token (that token is generic vocabulary, not PII).
+            _lead = re.search(r"[a-zà-ú]+", text.lower())
             print(
                 "[leave] leave phrase heard but not fired (called=False, "
-                f"split_window_armed={getattr(session, 'last_addressed', None) is not None})",
+                f"split_window_armed={getattr(session, 'last_addressed', None) is not None}, "
+                f"humans={len(session.roster(avatar.name))}, "
+                f"lead_ok={plausible_leave_followup(text)}, "
+                f"lead={_lead.group(0) if _lead else ''!r})",
                 flush=True,
             )
         elif called and _LEAVE_HINT.search(question):
+            # The matched hint verb is one generic word (esci/leave/vai…), not
+            # transcript content — enough to reproduce the regex miss offline.
             print(
                 "[leave] addressed line has a leave-ish word but no leave match "
-                "(regex-miss candidate)",
+                f"(regex-miss candidate, hint={_LEAVE_HINT.search(question).group(0)!r})",
                 flush=True,
             )
     # Arm the split window on EVERY addressed turn, bare or substantive

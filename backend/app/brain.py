@@ -396,7 +396,12 @@ _ACTION_LEAD = (
 # side, so "controlla se…" stays a live question.
 _ACTION_VERBS_IT = (
     r"(?:manda(?:mi)?|invia(?:mi)?|inoltra|spedisci|prenota|fissa|"
-    r"organi[sz]za|programma|prepara|ricordami\s+di)"
+    # "schedula" (italianized English) is how calendar asks actually sound live
+    # (2026-07-10 test: "schedula il meeting" routed to the slow answer path
+    # instead of instant capture), plus the "crea/aggiungi" calendar shapes.
+    r"organi[sz]za|programma|schedula(?:mi)?|prepara|ricordami\s+di|"
+    r"crea\s+(?:un[oa]?\s+|il\s+|la\s+)?(?:meeting|riunione|evento|invito|task|ticket)|"
+    r"aggiungi\s+(?:[\w']+\s+){0,4}al\s+calendario|metti\s+in\s+calendario)"
 )
 _ACTION_INTENT = re.compile(
     rf"\b(?:can|could|will|would)\s+you\s+(?:please\s+)?{_ACTION_VERBS}\b"
@@ -411,9 +416,9 @@ _ACTION_INTENT = re.compile(
     rf"|^{_ACTION_LEAD}{_ACTION_VERBS_IT}\b"
     # Italian periphrastic: "puoi/potresti mandare…", "mi mandi/prenoti…", "ricordami di…"
     r"|\b(?:puoi|potresti|riesci\s+a)\s+(?:mandar|inviar|prenotar|fissar|"
-    r"organizzar|preparar)\w*\b"
+    r"organizzar|preparar|schedular|programmar|crear)\w*\b"
     r"|\b(?:puoi|potresti)\s+ricordar(?:mi|ci)\s+di\b"
-    r"|\bmi\s+(?:mandi|invii|prenoti|fissi|prepari)\b"
+    r"|\bmi\s+(?:mandi|invii|prenoti|fissi|prepari|scheduli|programmi)\b"
     r"|\bricorda(?:mi|ci)\s+di\b",
     re.IGNORECASE,
 )
