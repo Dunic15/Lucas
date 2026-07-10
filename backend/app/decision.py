@@ -251,6 +251,48 @@ def detect_closing(utterance: str) -> bool:
     return bool(_CLOSING.search(utterance))
 
 
+# ── action-capture continuation guard ──
+# main.py keeps a short same-speaker window after a captured action so an ask
+# that ASR split across two finals ("send the recap" + "to the whole team by
+# Friday") lands on ONE action card. That window must NOT swallow a genuinely
+# NEW sentence said right after the capture (live repro 2026-07-10: "manda un
+# messaggio di prova a Ben su Slack…" + 3s later "perfetto, direi che abbiamo
+# finito il test" → dirty card). A real ASR split picks up MID-PHRASE; a new
+# thought opens with an acknowledgement/appreciation marker or sounds like the
+# meeting wrapping up (detect_closing). Lexical only, O(1) — this sits on the
+# live path. Openers that can plausibly start a real split continuation are
+# deliberately NOT here ("right after lunch", "good before Friday").
+_CAPTURE_BREAK_OPENERS = re.compile(
+    r"^(?:ok(?:ay)?|alright|great|perfect|awesome|excellent|"
+    r"thanks|thank you|got it|sounds good|"
+    # Italian
+    r"perfetto|ottimo|benissimo|va bene|bene|grazie|d'accordo|"
+    r"capito|ricevuto|direi che)\b",
+    re.IGNORECASE,
+)
+
+
+def is_capture_continuation(text: str) -> bool:
+    """True when a same-speaker follow-up right after a captured action reads
+    as the CONTINUATION of that ask (a real ASR split final), not a new one.
+
+    "to the whole team by Friday"                 -> True  (glue onto the card)
+    "perfetto, direi che abbiamo finito il test"  -> False (new sentence)
+
+    Deliberately conservative in what it REJECTS: a wrongly-missed glue only
+    truncates the card text (the finalize summarizer still sees the whole
+    transcript), while a wrong glue dirties the approval card the owner acts on.
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    if _CAPTURE_BREAK_OPENERS.match(t):
+        return False
+    if detect_closing(t):
+        return False
+    return True
+
+
 # ── stop command ("Laura, stop / aspetta / basta") ──
 # Only checked on the wake-stripped ask of an utterance addressed BY NAME, so
 # it can stay strict: the WHOLE ask must be stop vocabulary (+ politeness).

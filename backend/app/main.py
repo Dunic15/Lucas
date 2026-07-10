@@ -80,6 +80,7 @@ from .decision import (
     detect_closing,
     detect_leave_command,
     detect_stop_command,
+    is_capture_continuation,
     plausible_leave_followup,
 )
 from .rag import ensure_about_index, ensure_index, warm as warm_index
@@ -2667,11 +2668,21 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # ── action-capture continuation ──
     # A same-speaker follow-up right after a captured action (and NOT a new
     # wake) extends the captured item's text, so the artifact/ledger get the
-    # whole ask even when ASR split it across finals. Short window only.
+    # whole ask even when ASR split it across finals. Short window only, and
+    # only when the follow-up actually READS as a continuation: a new sentence
+    # said inside the window ("perfetto, direi che abbiamo finito il test" 3s
+    # after the capture — live repro 2026-07-10) must not be glued onto the
+    # card. A real ASR split picks up mid-phrase; is_capture_continuation
+    # (decision.py) rejects acknowledgement openers and wrap-up lines.
     pending = getattr(session, "last_capture", None)
     if pending is not None:
         p_item, p_speaker, p_ts = pending
-        if not called and speaker == p_speaker and time.time() - p_ts < 4.0:
+        if (
+            not called
+            and speaker == p_speaker
+            and time.time() - p_ts < 4.0
+            and is_capture_continuation(text)
+        ):
             p_item["action"] = " ".join((p_item["action"] + " " + text).split())[:300]
             session.last_capture = (p_item, p_speaker, time.time())
             return JSONResponse({"ok": True, "spoke": False, "capture_extended": True})
