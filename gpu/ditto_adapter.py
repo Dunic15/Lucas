@@ -52,6 +52,11 @@ _SR = 16000          # hubert sample rate
 _FRAME = 640         # samples per 40ms hubert frame (25fps native)
 _WINDOW_PAD = 80     # alignment pad Ditto's online examples add to the window
 
+# Emotion label (backend emotion.py) -> Ditto `emo` index. Ditto's order,
+# verified in its condition_handler.py: 0 Angry, 1 Disgust, 2 Fear, 3 Happy,
+# 4 Neutral, 5 Sad, 6 Surprise, 7 Contempt. Unknown labels render neutral.
+_EMO_FOR = {"neutral": 4, "happy": 3, "excited": 3, "serious": 4, "concerned": 5}
+
 
 def _ffmpeg_bin() -> str:
     try:
@@ -167,13 +172,36 @@ class DittoPipeline:
                 break
         return got
 
+    def _set_emotion(self, emotion: str | None) -> None:
+        """Point Ditto's condition handler at this clip's mood.
+
+        The emotion is one row of the motion generator's conditioning vector —
+        pure numpy (a softmax over 8 labels), rebuilt here in microseconds. No
+        engine or avatar re-registration is involved. Safe between utterances:
+        the pipeline serves one clip at a time by design."""
+        ch = getattr(self.sdk, "condition_handler", None)
+        if ch is None or not getattr(ch, "use_emo", False):
+            return
+        idx = _EMO_FOR.get((emotion or "neutral").strip().lower(), 4)
+        if idx == getattr(self, "_cur_emo", 4):
+            return
+        try:
+            ch.emo_lst = ch._parse_emo_seq(idx)  # [1, 8] softmax row
+            ch.num_emo = 1
+            ch.emo_seq = np.concatenate([ch.emo_lst] * ch.seq_frames, 0)
+            self._cur_emo = idx
+        except Exception as e:  # noqa: BLE001 — a wrong face beats a dead face
+            print(f"[ditto] set_emotion fallita ({e}) — resto neutrale", flush=True)
+
     # ── one utterance -> stream of JPEG frames ──
-    async def stream(self, audio_mp3: bytes, fps: int = 25, jpeg_quality: int = 82):
+    async def stream(self, audio_mp3: bytes, fps: int = 25, jpeg_quality: int = 82,
+                     emotion: str | None = None):
         """Async generator: JPEG frames for this clip, produced while Ditto
         renders. server.py handles pacing (sleep-to-FPS) and talk_start/end."""
         if self.sdk is None:
             raise RuntimeError("DittoPipeline.warmup() not called")
         self.writer.jpeg_quality = jpeg_quality
+        self._set_emotion(emotion)
 
         # Flush any stale frames a previous utterance's trailing pipeline work
         # left in the queue — serving them now would lag the lips behind the

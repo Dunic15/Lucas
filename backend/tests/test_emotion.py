@@ -48,3 +48,18 @@ def test_face_mappings_are_valid():
 def test_default_is_neutral_everywhere():
     assert emotion.talk_mood(None) == "neutral"
     assert emotion.ditto_emo(None) == 4  # Ditto's documented neutral default
+
+
+def test_ditto_indices_match_ditto_emotion_order():
+    # Ditto's order (its condition_handler.py): 0 Angry, 1 Disgust, 2 Fear,
+    # 3 Happy, 4 Neutral, 5 Sad, 6 Surprise, 7 Contempt. A wrong index here
+    # means a wrong FACE (happy praise rendered as disgust) — pin them.
+    assert emotion.ditto_emo("happy") == 3
+    assert emotion.ditto_emo("excited") == 3
+    assert emotion.ditto_emo("concerned") == 5
+    assert emotion.ditto_emo("serious") == 4
+    # never map to the hostile emotions
+    assert all(
+        emotion.ditto_emo(m) not in (0, 1, 2, 7)
+        for m in ("neutral", "happy", "excited", "serious", "concerned")
+    )

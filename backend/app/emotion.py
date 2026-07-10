@@ -24,16 +24,16 @@ from __future__ import annotations
 # The five moods, and how each maps onto the two faces.
 #   talk_mood  -> TalkingHead setMood() name (its built-in mood set)
 #   ditto_emo  -> Ditto `emo` index (0-7); 4 is the model's neutral default.
-# Ditto's emotion indices follow the AffectNet-style order its training used:
-# 0 neutral, 1 happy, 2 sad, 3 surprised, 4 (its documented neutral default),
-# 5 angry, 6 disgust, 7 fear. We only use the expressive ones a business avatar
-# should ever show; the rest stay mapped to neutral.
+# Ditto's emotion order, VERIFIED in its condition_handler.py source comment:
+#   0 Angry, 1 Disgust, 2 Fear, 3 Happy, 4 Neutral, 5 Sad, 6 Surprise, 7 Contempt
+# A business avatar only ever shows Happy/Neutral/Sad — anger, disgust, fear
+# and contempt stay unmapped on purpose.
 _MOODS: dict[str, dict] = {
     "neutral":   {"talk_mood": "neutral", "ditto_emo": 4},
-    "happy":     {"talk_mood": "happy",   "ditto_emo": 1},
-    "excited":   {"talk_mood": "happy",   "ditto_emo": 1},
-    "serious":   {"talk_mood": "neutral", "ditto_emo": 0},
-    "concerned": {"talk_mood": "sad",     "ditto_emo": 2},
+    "happy":     {"talk_mood": "happy",   "ditto_emo": 3},
+    "excited":   {"talk_mood": "happy",   "ditto_emo": 3},
+    "serious":   {"talk_mood": "neutral", "ditto_emo": 4},
+    "concerned": {"talk_mood": "sad",     "ditto_emo": 5},
 }
 
 DEFAULT = "neutral"
