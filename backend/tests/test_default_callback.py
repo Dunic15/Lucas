@@ -148,3 +148,37 @@ def test_start_avatar_session_applies_default_integration(client, monkeypatch):
     s = store.get("bot_gmail")
     assert s.integration is not None
     assert s.integration["callback_url"] == "https://meet-cedric.com/api/laura/events"
+
+
+# ── default external_ref (live finding 2026-07-10: {} → orchestrator can't
+# route Slack cards/recaps, drops silently) ──
+
+
+def test_default_external_ref_fills_empty(monkeypatch):
+    monkeypatch.setattr(settings, "surface_webhook_url", "https://d/events")
+    monkeypatch.setattr(
+        settings, "surface_external_ref",
+        '{"team": "T1", "slack_channel": "#cedric", "requested_by": "duccio"}',
+    )
+    integ = integration.build_integration(_Req(), "")
+    assert integ["external_ref"] == {
+        "team": "T1", "slack_channel": "#cedric", "requested_by": "duccio",
+    }
+    # request-less summons (gmail/calendar) get the same default
+    integ2 = integration.default_integration()
+    assert integ2["external_ref"]["slack_channel"] == "#cedric"
+
+
+def test_session_own_external_ref_wins(monkeypatch):
+    monkeypatch.setattr(settings, "surface_webhook_url", "https://d/events")
+    monkeypatch.setattr(settings, "surface_external_ref", '{"team": "DEFAULT"}')
+    integ = integration.build_integration(_Req(external_ref={"team": "REAL"}), "")
+    assert integ["external_ref"] == {"team": "REAL"}
+
+
+def test_invalid_default_external_ref_is_ignored(monkeypatch):
+    monkeypatch.setattr(settings, "surface_webhook_url", "https://d/events")
+    monkeypatch.setattr(settings, "surface_external_ref", "not-json{")
+    assert integration.build_integration(_Req(), "")["external_ref"] == {}
+    monkeypatch.setattr(settings, "surface_external_ref", '["not","a","dict"]')
+    assert integration.default_integration()["external_ref"] == {}
