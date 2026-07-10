@@ -43,3 +43,7 @@ speak_cooldown_seconds:     # seconds of silence to keep after speaking
 
 # Knowledge lives in:  avatars/laura/knowledge/*.md
 # Drop more .md files there and re-run:  python backend/scripts/ingest.py
+
+# Volto in riunione: Ultra-HD fotorealistico (Ditto sul GPU pod).
+# Rimuovi o svuota per tornare al 3D gratuito. Cache mtime: niente restart.
+face: photoreal
