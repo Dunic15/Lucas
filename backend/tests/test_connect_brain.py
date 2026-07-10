@@ -215,6 +215,43 @@ def test_provision_org_unconfigured_returns_none(monkeypatch):
     assert callback.provision_org("org1", "T1") is None
 
 
+def test_first_login_preprovision_uses_pending_route(monkeypatch):
+    monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
+    monkeypatch.setattr(settings, "laura_api_token", "machine-token")
+    calls: list[tuple[str, dict]] = []
+
+    class FakeResponse:
+        status_code = 202
+        headers: dict = {}
+
+        def json(self):
+            return {"ok": True, "status": "pending"}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): ...
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def post(self, url, **kwargs):
+            calls.append((url, kwargs["json"]))
+            return FakeResponse()
+
+    monkeypatch.setattr(callback.httpx, "Client", FakeClient)
+    result = callback.provision_org("org1", None, "", "cedric")
+
+    assert result and result.status_code == 202
+    assert calls == [
+        (
+            "https://cedric/api/laura/orgs/pending",
+            {
+                "org_id": "org1",
+                "team_id": None,
+                "default_slack_channel": "",
+                "avatar_id": "cedric",
+            },
+        )
+    ]
+
+
 def test_brain_connectors_pending_until_linked(client):
     _login(client)
     r = client.get("/dashboard/connections/brain/connectors")

@@ -309,6 +309,7 @@ def provision_org(
     url = settings.cedric_orgs_url.strip()
     if not url:
         return None
+    target_url = f"{url.rstrip('/')}/pending" if not team_id else url
     headers = {"Content-Type": "application/json"}
     token = settings.cedric_orgs_token.strip() or settings.laura_api_token.strip()
     if token:
@@ -321,7 +322,7 @@ def provision_org(
     }
     try:
         with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
-            resp = client.post(url, json=payload, headers=headers)
+            resp = client.post(target_url, json=payload, headers=headers)
             target = _redirect_target(resp)
             if target:
                 resp = client.post(target, json=payload, headers=headers)
