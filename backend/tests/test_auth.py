@@ -345,11 +345,15 @@ def test_token_plus_login_anonymous_gets_google_gate(client, google_on, monkeypa
 def test_logged_in_user_can_end_unowned_session(client, google_on, monkeypatch):
     """A user may end a legacy/service (org_id == '') session — the by-design
     branch the original tests never exercised."""
-    from app import cedric
+    from app import cedric, recall_client
 
     _login(client, "alice@example.com")
     store.create("bot_unowned", "https://meet.google.com/u", "laura", org_id="")
     monkeypatch.setattr(cedric, "wire_artifact", lambda a: a)
+    # /end finalizes the session, which stops the Recall meter (leave_call) —
+    # stub it like every other finalize test does, or the key-free suite dies
+    # on assert_ready (and a keyed machine would hit the real Recall API).
+    monkeypatch.setattr(recall_client, "leave_call", lambda bot_id: None)
     try:
         resp = client.post("/sessions/bot_unowned/end")
         assert resp.status_code in (200, 202)
