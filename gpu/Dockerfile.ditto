@@ -22,6 +22,7 @@ FROM runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04
 # ── system deps (ffmpeg per l'audio, GLES/EGL per mediapipe headless) ──
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ffmpeg git libgl1 libglib2.0-0 libgles2 libegl1 libopengl0 psmisc \
+      openssh-server \
     && rm -rf /var/lib/apt/lists/*
 
 # ── python deps (ordine e pin contano — vedi lezioni sopra) ──
@@ -48,7 +49,7 @@ RUN huggingface-cli download digital-avatar/ditto-talkinghead \
 
 # ── il nostro server + adapter + ritratto ──
 WORKDIR /app
-COPY server.py ditto_adapter.py ./
+COPY server.py ditto_adapter.py pod_start.sh ./
 COPY assets/ ./assets/
 # Il ritratto di produzione: sovrascrivibile a runtime montando/copiando un
 # file e puntando REFERENCE_IMAGE altrove.
@@ -60,4 +61,4 @@ ENV AVATAR_ENGINE=ditto \
     JPEG_QUALITY=90 \
     PORT=8080
 EXPOSE 8080
-CMD ["python3", "server.py"]
+CMD ["bash", "/app/pod_start.sh"]
