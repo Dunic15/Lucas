@@ -40,6 +40,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 
 import numpy as np
 
@@ -132,6 +133,20 @@ class DittoPipeline:
             pass
         self.sdk.writer = self.writer
 
+        # DITTO_TIMING=1: per-stage probes to find the fps bottleneck. Wraps
+        # wav2feat (pure hubert cost) — run_chunk minus wav2feat = queue
+        # backpressure from downstream stages. Numbers only, no content (PII).
+        if os.environ.get("DITTO_TIMING"):
+            import time as _t
+            _orig_w2f = self.sdk.wav2feat
+            def _timed_w2f(*a, **k):
+                t0 = _t.perf_counter()
+                r = _orig_w2f(*a, **k)
+                print(f"[timing] wav2feat {(_t.perf_counter()-t0)*1000:.0f}ms",
+                      flush=True)
+                return r
+            self.sdk.wav2feat = _timed_w2f
+
         # Prime the whole pipeline with a short silence so the first REAL
         # utterance doesn't pay cold-start costs.
         silence = np.zeros(_FRAME * sum(_CHUNK) + _WINDOW_PAD, dtype=np.float32)
@@ -175,12 +190,17 @@ class DittoPipeline:
         padded = np.concatenate([np.zeros(_FRAME * past, dtype=np.float32), pcm])
 
         def _feed() -> None:
+            timing = bool(os.environ.get("DITTO_TIMING"))
             with self._lock:
                 for off in range(0, len(pcm), hop):
                     chunk = padded[off: off + window]
                     if len(chunk) < window:
                         chunk = np.pad(chunk, (0, window - len(chunk)))
+                    t0 = time.perf_counter() if timing else 0.0
                     self.sdk.run_chunk(chunk, chunksize=_CHUNK)
+                    if timing:
+                        print(f"[timing] run_chunk {(time.perf_counter()-t0)*1000:.0f}ms",
+                              flush=True)
 
         feeder = threading.Thread(target=_feed, daemon=True)
         feeder.start()
@@ -190,8 +210,14 @@ class DittoPipeline:
         emitted = 0.0
         served = 0
         while served < n_expected:
+            # Feeder finito -> la pipeline sta solo svuotando le code: attesa
+            # corta, così la clip chiude ~1s dopo l'ULTIMO frame reale invece
+            # di aspettare 10s un frame che non arriverà (l'off-by-one tra
+            # n_expected e frame prodotti costava una coda muta di 10s a clip
+            # — era LUI il "11fps" misurato, non la pipeline).
+            timeout = 10.0 if feeder.is_alive() else 1.0
             try:
-                frame = await asyncio.to_thread(self.writer.frames.get, True, 10.0)
+                frame = await asyncio.to_thread(self.writer.frames.get, True, timeout)
             except queue.Empty:
                 break   # generation stalled/finished — end the clip gracefully
             served += 1

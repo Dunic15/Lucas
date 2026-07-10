@@ -195,14 +195,32 @@ class DittoEngine:
 
 
 _ENGINES = {"musetalk": MuseTalkEngine, "ditto": DittoEngine}
-engine = _ENGINES.get(ENGINE, StubEngine)(REFERENCE_IMAGE)
+_ENGINE_CLS = _ENGINES.get(ENGINE, StubEngine)
+
+# Multi-volto: REFERENCE_IMAGES="laura:/x/laura.jpg,cedric:/x/cedric.jpg"
+# crea UN engine per avatar (ognuno col suo volto registrato; ~2.6GB VRAM
+# l'uno con ditto). Senza quella env: un solo engine da REFERENCE_IMAGE,
+# comportamento identico a prima. La connessione /stream sceglie con
+# ?avatar_id=<id>; id sconosciuto o assente -> il primo (default).
+_FACES: dict[str, str] = {}
+for _pair in filter(None, os.environ.get("REFERENCE_IMAGES", "").split(",")):
+    _aid, _, _path = _pair.partition(":")
+    if _aid.strip() and _path.strip():
+        _FACES[_aid.strip()] = _path.strip()
+if not _FACES:
+    _FACES["default"] = REFERENCE_IMAGE
+
+engines: dict[str, object] = {aid: _ENGINE_CLS(path) for aid, path in _FACES.items()}
+engine = next(iter(engines.values()))  # default + retrocompatibilità
 
 
 @app.on_event("startup")
 async def _warmup() -> None:
-    await engine.start()
+    for aid, eng in engines.items():
+        await eng.start()
+        print(f"[gpu-avatar] volto '{aid}' pronto", flush=True)
     asyncio.create_task(_idle_watchdog())
-    print(f"[gpu-avatar] engine={ENGINE} fps={FPS} ref={REFERENCE_IMAGE} "
+    print(f"[gpu-avatar] engine={ENGINE} fps={FPS} faces={list(engines)} "
           f"idle_shutdown={IDLE_SHUTDOWN_MINUTES}min", flush=True)
 
 
@@ -241,9 +259,13 @@ def metrics() -> JSONResponse:
 async def stream(ws: WebSocket) -> None:
     global CLIENTS, IDLE_SINCE
     await ws.accept()
+    # multi-volto: la pagina passa ?avatar_id=; id ignoto -> engine di default
+    aid = ws.query_params.get("avatar_id", "")
+    eng = engines.get(aid, engine)
     CLIENTS += 1
     IDLE_SINCE = None
-    await ws.send_text(json.dumps({"type": "hello", "mode": ENGINE, "fps": FPS}))
+    await ws.send_text(json.dumps({"type": "hello", "mode": ENGINE, "fps": FPS,
+                                   "face": aid if aid in engines else next(iter(engines))}))
     speak_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
     async def reader() -> None:
@@ -265,7 +287,7 @@ async def stream(ws: WebSocket) -> None:
                 t_speak = time.perf_counter()
                 await ws.send_text(json.dumps({"type": "talk_start"}))
                 first_frame = True
-                async for frame in engine.talk_frames(audio):
+                async for frame in eng.talk_frames(audio):
                     t0 = time.perf_counter()
                     await ws.send_bytes(frame)
                     _note_frame()
@@ -278,7 +300,7 @@ async def stream(ws: WebSocket) -> None:
                         await asyncio.sleep(delay)
                 await ws.send_text(json.dumps({"type": "talk_end"}))
             else:
-                await ws.send_bytes(engine.next_idle_frame())
+                await ws.send_bytes(eng.next_idle_frame())
                 _note_frame()
                 await asyncio.sleep(frame_interval)
     except (WebSocketDisconnect, RuntimeError):

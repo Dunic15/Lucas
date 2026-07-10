@@ -73,7 +73,30 @@ frame Ditto → talk_end. Adapter validato su GPU vera.
   ignorato) — non conta come leva finché non si verifica nel cfg pkl.
 - Ridurre il ritratto (1122→800px) non cambia gli fps (costo nelle fasi interne).
 
-## SPERIMENTATO (2026-07-10, sessione notturna completa) — il collo NON è la GPU
+## ⭐ RISOLTO (2026-07-10, sessione due): erano 23fps VERI — il "11fps" era un artefatto
+La sessione strumentata (A4500 $0.19/h) ha smontato il mistero in tre atti:
+1. wav2feat/HuBERT: solo ~22ms/chunk → INNOCENTE (ipotesi smentita dai dati).
+2. Il writer riceve frame ogni ~30ms (≈33fps di produzione), encode 8ms.
+3. **Il colpevole del "11fps": un timeout di coda da 10s** a fine clip
+   (off-by-one tra frame attesi e prodotti) che gonfiava OGNI misura — e
+   essendo una costante, rendeva "identiche" tutte le GPU. FIXATO
+   nell'adapter (attesa corta post-feeder) + client che misura fino
+   all'ULTIMO frame.
+**Numeri di produzione reali (A4500 da $0.19/h): ~23fps un volto, ~17fps col
+secondo volto caricato. Recall consegna comunque max 15fps → GIÀ SOPRA IL
+TETTO del meeting.** Drift residuo ~0.7s su frasi da 8.5s (impercettibile
+sulle risposte tipiche 3-5s). Rifinitura opzionale per il 25 pieno: knob
+sampling_timesteps (via cfg, non kwarg — ignorato lì), CPU del pod più larga.
+
+## MULTI-VOLTO (stesso pod) — FUNZIONA ✅
+`REFERENCE_IMAGES="laura:/x/laura.jpg,cedric:/x/cedric.jpg"` sul server → un
+engine per volto (~2.6GB VRAM l'uno); la pagina photoreal passa
+`?avatar_id=` sul ws e riceve il volto giusto (hello.face conferma).
+Retrocompatibile: senza env resta il singolo REFERENCE_IMAGE. Testato live:
+Laura e Cedric serviti dalla stessa A4500. Nota: due volti attivi → ~17fps
+cad. (contesa CPU); per il massimo fps: un pod per riunione comunque.
+
+## Archivio prima sessione (metodo) — il collo NON era la GPU
 Misure a parità di adapter (~11-12fps SEMPRE):
 | Config | fps |
 |---|---|
