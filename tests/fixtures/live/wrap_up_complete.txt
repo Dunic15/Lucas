@@ -1,0 +1,7 @@
+Cora Vale: This is a synthetic customer onboarding kickoff.
+Juno Hart: Security approval is cleared and done.
+Cora Vale: The DPA is signed and confirmed.
+Juno Hart: Juno will own implementation.
+Cora Vale: Customer handoff is complete.
+Juno Hart: Go-live is scheduled for Friday.
+Cora Vale: That's everything, let's wrap up.

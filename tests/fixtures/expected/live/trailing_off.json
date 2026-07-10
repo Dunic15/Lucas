@@ -1,0 +1,44 @@
+{
+  "scenario": "trailing_off",
+  "covers": ["trailing_off"],
+  "roster": ["Sela Noor"],
+  "turns": [
+    {
+      "id": "t1", "speaker": "Sela Noor",
+      "floor_holding": {"expected": "hold", "deference": "long"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": false, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "laura"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t2", "speaker": "Sela Noor",
+      "floor_holding": {"expected": "yield", "deference": "short"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": false, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "none"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t3", "speaker": "Sela Noor",
+      "floor_holding": {"expected": "hold", "deference": "long"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": false, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "none"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"},
+      "xfail": {"floor_holding": "end_of_turn.completeness treats a mid-word ASR cutoff as a yielded floor"}
+    },
+    {
+      "id": "t4", "speaker": "Sela Noor",
+      "floor_holding": {"expected": "yield", "deference": "short"},
+      "address_detection": {"expected": "speak", "model_result": {"sufficient_context": true, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "laura"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    }
+  ]
+}

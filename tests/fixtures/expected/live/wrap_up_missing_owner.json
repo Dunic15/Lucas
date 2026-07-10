@@ -1,0 +1,61 @@
+{
+  "scenario": "wrap_up_missing_owner",
+  "covers": ["wrap_up_closing"],
+  "roster": ["Orin Blue", "Mavi Gold"],
+  "turns": [
+    {
+      "id": "t1", "speaker": "Orin Blue",
+      "floor_holding": {"expected": "yield", "deference": "base"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": false, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "none"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t2", "speaker": "Mavi Gold",
+      "floor_holding": {"expected": "yield", "deference": "base"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": false, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "none"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t3", "speaker": "Orin Blue",
+      "floor_holding": {"expected": "yield", "deference": "base"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": false, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "none"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t4", "speaker": "Mavi Gold",
+      "floor_holding": {"expected": "yield", "deference": "base"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": false, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "none"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t5", "speaker": "Orin Blue",
+      "floor_holding": {"expected": "yield", "deference": "base"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": false, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "none"},
+      "control_intent": {"expected": "none"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "silent"}
+    },
+    {
+      "id": "t6", "speaker": "Mavi Gold",
+      "floor_holding": {"expected": "yield", "deference": "short"},
+      "address_detection": {"expected": "silent", "model_result": {"sufficient_context": false, "confidence": 0.9}},
+      "multiparty_deference": {"expected": "room"},
+      "control_intent": {"expected": "closing"},
+      "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
+      "intervention_timing": {"expected": "nudge"}
+    }
+  ]
+}
