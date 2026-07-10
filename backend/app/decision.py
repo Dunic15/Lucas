@@ -189,6 +189,20 @@ def _strip_wake(utterance: str, wake: str) -> str:
 # Vocative labels that are never real spoken names (anonymous roster entries).
 _NON_VOCATIVE = {"guest", "everyone", "all", "team", "folks", "guys", "ragazzi"}
 
+# Live ASR frequently drops the comma in a leading vocative: "Marco can you
+# confirm?". Accept that shape only when the name is followed by an unmistakable
+# second-person question or imperative. This intentionally excludes ordinary
+# subject mentions such as "Marco can confirm" and "Marco will own the rollout".
+_NO_COMMA_VOCATIVE = re.compile(
+    r"(?:^|[.;:!?]\s+)([a-z]+)\s+(?="
+    r"(?:(?:can|could|would|will|do|did|are|were|have|has)\s+you\b|"
+    r"(?:what|when|where|why|how)\b|"
+    r"(?:please|tell|show|give|take|send|share|confirm|check|explain)\b|"
+    r"(?:per favore|puoi|potresti|potete|vuoi|volete|riesci|riuscite|cosa)\b)"
+    r")",
+    re.IGNORECASE,
+)
+
 
 def addressed_to_other(utterance: str, roster: list[str]) -> bool:
     """True when the line is a vocative aimed at ANOTHER participant by name
@@ -203,13 +217,15 @@ def addressed_to_other(utterance: str, roster: list[str]) -> bool:
     lower = (utterance or "").lower()
     if not lower:
         return False
-    # Tokens sitting in a vocative position: "X, …" / "hey X …" / "…, X?".
+    # Tokens sitting in a vocative position: "X, …" / "X can you …" /
+    # "hey X …" / "…, X?".
     # Fuzzy-compared against roster first names so an ASR-mangled "Marko,
     # can you…" still reads as Marco's turn.
     candidates = set(
         re.findall(r"(?:^|[,.;:!?]\s+)([a-z]+)\s*[,:]", lower)
         + re.findall(r"\b(?:hey|hi|hello|ok|okay|yo|ehi|ciao|senti|scusa|allora)\s+([a-z]+)\b", lower)
         + re.findall(r",\s*([a-z]+)[^a-z]*$", lower)
+        + _NO_COMMA_VOCATIVE.findall(lower)
     )
     if not candidates:
         return False

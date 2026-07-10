@@ -10,11 +10,7 @@
       "multiparty_deference": {"expected": "Marco Bell"},
       "control_intent": {"expected": "none"},
       "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
-      "intervention_timing": {"expected": "silent"},
-      "xfail": {
-        "address_detection": "addressed_to_other misses an ASR vocative when punctuation is absent",
-        "multiparty_deference": "addressed_to_other misses an ASR vocative when punctuation is absent"
-      }
+      "intervention_timing": {"expected": "silent"}
     },
     {
       "id": "t2", "speaker": "Marco Bell",

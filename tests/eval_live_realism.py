@@ -353,6 +353,14 @@ def _vocative_candidates(text: str) -> list[str]:
         )
         + re.findall(r",\s*([a-z]+)[^a-z]*$", lower)
     )
+    # addressed_to_other has already established that this is a vocative. Its
+    # punctuation-free ASR path can be a bare leading name ("Marco can you …"),
+    # so preserve that target for fuzzy roster resolution without weakening the
+    # runtime gate itself.
+    if not candidates:
+        leading = re.match(r"([a-z]+)\b", lower)
+        if leading:
+            candidates.append(leading.group(1))
     return list(dict.fromkeys(candidates))
 
 

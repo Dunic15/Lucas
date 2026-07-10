@@ -37,8 +37,7 @@
       "multiparty_deference": {"expected": "room"},
       "control_intent": {"expected": "none"},
       "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
-      "intervention_timing": {"expected": "silent"},
-      "xfail": {"floor_holding": "end_of_turn.completeness treats a completed question ending in 'that?' as mid-thought"}
+      "intervention_timing": {"expected": "silent"}
     }
   ]
 }

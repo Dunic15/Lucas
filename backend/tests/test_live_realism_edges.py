@@ -94,9 +94,6 @@ def test_emoji_keeps_emotion_precedence_and_safe_renderer_mappings():
     assert emotion.ditto_emo(excited) == 3
 
 
-@pytest.mark.xfail(
-    reason="addressed_to_other misses ASR vocatives when the comma is absent"
-)
 def test_asr_vocative_without_punctuation_defers_to_named_human():
     assert decision.addressed_to_other(
         "Marco can you confirm the total", ["Lian Park", "Marco Bell"]
@@ -110,9 +107,6 @@ def test_mid_word_asr_cutoff_holds_the_floor():
     assert end_of_turn.completeness("I also wanted to ask abou") <= 0.3
 
 
-@pytest.mark.xfail(
-    reason="trailing incomplete-word precedence overrides a terminal question mark"
-)
 def test_completed_question_ending_in_that_yields_the_floor():
     assert end_of_turn.completeness("What did Laura mean by that?") >= 0.8
 
