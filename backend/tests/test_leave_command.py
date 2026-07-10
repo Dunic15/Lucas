@@ -90,6 +90,13 @@ LEAVE_ASKS = [
     "vai fuori dal meeting",
     "esci da questo meeting",
     "leave the meet",
+    # trailing politeness/urgency (live regex-miss candidate 2026-07-10:
+    # Italian puts "per favore" at the END, the shapes only allowed it leading)
+    "esci dal meeting per favore",
+    "esci dal meeting, per favore",
+    "puoi uscire dal meeting per favore",
+    "esci subito",
+    "lascia il meeting adesso per favore",
 ]
 
 
@@ -444,6 +451,69 @@ def test_webhook_split_leave_italian_imperative_followup(monkeypatch, tmp_path):
     assert b2.get("left") is True, "Italian imperative follow-up must fire"
     assert calls["leave"] == 1
     store.remove(bot_id)
+
+
+def test_webhook_solo_room_unaddressed_leave_fires(monkeypatch, tmp_path):
+    """Live-test repro (2026-07-10, round 2): in a 1:1 room the owner says
+    "esci dal meeting" with NO name and long after any addressed turn — there
+    is no other possible addressee, so it must end the meeting."""
+    bot_id = "leave-solo-1"
+    calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+    store.get(bot_id).addressed_once = True  # past the opening settle-in grace
+
+    _post_line_as(bot_id, "allora direi che abbiamo visto tutto", "Duccio")
+    b = _post_line_as(bot_id, "esci dal meeting", "Duccio")
+    assert b.get("left") is True, "1:1 unaddressed dismissal must fire"
+    assert calls["leave"] == 1
+    store.remove(bot_id)
+
+
+def test_webhook_solo_room_name_led_dismissal_still_blocked(monkeypatch, tmp_path):
+    """Meter safety in the 1:1 rule: even with one human in the roster, a
+    name-led dismissal ("Sara you can leave now" — e.g. someone on a phone
+    speaker, or a roster undercount after a restart) must NOT end the bot."""
+    bot_id = "leave-solo-2"
+    calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+    store.get(bot_id).addressed_once = True  # past the opening settle-in grace
+
+    _post_line_as(bot_id, "ok facciamo così", "Duccio")
+    b = _post_line_as(bot_id, "Sara you can leave now", "Duccio")
+    assert b.get("left") is None, "name-led dismissal is never for the avatar"
+    assert calls["leave"] == 0
+    assert store.get(bot_id) is not None
+    store.remove(bot_id)
+
+
+def test_webhook_multi_room_unaddressed_leave_needs_window(monkeypatch, tmp_path):
+    """With 2+ humans the 1:1 rule must NOT apply: an unaddressed "you can
+    leave now" with no armed window could be aimed at the other human."""
+    bot_id = "leave-multi-1"
+    calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+    store.get(bot_id).addressed_once = True  # past the opening settle-in grace
+
+    _post_line_as(bot_id, "I think we're done here", "Marco")
+    _post_line_as(bot_id, "yes let's wrap up", "Duccio")  # 2 humans in roster
+    b = _post_line_as(bot_id, "you can leave now", "Duccio")
+    assert b.get("left") is None, "multi-human room still needs name or window"
+    assert calls["leave"] == 0
+    store.remove(bot_id)
+
+
+def test_plausible_leads_include_discourse_markers():
+    """Live miss (2026-07-10): an armed window still didn't fire — natural
+    speech leads with a discourse marker ("dai, esci pure")."""
+    from app.decision import plausible_leave_followup
+
+    for text in (
+        "dai, esci pure dal meeting",
+        "quindi puoi andare",
+        "bene, esci dal meeting",
+        "no, esci dal meeting",
+        "well, you can leave now",
+    ):
+        assert plausible_leave_followup(text), f"should be plausible: {text!r}"
+    for text in ("Sara you can leave now", "Marco esci pure"):
+        assert not plausible_leave_followup(text), f"must NOT be plausible: {text!r}"
 
 
 def test_webhook_split_leave_skips_dismissal_of_named_participant(monkeypatch, tmp_path):

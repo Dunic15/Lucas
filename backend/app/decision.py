@@ -351,10 +351,10 @@ _LEAVE_IT = re.compile(
     r"lascia(?:ci)?(?=\s+(?:pure\s+)?(?:la|il|lo|questa|questo)\s+(?:riunione|call|chiamata|meeting|meet)))"
     r"(?:\s+pure)?"
     r"(?:\s+(?:dalla|dal|dallo|da (?:questa|questo|qui)|la|il|lo|questa|questo)\s+(?:riunione|call|chiamata|meeting|meet))?"
-    r"(?:\s+(?:ora|adesso|pure|grazie))*[.!?\s]*$"
+    r"(?:\s*,?\s*(?:ora|adesso|subito|pure|grazie|per favore|please))*[.!?\s]*$"
     r"|\b(?:puoi|potresti|potete)\s+(?:andare|andartene|uscire|lasciarci|abbandonare|scollegarti)"
     r"(?:\s+(?:dalla|dal|dallo|da (?:questa|questo|qui)|la|il|lo|questa|questo)\s+(?:riunione|call|chiamata|meeting|meet))?"
-    r"(?:\s+(?:ora|adesso|pure|grazie))*\s*(?:[.!?,;]|$)"
+    r"(?:\s*,?\s*(?:ora|adesso|subito|pure|grazie|per favore|please))*\s*(?:[.!?,;]|$)"
     r"|\bte ne puoi andare\b|\bve ne potete andare\b"
     r"|\bsei liber[ao] di andare\b",
     re.IGNORECASE,
@@ -395,11 +395,14 @@ _FOLLOWUP_LEADS = frozenset(
     # EN verbs / pronouns / modals / leads
     "leave exit go get drop hop hang disconnect log sign you she can could "
     "would will please now just kindly ok okay so right thanks thank bye "
-    "goodbye see".split()
-    # IT verbs / pronouns / modals / leads
+    "goodbye see well and but then anyway alright actually yes no".split()
+    # IT verbs / pronouns / modals / leads. The discourse markers (dai, quindi,
+    # bene, poi, comunque…) matter: live speech leads with them ("dai, esci
+    # pure") and the 2026-07-10 test showed an armed window still not firing.
     + "esci vattene vai scollegati abbandona lascia lasciaci puoi potresti "
-      "potete per ora adesso pure va sì si te ve sei ciao arrivederci grazie "
-      "allora".split()
+      "potete per ora adesso subito pure va sì si te ve sei ciao arrivederci "
+      "grazie allora dai quindi bene poi e ma comunque senti ecco beh boh ah "
+      "oh perfetto niente".split()
 )
 
 

@@ -629,6 +629,15 @@ def test_wants_action_capture_italian_bare_imperatives():
         "fissa una riunione giovedì",
         "mandami il file",
         "ricordami di chiamare Marco",
+        # calendar asks as they actually sound live (2026-07-10 test:
+        # "schedula il meeting" routed to the slow answer path — Cedric
+        # "thought hard" instead of instantly noting it down)
+        "schedula il meeting con Marco per domani",
+        "puoi schedulare una call con Ben",
+        "mi scheduli la review di venerdì?",
+        "crea un meeting per lunedì alle 10",
+        "aggiungi la demo al calendario",
+        "metti in calendario il follow-up",
     ]:
         assert wants_action_capture(phrase), f"must capture: {phrase!r}"
 
@@ -636,6 +645,8 @@ def test_wants_action_capture_italian_bare_imperatives():
         "dovremmo mandare una mail",       # suggestion, not an imperative
         "la mail la manda Priya domani",   # 'manda' mid-sentence indicative
         "controlla se i numeri tornano",   # content query, not an action
+        "abbiamo schedulato il meeting ieri",  # past indicative, not an ask
+        "il meeting è schedulato per domani",
     ]:
         assert not wants_action_capture(phrase), f"must NOT capture: {phrase!r}"
 
