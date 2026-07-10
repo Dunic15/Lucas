@@ -24,9 +24,12 @@ from ..config import settings
 _lock = threading.RLock()
 _cache: dict[str, str] = {}
 _env_snapshot: str | None = None
-# Do not make an AWS metadata/network call on first local callback.  Production
-# already has the env snapshot at boot; a connect writes through immediately.
-_last_ssm_refresh = time.monotonic()
+# Force an SSM read on the FIRST callback after boot: App Runner resolves the
+# env snapshot at deploy time, but a connect that landed in SSM while a previous
+# process was alive can be newer than this process's boot env until SSM is
+# consulted.  -inf makes the first secret_for() read SSM once (a single
+# background-path call, never the live speak path), then it refreshes every N s.
+_last_ssm_refresh = float("-inf")
 
 
 def _valid_registry(value: Any) -> dict[str, str] | None:

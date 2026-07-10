@@ -131,6 +131,10 @@ def test_callback_payloads_carry_org_id(monkeypatch):
 
 
 def test_signing_secret_per_org_with_fallback(monkeypatch):
+    # Pure env-registry behaviour: disable the SSM source so the lookup doesn't
+    # reach a real parameter (the registry now consults SSM on the first call
+    # after boot).
+    monkeypatch.setattr(settings, "laura_webhook_registry_ssm_parameter", "")
     monkeypatch.setattr(settings, "laura_webhook_secret", "global-secret")
     monkeypatch.setattr(
         settings, "laura_webhook_secrets_by_org", json.dumps({"org-42": "org-secret"})
@@ -169,6 +173,7 @@ def test_ssm_registry_merge_preserves_existing_orgs_and_hot_reloads(monkeypatch)
 
 
 def test_signature_differs_by_org_secret(monkeypatch):
+    monkeypatch.setattr(settings, "laura_webhook_registry_ssm_parameter", "")
     monkeypatch.setattr(settings, "laura_webhook_secret", "global-secret")
     monkeypatch.setattr(settings, "laura_webhook_token", "tok")
     monkeypatch.setattr(
