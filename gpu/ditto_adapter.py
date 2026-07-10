@@ -111,7 +111,9 @@ class DittoPipeline:
         sys.path.insert(0, _REPO)
         from stream_pipeline_online import StreamSDK  # noqa: PLC0415
 
-        cfg = os.path.join(_CKPT, "ditto_cfg", "v0.4_hubert_cfg_trt_online.pkl")
+        cfg = os.environ.get("DITTO_CFG_PKL") or os.path.join(
+            _CKPT, "ditto_cfg", "v0.4_hubert_cfg_trt_online.pkl"
+        )
         data_root = os.path.join(_CKPT, "ditto_trt_Ampere_Plus")
         self.sdk = StreamSDK(cfg, data_root)
 

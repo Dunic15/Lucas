@@ -72,7 +72,8 @@
   let gpu = null;          // websocket to gpu/server.py
   let gpuReady = false;
   let lastUrl = null;      // revoke previous blob URL to avoid leaking
-  let pendingAudio = [];   // audio clips awaiting talk_start (play-on-signal)
+  let pendingAudio = [];   // audio clips awaiting their first frame
+  let waitingFirstFrame = false; // talk_start seen, audio starts on next frame
 
   // Frame pacing: paint at most one frame per display tick, always the NEWEST.
   // If the network delivers a burst (proxy hiccup), stale frames are dropped
@@ -110,9 +111,16 @@
         try {
           const msg = JSON.parse(ev.data);
           if (msg.type === "hello") { gpuReady = true; status(`live — ${msg.mode} engine @ ${msg.fps}fps`); }
-          if (msg.type === "talk_start" && pendingAudio.length) playClip(pendingAudio.shift());
+          // audio starts on the FIRST FRAME of the clip, not on talk_start:
+          // the GPU takes ~200-400ms to produce it, and starting the sound
+          // early is exactly the head start the lips never recover from.
+          if (msg.type === "talk_start" && pendingAudio.length) waitingFirstFrame = true;
         } catch (_) {}
         return;
+      }
+      if (waitingFirstFrame && pendingAudio.length) {
+        waitingFirstFrame = false;
+        playClip(pendingAudio.shift());
       }
       nextBlob = ev.data;
       if (!paintScheduled) {
@@ -135,9 +143,28 @@
   }
 
   // ── speak: TTS -> GPU (frames) + local playback, serialized in order ────
+  // Long answers are split into sentence-sized clips: Ditto generates at
+  // ~23fps against a 25fps timeline, so lips fall ~0.1s behind per second of
+  // audio. Per-clip alignment (audio starts on the clip's first frame) resets
+  // that drift at every sentence — it can never accumulate past ~0.2s.
+  function sentenceChunks(text, max = 160) {
+    const parts = text.match(/[^.!?…]+[.!?…]+["»']?\s*|[^.!?…]+\s*$/g) || [text];
+    const chunks = [];
+    let cur = "";
+    for (const p of parts) {
+      if (cur && (cur + p).length > max) { chunks.push(cur.trim()); cur = p; }
+      else cur += p;
+    }
+    if (cur.trim()) chunks.push(cur.trim());
+    return chunks;
+  }
   let chain = Promise.resolve();
   function say(text) {
     if (!text || !text.trim()) return chain;
+    for (const piece of sentenceChunks(text)) sayOne(piece);
+    return chain;
+  }
+  function sayOne(text) {
     const synth = (async () => {
       const r = await fetch("/tts", {
         method: "POST", headers: { "content-type": "application/json" },
@@ -152,7 +179,7 @@
         const audioB64 = await synth;
         const bytes = Uint8Array.from(atob(audioB64), (c) => c.charCodeAt(0)).buffer;
         if (gpu && gpuReady) {
-          pendingAudio.push(bytes);                 // played on talk_start
+          pendingAudio.push(bytes);                 // played on the clip's first frame
           gpu.send(JSON.stringify({ type: "speak", audio_b64: audioB64 }));
         } else {
           await playClip(bytes);                    // static-portrait fallback
