@@ -94,8 +94,9 @@ def _recipient_addresses(msg: dict) -> set[str]:
     return out
 
 
-def _message_meet_urls(token: str, msg_id: str) -> tuple[set[str], set[str]]:
-    """Fetch one message: (meet urls in snippet+body, recipient addresses)."""
+def _message_meet_urls(token: str, msg_id: str) -> tuple[set[str], set[str], float]:
+    """Fetch one message: (meet urls in snippet+body, recipient addresses,
+    received-at epoch seconds — 0.0 when Gmail omits internalDate)."""
     r = _client.get(
         f"{GMAIL_API}/messages/{msg_id}",
         params={"format": "full"},
@@ -119,16 +120,24 @@ def _message_meet_urls(token: str, msg_id: str) -> tuple[set[str], set[str]]:
             walk(child)
 
     walk(msg.get("payload") or {})
-    return urls, _recipient_addresses(msg)
+    try:
+        received_at = float(msg.get("internalDate", 0)) / 1000.0
+    except (TypeError, ValueError):
+        received_at = 0.0
+    return urls, _recipient_addresses(msg), received_at
 
 
-def poll_new_invites(token: str, seen_ids: set[str]) -> list[tuple[str, str, set[str]]]:
-    """Return [(message_id, meet_url, recipient_addresses)] for unseen invites.
+def poll_new_invites(
+    token: str, seen_ids: set[str]
+) -> list[tuple[str, str, set[str], float]]:
+    """Return [(message_id, meet_url, recipient_addresses, received_at)] for
+    unseen invites.
 
     Only looks at very recent mail so we react to a live "Add people" invite, not
     stale ones. `seen_ids` is mutated to record everything we've processed. The
     recipient addresses let the caller route a plus-tagged alias (an avatar's
-    email) to its avatar.
+    email) to its avatar; received_at (epoch seconds) lets the caller's seeding
+    pass tell a live invite from stale mail after a restart.
     """
     r = _client.get(
         f"{GMAIL_API}/messages",
@@ -136,16 +145,16 @@ def poll_new_invites(token: str, seen_ids: set[str]) -> list[tuple[str, str, set
         headers={"Authorization": f"Bearer {token}"},
     )
     r.raise_for_status()
-    out: list[tuple[str, str, set[str]]] = []
+    out: list[tuple[str, str, set[str], float]] = []
     for m in r.json().get("messages", []) or []:
         mid = m.get("id")
         if not mid or mid in seen_ids:
             continue
         seen_ids.add(mid)
         try:
-            urls, addrs = _message_meet_urls(token, mid)
+            urls, addrs, received_at = _message_meet_urls(token, mid)
             for url in urls:
-                out.append((mid, url, addrs))
+                out.append((mid, url, addrs, received_at))
         except Exception:
             pass
     return out
