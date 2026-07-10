@@ -81,6 +81,9 @@
       } catch (_) { /* backend unreachable */ }
     }
     if (!streamUrl) { status("no GPU stream configured — static portrait mode"); return; }
+    // multi-volto: dice al GPU server QUALE faccia servire su questa
+    // connessione (un server a volto singolo la ignora — retrocompatibile)
+    streamUrl += (streamUrl.includes("?") ? "&" : "?") + "avatar_id=" + encodeURIComponent(avatarId);
     const ws = new WebSocket(streamUrl);
     ws.binaryType = "blob";
     ws.onopen = () => { gpu = ws; status("GPU stream connected"); };

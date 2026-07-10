@@ -1,0 +1,63 @@
+# Laura photoreal GPU box — Ditto live engine, pesi COTTI DENTRO l'immagine.
+#
+# Perché: i datacenter condivisi vengono rate-limitati da HuggingFace (429,
+# vissuto il 2026-07-09) — un pod che scarica pesi all'avvio è un pod che non
+# parte quando serve. Con l'immagine pronta il boot è: pull -> secondi -> live.
+#
+# Build (una tantum, ~15-20 min, immagine ~12-15GB):
+#   docker build -f gpu/Dockerfile.ditto -t <registry>/laura-ditto:v1 gpu/
+#   docker push <registry>/laura-ditto:v1
+# (registry: Docker Hub privato o GHCR. Poi su Runpod: template con questa
+#  immagine + porta 8080/http — vedi DITTO-LIVE.md)
+#
+# Lezioni dei collaudi 2026-07-09/10 incise qui dentro:
+#   - numpy DEVE restare <2 (mediapipe & co. trascinano numpy2 che rompe torch)
+#   - huggingface_hub pinnato ==0.30.2 (1.x rompe transformers/CLI)
+#   - mediapipe vuole libGLESv2/EGL anche headless
+#   - cuda-python <12 (la 13 ha rimosso l'API legacy `from cuda import cuda`)
+#   - tensorrt pip vuole libcudnn.so.8: la mettiamo in un prefisso dedicato
+#   - il repo Ditto usa np.atan2 (solo numpy2) -> patch ad arctan2
+FROM runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04
+
+# ── system deps (ffmpeg per l'audio, GLES/EGL per mediapipe headless) ──
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ffmpeg git libgl1 libglib2.0-0 libgles2 libegl1 libopengl0 psmisc \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── python deps (ordine e pin contano — vedi lezioni sopra) ──
+RUN pip install --no-cache-dir \
+      librosa tqdm filetype imageio imageio-ffmpeg opencv_python_headless \
+      scikit-image cython "cuda-python<12" colored polygraphy einops mediapipe \
+      "onnxruntime-gpu==1.18.1" "tensorrt==8.6.1" \
+      fastapi "uvicorn[standard]" pillow websockets \
+      "huggingface_hub[cli]==0.30.2" \
+    && pip install --no-cache-dir "numpy==1.26.4"   # SEMPRE per ultimo: ri-pinna
+
+# ── cudnn8 per tensorrt (prefisso dedicato: non tocca la cudnn di torch) ──
+RUN pip install --no-cache-dir --target /opt/cudnn8 nvidia-cudnn-cu11==8.9.6.50
+ENV LD_LIBRARY_PATH=/opt/cudnn8/nvidia/cudnn/lib:$LD_LIBRARY_PATH
+
+# ── repo Ditto + pesi (SOLO cfg + engine TRT Ampere+: il necessario per il live) ──
+WORKDIR /opt/ditto
+RUN git clone --depth 1 https://github.com/antgroup/ditto-talkinghead repo \
+    && sed -i "s/np\.atan2/np.arctan2/g" repo/core/aux_models/mediapipe_landmark478.py
+RUN huggingface-cli download digital-avatar/ditto-talkinghead \
+      --include "ditto_cfg/*" "ditto_trt_Ampere_Plus/*" \
+      --local-dir /opt/ditto/checkpoints \
+    && rm -rf /opt/ditto/checkpoints/.cache
+
+# ── il nostro server + adapter + ritratto ──
+WORKDIR /app
+COPY server.py ditto_adapter.py ./
+COPY assets/ ./assets/
+# Il ritratto di produzione: sovrascrivibile a runtime montando/copiando un
+# file e puntando REFERENCE_IMAGE altrove.
+ENV AVATAR_ENGINE=ditto \
+    REFERENCE_IMAGE=/app/assets/reference.jpg \
+    DITTO_REPO=/opt/ditto/repo \
+    DITTO_CHECKPOINTS=/opt/ditto/checkpoints \
+    STREAM_FPS=25 \
+    JPEG_QUALITY=90 \
+    PORT=8080
+EXPOSE 8080
+CMD ["python3", "server.py"]

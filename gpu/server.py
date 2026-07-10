@@ -6,14 +6,17 @@ as the bot camera. The BRAIN and TTS stay on the App Runner backend — this box
 only does face rendering, so it can be stopped whenever no meeting is running
 (GPU idle = money; same rule as the Recall meter).
 
-Two engines behind one seam (pick with AVATAR_ENGINE=stub|musetalk):
+Three engines behind one seam (pick with AVATAR_ENGINE=stub|musetalk|ditto):
 
   stub      — no GPU needed. Streams the reference portrait with a subtle
               breathing sway. Exists so the ENTIRE pipeline (page, websocket,
               framing, audio sync, meeting mode) is testable on a laptop today.
-  musetalk  — the real thing: MuseTalk (open source, Tencent) lip-syncs the
-              reference face to the audio in near-real-time on the GPU.
-              Install via setup.sh; expect launch-day tuning.
+  musetalk  — MuseTalk (open source, Tencent): lip-sync only, head stays
+              still. Install via setup.sh.
+  ditto     — Ditto (open source, Ant Group; Apache-2.0): lip-sync PLUS head
+              motion and expressions — the chosen production face
+              (owner-approved 2026-07-09). TRT online pipeline, Ampere+ GPU.
+              See Dockerfile.ditto + DITTO-LIVE.md; expect launch-day tuning.
 
 WebSocket protocol (single socket, /stream):
   client -> server:  {"type":"speak","audio_b64":"<mp3 base64>"}
@@ -160,14 +163,64 @@ class MuseTalkEngine:
             yield frame
 
 
-engine = (MuseTalkEngine if ENGINE == "musetalk" else StubEngine)(REFERENCE_IMAGE)
+class DittoEngine:
+    """Real engine #2: Ditto (Ant Group) — lip-sync + head motion/expressions.
+
+    Interface-compatible with StubEngine/MuseTalkEngine. The heavy imports
+    happen in start() so the module loads on any machine. The pipeline keeps
+    ONE StreamSDK alive (avatar registered once at warmup) and serves each
+    speak clip as an async stream of JPEG frames — see ditto_adapter.py.
+    """
+
+    def __init__(self, image_path: str) -> None:
+        self.image_path = image_path
+        self.pipeline = None
+        self._stub = StubEngine(image_path)  # idle frames while not talking
+
+    async def start(self) -> None:
+        # Deferred import: only exists on the GPU box (Dockerfile.ditto).
+        from ditto_adapter import DittoPipeline  # noqa: PLC0415
+
+        self.pipeline = DittoPipeline(self.image_path)
+        await asyncio.to_thread(self.pipeline.warmup, JPEG_QUALITY)
+
+    def next_idle_frame(self) -> bytes:
+        return self._stub.next_idle_frame()
+
+    async def talk_frames(self, audio_mp3: bytes):
+        """Yield Ditto-generated JPEG frames for this audio clip."""
+        async for frame in self.pipeline.stream(audio_mp3, fps=FPS,
+                                                jpeg_quality=JPEG_QUALITY):
+            yield frame
+
+
+_ENGINES = {"musetalk": MuseTalkEngine, "ditto": DittoEngine}
+_ENGINE_CLS = _ENGINES.get(ENGINE, StubEngine)
+
+# Multi-volto: REFERENCE_IMAGES="laura:/x/laura.jpg,cedric:/x/cedric.jpg"
+# crea UN engine per avatar (ognuno col suo volto registrato; ~2.6GB VRAM
+# l'uno con ditto). Senza quella env: un solo engine da REFERENCE_IMAGE,
+# comportamento identico a prima. La connessione /stream sceglie con
+# ?avatar_id=<id>; id sconosciuto o assente -> il primo (default).
+_FACES: dict[str, str] = {}
+for _pair in filter(None, os.environ.get("REFERENCE_IMAGES", "").split(",")):
+    _aid, _, _path = _pair.partition(":")
+    if _aid.strip() and _path.strip():
+        _FACES[_aid.strip()] = _path.strip()
+if not _FACES:
+    _FACES["default"] = REFERENCE_IMAGE
+
+engines: dict[str, object] = {aid: _ENGINE_CLS(path) for aid, path in _FACES.items()}
+engine = next(iter(engines.values()))  # default + retrocompatibilità
 
 
 @app.on_event("startup")
 async def _warmup() -> None:
-    await engine.start()
+    for aid, eng in engines.items():
+        await eng.start()
+        print(f"[gpu-avatar] volto '{aid}' pronto", flush=True)
     asyncio.create_task(_idle_watchdog())
-    print(f"[gpu-avatar] engine={ENGINE} fps={FPS} ref={REFERENCE_IMAGE} "
+    print(f"[gpu-avatar] engine={ENGINE} fps={FPS} faces={list(engines)} "
           f"idle_shutdown={IDLE_SHUTDOWN_MINUTES}min", flush=True)
 
 
@@ -206,9 +259,13 @@ def metrics() -> JSONResponse:
 async def stream(ws: WebSocket) -> None:
     global CLIENTS, IDLE_SINCE
     await ws.accept()
+    # multi-volto: la pagina passa ?avatar_id=; id ignoto -> engine di default
+    aid = ws.query_params.get("avatar_id", "")
+    eng = engines.get(aid, engine)
     CLIENTS += 1
     IDLE_SINCE = None
-    await ws.send_text(json.dumps({"type": "hello", "mode": ENGINE, "fps": FPS}))
+    await ws.send_text(json.dumps({"type": "hello", "mode": ENGINE, "fps": FPS,
+                                   "face": aid if aid in engines else next(iter(engines))}))
     speak_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
     async def reader() -> None:
@@ -230,7 +287,7 @@ async def stream(ws: WebSocket) -> None:
                 t_speak = time.perf_counter()
                 await ws.send_text(json.dumps({"type": "talk_start"}))
                 first_frame = True
-                async for frame in engine.talk_frames(audio):
+                async for frame in eng.talk_frames(audio):
                     t0 = time.perf_counter()
                     await ws.send_bytes(frame)
                     _note_frame()
@@ -243,7 +300,7 @@ async def stream(ws: WebSocket) -> None:
                         await asyncio.sleep(delay)
                 await ws.send_text(json.dumps({"type": "talk_end"}))
             else:
-                await ws.send_bytes(engine.next_idle_frame())
+                await ws.send_bytes(eng.next_idle_frame())
                 _note_frame()
                 await asyncio.sleep(frame_interval)
     except (WebSocketDisconnect, RuntimeError):
