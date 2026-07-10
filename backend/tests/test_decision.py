@@ -113,6 +113,41 @@ def test_italian_closing_detected():
         assert detect_closing(line), line
 
 
+# ── action-capture continuation guard (main.py's 4s same-speaker window) ──
+# The window exists for real ASR splits; a follow-up that opens like a NEW
+# sentence (acknowledgement marker / wrap-up line) must not read as one.
+
+
+def test_capture_continuation_true_for_real_asr_splits():
+    from app.decision import is_capture_continuation
+    for text in (
+        "to the whole team by Friday",
+        "entro venerdì a Marco",
+        "and cc the finance team",
+        "il recap della riunione di oggi",
+    ):
+        assert is_capture_continuation(text), text
+
+
+def test_capture_continuation_false_for_new_sentences():
+    from app.decision import is_capture_continuation
+    for text in (
+        "perfetto, direi che abbiamo finito il test",  # live repro 2026-07-10
+        "ok so let's move on to the next topic",
+        "great, thanks everyone",
+        "grazie mille",
+        "va bene, passiamo oltre",
+        "anything else before we wrap up?",  # closing without an opener marker
+    ):
+        assert not is_capture_continuation(text), text
+
+
+def test_capture_continuation_blank_is_not_a_continuation():
+    from app.decision import is_capture_continuation
+    assert not is_capture_continuation("")
+    assert not is_capture_continuation("   ")
+
+
 def test_italian_reported_speech_does_not_wake():
     from app.avatars import Avatar
     from app.decision import detect_wake

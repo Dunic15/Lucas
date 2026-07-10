@@ -860,6 +860,13 @@ with Marco", "post it to Slack", "email Priya") — even when no owner or deadli
 was stated (use "UNASSIGNED"/"" and gap_type accordingly). Do not drop an action \
 just because it was said casually.
 
+If the prompt lists actions ALREADY CAPTURED LIVE during the meeting, those are \
+already queued for execution: do NOT put them (or any semantically equivalent \
+restatement) into actions[]. Equivalence is by MEANING, not wording — a \
+translation counts (an Italian live capture and its English restatement are the \
+SAME action; re-listing it would execute it twice). Only add actions that are \
+genuinely new relative to that list.
+
 Return ONLY a JSON object:
 {
   "summary": "<3-5 sentence plain summary of what was discussed and decided>",
@@ -873,6 +880,100 @@ Return ONLY a JSON object:
     "body": "<short professional email body summarizing decisions and next steps>"
   }
 }"""
+
+
+def _live_actions_block(live_actions: list[dict] | None) -> str:
+    """The 'already captured live' section of the post-meeting prompt.
+
+    One line per queue_action capture (action + any owner/due), under a header
+    that repeats the do-not-re-extract rule next to the data it applies to.
+    "" when there were no live captures — the prompt is unchanged for the
+    common no-capture meeting.
+    """
+    lines = []
+    for a in live_actions or []:
+        text = (a.get("action") or "").strip()
+        if not text:
+            continue
+        owner = (a.get("owner") or "").strip()
+        due = (a.get("due") or "").strip()
+        suffix = (f" (owner: {owner})" if owner else "") + (
+            f" (due: {due})" if due else ""
+        )
+        lines.append(f"- {text}{suffix}")
+    if not lines:
+        return ""
+    return (
+        "Actions ALREADY CAPTURED LIVE during the meeting (each already has an "
+        "approval card — do NOT re-extract these, nor any rephrasing or "
+        "translation of them; only genuinely new actions belong in actions[]):\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
+
+
+# Safety net behind the prompt-level prevention above: the summarizer is a
+# model, so "do not re-extract" is obeyed almost always, not always. The merge
+# in main._merge_action_items catches same-language rephrases by content-word
+# overlap, but an Italian live capture and its English re-extraction share no
+# words — that gap produced a real double execution (two approval cards → two
+# calendar events for one spoken request). This ONE cheap completion closes it.
+ACTION_DEDUP_SYSTEM = """You compare two lists of action items from the same \
+meeting: LIVE actions (captured in the room, already queued for execution) and \
+EXTRACTED actions (from a post-meeting summary). Identify every EXTRACTED \
+action that is the SAME real-world request as one of the LIVE actions — same \
+task and same target — even when it is worded differently or written in a \
+DIFFERENT LANGUAGE (e.g. an Italian live capture restated in English). \
+Executing both entries of a matched pair would do the task twice, so match on \
+meaning, not wording. Be conservative: if two items could plausibly be two \
+distinct tasks, do not match them.
+
+Return ONLY a JSON object:
+{"duplicates": [{"extracted": <index into EXTRACTED>, "live": <index into LIVE>}]}
+Return {"duplicates": []} when nothing matches."""
+
+
+def semantic_action_duplicates(
+    live: list[str], extracted: list[str]
+) -> list[tuple[int, int]]:
+    """(extracted_idx, live_idx) pairs where a summarizer-extracted action is
+    semantically the same request as a live capture — cross-language included.
+
+    Called by the finalize merge only for the extracted actions that survived
+    the word-overlap dedup, and only when live captures exist — so in the
+    common case (no live captures, or the summarizer obeyed the prompt-level
+    prevention) it costs nothing or one small completion, always OFF the live
+    path. Fails OPEN: stub mode, a model error, or junk output returns [] —
+    a missed dedup is a reviewable duplicate card, a false merge would silently
+    drop a real action.
+    """
+    if not live or not extracted or post_provider() == "stub":
+        return []
+    live_lines = "\n".join(f"{i}. {t}" for i, t in enumerate(live))
+    extracted_lines = "\n".join(f"{i}. {t}" for i, t in enumerate(extracted))
+    try:
+        raw = llm.complete(
+            ACTION_DEDUP_SYSTEM,
+            (
+                f"LIVE actions:\n{live_lines}\n\n"
+                f"EXTRACTED actions:\n{extracted_lines}\n\n"
+                "Respond with the JSON object only."
+            ),
+            max_tokens=400,
+            provider=post_provider(),
+        )
+        duplicates = _parse_json(raw).get("duplicates") or []
+    except Exception:  # noqa: BLE001 — fail open, never break finalize
+        return []
+    pairs: list[tuple[int, int]] = []
+    for d in duplicates:
+        try:
+            xi, li = int(d["extracted"]), int(d["live"])
+        except (TypeError, KeyError, ValueError):
+            continue  # junk entry from the model: skip it, keep the rest
+        if 0 <= xi < len(extracted) and 0 <= li < len(live):
+            pairs.append((xi, li))
+    return pairs
 
 
 PROACTIVE_SYSTEM = """{persona}
@@ -973,7 +1074,12 @@ def _stub_proactive(chunks: list[Retrieved], transcript_text: str) -> dict:
 
 
 def post_meeting(
-    avatar: Avatar, transcript_text: str, *, k: int = 6, context: str = ""
+    avatar: Avatar,
+    transcript_text: str,
+    *,
+    k: int = 6,
+    context: str = "",
+    live_actions: list[dict] | None = None,
 ) -> dict:
     """Full post-meeting artifact: summary, decisions, actions, missing process
     steps, readiness score, risks, and a draft follow-up email.
@@ -984,6 +1090,14 @@ def post_meeting(
     the model returns none. `context` is an optional pre-meeting brief (the
     orchestrator's agenda/participants/open items) so the summary understands
     what the meeting was FOR.
+
+    `live_actions` are the session's queue_action captures (action/owner/due
+    dicts). They are shown to the model with an explicit do-not-re-extract
+    instruction — dedup PREVENTION at the source. Without it the summarizer
+    re-extracts a live capture in ITS OWN words (often translating an Italian
+    ask into English), the downstream word-overlap dedup can't bridge the
+    language gap, and one spoken request becomes two approval cards → double
+    execution. Finalize-only: this never touches the live path.
     """
     state = meeting_state.build_from_text(avatar, transcript_text)
 
@@ -999,10 +1113,12 @@ def post_meeting(
             if context.strip()
             else ""
         )
+        live_block = _live_actions_block(live_actions)
         raw = llm.complete(
             POSTMEETING_SYSTEM,
             (
                 f"{brief_block}"
+                f"{live_block}"
                 f"Relevant company process context:\n\n{_format_context(chunks)}\n\n"
                 f"Structured meeting state (tracked during the meeting):\n"
                 f"{meeting_state.state_summary(state)}\n\n"

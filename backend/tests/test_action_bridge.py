@@ -442,6 +442,58 @@ def test_live_route_capture_continuation_extends_item(
     assert body3.get("capture_extended") is None
 
 
+def test_live_route_capture_window_rejects_closing_followup(
+    client, recall_stubbed, spoken, monkeypatch
+):
+    """Live repro 2026-07-10: action captured, then 3s later the SAME speaker
+    says the wrap-up line — inside the 4s continuation window. That is a NEW
+    sentence, not an ASR split of the ask, and must NOT be glued onto the
+    action card."""
+    monkeypatch.setattr(cedric_callback, "send_action_requested", lambda *a: True)
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+
+    _post_final(
+        client,
+        bot_id,
+        "Ben",
+        "Cedric, manda un messaggio di prova a Ben su Slack"
+        " per confermare che il flusso funziona",
+    )
+    session = store.get(bot_id)
+    assert len(session.queued_actions) == 1
+    captured = session.queued_actions[0]["action"]
+    # The real speak path marks the spoken ack (cooldown); the fake-speak
+    # fixture doesn't, so mirror it — this is exactly the live repro's state
+    # (her confirmation 3s earlier keeps the proactive wrap-up gate closed).
+    session.mark_spoke()
+
+    body2 = _post_final(
+        client, bot_id, "Ben", "perfetto, direi che abbiamo finito il test"
+    )
+    assert body2.get("capture_extended") is None
+    assert session.queued_actions[0]["action"] == captured  # card stays clean
+    assert session.last_capture is None  # window closed for later finals too
+
+
+def test_live_route_capture_window_rejects_acknowledgement_followup(
+    client, recall_stubbed, spoken, monkeypatch
+):
+    """A same-speaker acknowledgement opener ("ok great, thanks") inside the
+    window is a new thought even when it doesn't sound like a meeting close —
+    the opener alone must keep it off the card."""
+    monkeypatch.setattr(cedric_callback, "send_action_requested", lambda *a: True)
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+
+    _post_final(client, bot_id, "Ben", "Cedric, please send the recap to the team")
+    session = store.get(bot_id)
+    captured = session.queued_actions[0]["action"]
+    session.mark_spoke()  # see the closing-followup test above
+
+    body2 = _post_final(client, bot_id, "Ben", "ok great, thanks")
+    assert body2.get("capture_extended") is None
+    assert session.queued_actions[0]["action"] == captured
+
+
 def test_live_route_content_question_is_not_captured(
     client, recall_stubbed, spoken, monkeypatch
 ):

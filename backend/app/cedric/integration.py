@@ -137,7 +137,8 @@ def default_integration() -> Optional[dict]:
     downstream consumer (deliver_ended, handle_webhook_status, inject_brief,
     the callback senders) works unchanged. ``external_ref`` / ``brief`` /
     ``meeting`` start empty because there is no request to carry them; the fresh
-    brief is pulled at join via ``handle_webhook_status`` -> ``fetch_context``
+    brief is pulled at join via ``maybe_refresh_context`` -> ``fetch_context``
+    (triggered by the first "live" status OR the first transcript webhook)
     when context_url is set."""
     callback = settings.surface_webhook_url
     context_url = settings.surface_context_url
@@ -270,17 +271,52 @@ async def handle_webhook_status(session: Any, bot_id: str, status_code: str) -> 
                 status_code,
             )
         )
-    if mapped == "live" and not session.integration.get("context_refreshed"):
-        integration = dict(session.integration)
-        integration["context_refreshed"] = True
-        session.integration = integration  # persist: refresh runs once
-        fresh = await run_in_threadpool(callback.fetch_context, integration)
-        if fresh and isinstance(fresh.get("brief_markdown"), str):
-            integration = dict(integration)
-            integration["brief"] = fresh["brief_markdown"]
-            if isinstance(fresh.get("meeting"), dict):
-                integration["meeting"] = fresh["meeting"]
-            session.integration = integration
+    if mapped == "live":
+        maybe_refresh_context(session)
+
+
+def maybe_refresh_context(session: Any) -> bool:
+    """One-shot pre-meeting context pull (Cedric -> Laura), shared by BOTH
+    triggers:
+
+      - ``handle_webhook_status`` when a Recall status maps to "live" — the
+        original trigger, which production (2026-07-10) shows often never
+        fires: the realtime webhook delivers no bot-status events at all
+        (every finalize that day was source=reconcile), so the avatar sat in
+        meetings without Cedric's brief; and
+      - the FIRST transcript webhook of the session (``main.py``, partial or
+        final) — the fallback: a transcript is proof the bot is in the call.
+
+    Fire-and-forget and OFF the live path: this function only does dict
+    checks; the GET runs in the threadpool inside a task. ``context_refreshed``
+    is flipped (and persisted) BEFORE the task launches so the refresh runs
+    once per session — and since there is no await between check and flip,
+    racing partial/final webhooks on the same event loop cannot double-launch.
+    Returns True when a refresh task was launched."""
+    if session is None or not session.integration:
+        return False  # not an orchestrated session
+    integration = session.integration
+    if not integration.get("context_url") or integration.get("context_refreshed"):
+        return False
+    integration = dict(integration)
+    integration["context_refreshed"] = True
+    session.integration = integration  # persist first: refresh runs once
+    asyncio.create_task(_refresh_context(session, integration))
+    return True
+
+
+async def _refresh_context(session: Any, integration: dict) -> None:
+    """The refresh body behind ``maybe_refresh_context``: GET the fresh
+    context off the event loop and fold it into the session. Best-effort —
+    ``fetch_context`` swallows transport errors (returns None) and a
+    malformed payload just keeps the booking-time brief."""
+    fresh = await run_in_threadpool(callback.fetch_context, integration)
+    if fresh and isinstance(fresh.get("brief_markdown"), str):
+        integration = dict(integration)
+        integration["brief"] = fresh["brief_markdown"]
+        if isinstance(fresh.get("meeting"), dict):
+            integration["meeting"] = fresh["meeting"]
+        session.integration = integration
 
 
 def inject_brief(session: Any, memory: str) -> str:

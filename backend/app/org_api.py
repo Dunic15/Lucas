@@ -11,6 +11,8 @@ thin wrappers over ledger.py, which remains the single source of truth.
 """
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
@@ -94,16 +96,39 @@ async def org_resolve(ref: str, request: Request) -> JSONResponse:
     ``ref`` is either the numeric ledger row id (as before) OR the stable
     string ``action_id`` the orchestrator carries from action.requested /
     session.ended — the natural key for Cedric's ack loop, since it never sees
-    the numeric row id."""
+    the numeric row id.
+
+    OPTIONAL JSON body (agreed contract — orchestrator side implements in
+    parallel): {"outcome": "done"|"rejected"|"failed", "detail": "<=300 chars"}.
+    Absent/empty body means "done", so today's body-less callers keep working
+    identically. All three outcomes are terminal; the response echoes the
+    status actually applied."""
     if err := cedric.auth_error(request):
         return err
-    if ref.isdigit():
-        ok = await run_in_threadpool(ledger.resolve_item, int(ref))
+    raw = await request.body()
+    if raw.strip():
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if body is not None and not isinstance(body, dict):
+            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
     else:
-        ok = await run_in_threadpool(ledger.resolve_by_action_id, ref)
+        body = None  # no body at all — the pre-contract client shape
+    outcome = str((body or {}).get("outcome") or "done").strip().lower()
+    if outcome not in ledger.RESOLUTION_OUTCOMES:
+        return JSONResponse(
+            {"error": f"outcome must be one of {list(ledger.RESOLUTION_OUTCOMES)}"},
+            status_code=400,
+        )
+    detail = str((body or {}).get("detail") or "").strip()[:300]
+    if ref.isdigit():
+        ok = await run_in_threadpool(ledger.resolve_item, int(ref), "", outcome, detail)
+    else:
+        ok = await run_in_threadpool(ledger.resolve_by_action_id, ref, "", outcome, detail)
     if not ok:
         return JSONResponse({"error": "unknown or already resolved item"}, status_code=404)
-    return JSONResponse({"resolved": True, "id": ref})
+    return JSONResponse({"resolved": True, "id": ref, "status": outcome})
 
 
 @router.post("/actions/{action_id}/status")

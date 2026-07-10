@@ -72,12 +72,13 @@ def _init_db() -> None:
                 owner TEXT NOT NULL DEFAULT '',
                 deadline TEXT NOT NULL DEFAULT '',
                 meeting_type TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'open',   -- open | done | noted
+                status TEXT NOT NULL DEFAULT 'open',   -- open | done | rejected | failed | noted
                 bot_id TEXT NOT NULL DEFAULT '',
                 action_id TEXT NOT NULL DEFAULT '',    -- stable cross-channel id (actions)
                 created_at REAL NOT NULL,
                 resolved_at REAL,
-                resolved_by_bot_id TEXT NOT NULL DEFAULT ''
+                resolved_by_bot_id TEXT NOT NULL DEFAULT '',
+                resolution_detail TEXT NOT NULL DEFAULT ''  -- distilled outcome one-liner
             );
             CREATE INDEX IF NOT EXISTS idx_ledger_key_status
                 ON ledger_items(meeting_key, status);
@@ -101,6 +102,18 @@ def _init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_ledger_action_id "
             "ON ledger_items(action_id)"
         )
+        # Additive migration (same pattern as action_id above) for stores that
+        # predate the resolution_detail column: the short "why" recorded when a
+        # resolve carries an outcome ("rejected: budget cut"). Idempotent — on
+        # an already-migrated DB the ALTER raises "duplicate column" and we
+        # move on.
+        try:
+            conn.execute(
+                "ALTER TABLE ledger_items "
+                "ADD COLUMN resolution_detail TEXT NOT NULL DEFAULT ''"
+            )
+        except sqlite3.OperationalError:
+            pass  # column already exists
         # Execution provenance reported back by the orchestrator (Cedric) via
         # POST /org/actions/{action_id}/status: the brain's side of the story
         # (proposed → approved/rejected → done/failed), keyed on the same
@@ -247,30 +260,49 @@ def search(query: str, *, limit: int = 20) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def resolve_item(item_id: int, bot_id: str = "") -> bool:
+# Terminal outcomes a resolve may carry (agreed contract with the orchestrator
+# side): all three CLOSE the item — "rejected" and "failed" are as final as
+# "done", so a declined or errored action stops resurfacing as open forever.
+RESOLUTION_OUTCOMES = ("done", "rejected", "failed")
+
+
+def resolve_item(
+    item_id: int, bot_id: str = "", outcome: str = "done", detail: str = ""
+) -> bool:
+    """Close a ledger item with a terminal outcome (default 'done', keeping
+    every existing caller's behavior byte-identical). ``detail`` is a distilled
+    one-liner (capped, never transcript content by contract). An unknown
+    outcome is a no-op (False) — callers validate first for their 400s."""
+    if outcome not in RESOLUTION_OUTCOMES:
+        return False
     with store._LOCK, store._connect() as conn:
         cur = conn.execute(
-            """UPDATE ledger_items SET status='done', resolved_at=?, resolved_by_bot_id=?
+            """UPDATE ledger_items
+               SET status=?, resolved_at=?, resolved_by_bot_id=?, resolution_detail=?
                WHERE id=? AND status='open'""",
-            (time.time(), bot_id, item_id),
+            (outcome, time.time(), bot_id, (detail or "").strip()[:300], item_id),
         )
         return cur.rowcount > 0
 
 
-def resolve_by_action_id(action_id: str, bot_id: str = "") -> bool:
+def resolve_by_action_id(
+    action_id: str, bot_id: str = "", outcome: str = "done", detail: str = ""
+) -> bool:
     """Close an action by its stable cross-channel action_id — the id the
     orchestrator (Cedric) holds from the live action.requested event and the
     session.ended artifact, so it can ack 'done/approved in Slack' without ever
     seeing the numeric ledger row id. Only resolves after the meeting finalized
-    (when the row exists); an unknown/already-closed id is a no-op (False)."""
+    (when the row exists); an unknown/already-closed id or outcome is a no-op
+    (False). ``outcome``/``detail`` semantics match resolve_item."""
     aid = (action_id or "").strip()
-    if not aid:
+    if not aid or outcome not in RESOLUTION_OUTCOMES:
         return False
     with store._LOCK, store._connect() as conn:
         cur = conn.execute(
-            """UPDATE ledger_items SET status='done', resolved_at=?, resolved_by_bot_id=?
+            """UPDATE ledger_items
+               SET status=?, resolved_at=?, resolved_by_bot_id=?, resolution_detail=?
                WHERE action_id=? AND status='open'""",
-            (time.time(), bot_id, aid),
+            (outcome, time.time(), bot_id, (detail or "").strip()[:300], aid),
         )
         return cur.rowcount > 0
 
@@ -280,13 +312,22 @@ def resolve_by_action_id(action_id: str, bot_id: str = "") -> bool:
 EXECUTION_STATUSES = ("proposed", "approved", "rejected", "done", "failed")
 
 
+# Terminal execution statuses close the ledger item with the matching resolve
+# outcome — one weld point so the provenance channel (/status, what Cedric's
+# own loop reports) and the closure channel (/resolve) can never disagree.
+# 'proposed'/'approved' are in-flight and must NOT close anything.
+_TERMINAL_STATUS_OUTCOME = {"done": "done", "rejected": "rejected", "failed": "failed"}
+
+
 def set_action_status(action_id: str, status: str, detail: str = "") -> bool:
     """Record the orchestrator-reported execution state of an action (upsert,
-    latest wins). A terminal 'done' also closes the ledger item — same effect
-    as the resolve endpoint — so the two reporting paths can't disagree.
-    Unknown status or empty id is a no-op (False). ``detail`` is a distilled
-    one-liner (card link, error class); it is capped, and it is never
-    transcript content by contract."""
+    latest wins). Terminal statuses (done/rejected/failed) also close the
+    ledger item with the matching outcome — same effect as the resolve
+    endpoint — so the two reporting paths can't disagree (live gap 2026-07-10:
+    Cedric's status loop reported 'rejected' but the ledger row stayed open
+    forever). Unknown status or empty id is a no-op (False). ``detail`` is a
+    distilled one-liner (card link, error class); it is capped, and it is
+    never transcript content by contract."""
     aid = (action_id or "").strip()
     st = (status or "").strip().lower()
     if not aid or st not in EXECUTION_STATUSES:
@@ -300,8 +341,9 @@ def set_action_status(action_id: str, status: str, detail: str = "") -> bool:
                  updated_at=excluded.updated_at""",
             (aid, st, (detail or "").strip()[:300], time.time()),
         )
-    if st == "done":
-        resolve_by_action_id(aid)
+    outcome = _TERMINAL_STATUS_OUTCOME.get(st)
+    if outcome:
+        resolve_by_action_id(aid, "", outcome, (detail or "").strip()[:300])
     return True
 
 

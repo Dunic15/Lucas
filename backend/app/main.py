@@ -72,6 +72,7 @@ from .brain import (
     post_meeting,
     proactive_flag,
     effective_provider,
+    semantic_action_duplicates,
 )
 from .config import settings
 from .decision import (
@@ -80,6 +81,7 @@ from .decision import (
     detect_closing,
     detect_leave_command,
     detect_stop_command,
+    is_capture_continuation,
     plausible_leave_followup,
 )
 from .rag import ensure_about_index, ensure_index, warm as warm_index
@@ -1218,7 +1220,10 @@ def _merge_action_items(queued: list, extracted: list) -> list:
     the id assigned at capture time (the same one already sent on its
     action.requested webhook), and a summarizer-only action — which never fired
     a live event — gets a fresh id here. The id is what the orchestrator dedupes
-    and resolves on."""
+    and resolves on.
+
+    May make ONE model call (the cross-language net below) — finalize-only;
+    callers on the event loop must run it in a threadpool."""
     merged: list = []
     seen: set[str] = set()
     for q in queued or []:
@@ -1239,6 +1244,7 @@ def _merge_action_items(queued: list, extracted: list) -> list:
             }
         )
     live_items = list(merged)  # everything so far is a live capture
+    extras: list[dict] = []  # summarizer actions that survived the overlap dedup
     for a in extracted or []:
         text = a.get("item", "") if isinstance(a, dict) else str(a)
         key = _norm_action_text(text)
@@ -1251,19 +1257,47 @@ def _merge_action_items(queued: list, extracted: list) -> list:
         # structured owner/deadline where the live capture had none. (#84 dedup.)
         dup = next((m for m in live_items if _same_action(text, m["item"])), None)
         if dup is not None:
-            if isinstance(a, dict):
-                if not dup.get("deadline") and a.get("deadline"):
-                    dup["deadline"] = a["deadline"]
-                ow = (a.get("owner") or "").strip()
-                if dup.get("owner") in ("", "UNASSIGNED") and ow and ow != "UNASSIGNED":
-                    dup["owner"], dup["gap_type"] = ow, "none"
+            _fold_into_live(dup, a)
             continue
         if key:
             seen.add(key)
         a = dict(a) if isinstance(a, dict) else {"item": text}
         a.setdefault("action_id", ledger.new_action_id())
         merged.append(a)
+        extras.append(a)
+    # Cross-language net: word overlap can't see that the summarizer restated an
+    # Italian live capture in English ("schedula un meeting di prova con Ben…" →
+    # "Schedule a test meeting with Ben…"), and that slip shipped TWO approval
+    # cards → double execution. The prompt-level prevention in brain.post_meeting
+    # stops most of it at the source; this one cheap model call (stub: no-op;
+    # failure: keeps both) catches whatever still got through. Same fold-and-drop
+    # semantics as the overlap path: the live entry — whose action_id already
+    # went out on action.requested — always wins.
+    if live_items and extras:
+        drop: set[int] = set()
+        for xi, li in semantic_action_duplicates(
+            [m["item"] for m in live_items],
+            [(x.get("item") or "") for x in extras],
+        ):
+            if id(extras[xi]) in drop:
+                continue  # model repeated an extracted index: first match wins
+            _fold_into_live(live_items[li], extras[xi])
+            drop.add(id(extras[xi]))
+        if drop:
+            merged = [m for m in merged if id(m) not in drop]
     return merged
+
+
+def _fold_into_live(live: dict, extracted: object) -> None:
+    """Absorb the summarizer's structured owner/deadline into the winning live
+    capture (which often has neither — the room just spoke the ask)."""
+    if not isinstance(extracted, dict):
+        return
+    if not live.get("deadline") and extracted.get("deadline"):
+        live["deadline"] = extracted["deadline"]
+    ow = (extracted.get("owner") or "").strip()
+    if live.get("owner") in ("", "UNASSIGNED") and ow and ow != "UNASSIGNED":
+        live["owner"], live["gap_type"] = ow, "none"
 
 
 async def _finalize_session(
@@ -1329,6 +1363,11 @@ async def _finalize_session_locked(
         "follow_up_email": {},
     }
     integration = dict(session.integration) if session.integration else None  # CEDRIC
+    # Live-captured action requests (tools.queue_action) — read once, used twice:
+    # shown to the summarizer as "already captured, do not re-extract" (dedup
+    # prevention at the source, cross-language included) and then merged into
+    # the artifact's actions[] below.
+    queued_actions = list(getattr(session, "queued_actions", None) or [])
     if transcript_text.strip():
         avatar = avatars.load(session.avatar_id)
         artifact = await run_in_threadpool(
@@ -1336,19 +1375,21 @@ async def _finalize_session_locked(
                 avatar,
                 transcript_text,
                 context=(integration or {}).get("brief", ""),  # CEDRIC: brief-grounded summary
+                live_actions=queued_actions,
             )
         )
 
-    # Live-captured action requests (tools.queue_action): fold them into the
-    # artifact's actions[] ahead of the summarizer's extraction, deduped on
-    # normalized item text. Runs BEFORE save_artifact and ledger.record_meeting
-    # so every consumer — stored artifact, wire artifact, ledger, autopilot —
-    # sees the same merged list. Plain non-orchestrated sessions benefit too.
-    # Always run the merge (even with no live captures) so EVERY action carries
-    # a stable action_id — the summarizer-only actions get one here too.
-    queued_actions = list(getattr(session, "queued_actions", None) or [])
-    artifact["actions"] = _merge_action_items(
-        queued_actions, artifact.get("actions") or []
+    # Fold the live captures into the artifact's actions[] ahead of the
+    # summarizer's extraction, deduped on normalized item text. Runs BEFORE
+    # save_artifact and ledger.record_meeting so every consumer — stored
+    # artifact, wire artifact, ledger, autopilot — sees the same merged list.
+    # Plain non-orchestrated sessions benefit too. Always run the merge (even
+    # with no live captures) so EVERY action carries a stable action_id — the
+    # summarizer-only actions get one here too. Threadpool because the merge's
+    # cross-language net may make one model call: finalize is off the live path,
+    # but the event loop (other meetings' live turns) must never wait on it.
+    artifact["actions"] = await run_in_threadpool(
+        _merge_action_items, queued_actions, artifact.get("actions") or []
     )
     artifact["checklist"] = artifact["actions"]  # legacy alias, same list
 
@@ -2423,6 +2464,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
         session = store.get(bot_id)
         if session is None:
             return JSONResponse({"ok": True, "note": "no session"})
+        # CEDRIC: fallback context pull — production (2026-07-10) shows the
+        # realtime webhook often carries NO bot-status events (every finalize
+        # arrived via reconcile), so handle_webhook_status's "live" trigger
+        # never fires and the avatar sits in the meeting without Cedric's
+        # brief. The first transcript IS proof the bot is in the call: launch
+        # the same one-shot refresh here. Flag-guarded (runs once per session),
+        # sync dict checks + create_task only — zero latency on the live path.
+        cedric.maybe_refresh_context(session)
         words = data.get("words", [])
         text = " ".join(w.get("text", "") for w in words).strip()
         participant = data.get("participant") or {}
@@ -2579,6 +2628,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if session is None:
         return JSONResponse({"ok": True, "note": "no session"})
 
+    # CEDRIC: fallback context pull — see the partial path above. Finals cover
+    # the (rare) delivery where the session's very first webhook is a final.
+    cedric.maybe_refresh_context(session)
+
     words = data.get("words", [])
     text = " ".join(w.get("text", "") for w in words).strip()
     participant = data.get("participant") or {}
@@ -2667,11 +2720,21 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # ── action-capture continuation ──
     # A same-speaker follow-up right after a captured action (and NOT a new
     # wake) extends the captured item's text, so the artifact/ledger get the
-    # whole ask even when ASR split it across finals. Short window only.
+    # whole ask even when ASR split it across finals. Short window only, and
+    # only when the follow-up actually READS as a continuation: a new sentence
+    # said inside the window ("perfetto, direi che abbiamo finito il test" 3s
+    # after the capture — live repro 2026-07-10) must not be glued onto the
+    # card. A real ASR split picks up mid-phrase; is_capture_continuation
+    # (decision.py) rejects acknowledgement openers and wrap-up lines.
     pending = getattr(session, "last_capture", None)
     if pending is not None:
         p_item, p_speaker, p_ts = pending
-        if not called and speaker == p_speaker and time.time() - p_ts < 4.0:
+        if (
+            not called
+            and speaker == p_speaker
+            and time.time() - p_ts < 4.0
+            and is_capture_continuation(text)
+        ):
             p_item["action"] = " ".join((p_item["action"] + " " + text).split())[:300]
             session.last_capture = (p_item, p_speaker, time.time())
             return JSONResponse({"ok": True, "spoke": False, "capture_extended": True})

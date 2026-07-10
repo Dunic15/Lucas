@@ -79,17 +79,52 @@ def test_init_db_migrates_pre_action_id_ledger():
     with store._LOCK, store._connect() as conn:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(ledger_items)").fetchall()]
         assert "action_id" in cols  # column added by the migration
+        assert "resolution_detail" in cols  # outcome-detail migration too
         legacy = conn.execute(
-            "SELECT action_id FROM ledger_items WHERE item='legacy item'"
+            "SELECT action_id, resolution_detail FROM ledger_items WHERE item='legacy item'"
         ).fetchone()
-        assert legacy[0] == ""  # pre-existing row survives with an empty id
+        assert legacy[0] == "" and legacy[1] == ""  # pre-existing row survives
 
-    # …and the full path works after migrating: record + resolve by action_id.
+    # …and the full path works after migrating: record + resolve by action_id
+    # (the UPDATE now touches resolution_detail, so this would raise if the
+    # migration hadn't added the column).
     ledger.record_meeting(
         MEET, "cedric", "bot_mig",
         {"actions": [{"item": "Do X", "owner": "Ben", "action_id": "mig_1"}]},
     )
     assert ledger.resolve_by_action_id("mig_1") is True
+
+
+def test_resolve_outcomes_terminal_and_detail():
+    """rejected/failed close an item exactly like done — terminal, never
+    reopenable — and the distilled detail lands in resolution_detail."""
+    url = "https://meet.google.com/out-comes-ts1"
+    ledger.record_meeting(
+        url, "laura", "bot-1",
+        _artifact(missing=[], actions=[
+            {"item": "Ship it", "owner": "", "deadline": ""},
+            {"item": "Book venue", "owner": "", "deadline": ""},
+        ]),
+    )
+    key = ledger.meeting_key(url)
+    a, b = ledger.items(key, status="open")
+
+    # unknown outcome on an OPEN item is a defensive no-op, never a write
+    assert ledger.resolve_item(a["id"], "slack", "exploded") is False
+    assert ledger.items(key, status="open")[0]["id"] == a["id"]
+
+    assert ledger.resolve_item(a["id"], "slack", "rejected", "budget cut") is True
+    assert ledger.resolve_item(b["id"], "slack", "failed", "tool errored") is True
+    assert ledger.items(key, status="open") == []
+    by_id = {i["id"]: i for i in ledger.items(key)}
+    assert by_id[a["id"]]["status"] == "rejected"
+    assert by_id[a["id"]]["resolution_detail"] == "budget cut"
+    assert by_id[b["id"]]["status"] == "failed"
+    assert by_id[b["id"]]["resolution_detail"] == "tool errored"
+    # terminal: no further resolve, with any outcome
+    assert ledger.resolve_item(a["id"], "slack") is False
+    assert ledger.resolve_item(a["id"], "slack", "done") is False
+    assert ledger.resolve_item(b["id"], "slack", "rejected") is False
 
 
 def test_record_and_carryover_and_resolution():
