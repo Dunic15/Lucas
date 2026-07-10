@@ -19,7 +19,6 @@
     font-family:var(--font);-webkit-font-smoothing:antialiased;
     display:flex;flex-direction:column;
   }
-  /* ambient gradient field */
   .field{position:fixed;inset:0;pointer-events:none;overflow:hidden;}
   .field::before{content:"";position:absolute;width:900px;height:900px;left:50%;top:-30%;
     transform:translateX(-50%);border-radius:50%;filter:blur(120px);opacity:.16;
@@ -38,15 +37,27 @@
   main{position:relative;z-index:2;flex:1;display:grid;place-items:center;
     padding:24px clamp(22px,5vw,52px) 60px;}
   .card{width:100%;max-width:420px;text-align:center;}
-  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.32em;
-    text-transform:uppercase;color:var(--faint);margin:0 0 22px;}
+  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.26em;
+    text-transform:uppercase;color:var(--faint);margin:0 0 22px;
+    display:inline-flex;align-items:center;gap:8px;}
+  .eyebrow .pip{width:6px;height:6px;border-radius:50%;background:var(--g2);
+    box-shadow:0 0 10px var(--g2);}
   h1{font-weight:600;font-size:clamp(2rem,6vw,2.7rem);line-height:1.04;
     letter-spacing:-.045em;margin:0 0 14px;text-wrap:balance;}
-  h1 .grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;
-    color:transparent;}
-  .sub{color:var(--dim);font-size:1rem;line-height:1.6;margin:0 0 34px;}
+  h1 .grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;}
+  .sub{color:var(--dim);font-size:1rem;line-height:1.6;margin:0 0 30px;}
 
-  .google{
+  form{display:flex;flex-direction:column;gap:10px;}
+  .email{
+    width:100%;padding:14px 16px;border-radius:14px;
+    background:rgba(255,255,255,.04);border:1px solid var(--line);
+    color:var(--text);font-family:var(--font);font-size:1rem;text-align:center;
+  }
+  .email::placeholder{color:var(--faint);}
+  .email:focus{outline:none;border-color:rgba(126,182,255,.55);
+    box-shadow:0 0 0 3px rgba(77,124,254,.15);}
+
+  .primary{
     display:flex;align-items:center;justify-content:center;gap:11px;width:100%;
     padding:15px 20px;border-radius:999px;border:0;cursor:pointer;
     background:#FAFAFC;color:#0B0C10;font-family:var(--font);
@@ -54,14 +65,23 @@
     transition:transform .15s ease, box-shadow .15s ease;
     box-shadow:0 0 0 1px rgba(255,255,255,.06), 0 18px 44px -18px rgba(77,124,254,.35);
   }
-  .google:hover{transform:translateY(-1px);
+  .primary:hover{transform:translateY(-1px);
     box-shadow:0 0 0 1px rgba(255,255,255,.1), 0 22px 52px -18px rgba(245,72,77,.35);}
-  .google svg{width:18px;height:18px;flex:0 0 auto;}
+  .primary:disabled{opacity:.6;cursor:default;transform:none;}
+  .primary svg{width:18px;height:18px;flex:0 0 auto;}
 
-  .err{margin:18px 0 0;padding:11px 15px;border-radius:12px;font-size:.85rem;
+  .coming{display:none;margin-top:6px;padding:22px 20px;border-radius:16px;
+    background:rgba(255,255,255,.03);border:1px solid var(--line);}
+  .coming h2{font-size:1.15rem;font-weight:600;letter-spacing:-.02em;margin:0 0 8px;}
+  .coming h2 .grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;}
+  .coming p{color:var(--dim);font-size:.9rem;line-height:1.55;margin:0;}
+  .coming .who{font-family:var(--mono);font-size:.8rem;color:var(--text);margin-top:8px;word-break:break-all;}
+
+  .err{margin:16px 0 0;padding:11px 15px;border-radius:12px;font-size:.85rem;
     background:rgba(245,72,77,.1);border:1px solid rgba(245,72,77,.3);color:#FFB4B6;display:none;}
   .demo{margin-top:26px;font-size:.85rem;color:var(--faint);}
   .demo a{color:var(--dim);}
+  .hint{margin-top:16px;font-size:.78rem;color:var(--faint);}
 
   footer{position:relative;z-index:2;display:flex;justify-content:space-between;gap:12px;
     padding:0 clamp(22px,5vw,52px) 28px;font-family:var(--mono);
@@ -77,45 +97,94 @@
   <header><span class="dot"></span><b>Laura</b></header>
   <main>
     <div class="card">
-      <p class="eyebrow">Mission control</p>
+      <p class="eyebrow"><span class="pip"></span>Private beta</p>
       <h1>Your avatars,<br /><span class="grad">under your command.</span></h1>
-      <p class="sub">Sign in to dispatch your avatars into meetings, watch them live, and read everything they did for you.</p>
-      <a class="google" href="/auth/google/start" id="google-btn">
+      <p class="sub">Dispatch your avatars into meetings, watch them live, and read everything they did for you.</p>
+
+      <!-- email gate (shown when the beta allow-list is on) -->
+      <form id="email-form" hidden>
+        <input class="email" id="email" type="email" placeholder="you@company.com" autocomplete="email" required />
+        <button class="primary" id="continue" type="submit">Continue</button>
+      </form>
+
+      <!-- direct Google (shown when no allow-list is configured) -->
+      <a class="primary" href="/auth/google/start" id="google-btn" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M23.5 12.3c0-.9-.1-1.5-.3-2.2H12v4.4h6.5c-.1 1.1-.8 2.7-2.4 3.8l3.8 2.9c2.3-2.1 3.6-5.2 3.6-8.9z"/><path fill="#34A853" d="M12 24c3.2 0 5.9-1.1 7.9-2.9l-3.8-2.9c-1 .7-2.4 1.2-4.1 1.2-3.1 0-5.8-2.1-6.7-4.9L1.3 17.4C3.3 21.3 7.3 24 12 24z"/><path fill="#FBBC05" d="M5.3 14.5c-.2-.7-.4-1.4-.4-2.2s.1-1.5.4-2.2L1.3 7C.5 8.6 0 10.4 0 12.3s.5 3.7 1.3 5.2l4-3z"/><path fill="#EA4335" d="M12 4.8c1.8 0 3 .8 3.7 1.4l3.4-3.3C17.9 1 15.2 0 12 0 7.3 0 3.3 2.7 1.3 6.9l4 3.1c.9-2.9 3.6-5.2 6.7-5.2z"/></svg>
         Continue with Google
       </a>
+
+      <!-- coming soon (shown when the email isn't on the beta list) -->
+      <div class="coming" id="coming">
+        <h2><span class="grad">Coming soon.</span></h2>
+        <p>Laura is in private beta. We've noted your interest and we'll email you the moment early access opens.</p>
+        <p class="who" id="coming-who"></p>
+      </div>
+
       <p class="err" id="err"></p>
+      <p class="hint" id="hint" hidden>We use your email only to check early access.</p>
       <p class="demo" id="demo" hidden>Login isn't configured on this deployment — <a href="/dashboard">open the dashboard in demo mode</a>.</p>
     </div>
   </main>
   <footer><span>LAURA — AI PROCESS EXPERT</span><span>lauravatar.com</span></footer>
   <script>
     (function(){
+      var $ = function(id){ return document.getElementById(id); };
       var q = new URLSearchParams(location.search);
-      var err = q.get("error");
-      var msgs = {
-        not_configured: "", // handled below: show demo mode instead
-        state: "That sign-in attempt expired or was tampered with. Try again.",
-        expired: "That sign-in attempt expired. Try again.",
-        denied: "Google sign-in was cancelled.",
-        exchange: "Google didn't accept the sign-in. Try again.",
-        token: "Could not verify the Google account. Try again."
-      };
-      if (err === "not_configured") {
-        document.getElementById("google-btn").style.display = "none";
-        document.getElementById("demo").hidden = false;
-      } else if (err && msgs[err]) {
-        var el = document.getElementById("err");
-        el.textContent = msgs[err]; el.style.display = "block";
+
+      function showComing(email){
+        $("email-form").hidden = true; $("google-btn").hidden = true; $("hint").hidden = true;
+        $("coming").style.display = "block";
+        $("coming-who").textContent = email ? "· " + email : "";
       }
-      // If login isn't configured at all, offer demo mode proactively.
+      function showError(msg){ var el=$("err"); el.textContent=msg; el.style.display="block"; }
+      function showDemo(){ $("email-form").hidden=true; $("google-btn").hidden=true; $("demo").hidden=false; }
+      function showGoogleDirect(){ $("email-form").hidden=true; $("google-btn").hidden=false; }
+      function showEmailGate(){ $("email-form").hidden=false; $("hint").hidden=false; }
+
+      // the callback bounced this email as not-allowed -> coming soon
+      if (q.get("error") === "not_allowed") { showComing(""); }
+      else if (q.get("error") === "not_configured") { showDemo(); }
+      else {
+        var msgs = { state:"That sign-in attempt expired or was tampered with. Try again.",
+          expired:"That sign-in attempt expired. Try again.",
+          denied:"Google sign-in was cancelled.",
+          exchange:"Google didn't accept the sign-in. Try again.",
+          token:"Could not verify the Google account. Try again." };
+        var e = q.get("error"); if (e && msgs[e]) showError(msgs[e]);
+      }
+
+      function decideGate(a){
+        if (a && a.auth_enabled === false) { showDemo(); return; }
+        if (q.get("error")) return;            // an error/coming view is already up
+        if (a && a.gated) showEmailGate(); else showGoogleDirect();
+      }
+
+      // Already signed in? go straight to the dashboard. Else decide which gate.
       fetch("/auth/me").then(function(r){ return r.json(); }).then(function(d){
         if (d && d.user) { location.replace("/dashboard"); return; }
-        if (d && d.auth_enabled === false) {
-          document.getElementById("google-btn").style.display = "none";
-          document.getElementById("demo").hidden = false;
-        }
-      }).catch(function(){});
+        if (d && d.auth_enabled === false) { showDemo(); return; }
+        fetch("/auth/allowed").then(function(r){ return r.json(); }).then(decideGate)
+          .catch(function(){ showGoogleDirect(); });
+      }).catch(function(){
+        fetch("/auth/allowed").then(function(r){ return r.json(); }).then(decideGate)
+          .catch(function(){ showGoogleDirect(); });
+      });
+
+      // Email gate submit -> check allow-list -> Google or coming-soon
+      $("email-form").addEventListener("submit", function(ev){
+        ev.preventDefault();
+        var email = $("email").value.trim();
+        if (!email) return;
+        var btn = $("continue"); btn.disabled = true; btn.textContent = "Checking…";
+        fetch("/auth/allowed?email=" + encodeURIComponent(email))
+          .then(function(r){ return r.json(); })
+          .then(function(a){
+            if (a && a.allowed) { location.href = "/auth/google/start"; }
+            else { showComing(email); }
+          })
+          .catch(function(){ showError("Couldn't check access. Try again."); })
+          .finally(function(){ btn.disabled = false; btn.textContent = "Continue"; });
+      });
     })();
   </script>
 </body>
