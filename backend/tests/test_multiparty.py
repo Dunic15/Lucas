@@ -120,18 +120,26 @@ ROSTER = ["Duccio", "Marco Rossi", "Guest 1"]
 
 ADDRESSED_TO_OTHER = [
     "Marco, can you take this?",
+    "Marco can you confirm the total",
+    "Marko could you share your screen",
     "marco, what do you think",
+    "Marco what do you think",
     "hey Marco what's your read on this",
     "ok Marco, over to you",
     "so that's the plan. Marco, your turn",
     "what do you think, Marco?",
     "Duccio, puoi condividere lo schermo?",
+    "Duccio puoi condividere lo schermo",
+    "Duccio cosa ne pensi",
     "senti Marco, andiamo avanti noi",
 ]
 
 NOT_ADDRESSED_TO_OTHER = [
     # a mention mid-sentence is normal meeting talk, not a hand-off
     "Marco will own the rollout",
+    "Marco can confirm the total",
+    "Marco could own the rollout",
+    "Marco che lavora con noi presenterà il piano",
     "I agree with Marco on the timeline",
     "did Marco send the doc?",
     "what's the next step for onboarding?",

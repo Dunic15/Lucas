@@ -12,14 +12,12 @@ check and the in-stream SKIP gate stay in charge of that, so a wrong estimate
 can only ever cost latency, never emit unaddressed speech).
 
 v1 is a linguistic heuristic: zero network, zero model download, ~microseconds,
-bilingual IT/EN. It reads three signals, strongest first:
-  1. trailing INCOMPLETENESS markers — an utterance ending in a conjunction,
-     preposition, article or filler ("about the", "e quindi", "with a") is
-     mid-thought almost by definition;
-  2. terminal punctuation — a full question mark is the strongest "done" signal
-     a transcript carries; a period is close behind;
-  3. length — a 2-word fragment without terminal punctuation is far more likely
-     mid-thought than a 20-word clause.
+bilingual IT/EN. It reads these signals in risk-aware order:
+  1. a trailing ellipsis holds the floor;
+  2. a terminal question mark is the strongest "done" signal a transcript carries;
+  3. trailing INCOMPLETENESS markers — a conjunction, preposition, article or
+     filler ("about the", "e quindi", "with a") — otherwise hold the floor;
+  4. remaining punctuation and length resolve the less certain cases.
 
 v2 (the planned upgrade, do NOT bolt onto this file): pipecat smart-turn v3 —
 an 8M-param audio model (BSD-2, ~12ms on CPU, Italian included) fed by Recall's
@@ -75,6 +73,12 @@ def completeness(text: str) -> float:
     if t.endswith(("...", "…")):
         return 0.15
 
+    # A complete question can naturally end in a word that is incomplete only
+    # outside question syntax ("What did she mean by that?"). The question mark
+    # is the stronger turn-yield signal, so check it before the final token.
+    if t.endswith("?"):
+        return 0.95
+
     last = re.sub(r"[^\w']+$", "", t).split()[-1].lower() if t.split() else ""
     words = len(t.split())
 
@@ -83,8 +87,6 @@ def completeness(text: str) -> float:
     if last in _TRAILING_INCOMPLETE:
         return 0.2
 
-    if t.endswith("?"):
-        return 0.95
     if t.endswith((".", "!")):
         # Punctuated, but a 1-2 word "sentence" is often a transcriber artifact
         # ("So." / "Allora.") — treat short ones as weaker evidence.

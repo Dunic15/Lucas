@@ -15,6 +15,12 @@ def test_full_questions_are_clearly_done():
     assert end_of_turn.completeness("Qual è la scadenza per la migrazione?") >= 0.8
 
 
+def test_question_mark_outranks_trailing_incomplete_word():
+    assert end_of_turn.completeness("What did Laura mean by that?") >= 0.8
+    assert end_of_turn.completeness("Who is this for?") >= 0.8
+    assert end_of_turn.completeness("È questo che volevi?") >= 0.8
+
+
 def test_trailing_connectives_are_mid_thought_bilingual():
     assert end_of_turn.completeness("I wanted to ask about the") <= 0.3
     assert end_of_turn.completeness("Volevo chiederti della") <= 0.3
