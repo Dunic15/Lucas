@@ -165,11 +165,42 @@ def test_ssm_registry_merge_preserves_existing_orgs_and_hot_reloads(monkeypatch)
     monkeypatch.setattr(secret_registry, "_cache", {})
 
     assert secret_registry.upsert_org_secret("org-new", "new-secret") is True
-    saved = json.loads(writes[0]["Value"])
+    dedicated = next(w for w in writes if w["Name"].endswith("/orgs/org-new"))
+    aggregate = next(w for w in writes if w["Name"] == "/test/registry")
+    assert dedicated["Value"] == "new-secret"
+    assert dedicated["Type"] == "SecureString"
+    assert dedicated["Overwrite"] is True
+    saved = json.loads(aggregate["Value"])
     assert saved == {"org-old": "old-secret", "org-new": "new-secret"}
-    assert writes[0]["Type"] == "SecureString"
-    assert writes[0]["Overwrite"] is True
+    assert aggregate["Type"] == "SecureString"
+    assert aggregate["Overwrite"] is True
     assert callback._secret_for("org-new") == "new-secret"
+
+
+def test_dedicated_ssm_secret_wins_over_stale_aggregate(monkeypatch):
+    class FakeSsm:
+        def get_parameter(self, **kwargs):
+            return {"Parameter": {"Value": json.dumps({"org-new": "stale"})}}
+
+        def get_parameters_by_path(self, **kwargs):
+            assert kwargs["WithDecryption"] is True
+            return {
+                "Parameters": [
+                    {
+                        "Name": "/test/registry/orgs/org-new",
+                        "Value": "durable-secret",
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(secret_registry, "_client", lambda: FakeSsm())
+    monkeypatch.setattr(settings, "laura_webhook_registry_ssm_parameter", "/test/registry")
+    monkeypatch.setattr(settings, "laura_webhook_secrets_by_org", "{}")
+    monkeypatch.setattr(secret_registry, "_env_snapshot", None)
+    monkeypatch.setattr(secret_registry, "_cache", {})
+    monkeypatch.setattr(secret_registry, "_last_ssm_refresh", float("-inf"))
+
+    assert callback._secret_for("org-new") == "durable-secret"
 
 
 def test_signature_differs_by_org_secret(monkeypatch):
