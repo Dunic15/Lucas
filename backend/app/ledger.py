@@ -101,6 +101,21 @@ def _init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_ledger_action_id "
             "ON ledger_items(action_id)"
         )
+        # Execution provenance reported back by the orchestrator (Cedric) via
+        # POST /org/actions/{action_id}/status: the brain's side of the story
+        # (proposed → approved/rejected → done/failed), keyed on the same
+        # stable action_id the events carry. Latest state only — the dashboard
+        # shows where each action stands, not a full audit trail.
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS action_status (
+                action_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,        -- proposed | approved | rejected | done | failed
+                detail TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL
+            );
+            """
+        )
 
 
 def _norm(text: str) -> str:
@@ -258,6 +273,59 @@ def resolve_by_action_id(action_id: str, bot_id: str = "") -> bool:
             (time.time(), bot_id, aid),
         )
         return cur.rowcount > 0
+
+
+# Execution states the orchestrator may report — the brain's lifecycle for an
+# action it received (proposal card up → human decision → tool run outcome).
+EXECUTION_STATUSES = ("proposed", "approved", "rejected", "done", "failed")
+
+
+def set_action_status(action_id: str, status: str, detail: str = "") -> bool:
+    """Record the orchestrator-reported execution state of an action (upsert,
+    latest wins). A terminal 'done' also closes the ledger item — same effect
+    as the resolve endpoint — so the two reporting paths can't disagree.
+    Unknown status or empty id is a no-op (False). ``detail`` is a distilled
+    one-liner (card link, error class); it is capped, and it is never
+    transcript content by contract."""
+    aid = (action_id or "").strip()
+    st = (status or "").strip().lower()
+    if not aid or st not in EXECUTION_STATUSES:
+        return False
+    with store._LOCK, store._connect() as conn:
+        conn.execute(
+            """INSERT INTO action_status (action_id, status, detail, updated_at)
+               VALUES (?,?,?,?)
+               ON CONFLICT(action_id) DO UPDATE SET
+                 status=excluded.status, detail=excluded.detail,
+                 updated_at=excluded.updated_at""",
+            (aid, st, (detail or "").strip()[:300], time.time()),
+        )
+    if st == "done":
+        resolve_by_action_id(aid)
+    return True
+
+
+def action_statuses(action_ids: list[str]) -> dict[str, dict]:
+    """Latest execution state for each of the given action_ids (missing ids
+    simply absent). One query — the dashboard decorates a page of meetings."""
+    ids = [a for a in {(i or "").strip() for i in action_ids} if a]
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    with store._LOCK, store._connect() as conn:
+        rows = conn.execute(
+            f"""SELECT action_id, status, detail, updated_at
+                FROM action_status WHERE action_id IN ({marks})""",
+            ids,
+        ).fetchall()
+    return {
+        r["action_id"]: {
+            "status": r["status"],
+            "detail": r["detail"],
+            "updated_at": r["updated_at"],
+        }
+        for r in rows
+    }
 
 
 def carryover_brief(meeting_url: str, *, limit: int = 8) -> str:

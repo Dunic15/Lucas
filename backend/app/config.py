@@ -274,6 +274,11 @@ class Settings(BaseSettings):
     # HMAC key for signing callbacks POSTed to a session's callback_url
     # (X-Laura-Signature: t=<ts>,v1=<hex>). Shared with the orchestrator.
     laura_webhook_secret: str = ""
+    # Per-client signing registry: a JSON object {org_id: secret}. When a
+    # session belongs to a connected org, its callbacks are signed with the
+    # org's own secret (minted at Connect-the-brain provisioning); orgs not in
+    # the map — and service starts — fall back to LAURA_WEBHOOK_SECRET.
+    laura_webhook_secrets_by_org: str = ""
     # Bearer presented on those callbacks (the orchestrator's cheap first-line
     # check before HMAC verification).
     laura_webhook_token: str = ""
