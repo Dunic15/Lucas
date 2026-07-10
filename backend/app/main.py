@@ -1169,6 +1169,15 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
             req.meeting_url, req.avatar_id, req.join_at, integration,
             org_id=(user or {}).get("org_id", ""),
         )
+    except recall_client.AvatarBusyError:
+        return JSONResponse(
+            {
+                "error": "avatar_busy",
+                "detail": "All avatars are busy right now — retry in a minute.",
+            },
+            status_code=503,
+            headers={"Retry-After": "60"},
+        )
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse(result)
