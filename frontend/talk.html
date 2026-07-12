@@ -596,6 +596,12 @@
         const g = genOf(msg);
         if (g !== null) staleBefore = Math.max(staleBefore, g);
         interruptSpeech();
+      } else if (msg.type === "raise_hand") {
+        // Hand-raise etiquette: she has a point queued and waits to be
+        // invited — hand stays up on her tile until the backend lowers it.
+        try { head.playGesture("handup", 600, false, 900); } catch (_) {}
+      } else if (msg.type === "lower_hand") {
+        try { head.stopGesture(900); } catch (_) {}
       }
     };
 

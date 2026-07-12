@@ -2162,18 +2162,24 @@ async def _raise_hand(session: store.Session, avatar, heard: str = "") -> None:
     session.pending_contribution until someone invites her ("dimmi, Laura")."""
     session.hand_raised_at = time.time()
     await _send_avatar_control(session, {"type": "raise_hand"})
-    # Chat line: best-effort and off the latency path — a Recall hiccup (or the
-    # key-free demo, where there's no real bot) must never block the meeting.
+    # Chat line: genuinely fire-and-forget — Recall's read timeout is up to 60s,
+    # so posting it inline could hold THIS webhook's response open on a slow/hung
+    # chat endpoint. Detach it: a Recall hiccup (or the key-free demo, where there
+    # is no real bot) must never block or delay the meeting.
     if settings.recall_api_key:
         line = _line_for(heard, _HAND_CHAT_LINES, _HAND_CHAT_LINES_IT).format(
             name=avatar.name
         )
-        try:
-            await run_in_threadpool(
-                recall_client.send_chat_message, session.bot_id, line
-            )
-        except Exception as e:  # noqa: BLE001
-            print(f"[hand] chat message failed (hand still raised): {e}", flush=True)
+
+        async def _post_hand_chat() -> None:
+            try:
+                await run_in_threadpool(
+                    recall_client.send_chat_message, session.bot_id, line
+                )
+            except Exception as e:  # noqa: BLE001
+                print(f"[hand] chat message failed (hand still raised): {e}", flush=True)
+
+        asyncio.create_task(_post_hand_chat())
 
 
 async def _lower_hand(session: store.Session) -> None:
