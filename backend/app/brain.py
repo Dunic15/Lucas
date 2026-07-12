@@ -133,6 +133,17 @@ def answer_question(
         {"source": c.source, "section": c.section, "score": round(c.score, 3)}
         for c in chunks
     ]
+    # Grounding floor: the model self-reports sufficient_context, but on weak
+    # retrieval it sometimes labels a world-knowledge answer as document-grounded
+    # (sufficient_context=true + doc citations) — a false "this came from your
+    # docs" signal. If the best chunk is below the relevance floor, the answer is
+    # NOT grounded in company context: correct the metadata (the answer text stays
+    # — Laura is a general assistant first, so world-knowledge answers are fine,
+    # just honestly labelled un-grounded). Grounded matches score ~0.6-0.75;
+    # irrelevant ones ~0.30.
+    if max((c.score for c in chunks), default=0.0) < settings.answer_grounding_floor:
+        result["sufficient_context"] = False
+        result["citations"] = []
     return result
 
 

@@ -1650,10 +1650,27 @@ def meetings_page() -> FileResponse:
 
 
 @app.get("/meetings/list")
-def meetings_list() -> JSONResponse:
+def meetings_list(request: Request) -> JSONResponse:
     """All saved artifacts, newest first, for the /meetings page. Transcripts
-    are PII: they may be *served* (that's the product) but never logged."""
-    return JSONResponse({"meetings": store.list_artifacts()})
+    are PII: gated to a logged-in owner (their own org) or the machine bearer —
+    never served to the anonymous internet — and never logged. Same guard as
+    /dashboard/summary; the HTML shell (/meetings) stays open like /dashboard."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+    artifacts = store.list_artifacts()
+    if user is not None:
+        # Cookie login: scope to the caller's org. Unowned/legacy artifacts
+        # (empty org_id) stay visible, mirroring the /sessions/*/redeliver rule.
+        org = str(user["org_id"])
+        artifacts = [
+            a
+            for a in artifacts
+            if (art_org := str((a.get("artifact") or {}).get("org_id") or "")) == ""
+            or art_org == org
+        ]
+    return JSONResponse({"meetings": artifacts})
 
 
 # ───────────────────────── avatar page + ws ─────────────────────────
