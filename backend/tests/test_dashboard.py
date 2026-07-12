@@ -162,6 +162,28 @@ def test_dashboard_page_served(client):
     assert "Laura — Dashboard" in resp.text
 
 
+def test_dashboard_guides_first_run_and_shows_avatar_portraits(client):
+    """The customer surface must explain the activation path and render the
+    existing avatars as people, not expose repository/roadmap implementation
+    details to a brand-new user."""
+    html = client.get("/dashboard").text
+    assert "Launch your first avatar" in html
+    assert "Add the brain to Slack" in html
+    assert "/laura-reference.jpg?avatar_id=" in html
+    assert "SELF-SERVE WIZARD IS ON THE ROADMAP" not in html
+    assert "configured on the server" not in html
+
+
+def test_dashboard_rejects_non_meeting_links_before_dispatch(client):
+    """A pasted random URL should fail in the browser before it can create a
+    paid Recall bot. Meet, Zoom and Teams are the only advertised providers."""
+    html = client.get("/dashboard").text
+    assert "meet\\.google\\.com" in html
+    assert "zoom\\.us" in html
+    assert "teams\\.(microsoft\\.com|live\\.com)" in html
+    assert "Paste a Google Meet, Zoom or Microsoft Teams meeting link." in html
+
+
 def test_legacy_artifact_without_avatar_id(client):
     """Artifacts saved before avatar_id stamping still render (attributed to
     the empty id, not crashed on)."""
