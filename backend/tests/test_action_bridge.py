@@ -389,11 +389,17 @@ def test_live_route_async_ask_captures_and_confirms(
     client, recall_stubbed, spoken, monkeypatch
 ):
     fired: list[tuple] = []
+
+    def record_notification(session, bot_id, item):
+        # This test owns the real webhook/capture route, not asyncio task
+        # lifetime. TestClient may tear down its per-request portal before a
+        # fire-and-forget create_task reaches the threadpool, making a timing
+        # poll flaky on clean CI runners. The transport and off-path dispatch
+        # have dedicated tests above; record the seam synchronously here.
+        fired.append((dict(session.integration), bot_id, dict(item)))
+
     monkeypatch.setattr(
-        cedric_callback,
-        "send_action_requested",
-        lambda integration, bot_id, item: fired.append((integration, bot_id, item))
-        or True,
+        main_module.cedric, "notify_action_requested", record_notification
     )
 
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
@@ -412,8 +418,8 @@ def test_live_route_async_ask_captures_and_confirms(
     queue_pool = main_module._QUEUE_LINES + main_module._QUEUE_LINES_IT
     assert spoken and spoken[-1] in queue_pool
 
-    # Orchestrated session → action.requested fired exactly once, ref echoed.
-    assert _wait_until(lambda: len(fired) == 1)
+    # Orchestrated session → action.requested seam fired exactly once, ref echoed.
+    assert len(fired) == 1
     integration, fired_bot, item = fired[0]
     assert fired_bot == bot_id
     assert integration["external_ref"] == {"team": "T1", "meet_session_id": "ms_1"}
