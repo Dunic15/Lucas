@@ -850,15 +850,24 @@ def answer_with_tools(
 POSTMEETING_SYSTEM = """You analyze a meeting transcript against company \
 process knowledge. Produce a crisp post-meeting artifact a team can act on.
 
+SOURCE BOUNDARY: the MEETING TRANSCRIPT is the only source for decisions, \
+actions, and risks that were actually raised or agreed in this meeting. A \
+pre-meeting brief and company process context are background only: use them to \
+understand the meeting and describe process gaps, but NEVER turn their agenda, \
+open items, deadlines, or suggested next steps into decisions, actions, or \
+risks unless the transcript itself discusses them.
+
 Detect PROCESS GAPS, specifically any of: missing owner, missing deadline, \
 missing approval, missing required document, unresolved blocker. Only flag a \
 gap if it is genuinely implied by the discussion; do not pad the list.
 
 Capture EVERY action anyone asked for or committed to as an actions[] entry — \
-including brief, in-passing requests ("send the recap", "schedule a follow-up \
+including short, in-passing requests ("send the recap", "schedule a follow-up \
 with Marco", "post it to Slack", "email Priya") — even when no owner or deadline \
 was stated (use "UNASSIGNED"/"" and gap_type accordingly). Do not drop an action \
-just because it was said casually.
+just because it was said casually. For each extracted action, include a short, \
+verbatim evidence excerpt copied from the MEETING TRANSCRIPT. If there is no \
+supporting transcript excerpt, do not emit the action.
 
 If the prompt lists actions ALREADY CAPTURED LIVE during the meeting, those are \
 already queued for execution: do NOT put them (or any semantically equivalent \
@@ -872,7 +881,7 @@ Return ONLY a JSON object:
   "summary": "<3-5 sentence plain summary of what was discussed and decided>",
   "decisions": ["<each decision the group actually reached, one short line>"],
   "actions": [
-    {"item": "<action>", "owner": "<name or 'UNASSIGNED'>", "deadline": "<stated deadline or ''>", "gap_type": "<owner|deadline|approval|document|blocker|none>"}
+    {"item": "<action>", "owner": "<name or 'UNASSIGNED'>", "deadline": "<stated deadline or ''>", "gap_type": "<owner|deadline|approval|document|blocker|none>", "evidence": "<exact supporting excerpt from the meeting transcript>"}
   ],
   "risks": ["<each risk or unresolved blocker raised, one short line>"],
   "follow_up_email": {
@@ -880,6 +889,34 @@ Return ONLY a JSON object:
     "body": "<short professional email body summarizing decisions and next steps>"
   }
 }"""
+
+
+def _scope_actions_to_transcript(artifact: dict, transcript_text: str) -> None:
+    """Keep only model-extracted actions grounded in the meeting transcript.
+
+    The post model also sees a pre-meeting brief and process context so it can
+    produce a useful summary and gap analysis. Those background sections are
+    deliberately not action sources. Requiring a verbatim transcript excerpt
+    gives us a deterministic boundary after the model call: a brief-only item
+    cannot enter the artifact merely because the model ignored the prompt.
+
+    Live ``queue_action`` captures do not pass through this filter. They are
+    merged later by ``main._merge_action_items`` and remain authoritative.
+    """
+    transcript = " ".join((transcript_text or "").split()).casefold()
+    actions = artifact.get("actions") or artifact.get("checklist") or []
+    scoped: list[dict] = []
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        evidence = " ".join(str(action.get("evidence") or "").split()).casefold()
+        if not evidence or evidence not in transcript:
+            continue
+        clean = dict(action)
+        clean.pop("evidence", None)
+        scoped.append(clean)
+    artifact["actions"] = scoped
+    artifact["checklist"] = scoped
 
 
 def _live_actions_block(live_actions: list[dict] | None) -> str:
@@ -1089,7 +1126,8 @@ def post_meeting(
     process template, not model judgement — and backfills decisions/risks when
     the model returns none. `context` is an optional pre-meeting brief (the
     orchestrator's agenda/participants/open items) so the summary understands
-    what the meeting was FOR.
+    what the meeting was FOR. It is never an action source: model actions must
+    carry verbatim transcript evidence and are filtered against the transcript.
 
     `live_actions` are the session's queue_action captures (action/owner/due
     dicts). They are shown to the model with an explicit do-not-re-extract
@@ -1109,7 +1147,8 @@ def post_meeting(
             avatar, transcript_text[-3000:] or "process steps owners approvals", k=k
         )
         brief_block = (
-            f"Pre-meeting brief (agenda, participants, open items):\n\n{context}\n\n"
+            "BACKGROUND ONLY — PRE-MEETING BRIEF (not evidence of what was "
+            f"discussed or agreed):\n\n{context}\n\n"
             if context.strip()
             else ""
         )
@@ -1143,6 +1182,8 @@ def post_meeting(
             artifact = _stub_post_meeting(
                 avatar, transcript_text, state, degraded=True
             )
+        else:
+            _scope_actions_to_transcript(artifact, transcript_text)
 
     return _finish_artifact(artifact, state)
 
