@@ -590,3 +590,32 @@ def test_partial_ack_requires_exact_name_and_a_forming_question(tmp_path, monkey
     _post(_partial_line_payload(s.bot_id, "Duccio", "Laura what's the process"))
     assert spoken, "exact name with 3+ words should ack"
     store.remove(s.bot_id)
+
+
+# ── fuzzy-wake exclude set: shield transcript-only participants ──
+
+
+def test_present_names_shields_transcript_only_participant(tmp_path, monkeypatch):
+    """A real "Lara" known ONLY from the transcript (she spoke but never fired a
+    join event) must be shielded from the fuzzy wake. present_names() now merges
+    transcript speakers (backed by roster()), so "Lara, …" is her turn — not a
+    corruption of "Laura". Strictly reduces false wakes; never makes her speak
+    more."""
+    from app.avatars import Avatar
+    from app.decision import detect_wake
+
+    s = _session(tmp_path, monkeypatch, bot_id="shield-bot")
+    s.add_utterance("Lara", "can you pull the latest numbers?")  # no join event
+    avatar = Avatar(
+        id="laura", name="Laura", role="x", wake_words=["laura"], persona_prompt="",
+        anam_avatar_id="r", elevenlabs_voice_id="v", min_confidence=0.55,
+        speak_cooldown_seconds=8.0, dir=Path("."),
+    )
+    line = "Lara, can you pull the latest numbers?"
+    # Baseline: with no exclude set, "Lara" fuzzy-wakes "Laura".
+    assert detect_wake(avatar, line, [])[0] is True
+    # The transcript-only participant is now in the exclude set …
+    assert "lara" in {n.lower() for n in s.present_names()}
+    # … so the fuzzy wake is suppressed: it's Lara's turn, not Laura's.
+    assert detect_wake(avatar, line, s.present_names())[0] is False
+    store.remove(s.bot_id)

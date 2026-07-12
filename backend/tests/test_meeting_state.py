@@ -353,3 +353,43 @@ def test_per_person_lists_stay_bounded():
             wake_words=["laura"],
         )
     assert len(state.per_person["Marco"]["commitments"]) <= 8
+
+
+# ── readiness fallback: a non-onboarding meeting still scores a real value ──
+
+
+def test_readiness_derived_when_no_template(monkeypatch):
+    """A generic (non-onboarding) transcript matches no process template, so the
+    rigorous step-coverage readiness is undefined. The artifact must STILL carry
+    a real, defensible readiness_score (never a dead 0/"—" on the demo tile)."""
+    import app.brain as brain
+
+    monkeypatch.setattr(brain, "effective_provider", lambda: "stub")
+    monkeypatch.setattr(brain, "post_provider", lambda: "stub")
+    text = (
+        "Marco: Let's review the quarterly numbers. I'll send the deck to the team.\n"
+        "Anna: I can draft the summary email by Friday.\n"
+        "Marco: We decided to move the launch to Q3.\n"
+        "Anna: One risk is the vendor timeline could slip.\n"
+    )
+    artifact = brain.post_meeting(_FakeAvatar(), text)
+    assert artifact["meeting_type"] == ""        # no template matched
+    score = artifact["readiness_score"]
+    assert isinstance(score, int)
+    assert 0 < score <= 100                       # real value, never a dead "—"
+
+
+def test_derived_readiness_weights():
+    """_derived_readiness is a deterministic 0-100 from distilled fields only."""
+    import app.brain as brain
+
+    assert brain._derived_readiness({}) == 0
+    assert brain._derived_readiness({"summary": "recap"}) == 25
+    unassigned = {
+        "summary": "recap",
+        "actions": [{"item": "x", "owner": "UNASSIGNED"}],
+        "follow_up_email": {"subject": "Follow-up", "body": "…"},
+    }
+    assert brain._derived_readiness(unassigned) == 70   # 25 + 25 + 0 + 20
+    owned = dict(unassigned, actions=[{"item": "x", "owner": "Ben"}])
+    assert brain._derived_readiness(owned) == 100        # 25 + 25 + 30 + 20
