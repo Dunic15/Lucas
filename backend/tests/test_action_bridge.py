@@ -633,16 +633,21 @@ def test_action_id_correlates_live_event_and_artifact(client, recall_stubbed, sp
     card against the final action on the id, not on text (the continuation
     window can extend the text after the live event already fired)."""
     live_ids: list = []
+
+    def record_notification(session, bot_id, item):
+        live_ids.append(dict(item).get("action_id"))
+
+    # Keep this correlation assertion deterministic for the same TestClient
+    # portal-lifetime reason as the live-route test above. Transport scheduling
+    # and payload delivery remain covered independently.
     monkeypatch.setattr(
-        cedric_callback,
-        "send_action_requested",
-        lambda integration, bot_id, item: live_ids.append(item.get("action_id")) or True,
+        main_module.cedric, "notify_action_requested", record_notification
     )
     monkeypatch.setattr(cedric_callback, "send_ended", lambda *a: True)
 
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
     _post_final(client, bot_id, "Ben", "Cedric, schedule a follow-up with Marco on Friday")
-    assert _wait_until(lambda: len(live_ids) == 1)
+    assert len(live_ids) == 1
     live_id = live_ids[0]
     assert live_id  # the live event carried a real id
 
