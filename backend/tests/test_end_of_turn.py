@@ -38,6 +38,23 @@ def test_punctuated_statements_read_done():
     assert end_of_turn.completeness("The rollout finished yesterday.") >= 0.8
 
 
+def test_trailing_emoji_preserves_completed_punctuation():
+    assert end_of_turn.completeness("Great job! 🎉") >= 0.8
+    assert end_of_turn.completeness("Complimenti! 🚀🚀") >= 0.8
+    assert end_of_turn.completeness("Is this ready? 🤔") >= 0.8
+    assert end_of_turn.completeness("Looks good! ❤️") >= 0.8
+    assert end_of_turn.completeness("All done! 👍🏽") >= 0.8
+
+
+def test_trailing_emoji_does_not_hide_ellipsis_or_invent_content():
+    assert end_of_turn.completeness("and then... 😬") <= 0.3
+    assert end_of_turn.completeness("🎉") == 0.0
+
+
+def test_short_period_anchor_remains_uncertain():
+    assert end_of_turn.completeness("So. ✅") < 0.8
+
+
 def test_short_fragments_are_uncertain_not_done():
     # 1-2 word unpunctuated fragments must never read "clearly done".
     assert end_of_turn.completeness("the deadline") < 0.8

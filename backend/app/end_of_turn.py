@@ -26,10 +26,13 @@ realtime per-participant audio. That needs a websocket RECEIVER, and App Runner
 (the GPU pod or a small always-on worker) and forward end-of-turn probabilities
 to this same seam. The interface here (text in, 0..1 out feeding the deference
 sizer) is deliberately shaped so v2 swaps in without touching the callers.
+Mid-word ASR truncation is intentionally deferred to that audio model: text alone
+cannot safely distinguish a cutoff from a valid name, acronym, or domain term.
 """
 from __future__ import annotations
 
 import re
+import unicodedata
 
 # Words that essentially never END a finished thought (lowercase match on the
 # final token, punctuation stripped). Bilingual: Laura works in IT and EN.
@@ -57,6 +60,26 @@ _TRAILING_FILLER = {
 }
 
 
+def _strip_trailing_symbol_run(text: str) -> str:
+    """Remove trailing emoji/symbol clusters while preserving punctuation.
+
+    Emoji clusters may include variation selectors, combining marks, and ZWJ
+    format characters. Only trim the candidate run when it contains an actual
+    Unicode symbol, so a decomposed accent on a final word is left untouched.
+    """
+    index = len(text)
+    saw_symbol = False
+    while index:
+        char = text[index - 1]
+        category = unicodedata.category(char)
+        if char.isspace() or category[0] == "S" or category in {"Mn", "Me", "Cf"}:
+            saw_symbol = saw_symbol or category[0] == "S"
+            index -= 1
+            continue
+        break
+    return text[:index].rstrip() if saw_symbol else text
+
+
 def completeness(text: str) -> float:
     """0..1 likelihood that the speaker has finished their thought.
 
@@ -66,6 +89,12 @@ def completeness(text: str) -> float:
       <= 0.3  clearly mid-thought (trailing connective/filler/fragment)
     """
     t = (text or "").strip()
+    if not t:
+        return 0.0
+
+    # A trailing reaction must not hide the punctuation immediately before it:
+    # "Great job! 🎉" has the same turn boundary as "Great job!".
+    t = _strip_trailing_symbol_run(t)
     if not t:
         return 0.0
 
@@ -87,7 +116,9 @@ def completeness(text: str) -> float:
     if last in _TRAILING_INCOMPLETE:
         return 0.2
 
-    if t.endswith((".", "!")):
+    if t.endswith("!"):
+        return 0.85
+    if t.endswith("."):
         # Punctuated, but a 1-2 word "sentence" is often a transcriber artifact
         # ("So." / "Allora.") — treat short ones as weaker evidence.
         return 0.85 if words >= 3 else 0.6

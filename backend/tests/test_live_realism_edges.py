@@ -101,7 +101,10 @@ def test_asr_vocative_without_punctuation_defers_to_named_human():
 
 
 @pytest.mark.xfail(
-    reason="end_of_turn.completeness treats a mid-word ASR cutoff as yielded"
+    reason=(
+        "deferred to smart-turn v2 audio model (see end_of_turn.py v2 note) — "
+        "text heuristic cannot safely detect mid-word truncation"
+    )
 )
 def test_mid_word_asr_cutoff_holds_the_floor():
     assert end_of_turn.completeness("I also wanted to ask abou") <= 0.3
@@ -111,9 +114,6 @@ def test_completed_question_ending_in_that_yields_the_floor():
     assert end_of_turn.completeness("What did Laura mean by that?") >= 0.8
 
 
-@pytest.mark.xfail(
-    reason="terminal emoji hides the sentence punctuation from completeness"
-)
 def test_terminal_emoji_preserves_completed_punctuation():
     assert end_of_turn.completeness("Great job! 🎉") >= 0.8
 
