@@ -134,6 +134,7 @@ def test_auth_required_when_token_set(client, recall_stubbed, monkeypatch):
     assert client.post("/sessions/start", json=START_BODY).status_code == 401
     assert client.get("/ledger", params={"meeting_url": "x"}).status_code == 401
     assert client.get("/sessions/whatever/artifact").status_code == 401
+    assert client.post("/sessions/whatever/redeliver").status_code == 401
     ok = client.post(
         "/sessions/start",
         json=START_BODY,
@@ -190,6 +191,40 @@ def test_end_delivers_ended_callback(client, recall_stubbed, monkeypatch):
     assert polled["status"] == "done"
     assert "transcript" not in polled
     assert polled["artifact_version"] == 1
+
+
+def test_redeliver_uses_saved_distilled_artifact(client, monkeypatch):
+    captured: list[tuple] = []
+    bot_id = "bot_redeliver"
+    store.save_artifact(
+        bot_id,
+        {
+            "summary": "Safe summary",
+            "transcript": "private transcript",
+            "org_id": "org_1",
+            "actions": [],
+        },
+    )
+    monkeypatch.setattr(
+        settings, "surface_webhook_url", "https://cedric.example/api/laura/events"
+    )
+    monkeypatch.setattr(
+        cedric_callback,
+        "send_ended",
+        lambda integration, delivered_bot, artifact: captured.append(
+            (integration, delivered_bot, artifact)
+        )
+        or True,
+    )
+
+    resp = client.post(f"/sessions/{bot_id}/redeliver")
+
+    assert resp.status_code == 200, resp.text
+    integration, delivered_bot, artifact = captured.pop()
+    assert delivered_bot == bot_id
+    assert integration["org_id"] == "org_1"
+    assert artifact["summary"] == "Safe summary"
+    assert "transcript" not in artifact
 
 
 def test_ended_callback_payload_signature_and_retries(monkeypatch):

@@ -1602,6 +1602,44 @@ def session_artifact(bot_id: str, request: Request) -> JSONResponse:
     return JSONResponse({"status": "done", **cedric.wire_artifact(artifact)})  # CEDRIC: PII stays home
 
 
+@app.post("/sessions/{bot_id}/redeliver")
+async def redeliver_artifact(bot_id: str, request: Request) -> JSONResponse:
+    """Retry a finished session's signed ``session.ended`` callback.
+
+    Callback delivery is deliberately best-effort during meeting cleanup, so
+    the stored artifact is the recovery source of truth.  This endpoint gives
+    a logged-in owner (or the machine bearer) a bounded retry without ever
+    sending the transcript across the PII boundary.
+    """
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+
+    artifact = store.get_artifact(bot_id)
+    if artifact is None:
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
+    artifact_org = str(artifact.get("org_id") or "")
+    if user is not None and artifact_org and artifact_org != user["org_id"]:
+        return JSONResponse({"error": "not your session"}, status_code=403)
+
+    integration = cedric.default_integration()
+    if not integration or not integration.get("callback_url"):
+        return JSONResponse(
+            {"error": "orchestrator callback is not configured"}, status_code=503
+        )
+    integration = {**integration, "org_id": artifact_org}
+    delivered = await run_in_threadpool(
+        cedric.callback.send_ended,
+        integration,
+        bot_id,
+        cedric.wire_artifact(artifact),
+    )
+    if not delivered:
+        return JSONResponse({"error": "callback delivery failed"}, status_code=502)
+    return JSONResponse({"ok": True, "bot_id": bot_id})
+
+
 @app.get("/meetings")
 def meetings_page() -> FileResponse:
     """Archive UI: every finished meeting's artifact, transcript included."""
