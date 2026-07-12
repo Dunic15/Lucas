@@ -80,6 +80,10 @@
   .rost{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:10px;color:inherit;cursor:pointer;}
   .rost:hover{background:var(--panel);}
   .av{border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:600;flex:0 0 auto;letter-spacing:-.02em;}
+  .avatar-photo{position:relative;overflow:hidden;isolation:isolate;background:var(--panel-2);}
+  .avatar-photo .fallback{position:absolute;inset:0;display:grid;place-items:center;z-index:0;}
+  .avatar-photo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 22%;z-index:1;}
+  .avatar-photo.broken img{display:none;}
   .rost .av{width:25px;height:25px;font-size:.76rem;}
   .rost .nm{font-size:.86rem;flex:1;}
   .sdot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:0 0 auto;}
@@ -129,6 +133,27 @@
   .livestrip .txt{font-size:.9rem;flex:1;min-width:180px;}
   .livestrip .txt b{font-weight:600;}
   .livestrip .meta{font-family:var(--mono);font-size:.74rem;color:var(--live);}
+
+  /* first-run activation: one clear path to the first useful meeting */
+  .activation{margin:0 0 20px;padding:18px;border:1px solid rgba(126,182,255,.24);border-radius:18px;
+    background:linear-gradient(115deg,rgba(77,124,254,.10),var(--panel) 48%,rgba(245,72,77,.06));box-shadow:var(--shadow-sm);}
+  .activation-top{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px;flex-wrap:wrap;}
+  .activation h2{margin:0;font-size:1.12rem;letter-spacing:-.025em;}
+  .activation p{margin:3px 0 0;color:var(--dim);font-size:.82rem;}
+  .activation-count{font-family:var(--mono);font-size:.68rem;color:var(--live);white-space:nowrap;padding-top:3px;}
+  .activation-steps{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
+  @media (max-width:820px){.activation-steps{grid-template-columns:repeat(2,1fr);}}
+  @media (max-width:500px){.activation-steps{grid-template-columns:1fr;}}
+  .activation-step{display:flex;align-items:center;gap:10px;min-height:58px;padding:10px 11px;border:1px solid var(--line-soft);
+    border-radius:13px;background:rgba(255,255,255,.025);text-align:left;color:var(--text);}
+  .activation-step:not(.done):hover{border-color:rgba(126,182,255,.42);background:var(--panel-2);}
+  .activation-step.done{cursor:default;color:var(--faint);}
+  .activation-step .check{display:grid;place-items:center;width:23px;height:23px;flex:0 0 auto;border-radius:50%;
+    border:1px solid var(--line);font-family:var(--mono);font-size:.68rem;color:var(--live);}
+  .activation-step.done .check{background:var(--ok-soft);border-color:rgba(79,192,138,.35);color:var(--ok);}
+  .activation-step .copy{min-width:0;}
+  .activation-step .copy b{display:block;font-size:.82rem;font-weight:600;}
+  .activation-step .copy span{display:block;font-size:.7rem;color:var(--faint);margin-top:1px;}
 
   /* how it works */
   .how{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px;}
@@ -377,8 +402,14 @@
       </div>
       <div class="livewrap" id="livewrap"></div>
 
+      <section class="activation" id="activation" hidden aria-labelledby="activation-title">
+        <div class="activation-top"><div><h2 id="activation-title">Launch your first avatar</h2>
+          <p>Four short steps from setup to a completed action.</p></div><div class="activation-count" id="activation-count"></div></div>
+        <div class="activation-steps" id="activation-steps"></div>
+      </section>
+
       <div class="how">
-        <div class="step"><div class="n">01 / CONNECT YOUR TOOLS</div><h3>Connected to your tools</h3><p>Connect each avatar to your Gmail, Calendar and Slack. It works inside your world — reading context and acting on your behalf, with your permission.</p></div>
+        <div class="step"><div class="n">01 / CONNECT YOUR TOOLS</div><h3>Connect the tools you trust</h3><p>Add Slack, Gmail and Calendar when you need them. Every action stays permissioned and visible.</p></div>
         <div class="step"><div class="n">02 / SEND IT IN</div><h3>Into any meeting</h3><p>Paste a Zoom, Meet or Teams link below (or invite its email to the calendar). It joins as a participant, on camera.</p></div>
         <div class="step"><div class="n">03 / GET THE WORK BACK</div><h3>It does the follow-through</h3><p>Live it tracks the checklist and answers. The moment the call ends, the summary and action items land here.</p></div>
         <div class="how-foot">Avatars act on their own — this is where you watch them and steer.</div>
@@ -388,8 +419,8 @@
         <h2>Send an avatar to a meeting</h2>
         <div class="ph">Paste a Zoom / Meet / Teams link — the avatar joins as a participant.</div>
         <div class="dispatch">
-          <select id="dsp-avatar"></select>
-          <input id="dsp-url" placeholder="https://meet.google.com/…" />
+          <select id="dsp-avatar" aria-label="Avatar"></select>
+          <input id="dsp-url" type="url" inputmode="url" autocomplete="off" aria-label="Meeting link" placeholder="https://meet.google.com/…" />
           <button class="btn primary" id="dsp-go">Send</button>
         </div>
         <div class="note">The host may need to admit it from the waiting room. Sessions bill per minute — end them from the live bar above.</div>
@@ -419,7 +450,7 @@
     <section class="view" id="view-avatars" hidden>
       <div class="head"><div><h1>Avatars</h1><div class="sub">Your AI colleagues — who they are, what they know, what they can do</div></div></div>
       <div id="av-grid"></div>
-      <div class="foot">A NEW AVATAR IS A FOLDER UNDER avatars/ TODAY — THE SELF-SERVE WIZARD IS ON THE ROADMAP.</div>
+      <div class="foot">CHOOSE THE SPECIALIST THAT FITS THE MEETING. EACH AVATAR KEEPS ITS OWN ROLE, KNOWLEDGE AND MEETING ADDRESS.</div>
     </section>
 
     <!-- MEETINGS -->
@@ -442,7 +473,7 @@
           <h2 style="margin:0 0 6px">Connect your calendar</h2>
           <div class="ph" style="max-width:46ch;margin:0 auto 18px">See upcoming meetings here and let your avatars auto-join them — or schedule an avatar into a meeting straight from the dashboard.</div>
           <button class="btn primary" id="cal-connect">Connect Google Calendar</button>
-          <div class="cnote" style="margin-top:14px">Calendar auto-join &amp; scheduling is the next connector we're wiring up.</div>
+          <div class="cnote" style="margin-top:14px">After connecting, invite an avatar's email address to choose who joins.</div>
         </div>
       </div>
     </section>
@@ -469,9 +500,9 @@
 
     <!-- CONNECTIONS -->
     <section class="view" id="view-connections" hidden>
-      <div class="head"><div><h1>Connections</h1><div class="sub">What your avatars can reach — configured on the server</div></div></div>
+      <div class="head"><div><h1>Connections</h1><div class="sub">Choose what your avatars can read and where approved actions can run</div></div></div>
       <div class="conns" id="conns"></div>
-      <div class="foot">CONNECTIONS ARE CONFIGURED VIA ENVIRONMENT/OAUTH ON THE DEPLOYMENT. CALENDAR CONNECT OPENS THE GOOGLE CONSENT FLOW.</div>
+      <div class="foot">CONNECTED DOES NOT MEAN AUTONOMOUS ACCESS — ACTIONS STILL FOLLOW THE APPROVAL RULES OF EACH TOOL.</div>
     </section>
 
     <!-- SETTINGS -->
@@ -506,6 +537,12 @@
              "linear-gradient(135deg,#8b5cf6,#c4b5fd)","linear-gradient(135deg,#1F9D63,#4FC08A)"];
   var gradOf={};
   function grad(id){ if(!(id in gradOf)) gradOf[id]=GRADS[Object.keys(gradOf).length%GRADS.length]; return gradOf[id]; }
+  function avatarBadge(id,name,style){
+    var safeId=encodeURIComponent(id||"laura"), letter=esc((name||id||"?")[0].toUpperCase());
+    return '<span class="av avatar-photo" style="background:'+grad(id)+';'+(style||'')+'">'+
+      '<span class="fallback">'+letter+'</span><img src="/laura-reference.jpg?avatar_id='+safeId+'" alt="'+esc(name||id||"Avatar")+'" '+
+      'onerror="this.parentNode.classList.add(\'broken\')" /></span>';
+  }
 
   var token=localStorage.getItem("LAURA_API_TOKEN")||"";
   function headers(){ var h={"Content-Type":"application/json"}; if(token) h["Authorization"]="Bearer "+token; return h; }
@@ -559,6 +596,7 @@
   function renderAll(d){
     var avById={}; d.avatars.forEach(function(a){avById[a.id]=a;});
     function avName(id){ return (avById[id]||{}).name || (id?id:"—"); }
+    var brainConnected=(d.org_connections||[]).some(function(x){return x.provider==="cedric-brain"&&x.status==="connected";});
 
     var uc=$("#userchip");
     if(d.user){
@@ -571,13 +609,14 @@
     } else { uc.hidden=true; }
 
     $("#side-roster").innerHTML = d.avatars.map(function(a){
-      return '<div class="rost" data-goto="avatars"><span class="av" style="background:'+grad(a.id)+'">'+esc(a.name[0]||"?")+'</span>'+
+      return '<div class="rost" data-goto="avatars">'+avatarBadge(a.id,a.name)+
         '<span class="nm">'+esc(a.name)+'</span><span class="sdot'+(a.live_now?" live":"")+'"></span></div>';}).join("")
       || '<div class="empty" style="padding:8px;font-size:.78rem">No avatars installed</div>';
     var connNames={calendar:"Google Calendar",gmail:"Gmail watch",drive:"Google Drive",slack:"Slack",voice:"Voice (ElevenLabs)",meetings:"Meetings (Recall)"};
     $("#side-conns").innerHTML = ["calendar","gmail","slack"].map(function(k){
-      return '<div class="rost" data-goto="connections"><span class="sdot'+(d.connections[k]?" ok":"")+'"></span>'+
-        '<span class="nm" style="font-size:.82rem;color:'+(d.connections[k]?"inherit":"var(--faint)")+'">'+connNames[k]+'</span></div>';}).join("");
+      var on=k==="slack"?brainConnected:!!d.connections[k];
+      return '<div class="rost" data-goto="connections"><span class="sdot'+(on?" ok":"")+'"></span>'+
+        '<span class="nm" style="font-size:.82rem;color:'+(on?"inherit":"var(--faint)")+'">'+connNames[k]+'</span></div>';}).join("");
 
     var liveN=d.live.length;
     $("#ov-sub").textContent = d.avatars.length+" avatar"+(d.avatars.length===1?"":"s")+" · "+
@@ -595,6 +634,27 @@
           toast("Session ended — meter stopped. Artifact will appear in Meetings."); setTimeout(load,1200); })
         .catch(function(e){ toast("Could not end: "+e.message,true); b.disabled=false; b.textContent="End session"; }); }); });
 
+    var firstMeeting=!!(d.live.length||d.stats.meetings_30d||(d.meetings||[]).length);
+    var firstResult=!!(d.meetings||[]).length;
+    var avatarChosen=localStorage.getItem("laura_avatar_chosen")==="1"||firstMeeting;
+    var activation=[
+      {done:avatarChosen,label:"Choose your avatar",hint:"Pick the right specialist",action:"avatars"},
+      {done:brainConnected,label:"Add the brain to Slack",hint:"Approvals and execution",action:"slack"},
+      {done:firstMeeting,label:"Run a first meeting",hint:"Meet, Zoom or Teams",action:"meeting"},
+      {done:firstResult,label:"Review the outcome",hint:"Summary, gaps and actions",action:"results"}
+    ];
+    var doneN=activation.filter(function(x){return x.done;}).length;
+    $("#activation").hidden=doneN===activation.length;
+    $("#activation-count").textContent=doneN+" of "+activation.length+" complete";
+    $("#activation-steps").innerHTML=activation.map(function(x,i){return '<button class="activation-step'+(x.done?' done':'')+'" '+
+      (x.done?'disabled':'data-activate="'+x.action+'"')+'><span class="check">'+(x.done?'✓':(i+1))+'</span><span class="copy"><b>'+x.label+'</b><span>'+x.hint+'</span></span></button>';}).join("");
+    $$("[data-activate]").forEach(function(b){b.addEventListener("click",function(){var a=b.getAttribute("data-activate");
+      if(a==="avatars"){go("avatars");}
+      if(a==="slack"){go("avatars");var c=$("[data-brain-on=\"cedric\"]");if(c){c.click();c.scrollIntoView({behavior:"smooth",block:"center"});}}
+      if(a==="meeting"){go("overview");$("#dsp-url").focus();$("#dsp-url").scrollIntoView({behavior:"smooth",block:"center"});}
+      if(a==="results"){go("meetings");}
+    });});
+
     var prevAvatar=$("#dsp-avatar").value;
     $("#dsp-avatar").innerHTML = d.avatars.map(function(a){return '<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>';}).join("");
     if(prevAvatar) $("#dsp-avatar").value=prevAvatar;
@@ -607,7 +667,7 @@
     renderChart(d.stats.weekly);
 
     $("#avcards").innerHTML = d.avatars.map(function(a){
-      return '<div class="avc" data-goto="avatars"><span class="av" style="background:'+grad(a.id)+'">'+esc(a.name[0]||"?")+'</span>'+
+      return '<div class="avc" data-goto="avatars">'+avatarBadge(a.id,a.name)+
         '<div><div class="nm">'+esc(a.name)+' <span class="pill '+(a.live_now?"live":"idle")+'">'+(a.live_now?"in call":"idle")+'</span>'+(a.silent?' <span class="pill silent">silent</span>':'')+'</div>'+
         '<div class="ro">'+esc(a.role)+' · '+a.knowledge_docs+' docs</div></div>'+
         '<div class="stat"><div class="n tnum">'+a.meetings_total+'</div><div class="l">meetings</div></div></div>';}).join("")
@@ -638,7 +698,7 @@
           '<div id="brain-conns" class="conns-list" style="margin-top:10px"></div>';
       }
       return '<div class="avd"><div class="top">'+
-          '<div class="idn"><span class="av" style="background:'+grad(a.id)+'">'+esc(a.name[0]||"?")+'</span>'+
+          '<div class="idn">'+avatarBadge(a.id,a.name)+
           '<div><div class="nm">'+esc(a.name)+' <span class="pill '+(a.live_now?"live":"idle")+'">'+(a.live_now?"in call":"idle")+'</span></div>'+
           '<div class="ro">'+esc(a.role)+' · '+a.meetings_total+' meeting'+(a.meetings_total===1?"":"s")+(a.last_meeting_at?' · last '+fmtWhen(a.last_meeting_at):'')+'</div>'+
           (a.persona?'<div class="persona">'+esc(a.persona)+(a.persona.length>=220?"…":"")+'</div>':'')+
@@ -652,7 +712,8 @@
         '</div>';}).join("") || '<div class="empty">No avatars installed</div>';
     if(document.getElementById("brain-conns")) loadBrainConnectors();
     $$("#av-grid [data-dispatch]").forEach(function(b){ b.addEventListener("click",function(e){
-      e.stopPropagation(); go("overview"); $("#dsp-avatar").value=b.getAttribute("data-dispatch"); $("#dsp-url").focus(); }); });
+      e.stopPropagation(); localStorage.setItem("laura_avatar_chosen","1"); go("overview");
+      $("#dsp-avatar").value=b.getAttribute("data-dispatch"); $("#dsp-url").focus(); }); });
     $$("#av-grid [data-copy]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); var v=b.getAttribute("data-copy");
       if(navigator.clipboard) navigator.clipboard.writeText(v);
@@ -701,7 +762,7 @@
     function platformsIn(){ var s={}; (d.meetings||[]).forEach(function(m){ if(m.platform&&m.platform!=="—") s[m.platform]=1; }); return Object.keys(s); }
     function rowHTML(m,i){ var nm=avName(m.avatar_id);
       return '<tr class="row" data-i="'+i+'"><td><div class="cell-av">'+
-        '<span class="av" style="background:'+(m.avatar_id?grad(m.avatar_id):"var(--faint)")+'">'+esc(nm[0]||"?")+'</span><span>'+esc(nm)+'</span></div></td>'+
+        (m.avatar_id?avatarBadge(m.avatar_id,nm):'<span class="av" style="background:var(--faint)">'+esc(nm[0]||"?")+'</span>')+'<span>'+esc(nm)+'</span></div></td>'+
         '<td><span class="platc">'+esc(m.platform)+'</span></td>'+
         '<td class="when">'+fmtWhen(m.saved_at)+'</td><td class="dur">'+fmtDur(m.duration_seconds)+'</td>'+
         '<td class="r tnum">'+m.actions.length+'</td>'+
@@ -755,20 +816,23 @@
     var visIds=d.avatars.map(function(a){return a.id;});
     $("#u-bars").innerHTML = (visIds.filter(function(id){return byAv[id]!=null;}).length ? visIds : Object.keys(byAv)).filter(function(id){return byAv[id]!=null;}).map(function(id){
       var mins=byAv[id]||0;
-      return '<div class="ubar"><div class="nm"><span class="av" style="width:20px;height:20px;font-size:.62rem;background:'+grad(id)+'">'+esc(avName(id)[0]||"?")+'</span>'+esc(avName(id))+'</div>'+
+      return '<div class="ubar"><div class="nm">'+avatarBadge(id,avName(id),'width:20px;height:20px;font-size:.62rem')+esc(avName(id))+'</div>'+
         '<div class="track"><div class="fill" style="width:'+Math.round(mins/maxMin*100)+'%"></div></div><div class="val tnum">'+mins+'m</div></div>';}).join("")
       || '<div class="empty" style="padding:10px 0">No usage yet.</div>';
 
     var CONN=[["calendar","Google Calendar","Auto-join meetings on the calendar","/oauth/google/connect"],
               ["gmail","Gmail watch","Join from emailed Meet links · follow-up delivery",null],
               ["drive","Google Drive","Per-avatar knowledge from a Drive folder",null],
-              ["slack","Slack","Post-meeting summary to a channel",null],
+              ["brain","Slack approvals & execution","Send decisions for approval, then run them with Cedric's connected tools",null],
               ["voice","Voice (ElevenLabs)","Natural voice for the avatars",null],
               ["meetings","Meetings (Recall)","The bot that joins Zoom / Meet / Teams",null]];
-    $("#conns").innerHTML = CONN.map(function(c){ var on=!!d.connections[c[0]];
+    $("#conns").innerHTML = CONN.map(function(c){ var on=c[0]==="brain"?brainConnected:!!d.connections[c[0]];
       return '<div class="conn"><div class="nm">'+c[1]+'</div><div class="ds">'+c[2]+'</div>'+
         '<div class="foot"><span class="cstat'+(on?" on":"")+'"><b></b>'+(on?"Connected":"Not configured")+'</span>'+
-        (c[3]&&!on?'<a class="btn primary" style="text-decoration:none" href="'+c[3]+'">Connect</a>':'')+'</div></div>'; }).join("");
+        (c[3]&&!on?'<a class="btn primary" style="text-decoration:none" href="'+c[3]+'">Connect</a>':'')+
+        (c[0]==="brain"&&!on?'<button class="btn primary" data-connection-brain>Connect Slack</button>':'')+'</div></div>'; }).join("");
+    $$("[data-connection-brain]").forEach(function(b){b.addEventListener("click",function(){go("avatars");
+      var c=$("[data-brain-on=\"cedric\"]");if(c){c.click();c.scrollIntoView({behavior:"smooth",block:"center"});}});});
   }
 
   function renderChart(weekly){
@@ -791,13 +855,16 @@
   $("#dsp-go").addEventListener("click",function(){
     var url=$("#dsp-url").value.trim(), avatar=$("#dsp-avatar").value;
     if(!url){ $("#dsp-url").focus(); return; }
+    if(!/^https:\/\/(meet\.google\.com|([a-z0-9-]+\.)*zoom\.us|teams\.(microsoft\.com|live\.com))\//i.test(url)){
+      toast("Paste a Google Meet, Zoom or Microsoft Teams meeting link.",true); $("#dsp-url").focus(); return; }
     var b=this; b.disabled=true; b.textContent="Sending…";
     fetch("/sessions/start",{method:"POST",headers:headers(),body:JSON.stringify({meeting_url:url,avatar_id:avatar})})
       .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
       .then(function(res){ if(!res.ok){
           var msg=res.j.error==="avatar_busy" ? res.j.detail : (res.j.error||res.j.detail||"request failed");
           throw new Error(msg); }
-        toast((avatar||"Avatar")+" is joining — admit it from the waiting room if asked.");
+        var picked=(DATA&&DATA.avatars||[]).find(function(a){return a.id===avatar;});
+        toast((picked?picked.name:"Avatar")+" is joining — admit them from the waiting room if asked.");
         $("#dsp-url").value=""; setTimeout(load,1500); })
       .catch(function(e){ toast("Could not send: "+e.message,true); })
       .finally(function(){ b.disabled=false; b.textContent="Send"; });
@@ -820,6 +887,10 @@
     var w=b.getAttribute("data-w");
     $("#mt-past").hidden = (w!=="past"); $("#mt-upcoming").hidden = (w!=="upcoming"); }); });
   $("#cal-connect").addEventListener("click",function(){ window.location.href="/oauth/google/connect"; });
+  $("#dsp-avatar").addEventListener("change",function(){
+    localStorage.setItem("laura_avatar_chosen","1");
+    if(DATA) renderAll(DATA);
+  });
 
   $("#refresh").addEventListener("click",load);
   load();
