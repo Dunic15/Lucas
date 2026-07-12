@@ -195,10 +195,17 @@ class Session:
         return label
 
     def present_names(self) -> list[str]:
-        """Names currently in the room per the EVENT roster only — cheap (small
-        dict, no transcript scan), safe to call on the partial hot path. Used
-        to keep the fuzzy wake from swallowing a real participant's name."""
-        return [p["name"] for p in self.participants.values() if p.get("here")]
+        """First names to EXCLUDE from the FUZZY wake match: everyone else known
+        to be in the meeting, from the event roster AND transcript speakers.
+
+        Backed by roster()'s merge (was event-roster only) so a real participant
+        known only from the transcript — a "Lara" who spoke but never fired a
+        join event — is still shielded and never swallowed as a corruption of
+        "Laura". Broadening this exclude set can only SUPPRESS a fuzzy wake, never
+        create one, so it strictly reduces false wakes. Still cheap enough for the
+        partial hot path (a lowercased scan of a short transcript), and it's the
+        same scan roster() already runs on the final path."""
+        return self.roster()
 
     def roster(self, avatar_name: str = "") -> list[str]:
         """Who is in the meeting right now, besides the avatar itself.

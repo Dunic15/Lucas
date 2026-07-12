@@ -58,11 +58,36 @@ def _action_entry(action) -> dict:
     return {"action_id": "", "item": str(action)[:300], "owner": "", "done": False}
 
 
+def _delivered(
+    actions: list, email: dict, readiness: int, decisions_count: int
+) -> list[str]:
+    """The captured→DELIVERED story for one meeting, from distilled artifact
+    fields ONLY (no Cedric dispatch wiring — that's a deferred track). Short
+    chips a buyer reads as "what came OUT of this meeting", so the row proves
+    Laura produced outcomes, not just that she took notes. Best-effort: an
+    empty list simply means the artifact carried nothing worth surfacing."""
+    chips: list[str] = []
+    if actions:
+        chips.append(f"{len(actions)} action{'s' if len(actions) != 1 else ''}")
+    if decisions_count:
+        chips.append(
+            f"{decisions_count} decision{'s' if decisions_count != 1 else ''}"
+        )
+    if (email.get("subject") or "").strip():
+        chips.append("follow-up email drafted")
+    if readiness:
+        chips.append(f"readiness {readiness}")
+    return chips
+
+
 def _meeting_row(row: dict) -> dict:
     """One artifact → one dashboard meeting row. Distilled fields only: the
     transcript never leaves the store through this projection."""
     art = row.get("artifact") or {}
     email = art.get("follow_up_email") or {}
+    actions = [_action_entry(a) for a in (art.get("actions") or [])[:12]]
+    readiness = int(art.get("readiness_score") or 0)
+    decisions_count = len(art.get("decisions") or [])
     return {
         "bot_id": row.get("bot_id"),
         "saved_at": row.get("saved_at"),
@@ -71,12 +96,15 @@ def _meeting_row(row: dict) -> dict:
         "platform": _platform(art.get("meeting_url", "")),
         "meeting_type": art.get("meeting_type", ""),
         "duration_seconds": int(art.get("duration_seconds") or 0),
-        "readiness_score": int(art.get("readiness_score") or 0),
+        "readiness_score": readiness,
         "summary": str(art.get("summary") or "")[:600],
-        "actions": [_action_entry(a) for a in (art.get("actions") or [])[:12]],
+        "actions": actions,
         "missing_steps": [str(s) for s in (art.get("missing_steps") or [])[:8]],
-        "decisions_count": len(art.get("decisions") or []),
+        "decisions_count": decisions_count,
         "follow_up_subject": str(email.get("subject") or "")[:160],
+        # Additive: what this meeting DELIVERED (captured→delivered), derived
+        # purely from the fields above so it never leaks transcript or invents.
+        "delivered": _delivered(actions, email, readiness, decisions_count),
     }
 
 
@@ -162,6 +190,12 @@ def _hidden(avatar_id: str) -> bool:
 # on the web_4_core tier) plus modest LLM/TTS. A deliberate, conservative
 # ESTIMATE for the usage panel; real invoicing is a later track.
 EST_COST_PER_MIN = 0.04
+
+# Manual follow-up work a captured, owner-tagged action item saves a human from
+# doing by hand (finding the note, drafting the message, chasing the owner). A
+# deliberately conservative ESTIMATE for the ROI panel — the buyer-facing "so
+# what", derived from the REAL action counts, never invented data.
+FOLLOWUP_MINUTES_SAVED_PER_ACTION = 12
 
 
 def _avatar_email(avatar_id: str) -> str:
@@ -294,13 +328,34 @@ def dashboard_summary(request: Request) -> JSONResponse:
         if 0 <= bucket < 8:
             weekly[7 - bucket] += 1
 
+    actions_30d = sum(len(m["actions"]) for m in recent)
+    followups_30d = sum(1 for m in recent if m["follow_up_subject"])
+    # Actions the orchestrator (Cedric) actually executed — the execution
+    # provenance decorated onto each action above. Honest: 0 until dispatch is
+    # wired, never fabricated.
+    actions_executed_30d = sum(
+        1
+        for m in recent
+        for a in m["actions"]
+        if (a.get("execution") or {}).get("status") == "done"
+    )
     stats = {
         "meetings_30d": len(recent),
         "hours_30d": round(sum(m["duration_seconds"] for m in recent) / 3600, 1),
-        "actions_30d": sum(len(m["actions"]) for m in recent),
-        "followups_30d": sum(1 for m in recent if m["follow_up_subject"]),
+        "actions_30d": actions_30d,
+        "followups_30d": followups_30d,
         "avg_readiness_30d": round(sum(scored) / len(scored)) if scored else 0,
         "weekly": weekly,
+        # ── outcome / ROI framing (ADDITIVE; the keys above are untouched) ──
+        # "What Laura DID", not just notes she took. All derived from the real
+        # counts above — actions captured, follow-ups automated, and a
+        # conservative estimate of the manual follow-up hours those saved.
+        "actions_executed_30d": actions_executed_30d,
+        "followups_automated_30d": followups_30d,
+        "hours_saved_30d": round(
+            actions_30d * FOLLOWUP_MINUTES_SAVED_PER_ACTION / 60, 1
+        ),
+        "roi_minutes_per_action": FOLLOWUP_MINUTES_SAVED_PER_ACTION,
     }
 
     # Usage & billing. Minutes are REAL (summed from meeting durations); the cost

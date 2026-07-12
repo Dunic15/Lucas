@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app import ledger, store
+from app import dashboard, ledger, store
 from app.config import settings
 
 SECRET_LINE = "duccio: the acquisition price is nine million"
@@ -91,6 +91,37 @@ def test_summary_shape_and_attribution(client):
 
     # Connections are booleans only — never secrets.
     assert all(isinstance(v, bool) for v in data["connections"].values())
+
+
+def test_stats_include_roi_framing(client):
+    """The stats block surfaces OUTCOMES (actions executed, follow-ups
+    automated, follow-up hours saved), not just note-taking — all derived from
+    the real counts, existing keys untouched."""
+    _seed_artifact()  # 1 action, 1 follow-up, readiness 78, no execution
+    stats = client.get("/dashboard/summary").json()["stats"]
+    # Existing keys the frontend reads stay put.
+    assert stats["actions_30d"] == 1
+    assert stats["followups_30d"] == 1
+    # Additive value framing.
+    assert stats["followups_automated_30d"] == 1
+    assert stats["actions_executed_30d"] == 0  # honest: no dispatch wired yet
+    assert stats["roi_minutes_per_action"] == dashboard.FOLLOWUP_MINUTES_SAVED_PER_ACTION
+    assert stats["hours_saved_30d"] == round(
+        1 * stats["roi_minutes_per_action"] / 60, 1
+    )
+    assert stats["hours_saved_30d"] > 0
+
+
+def test_meeting_delivered_summary(client):
+    """Each meeting row carries the captured→DELIVERED chips derived from the
+    artifact (actions / decisions / follow-up / readiness) — proof Laura
+    produced outcomes, not just notes."""
+    _seed_artifact()  # 1 action, 1 decision, follow-up subject, readiness 78
+    m = client.get("/dashboard/summary").json()["meetings"][0]
+    assert "delivered" in m and isinstance(m["delivered"], list)
+    assert any("action" in c for c in m["delivered"])
+    assert "follow-up email drafted" in m["delivered"]
+    assert any("readiness" in c for c in m["delivered"])
 
 
 def test_summary_includes_live_sessions_without_text(client):

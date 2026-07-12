@@ -1232,6 +1232,46 @@ def _looks_degraded(artifact: dict) -> bool:
     )
 
 
+# When a process template matched the meeting, readiness = the share of required
+# process steps it covered (state.readiness_score()). When NO template matched
+# (e.g. a generic non-onboarding transcript) that score is undefined and comes
+# back 0 — leaving the demo readiness tile a dead "—". Derive instead a
+# defensible OUTCOME-readiness from the distilled artifact alone: did the meeting
+# produce a recap, action items, owners, and a drafted follow-up? Deterministic
+# (same artifact → same score), no model call, no new artifact keys. Weights sum
+# to 100.
+_READY_SUMMARY_W = 25   # a real recap was distilled
+_READY_ACTIONS_W = 25   # at least one action item was captured
+_READY_OWNED_W = 30     # captured actions carry named owners (scaled by ratio)
+_READY_FOLLOWUP_W = 20  # a follow-up email was drafted
+
+
+def _action_has_owner(action: object) -> bool:
+    """True when an action item names a real owner (not blank / UNASSIGNED)."""
+    if isinstance(action, dict):
+        owner = str(action.get("owner") or "").strip()
+        return bool(owner) and owner.upper() != "UNASSIGNED"
+    return False
+
+
+def _derived_readiness(artifact: dict) -> int:
+    """Defensible 0-100 outcome-readiness for a meeting with no process template
+    (see the weights above). Reads only distilled artifact fields, so it never
+    touches the transcript and is safe on the demo path."""
+    score = 0
+    if (artifact.get("summary") or "").strip():
+        score += _READY_SUMMARY_W
+    actions = artifact.get("actions") or []
+    if actions:
+        score += _READY_ACTIONS_W
+        owned = sum(1 for a in actions if _action_has_owner(a))
+        score += round(_READY_OWNED_W * owned / len(actions))
+    email = artifact.get("follow_up_email") or {}
+    if (str(email.get("subject") or "") + str(email.get("body") or "")).strip():
+        score += _READY_FOLLOWUP_W
+    return min(100, score)
+
+
 def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dict:
     """Normalize to the full artifact schema; state fills the deterministic
     fields and backfills anything the model left out.
@@ -1258,7 +1298,14 @@ def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dic
     artifact["actions"] = actions
     artifact["checklist"] = actions
     artifact["missing_steps"] = list(state.missing_steps)
-    artifact["readiness_score"] = state.readiness_score()
+    # Readiness: the rigorous template-coverage score when a process template
+    # matched; otherwise a defensible outcome-readiness derived from the artifact
+    # so the tile is never a dead "—" for a non-onboarding meeting.
+    artifact["readiness_score"] = (
+        state.readiness_score()
+        if state.required_steps
+        else _derived_readiness(artifact)
+    )
     artifact["meeting_type"] = state.meeting_type
     # Participation view (Read.ai-style, but in the same product as the voice):
     # per-person talk share + what each person committed to. Straight from the
