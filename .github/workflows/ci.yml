@@ -1,0 +1,46 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python 3.12 · key-free suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BRAIN_PROVIDER: stub
+      EMBEDDING_PROVIDER: hash
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt 'pytest>=8,<10'
+
+      - name: Backend tests
+        run: python -m pytest backend/tests -q -p no:cacheprovider
+
+      - name: Conversation evals
+        run: python -m pytest tests -q -p no:cacheprovider
