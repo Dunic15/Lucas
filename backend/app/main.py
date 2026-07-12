@@ -1058,7 +1058,7 @@ async def _start_avatar_session(
     avatar_id: str = "",
     join_at: Optional[str] = None,
     integration: Optional[dict] = None,
-    org_id: str = "",
+    org_id: str = settings.demo_org_id,
 ) -> dict:
     """Send a Recall bot (rendering the avatar page as its camera) into a meeting.
 
@@ -1066,7 +1066,7 @@ async def _start_avatar_session(
     and the Gmail watcher. Raises on failure. The avatar page mints its own fresh
     Anam token at render time and keys its websocket on the conversation_id.
     org_id is the owning tenant when a logged-in user dispatched (auth.py);
-    "" for service starts (Cedric, calendar auto-join, Gmail watcher).
+    the Demo org for service starts (Cedric, calendar auto-join, Gmail watcher).
     """
     avatar = avatars.load(avatar_id or settings.default_avatar_id)  # raises if unknown
     conversation_id = uuid.uuid4().hex
@@ -1099,11 +1099,11 @@ async def _start_avatar_session(
         # signing secret. "" for service starts keeps today's behaviour.
         session.integration = {**integration, "org_id": org_id}
     session.anam_conversation_id = conversation_id
-    store.register_conversation(conversation_id, bot["id"])
+    store.register_conversation(conversation_id, bot["id"], org_id=org_id)
     # Cross-meeting memory: what previous sessions of this meeting link left
-    # open. One sqlite read at start; "" when the meeting has no history.
+    # open, scoped to THIS org. One sqlite read at start; "" when no history.
     session.memory_brief = await run_in_threadpool(
-        ledger.carryover_brief, meeting_url
+        ledger.carryover_brief, meeting_url, org_id=org_id
     )
     # Drive connector: the avatar's shared folder (avatar.yaml drive_folder_id)
     # becomes part of the same brief channel. Fetched HERE — session start,
@@ -1154,10 +1154,21 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     brief = req.context.brief_markdown if req.context else ""  # CEDRIC
     if err := cedric.brief_too_large(brief):  # CEDRIC
         return err
+    # The owning tenant: the logged-in user's org, else the Demo org for the
+    # machine/anon/service path (Cedric bearer, key-free demo). Never derived
+    # from a request parameter or a meeting participant (MULTI-TENANCY §0/§3.1).
+    caller_org = user["org_id"] if user else settings.demo_org_id
     # One live/scheduled booking per meeting URL: rebooking must cancel first
     # (otherwise two bots — and two per-minute meters — end up in one call).
     for existing in store.all_sessions():
         if existing.meeting_url == req.meeting_url:
+            # Don't leak another tenant's bot_id when the clashing session
+            # belongs to a different org — a generic 409 instead.
+            if existing.org_id != caller_org:
+                return JSONResponse(
+                    {"error": "a session already exists for this meeting_url"},
+                    status_code=409,
+                )
             return JSONResponse(
                 {
                     "error": "a session already exists for this meeting_url",
@@ -1170,7 +1181,7 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     try:
         result = await _start_avatar_session(
             req.meeting_url, req.avatar_id, req.join_at, integration,
-            org_id=(user or {}).get("org_id", ""),
+            org_id=caller_org,
         )
     except recall_client.AvatarBusyError:
         return JSONResponse(
@@ -1426,13 +1437,14 @@ async def _finalize_session_locked(
             session.transcript[-1].ts - session.transcript[0].ts
         )
 
-    store.save_artifact(bot_id, artifact)
+    store.save_artifact(bot_id, artifact, org_id=session.org_id)
     # Cross-meeting memory: fold this meeting's extracted facts into the
     # ledger. Best-effort — memory must never block the cleanup below
     # (session removal + GPU meter signal), so a ledger hiccup is swallowed.
     try:
         await run_in_threadpool(
-            ledger.record_meeting, session.meeting_url, session.avatar_id, bot_id, artifact
+            ledger.record_meeting, session.meeting_url, session.avatar_id, bot_id,
+            artifact, org_id=session.org_id,
         )
     except Exception:
         pass
@@ -1479,7 +1491,12 @@ async def end_session(bot_id: str, request: Request) -> JSONResponse:
             return err
     else:
         live = store.get(bot_id)
-        if live is not None and live.org_id and live.org_id != user["org_id"]:
+        # Shared/service sessions (empty or the Demo org) stay endable by any
+        # logged-in user — that's virtually all live traffic today, and this is
+        # the manual meter-kill switch. Only a DIFFERENT real org is blocked.
+        if live is not None and live.org_id not in (
+            "", settings.demo_org_id, user["org_id"]
+        ):
             return JSONResponse({"error": "not your session"}, status_code=403)
     artifact = await _finalize_session(bot_id, source="manual")
     if artifact is None:
@@ -1581,12 +1598,15 @@ def ledger_view(meeting_url: str, request: Request) -> JSONResponse:
     carryover brief the avatar gets injected at the next session."""
     if err := cedric.auth_error(request):  # CEDRIC
         return err
+    # Machine/service seam (Cedric bearer): no cookie principal, so the Demo
+    # org. A per-org token→org resolver is a later, auth-blocked PR (§5).
+    org = settings.demo_org_id
     key = ledger.meeting_key(meeting_url)
     return JSONResponse(
         {
             "meeting_key": key,
-            "brief": ledger.carryover_brief(meeting_url),
-            "items": ledger.items(key),
+            "brief": ledger.carryover_brief(meeting_url, org_id=org),
+            "items": ledger.items(key, org_id=org),
         }
     )
 
@@ -1623,7 +1643,9 @@ async def redeliver_artifact(bot_id: str, request: Request) -> JSONResponse:
     if artifact is None:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     artifact_org = str(artifact.get("org_id") or "")
-    if user is not None and artifact_org and artifact_org != user["org_id"]:
+    if user is not None and artifact_org not in (
+        "", settings.demo_org_id, user["org_id"]
+    ):
         return JSONResponse({"error": "not your session"}, status_code=403)
 
     integration = cedric.default_integration()
@@ -1667,8 +1689,8 @@ def meetings_list(request: Request) -> JSONResponse:
         artifacts = [
             a
             for a in artifacts
-            if (art_org := str((a.get("artifact") or {}).get("org_id") or "")) == ""
-            or art_org == org
+            if (art_org := str((a.get("artifact") or {}).get("org_id") or ""))
+            in ("", settings.demo_org_id, org)
         ]
     return JSONResponse({"meetings": artifacts})
 
@@ -2523,7 +2545,13 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             bot = await run_in_threadpool(
                 recall_client.create_bot, url, avatar_url, start, avatar.name
             )
-            s = store.create(bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id)
+            # Calendar auto-join has no authenticated principal (a webhook on
+            # Laura's one Google account) → the Demo org (§5, intrinsically
+            # single-tenant until calendar connections become per-org).
+            s = store.create(
+                bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id,
+                org_id=settings.demo_org_id,
+            )
             runpod_runtime.on_session_started(avatar.page)
             # CEDRIC: calendar-summoned (scheduled) bots take this inlined path,
             # NOT _start_avatar_session, so wire the Model A default here too —
@@ -2533,7 +2561,9 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             if default_integ:
                 s.integration = default_integ
             s.anam_conversation_id = conversation_id
-            store.register_conversation(conversation_id, bot["id"])
+            store.register_conversation(
+                conversation_id, bot["id"], org_id=settings.demo_org_id
+            )
             if eid:
                 store.mark_scheduled(eid)
             scheduled.append({"event": eid, "bot_id": bot["id"], "join_at": start})
@@ -2832,10 +2862,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if _is_own_speech(avatar.name, speaker):
         return JSONResponse({"ok": True, "spoke": False, "reason": "own speech"})
 
-    # Cross-meeting memory: lazily (re)load after a process restart.
+    # Cross-meeting memory: lazily (re)load after a process restart, scoped to
+    # this session's org (never another tenant's open items in the live prompt).
     if session.memory_brief is None:
         session.memory_brief = await run_in_threadpool(
-            ledger.carryover_brief, session.meeting_url
+            ledger.carryover_brief, session.meeting_url, org_id=session.org_id
         )
     memory = session.memory_brief or ""
     memory = cedric.inject_brief(session, memory)  # CEDRIC: brief ahead of carryover

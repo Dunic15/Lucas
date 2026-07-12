@@ -26,3 +26,12 @@ edge-tts>=6.1
 # Meeting-bound GPU runtime (issue #3): start/stop the photoreal EC2 box around
 # meetings. Only exercised when GPU_INSTANCE_ID is set; import is guarded.
 boto3>=1.34
+
+# Multi-tenancy control plane (docs/infra/MULTI-TENANCY*.md). Only used when
+# LAURA_DATABASE_URL is set (Supabase Postgres): Alembic runs the 0001 migration
+# (identity spine + org_id + RLS) and SQLAlchemy/psycopg drive the control DAO.
+# The key-free SQLite demo never imports these — Alembic env.py is a no-op when
+# the URL is empty.
+sqlalchemy>=2.0
+alembic>=1.13
+psycopg[binary]>=3.1

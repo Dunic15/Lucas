@@ -194,11 +194,11 @@ def dashboard_summary(request: Request) -> JSONResponse:
             return err
 
     # Tenancy scoping (org_id == user_id today): a logged-in user sees their
-    # own rows plus unowned ("") rows — the pre-auth/service world of this
-    # single-tenant deployment. Strict isolation lands with the Postgres/RLS
-    # track (docs/infra/MULTI-TENANCY.md); the filter seam is already here.
+    # own rows plus shared rows — unowned ("") and the Demo org that every
+    # service/anon/auto-join session is stamped with. Strict isolation lands
+    # with the Postgres/RLS track (docs/infra/MULTI-TENANCY.md); seam is here.
     def visible(row_org: str) -> bool:
-        return user is None or row_org in ("", user["org_id"])
+        return user is None or row_org in ("", settings.demo_org_id, user["org_id"])
 
     now = time.time()
     artifact_rows = store.list_artifacts()  # newest first

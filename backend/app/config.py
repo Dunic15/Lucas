@@ -325,6 +325,17 @@ class Settings(BaseSettings):
     # Static bearer token for the session API (/sessions/*, /ledger). Empty =
     # open (preserves the zero-key local demo); set in any real deployment.
     laura_api_token: str = ""
+    # ── Multi-tenancy spine (docs/infra/MULTI-TENANCY*.md) ──
+    # Control-plane database. Empty = the key-free SQLite demo (no Alembic, no
+    # Postgres); when set (a Supabase transaction-pooler URL) the Alembic 0001
+    # migration + RLS apply. The hot path (sessions/utterances) stays SQLite
+    # regardless — latency is the product. Never in git (see exposed-secrets).
+    laura_database_url: str = ""
+    # The fixed tenant every unauthenticated / service / anon row is stamped
+    # with. Its uuid is seeded as the "Demo" org row so the single-tenant demo
+    # stays byte-identical while every persisted row still carries a non-null
+    # org_id (the "start right so we never re-architect" invariant, §0).
+    demo_org_id: str = "00000000-0000-0000-0000-0000000000de"
     # HMAC key for signing dashboard login cookies (auth.py). Empty = a random
     # per-boot key is derived, which just means users re-login after a restart
     # — fine for now, set a stable value in a real deployment.

@@ -406,6 +406,35 @@ def test_token_plus_login_anonymous_gets_google_gate(client, google_on, monkeypa
     assert resp.json().get("auth_enabled") is True
 
 
+def test_logged_in_user_can_end_demo_org_session(client, google_on, monkeypatch):
+    """Regression (code-review catch): real service/anon/auto-join sessions are
+    now stamped DEMO_ORG_ID (not ''), and a logged-in beta user of a DIFFERENT
+    org must still be able to end them — the manual meter-kill switch for ~all
+    live traffic today. Exercises the REAL store.create default, not org_id=''."""
+    from app import cedric, recall_client
+
+    _login(client, "alice@example.com")
+    s = store.create("bot_demo", "https://meet.google.com/d", "laura")
+    assert s.org_id == settings.demo_org_id and s.org_id != ""
+    monkeypatch.setattr(cedric, "wire_artifact", lambda a: a)
+    monkeypatch.setattr(recall_client, "leave_call", lambda bot_id: None)
+    resp = client.post("/sessions/bot_demo/end")
+    assert resp.status_code in (200, 202), resp.json()
+
+
+def test_meetings_list_shows_demo_org_rows_to_logged_in_user(client, google_on):
+    """Regression: demo/service artifacts (DEMO_ORG_ID) must stay visible to a
+    logged-in beta user — the dashboard/meetings blank-out the review caught."""
+    _login(client, "alice@example.com")
+    store.save_artifact(
+        "bot_demo_art",
+        {"summary": "s", "transcript": "t", "org_id": settings.demo_org_id},
+        org_id=settings.demo_org_id,
+    )
+    bots = {m["bot_id"] for m in client.get("/meetings/list").json()["meetings"]}
+    assert "bot_demo_art" in bots
+
+
 def test_logged_in_user_can_end_unowned_session(client, google_on, monkeypatch):
     """A user may end a legacy/service (org_id == '') session — the by-design
     branch the original tests never exercised."""

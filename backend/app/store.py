@@ -17,6 +17,13 @@ from typing import Any
 
 from fastapi import WebSocket
 
+from .config import settings
+
+# Every persisted row carries a non-null org_id (docs/infra/MULTI-TENANCY.md
+# §0). Unauthenticated / service / anon rows are stamped with the fixed Demo
+# tenant so the single-tenant demo stays byte-identical.
+DEMO_ORG_ID = settings.demo_org_id
+
 
 def _default_store_path() -> Path:
     persistent_mount = Path("/var/data")
@@ -52,10 +59,11 @@ class Session:
     bot_id: str
     meeting_url: str
     avatar_id: str = "laura"
-    # Owning tenant (auth.py user's org). "" = shared/service session — the
-    # pre-auth world, calendar auto-join, and orchestrator (Cedric) starts.
-    # org_id == user_id today; the seam is what matters (MULTI-TENANCY.md).
-    org_id: str = ""
+    # Owning tenant (auth.py user's org). Defaults to the Demo org so a session
+    # is never null-tenant; a logged-in dispatch overrides it with the user's
+    # org, and legacy/unowned rows may still carry "" explicitly (the pre-auth
+    # world). org_id == user_id today; the seam is what matters (MULTI-TENANCY.md).
+    org_id: str = DEMO_ORG_ID
     anam_conversation_id: str = ""
     anam_conversation_url: str = ""
     transcript: list[Utterance] = field(default_factory=list)
@@ -219,7 +227,9 @@ class Session:
     def add_utterance(self, speaker: str, text: str) -> None:
         utterance = Utterance(speaker=speaker, text=text, ts=time.time())
         self.transcript.append(utterance)
-        _persist_utterance(self.bot_id, utterance)
+        # Hot path: the per-utterance write stays on local SQLite (never a
+        # network DB — latency is the product). org inherited from the session.
+        _persist_utterance(self.org_id, self.bot_id, utterance)
 
     def transcript_text(self) -> str:
         return "\n".join(f"{u.speaker}: {u.text}" for u in self.transcript)
@@ -256,12 +266,87 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _add_column(conn: sqlite3.Connection, table: str, coldef: str) -> None:
+    """Idempotent ADD COLUMN so an existing local DB upgrades in place. Mirrors
+    the Postgres 0001 backfill (a new NOT NULL org_id defaults to the Demo org,
+    so pre-existing rows become tenant-owned instead of null-tenant)."""
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {coldef}")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
+
 def _init_db() -> None:
+    demo = DEMO_ORG_ID
     with _LOCK, _connect() as conn:
         conn.executescript(
-            """
+            f"""
+            -- ── identity spine (empty now; SSO/SCIM attach later) ──
+            -- No FKs into orgs on SQLite: org_id == user_id today, so real
+            -- sessions carry a user id that is not (yet) a provisioned orgs
+            -- row. The Postgres 0001 migration adds the FKs + RLS.
+            CREATE TABLE IF NOT EXISTS orgs (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                slug TEXT UNIQUE NOT NULL,
+                plan TEXT NOT NULL DEFAULT 'free',
+                region TEXT NOT NULL DEFAULT 'eu-central-1',
+                sso_connection_id TEXT,
+                retention_days INTEGER NOT NULL DEFAULT 90,
+                created_at REAL NOT NULL DEFAULT 0,
+                deleted_at REAL
+            );
+
+            CREATE TABLE IF NOT EXISTS memberships (
+                user_id TEXT NOT NULL,
+                org_id TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'member',      -- owner|admin|member|billing
+                status TEXT NOT NULL DEFAULT 'active',
+                PRIMARY KEY (user_id, org_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS org_domains (
+                org_id TEXT NOT NULL,
+                domain TEXT NOT NULL,                     -- NEVER map gmail.com etc.
+                verified_at REAL,
+                PRIMARY KEY (org_id, domain)
+            );
+
+            -- The GRANT org↔agent (a shared avatar folder becomes callable for
+            -- an org). PK(org_id, avatar_id) — one grant per pair.
+            CREATE TABLE IF NOT EXISTS org_agents (
+                org_id TEXT NOT NULL,
+                avatar_id TEXT NOT NULL,
+                alias TEXT NOT NULL DEFAULT '',
+                visibility TEXT NOT NULL DEFAULT 'org',
+                status TEXT NOT NULL DEFAULT 'active',
+                PRIMARY KEY (org_id, avatar_id)
+            );
+
+            -- token_hash → org_id (replaces the single global bearer). Empty
+            -- now; the deps.py resolver is a later, auth-blocked PR.
+            CREATE TABLE IF NOT EXISTS org_tokens (
+                token_hash TEXT PRIMARY KEY,
+                org_id TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL DEFAULT 0
+            );
+
+            -- append-only, METADATA ONLY, never transcript (RLS + REVOKE
+            -- UPDATE/DELETE enforce append-only on Postgres; see 0001).
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                org_id TEXT NOT NULL,
+                actor_user_id TEXT,
+                action TEXT NOT NULL,
+                target TEXT,
+                ts REAL NOT NULL DEFAULT 0
+            );
+
+            -- ── existing store tables, now org-scoped ──
             CREATE TABLE IF NOT EXISTS sessions (
                 bot_id TEXT PRIMARY KEY,
+                org_id TEXT NOT NULL DEFAULT '{demo}',
                 meeting_url TEXT NOT NULL,
                 avatar_id TEXT NOT NULL,
                 anam_conversation_id TEXT NOT NULL DEFAULT '',
@@ -274,6 +359,7 @@ def _init_db() -> None:
 
             CREATE TABLE IF NOT EXISTS utterances (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                org_id TEXT NOT NULL DEFAULT '{demo}',
                 bot_id TEXT NOT NULL,
                 speaker TEXT NOT NULL,
                 text TEXT NOT NULL,
@@ -286,18 +372,21 @@ def _init_db() -> None:
 
             CREATE TABLE IF NOT EXISTS conversation_routes (
                 conversation_id TEXT PRIMARY KEY,
+                org_id TEXT NOT NULL DEFAULT '{demo}',
                 bot_id TEXT NOT NULL,
                 FOREIGN KEY(bot_id) REFERENCES sessions(bot_id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS artifacts (
                 bot_id TEXT PRIMARY KEY,
+                org_id TEXT NOT NULL DEFAULT '{demo}',
                 artifact_json TEXT NOT NULL,
                 saved_at REAL NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS scheduled_events (
                 event_id TEXT PRIMARY KEY,
+                org_id TEXT NOT NULL DEFAULT '{demo}',
                 marked_at REAL NOT NULL
             );
 
@@ -327,20 +416,38 @@ def _init_db() -> None:
             """
         )
         # Migration for stores created before the Cedric integration column.
-        try:
-            conn.execute(
-                "ALTER TABLE sessions "
-                "ADD COLUMN integration_json TEXT NOT NULL DEFAULT ''"
-            )
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        # Migration for stores created before per-user session ownership.
-        try:
-            conn.execute(
-                "ALTER TABLE sessions ADD COLUMN org_id TEXT NOT NULL DEFAULT ''"
-            )
-        except sqlite3.OperationalError:
-            pass  # column already exists
+        _add_column(conn, "sessions", "integration_json TEXT NOT NULL DEFAULT ''")
+        # Migration for stores created before per-user session ownership. The
+        # pre-existing column defaults to '' (legacy/unowned stays visible);
+        # new sessions stamp DEMO_ORG_ID via Session.org_id.
+        _add_column(conn, "sessions", "org_id TEXT NOT NULL DEFAULT ''")
+        # org_id on the remaining persisted tables (idempotent; a new NOT NULL
+        # column backfills existing rows to the Demo org).
+        _add_column(conn, "utterances", f"org_id TEXT NOT NULL DEFAULT '{demo}'")
+        _add_column(
+            conn, "conversation_routes", f"org_id TEXT NOT NULL DEFAULT '{demo}'"
+        )
+        _add_column(conn, "artifacts", f"org_id TEXT NOT NULL DEFAULT '{demo}'")
+        _add_column(conn, "scheduled_events", f"org_id TEXT NOT NULL DEFAULT '{demo}'")
+        # Indexes lead with org_id; conversation_routes keeps a GLOBAL unique on
+        # conversation_id (the unauthenticated ws resolves org from it alone).
+        conn.executescript(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_sessions_org_bot
+                ON sessions(org_id, bot_id);
+            CREATE INDEX IF NOT EXISTS idx_utt_org_bot ON utterances(org_id, bot_id, id);
+            CREATE INDEX IF NOT EXISTS idx_conv_routes_org ON conversation_routes(org_id);
+            CREATE INDEX IF NOT EXISTS idx_artifacts_org_saved
+                ON artifacts(org_id, saved_at);
+            """
+        )
+        # Seed the Demo org row (before any backfill would need it, as on
+        # Postgres). Idempotent; the demo is just an org.
+        conn.execute(
+            "INSERT OR IGNORE INTO orgs (id, name, slug, plan, created_at) "
+            "VALUES (?, 'Demo', 'demo', 'demo', ?)",
+            (demo, time.time()),
+        )
 
 
 def _session_from_row(row: sqlite3.Row, utterances: list[Utterance]) -> Session:
@@ -441,14 +548,14 @@ def _persist_session(session: Session) -> None:
         )
 
 
-def _persist_utterance(bot_id: str, utterance: Utterance) -> None:
+def _persist_utterance(org_id: str, bot_id: str, utterance: Utterance) -> None:
     with _LOCK, _connect() as conn:
         conn.execute(
             """
-            INSERT INTO utterances (bot_id, speaker, text, ts)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO utterances (org_id, bot_id, speaker, text, ts)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (bot_id, utterance.speaker, utterance.text, float(utterance.ts)),
+            (org_id, bot_id, utterance.speaker, utterance.text, float(utterance.ts)),
         )
 
 
@@ -456,30 +563,37 @@ def is_scheduled(event_id: str) -> bool:
     return event_id in _scheduled_events
 
 
-def mark_scheduled(event_id: str) -> None:
+def mark_scheduled(event_id: str, *, org_id: str = DEMO_ORG_ID) -> None:
     _scheduled_events.add(event_id)
     with _LOCK, _connect() as conn:
         conn.execute(
             """
-            INSERT OR IGNORE INTO scheduled_events (event_id, marked_at)
-            VALUES (?, ?)
+            INSERT OR IGNORE INTO scheduled_events (event_id, org_id, marked_at)
+            VALUES (?, ?, ?)
             """,
-            (event_id, time.time()),
+            (event_id, org_id, time.time()),
         )
 
 
-def save_artifact(bot_id: str, artifact: dict) -> None:
+def save_artifact(bot_id: str, artifact: dict, *, org_id: str | None = None) -> None:
+    """Persist a finished meeting's distilled artifact (never raw transcript on
+    the wire; the store keeps the full copy). The row's org_id column comes from
+    the explicit ``org_id`` when given, else the artifact's own ``org_id`` field
+    (finalize stamps it from the session), else the Demo org — so the column and
+    the artifact JSON agree and single-tenant stays byte-identical."""
     _artifacts[bot_id] = artifact
+    row_org = org_id if org_id is not None else (artifact.get("org_id") or DEMO_ORG_ID)
     with _LOCK, _connect() as conn:
         conn.execute(
             """
-            INSERT INTO artifacts (bot_id, artifact_json, saved_at)
-            VALUES (?, ?, ?)
+            INSERT INTO artifacts (bot_id, org_id, artifact_json, saved_at)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(bot_id) DO UPDATE SET
+                org_id=excluded.org_id,
                 artifact_json=excluded.artifact_json,
                 saved_at=excluded.saved_at
             """,
-            (bot_id, json.dumps(artifact), time.time()),
+            (bot_id, row_org, json.dumps(artifact), time.time()),
         )
 
 
@@ -487,14 +601,27 @@ def get_artifact(bot_id: str) -> dict | None:
     return _artifacts.get(bot_id)
 
 
-def list_artifacts() -> list[dict]:
+def list_artifacts(org_id: str | None = None) -> list[dict]:
     """Every saved artifact with its metadata, newest first (meetings page).
     Reads the DB (not the in-memory cache) so it sees rows written by other
-    processes — e.g. tests or scripts seeding the store."""
+    processes — e.g. tests or scripts seeding the store.
+
+    ``org_id`` seals the enumeration to one tenant (``WHERE org_id=?``); the
+    default (None) returns every row for the callers that apply their own
+    visibility policy downstream (dashboard.visible / /meetings/list scope on
+    the artifact's own org_id, which keeps the legacy ""=shared semantics)."""
     with _LOCK, _connect() as conn:
-        rows = conn.execute(
-            "SELECT bot_id, artifact_json, saved_at FROM artifacts ORDER BY saved_at DESC"
-        ).fetchall()
+        if org_id is None:
+            rows = conn.execute(
+                "SELECT bot_id, org_id, artifact_json, saved_at FROM artifacts "
+                "ORDER BY saved_at DESC"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT bot_id, org_id, artifact_json, saved_at FROM artifacts "
+                "WHERE org_id=? ORDER BY saved_at DESC",
+                (org_id,),
+            ).fetchall()
     out = []
     for r in rows:
         try:
@@ -506,7 +633,7 @@ def list_artifacts() -> list[dict]:
 
 
 def create(
-    bot_id: str, meeting_url: str, avatar_id: str = "laura", org_id: str = ""
+    bot_id: str, meeting_url: str, avatar_id: str = "laura", org_id: str = DEMO_ORG_ID
 ) -> Session:
     s = Session(
         bot_id=bot_id, meeting_url=meeting_url, avatar_id=avatar_id, org_id=org_id
@@ -628,16 +755,19 @@ def connections_for_org(org_id: str) -> list[dict]:
     return out
 
 
-def register_conversation(conversation_id: str, bot_id: str) -> None:
+def register_conversation(
+    conversation_id: str, bot_id: str, *, org_id: str = DEMO_ORG_ID
+) -> None:
     _by_conversation[conversation_id] = bot_id
     with _LOCK, _connect() as conn:
         conn.execute(
             """
-            INSERT INTO conversation_routes (conversation_id, bot_id)
-            VALUES (?, ?)
-            ON CONFLICT(conversation_id) DO UPDATE SET bot_id=excluded.bot_id
+            INSERT INTO conversation_routes (conversation_id, org_id, bot_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT(conversation_id) DO UPDATE SET
+                org_id=excluded.org_id, bot_id=excluded.bot_id
             """,
-            (conversation_id, bot_id),
+            (conversation_id, org_id, bot_id),
         )
 
 

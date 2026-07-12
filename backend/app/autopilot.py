@@ -59,7 +59,8 @@ def maybe_send_brief(meeting_url: str, avatar_name: str) -> dict[str, Any]:
     if not settings.autopilot_brief:
         return {"sent": False, "reason": "disabled"}
     try:
-        brief = ledger.carryover_brief(meeting_url)
+        # Autopilot runs on the service path (no request principal) → Demo org.
+        brief = ledger.carryover_brief(meeting_url, org_id=settings.demo_org_id)
         if not brief:
             return {"sent": False, "reason": "no history"}
         key = ledger.meeting_key(meeting_url)
@@ -82,7 +83,7 @@ def maybe_send_brief(meeting_url: str, avatar_name: str) -> dict[str, Any]:
 def nudge_digest() -> str:
     """One Slack-ready digest of every open ledger item, grouped by meeting.
     Empty string when nothing is open (callers skip posting)."""
-    by_meeting = ledger.open_by_meeting()
+    by_meeting = ledger.open_by_meeting(org_id=settings.demo_org_id)
     if not by_meeting:
         return ""
     lines = ["*Open items Laura is tracking across meetings:*"]
