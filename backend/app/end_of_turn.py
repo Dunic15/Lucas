@@ -56,6 +56,14 @@ _TRAILING_FILLER = {
     "ehm", "cioè", "allora", "diciamo", "insomma", "tipo", "vediamo",
 }
 
+# A trailing emoji / pictographic / symbol run (with any whitespace) hides the
+# terminal punctuation before it — "Great job! 🎉" is a finished exclamation.
+# Stripped before reading punctuation. Live ASR rarely emits emoji, but chat-
+# or caption-driven inputs can, so read the sentence, not the decoration.
+_TRAILING_SYMBOLS = re.compile(
+    r"[\s←-⇿⌀-➿⬀-⯿️\U0001F000-\U0001FAFF]+$"
+)
+
 
 def completeness(text: str) -> float:
     """0..1 likelihood that the speaker has finished their thought.
@@ -69,14 +77,19 @@ def completeness(text: str) -> float:
     if not t:
         return 0.0
 
+    # Read terminal punctuation off a copy with any trailing emoji/symbol run
+    # stripped, so "Great job! 🎉" still reads its "!". `t` keeps the decoration
+    # for the word-level checks (which already strip trailing non-word chars).
+    core = _TRAILING_SYMBOLS.sub("", t) or t
+
     # Trailing ellipsis is a spoken "..." — the transcriber heard the trail-off.
-    if t.endswith(("...", "…")):
+    if core.endswith(("...", "…")):
         return 0.15
 
     # A complete question can naturally end in a word that is incomplete only
     # outside question syntax ("What did she mean by that?"). The question mark
     # is the stronger turn-yield signal, so check it before the final token.
-    if t.endswith("?"):
+    if core.endswith("?"):
         return 0.95
 
     last = re.sub(r"[^\w']+$", "", t).split()[-1].lower() if t.split() else ""
@@ -87,7 +100,7 @@ def completeness(text: str) -> float:
     if last in _TRAILING_INCOMPLETE:
         return 0.2
 
-    if t.endswith((".", "!")):
+    if core.endswith((".", "!")):
         # Punctuated, but a 1-2 word "sentence" is often a transcriber artifact
         # ("So." / "Allora.") — treat short ones as weaker evidence.
         return 0.85 if words >= 3 else 0.6

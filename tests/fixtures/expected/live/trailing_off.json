@@ -29,7 +29,7 @@
       "control_intent": {"expected": "none"},
       "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
       "intervention_timing": {"expected": "silent"},
-      "xfail": {"floor_holding": "end_of_turn.completeness treats a mid-word ASR cutoff as a yielded floor"}
+      "xfail": {"floor_holding": "DEFERRED to smart-turn v2 audio model: mid-word ASR truncation is undecidable from text alone (see app/end_of_turn.py v2 note)"}
     },
     {
       "id": "t4", "speaker": "Sela Noor",
