@@ -162,14 +162,14 @@ def test_dashboard_page_served(client):
     assert "Laura — Dashboard" in resp.text
 
 
-def test_dashboard_guides_first_run_and_shows_avatar_portraits(client):
-    """The customer surface must explain the activation path and render the
-    existing avatars as people, not expose repository/roadmap implementation
-    details to a brand-new user."""
+def test_dashboard_shows_avatar_portraits_without_internal_copy(client):
+    """Render installed avatars as people and keep implementation/roadmap
+    details out of the customer-facing surface."""
     html = client.get("/dashboard").text
-    assert "Launch your first avatar" in html
-    assert "Add the brain to Slack" in html
     assert "/laura-reference.jpg?avatar_id=" in html
+    assert 'loading="lazy"' in html
+    assert 'aria-live="polite"' in html
+    assert "onerror=" not in html
     assert "SELF-SERVE WIZARD IS ON THE ROADMAP" not in html
     assert "configured on the server" not in html
 
