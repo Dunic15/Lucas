@@ -605,8 +605,14 @@ async def _reconcile_sessions_loop() -> None:
 
 
 @app.get("/gmail/status")
-def gmail_status() -> JSONResponse:
-    """Non-secret health of the Gmail 'Add people' auto-join watcher."""
+def gmail_status(request: Request) -> JSONResponse:
+    """Health of the Gmail 'Add people' auto-join watcher. Gated: `recent_joins`
+    carries live meeting URLs + bot_ids (joinable links = PII), so only a
+    logged-in owner (or the machine bearer) may read it — never the anonymous
+    internet. Open in the key-free demo (auth disabled)."""
+    if auth.current_user(request) is None:
+        if err := auth.gate(request):
+            return err
     has_rt = bool(gmail_watcher.refresh_token())
     last = _gmail_state["last_poll"]
     return JSONResponse(
@@ -870,8 +876,15 @@ async def live_error(e: LiveError) -> JSONResponse:
 
 
 @app.post("/live/token")
-async def live_token(req: LiveTokenRequest) -> JSONResponse:
-    """Mint a fresh Anam session token for the browser to stream the avatar."""
+async def live_token(req: LiveTokenRequest, request: Request) -> JSONResponse:
+    """Mint a fresh Anam session token for the browser to stream the avatar.
+    Gated: minting an Anam conversation bills per-minute, so an anonymous caller
+    can't rack up charges — a logged-in owner (or the machine bearer) only. Open
+    in the key-free demo (auth disabled). The current /talk face uses TalkingHead
+    + /tts (not Anam), so this only affects the legacy /live + /avatar pages."""
+    if auth.current_user(request) is None:
+        if err := auth.gate(request):
+            return err
     avatar = avatars.load(req.avatar_id)
     try:
         persona_id = await run_in_threadpool(anam_client.create_persona, avatar)

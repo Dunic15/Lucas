@@ -132,6 +132,16 @@ def test_meetings_list_scopes_to_caller_org(client, google_on):
     assert "theirs" not in bots    # another org's transcript never leaks
 
 
+def test_gmail_status_requires_login_when_auth_enabled(client, google_on):
+    # recent_joins leaks joinable Meet URLs + bot_ids — must not be anonymous.
+    assert client.get("/gmail/status").status_code == 401
+
+
+def test_live_token_requires_login_when_auth_enabled(client, google_on):
+    # Minting an Anam token bills per-minute — no anonymous minting in prod.
+    assert client.post("/live/token", json={"avatar_id": "laura"}).status_code == 401
+
+
 def test_bearer_still_works_when_auth_enabled(client, google_on, monkeypatch):
     monkeypatch.setattr(settings, "laura_api_token", "sesame")
     ok = client.get(
