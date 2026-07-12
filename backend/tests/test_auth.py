@@ -105,6 +105,33 @@ def test_summary_with_cookie_when_auth_enabled(client, google_on):
     assert user["org_id"] == user["user_id"]
 
 
+def test_meetings_list_requires_login_when_auth_enabled(client, google_on):
+    # Transcripts are PII — the meetings archive must not be readable anonymously.
+    resp = client.get("/meetings/list")
+    assert resp.status_code == 401
+    assert resp.json()["error"] == "login_required"
+
+
+def test_meetings_list_open_when_auth_disabled(client):
+    # Demo mode (no Google configured) stays open + key-free, like /dashboard.
+    store.save_artifact("bot-demo", {"summary": "s", "transcript": "t"})
+    resp = client.get("/meetings/list")
+    assert resp.status_code == 200
+    assert any(m["bot_id"] == "bot-demo" for m in resp.json()["meetings"])
+
+
+def test_meetings_list_scopes_to_caller_org(client, google_on):
+    user = _login(client, "owner@example.com")
+    org = user["org_id"]
+    store.save_artifact("mine", {"summary": "a", "transcript": "x", "org_id": org})
+    store.save_artifact("theirs", {"summary": "b", "transcript": "y", "org_id": "other-org"})
+    store.save_artifact("unowned", {"summary": "c", "transcript": "z"})  # empty org_id
+    bots = {m["bot_id"] for m in client.get("/meetings/list").json()["meetings"]}
+    assert "mine" in bots
+    assert "unowned" in bots       # legacy/unowned stays visible (redeliver rule)
+    assert "theirs" not in bots    # another org's transcript never leaks
+
+
 def test_bearer_still_works_when_auth_enabled(client, google_on, monkeypatch):
     monkeypatch.setattr(settings, "laura_api_token", "sesame")
     ok = client.get(

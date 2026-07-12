@@ -185,6 +185,13 @@ class Settings(BaseSettings):
     # decides grounding itself). Kept only for per-avatar config back-compat and the
     # decision.py unit tests; changing it has no effect on live meetings.
     min_confidence: float = 0.55
+    # answer_question (non-stream: /demo/ask + non-live asks) grounding floor.
+    # The model self-reports sufficient_context; on weak retrieval it can mislabel
+    # a world-knowledge answer as document-grounded. If the top retrieved chunk
+    # scores below this, force sufficient_context=False + drop citations (answer
+    # text unchanged). Grounded matches ~0.6-0.75, irrelevant ~0.30 → 0.45 splits
+    # them cleanly. Override via env ANSWER_GROUNDING_FLOOR without a redeploy.
+    answer_grounding_floor: float = 0.45
     # Autopilot (acts between meetings; every flag defaults OFF — the zero-key
     # demo never sends anything). See backend/app/autopilot.py.
     autopilot_deliver: bool = False        # auto-send artifact email+Slack at finalize
