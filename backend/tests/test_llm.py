@@ -216,3 +216,52 @@ def test_stream_falls_back_to_haiku_when_groq_fails(monkeypatch):
     monkeypatch.setattr(llm, "_stream_anthropic", lambda s, u, mt, m: iter(["hi from haiku"]))
 
     assert list(llm.stream_complete("s", "u")) == ["hi from haiku"]
+
+
+# ── cerebras: a first-class OpenAI-compatible provider (prod's live brain) ──
+
+
+def test_compat_creds_selects_endpoint_per_provider(monkeypatch):
+    """cerebras -> Cerebras base+key; groq -> Groq base+key; missing key raises."""
+    monkeypatch.setattr(llm.settings, "cerebras_api_key", "csk-x")
+    monkeypatch.setattr(llm.settings, "cerebras_base", "https://api.cerebras.ai/v1")
+    monkeypatch.setattr(llm.settings, "groq_api_key", "gsk-y")
+    assert llm._compat_creds("cerebras") == ("https://api.cerebras.ai/v1", "csk-x")
+    assert llm._compat_creds("groq")[1] == "gsk-y"
+
+    import pytest
+
+    monkeypatch.setattr(llm.settings, "cerebras_api_key", "")
+    with pytest.raises(RuntimeError, match="CEREBRAS_API_KEY"):
+        llm._compat_creds("cerebras")
+
+
+def test_cerebras_dispatches_through_openai_compat(monkeypatch):
+    """BRAIN_PROVIDER=cerebras routes to the shared OpenAI-compatible impl with
+    provider='cerebras' (not to Groq, not to Anthropic)."""
+    monkeypatch.setattr(llm.settings, "brain_provider", "cerebras")
+    seen = {}
+
+    def fake_compat(system, user, max_tokens, model=None, provider="groq"):
+        seen["provider"] = provider
+        return "cerebras answer"
+
+    monkeypatch.setattr(llm, "_complete_groq", fake_compat)
+    assert llm.complete("s", "u") == "cerebras answer"
+    assert seen["provider"] == "cerebras"
+
+
+def test_cerebras_stream_falls_back_to_haiku_when_it_fails(monkeypatch):
+    """A Cerebras failure trips the shared breaker and streams Haiku — parity
+    with the Groq path, so the spoken avatar never goes silent."""
+    monkeypatch.setattr(llm.settings, "brain_provider", "cerebras")
+    monkeypatch.setattr(llm.settings, "anthropic_api_key", "k")
+
+    def boom(*a, **k):
+        raise RuntimeError("429 Too Many Requests")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(llm, "_stream_groq", boom)
+    monkeypatch.setattr(llm, "_stream_anthropic", lambda s, u, mt, m: iter(["hi from haiku"]))
+
+    assert list(llm.stream_complete("s", "u")) == ["hi from haiku"]

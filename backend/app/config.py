@@ -18,8 +18,12 @@ class Settings(BaseSettings):
 
     # Reasoning (the brain) — pick a provider:
     #   anthropic (best quality, needs ANTHROPIC_API_KEY)  ← default
+    #   cerebras  (FASTEST live, ~0.17s; OpenAI-compatible, needs CEREBRAS_API_KEY)
+    #   groq      (fast + cheap; OpenAI-compatible, needs GROQ_API_KEY)
     #   ollama    (free, local, needs Ollama running)
     #   stub      (free, offline, no model — deterministic, for a zero-key demo)
+    # NOTE: prod today runs BRAIN_PROVIDER=cerebras for the live spoken path and
+    # BRAIN_PROVIDER_POST=anthropic (Sonnet 5) for the post-meeting artifact.
     brain_provider: str = "anthropic"
     anthropic_api_key: str = ""
     brain_model: str = "claude-sonnet-5"
@@ -47,6 +51,15 @@ class Settings(BaseSettings):
     # (e.g. llama-3.3-70b-versatile). ~0.2-0.4s first token, no latency spikes.
     groq_api_key: str = ""
     groq_base: str = "https://api.groq.com/openai/v1"
+
+    # Cerebras (fastest live inference, ~0.17s first token; same OpenAI-compatible
+    # wire format as Groq, different endpoint + models). BRAIN_PROVIDER=cerebras;
+    # set BRAIN_MODEL_FAST to a Cerebras model id (e.g. gemma-4-31b, gpt-oss-120b).
+    # This is what prod uses on the live spoken path — it's the latency play.
+    # (History: this used to be smuggled in via GROQ_BASE=https://api.cerebras.ai/v1
+    # with the Cerebras key stored under GROQ_API_KEY — now a first-class provider.)
+    cerebras_api_key: str = ""
+    cerebras_base: str = "https://api.cerebras.ai/v1"
 
     # Embeddings for RAG — pick a provider:
     #   hash   (free, offline, zero-dependency keyword vectors)  ← default
