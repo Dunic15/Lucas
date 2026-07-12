@@ -186,13 +186,29 @@ def record_meeting(
             item = (item or "").strip()[:200]
             if not item or (kind, _norm(item)) in existing:
                 return
+            resolved_at = None
+            resolution_detail = ""
+            if kind == "action" and action_id:
+                execution = conn.execute(
+                    """SELECT status, detail, updated_at FROM action_status
+                       WHERE action_id=?""",
+                    (action_id,),
+                ).fetchone()
+                if execution and execution["status"] in _TERMINAL_STATUS_OUTCOME:
+                    # Cedric may report completion before finalize creates this
+                    # row. Preserve that terminal state instead of resurrecting
+                    # the action as open.
+                    status = _TERMINAL_STATUS_OUTCOME[execution["status"]]
+                    resolved_at = execution["updated_at"]
+                    resolution_detail = execution["detail"]
             conn.execute(
                 """INSERT INTO ledger_items
                    (meeting_key, avatar_id, kind, item, owner, deadline,
-                    meeting_type, status, bot_id, action_id, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    meeting_type, status, bot_id, action_id, created_at,
+                    resolved_at, resolution_detail)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (key, avatar_id, kind, item, owner, deadline, meeting_type,
-                 status, bot_id, action_id, now),
+                 status, bot_id, action_id, now, resolved_at, resolution_detail),
             )
             existing.add((kind, _norm(item)))
             added += 1

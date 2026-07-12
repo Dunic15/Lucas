@@ -94,10 +94,10 @@ def _read_aggregate_locked(client) -> dict[str, str] | None:
     return _parse(raw)
 
 
-def _read_dedicated_locked(client) -> dict[str, str]:
+def _read_dedicated_locked(client) -> dict[str, str] | None:
     base = settings.laura_webhook_registry_ssm_parameter.strip()
     if not base or client is None or not hasattr(client, "get_parameters_by_path"):
-        return {}
+        return None
     path = f"{base.rstrip('/')}/orgs"
     found: dict[str, str] = {}
     token = None
@@ -118,13 +118,33 @@ def _read_dedicated_locked(client) -> dict[str, str]:
 
 
 def _read_ssm_locked(client) -> dict[str, str] | None:
-    aggregate = _read_aggregate_locked(client)
-    if aggregate is None:
+    # Read the two sources independently. The legacy aggregate can be missing,
+    # malformed, or temporarily unreadable while the authoritative per-org
+    # SecureStrings remain healthy (notably after a process restart).
+    try:
+        aggregate = _read_aggregate_locked(client)
+    except Exception as exc:  # noqa: BLE001 - still try dedicated parameters
+        aggregate = None
+        print(
+            "[cedric-callback] aggregate SSM registry refresh failed "
+            f"({type(exc).__name__})",
+            flush=True,
+        )
+    try:
+        dedicated = _read_dedicated_locked(client)
+    except Exception as exc:  # noqa: BLE001 - aggregate may still be usable
+        dedicated = None
+        print(
+            "[cedric-callback] dedicated SSM registry refresh failed "
+            f"({type(exc).__name__})",
+            flush=True,
+        )
+    if aggregate is None and dedicated is None:
         return None
     # Dedicated values win over the legacy JSON aggregate. They are written
     # independently, so concurrent org connects and rolling deploy overlap
     # cannot clobber one another.
-    return {**aggregate, **_read_dedicated_locked(client)}
+    return {**(aggregate or {}), **(dedicated or {})}
 
 
 def secret_for(org_id: str) -> str:
