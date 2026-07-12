@@ -18,17 +18,26 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from . import cedric, ledger, store
+from .config import settings
 
 router = APIRouter(prefix="/org", tags=["org-memory"])
 
 
-def _search_artifacts(query: str, limit: int) -> list[dict]:
+def _org_for(request: Request) -> str:
+    """The tenant whose memory a surface may read. These routes sit behind the
+    machine Bearer gate (Cedric), with no cookie principal, so today they map to
+    the Demo org. A per-org token→org resolver (org_tokens) is a later,
+    auth-blocked PR (MULTI-TENANCY §5); until then the fallback is Demo."""
+    return settings.demo_org_id
+
+
+def _search_artifacts(query: str, limit: int, org_id: str) -> list[dict]:
     """Meetings whose summary/decisions/actions mention the query — a distilled
-    snippet per hit, newest first. No transcripts (they aren't in list_artifacts
-    output beyond the distilled fields we read here)."""
+    snippet per hit, newest first, scoped to one org. No transcripts (they
+    aren't in list_artifacts output beyond the distilled fields we read here)."""
     q = query.lower()
     hits: list[dict] = []
-    for row in store.list_artifacts():
+    for row in store.list_artifacts(org_id):
         art = row.get("artifact") or {}
         hay = [art.get("summary", "")]
         hay += [str(d) for d in (art.get("decisions") or [])]
@@ -55,7 +64,8 @@ async def org_brief(meeting_url: str, request: Request) -> JSONResponse:
     open (process steps, actions with owners, recent decisions)."""
     if err := cedric.auth_error(request):
         return err
-    brief = await run_in_threadpool(ledger.carryover_brief, meeting_url)
+    org = _org_for(request)
+    brief = await run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org)
     return JSONResponse(
         {"meeting_key": ledger.meeting_key(meeting_url), "brief": brief}
     )
@@ -66,7 +76,7 @@ async def org_actions(request: Request) -> JSONResponse:
     """Open ledger items across all meetings, grouped by meeting key."""
     if err := cedric.auth_error(request):
         return err
-    grouped = await run_in_threadpool(ledger.open_by_meeting)
+    grouped = await run_in_threadpool(ledger.open_by_meeting, org_id=_org_for(request))
     return JSONResponse({"open": grouped})
 
 
@@ -82,8 +92,9 @@ async def org_search(q: str, request: Request, limit: int = 20) -> JSONResponse:
     if not query:
         return JSONResponse({"error": "missing query ?q="}, status_code=400)
     limit = max(1, min(limit, 50))
-    ledger_hits = await run_in_threadpool(ledger.search, query, limit=limit)
-    meeting_hits = await run_in_threadpool(_search_artifacts, query, limit)
+    org = _org_for(request)
+    ledger_hits = await run_in_threadpool(ledger.search, query, limit=limit, org_id=org)
+    meeting_hits = await run_in_threadpool(_search_artifacts, query, limit, org)
     return JSONResponse(
         {"query": query, "ledger_matches": ledger_hits, "meeting_matches": meeting_hits}
     )
@@ -122,10 +133,15 @@ async def org_resolve(ref: str, request: Request) -> JSONResponse:
             status_code=400,
         )
     detail = str((body or {}).get("detail") or "").strip()[:300]
+    org = _org_for(request)
     if ref.isdigit():
-        ok = await run_in_threadpool(ledger.resolve_item, int(ref), "", outcome, detail)
+        ok = await run_in_threadpool(
+            ledger.resolve_item, int(ref), "", outcome, detail, org_id=org
+        )
     else:
-        ok = await run_in_threadpool(ledger.resolve_by_action_id, ref, "", outcome, detail)
+        ok = await run_in_threadpool(
+            ledger.resolve_by_action_id, ref, "", outcome, detail, org_id=org
+        )
     if not ok:
         return JSONResponse({"error": "unknown or already resolved item"}, status_code=404)
     return JSONResponse({"resolved": True, "id": ref, "status": outcome})

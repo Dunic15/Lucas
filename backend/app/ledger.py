@@ -26,7 +26,15 @@ import uuid
 from typing import Any
 
 from . import store
+from .config import settings
 from .meeting_state import humanize_step
+
+# Every ledger row is tenant-owned (docs/infra/MULTI-TENANCY.md §3). org_id is a
+# keyword arg on every public function, defaulting to the Demo org so the
+# single-tenant/service path stays byte-identical while isolation is enforced
+# via `WHERE org_id=?` on every statement. meeting_key() stays a pure URL→code
+# function; isolation is (org_id, meeting_key), never meeting_key alone.
+DEMO_ORG_ID = settings.demo_org_id
 
 
 def new_action_id() -> str:
@@ -59,16 +67,27 @@ def meeting_key(meeting_url: str) -> str:
     return url.rstrip("/").lower()
 
 
+def _ledger_add_column(conn: sqlite3.Connection, coldef: str) -> None:
+    """Idempotent ADD COLUMN (mirrors store._add_column's guarded style)."""
+    try:
+        conn.execute(f"ALTER TABLE ledger_items ADD COLUMN {coldef}")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
+
 def _init_db() -> None:
+    demo = DEMO_ORG_ID
     with store._LOCK, store._connect() as conn:
         conn.executescript(
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS ledger_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                meeting_key TEXT NOT NULL,
+                org_id TEXT NOT NULL DEFAULT '{demo}',   -- tenant owner (§3)
+                meeting_key TEXT NOT NULL,               -- scoped by org_id now
                 avatar_id TEXT NOT NULL,
                 kind TEXT NOT NULL,          -- action | decision | missing_step
                 item TEXT NOT NULL,          -- distilled line, never raw transcript
+                item_norm TEXT NOT NULL DEFAULT '',      -- _norm(item), stored for dedupe
                 owner TEXT NOT NULL DEFAULT '',
                 deadline TEXT NOT NULL DEFAULT '',
                 meeting_type TEXT NOT NULL DEFAULT '',
@@ -80,8 +99,6 @@ def _init_db() -> None:
                 resolved_by_bot_id TEXT NOT NULL DEFAULT '',
                 resolution_detail TEXT NOT NULL DEFAULT ''  -- distilled outcome one-liner
             );
-            CREATE INDEX IF NOT EXISTS idx_ledger_key_status
-                ON ledger_items(meeting_key, status);
             """
         )
         # Migration for stores created before the action_id column. This MUST
@@ -90,30 +107,44 @@ def _init_db() -> None:
         # `CREATE INDEX ON ledger_items(action_id)` would raise "no such column"
         # and crash the boot. (Fresh-DB tests never hit this ordering because
         # their CREATE TABLE already includes the column.)
-        try:
+        _ledger_add_column(conn, "action_id TEXT NOT NULL DEFAULT ''")
+        # Additive migration for stores that predate the resolution_detail
+        # column: the short "why" recorded when a resolve carries an outcome
+        # ("rejected: budget cut"). Idempotent.
+        _ledger_add_column(conn, "resolution_detail TEXT NOT NULL DEFAULT ''")
+        # Multi-tenancy: org_id (backfills existing rows to Demo) + a stored
+        # item_norm so the dedupe UNIQUE is (org_id, meeting_key, kind, item_norm).
+        _ledger_add_column(conn, f"org_id TEXT NOT NULL DEFAULT '{demo}'")
+        _ledger_add_column(conn, "item_norm TEXT NOT NULL DEFAULT ''")
+        # Backfill item_norm for pre-existing rows (SQLite can't compute _norm
+        # in SQL); a fresh DB has no rows so this is a no-op. Needed before the
+        # UNIQUE index, else two rows of the same meeting/kind collide on ''.
+        for row in conn.execute(
+            "SELECT id, item FROM ledger_items WHERE item_norm=''"
+        ).fetchall():
             conn.execute(
-                "ALTER TABLE ledger_items "
-                "ADD COLUMN action_id TEXT NOT NULL DEFAULT ''"
+                "UPDATE ledger_items SET item_norm=? WHERE id=?",
+                (_norm(row["item"]), row["id"]),
             )
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        # Column now guaranteed to exist (fresh OR migrated) — safe to index it.
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_ledger_action_id "
-            "ON ledger_items(action_id)"
+        # Column now guaranteed to exist (fresh OR migrated) — safe to index.
+        conn.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_org_key_status
+                ON ledger_items(org_id, meeting_key, status);
+            CREATE INDEX IF NOT EXISTS idx_ledger_action_id
+                ON ledger_items(action_id);
+            """
         )
-        # Additive migration (same pattern as action_id above) for stores that
-        # predate the resolution_detail column: the short "why" recorded when a
-        # resolve carries an outcome ("rejected: budget cut"). Idempotent — on
-        # an already-migrated DB the ALTER raises "duplicate column" and we
-        # move on.
+        # Org-scoped dedupe backstop (the Python `existing` set is the primary
+        # guard; this is belt-and-suspenders and matches the Postgres UNIQUE).
+        # Guarded: a pre-existing DB with legacy duplicates must not crash boot.
         try:
             conn.execute(
-                "ALTER TABLE ledger_items "
-                "ADD COLUMN resolution_detail TEXT NOT NULL DEFAULT ''"
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_ledger_dedupe "
+                "ON ledger_items(org_id, meeting_key, kind, item_norm)"
             )
         except sqlite3.OperationalError:
-            pass  # column already exists
+            pass  # legacy duplicates — the Python dedupe guard still applies
         # Execution provenance reported back by the orchestrator (Cedric) via
         # POST /org/actions/{action_id}/status: the brain's side of the story
         # (proposed → approved/rejected → done/failed), keyed on the same
@@ -136,15 +167,17 @@ def _norm(text: str) -> str:
 
 
 def record_meeting(
-    meeting_url: str, avatar_id: str, bot_id: str, artifact: dict[str, Any]
+    meeting_url: str, avatar_id: str, bot_id: str, artifact: dict[str, Any],
+    *, org_id: str = DEMO_ORG_ID,
 ) -> dict[str, int]:
     """Fold one finished meeting's artifact into the ledger.
 
     - resolves previously-missing process steps that this meeting covered
-      (same meeting_key + meeting_type, deterministic via the template),
+      (same org + meeting_key + meeting_type, deterministic via the template),
     - inserts new open actions / missing steps / decisions,
-    - dedupes on normalized item text per (meeting_key, kind).
-    Returns counts for the caller's response payload.
+    - dedupes on normalized item text per (org_id, meeting_key, kind).
+    Every read/write is scoped to ``org_id`` so two tenants on the same
+    recurring link never merge memory. Returns counts for the caller.
     """
     key = meeting_key(meeting_url)
     meeting_type = str(artifact.get("meeting_type") or "")
@@ -155,28 +188,29 @@ def record_meeting(
 
     with store._LOCK, store._connect() as conn:
         # 1. Resolve: step was open from an earlier session of the same
-        #    meeting+type, and this meeting no longer lists it as missing.
+        #    org+meeting+type, and this meeting no longer lists it as missing.
         if meeting_type:
             open_steps = conn.execute(
                 """SELECT id, item FROM ledger_items
-                   WHERE meeting_key=? AND kind='missing_step' AND status='open'
-                     AND meeting_type=?""",
-                (key, meeting_type),
+                   WHERE org_id=? AND meeting_key=? AND kind='missing_step'
+                     AND status='open' AND meeting_type=?""",
+                (org_id, key, meeting_type),
             ).fetchall()
             for row in open_steps:
                 if row["item"] not in current_missing:
                     conn.execute(
                         """UPDATE ledger_items
                            SET status='done', resolved_at=?, resolved_by_bot_id=?
-                           WHERE id=?""",
-                        (now, bot_id, row["id"]),
+                           WHERE id=? AND org_id=?""",
+                        (now, bot_id, row["id"], org_id),
                     )
                     resolved += 1
 
         existing = {
             (row["kind"], _norm(row["item"]))
             for row in conn.execute(
-                "SELECT kind, item FROM ledger_items WHERE meeting_key=?", (key,)
+                "SELECT kind, item FROM ledger_items WHERE org_id=? AND meeting_key=?",
+                (org_id, key),
             ).fetchall()
         }
 
@@ -184,7 +218,8 @@ def record_meeting(
                     status: str = "open", action_id: str = "") -> None:
             nonlocal added
             item = (item or "").strip()[:200]
-            if not item or (kind, _norm(item)) in existing:
+            norm = _norm(item)
+            if not item or (kind, norm) in existing:
                 return
             resolved_at = None
             resolution_detail = ""
@@ -203,14 +238,15 @@ def record_meeting(
                     resolution_detail = execution["detail"]
             conn.execute(
                 """INSERT INTO ledger_items
-                   (meeting_key, avatar_id, kind, item, owner, deadline,
-                    meeting_type, status, bot_id, action_id, created_at,
+                   (org_id, meeting_key, avatar_id, kind, item, item_norm, owner,
+                    deadline, meeting_type, status, bot_id, action_id, created_at,
                     resolved_at, resolution_detail)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (key, avatar_id, kind, item, owner, deadline, meeting_type,
-                 status, bot_id, action_id, now, resolved_at, resolution_detail),
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (org_id, key, avatar_id, kind, item, norm, owner, deadline,
+                 meeting_type, status, bot_id, action_id, now, resolved_at,
+                 resolution_detail),
             )
-            existing.add((kind, _norm(item)))
+            existing.add((kind, norm))
             added += 1
 
         for a in artifact.get("actions") or []:
@@ -224,20 +260,24 @@ def record_meeting(
         for d in artifact.get("decisions") or []:
             _insert("decision", str(d), status="noted")
 
-        # keep the ledger bounded per meeting
+        # keep the ledger bounded per (org, meeting). Org-scoped so eviction
+        # never deletes another tenant's rows on a shared meeting_key (§6.5).
         conn.execute(
-            """DELETE FROM ledger_items WHERE meeting_key=? AND id NOT IN (
-                 SELECT id FROM ledger_items WHERE meeting_key=?
+            """DELETE FROM ledger_items
+               WHERE org_id=? AND meeting_key=? AND id NOT IN (
+                 SELECT id FROM ledger_items WHERE org_id=? AND meeting_key=?
                  ORDER BY id DESC LIMIT ?)""",
-            (key, key, _LIST_LIMIT),
+            (org_id, key, org_id, key, _LIST_LIMIT),
         )
 
     return {"added": added, "resolved": resolved}
 
 
-def items(meeting_key_: str, status: str = "") -> list[dict[str, Any]]:
-    q = "SELECT * FROM ledger_items WHERE meeting_key=?"
-    args: list[Any] = [meeting_key_]
+def items(
+    meeting_key_: str, status: str = "", *, org_id: str = DEMO_ORG_ID
+) -> list[dict[str, Any]]:
+    q = "SELECT * FROM ledger_items WHERE org_id=? AND meeting_key=?"
+    args: list[Any] = [org_id, meeting_key_]
     if status:
         q += " AND status=?"
         args.append(status)
@@ -246,12 +286,14 @@ def items(meeting_key_: str, status: str = "") -> list[dict[str, Any]]:
         return [dict(row) for row in conn.execute(q, args).fetchall()]
 
 
-def open_by_meeting() -> dict[str, list[dict[str, Any]]]:
-    """Every open item across all meetings, grouped by meeting_key (for the
-    autopilot nudge digest)."""
+def open_by_meeting(*, org_id: str = DEMO_ORG_ID) -> dict[str, list[dict[str, Any]]]:
+    """Every open item for one org across all meetings, grouped by meeting_key
+    (for the autopilot nudge digest)."""
     with store._LOCK, store._connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM ledger_items WHERE status='open' ORDER BY meeting_key, id"
+            "SELECT * FROM ledger_items WHERE org_id=? AND status='open' "
+            "ORDER BY meeting_key, id",
+            (org_id,),
         ).fetchall()
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -259,9 +301,11 @@ def open_by_meeting() -> dict[str, list[dict[str, Any]]]:
     return grouped
 
 
-def search(query: str, *, limit: int = 20) -> list[dict[str, Any]]:
-    """Ledger items matching a free-text query in the item or owner text.
-    Powers 'what did we decide/commit about X across all meetings'."""
+def search(
+    query: str, *, limit: int = 20, org_id: str = DEMO_ORG_ID
+) -> list[dict[str, Any]]:
+    """Ledger items matching a free-text query in the item or owner text, for
+    one org. Powers 'what did we decide/commit about X across all meetings'."""
     q = (query or "").strip()
     if not q:
         return []
@@ -269,9 +313,9 @@ def search(query: str, *, limit: int = 20) -> list[dict[str, Any]]:
     with store._LOCK, store._connect() as conn:
         rows = conn.execute(
             """SELECT * FROM ledger_items
-               WHERE item LIKE ? OR owner LIKE ?
+               WHERE org_id=? AND (item LIKE ? OR owner LIKE ?)
                ORDER BY status='open' DESC, id DESC LIMIT ?""",
-            (like, like, limit),
+            (org_id, like, like, limit),
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -283,10 +327,12 @@ RESOLUTION_OUTCOMES = ("done", "rejected", "failed")
 
 
 def resolve_item(
-    item_id: int, bot_id: str = "", outcome: str = "done", detail: str = ""
+    item_id: int, bot_id: str = "", outcome: str = "done", detail: str = "",
+    *, org_id: str = DEMO_ORG_ID,
 ) -> bool:
     """Close a ledger item with a terminal outcome (default 'done', keeping
-    every existing caller's behavior byte-identical). ``detail`` is a distilled
+    every existing caller's behavior byte-identical). Scoped to ``org_id`` so
+    one tenant can never resolve another's row. ``detail`` is a distilled
     one-liner (capped, never transcript content by contract). An unknown
     outcome is a no-op (False) — callers validate first for their 400s."""
     if outcome not in RESOLUTION_OUTCOMES:
@@ -295,21 +341,23 @@ def resolve_item(
         cur = conn.execute(
             """UPDATE ledger_items
                SET status=?, resolved_at=?, resolved_by_bot_id=?, resolution_detail=?
-               WHERE id=? AND status='open'""",
-            (outcome, time.time(), bot_id, (detail or "").strip()[:300], item_id),
+               WHERE id=? AND org_id=? AND status='open'""",
+            (outcome, time.time(), bot_id, (detail or "").strip()[:300], item_id, org_id),
         )
         return cur.rowcount > 0
 
 
 def resolve_by_action_id(
-    action_id: str, bot_id: str = "", outcome: str = "done", detail: str = ""
+    action_id: str, bot_id: str = "", outcome: str = "done", detail: str = "",
+    *, org_id: str = DEMO_ORG_ID,
 ) -> bool:
     """Close an action by its stable cross-channel action_id — the id the
     orchestrator (Cedric) holds from the live action.requested event and the
     session.ended artifact, so it can ack 'done/approved in Slack' without ever
-    seeing the numeric ledger row id. Only resolves after the meeting finalized
-    (when the row exists); an unknown/already-closed id or outcome is a no-op
-    (False). ``outcome``/``detail`` semantics match resolve_item."""
+    seeing the numeric ledger row id. Scoped to ``org_id``. Only resolves after
+    the meeting finalized (when the row exists); an unknown/already-closed id or
+    outcome is a no-op (False). ``outcome``/``detail`` semantics match
+    resolve_item."""
     aid = (action_id or "").strip()
     if not aid or outcome not in RESOLUTION_OUTCOMES:
         return False
@@ -317,8 +365,8 @@ def resolve_by_action_id(
         cur = conn.execute(
             """UPDATE ledger_items
                SET status=?, resolved_at=?, resolved_by_bot_id=?, resolution_detail=?
-               WHERE action_id=? AND status='open'""",
-            (outcome, time.time(), bot_id, (detail or "").strip()[:300], aid),
+               WHERE action_id=? AND org_id=? AND status='open'""",
+            (outcome, time.time(), bot_id, (detail or "").strip()[:300], aid, org_id),
         )
         return cur.rowcount > 0
 
@@ -386,21 +434,26 @@ def action_statuses(action_ids: list[str]) -> dict[str, dict]:
     }
 
 
-def carryover_brief(meeting_url: str, *, limit: int = 8) -> str:
+def carryover_brief(
+    meeting_url: str, *, limit: int = 8, org_id: str = DEMO_ORG_ID
+) -> str:
     """Compact 'what previous meetings left open' block for prompt injection
-    and pre-meeting briefs. Empty string when there is no history — callers
-    can skip the block entirely."""
+    and pre-meeting briefs. Scoped to ``org_id`` — this feeds the LIVE prompt,
+    so another tenant's open items must never surface mid-meeting (§6.4). Empty
+    string when there is no history — callers can skip the block entirely."""
     key = meeting_key(meeting_url)
     with store._LOCK, store._connect() as conn:
         open_rows = conn.execute(
             """SELECT kind, item, owner, deadline, created_at FROM ledger_items
-               WHERE meeting_key=? AND status='open' ORDER BY id LIMIT ?""",
-            (key, limit),
+               WHERE org_id=? AND meeting_key=? AND status='open'
+               ORDER BY id LIMIT ?""",
+            (org_id, key, limit),
         ).fetchall()
         decisions = conn.execute(
             """SELECT item FROM ledger_items
-               WHERE meeting_key=? AND kind='decision' ORDER BY id DESC LIMIT 3""",
-            (key,),
+               WHERE org_id=? AND meeting_key=? AND kind='decision'
+               ORDER BY id DESC LIMIT 3""",
+            (org_id, key),
         ).fetchall()
     if not open_rows and not decisions:
         return ""

@@ -141,7 +141,7 @@ def test_start_avatar_session_applies_default_integration(client, monkeypatch):
 
     monkeypatch.setattr(settings, "surface_webhook_url", "https://meet-cedric.com/api/laura/events")
     monkeypatch.setattr(main_module.recall_client, "create_bot", lambda *a, **k: {"id": "bot_gmail"})
-    monkeypatch.setattr(main_module.ledger, "carryover_brief", lambda url: "")
+    monkeypatch.setattr(main_module.ledger, "carryover_brief", lambda url, **kw: "")
     monkeypatch.setattr(main_module.drive_client, "folder_brief", lambda fid: "")
 
     asyncio.run(main_module._start_avatar_session("https://meet.google.com/gmail-summon", "cedric"))
