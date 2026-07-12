@@ -280,6 +280,13 @@ class Settings(BaseSettings):
     hand_raise_enabled: bool = True
     hand_raise_min_humans: int = 2
     hand_raise_timeout_seconds: float = 120.0
+    # Motivation gate (decision.should_raise_hand): the SKIP gate decides if a
+    # contribution is grounded; these decide if raising the hand for it is
+    # socially worth it. Cap per meeting, minimum gap between raises, and a
+    # longer back-off after a raise the room ignored — silence means "not now".
+    hand_raise_max_per_meeting: int = 4
+    hand_raise_min_gap_seconds: float = 90.0
+    hand_raise_ignored_gap_seconds: float = 240.0
 
     # Vendor subscription/credit watchdog (vendor_health.py): daily sweep of
     # ElevenLabs characters, Google refresh token, Recall/LLM keys, RunPod
