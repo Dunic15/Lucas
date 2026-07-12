@@ -83,6 +83,28 @@ def test_status_done_closes_ledger_item(client):
     assert open_items == []
 
 
+@pytest.mark.parametrize("terminal_status", ["done", "rejected", "failed"])
+def test_terminal_status_before_record_meeting_inserts_resolved(
+    client, terminal_status
+):
+    action_id = f"early-{terminal_status}"
+    detail = f"Cedric reported {terminal_status}"
+    assert ledger.set_action_status(action_id, terminal_status, detail) is True
+
+    _seed_action(client, action_id)
+
+    row = next(
+        item
+        for item in ledger.items(
+            ledger.meeting_key("https://meet.google.com/abc-defg-hij")
+        )
+        if item["action_id"] == action_id
+    )
+    assert row["status"] == terminal_status
+    assert row["resolved_at"] is not None
+    assert row["resolution_detail"] == detail
+
+
 def test_status_rejects_unknown_state_and_bad_json(client):
     r = client.post("/org/actions/whatever/status", json={"status": "exploded"})
     assert r.status_code == 400
@@ -201,6 +223,37 @@ def test_dedicated_ssm_secret_wins_over_stale_aggregate(monkeypatch):
     monkeypatch.setattr(secret_registry, "_last_ssm_refresh", float("-inf"))
 
     assert callback._secret_for("org-new") == "durable-secret"
+
+
+@pytest.mark.parametrize("aggregate_mode", ["raises", "invalid"])
+def test_dedicated_ssm_secret_survives_unreadable_aggregate(
+    monkeypatch, aggregate_mode
+):
+    class FakeSsm:
+        def get_parameter(self, **kwargs):
+            if aggregate_mode == "raises":
+                raise RuntimeError("aggregate unavailable")
+            return {"Parameter": {"Value": "not valid json"}}
+
+        def get_parameters_by_path(self, **kwargs):
+            assert kwargs["WithDecryption"] is True
+            return {
+                "Parameters": [
+                    {
+                        "Name": "/test/registry/orgs/org-durable",
+                        "Value": "dedicated-secret",
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(secret_registry, "_client", lambda: FakeSsm())
+    monkeypatch.setattr(settings, "laura_webhook_registry_ssm_parameter", "/test/registry")
+    monkeypatch.setattr(settings, "laura_webhook_secrets_by_org", "{}")
+    monkeypatch.setattr(secret_registry, "_env_snapshot", None)
+    monkeypatch.setattr(secret_registry, "_cache", {})
+    monkeypatch.setattr(secret_registry, "_last_ssm_refresh", float("-inf"))
+
+    assert secret_registry.secret_for("org-durable") == "dedicated-secret"
 
 
 def test_signature_differs_by_org_secret(monkeypatch):
