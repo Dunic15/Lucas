@@ -118,7 +118,6 @@ def test_terminal_emoji_preserves_completed_punctuation():
     assert end_of_turn.completeness("Great job! 🎉") >= 0.8
 
 
-@pytest.mark.xfail(reason="app.decision.detect_invite is not implemented on main")
 def test_explicit_invitation_to_speak_is_detected():
     detector = getattr(decision, "detect_invite", None)
 

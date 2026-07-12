@@ -37,8 +37,7 @@
       "multiparty_deference": {"expected": "laura"},
       "control_intent": {"expected": "invite"},
       "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
-      "intervention_timing": {"expected": "silent"},
-      "xfail": {"control_intent": "app.decision.detect_invite is not implemented on main"}
+      "intervention_timing": {"expected": "silent"}
     },
     {
       "id": "t5", "speaker": "Sara Flint",

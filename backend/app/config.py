@@ -264,6 +264,22 @@ class Settings(BaseSettings):
     # the instant she's first addressed by name; after it, normal proactive
     # behaviour resumes. 0 disables (revert to speaking from the first line).
     opening_grace_seconds: float = 45.0
+    # First-call activation: the opening grace NEVER expires on its own — she
+    # stays silent (no unprompted answers, greetings, backchannels, or wrap-up
+    # interventions) until someone says her name once ("Laura, come stai?").
+    # Being named once activates her for the rest of the meeting. False reverts
+    # to the time-boxed grace above.
+    first_call_required: bool = True
+    # Hand-raise etiquette: once activated, when the room is talking among
+    # itself (nobody addressed her) and she has a grounded contribution, she
+    # does NOT speak over the conversation — she raises her hand (gesture on
+    # her /talk tile + a meeting-chat line) and waits to be invited ("dimmi,
+    # Laura"). Only in multi-human meetings (min_humans); in a 1:1 she answers
+    # directly as before. The hand lowers silently after timeout_seconds if
+    # nobody invites her (the moment has passed).
+    hand_raise_enabled: bool = True
+    hand_raise_min_humans: int = 2
+    hand_raise_timeout_seconds: float = 120.0
 
     # Vendor subscription/credit watchdog (vendor_health.py): daily sweep of
     # ElevenLabs characters, Google refresh token, Recall/LLM keys, RunPod

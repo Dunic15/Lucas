@@ -549,3 +549,19 @@ def leave_call(bot_id: str) -> None:
         f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/{bot_id}/leave_call/",
         headers=_headers(),
     )
+
+
+def send_chat_message(bot_id: str, message: str) -> None:
+    """Post a line into the meeting chat (visible to everyone).
+
+    Recall has no raise-hand action on any platform, so the chat message is
+    the in-platform half of the avatar's hand-raise (the visual half is the
+    gesture on her /talk tile). Best-effort at the call site — a chat failure
+    must never block or delay the live path.
+    """
+    _request(
+        "POST",
+        f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/{bot_id}/send_chat_message/",
+        headers=_headers(),
+        json={"to": "everyone", "message": message[:500]},
+    )

@@ -82,6 +82,7 @@ from .decision import (
     adaptive_deference_seconds,
     detect_wake,
     detect_closing,
+    detect_invite,
     detect_leave_command,
     detect_stop_command,
     is_capture_continuation,
@@ -1823,6 +1824,18 @@ _QUEUE_LINES_IT = [
 _BACKCHANNEL_LINES = ["Mm-hm.", "Mm.", "Right."]
 _BACKCHANNEL_LINES_IT = ["Mm-hm.", "Mm.", "Capito."]
 
+# Meeting-chat line posted when she raises her hand (Recall has no raise-hand
+# action, so the chat is the in-platform signal; the gesture on her /talk tile
+# is the visual one). Tells the room HOW to give her the floor.
+_HAND_CHAT_LINES = [
+    '✋ {name} here — I have something to add when there\'s a moment. Just say "go ahead, {name}".',
+    '✋ {name}: quick point on this when you have a second — just say "{name}, what\'s up?".',
+]
+_HAND_CHAT_LINES_IT = [
+    '✋ {name}: avrei una cosa da aggiungere quando c\'è un attimo — basta dire "dimmi, {name}".',
+    '✋ {name}: un appunto veloce su questo punto quando volete — dite "vai, {name}".',
+]
+
 
 def _avatar_voice(session: "store.Session") -> str:
     """The session avatar's ElevenLabs voice for TTS. avatars.load is
@@ -2128,6 +2141,49 @@ async def _make_avatar_stop(session: store.Session) -> None:
     store.queue_avatar_message(session, message)
 
 
+async def _send_avatar_control(session: store.Session, message: dict) -> None:
+    """Deliver a non-speech control message ({"type": ...}) to the avatar page.
+    Same additive delivery contract as speak/stop — ws first, HTTP queue as the
+    net; pages that don't know the type ignore it."""
+    if session.ws is not None:
+        try:
+            await session.ws.send_json(message)
+            return
+        except Exception:
+            session.ws = None
+    store.queue_avatar_message(session, message)
+
+
+async def _raise_hand(session: store.Session, avatar, heard: str = "") -> None:
+    """Hand-raise etiquette: the room is talking among itself and she has a
+    grounded contribution — instead of speaking over the conversation she
+    raises her hand (gesture on her /talk tile) and posts one meeting-chat
+    line saying how to give her the floor. The contribution itself waits in
+    session.pending_contribution until someone invites her ("dimmi, Laura")."""
+    session.hand_raised_at = time.time()
+    await _send_avatar_control(session, {"type": "raise_hand"})
+    # Chat line: best-effort and off the latency path — a Recall hiccup (or the
+    # key-free demo, where there's no real bot) must never block the meeting.
+    if settings.recall_api_key:
+        line = _line_for(heard, _HAND_CHAT_LINES, _HAND_CHAT_LINES_IT).format(
+            name=avatar.name
+        )
+        try:
+            await run_in_threadpool(
+                recall_client.send_chat_message, session.bot_id, line
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[hand] chat message failed (hand still raised): {e}", flush=True)
+
+
+async def _lower_hand(session: store.Session) -> None:
+    """Put the hand down and drop the queued contribution (delivered, answered
+    another way, or the moment simply passed)."""
+    session.hand_raised_at = 0.0
+    session.pending_contribution = ""
+    await _send_avatar_control(session, {"type": "lower_hand"})
+
+
 def _is_own_speech(avatar_name: str, speaker: str) -> bool:
     """True when a transcript line is the avatar's OWN voice — the meeting bot
     hears the avatar too. The Recall bot's display name is the avatar's name
@@ -2143,8 +2199,16 @@ def _in_opening_grace(session: store.Session) -> bool:
     (session.addressed_once) or after settings.opening_grace_seconds from join,
     whichever comes first — so she never talks over the room while it settles,
     but engages immediately when named and becomes proactive once things settle
-    even if nobody names her."""
-    if settings.opening_grace_seconds <= 0 or session.addressed_once:
+    even if nobody names her.
+
+    With first_call_required (the default) the grace never expires on its own:
+    being named once is the ONLY thing that activates her — before that she is
+    a silent guest, however long the meeting runs."""
+    if session.addressed_once:
+        return False
+    if settings.first_call_required:
+        return True
+    if settings.opening_grace_seconds <= 0:
         return False
     return (time.time() - session.created_at) < settings.opening_grace_seconds
 
@@ -2548,7 +2612,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # Nobody called her, someone is deep into a long point: one tiny
         # "Mm-hm." makes her feel present in the room. Not a turn: it never
         # refreshes the cooldown, so a real question right after still answers.
-        if not called and not acked and _should_backchannel(session, text):
+        # Not before activation: a listening cue from an avatar nobody has
+        # spoken to yet reads as eavesdropping, not presence.
+        if (
+            not called
+            and not acked
+            and not _in_opening_grace(session)
+            and _should_backchannel(session, text)
+        ):
             session.last_backchannel_at = time.time()
             bc = _line_for(text, _BACKCHANNEL_LINES, _BACKCHANNEL_LINES_IT)
             await _make_avatar_speak(
@@ -2706,6 +2777,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if (
         settings.proactive_enabled
         and not session.proactive_done
+        and not _in_opening_grace(session)  # never activated → stays a silent guest
         and detect_closing(text)
         and not session.in_cooldown(avatar.speak_cooldown_seconds)
     ):
@@ -2736,6 +2808,16 @@ async def recall_webhook(request: Request) -> JSONResponse:
         session.addressed_once = True
     elif _in_opening_grace(session):
         return JSONResponse({"ok": True, "spoke": False, "reason": "opening grace"})
+
+    # ── hand-raise timeout ──
+    # Nobody invited her and the conversation moved on: put the hand down
+    # silently and drop the queued point — delivering it minutes later would
+    # derail the room worse than the interruption she avoided.
+    if (
+        session.hand_raised_at
+        and time.time() - session.hand_raised_at > settings.hand_raise_timeout_seconds
+    ):
+        await _lower_hand(session)
 
     # ── action-capture continuation ──
     # A same-speaker follow-up right after a captured action (and NOT a new
@@ -2899,6 +2981,24 @@ async def recall_webhook(request: Request) -> JSONResponse:
             {"ok": True, "spoke": True, "left": True, "reason": "leave_command"}
         )
 
+    # ── hand raised → invited to speak ──
+    # Her hand is up and someone said her name. A bare address ("Laura?") or an
+    # explicit invitation ("dimmi, Laura" / "go ahead") hands her the floor:
+    # deliver the queued contribution. Any substantive ask instead ("Laura,
+    # what's the budget?") answers on the normal path below — either way the
+    # hand comes down now.
+    if called and session.hand_raised_at:
+        pending = session.pending_contribution
+        await _lower_hand(session)
+        if pending and (detect_invite(question) or _address_is_bare(avatar, text)):
+            turn_gen = store.bump_speech_generation(session)
+            spoke = await _speak_with_audio(
+                session, pending, force=True, generation=turn_gen, prev=None
+            )
+            return JSONResponse(
+                {"ok": True, "spoke": bool(spoke), "hand_delivered": True}
+            )
+
     # ── footing: quiet-participant nudge (fires once, at wrap-up) ──
     # She knows who is in the room (roster) and who has spoken (transcript).
     # As the meeting wraps up — and she wasn't addressed directly — invite ONE
@@ -2909,6 +3009,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         settings.quiet_nudge_enabled
         and not called
         and not session.quiet_nudge_done
+        and not _in_opening_grace(session)  # never activated → stays a silent guest
         and detect_closing(text)
         and len(session.transcript) >= 12
         and not session.in_cooldown(avatar.speak_cooldown_seconds)
@@ -2956,6 +3057,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # conversation is made of, so `called` (and `followup`) bypass it.
     if not called and not followup and session.in_cooldown(avatar.speak_cooldown_seconds):
         return JSONResponse({"ok": True, "spoke": False, "reason": "cooldown"})
+
+    # While her hand is up, unaddressed talk is the room continuing without
+    # her: don't generate a second contribution — the first one is already
+    # queued and waiting for the invite (or the timeout above).
+    if not called and session.hand_raised_at:
+        return JSONResponse({"ok": True, "spoke": False, "reason": "hand raised"})
 
     # ── deference window ──
     # Nobody addressed her by name, so this is at best a room-open question:
@@ -3074,6 +3181,18 @@ async def recall_webhook(request: Request) -> JSONResponse:
     interrupted = False
     speak_tasks: list[asyncio.Task] = []
     prev_task: asyncio.Task | None = None
+    # ── hand-raise mode ──
+    # Nobody addressed her and the room is a multi-human conversation: whatever
+    # grounded contribution the stream produces is QUEUED behind a raised hand
+    # instead of spoken over the talk (the SKIP sentinel still applies — no
+    # contribution, no hand). 1:1 meetings keep today's direct answers.
+    hand_mode = (
+        settings.hand_raise_enabled
+        and not called
+        and not followup
+        and len(roster) >= settings.hand_raise_min_humans
+    )
+    hand_sentences: list[str] = []
     async for sentence in iterate_in_threadpool(
         answer_question_stream(
             avatar,
@@ -3094,6 +3213,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if session.speech_generation != turn_gen:
             interrupted = True
             break
+        if hand_mode:
+            hand_sentences.append(sentence)
+            continue
         # Called by name -> answer even if it repeats a recent line; an
         # unaddressed duplicate is suppressed (and reported honestly below).
         # Speaking is pipelined: sentence N synthesizes server-side while
@@ -3109,6 +3231,19 @@ async def recall_webhook(request: Request) -> JSONResponse:
             )
         )
         speak_tasks.append(prev_task)
+
+    if hand_mode:
+        if interrupted or session.speech_generation != turn_gen:
+            return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
+        if hand_sentences:
+            # Cap the queued point at spoken length: a raised hand buys a
+            # remark, not a lecture.
+            session.pending_contribution = " ".join(hand_sentences)[:600]
+            await _raise_hand(session, avatar, heard=text)
+            return JSONResponse({"ok": True, "spoke": False, "hand_raised": True})
+        return JSONResponse(
+            {"ok": True, "spoke": False, "reason": "insufficient context (SKIP)"}
+        )
 
     if not interrupted and speak_tasks:
         results = await asyncio.gather(*speak_tasks, return_exceptions=True)

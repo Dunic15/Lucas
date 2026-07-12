@@ -400,6 +400,39 @@ def detect_stop_command(question: str) -> bool:
     return bool(q) and bool(_STOP_COMMAND.match(q))
 
 
+# ── invitation ("Laura, dimmi" / "go ahead, Laura") ──
+# Only ever checked on the wake-stripped ask of an utterance that addressed
+# the avatar BY NAME while her hand was raised, so it can stay strict: the
+# WHOLE ask must be an invitation to take the floor. "Laura, dimmi" invites;
+# "Laura, dimmi il budget" is a request and takes the normal answer path.
+_INVITE_WORDS = (
+    r"go ahead|go on|tell (?:us|me)|what'?s up|what is it|what'?ve you got|"
+    r"you have the floor|floor is yours|we'?re listening|shoot|speak|"
+    # "would you like to add anything?" / "anything to add?" — the most common
+    # way a room hands the floor to a raised hand.
+    r"(?:would you like|do you want|want) to (?:add|say)(?: (?:anything|something))?|"
+    r"(?:is there )?anything (?:else )?(?:you'?d like )?to add|"
+    # Italian: "dimmi", "cosa c'è", "vai pure", "sentiamo", "prego", "dicci"
+    r"dimmi|dicci|di' pure|cosa c'?è|che c'?è|vai(?: pure)?|prego|sentiamo|"
+    r"ti ascoltiamo|parla(?: pure)?|a te(?: la parola)?|"
+    r"vuoi aggiungere(?: qualcosa)?|(?:c'?è )?qualcosa da aggiungere"
+)
+_INVITE = re.compile(
+    rf"^(?:(?:ok(?:ay)?|yes|sì|si|allora|va bene|certo|sure)[,\s]+)*"
+    rf"(?:{_INVITE_WORDS})"
+    rf"(?:\s+(?:please|pure|per favore|grazie|now|ora|adesso))*"
+    rf"[.!?\s]*$",
+    re.IGNORECASE,
+)
+
+
+def detect_invite(question: str) -> bool:
+    """True if the (wake-stripped) ask hands the avatar the floor — the "yes,
+    what is it?" reply to her raised hand."""
+    q = (question or "").strip()
+    return bool(q) and bool(_INVITE.match(q))
+
+
 # Dismissal ("Laura, you can leave"). Only ever checked on the wake-stripped
 # question of an utterance that addressed her BY NAME, so the patterns can stay
 # tight. Two shapes: an imperative aimed at her at the start of the ask, or an
