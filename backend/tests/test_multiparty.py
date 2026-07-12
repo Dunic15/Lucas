@@ -21,10 +21,10 @@ def _session(tmp_path, monkeypatch, bot_id="roster-bot") -> store.Session:
     store._init_db()
     s = store.create(bot_id, "https://meet.google.com/abc-defg-hij", "laura")
     # These scenarios model a meeting already UNDERWAY (roster built, turns
-    # taken). Push past the opening settle-in grace so unaddressed lines exercise
-    # deference / greeting / nudge / follow-up instead of being held silent — the
-    # grace itself is covered on its own in test_opening_grace.py.
-    s.created_at -= settings.opening_grace_seconds + 1
+    # taken, avatar already named once). Mark her activated so unaddressed lines
+    # exercise deference / greeting / nudge / follow-up instead of being held
+    # silent — the first-call gate is covered on its own in test_opening_grace.py.
+    s.addressed_once = True
     return s
 
 

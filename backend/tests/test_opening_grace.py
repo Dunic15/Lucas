@@ -1,8 +1,8 @@
-"""Opening settle-in ("wait to be called"): for the first moments after she
-joins, the avatar stays silent UNLESS directly addressed by name — no joiner
-greetings, no unprompted room-open answers — so she never talks over a room
-that is still settling. The window ends the instant she's first named, or after
-settings.opening_grace_seconds, whichever comes first. No keys, no model."""
+"""Opening settle-in ("wait to be called"): after joining, the avatar stays
+silent UNLESS directly addressed by name — no joiner greetings, no unprompted
+room-open answers. With first_call_required (the default) ONLY being named once
+activates her; in legacy mode (first_call_required=False) the window also
+expires after settings.opening_grace_seconds. No keys, no model."""
 from __future__ import annotations
 
 import asyncio
@@ -65,9 +65,14 @@ def test_in_opening_grace_logic(tmp_path, monkeypatch):
     s.addressed_once = True
     assert main._in_opening_grace(s) is False
 
-    # time elapsing ends it, even if never named
+    # first-call activation (the default): time alone NEVER ends it — however
+    # long the meeting runs, she waits to be named once
     s.addressed_once = False
     s.created_at -= settings.opening_grace_seconds + 1
+    assert main._in_opening_grace(s) is True
+
+    # legacy time-boxed mode: time elapsing ends it, even if never named
+    monkeypatch.setattr(settings, "first_call_required", False)
     assert main._in_opening_grace(s) is False
 
     # 0 disables the feature entirely (revert to speaking from line one)
@@ -121,8 +126,11 @@ def test_being_named_ends_grace(tmp_path, monkeypatch):
 
 
 def test_grace_expires_by_time_then_answers(tmp_path, monkeypatch):
+    """Legacy time-boxed mode only — with first_call_required the grace never
+    expires (covered in test_in_opening_grace_logic)."""
     s = _session(tmp_path, monkeypatch)
     s.memory_brief = ""
+    monkeypatch.setattr(settings, "first_call_required", False)
     s.created_at -= settings.opening_grace_seconds + 1  # room has settled
     monkeypatch.setattr(settings, "deference_seconds", 0)  # no wait, deterministic
 
@@ -160,8 +168,8 @@ def test_joiner_greeting_suppressed_during_grace(tmp_path, monkeypatch):
     _post(_join(s.bot_id, "Anna", 7))
     assert not spoken  # no "welcome Anna" over the still-settling room
 
-    # once the room has settled, the same joiner IS greeted
-    s.created_at -= settings.opening_grace_seconds + 1
+    # once she's been activated (named once), the same joiner IS greeted
+    s.addressed_once = True
     _post(_join(s.bot_id, "Priya", 8))
     assert spoken and "Priya" in spoken[0]
     store.remove(s.bot_id)

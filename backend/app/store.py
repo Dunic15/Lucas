@@ -130,6 +130,12 @@ class Session:
     # if anything, desirable).
     created_at: float = field(default_factory=time.time, repr=False, compare=False)
     addressed_once: bool = field(default=False, repr=False, compare=False)
+    # Hand-raise etiquette: epoch seconds since her hand went up (0 = down) and
+    # the grounded contribution she queued instead of speaking over the room.
+    # Delivered when someone invites her ("dimmi, Laura"), dropped on timeout.
+    # In-memory only: after a restart the hand is simply down again.
+    hand_raised_at: float = field(default=0.0, repr=False, compare=False)
+    pending_contribution: str = field(default="", repr=False, compare=False)
     _persist_enabled: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
