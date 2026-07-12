@@ -433,6 +433,57 @@ def detect_invite(question: str) -> bool:
     return bool(q) and bool(_INVITE.match(q))
 
 
+# ── hand-raise motivation gate (Inner Thoughts-lite) ──
+# A raised hand is a social ask, and each raise also posts a meeting-chat line:
+# raising too often reads as an over-eager participant spamming the room. The
+# in-stream SKIP gate already decides "is this contribution GROUNDED"; this
+# policy decides "is raising the hand for it SOCIALLY worth it" — a budget, a
+# minimum gap, a longer back-off after the room ignored her, and a near-dup
+# check so the same point never raises the hand twice. Pure functions: the
+# webhook passes state in, tests pin the calibration.
+
+_WORD = re.compile(r"[\wàèéìòù']+")
+
+
+def similar_contribution(a: str, b: str, threshold: float = 0.7) -> bool:
+    """True when two queued contributions make essentially the SAME point
+    (token Jaccard ≥ threshold, case/punctuation-insensitive). Loose on
+    purpose: a re-generated answer to the same discussion rephrases a little
+    but keeps the content words; genuinely new points share far fewer."""
+    ta = {w.lower() for w in _WORD.findall(a or "")}
+    tb = {w.lower() for w in _WORD.findall(b or "")}
+    if not ta or not tb:
+        return False
+    return len(ta & tb) / len(ta | tb) >= threshold
+
+
+def should_raise_hand(
+    *,
+    now: float,
+    count: int,
+    last_at: float,
+    last_ignored: bool,
+    max_per_meeting: int,
+    min_gap_seconds: float,
+    ignored_gap_seconds: float,
+) -> bool:
+    """Budget + pacing for the raised hand.
+
+    - hard cap per meeting (a guest who raises a hand ten times is a nuisance
+      no matter how grounded each point is);
+    - a minimum gap between raises;
+    - after a raise the room IGNORED (timeout), the next one waits longer —
+      the polite read of silence is "not now".
+    """
+    if count >= max_per_meeting:
+        return False
+    if last_at > 0:
+        gap = ignored_gap_seconds if last_ignored else min_gap_seconds
+        if now - last_at < gap:
+            return False
+    return True
+
+
 # Dismissal ("Laura, you can leave"). Only ever checked on the wake-stripped
 # question of an utterance that addressed her BY NAME, so the patterns can stay
 # tight. Two shapes: an imperative aimed at her at the start of the ask, or an

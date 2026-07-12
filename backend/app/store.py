@@ -136,6 +136,13 @@ class Session:
     # In-memory only: after a restart the hand is simply down again.
     hand_raised_at: float = field(default=0.0, repr=False, compare=False)
     pending_contribution: str = field(default="", repr=False, compare=False)
+    # Motivation-gate state (decision.should_raise_hand): raises so far, when
+    # the last one happened, whether the room ignored it (timeout), and the
+    # last queued point (near-dup guard). In-memory only, like the hand itself.
+    hand_raise_count: int = field(default=0, repr=False, compare=False)
+    hand_last_raise_at: float = field(default=0.0, repr=False, compare=False)
+    hand_last_ignored: bool = field(default=False, repr=False, compare=False)
+    hand_last_contribution: str = field(default="", repr=False, compare=False)
     _persist_enabled: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:

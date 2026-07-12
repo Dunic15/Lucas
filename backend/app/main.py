@@ -87,6 +87,8 @@ from .decision import (
     detect_stop_command,
     is_capture_continuation,
     plausible_leave_followup,
+    should_raise_hand,
+    similar_contribution,
 )
 from .rag import ensure_about_index, ensure_index, warm as warm_index
 
@@ -2199,6 +2201,10 @@ async def _raise_hand(session: store.Session, avatar, heard: str = "") -> None:
     line saying how to give her the floor. The contribution itself waits in
     session.pending_contribution until someone invites her ("dimmi, Laura")."""
     session.hand_raised_at = time.time()
+    # Motivation-gate bookkeeping (caller already passed should_raise_hand).
+    session.hand_raise_count += 1
+    session.hand_last_raise_at = session.hand_raised_at
+    session.hand_last_contribution = session.pending_contribution
     await _send_avatar_control(session, {"type": "raise_hand"})
     # Chat line: genuinely fire-and-forget — Recall's read timeout is up to 60s,
     # so posting it inline could hold THIS webhook's response open on a slow/hung
@@ -2856,11 +2862,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # ── hand-raise timeout ──
     # Nobody invited her and the conversation moved on: put the hand down
     # silently and drop the queued point — delivering it minutes later would
-    # derail the room worse than the interruption she avoided.
+    # derail the room worse than the interruption she avoided. The room's
+    # silence is feedback: the next raise backs off (ignored_gap_seconds).
     if (
         session.hand_raised_at
         and time.time() - session.hand_raised_at > settings.hand_raise_timeout_seconds
     ):
+        session.hand_last_ignored = True
         await _lower_hand(session)
 
     # ── action-capture continuation ──
@@ -3033,6 +3041,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # hand comes down now.
     if called and session.hand_raised_at:
         pending = session.pending_contribution
+        session.hand_last_ignored = False  # the room engaged her: no back-off
         await _lower_hand(session)
         if pending and (detect_invite(question) or _address_is_bare(avatar, text)):
             turn_gen = store.bump_speech_generation(session)
@@ -3282,7 +3291,29 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if hand_sentences:
             # Cap the queued point at spoken length: a raised hand buys a
             # remark, not a lecture.
-            session.pending_contribution = " ".join(hand_sentences)[:600]
+            contribution = " ".join(hand_sentences)[:600]
+            # Motivation gate: grounded (SKIP already passed) is necessary but
+            # not sufficient — the same point must not raise the hand twice,
+            # and raising has a social budget (cap + pacing + back-off after
+            # being ignored). A suppressed point isn't lost to the meeting:
+            # the finalize summarizer still reads the whole transcript.
+            if similar_contribution(contribution, session.hand_last_contribution):
+                return JSONResponse(
+                    {"ok": True, "spoke": False, "reason": "hand suppressed (same point)"}
+                )
+            if not should_raise_hand(
+                now=time.time(),
+                count=session.hand_raise_count,
+                last_at=session.hand_last_raise_at,
+                last_ignored=session.hand_last_ignored,
+                max_per_meeting=settings.hand_raise_max_per_meeting,
+                min_gap_seconds=settings.hand_raise_min_gap_seconds,
+                ignored_gap_seconds=settings.hand_raise_ignored_gap_seconds,
+            ):
+                return JSONResponse(
+                    {"ok": True, "spoke": False, "reason": "hand suppressed (budget)"}
+                )
+            session.pending_contribution = contribution
             await _raise_hand(session, avatar, heard=text)
             return JSONResponse({"ok": True, "spoke": False, "hand_raised": True})
         return JSONResponse(
