@@ -188,26 +188,25 @@ def test_roster_keeps_human_named_laura_in_cedric_meeting():
     assert {n.lower() for n in roster} == {"laura", "ben"}
 
 
-def test_roster_still_strips_avatars_own_name_when_avatar_is_laura():
+def test_roster_strips_explicit_agent_not_same_name_human():
     s = _detached_session("laura-bot")
-    s.participant_event("Laura", 1, here=True)  # the avatar's OWN name
-    s.participant_event("Ben", 2, here=True)
-    roster = s.roster("Laura")
-    assert roster == ["Ben"]  # the avatar itself is not a human in the room
+    s.participant_event(
+        "Laura", 1, here=True, metadata={"id": 1, "is_bot": True}
+    )
+    s.participant_event("Laura", 2, here=True, metadata={"id": 2})
+    s.participant_event("Ben", 3, here=True)
+    assert s.roster("Laura") == ["Laura", "Ben"]
 
 
-def test_present_names_forwards_avatar_name_to_roster():
-    # present_names()'s "everyone besides the avatar itself" contract must stay
-    # literally true after Fix 2: forwarding the avatar name keeps its OWN name
-    # out of the fuzzy-wake exclude set (so a corruption of its wake word still
-    # wakes it), while a legacy no-arg call is unchanged.
+def test_present_names_filters_agent_by_identity_for_all_callers():
     s = _detached_session("laura-bot-pn")
-    s.participant_event("Laura", 1, here=True)  # avatar's own name as a participant
+    s.participant_event(
+        "Laura", 1, here=True, metadata={"id": 1, "is_bot": True}
+    )
     s.participant_event("Ben", 2, here=True)
     named = {n.lower() for n in s.present_names("Laura")}
     assert "laura" not in named and "ben" in named
-    # No-arg (legacy) still returns everyone, a Laura participant included.
-    assert "laura" in {n.lower() for n in s.present_names()}
+    assert "laura" not in {n.lower() for n in s.present_names()}
 
 
 # ── Fix 3: a transient post-meeting failure degrades, never loses the artifact ─
