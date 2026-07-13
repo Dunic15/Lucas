@@ -238,8 +238,14 @@ class Session:
         kind = "agent" if explicit_agent else str(existing.get("kind") or "human")
         here = bool(existing.get("here", True))
         identity = {"id": key, "name": display_name, "kind": kind, "here": here}
+        changed = (
+            not existing
+            or str(existing.get("name") or "") != display_name
+            or str(existing.get("kind") or "human") != kind
+        )
         self.participants[key] = identity
-        _persist_participant(self.org_id, self.bot_id, identity)
+        if changed:
+            _persist_participant(self.org_id, self.bot_id, identity)
         return identity
 
     def resolve_speaker(self, name: str | None, participant_id: Any = None) -> str:
