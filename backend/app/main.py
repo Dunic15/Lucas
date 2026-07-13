@@ -115,6 +115,8 @@ async def _lifespan(app: FastAPI):
     watcher from dispatching at once, so the old + new instances don't both put a
     bot in the same meeting during the overlap.
     """
+    global _shutting_down
+    _shutting_down = False
     _prebuild_indexes()
 
     if settings.autopilot_nudge:
@@ -142,12 +144,21 @@ async def _lifespan(app: FastAPI):
 
     async def _outbox_loop() -> None:
         while not _shutting_down:
-            await run_in_threadpool(outbox.reconcile_sessions)
-            await run_in_threadpool(outbox.process_due)
+            try:
+                await run_in_threadpool(outbox.reconcile_sessions)
+                await run_in_threadpool(outbox.process_due)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # keep the worker alive; never log payload/PII
+                print(
+                    f"[outbox] worker iteration failed: {type(exc).__name__}",
+                    flush=True,
+                )
             await asyncio.sleep(5)
 
     # Callback delivery is durable and never tied to a request/task lifetime.
-    asyncio.create_task(_outbox_loop())
+    # Keep the task so shutdown can cancel and await it deterministically.
+    outbox_task = asyncio.create_task(_outbox_loop())
 
     if settings.elevenlabs_api_key:
         # Pre-synthesize the fixed conversational furniture so the FIRST
@@ -158,8 +169,12 @@ async def _lifespan(app: FastAPI):
     try:
         yield
     finally:
-        global _shutting_down
         _shutting_down = True
+        outbox_task.cancel()
+        try:
+            await outbox_task
+        except asyncio.CancelledError:
+            pass
         print("[gmail-watch] shutdown signal — watcher draining", flush=True)
 
 
