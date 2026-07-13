@@ -13,6 +13,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 
 from . import control_plane
+from .config import settings
 
 
 def _engine():
@@ -187,6 +188,12 @@ def claim_due(
 ) -> list[dict[str, Any]]:
     engine = _engine()
     clock = "clock_timestamp()" if now is None else "to_timestamp(:now)"
+    # A claim must outlive the configured HTTP timeout, otherwise a slow but
+    # healthy Cedric response could still be in flight when another App Runner
+    # instance reclaims and sends the same event concurrently.
+    lease_seconds = max(
+        60, int(float(settings.callback_timeout_seconds)) + 30
+    )
     id_filter = "" if outbox_id is None else "AND id=:outbox_id"
     query = text(
         f"""
@@ -215,7 +222,8 @@ def claim_due(
         UPDATE callback_outbox AS o
         SET status='sending',
             lease_token=gen_random_uuid(),
-            lease_until={clock} + interval '60 seconds',
+            lease_until={clock}
+              + (:lease_seconds * interval '1 second'),
             updated_at={clock}
         FROM due
         WHERE o.id=due.id
@@ -229,6 +237,7 @@ def claim_due(
     params: dict[str, Any] = {
         "org_id": org_id,
         "limit": max(1, min(int(limit), 100)),
+        "lease_seconds": lease_seconds,
     }
     if outbox_id is not None:
         params["outbox_id"] = int(outbox_id)
