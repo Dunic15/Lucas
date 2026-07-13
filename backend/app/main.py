@@ -4564,7 +4564,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if called and wants_action_capture(question) and not wants_web_search(question):
         # detect_wake already stripped the wake word: `question` is the ask
         # itself ("please schedule a follow-up with Marco on Friday").
-        item = tools.capture_action(session, question.strip())
+        # One bounded tenant transaction, off the shared event loop. No
+        # callback network occurs on the live transcript path.
+        item = await run_in_threadpool(
+            tools.capture_action, session, question.strip()
+        )
         # ASR often splits one ask across finals ("Cedric, can you send" +
         # "the recap by Friday"). Remember this capture so a same-speaker
         # follow-up within a few seconds extends its text (see the
