@@ -61,6 +61,7 @@ def _stub_finalize_vendors(monkeypatch):
 
 def _session(bot_id: str = "bot_x", integration: dict | None = None) -> store.Session:
     s = store.create(bot_id, "https://meet.google.com/abc-defg-hij", "cedric")
+    store.register_recall_realtime_capability(bot_id, "test-realtime-cap")
     s.memory_brief = ""  # skip lazy ledger load
     if integration is not None:
         s.integration = integration
@@ -179,6 +180,7 @@ def test_concurrent_finalize_delivers_session_ended_once(fresh_store, monkeypatc
 def _webhook(payload: dict) -> dict:
     class FakeRequest:
         headers: dict = {}
+        query_params: dict = {"cap": "test-realtime-cap"}
 
         async def body(self) -> bytes:
             return json.dumps(payload).encode()
