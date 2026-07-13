@@ -524,15 +524,30 @@ async def retry_callback_delivery(request: Request) -> JSONResponse:
         outbox_id = int((body or {}).get("outbox_id"))
     except (TypeError, ValueError):
         return JSONResponse({"error": "outbox_id is required"}, status_code=400)
-    exists = await run_in_threadpool(outbox.retry, user["org_id"], outbox_id)
-    if not exists:
-        return JSONResponse({"error": "delivery not found"}, status_code=404)
-    await run_in_threadpool(
-        outbox.process_due, org_id=user["org_id"], outbox_id=outbox_id
+    retry_state = await run_in_threadpool(
+        outbox.retry_status, user["org_id"], outbox_id
     )
+    if retry_state == "missing":
+        return JSONResponse({"error": "delivery not found"}, status_code=404)
+    if retry_state == "busy":
+        # Never steal an unexpired lease from another App Runner instance.
+        return JSONResponse(
+            {"error": "delivery is already being attempted"},
+            status_code=409,
+        )
+    if retry_state == "queued":
+        await run_in_threadpool(
+            outbox.process_due, org_id=user["org_id"], outbox_id=outbox_id
+        )
     rows = await run_in_threadpool(outbox.delivery_rows, user["org_id"])
     row = next((item for item in rows if item["id"] == outbox_id), None)
-    return JSONResponse({"ok": True, "delivery": row})
+    return JSONResponse(
+        {
+            "ok": True,
+            "retry_state": retry_state,
+            "delivery": row,
+        }
+    )
 
 
 @router.post("/dashboard/connections/brain")
