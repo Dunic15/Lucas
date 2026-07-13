@@ -1651,6 +1651,9 @@ async def _finalize_session_locked(
     if failed_code == "fatal":
         cedric.notify_failed(session, bot_id, failed_code)  # CEDRIC
     transcript_text = session.transcript_text()
+    # Raw transcript retains agent output for the archive. Intelligence,
+    # decisions and actions use human evidence only.
+    analysis_transcript_text = session.transcript_text(include_agents=False)
 
     # Stop billing on both vendors. leave_call is the Recall meter-stop and now
     # RAISES on a persistent failure (retry=True + raise_for_status). The stop is
@@ -1689,13 +1692,13 @@ async def _finalize_session_locked(
     # prevention at the source, cross-language included) and then merged into
     # the artifact's actions[] below.
     queued_actions = list(getattr(session, "queued_actions", None) or [])
-    if transcript_text.strip():
+    if analysis_transcript_text.strip():
         avatar = avatars.load(session.avatar_id)
         try:
             artifact = await run_in_threadpool(
                 lambda: post_meeting(
                     avatar,
-                    transcript_text,
+                    analysis_transcript_text,
                     context=(integration or {}).get("brief", ""),  # CEDRIC: brief-grounded summary
                     live_actions=queued_actions,
                 )
@@ -1715,7 +1718,7 @@ async def _finalize_session_locked(
             )
             try:
                 artifact = await run_in_threadpool(
-                    degraded_post_meeting, avatar, transcript_text
+                    degraded_post_meeting, avatar, analysis_transcript_text
                 )
             except Exception as e2:  # noqa: BLE001 — the degraded rebuild ALSO failed.
                 # This is no longer a transient LLM blip: degraded_post_meeting
@@ -2739,14 +2742,17 @@ async def _lower_hand(session: store.Session) -> None:
     await _send_avatar_control(session, {"type": "lower_hand"})
 
 
-def _is_own_speech(avatar_name: str, speaker: str) -> bool:
-    """True when a transcript line is the avatar's OWN voice — the meeting bot
-    hears the avatar too. The Recall bot's display name is the avatar's name
-    (recall_client.create_bot(bot_name=avatar.name)), so one comparison covers
-    both; no hardcoded persona name, so a human participant who shares a name
-    with a DIFFERENT avatar is never silenced."""
-    return speaker.strip().lower() == avatar_name.strip().lower()
+def _is_own_speech(
+    avatar_name: str,
+    speaker: str,
+    speaker_kind: str = "human",
+) -> bool:
+    """Own speech is an identity classification, never a name comparison.
 
+    avatar_name/speaker remain in the signature for call-site compatibility;
+    a real human is allowed to share the avatar's display name.
+    """
+    return speaker_kind == "agent"
 
 def _in_opening_grace(session: store.Session) -> bool:
     """Opening settle-in ("wait to be called"): True while she should stay silent
@@ -2899,7 +2905,14 @@ _FILLER_ONLY = re.compile(
 )
 
 
-def _should_barge_in(session: store.Session, avatar_name: str, speaker: str, text: str) -> bool:
+def _should_barge_in(
+    session: store.Session,
+    avatar_name: str,
+    speaker: str,
+    text: str,
+    *,
+    speaker_kind: str = "human",
+) -> bool:
     """A human talked while Laura is (estimated) still speaking -> interrupt her.
 
     Not her own transcribed speech (the meeting bot hears her too), not her own
@@ -2908,7 +2921,7 @@ def _should_barge_in(session: store.Session, avatar_name: str, speaker: str, tex
     """
     if not settings.barge_in_enabled:
         return False
-    if _is_own_speech(avatar_name, speaker):
+    if _is_own_speech(avatar_name, speaker, speaker_kind):
         return False
     if len(text.split()) < 3:
         return False
@@ -3298,13 +3311,25 @@ async def recall_webhook(request: Request) -> JSONResponse:
         words = data.get("words", [])
         text = " ".join(w.get("text", "") for w in words).strip()
         participant = data.get("participant") or {}
-        speaker = session.resolve_speaker(participant.get("name"), participant.get("id"))
+        identity = session.resolve_participant(
+            participant.get("name"),
+            participant.get("id"),
+            metadata=participant,
+        )
+        speaker = identity["name"]
+        speaker_kind = identity["kind"]
         if not text:
             return JSONResponse({"ok": True})
         avatar = avatars.load(session.avatar_id)
-        if _should_barge_in(session, avatar.name, speaker, text):
+        if _should_barge_in(
+            session,
+            avatar.name,
+            speaker,
+            text,
+            speaker_kind=speaker_kind,
+        ):
             await _make_avatar_stop(session)
-        if _is_own_speech(avatar.name, speaker):
+        if _is_own_speech(avatar.name, speaker, speaker_kind):
             return JSONResponse({"ok": True, "partial": True})
         # Her own echo through an open mic is not a human talking: it must not
         # ack, backchannel, or (via the stamp below) cancel a deference wait.
@@ -3380,15 +3405,17 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if session is not None:
             data = payload.get("data", {}).get("data", {})
             p = data.get("participant") or {}
-            label = session.resolve_speaker(p.get("name"), p.get("id"))
+            key = str(p.get("id")) if p.get("id") is not None else ""
+            is_new = bool(key and key not in session.participants)
+            identity = session.participant_event(
+                p.get("name"),
+                p.get("id"),
+                here=(event == "participant_events.join"),
+                metadata=p,
+            )
+            label = identity["name"]
             avatar = avatars.load(session.avatar_id)
-            if not _is_own_speech(avatar.name, label):  # the bot joins too
-                key = str(p.get("id")) if p.get("id") is not None else label
-                is_new = key not in session.participants
-                session.participant_event(
-                    p.get("name"), p.get("id"),
-                    here=(event == "participant_events.join"),
-                )
+            if identity["kind"] != "agent":
                 # ── footing: greet a late joiner by name ──
                 # Only when the meeting is genuinely underway (start-of-call
                 # joins greet each other anyway), only for NEW named humans,
@@ -3468,23 +3495,42 @@ async def recall_webhook(request: Request) -> JSONResponse:
     words = data.get("words", [])
     text = " ".join(w.get("text", "") for w in words).strip()
     participant = data.get("participant") or {}
-    speaker = session.resolve_speaker(participant.get("name"), participant.get("id"))
+    identity = session.resolve_participant(
+        participant.get("name"),
+        participant.get("id"),
+        metadata=participant,
+    )
+    speaker = identity["name"]
+    speaker_id = identity["id"]
+    speaker_kind = identity["kind"]
     if not text:
         return JSONResponse({"ok": True})
 
     # Her own voice re-entering through a participant's open mic: not a human
-    # line. Keep it out of the transcript (it would pollute per-person
-    # tracking and could even get ANSWERED as if a person said it).
+    # line. Keep it out of the transcript entirely.
     if _is_echo(session, text):
         return JSONResponse({"ok": True, "spoke": False, "reason": "echo"})
 
-    session.add_utterance(speaker, text)
+    # Agent speech may remain in the transcript for audit/presentation, but it
+    # must exit before barge-in, MeetingState, actions, readiness or prompts.
+    session.add_utterance(
+        speaker,
+        text,
+        participant_id=speaker_id,
+        speaker_kind=speaker_kind,
+    )
     avatar = avatars.load(session.avatar_id)
+    if _is_own_speech(avatar.name, speaker, speaker_kind):
+        return JSONResponse({"ok": True, "spoke": False, "reason": "own speech"})
 
     # ── barge-in: never talk over a human ──
-    # If someone starts speaking while Laura is still talking, stop her mouth
-    # first (the page cancels TTS instantly), then process what they said.
-    if _should_barge_in(session, avatar.name, speaker, text):
+    if _should_barge_in(
+        session,
+        avatar.name,
+        speaker,
+        text,
+        speaker_kind=speaker_kind,
+    ):
         await _make_avatar_stop(session)
 
     # ── silent intelligence layer ──
@@ -3492,20 +3538,20 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # owners, deadlines, risks) BEFORE any speak decision. Pure regex — adds no
     # latency to the live path — and informs both the closing intervention below
     # and the post-meeting artifact.
-    state = meeting_state.observe(session, avatar, speaker, text)
+    state = meeting_state.observe(
+        session,
+        avatar,
+        speaker,
+        text,
+        participant_id=speaker_id,
+        speaker_kind=speaker_kind,
+    )
 
     # ── rolling meeting notes (background) ──
     # Every ~20 lines, fold the transcript older than the live history window
     # into short running notes (fast model, off the hot path) so her context
     # is the WHOLE meeting, not just the last 8 lines.
     _maybe_refresh_rolling_summary(session, avatar)
-
-    # ── never converse with yourself ──
-    # The bot transcribes Laura's own speech too. Answering it creates greeting
-    # loops ("I'm doing well…" -> hears it -> replies -> …). Her lines stay in
-    # the transcript and state above, but never reach the speak gates below.
-    if _is_own_speech(avatar.name, speaker):
-        return JSONResponse({"ok": True, "spoke": False, "reason": "own speech"})
 
     # Cross-meeting memory: lazily (re)load after a process restart, scoped to
     # this session's org (never another tenant's open items in the live prompt).
@@ -3584,7 +3630,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         p_item, p_speaker, p_ts = pending
         if (
             not called
-            and speaker == p_speaker
+            and speaker_id == p_speaker
             and time.time() - p_ts < 4.0
             and is_capture_continuation(text)
         ):
@@ -3647,7 +3693,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if not leave_now and addressed is not None:
             a_speaker, a_ts, a_text = addressed
             if (
-                speaker == a_speaker
+                speaker_id == a_speaker
                 and time.time() - a_ts < 8.0
                 # Addressee guard: the follow-up must START like a command
                 # aimed at the avatar ("you can…", "esci…") — a leading name
@@ -3706,9 +3752,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # a new speaker or a stale (>8s) window clears the arm, so it can never
     # linger into unrelated speech.
     if called:
-        session.last_addressed = (speaker, time.time(), text)
+        session.last_addressed = (speaker_id, time.time(), text)
     elif getattr(session, "last_addressed", None) is not None and (
-        speaker != session.last_addressed[0]
+        speaker_id != session.last_addressed[0]
         or time.time() - session.last_addressed[1] >= 8.0
     ):
         session.last_addressed = None
@@ -3875,7 +3921,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # "the recap by Friday"). Remember this capture so a same-speaker
         # follow-up within a few seconds extends its text (see the
         # continuation check after wake detection).
-        session.last_capture = (item, speaker, time.time())
+        session.last_capture = (item, speaker_id, time.time())
         if session.speech_generation != turn_gen:  # barge-in since the final landed
             return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
         line = _line_for(question, _QUEUE_LINES, _QUEUE_LINES_IT)
