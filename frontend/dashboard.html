@@ -70,8 +70,10 @@
   .brand .dot{width:12px;height:12px;border-radius:50%;background:var(--grad);position:relative;box-shadow:0 0 14px rgba(126,150,255,.6);}
   .brand .dot::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:1px solid rgba(127,150,200,.4);animation:ring 3.4s ease-out infinite;}
   .nav{display:flex;flex-direction:column;gap:2px;}
-  .nav button{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:10px;
+  .nav button{appearance:none;width:100%;border:0;background:transparent;font:inherit;text-align:left;
+    display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:10px;
     color:var(--dim);text-decoration:none;font-size:.9rem;cursor:pointer;position:relative;}
+  .nav button:focus-visible{outline:2px solid var(--g2);outline-offset:2px;}
   .nav button .ic{width:16px;text-align:center;opacity:.85;}
   .nav button.on{background:var(--panel-2);color:var(--text);font-weight:600;}
   .nav button.on::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2.5px;border-radius:3px;background:var(--grad);}
