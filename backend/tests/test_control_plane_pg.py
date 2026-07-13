@@ -1,17 +1,19 @@
 """Two-org isolation on the REAL control plane — embedded Postgres (PR A).
 
-Boots an embedded Postgres (pgserver), runs ``alembic upgrade head`` (0001 org
-spine + 0002 control plane) against it, then proves on real RLS:
+Boots an embedded Postgres (pgserver), runs the full Alembic chain through
+0004 with an ADMIN URL, then points the runtime DAL at a distinct
+``laura_app`` URL and proves on real RLS:
 
 - two self-serve signups (control_plane.ensure_user) produce two DISTINCT UUID
   personal orgs, each with an owner membership, exactly the laura/cedric
   org_agents grants, and a free billing account (900 included seconds);
 - signup is idempotent (re-login by sub OR by email returns the same ids);
 - per-org machine tokens round-trip and NEVER cross orgs;
-- FORCE RLS holds on the NEW 0002 tables for a NON-superuser policy-bound role
-  (``laura_app``): with app.current_org set to org A, a bare SELECT on
-  org_connections / billing_accounts returns ONLY org A's rows — and nothing
-  at all without an org context.
+- runtime ``current_user`` is exactly ``laura_app``, with both
+  ``rolsuper`` and ``rolbypassrls`` false;
+- signup/domain and token resolution work only through the private definer
+  functions while direct identity enumeration is denied;
+- FORCE RLS isolates reads and rejects cross-org writes.
 
 Skipped when pgserver isn't installed (CI installs it; the key-free suite is
 otherwise untouched). Embedded Postgres ships without contrib extensions, so
@@ -76,8 +78,7 @@ def _write_extension_shims() -> None:
 
 @pytest.fixture(scope="module")
 def pg(tmp_path_factory):
-    """Embedded Postgres with the FULL migration chain applied (0001 + 0002),
-    plus the non-superuser app role the RLS assertions connect as."""
+    """Embedded PG migrated as admin, plus the distinct runtime app URL."""
     _write_extension_shims()
     srv = pgserver.get_server(str(tmp_path_factory.mktemp("cp_pg")))
     uri = srv.get_uri()
@@ -88,17 +89,64 @@ def pg(tmp_path_factory):
             f"CREATE ROLE {APP_ROLE} LOGIN PASSWORD '{APP_ROLE_PASSWORD}' "
             "NOSUPERUSER NOBYPASSRLS"
         )
-    sa_url = uri.replace("postgresql://", "postgresql+psycopg://")
-    proc = subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
-        cwd=str(BACKEND_DIR),
-        env={**os.environ, "LAURA_DATABASE_URL": sa_url},
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
+        conn.execute("CREATE ROLE anon NOLOGIN")
+        conn.execute("CREATE ROLE authenticated NOLOGIN")
+    admin_sa_url = uri.replace("postgresql://", "postgresql+psycopg://")
+
+    import psycopg.conninfo as _ci
+    from sqlalchemy.engine import URL
+
+    info = _ci.conninfo_to_dict(uri)
+    query = {
+        key: str(info[key])
+        for key in ("host", "port")
+        if info.get(key) is not None
+    }
+    app_sa_url = URL.create(
+        "postgresql+psycopg",
+        username=APP_ROLE,
+        password=APP_ROLE_PASSWORD,
+        database=info.get("dbname"),
+        query=query,
+    ).render_as_string(hide_password=False)
+
+    migrate_env = {
+        **os.environ,
+        "LAURA_DATABASE_ADMIN_URL": admin_sa_url,
+        "LAURA_DATABASE_URL": "",
+        "LAURA_REQUIRE_MIGRATIONS": "1",
+    }
+
+    def migrate(revision: str):
+        return subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", revision],
+            cwd=str(BACKEND_DIR),
+            env=migrate_env,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+
+    # Stop immediately before the privilege-boundary migration and simulate a
+    # dirty database whose runtime/public roles were accidentally over-granted.
+    proc = migrate("0003_usage")
     assert proc.returncode == 0, f"alembic upgrade failed:\n{proc.stdout}\n{proc.stderr}"
-    yield {"uri": uri, "sa_url": sa_url}
+    with psycopg.connect(uri, autocommit=True) as conn:
+        conn.execute(
+            "GRANT ALL ON TABLE users, orgs, memberships, org_domains, "
+            "org_agents, org_tokens, org_connections, billing_accounts, "
+            "usage_sessions, stripe_events, audit_log "
+            "TO PUBLIC, laura_app, anon, authenticated"
+        )
+
+    # 0004 must be an exact privilege reset, not merely additive hardening.
+    proc = migrate("head")
+    assert proc.returncode == 0, f"alembic upgrade failed:\n{proc.stdout}\n{proc.stderr}"
+    yield {
+        "uri": uri,
+        "admin_sa_url": admin_sa_url,
+        "app_sa_url": app_sa_url,
+    }
     control_plane.reset_engine()
     srv.cleanup()
 
@@ -107,7 +155,7 @@ def pg(tmp_path_factory):
 def cp(pg, monkeypatch):
     """control_plane pointed at the embedded PG (reset back afterwards so the
     rest of the suite stays key-free/disabled)."""
-    monkeypatch.setattr(settings, "laura_database_url", pg["sa_url"])
+    monkeypatch.setattr(settings, "laura_database_url", pg["app_sa_url"])
     control_plane.reset_engine()
     yield control_plane
     control_plane.reset_engine()
@@ -123,6 +171,17 @@ def _signup_b(cp):
 
 def _admin(pg):
     return psycopg.connect(pg["uri"], autocommit=True)
+
+
+def _app(pg):
+    import psycopg.conninfo as _ci
+
+    kwargs = {
+        **_ci.conninfo_to_dict(pg["uri"]),
+        "user": APP_ROLE,
+        "password": APP_ROLE_PASSWORD,
+    }
+    return psycopg.connect(**kwargs, autocommit=True)
 
 
 # ── signup: two users → two orgs, fully provisioned ────────────────────
@@ -277,52 +336,253 @@ def test_org_token_roundtrip_and_no_cross_org(cp):
     assert cp.resolve_org_token("") is None
 
 
-# ── RLS on the NEW 0002 tables, as the policy-bound app role ───────────
-
-def test_rls_isolates_new_tables_for_app_role(cp, pg):
+def test_org_token_rotate_and_revoke_work_as_app_role(cp):
     a, b = _signup_a(cp), _signup_b(cp)
-    # seed one connection row per org through the DAL (also proves the
-    # durable mirror round-trips its config)
+    first_a = cp.mint_org_token(a["org_id"], "cedric:workspace")
+    token_b = cp.rotate_org_token(b["org_id"], "cedric:workspace")
+    assert cp.resolve_org_token(first_a) == a["org_id"]
+    assert cp.resolve_org_token(token_b) == b["org_id"]
+
+    rotated_a = cp.rotate_org_token(a["org_id"], "cedric:workspace")
+    assert rotated_a and rotated_a != first_a
+    assert cp.resolve_org_token(first_a) is None
+    assert cp.resolve_org_token(rotated_a) == a["org_id"]
+    assert cp.resolve_org_token(token_b) == b["org_id"]
+
+    assert cp.revoke_org_tokens(a["org_id"], "cedric:workspace") is True
+    assert cp.resolve_org_token(rotated_a) is None
+    assert cp.resolve_org_token(token_b) == b["org_id"]
+
+
+# ── production role + SECURITY DEFINER boundary + real RLS ──────────────
+
+def test_runtime_engine_is_exact_policy_bound_role(cp):
+    from sqlalchemy import text
+
+    with cp._get_engine().connect() as conn:
+        role = conn.execute(
+            text(
+                "SELECT current_user, rolsuper, rolbypassrls "
+                "FROM pg_roles WHERE rolname = current_user"
+            )
+        ).fetchone()
+    assert role == (APP_ROLE, False, False)
+
+
+def test_private_functions_have_exact_grants_and_identity_tables_are_hidden(cp, pg):
+    # Signup succeeding above already proves laura_app can execute the definer.
+    _signup_a(cp)
+    functions = (
+        "laura_private.ensure_user(text,text,text)",
+        "laura_private.resolve_org_token(text)",
+        "laura_private.list_open_usage_sessions()",
+        "laura_private.claim_stripe_event(text,text)",
+    )
+    with _admin(pg) as conn:
+        for function in functions:
+            assert conn.execute(
+                "SELECT has_function_privilege(%s, %s, 'EXECUTE')",
+                (APP_ROLE, function),
+            ).fetchone()[0] is True
+            assert conn.execute(
+                "SELECT has_function_privilege('anon', %s, 'EXECUTE')",
+                (function,),
+            ).fetchone()[0] is False
+            assert conn.execute(
+                "SELECT has_function_privilege('authenticated', %s, 'EXECUTE')",
+                (function,),
+            ).fetchone()[0] is False
+
+        # The deliberately pre-granted privileges in the fixture must be gone.
+        assert conn.execute(
+            "SELECT has_table_privilege(%s, 'users', 'SELECT')", (APP_ROLE,)
+        ).fetchone()[0] is False
+        assert conn.execute(
+            "SELECT has_table_privilege('anon', 'users', 'SELECT')"
+        ).fetchone()[0] is False
+        assert conn.execute(
+            "SELECT has_table_privilege('authenticated', 'usage_sessions', 'SELECT')"
+        ).fetchone()[0] is False
+        assert conn.execute(
+            "SELECT has_table_privilege(%s, 'stripe_events', 'SELECT')", (APP_ROLE,)
+        ).fetchone()[0] is False
+        assert conn.execute(
+            "SELECT has_table_privilege(%s, 'org_tokens', 'INSERT')", (APP_ROLE,)
+        ).fetchone()[0] is True
+        assert conn.execute(
+            "SELECT has_table_privilege(%s, 'org_tokens', 'DELETE')", (APP_ROLE,)
+        ).fetchone()[0] is True
+        assert conn.execute(
+            "SELECT has_table_privilege(%s, 'org_tokens', 'SELECT')", (APP_ROLE,)
+        ).fetchone()[0] is False
+
+    with _app(pg) as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("SELECT count(*) FROM users")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("SELECT count(*) FROM org_tokens")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("SELECT count(*) FROM stripe_events")
+
+
+def test_rls_isolates_reads_and_rejects_cross_org_write(cp, pg):
+    a, b = _signup_a(cp), _signup_b(cp)
     assert cp.set_connection(
         a["org_id"], "laura", "calendar", "connected", {"who": "alice"}
     ) is True
     assert cp.set_connection(
         b["org_id"], "laura", "calendar", "connected", {"who": "bob"}
     ) is True
-    conns_a = cp.get_connections(a["org_id"])
-    assert [c["config"]["who"] for c in conns_a] == ["alice"]
+    assert [c["config"]["who"] for c in cp.get_connections(a["org_id"])] == ["alice"]
 
-    with _admin(pg) as conn:
-        conn.execute(
-            f"GRANT SELECT ON org_connections, billing_accounts TO {APP_ROLE}"
-        )
+    with _app(pg) as conn:
+        role = conn.execute(
+            "SELECT current_user, rolsuper, rolbypassrls "
+            "FROM pg_roles WHERE rolname = current_user"
+        ).fetchone()
+        assert role == (APP_ROLE, False, False)
 
-    import psycopg.conninfo as _ci
-
-    app_kwargs = {
-        **_ci.conninfo_to_dict(pg["uri"]),
-        "user": APP_ROLE,
-        "password": APP_ROLE_PASSWORD,
-    }
-    with psycopg.connect(**app_kwargs, autocommit=True) as conn:
-        is_super = conn.execute(
-            "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user"
-        ).fetchone()[0]
-        assert not is_super, "app role must be policy-bound for this test to mean anything"
-
-        # no org context → FORCE RLS yields nothing at all
+        # No context: the policy's missing_ok setting resolves to no rows.
         assert conn.execute("SELECT count(*) FROM org_connections").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM billing_accounts").fetchone()[0] == 0
 
-        # as org A: a bare, WHERE-less SELECT sees ONLY org A's rows
+        # Org A context: WHERE-less reads can see only A.
         conn.execute("SELECT set_config('app.current_org', %s, false)", (a["org_id"],))
         got = {
-            str(r[0])
-            for r in conn.execute("SELECT org_id FROM org_connections").fetchall()
+            str(row[0])
+            for row in conn.execute("SELECT org_id FROM org_connections").fetchall()
         }
         assert got == {a["org_id"]}
         got_billing = {
-            str(r[0])
-            for r in conn.execute("SELECT org_id FROM billing_accounts").fetchall()
+            str(row[0])
+            for row in conn.execute("SELECT org_id FROM billing_accounts").fetchall()
         }
         assert got_billing == {a["org_id"]}
+
+        # Even an explicit B org_id cannot cross the WITH CHECK boundary.
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute(
+                "INSERT INTO org_connections "
+                "(org_id, avatar_id, provider, status) "
+                "VALUES (%s, 'laura', 'drive', 'connected')",
+                (b["org_id"],),
+            )
+
+    with _admin(pg) as conn:
+        leaked = conn.execute(
+            "SELECT count(*) FROM org_connections "
+            "WHERE org_id = %s AND provider = 'drive'",
+            (b["org_id"],),
+        ).fetchone()[0]
+    assert leaked == 0
+
+def test_owner_dsn_is_rejected_by_runtime_guard(pg, monkeypatch):
+    monkeypatch.setattr(settings, "laura_database_url", pg["admin_sa_url"])
+    control_plane.reset_engine()
+    with pytest.raises(RuntimeError, match="unsafe runtime database role"):
+        control_plane._get_engine()
+    assert control_plane._engine is None
+    control_plane.reset_engine()
+
+
+def test_definer_owner_is_not_runtime_and_can_bypass_rls(pg):
+    with _admin(pg) as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT owner.rolname, owner.rolsuper, owner.rolbypassrls "
+            "FROM pg_proc p "
+            "JOIN pg_namespace n ON n.oid = p.pronamespace "
+            "JOIN pg_roles owner ON owner.oid = p.proowner "
+            "WHERE n.nspname = 'laura_private'"
+        ).fetchall()
+    assert rows
+    assert all(name != APP_ROLE for name, _, _ in rows)
+    assert all(is_super or bypasses for _, is_super, bypasses in rows)
+
+
+def test_inactive_corporate_membership_cannot_regain_access(cp, pg):
+    shared = str(uuid.uuid4())
+    with _admin(pg) as conn:
+        conn.execute(
+            "INSERT INTO orgs (id, name, slug, plan) VALUES (%s, 'Locked', %s, 'free')",
+            (shared, f"locked-{shared[:8]}"),
+        )
+        conn.execute(
+            "INSERT INTO org_domains (org_id, domain, verified_at) "
+            "VALUES (%s, 'locked.test', now())",
+            (shared,),
+        )
+    first = cp.ensure_user("sub-locked", "employee@locked.test", "Emp", "")
+    assert first["org_id"] == shared
+    with _admin(pg) as conn:
+        conn.execute(
+            "UPDATE memberships SET status = 'inactive' "
+            "WHERE user_id = %s AND org_id = %s",
+            (first["user_id"], shared),
+        )
+
+    with pytest.raises(Exception, match="corporate membership is not active"):
+        cp.ensure_user("sub-locked", "employee@locked.test", "Emp", "")
+
+    with _admin(pg) as conn:
+        assert conn.execute(
+            "SELECT status FROM memberships WHERE user_id = %s AND org_id = %s",
+            (first["user_id"], shared),
+        ).fetchone() == ("inactive",)
+
+
+def test_verified_domains_are_globally_unique_case_insensitive(pg):
+    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    with _admin(pg) as conn:
+        conn.execute(
+            "INSERT INTO orgs (id, name, slug, plan) VALUES "
+            "(%s, 'Domain A', %s, 'free'), (%s, 'Domain B', %s, 'free')",
+            (a, f"domain-a-{a[:8]}", b, f"domain-b-{b[:8]}"),
+        )
+        conn.execute(
+            "INSERT INTO org_domains (org_id, domain, verified_at) "
+            "VALUES (%s, 'CaseUnique.Test', now())",
+            (a,),
+        )
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            conn.execute(
+                "INSERT INTO org_domains (org_id, domain, verified_at) "
+                "VALUES (%s, 'caseunique.test', now())",
+                (b,),
+            )
+
+
+def test_pool_reuse_clears_transaction_local_org(cp):
+    from sqlalchemy import text
+
+    a = _signup_a(cp)
+    engine = cp._get_engine()
+    with engine.begin() as conn:
+        cp._set_org(conn, a["org_id"])
+        assert conn.execute(text("SELECT count(*) FROM billing_accounts")).scalar() == 1
+
+    # A subsequent checkout may reuse the same physical connection. The
+    # transaction-local GUC is empty; NULLIF(..., '') prevents an invalid UUID,
+    # and FORCE RLS exposes no previous tenant.
+    with engine.begin() as conn:
+        assert conn.execute(text("SELECT count(*) FROM billing_accounts")).scalar() == 0
+
+
+def test_stripe_idempotency_uses_private_boundary(cp, pg):
+    from sqlalchemy import text
+
+    engine = cp._get_engine()
+    with engine.begin() as conn:
+        assert conn.execute(
+            text("SELECT laura_private.claim_stripe_event(:id, :type)"),
+            {"id": "evt-boundary", "type": "checkout.session.completed"},
+        ).scalar() is True
+    with engine.begin() as conn:
+        assert conn.execute(
+            text("SELECT laura_private.claim_stripe_event(:id, :type)"),
+            {"id": "evt-boundary", "type": "checkout.session.completed"},
+        ).scalar() is False
+
+    with _app(pg) as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("SELECT count(*) FROM stripe_events")
+
