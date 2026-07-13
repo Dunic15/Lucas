@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ..config import settings
+from .. import outbox
 from . import callback
 
 # Meeting briefs are markdown from the orchestrator; cap so a runaway payload
@@ -296,78 +297,45 @@ def wire_artifact(artifact: dict) -> dict:
     return wire
 
 
+def _kick_outbox() -> None:
+    """Nudge delivery off-path; the lifespan worker remains the crash backstop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        threading.Thread(target=outbox.process_due, daemon=True).start()
+        return
+    asyncio.create_task(run_in_threadpool(outbox.process_due))
+
+
 def deliver_ended(integration: Optional[dict], bot_id: str, artifact: dict) -> bool:
-    """Hand the finished artifact to the orchestrator's webhook (retried inside
-    send_ended). Fire-and-forget — the artifact is already saved and the
-    orchestrator polls as a fallback. Returns True when this is an orchestrated
-    session (so the caller skips autopilot delivery — the orchestrator owns
-    approval-gated email + Slack for its sessions)."""
+    """Durably enqueue session.ended; network delivery never blocks finalize."""
     if integration and integration.get("callback_url"):
-        task = asyncio.create_task(
-            run_in_threadpool(
-                callback.send_ended, integration, bot_id, wire_artifact(artifact)
-            )
+        outbox.enqueue_session_ended(
+            dict(integration), bot_id, wire_artifact(artifact)
         )
-        # Hold a strong ref until the send finishes (asyncio only refs it weakly).
-        _ended_tasks.add(task)
-        task.add_done_callback(_ended_tasks.discard)
+        _kick_outbox()
         return True
     return False
 
-
 def notify_action_requested(session: Any, bot_id: str, item: dict) -> None:
-    """An action request was captured live (tools.queue_action): tell the
-    orchestrator NOW, so the Slack approval card is ready before the meeting
-    ends. No-ops unless the session is orchestrated (integration with a
-    callback_url). Fire-and-forget and OFF the live path — the artifact's
-    actions[] at finalize stays the authoritative copy, so a lost event costs
-    nothing. PII rule: only the distilled action/owner/due (plus the stable,
-    non-PII action_id used to correlate this event with the final artifact)
-    leave — never transcript content."""
-    # PII-safe telemetry (action_id only, never the action text): the live
-    # "Cedric said he could but did nothing" report is undiagnosable without
-    # knowing whether the captured action even had a surface to go to. Two
-    # distinct no-op reasons, so a mis-summoned (non-orchestrated) session is
-    # told apart from a genuine send.
-    aid = (item or {}).get("action_id", "")
+    """Durably enqueue a live action card with its original routing envelope."""
+    aid = str((item or {}).get("action_id") or "")
     if session is None or not session.integration:
         print(
             f"[cedric] action captured (action_id={aid!r}) but session is NOT "
-            "orchestrated (no integration) — nothing sent to the surface",
+            "orchestrated (no integration)",
             flush=True,
         )
         return
     integration = dict(session.integration)
     if not integration.get("callback_url"):
-        print(
-            f"[cedric] action captured (action_id={aid!r}) but session has no "
-            "callback_url — nothing sent to the surface",
-            flush=True,
-        )
         return
-    print(
-        f"[cedric] action.requested dispatching to surface (action_id={aid!r})",
-        flush=True,
-    )
     wire_item = {
-        k: (item or {}).get(k, "") for k in ("action_id", "action", "owner", "due")
+        key: (item or {}).get(key, "")
+        for key in ("action_id", "action", "owner", "due")
     }
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        # Tool dispatch runs inside run_in_threadpool — no event loop in this
-        # worker thread, so create_task would raise. A daemon thread keeps the
-        # POST just as fire-and-forget and off the live path.
-        threading.Thread(
-            target=callback.send_action_requested,
-            args=(integration, bot_id, wire_item),
-            daemon=True,
-        ).start()
-        return
-    asyncio.create_task(
-        run_in_threadpool(callback.send_action_requested, integration, bot_id, wire_item)
-    )
-
+    outbox.enqueue_action_requested(integration, bot_id, wire_item)
+    _kick_outbox()
 
 def notify_failed(session: Any, bot_id: str, status_code: str) -> None:
     """A fatal bot status never reached 'live': tell the orchestrator the join
