@@ -415,12 +415,29 @@ def test_private_functions_have_exact_grants_and_identity_tables_are_hidden(cp, 
         assert conn.execute(
             "SELECT has_table_privilege(%s, 'org_tokens', 'SELECT')", (APP_ROLE,)
         ).fetchone()[0] is False
+        assert conn.execute(
+            "SELECT has_column_privilege(%s, 'org_tokens', 'org_id', 'SELECT')",
+            (APP_ROLE,),
+        ).fetchone()[0] is True
+        assert conn.execute(
+            "SELECT has_column_privilege(%s, 'org_tokens', 'label', 'SELECT')",
+            (APP_ROLE,),
+        ).fetchone()[0] is True
+        assert conn.execute(
+            "SELECT has_column_privilege(%s, 'org_tokens', 'token_hash', 'SELECT')",
+            (APP_ROLE,),
+        ).fetchone()[0] is False
 
     with _app(pg) as conn:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute("SELECT count(*) FROM users")
+        # Only the two RLS routing columns are readable. Secrets and SELECT *
+        # remain denied, while no-context routing reads return no tenant rows.
+        assert conn.execute("SELECT org_id, label FROM org_tokens").fetchall() == []
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute("SELECT count(*) FROM org_tokens")
+            conn.execute("SELECT token_hash FROM org_tokens")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("SELECT * FROM org_tokens")
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute("SELECT count(*) FROM stripe_events")
 
