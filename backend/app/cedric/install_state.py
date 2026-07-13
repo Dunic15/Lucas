@@ -33,6 +33,7 @@ def pack(
     avatar_id: str,
     channel: str,
     return_url: str,
+    complete_url: str = "",
     *,
     now: float | None = None,
 ) -> str:
@@ -42,6 +43,7 @@ def pack(
         "avatar_id": avatar_id,
         "channel": channel,
         "return_url": return_url,
+        "complete_url": complete_url,
         "exp": int(now if now is not None else time.time()) + _TTL_SECONDS,
         "nonce": secrets.token_hex(16),
     }
@@ -78,11 +80,15 @@ def unpack(state: str, *, now: float | None = None) -> dict | None:
 
 
 def install_url(
-    org_id: str, avatar_id: str, channel: str = "", return_url: str = ""
+    org_id: str,
+    avatar_id: str,
+    channel: str = "",
+    return_url: str = "",
+    complete_url: str = "",
 ) -> str:
     orgs_url = settings.cedric_orgs_url.strip()
     if not orgs_url:
         raise RuntimeError("brain provisioning is not configured")
     base = orgs_url.rstrip("/").rsplit("/api/laura/orgs", 1)[0]
-    state = pack(org_id, avatar_id, channel, return_url)
+    state = pack(org_id, avatar_id, channel, return_url, complete_url)
     return f"{base}/api/slack/install?{urlencode({'state': state})}"
