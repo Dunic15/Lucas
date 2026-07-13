@@ -2885,8 +2885,15 @@ async def _refresh_rolling_summary(
 ) -> None:
     try:
         cutoff = max(0, len(session.transcript) - _SUMMARY_KEEP_RECENT)
-        lines = session.transcript[session.summary_upto : cutoff]
+        lines = [
+            u
+            for u in session.transcript[session.summary_upto : cutoff]
+            if u.speaker_kind != "agent"
+        ]
         if not lines:
+            # Progress the raw-transcript cursor even when this entire fold was
+            # agent output, otherwise every future human line retries it.
+            session.summary_upto = cutoff
             return
         text = "\n".join(f"{u.speaker}: {u.text}" for u in lines)
         notes = await run_in_threadpool(
@@ -3096,7 +3103,8 @@ async def _usage_warn(session: store.Session, deadline: float) -> None:
         return
     try:
         left = deadline - time.time()
-        heard = session.transcript[-1].text if session.transcript else ""
+        human = session.human_transcript()
+        heard = human[-1].text if human else ""
         if left <= 60 and left > 5 and not session.usage_warned_1m:
             session.usage_warned_1m = True
             session.usage_warned_5m = True  # never follow with the milder one
@@ -3936,7 +3944,8 @@ def _closing_signal(session: store.Session, text: str) -> bool:
     trigger, never bypass a safety gate."""
     if detect_closing(text):
         return True
-    prev_ts = session.transcript[-2].ts if len(session.transcript) >= 2 else 0.0
+    human = session.human_transcript()
+    prev_ts = human[-2].ts if len(human) >= 2 else 0.0
     return closing_fallback_fires(
         enabled=settings.closing_fallback_enabled,
         now=time.time(),
@@ -4213,7 +4222,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     event == "participant_events.join"
                     and settings.greet_joiners
                     and is_new
-                    and len(session.transcript) >= 4
+                    and len(session.human_transcript()) >= 4
                     and not _in_opening_grace(session)  # not while the room settles
                     and not label.lower().startswith("guest")
                     and time.time() > session.speaking_until
@@ -4380,7 +4389,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
         and not session.in_cooldown(avatar.speak_cooldown_seconds)
     ):
         flag = await run_in_threadpool(
-            proactive_flag, avatar, session.transcript_text(), state=state, memory=memory
+            proactive_flag,
+            avatar,
+            session.transcript_text(include_agents=False),
+            state=state,
+            memory=memory,
         )
         conf = float(flag.get("confidence", 0.0))
         if flag.get("should_speak") and flag.get("line") and conf >= settings.proactive_min_confidence:
@@ -4672,16 +4685,21 @@ async def recall_webhook(request: Request) -> JSONResponse:
         and not session.quiet_nudge_done
         and not _in_opening_grace(session)  # never activated → stays a silent guest
         and _closing_signal(session, text)
-        and len(session.transcript) >= 12
+        and len(session.human_transcript()) >= 12
         and not session.in_cooldown(avatar.speak_cooldown_seconds)
     ):
-        spoken_names = {u.speaker.strip().lower() for u in session.transcript}
-        quiet = [
-            n
-            for n in session.roster(avatar.name)
-            if n.strip().lower() not in spoken_names
-            and not n.lower().startswith("guest")
+        # Names are presentation only. Consume one spoken occurrence per
+        # roster occurrence so two humans called Alex don't collapse together.
+        spoken_names = [
+            u.speaker.strip().lower() for u in session.human_transcript()
         ]
+        quiet = []
+        for name in session.roster(avatar.name):
+            normalized = name.strip().lower()
+            if normalized in spoken_names:
+                spoken_names.remove(normalized)
+            elif not normalized.startswith("guest"):
+                quiet.append(name)
         if quiet:
             session.quiet_nudge_done = True
             nudge = _line_for(
@@ -4731,7 +4749,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # (a partial lands or the transcript grows), yield silently. Deliberately
     # AFTER the cheap gates — a line that would be skipped anyway never waits.
     if not called and not followup and settings.deference_seconds > 0:
-        _defer_mark = len(session.transcript)
+        _defer_mark = len(session.human_transcript())
         _defer_t0 = time.time()
         # Size ONLY the wait — the yield decision below is unchanged. Adaptation
         # is off by default (returns deference_seconds verbatim).
@@ -4752,7 +4770,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # own the floor — wait the MAX rather than the sized window so she never
         # clips their volley. Suppression-only (still just a wait).
         if settings.cross_talk_suppression_enabled and in_locked_dyad(
-            session.transcript,
+            session.human_transcript(),
             avatar_name=avatar.name,
             now=_defer_t0,
             min_turns=settings.cross_talk_min_turns,
@@ -4762,7 +4780,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             _defer_wait = max(_defer_wait, settings.deference_max_seconds)
         await asyncio.sleep(_defer_wait)
         if (
-            len(session.transcript) > _defer_mark
+            len(session.human_transcript()) > _defer_mark
             or session.last_human_partial_at > _defer_t0
         ):
             return JSONResponse(
@@ -4920,7 +4938,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # interjection floor check below can tell whether a human took the floor while
     # she was generating (a new final landed, or a human partial arrived during
     # the generation window). Cheap ints — no latency on the hot path.
-    _interject_len0 = len(session.transcript)
+    _interject_len0 = len(session.human_transcript())
     _interject_t0 = time.time()
     try:
         async for sentence in iterate_in_threadpool(
@@ -5056,7 +5074,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # UNPROMPTED interjection — she falls to the audio-silent raised hand
             # (waiting to be invited) instead of talking over their volley.
             _dyad = settings.cross_talk_suppression_enabled and in_locked_dyad(
-                session.transcript,
+                session.human_transcript(),
                 avatar_name=avatar.name,
                 now=time.time(),
                 min_turns=settings.cross_talk_min_turns,
@@ -5076,7 +5094,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     # while she generated. Off → today's single trigger-time read.
                     transcript_grew=(
                         settings.interject_recheck_floor_at_speak
-                        and len(session.transcript) > _interject_len0
+                        and len(session.human_transcript()) > _interject_len0
                     ),
                     generation_elapsed=(
                         time.time() - _interject_t0
