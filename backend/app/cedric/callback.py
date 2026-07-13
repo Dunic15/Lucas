@@ -46,9 +46,15 @@ def _secret_for(org_id: str) -> str:
     present, else the global LAURA_WEBHOOK_SECRET. The registry is how each
     connected workspace gets its own credential (minted by the orchestrator's
     /api/laura/orgs provisioning) without rotating anyone else's."""
-    per_org = secret_registry.secret_for(org_id)
+    org = (org_id or "").strip()
+    per_org = secret_registry.secret_for(org)
     if per_org:
         return per_org
+    # A real customer callback must never fall back to a deployment-wide HMAC
+    # secret. Missing per-org credentials fail closed (no signature) and the
+    # delivery remains retryable.
+    if org and org != settings.demo_org_id:
+        return ""
     return settings.laura_webhook_secret.strip()
 
 
@@ -104,8 +110,25 @@ _REDIRECTS = (301, 307, 308)
 
 
 def _redirect_target(resp: httpx.Response) -> str | None:
+    """Follow at most one same-origin redirect.
+
+    Workspace Authorization/HMAC credentials must never cross an origin
+    boundary. A cross-origin redirect is returned to the caller as a failed
+    delivery instead of being followed with secrets attached.
+    """
     loc = resp.headers.get("location")
-    return str(resp.url.join(loc)) if resp.status_code in _REDIRECTS and loc else None
+    if resp.status_code not in _REDIRECTS or not loc:
+        return None
+    target = str(resp.url.join(loc))
+    source_parts = urlsplit(str(resp.url))
+    target_parts = urlsplit(target)
+    source_origin = (
+        source_parts.scheme.lower(), (source_parts.hostname or "").lower(), source_parts.port
+    )
+    target_origin = (
+        target_parts.scheme.lower(), (target_parts.hostname or "").lower(), target_parts.port
+    )
+    return target if source_origin == target_origin else None
 
 
 def _post(url: str, payload: dict) -> httpx.Response:
@@ -325,9 +348,10 @@ def provision_org(
         return None
     target_url = f"{url.rstrip('/')}/pending" if not team_id else url
     headers = {"Content-Type": "application/json"}
-    token = settings.cedric_orgs_token.strip() or settings.laura_api_token.strip()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    token = settings.cedric_orgs_token.strip()
+    if not token:
+        return ProvisionResult(0)
+    headers["Authorization"] = f"Bearer {token}"
     payload = {
         "org_id": org_id,
         "team_id": team_id or None,
