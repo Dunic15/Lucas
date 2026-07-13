@@ -316,12 +316,26 @@ class Session:
         participant_id: str = "",
         speaker_kind: str = "human",
     ) -> None:
+        resolved_id = str(participant_id or "")
+        resolved_kind = speaker_kind
+        if not resolved_id:
+            # Backward-compatible direct callers: bind by name only when the
+            # live participant map has exactly one unambiguous match.
+            matches = [
+                (str(pid), p)
+                for pid, p in self.participants.items()
+                if str(p.get("name") or "").strip().lower()
+                == speaker.strip().lower()
+            ]
+            if len(matches) == 1:
+                resolved_id, participant = matches[0]
+                resolved_kind = str(participant.get("kind") or speaker_kind)
         utterance = Utterance(
             speaker=speaker,
             text=text,
             ts=time.time(),
-            participant_id=str(participant_id or ""),
-            speaker_kind="agent" if speaker_kind == "agent" else "human",
+            participant_id=resolved_id,
+            speaker_kind="agent" if resolved_kind == "agent" else "human",
         )
         self.transcript.append(utterance)
         # Hot path: the per-utterance write stays on local SQLite (never a
