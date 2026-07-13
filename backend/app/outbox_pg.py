@@ -18,6 +18,8 @@ from .config import settings
 
 _EXECUTION_STATUSES = ("proposed", "approved", "rejected", "done", "failed")
 _TERMINAL_EXECUTION_STATUSES = ("rejected", "done", "failed")
+_EXECUTION_RANK = {"": -1, "proposed": 0, "approved": 1}
+_EXECUTION_RANK.update({state: 2 for state in _TERMINAL_EXECUTION_STATUSES})
 
 
 class ActionCaptureClosed(RuntimeError):
@@ -588,7 +590,12 @@ def set_action_status(
         ).first()
         if row is None:
             return False
-        if str(row[0] or "") in _TERMINAL_EXECUTION_STATUSES:
+        current = str(row[0] or "")
+        if current in _TERMINAL_EXECUTION_STATUSES:
+            return True
+        # Webhook delivery is at-least-once and may be out of order. A late
+        # proposed event cannot repaint an already-approved action.
+        if _EXECUTION_RANK[state] < _EXECUTION_RANK.get(current, -1):
             return True
         conn.execute(
             text(
@@ -638,8 +645,13 @@ def resolve_action(
             ),
             {"org_id": org_id, "action_id": aid},
         ).first()
-        if row is None or str(row[0] or "") in _TERMINAL_EXECUTION_STATUSES:
+        if row is None:
             return False
+        current = str(row[0] or "")
+        if current in _TERMINAL_EXECUTION_STATUSES:
+            # A successful response may be lost after the PG commit. Retrying
+            # the same outcome is success; a conflicting terminal is rejected.
+            return current == state
         result = conn.execute(
             text(
                 """

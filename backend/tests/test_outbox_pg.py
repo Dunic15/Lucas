@@ -721,3 +721,77 @@ def test_action_index_status_and_resolve_are_force_rls_isolated(cp, pg):
     assert outbox_pg.action_statuses(org_a, [action_id])[action_id][
         "status"
     ] == "approved"
+
+
+
+def test_pg_action_mutation_survives_broken_sqlite_mirror_and_retry(
+    cp, monkeypatch
+):
+    org = _org(cp, "mirror-failure")
+    status_id = "action-status-no-disk"
+    resolve_id = "action-resolve-no-disk"
+    assert outbox.enqueue_session_ended(
+        _integration(org),
+        "bot-mirror-failure",
+        {"actions": [
+            {"action_id": status_id, "item": "Report completion"},
+            {"action_id": resolve_id, "item": "Close approval"},
+        ]},
+    ) is not None
+
+    def broken_local_store():
+        raise OSError("read-only local disk")
+
+    monkeypatch.setattr(store, "_connect", broken_local_store)
+
+    # Both requests commit in PG and still answer success when the optional
+    # per-instance SQLite cache is unavailable.
+    assert ledger.set_action_status(
+        status_id, "done", "completed remotely", org_id=org
+    )
+    assert ledger.resolve_by_action_id(
+        resolve_id, outcome="rejected", detail="declined remotely", org_id=org
+    )
+
+    # Lost HTTP responses are safe: same terminal retry remains successful.
+    assert ledger.set_action_status(
+        status_id, "done", "completed remotely", org_id=org
+    )
+    assert ledger.resolve_by_action_id(
+        resolve_id, outcome="rejected", detail="declined remotely", org_id=org
+    )
+    states = outbox_pg.action_statuses(org, [status_id, resolve_id])
+    assert states[status_id]["status"] == "done"
+    assert states[status_id]["detail"] == "completed remotely"
+    assert states[status_id]["updated_at"] > 0
+    assert states[resolve_id]["status"] == "rejected"
+    assert states[resolve_id]["detail"] == "declined remotely"
+    assert states[resolve_id]["updated_at"] > 0
+
+
+def test_pg_execution_state_is_monotonic_under_out_of_order_events(cp):
+    org = _org(cp, "status-order")
+    action_id = "action-out-of-order"
+    assert outbox.enqueue_session_ended(
+        _integration(org),
+        "bot-status-order",
+        {"actions": [{"action_id": action_id, "item": "Ship release"}]},
+    ) is not None
+
+    assert outbox_pg.set_action_status(
+        org, action_id, "approved", "owner approved"
+    )
+    assert outbox_pg.set_action_status(
+        org, action_id, "proposed", "late card-created replay"
+    )
+    state = outbox_pg.action_statuses(org, [action_id])[action_id]
+    assert state["status"] == "approved"
+    assert state["detail"] == "owner approved"
+
+    assert outbox_pg.set_action_status(org, action_id, "done", "executed")
+    assert outbox_pg.set_action_status(
+        org, action_id, "approved", "late approval replay"
+    )
+    state = outbox_pg.action_statuses(org, [action_id])[action_id]
+    assert state["status"] == "done"
+    assert state["detail"] == "executed"

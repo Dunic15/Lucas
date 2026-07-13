@@ -420,24 +420,35 @@ def resolve_by_action_id(
         if not durable_resolved:
             return False
     now = time.time()
-    with store._LOCK, store._connect() as conn:
-        cur = conn.execute(
-            """UPDATE ledger_items
-               SET status=?, resolved_at=?, resolved_by_bot_id=?, resolution_detail=?
-               WHERE action_id=? AND org_id=? AND status='open'""",
-            (outcome, now, bot_id, (detail or "").strip()[:300], aid, org_id),
-        )
-        if durable_resolved:
-            conn.execute(
-                """INSERT INTO action_status
-                       (org_id, action_id, status, detail, updated_at)
-                   VALUES (?,?,?,?,?)
-                   ON CONFLICT(org_id, action_id) DO UPDATE SET
-                     status=excluded.status, detail=excluded.detail,
-                     updated_at=excluded.updated_at""",
-                (org_id, aid, outcome, (detail or "").strip()[:300], now),
+    try:
+        with store._LOCK, store._connect() as conn:
+            cur = conn.execute(
+                """UPDATE ledger_items
+                   SET status=?, resolved_at=?, resolved_by_bot_id=?,
+                       resolution_detail=?
+                   WHERE action_id=? AND org_id=? AND status='open'""",
+                (
+                    outcome, now, bot_id, (detail or "").strip()[:300],
+                    aid, org_id,
+                ),
             )
-        return durable_resolved or cur.rowcount > 0
+            if durable_resolved:
+                conn.execute(
+                    """INSERT INTO action_status
+                           (org_id, action_id, status, detail, updated_at)
+                       VALUES (?,?,?,?,?)
+                       ON CONFLICT(org_id, action_id) DO UPDATE SET
+                         status=excluded.status, detail=excluded.detail,
+                         updated_at=excluded.updated_at""",
+                    (org_id, aid, outcome, (detail or "").strip()[:300], now),
+                )
+            return durable_resolved or cur.rowcount > 0
+    except Exception:
+        if durable_resolved:
+            # Postgres is authoritative in production. A full/read-only local
+            # disk must not turn a committed resolve into 5xx/404 on retry.
+            return True
+        raise
 
 
 # Execution states the orchestrator may report — the brain's lifecycle for an
@@ -477,38 +488,45 @@ def set_action_status(
 
         if not outbox_pg.set_action_status(org_id, aid, st, detail):
             return False
-    with store._LOCK, store._connect() as conn:
-        current = conn.execute(
-            "SELECT status FROM action_status WHERE org_id=? AND action_id=?",
-            (org_id, aid),
-        ).fetchone()
-        # Execution state is monotonic. Once Cedric reports a terminal result,
-        # late/replayed proposed or approved events (or a conflicting terminal)
-        # cannot repaint a green/red dashboard chip.
-        if current and current["status"] in _TERMINAL_STATUS_OUTCOME:
+    try:
+        with store._LOCK, store._connect() as conn:
+            current = conn.execute(
+                "SELECT status FROM action_status WHERE org_id=? AND action_id=?",
+                (org_id, aid),
+            ).fetchone()
+            # Execution state is monotonic. Once Cedric reports a terminal
+            # result, late/replayed events cannot repaint the dashboard chip.
+            if current and current["status"] in _TERMINAL_STATUS_OUTCOME:
+                return True
+            conn.execute(
+                """INSERT INTO action_status
+                       (org_id, action_id, status, detail, updated_at)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(org_id, action_id) DO UPDATE SET
+                     status=excluded.status, detail=excluded.detail,
+                     updated_at=excluded.updated_at""",
+                (org_id, aid, st, (detail or "").strip()[:300], time.time()),
+            )
+    except Exception:
+        if durable_status:
             return True
-        conn.execute(
-            """INSERT INTO action_status
-                   (org_id, action_id, status, detail, updated_at)
-               VALUES (?,?,?,?,?)
-               ON CONFLICT(org_id, action_id) DO UPDATE SET
-                 status=excluded.status, detail=excluded.detail,
-                 updated_at=excluded.updated_at""",
-            (org_id, aid, st, (detail or "").strip()[:300], time.time()),
-        )
+        raise
     outcome = _TERMINAL_STATUS_OUTCOME.get(st)
     if outcome:
         if durable_status:
-            with store._LOCK, store._connect() as conn:
-                conn.execute(
-                    """UPDATE ledger_items
-                       SET status=?, resolved_at=?, resolution_detail=?
-                       WHERE action_id=? AND org_id=? AND status='open'""",
-                    (
-                        outcome, time.time(), (detail or "").strip()[:300],
-                        aid, org_id,
-                    ),
-                )
+            try:
+                with store._LOCK, store._connect() as conn:
+                    conn.execute(
+                        """UPDATE ledger_items
+                           SET status=?, resolved_at=?, resolution_detail=?
+                           WHERE action_id=? AND org_id=? AND status='open'""",
+                        (
+                            outcome, time.time(), (detail or "").strip()[:300],
+                            aid, org_id,
+                        ),
+                    )
+            except Exception:
+                pass  # durable PG success never depends on the local cache
         else:
             resolve_by_action_id(
                 aid, "", outcome, (detail or "").strip()[:300], org_id=org_id
