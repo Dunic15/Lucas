@@ -298,7 +298,7 @@
   .ubar .fill{height:100%;border-radius:6px;background:var(--grad);}
   .ubar .val{font-family:var(--mono);font-size:.8rem;color:var(--dim);width:60px;text-align:right;flex:0 0 auto;}
   .soon{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--warn);background:var(--warn-soft);padding:4px 10px;border-radius:999px;}
-  .plans{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:16px;}
+  .plans{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:16px;}
   @media (max-width:700px){.plans{grid-template-columns:1fr;}}
   .plan{border:1px solid var(--line);border-radius:16px;padding:18px;background:var(--panel);display:flex;flex-direction:column;gap:12px;}
   .plan.featured{border-color:rgba(126,182,255,.35);background:linear-gradient(145deg,var(--live-soft),var(--panel));}
@@ -480,30 +480,39 @@
     <section class="view" id="view-usage" hidden>
       <div class="head"><div><h1>Usage &amp; billing</h1><div class="sub">One balance shared by Laura and Cedric</div></div></div>
       <div class="usage-hero">
-        <div class="ubig"><div class="k">Avatar minutes · 30 days</div><div class="v tnum" id="u-min">—</div><div class="s" id="u-min-tot"></div></div>
-        <div class="ubig"><div class="k">Launch offer</div><div class="v tnum gradtext">15 min</div><div class="s">Free avatar time · no card required</div></div>
+        <div class="ubig"><div class="k">Minutes remaining</div><div class="v tnum" id="u-remaining">—</div><div class="s" id="u-included">Loading your entitlement…</div></div>
+        <div class="ubig"><div class="k">Minutes used this period</div><div class="v tnum" id="u-used">—</div><div class="s" id="u-period">Shared across Laura and Cedric</div></div>
       </div>
       <div class="panel" style="margin-bottom:16px">
-        <h2>Minutes by avatar</h2><div class="ph">All time</div>
+        <h2>Minutes by avatar</h2><div class="ph">Meeting history</div>
         <div id="u-bars"></div>
       </div>
       <div class="panel">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-          <div><h2>Plan &amp; invoicing</h2><div class="ph" style="margin:0">Current plan: <b id="u-plan">Demo</b></div></div>
-          <span class="soon" id="billing-state">Billing activation in progress</span>
+          <div><h2>Plan &amp; invoicing</h2><div class="ph" style="margin:0">Current plan: <b id="u-plan">Loading…</b></div></div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span class="soon" id="billing-state">Checking billing</span>
+            <button class="btn" id="billing-manage" hidden>Manage billing</button>
+          </div>
         </div>
         <div class="plans">
-          <article class="plan featured">
-            <div class="ptop"><h3>Individual</h3><span class="stchip connected">Free trial</span></div>
-            <div class="price">15 min <small>free to start</small></div>
-            <ul><li>Laura and Cedric</li><li>Meet, Zoom and Teams</li><li>Recaps, decisions and actions</li><li>Connected tools through Cedric</li></ul>
-            <button class="btn primary" data-goto="overview">Start with a meeting</button>
+          <article class="plan" id="plan-free">
+            <div class="ptop"><h3>Free</h3><span class="stchip" id="free-state">15 minutes</span></div>
+            <div class="price">€0 <small>no card required</small></div>
+            <ul><li>15 avatar-minutes once</li><li>Laura and Cedric</li><li>Meet, Zoom and Teams</li><li>Recaps, decisions and actions</li></ul>
+            <button class="btn" data-goto="overview">Start with a meeting</button>
+          </article>
+          <article class="plan featured" id="plan-solo">
+            <div class="ptop"><h3>Solo</h3><span class="stchip connected">Best for individuals</span></div>
+            <div class="price">€49 <small>/ month</small></div>
+            <ul><li>300 avatar-minutes each billing period</li><li>Laura and Cedric</li><li>Connected tools through Cedric</li><li>Customer billing portal</li></ul>
+            <button class="btn primary" id="billing-upgrade">Upgrade to Solo</button>
           </article>
           <article class="plan">
             <div class="ptop"><h3>Enterprise</h3><span class="stchip pending">Early access</span></div>
             <div class="price">Talk to us</div>
-            <p class="ph">Design-partner scope — these controls are not live in the individual dashboard today.</p>
-            <ul><li>Planned: shared workspaces and roles</li><li>Planned: SSO, auditability and retention controls</li><li>Planned: security review and guided rollout</li></ul>
+            <p class="ph">Design-partner scope — enterprise controls are not presented as live today.</p>
+            <ul><li>Planned: shared workspaces and roles</li><li>Planned: SSO, auditability and retention</li><li>Planned: security review and guided rollout</li></ul>
             <a class="btn" href="mailto:duccio@sffstudio.com?subject=Laura%20enterprise%20early%20access">Contact sales</a>
           </article>
         </div>
@@ -569,11 +578,20 @@
   function headers(){ var h={"Content-Type":"application/json"}; if(token) h["Authorization"]="Bearer "+token; return h; }
   function toast(msg,err){ var t=document.createElement("div"); t.className="toast"+(err?" err":""); t.setAttribute("role",err?"alert":"status"); t.innerHTML='<span class="dt"></span>'+esc(msg);
     $("#toasts").appendChild(t); setTimeout(function(){ t.style.opacity="0"; t.style.transition="opacity .3s"; setTimeout(function(){t.remove();},300); },3000); }
-  var oauthResult=new URLSearchParams(window.location.search).get("brain");
+  var query=new URLSearchParams(window.location.search);
+  var oauthResult=query.get("brain");
+  var billingResult=query.get("billing");
   if(oauthResult){
     toast(oauthResult==="connected"
       ?"Brain linked — meeting actions will flow to your Slack."
       :"Slack was installed, but the brain link is still pending.",oauthResult!=="connected");
+  }
+  if(billingResult){
+    toast(billingResult==="success"
+      ?"Solo is activating — your allowance updates after Stripe confirms payment."
+      :"Checkout was cancelled; your current plan is unchanged.",billingResult!=="success");
+  }
+  if(oauthResult||billingResult){
     window.history.replaceState({},"",window.location.pathname);
   }
 
@@ -593,8 +611,56 @@
         if(r.status===401){ return r.json().catch(function(){return {};}).then(function(j){ showGate(true, !!j.auth_enabled); throw new Error("401"); }); }
         showGate(false,false); return r.json();
       })
-      .then(function(d){ DATA=d; renderAll(d); })
+      .then(function(d){ DATA=d; renderAll(d); if(d.user) loadBilling(); })
       .catch(function(e){ if(String(e.message)!=="401") toast("Could not load: "+e.message,true); });
+  }
+  function loadBilling(){
+    fetch("/billing/summary",{headers:headers()})
+      .then(function(r){
+        if(r.status===404||r.status===503) return null;
+        if(!r.ok) throw new Error("HTTP "+r.status);
+        return r.json();
+      })
+      .then(function(b){ if(b) renderBilling(b); })
+      .catch(function(){ $("#billing-state").textContent="Billing temporarily unavailable"; });
+  }
+  function secondsOf(b,key){
+    var direct=Number(b[key+"_seconds"]);
+    if(Number.isFinite(direct)) return Math.max(0,direct);
+    var fallback=Number(b[key]);
+    return Number.isFinite(fallback)?Math.max(0,fallback):0;
+  }
+  function minuteLabel(seconds){ return Math.max(0,Math.ceil(seconds/60))+" min"; }
+  function renderBilling(b){
+    var plan=String(b.plan||"free").toLowerCase();
+    var used=secondsOf(b,"used"), remaining=secondsOf(b,"remaining"), included=secondsOf(b,"included");
+    $("#u-used").textContent=minuteLabel(used);
+    $("#u-remaining").textContent=minuteLabel(remaining);
+    $("#u-included").textContent=minuteLabel(included)+" included in this "+(plan==="solo"?"billing period":"trial");
+    $("#u-period").textContent=b.current_period_end
+      ?"Renews "+new Date(b.current_period_end*1000).toLocaleDateString()
+      :"Shared across Laura and Cedric";
+    $("#u-plan").textContent=plan==="solo"?"Solo":"Free";
+    $("#billing-state").textContent=plan==="solo"?"Billing active":"Free trial";
+    $("#free-state").textContent=plan==="solo"?"Previous plan":"15 minutes";
+    $("#billing-upgrade").hidden=plan==="solo";
+    $("#billing-manage").hidden=plan!=="solo";
+    $("#plan-solo").classList.toggle("featured",plan!=="solo");
+    $("#plan-free").classList.toggle("featured",plan==="free");
+  }
+  function openBilling(path,button){
+    button.disabled=true;
+    var old=button.textContent;
+    button.textContent="Opening…";
+    fetch(path,{method:"POST",headers:headers(),body:"{}"})
+      .then(function(r){return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,j:j};});})
+      .then(function(res){
+        if(!res.ok) throw new Error(res.j.error||"billing request failed");
+        var url=res.j.url||res.j.checkout_url||res.j.portal_url;
+        if(!url) throw new Error("billing URL missing");
+        window.location.assign(url);
+      })
+      .catch(function(e){toast("Could not open billing: "+e.message,true);button.disabled=false;button.textContent=old;});
   }
   function showGate(on, authEnabled){
     $("#authgate").hidden=!on; $("#views").hidden=on;
@@ -809,12 +875,14 @@
       fa.onchange=apply; fp.onchange=apply; fw.onchange=apply; apply();
     })();
 
-    // usage & billing
+    // Usage history is available immediately. The authoritative entitlement
+    // overlays this block from /billing/summary for logged-in customers.
     var b=d.billing||{};
-    $("#u-min").textContent = (b.minutes_30d||0)+" min";
-    $("#u-min-tot").textContent = (b.total_minutes||0)+" min all-time";
-    $("#u-plan").textContent = b.plan||"Demo";
-    $("#billing-state").textContent = b.billing_live?"Billing active":"Billing activation in progress";
+    $("#u-used").textContent=(b.minutes_30d||0)+" min";
+    $("#u-remaining").textContent="15 min";
+    $("#u-included").textContent="15 min included in this trial";
+    $("#u-plan").textContent=(b.plan&&b.plan!=="Demo")?b.plan:"Free";
+    $("#billing-state").textContent="Free trial";
     var byAv=b.by_avatar||{}, maxMin=Math.max.apply(null,Object.keys(byAv).map(function(k){return byAv[k];}).concat([1]));
     var visIds=d.avatars.map(function(a){return a.id;});
     $("#u-bars").innerHTML = (visIds.filter(function(id){return byAv[id]!=null;}).length ? visIds : Object.keys(byAv)).filter(function(id){return byAv[id]!=null;}).map(function(id){
@@ -855,18 +923,26 @@
       toast("Paste a Google Meet, Zoom or Microsoft Teams meeting link.",true); $("#dsp-url").focus(); return; }
     var b=this; b.disabled=true; b.textContent="Sending…";
     fetch("/sessions/start",{method:"POST",headers:headers(),body:JSON.stringify({meeting_url:url,avatar_id:avatar})})
-      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); })
       .then(function(res){ if(!res.ok){
+          if(res.status===402){
+            go("usage"); loadBilling();
+            var upgradeError=new Error("Your included minutes are used. Upgrade to Solo to continue.");
+            upgradeError.billing=true; throw upgradeError;
+          }
           var msg=res.j.error==="avatar_busy" ? res.j.detail : (res.j.error||res.j.detail||"request failed");
           throw new Error(msg); }
         var picked=(DATA&&DATA.avatars||[]).find(function(a){return a.id===avatar;});
         toast((picked?picked.name:"Avatar")+" is joining — admit them from the waiting room if asked.");
         $("#dsp-url").value=""; setTimeout(load,1500); })
-      .catch(function(e){ toast("Could not send: "+e.message,true); })
+      .catch(function(e){ toast(e.billing?e.message:"Could not send: "+e.message,true); })
       .finally(function(){ b.disabled=false; b.textContent="Send"; });
   });
 
-  $$("#seg-theme button").forEach(function(b){ b.addEventListener("click",function(){
+  $("#billing-upgrade").addEventListener("click",function(){openBilling("/billing/checkout",this);});
+  $("#billing-manage").addEventListener("click",function(){openBilling("/billing/portal",this);});
+
+  $("#seg-theme button").forEach(function(b){ b.addEventListener("click",function(){
     $$("#seg-theme button").forEach(function(x){x.classList.remove("on");}); b.classList.add("on");
     var t=b.getAttribute("data-t");
     if(t){ document.documentElement.setAttribute("data-theme",t); localStorage.setItem("laura_theme",t); }
