@@ -947,3 +947,636 @@ def org_plan(org_id: str) -> Optional[dict]:
     if row is None:
         return None
     return {"plan": str(row[0]), "included_seconds": int(row[1])}
+
+
+# ── Stripe billing control plane (PR C, migration 0005) ────────────────
+
+_BILLING_TERMINAL = {
+    "canceled", "unpaid", "incomplete_expired", "incomplete", "paused",
+    "invalid", "none",
+}
+_BILLING_IRREVERSIBLE = {
+    "canceled", "unpaid", "incomplete_expired", "invalid",
+}
+
+
+def billing_boundary_ready() -> bool:
+    """Prove both the runtime role and migration 0005 private boundary."""
+    if not enabled():
+        return False
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.connect() as conn:
+        return bool(
+            conn.execute(
+                text("SELECT laura_private.billing_boundary_ready()")
+            ).scalar()
+        )
+
+
+def _billing_dict(row) -> Optional[dict]:
+    if row is None:
+        return None
+    return {
+        "plan": str(row[0]),
+        "included_seconds": int(row[1]),
+        "subscription_status": str(row[2]),
+        "current_period_start": int(row[3]) if row[3] is not None else None,
+        "current_period_end": int(row[4]) if row[4] is not None else None,
+        "stripe_customer_id": str(row[5]) if row[5] else None,
+        "stripe_subscription_id": str(row[6]) if row[6] else None,
+        "checkout_revision": int(row[7] or 0),
+        "checkout_pending_until": int(row[8]) if row[8] is not None else None,
+    }
+
+
+def get_billing(org_id: str) -> Optional[dict]:
+    """Tenant-scoped billing state. Customer ids are returned only for this org."""
+    if not enabled() or not (org_id or "").strip():
+        return None
+    from sqlalchemy import text
+
+    org = org_id.strip()
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        row = conn.execute(
+            text(
+                """
+                SELECT plan, included_seconds, subscription_status,
+                       EXTRACT(EPOCH FROM current_period_start),
+                       EXTRACT(EPOCH FROM current_period_end),
+                       stripe_customer_id, stripe_subscription_id,
+                       checkout_revision,
+                       EXTRACT(EPOCH FROM checkout_pending_until)
+                  FROM billing_accounts
+                 WHERE org_id = :o
+                """
+            ),
+            {"o": org},
+        ).fetchone()
+    return _billing_dict(row)
+
+
+def member_role(org_id: str, user_id: str) -> Optional[str]:
+    """Return only this member's active role through the private boundary."""
+    if (
+        not enabled()
+        or not (org_id or "").strip()
+        or not (user_id or "").strip()
+    ):
+        return None
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.connect() as conn:
+        role = conn.execute(
+            text(
+                "SELECT laura_private.billing_member_role("
+                "CAST(:o AS uuid), CAST(:u AS uuid))"
+            ),
+            {"o": org_id.strip(), "u": user_id.strip()},
+        ).scalar()
+    return str(role) if role is not None else None
+
+
+def reserve_checkout(org_id: str) -> Optional[dict]:
+    """Serialize Checkout for one org and reserve one revision for a short TTL."""
+    if not enabled() or not (org_id or "").strip():
+        return None
+    from sqlalchemy import text
+
+    org = org_id.strip()
+    ttl = max(30, int(settings.billing_checkout_reservation_seconds))
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        conn.execute(
+            text(
+                "INSERT INTO billing_accounts (org_id, plan, included_seconds) "
+                "VALUES (:o, 'free', :inc) ON CONFLICT (org_id) DO NOTHING"
+            ),
+            {"o": org, "inc": int(settings.free_trial_seconds)},
+        )
+        row = conn.execute(
+            text(
+                """
+                SELECT stripe_customer_id, stripe_subscription_id,
+                       subscription_status, checkout_revision,
+                       checkout_pending_until > now()
+                  FROM billing_accounts
+                 WHERE org_id = :o
+                 FOR UPDATE
+                """
+            ),
+            {"o": org},
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("billing account unavailable")
+        customer = str(row[0]) if row[0] else None
+        subscription = str(row[1]) if row[1] else None
+        status = str(row[2] or "none").lower()
+        if subscription and status not in _BILLING_TERMINAL:
+            return {
+                "ok": False,
+                "reason": "subscription_exists",
+                "customer_id": customer,
+            }
+        if bool(row[4]):
+            return {"ok": False, "reason": "checkout_in_progress"}
+        revision = int(row[3] or 0) + 1
+        conn.execute(
+            text(
+                """
+                UPDATE billing_accounts
+                   SET checkout_revision = :r,
+                       checkout_pending_until =
+                         now() + (:ttl * interval '1 second'),
+                       updated_at = now()
+                 WHERE org_id = :o
+                """
+            ),
+            {"o": org, "r": revision, "ttl": ttl},
+        )
+    return {
+        "ok": True,
+        "revision": revision,
+        "customer_id": customer,
+    }
+
+
+def bind_stripe_customer(
+    org_id: str, revision: int, customer_id: str
+) -> bool:
+    """Bind the first Stripe Customer exactly once; rebinding is forbidden."""
+    if (
+        not enabled()
+        or not (org_id or "").strip()
+        or not (customer_id or "").strip()
+    ):
+        return False
+    from sqlalchemy import text
+
+    org = org_id.strip()
+    customer = customer_id.strip()
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        row = conn.execute(
+            text(
+                """
+                SELECT stripe_customer_id, checkout_revision
+                  FROM billing_accounts
+                 WHERE org_id = :o
+                 FOR UPDATE
+                """
+            ),
+            {"o": org},
+        ).fetchone()
+        if row is None or int(row[1] or 0) != int(revision):
+            return False
+        existing = str(row[0]) if row[0] else None
+        if existing is not None and existing != customer:
+            return False
+        conn.execute(
+            text(
+                """
+                UPDATE billing_accounts
+                   SET stripe_customer_id = COALESCE(stripe_customer_id, :c),
+                       updated_at = now()
+                 WHERE org_id = :o
+                """
+            ),
+            {"o": org, "c": customer},
+        )
+    return True
+
+
+def finish_checkout(
+    org_id: str,
+    revision: int,
+    customer_id: str,
+    session_id: str,
+    expires_at: int,
+) -> bool:
+    """Clear only the matching reservation after Stripe created the session."""
+    if not enabled() or not (org_id or "").strip():
+        return False
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id.strip())
+        result = conn.execute(
+            text(
+                """
+                UPDATE billing_accounts
+                   SET checkout_pending_until =
+                         to_timestamp(CAST(:expires AS double precision)),
+                       last_checkout_session_id = :s,
+                       updated_at = now()
+                 WHERE org_id = :o
+                   AND checkout_revision = :r
+                   AND stripe_customer_id = :c
+                """
+            ),
+            {
+                "o": org_id.strip(),
+                "r": int(revision),
+                "c": customer_id.strip(),
+                "s": session_id.strip() or None,
+                "expires": int(expires_at),
+            },
+        )
+    return result.rowcount == 1
+
+
+def release_checkout(org_id: str, revision: int) -> None:
+    """Release only this failed attempt; never clear a newer reservation."""
+    if not enabled() or not (org_id or "").strip():
+        return
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id.strip())
+        conn.execute(
+            text(
+                "UPDATE billing_accounts SET checkout_pending_until = NULL "
+                "WHERE org_id = :o AND checkout_revision = :r"
+            ),
+            {"o": org_id.strip(), "r": int(revision)},
+        )
+
+
+def _event_is_newer(created: int, event_id: str, old_created: int, old_id: str) -> bool:
+    return (int(created), str(event_id)) > (int(old_created or 0), str(old_id or ""))
+
+
+def apply_stripe_event(
+    event_id: str,
+    event_type: str,
+    customer_id: str | None,
+    effect: dict | None,
+) -> Optional[bool]:
+    """Claim and apply one signed Stripe event in one database transaction.
+
+    The SECURITY DEFINER call can only insert the global event id and resolve
+    one customer to one locked org. All state mutation after that is normal
+    laura_app tenant CRUD under FORCE RLS. Any exception rolls both back, so
+    Stripe receives a 5xx and retries.
+    """
+    if not enabled():
+        return None
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        claim = conn.execute(
+            text(
+                "SELECT claimed, resolved_org_id "
+                "FROM laura_private.claim_billing_event(:e, :t, :c)"
+            ),
+            {
+                "e": event_id,
+                "t": event_type,
+                "c": (customer_id or "").strip() or None,
+            },
+        ).fetchone()
+        if claim is None or not bool(claim[0]):
+            return False
+        if effect is None:
+            return True
+        if claim[1] is None:
+            raise RuntimeError("stripe customer is not bound")
+        org = str(claim[1])
+        asserted_org = str(effect.get("asserted_org") or "").strip()
+        if asserted_org and asserted_org != org:
+            return True
+
+        _set_org(conn, org)
+        row = conn.execute(
+            text(
+                """
+                SELECT plan, included_seconds, subscription_status,
+                       EXTRACT(EPOCH FROM current_period_start),
+                       EXTRACT(EPOCH FROM current_period_end),
+                       stripe_customer_id, stripe_subscription_id,
+                       subscription_event_created, subscription_event_id,
+                       invoice_event_created, invoice_event_id,
+                       checkout_event_created, checkout_event_id,
+                       verified_paid_subscription_id,
+                       EXTRACT(EPOCH FROM verified_paid_period_start),
+                       EXTRACT(EPOCH FROM verified_paid_period_end),
+                       verified_paid_event_created, verified_paid_event_id,
+                       invoice_event_subscription_id
+                  FROM billing_accounts
+                 WHERE org_id = :o
+                 FOR UPDATE
+                """
+            ),
+            {"o": org},
+        ).fetchone()
+        if row is None or str(row[5] or "") != str(customer_id or ""):
+            raise RuntimeError("stripe customer binding changed")
+
+        kind = str(effect.get("kind") or "")
+        created = int(effect.get("event_created") or 0)
+        current_sub = str(row[6] or "")
+        current_status = str(row[2] or "none").lower()
+
+        if kind == "checkout_link":
+            if not _event_is_newer(created, event_id, int(row[11] or 0), str(row[12] or "")):
+                return True
+            conn.execute(
+                text(
+                    """
+                    UPDATE billing_accounts
+                       SET checkout_event_created = :created,
+                           checkout_event_id = :event_id,
+                           last_checkout_session_id = :session_id,
+                           last_checkout_subscription_id = :subscription_id,
+                           updated_at = now()
+                     WHERE org_id = :o
+                    """
+                ),
+                {
+                    "o": org,
+                    "created": created,
+                    "event_id": event_id,
+                    "session_id": effect.get("session_id") or None,
+                    "subscription_id": effect.get("subscription_id") or None,
+                },
+            )
+            return True
+
+        if kind == "subscription":
+            sub = str(effect.get("subscription_id") or "")
+            status = str(effect.get("status") or "invalid").lower()
+            access = str(effect.get("access") or "terminal")
+            old_created = int(row[7] or 0)
+            if not sub or created < old_created:
+                return True
+            if current_sub and sub != current_sub:
+                if current_status not in _BILLING_TERMINAL or access == "terminal":
+                    return True
+            if (
+                current_sub == sub
+                and current_status in _BILLING_IRREVERSIBLE
+                and access != "terminal"
+            ):
+                return True
+            if created == old_created and current_sub == sub:
+                priority = {"active": 1, "past_due": 2, "terminal": 3}
+                current_access = (
+                    "terminal"
+                    if current_status in _BILLING_TERMINAL
+                    else ("past_due" if current_status == "past_due" else "active")
+                )
+                if priority.get(access, 3) <= priority[current_access]:
+                    return True
+            if not bool(effect.get("price_valid")):
+                if current_sub == sub:
+                    access = "terminal"
+                    status = "invalid"
+                else:
+                    return True
+
+            proof_sub = str(row[13] or "")
+            proof_start = int(row[14]) if row[14] is not None else None
+            proof_end = int(row[15]) if row[15] is not None else None
+            verified_window = bool(
+                proof_sub == sub
+                and proof_start is not None
+                and proof_end is not None
+                and proof_end > proof_start
+            )
+            if access == "terminal":
+                plan = "free"
+                included = int(settings.free_trial_seconds)
+                stored_status = status or "canceled"
+                period_start = None
+                period_end = None
+            elif access == "active" and verified_window:
+                plan = "solo"
+                included = int(settings.solo_included_seconds)
+                stored_status = "active"
+                period_start = proof_start
+                period_end = proof_end
+            elif (
+                access == "past_due"
+                and current_sub == sub
+                and str(row[0]) == "solo"
+                and row[3] is not None
+                and row[4] is not None
+            ):
+                # A failed renewal never advances or resets the last paid
+                # allowance window. Access lasts only through its paid end.
+                plan = "solo"
+                included = int(settings.solo_included_seconds)
+                stored_status = "past_due"
+                period_start = int(row[3])
+                period_end = int(row[4])
+            else:
+                # Subscription state alone is not proof of payment. The exact
+                # invoice.paid signal may arrive before or after this event.
+                plan = "free"
+                included = int(settings.free_trial_seconds)
+                stored_status = (
+                    "past_due" if access == "past_due" else "awaiting_payment"
+                )
+                period_start = None
+                period_end = None
+
+            conn.execute(
+                text(
+                    """
+                    UPDATE billing_accounts
+                       SET plan = :plan,
+                           included_seconds = :included,
+                           subscription_status = :status,
+                           current_period_start =
+                             CASE
+                               WHEN CAST(:ps AS double precision) IS NULL
+                                 THEN NULL
+                               ELSE to_timestamp(
+                                 CAST(:ps AS double precision)
+                               )
+                             END,
+                           current_period_end =
+                             CASE
+                               WHEN CAST(:pe AS double precision) IS NULL
+                                 THEN NULL
+                               ELSE to_timestamp(
+                                 CAST(:pe AS double precision)
+                               )
+                             END,
+                           stripe_subscription_id = :sub,
+                           subscription_event_created = :created,
+                           subscription_event_id = :event_id,
+                           checkout_pending_until = NULL,
+                           updated_at = now()
+                     WHERE org_id = :o
+                    """
+                ),
+                {
+                    "o": org,
+                    "plan": plan,
+                    "included": included,
+                    "status": stored_status,
+                    "ps": period_start,
+                    "pe": period_end,
+                    "sub": sub,
+                    "created": created,
+                    "event_id": event_id,
+                },
+            )
+            return True
+
+        if kind in {"invoice_paid", "invoice_failed"}:
+            sub = str(effect.get("subscription_id") or "")
+            old_invoice_sub = str(row[18] or "")
+            if (
+                not sub
+                or not bool(effect.get("price_valid"))
+                or (
+                    old_invoice_sub == sub
+                    and created < int(row[9] or 0)
+                )
+                or (
+                    old_invoice_sub == sub
+                    and created == int(row[9] or 0)
+                    and kind != "invoice_failed"
+                )
+            ):
+                return True
+
+            params = {
+                "o": org,
+                "created": created,
+                "event_id": event_id,
+                "sub": sub,
+            }
+            if kind == "invoice_failed":
+                if (
+                    sub == current_sub
+                    and current_status
+                    in {"active", "past_due", "awaiting_payment"}
+                ):
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE billing_accounts
+                               SET subscription_status = 'past_due',
+                                   invoice_event_created = :created,
+                                   invoice_event_id = :event_id,
+                                   invoice_event_subscription_id = :sub,
+                                   updated_at = now()
+                             WHERE org_id = :o
+                            """
+                        ),
+                        params,
+                    )
+                return True
+
+            ps = effect.get("period_start")
+            pe = effect.get("period_end")
+            if (
+                ps is None
+                or pe is None
+                or int(pe) <= int(ps)
+            ):
+                return True
+
+            # Do not let an old subscription's invoice touch a newer active
+            # subscription. A paid invoice may be remembered before its own
+            # subscription event only when there is no current subscription or
+            # the old one is terminal.
+            if (
+                current_sub
+                and sub != current_sub
+                and current_status not in _BILLING_TERMINAL
+            ):
+                return True
+            if (
+                current_status in _BILLING_TERMINAL
+                and created < int(row[7] or 0)
+            ):
+                return True
+
+            proof_sub = str(row[13] or "")
+            proof_start = int(row[14]) if row[14] is not None else None
+            proof_created = int(row[16] or 0)
+            if proof_sub == sub and (
+                int(ps) < int(proof_start or 0)
+                or created < proof_created
+            ):
+                return True
+
+            params.update(
+                {
+                    "ps": int(ps),
+                    "pe": int(pe),
+                    "sub": sub,
+                    "adopt": bool(
+                        not current_sub
+                        or (
+                            sub != current_sub
+                            and current_status in _BILLING_TERMINAL
+                        )
+                    ),
+                    "grant": bool(
+                        sub == current_sub
+                        and current_status
+                        in {"active", "past_due", "awaiting_payment"}
+                    ),
+                    "solo": int(settings.solo_included_seconds),
+                }
+            )
+            conn.execute(
+                text(
+                    """
+                    UPDATE billing_accounts
+                       SET verified_paid_subscription_id = :sub,
+                           verified_paid_period_start =
+                             to_timestamp(CAST(:ps AS double precision)),
+                           verified_paid_period_end =
+                             to_timestamp(CAST(:pe AS double precision)),
+                           verified_paid_event_created = :created,
+                           verified_paid_event_id = :event_id,
+                           stripe_subscription_id =
+                             CASE WHEN :adopt THEN :sub
+                                  ELSE stripe_subscription_id END,
+                           subscription_status =
+                             CASE WHEN :grant THEN 'active'
+                                  WHEN :adopt THEN 'awaiting_subscription'
+                                  ELSE subscription_status END,
+                           plan = CASE WHEN :grant THEN 'solo' ELSE plan END,
+                           included_seconds =
+                             CASE WHEN :grant THEN :solo
+                                  ELSE included_seconds END,
+                           current_period_start =
+                             CASE WHEN :grant
+                                  THEN to_timestamp(
+                                    CAST(:ps AS double precision)
+                                  )
+                                  ELSE current_period_start END,
+                           current_period_end =
+                             CASE WHEN :grant
+                                  THEN to_timestamp(
+                                    CAST(:pe AS double precision)
+                                  )
+                                  ELSE current_period_end END,
+                           invoice_event_created = :created,
+                           invoice_event_id = :event_id,
+                           invoice_event_subscription_id = :sub,
+                           updated_at = now()
+                     WHERE org_id = :o
+                    """
+                ),
+                params,
+            )
+            return True
+
+        return True
