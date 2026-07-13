@@ -39,6 +39,8 @@ const footerLinks = [
   { label: "Use Cases", href: "#use-cases" },
   { label: "Pricing", href: "#pricing" },
   { label: "Enterprise", href: "#enterprise" },
+  { label: "Privacy", href: "/privacy" },
+  { label: "Terms", href: "/terms" },
 ];
 
 export function Footer() {
@@ -57,7 +59,7 @@ export function Footer() {
           </p>
         </div>
 
-        <nav className="flex flex-wrap gap-x-8 gap-y-3">
+        <nav className="flex flex-wrap gap-x-8 gap-y-3" aria-label="Footer">
           {footerLinks.map((link) => (
             <a
               key={link.label}
@@ -70,10 +72,14 @@ export function Footer() {
         </nav>
       </div>
 
-      <div className="mx-auto mt-10 w-full max-w-6xl border-t border-border pt-6">
-        <p className="text-xs text-muted-foreground">
-          © {new Date().getFullYear()} Laura. All rights reserved.
-        </p>
+      <div className="mx-auto mt-10 flex w-full max-w-6xl flex-col gap-3 border-t border-border pt-6 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+        <p>© {new Date().getFullYear()} Laura. All rights reserved.</p>
+        <a
+          href="mailto:duccio@sffstudio.com"
+          className="transition-colors hover:text-foreground"
+        >
+          duccio@sffstudio.com
+        </a>
       </div>
     </footer>
   );
