@@ -214,23 +214,28 @@ def test_redeliver_uses_saved_distilled_artifact(client, monkeypatch):
     monkeypatch.setattr(
         settings, "surface_webhook_url", "https://cedric.example/api/laura/events"
     )
-    monkeypatch.setattr(
-        cedric_callback,
-        "send_ended",
-        lambda integration, delivered_bot, artifact: captured.append(
-            (integration, delivered_bot, artifact)
+    # redeliver is now fire-and-forget: it hands off to cedric.deliver_ended (the
+    # SYNCHRONOUS distil-then-schedule seam) and answers 202 immediately, instead
+    # of awaiting send_ended's ~150s blocking retry chain and 504-ing. Capture at
+    # that seam — deterministic under TestClient, unlike the orphaned async
+    # send_ended (see test_end_delivers_ended_callback for why).
+    def fake_deliver_ended(integration, delivered_bot, artifact):
+        captured.append(
+            (integration, delivered_bot, main_module.cedric.wire_artifact(artifact))
         )
-        or True,
-    )
+        return bool(integration and integration.get("callback_url"))
+
+    monkeypatch.setattr(main_module.cedric, "deliver_ended", fake_deliver_ended)
 
     resp = client.post(f"/sessions/{bot_id}/redeliver")
 
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 202, resp.text
+    assert resp.json().get("status") == "retrying"
     integration, delivered_bot, artifact = captured.pop()
     assert delivered_bot == bot_id
     assert integration["org_id"] == "org_1"
     assert artifact["summary"] == "Safe summary"
-    assert "transcript" not in artifact
+    assert "transcript" not in artifact  # distilled: PII stays home
 
 
 def test_ended_callback_payload_signature_and_retries(monkeypatch):

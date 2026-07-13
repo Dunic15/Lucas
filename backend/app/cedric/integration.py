@@ -29,6 +29,13 @@ from . import callback
 # can't blow up prompts (the orchestrator summarizes down, we never truncate).
 MAX_BRIEF_BYTES = 32 * 1024
 
+# Strong refs to in-flight fire-and-forget ``session.ended`` sends. asyncio only
+# holds a WEAK reference to a bare create_task, so a running task can be GC'd
+# mid-flight (Python docs) — dropping the delivery. /redeliver now makes this
+# path directly (and repeatably) HTTP-triggerable, so keep each task alive until
+# it finishes, then drop it. Same pattern as main.py's _summary_tasks.
+_ended_tasks: set = set()
+
 # Recall bot status_code -> orchestrator session.status, for non-terminal
 # join-progress relaying.
 _STATUS_MAP = {
@@ -176,11 +183,14 @@ def deliver_ended(integration: Optional[dict], bot_id: str, artifact: dict) -> b
     session (so the caller skips autopilot delivery — the orchestrator owns
     approval-gated email + Slack for its sessions)."""
     if integration and integration.get("callback_url"):
-        asyncio.create_task(
+        task = asyncio.create_task(
             run_in_threadpool(
                 callback.send_ended, integration, bot_id, wire_artifact(artifact)
             )
         )
+        # Hold a strong ref until the send finishes (asyncio only refs it weakly).
+        _ended_tasks.add(task)
+        task.add_done_callback(_ended_tasks.discard)
         return True
     return False
 

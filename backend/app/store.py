@@ -201,7 +201,7 @@ class Session:
         self.participants[key] = {"name": label, "here": here}
         return label
 
-    def present_names(self) -> list[str]:
+    def present_names(self, avatar_name: str = "") -> list[str]:
         """First names to EXCLUDE from the FUZZY wake match: everyone else known
         to be in the meeting, from the event roster AND transcript speakers.
 
@@ -211,16 +211,26 @@ class Session:
         "Laura". Broadening this exclude set can only SUPPRESS a fuzzy wake, never
         create one, so it strictly reduces false wakes. Still cheap enough for the
         partial hot path (a lowercased scan of a short transcript), and it's the
-        same scan roster() already runs on the final path."""
-        return self.roster()
+        same scan roster() already runs on the final path.
+
+        ``avatar_name`` (the running avatar's own name) is forwarded to roster()
+        so its "everyone besides the avatar itself" contract stays literally true
+        — the avatar's own name is never in the exclude set that would shield a
+        fuzzy corruption of its wake word."""
+        return self.roster(avatar_name)
 
     def roster(self, avatar_name: str = "") -> list[str]:
         """Who is in the meeting right now, besides the avatar itself.
 
         Prefers the event-driven roster (it sees silent participants); merges in
         transcript speakers as a net for missed events / process restarts.
+
+        Only the running avatar's OWN name (passed in as ``avatar_name``) and the
+        empty string are stripped — NOT a hardcoded "laura", which would erase a
+        human named Laura from a Cedric/SFF/Duccio meeting's roster and misfire
+        the hand-raise / adaptive-deference human-count gates.
         """
-        skip = {avatar_name.strip().lower(), "laura", ""}
+        skip = {avatar_name.strip().lower(), ""}
         names: list[str] = []
         for p in self.participants.values():
             if p.get("here") and p["name"].strip().lower() not in skip:
