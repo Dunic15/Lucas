@@ -64,7 +64,19 @@ _EMO_FOR = {"neutral": 4, "happy": 3, "excited": 3, "serious": 4, "concerned": 5
 # rendering a CLOSED smile mid-syllable where neutral had parted, articulating
 # lips. Blending the emotion row with neutral keeps the expression as a tint
 # the mouth can articulate through. 0 = always neutral, 1 = full (old behavior).
-_EMO_INTENSITY = min(1.0, max(0.0, float(os.environ.get("DITTO_EMO_INTENSITY", "0.5"))))
+def _read_emo_intensity() -> float:
+    """Parse DITTO_EMO_INTENSITY, clamped to [0,1]. Runs at import (inside
+    DittoEngine.start); a typo'd env must NOT crash the server's whole startup —
+    a wrong intensity beats a dead face. Falls back to the 0.5 default."""
+    raw = os.environ.get("DITTO_EMO_INTENSITY", "0.5")
+    try:
+        return min(1.0, max(0.0, float(raw)))
+    except ValueError:
+        print(f"[ditto] bad DITTO_EMO_INTENSITY={raw!r} — using 0.5", flush=True)
+        return 0.5
+
+
+_EMO_INTENSITY = _read_emo_intensity()
 
 
 def _ffmpeg_bin() -> str:
