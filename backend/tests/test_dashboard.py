@@ -229,6 +229,18 @@ def test_dashboard_wires_real_selfserve_billing_flow(client):
     assert "Your included minutes are used. Upgrade to Solo to continue." in html
 
 
+def test_dashboard_reports_brain_and_connector_states_truthfully(client):
+    html = client.get("/dashboard").text
+    assert 'oauthResult==="connected"' in html
+    assert 'oauthResult==="pending"' in html
+    assert 'oauthResult==="error"' in html
+    assert "Slack could not be connected. No new workspace access was enabled" in html
+    assert 'j.status==="not_connected"' in html
+    assert 'j.status==="unavailable"' in html
+    assert 'method:"POST",headers:headers(),body:JSON.stringify({avatar_id:avatarId})' in html
+    assert 'method:"DELETE"' not in html
+
+
 def test_dashboard_rejects_non_meeting_links_before_dispatch(client):
     html = client.get("/dashboard").text
     assert "meet\\.google\\.com" in html
