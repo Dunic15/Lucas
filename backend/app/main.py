@@ -754,6 +754,37 @@ def _leave_confirmed_stopped(exc: BaseException | None) -> bool:
     return False
 
 
+async def _bot_reports_terminal(bot_id: str) -> bool:
+    """Best-effort status poll: True iff Recall AFFIRMATIVELY confirms the bot is
+    not billing — its latest status is terminal (done/call_ended/fatal) or Recall
+    no longer knows it (404/410 → gone). Used to DRAIN a leave_pending session
+    whose leave_call keeps being rejected with a non-gone status (e.g. Recall's
+    400 "bot is not in a call" for an already-ended bot): leave_pending IS a
+    persisted field, so a phantom survives a redeploy (SQLite → S3 restore) and
+    would otherwise be retried every reconcile pass FOREVER, inflating
+    active_sessions. Any ambiguity — a still-live/non-terminal status, a non-200
+    that isn't a gone-status, or a poll error — returns False so the caller KEEPS
+    the session (never drop a possibly-live, possibly-billing bot)."""
+    try:
+        r = await run_in_threadpool(
+            lambda: httpx.get(
+                f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/{bot_id}/",
+                headers=_recall_list_headers(),
+                timeout=20.0,
+            )
+        )
+    except Exception:  # noqa: BLE001 — a poll error keeps the session (retry next pass)
+        return False
+    if r.status_code in _LEAVE_GONE_STATUSES:
+        return True  # Recall no longer has the bot → gone → not billing
+    if r.status_code != 200:
+        return False  # auth/rate/5xx — unknown, keep the session
+    try:
+        return _bot_status_code(r.json()) in _BOT_TERMINAL
+    except Exception:  # noqa: BLE001 — unparseable body → treat as unknown
+        return False
+
+
 async def _retry_leave(bot_id: str, session: store.Session) -> bool:
     """Retry ONLY the Recall meter-stop for a session whose artifact was already
     built + delivered but whose leave_call could not be confirmed (so it was kept
@@ -774,8 +805,15 @@ async def _retry_leave(bot_id: str, session: store.Session) -> bool:
             await run_in_threadpool(recall_client.leave_call, bot_id)
         except Exception as e:  # noqa: BLE001 — classified below
             if not _leave_confirmed_stopped(e):
-                return False  # UNVERIFIED — keep the session, retry next pass
-            # 404/410: bot genuinely gone → not billing → fall through and drop.
+                # The leave itself didn't confirm the stop. But a bot Recall now
+                # reports terminal/gone is not billing — an already-ended bot
+                # rejects the courtesy leave with 400 "not in a call", which is
+                # NOT a gone-status, so without this a restored leave_pending
+                # phantom (leave_pending is persisted → survives redeploy) would
+                # retry forever. Confirm via a status poll before giving up.
+                if not await _bot_reports_terminal(bot_id):
+                    return False  # UNVERIFIED and not terminal — keep, retry next pass
+            # 404/410 leave, OR Recall confirms terminal/gone → not billing → drop.
         # PR B BLOCKER 2: the meter is NOW confirmed off — close the usage row
         # here (finalize deferred it on the unverified leave to keep the slot
         # held). First-close-wins, so a manual /end + a reconcile tick racing
@@ -953,6 +991,7 @@ async def _reconcile_once() -> None:
                     source="reconcile",
                     failed_code=code,
                     usage_end_epoch=_status_change_epoch(bot, {code}, first=False),
+                    bot_terminal=True,  # Recall reports terminal → meter already off
                 )
                 continue
             # Live bot with a usage deadline: warn near it, hard-stop at it.
@@ -2142,6 +2181,7 @@ async def _finalize_session(
     usage_reason: str = "",
     usage_end_epoch: float | None = None,
     artifact_org_id: str | None = None,
+    bot_terminal: bool = False,
 ) -> dict | None:
     """End a session once: stop both vendors, build + store the artifact.
 
@@ -2163,6 +2203,16 @@ async def _finalize_session(
     consumed_seconds exactly once. artifact_org_id is accepted only from an
     already-authenticated endpoint; it enables an RLS-scoped idempotent read
     after process replacement without adding a global bot-id lookup.
+
+    ``bot_terminal`` (set by the two callers that KNOW Recall already reports the
+    bot terminal — the reconcile terminal-status poll and the account terminal
+    webhook) means the meter is ALREADY stopped: a bot in done/call_ended/fatal
+    is not in a call and cannot bill. The courtesy leave_call below may then be
+    rejected by Recall (e.g. 400 "bot is not in a call" for an already-ended
+    bot) — which must NOT be treated as an UNVERIFIED stop, or the session is
+    kept as leave_pending and retried forever, inflating active_sessions (the
+    phantom that blocks the pre-deploy gate). Only a leave for a possibly-still-
+    live bot (manual /end, bot_terminal=False) requires a verified stop.
     """
     session = store.get(bot_id)
     if session is None:
@@ -2201,7 +2251,8 @@ async def _finalize_session(
     _finalizing.add(bot_id)
     try:
         return await _finalize_session_locked(
-            bot_id, session, source, failed_code, usage_reason, usage_end_epoch
+            bot_id, session, source, failed_code, usage_reason, usage_end_epoch,
+            bot_terminal,
         )
     finally:
         _finalizing.discard(bot_id)
@@ -2214,6 +2265,7 @@ async def _finalize_session_locked(
     failed_code: str = "",
     usage_reason: str = "",
     usage_end_epoch: float | None = None,
+    bot_terminal: bool = False,
 ) -> dict | None:
     """The actual finalize body, run under the ``_finalizing`` in-flight guard."""
     # Join-failed notification (fatal): fire here, under the guard, so it runs at
@@ -2237,7 +2289,12 @@ async def _finalize_session_locked(
     try:
         await run_in_threadpool(recall_client.leave_call, bot_id)
     except Exception as e:  # noqa: BLE001 — classified by _leave_confirmed_stopped
-        leave_verified = _leave_confirmed_stopped(e)
+        # A bot Recall ALREADY reports terminal (bot_terminal) is not billing —
+        # leave_call is a courtesy and its rejection (e.g. 400 "not in a call"
+        # for an already-ended bot) must not strand the session as leave_pending
+        # (phantom active_sessions). A possibly-still-live bot still needs a
+        # verified stop (404/410/success) — the fleet meter-leak guard.
+        leave_verified = bot_terminal or _leave_confirmed_stopped(e)
     if session.anam_conversation_id:
         try:
             await run_in_threadpool(
@@ -4317,7 +4374,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
         session = store.get(bid) if bid else None
         if term and session is not None:
             await _finalize_session(
-                bid, source="webhook", failed_code="fatal" if failed else ""
+                bid, source="webhook", failed_code="fatal" if failed else "",
+                bot_terminal=True,  # terminal webhook → Recall meter already off
             )
             return JSONResponse({"ok": True, "finalized": bid})
         # CEDRIC: relay non-terminal join progress to the orchestrator + a
