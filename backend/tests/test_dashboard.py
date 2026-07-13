@@ -218,6 +218,17 @@ def test_dashboard_is_customer_facing_and_enterprise_is_honest(client):
     assert '    $("#av-grid [data-brain-off]").forEach' not in html
 
 
+def test_dashboard_wires_real_selfserve_billing_flow(client):
+    html = client.get("/dashboard").text
+    assert "€49" in html and "300 avatar-minutes" in html
+    assert 'fetch("/billing/summary"' in html
+    assert 'openBilling("/billing/checkout"' in html
+    assert 'openBilling("/billing/portal"' in html
+    assert "res.status===402" in html
+    assert 'go("usage"); loadBilling();' in html
+    assert "Your included minutes are used. Upgrade to Solo to continue." in html
+
+
 def test_dashboard_rejects_non_meeting_links_before_dispatch(client):
     html = client.get("/dashboard").text
     assert "meet\\.google\\.com" in html
