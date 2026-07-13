@@ -70,6 +70,9 @@ def pg(tmp_path_factory):
         database=info.get("dbname"),
         query=query,
     ).render_as_string(hide_password=False)
+    app_conninfo = ci.make_conninfo(
+        uri, user="laura_app", password=APP_PASSWORD
+    )
     proc = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
         cwd=str(BACKEND_DIR),
@@ -86,7 +89,11 @@ def pg(tmp_path_factory):
     assert proc.returncode == 0, (
         f"alembic upgrade failed:\n{proc.stdout}\n{proc.stderr}"
     )
-    yield {"uri": uri, "app_url": app_url}
+    yield {
+        "uri": uri,
+        "app_url": app_url,
+        "app_conninfo": app_conninfo,
+    }
     control_plane.reset_engine()
     srv.cleanup()
 
@@ -144,9 +151,28 @@ def _subscription(
     }
 
 
+def _pay(
+    cp, customer, sub, *, event_id, created, start=None, end=None
+):
+    now = int(time.time())
+    return cp.apply_stripe_event(
+        event_id,
+        "invoice.paid",
+        customer,
+        {
+            "kind": "invoice_paid",
+            "event_created": created,
+            "subscription_id": sub,
+            "price_valid": True,
+            "period_start": start if start is not None else now - 60,
+            "period_end": end if end is not None else now + 3600,
+        },
+    )
+
+
 def test_runtime_boundary_and_global_event_table(cp, pg):
     assert cp.billing_boundary_ready() is True
-    with psycopg.connect(pg["app_url"]) as conn:
+    with psycopg.connect(pg["app_conninfo"]) as conn:
         role = conn.execute(
             "SELECT current_user, rolsuper, rolbypassrls "
             "FROM pg_roles WHERE rolname = current_user"
@@ -176,6 +202,10 @@ def test_cancel_then_late_active_same_subscription_cannot_resurrect(cp):
         "evt_sticky_active", "customer.subscription.created", customer,
         _subscription(org, "sub_sticky", created=100),
     ) is True
+    _pay(
+        cp, customer, "sub_sticky",
+        event_id="evt_sticky_paid", created=110,
+    )
     assert cp.apply_stripe_event(
         "evt_sticky_cancel", "customer.subscription.deleted", customer,
         _subscription(
@@ -192,12 +222,35 @@ def test_cancel_then_late_active_same_subscription_cannot_resurrect(cp):
     assert row["subscription_status"] == "canceled"
 
 
+def test_cancel_wins_same_second_regardless_of_event_id(cp):
+    org = _org(cp, "same-second")
+    customer, _ = _bind(cp, org, "samesecond")
+    cp.apply_stripe_event(
+        "evt_z_active", "customer.subscription.created", customer,
+        _subscription(org, "sub_same_second", created=100),
+    )
+    cp.apply_stripe_event(
+        "evt_a_cancel", "customer.subscription.deleted", customer,
+        _subscription(
+            org, "sub_same_second", created=100, status="canceled",
+            access="terminal",
+        ),
+    )
+    row = cp.get_billing(org)
+    assert row["plan"] == "free"
+    assert row["subscription_status"] == "canceled"
+
+
 def test_old_subscription_cannot_cancel_new_subscription(cp):
     org = _org(cp, "old-sub")
     customer, _ = _bind(cp, org, "oldsub")
     cp.apply_stripe_event(
         "evt_old_active", "customer.subscription.created", customer,
         _subscription(org, "sub_old", created=100),
+    )
+    _pay(
+        cp, customer, "sub_old",
+        event_id="evt_old_paid", created=110,
     )
     cp.apply_stripe_event(
         "evt_old_cancel", "customer.subscription.deleted", customer,
@@ -209,6 +262,10 @@ def test_old_subscription_cannot_cancel_new_subscription(cp):
     cp.apply_stripe_event(
         "evt_new_active", "customer.subscription.created", customer,
         _subscription(org, "sub_new", created=300),
+    )
+    _pay(
+        cp, customer, "sub_new",
+        event_id="evt_new_paid", created=310,
     )
     cp.apply_stripe_event(
         "evt_old_late_delete", "customer.subscription.deleted", customer,
@@ -230,6 +287,10 @@ def test_late_checkout_completion_never_grants(cp):
         "evt_link_active", "customer.subscription.created", customer,
         _subscription(org, "sub_link", created=100),
     )
+    _pay(
+        cp, customer, "sub_link",
+        event_id="evt_link_paid", created=110,
+    )
     cp.apply_stripe_event(
         "evt_link_cancel", "customer.subscription.deleted", customer,
         _subscription(
@@ -246,6 +307,10 @@ def test_late_checkout_completion_never_grants(cp):
             "session_id": "cs_late",
             "subscription_id": "sub_link",
         },
+    )
+    _pay(
+        cp, customer, "sub_link",
+        event_id="evt_late_paid_after_cancel", created=400,
     )
     row = cp.get_billing(org)
     assert row["plan"] == "free"
@@ -274,6 +339,11 @@ def test_invoice_is_current_subscription_only_and_period_monotonic(cp):
             org, "sub_invoice", created=100,
             start=now - 100, end=now + 1000,
         ),
+    )
+    _pay(
+        cp, customer, "sub_invoice",
+        event_id="evt_invoice_initial_paid", created=150,
+        start=now - 100, end=now + 1000,
     )
     cp.apply_stripe_event(
         "evt_old_sub_invoice", "invoice.payment_failed", customer,
@@ -330,6 +400,34 @@ def test_invoice_is_current_subscription_only_and_period_monotonic(cp):
     assert renewed["current_period_start"] == now + 1000
 
 
+def test_invoice_paid_before_subscription_is_reconciled_without_early_grant(cp):
+    org = _org(cp, "invoice-first")
+    customer, _ = _bind(cp, org, "invoicefirst")
+    now = int(time.time())
+    _pay(
+        cp, customer, "sub_invoice_first",
+        event_id="evt_invoice_first_paid", created=200,
+        start=now - 60, end=now + 3600,
+    )
+    waiting = cp.get_billing(org)
+    assert waiting["plan"] == "free"
+    assert waiting["subscription_status"] == "awaiting_subscription"
+
+    cp.apply_stripe_event(
+        "evt_invoice_first_subscription",
+        "customer.subscription.created",
+        customer,
+        _subscription(
+            org, "sub_invoice_first", created=100,
+            start=now - 60, end=now + 3600,
+        ),
+    )
+    active = cp.get_billing(org)
+    assert active["plan"] == "solo"
+    assert active["subscription_status"] == "active"
+    assert active["current_period_start"] == now - 60
+
+
 def test_past_due_does_not_reset_and_expires_at_paid_through(cp, pg):
     org = _org(cp, "dunning")
     customer, _ = _bind(cp, org, "dunning")
@@ -341,18 +439,48 @@ def test_past_due_does_not_reset_and_expires_at_paid_through(cp, pg):
             start=now - 100, end=now + 1000,
         ),
     )
+    _pay(
+        cp, customer, "sub_dunning",
+        event_id="evt_dunning_paid", created=150,
+        start=now - 100, end=now + 1000,
+    )
+    assert entitlements.open_usage(
+        org, "bot-dunning-used", "laura"
+    )["ok"] is True
+    entitlements.mark_in_call(org, "bot-dunning-used", time.time() - 600)
+    assert entitlements.close_usage(
+        org, "bot-dunning-used", 600, "ended"
+    ) is True
+    before = cp.get_billing(org)
+    remaining_before = entitlements.remaining_seconds(org)
+    assert remaining_before == int(settings.solo_included_seconds) - 600
+
+    # Stripe may expose the next observed subscription-item period while the
+    # renewal is unpaid. It must not move the paid usage window.
+    cp.apply_stripe_event(
+        "evt_dunning_subscription_past_due",
+        "customer.subscription.updated",
+        customer,
+        _subscription(
+            org, "sub_dunning", created=200, status="past_due",
+            access="past_due", start=now + 1000, end=now + 2000,
+        ),
+    )
+    observed = cp.get_billing(org)
+    assert observed["current_period_start"] == before["current_period_start"]
+    assert observed["current_period_end"] == before["current_period_end"]
+    assert entitlements.remaining_seconds(org) == remaining_before
+
     cp.apply_stripe_event(
         "evt_dunning_fail", "invoice.payment_failed", customer,
         {
             "kind": "invoice_failed",
-            "event_created": 200,
+            "event_created": 300,
             "subscription_id": "sub_dunning",
             "price_valid": True,
         },
     )
-    assert entitlements.remaining_seconds(org) == int(
-        settings.solo_included_seconds
-    )
+    assert entitlements.remaining_seconds(org) == remaining_before
     with psycopg.connect(pg["uri"], autocommit=True) as conn:
         conn.execute(
             "UPDATE billing_accounts SET current_period_end = now() - "
@@ -370,6 +498,10 @@ def test_paused_update_fails_closed(cp):
     cp.apply_stripe_event(
         "evt_paused_active", "customer.subscription.created", customer,
         _subscription(org, "sub_paused", created=100),
+    )
+    _pay(
+        cp, customer, "sub_paused",
+        event_id="evt_paused_paid", created=150,
     )
     cp.apply_stripe_event(
         "evt_paused", "customer.subscription.updated", customer,
@@ -440,4 +572,3 @@ def test_member_role_uses_private_boundary(cp):
         "sub-billing-role", "billing-role@freemail.test", "role", ""
     )
     assert cp.member_role(signup["org_id"], signup["user_id"]) == "owner"
-
