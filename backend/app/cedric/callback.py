@@ -131,17 +131,22 @@ def _redirect_target(resp: httpx.Response) -> str | None:
     return target if source_origin == target_origin else None
 
 
-def _post(url: str, payload: dict) -> httpx.Response:
+def _post(
+    url: str, payload: dict, *, idempotency_key: str = ""
+) -> httpx.Response:
     body = json.dumps(payload).encode()
     org_id = str(payload.get("org_id") or "")
     # A redirect (e.g. Vercel apex→www) is followed manually for one hop:
     # httpx's follow_redirects strips Authorization when the host changes, so
     # the auth + signature headers must be re-applied to the new URL.
+    headers = _signature_headers(body, org_id)
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
     with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
-        resp = client.post(url, content=body, headers=_signature_headers(body, org_id))
+        resp = client.post(url, content=body, headers=headers)
         target = _redirect_target(resp)
         if target:
-            resp = client.post(target, content=body, headers=_signature_headers(body, org_id))
+            resp = client.post(target, content=body, headers=headers)
         return resp
 
 
