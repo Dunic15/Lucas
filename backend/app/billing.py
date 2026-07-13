@@ -197,10 +197,13 @@ async def _billing_principal(request: Request):
     user = auth.current_user(request)
     if user is None or not _exact_same_origin(request):
         return None, JSONResponse({"error": "forbidden"}, status_code=403)
+    # Bill against the DURABLE identity: member_uid is the Postgres user UUID;
+    # user_id is the ephemeral u_<hash> cookie cache-key (not a UUID, would 500
+    # the member-role uuid cast). Fall back to user_id for the key-free path.
     role = await run_in_threadpool(
         control_plane.member_role,
         user["org_id"],
-        str(user.get("user_id") or ""),
+        str(user.get("member_uid") or user.get("user_id") or ""),
     )
     if role not in ("owner", "billing"):
         return None, JSONResponse({"error": "forbidden"}, status_code=403)

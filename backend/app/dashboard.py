@@ -729,9 +729,16 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
     team_id = str((body or {}).get("team_id") or "").strip()
     channel = str((body or {}).get("channel") or "").strip()
     webhook_secret = str((body or {}).get("webhook_secret") or "").strip()
+    # webhook_token is OPTIONAL: it is the per-org bearer for the future
+    # token->org path (Option A). The shipped Cedric install callback carries
+    # only webhook_secret today, so requiring the token here left every connect
+    # stuck at "pending" (400 missing-required-fields). Tenant isolation still
+    # holds without it — the events path is bound by the per-org webhook_secret
+    # HMAC, and Laura->Cedric calls use the shared deployment bearer that Cedric
+    # accepts. When Cedric starts sending webhook_token, it is stored and used.
     webhook_token = str((body or {}).get("webhook_token") or "").strip()
     state = str((body or {}).get("state") or "").strip()
-    if not all((org_id, avatar_id, team_id, webhook_secret, webhook_token, state)):
+    if not all((org_id, avatar_id, team_id, webhook_secret, state)):
         return JSONResponse({"error": "missing required fields"}, status_code=400)
     if not provisioning_ok and org_id != machine_org:
         return JSONResponse({"error": "not your org"}, status_code=403)
