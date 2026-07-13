@@ -1832,11 +1832,11 @@ async def end_session(bot_id: str, request: Request) -> JSONResponse:
         # decision (2026-07-13): the Demo org is the anonymous showroom, and a
         # real signup must not be able to kill (or see) another visitor's demo.
         if live is not None and live.org_id not in ("", user["org_id"]):
-            return JSONResponse({"error": "not your session"}, status_code=403)
+            return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     if token_org is not None:
         live = store.get(bot_id)
         if live is not None and live.org_id != token_org:
-            return JSONResponse({"error": "not your session"}, status_code=403)
+            return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     artifact = await _finalize_session(bot_id, source="manual")
     if artifact is None:
         # _finalize_session returns None only when the session is already gone
@@ -2037,9 +2037,9 @@ async def redeliver_artifact(bot_id: str, request: Request) -> JSONResponse:
     # logged-in users (self-serve product decision, 2026-07-13; same rule as
     # /sessions/{id}/end and dashboard.visible).
     if user is not None and artifact_org not in ("", user["org_id"]):
-        return JSONResponse({"error": "not your session"}, status_code=403)
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     if token_org is not None and artifact_org != token_org:
-        return JSONResponse({"error": "not your session"}, status_code=403)
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
 
     integration = cedric.default_integration()
     if not integration or not integration.get("callback_url"):
