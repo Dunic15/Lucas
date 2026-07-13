@@ -20,9 +20,10 @@ def _b64(data: bytes) -> str:
 
 
 def _sign(payload: str) -> str:
-    # Production uses the same deployment credential Cedric accepts on
-    # /api/laura/orgs. CEDRIC_ORGS_TOKEN remains an optional override.
-    key = settings.cedric_orgs_token.strip() or settings.laura_api_token.strip()
+    # Dedicated bootstrap credential shared only by Laura's signed handoff
+    # and Cedric's provisioning callback. The general session bearer is never
+    # a cross-tenant provisioning key.
+    key = settings.cedric_orgs_token.strip()
     if not key:
         raise RuntimeError("brain provisioning is not configured")
     return hmac.new(key.encode(), _PURPOSE + payload.encode(), hashlib.sha256).hexdigest()
