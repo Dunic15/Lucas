@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -108,9 +109,9 @@ def test_folder_brief_is_best_effort(monkeypatch):
     assert drive_client.folder_brief("") == ""
 
 
-def test_cedric_yaml_carries_the_folder():
-    assert avatars.load("cedric").drive_folder_id == FOLDER
-    assert avatars.load("laura").drive_folder_id == ""  # unaffected
+def test_customer_avatars_do_not_ship_with_a_shared_drive():
+    assert avatars.load("cedric").drive_folder_id == ""
+    assert avatars.load("laura").drive_folder_id == ""
 
 
 def test_session_start_merges_drive_brief(tmp_path, monkeypatch):
@@ -120,6 +121,16 @@ def test_session_start_merges_drive_brief(tmp_path, monkeypatch):
     client = TestClient(main_module.app)
 
     monkeypatch.setattr(main_module.recall_client, "assert_ready", lambda: None)
+
+    # Exercise the connector seam without shipping one customer's folder in the
+    # public Cedric configuration.
+    real_load = avatars.load
+
+    def load_with_test_folder(avatar_id: str):
+        avatar = real_load(avatar_id)
+        return replace(avatar, drive_folder_id=FOLDER) if avatar_id == "cedric" else avatar
+
+    monkeypatch.setattr(main_module.avatars, "load", load_with_test_folder)
     made: list[int] = []
 
     def fake_create_bot(*a, **k):

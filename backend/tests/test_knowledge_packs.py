@@ -1,5 +1,4 @@
-"""Knowledge packs: the pack mechanism still works; laura no longer bundles the
-sff pack (she answers SFF from web search now); sff avatar keeps no invented facts."""
+"""Knowledge packs remain usable without exposing them as callable avatars."""
 from __future__ import annotations
 
 import sys
@@ -23,15 +22,18 @@ def test_missing_pack_is_ignored_not_fatal():
     assert laura.knowledge_dirs == [laura.knowledge_dir]
 
 
-def test_sff_avatar_loads_with_both_wake_words():
-    sff = avatars.load("sff")
-    assert "laura" in sff.wake_words and "sff" in sff.wake_words
+def test_sff_is_a_knowledge_pack_not_a_callable_avatar():
+    pack = avatars.settings.avatars_dir / "sff"
+    assert (pack / "knowledge").is_dir()
+    assert not (pack / "avatar.yaml").exists()
 
 
 def test_sff_sectors_are_owner_fill_not_invented():
     """Hard rule: the site publishes no sectors — every Sector line must be
     owner-fill, and portfolio facts must carry their source."""
-    doc = (avatars.load("sff").knowledge_dir / "portfolio_companies.md").read_text()
+    doc = (
+        avatars.settings.avatars_dir / "sff" / "knowledge" / "portfolio_companies.md"
+    ).read_text()
     sector_lines = [l for l in doc.splitlines() if l.startswith("- Sector:")]
     assert sector_lines, "portfolio doc lost its Sector fields"
     assert all("to be filled by owner" in l for l in sector_lines)

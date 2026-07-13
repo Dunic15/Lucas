@@ -3,6 +3,9 @@ import { useReveal } from "@/hooks/use-reveal";
 import { cn } from "@/lib/utils";
 
 export const DEMO_LINK = "#demo";
+export const START_LINK = import.meta.env.VITE_LAURA_APP_URL || "/login";
+export const SALES_LINK =
+  "mailto:duccio@sffstudio.com?subject=Laura%20enterprise%20early%20access";
 
 /** Section wrapper with consistent vertical rhythm + max width. */
 export function Section({

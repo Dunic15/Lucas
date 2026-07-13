@@ -47,3 +47,29 @@ jobs:
 
       - name: Conversation evals
         run: python -m pytest tests -q -p no:cacheprovider
+
+
+  frontend:
+    name: Node 24 · marketing build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: lovable/laura-meeting-expert
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install frontend dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Build marketing app
+        run: npm run build

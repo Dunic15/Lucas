@@ -171,6 +171,23 @@ def is_internal(avatar_id: str) -> bool:
     return (avatar_id or "").strip().lower() in settings.internal_avatar_id_set
 
 
+CUSTOMER_AVATAR_IDS = frozenset({"laura", "cedric"})
+
+
+def is_customer_enabled(avatar_id: str) -> bool:
+    """Whether an avatar may be named by an end-user or public product route.
+
+    Internal/test personas and knowledge-pack folders can remain on disk for
+    explicit offline administration, but are never customer-callable.
+    """
+    normalized = (avatar_id or "").strip().lower()
+    return (
+        normalized in CUSTOMER_AVATAR_IDS
+        and not is_internal(normalized)
+        and (settings.avatars_dir / normalized / "avatar.yaml").is_file()
+    )
+
+
 def list_ids() -> list[str]:
     """Installed, LISTABLE avatar folders. Internal personas
     (settings.internal_avatar_ids) are excluded here — the single choke point
@@ -218,6 +235,12 @@ def list_for_org(org_id: str) -> list[str]:
     return resolved
 
 
+def list_customer_ids(org_id: str = "") -> list[str]:
+    """Customer-callable roster, optionally intersected with an org's grants."""
+    roster = list_for_org(org_id) if org_id else list_ids()
+    return [avatar_id for avatar_id in roster if is_customer_enabled(avatar_id)]
+
+
 # ── every avatar gets an email address, for free ──────────────────────
 # The platform watches ONE inbox (the calendar/Gmail account). Gmail plus-
 # aliases make that inbox an address PER AVATAR with zero extra accounts:
@@ -240,7 +263,7 @@ def from_invite_email(addresses: "Iterable[str]", bases: "Iterable[str]") -> str
     `bases` the configured inbox address(es). Only a tag that matches an
     installed avatar id counts — anything else falls back to the caller's
     default, so a typo'd tag can never summon a ghost."""
-    known = set(list_ids())
+    known = set(list_customer_ids())
     base_keys = set()
     for b in bases:
         if b:

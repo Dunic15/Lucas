@@ -1092,9 +1092,7 @@ def list_avatars(request: Request) -> dict:
     user sees only their org's granted avatars; the anonymous/demo caller sees
     ALL — the key-free demo picker is unchanged."""
     user = auth.current_user(request)
-    roster = (
-        avatars.list_for_org(user["org_id"]) if user else avatars.list_ids()
-    )
+    roster = avatars.list_customer_ids(user["org_id"] if user else "")
     out = []
     for aid in roster:
         a = avatars.load(aid)
@@ -1117,10 +1115,27 @@ class AskRequest(BaseModel):
     avatar_id: str = "laura"
 
 
+def _unknown_customer_avatar() -> JSONResponse:
+    return JSONResponse(
+        {"error": "unknown avatar_id", "available": avatars.list_customer_ids()},
+        status_code=404,
+    )
+
+
+def _load_customer_avatar(avatar_id: str):
+    requested = (avatar_id or settings.default_avatar_id).strip().lower()
+    if not avatars.is_customer_enabled(requested):
+        raise FileNotFoundError(f"No customer avatar '{requested}'")
+    return avatars.load(requested)
+
+
 @app.post("/demo/ask")
 async def demo_ask(req: AskRequest) -> JSONResponse:
     """Ask an avatar a question → grounded, cited answer (no meeting needed)."""
-    avatar = avatars.load(req.avatar_id)  # raises if unknown
+    try:
+        avatar = _load_customer_avatar(req.avatar_id)
+    except FileNotFoundError:
+        return _unknown_customer_avatar()
     result = await run_in_threadpool(answer_question, avatar, req.question)
     return JSONResponse(result)
 
@@ -1134,7 +1149,10 @@ async def live_ask(req: AskRequest) -> StreamingResponse:
     grounded sentence is emitted as `data: {"content": "..."}` (and `[DONE]` at
     the end). Stays silent (no content, just [DONE]) when the SKIP gate fires.
     """
-    avatar = avatars.load(req.avatar_id)
+    try:
+        avatar = _load_customer_avatar(req.avatar_id)
+    except FileNotFoundError:
+        return _unknown_customer_avatar()
 
     async def gen():
         async for sentence in iterate_in_threadpool(
@@ -1157,7 +1175,10 @@ async def live_act(req: AskRequest) -> StreamingResponse:
     Kept OFF the streaming meeting hot path on purpose: tool use needs a round-trip
     first, so this is for the direct web avatar / demo.
     """
-    avatar = avatars.load(req.avatar_id)
+    try:
+        avatar = _load_customer_avatar(req.avatar_id)
+    except FileNotFoundError:
+        return _unknown_customer_avatar()
 
     async def gen():
         # Start the answer immediately, then never leave dead air while it cooks:
@@ -1203,14 +1224,9 @@ class PostMeetingRequest(BaseModel):
 async def demo_post_meeting(req: PostMeetingRequest) -> JSONResponse:
     """Turn a meeting transcript into the full post-meeting artifact."""
     try:
-        avatar = avatars.load(req.avatar_id)
+        avatar = _load_customer_avatar(req.avatar_id)
     except FileNotFoundError:
-        # A bogus avatar_id would otherwise raise an unhandled 500 and the demo
-        # page shows a bare "HTTP 500" — answer a clear 404 with the choices.
-        return JSONResponse(
-            {"error": "unknown avatar_id", "available": avatars.list_ids()},
-            status_code=404,
-        )
+        return _unknown_customer_avatar()
     artifact = await run_in_threadpool(post_meeting, avatar, req.transcript)
     # Echo the transcript so the demo artifact matches the live one
     # (_finalize_session does the same); the page shows it in a transcript tab.
@@ -1222,12 +1238,9 @@ async def demo_post_meeting(req: PostMeetingRequest) -> JSONResponse:
 def demo_sample(avatar_id: str = "laura") -> JSONResponse:
     """A sample transcript to load into the post-meeting demo, if the avatar has one."""
     try:
-        avatar = avatars.load(avatar_id)
+        avatar = _load_customer_avatar(avatar_id)
     except FileNotFoundError:
-        return JSONResponse(
-            {"error": "unknown avatar_id", "available": avatars.list_ids()},
-            status_code=404,
-        )
+        return _unknown_customer_avatar()
     sample = avatar.dir / "sample_meeting.txt"
     text = sample.read_text() if sample.exists() else ""
     return JSONResponse({"avatar_id": avatar_id, "transcript": text})
@@ -1282,13 +1295,16 @@ def photoreal_config() -> JSONResponse:
 
 
 @app.get("/laura-reference.jpg")
-def photoreal_reference(avatar_id: str = "") -> FileResponse:
+def photoreal_reference(avatar_id: str = "") -> Response:
     """Static reference portrait — the photoreal page's no-GPU fallback face.
     Per-avatar when gpu/assets/reference-<id>.jpg exists (the wake-up window
     must show the RIGHT face); the legacy Laura file otherwise. The route name
     predates multi-avatar and is kept for cached pages."""
     assets = REPO_ROOT_DIR / "gpu" / "assets"
-    safe = "".join(c for c in avatar_id.lower() if c.isalnum() or c in "-_")
+    requested = (avatar_id or "").strip().lower()
+    if requested and not avatars.is_customer_enabled(requested):
+        return JSONResponse({"error": "unknown avatar_id"}, status_code=404)
+    safe = "".join(c for c in requested if c.isalnum() or c in "-_")
     per_avatar = assets / f"reference-{safe}.jpg"
     return FileResponse(
         per_avatar if safe and per_avatar.exists() else assets / "reference.jpg",
@@ -1308,7 +1324,10 @@ def talk_avatar_model(avatar_id: str) -> Response:
     silently defeated the probe (curl -I caught this; FileResponse handles HEAD
     natively). Whitelisted to simple ids resolving to real files — never a
     path traversal."""
-    if not re.fullmatch(r"[a-z0-9_-]{1,64}", avatar_id):
+    if (
+        not re.fullmatch(r"[a-z0-9_-]{1,64}", avatar_id)
+        or not avatars.is_customer_enabled(avatar_id)
+    ):
         return JSONResponse({"error": "unknown model"}, status_code=404)
     model_path = FRONTEND_DIR / f"{avatar_id}.glb"
     if not model_path.is_file():
@@ -1351,7 +1370,10 @@ async def live_token(req: LiveTokenRequest, request: Request) -> JSONResponse:
     if auth.current_user(request) is None:
         if err := auth.gate(request):
             return err
-    avatar = avatars.load(req.avatar_id)
+    try:
+        avatar = _load_customer_avatar(req.avatar_id)
+    except FileNotFoundError:
+        return _unknown_customer_avatar()
     try:
         persona_id = await run_in_threadpool(anam_client.create_persona, avatar)
         convo = await run_in_threadpool(
@@ -1548,12 +1570,10 @@ async def _start_avatar_session(
     the Demo org for service starts (Cedric, calendar auto-join, Gmail watcher).
     """
     requested = (avatar_id or settings.default_avatar_id).strip()
-    if avatars.is_internal(requested):
-        # Internal personas are not dispatchable for ANY entry point (manual
-        # start, calendar auto-join, Gmail watcher) — same error an unknown
-        # folder raises, so callers treat it as a nonexistent avatar.
-        raise FileNotFoundError(f"No avatar '{requested}'")
-    avatar = avatars.load(requested)  # raises if unknown
+    if not avatars.is_customer_enabled(requested):
+        # Internal/test personas and knowledge packs are never customer-callable.
+        raise FileNotFoundError(f"No customer avatar '{requested}'")
+    avatar = avatars.load(requested)
     conversation_id = uuid.uuid4().hex
     # avatar.page: per-avatar face tier (3D "talk" vs photoreal), falling back
     # to the global AVATAR_PAGE — the dashboard's "choose your avatar" knob.
@@ -1763,6 +1783,11 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
             {"error": "integration wiring is managed by your workspace"},
             status_code=400,
         )
+    requested_avatar_id = (
+        req.avatar_id or settings.default_avatar_id
+    ).strip().lower()
+    if not avatars.is_customer_enabled(requested_avatar_id):
+        return JSONResponse({"error": "unknown avatar_id"}, status_code=404)
     try:
         recall_client.assert_ready()
     except RuntimeError as e:
@@ -1777,11 +1802,6 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     # meeting participant (MULTI-TENANCY §0/§3.1) — StartRequest deliberately
     # has no org field; keep it that way.
     caller_org = user["org_id"] if user else (token_org or settings.demo_org_id)
-    # Internal personas (INTERNAL_AVATAR_IDS) are not dispatchable by ANY
-    # caller — same 404 an unknown avatar id gets (defense-in-depth while the
-    # folder still exists; see config.internal_avatar_ids).
-    if avatars.is_internal(req.avatar_id or settings.default_avatar_id):
-        return JSONResponse({"error": "unknown avatar_id"}, status_code=404)
     # One live/scheduled booking per meeting URL: rebooking must cancel first
     # (otherwise two bots — and two per-minute meters — end up in one call).
     # Fast path: an obvious local-store clash needs no lock or Recall round-trip

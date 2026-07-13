@@ -3,6 +3,7 @@ process retrieval. No vendors/keys — hash embeddings + the repo's own docs."""
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -64,9 +65,9 @@ def test_about_retrieval_hits_meta_docs():
     assert any(h.source == "laura_architecture.md" for h in hits)
 
 
-def test_about_retrieval_empty_for_avatar_without_about_dir():
-    sff = avatars.load("sff")
-    assert retrieve_about(sff, "how do you work?", k=4) == []
+def test_about_retrieval_empty_for_avatar_without_about_dir(tmp_path):
+    fixture = replace(_laura(), id="no-about-fixture", dir=tmp_path)
+    assert retrieve_about(fixture, "how do you work?", k=4) == []
 
 
 def test_retrieve_for_routes_by_intent():

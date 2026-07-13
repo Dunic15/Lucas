@@ -86,7 +86,25 @@ def test_summary_open_when_auth_not_configured(client):
 def test_login_page_served(client):
     resp = client.get("/login")
     assert resp.status_code == 200
-    assert "Continue with Google" in resp.text
+    assert "Start free with Google" in resp.text
+    assert "15 avatar minutes" in resp.text
+    assert "No card required" in resp.text
+    assert "Enterprise early access" in resp.text
+    assert "Private beta" not in resp.text
+
+
+@pytest.mark.parametrize("avatar_id", ["laura", "sff", "duccio"])
+def test_slack_install_start_is_cedric_only(client, google_on, avatar_id):
+    _login(client, "customer@example.com")
+    denied = client.get(
+        "/dashboard/connections/brain/slack/start",
+        params={"avatar_id": avatar_id},
+        follow_redirects=False,
+    )
+    assert denied.status_code == 400
+    assert denied.json() == {
+        "error": "only Cedric can connect a customer workspace"
+    }
 
 
 # ── login required when configured ─────────────────────────────────────
