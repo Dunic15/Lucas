@@ -654,21 +654,43 @@
     return Number.isFinite(fallback)?Math.max(0,fallback):0;
   }
   function minuteLabel(seconds){ return Math.max(0,Math.ceil(seconds/60))+" min"; }
+  function billingErrorText(code){
+    switch(String(code||"")){
+      case "forbidden": return "Billing is managed by your workspace owner — you don't have permission to change it.";
+      case "billing_not_enabled": return "Billing isn't enabled on this deployment yet.";
+      case "no_customer": return "No billing account yet — start a subscription first.";
+      case "subscription_exists": return "This workspace already has an active subscription.";
+      case "checkout_in_progress": return "A checkout is already in progress — check your other tab.";
+      default: return "Could not open billing: "+code;
+    }
+  }
   function renderBilling(b){
     var plan=String(b.plan||"free").toLowerCase();
+    var canManage=b.can_manage_billing!==false;   // default true (demo / personal owner)
+    var eligible=b.self_serve_eligible!==false;    // default true
+    var managed=b.managed_plan===true;
     var used=secondsOf(b,"used"), remaining=secondsOf(b,"remaining"), included=secondsOf(b,"included");
     $("#u-used").textContent=minuteLabel(used);
     $("#u-remaining").textContent=minuteLabel(remaining);
-    $("#u-included").textContent=minuteLabel(included)+" included in this "+(plan==="solo"?"billing period":"trial");
+    $("#u-included").textContent=managed
+      ?minuteLabel(included)+" included by your organization"
+      :minuteLabel(included)+" included in this "+(plan==="solo"?"billing period":"trial");
     $("#u-period").textContent=b.current_period_end
       ?"Renews "+new Date(b.current_period_end*1000).toLocaleDateString()
       :"Shared across Laura and Cedric";
-    $("#u-plan").textContent=plan==="solo"?"Solo":"Free";
-    $("#billing-state").textContent=plan==="solo"?"Billing active":"Free trial";
+    $("#u-plan").textContent=plan==="solo"?"Solo":(managed?"Managed":"Free");
+    $("#billing-state").textContent=plan==="solo"?"Billing active"
+      :managed?"Managed by your organization"
+      :!canManage?"Managed by your workspace owner"
+      :"Free trial";
     $("#free-state").textContent=plan==="solo"?"Previous plan":"15 minutes";
-    $("#billing-upgrade").hidden=plan==="solo";
-    $("#billing-manage").hidden=plan!=="solo";
-    $("#plan-solo").classList.toggle("featured",plan!=="solo");
+    // Hide the self-serve buttons unless this member can actually use them: the
+    // checkout/portal role-gate 403s non-owners, and an already-entitled
+    // (managed) org can't self-serve Solo at all. Showing the button anyway is
+    // what surfaced "Could not open billing: forbidden".
+    $("#billing-upgrade").hidden=plan==="solo"||!eligible||!canManage;
+    $("#billing-manage").hidden=plan!=="solo"||!canManage;
+    $("#plan-solo").classList.toggle("featured",plan!=="solo"&&eligible);
     $("#plan-free").classList.toggle("featured",plan==="free");
   }
   function openBilling(path,button){
@@ -683,7 +705,7 @@
         if(!url) throw new Error("billing URL missing");
         window.location.assign(url);
       })
-      .catch(function(e){toast("Could not open billing: "+e.message,true);button.disabled=false;button.textContent=old;});
+      .catch(function(e){toast(billingErrorText(e.message),true);button.disabled=false;button.textContent=old;});
   }
   function showGate(on, authEnabled){
     $("#authgate").hidden=!on; $("#views").hidden=on;
