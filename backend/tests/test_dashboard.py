@@ -168,10 +168,9 @@ def test_hidden_avatar_excluded_and_enriched(client):
     assert "minutes_total" in laura
 
 
-def test_public_avatar_picker_no_longer_exposes_duccio(client):
+def test_public_avatar_picker_is_customer_roster_only(client):
     ids = {row["id"] for row in client.get("/avatars").json()["avatars"]}
-    assert {"laura", "cedric"} <= ids
-    assert "duccio" not in ids
+    assert ids == {"laura", "cedric"}
 
 
 def test_avatar_email_default_bare_others_tagged(client):
