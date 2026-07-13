@@ -1347,6 +1347,20 @@ def login_page() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "login.html")
 
 
+@app.get("/privacy")
+def privacy_page() -> FileResponse:
+    """Public privacy policy — required by the Google OAuth consent screen
+    (and linked from the marketing site). Static, no data, no auth."""
+    return FileResponse(FRONTEND_DIR / "privacy.html")
+
+
+@app.get("/terms")
+def terms_page() -> FileResponse:
+    """Public terms of service — companion to /privacy for the consent
+    screen and checkout. Static, no data, no auth."""
+    return FileResponse(FRONTEND_DIR / "terms.html")
+
+
 @app.get("/talk")
 def talk_page() -> FileResponse:
     """Open-source avatar page (TalkingHead + our TTS) — the Anam replacement.
