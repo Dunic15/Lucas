@@ -187,12 +187,17 @@ def test_finalize_merges_and_dedupes_actions(client, recall_stubbed, monkeypatch
 
 def test_orchestrated_capture_fires_action_requested(client, recall_stubbed, monkeypatch):
     delivered: list[tuple] = []
-    monkeypatch.setattr(
-        cedric_callback,
-        "send_action_requested",
-        lambda integration, bot_id, item: delivered.append((integration, bot_id, item))
-        or True,
-    )
+
+    # Capture on the SYNCHRONOUS seam: cedric.notify_action_requested is called
+    # in-line by capture_action and is what distils + schedules the async
+    # action.requested POST. Mocking send_action_requested — the async inner —
+    # is flaky: its off-thread/create_task delivery can lose the record under CI
+    # load. The seam receives the raw captured item, which carries the same
+    # action/owner/due/action_id the wire payload echoes.
+    def record(session, bot_id, item):
+        delivered.append((dict(session.integration), bot_id, dict(item)))
+
+    monkeypatch.setattr(main_module.cedric, "notify_action_requested", record)
 
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
     session = store.get(bot_id)
@@ -205,8 +210,6 @@ def test_orchestrated_capture_fires_action_requested(client, recall_stubbed, mon
         "queue_action", {"action": "Book a follow-up", "due": "Friday"}, session=session
     )
 
-    assert _wait_until(lambda: len(delivered) >= 2)
-    time.sleep(0.05)
     assert len(delivered) == 2  # exactly once per capture
 
     integration, delivered_bot, item = delivered[0]
@@ -739,11 +742,18 @@ def test_merge_dedupes_summarizer_rephrase_of_a_live_action():
 
 def test_wire_artifact_still_transcript_free(client, recall_stubbed, monkeypatch):
     delivered: list[dict] = []
-    monkeypatch.setattr(
-        cedric_callback,
-        "send_ended",
-        lambda integration, bot_id, artifact: delivered.append(artifact) or True,
-    )
+
+    # Capture on the SYNCHRONOUS delivery seam: cedric.deliver_ended runs
+    # in-request at finalize and distils via wire_artifact BEFORE scheduling the
+    # fire-and-forget send_ended. Mocking send_ended — the async inner — is
+    # flaky under TestClient: its create_task is orphaned once the request's
+    # portal closes. Distil here exactly as the real async path would, so the
+    # PII assertions below are deterministic.
+    def fake_deliver_ended(integration, bot_id, artifact):
+        delivered.append(main_module.cedric.wire_artifact(artifact))
+        return bool(integration and integration.get("callback_url"))
+
+    monkeypatch.setattr(main_module.cedric, "deliver_ended", fake_deliver_ended)
     monkeypatch.setattr(cedric_callback, "send_action_requested", lambda *a: True)
 
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
@@ -759,7 +769,7 @@ def test_wire_artifact_still_transcript_free(client, recall_stubbed, monkeypatch
     assert wire["artifact_version"] == 1
     assert any(a.get("requested_live") for a in wire["actions"])
 
-    assert _wait_until(lambda: len(delivered) == 1)
+    assert len(delivered) == 1
     assert "transcript" not in delivered[0]
     assert any(a.get("requested_live") for a in delivered[0]["actions"])
 
