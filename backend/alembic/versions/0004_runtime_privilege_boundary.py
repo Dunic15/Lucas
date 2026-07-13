@@ -382,6 +382,7 @@ def upgrade() -> None:
 
         GRANT USAGE ON SCHEMA public TO laura_app;
         GRANT INSERT, DELETE ON TABLE public.org_tokens TO laura_app;
+        GRANT SELECT (org_id, label) ON TABLE public.org_tokens TO laura_app;
         GRANT SELECT, INSERT, UPDATE ON TABLE
           public.org_connections, public.billing_accounts,
           public.usage_sessions TO laura_app;
