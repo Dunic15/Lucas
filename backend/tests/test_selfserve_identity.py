@@ -80,6 +80,30 @@ def test_control_plane_disabled_is_total_noop():
     assert control_plane._engine is None  # nothing was lazily created
 
 
+
+def test_key_free_lifespan_skips_runtime_role_verification(monkeypatch):
+    assert control_plane.enabled() is False
+
+    def must_not_run():
+        raise AssertionError("key-free startup must not touch the control plane")
+
+    monkeypatch.setattr(control_plane, "runtime_role_status", must_not_run)
+    monkeypatch.setattr(main_module, "_prebuild_indexes", lambda: None)
+    monkeypatch.setattr(settings, "autopilot_nudge", False)
+    monkeypatch.setattr(settings, "gmail_watch_enabled", False)
+    monkeypatch.setattr(settings, "vendor_alerts_enabled", False)
+    monkeypatch.setattr(settings, "reconcile_enabled", False)
+    monkeypatch.setattr(settings, "elevenlabs_api_key", "")
+    main_module._shutting_down = False
+    try:
+        with TestClient(main_module.app) as startup_client:
+            assert startup_client.get("/health").status_code == 200
+        assert control_plane._engine is None
+    finally:
+        # Lifespan shutdown sets the process drain flag; do not contaminate the
+        # rest of the key-free test process.
+        main_module._shutting_down = False
+
 def test_upsert_user_unchanged_when_control_plane_off(client):
     """Login resolution with the control plane off is exactly today's:
     personal org == user_id, google_sub accepted but unused."""
