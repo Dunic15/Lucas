@@ -47,6 +47,7 @@ from . import (
     recall_client,
     anam_client,
     auth,
+    billing,
     cedric,
     control_plane,
     dashboard,
@@ -171,6 +172,7 @@ security.install(app)
 app.include_router(tts.router)  # POST /tts (open-source avatar voice)
 app.include_router(org_api.router)  # /org/* — org-memory seam for surfaces (#48)
 app.include_router(auth.router)  # /auth/* — dashboard login (Google Sign-In)
+app.include_router(billing.router)  # /billing/* + signed /webhooks/stripe
 app.include_router(dashboard.router)  # /dashboard — owner control view
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
