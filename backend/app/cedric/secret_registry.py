@@ -332,12 +332,12 @@ def upsert_org_secret(org_id: str, secret: str) -> bool:
 
 
 def remove_org_credentials(org_id: str) -> bool:
-    """Remove every per-org Cedric credential, durably and fail-closed.
+    """Remove every per-org credential durably and retry-safely.
 
-    Success means the dedicated HMAC secret, dedicated peer bearer and legacy
-    aggregate entry are all absent. Any SSM error returns False so the caller
-    keeps the connection visible and retryable instead of claiming a revoke
-    while a credential can be resurrected on the next cache refresh.
+    When SSM is configured, hot caches are evicted only after every durable
+    delete succeeds. A partial failure therefore leaves the peer bearer
+    available for the disconnect saga to retry; the dashboard persists the
+    remote-revoked phase before invoking this cleanup.
     """
     global _cache, _last_ssm_refresh, _bearer_cache, _bearer_last_refresh
     org = (org_id or "").strip()
@@ -346,16 +346,18 @@ def remove_org_credentials(org_id: str) -> bool:
     name = settings.laura_webhook_registry_ssm_parameter.strip()
     with _lock:
         _sync_env_locked()
-        _cache = {k: v for k, v in _cache.items() if k != org}
-        _bearer_cache = {k: v for k, v in _bearer_cache.items() if k != org}
-        _bearer_last_refresh.pop(org, None)
         if not name:
+            _cache = {k: v for k, v in _cache.items() if k != org}
+            _bearer_cache = {k: v for k, v in _bearer_cache.items() if k != org}
+            _bearer_last_refresh.pop(org, None)
             return True
+
         secret_name = _org_parameter_name(name, org)
         bearer_name = _bearer_parameter_name(name, org)
         client = _client()
         if client is None or not secret_name or not bearer_name:
             return False
+
         ok = True
         for parameter in (secret_name, bearer_name):
             try:
@@ -374,7 +376,9 @@ def remove_org_credentials(org_id: str) -> bool:
                 current.pop(org)
                 client.put_parameter(
                     Name=name,
-                    Value=json.dumps(current, separators=(",", ":"), sort_keys=True),
+                    Value=json.dumps(
+                        current, separators=(",", ":"), sort_keys=True
+                    ),
                     Type="SecureString",
                     Overwrite=True,
                 )
@@ -386,9 +390,13 @@ def remove_org_credentials(org_id: str) -> bool:
                     f"({type(exc).__name__})",
                     flush=True,
                 )
-        _last_ssm_refresh = time.monotonic()
-        return ok
 
+        if ok:
+            _cache = {k: v for k, v in _cache.items() if k != org}
+            _bearer_cache = {k: v for k, v in _bearer_cache.items() if k != org}
+            _bearer_last_refresh.pop(org, None)
+            _last_ssm_refresh = time.monotonic()
+        return ok
 
 def remove_org_secret(org_id: str) -> bool:
     """Backward-compatible alias; disconnect now removes both credentials."""
