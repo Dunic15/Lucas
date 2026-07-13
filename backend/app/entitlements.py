@@ -81,18 +81,41 @@ def _included_default() -> int:
 # ── internal SQL helpers (all run inside a caller-owned connection) ─────
 
 def _used_seconds(conn, org_id: str, *, exclude_bot_id: str | None = None) -> float:
-    """closed consumption + live elapsed of active rows (pending rows count 0).
-    ``exclude_bot_id`` leaves one row's OWN elapsed out (mark_in_call computes
-    the deadline for that row, so it must not count against itself)."""
+    """Consumption in the current paid period, or lifetime for the free plan."""
     from sqlalchemy import text
 
-    closed = conn.execute(
+    meta = conn.execute(
         text(
-            "SELECT COALESCE(SUM(consumed_seconds), 0) FROM usage_sessions "
-            "WHERE org_id = :o AND state = 'closed'"
+            "SELECT plan, EXTRACT(EPOCH FROM current_period_start) "
+            "FROM billing_accounts WHERE org_id = :o"
         ),
         {"o": org_id},
-    ).scalar()
+    ).fetchone()
+    windowed = bool(
+        meta
+        and str(meta[0]) == "solo"
+        and meta[1] is not None
+    )
+    if windowed:
+        closed = conn.execute(
+            text(
+                "SELECT COALESCE(SUM(consumed_seconds), 0) "
+                "FROM usage_sessions "
+                "WHERE org_id = :o AND state = 'closed' "
+                "AND closed_at >= "
+                "to_timestamp(CAST(:period_start AS double precision))"
+            ),
+            {"o": org_id, "period_start": float(meta[1])},
+        ).scalar()
+    else:
+        closed = conn.execute(
+            text(
+                "SELECT COALESCE(SUM(consumed_seconds), 0) "
+                "FROM usage_sessions "
+                "WHERE org_id = :o AND state = 'closed'"
+            ),
+            {"o": org_id},
+        ).scalar()
     active = conn.execute(
         text(
             "SELECT COALESCE(SUM(GREATEST(0, "
@@ -106,6 +129,27 @@ def _used_seconds(conn, org_id: str, *, exclude_bot_id: str | None = None) -> fl
     return float(closed or 0) + float(active or 0)
 
 
+def _effective_allowance(row) -> int:
+    """Paid access is valid only through its verified Stripe period end."""
+    if row is None:
+        return _included_default()
+    included = int(row[0])
+    plan = str(row[1] or "free")
+    if plan != "solo":
+        return included
+    status = str(row[2] or "none")
+    period_end = float(row[3]) if row[3] is not None else None
+    period_start = float(row[4]) if row[4] is not None else None
+    if (
+        status not in {"active", "past_due"}
+        or period_start is None
+        or period_end is None
+        or period_end <= time.time()
+    ):
+        return 0
+    return included
+
+
 def _lock_billing_row(conn, org_id: str) -> int:
     """included_seconds for the org, row LOCKED (FOR UPDATE) so concurrent
     gates/deadline computations serialize. Creates the free-plan row when
@@ -114,7 +158,10 @@ def _lock_billing_row(conn, org_id: str) -> int:
 
     row = conn.execute(
         text(
-            "SELECT included_seconds FROM billing_accounts "
+            "SELECT included_seconds, plan, subscription_status, "
+            "EXTRACT(EPOCH FROM current_period_end), "
+            "EXTRACT(EPOCH FROM current_period_start) "
+            "FROM billing_accounts "
             "WHERE org_id = :o FOR UPDATE"
         ),
         {"o": org_id},
@@ -130,12 +177,15 @@ def _lock_billing_row(conn, org_id: str) -> int:
         # Re-read under the lock: on a conflict the WINNER's row is what counts.
         row = conn.execute(
             text(
-                "SELECT included_seconds FROM billing_accounts "
+                "SELECT included_seconds, plan, subscription_status, "
+                "EXTRACT(EPOCH FROM current_period_end), "
+                "EXTRACT(EPOCH FROM current_period_start) "
+                "FROM billing_accounts "
                 "WHERE org_id = :o FOR UPDATE"
             ),
             {"o": org_id},
         ).fetchone()
-    return int(row[0]) if row else _included_default()
+    return _effective_allowance(row)
 
 
 def _unavailable(exc: Exception) -> EntitlementsUnavailable:
@@ -161,10 +211,15 @@ def remaining_seconds(org_id: str) -> Optional[int]:
         with _engine().begin() as conn:
             control_plane._set_org(conn, org)
             row = conn.execute(
-                text("SELECT included_seconds FROM billing_accounts WHERE org_id = :o"),
+                text(
+                    "SELECT included_seconds, plan, subscription_status, "
+                    "EXTRACT(EPOCH FROM current_period_end), "
+                    "EXTRACT(EPOCH FROM current_period_start) "
+                    "FROM billing_accounts WHERE org_id = :o"
+                ),
                 {"o": org},
             ).fetchone()
-            included = int(row[0]) if row else _included_default()
+            included = _effective_allowance(row)
             used = _used_seconds(conn, org)
     except SQLAlchemyError as e:
         raise _unavailable(e) from e
@@ -444,13 +499,20 @@ def usage_summary(org_id: str) -> Optional[dict]:
             control_plane._set_org(conn, org)
             row = conn.execute(
                 text(
-                    "SELECT plan, included_seconds FROM billing_accounts "
+                    "SELECT plan, included_seconds, subscription_status, "
+                    "EXTRACT(EPOCH FROM current_period_end), "
+                    "EXTRACT(EPOCH FROM current_period_start) "
+                    "FROM billing_accounts "
                     "WHERE org_id = :o"
                 ),
                 {"o": org},
             ).fetchone()
             plan = str(row[0]) if row else "free"
             included = int(row[1]) if row else _included_default()
+            effective = _effective_allowance(
+                (row[1], row[0], row[2], row[3], row[4])
+                if row else None
+            )
             used = int(_used_seconds(conn, org))
     except SQLAlchemyError as e:
         raise _unavailable(e) from e
@@ -458,5 +520,28 @@ def usage_summary(org_id: str) -> Optional[dict]:
         "plan": plan,
         "included_seconds": included,
         "used_seconds": used,
-        "remaining_seconds": max(0, included - used),
+        "remaining_seconds": max(0, effective - used),
     }
+
+
+def has_active_session(org_id: str) -> bool:
+    """Whether this org's one meeting slot is currently occupied."""
+    if not enabled() or not (org_id or "").strip():
+        return False
+    from sqlalchemy import text
+    from sqlalchemy.exc import SQLAlchemyError
+
+    org = org_id.strip()
+    try:
+        with _engine().begin() as conn:
+            control_plane._set_org(conn, org)
+            return conn.execute(
+                text(
+                    "SELECT 1 FROM usage_sessions "
+                    "WHERE org_id = :o AND state IN ('pending', 'active') "
+                    "LIMIT 1"
+                ),
+                {"o": org},
+            ).fetchone() is not None
+    except SQLAlchemyError:
+        return False
