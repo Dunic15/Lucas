@@ -133,8 +133,44 @@ def test_customer_callback_urls_are_bound_to_cedric_https_origin(monkeypatch):
     assert cedric.request_integration_urls_allowed(safe, "org_customer") is True
     assert cedric.request_integration_urls_allowed(hostile, "org_customer") is False
     assert cedric.request_integration_urls_allowed(insecure, "org_customer") is False
+    for blocked in (
+        "https://127.0.0.1/callback",
+        "https://169.254.169.254/latest/meta-data",
+        "https://10.0.0.8/callback",
+        "https://user:pass@www.meet-cedric.com/callback",
+        "https://www.meet-cedric.com:8443/callback",
+    ):
+        req = types.SimpleNamespace(callback_url=blocked, context_url="")
+        assert cedric.request_integration_urls_allowed(req, "org_customer") is False
     # Demo/key-free wiring is unchanged.
     assert cedric.request_integration_urls_allowed(hostile, settings.demo_org_id) is True
+
+
+
+def test_cookie_user_cannot_supply_integration_wiring(
+    client, monkeypatch, google_on
+):
+    """The browser chooses meeting/avatar only; org routing is server-owned."""
+    from app import recall_client
+
+    _login(client)
+    monkeypatch.setattr(recall_client, "assert_ready", lambda: None)
+    created: list[tuple] = []
+    monkeypatch.setattr(
+        recall_client, "create_bot", lambda *a, **k: created.append((a, k))
+    )
+    response = client.post(
+        "/sessions/start",
+        json={
+            "meeting_url": "https://meet.google.com/no-browser-routing",
+            "avatar_id": "cedric",
+            "callback_url": "https://www.meet-cedric.com/api/laura/events",
+            "external_ref": {"team": "T1"},
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "integration wiring is managed by your workspace"
+    assert created == []
 
 
 def test_org_token_scopes_cancel(client, monkeypatch):
