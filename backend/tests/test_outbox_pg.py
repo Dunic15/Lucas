@@ -123,6 +123,7 @@ def cp(pg, monkeypatch):
     with _admin(pg) as conn:
         conn.execute("DELETE FROM callback_outbox")
         conn.execute("DELETE FROM action_capture_events")
+        conn.execute("DELETE FROM action_finalize_state")
         conn.execute("DELETE FROM queued_actions")
     yield control_plane
     control_plane.reset_engine()
@@ -541,4 +542,61 @@ def test_continuation_is_append_once_and_updates_wire_before_claim(cp, pg):
         assert conn.execute(
             "SELECT count(*) FROM action_capture_events WHERE org_id=%s",
             (org,),
+        ).fetchone()[0] == 1
+
+
+
+def test_finalize_fence_drains_inflight_capture_and_rejects_late(
+    cp, pg, monkeypatch
+):
+    from threading import Event
+
+    org = _org(cp, "finalize-fence")
+    session = SimpleNamespace(
+        org_id=org,
+        bot_id="bot-finalize-fence",
+        integration=_integration(org),
+        queued_actions=[],
+    )
+    entered = Event()
+    release = Event()
+    original_insert = outbox_pg._callback_insert
+
+    def blocked_insert(conn, callback_record):
+        entered.set()
+        assert release.wait(10)
+        return original_insert(conn, callback_record)
+
+    monkeypatch.setattr(outbox_pg, "_callback_insert", blocked_insert)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        capture_future = pool.submit(
+            tools.capture_action_once,
+            session,
+            "Send the fenced recap",
+            source_event_key="fence-inflight",
+        )
+        assert entered.wait(10)
+        finalize_future = pool.submit(
+            outbox.begin_action_finalize, org, session.bot_id
+        )
+        time.sleep(0.1)
+        assert finalize_future.done() is False
+        release.set()
+        captured, created = capture_future.result(timeout=10)
+        snapshot = finalize_future.result(timeout=10)
+
+    assert created is True
+    assert [row["action_id"] for row in snapshot] == [captured["action_id"]]
+    with pytest.raises(outbox.ActionCaptureClosed):
+        tools.capture_action_once(
+            session,
+            "This must not become a live-only card",
+            source_event_key="fence-late",
+        )
+    with _admin(pg) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM queued_actions WHERE org_id=%s", (org,)
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT count(*) FROM callback_outbox WHERE org_id=%s", (org,)
         ).fetchone()[0] == 1

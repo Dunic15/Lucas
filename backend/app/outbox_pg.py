@@ -16,12 +16,38 @@ from . import control_plane
 from .config import settings
 
 
+class ActionCaptureClosed(RuntimeError):
+    """The durable finalizer fenced this bot before a late capture."""
+
+
 def _engine():
     return control_plane._get_engine()
 
 
 def _set_org(conn, org_id: str) -> None:
     control_plane._set_org(conn, org_id)
+
+
+def _capture_finalize_lock(conn, org_id: str, bot_id: str) -> None:
+    conn.execute(
+        text(
+            "SELECT pg_catalog.pg_advisory_xact_lock("
+            "pg_catalog.hashtextextended(:lock_key, 0))"
+        ),
+        {"lock_key": f"{org_id}:{bot_id}:capture-finalize"},
+    )
+
+
+def _require_capture_open(conn, org_id: str, bot_id: str) -> None:
+    row = conn.execute(
+        text(
+            "SELECT state FROM action_finalize_state "
+            "WHERE org_id=:org_id AND bot_id=:bot_id"
+        ),
+        {"org_id": org_id, "bot_id": bot_id},
+    ).first()
+    if row is not None:
+        raise ActionCaptureClosed(str(row[0]))
 
 
 def _callback_insert(conn, callback: dict[str, Any]) -> Optional[int]:
@@ -108,6 +134,8 @@ def persist_action_capture_once(
     engine = _engine()
     with engine.begin() as conn:
         _set_org(conn, org_id)
+        _capture_finalize_lock(conn, org_id, bot_id)
+        _require_capture_open(conn, org_id, bot_id)
         lock_key = event_key or fingerprint
         if lock_key:
             conn.execute(
@@ -216,6 +244,8 @@ def extend_action_capture_once(
     engine = _engine()
     with engine.begin() as conn:
         _set_org(conn, org_id)
+        _capture_finalize_lock(conn, org_id, bot_id)
+        _require_capture_open(conn, org_id, bot_id)
         conn.execute(
             text(
                 "SELECT pg_catalog.pg_advisory_xact_lock("
@@ -400,6 +430,43 @@ def update_queued_action(
                 "due": str(item.get("due") or "")[:100],
             },
         )
+
+
+def begin_action_finalize(
+    org_id: str, bot_id: str
+) -> list[dict[str, Any]]:
+    """Wait for active captures, fence new ones, return canonical snapshot."""
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        _capture_finalize_lock(conn, org_id, bot_id)
+        conn.execute(
+            text(
+                """
+                INSERT INTO action_finalize_state (
+                  org_id, bot_id, state, created_at, updated_at
+                ) VALUES (
+                  :org_id, :bot_id, 'finalizing',
+                  clock_timestamp(), clock_timestamp()
+                )
+                ON CONFLICT (org_id, bot_id) DO UPDATE SET
+                  updated_at=clock_timestamp()
+                """
+            ),
+            {"org_id": org_id, "bot_id": bot_id},
+        )
+        rows = conn.execute(
+            text(
+                """
+                SELECT action_id, action, owner, due
+                FROM queued_actions
+                WHERE org_id=:org_id AND bot_id=:bot_id
+                ORDER BY created_at, action_id
+                """
+            ),
+            {"org_id": org_id, "bot_id": bot_id},
+        ).mappings().all()
+    return [dict(row) for row in rows]
 
 
 def queued_actions(org_id: str, bot_id: str) -> list[dict[str, Any]]:

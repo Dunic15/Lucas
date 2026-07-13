@@ -2214,7 +2214,7 @@ async def _finalize_session_locked(
     # prevention at the source, cross-language included) and then merged into
     # the artifact's actions[] below.
     queued_actions = await run_in_threadpool(
-        outbox.queued_actions, session.org_id, bot_id
+        outbox.begin_action_finalize, session.org_id, bot_id
     )
     if not queued_actions:
         # Compatibility for synthetic/key-free sessions captured before the
@@ -4362,14 +4362,24 @@ async def recall_webhook(request: Request) -> JSONResponse:
             and time.time() - p_ts < 4.0
             and is_capture_continuation(text)
         ):
-            updated_item, extended = await run_in_threadpool(
-                tools.extend_action_once,
-                session,
-                p_item,
-                text,
-                source_event_key=capture_event_key,
-                source_fingerprint=capture_fingerprint,
-            )
+            try:
+                updated_item, extended = await run_in_threadpool(
+                    tools.extend_action_once,
+                    session,
+                    p_item,
+                    text,
+                    source_event_key=capture_event_key,
+                    source_fingerprint=capture_fingerprint,
+                )
+            except outbox.ActionCaptureClosed:
+                session.last_capture = None
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "spoke": False,
+                        "capture_rejected": "meeting_finalizing",
+                    }
+                )
             session.last_capture = (
                 updated_item,
                 p_speaker,
@@ -4678,13 +4688,23 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # itself ("please schedule a follow-up with Marco on Friday").
         # One bounded tenant transaction, off the shared event loop. No
         # callback network occurs on the live transcript path.
-        item, created = await run_in_threadpool(
-            tools.capture_action_once,
-            session,
-            question.strip(),
-            source_event_key=capture_event_key,
-            source_fingerprint=capture_fingerprint,
-        )
+        try:
+            item, created = await run_in_threadpool(
+                tools.capture_action_once,
+                session,
+                question.strip(),
+                source_event_key=capture_event_key,
+                source_fingerprint=capture_fingerprint,
+            )
+        except outbox.ActionCaptureClosed:
+            session.last_capture = None
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": False,
+                    "capture_rejected": "meeting_finalizing",
+                }
+            )
         if not created:
             # A restart may have dropped the in-memory continuation window.
             # Re-arm it from the canonical durable row so the next genuine ASR

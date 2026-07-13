@@ -24,11 +24,17 @@ class OutboxUnavailable(RuntimeError):
     """Configured durable store is unavailable; callers must fail closed."""
 
 
+class ActionCaptureClosed(RuntimeError):
+    """The terminal finalizer won the per-bot capture/finalize fence."""
+
+
 def _pg_call(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except OutboxUnavailable:
         raise
+    except outbox_pg.ActionCaptureClosed as exc:
+        raise ActionCaptureClosed(str(exc)) from exc
     except Exception as exc:
         raise OutboxUnavailable(type(exc).__name__) from exc
 
@@ -74,6 +80,15 @@ def _ensure_schema() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_queued_actions_bot
                 ON queued_actions(org_id, bot_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS action_finalize_state (
+                org_id TEXT NOT NULL,
+                bot_id TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'finalizing',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (org_id, bot_id)
+            );
 
             CREATE TABLE IF NOT EXISTS action_capture_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -262,6 +277,13 @@ def persist_action_capture_once(
     _ensure_schema()
     now = time.time()
     with store._LOCK, store._connect() as conn:
+        closed = conn.execute(
+            "SELECT state FROM action_finalize_state "
+            "WHERE org_id=? AND bot_id=?",
+            (org_id, str(session.bot_id)),
+        ).fetchone()
+        if closed is not None:
+            raise ActionCaptureClosed(str(closed["state"]))
         existing = None
         if event_key:
             existing = conn.execute(
@@ -384,6 +406,13 @@ def extend_action_capture_once(
     _ensure_schema()
     now = time.time()
     with store._LOCK, store._connect() as conn:
+        closed = conn.execute(
+            "SELECT state FROM action_finalize_state "
+            "WHERE org_id=? AND bot_id=?",
+            (org_id, str(session.bot_id)),
+        ).fetchone()
+        if closed is not None:
+            raise ActionCaptureClosed(str(closed["state"]))
         row = conn.execute(
             """
             SELECT action_id, action, owner, due
@@ -462,6 +491,35 @@ def extend_action_capture_once(
             "owner": str(row["owner"]),
             "due": str(row["due"]),
         }, True
+
+
+def begin_action_finalize(org_id: str, bot_id: str) -> list[dict]:
+    """Drain active captures and atomically reject every later capture."""
+    org = org_id or settings.demo_org_id
+    if control_plane.enabled():
+        return _pg_call(outbox_pg.begin_action_finalize, org, bot_id)
+    _ensure_schema()
+    now = time.time()
+    with store._LOCK, store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO action_finalize_state (
+              org_id, bot_id, state, created_at, updated_at
+            ) VALUES (?, ?, 'finalizing', ?, ?)
+            ON CONFLICT(org_id, bot_id) DO UPDATE SET updated_at=excluded.updated_at
+            """,
+            (org, bot_id, now, now),
+        )
+        rows = conn.execute(
+            """
+            SELECT action_id, action, owner, due
+            FROM queued_actions
+            WHERE org_id=? AND bot_id=?
+            ORDER BY created_at, action_id
+            """,
+            (org, bot_id),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def queued_actions(org_id: str, bot_id: str) -> list[dict]:

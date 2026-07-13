@@ -217,7 +217,12 @@ def queue_action(
     try:
         capture_action(session, action, owner, due)
     except Exception as exc:
-        from .outbox import OutboxUnavailable
+        from .outbox import ActionCaptureClosed, OutboxUnavailable
+        if isinstance(exc, ActionCaptureClosed):
+            return (
+                "error: this meeting is already finalizing, so the action "
+                "was not queued."
+            )
         if isinstance(exc, OutboxUnavailable):
             return (
                 "error: I couldn't save that action safely — please try again "
