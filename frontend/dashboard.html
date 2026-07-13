@@ -993,7 +993,7 @@
   $("#billing-upgrade").addEventListener("click",function(){openBilling("/billing/checkout",this);});
   $("#billing-manage").addEventListener("click",function(){openBilling("/billing/portal",this);});
 
-  $("#seg-theme button").forEach(function(b){ b.addEventListener("click",function(){
+  $$("#seg-theme button").forEach(function(b){ b.addEventListener("click",function(){
     $$("#seg-theme button").forEach(function(x){x.classList.remove("on");}); b.classList.add("on");
     var t=b.getAttribute("data-t");
     if(t){ document.documentElement.setAttribute("data-theme",t); localStorage.setItem("laura_theme",t); }
