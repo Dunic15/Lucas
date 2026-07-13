@@ -118,9 +118,16 @@ def _get_engine():
             candidate = create_engine(url, pool_pre_ping=True)
             try:
                 _assert_runtime_role(candidate)
-            except Exception:
+            except RuntimeError:
                 candidate.dispose()
                 raise
+            except Exception:
+                candidate.dispose()
+                # Startup/health logs must never render a DSN, host, username,
+                # or password from a failed SQLAlchemy/driver connection.
+                raise RuntimeError(
+                    "runtime database role verification failed"
+                ) from None
             if _engine is not None:
                 _engine.dispose()
             _engine = candidate
