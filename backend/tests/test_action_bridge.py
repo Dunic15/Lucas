@@ -392,12 +392,15 @@ def test_live_route_async_ask_captures_and_confirms(
     client, recall_stubbed, spoken, monkeypatch
 ):
     fired: list[tuple] = []
-    monkeypatch.setattr(
-        cedric_callback,
-        "send_action_requested",
-        lambda integration, bot_id, item: fired.append((integration, bot_id, item))
-        or True,
-    )
+
+    # Capture on the SYNCHRONOUS seam (cedric.notify_action_requested, called
+    # in-request by capture_action) — NOT the async send_action_requested, whose
+    # create_task delivery is orphaned by the TestClient portal under CI load
+    # (flake). Same pattern as test_orchestrated_capture_fires_action_requested.
+    def _record(session, bot_id, item):
+        fired.append((dict(session.integration), bot_id, dict(item)))
+
+    monkeypatch.setattr(main_module.cedric, "notify_action_requested", _record)
 
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
     body = _post_final(
@@ -416,7 +419,7 @@ def test_live_route_async_ask_captures_and_confirms(
     assert spoken and spoken[-1] in queue_pool
 
     # Orchestrated session → action.requested fired exactly once, ref echoed.
-    assert _wait_until(lambda: len(fired) == 1)
+    assert len(fired) == 1
     integration, fired_bot, item = fired[0]
     assert fired_bot == bot_id
     assert integration["external_ref"] == {"team": "T1", "meet_session_id": "ms_1"}
