@@ -1010,7 +1010,7 @@ def org_exists(org_id: str) -> bool:
 # ── org connections (the Configure tab) ──
 
 CONNECTION_PROVIDERS = ("cedric-brain", "gmail", "calendar", "slack", "drive")
-CONNECTION_STATUSES = ("connected", "pending", "disconnected")
+CONNECTION_STATUSES = ("connected", "pending", "disconnecting", "disconnected")
 
 
 def set_connection(
