@@ -495,11 +495,19 @@ class Settings(BaseSettings):
     # open (preserves the zero-key local demo); set in any real deployment.
     laura_api_token: str = ""
     # ── Multi-tenancy spine (docs/infra/MULTI-TENANCY*.md) ──
-    # Control-plane database. Empty = the key-free SQLite demo (no Alembic, no
-    # Postgres); when set (a Supabase transaction-pooler URL) the Alembic 0001
-    # migration + RLS apply. The hot path (sessions/utterances) stays SQLite
-    # regardless — latency is the product. Never in git (see exposed-secrets).
+    # Runtime control-plane database. Empty = the key-free SQLite demo. In
+    # production this MUST be the dedicated `laura_app` pooler credential
+    # (NOSUPERUSER, NOBYPASSRLS); App Runner receives this URL and never the
+    # migration owner credential. The hot path stays on local SQLite.
     laura_database_url: str = ""
+    # Migration/DDL credential used ONLY by backend/alembic/env.py and one-off
+    # migration jobs. Never inject this owner URL into App Runner. Keeping a
+    # separate setting makes accidentally running the service with BYPASSRLS
+    # structurally harder.
+    laura_database_admin_url: str = ""
+    # Migration jobs set this to true so a missing admin secret is fatal even
+    # when the runtime URL is intentionally absent from that job.
+    laura_require_migrations: bool = False
     # The fixed tenant every unauthenticated / service / anon row is stamped
     # with. Its uuid is seeded as the "Demo" org row so the single-tenant demo
     # stays byte-identical while every persisted row still carries a non-null
