@@ -5,7 +5,7 @@ Proves the four self-serve seams on SQLite with zero external services:
 1. PER-ORG machine bearers are first-class on every Cedric-facing endpoint:
    a bearer that resolves via org_tokens acts ONLY on its own org's rows
    (own → ok, another org's → 403); the GLOBAL laura_api_token keeps its
-   legacy service scope byte-identically; key-free stays open.
+   Demo service scope; key-free stays open.
 2. /dashboard/connections/brain/slack/complete binds a secret ONLY to an org
    that initiated an install — via the signed state minted by /slack/start
    (echoed back opaquely) or a pending/connected org_connections row. On
@@ -103,7 +103,7 @@ def test_org_token_scopes_cancel(client, monkeypatch):
     """A per-org bearer cancels ONLY its own org's sessions; another org's
     stays running and answers a 404 BYTE-IDENTICAL to a nonexistent bot_id —
     no cross-tenant existence oracle (adversarial review should-fix 2). The
-    global bearer keeps its full service scope."""
+    global bearer is scoped to the Demo org."""
     from app import recall_client
 
     monkeypatch.setattr(settings, "laura_api_token", "sesame")
@@ -123,9 +123,10 @@ def test_org_token_scopes_cancel(client, monkeypatch):
         assert ok.status_code == 200 and ok.json()["cancelled"] is True
         assert store.get("bot_c_own") is None
 
-        # the global bearer cancels any org's session — today's behavior
+        # The deployment bearer is Demo-only, never a tenant master key.
         legacy = client.post("/sessions/bot_c_other/cancel", headers=_bearer("sesame"))
-        assert legacy.status_code == 200
+        assert legacy.status_code == 404
+        assert store.get("bot_c_other") is not None
     finally:
         for bot in ("bot_c_own", "bot_c_other"):
             if store.get(bot):
@@ -153,9 +154,9 @@ def test_org_token_scopes_artifact_read(client, monkeypatch):
         assert live.status_code == 404 and live.content == ghost.content
     finally:
         store.remove("bot_live_x")
-    # global bearer: unchanged full service scope
+    # The global service bearer is Demo-scoped, not cross-tenant.
     legacy = client.get("/sessions/b_art_other/artifact", headers=_bearer("sesame"))
-    assert legacy.status_code == 200
+    assert legacy.status_code == 404
 
 
 def test_org_token_scopes_deliver(client, monkeypatch):
@@ -291,8 +292,8 @@ def test_org_action_status_is_tenant_scoped_before_finalize(client, monkeypatch)
 
 def test_summary_scoped_for_per_org_bearer(client, monkeypatch):
     """/dashboard/summary's machine path: a per-org bearer sees its org + the
-    legacy unowned rows — never the Demo org's; the global bearer keeps the
-    full service view."""
+    legacy unowned rows — never the Demo org's; the global bearer sees only
+    Demo + legacy rows."""
     monkeypatch.setattr(settings, "laura_api_token", "sesame")
     raw = store.mint_org_token("org_sff", "svc")
     store.save_artifact("b_sum_own", {"summary": "own row", "org_id": "org_sff"})
@@ -309,8 +310,8 @@ def test_summary_scoped_for_per_org_bearer(client, monkeypatch):
     assert [c["provider"] for c in scoped["org_connections"]] == ["cedric-brain"]
 
     legacy = client.get("/dashboard/summary", headers=_bearer("sesame")).json()
-    assert {"own row", "demo row", "legacy row"} <= {
-        m["summary"] for m in legacy["meetings"]
+    assert {m["summary"] for m in legacy["meetings"]} == {
+        "demo row", "legacy row"
     }
 
 
