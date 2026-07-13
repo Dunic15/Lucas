@@ -57,6 +57,7 @@ class ProvisionResult:
 
     status_code: int
     webhook_secret: str = ""
+    webhook_token: str = ""
 
     def __bool__(self) -> bool:
         return 200 <= self.status_code < 300
@@ -64,13 +65,26 @@ class ProvisionResult:
     def __repr__(self) -> str:
         return (
             f"ProvisionResult(status_code={self.status_code}, "
-            f"webhook_secret={'<redacted>' if self.webhook_secret else '<missing>'})"
+            f"webhook_secret={'<redacted>' if self.webhook_secret else '<missing>'}, "
+            f"webhook_token={'<redacted>' if self.webhook_token else '<missing>'})"
         )
+
+
+def _bearer_for(org_id: str, legacy: str = "") -> str:
+    """Bearer for Laura→Cedric calls.
+
+    Real customer orgs must use Cedric's per-workspace token; the deployment
+    token is retained only for empty/Demo bootstrap and legacy traffic.
+    """
+    org = (org_id or "").strip()
+    if org and org != settings.demo_org_id:
+        return secret_registry.bearer_for(org)
+    return (legacy or "").strip()
 
 
 def _signature_headers(body: bytes, org_id: str = "") -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    token = settings.laura_webhook_token.strip()
+    token = _bearer_for(org_id, settings.laura_webhook_token)
     if token:
         headers["Authorization"] = f"Bearer {token}"
     secret = _secret_for(org_id)
@@ -265,7 +279,8 @@ def fetch_context(integration: dict | None) -> dict | None:
     if not url:
         return None
     headers = {}
-    token = settings.laura_context_token.strip()
+    org_id = str((integration or {}).get("org_id") or "")
+    token = _bearer_for(org_id, settings.laura_context_token)
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
@@ -327,6 +342,7 @@ def provision_org(
             if target:
                 resp = client.post(target, json=payload, headers=headers)
         secret = ""
+        peer_token = ""
         if 200 <= resp.status_code < 300:
             try:
                 data = resp.json()
@@ -334,10 +350,12 @@ def provision_org(
                 if isinstance(credentials, dict):
                     candidate = credentials.get("webhook_secret")
                     secret = candidate.strip() if isinstance(candidate, str) else ""
+                    candidate = credentials.get("webhook_token")
+                    peer_token = candidate.strip() if isinstance(candidate, str) else ""
             except ValueError:
                 pass
         print(f"[cedric-callback] org provisioning HTTP {resp.status_code}", flush=True)
-        return ProvisionResult(resp.status_code, secret)
+        return ProvisionResult(resp.status_code, secret, peer_token)
     except Exception as e:  # noqa: BLE001 — connection stays pending, retry later
         print(
             f"[cedric-callback] org provisioning failed ({type(e).__name__})",
@@ -363,7 +381,9 @@ def fetch_org_connectors(org_id: str, team_id: str = "") -> dict | None:
     # CEDRIC_ORGS_URL points at .../api/laura/orgs — the sibling route.
     url = base.rstrip("/").rsplit("/", 1)[0] + "/connectors"
     headers = {}
-    token = settings.cedric_orgs_token.strip() or settings.laura_api_token.strip()
+    token = _bearer_for(
+        org_id, settings.cedric_orgs_token.strip() or settings.laura_api_token.strip()
+    )
     if token:
         headers["Authorization"] = f"Bearer {token}"
     params = {"org_id": org_id}
@@ -406,7 +426,9 @@ def revoke_org(org_id: str) -> int | None:
         return 0
     url = f"{base.rstrip('/')}/{org}"
     headers = {}
-    token = settings.cedric_orgs_token.strip() or settings.laura_api_token.strip()
+    token = _bearer_for(
+        org, settings.cedric_orgs_token.strip() or settings.laura_api_token.strip()
+    )
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
