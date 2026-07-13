@@ -371,23 +371,45 @@ def _extract_owner(text: str) -> str:
     return ""
 
 
-def _person(state: MeetingState, name: str) -> dict | None:
-    """The per-person entry for `name`, merging by first name so an extracted
-    owner ("Marco") lands on the platform speaker ("Marco Rossi"). Returns
-    None when the roster cap is hit (state stays bounded on huge calls)."""
-    key = (name or "").strip()
+def _person(
+    state: MeetingState,
+    participant_id: str,
+    display_name: str,
+) -> dict | None:
+    """Per-person entry keyed by canonical participant_id when available.
+
+    Legacy callers without ids retain the former first-name merge for backward
+    compatibility. ID-bearing participants are never merged by display name.
+    """
+    name = (display_name or "").strip()
+    key = (participant_id or name).strip()
     if not key:
         return None
-    first = key.split()[0].lower()
-    for existing, entry in state.per_person.items():
-        if existing.split()[0].lower() == first:
-            return entry
+    if participant_id:
+        existing = state.per_person.get(key)
+        if existing is not None:
+            if name:
+                existing["name"] = name
+            return existing
+    else:
+        first = name.split()[0].lower()
+        for existing_key, entry in state.per_person.items():
+            if not str(entry.get("participant_id") or ""):
+                existing_name = str(entry.get("name") or existing_key)
+                if existing_name.split()[0].lower() == first:
+                    return entry
     if len(state.per_person) >= _LIST_CAP:
         return None
-    entry = {"lines": 0, "commitments": [], "questions": [], "risks": []}
+    entry = {
+        "participant_id": participant_id,
+        "name": name or "Guest",
+        "lines": 0,
+        "commitments": [],
+        "questions": [],
+        "risks": [],
+    }
     state.per_person[key] = entry
     return entry
-
 
 def _person_append(entries: list, text: str) -> None:
     """Append a per-person snippet with dedupe and a tight cap."""
@@ -420,12 +442,16 @@ def update(
     speaker: str,
     text: str,
     *,
+    participant_id: str = "",
+    speaker_kind: str = "human",
     templates: Iterable[ProcessTemplate] = (),
     wake_words: Iterable[str] = (),
 ) -> MeetingState:
-    """Fold one transcript line into the state. Silent, pure regex, O(line)."""
+    """Fold one HUMAN transcript line into state, keyed by participant_id."""
     text = (text or "").strip()
-    if not text:
+    # Agent output may remain in the raw transcript, but is never meeting
+    # evidence. Return before stage/readiness/decision/owner/risk mutation.
+    if not text or speaker_kind == "agent":
         return state
     if state.stage == "start":
         state.stage = "in_progress"
@@ -455,13 +481,30 @@ def update(
             state.missing_steps.remove(step)
 
     if _DECISION.search(text):
-        _append(state.decisions, {"speaker": speaker, "decision": text[:200]}, "decision")
+        _append(
+            state.decisions,
+            {
+                "speaker_id": participant_id,
+                "speaker": speaker,
+                "decision": text[:200],
+            },
+            "decision",
+        )
 
     owner = _extract_owner(text)
     if not owner and _SELF_OWNER.search(text) and speaker:
         owner = speaker
     if owner:
-        _append(state.owners, {"owner": owner, "item": text[:160]}, "item")
+        owner_is_speaker = bool(
+            speaker
+            and owner.split()[0].lower() == speaker.split()[0].lower()
+        )
+        owner_id = participant_id if owner_is_speaker else ""
+        _append(
+            state.owners,
+            {"owner_id": owner_id, "owner": owner, "item": text[:160]},
+            "item",
+        )
 
     if _DEADLINE_CUE.search(text):
         when = _DATE.search(text)
@@ -473,7 +516,11 @@ def update(
             )
 
     if _RISK.search(text):
-        _append(state.risks, {"speaker": speaker, "risk": text[:160]}, "risk")
+        _append(
+            state.risks,
+            {"speaker_id": participant_id, "speaker": speaker, "risk": text[:160]},
+            "risk",
+        )
 
     lower = text.lower()
     addressed_to_avatar = any(w and w in lower for w in wake_words)
@@ -491,7 +538,7 @@ def update(
     # ("Marco will own the rollout" credits Marco, whoever said it).
     wake_set = {str(w).strip().lower() for w in wake_words}
     if speaker and speaker.strip().lower() not in wake_set:
-        p = _person(state, speaker)
+        p = _person(state, participant_id, speaker)
         if p is not None:
             p["lines"] += 1
             if _SELF_OWNER.search(text):
@@ -501,7 +548,11 @@ def update(
             if _RISK.search(text):
                 _person_append(p["risks"], text[:120])
     if owner and owner.strip().lower() not in wake_set:
-        target = _person(state, owner)
+        target = _person(
+            state,
+            participant_id if owner_is_speaker else "",
+            owner,
+        )
         if target is not None:
             _person_append(target["commitments"], text[:120])
 
@@ -543,7 +594,15 @@ def intervention_line(state: MeetingState) -> str:
 
 
 # ───────────────────── session / transcript entry points ──────────────
-def observe(session, avatar: Avatar, speaker: str, text: str) -> MeetingState:
+def observe(
+    session,
+    avatar: Avatar,
+    speaker: str,
+    text: str,
+    *,
+    participant_id: str = "",
+    speaker_kind: str = "human",
+) -> MeetingState:
     """Fold the newest utterance into the session's live meeting state.
 
     Call AFTER session.add_utterance(speaker, text): on a fresh state (process
@@ -556,8 +615,24 @@ def observe(session, avatar: Avatar, speaker: str, text: str) -> MeetingState:
         state = MeetingState()
         session.meeting_state = state
         for u in session.transcript[:-1]:
-            update(state, u.speaker, u.text, templates=templates, wake_words=avatar.wake_words)
-    update(state, speaker, text, templates=templates, wake_words=avatar.wake_words)
+            update(
+                state,
+                u.speaker,
+                u.text,
+                participant_id=getattr(u, "participant_id", ""),
+                speaker_kind=getattr(u, "speaker_kind", "human"),
+                templates=templates,
+                wake_words=avatar.wake_words,
+            )
+    update(
+        state,
+        speaker,
+        text,
+        participant_id=participant_id,
+        speaker_kind=speaker_kind,
+        templates=templates,
+        wake_words=avatar.wake_words,
+    )
     return state
 
 
@@ -612,7 +687,8 @@ def state_summary(state: MeetingState) -> str:
     # Per-person block: only people with actual content (a bare line count is
     # noise), capped tight — this goes into the latency-critical live prompt.
     person_bits = []
-    for name, p in state.per_person.items():
+    for participant_key, p in state.per_person.items():
+        name = str(p.get("name") or participant_key)
         frags = []
         if p["commitments"]:
             frags.append("committed to: " + " / ".join(p["commitments"][:2]))
