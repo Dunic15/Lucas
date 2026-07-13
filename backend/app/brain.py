@@ -511,6 +511,63 @@ def _web_search_answer(question: str, convo: str = "") -> str:
     return head
 
 
+# ── honest caveat on ungrounded PROCESS answers (settings.caveat_ungrounded_
+#    process_answers) ──
+# On thin retrieval the chunks are dropped (below rag_min_context_score) and she
+# answers from world knowledge — fine for a general question, but for a COMPANY/
+# PROCESS-specific one ("what's OUR refund policy?") an authoritative world-
+# knowledge answer reads as if it came from their docs, undercutting the
+# "grounded + cited from YOUR process docs" pitch. This lightweight lexical
+# heuristic flags the process-specific case so the streamer can PREFACE it with a
+# brief honest caveat instead. Simple + documented on purpose: markers are
+# org-possessives ("our/my", "the company/team/…") and process/policy nouns
+# ("policy/process/procedure/SOP/onboarding/refund/approval/…"), EN + IT. A false
+# positive only adds a caveat; a false negative only omits it — both safe.
+_PROCESS_SPECIFIC = re.compile(
+    r"\b("
+    # org-possessives — this company's OWN thing
+    r"our|ours|my|company'?s|team'?s|"
+    r"the\s+(?:company|team|org|organi[sz]ation|firm|fund|business|office)|"
+    # process / policy nouns
+    r"policy|policies|process(?:es)?|procedures?|sop|sops|workflow|guidelines?|"
+    r"onboarding|offboarding|approvals?|refunds?|reimburse\w*|escalation|"
+    r"runbook|playbook|checklist|protocol|"
+    # Italian
+    r"nostr[oaie]|mia|mio|miei|mie|"
+    r"la\s+(?:nostra\s+)?(?:azienda|societ[àa]|ditta)|"
+    r"politich?e?|policy|procedur\w*|processo|processi|flusso|"
+    r"approvazione|rimbors\w*|linee\s+guida|prassi|protocollo"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# The caveat prefix itself, spoken as a lead-in before the world-knowledge
+# answer. Ends with an em-dash so it flows straight into the answer.
+_CAVEAT_UNGROUNDED_EN = "I don't see this in your process docs, so answering generally —"
+_CAVEAT_UNGROUNDED_IT = (
+    "Non lo trovo nei vostri documenti di processo, quindi rispondo in generale —"
+)
+
+
+def _looks_process_specific(question: str) -> bool:
+    """True when a question reads as being about THIS company's own process/
+    policy (something that SHOULD come from the docs). See _PROCESS_SPECIFIC.
+    Cheap + only consulted when retrieval already fell below the floor, so it
+    never touches the grounded happy path."""
+    return bool(_PROCESS_SPECIFIC.search(question or ""))
+
+
+def _ungrounded_process_caveat(question: str, below_floor: bool) -> str:
+    """The caveat lead-in for a below-floor PROCESS-specific answer, or "" when
+    it does not apply (feature off, chunks were grounded, or a general/world
+    question). Language follows the asker."""
+    if not (settings.caveat_ungrounded_process_answers and below_floor):
+        return ""
+    if not _looks_process_specific(question):
+        return ""
+    return _CAVEAT_UNGROUNDED_IT if sounds_italian(question) else _CAVEAT_UNGROUNDED_EN
+
+
 def answer_question_stream(
     avatar: Avatar,
     question: str,
@@ -564,7 +621,11 @@ def answer_question_stream(
     _retrieve_ms = (time.perf_counter() - _t0) * 1000
     # Only ground in the docs when they actually match the question —
     # irrelevant chunks bias the model into doc-quoting general answers.
-    if chunks and chunks[0].score < settings.rag_min_context_score:
+    # Remember WHY they were dropped: chunks existed but scored below the floor
+    # (thin retrieval) is exactly the case where a company/process-specific
+    # answer would otherwise read as doc-grounded — it earns an honest caveat.
+    _below_floor = bool(chunks) and chunks[0].score < settings.rag_min_context_score
+    if _below_floor:
         chunks = []
     citation = chunks[0].source if chunks else ""
     # Expose the grounding confidence the retrieval already computed (top
@@ -628,6 +689,11 @@ def answer_question_stream(
     decided = False   # whether we've ruled out the SKIP sentinel
     spoke_any = False
     _first_token_ms = None
+    # Honest caveat for a below-floor PROCESS-specific answer, spoken as a lead-in
+    # the moment SKIP is ruled out (so a SKIP still stays fully silent, and the
+    # grounded/above-floor path yields ""  → zero cost). Emitted at most once.
+    _caveat_line = _ungrounded_process_caveat(question, _below_floor)
+    _caveat_emitted = False
 
     def _log_first() -> None:
         if not spoke_any:
@@ -640,6 +706,9 @@ def answer_question_stream(
 
     _provider, _model = _live_route(question)
     if _provider == "search":
+        # No ungrounded-process caveat here: this branch answers from a live web
+        # search, and the announce line ("let me look that up") already discloses
+        # the answer isn't from the docs — a second caveat would be redundant.
         # Announce the lookup BEFORE the slow web call — it buys the search its
         # seconds honestly instead of leaving dead air. In the asker's language.
         yield random.choice(
@@ -674,6 +743,14 @@ def answer_question_stream(
             if _is_skip(head):
                 return  # insufficient context — stay silent
             decided = True
+            # SKIP is ruled out → she IS answering. If this is a below-floor
+            # process-specific answer, lead with the honest caveat before any
+            # world-knowledge content, so it never reads as doc-grounded.
+            if _caveat_line and not _caveat_emitted:
+                _caveat_emitted = True
+                _log_first()
+                yield _caveat_line
+                spoke_any = True
 
         pending, sentences = _split_sentences(pending)
         for s in sentences:
@@ -696,6 +773,11 @@ def answer_question_stream(
     tail = pending.strip()
     remainder = f"{outbuf} {tail}".strip() if min_chars > 0 else tail
     if remainder and (decided or not _is_skip(remainder)):
+        # A very short answer can flush only here (never set `decided` in the
+        # loop) — still lead with the caveat if it applies and wasn't emitted.
+        if _caveat_line and not _caveat_emitted:
+            _caveat_emitted = True
+            yield _caveat_line
         _log_first()
         yield remainder
         spoke_any = True

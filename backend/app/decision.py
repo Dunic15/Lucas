@@ -530,6 +530,8 @@ def interjection_floor_open(
     since_human_partial: float,
     active_partial_seconds: float,
     min_completeness: float = 0.6,
+    transcript_grew: bool = False,
+    generation_elapsed: float | None = None,
 ) -> bool:
     """True when it is socially safe to interject a single grounded line: the
     line that just opened the floor SOUNDS finished (``turn_completeness`` at or
@@ -539,10 +541,33 @@ def interjection_floor_open(
     signal failing keeps the safe raised hand — interrupting a held floor is
     exactly what the hand-raise exists to avoid.
 
+    Because the whole contribution is generated BEFORE this check (several
+    seconds), a floor that was open at the triggering line may have closed while
+    she was generating. Two optional signals, re-evaluated at SPEAK time, catch
+    that (both default off so existing callers are byte-for-byte unchanged):
+
+      - ``transcript_grew``: a NEW transcript line landed during her generation
+        (finals lag, so this is proof a human took the floor mid-turn) → busy.
+      - ``generation_elapsed``: how long generation has run. A human partial that
+        arrived at ANY point AFTER the turn started (``since_human_partial`` <
+        ``generation_elapsed``, i.e. the last partial is newer than the whole
+        window) means someone spoke during her generation → busy. The longer the
+        generation ran, the wider this "someone talked" catch — the stale
+        trigger-time all-clear is no longer trusted. In a genuine lull no partial
+        lands during generation, so this never fires and she still interjects.
+
     Deliberately conservative: a wrong "open" talks over someone, while a wrong
     "not open" merely falls back to raising the hand (no harm). ``turn_
     completeness`` None (no estimate) does not by itself block — the partial-gap
     check still guards the "someone is talking right now" case."""
+    if transcript_grew:
+        return False  # a new final landed mid-turn — a human took the floor
+    if (
+        generation_elapsed is not None
+        and generation_elapsed > 0
+        and since_human_partial < generation_elapsed
+    ):
+        return False  # a human partial arrived DURING her generation — busy
     if since_human_partial < active_partial_seconds:
         return False  # a human partial is in flight — someone is talking now
     if turn_completeness is not None and turn_completeness < min_completeness:

@@ -233,6 +233,19 @@ class Settings(BaseSettings):
     # 0.28: real process/SFF questions score 0.6+, unrelated chatter ~0.1 —
     # below the bar she answers from her own intelligence, no doc flavor.
     rag_min_context_score: float = 0.28
+    # Honest caveat on ungrounded PROCESS answers: when the retrieved chunks were
+    # cleared for being below rag_min_context_score AND the question reads as
+    # company/process-specific (a lightweight lexical heuristic —
+    # brain._looks_process_specific: possessives like "our/my" + process/policy
+    # nouns like "policy/process/SOP/procedure/onboarding/refund…", EN + IT), she
+    # PREFACES the answer with a brief honest caveat ("I don't see this in your
+    # process docs, so answering generally —") instead of presenting world
+    # knowledge as if it came from their docs. Only this below-floor + process-
+    # specific case is caveated: a general/world question ("capital of France")
+    # answers normally, and the grounded (above-floor) happy path is untouched
+    # (and pays zero extra latency — the heuristic runs only when below floor).
+    # False = today's behaviour (world-knowledge answer, no caveat).
+    caveat_ungrounded_process_answers: bool = True
     # Spoken acknowledgment the instant she's addressed by name, while the
     # answer generates — kills the dead air that reads as lag.
     ack_enabled: bool = True
@@ -311,6 +324,30 @@ class Settings(BaseSettings):
     # Being named once activates her for the rest of the meeting. False reverts
     # to the time-boxed grace above.
     first_call_required: bool = True
+    # One-time self-introduction (fixes the "joined-but-mute first call"):
+    # first_call_required keeps her a SILENT guest until someone says her name,
+    # so a first-time room where nobody knows to call her by name gets a joined-
+    # but-mute avatar with no cue how to activate her — a poor first impression.
+    # This does NOT touch the etiquette (she still WAITS to be addressed for real
+    # answers): once, shortly after she is proven to be in the call (the first
+    # transcript webhook), she says ONE short line introducing herself and telling
+    # the room how to call her in — then goes back to waiting. Fires at most once
+    # per session, only if she hasn't already been addressed or spoken (the
+    # meeting activating her first makes the intro moot), and is scheduled OFF the
+    # live hot path (a detached delayed task, never inline). False = exactly
+    # today's behaviour (silent until named). The delay lets the room settle
+    # (hellos, "can you hear me?") before she introduces herself.
+    self_introduce_on_join: bool = True
+    self_introduce_after_seconds: float = 10.0
+    # She must never barge in OVER a human to introduce herself (that would be
+    # the exact talk-over the etiquette avoids). After the settle-in delay, if a
+    # human is audibly mid-utterance (a human partial landed within
+    # interject_min_pause_seconds), she re-polls for a natural pause every ~2s and
+    # introduces at the FIRST open floor — up to this cap, after which she gives
+    # up silently (the moment has passed). The suppression check
+    # (addressed_once / she spoke) is re-run each loop, so a room that engages her
+    # during the wait aborts the intro entirely.
+    self_introduce_max_wait_seconds: float = 40.0
     # Hand-raise etiquette: once activated, when the room is talking among
     # itself (nobody addressed her) and she has a grounded contribution, she
     # does NOT speak over the conversation — she raises her hand (gesture on
@@ -368,6 +405,23 @@ class Settings(BaseSettings):
     #    not for a talk-over decision): a full second of no one talking.
     interject_min_completeness: float = 0.6
     interject_min_pause_seconds: float = 1.0
+    # Talk-over guard for the interjection escape: in hand_mode the WHOLE
+    # contribution is generated (deference sleep + full answer collected — several
+    # seconds) BEFORE the floor-open check. `interjection_floor_open` judged the
+    # floor purely from `last_human_partial_at`, which is written only on
+    # transcript PARTIALS (they lag) — so by the time she is ready to speak a
+    # human may already have taken the floor and she talks over them. With this
+    # ON (default) the floor decision re-checks at SPEAK time with two extra
+    # "someone is (or just was) talking" signals: (a) a new transcript line landed
+    # while she was generating (transcript grew since the turn started), and (b) a
+    # human partial arrived at ANY point during her generation window (not just in
+    # the last `interject_min_pause_seconds`) — the longer the generation ran, the
+    # wider this catch. Either → she DEFERS (raises the hand instead of speaking
+    # over). A genuinely open floor (no new line, no partial during generation)
+    # still interjects, so this never makes her silent — it only drops the
+    # talk-over cases. False = exactly today's behaviour (single trigger-time
+    # reading).
+    interject_recheck_floor_at_speak: bool = True
 
     # Vendor subscription/credit watchdog (vendor_health.py): daily sweep of
     # ElevenLabs characters, Google refresh token, Recall/LLM keys, RunPod

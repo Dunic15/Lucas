@@ -339,12 +339,12 @@ def test_deliver_ended_holds_strong_ref_until_task_done(monkeypatch):
         assert ok is True
         # Strong ref held the moment the task is scheduled (before it runs).
         assert len(ci._ended_tasks) == 1
-        # Let the scheduled run_in_threadpool(send_ended) complete …
-        for _ in range(200):
-            await asyncio.sleep(0)
-            if not ci._ended_tasks:
-                break
-        # … then the done-callback discards it (no leak) and it actually ran.
+        # Deterministically wait for the send_ended task to finish (it runs on a
+        # threadpool thread, so a bare `sleep(0)` yield loop can starve under CI
+        # load), then a single yield lets its done-callback run …
+        await asyncio.gather(*list(ci._ended_tasks), return_exceptions=True)
+        await asyncio.sleep(0)
+        # … which discards it (no leak); and it actually ran.
         assert ci._ended_tasks == set()
         assert calls == ["bot_ref"]
 
