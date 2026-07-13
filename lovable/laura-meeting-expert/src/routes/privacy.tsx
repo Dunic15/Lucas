@@ -75,7 +75,9 @@ function Privacy() {
         <h2>4. Google and connected-service data</h2>
         <p>
           Laura initially requests only Google OpenID scopes for sign-in: identity, email, and
-          profile. Calendar, Gmail, Drive, Slack, or other workspace access is authorized separately\n          through Cedric when you choose to connect that service. Laura does not ask you to\n          reconnect the same tools. We request the narrowest scopes needed for the feature you activate.
+          profile. Calendar, Gmail, Drive, Slack, or other workspace access is authorized separately
+          through Cedric when you choose to connect that service. Laura does not ask you to
+          reconnect the same tools. We request the narrowest scopes needed for the feature you activate.
         </p>
         <p>
           We use connected-service data only to provide or improve the user-facing features you
@@ -112,7 +114,9 @@ function Privacy() {
         <p>
           Product data is retained only as long as needed to provide the service, meet the
           retention setting or contract that applies to your organization, resolve disputes, and
-          satisfy legal obligations. Account, security, and billing records may be kept longer when\n          required for fraud prevention, accounting, or law. We will publish a specific default\n          retention period when the corresponding automated deletion control is enabled.
+          satisfy legal obligations. Account, security, and billing records may be kept longer when
+          required for fraud prevention, accounting, or law. We will publish a specific default
+          retention period when the corresponding automated deletion control is enabled.
         </p>
         <p>
           You can request account or data deletion by emailing us. We may retain limited records
