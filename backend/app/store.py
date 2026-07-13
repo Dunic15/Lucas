@@ -774,6 +774,12 @@ def _persist_utterance(org_id: str, bot_id: str, utterance: Utterance) -> None:
 def _persist_participant(org_id: str, bot_id: str, identity: dict) -> None:
     """Persist identity/classification so restart uses the same decisions."""
     with _LOCK, _connect() as conn:
+        # Unit-level Session objects may not be store-backed. Production
+        # sessions are persisted before participant events arrive.
+        if conn.execute(
+            "SELECT 1 FROM sessions WHERE bot_id=?", (bot_id,)
+        ).fetchone() is None:
+            return
         conn.execute(
             """
             INSERT INTO session_participants (
