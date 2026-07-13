@@ -13,6 +13,8 @@ Public surface:
   - auth_error          — Bearer gate for the session API
   - resolve_machine_org — machine bearer → org scope (global → demo org,
                           per-org token → its org, else None)
+  - provisioning_auth_ok — dedicated Slack OAuth completion credential
+  - request_integration_urls_allowed — customer callback/context origin guard
   - build_integration   — assemble the per-session integration dict
   - default_integration — SURFACE_* default routing for non-API summons
   - brief_too_large     — request-validation helper
@@ -45,6 +47,8 @@ from .integration import (  # noqa: F401
     maybe_refresh_context,
     notify_action_requested,
     notify_failed,
+    provisioning_auth_ok,
+    request_integration_urls_allowed,
     resolve_machine_org,
     wire_artifact,
 )
