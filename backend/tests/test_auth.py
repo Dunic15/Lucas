@@ -382,6 +382,47 @@ def test_logout_rejects_cross_site(client, google_on):
     assert resp.status_code == 403
 
 
+# ── logout works from the real browser origin (lauravatar.com via CF Worker) ──
+# public_base_url is the App Runner URL, but users are on lauravatar.com, so the
+# browser sends Origin: https://lauravatar.com — which was 403'd before the fix.
+
+def test_logout_allows_first_party_lauravatar_origin(client, google_on):
+    _login(client, "alice@example.com")
+    resp = client.post(
+        "/auth/logout",
+        headers={"origin": "https://lauravatar.com"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    # The 302 actually emits the cookie-clearing Set-Cookie (the header the
+    # browser needs — the old test manually cleared cookies and never checked it).
+    set_cookie = " ".join(resp.headers.get_list("set-cookie"))
+    assert auth.COOKIE_NAME in set_cookie
+
+
+def test_logout_allows_www_subdomain_origin(client, google_on):
+    _login(client, "alice@example.com")
+    resp = client.post(
+        "/auth/logout",
+        headers={"origin": "https://www.lauravatar.com"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+
+
+def test_first_party_origin_classification(monkeypatch):
+    monkeypatch.setattr(settings, "public_base_url",
+                        "https://dhfgfe6yw6.eu-central-1.awsapprunner.com")
+    assert auth._first_party_origin("https://lauravatar.com") is True
+    assert auth._first_party_origin("https://www.lauravatar.com") is True
+    assert auth._first_party_origin("https://lauravatar.com/") is True  # trailing slash
+    assert auth._first_party_origin(settings.public_base_url) is True   # App Runner exact
+    assert auth._first_party_origin("https://evil.example") is False
+    assert auth._first_party_origin("https://notlauravatar.com") is False
+    assert auth._first_party_origin("https://lauravatar.com.evil.io") is False
+    assert auth._first_party_origin("") is False
+
+
 # ── review fixes: gate on write endpoints, allowlist, robustness ───────
 
 def test_anonymous_cannot_start_when_login_enabled(client, google_on):
