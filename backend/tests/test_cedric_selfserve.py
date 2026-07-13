@@ -886,10 +886,12 @@ def test_anonymous_demo_keeps_global_flags(client, monkeypatch):
     assert conn["gmail"] is True
 
 
-def test_global_bearer_keeps_global_flags(client, monkeypatch):
+def test_global_bearer_is_demo_scoped_not_platform_global(client, monkeypatch):
     monkeypatch.setattr(settings, "laura_api_token", "sesame")
     monkeypatch.setattr(settings, "google_calendar_client_id", "cid-only")
     conn = client.get("/dashboard/summary", headers=_bearer("sesame")).json()[
         "connections"
     ]
-    assert conn["calendar"] is True
+    # The deployment bearer is explicitly the Demo tenant, so platform-global
+    # OAuth configuration is never presented as that workspace's connection.
+    assert conn["calendar"] is False
