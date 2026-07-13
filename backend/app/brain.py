@@ -1234,6 +1234,7 @@ def post_meeting(
     k: int = 6,
     context: str = "",
     live_actions: list[dict] | None = None,
+    state: "meeting_state.MeetingState | None" = None,
 ) -> dict:
     """Full post-meeting artifact: summary, decisions, actions, missing process
     steps, readiness score, risks, and a draft follow-up email.
@@ -1254,7 +1255,8 @@ def post_meeting(
     language gap, and one spoken request becomes two approval cards → double
     execution. Finalize-only: this never touches the live path.
     """
-    state = meeting_state.build_from_text(avatar, transcript_text)
+    if state is None:
+        state = meeting_state.build_from_text(avatar, transcript_text)
 
     if post_provider() == "stub":
         artifact = _stub_post_meeting(avatar, transcript_text, state)
@@ -1305,7 +1307,12 @@ def post_meeting(
     return _finish_artifact(artifact, state)
 
 
-def degraded_post_meeting(avatar: Avatar, transcript_text: str) -> dict:
+def degraded_post_meeting(
+    avatar: Avatar,
+    transcript_text: str,
+    *,
+    state: "meeting_state.MeetingState | None" = None,
+) -> dict:
     """A complete deterministic recap for when the post-meeting model call FAILS
     outright (a transient 429/529/timeout that re-raises) rather than returning
     malformed JSON.
@@ -1315,7 +1322,8 @@ def degraded_post_meeting(avatar: Avatar, transcript_text: str) -> dict:
     where the model call itself raised — so a finalize-time model hiccup DEGRADES
     to a plain (but full) artifact — summary + follow-up email + actions — instead
     of losing the whole deliverable. Off the live path (finalize only)."""
-    state = meeting_state.build_from_text(avatar, transcript_text)
+    if state is None:
+        state = meeting_state.build_from_text(avatar, transcript_text)
     artifact = _stub_post_meeting(avatar, transcript_text, state, degraded=True)
     return _finish_artifact(artifact, state)
 

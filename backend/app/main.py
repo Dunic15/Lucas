@@ -2241,6 +2241,11 @@ async def _finalize_session_locked(
         queued_actions = list(getattr(session, "queued_actions", None) or [])
     if analysis_transcript_text.strip():
         avatar = avatars.load(session.avatar_id)
+        analysis_state = session.meeting_state
+        if analysis_state is None:
+            analysis_state = meeting_state.build_from_utterances(
+                avatar, session.human_transcript()
+            )
         try:
             artifact = await run_in_threadpool(
                 lambda: post_meeting(
@@ -2248,6 +2253,7 @@ async def _finalize_session_locked(
                     analysis_transcript_text,
                     context=(integration or {}).get("brief", ""),  # CEDRIC: brief-grounded summary
                     live_actions=queued_actions,
+                    state=analysis_state,
                 )
             )
         except Exception as e:  # noqa: BLE001 — a transient post-model failure must
@@ -2265,7 +2271,10 @@ async def _finalize_session_locked(
             )
             try:
                 artifact = await run_in_threadpool(
-                    degraded_post_meeting, avatar, analysis_transcript_text
+                    degraded_post_meeting,
+                    avatar,
+                    analysis_transcript_text,
+                    state=analysis_state,
                 )
             except Exception as e2:  # noqa: BLE001 — the degraded rebuild ALSO failed.
                 # This is no longer a transient LLM blip: degraded_post_meeting
