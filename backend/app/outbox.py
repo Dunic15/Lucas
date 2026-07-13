@@ -256,23 +256,36 @@ def reconcile_sessions() -> int:
     return count
 
 
-def _claim_due(now: float, limit: int) -> list[dict]:
+def _claim_due(
+    now: float,
+    limit: int,
+    *,
+    org_id: str | None = None,
+    outbox_id: int | None = None,
+) -> list[dict]:
     _ensure_schema()
+    filters = [
+        """(
+            ((status='pending' OR (status='failed' AND next_attempt_at > 0))
+             AND next_attempt_at <= ?)
+            OR (status='sending' AND next_attempt_at <= ?)
+        )"""
+    ]
+    params: list[Any] = [now, now]
+    if org_id is not None:
+        filters.append("org_id=?")
+        params.append(org_id or settings.demo_org_id)
+    if outbox_id is not None:
+        filters.append("id=?")
+        params.append(int(outbox_id))
+    params.append(int(limit))
+    query = (
+        "SELECT * FROM callback_outbox WHERE "
+        + " AND ".join(filters)
+        + " ORDER BY next_attempt_at, id LIMIT ?"
+    )
     with store._LOCK, store._connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT * FROM callback_outbox
-            WHERE (
-                (status='pending' OR (status='failed' AND next_attempt_at > 0))
-                AND next_attempt_at <= ?
-            ) OR (
-                status='sending' AND next_attempt_at <= ?
-            )
-            ORDER BY next_attempt_at, id
-            LIMIT ?
-            """,
-            (now, now, limit),
-        ).fetchall()
+        rows = conn.execute(query, params).fetchall()
         claimed: list[dict] = []
         for row in rows:
             cur = conn.execute(
@@ -292,13 +305,26 @@ def _claim_due(now: float, limit: int) -> list[dict]:
     return claimed
 
 
-def process_due(*, limit: int = 20, now: float | None = None) -> int:
-    """Deliver due rows without sleeping. Safe for a periodic background worker."""
+def process_due(
+    *,
+    limit: int = 20,
+    now: float | None = None,
+    org_id: str | None = None,
+    outbox_id: int | None = None,
+) -> int:
+    """Deliver due rows without sleeping.
+
+    The periodic worker uses the unscoped form. Request paths MUST provide both
+    org_id and the selected outbox_id so one tenant cannot nudge another
+    tenant's callbacks.
+    """
     from .cedric import callback
 
     current = time.time() if now is None else float(now)
     delivered = 0
-    for row in _claim_due(current, limit):
+    for row in _claim_due(
+        current, limit, org_id=org_id, outbox_id=outbox_id
+    ):
         try:
             payload = json.loads(row["payload_json"])
             response = callback._post(
