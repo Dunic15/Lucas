@@ -263,7 +263,8 @@ def _claim_due(now: float, limit: int) -> list[dict]:
             """
             SELECT * FROM callback_outbox
             WHERE (
-                status IN ('pending', 'failed') AND next_attempt_at <= ?
+                (status='pending' OR (status='failed' AND next_attempt_at > 0))
+                AND next_attempt_at <= ?
             ) OR (
                 status='sending' AND next_attempt_at <= ?
             )
@@ -279,7 +280,8 @@ def _claim_due(now: float, limit: int) -> list[dict]:
                 UPDATE callback_outbox
                 SET status='sending', next_attempt_at=?
                 WHERE id=? AND (
-                    (status IN ('pending','failed') AND next_attempt_at <= ?)
+                    ((status='pending' OR (status='failed' AND next_attempt_at > 0))
+                     AND next_attempt_at <= ?)
                     OR (status='sending' AND next_attempt_at <= ?)
                 )
                 """,
