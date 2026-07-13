@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import ledger, main, outbox, store, tools
+from app import control_plane, ledger, main, outbox, store, tools
 from app.cedric import integration
 
 
@@ -630,3 +630,75 @@ def test_crash_after_ended_checkpoint_reuses_first_wire_action_ids(
     assert len(payloads) == 1
     assert '"action-first"' in payloads[0]["payload_json"]
     assert '"action-second"' not in payloads[0]["payload_json"]
+
+
+def test_finalize_keeps_session_when_artifact_postgres_is_down(
+    tmp_path, monkeypatch
+):
+    _fresh(tmp_path, monkeypatch)
+    bot_id = "bot-artifact-pg-down"
+    store._artifacts.pop(bot_id, None)
+    session = store.create(
+        bot_id,
+        "https://meet.google.com/abc-defg-hij",
+        "laura",
+        org_id="org-artifact-pg-down",
+    )
+    session.integration = _integration("org-artifact-pg-down")
+
+    monkeypatch.setattr(main.recall_client, "leave_call", lambda bot: None)
+    monkeypatch.setattr(main.outbox, "begin_action_finalize", lambda *args: [])
+    monkeypatch.setattr(main.cedric, "deliver_ended", lambda *args: True)
+    monkeypatch.setattr(control_plane, "enabled", lambda: True)
+
+    def postgres_down(*args, **kwargs):
+        raise RuntimeError("durable artifact database unavailable")
+
+    monkeypatch.setattr(control_plane, "save_artifact", postgres_down)
+
+    with pytest.raises(
+        RuntimeError, match="durable artifact database unavailable"
+    ):
+        asyncio.run(
+            main._finalize_session_locked(
+                bot_id, session, "test", usage_reason="ended"
+            )
+        )
+
+    # PG-first means no local false-success and, because cleanup is after the
+    # durable write, the session remains available for a bounded retry.
+    assert store.get(bot_id) is session
+    assert store.get_artifact(bot_id) is None
+    store.remove(bot_id)
+
+
+def test_keyfree_artifact_sqlite_behavior_is_unchanged(tmp_path, monkeypatch):
+    _fresh(tmp_path, monkeypatch)
+    bot_id = "bot-keyfree-artifact"
+    org_id = "org-keyfree"
+    artifact = {
+        "org_id": org_id,
+        "summary": "Local demo summary",
+        "transcript": "Local demo transcript",
+    }
+    monkeypatch.setattr(control_plane, "enabled", lambda: False)
+
+    def must_not_call_postgres(*args, **kwargs):
+        raise AssertionError("key-free artifact path touched Postgres")
+
+    monkeypatch.setattr(control_plane, "save_artifact", must_not_call_postgres)
+    store.save_artifact(bot_id, artifact, org_id=org_id)
+
+    # Rebuild process memory from SQLite, matching the existing demo restart
+    # path, then exercise both legacy get and tenant-filtered list shapes.
+    store._artifacts.clear()
+    store._load_from_db()
+    assert store.get_artifact(bot_id) == artifact
+    assert store.list_artifacts(org_id) == [
+        {
+            "bot_id": bot_id,
+            "saved_at": pytest.approx(time.time(), abs=5),
+            "artifact": artifact,
+        }
+    ]
+    store._artifacts.pop(bot_id, None)
