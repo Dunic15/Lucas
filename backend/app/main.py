@@ -14,8 +14,10 @@ Flow:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
+import math
 import random
 import re
 import time
@@ -62,6 +64,7 @@ from . import (
     gpu_runtime,
     runpod_runtime,
     ledger,
+    outbox,
     meeting_state,
     org_api,
     security,
@@ -118,6 +121,9 @@ async def _lifespan(app: FastAPI):
     watcher from dispatching at once, so the old + new instances don't both put a
     bot in the same meeting during the overlap.
     """
+    global _shutting_down
+    _shutting_down = False
+
     # Production must prove the exact policy-bound runtime credential before
     # warming indexes or launching any worker that could serve/dispatch work.
     # Key-free demo: enabled() is false, so no engine or network connection.
@@ -149,6 +155,26 @@ async def _lifespan(app: FastAPI):
         # status webhook never arrived — keeps the per-minute meter from leaking.
         asyncio.create_task(_reconcile_sessions_loop())
 
+    async def _outbox_loop() -> None:
+        while not _shutting_down:
+            try:
+                # SQLite demo reconciliation is harmless; production claims
+                # durable Postgres rows with SKIP LOCKED + expiring leases.
+                await run_in_threadpool(outbox.reconcile_sessions)
+                await run_in_threadpool(outbox.process_due)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # never log payload, URL, org or action text
+                print(
+                    f"[outbox] worker iteration failed: {type(exc).__name__}",
+                    flush=True,
+                )
+            await asyncio.sleep(5)
+
+    # Retain the task so shutdown cancels and awaits it deterministically.
+    # Delivery ownership is the committed row, not this in-memory task.
+    outbox_task = asyncio.create_task(_outbox_loop())
+
     if settings.elevenlabs_api_key:
         # Pre-synthesize the fixed conversational furniture so the FIRST
         # ack/backchannel/goodbye of a meeting comes from cache, not a
@@ -158,8 +184,12 @@ async def _lifespan(app: FastAPI):
     try:
         yield
     finally:
-        global _shutting_down
         _shutting_down = True
+        outbox_task.cancel()
+        try:
+            await outbox_task
+        except asyncio.CancelledError:
+            pass
         print("[gmail-watch] shutdown signal — watcher draining", flush=True)
 
 
@@ -2185,7 +2215,13 @@ async def _finalize_session_locked(
     # shown to the summarizer as "already captured, do not re-extract" (dedup
     # prevention at the source, cross-language included) and then merged into
     # the artifact's actions[] below.
-    queued_actions = list(getattr(session, "queued_actions", None) or [])
+    queued_actions = await run_in_threadpool(
+        outbox.begin_action_finalize, session.org_id, bot_id
+    )
+    if not queued_actions:
+        # Compatibility for synthetic/key-free sessions captured before the
+        # durable queue existed.
+        queued_actions = list(getattr(session, "queued_actions", None) or [])
     if transcript_text.strip():
         avatar = avatars.load(session.avatar_id)
         try:
@@ -2278,6 +2314,14 @@ async def _finalize_session_locked(
             session.transcript[-1].ts - session.transcript[0].ts
         )
 
+    # PRODUCTION DURABILITY ORDER: for orchestrated sessions, commit the
+    # transcript-free session.ended envelope to Postgres BEFORE any local
+    # artifact write, ledger write, or session cleanup. If Postgres is
+    # configured but unavailable, OutboxUnavailable propagates and the local
+    # session remains available for a retry; we never claim completion while
+    # the only customer delivery record could still be lost.
+    orchestrated = cedric.deliver_ended(integration, bot_id, artifact)  # CEDRIC
+
     store.save_artifact(bot_id, artifact, org_id=session.org_id)
     # Cross-meeting memory: fold this meeting's extracted facts into the
     # ledger. Best-effort — memory must never block the cleanup below
@@ -2289,7 +2333,6 @@ async def _finalize_session_locked(
         )
     except Exception:
         pass
-    orchestrated = cedric.deliver_ended(integration, bot_id, artifact)  # CEDRIC
     if orchestrated:
         pass  # orchestrated session: the orchestrator owns delivery, skip autopilot
     elif settings.autopilot_deliver:
@@ -3847,6 +3890,78 @@ def _closing_signal(session: store.Session, text: str) -> bool:
     )
 
 
+def _capture_digest(*parts: object) -> str:
+    canonical = "\x1f".join(str(part or "") for part in parts)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _recall_capture_identity(
+    payload: dict,
+    headers: object,
+    *,
+    signed: bool,
+    org_id: str,
+    bot_id: str,
+    participant: dict,
+    words: list,
+    text: str,
+) -> tuple[str, str]:
+    """Build PII-free hashes that survive webhook retry and process restart.
+
+    Recall's normalized final has no per-utterance id.  Its transcript id plus
+    participant and relative word interval is the stable event identity.  A
+    verified Svix/webhook id wins when present.  Legacy payloads without timing
+    fall back to a bounded same-speaker/text fingerprint in the outbox DAL.
+    """
+    get_header = getattr(headers, "get", lambda _name, _default="": _default)
+    webhook_id = ""
+    if signed:
+        webhook_id = str(
+            get_header("webhook-id", "")
+            or get_header("svix-id", "")
+            or ""
+        ).strip()
+    data = payload.get("data") or {}
+    transcript_id = str((data.get("transcript") or {}).get("id") or "")
+    recording_id = str((data.get("recording") or {}).get("id") or "")
+    endpoint_id = str((data.get("realtime_endpoint") or {}).get("id") or "")
+    participant_id = str(participant.get("id") or participant.get("name") or "")
+    normalized_text = " ".join((text or "").split()).casefold()
+
+    def relative(word: dict, field: str) -> str:
+        try:
+            value = float(((word.get(field) or {}).get("relative")))
+        except (TypeError, ValueError, AttributeError):
+            return ""
+        if not math.isfinite(value):
+            return ""
+        return format(value, ".6f")
+
+    start = relative(words[0], "start_timestamp") if words else ""
+    end = ""
+    if words:
+        end = relative(words[-1], "end_timestamp") or relative(
+            words[-1], "start_timestamp"
+        )
+
+    event_key = ""
+    if webhook_id:
+        event_key = _capture_digest(
+            "recall-webhook-v1", org_id, bot_id, webhook_id
+        )
+    elif transcript_id and start:
+        event_key = _capture_digest(
+            "recall-final-v1", org_id, bot_id, transcript_id,
+            recording_id, endpoint_id, participant_id, start, end,
+            normalized_text,
+        )
+    fingerprint = _capture_digest(
+        "recall-final-fallback-v1", org_id, bot_id,
+        participant_id, normalized_text,
+    )
+    return event_key, fingerprint
+
+
 # ───────────────────────── recall webhook ──────────────────────────
 @app.post("/webhooks/recall")
 async def recall_webhook(request: Request) -> JSONResponse:
@@ -4100,6 +4215,16 @@ async def recall_webhook(request: Request) -> JSONResponse:
     speaker = session.resolve_speaker(participant.get("name"), participant.get("id"))
     if not text:
         return JSONResponse({"ok": True})
+    capture_event_key, capture_fingerprint = _recall_capture_identity(
+        payload,
+        request.headers,
+        signed=has_signature,
+        org_id=session.org_id,
+        bot_id=bot_id,
+        participant=participant,
+        words=words,
+        text=text,
+    )
 
     # Her own voice re-entering through a participant's open mic: not a human
     # line. Keep it out of the transcript (it would pollute per-person
@@ -4210,16 +4335,81 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # (decision.py) rejects acknowledgement openers and wrap-up lines.
     pending = getattr(session, "last_capture", None)
     if pending is not None:
-        p_item, p_speaker, p_ts = pending
+        p_item, p_speaker, p_ts = pending[:3]
+        p_event_key = pending[3] if len(pending) > 3 else ""
+        p_fingerprint = pending[4] if len(pending) > 4 else ""
+        same_source = bool(
+            (capture_event_key and capture_event_key == p_event_key)
+            or (
+                not capture_event_key
+                and capture_fingerprint
+                and capture_fingerprint == p_fingerprint
+            )
+        )
+        if same_source:
+            # The 2xx for either the initial final or its continuation was
+            # lost. Preserve the continuation window; clearing last_capture
+            # here would make the genuinely next ASR fragment disappear.
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": False,
+                    "action_capture": True,
+                    "duplicate": True,
+                }
+            )
         if (
             not called
             and speaker == p_speaker
             and time.time() - p_ts < 4.0
             and is_capture_continuation(text)
         ):
-            p_item["action"] = " ".join((p_item["action"] + " " + text).split())[:300]
-            session.last_capture = (p_item, p_speaker, time.time())
-            return JSONResponse({"ok": True, "spoke": False, "capture_extended": True})
+            try:
+                updated_item, extended = await run_in_threadpool(
+                    tools.extend_action_once,
+                    session,
+                    p_item,
+                    text,
+                    source_event_key=capture_event_key,
+                    source_fingerprint=capture_fingerprint,
+                )
+            except outbox.ActionCaptureClosed:
+                session.last_capture = None
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "spoke": False,
+                        "capture_rejected": "meeting_finalizing",
+                    }
+                )
+            if extended:
+                session.last_capture = (
+                    updated_item,
+                    p_speaker,
+                    time.time(),
+                    capture_event_key,
+                    capture_fingerprint,
+                )
+            else:
+                # An older ASR final can replay after a newer continuation.
+                # Durable dedupe correctly rejects it; do not let that replay
+                # roll the in-memory source identity backward or refresh the
+                # four-second continuation window.
+                session.last_capture = (
+                    updated_item,
+                    p_speaker,
+                    p_ts,
+                    p_event_key,
+                    p_fingerprint,
+                )
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": False,
+                    "capture_extended": True,
+                    "duplicate": not extended,
+                }
+            )
         session.last_capture = None
 
     # ── voice stop ("Laura, stop / aspetta") ──
@@ -4511,12 +4701,57 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if called and wants_action_capture(question) and not wants_web_search(question):
         # detect_wake already stripped the wake word: `question` is the ask
         # itself ("please schedule a follow-up with Marco on Friday").
-        item = tools.capture_action(session, question.strip())
+        # One bounded tenant transaction, off the shared event loop. No
+        # callback network occurs on the live transcript path.
+        try:
+            item, created = await run_in_threadpool(
+                tools.capture_action_once,
+                session,
+                question.strip(),
+                source_event_key=capture_event_key,
+                source_fingerprint=capture_fingerprint,
+            )
+        except outbox.ActionCaptureClosed:
+            session.last_capture = None
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": False,
+                    "capture_rejected": "meeting_finalizing",
+                }
+            )
+        if not created:
+            # A restart may have dropped the in-memory continuation window.
+            # Re-arm it from the canonical durable row so the next genuine ASR
+            # fragment is not lost after this initial-final replay.
+            session.last_capture = (
+                item,
+                speaker,
+                time.time(),
+                capture_event_key,
+                capture_fingerprint,
+            )
+            # Recall retry after a lost 2xx: the original durable action and
+            # callback already own the acknowledgement. Never speak/kick twice.
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": False,
+                    "action_capture": True,
+                    "duplicate": True,
+                }
+            )
         # ASR often splits one ask across finals ("Cedric, can you send" +
         # "the recap by Friday"). Remember this capture so a same-speaker
         # follow-up within a few seconds extends its text (see the
         # continuation check after wake detection).
-        session.last_capture = (item, speaker, time.time())
+        session.last_capture = (
+            item,
+            speaker,
+            time.time(),
+            capture_event_key,
+            capture_fingerprint,
+        )
         if session.speech_generation != turn_gen:  # barge-in since the final landed
             return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
         line = _line_for(question, _QUEUE_LINES, _QUEUE_LINES_IT)

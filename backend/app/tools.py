@@ -10,7 +10,7 @@ Deliberately tiny, deterministic, and KEY-FREE so the demo runs offline:
   - date_math     : today's date, or how many days until a deadline
   - lookup_record : a SYNTHETIC in-memory 'system of record' (demo data only)
   - queue_action  : capture a requested action for approval AFTER the call
-                    (in-memory on the live session — instant, zero I/O)
+                    (durable local capture; callback delivery is off-path)
 
 Safety: the calculator parses an AST and only allows numeric arithmetic (never
 eval()); lookup_record returns SYNTHETIC data only — no real PII, matching the
@@ -121,54 +121,90 @@ def lookup_record(record_id: str = "", query: str = "") -> str:
 # lives behind an approval after the call — e.g. Cedric's Slack cards, or
 # Laura's autopilot follow-up). When someone asks the avatar to DO something
 # ("send the recap", "book a follow-up"), this captures {action, owner, due}
-# on the live session, in memory only: no network, no disk, no sqlite —
-# latency is the product on the live path. Captured items are merged into the
+# on the live session and in local SQLite. No network occurs on the live path;
+# the callback outbox worker delivers asynchronously. Captured items are merged into the
 # post-meeting artifact's actions[] at finalize (main._finalize_session) and,
 # for orchestrated sessions, announced immediately via the action.requested
 # webhook (fired OFF the live path by cedric.notify_action_requested).
-def capture_action(session, action: str, owner: str = "", due: str = "") -> dict:
-    """The one capture primitive, shared by the queue_action tool handler and
-    main.py's deterministic live-path branch: append {action, owner, due} to
-    the session's in-memory list and fire the (off-path) webhook. Instant —
-    no network, no disk, no sqlite here.
-    """
-    item = {
-        # Stable id assigned ONCE here, at capture. It rides the live
-        # action.requested webhook AND survives into the artifact's actions[],
-        # so the orchestrator (Cedric) correlates the two — and dedupes — on the
-        # id, not on text (which the ASR-continuation window can still extend
-        # after the webhook already fired). Also the key the /org resolve
-        # endpoint accepts back for the ack loop.
+def capture_action_once(
+    session,
+    action: str,
+    owner: str = "",
+    due: str = "",
+    *,
+    source_event_key: str = "",
+    source_fingerprint: str = "",
+    dedupe_window_seconds: float = 30.0,
+) -> tuple[dict, bool]:
+    """Capture once even when Recall concurrently retries the same final."""
+    proposed = {
         "action_id": uuid.uuid4().hex[:16],
         "action": " ".join((action or "").split())[:300],
         "owner": " ".join((owner or "").split())[:100],
         "due": " ".join((due or "").split())[:100],
     }
+    from . import outbox
+
+    item, created, _outbox_id = outbox.persist_action_capture_once(
+        session,
+        proposed,
+        source_event_key=source_event_key,
+        source_fingerprint=source_fingerprint,
+        dedupe_window_seconds=dedupe_window_seconds,
+    )
+    if not created:
+        return item, False
+
     queued = getattr(session, "queued_actions", None)
     if queued is None:
-        # In-memory only by design: "queued_actions" is not a persisted Session
-        # field, so this never touches sqlite on the live path. Items survive in
-        # the session object until finalize folds them into the artifact.
         queued = []
         session.queued_actions = queued
     queued.append(item)
     try:
-        # Orchestrated sessions get the action.requested webhook NOW (so the
-        # approval card is ready before the meeting ends). notify_ is a no-op
-        # for plain sessions and always dispatches off the live path. Lazy
-        # import keeps this module import-light and dependency-free offline.
         from .cedric import notify_action_requested
 
         notify_action_requested(session, session.bot_id, item)
-    except Exception:  # noqa: BLE001 — the webhook is a bonus; capture never fails
+    except Exception:  # noqa: BLE001 — durable worker owns delivery
         pass
+    return item, True
+
+
+def capture_action(session, action: str, owner: str = "", due: str = "") -> dict:
+    """Compatibility capture primitive for tool calls without Recall identity."""
+    item, _created = capture_action_once(session, action, owner, due)
     return item
+
+
+def extend_action_once(
+    session,
+    item: dict,
+    fragment: str,
+    *,
+    source_event_key: str = "",
+    source_fingerprint: str = "",
+    dedupe_window_seconds: float = 30.0,
+) -> tuple[dict, bool]:
+    """Durably append one ASR continuation; retries return the same item."""
+    from . import outbox
+
+    canonical, extended = outbox.extend_action_capture_once(
+        session,
+        item,
+        fragment,
+        source_event_key=source_event_key,
+        source_fingerprint=source_fingerprint,
+        dedupe_window_seconds=dedupe_window_seconds,
+    )
+    if isinstance(item, dict):
+        item.clear()
+        item.update(canonical)
+    return canonical, extended
 
 
 def queue_action(
     action: str = "", owner: str = "", due: str = "", session=None
 ) -> str:
-    """Capture a requested action on the live session. Instant, in-memory."""
+    """Capture a requested action durably; delivery remains asynchronous."""
     if not (action or "").strip():
         return "error: 'action' is required — one short line saying what should be done"
     if session is None:
@@ -178,7 +214,21 @@ def queue_action(
             "note: there is no live meeting session, so nothing was queued — "
             "tell the person you can only queue actions during a meeting."
         )
-    capture_action(session, action, owner, due)
+    try:
+        capture_action(session, action, owner, due)
+    except Exception as exc:
+        from .outbox import ActionCaptureClosed, OutboxUnavailable
+        if isinstance(exc, ActionCaptureClosed):
+            return (
+                "error: this meeting is already finalizing, so the action "
+                "was not queued."
+            )
+        if isinstance(exc, OutboxUnavailable):
+            return (
+                "error: I couldn't save that action safely — please try again "
+                "in a moment."
+            )
+        raise
     return "Noted — I'll queue that for approval in Slack right after the call."
 
 

@@ -40,6 +40,10 @@ from . import secret_registry
 ENDED_BACKOFF: tuple[float, ...] = (5.0, 25.0, 120.0)
 
 
+class CallbackCredentialsUnavailable(RuntimeError):
+    """A customer callback cannot be sent until both org credentials exist."""
+
+
 def _secret_for(org_id: str) -> str:
     """The signing secret for an org: its entry in the per-client registry
     (LAURA_WEBHOOK_SECRETS_BY_ORG, a JSON object {org_id: secret}) when
@@ -131,17 +135,30 @@ def _redirect_target(resp: httpx.Response) -> str | None:
     return target if source_origin == target_origin else None
 
 
-def _post(url: str, payload: dict) -> httpx.Response:
+def _post(
+    url: str, payload: dict, *, idempotency_key: str = ""
+) -> httpx.Response:
     body = json.dumps(payload).encode()
     org_id = str(payload.get("org_id") or "")
     # A redirect (e.g. Vercel apex→www) is followed manually for one hop:
     # httpx's follow_redirects strips Authorization when the host changes, so
     # the auth + signature headers must be re-applied to the new URL.
+    headers = _signature_headers(body, org_id)
+    if org_id and org_id != settings.demo_org_id and (
+        "Authorization" not in headers or "X-Laura-Signature" not in headers
+    ):
+        # Fail closed before opening a socket. The durable outbox will retry
+        # after Slack provisioning stores both per-org credentials.
+        raise CallbackCredentialsUnavailable(
+            "per-org callback credentials are unavailable"
+        )
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
     with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
-        resp = client.post(url, content=body, headers=_signature_headers(body, org_id))
+        resp = client.post(url, content=body, headers=headers)
         target = _redirect_target(resp)
         if target:
-            resp = client.post(target, content=body, headers=_signature_headers(body, org_id))
+            resp = client.post(target, content=body, headers=headers)
         return resp
 
 

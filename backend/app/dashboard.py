@@ -20,7 +20,7 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
-from . import auth, avatars, ledger, store
+from . import auth, avatars, ledger, outbox, store
 from .config import settings
 
 router = APIRouter(tags=["dashboard"])
@@ -480,6 +480,10 @@ def dashboard_summary(request: Request) -> JSONResponse:
             "meetings": bool(settings.recall_api_key),
         }
 
+    callback_deliveries = outbox.delivery_rows(
+        caller_org or settings.demo_org_id
+    )
+
     return JSONResponse(
         {
             "avatars": avatar_rows,
@@ -492,12 +496,56 @@ def dashboard_summary(request: Request) -> JSONResponse:
             # and per-avatar Gmail/Calendar/Slack/Drive. Config is non-secret
             # wiring only. Durable mirror overlaid when configured (PR D).
             "org_connections": org_rows,
+            # PII-safe callback delivery health. Payloads and callback URLs are
+            # never exposed; owners see delivered/failed/next-attempt only.
+            "callback_deliveries": callback_deliveries,
             "auth_enabled": auth.enabled(),
             "user": (
                 {k: user[k] for k in ("user_id", "email", "name", "picture")}
                 if user
                 else None
             ),
+        }
+    )
+
+
+@router.post("/dashboard/outbox/retry")
+async def retry_callback_delivery(request: Request) -> JSONResponse:
+    """Owner-triggered retry; delivered idempotency keys are never resent."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+        outbox_id = int((body or {}).get("outbox_id"))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "outbox_id is required"}, status_code=400)
+    retry_state = await run_in_threadpool(
+        outbox.retry_status, user["org_id"], outbox_id
+    )
+    if retry_state == "missing":
+        return JSONResponse({"error": "delivery not found"}, status_code=404)
+    if retry_state == "busy":
+        # Never steal an unexpired lease from another App Runner instance.
+        return JSONResponse(
+            {"error": "delivery is already being attempted"},
+            status_code=409,
+        )
+    if retry_state == "queued":
+        await run_in_threadpool(
+            outbox.process_due, org_id=user["org_id"], outbox_id=outbox_id
+        )
+    rows = await run_in_threadpool(outbox.delivery_rows, user["org_id"])
+    row = next((item for item in rows if item["id"] == outbox_id), None)
+    return JSONResponse(
+        {
+            "ok": True,
+            "retry_state": retry_state,
+            "delivery": row,
         }
     )
 
