@@ -363,17 +363,18 @@ class Session:
         _persist_utterance(self.org_id, self.bot_id, utterance)
 
     def transcript_text(self, *, include_agents: bool = True) -> str:
-        utterances = (
-            self.transcript
-            if include_agents
-            else [u for u in self.transcript if u.speaker_kind != "agent"]
-        )
+        utterances = self.transcript if include_agents else self.human_transcript()
         return "\n".join(f"{u.speaker}: {u.text}" for u in utterances)
+
+    def human_transcript(self) -> list[Utterance]:
+        """Human-only evidence for every live and post-meeting decision path."""
+        return [u for u in self.transcript if u.speaker_kind != "agent"]
 
     def recent_transcript(self, n: int = 8) -> str:
         """Recent HUMAN turns; agent output is never evidence for a new answer."""
-        human = [u for u in self.transcript if u.speaker_kind != "agent"]
-        return "\n".join(f"{u.speaker}: {u.text}" for u in human[-n:])
+        return "\n".join(
+            f"{u.speaker}: {u.text}" for u in self.human_transcript()[-n:]
+        )
 
     def in_cooldown(self, cooldown_seconds: float) -> bool:
         return (time.time() - self.last_spoke_at) < cooldown_seconds
@@ -1809,4 +1810,3 @@ def remove(bot_id: str) -> None:
 
 _init_db()
 _load_from_db()
-

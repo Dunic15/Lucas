@@ -185,6 +185,38 @@ def test_agent_assertion_stays_in_transcript_but_not_meeting_state(
     assert "Security is approved" not in session.transcript_text(
         include_agents=False
     )
+    assert [u.participant_id for u in session.human_transcript()] == ["human-2"]
+    store.remove(session.bot_id)
+
+
+def test_rolling_summary_receives_human_evidence_only(tmp_path, monkeypatch):
+    session = _session(tmp_path, monkeypatch, "identity-rolling-notes")
+    avatar = avatars.load("laura")
+    session.add_utterance(
+        "Laura",
+        "Agent-only assertion",
+        participant_id="agent-1",
+        speaker_kind="agent",
+    )
+    session.add_utterance(
+        "Marco",
+        "Human evidence",
+        participant_id="human-1",
+        speaker_kind="human",
+    )
+    seen: list[str] = []
+    monkeypatch.setattr(main, "_SUMMARY_KEEP_RECENT", 0)
+    monkeypatch.setattr(
+        main,
+        "rolling_summary",
+        lambda _avatar, _previous, text: seen.append(text) or "notes",
+    )
+
+    asyncio.run(main._refresh_rolling_summary(session, avatar))
+
+    assert seen == ["Marco: Human evidence"]
+    assert session.rolling_summary == "notes"
+    assert session.summary_upto == 2
     store.remove(session.bot_id)
 
 
