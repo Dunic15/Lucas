@@ -3230,7 +3230,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
     )
     capability_bot_id: str | None = None
     if not has_signature:
-        capability = (request.query_params.get("cap") or "").strip()
+        query_params = getattr(request, "query_params", {})
+        capability = (query_params.get("cap") or "").strip()
         capability_required = bool(settings.recall_api_key.strip())
         if capability_required and not capability:
             return JSONResponse({"error": "missing realtime capability"}, status_code=401)
