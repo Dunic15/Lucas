@@ -68,7 +68,12 @@ def _subscription(
 
 def test_readiness_is_full_boundary_not_toggle(stripe_config, monkeypatch):
     assert billing._billing_ready() is True
+    monkeypatch.setattr(settings, "stripe_secret_key", "rk_test_restricted")
+    assert billing._billing_ready() is True
+    monkeypatch.setattr(settings, "stripe_secret_key", "sk_test_example")
     monkeypatch.setattr(settings, "public_base_url", "http://app.lauravatar.com")
+    assert billing._billing_ready() is False
+    monkeypatch.setattr(settings, "public_base_url", "https://evil.example")
     assert billing._billing_ready() is False
     monkeypatch.setattr(settings, "public_base_url", "https://app.lauravatar.com")
     monkeypatch.setattr(settings, "stripe_secret_key", "sk_live_wrong-mode")
@@ -346,11 +351,15 @@ def test_checkout_uses_stable_customer_and_revisioned_session_keys(
             )
 
     class Checkout:
-        Session = Session
+        pass
+
+    Checkout.Session = Session
 
     class SDK:
-        Customer = Customer
-        checkout = Checkout
+        pass
+
+    SDK.Customer = Customer
+    SDK.checkout = Checkout
 
     monkeypatch.setattr(billing, "_stripe", lambda: SDK)
     monkeypatch.setattr(
@@ -372,3 +381,57 @@ def test_checkout_uses_stable_customer_and_revisioned_session_keys(
         {"price": "price_solo", "quantity": 1}
     ]
 
+
+def test_checkout_releases_only_before_session_call(stripe_config, monkeypatch):
+    released = []
+
+    class CustomerFails:
+        @staticmethod
+        def create(**_kwargs):
+            raise RuntimeError("customer failed")
+
+    class SDKCustomerFails:
+        pass
+
+    SDKCustomerFails.Customer = CustomerFails
+
+    monkeypatch.setattr(billing, "_stripe", lambda: SDKCustomerFails)
+    monkeypatch.setattr(
+        billing.control_plane,
+        "reserve_checkout",
+        lambda _org: {"ok": True, "revision": 9, "customer_id": None},
+    )
+    monkeypatch.setattr(
+        billing.control_plane,
+        "release_checkout",
+        lambda org, revision: released.append((org, revision)),
+    )
+    with pytest.raises(RuntimeError):
+        billing._create_checkout("org-a", "owner@example.test")
+    assert released == [("org-a", 9)]
+
+    class SessionFails:
+        @staticmethod
+        def create(**_kwargs):
+            raise RuntimeError("ambiguous session failure")
+
+    class Checkout:
+        pass
+
+    Checkout.Session = SessionFails
+
+    class SDKSessionFails:
+        pass
+
+    SDKSessionFails.checkout = Checkout
+    monkeypatch.setattr(billing, "_stripe", lambda: SDKSessionFails)
+    monkeypatch.setattr(
+        billing.control_plane,
+        "reserve_checkout",
+        lambda _org: {
+            "ok": True, "revision": 10, "customer_id": "cus_existing"
+        },
+    )
+    with pytest.raises(RuntimeError):
+        billing._create_checkout("org-a", "owner@example.test")
+    assert released == [("org-a", 9)]
