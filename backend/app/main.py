@@ -61,6 +61,7 @@ from . import (
     gpu_runtime,
     runpod_runtime,
     ledger,
+    outbox,
     meeting_state,
     org_api,
     security,
@@ -117,6 +118,9 @@ async def _lifespan(app: FastAPI):
     watcher from dispatching at once, so the old + new instances don't both put a
     bot in the same meeting during the overlap.
     """
+    global _shutting_down
+    _shutting_down = False
+
     # Production must prove the exact policy-bound runtime credential before
     # warming indexes or launching any worker that could serve/dispatch work.
     # Key-free demo: enabled() is false, so no engine or network connection.
@@ -148,6 +152,26 @@ async def _lifespan(app: FastAPI):
         # status webhook never arrived — keeps the per-minute meter from leaking.
         asyncio.create_task(_reconcile_sessions_loop())
 
+    async def _outbox_loop() -> None:
+        while not _shutting_down:
+            try:
+                # SQLite demo reconciliation is harmless; production claims
+                # durable Postgres rows with SKIP LOCKED + expiring leases.
+                await run_in_threadpool(outbox.reconcile_sessions)
+                await run_in_threadpool(outbox.process_due)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # never log payload, URL, org or action text
+                print(
+                    f"[outbox] worker iteration failed: {type(exc).__name__}",
+                    flush=True,
+                )
+            await asyncio.sleep(5)
+
+    # Retain the task so shutdown cancels and awaits it deterministically.
+    # Delivery ownership is the committed row, not this in-memory task.
+    outbox_task = asyncio.create_task(_outbox_loop())
+
     if settings.elevenlabs_api_key:
         # Pre-synthesize the fixed conversational furniture so the FIRST
         # ack/backchannel/goodbye of a meeting comes from cache, not a
@@ -157,8 +181,12 @@ async def _lifespan(app: FastAPI):
     try:
         yield
     finally:
-        global _shutting_down
         _shutting_down = True
+        outbox_task.cancel()
+        try:
+            await outbox_task
+        except asyncio.CancelledError:
+            pass
         print("[gmail-watch] shutdown signal — watcher draining", flush=True)
 
 
@@ -2183,7 +2211,13 @@ async def _finalize_session_locked(
     # shown to the summarizer as "already captured, do not re-extract" (dedup
     # prevention at the source, cross-language included) and then merged into
     # the artifact's actions[] below.
-    queued_actions = list(getattr(session, "queued_actions", None) or [])
+    queued_actions = await run_in_threadpool(
+        outbox.queued_actions, session.org_id, bot_id
+    )
+    if not queued_actions:
+        # Compatibility for synthetic/key-free sessions captured before the
+        # durable queue existed.
+        queued_actions = list(getattr(session, "queued_actions", None) or [])
     if transcript_text.strip():
         avatar = avatars.load(session.avatar_id)
         try:
@@ -2276,6 +2310,14 @@ async def _finalize_session_locked(
             session.transcript[-1].ts - session.transcript[0].ts
         )
 
+    # PRODUCTION DURABILITY ORDER: for orchestrated sessions, commit the
+    # transcript-free session.ended envelope to Postgres BEFORE any local
+    # artifact write, ledger write, or session cleanup. If Postgres is
+    # configured but unavailable, OutboxUnavailable propagates and the local
+    # session remains available for a retry; we never claim completion while
+    # the only customer delivery record could still be lost.
+    orchestrated = cedric.deliver_ended(integration, bot_id, artifact)  # CEDRIC
+
     store.save_artifact(bot_id, artifact, org_id=session.org_id)
     # Cross-meeting memory: fold this meeting's extracted facts into the
     # ledger. Best-effort — memory must never block the cleanup below
@@ -2287,7 +2329,6 @@ async def _finalize_session_locked(
         )
     except Exception:
         pass
-    orchestrated = cedric.deliver_ended(integration, bot_id, artifact)  # CEDRIC
     if orchestrated:
         pass  # orchestrated session: the orchestrator owns delivery, skip autopilot
     elif settings.autopilot_deliver:
@@ -4216,6 +4257,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
             and is_capture_continuation(text)
         ):
             p_item["action"] = " ".join((p_item["action"] + " " + text).split())[:300]
+            # Keep the stable action/callback row in sync before acknowledging
+            # the extended capture. Production uses one tenant-scoped PG tx.
+            await run_in_threadpool(outbox.persist_queued_action, session, p_item)
             session.last_capture = (p_item, p_speaker, time.time())
             return JSONResponse({"ok": True, "spoke": False, "capture_extended": True})
         session.last_capture = None
