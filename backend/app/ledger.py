@@ -23,7 +23,7 @@ import re
 import sqlite3
 import time
 import uuid
-from typing import Any
+from typing import Any, Optional
 
 from . import store
 from .config import settings
@@ -383,7 +383,9 @@ EXECUTION_STATUSES = ("proposed", "approved", "rejected", "done", "failed")
 _TERMINAL_STATUS_OUTCOME = {"done": "done", "rejected": "rejected", "failed": "failed"}
 
 
-def set_action_status(action_id: str, status: str, detail: str = "") -> bool:
+def set_action_status(
+    action_id: str, status: str, detail: str = "", *, org_id: str = DEMO_ORG_ID
+) -> bool:
     """Record the orchestrator-reported execution state of an action (upsert,
     latest wins). Terminal statuses (done/rejected/failed) also close the
     ledger item with the matching outcome — same effect as the resolve
@@ -391,7 +393,9 @@ def set_action_status(action_id: str, status: str, detail: str = "") -> bool:
     Cedric's status loop reported 'rejected' but the ledger row stayed open
     forever). Unknown status or empty id is a no-op (False). ``detail`` is a
     distilled one-liner (card link, error class); it is capped, and it is
-    never transcript content by contract."""
+    never transcript content by contract. ``org_id`` scopes the terminal
+    ledger close (PR D: a per-org caller closes ITS row, not the Demo org's);
+    the default keeps every existing caller byte-identical."""
     aid = (action_id or "").strip()
     st = (status or "").strip().lower()
     if not aid or st not in EXECUTION_STATUSES:
@@ -407,8 +411,22 @@ def set_action_status(action_id: str, status: str, detail: str = "") -> bool:
         )
     outcome = _TERMINAL_STATUS_OUTCOME.get(st)
     if outcome:
-        resolve_by_action_id(aid, "", outcome, (detail or "").strip()[:300])
+        resolve_by_action_id(aid, "", outcome, (detail or "").strip()[:300], org_id=org_id)
     return True
+
+
+def action_org(action_id: str) -> Optional[str]:
+    """The org owning the ledger row for this ``action_id``, or None when no
+    row exists (the meeting hasn't finalized yet, or the id is unknown). The
+    org-equality check for per-org machine callers on the status endpoint."""
+    aid = (action_id or "").strip()
+    if not aid:
+        return None
+    with store._LOCK, store._connect() as conn:
+        row = conn.execute(
+            "SELECT org_id FROM ledger_items WHERE action_id=? LIMIT 1", (aid,)
+        ).fetchone()
+    return row["org_id"] if row else None
 
 
 def action_statuses(action_ids: list[str]) -> dict[str, dict]:

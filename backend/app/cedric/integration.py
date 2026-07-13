@@ -66,6 +66,46 @@ def auth_error(request: Request) -> Optional[JSONResponse]:
     return JSONResponse({"error": "unauthorized"}, status_code=401)
 
 
+def resolve_machine_org(request: Request) -> Optional[str]:
+    """The org this request's MACHINE bearer is scoped to, or None when the
+    request carries no recognized machine credential.
+
+      - The GLOBAL ``laura_api_token`` (when configured) → ``settings.
+        demo_org_id``: the legacy service scope. Endpoints treat it exactly as
+        today (Cedric's deployment credential, never narrowed by this PR).
+      - A PER-ORG token (org_tokens — durable control plane first, SQLite
+        fallback; PR A) → its org_id. Callers MUST enforce that such a bearer
+        only touches its own org's rows.
+      - Anything else (no/blank/unknown bearer) → None; callers fall back to
+        ``auth_error`` / ``auth.gate`` so the key-free demo stays
+        byte-identical (open when no token is configured).
+
+    Sibling of ``main._org_token_bearer_org`` (PR A), which returns None for
+    the global bearer instead — deliberately NOT consolidated so PR A's
+    start/end/redeliver semantics stay untouched.
+
+    SYNC (SQLite + optionally a Postgres round-trip): async handlers must call
+    it via ``run_in_threadpool`` — never on the live hot path. The raw secret
+    is compared/hashed only, never logged."""
+    provided = request.headers.get("authorization", "")
+    if not provided.startswith("Bearer "):
+        return None
+    raw = provided[len("Bearer "):].strip()
+    if not raw:
+        return None
+    global_token = settings.laura_api_token.strip()
+    if global_token and hmac.compare_digest(raw, global_token):
+        return settings.demo_org_id
+    # Lazy imports keep the module graph flat (cedric never needs store/
+    # control_plane at import time; mirrors auth.py's local `import cedric`).
+    from .. import control_plane, store
+
+    org = control_plane.resolve_org_token(raw)
+    if org is None:
+        org = store.resolve_org_token(raw)
+    return org
+
+
 def brief_too_large(brief: str) -> Optional[JSONResponse]:
     """400 response when an injected brief exceeds the cap, else None."""
     if len(brief.encode()) > MAX_BRIEF_BYTES:

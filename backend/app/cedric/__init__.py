@@ -11,6 +11,8 @@ Public surface:
   - MeetingContext      — the orchestrator's per-session context payload
   - MAX_BRIEF_BYTES     — cap on an injected brief
   - auth_error          — Bearer gate for the session API
+  - resolve_machine_org — machine bearer → org scope (global → demo org,
+                          per-org token → its org, else None)
   - build_integration   — assemble the per-session integration dict
   - default_integration — SURFACE_* default routing for non-API summons
   - brief_too_large     — request-validation helper
@@ -22,12 +24,13 @@ Public surface:
   - notify_action_requested — fire action.requested when queue_action captures
   - inject_brief        — fold the meeting brief into the live prompt memory
   - provision_org       — register an org→workspace link (Connect the brain)
+  - revoke_org          — detach the org on the orchestrator (disconnect)
   - fetch_org_connectors — what the brain can touch (Configure tab bridge)
 """
 from __future__ import annotations
 
 from . import callback  # noqa: F401
-from .callback import fetch_org_connectors, provision_org  # noqa: F401
+from .callback import fetch_org_connectors, provision_org, revoke_org  # noqa: F401
 from .integration import (  # noqa: F401
     ARTIFACT_VERSION,
     MAX_BRIEF_BYTES,
@@ -42,5 +45,6 @@ from .integration import (  # noqa: F401
     maybe_refresh_context,
     notify_action_requested,
     notify_failed,
+    resolve_machine_org,
     wire_artifact,
 )

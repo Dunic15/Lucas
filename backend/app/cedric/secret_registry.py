@@ -239,3 +239,54 @@ def upsert_org_secret(org_id: str, secret: str) -> bool:
                 flush=True,
             )
             return False
+
+
+def remove_org_secret(org_id: str) -> bool:
+    """Drop one org from the registry (disconnect): delete its dedicated
+    SecureString, remove it from the legacy aggregate, and hot-update this
+    process's cache. Callers invoke this ONLY after the orchestrator confirmed
+    the remote revoke, so a lingering secret can never be the thing that keeps
+    a "disconnected" org verifiable. The cache drop always happens; the SSM
+    deletes are best-effort (an absent parameter is already-gone). Returns
+    False only for an empty org_id. Secret values are never logged."""
+    global _cache, _last_ssm_refresh
+    org = (org_id or "").strip()
+    if not org:
+        return False
+    name = settings.laura_webhook_registry_ssm_parameter.strip()
+    with _lock:
+        _sync_env_locked()
+        purged = dict(_cache)
+        purged.pop(org, None)
+        _cache = purged
+        dedicated = _org_parameter_name(name, org) if name else ""
+        client = _client() if name else None
+        if client is None or not dedicated:
+            return True  # no SSM configured (local/dev): cache drop is all
+        try:
+            client.delete_parameter(Name=dedicated)
+        except Exception as exc:  # noqa: BLE001 - ParameterNotFound = gone
+            if type(exc).__name__ != "ParameterNotFound":
+                print(
+                    "[cedric-callback] dedicated SSM registry delete failed "
+                    f"({type(exc).__name__})",
+                    flush=True,
+                )
+        try:
+            current = _read_aggregate_locked(client)
+            if current is not None and org in current:
+                current.pop(org)
+                client.put_parameter(
+                    Name=name,
+                    Value=json.dumps(current, separators=(",", ":"), sort_keys=True),
+                    Type="SecureString",
+                    Overwrite=True,
+                )
+        except Exception as exc:  # noqa: BLE001 - dedicated delete is the one that counts
+            print(
+                "[cedric-callback] aggregate SSM registry delete failed "
+                f"({type(exc).__name__})",
+                flush=True,
+            )
+        _last_ssm_refresh = time.monotonic()
+    return True

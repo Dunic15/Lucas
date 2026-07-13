@@ -143,6 +143,9 @@ def test_add_to_slack_start_carries_signed_org_state(client, monkeypatch):
 def test_slack_complete_hot_writes_registry_and_connection(client, monkeypatch):
     monkeypatch.setattr(settings, "laura_api_token", "machine-token")
     user = store.upsert_user("owner@example.com", "Owner")
+    # PR D binding rule: /complete only binds an org that INITIATED an install
+    # (signed state echo or a pending row from slack/start / connect).
+    store.set_connection(user["org_id"], "cedric", "cedric-brain", "pending", {})
     writes: list[tuple[str, str]] = []
     monkeypatch.setattr(
         secret_registry,
@@ -167,6 +170,9 @@ def test_slack_complete_hot_writes_registry_and_connection(client, monkeypatch):
     row = store.connections_for_org(user["org_id"])[0]
     assert row["status"] == "connected"
     assert row["config"] == {"team_id": "T_NEW", "channel": "#approvals"}
+    # the per-workspace bearer is returned ONCE and resolves to this org
+    token = response.json()["org_token"]
+    assert token and store.resolve_org_token(token) == user["org_id"]
 
 
 def test_dashboard_uses_add_to_slack_not_team_id_field():
@@ -252,8 +258,14 @@ def test_first_login_preprovision_uses_pending_route(monkeypatch):
     ]
 
 
-def test_brain_connectors_pending_until_linked(client):
-    _login(client)
+def test_brain_connectors_not_connected_until_linked(client):
+    """A fresh org with NO brain connection reads not_connected (never the
+    global demo team's catalog); an install mid-flow reads pending."""
+    user = _login(client)
+    r = client.get("/dashboard/connections/brain/connectors")
+    assert r.status_code == 200 and r.json()["status"] == "not_connected"
+    assert r.json()["connectors"] == []
+    store.set_connection(user["org_id"], "cedric", "cedric-brain", "pending", {})
     r = client.get("/dashboard/connections/brain/connectors")
     assert r.status_code == 200 and r.json()["status"] == "pending"
 
@@ -274,7 +286,7 @@ def test_brain_connectors_proxies_when_linked(client, monkeypatch):
         "connectors": [{"key": "gmail", "name": "Gmail", "connected": False,
                         "connect_url": "https://cedric/api/connect/google/start?team=T1&app=gmail"}],
     }
-    monkeypatch.setattr(cedric, "fetch_org_connectors", lambda org: payload)
+    monkeypatch.setattr(cedric, "fetch_org_connectors", lambda org, team="": payload)
     r = client.get("/dashboard/connections/brain/connectors")
     assert r.status_code == 200
     body = r.json()

@@ -1332,7 +1332,10 @@ def _org_token_bearer_org(request: Request) -> Optional[str]:
     """The org owning the request's Bearer, when it is a PER-ORG machine token
     (org_tokens: durable control plane first, SQLite fallback). None for no/
     non-org bearers — including the GLOBAL laura_api_token, which keeps its
-    demo-org behavior. A raw secret is compared/hashed, never logged. Called
+    demo-org behavior. Sibling of cedric.resolve_machine_org (PR D), which
+    additionally maps the global bearer to the Demo org — kept separate so PR
+    A's start/end/redeliver semantics stay untouched.
+    A raw secret is compared/hashed, never logged. Called
     on /sessions/start, /sessions/{id}/end and /sessions/{id}/redeliver —
     control-plane paths, never the live hot path. SYNC (SQLite + optionally
     the Postgres control plane): async handlers must call it via
@@ -1855,10 +1858,22 @@ async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
     Used by the orchestrator when a calendar event moves or is cancelled (it
     rebooks afterwards). `end` keeps its meaning: finalize + artifact.
     """
-    if err := cedric.auth_error(request):  # CEDRIC
-        return err
+    # PER-ORG machine bearers are first-class here (PR D): they authenticate
+    # like the global bearer but may cancel ONLY their own org's sessions. The
+    # global bearer keeps its full legacy service scope; key-free stays open.
+    machine_org = await run_in_threadpool(cedric.resolve_machine_org, request)
+    if machine_org is None:
+        if err := cedric.auth_error(request):  # CEDRIC
+            return err
     session = store.get(bot_id)
-    if session is None:
+    # Wrong-org answers the IDENTICAL body as not-found: a distinct 403 would
+    # be an existence oracle (a per-org bearer probing whether another org's
+    # bot_id exists). Adversarial review 2026-07-13, should-fix 2.
+    if session is None or (
+        machine_org is not None
+        and machine_org != settings.demo_org_id
+        and session.org_id != machine_org
+    ):
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     # Stop the meter: works for live bots; scheduled bots may reject leave_call,
     # so fall back to deleting the scheduled bot. Best-effort on both — the
@@ -1891,10 +1906,20 @@ class DeliverRequest(BaseModel):
 @app.post("/sessions/{bot_id}/deliver")
 async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -> JSONResponse:
     """Actually send the finished meeting's follow-up email + post it to Slack."""
-    if err := cedric.auth_error(request):  # CEDRIC
-        return err
+    # Same machine-auth seam as /cancel: a PER-ORG bearer may deliver ONLY its
+    # own org's artifacts; the global bearer keeps today's full service scope.
+    machine_org = await run_in_threadpool(cedric.resolve_machine_org, request)
+    if machine_org is None:
+        if err := cedric.auth_error(request):  # CEDRIC
+            return err
     artifact = store.get_artifact(bot_id)
-    if artifact is None:
+    # Wrong-org == not-found, byte-identical (no existence oracle for per-org
+    # bearers). Adversarial review 2026-07-13, should-fix 2.
+    if artifact is None or (
+        machine_org is not None
+        and machine_org != settings.demo_org_id
+        and str(artifact.get("org_id") or "") != machine_org
+    ):
         return JSONResponse({"error": "no artifact for this bot_id"}, status_code=404)
 
     # Finalize already ran store.remove(bot_id), so store.get(bot_id) is None here
@@ -1941,11 +1966,14 @@ def vendors_view(request: Request) -> JSONResponse:
 def ledger_view(meeting_url: str, request: Request) -> JSONResponse:
     """Cross-meeting memory for a meeting link: every ledger item plus the
     carryover brief the avatar gets injected at the next session."""
-    if err := cedric.auth_error(request):  # CEDRIC
-        return err
-    # Machine/service seam (Cedric bearer): no cookie principal, so the Demo
-    # org. A per-org token→org resolver is a later, auth-blocked PR (§5).
-    org = settings.demo_org_id
+    # Machine/service seam: a PER-ORG bearer reads ITS org's memory; the
+    # global bearer (and the key-free open demo) keeps the Demo org, exactly
+    # as today. Sync handler → FastAPI already runs this off the event loop.
+    machine_org = cedric.resolve_machine_org(request)
+    if machine_org is None:
+        if err := cedric.auth_error(request):  # CEDRIC
+            return err
+    org = machine_org or settings.demo_org_id
     key = ledger.meeting_key(meeting_url)
     return JSONResponse(
         {
@@ -1959,13 +1987,25 @@ def ledger_view(meeting_url: str, request: Request) -> JSONResponse:
 @app.get("/sessions/{bot_id}/artifact")
 def session_artifact(bot_id: str, request: Request) -> JSONResponse:
     """Retrieve a finished session's artifact (summary + checklist + email)."""
-    if err := cedric.auth_error(request):  # CEDRIC
-        return err
+    # A PER-ORG bearer may read ONLY its own org's sessions/artifacts. Another
+    # org's bot_id — live OR finalized — answers the IDENTICAL not-found body,
+    # so the endpoint is never an existence/progress oracle (adversarial
+    # review 2026-07-13, should-fix 2). The global bearer and the key-free
+    # demo keep today's full service scope.
+    machine_org = cedric.resolve_machine_org(request)
+    if machine_org is None:
+        if err := cedric.auth_error(request):  # CEDRIC
+            return err
+    org_scoped = machine_org is not None and machine_org != settings.demo_org_id
     live = store.get(bot_id)
     if live is not None:
+        if org_scoped and live.org_id != machine_org:
+            return JSONResponse({"error": "unknown bot_id"}, status_code=404)
         return JSONResponse({"status": "in_progress", "bot_id": bot_id})
     artifact = store.get_artifact(bot_id)
-    if artifact is None:
+    if artifact is None or (
+        org_scoped and str(artifact.get("org_id") or "") != machine_org
+    ):
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     return JSONResponse({"status": "done", **cedric.wire_artifact(artifact)})  # CEDRIC: PII stays home
 

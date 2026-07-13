@@ -49,6 +49,34 @@ def pack(
     return f"{payload}.{_sign(payload)}"
 
 
+def unpack(state: str, *, now: float | None = None) -> dict | None:
+    """Verify + decode a state we minted in ``pack``. None on ANY failure —
+    bad shape, wrong signature, expired, or wrong version — so a forged or
+    stale state can never bind an install (the caller treats None as
+    'not initiated'). Constant-time signature compare; never raises on
+    hostile input (a missing signing key is 'cannot verify' → None)."""
+    raw = (state or "").strip()
+    if "." not in raw:
+        return None
+    payload, _, signature = raw.rpartition(".")
+    try:
+        expected = _sign(payload)
+    except RuntimeError:
+        return None  # provisioning unconfigured: nothing we minted can verify
+    if not hmac.compare_digest(signature.encode("utf-8", "ignore"), expected.encode()):
+        return None
+    try:
+        pad = "=" * (-len(payload) % 4)
+        data = json.loads(base64.urlsafe_b64decode(payload + pad))
+    except Exception:  # noqa: BLE001 — hostile payloads must not raise
+        return None
+    if not isinstance(data, dict) or data.get("v") != 1:
+        return None
+    if float(data.get("exp") or 0) < (now if now is not None else time.time()):
+        return None
+    return data
+
+
 def install_url(
     org_id: str, avatar_id: str, channel: str = "", return_url: str = ""
 ) -> str:

@@ -346,11 +346,14 @@ def provision_org(
         return ProvisionResult(0)
 
 
-def fetch_org_connectors(org_id: str) -> dict | None:
+def fetch_org_connectors(org_id: str, team_id: str = "") -> dict | None:
     """The product bridge, read side: what the brain can touch for this org.
-    GET {orchestrator}/api/laura/connectors?org_id= — returns Cedric's
+    GET {orchestrator}/api/laura/connectors?org_id=&team= — returns Cedric's
     connector catalog with live state (connected / account label /
-    needs-reconnect) plus browser connect_url/manage_url links. PII-light by
+    needs-reconnect) plus browser connect_url/manage_url links. ``team_id``
+    (the org's OWN Slack workspace, from its org_connections config) pins the
+    upstream query to the caller's workspace so an org the orchestrator can't
+    resolve never falls back to another team's catalog. PII-light by
     contract (no account ids or tokens); Laura renders it verbatim in the
     avatar's Configure tab and never stores it. None when the orchestrator
     isn't configured/linked or on any failure."""
@@ -363,12 +366,15 @@ def fetch_org_connectors(org_id: str) -> dict | None:
     token = settings.cedric_orgs_token.strip() or settings.laura_api_token.strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    params = {"org_id": org_id}
+    if (team_id or "").strip():
+        params["team"] = team_id.strip()
     try:
         with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
-            resp = client.get(url, params={"org_id": org_id}, headers=headers)
+            resp = client.get(url, params=params, headers=headers)
             target = _redirect_target(resp)
             if target:
-                resp = client.get(target, params={"org_id": org_id}, headers=headers)
+                resp = client.get(target, params=params, headers=headers)
         if resp.status_code != 200:
             return None
         data = resp.json()
@@ -376,3 +382,41 @@ def fetch_org_connectors(org_id: str) -> dict | None:
     except Exception as e:  # noqa: BLE001 — the Configure tab just shows "unavailable"
         print(f"[cedric-callback] connectors fetch failed: {e}", flush=True)
         return None
+
+
+def revoke_org(org_id: str) -> int | None:
+    """Remote revoke, the write half of disconnect: DELETE the org→workspace
+    link on the orchestrator (``DELETE {CEDRIC_ORGS_URL}/{org_id}`` — the
+    contract's `/api/laura/orgs/{org_id}` mirror of provisioning). Returns the
+    HTTP status code (0 on transport error / an org_id unsafe for a URL path),
+    or None when CEDRIC_ORGS_URL isn't configured (no remote side exists —
+    the caller may disconnect locally). The caller treats 2xx and 404
+    (already gone) as revoked and MUST leave local state untouched on
+    anything else — never claim a disconnection the orchestrator didn't
+    confirm."""
+    base = settings.cedric_orgs_url.strip()
+    if not base:
+        return None
+    org = (org_id or "").strip()
+    # Laura generates org ids, but validate before splicing one into a URL
+    # path anyway (same rule as secret_registry._org_parameter_name).
+    import re
+
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", org):
+        return 0
+    url = f"{base.rstrip('/')}/{org}"
+    headers = {}
+    token = settings.cedric_orgs_token.strip() or settings.laura_api_token.strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
+            resp = client.delete(url, headers=headers)
+            target = _redirect_target(resp)
+            if target:
+                resp = client.delete(target, headers=headers)
+        print(f"[cedric-callback] org revoke HTTP {resp.status_code}", flush=True)
+        return resp.status_code
+    except Exception as e:  # noqa: BLE001 — local state must stay 'connected'
+        print(f"[cedric-callback] org revoke failed ({type(e).__name__})", flush=True)
+        return 0
