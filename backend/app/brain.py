@@ -523,9 +523,16 @@ def answer_question_stream(
     roster: "list[str] | None" = None,
     k: int = 6,
     min_chars: int = 0,
+    meta: "dict | None" = None,
 ):
     """Yield spoken sentences as they are generated. Yields nothing (stays silent)
     only when the model judges the speech was not addressed to Laura (SKIP).
+
+    ``meta`` (optional out-param) is filled — before the first sentence — with
+    ``{"top_score": <grounding confidence>}``: the top retrieved-chunk score that
+    survived the ``rag_min_context_score`` gate (0.0 when nothing grounded). It
+    exposes the confidence the retrieval step ALREADY computed so a caller (the
+    hand-raise interjection escape) can gate on it without a second model call.
 
     `memory` is the cross-meeting carryover brief (ledger.carryover_brief):
     what previous sessions of this same meeting left open or decided. Empty
@@ -560,6 +567,11 @@ def answer_question_stream(
     if chunks and chunks[0].score < settings.rag_min_context_score:
         chunks = []
     citation = chunks[0].source if chunks else ""
+    # Expose the grounding confidence the retrieval already computed (top
+    # surviving chunk score, 0.0 when nothing grounded) for a caller that gates
+    # on it — set BEFORE the first yield so it is populated once iteration ends.
+    if meta is not None:
+        meta["top_score"] = float(chunks[0].score) if chunks else 0.0
 
     if _is_stub():
         r = _stub_answer(chunks)

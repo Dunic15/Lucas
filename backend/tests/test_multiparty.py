@@ -619,3 +619,178 @@ def test_present_names_shields_transcript_only_participant(tmp_path, monkeypatch
     # … so the fuzzy wake is suppressed: it's Lara's turn, not Laura's.
     assert detect_wake(avatar, line, s.present_names())[0] is False
     store.remove(s.bot_id)
+
+
+# ── closing fallback: facilitation beats also fire on a natural lull ──
+# (DEMO-READY-ROADMAP §5 item 12). The proactive wrap-up + quiet-participant
+# nudge no longer depend on the exact detect_closing() phrase: a long idle gap
+# after a long-enough meeting is an additive trigger. Conservative — both a
+# duration gate and an idle gate must hold, so it never fires in a short or
+# actively-talking call.
+
+
+def _seed_wrapup_session(tmp_path, monkeypatch, bot_id, *, meeting_age, idle):
+    from app.config import settings
+
+    s = _session(tmp_path, monkeypatch, bot_id=bot_id)
+    s.memory_brief = ""
+    monkeypatch.setattr(settings, "proactive_enabled", False)  # isolate the nudge
+    monkeypatch.setattr(settings, "deference_seconds", 0)  # deterministic, no wait
+    s.participant_event("Anna", 3, here=True)  # in the room, never spoke
+    for i in range(12):
+        s.add_utterance("Duccio" if i % 2 else "Marco", f"working point {i}")
+    now = _time.time()
+    s.transcript[-1].ts = now - idle       # the room went quiet `idle`s ago
+    s.created_at = now - meeting_age       # meeting has run `meeting_age`s
+    return s
+
+
+def test_closing_fallback_nudges_on_idle_lull_without_phrase(tmp_path, monkeypatch):
+    """No exact closing phrase, but a 30s lull after a 5-min meeting → the quiet
+    nudge fires via the fallback."""
+    s = _seed_wrapup_session(
+        tmp_path, monkeypatch, "nudge-fallback-1", meeting_age=300, idle=30
+    )
+    spoken = []
+
+    async def fake_speak(session, line, citations=None, **kw):
+        spoken.append(line)
+        return True
+
+    monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+    # A plain line that detect_closing() does NOT match.
+    body = _post(_line_payload(s.bot_id, "Duccio", "so, where does that leave everyone?"))
+    assert body.get("quiet_nudge") is True
+    assert spoken and "Anna" in spoken[0]
+    store.remove(s.bot_id)
+
+
+def test_closing_fallback_silent_in_short_meeting(tmp_path, monkeypatch):
+    """Same lull, but the meeting is only 60s old → the duration gate keeps her
+    quiet (no false wrap-up in a short call)."""
+    s = _seed_wrapup_session(
+        tmp_path, monkeypatch, "nudge-fallback-short", meeting_age=60, idle=30
+    )
+    spoken = []
+
+    async def fake_speak(session, line, citations=None, **kw):
+        spoken.append(line)
+        return True
+
+    monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+    body = _post(_line_payload(s.bot_id, "Duccio", "so, where does that leave everyone?"))
+    assert body.get("quiet_nudge") is None
+    assert not spoken
+    store.remove(s.bot_id)
+
+
+def test_closing_fallback_silent_in_active_meeting(tmp_path, monkeypatch):
+    """Long meeting, but the room is actively talking (last line 4s ago) → the
+    idle gate keeps her quiet."""
+    s = _seed_wrapup_session(
+        tmp_path, monkeypatch, "nudge-fallback-active", meeting_age=600, idle=4
+    )
+    spoken = []
+
+    async def fake_speak(session, line, citations=None, **kw):
+        spoken.append(line)
+        return True
+
+    monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+    body = _post(_line_payload(s.bot_id, "Duccio", "so, where does that leave everyone?"))
+    assert body.get("quiet_nudge") is None
+    assert not spoken
+    store.remove(s.bot_id)
+
+
+def test_exact_closing_phrase_still_nudges_when_fallback_disabled(tmp_path, monkeypatch):
+    """Regression: the regex path is untouched — an exact closing phrase nudges
+    even with the fallback turned off and a young, active meeting."""
+    from app.config import settings
+
+    s = _seed_wrapup_session(
+        tmp_path, monkeypatch, "nudge-regex-only", meeting_age=30, idle=2
+    )
+    monkeypatch.setattr(settings, "closing_fallback_enabled", False)
+    spoken = []
+
+    async def fake_speak(session, line, citations=None, **kw):
+        spoken.append(line)
+        return True
+
+    monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+    body = _post(_line_payload(s.bot_id, "Duccio", "okay, anything else before we wrap up?"))
+    assert body.get("quiet_nudge") is True
+    assert spoken and "Anna" in spoken[0]
+    store.remove(s.bot_id)
+
+
+# ── BLOCKER 2: a directly-addressed turn after a lull must NOT pay for the
+# synchronous proactive model call (latency in front of her first token). The
+# proactive/closing check is computed only for UNADDRESSED lulls. ──
+
+
+def test_called_line_after_lull_skips_proactive_path(tmp_path, monkeypatch):
+    """>3min meeting, >25s lull, but the line addresses Laura by name → the
+    proactive check (retrieve + LLM) is never invoked; the fast answer path owns
+    the turn."""
+    from app.config import settings
+
+    calls = {"n": 0}
+
+    def spy_proactive(*a, **k):
+        calls["n"] += 1
+        return {"should_speak": False, "line": "", "confidence": 0.0}
+
+    monkeypatch.setattr(main, "proactive_flag", spy_proactive)
+
+    def instant_answer(*a, **k):
+        yield "The next step is the security review."
+
+    monkeypatch.setattr(main, "answer_question_stream", instant_answer)
+
+    async def fake_speak(session, line, citations=None, **kw):
+        return True
+
+    async def fake_speak_audio(session, text, *, force, generation, prev, t0=None):
+        return True
+
+    monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+    monkeypatch.setattr(main, "_speak_with_audio", fake_speak_audio)
+
+    s = _seed_wrapup_session(
+        tmp_path, monkeypatch, "called-lull", meeting_age=300, idle=30
+    )
+    monkeypatch.setattr(settings, "proactive_enabled", True)  # helper disabled it
+
+    _post(_line_payload(s.bot_id, "Duccio", "Laura, what's the next step?"))
+    assert calls["n"] == 0  # proactive_flag never ran on a called turn
+    store.remove(s.bot_id)
+
+
+def test_unaddressed_lull_still_enters_proactive_path(tmp_path, monkeypatch):
+    """The counterpart: an UNADDRESSED lull in the same long meeting still runs
+    the proactive check — the fallback behavior is preserved for room talk."""
+    from app.config import settings
+
+    calls = {"n": 0}
+
+    def spy_proactive(*a, **k):
+        calls["n"] += 1
+        return {"should_speak": False, "line": "", "confidence": 0.0}
+
+    monkeypatch.setattr(main, "proactive_flag", spy_proactive)
+
+    async def fake_speak(session, line, citations=None, **kw):
+        return True
+
+    monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+
+    s = _seed_wrapup_session(
+        tmp_path, monkeypatch, "unaddr-lull", meeting_age=300, idle=30
+    )
+    monkeypatch.setattr(settings, "proactive_enabled", True)
+
+    _post(_line_payload(s.bot_id, "Duccio", "so, where does that leave everyone?"))
+    assert calls["n"] == 1  # proactive check ran on the unaddressed lull
+    store.remove(s.bot_id)

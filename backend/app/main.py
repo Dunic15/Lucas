@@ -80,13 +80,16 @@ from .config import settings
 from .decision import (
     addressed_to_other,
     adaptive_deference_seconds,
+    closing_fallback_fires,
     detect_wake,
     detect_closing,
     detect_invite,
     detect_leave_command,
     detect_stop_command,
+    interjection_floor_open,
     is_capture_continuation,
     plausible_leave_followup,
+    should_interject,
     should_raise_hand,
     similar_contribution,
 )
@@ -2624,6 +2627,31 @@ def _names_another_participant(text: str, roster, wake_words) -> bool:
     return False
 
 
+def _closing_signal(session: store.Session, text: str) -> bool:
+    """Whether to treat THIS moment as the meeting wrapping up, for the two
+    facilitation beats (proactive intervention + quiet-participant nudge).
+
+    ``detect_closing``'s regex stays PRIMARY; this only ORs an additive fallback
+    (decision.closing_fallback_fires) so the beats also fire on a natural lull
+    with no exact closing phrase — the room went quiet for a while and someone
+    just broke the silence. The current line is already appended to the
+    transcript, so the previous line's timestamp is how long the room was idle
+    before it. Both the regex and the fallback keep every downstream guard (the
+    beats' one-shot flags, cooldown, confidence bar), so this can only ADD a
+    trigger, never bypass a safety gate."""
+    if detect_closing(text):
+        return True
+    prev_ts = session.transcript[-2].ts if len(session.transcript) >= 2 else 0.0
+    return closing_fallback_fires(
+        enabled=settings.closing_fallback_enabled,
+        now=time.time(),
+        meeting_start=session.created_at,
+        last_line_at=prev_ts,
+        idle_seconds=settings.closing_fallback_idle_seconds,
+        min_meeting_seconds=settings.closing_fallback_min_meeting_seconds,
+    )
+
+
 # ───────────────────────── recall webhook ──────────────────────────
 @app.post("/webhooks/recall")
 async def recall_webhook(request: Request) -> JSONResponse:
@@ -2884,12 +2912,23 @@ async def recall_webhook(request: Request) -> JSONResponse:
     memory = session.memory_brief or ""
     memory = cedric.inject_brief(session, memory)  # CEDRIC: brief ahead of carryover
 
+    # ── when-to-speak gate ──
+    # By default (require_wake_word=False) she answers any grounded question; the
+    # SKIP sentinel + cooldown keep her from interjecting on things she can't ground.
+    # Computed HERE — before the closing/proactive block — so a DIRECTLY-ADDRESSED
+    # turn never pays for the synchronous proactive model call: the fast answer
+    # path owns that turn, and the wrap-up check only looks at the next UNADDRESSED
+    # lull. (Without this, the idle closing-fallback would fire the proactive
+    # retrieve+LLM in front of her first token on any "Laura, …?" after a pause.)
+    called, question = detect_wake(avatar, text, session.present_names())
+
     # ── proactive intervention (fires once, as the meeting wraps up) ──
     if (
         settings.proactive_enabled
+        and not called  # a direct ask owns its turn — never add proactive latency
         and not session.proactive_done
         and not _in_opening_grace(session)  # never activated → stays a silent guest
-        and detect_closing(text)
+        and _closing_signal(session, text)
         and not session.in_cooldown(avatar.speak_cooldown_seconds)
     ):
         flag = await run_in_threadpool(
@@ -2902,11 +2941,6 @@ async def recall_webhook(request: Request) -> JSONResponse:
             line = flag["line"] + (f" — per {cits[0]}" if cits else "")
             await _make_avatar_speak(session, line, cits)
             return JSONResponse({"ok": True, "spoke": True, "proactive": True, "line": line})
-
-    # ── when-to-speak gate ──
-    # By default (require_wake_word=False) she answers any grounded question; the
-    # SKIP sentinel + cooldown keep her from interjecting on things she can't ground.
-    called, question = detect_wake(avatar, text, session.present_names())
 
     # ── opening settle-in: wait to be called ──
     # For the first moments after joining she stays silent unless directly
@@ -3124,7 +3158,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         and not called
         and not session.quiet_nudge_done
         and not _in_opening_grace(session)  # never activated → stays a silent guest
-        and detect_closing(text)
+        and _closing_signal(session, text)
         and len(session.transcript) >= 12
         and not session.in_cooldown(avatar.speak_cooldown_seconds)
     ):
@@ -3307,6 +3341,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
         and len(roster) >= settings.hand_raise_min_humans
     )
     hand_sentences: list[str] = []
+    # Grounding confidence the retrieval already computed (top surviving chunk
+    # score), read back after the stream ends to gate the interjection escape —
+    # no second model call. Only consulted on the hand-raise path below.
+    _answer_meta: dict = {}
     async for sentence in iterate_in_threadpool(
         answer_question_stream(
             avatar,
@@ -3319,6 +3357,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             roster=roster,
             k=4,  # leaner context: input tokens ARE first-token latency live
             min_chars=45,  # coalesce tiny fragments so the TTS voice flows
+            meta=_answer_meta,
         )
     ):
         # Interrupted (barge-in) or superseded by a newer turn while this
@@ -3362,6 +3401,15 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 return JSONResponse(
                     {"ok": True, "spoke": False, "reason": "hand suppressed (same point)"}
                 )
+            # ── ONE shared social budget for an interjection AND a raised hand ──
+            # Grounded (SKIP passed) + not-a-duplicate is necessary but not
+            # sufficient: taking the floor at all — spoken interjection OR silent
+            # hand — draws from the SAME per-meeting budget (cap + minimum gap +
+            # longer back-off after the room ignored a raise). Checked ONCE, up
+            # front, so a "single-interjection" stays singular: without this the
+            # spoken escape would bypass the budget and she could interject every
+            # cooldown. Budget spent → stay silent (the finalize summarizer still
+            # reads the whole transcript, so the point is never lost).
             if not should_raise_hand(
                 now=time.time(),
                 count=session.hand_raise_count,
@@ -3373,6 +3421,48 @@ async def recall_webhook(request: Request) -> JSONResponse:
             ):
                 return JSONResponse(
                     {"ok": True, "spoke": False, "reason": "hand suppressed (budget)"}
+                )
+            # ── high-confidence interjection escape ──
+            # Grounded, non-duplicate, and within budget. If it is ALSO strongly
+            # grounded (top retrieval score ≥ the bar) AND the floor is open (the
+            # line that opened it sounds FINISHED and no human is audibly
+            # mid-utterance), say ONE line directly instead of raising a silent
+            # hand nobody may notice+invite in time — the marquee "she jumped in
+            # with the right fact" beat. Weaker or floor-busy points fall through
+            # to the raised hand. The generation was already bumped for this turn;
+            # barge-in during generation is caught by the interrupted check above,
+            # so speaking under turn_gen here is safe.
+            _top_score = float(_answer_meta.get("top_score", 0.0))
+            if should_interject(
+                enabled=settings.hand_raise_interject_when_confident,
+                confidence=_top_score,
+                min_confidence=settings.hand_raise_interject_min_confidence,
+                floor_open=interjection_floor_open(
+                    turn_completeness=end_of_turn.completeness(text),
+                    since_human_partial=time.time() - session.last_human_partial_at,
+                    active_partial_seconds=settings.interject_min_pause_seconds,
+                    min_completeness=settings.interject_min_completeness,
+                ),
+            ):
+                # Charge the interjection to the shared budget EXACTLY as
+                # _raise_hand does: it counts against the cap, paces the next one
+                # (hand_last_raise_at), and — since it was ENGAGED (spoken), not
+                # ignored — resets the back-off. Also dedup a future repeat of
+                # this same point (hand OR interject).
+                session.hand_raise_count += 1
+                session.hand_last_raise_at = time.time()
+                session.hand_last_ignored = False
+                session.hand_last_contribution = contribution
+                spoke = await _speak_with_audio(
+                    session, contribution, force=True, generation=turn_gen, prev=None
+                )
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "spoke": bool(spoke),
+                        "interjected": True,
+                        "confidence": round(_top_score, 3),
+                    }
                 )
             session.pending_contribution = contribution
             await _raise_hand(session, avatar, heard=text)

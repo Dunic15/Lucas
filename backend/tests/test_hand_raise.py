@@ -102,8 +102,12 @@ def _post(payload: dict) -> dict:
     return json.loads(resp.body)
 
 
-def _stub_stream(monkeypatch, sentences):
+def _stub_stream(monkeypatch, sentences, top_score=0.0):
     def stream(*a, **k):
+        # Populate the grounding-confidence out-param exactly as the real stream
+        # does (before the first sentence), so the interjection escape can gate.
+        if k.get("meta") is not None:
+            k["meta"]["top_score"] = top_score
         yield from sentences
 
     monkeypatch.setattr(main, "answer_question_stream", stream)
@@ -203,6 +207,123 @@ def test_substantive_ask_lowers_hand_and_answers_normally(tmp_path, monkeypatch)
     assert spoken == ["The deadline is Friday."]  # the ask wins, not the queue
     assert s.hand_raised_at == 0
     assert s.pending_contribution == ""
+    store.remove(s.bot_id)
+
+
+# ── high-confidence interjection escape (DEMO-READY-ROADMAP §5 item 10) ──
+
+
+def test_high_confidence_pause_interjects_instead_of_raising_hand(tmp_path, monkeypatch):
+    """Strongly grounded (top_score ≥ bar) + open floor (finished line, no human
+    partial in flight) → she says ONE line directly, no silent hand."""
+    s = _session(tmp_path, monkeypatch, bot_id="hand-bot-interject")
+    _stub_stream(
+        monkeypatch,
+        ["The onboarding SOP puts security review before access provisioning."],
+        top_score=0.9,  # strongly grounded
+    )
+    spoken = _capture_speech(monkeypatch)
+
+    body = _post(_line(s.bot_id, "Ben", "what comes before we grant access?"))
+    assert body.get("interjected") is True
+    assert body.get("spoke") is True
+    assert body.get("hand_raised") is None
+    assert spoken and "security review" in spoken[0]
+    assert s.hand_raised_at == 0  # she spoke; no hand up
+    store.remove(s.bot_id)
+
+
+def test_low_confidence_still_raises_hand(tmp_path, monkeypatch):
+    """A grounded-but-weak contribution (top_score below the bar) keeps the safe
+    raised-hand default even on an open floor."""
+    s = _session(tmp_path, monkeypatch, bot_id="hand-bot-lowconf")
+    _stub_stream(
+        monkeypatch,
+        ["I think onboarding usually takes about two weeks."],
+        top_score=0.3,  # below the 0.5 default bar
+    )
+    spoken = _capture_speech(monkeypatch)
+
+    body = _post(_line(s.bot_id, "Ben", "how long should we plan for onboarding?"))
+    assert body.get("hand_raised") is True
+    assert body.get("interjected") is None
+    assert not spoken
+    assert s.hand_raised_at > 0
+    store.remove(s.bot_id)
+
+
+def test_high_confidence_but_busy_floor_raises_hand(tmp_path, monkeypatch):
+    """Even strongly grounded, if a human partial is in flight (someone is
+    talking right now) she must NOT interject — she raises the hand instead."""
+    s = _session(tmp_path, monkeypatch, bot_id="hand-bot-busyfloor")
+    _stub_stream(
+        monkeypatch,
+        ["The SOP requires a DPA before go-live."],
+        top_score=0.95,
+    )
+    spoken = _capture_speech(monkeypatch)
+    # A human partial landed just now → the floor is busy.
+    s.last_human_partial_at = time.time()
+
+    body = _post(_line(s.bot_id, "Ben", "so what's left before launch?"))
+    assert body.get("hand_raised") is True
+    assert body.get("interjected") is None
+    assert not spoken
+    store.remove(s.bot_id)
+
+
+def test_interjection_disabled_falls_back_to_hand(tmp_path, monkeypatch):
+    """With the escape flag off, a strongly grounded point still raises the hand
+    (the pre-feature behaviour)."""
+    s = _session(tmp_path, monkeypatch, bot_id="hand-bot-nointerject")
+    monkeypatch.setattr(settings, "hand_raise_interject_when_confident", False)
+    _stub_stream(
+        monkeypatch,
+        ["The onboarding SOP puts security review before access."],
+        top_score=0.99,
+    )
+    spoken = _capture_speech(monkeypatch)
+
+    body = _post(_line(s.bot_id, "Ben", "what comes before we grant access?"))
+    assert body.get("hand_raised") is True
+    assert body.get("interjected") is None
+    assert not spoken
+    store.remove(s.bot_id)
+
+
+def test_interjection_draws_from_shared_hand_raise_budget(tmp_path, monkeypatch):
+    """A spoken interjection consumes the SAME per-meeting budget as a raised
+    hand: repeated high-confidence, floor-open contributions hit the shared cap
+    and then fall back to silence — never a stream of interjections (BLOCKER 1).
+    min_gap is zeroed here so ONLY the count cap is exercised."""
+    s = _session(tmp_path, monkeypatch, bot_id="hand-bot-budget")
+    monkeypatch.setattr(settings, "hand_raise_min_gap_seconds", 0.0)
+    monkeypatch.setattr(settings, "hand_raise_max_per_meeting", 3)
+    spoken = _capture_speech(monkeypatch)
+
+    turns = [
+        ("what are the onboarding steps for a new employee?",
+         "The onboarding SOP starts with the security review."),
+        ("how is laptop provisioning handled?",
+         "Laptops get imaged by IT before day one per the setup guide."),
+        ("who signs the data processing agreement?",
+         "Legal countersigns the DPA before any access is granted."),
+        ("what training is required in week one?",
+         "Week one covers the mandatory compliance and safety modules."),
+    ]
+    results = []
+    for question, contribution in turns:
+        _stub_stream(monkeypatch, [contribution], top_score=0.9)
+        s.last_spoke_at = 0.0          # bypass the generic 8s speak cooldown
+        s.last_human_partial_at = 0.0  # floor open
+        results.append(_post(_line(s.bot_id, "Ben", question)))
+
+    # First 3 interject (spoken); the 4th is throttled by the shared budget.
+    assert [b.get("interjected") for b in results] == [True, True, True, None]
+    assert results[3].get("reason") == "hand suppressed (budget)"
+    assert len(spoken) == 3
+    assert s.hand_raise_count == 3   # interjections counted against the cap
+    assert s.hand_raised_at == 0     # she spoke each time; no hidden raised hand
     store.remove(s.bot_id)
 
 
