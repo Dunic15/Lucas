@@ -4333,7 +4333,29 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # (decision.py) rejects acknowledgement openers and wrap-up lines.
     pending = getattr(session, "last_capture", None)
     if pending is not None:
-        p_item, p_speaker, p_ts = pending
+        p_item, p_speaker, p_ts = pending[:3]
+        p_event_key = pending[3] if len(pending) > 3 else ""
+        p_fingerprint = pending[4] if len(pending) > 4 else ""
+        same_source = bool(
+            (capture_event_key and capture_event_key == p_event_key)
+            or (
+                not capture_event_key
+                and capture_fingerprint
+                and capture_fingerprint == p_fingerprint
+            )
+        )
+        if same_source:
+            # The 2xx for either the initial final or its continuation was
+            # lost. Preserve the continuation window; clearing last_capture
+            # here would make the genuinely next ASR fragment disappear.
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": False,
+                    "action_capture": True,
+                    "duplicate": True,
+                }
+            )
         if (
             not called
             and speaker == p_speaker
@@ -4349,7 +4371,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 source_fingerprint=capture_fingerprint,
             )
             session.last_capture = (
-                updated_item, p_speaker, time.time()
+                updated_item,
+                p_speaker,
+                time.time(),
+                capture_event_key,
+                capture_fingerprint,
             )
             return JSONResponse(
                 {
@@ -4660,8 +4686,18 @@ async def recall_webhook(request: Request) -> JSONResponse:
             source_fingerprint=capture_fingerprint,
         )
         if not created:
+            # A restart may have dropped the in-memory continuation window.
+            # Re-arm it from the canonical durable row so the next genuine ASR
+            # fragment is not lost after this initial-final replay.
+            session.last_capture = (
+                item,
+                speaker,
+                time.time(),
+                capture_event_key,
+                capture_fingerprint,
+            )
             # Recall retry after a lost 2xx: the original durable action and
-            # callback already own the acknowledgement.  Never speak/kick twice.
+            # callback already own the acknowledgement. Never speak/kick twice.
             return JSONResponse(
                 {
                     "ok": True,
@@ -4674,7 +4710,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # "the recap by Friday"). Remember this capture so a same-speaker
         # follow-up within a few seconds extends its text (see the
         # continuation check after wake detection).
-        session.last_capture = (item, speaker, time.time())
+        session.last_capture = (
+            item,
+            speaker,
+            time.time(),
+            capture_event_key,
+            capture_fingerprint,
+        )
         if session.speech_generation != turn_gen:  # barge-in since the final landed
             return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
         line = _line_for(question, _QUEUE_LINES, _QUEUE_LINES_IT)

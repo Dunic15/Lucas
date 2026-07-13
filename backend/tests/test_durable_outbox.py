@@ -536,3 +536,46 @@ def test_duplicate_continuation_updates_pending_wire_once(
         assert conn.execute(
             "SELECT count(*) FROM action_capture_events"
         ).fetchone()[0] == 1
+
+
+
+def test_initial_final_replay_preserves_next_continuation_window(
+    tmp_path, monkeypatch
+):
+    _fresh(tmp_path, monkeypatch)
+    monkeypatch.setattr(integration, "_kick_outbox", lambda: None)
+    session = store.create(
+        "bot-initial-replay",
+        "https://meet.google.com/abc-defg-hij",
+        "cedric",
+        org_id="org-a",
+    )
+    session.integration = _integration()
+    item, created = tools.capture_action_once(
+        session,
+        "Send the recap",
+        source_event_key="initial-final-key",
+    )
+    assert created is True
+    session.last_capture = (
+        item, "Alex", time.time(), "initial-final-key", "initial-fingerprint"
+    )
+
+    # What the webhook's same_source fast path guarantees: replay keeps the
+    # full identity-bearing state instead of clearing it before durable dedupe.
+    pending = session.last_capture
+    assert pending[3:] == ("initial-final-key", "initial-fingerprint")
+
+    # The genuinely next split uses a different source id and still appends.
+    updated, applied = tools.extend_action_once(
+        session,
+        item,
+        "by Friday",
+        source_event_key="continuation-final-key",
+    )
+    session.last_capture = (
+        updated, "Alex", time.time(),
+        "continuation-final-key", "continuation-fingerprint",
+    )
+    assert applied is True
+    assert updated["action"] == "Send the recap by Friday"
