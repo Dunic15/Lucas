@@ -303,13 +303,12 @@ def test_summary_scoped_for_per_org_bearer(client, monkeypatch):
 # ── 2. slack/complete binds ONLY an initiated install ──────────────────
 
 def test_slack_complete_rejects_uninitiated_org(client, monkeypatch):
-    """No slack/start, no connect, no state: the machine bearer alone can NOT
-    bind a secret — 403, registry untouched, no connection row."""
+    """No signed state: the machine bearer alone cannot bind credentials."""
     monkeypatch.setattr(settings, "laura_api_token", "machine-token")
     user = store.upsert_user("victim@example.com", "Victim")
     writes: list = []
     monkeypatch.setattr(
-        secret_registry, "upsert_org_secret", lambda *a: writes.append(a) or True
+        secret_registry, "upsert_org_credentials", lambda *a: writes.append(a) or True
     )
 
     resp = client.post(
@@ -320,9 +319,10 @@ def test_slack_complete_rejects_uninitiated_org(client, monkeypatch):
             "avatar_id": "cedric",
             "team_id": "T_EVIL",
             "webhook_secret": "attacker-secret",
+            "webhook_token": "attacker-token",
         },
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 400
     assert writes == []
     assert store.connections_for_org(user["org_id"]) == []
 
@@ -339,7 +339,7 @@ def test_slack_start_complete_full_roundtrip(client, monkeypatch, google_on):
     monkeypatch.setattr(
         secret_registry,
         "upsert_org_secret",
-        lambda org, secret: writes.append((org, secret)) or True,
+        lambda org, secret, token: writes.append((org, secret, token)) or True,
     )
 
     start = client.get(
@@ -362,13 +362,16 @@ def test_slack_start_complete_full_roundtrip(client, monkeypatch, google_on):
             "team_id": "T_RT",
             "channel": "#approvals",
             "webhook_secret": "minted-by-cedric",
+            "webhook_token": "cedric-workspace-token",
             "state": state,
         },
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "connected"
-    assert writes == [(user["org_id"], "minted-by-cedric")]
+    assert writes == [
+        (user["org_id"], "minted-by-cedric", "cedric-workspace-token")
+    ]
     row = store.connections_for_org(user["org_id"])[0]
     assert row["status"] == "connected"
     assert row["config"] == {"team_id": "T_RT", "channel": "#approvals"}
@@ -386,7 +389,7 @@ def test_slack_complete_state_alone_proves_initiation(client, monkeypatch):
     monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
     monkeypatch.setattr(settings, "laura_api_token", "machine-token")
     user = store.upsert_user("stateful@example.com")
-    monkeypatch.setattr(secret_registry, "upsert_org_secret", lambda *a: True)
+    monkeypatch.setattr(secret_registry, "upsert_org_credentials", lambda *a: True)
     state = install_state.pack(user["org_id"], "cedric", "#ops", "https://x/dash")
 
     resp = client.post(
@@ -397,6 +400,7 @@ def test_slack_complete_state_alone_proves_initiation(client, monkeypatch):
             "avatar_id": "cedric",
             "team_id": "T_ST",
             "webhook_secret": "minted",
+            "webhook_token": "cedric-workspace-token",
             "state": state,
         },
     )
@@ -413,7 +417,7 @@ def test_slack_complete_state_org_mismatch_hard_fails(client, monkeypatch):
     store.set_connection(bob["org_id"], "cedric", "cedric-brain", "pending", {})
     writes: list = []
     monkeypatch.setattr(
-        secret_registry, "upsert_org_secret", lambda *a: writes.append(a) or True
+        secret_registry, "upsert_org_credentials", lambda *a: writes.append(a) or True
     )
     alice_state = install_state.pack(alice["org_id"], "cedric", "", "")
 
@@ -425,6 +429,7 @@ def test_slack_complete_state_org_mismatch_hard_fails(client, monkeypatch):
             "avatar_id": "cedric",
             "team_id": "T_X",
             "webhook_secret": "minted",
+            "webhook_token": "cedric-workspace-token",
             "state": alice_state,
         },
     )
@@ -439,8 +444,10 @@ def test_slack_complete_per_org_bearer_own_org_only(client, monkeypatch):
     bob = store.upsert_user("bob-tok@example.com")
     for u in (alice, bob):
         store.set_connection(u["org_id"], "cedric", "cedric-brain", "pending", {})
-    monkeypatch.setattr(secret_registry, "upsert_org_secret", lambda *a: True)
+    monkeypatch.setattr(secret_registry, "upsert_org_credentials", lambda *a: True)
     alice_token = store.mint_org_token(alice["org_id"], "ws")
+    alice_state = install_state.pack(alice["org_id"], "cedric", "", "")
+    bob_state = install_state.pack(bob["org_id"], "cedric", "", "")
 
     denied = client.post(
         "/dashboard/connections/brain/slack/complete",
@@ -448,6 +455,7 @@ def test_slack_complete_per_org_bearer_own_org_only(client, monkeypatch):
         json={
             "org_id": bob["org_id"], "avatar_id": "cedric",
             "team_id": "T_B", "webhook_secret": "s",
+            "webhook_token": "peer-b", "state": bob_state,
         },
     )
     assert denied.status_code == 403
@@ -457,6 +465,7 @@ def test_slack_complete_per_org_bearer_own_org_only(client, monkeypatch):
         json={
             "org_id": alice["org_id"], "avatar_id": "cedric",
             "team_id": "T_A", "webhook_secret": "s",
+            "webhook_token": "peer-a", "state": alice_state,
         },
     )
     assert ok.status_code == 200
@@ -468,7 +477,7 @@ def test_slack_complete_mirrors_durable_control_plane(client, monkeypatch):
     monkeypatch.setattr(settings, "laura_api_token", "machine-token")
     user = store.upsert_user("durable@example.com")
     store.set_connection(user["org_id"], "cedric", "cedric-brain", "pending", {})
-    monkeypatch.setattr(secret_registry, "upsert_org_secret", lambda *a: True)
+    monkeypatch.setattr(secret_registry, "upsert_org_credentials", lambda *a: True)
     mirrored: list[tuple] = []
     monkeypatch.setattr(control_plane, "enabled", lambda: True)
     monkeypatch.setattr(control_plane, "get_connections", lambda org: [])
@@ -478,8 +487,9 @@ def test_slack_complete_mirrors_durable_control_plane(client, monkeypatch):
         lambda *a, **k: mirrored.append(a) or True,
     )
     monkeypatch.setattr(
-        control_plane, "mint_org_token", lambda org, label="": "durable-raw-token"
+        control_plane, "rotate_org_token", lambda org, label: "durable-raw-token"
     )
+    state = install_state.pack(user["org_id"], "cedric", "", "")
 
     resp = client.post(
         "/dashboard/connections/brain/slack/complete",
@@ -487,6 +497,7 @@ def test_slack_complete_mirrors_durable_control_plane(client, monkeypatch):
         json={
             "org_id": user["org_id"], "avatar_id": "cedric",
             "team_id": "T_D", "webhook_secret": "s",
+            "webhook_token": "peer-d", "state": state,
         },
     )
     assert resp.status_code == 200
@@ -499,9 +510,12 @@ def test_slack_complete_mirrors_durable_control_plane(client, monkeypatch):
 
 def test_install_state_unpack_contract(monkeypatch):
     monkeypatch.setattr(settings, "cedric_orgs_token", "sign-key")
-    state = install_state.pack("org_a", "cedric", "#ch", "https://x/d", now=1000.0)
+    state = install_state.pack(
+        "org_a", "cedric", "#ch", "https://x/d", "https://x/complete", now=1000.0
+    )
     data = install_state.unpack(state, now=1200.0)
     assert data and data["org_id"] == "org_a" and data["avatar_id"] == "cedric"
+    assert data["complete_url"] == "https://x/complete"
     assert install_state.unpack(state, now=1000.0 + 601) is None  # expired
     tampered = state[:-1] + ("0" if state[-1] != "0" else "1")
     assert install_state.unpack(tampered, now=1200.0) is None  # tampered
@@ -550,7 +564,7 @@ def test_disconnect_remote_revoke_failure_keeps_local_state(client, monkeypatch,
     )
     removed: list = []
     monkeypatch.setattr(
-        secret_registry, "remove_org_secret", lambda org: removed.append(org) or True
+        secret_registry, "remove_org_credentials", lambda org: removed.append(org) or True
     )
 
     class FakeClient:
@@ -579,7 +593,7 @@ def test_disconnect_remote_revoke_ok_drops_secret(client, monkeypatch, google_on
     )
     removed: list = []
     monkeypatch.setattr(
-        secret_registry, "remove_org_secret", lambda org: removed.append(org) or True
+        secret_registry, "remove_org_credentials", lambda org: removed.append(org) or True
     )
     deleted: list[str] = []
 
@@ -610,7 +624,7 @@ def test_disconnect_remote_404_counts_as_revoked(client, monkeypatch, google_on)
     store.set_connection(
         user["org_id"], "cedric", "cedric-brain", "connected", {"team_id": "T1"}
     )
-    monkeypatch.setattr(secret_registry, "remove_org_secret", lambda org: True)
+    monkeypatch.setattr(secret_registry, "remove_org_credentials", lambda org: True)
 
     class FakeClient:
         def __init__(self, *a, **k): ...
@@ -634,7 +648,7 @@ def test_disconnect_without_orchestrator_is_local_only(client, monkeypatch, goog
     store.set_connection(
         user["org_id"], "cedric", "cedric-brain", "connected", {"team_id": "T1"}
     )
-    monkeypatch.setattr(secret_registry, "remove_org_secret", lambda org: True)
+    monkeypatch.setattr(secret_registry, "remove_org_credentials", lambda org: True)
     resp = client.post(
         "/dashboard/connections/brain/disconnect", json={"avatar_id": "cedric"}
     )
@@ -667,10 +681,10 @@ def test_remove_org_secret_drops_cache_without_ssm(monkeypatch):
     monkeypatch.setattr(secret_registry, "boto3", None)
     monkeypatch.setattr(secret_registry, "_env_snapshot", "")
     monkeypatch.setattr(secret_registry, "_cache", {"org_x": "s3cret", "org_y": "k"})
-    assert secret_registry.remove_org_secret("org_x") is True
+    assert secret_registry.remove_org_credentials("org_x") is True
     assert secret_registry.secret_for("org_x") == ""
     assert secret_registry.secret_for("org_y") == "k"
-    assert secret_registry.remove_org_secret("") is False
+    assert secret_registry.remove_org_credentials("") is False
 
 
 # ── 4. per-org connection flags for logged-in users ────────────────────
