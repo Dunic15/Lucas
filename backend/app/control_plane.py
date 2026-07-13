@@ -417,6 +417,9 @@ _BILLING_TERMINAL = {
     "canceled", "unpaid", "incomplete_expired", "incomplete", "paused",
     "invalid", "none",
 }
+_BILLING_IRREVERSIBLE = {
+    "canceled", "unpaid", "incomplete_expired", "invalid",
+}
 
 
 def billing_boundary_ready() -> bool:
@@ -724,7 +727,11 @@ def apply_stripe_event(
                        stripe_customer_id, stripe_subscription_id,
                        subscription_event_created, subscription_event_id,
                        invoice_event_created, invoice_event_id,
-                       checkout_event_created, checkout_event_id
+                       checkout_event_created, checkout_event_id,
+                       verified_paid_subscription_id,
+                       EXTRACT(EPOCH FROM verified_paid_period_start),
+                       EXTRACT(EPOCH FROM verified_paid_period_end),
+                       verified_paid_event_created, verified_paid_event_id
                   FROM billing_accounts
                  WHERE org_id = :o
                  FOR UPDATE
@@ -769,20 +776,27 @@ def apply_stripe_event(
             sub = str(effect.get("subscription_id") or "")
             status = str(effect.get("status") or "invalid").lower()
             access = str(effect.get("access") or "terminal")
-            newer = _event_is_newer(
-                created, event_id, int(row[7] or 0), str(row[8] or "")
-            )
-            if not sub or not newer:
+            old_created = int(row[7] or 0)
+            if not sub or created < old_created:
                 return True
             if current_sub and sub != current_sub:
                 if current_status not in _BILLING_TERMINAL or access == "terminal":
                     return True
             if (
                 current_sub == sub
-                and current_status in _BILLING_TERMINAL
+                and current_status in _BILLING_IRREVERSIBLE
                 and access != "terminal"
             ):
                 return True
+            if created == old_created and current_sub == sub:
+                priority = {"active": 1, "past_due": 2, "terminal": 3}
+                current_access = (
+                    "terminal"
+                    if current_status in _BILLING_TERMINAL
+                    else ("past_due" if current_status == "past_due" else "active")
+                )
+                if priority.get(access, 3) <= priority[current_access]:
+                    return True
             if not bool(effect.get("price_valid")):
                 if current_sub == sub:
                     access = "terminal"
@@ -790,29 +804,49 @@ def apply_stripe_event(
                 else:
                     return True
 
-            period_start = effect.get("period_start")
-            period_end = effect.get("period_end")
-            if access != "terminal":
-                if (
-                    period_start is None
-                    or period_end is None
-                    or int(period_end) <= int(period_start)
-                ):
-                    access = "terminal"
-                    status = "invalid"
-
-            if access == "active":
-                plan = "solo"
-                included = int(settings.solo_included_seconds)
-                stored_status = "active"
-            elif access == "past_due":
-                plan = "solo"
-                included = int(settings.solo_included_seconds)
-                stored_status = "past_due"
-            else:
+            proof_sub = str(row[13] or "")
+            proof_start = int(row[14]) if row[14] is not None else None
+            proof_end = int(row[15]) if row[15] is not None else None
+            verified_window = bool(
+                proof_sub == sub
+                and proof_start is not None
+                and proof_end is not None
+                and proof_end > proof_start
+            )
+            if access == "terminal":
                 plan = "free"
                 included = int(settings.free_trial_seconds)
                 stored_status = status or "canceled"
+                period_start = None
+                period_end = None
+            elif access == "active" and verified_window:
+                plan = "solo"
+                included = int(settings.solo_included_seconds)
+                stored_status = "active"
+                period_start = proof_start
+                period_end = proof_end
+            elif (
+                access == "past_due"
+                and current_sub == sub
+                and str(row[0]) == "solo"
+                and row[3] is not None
+                and row[4] is not None
+            ):
+                # A failed renewal never advances or resets the last paid
+                # allowance window. Access lasts only through its paid end.
+                plan = "solo"
+                included = int(settings.solo_included_seconds)
+                stored_status = "past_due"
+                period_start = int(row[3])
+                period_end = int(row[4])
+            else:
+                # Subscription state alone is not proof of payment. The exact
+                # invoice.paid signal may arrive before or after this event.
+                plan = "free"
+                included = int(settings.free_trial_seconds)
+                stored_status = (
+                    "past_due" if access == "past_due" else "awaiting_payment"
+                )
                 period_start = None
                 period_end = None
 
@@ -824,11 +858,21 @@ def apply_stripe_event(
                            included_seconds = :included,
                            subscription_status = :status,
                            current_period_start =
-                             CASE WHEN :ps IS NULL THEN NULL
-                                  ELSE to_timestamp(CAST(:ps AS double precision)) END,
+                             CASE
+                               WHEN CAST(:ps AS double precision) IS NULL
+                                 THEN NULL
+                               ELSE to_timestamp(
+                                 CAST(:ps AS double precision)
+                               )
+                             END,
                            current_period_end =
-                             CASE WHEN :pe IS NULL THEN NULL
-                                  ELSE to_timestamp(CAST(:pe AS double precision)) END,
+                             CASE
+                               WHEN CAST(:pe AS double precision) IS NULL
+                                 THEN NULL
+                               ELSE to_timestamp(
+                                 CAST(:pe AS double precision)
+                               )
+                             END,
                            stripe_subscription_id = :sub,
                            subscription_event_created = :created,
                            subscription_event_id = :event_id,
@@ -855,17 +899,22 @@ def apply_stripe_event(
             sub = str(effect.get("subscription_id") or "")
             if (
                 not sub
-                or sub != current_sub
                 or not bool(effect.get("price_valid"))
-                or not _event_is_newer(
-                    created, event_id, int(row[9] or 0), str(row[10] or "")
+                or created < int(row[9] or 0)
+                or (
+                    created == int(row[9] or 0)
+                    and kind != "invoice_failed"
                 )
             ):
                 return True
 
             params = {"o": org, "created": created, "event_id": event_id}
             if kind == "invoice_failed":
-                if str(row[0]) == "solo" and current_status in {"active", "past_due"}:
+                if (
+                    sub == current_sub
+                    and current_status
+                    in {"active", "past_due", "awaiting_payment"}
+                ):
                     conn.execute(
                         text(
                             """
@@ -883,26 +932,92 @@ def apply_stripe_event(
 
             ps = effect.get("period_start")
             pe = effect.get("period_end")
-            old_ps = int(row[3]) if row[3] is not None else None
             if (
-                str(row[0]) != "solo"
-                or current_status not in {"active", "past_due"}
-                or ps is None
+                ps is None
                 or pe is None
                 or int(pe) <= int(ps)
-                or (old_ps is not None and int(ps) < old_ps)
             ):
                 return True
-            params.update({"ps": int(ps), "pe": int(pe)})
+
+            # Do not let an old subscription's invoice touch a newer active
+            # subscription. A paid invoice may be remembered before its own
+            # subscription event only when there is no current subscription or
+            # the old one is terminal.
+            if (
+                current_sub
+                and sub != current_sub
+                and current_status not in _BILLING_TERMINAL
+            ):
+                return True
+            if (
+                current_status in _BILLING_TERMINAL
+                and created < int(row[7] or 0)
+            ):
+                return True
+
+            proof_sub = str(row[13] or "")
+            proof_start = int(row[14]) if row[14] is not None else None
+            proof_created = int(row[16] or 0)
+            if proof_sub == sub and (
+                int(ps) < int(proof_start or 0)
+                or created < proof_created
+            ):
+                return True
+
+            params.update(
+                {
+                    "ps": int(ps),
+                    "pe": int(pe),
+                    "sub": sub,
+                    "adopt": bool(
+                        not current_sub
+                        or (
+                            sub != current_sub
+                            and current_status in _BILLING_TERMINAL
+                        )
+                    ),
+                    "grant": bool(
+                        sub == current_sub
+                        and current_status
+                        in {"active", "past_due", "awaiting_payment"}
+                    ),
+                    "solo": int(settings.solo_included_seconds),
+                }
+            )
             conn.execute(
                 text(
                     """
                     UPDATE billing_accounts
-                       SET subscription_status = 'active',
-                           current_period_start =
+                       SET verified_paid_subscription_id = :sub,
+                           verified_paid_period_start =
                              to_timestamp(CAST(:ps AS double precision)),
-                           current_period_end =
+                           verified_paid_period_end =
                              to_timestamp(CAST(:pe AS double precision)),
+                           verified_paid_event_created = :created,
+                           verified_paid_event_id = :event_id,
+                           stripe_subscription_id =
+                             CASE WHEN :adopt THEN :sub
+                                  ELSE stripe_subscription_id END,
+                           subscription_status =
+                             CASE WHEN :grant THEN 'active'
+                                  WHEN :adopt THEN 'awaiting_subscription'
+                                  ELSE subscription_status END,
+                           plan = CASE WHEN :grant THEN 'solo' ELSE plan END,
+                           included_seconds =
+                             CASE WHEN :grant THEN :solo
+                                  ELSE included_seconds END,
+                           current_period_start =
+                             CASE WHEN :grant
+                                  THEN to_timestamp(
+                                    CAST(:ps AS double precision)
+                                  )
+                                  ELSE current_period_start END,
+                           current_period_end =
+                             CASE WHEN :grant
+                                  THEN to_timestamp(
+                                    CAST(:pe AS double precision)
+                                  )
+                                  ELSE current_period_end END,
                            invoice_event_created = :created,
                            invoice_event_id = :event_id,
                            updated_at = now()
