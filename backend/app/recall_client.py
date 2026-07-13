@@ -543,12 +543,22 @@ def list_calendar_events(
 
 
 def leave_call(bot_id: str) -> None:
-    """Remove the bot from the meeting (stops avatar streaming → stops billing)."""
-    _request(
+    """Remove the bot from the meeting (stops avatar streaming → stops billing).
+
+    Hardened like delete_bot: retry the transient 5xx/429 window, then
+    raise_for_status so a PERSISTENT Recall failure propagates to the caller.
+    Swallowing a 5xx (the old behavior) let finalize believe the meter had
+    stopped, delete the session, and leak the per-minute bill forever — the
+    reconcile backstop only revisits sessions still in the store, so a
+    removed-but-still-live bot was never retried.
+    """
+    resp = _request(
         "POST",
         f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/{bot_id}/leave_call/",
         headers=_headers(),
+        retry=True,
     )
+    resp.raise_for_status()
 
 
 def send_chat_message(bot_id: str, message: str) -> None:

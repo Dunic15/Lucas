@@ -19,6 +19,7 @@ import random
 import re
 import time
 import uuid
+import weakref
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -264,7 +265,6 @@ _ACK_FILLERS_IT = (
 # filler. Below this, a filler is just noise in front of an instant answer.
 _ACK_FILLER_AFTER_S = 1.2
 
-_MEET_CODE_RE = re.compile(r"meet\.google\.com/([a-z-]+)")
 _BOT_TERMINAL = {"call_ended", "done", "fatal"}
 # bot_ids whose finalize is currently in flight. Recall emits bot.call_ended
 # THEN bot.done (both terminal) as SEPARATE concurrent webhook POSTs, and the
@@ -284,9 +284,25 @@ _LIVE_REPAIR_RE = re.compile(
 )
 
 
-def _meeting_code(url: str) -> str:
-    m = _MEET_CODE_RE.search(url or "")
-    return m.group(1) if m else (url or "")
+def _bot_meeting_key(bot: dict) -> str:
+    """Platform-aware meeting_key for a Recall bot record, to compare for
+    EQUALITY against ledger.meeting_key(our_url) — not a Meet-only substring.
+
+    Recall reports the joined meeting either as a full URL string or as a
+    structured object carrying the platform-native meeting_id. ledger.meeting_key
+    extracts exactly that native id from a URL (Meet code / Zoom id / Teams
+    thread), so:
+      - a URL string → normalize it the same way we normalized ours;
+      - an object → its meeting_id IS the native id ledger.meeting_key produces,
+        so compare on it directly (lower-cased).
+    The old Meet-only regex made ``code`` the whole URL for Zoom/Teams while
+    Recall reports an opaque id, so the substring test never matched and both
+    durable guards silently no-op'd — two bots, two meters, uncleaned.
+    """
+    mu = bot.get("meeting_url")
+    if isinstance(mu, dict):
+        return str(mu.get("meeting_id") or "").strip().lower()
+    return ledger.meeting_key(str(mu or ""))
 
 
 def _recall_list_headers() -> dict[str, str]:
@@ -329,8 +345,10 @@ def _reconcile_duplicate_bots(meeting_url: str, my_bot_id: str) -> None:
     compute the same ranking from the same Recall data, so the duplicate resolves
     deterministically and the survivor is the smooth bot, not the laggy default.
     """
-    code = _meeting_code(meeting_url)
-    if not code:
+    if not settings.recall_api_key.strip():
+        return  # no key → can't query Recall (offline/demo); nothing to reconcile
+    key = ledger.meeting_key(meeting_url)
+    if not key:
         return
     try:
         r = httpx.get(
@@ -341,18 +359,17 @@ def _reconcile_duplicate_bots(meeting_url: str, my_bot_id: str) -> None:
         r.raise_for_status()
         active = []
         for bot in (r.json().get("results") or [])[:25]:
-            mu = bot.get("meeting_url")
-            mid = mu.get("meeting_id") if isinstance(mu, dict) else mu
-            if mid and code in str(mid):
-                status = (bot.get("status_changes") or [{}])[-1].get("code")
-                if status not in _BOT_TERMINAL:
-                    active.append(
-                        (
-                            _bot_variant_rank(bot),
-                            bot.get("created_at") or "",
-                            bot.get("id"),
-                        )
+            if _bot_meeting_key(bot) != key:
+                continue
+            status = (bot.get("status_changes") or [{}])[-1].get("code")
+            if status not in _BOT_TERMINAL:
+                active.append(
+                    (
+                        _bot_variant_rank(bot),
+                        bot.get("created_at") or "",
+                        bot.get("id"),
                     )
+                )
         if len(active) <= 1:
             return
         active.sort()  # best variant first, then earliest; keep [0], evict the rest
@@ -372,10 +389,14 @@ def _meeting_has_active_bot(meeting_url: str) -> bool:
 
     Durable, cross-instance dedup: the in-memory / per-process guards can miss a
     duplicate across a deploy overlap or a second invite email, so we check
-    Recall itself (the source of truth) before dispatching another bot.
+    Recall itself (the source of truth) before dispatching another bot. Matching
+    is platform-aware via ledger.meeting_key (Meet/Zoom/Teams) — the old
+    Meet-only regex never matched a Zoom/Teams link, so this guard no-op'd there.
     """
-    code = _meeting_code(meeting_url)
-    if not code:
+    if not settings.recall_api_key.strip():
+        return False  # no key → can't query Recall (offline/demo); pre-guard behavior
+    key = ledger.meeting_key(meeting_url)
+    if not key:
         return False
     try:
         r = httpx.get(
@@ -385,15 +406,34 @@ def _meeting_has_active_bot(meeting_url: str) -> bool:
         )
         r.raise_for_status()
         for bot in (r.json().get("results") or [])[:25]:
-            mu = bot.get("meeting_url")
-            mid = mu.get("meeting_id") if isinstance(mu, dict) else mu
-            if mid and code in str(mid):
-                status = (bot.get("status_changes") or [{}])[-1].get("code")
-                if status not in _BOT_TERMINAL:
-                    return True
+            if _bot_meeting_key(bot) != key:
+                continue
+            status = (bot.get("status_changes") or [{}])[-1].get("code")
+            if status not in _BOT_TERMINAL:
+                return True
     except Exception:
         pass
     return False
+
+
+# Per-meeting serialization for the manual-start guard→create window. Two
+# concurrent POST /sessions/start for the SAME meeting must not both pass the
+# dedup checks and both create a bot (two bots → two per-minute meters in one
+# call). Keyed by ledger.meeting_key so Meet/Zoom/Teams links serialize per
+# meeting; DIFFERENT meetings hold different locks and still dispatch in
+# parallel. A WeakValueDictionary drops a lock once no request references it (no
+# unbounded growth), while any concurrent waiter keeps its own strong ref so the
+# same key always resolves to the same lock object.
+_start_locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
+
+
+def _start_lock_for(meeting_url: str) -> asyncio.Lock:
+    key = ledger.meeting_key(meeting_url)
+    lock = _start_locks.get(key)
+    if lock is None:  # create-on-demand; get→create is synchronous (atomic here)
+        lock = asyncio.Lock()
+        _start_locks[key] = lock
+    return lock
 
 
 # Seeding cutoff for the gmail watcher's FIRST poll after boot: mail older
@@ -544,6 +584,56 @@ async def _abandon_orphan_session(bot_id: str) -> None:
         _finalizing.discard(bot_id)
 
 
+# Recall statuses that CONFIRM a bot is no longer billing: the bot is genuinely
+# gone. Everything else — 401/403 (rotated/expired key), 429 (rate limit), any
+# 5xx, network/other — leaves the meter-stop UNVERIFIED: the bot may still be
+# live and billing, so the session must be kept and the leave retried.
+_LEAVE_GONE_STATUSES = {404, 410}
+
+
+def _leave_confirmed_stopped(exc: BaseException | None) -> bool:
+    """True iff the Recall meter is CONFIRMED not billing: leave_call succeeded
+    (exc is None) or Recall reports the bot genuinely gone (404/410). Every other
+    error — 401/403/429 auth/rate-limit, 5xx, network/other — is UNVERIFIED, so
+    the caller keeps the session for a retry rather than dropping a still-live,
+    still-billing bot (the fleet-wide meter-leak class this whole change closes)."""
+    if exc is None:
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _LEAVE_GONE_STATUSES
+    return False
+
+
+async def _retry_leave(bot_id: str, session: store.Session) -> bool:
+    """Retry ONLY the Recall meter-stop for a session whose artifact was already
+    built + delivered but whose leave_call could not be confirmed (so it was kept
+    in the store for this retry — see _finalize_session_locked). Drop the session
+    and signal the GPU meter when the meter is CONFIRMED stopped (leave succeeded
+    OR the bot is gone 404/410 — otherwise a legitimate already-ended bot would
+    be retried every pass FOREVER, inflating active_sessions and defeating the
+    pre-deploy gate). NO artifact rebuild, NO re-delivery. Returns False while the
+    stop is still UNVERIFIED so the reconcile loop retries next pass.
+
+    Guarded by ``_finalizing`` so a manual /end and a reconcile tick can't both
+    retry the same bot at once (idempotent regardless — defense in depth)."""
+    if bot_id in _finalizing:
+        return False
+    _finalizing.add(bot_id)
+    try:
+        try:
+            await run_in_threadpool(recall_client.leave_call, bot_id)
+        except Exception as e:  # noqa: BLE001 — classified below
+            if not _leave_confirmed_stopped(e):
+                return False  # UNVERIFIED — keep the session, retry next pass
+            # 404/410: bot genuinely gone → not billing → fall through and drop.
+        store.remove(bot_id)
+        gpu_runtime.on_session_ended(len(store.all_sessions()))
+        runpod_runtime.on_session_ended(len(store.all_sessions()))
+        return True
+    finally:
+        _finalizing.discard(bot_id)
+
+
 async def _reconcile_once() -> None:
     """One reconciliation pass: finalize every active session whose Recall bot is
     terminal, and drop orphaned sessions whose bot Recall no longer knows about.
@@ -559,6 +649,14 @@ async def _reconcile_once() -> None:
         if _shutting_down:
             break
         bid = session.bot_id
+        # A prior finalize built + delivered this session but its Recall
+        # meter-stop failed (5xx / network) and kept it for retry. The bot may
+        # still be live, so the terminal-status path below would never fire —
+        # retry the leave directly. On success the session is dropped; the
+        # artifact already went out, so there is NO re-delivery.
+        if getattr(session, "leave_pending", False):
+            await _retry_leave(bid, session)
+            continue
         try:
             r = await run_in_threadpool(
                 lambda b=bid: httpx.get(
@@ -1164,6 +1262,48 @@ async def _start_avatar_session(
     }
 
 
+def _existing_session_clash(meeting_url: str, caller_org: str) -> JSONResponse | None:
+    """The 409 to return when a local-store session is already booked for this
+    exact meeting_url — one live/scheduled booking per URL (rebooking must cancel
+    first, else two bots + two per-minute meters land in one call). None when
+    there is no clash. Another tenant's clashing bot_id is never leaked."""
+    for existing in store.all_sessions():
+        if existing.meeting_url == meeting_url:
+            if existing.org_id != caller_org:
+                return JSONResponse(
+                    {"error": "a session already exists for this meeting_url"},
+                    status_code=409,
+                )
+            return JSONResponse(
+                {
+                    "error": "a session already exists for this meeting_url",
+                    "bot_id": existing.bot_id,
+                },
+                status_code=409,
+            )
+    return None
+
+
+async def _reconcile_after_start(meeting_url: str, bot_id: str) -> None:
+    """Give a racing duplicate bot a moment to register with Recall, then keep
+    the best variant and drop the rest — same as the Gmail auto-join loop, but
+    fire-and-forget so the /sessions/start response returns immediately."""
+    try:
+        await asyncio.sleep(4)
+        await run_in_threadpool(_reconcile_duplicate_bots, meeting_url, bot_id)
+    except Exception:
+        pass
+
+
+def _schedule_start_reconcile(meeting_url: str, bot_id: str) -> None:
+    """Schedule the post-start duplicate-bot reconcile without blocking the
+    response (the Gmail loop can await it inline; a request handler cannot)."""
+    try:
+        asyncio.create_task(_reconcile_after_start(meeting_url, bot_id))
+    except RuntimeError:
+        pass  # no running loop to schedule on (shouldn't happen in the handler)
+
+
 @app.post("/sessions/start")
 async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     # A logged-in human (dashboard cookie) or a machine bearer (Cedric). The
@@ -1188,40 +1328,49 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     caller_org = user["org_id"] if user else settings.demo_org_id
     # One live/scheduled booking per meeting URL: rebooking must cancel first
     # (otherwise two bots — and two per-minute meters — end up in one call).
-    for existing in store.all_sessions():
-        if existing.meeting_url == req.meeting_url:
-            # Don't leak another tenant's bot_id when the clashing session
-            # belongs to a different org — a generic 409 instead.
-            if existing.org_id != caller_org:
-                return JSONResponse(
-                    {"error": "a session already exists for this meeting_url"},
-                    status_code=409,
-                )
-            return JSONResponse(
-                {
-                    "error": "a session already exists for this meeting_url",
-                    "bot_id": existing.bot_id,
-                },
-                status_code=409,
-            )
+    # Fast path: an obvious local-store clash needs no lock or Recall round-trip
+    # (the common re-click of the same link).
+    if clash := _existing_session_clash(req.meeting_url, caller_org):
+        return clash
 
     integration = cedric.build_integration(req, brief)  # CEDRIC
-    try:
-        result = await _start_avatar_session(
-            req.meeting_url, req.avatar_id, req.join_at, integration,
-            org_id=caller_org,
-        )
-    except recall_client.AvatarBusyError:
-        return JSONResponse(
-            {
-                "error": "avatar_busy",
-                "detail": "All avatars are busy right now — retry in a minute.",
-            },
-            status_code=503,
-            headers={"Retry-After": "60"},
-        )
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+    # Serialize the guard→create window PER MEETING so two concurrent starts for
+    # the same link can't both pass the dedup checks and both create a bot.
+    # DIFFERENT meetings hold different locks and still dispatch in parallel.
+    async with _start_lock_for(req.meeting_url):
+        # Re-check under the lock: a racing double-click may have created the
+        # session between the fast-path check above and acquiring the lock.
+        if clash := _existing_session_clash(req.meeting_url, caller_org):
+            return clash
+        # Durable cross-instance guard (Recall = source of truth): a redeploy can
+        # wipe the local store while Recall still holds the live bot, so a
+        # re-click would dispatch a SECOND bot + meter into the same call. The
+        # Gmail/calendar paths already gate on this; wire it here too (now
+        # platform-aware for Zoom/Teams as well as Meet).
+        if await run_in_threadpool(_meeting_has_active_bot, req.meeting_url):
+            return JSONResponse(
+                {"error": "a session already exists for this meeting_url"},
+                status_code=409,
+            )
+        try:
+            result = await _start_avatar_session(
+                req.meeting_url, req.avatar_id, req.join_at, integration,
+                org_id=caller_org,
+            )
+        except recall_client.AvatarBusyError:
+            return JSONResponse(
+                {
+                    "error": "avatar_busy",
+                    "detail": "All avatars are busy right now — retry in a minute.",
+                },
+                status_code=503,
+                headers={"Retry-After": "60"},
+            )
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+    # Resolve any deploy-overlap duplicate the way the Gmail loop does, without
+    # holding up the response.
+    _schedule_start_reconcile(req.meeting_url, result["bot_id"])
     return JSONResponse(result)
 
 
@@ -1372,6 +1521,16 @@ async def _finalize_session(
     session = store.get(bot_id)
     if session is None:
         return store.get_artifact(bot_id)
+    # A prior finalize already built + delivered this session's artifact but its
+    # Recall meter-stop (leave_call) was not confirmed, so the session was KEPT
+    # for retry (see _finalize_session_locked). Re-finalizing must NOT rebuild or
+    # re-deliver — just retry the meter-stop and drop the session once confirmed
+    # stopped. _retry_leave self-guards on _finalizing, so a manual /end and a
+    # reconcile tick can't double-retry. Return the already-stored artifact so
+    # /end still answers 200 with the deliverable.
+    if getattr(session, "leave_pending", False):
+        await _retry_leave(bot_id, session)
+        return store.get_artifact(bot_id)
     # Concurrency guard. store.remove(bot_id) — the thing that makes the
     # `session is None` check above idempotent — only runs at the very END of
     # the body, past several awaits (the multi-second post_meeting LLM call
@@ -1399,12 +1558,26 @@ async def _finalize_session_locked(
         cedric.notify_failed(session, bot_id, failed_code)  # CEDRIC
     transcript_text = session.transcript_text()
 
-    # Stop billing on both vendors.
-    await run_in_threadpool(recall_client.leave_call, bot_id)
+    # Stop billing on both vendors. leave_call is the Recall meter-stop and now
+    # RAISES on a persistent failure (retry=True + raise_for_status). The stop is
+    # only CONFIRMED when leave succeeds or Recall reports the bot genuinely gone
+    # (404/410, e.g. a naturally-ended meeting); a 401/403 (rotated key), 429, or
+    # 5xx leaves it UNVERIFIED — the bot may still be live+billing. When
+    # unverified we keep the session below so the reconcile backstop retries the
+    # leave; the artifact is still built + persisted + delivered here so the
+    # deliverable is never lost.
+    leave_verified = True
+    try:
+        await run_in_threadpool(recall_client.leave_call, bot_id)
+    except Exception as e:  # noqa: BLE001 — classified by _leave_confirmed_stopped
+        leave_verified = _leave_confirmed_stopped(e)
     if session.anam_conversation_id:
-        await run_in_threadpool(
-            anam_client.end_conversation, session.anam_conversation_id
-        )
+        try:
+            await run_in_threadpool(
+                anam_client.end_conversation, session.anam_conversation_id
+            )
+        except Exception:
+            pass
 
     artifact: dict = {
         "summary": "",
@@ -1499,11 +1672,25 @@ async def _finalize_session_locked(
         f"orchestrated={orchestrated} content={had_content}",
         flush=True,
     )
-    store.remove(bot_id)
-    # Photoreal only: last session out turns off the GPU meter (after a grace
-    # window, in case another meeting starts right away).
-    gpu_runtime.on_session_ended(len(store.all_sessions()))
-    runpod_runtime.on_session_ended(len(store.all_sessions()))
+    if leave_verified:
+        store.remove(bot_id)
+        # Photoreal only: last session out turns off the GPU meter (after a grace
+        # window, in case another meeting starts right away).
+        gpu_runtime.on_session_ended(len(store.all_sessions()))
+        runpod_runtime.on_session_ended(len(store.all_sessions()))
+    else:
+        # Meter-stop UNVERIFIED (Recall 5xx / network error): keep the session in
+        # the store so the reconcile backstop retries leave_call — the poll only
+        # revisits sessions still in the store, so removing it now would strand a
+        # still-live bot billing forever. The artifact is already saved and
+        # delivered above; the retry routes through leave_pending so it must NOT
+        # re-deliver. (No transcript is logged — PII.)
+        session.leave_pending = True
+        print(
+            f"[finalize] bot={bot_id} leave_call unverified — session kept for "
+            f"reconcile meter-stop retry",
+            flush=True,
+        )
     return artifact
 
 
