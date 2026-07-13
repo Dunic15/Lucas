@@ -318,7 +318,7 @@ def test_summary_scoped_for_per_org_bearer(client, monkeypatch):
 
 def test_slack_complete_rejects_uninitiated_org(client, monkeypatch):
     """No signed state: the machine bearer alone cannot bind credentials."""
-    monkeypatch.setattr(settings, "laura_api_token", "machine-token")
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
     user = store.upsert_user("victim@example.com", "Victim")
     writes: list = []
     monkeypatch.setattr(
@@ -327,7 +327,7 @@ def test_slack_complete_rejects_uninitiated_org(client, monkeypatch):
 
     resp = client.post(
         "/dashboard/connections/brain/slack/complete",
-        headers=_bearer("machine-token"),
+        headers=_bearer("provisioning-token"),
         json={
             "org_id": user["org_id"],
             "avatar_id": "cedric",
@@ -347,7 +347,7 @@ def test_slack_start_complete_full_roundtrip(client, monkeypatch, google_on):
     bound, and the per-workspace org_token returned exactly once."""
     monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
     monkeypatch.setattr(settings, "cedric_orgs_token", "shared-test-token")
-    monkeypatch.setattr(settings, "laura_api_token", "machine-token")
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
     user = _login(client)
     writes: list[tuple[str, str, str]] = []
     monkeypatch.setattr(
@@ -369,7 +369,7 @@ def test_slack_start_complete_full_roundtrip(client, monkeypatch, google_on):
 
     resp = client.post(
         "/dashboard/connections/brain/slack/complete",
-        headers=_bearer("machine-token"),
+        headers=_bearer("provisioning-token"),
         json={
             "org_id": user["org_id"],
             "avatar_id": "cedric",
@@ -388,7 +388,9 @@ def test_slack_start_complete_full_roundtrip(client, monkeypatch, google_on):
     ]
     row = store.connections_for_org(user["org_id"])[0]
     assert row["status"] == "connected"
-    assert row["config"] == {"team_id": "T_RT", "channel": "#approvals"}
+    assert row["config"]["team_id"] == "T_RT"
+    assert row["config"]["channel"] == "#approvals"
+    assert row["config"]["install_nonce"]
     # the org_token is returned ONCE, resolves to this org, stored hashed only
     token = body["org_token"]
     assert token and store.resolve_org_token(token) == user["org_id"]
@@ -401,18 +403,19 @@ def test_slack_complete_state_alone_proves_initiation(client, monkeypatch):
     """A valid signed state binds the install even if the pending row was lost
     (redeploy wiped the ephemeral store between start and complete)."""
     monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
-    monkeypatch.setattr(settings, "laura_api_token", "machine-token")
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
     user = store.upsert_user("stateful@example.com")
     monkeypatch.setattr(secret_registry, "upsert_org_credentials", lambda *a: True)
     state = install_state.pack(user["org_id"], "cedric", "#ops", "https://x/dash")
 
     resp = client.post(
         "/dashboard/connections/brain/slack/complete",
-        headers=_bearer("machine-token"),
+        headers=_bearer("provisioning-token"),
         json={
             "org_id": user["org_id"],
             "avatar_id": "cedric",
             "team_id": "T_ST",
+            "channel": "#ops",
             "webhook_secret": "minted",
             "webhook_token": "cedric-workspace-token",
             "state": state,
@@ -425,7 +428,7 @@ def test_slack_complete_state_org_mismatch_hard_fails(client, monkeypatch):
     """A state minted for org A spliced onto org B's complete is refused even
     when B has a pending row — a mismatched signed state is an attack signal."""
     monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
-    monkeypatch.setattr(settings, "laura_api_token", "machine-token")
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
     alice = store.upsert_user("alice-state@example.com")
     bob = store.upsert_user("bob-state@example.com")
     store.set_connection(bob["org_id"], "cedric", "cedric-brain", "pending", {})
@@ -437,7 +440,7 @@ def test_slack_complete_state_org_mismatch_hard_fails(client, monkeypatch):
 
     resp = client.post(
         "/dashboard/connections/brain/slack/complete",
-        headers=_bearer("machine-token"),
+        headers=_bearer("provisioning-token"),
         json={
             "org_id": bob["org_id"],
             "avatar_id": "cedric",
@@ -453,7 +456,7 @@ def test_slack_complete_state_org_mismatch_hard_fails(client, monkeypatch):
 
 def test_slack_complete_per_org_bearer_own_org_only(client, monkeypatch):
     """A per-org bearer may complete installs ONLY for its own org."""
-    monkeypatch.setattr(settings, "laura_api_token", "machine-token")
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
     alice = store.upsert_user("alice-tok@example.com")
     bob = store.upsert_user("bob-tok@example.com")
     for u in (alice, bob):
@@ -488,7 +491,7 @@ def test_slack_complete_per_org_bearer_own_org_only(client, monkeypatch):
 def test_slack_complete_mirrors_durable_control_plane(client, monkeypatch):
     """With the control plane configured, /complete mirrors the connection and
     mints the DURABLE org token (SQLite stays the fallback)."""
-    monkeypatch.setattr(settings, "laura_api_token", "machine-token")
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
     user = store.upsert_user("durable@example.com")
     store.set_connection(user["org_id"], "cedric", "cedric-brain", "pending", {})
     monkeypatch.setattr(secret_registry, "upsert_org_credentials", lambda *a: True)
@@ -504,10 +507,11 @@ def test_slack_complete_mirrors_durable_control_plane(client, monkeypatch):
         control_plane, "rotate_org_token", lambda org, label: "durable-raw-token"
     )
     state = install_state.pack(user["org_id"], "cedric", "", "")
+    state_nonce = install_state.unpack(state)["nonce"]
 
     resp = client.post(
         "/dashboard/connections/brain/slack/complete",
-        headers=_bearer("machine-token"),
+        headers=_bearer("provisioning-token"),
         json={
             "org_id": user["org_id"], "avatar_id": "cedric",
             "team_id": "T_D", "webhook_secret": "s",
@@ -518,7 +522,7 @@ def test_slack_complete_mirrors_durable_control_plane(client, monkeypatch):
     assert resp.json()["org_token"] == "durable-raw-token"
     assert mirrored == [
         (user["org_id"], "cedric", "cedric-brain", "connected",
-         {"team_id": "T_D", "channel": ""})
+         {"team_id": "T_D", "channel": "", "install_nonce": state_nonce})
     ]
 
 
