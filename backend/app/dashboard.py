@@ -353,7 +353,8 @@ def dashboard_summary(request: Request) -> JSONResponse:
     # their org's granted avatars (org_agents); the unscoped worlds see ALL —
     # today's behavior, key-free demo unchanged (docs/infra/MULTI-TENANCY.md).
     roster_ids = (
-        avatars.list_for_org(caller_org) if caller_org else avatars.list_ids()
+        avatars.list_customer_ids(caller_org) if caller_org
+        else avatars.list_customer_ids()
     )
     for aid in roster_ids:
         a = avatars.load(aid)
@@ -578,7 +579,7 @@ def connect_brain_slack_start(
         if err := auth.gate(request):
             return err
         return JSONResponse({"error": "login required"}, status_code=401)
-    allowed_avatar_ids = set(avatars.list_for_org(user["org_id"]))
+    allowed_avatar_ids = set(avatars.list_customer_ids(user["org_id"]))
     if avatar_id != "cedric" or avatar_id not in allowed_avatar_ids:
         return JSONResponse(
             {"error": "only Cedric can connect a customer workspace"},
@@ -677,7 +678,7 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
         return JSONResponse({"error": "missing required fields"}, status_code=400)
     if not provisioning_ok and org_id != machine_org:
         return JSONResponse({"error": "not your org"}, status_code=403)
-    if avatar_id not in avatars.list_ids():
+    if not avatars.is_customer_enabled(avatar_id):
         return JSONResponse({"error": "unknown avatar"}, status_code=404)
 
     # Cedric carries Laura's state opaquely through Slack OAuth. Completion
