@@ -1004,6 +1004,420 @@ def rotate_org_token(org_id: str, label: str) -> str | None:
     return raw
 
 
+def set_org_token(org_id: str, label: str, raw_token: str) -> bool:
+    """Atomically replace one labelled bearer with SHA-256(raw).
+
+    Used by retry-safe Slack completion: the raw value is deterministically
+    re-derived from the verified install nonce and is never stored.
+    """
+    import hashlib
+
+    org = (org_id or "").strip()
+    token_label = (label or "").strip()[:80]
+    raw = (raw_token or "").strip()
+    if not org or not token_label or not raw:
+        return False
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            "DELETE FROM org_tokens WHERE org_id = ? AND label = ?",
+            (org, token_label),
+        )
+        conn.execute(
+            "INSERT INTO org_tokens (token_hash, org_id, label, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (token_hash, org, token_label, time.time()),
+        )
+    return True
+
+
+
+def begin_brain_install(
+    org_id: str, avatar_id: str, nonce: str, channel: str = ""
+) -> bool:
+    """Persist the only nonce the next OAuth completion may claim."""
+    org = (org_id or "").strip()
+    avatar = (avatar_id or "").strip()
+    install_nonce = (nonce or "").strip()
+    if not org or not avatar or not install_nonce:
+        return False
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT status, config_json FROM org_connections "
+            "WHERE org_id = ? AND avatar_id = ? AND provider = 'cedric-brain'",
+            (org, avatar),
+        ).fetchone()
+        config: dict = {}
+        status = "pending"
+        if row is not None:
+            current_status = str(row["status"] or "")
+            if current_status == "disconnecting":
+                return False
+            status = "connected" if current_status == "connected" else "pending"
+            try:
+                config = json.loads(row["config_json"]) if row["config_json"] else {}
+            except ValueError:
+                config = {}
+            if not isinstance(config, dict):
+                config = {}
+        config.pop("install_tombstone", None)
+        config.pop("revoked_install_nonce", None)
+        config["pending_install_nonce"] = install_nonce
+        config["channel"] = (channel or "").strip()
+        conn.execute(
+            """
+            INSERT INTO org_connections
+                (org_id, avatar_id, provider, status, config_json, updated_at)
+            VALUES (?, ?, 'cedric-brain', ?, ?, ?)
+            ON CONFLICT(org_id, avatar_id, provider) DO UPDATE SET
+                status = excluded.status,
+                config_json = excluded.config_json,
+                updated_at = excluded.updated_at
+            """,
+            (org, avatar, status, json.dumps(config), time.time()),
+        )
+    return True
+
+
+def accept_brain_install(
+    org_id: str,
+    avatar_id: str,
+    nonce: str,
+    raw_token: str,
+    team_id: str,
+    channel: str,
+    webhook_secret: str,
+    webhook_token: str,
+) -> str:
+    """CAS one completion and bind retries to its exact accepted envelope."""
+    import hashlib
+
+    org = (org_id or "").strip()
+    avatar = (avatar_id or "").strip()
+    install_nonce = (nonce or "").strip()
+    raw = (raw_token or "").strip()
+    team = (team_id or "").strip()
+    callback_secret = (webhook_secret or "").strip()
+    callback_token = (webhook_token or "").strip()
+    callback_channel = (channel or "").strip()
+    if not all(
+        (org, avatar, install_nonce, raw, team, callback_secret, callback_token)
+    ):
+        return "invalid"
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    secret_hash = hashlib.sha256(callback_secret.encode()).hexdigest()
+    peer_hash = hashlib.sha256(callback_token.encode()).hexdigest()
+    label = "cedric-slack-install"
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT status, config_json FROM org_connections "
+            "WHERE org_id = ? AND avatar_id = ? AND provider = 'cedric-brain'",
+            (org, avatar),
+        ).fetchone()
+        config: dict = {}
+        current_status = ""
+        if row is not None:
+            current_status = str(row["status"] or "")
+            try:
+                config = json.loads(row["config_json"]) if row["config_json"] else {}
+            except ValueError:
+                config = {}
+            if not isinstance(config, dict):
+                config = {}
+        if current_status in ("disconnecting", "disconnected") or bool(
+            config.get("install_tombstone")
+        ):
+            return "stale"
+
+        installed = str(config.get("install_nonce") or "")
+        pending = str(config.get("pending_install_nonce") or "")
+        if pending:
+            if pending != install_nonce:
+                return "stale"
+        elif installed == install_nonce:
+            expected = (
+                str(config.get("team_id") or ""),
+                str(config.get("channel") or ""),
+                str(config.get("webhook_secret_sha256") or ""),
+                str(config.get("webhook_token_sha256") or ""),
+            )
+            presented = (team, callback_channel, secret_hash, peer_hash)
+            return "replay" if expected == presented else "conflict"
+        elif installed:
+            return "stale"
+
+        conn.execute(
+            "DELETE FROM org_tokens WHERE org_id = ? AND label = ?",
+            (org, label),
+        )
+        conn.execute(
+            "INSERT INTO org_tokens (token_hash, org_id, label, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (token_hash, org, label, time.time()),
+        )
+        config.update(
+            {
+                "team_id": team,
+                "channel": callback_channel,
+                "install_nonce": install_nonce,
+                "webhook_secret_sha256": secret_hash,
+                "webhook_token_sha256": peer_hash,
+            }
+        )
+        config.pop("pending_install_nonce", None)
+        config.pop("install_tombstone", None)
+        config.pop("revoked_install_nonce", None)
+        conn.execute(
+            """
+            INSERT INTO org_connections
+                (org_id, avatar_id, provider, status, config_json, updated_at)
+            VALUES (?, ?, 'cedric-brain', 'pending', ?, ?)
+            ON CONFLICT(org_id, avatar_id, provider) DO UPDATE SET
+                status = excluded.status,
+                config_json = excluded.config_json,
+                updated_at = excluded.updated_at
+            """,
+            (org, avatar, json.dumps(config), time.time()),
+        )
+    return "applied"
+
+
+def complete_brain_install(
+    org_id: str,
+    avatar_id: str,
+    nonce: str,
+    raw_token: str,
+    team_id: str,
+    channel: str,
+    webhook_secret: str,
+    webhook_token: str,
+) -> str:
+    """Run SQLite validation, registry sync and connect under one process lock."""
+    import hashlib
+    from .cedric import secret_registry
+
+    org = (org_id or "").strip()
+    avatar = (avatar_id or "").strip()
+    install_nonce = (nonce or "").strip()
+    raw = (raw_token or "").strip()
+    team = (team_id or "").strip()
+    callback_secret = (webhook_secret or "").strip()
+    callback_token = (webhook_token or "").strip()
+    callback_channel = (channel or "").strip()
+    if not all(
+        (org, avatar, install_nonce, raw, team, callback_secret, callback_token)
+    ):
+        return "invalid"
+
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    secret_hash = hashlib.sha256(callback_secret.encode()).hexdigest()
+    peer_hash = hashlib.sha256(callback_token.encode()).hexdigest()
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT status, config_json FROM org_connections "
+            "WHERE org_id = ? AND avatar_id = ? AND provider = 'cedric-brain'",
+            (org, avatar),
+        ).fetchone()
+        config: dict = {}
+        current_status = ""
+        if row is not None:
+            current_status = str(row["status"] or "")
+            try:
+                config = json.loads(row["config_json"]) if row["config_json"] else {}
+            except ValueError:
+                config = {}
+            if not isinstance(config, dict):
+                config = {}
+        if current_status in ("disconnecting", "disconnected") or bool(
+            config.get("install_tombstone")
+        ):
+            return "stale"
+
+        installed = str(config.get("install_nonce") or "")
+        pending = str(config.get("pending_install_nonce") or "")
+        replay = False
+        if pending:
+            if pending != install_nonce:
+                return "stale"
+        elif installed == install_nonce:
+            expected = (
+                str(config.get("team_id") or ""),
+                str(config.get("channel") or ""),
+                str(config.get("webhook_secret_sha256") or ""),
+                str(config.get("webhook_token_sha256") or ""),
+            )
+            presented = (team, callback_channel, secret_hash, peer_hash)
+            if expected != presented:
+                return "conflict"
+            replay = True
+        elif installed:
+            return "stale"
+
+        # Keep the process-wide RLock while updating the external registry.
+        # A concurrent start/disconnect therefore cannot make this callback
+        # stale between validation and the SSM write.
+        if not secret_registry.upsert_org_credentials(
+            org, callback_secret, callback_token
+        ):
+            return "registry_failed"
+
+        conn.execute(
+            "DELETE FROM org_tokens "
+            "WHERE org_id = ? AND label = 'cedric-slack-install'",
+            (org,),
+        )
+        conn.execute(
+            "INSERT INTO org_tokens (token_hash, org_id, label, created_at) "
+            "VALUES (?, ?, 'cedric-slack-install', ?)",
+            (token_hash, org, time.time()),
+        )
+        config.update(
+            {
+                "team_id": team,
+                "channel": callback_channel,
+                "install_nonce": install_nonce,
+                "webhook_secret_sha256": secret_hash,
+                "webhook_token_sha256": peer_hash,
+            }
+        )
+        config.pop("pending_install_nonce", None)
+        config.pop("install_tombstone", None)
+        config.pop("revoked_install_nonce", None)
+        config.pop("disconnect_phase", None)
+        conn.execute(
+            """
+            INSERT INTO org_connections
+                (org_id, avatar_id, provider, status, config_json, updated_at)
+            VALUES (?, ?, 'cedric-brain', 'connected', ?, ?)
+            ON CONFLICT(org_id, avatar_id, provider) DO UPDATE SET
+                status = excluded.status,
+                config_json = excluded.config_json,
+                updated_at = excluded.updated_at
+            """,
+            (org, avatar, json.dumps(config), time.time()),
+        )
+    return "replay" if replay else "applied"
+
+
+def finish_brain_install(org_id: str, avatar_id: str, nonce: str) -> str:
+    """Move the accepted install to connected under the same SQLite lock."""
+    org = (org_id or "").strip()
+    avatar = (avatar_id or "").strip()
+    install_nonce = (nonce or "").strip()
+    if not org or not avatar or not install_nonce:
+        return "invalid"
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT status, config_json FROM org_connections "
+            "WHERE org_id = ? AND avatar_id = ? AND provider = 'cedric-brain'",
+            (org, avatar),
+        ).fetchone()
+        if row is None:
+            return "stale"
+        try:
+            config = json.loads(row["config_json"]) if row["config_json"] else {}
+        except ValueError:
+            config = {}
+        if not isinstance(config, dict):
+            config = {}
+        if str(row["status"] or "") in ("disconnecting", "disconnected") or bool(
+            config.get("install_tombstone")
+        ):
+            return "stale"
+        if str(config.get("pending_install_nonce") or ""):
+            return "stale"
+        if str(config.get("install_nonce") or "") != install_nonce:
+            return "stale"
+        conn.execute(
+            "UPDATE org_connections SET status = 'connected', updated_at = ? "
+            "WHERE org_id = ? AND avatar_id = ? AND provider = 'cedric-brain'",
+            (time.time(), org, avatar),
+        )
+    return "connected"
+
+
+def begin_brain_disconnect(
+    org_id: str, avatar_id: str, phase: str = "revoke_pending"
+) -> bool:
+    """Fence every SQLite brain row before org-wide credential cleanup."""
+    org = (org_id or "").strip()
+    requested_avatar = (avatar_id or "").strip()
+    if not org or not requested_avatar:
+        return False
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            "SELECT avatar_id, config_json FROM org_connections "
+            "WHERE org_id = ? AND provider = 'cedric-brain'",
+            (org,),
+        ).fetchall()
+        if not rows or requested_avatar not in {str(row["avatar_id"]) for row in rows}:
+            return False
+        for row in rows:
+            try:
+                config = json.loads(row["config_json"]) if row["config_json"] else {}
+            except ValueError:
+                config = {}
+            if not isinstance(config, dict):
+                config = {}
+            config["disconnect_phase"] = (phase or "revoke_pending").strip()
+            conn.execute(
+                "UPDATE org_connections SET status = 'disconnecting', "
+                "config_json = ?, updated_at = ? "
+                "WHERE org_id = ? AND avatar_id = ? AND provider = 'cedric-brain'",
+                (json.dumps(config), time.time(), org, str(row["avatar_id"])),
+            )
+    return True
+
+
+def tombstone_brain_install(org_id: str, avatar_id: str) -> bool:
+    """Revoke the org token and tombstone every SQLite brain row atomically."""
+    org = (org_id or "").strip()
+    requested_avatar = (avatar_id or "").strip()
+    if not org or not requested_avatar:
+        return False
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            "SELECT avatar_id, config_json FROM org_connections "
+            "WHERE org_id = ? AND provider = 'cedric-brain'",
+            (org,),
+        ).fetchall()
+        if not rows or requested_avatar not in {str(row["avatar_id"]) for row in rows}:
+            return False
+        conn.execute(
+            "DELETE FROM org_tokens "
+            "WHERE org_id = ? AND label = 'cedric-slack-install'",
+            (org,),
+        )
+        for row in rows:
+            try:
+                old = json.loads(row["config_json"]) if row["config_json"] else {}
+            except ValueError:
+                old = {}
+            if not isinstance(old, dict):
+                old = {}
+            revoked_nonce = str(
+                old.get("pending_install_nonce")
+                or old.get("install_nonce")
+                or old.get("revoked_install_nonce")
+                or ""
+            )
+            tombstone = {"install_tombstone": True}
+            if revoked_nonce:
+                tombstone["revoked_install_nonce"] = revoked_nonce
+            conn.execute(
+                "UPDATE org_connections SET status = 'disconnected', "
+                "config_json = ?, updated_at = ? "
+                "WHERE org_id = ? AND avatar_id = ? AND provider = 'cedric-brain'",
+                (
+                    json.dumps(tombstone),
+                    time.time(),
+                    org,
+                    str(row["avatar_id"]),
+                ),
+            )
+    return True
+
+
 def revoke_org_tokens(org_id: str, label: str = "") -> bool:
     """Revoke SQLite machine bearers for an org."""
     org = (org_id or "").strip()

@@ -90,6 +90,13 @@ def test_add_to_slack_start_carries_signed_org_state(client, monkeypatch):
     assert data["avatar_id"] == "cedric"
     assert data["channel"] == "#approvals"
     assert data["return_url"] == "https://laura.example/dashboard"
+    assert data["complete_url"] == (
+        "https://laura.example/dashboard/connections/brain/slack/complete"
+    )
+    row = store.connections_for_org(user["org_id"])[0]
+    assert row["config"]["pending_install_nonce"] == data["nonce"]
+    # Neither browser URL nor signed state contains the Cedric→Laura org token.
+    assert "org_token" not in data
 
 
 def test_slack_complete_hot_writes_registry_and_connection(client, monkeypatch):

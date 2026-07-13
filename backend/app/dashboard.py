@@ -581,41 +581,50 @@ def connect_brain_slack_start(
     if not avatar_id or avatar_id not in avatars.list_ids():
         return JSONResponse({"error": "unknown avatar_id"}, status_code=400)
 
+    from . import control_plane
     from .cedric import install_state
 
     try:
         base_url = settings.public_base_url.rstrip("/")
-        target = install_state.install_url(
+        target, state = install_state.install_url_and_state(
             user["org_id"],
             avatar_id,
             channel.strip(),
             f"{base_url}/dashboard",
             f"{base_url}/dashboard/connections/brain/slack/complete",
         )
+        state_data = install_state.unpack(state)
+        nonce = str((state_data or {}).get("nonce") or "")
+        if not nonce:
+            raise RuntimeError("brain install state could not be checkpointed")
     except RuntimeError as exc:
         return JSONResponse({"error": str(exc)}, status_code=503)
-    # Record that THIS org initiated an install (PR D): /slack/complete binds
-    # a secret only to an org with a pending/connected row (or a valid signed
-    # state), so a machine caller can never attach credentials to an org that
-    # never clicked Connect. An already-connected row is left untouched — a
-    # re-install must not degrade a working link if the user abandons OAuth.
-    rows = _org_connection_rows(user["org_id"])
-    current = next(
-        (
-            r
-            for r in rows
-            if r["avatar_id"] == avatar_id and r["provider"] == "cedric-brain"
-        ),
-        None,
-    )
-    if current is None or current["status"] != "connected":
-        if not _set_connection_all(
-            user["org_id"], avatar_id, "cedric-brain", "pending",
-            {"channel": channel.strip()},
-        ):
+
+    # Persist the one nonce completion may claim. A connected row stays
+    # connected while OAuth is in flight, but its pending nonce is replaced so
+    # an older browser tab can never rotate credentials after a newer install.
+    if control_plane.enabled():
+        try:
+            durable = control_plane.begin_brain_install(
+                user["org_id"], avatar_id, nonce, channel.strip()
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                "[dashboard] durable brain-install start failed "
+                f"({type(exc).__name__})",
+                flush=True,
+            )
+            durable = False
+        if durable is not True:
             return JSONResponse(
                 {"error": "connection persistence failed"}, status_code=503
             )
+    if not store.begin_brain_install(
+        user["org_id"], avatar_id, nonce, channel.strip()
+    ):
+        return JSONResponse(
+            {"error": "connection persistence failed"}, status_code=503
+        )
     return RedirectResponse(target, status_code=302)
 
 
@@ -623,19 +632,15 @@ def connect_brain_slack_start(
 async def complete_brain_slack_install(request: Request) -> JSONResponse:
     """Cedric's OAuth callback writes the minted secret back server-to-server.
 
-    Binding rule (PR D): a secret may only be attached to an org that
-    INITIATED an install. Proof is either the ``state`` Laura's own
-    /slack/start minted (echoed back opaquely by the orchestrator — signature
-    + TTL verified, org/avatar must match the POST) or, absent a valid state,
-    an existing cedric-brain org_connections row (pending from /slack/start
-    or POST /connections/brain, connected for a re-install/secret rotation).
-    Neither → 403, nothing written. So a caller holding the machine bearer
-    can never bind credentials to an arbitrary org.
+    Binding rule: the signed, expiring ``state`` minted by /slack/start is
+    mandatory and its org/avatar/channel must match the POST. The pending nonce
+    is compare-and-swapped under the control-plane lock, so an older OAuth tab
+    cannot rotate credentials after a newer install.
 
-    On success the response carries ``org_token`` — a freshly minted PER-ORG
-    machine bearer (durable control plane when configured, SQLite fallback)
-    for the orchestrator to store and use on all its later Laura calls.
-    Returned exactly ONCE; Laura keeps only its hash."""
+    On success the response carries a PER-ORG ``org_token`` for Cedric to
+    store and use on later Laura calls. It is deterministically derived from the
+    verified install nonce: a lost-response retry returns the same raw value,
+    while Laura persists only SHA-256(raw). A new nonce rotates the credential."""
     from . import cedric, control_plane
     from .cedric import install_state, secret_registry
 
@@ -692,61 +697,60 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
             {"error": "state does not match this install"}, status_code=403
         )
     nonce = str(data.get("nonce") or "")
-    existing = await run_in_threadpool(_org_connection_rows, org_id)
-    if any(
-        r["provider"] == "cedric-brain"
-        and r["avatar_id"] == avatar_id
-        and str((r.get("config") or {}).get("install_nonce") or "") == nonce
-        for r in existing
-    ):
-        return JSONResponse({"error": "install state already consumed"}, status_code=409)
+    try:
+        # Derived only after provisioning auth + signed-state binding passed.
+        # Same nonce => same raw token; new nonce => rotation. Only SHA-256(raw)
+        # is persisted, so a lost HTTP 200 can be retried without secret escrow.
+        org_token = install_state.derive_org_token(org_id, nonce)
+    except RuntimeError:
+        return JSONResponse({"error": "org token derivation failed"}, status_code=503)
 
-    synced = await run_in_threadpool(
-        secret_registry.upsert_org_credentials,
-        org_id, webhook_secret, webhook_token,
+    durable_control_plane = control_plane.enabled()
+    saga = (
+        control_plane.complete_brain_install
+        if durable_control_plane
+        else store.complete_brain_install
     )
-    if not synced:
-        return JSONResponse({"error": "registry update failed"}, status_code=503)
-
-    # Laura is authoritative for the bearer Cedric uses when calling Laura.
-    # Rotate the labelled token on every completed install so re-installation
-    # invalidates the previous credential; never fall back to ephemeral SQLite
-    # when the durable control plane is enabled.
-    org_token = None
-    if control_plane.enabled():
-        try:
-            org_token = await run_in_threadpool(
-                control_plane.rotate_org_token,
-                org_id,
-                "cedric-slack-install",
-            )
-            await run_in_threadpool(
-                store.revoke_org_tokens, org_id, "cedric-slack-install"
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(
-                f"[dashboard] durable org-token rotation failed ({type(exc).__name__})",
-                flush=True,
-            )
-            return JSONResponse({"error": "org token rotation failed"}, status_code=503)
-    else:
-        org_token = await run_in_threadpool(
-            store.rotate_org_token, org_id, "cedric-slack-install"
+    try:
+        outcome = await run_in_threadpool(
+            saga,
+            org_id,
+            avatar_id,
+            nonce,
+            org_token,
+            team_id,
+            channel,
+            webhook_secret,
+            webhook_token,
         )
-    if not org_token:
+    except Exception as exc:  # noqa: BLE001
+        print(
+            "[dashboard] brain-install completion failed "
+            f"({type(exc).__name__})",
+            flush=True,
+        )
         return JSONResponse({"error": "org token rotation failed"}, status_code=503)
 
-    persisted = await run_in_threadpool(
-        _set_connection_all,
-        org_id,
-        avatar_id,
-        "cedric-brain",
-        "connected",
-        {"team_id": team_id, "channel": channel, "install_nonce": nonce},
+    if outcome == "stale":
+        return JSONResponse({"error": "stale install state"}, status_code=409)
+    if outcome == "conflict":
+        return JSONResponse({"error": "install replay does not match"}, status_code=409)
+    if outcome == "registry_failed":
+        return JSONResponse({"error": "registry update failed"}, status_code=503)
+    if outcome not in ("applied", "replay"):
+        return JSONResponse({"error": "org token rotation failed"}, status_code=503)
+
+    # Postgres is authoritative in production; do not write a second SQLite
+    # token/connection after releasing the durable org lock.  Such a warm-cache
+    # write could interpose after a disconnect and resurrect stale local state.
+    return JSONResponse(
+        {
+            "ok": True,
+            "status": "connected",
+            "org_token": org_token,
+            "idempotent_replay": outcome == "replay",
+        }
     )
-    if not persisted:
-        return JSONResponse({"error": "connection persistence failed"}, status_code=503)
-    return JSONResponse({"ok": True, "status": "connected", "org_token": org_token})
 
 
 @router.get("/dashboard/connections/brain/connectors")
@@ -821,27 +825,116 @@ async def disconnect_brain_remote(request: Request) -> JSONResponse:
             }
         )
 
-    async def persist_all(status: str, phase: str = "", clear: bool = False) -> bool:
-        ok = True
+    from . import cedric, control_plane
+    from .cedric import secret_registry
+
+    async def begin_disconnect_all(phase: str) -> bool:
+        """Enter/advance the disconnect saga under the same per-avatar lock
+        used by OAuth start/completion.  Postgres is authoritative when
+        enabled; SQLite mirrors only after the durable transition succeeds."""
         for row in brain:
-            config = {} if clear else dict(row.get("config") or {})
-            if phase:
-                config["disconnect_phase"] = phase
-            else:
-                config.pop("disconnect_phase", None)
-            saved = await run_in_threadpool(
+            if control_plane.enabled():
+                try:
+                    durable = await run_in_threadpool(
+                        control_plane.begin_brain_disconnect,
+                        user["org_id"],
+                        row["avatar_id"],
+                        phase,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(
+                        "[dashboard] durable brain disconnect lock failed "
+                        f"({type(exc).__name__})",
+                        flush=True,
+                    )
+                    return False
+                if durable is not True:
+                    return False
+
+            local = await run_in_threadpool(
+                store.begin_brain_disconnect,
+                user["org_id"],
+                row["avatar_id"],
+                phase,
+            )
+            if not local:
+                # A redeploy may leave the durable row without its ephemeral
+                # cache. Rehydrate it, then take the SQLite transaction lock.
+                await run_in_threadpool(
+                    store.set_connection,
+                    user["org_id"],
+                    row["avatar_id"],
+                    "cedric-brain",
+                    row["status"],
+                    dict(row.get("config") or {}),
+                )
+                local = await run_in_threadpool(
+                    store.begin_brain_disconnect,
+                    user["org_id"],
+                    row["avatar_id"],
+                    phase,
+                )
+            if not local:
+                return False
+        return True
+
+    async def restore_all() -> None:
+        """Best-effort restore only when Cedric confirmed no remote change."""
+        for row in brain:
+            await run_in_threadpool(
                 _set_connection_all,
                 user["org_id"],
                 row["avatar_id"],
                 "cedric-brain",
-                status,
-                config,
+                row["status"],
+                dict(row.get("config") or {}),
             )
-            ok = bool(saved) and ok
-        return ok
 
-    from . import cedric, control_plane
-    from .cedric import secret_registry
+    async def tombstone_all() -> bool:
+        """Revoke the labelled bearer and persist a non-resurrectable marker.
+        Durable rows are committed before refreshing the SQLite cache."""
+        for row in brain:
+            if control_plane.enabled():
+                try:
+                    durable = await run_in_threadpool(
+                        control_plane.tombstone_brain_install,
+                        user["org_id"],
+                        row["avatar_id"],
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(
+                        "[dashboard] durable brain tombstone failed "
+                        f"({type(exc).__name__})",
+                        flush=True,
+                    )
+                    return False
+                if durable is not True:
+                    return False
+
+        for row in brain:
+            local = await run_in_threadpool(
+                store.tombstone_brain_install,
+                user["org_id"],
+                row["avatar_id"],
+            )
+            if not local:
+                # Same cold-cache case as begin_disconnect_all.
+                await run_in_threadpool(
+                    store.set_connection,
+                    user["org_id"],
+                    row["avatar_id"],
+                    "cedric-brain",
+                    "disconnecting",
+                    {"disconnect_phase": "remote_revoked"},
+                )
+                local = await run_in_threadpool(
+                    store.tombstone_brain_install,
+                    user["org_id"],
+                    row["avatar_id"],
+                )
+            if not local:
+                return False
+        return True
 
     remote_done = any(
         str((r.get("config") or {}).get("disconnect_phase") or "")
@@ -850,33 +943,28 @@ async def disconnect_brain_remote(request: Request) -> JSONResponse:
     )
     revoked_remotely = remote_done
 
-    if not remote_done:
-        # Persist intent before the irreversible call. If the call succeeds but
-        # the next write fails, retrying the remote is still safe (404 = gone).
-        if not await persist_all("disconnecting", "revoke_pending"):
-            return JSONResponse(
-                {"error": "connection persistence failed"}, status_code=503
-            )
+    # Every entry and retry re-enters the saga through the same DB lock used by
+    # completion. While this status is set, an old OAuth state is always stale.
+    initial_phase = "remote_revoked" if remote_done else "revoke_pending"
+    if not await begin_disconnect_all(initial_phase):
+        return JSONResponse(
+            {"error": "connection persistence failed"}, status_code=503
+        )
 
+    if not remote_done:
+        # Intent is durable before the irreversible call. If Cedric succeeds
+        # but the checkpoint write fails, its DELETE is idempotent on retry.
         status_code = await run_in_threadpool(cedric.revoke_org, user["org_id"])
         revoked_remotely = status_code is not None and (
             200 <= status_code < 300 or status_code == 404
         )
         if status_code is not None and not revoked_remotely:
-            # Restore the customer-visible state when no irreversible remote
-            # change was confirmed.
-            for row in brain:
-                await run_in_threadpool(
-                    _set_connection_all,
-                    user["org_id"],
-                    row["avatar_id"],
-                    "cedric-brain",
-                    row["status"],
-                    dict(row.get("config") or {}),
-                )
+            # No irreversible remote change was confirmed, so the original
+            # customer-visible rows may safely be restored.
+            await restore_all()
             return JSONResponse({"error": "remote_revoke_failed"}, status_code=502)
 
-        if not await persist_all("disconnecting", "remote_revoked"):
+        if not await begin_disconnect_all("remote_revoked"):
             return JSONResponse(
                 {"error": "disconnect checkpoint failed"}, status_code=503
             )
@@ -888,31 +976,12 @@ async def disconnect_brain_remote(request: Request) -> JSONResponse:
     if not credentials_removed:
         return JSONResponse({"error": "credential_cleanup_failed"}, status_code=502)
 
-    if control_plane.enabled():
-        try:
-            revoked_tokens = await run_in_threadpool(
-                control_plane.revoke_org_tokens,
-                user["org_id"],
-                "cedric-slack-install",
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(
-                f"[dashboard] durable org-token revoke failed ({type(exc).__name__})",
-                flush=True,
-            )
-            revoked_tokens = False
-        if not revoked_tokens:
-            return JSONResponse({"error": "token_revoke_failed"}, status_code=502)
-    await run_in_threadpool(
-        store.revoke_org_tokens, user["org_id"], "cedric-slack-install"
-    )
+    # The tombstone and labelled-token revoke are one transaction per avatar
+    # under the install lock. Never clear this marker: it is what prevents an
+    # unexpired pre-disconnect OAuth callback from resurrecting the connection.
+    if not await tombstone_all():
+        return JSONResponse({"error": "token_revoke_failed"}, status_code=502)
 
-    # Cedric is one org-wide brain connection. Mark every avatar row together
-    # so disconnecting one cannot leave another falsely displayed as connected.
-    if not await persist_all("disconnected", clear=True):
-        return JSONResponse(
-            {"error": "connection persistence failed"}, status_code=503
-        )
     return JSONResponse(
         {
             "provider": "cedric-brain",

@@ -6,10 +6,9 @@ Proves the four self-serve seams on SQLite with zero external services:
    a bearer that resolves via org_tokens acts ONLY on its own org's rows
    (own → ok, another org's → 403); the GLOBAL laura_api_token keeps its
    Demo service scope; key-free stays open.
-2. /dashboard/connections/brain/slack/complete binds a secret ONLY to an org
-   that initiated an install — via the signed state minted by /slack/start
-   (echoed back opaquely) or a pending/connected org_connections row. On
-   success it returns a freshly minted per-workspace org_token exactly once.
+2. /dashboard/connections/brain/slack/complete binds credentials only through
+   signed state + the pending nonce. Same-state retries return the same hashed-
+   only org_token; a new nonce rotates it and stale states cannot roll it back.
 3. The brain-connectors catalog is scoped to the CALLER's org (upstream query
    carries their team_id; a fresh org reads not_connected, never the demo
    team's catalog), and disconnect revokes REMOTELY FIRST — local state and
@@ -24,6 +23,7 @@ functions (same module object dashboard.py lazily imports).
 """
 from __future__ import annotations
 
+import hashlib
 import importlib
 import sys
 import types
@@ -417,9 +417,8 @@ def test_slack_complete_rejects_uninitiated_org(client, monkeypatch):
 
 
 def test_slack_start_complete_full_roundtrip(client, monkeypatch, google_on):
-    """The full flow: /slack/start (cookie) mints the signed state + a pending
-    row → Cedric echoes the state on /complete (bearer) → connected, secret
-    bound, and the per-workspace org_token returned exactly once."""
+    """Full flow plus lost-response retry: the same server completion returns
+    the same org token without persisting its raw value."""
     monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
     monkeypatch.setattr(settings, "cedric_orgs_token", "shared-test-token")
     monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
@@ -441,6 +440,8 @@ def test_slack_start_complete_full_roundtrip(client, monkeypatch, google_on):
     rows = store.connections_for_org(user["org_id"])
     assert rows and rows[0]["provider"] == "cedric-brain"
     assert rows[0]["status"] == "pending"  # the initiation record
+    state_nonce = install_state.unpack(state)["nonce"]
+    assert rows[0]["config"]["pending_install_nonce"] == state_nonce
 
     resp = client.post(
         "/dashboard/connections/brain/slack/complete",
@@ -466,16 +467,97 @@ def test_slack_start_complete_full_roundtrip(client, monkeypatch, google_on):
     assert row["config"]["team_id"] == "T_RT"
     assert row["config"]["channel"] == "#approvals"
     assert row["config"]["install_nonce"]
-    # the org_token is returned ONCE, resolves to this org, stored hashed only
     token = body["org_token"]
     assert token and store.resolve_org_token(token) == user["org_id"]
     with store._connect() as conn:
         hashes = [r["token_hash"] for r in conn.execute("SELECT token_hash FROM org_tokens")]
     assert token not in hashes
 
+    # Simulate Cedric losing the first HTTP 200 after Laura committed.
+    replay = client.post(
+        "/dashboard/connections/brain/slack/complete",
+        headers=_bearer("provisioning-token"),
+        json={
+            "org_id": user["org_id"],
+            "avatar_id": "cedric",
+            "team_id": "T_RT",
+            "channel": "#approvals",
+            "webhook_secret": "minted-by-cedric",
+            "webhook_token": "cedric-workspace-token",
+            "state": state,
+        },
+    )
+    assert replay.status_code == 200
+    assert replay.json()["org_token"] == token
+    assert replay.json()["idempotent_replay"] is True
 
 
-def test_reinstall_rotates_token_and_consumes_state(client, monkeypatch):
+
+def test_same_state_replay_is_bound_to_original_workspace_envelope(
+    client, monkeypatch
+):
+    """A stolen/lost-response state cannot be replayed with different workspace
+    routing or credentials, and mismatches never reach the secret registry."""
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
+    user = store.upsert_user("bound-replay@example.com")
+    state = install_state.pack(user["org_id"], "cedric", "", "")
+    nonce = install_state.unpack(state)["nonce"]
+    assert store.begin_brain_install(user["org_id"], "cedric", nonce)
+
+    writes: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        secret_registry,
+        "upsert_org_credentials",
+        lambda org, secret, token: writes.append((org, secret, token)) or True,
+    )
+    original = {
+        "org_id": user["org_id"],
+        "avatar_id": "cedric",
+        "team_id": "T_BOUND",
+        "channel": "",
+        "webhook_secret": "bound-secret",
+        "webhook_token": "bound-peer",
+        "state": state,
+    }
+    first = client.post(
+        "/dashboard/connections/brain/slack/complete",
+        headers=_bearer("provisioning-token"),
+        json=original,
+    )
+    assert first.status_code == 200
+    row = store.connections_for_org(user["org_id"])[0]
+    assert row["config"]["webhook_secret_sha256"] == hashlib.sha256(
+        b"bound-secret"
+    ).hexdigest()
+    assert row["config"]["webhook_token_sha256"] == hashlib.sha256(
+        b"bound-peer"
+    ).hexdigest()
+    assert "webhook_secret" not in row["config"]
+    assert "webhook_token" not in row["config"]
+
+    writes.clear()
+    mutations = (
+        {"team_id": "T_OTHER"},
+        {"channel": "#other"},
+        {"webhook_secret": "other-secret"},
+        {"webhook_token": "other-peer"},
+    )
+    for mutation in mutations:
+        changed = {**original, **mutation}
+        replay = client.post(
+            "/dashboard/connections/brain/slack/complete",
+            headers=_bearer("provisioning-token"),
+            json=changed,
+        )
+        assert replay.status_code == 409
+        assert replay.json() == {"error": "install replay does not match"}
+    assert writes == []
+
+
+
+def test_reinstall_rotates_token_same_state_retries_and_old_state_is_stale(
+    client, monkeypatch
+):
     monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
     user = store.upsert_user("rotate@example.com")
     monkeypatch.setattr(secret_registry, "upsert_org_credentials", lambda *a: True)
@@ -496,11 +578,25 @@ def test_reinstall_rotates_token_and_consumes_state(client, monkeypatch):
         )
 
     first_state = install_state.pack(user["org_id"], "cedric", "", "")
+    first_nonce = install_state.unpack(first_state)["nonce"]
+    assert store.begin_brain_install(user["org_id"], "cedric", first_nonce)
     first = complete(first_state)
     assert first.status_code == 200
     first_token = first.json()["org_token"]
 
     second_state = install_state.pack(user["org_id"], "cedric", "", "")
+    second_nonce = install_state.unpack(second_state)["nonce"]
+    assert store.begin_brain_install(user["org_id"], "cedric", second_nonce)
+
+    # P0 regression: once a newer start is pending, an old installed nonce is
+    # stale — it must not return 200 or resync old workspace credentials.
+    old_during_new = complete(first_state)
+    assert old_during_new.status_code == 409
+    assert old_during_new.json()["error"] == "stale install state"
+    assert store.resolve_org_token(first_token) == user["org_id"]
+    pending = store.connections_for_org(user["org_id"])[0]["config"]
+    assert pending["pending_install_nonce"] == second_nonce
+
     second = complete(second_state)
     assert second.status_code == 200
     second_token = second.json()["org_token"]
@@ -509,8 +605,79 @@ def test_reinstall_rotates_token_and_consumes_state(client, monkeypatch):
     assert store.resolve_org_token(second_token) == user["org_id"]
 
     replay = complete(second_state)
-    assert replay.status_code == 409
-    assert replay.json()["error"] == "install state already consumed"
+    assert replay.status_code == 200
+    assert replay.json()["org_token"] == second_token
+    assert replay.json()["idempotent_replay"] is True
+
+    # A delayed callback from the older OAuth tab cannot roll credentials back.
+    stale = complete(first_state)
+    assert stale.status_code == 409
+    assert stale.json()["error"] == "stale install state"
+    assert store.resolve_org_token(second_token) == user["org_id"]
+    assert store.resolve_org_token(first_token) is None
+
+
+
+def test_concurrent_same_state_sqlite_guard_converges(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
+    user = store.upsert_user("concurrent-install@example.com")
+    state = install_state.pack(user["org_id"], "cedric", "", "")
+    nonce = install_state.unpack(state)["nonce"]
+    raw = install_state.derive_org_token(user["org_id"], nonce)
+    assert store.begin_brain_install(user["org_id"], "cedric", nonce)
+
+    def accept(_):
+        return store.accept_brain_install(
+            user["org_id"], "cedric", nonce, raw, "T_CONCURRENT", "",
+            "concurrent-secret", "concurrent-peer",
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = list(pool.map(accept, range(8)))
+
+    assert outcomes.count("applied") == 1
+    assert outcomes.count("replay") == 7
+    assert store.resolve_org_token(raw) == user["org_id"]
+    with store._connect() as conn:
+        count = conn.execute(
+            "SELECT count(*) FROM org_tokens "
+            "WHERE org_id = ? AND label = 'cedric-slack-install'",
+            (user["org_id"],),
+        ).fetchone()[0]
+    assert count == 1
+
+
+def test_org_token_derivation_survives_process_restart(monkeypatch):
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
+    user = store.upsert_user("restart-install@example.com")
+    state = install_state.pack(user["org_id"], "cedric", "", "")
+    nonce = install_state.unpack(state)["nonce"]
+    before = install_state.derive_org_token(user["org_id"], nonce)
+    assert store.begin_brain_install(user["org_id"], "cedric", nonce)
+    assert (
+        store.accept_brain_install(
+            user["org_id"], "cedric", nonce, before, "T_RESTART", "",
+            "restart-secret", "restart-peer",
+        )
+        == "applied"
+    )
+
+    # The raw value is not cached or stored. A fresh module instance derives
+    # the exact same response from the signed nonce after a process restart.
+    reloaded = importlib.reload(install_state)
+    after = reloaded.derive_org_token(user["org_id"], nonce)
+    assert after == before
+    assert (
+        store.accept_brain_install(
+            user["org_id"], "cedric", nonce, after, "T_RESTART", "",
+            "restart-secret", "restart-peer",
+        )
+        == "replay"
+    )
+    assert store.resolve_org_token(after) == user["org_id"]
+
 
 
 def test_slack_complete_state_alone_proves_initiation(client, monkeypatch):
@@ -603,27 +770,21 @@ def test_slack_complete_per_org_bearer_own_org_only(client, monkeypatch):
 
 
 def test_slack_complete_mirrors_durable_control_plane(client, monkeypatch):
-    """With the control plane configured, /complete mirrors the connection and
-    mints the DURABLE org token (SQLite stays the fallback)."""
+    """The endpoint delegates one indivisible PG+SSM completion saga."""
     monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
     user = store.upsert_user("durable@example.com")
     store.set_connection(user["org_id"], "cedric", "cedric-brain", "pending", {})
-    monkeypatch.setattr(secret_registry, "upsert_org_credentials", lambda *a: True)
-    mirrored: list[tuple] = []
+    completed: list[tuple] = []
     monkeypatch.setattr(control_plane, "enabled", lambda: True)
     monkeypatch.setattr(control_plane, "get_connections", lambda org: [])
     monkeypatch.setattr(
         control_plane,
-        "set_connection",
-        lambda *a, **k: mirrored.append(a) or True,
-    )
-    monkeypatch.setattr(
-        control_plane, "rotate_org_token", lambda org, label: "durable-raw-token"
+        "complete_brain_install",
+        lambda *a: completed.append(a) or "applied",
     )
     state = install_state.pack(user["org_id"], "cedric", "", "")
-    state_nonce = install_state.unpack(state)["nonce"]
-
-    resp = client.post(
+    nonce = install_state.unpack(state)["nonce"]
+    response = client.post(
         "/dashboard/connections/brain/slack/complete",
         headers=_bearer("provisioning-token"),
         json={
@@ -632,12 +793,50 @@ def test_slack_complete_mirrors_durable_control_plane(client, monkeypatch):
             "webhook_token": "peer-d", "state": state,
         },
     )
-    assert resp.status_code == 200
-    assert resp.json()["org_token"] == "durable-raw-token"
-    assert mirrored == [
-        (user["org_id"], "cedric", "cedric-brain", "connected",
-         {"team_id": "T_D", "channel": "", "install_nonce": state_nonce})
+    assert response.status_code == 200
+    expected = install_state.derive_org_token(user["org_id"], nonce)
+    assert response.json()["org_token"] == expected
+    assert completed == [
+        (
+            user["org_id"], "cedric", nonce, expected, "T_D", "",
+            "s", "peer-d",
+        )
     ]
+    # A post-lock warm-cache write could race a disconnect. Durable state is
+    # authoritative, so the pre-existing local initiation row stays pending.
+    assert store.connections_for_org(user["org_id"])[0]["status"] == "pending"
+
+
+def test_durable_replay_stays_pending_until_secret_sync_succeeds(
+    client, monkeypatch
+):
+    """A registry failure is retryable and never advertises connected."""
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
+    user = store.upsert_user("durable-replay-pending@example.com")
+    store.set_connection(user["org_id"], "cedric", "cedric-brain", "pending", {})
+    monkeypatch.setattr(control_plane, "enabled", lambda: True)
+    monkeypatch.setattr(control_plane, "get_connections", lambda org: [])
+    seen: list[str] = []
+
+    def fail_complete(*_args):
+        seen.append(store.connections_for_org(user["org_id"])[0]["status"])
+        return "registry_failed"
+
+    monkeypatch.setattr(control_plane, "complete_brain_install", fail_complete)
+    state = install_state.pack(user["org_id"], "cedric", "", "")
+    response = client.post(
+        "/dashboard/connections/brain/slack/complete",
+        headers=_bearer("provisioning-token"),
+        json={
+            "org_id": user["org_id"], "avatar_id": "cedric",
+            "team_id": "T_D", "webhook_secret": "s",
+            "webhook_token": "peer-d", "state": state,
+        },
+    )
+    assert response.status_code == 503
+    assert response.json() == {"error": "registry update failed"}
+    assert seen == ["pending"]
+    assert store.connections_for_org(user["org_id"])[0]["status"] == "pending"
 
 
 def test_install_state_unpack_contract(monkeypatch):
@@ -857,6 +1056,253 @@ def test_disconnect_is_org_wide_and_revokes_local_token(
         if row["provider"] == "cedric-brain"
     } == {"disconnected"}
     assert store.resolve_org_token(raw) is None
+
+
+def test_disconnect_tombstone_rejects_old_completion_before_secret_write(
+    client, monkeypatch, google_on
+):
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
+    monkeypatch.setattr(settings, "cedric_orgs_url", "")
+    user = _login(client)
+    state = install_state.pack(user["org_id"], "cedric", "", "")
+    nonce = install_state.unpack(state)["nonce"]
+    assert store.begin_brain_install(user["org_id"], "cedric", nonce)
+
+    writes: list[tuple] = []
+    monkeypatch.setattr(
+        secret_registry,
+        "upsert_org_credentials",
+        lambda *a: writes.append(a) or True,
+    )
+    body = {
+        "org_id": user["org_id"],
+        "avatar_id": "cedric",
+        "team_id": "T_GONE",
+        "channel": "",
+        "webhook_secret": "gone-secret",
+        "webhook_token": "gone-peer",
+        "state": state,
+    }
+    completed = client.post(
+        "/dashboard/connections/brain/slack/complete",
+        headers=_bearer("provisioning-token"),
+        json=body,
+    )
+    assert completed.status_code == 200
+    raw = completed.json()["org_token"]
+    monkeypatch.setattr(secret_registry, "remove_org_credentials", lambda org: True)
+
+    disconnected = client.post(
+        "/dashboard/connections/brain/disconnect",
+        json={"avatar_id": "cedric"},
+    )
+    assert disconnected.status_code == 200
+    writes.clear()
+
+    delayed = client.post(
+        "/dashboard/connections/brain/slack/complete",
+        headers=_bearer("provisioning-token"),
+        json=body,
+    )
+    assert delayed.status_code == 409
+    assert delayed.json() == {"error": "stale install state"}
+    assert writes == []
+    assert store.resolve_org_token(raw) is None
+    row = store.connections_for_org(user["org_id"])[0]
+    assert row["status"] == "disconnected"
+    assert row["config"]["install_tombstone"] is True
+    assert row["config"]["revoked_install_nonce"] == nonce
+
+
+def test_sqlite_completion_disconnect_race_converges_to_tombstone(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
+    user = store.upsert_user("sqlite-install-disconnect-race@example.com")
+    org = user["org_id"]
+    nonce = "sqlite-disconnect-race"
+    raw = install_state.derive_org_token(org, nonce)
+    assert store.begin_brain_install(org, "cedric", nonce)
+    barrier = Barrier(2)
+
+    def complete():
+        barrier.wait()
+        accepted = store.accept_brain_install(
+            org, "cedric", nonce, raw, "T_RACE", "",
+            "race-secret", "race-peer",
+        )
+        finished = (
+            store.finish_brain_install(org, "cedric", nonce)
+            if accepted in ("applied", "replay")
+            else None
+        )
+        return accepted, finished
+
+    def disconnect():
+        barrier.wait()
+        assert store.begin_brain_disconnect(org, "cedric", "remote_revoked")
+        assert store.tombstone_brain_install(org, "cedric")
+        return "disconnected"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        completion_future = pool.submit(complete)
+        disconnect_future = pool.submit(disconnect)
+        completion = completion_future.result()
+        assert disconnect_future.result() == "disconnected"
+
+    assert completion[0] in ("applied", "stale")
+    assert store.resolve_org_token(raw) is None
+    row = store.connections_for_org(org)[0]
+    assert row["status"] == "disconnected"
+    assert row["config"]["install_tombstone"] is True
+
+
+
+def test_endpoint_completion_vs_disconnect_cannot_resurrect_registry(
+    client, monkeypatch, google_on
+):
+    """Completion holds the SQLite saga lock through registry sync; a racing
+    disconnect fences afterward and removes the exact same org credentials."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, Lock
+    from urllib.parse import parse_qs, urlsplit
+
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
+    monkeypatch.setattr(
+        settings, "cedric_orgs_url", "https://cedric.example/api/laura/orgs"
+    )
+    monkeypatch.setattr(cedric, "revoke_org", lambda org: 204)
+    user = _login(client)
+    start = client.get(
+        "/dashboard/connections/brain/slack/start",
+        params={"avatar_id": "cedric"},
+        follow_redirects=False,
+    )
+    assert start.status_code == 302
+    state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+    payload = {
+        "org_id": user["org_id"], "avatar_id": "cedric", "team_id": "T_RACE",
+        "channel": "", "webhook_secret": "race-secret",
+        "webhook_token": "race-peer", "state": state,
+    }
+    registry: dict[str, tuple[str, str]] = {}
+    registry_lock = Lock()
+    registry_entered = Event()
+    release_registry = Event()
+    disconnect_started = Event()
+
+    def slow_upsert(org, secret, token):
+        with registry_lock:
+            registry[org] = (secret, token)
+        registry_entered.set()
+        assert release_registry.wait(10)
+        return True
+
+    def remove(org):
+        with registry_lock:
+            registry.pop(org, None)
+        return True
+
+    monkeypatch.setattr(secret_registry, "upsert_org_credentials", slow_upsert)
+    monkeypatch.setattr(secret_registry, "remove_org_credentials", remove)
+    original_rows = store.connections_for_org
+
+    def disconnect():
+        disconnect_started.set()
+        return client.post(
+            "/dashboard/connections/brain/disconnect",
+            json={"avatar_id": "cedric"},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        completion = pool.submit(
+            client.post,
+            "/dashboard/connections/brain/slack/complete",
+            headers=_bearer("provisioning-token"),
+            json=payload,
+        )
+        assert registry_entered.wait(10)
+        removal = pool.submit(disconnect)
+        assert disconnect_started.wait(10)
+        release_registry.set()
+        completed = completion.result(timeout=10)
+        disconnected = removal.result(timeout=10)
+
+    assert completed.status_code == 200
+    assert disconnected.status_code == 200
+    assert registry == {}
+    assert store.resolve_org_token(completed.json()["org_token"]) is None
+    row = original_rows(user["org_id"])[0]
+    assert row["status"] == "disconnected"
+    assert row["config"]["install_tombstone"] is True
+
+
+def test_endpoint_new_start_makes_old_completion_stale_before_registry_write(
+    client, monkeypatch, google_on
+):
+    """A delayed callback racing a newer OAuth start cannot touch SSM."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from urllib.parse import parse_qs, urlsplit
+
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
+    monkeypatch.setattr(
+        settings, "cedric_orgs_url", "https://cedric.example/api/laura/orgs"
+    )
+    user = _login(client)
+    old_start = client.get(
+        "/dashboard/connections/brain/slack/start",
+        params={"avatar_id": "cedric"},
+        follow_redirects=False,
+    )
+    old_state = parse_qs(urlsplit(old_start.headers["location"]).query)["state"][0]
+    writes: list[tuple] = []
+    monkeypatch.setattr(
+        secret_registry, "upsert_org_credentials",
+        lambda *a: writes.append(a) or True,
+    )
+    newer_committed = Event()
+    original_begin = store.begin_brain_install
+
+    def observed_begin(*args, **kwargs):
+        result = original_begin(*args, **kwargs)
+        newer_committed.set()
+        return result
+
+    monkeypatch.setattr(store, "begin_brain_install", observed_begin)
+
+    def delayed():
+        assert newer_committed.wait(10)
+        return client.post(
+            "/dashboard/connections/brain/slack/complete",
+            headers=_bearer("provisioning-token"),
+            json={
+                "org_id": user["org_id"], "avatar_id": "cedric",
+                "team_id": "T_OLD", "channel": "",
+                "webhook_secret": "old-secret", "webhook_token": "old-peer",
+                "state": old_state,
+            },
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        newer_f = pool.submit(
+            client.get,
+            "/dashboard/connections/brain/slack/start",
+            params={"avatar_id": "cedric"},
+            follow_redirects=False,
+        )
+        old_f = pool.submit(delayed)
+        newer = newer_f.result(timeout=10)
+        old = old_f.result(timeout=10)
+
+    assert newer.status_code == 302
+    new_state = parse_qs(urlsplit(newer.headers["location"]).query)["state"][0]
+    assert old.status_code == 409
+    assert old.json() == {"error": "stale install state"}
+    assert writes == []
+    row = store.connections_for_org(user["org_id"])[0]
+    assert row["config"]["pending_install_nonce"] == install_state.unpack(new_state)["nonce"]
 
 
 def test_disconnect_rejects_cross_site_and_unknown(client, monkeypatch, google_on):

@@ -355,6 +355,182 @@ def test_org_token_rotate_and_revoke_work_as_app_role(cp):
     assert cp.resolve_org_token(token_b) == b["org_id"]
 
 
+def test_brain_install_postgres_cas_retry_and_stale_state(cp):
+    a = cp.ensure_user(
+        "sub-install-cas", "install-cas@freemail.test", "Install CAS", ""
+    )
+    org = a["org_id"]
+    first_raw = "first-deterministic-token"
+    second_raw = "second-deterministic-token"
+
+    assert cp.begin_brain_install(org, "cedric", "nonce-1", "#ops") is True
+    assert (
+        cp.accept_brain_install(
+            org, "cedric", "nonce-1", first_raw, "T_A", "#ops",
+            "secret-a", "peer-a",
+        )
+        == "applied"
+    )
+    assert (
+        cp.accept_brain_install(
+            org, "cedric", "nonce-1", first_raw, "T_A", "#ops",
+            "secret-a", "peer-a",
+        )
+        == "replay"
+    )
+    assert cp.resolve_org_token(first_raw) == org
+    # A same-nonce replay is valid only for the exact accepted workspace and
+    # both credential fingerprints; mismatches are rejected before rotation.
+    for envelope in (
+        ("T_OTHER", "#ops", "secret-a", "peer-a"),
+        ("T_A", "#other", "secret-a", "peer-a"),
+        ("T_A", "#ops", "secret-other", "peer-a"),
+        ("T_A", "#ops", "secret-a", "peer-other"),
+    ):
+        assert (
+            cp.accept_brain_install(
+                org, "cedric", "nonce-1", first_raw, *envelope
+            )
+            == "conflict"
+        )
+
+    assert cp.begin_brain_install(org, "cedric", "nonce-2", "#ops") is True
+    # The newer pending nonce defeats an otherwise valid retry of nonce-1.
+    assert (
+        cp.accept_brain_install(
+            org, "cedric", "nonce-1", first_raw, "T_A", "#ops",
+            "secret-a", "peer-a",
+        )
+        == "stale"
+    )
+    assert cp.resolve_org_token(first_raw) == org
+    assert (
+        cp.accept_brain_install(
+            org, "cedric", "nonce-2", second_raw, "T_A", "#ops",
+            "secret-a", "peer-a",
+        )
+        == "applied"
+    )
+    assert cp.resolve_org_token(first_raw) is None
+    assert cp.resolve_org_token(second_raw) == org
+    assert (
+        cp.accept_brain_install(
+            org, "cedric", "nonce-1", first_raw, "T_A", "#ops",
+            "secret-a", "peer-a",
+        )
+        == "stale"
+    )
+    assert cp.resolve_org_token(second_raw) == org
+    assert cp.finish_brain_install(org, "cedric", "nonce-2") == "connected"
+    assert cp.begin_brain_disconnect(org, "cedric", "remote_revoked") is True
+    assert cp.tombstone_brain_install(org, "cedric") is True
+    assert (
+        cp.accept_brain_install(
+            org, "cedric", "nonce-2", second_raw, "T_A", "#ops",
+            "secret-a", "peer-a",
+        )
+        == "stale"
+    )
+    assert cp.resolve_org_token(second_raw) is None
+    row = next(
+        r for r in cp.get_connections(org)
+        if r["avatar_id"] == "cedric" and r["provider"] == "cedric-brain"
+    )
+    assert row["status"] == "disconnected"
+    assert row["config"]["install_tombstone"] is True
+    assert row["config"]["revoked_install_nonce"] == "nonce-2"
+
+
+def test_concurrent_same_state_postgres_cas_converges(cp):
+    from concurrent.futures import ThreadPoolExecutor
+
+    a = cp.ensure_user(
+        "sub-install-race", "install-race@freemail.test", "Install Race", ""
+    )
+    org = a["org_id"]
+    raw = "same-deterministic-token"
+    assert cp.begin_brain_install(org, "cedric", "nonce-race", "") is True
+
+    def accept(_):
+        return cp.accept_brain_install(
+            org, "cedric", "nonce-race", raw, "T_RACE", "",
+            "race-secret", "race-peer",
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = list(pool.map(accept, range(8)))
+
+    assert outcomes.count("applied") == 1
+    assert outcomes.count("replay") == 7
+    assert cp.resolve_org_token(raw) == org
+
+
+
+def test_postgres_completion_disconnect_race_converges_to_tombstone(
+    cp, monkeypatch
+):
+    """The production completion holds the org advisory lock through the
+    external registry write; disconnect fences afterward and removes it."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from app.cedric import secret_registry
+
+    user = cp.ensure_user(
+        "sub-install-disconnect-race",
+        "install-disconnect-race@freemail.test",
+        "Install Disconnect Race",
+        "",
+    )
+    org = user["org_id"]
+    raw = "disconnect-race-deterministic-token"
+    nonce = "nonce-disconnect-race"
+    assert cp.begin_brain_install(org, "cedric", nonce, "") is True
+
+    registry: dict[str, tuple[str, str]] = {}
+    registry_entered = Event()
+    release_registry = Event()
+    disconnect_attempted = Event()
+
+    def slow_upsert(target_org, secret, peer):
+        registry[target_org] = (secret, peer)
+        registry_entered.set()
+        assert release_registry.wait(10)
+        return True
+
+    monkeypatch.setattr(secret_registry, "upsert_org_credentials", slow_upsert)
+
+    def complete():
+        return cp.complete_brain_install(
+            org, "cedric", nonce, raw, "T_RACE", "",
+            "race-secret", "race-peer",
+        )
+
+    def disconnect():
+        disconnect_attempted.set()
+        assert cp.begin_brain_disconnect(org, "cedric", "remote_revoked") is True
+        registry.pop(org, None)
+        assert cp.tombstone_brain_install(org, "cedric") is True
+        return "disconnected"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        completion_future = pool.submit(complete)
+        assert registry_entered.wait(10)
+        disconnect_future = pool.submit(disconnect)
+        assert disconnect_attempted.wait(10)
+        release_registry.set()
+        assert completion_future.result(timeout=10) == "applied"
+        assert disconnect_future.result(timeout=10) == "disconnected"
+
+    assert registry == {}
+    assert cp.resolve_org_token(raw) is None
+    row = next(
+        r for r in cp.get_connections(org)
+        if r["avatar_id"] == "cedric" and r["provider"] == "cedric-brain"
+    )
+    assert row["status"] == "disconnected"
+    assert row["config"]["install_tombstone"] is True
+
+
 # ── production role + SECURITY DEFINER boundary + real RLS ──────────────
 
 def test_runtime_engine_is_exact_policy_bound_role(cp):
