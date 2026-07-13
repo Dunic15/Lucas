@@ -63,7 +63,7 @@ def test_sff_login_resolves_org_and_scopes_agents(fresh_store):
     expected = _expected_sff_agents()
     assert expected == ["cedric", "laura"]  # both folders exist in this repo
     assert avatars.list_for_org("org_sff") == expected
-    assert set(avatars.list_for_org("org_sff")) < set(avatars.list_ids())
+    assert avatars.list_for_org("org_sff") == ["cedric", "laura"]
 
 
 def test_gmail_login_is_personal_org_all_avatars(fresh_store):
@@ -133,11 +133,11 @@ def test_seed_gate_disables_seed(tmp_path, monkeypatch):
         importlib.reload(ledger)
 
 
-def test_demo_roster_endpoint_lists_all_avatars(fresh_store):
-    """Regression: the anonymous /avatars demo picker still lists every
-    installed avatar (key-free demo unchanged)."""
+def test_demo_roster_endpoint_lists_only_customer_avatars(fresh_store):
+    """Anonymous demo users can call only the two customer avatars."""
     client = TestClient(main_module.app)
     ids = {a["id"] for a in client.get("/avatars").json()["avatars"]}
+    assert ids == {"laura", "cedric"}
     assert ids == set(avatars.list_ids())
 
 
