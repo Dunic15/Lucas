@@ -441,6 +441,57 @@ def test_brain_install_postgres_cas_retry_and_stale_state(cp):
     assert row["config"]["revoked_install_nonce"] == "nonce-2"
 
 
+def test_begin_install_supersedes_stuck_disconnecting(cp):
+    """A brain row stuck in 'disconnecting' (a disconnect that fenced the token
+    but never finished) must not lock re-install: an explicit user install
+    supersedes it back to a fresh pending row instead of returning False, which
+    the /slack/start route turns into a bogus 503 'connection persistence
+    failed'."""
+    a = cp.ensure_user(
+        "sub-stuck-disc", "stuck-disc@freemail.test", "Stuck Disc", ""
+    )
+    org = a["org_id"]
+
+    def _brain_row():
+        return next(
+            r for r in cp.get_connections(org)
+            if r["avatar_id"] == "cedric" and r["provider"] == "cedric-brain"
+        )
+
+    assert cp.begin_brain_install(org, "cedric", "n1", "#ops") is True
+    assert (
+        cp.accept_brain_install(
+            org, "cedric", "n1", "raw-1", "T", "#ops", "sec", "peer"
+        )
+        == "applied"
+    )
+    assert cp.finish_brain_install(org, "cedric", "n1") == "connected"
+
+    # A disconnect fences the row (revokes the org token) but never finishes,
+    # leaving it stuck in "disconnecting".
+    assert cp.begin_brain_disconnect(org, "cedric", "revoke_pending") is True
+    stuck = _brain_row()
+    assert stuck["status"] == "disconnecting"
+    assert stuck["config"].get("disconnect_phase") == "revoke_pending"
+    assert cp.resolve_org_token("raw-1") is None  # token already revoked
+
+    # A fresh, user-initiated install supersedes the stuck row (was: False/503).
+    assert cp.begin_brain_install(org, "cedric", "n2", "#ops") is True
+    superseded = _brain_row()
+    assert superseded["status"] == "pending"
+    assert superseded["config"]["pending_install_nonce"] == "n2"
+    assert "disconnect_phase" not in superseded["config"]
+
+    # …and it completes cleanly, minting a fresh token.
+    assert (
+        cp.accept_brain_install(
+            org, "cedric", "n2", "raw-2", "T", "#ops", "sec", "peer"
+        )
+        == "applied"
+    )
+    assert cp.resolve_org_token("raw-2") == org
+
+
 def test_concurrent_same_state_postgres_cas_converges(cp):
     from concurrent.futures import ThreadPoolExecutor
 
