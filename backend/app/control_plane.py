@@ -368,6 +368,54 @@ def mint_org_token(org_id: str, label: str = "") -> Optional[str]:
     return raw
 
 
+def rotate_org_token(org_id: str, label: str) -> Optional[str]:
+    """Atomically replace one labelled per-org bearer and return it once."""
+    if not enabled() or not (org_id or "").strip() or not (label or "").strip():
+        return None
+    from sqlalchemy import text
+
+    org = org_id.strip()
+    token_label = label.strip()[:80]
+    raw = secrets.token_urlsafe(32)
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        conn.execute(
+            text("DELETE FROM org_tokens WHERE org_id = :o AND label = :l"),
+            {"o": org, "l": token_label},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO org_tokens (token_hash, org_id, label) "
+                "VALUES (:h, :o, :l)"
+            ),
+            {"h": _hash_token(raw), "o": org, "l": token_label},
+        )
+    return raw
+
+
+def revoke_org_tokens(org_id: str, label: str = "") -> bool:
+    """Revoke an org's machine bearers, optionally restricted to one label."""
+    if not enabled() or not (org_id or "").strip():
+        return False
+    from sqlalchemy import text
+
+    org = org_id.strip()
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        if (label or "").strip():
+            conn.execute(
+                text("DELETE FROM org_tokens WHERE org_id = :o AND label = :l"),
+                {"o": org, "l": label.strip()[:80]},
+            )
+        else:
+            conn.execute(
+                text("DELETE FROM org_tokens WHERE org_id = :o"), {"o": org}
+            )
+    return True
+
+
 # ── durable org_connections mirror + billing plan ──────────────────────
 
 def set_connection(
