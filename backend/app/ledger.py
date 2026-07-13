@@ -428,6 +428,15 @@ def set_action_status(
     if not aid or st not in EXECUTION_STATUSES:
         return False
     with store._LOCK, store._connect() as conn:
+        current = conn.execute(
+            "SELECT status FROM action_status WHERE org_id=? AND action_id=?",
+            (org_id, aid),
+        ).fetchone()
+        # Execution state is monotonic. Once Cedric reports a terminal result,
+        # late/replayed proposed or approved events (or a conflicting terminal)
+        # cannot repaint a green/red dashboard chip.
+        if current and current["status"] in _TERMINAL_STATUS_OUTCOME:
+            return True
         conn.execute(
             """INSERT INTO action_status
                    (org_id, action_id, status, detail, updated_at)
