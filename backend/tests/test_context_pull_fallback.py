@@ -269,6 +269,7 @@ def test_fetch_context_sends_routing_params(monkeypatch):
     ctx = cedric_callback.fetch_context(
         {
             "context_url": CONTEXT_URL,
+            "org_id": "org_customer",
             "external_ref": {"team": "T1", "slack_channel": "#cedric"},
         }
     )
