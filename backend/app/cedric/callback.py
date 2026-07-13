@@ -12,7 +12,8 @@ A session started with a `callback_url` gets three kinds of events POSTed back
 
 Requests are signed with `X-Laura-Signature: t=<unix_ts>,v1=<hmac_sha256_hex>`
 over `t + "." + raw_body` using LAURA_WEBHOOK_SECRET (Slack/Stripe-style), and
-carry `Authorization: Bearer LAURA_WEBHOOK_TOKEN` as a cheap first-line check.
+carry a per-workspace bearer for customer orgs. The deployment-level
+`LAURA_WEBHOOK_TOKEN` remains only for the Demo/legacy service path.
 
 Everything here is best-effort by design: a callback failure must NEVER block
 or fail the meeting lifecycle (finalize already saved the artifact — the
@@ -314,13 +315,11 @@ def provision_org(
     to its Slack team even without external_ref, and mint the org's own
     webhook credentials on his side.
 
-    Returns a truthy ProvisionResult on 2xx (including the minted webhook
-    secret for immediate SSM write-through), a falsey result on refusal/error,
-    or None when the endpoint isn't
-    configured yet (the connection stays 'pending' — contract step B, Cedric's
-    /api/laura/orgs, is in flight). Best-effort: any minted credentials in the
-    response are handled by ops (the signing registry env), NEVER stored or
-    logged here."""
+    Returns a truthy ProvisionResult on 2xx (including both minted workspace
+    credentials for immediate SSM write-through), a falsey result on refusal/error,
+    or None when the endpoint isn't configured yet (the connection stays
+    'pending'). Minted credentials are returned only in the redacted result;
+    dashboard.py persists them as per-org SecureStrings and never logs them."""
     url = settings.cedric_orgs_url.strip()
     if not url:
         return None
