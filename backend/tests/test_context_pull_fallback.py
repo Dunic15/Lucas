@@ -288,6 +288,7 @@ def test_recall_realtime_capability_rejects_missing_wrong_and_cross_session(
 ):
     """Production rejects before parsing, and one bot's URL cannot mutate another."""
     monkeypatch.setattr(settings, "recall_api_key", "prod-recall-key")
+    monkeypatch.setattr(settings, "recall_webhook_secret", "")
     bot_a = fresh_store.create(
         "bot_cap_a", "https://meet.google.com/cap-a", "cedric"
     )
@@ -314,6 +315,11 @@ def test_recall_realtime_capability_rejects_missing_wrong_and_cross_session(
             wrong = await ac.post(
                 "/webhooks/recall?cap=wrong", content=b"{not-json"
             )
+            fake_signature = await ac.post(
+                "/webhooks/recall",
+                content=b"{not-json",
+                headers={"webhook-signature": "v1,fake"},
+            )
             cross = await ac.post(
                 "/webhooks/recall?cap=cap-a", json=joined_b
             )
@@ -323,11 +329,12 @@ def test_recall_realtime_capability_rejects_missing_wrong_and_cross_session(
             valid = await ac.post(
                 "/webhooks/recall?cap=cap-b", json=joined_b
             )
-            return missing, wrong, cross, valid
+            return missing, wrong, fake_signature, cross, valid
 
-    missing, wrong, cross, valid = asyncio.run(_run())
+    missing, wrong, fake_signature, cross, valid = asyncio.run(_run())
     assert missing.status_code == 401
     assert wrong.status_code == 401
+    assert fake_signature.status_code == 401
     assert cross.status_code == 403
     assert valid.status_code == 200
     assert bot_b.participants["p1"]["name"] == "Alice"
