@@ -405,6 +405,14 @@ class Settings(BaseSettings):
     #    not for a talk-over decision): a full second of no one talking.
     interject_min_completeness: float = 0.6
     interject_min_pause_seconds: float = 1.0
+    # Cross-talk / locked-dyad suppression (decision.in_locked_dyad): when two
+    # humans are in a tight back-and-forth, an unaddressed interjection reads as
+    # butting in — hold it back to a SILENT raised hand and wait longer instead.
+    # Suppression-only (never speaks). Default OFF like every comparable knob.
+    cross_talk_suppression_enabled: bool = False
+    cross_talk_min_turns: int = 4
+    cross_talk_max_gap_seconds: float = 8.0
+    cross_talk_window: int = 6
     # Talk-over guard for the interjection escape: in hand_mode the WHOLE
     # contribution is generated (deference sleep + full answer collected — several
     # seconds) BEFORE the floor-open check. `interjection_floor_open` judged the
