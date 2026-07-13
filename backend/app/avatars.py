@@ -9,12 +9,15 @@ uses. Adding an avatar = adding a folder. No code changes. See avatars/README.md
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 from .config import settings
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -161,6 +164,37 @@ def list_ids() -> list[str]:
     if not root.exists():
         return []
     return sorted(p.name for p in root.iterdir() if (p / "avatar.yaml").exists())
+
+
+def list_for_org(org_id: str) -> list[str]:
+    """The avatar ids a member of ``org_id`` may call, sorted.
+
+    An org with explicit grants (org_agents rows) sees ONLY those, intersected
+    with the avatars that still exist as folders — a revoked/renamed folder
+    never yields a dead entry. An org with NO grants (personal orgs, the Demo
+    org, an unknown org) sees EVERY installed avatar: today's behavior, kept
+    backward-compatible for the key-free demo and personal-org logins.
+    """
+    from . import store  # lazy: neither module imports the other at load time
+
+    granted = store.list_org_agent_ids(org_id)
+    if not granted:
+        return list_ids()
+    existing = set(list_ids())
+    resolved = sorted(a for a in granted if a in existing)
+    if not resolved:
+        # Grants exist but every one references a missing folder (e.g. a folder
+        # was renamed/removed without updating org_agents). Fail OPEN to all
+        # avatars rather than handing the org a dead, empty dashboard. org_id is
+        # a synthetic id + a count — no PII/transcript in this log.
+        _log.warning(
+            "org %s has %d agent grant(s) but none resolve to a folder; "
+            "falling back to all avatars",
+            org_id,
+            len(granted),
+        )
+        return list_ids()
+    return resolved
 
 
 # ── every avatar gets an email address, for free ──────────────────────
