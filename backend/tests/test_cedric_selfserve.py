@@ -222,58 +222,72 @@ def test_org_token_scopes_ledger_and_org_memory(client, monkeypatch):
     )  # still open
 
 
-def test_org_action_status_enforces_org_equality(client, monkeypatch):
-    """A per-org bearer may write execution status ONLY for action_ids its
-    org owns. Another org's id and an unknown/pre-finalize id both answer the
-    IDENTICAL 404 with nothing written (should-fix 3: no status-planting on a
-    not-yet-finalized action, no existence oracle). The global bearer keeps
-    the trusted service path — pre-finalize writes still land."""
+def test_org_action_status_is_tenant_scoped_before_finalize(client, monkeypatch):
+    """The same action_id may progress independently in two organizations.
+
+    A per-org bearer may report pre-finalize state because the status row is
+    keyed by (org_id, action_id). Finalization consults only its own org's row.
+    """
     url = "https://meet.google.com/status-scope"
+    same_id = "aid00000000000a"
     ledger.record_meeting(
         url, "laura", "b_own",
-        {"actions": [{"owner": "A", "item": "send the doc", "action_id": "aid00000000000a"}]},
+        {"actions": [{"owner": "A", "item": "send the doc", "action_id": same_id}]},
         org_id="org_sff",
     )
     monkeypatch.setattr(settings, "laura_api_token", "sesame")
     own = store.mint_org_token("org_sff", "svc")
     other = store.mint_org_token("org_other", "svc")
 
-    denied = client.post(
-        "/org/actions/aid00000000000a/status",
+    # Org B can report the same id before its meeting finalizes; this must not
+    # close or decorate org A's row.
+    pre = client.post(
+        f"/org/actions/{same_id}/status",
         headers=_bearer(other),
-        json={"status": "done"},
+        json={"status": "done", "detail": "org B finished"},
     )
-    # pre-finalize/unknown id: a per-org bearer may NOT plant a status
-    unknown = client.post(
-        "/org/actions/aid_prefinalize00/status",
-        headers=_bearer(other),
-        json={"status": "done"},
-    )
-    assert denied.status_code == unknown.status_code == 404
-    assert denied.content == unknown.content  # indistinguishable
+    assert pre.status_code == 200
     assert ledger.items(ledger.meeting_key(url), status="open", org_id="org_sff")
-    assert ledger.action_statuses(["aid00000000000a", "aid_prefinalize00"]) == {}
+    assert ledger.action_statuses([same_id], org_id="org_sff") == {}
+    assert ledger.action_statuses([same_id], org_id="org_other")[same_id][
+        "status"
+    ] == "done"
 
+    # Org A's status is independent and closes only org A's ledger row.
     ok = client.post(
-        "/org/actions/aid00000000000a/status",
+        f"/org/actions/{same_id}/status",
         headers=_bearer(own),
-        json={"status": "done", "detail": "executed"},
+        json={"status": "done", "detail": "org A executed"},
     )
     assert ok.status_code == 200
-    # the terminal status closed the OWNING org's ledger row (not the demo's)
     assert not ledger.items(ledger.meeting_key(url), status="open", org_id="org_sff")
+    assert ledger.action_statuses([same_id], org_id="org_sff")[same_id][
+        "detail"
+    ] == "org A executed"
 
-    # the GLOBAL bearer is the trusted service path: pre-finalize writes work
+    # When org B later finalizes, its pre-finalize terminal status is preserved.
+    other_url = "https://meet.google.com/status-scope-b"
+    ledger.record_meeting(
+        other_url, "laura", "b_other",
+        {"actions": [{"owner": "B", "item": "send the other doc", "action_id": same_id}]},
+        org_id="org_other",
+    )
+    assert not ledger.items(
+        ledger.meeting_key(other_url), status="open", org_id="org_other"
+    )
+
+    # The global service bearer is Demo-scoped, not a cross-tenant writer.
+    demo_id = "aid_demo_prefinal0"
     svc = client.post(
-        "/org/actions/aid_prefinalize00/status",
+        f"/org/actions/{demo_id}/status",
         headers=_bearer("sesame"),
         json={"status": "proposed"},
     )
     assert svc.status_code == 200
-    assert ledger.action_statuses(["aid_prefinalize00"])[
-        "aid_prefinalize00"
-    ]["status"] == "proposed"
-
+    assert ledger.action_statuses([demo_id], org_id=settings.demo_org_id)[demo_id][
+        "status"
+    ] == "proposed"
+    assert ledger.action_statuses([demo_id], org_id="org_other") == {}
 
 def test_summary_scoped_for_per_org_bearer(client, monkeypatch):
     """/dashboard/summary's machine path: a per-org bearer sees its org + the
