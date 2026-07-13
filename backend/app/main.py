@@ -57,6 +57,7 @@ from . import (
     ledger,
     meeting_state,
     org_api,
+    security,
     tools,
     tts,
     vendor_health,
@@ -148,6 +149,11 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Callable AI Process Avatar", lifespan=_lifespan)
+# Production hardening: per-IP rate limiting on the public/expensive/unauth demo
+# endpoints + security response headers. Registered BEFORE the routers so it
+# wraps them; never touches the live-meeting path (ws/webhook/avatar/sessions).
+# Avatar pages stay iframe-embeddable (no X-Frame-Options). See security.py.
+security.install(app)
 app.include_router(tts.router)  # POST /tts (open-source avatar voice)
 app.include_router(org_api.router)  # /org/* — org-memory seam for surfaces (#48)
 app.include_router(auth.router)  # /auth/* — dashboard login (Google Sign-In)

@@ -380,6 +380,44 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
 
+    # ── Production hardening (backend/app/security.py) ──
+    # In-process, per-IP rate limiting on the PUBLIC, EXPENSIVE, UNAUTHENTICATED
+    # endpoints only (demo/direct-web-avatar brain + TTS). It NEVER touches the
+    # live-meeting path (/webhooks/recall, ws/<id>, /avatar/*, /sessions/*) or
+    # the authenticated dashboard — latency is the product there and the contract
+    # is sacred. Anti cost-bomb: /demo/post_meeting calls Sonnet-5 per request,
+    # the others hit an LLM or ElevenLabs, and anyone can hammer them today.
+    # Counts are in-process (fine: prod runs a single App Runner instance,
+    # MaxSize=1). Master switch defaults ON but can be flipped OFF via env so the
+    # limiter can never wedge a demo. Limits are per-IP, per-endpoint, per window.
+    rate_limit_enabled: bool = True
+    rate_limit_window_seconds: float = 60.0
+    # Sonnet-5 per call — the strictest bucket. A human demoing clicks it a
+    # handful of times a minute; a script hammering the summary blows past it.
+    rate_limit_demo_post_meeting: int = 6
+    # Cheaper grounded Q&A (RAG + fast model). Generous for a live demo.
+    rate_limit_demo_ask: int = 30
+    # Direct-web-avatar streaming brain (SSE). A real back-and-forth is a few
+    # turns a minute; 60 leaves plenty of headroom before it reads as abuse.
+    rate_limit_live_ask: int = 60
+    # Tool-using answer path (round-trip per call, can hit web search).
+    rate_limit_live_act: int = 30
+    # Page-side TTS fallback for the /talk avatar voice — GENEROUS on purpose:
+    # the live meeting attaches audio server-side (never via this HTTP route),
+    # so this is the direct web page + fallback. Kept high so a real talking
+    # page is never throttled; still caps a script scraping ElevenLabs credits.
+    rate_limit_tts: int = 120
+
+    # Security response headers (security.py middleware). HSTS + nosniff +
+    # Referrer-Policy + cross-domain-policies on every response. NOTE: no
+    # X-Frame-Options / CSP frame-ancestors — Recall renders the avatar page
+    # (/talk, /avatar, /photoreal, /live, /join) in an IFRAME as the bot camera,
+    # so frame-blocking would break the live avatar. See security.py.
+    security_headers_enabled: bool = True
+    # HSTS max-age in seconds (default 2 years). Only honored over HTTPS, so the
+    # local http demo is unaffected. Set 0 to omit the HSTS header entirely.
+    hsts_max_age_seconds: int = 63072000
+
     # ── Cedric integration (docs/ in the Cedric X Laura project) ──
     # Avatar used when a session/dispatch doesn't name one explicitly.
     default_avatar_id: str = "laura"
