@@ -894,3 +894,80 @@ def test_stripe_idempotency_uses_private_boundary(cp, pg):
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute("SELECT count(*) FROM stripe_events")
 
+
+
+def test_disconnect_endpoint_durable_org_repro(pg, monkeypatch, tmp_path):
+    """REPRO: disconnect the Cedric brain for a DURABLE (uuid) org via the real
+    endpoint, with control_plane enabled against embedded Postgres. Prod path
+    that the SQLite-only suite never exercises."""
+    import importlib
+    from app import store, auth, cedric, ledger
+    from app.cedric import secret_registry
+
+    monkeypatch.setenv("LAURA_STORE_PATH", str(tmp_path / "store.sqlite3"))
+    monkeypatch.setattr(settings, "laura_database_url", pg["app_sa_url"])
+    monkeypatch.setattr(settings, "session_secret", "test-secret")
+    monkeypatch.setattr(settings, "public_base_url", "https://app.lauravatar.com")
+    monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
+    control_plane.reset_engine()
+    importlib.reload(store)
+    importlib.reload(ledger)
+    client = TestClient(main.app)
+
+    # Durable signup: uuid org + member_uid, and a sqlite users row.
+    user = store.upsert_user(email="disc-durable@freemail.test", name="Disc")
+    assert control_plane.is_durable_org(user["org_id"]), user["org_id"]
+    client.cookies.set(auth.COOKIE_NAME, auth.make_cookie(user["user_id"]))
+
+    # Connect the brain durably (+ sqlite mirror), like a completed install.
+    nonce = "disc-nonce"
+    assert control_plane.begin_brain_install(user["org_id"], "cedric", nonce, "#ops") is True
+    assert (
+        control_plane.accept_brain_install(
+            user["org_id"], "cedric", nonce, "raw-d", "T", "#ops", "sec", "peer"
+        )
+        == "applied"
+    )
+    assert control_plane.finish_brain_install(user["org_id"], "cedric", nonce) == "connected"
+    # NOTE: no store.set_connection here — for a durable org, /complete writes
+    # Postgres ONLY (SQLite stays cold), which is the real production state and
+    # forces the endpoint's rehydrate path.
+
+    # SSM cleanup succeeds; use the REAL cedric.revoke_org so the deployment-bearer
+    # auth is exercised. Cedric's DELETE /api/laura/orgs/{org} accepts the
+    # deployment-level bearer (verifyLauraContextBearer); no per-org bearer was
+    # ever minted (Cedric sends only webhook_secret), so revoke_org MUST fall
+    # back to cedric_orgs_token or it sends no auth → 401 → the endpoint 502s.
+    from app.cedric import callback
+    monkeypatch.setattr(secret_registry, "remove_org_credentials", lambda org: True)
+    monkeypatch.setattr(settings, "cedric_orgs_token", "DEPLOY-TOKEN")
+
+    class _Resp:
+        def __init__(self, code):
+            self.status_code = code
+            self.headers: dict = {}
+        def json(self):
+            return {}
+
+    class AuthCheckingCedric:
+        def __init__(self, *a, **k): ...
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def delete(self, url, headers=None):
+            # Cedric returns 401 unless Laura presents the deployment bearer.
+            if (headers or {}).get("Authorization") == "Bearer DEPLOY-TOKEN":
+                return _Resp(204)
+            return _Resp(401)
+
+    monkeypatch.setattr(callback.httpx, "Client", AuthCheckingCedric)
+
+    resp = client.post(
+        "/dashboard/connections/brain/disconnect", json={"avatar_id": "cedric"}
+    )
+    assert resp.status_code == 200, f"{resp.status_code} {resp.text}"
+    assert resp.json()["status"] == "disconnected"
+    control_plane.reset_engine()
+    assert resp.json()["status"] == "disconnected"
+    control_plane.reset_engine()
