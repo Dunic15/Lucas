@@ -869,18 +869,39 @@
           if(j.status==="not_connected"){ box.innerHTML='<div class="cnote">Connect Cedric to Slack to choose the workspace tools he may use.</div>'; return; }
           if(j.status==="unavailable"){ box.innerHTML='<div class="cnote">Cedric is connected, but its tool catalog is temporarily unavailable. Retry in a moment.</div>'; return; }
           if(j.status!=="ok"){ box.innerHTML='<div class="cnote">The tool connection state could not be verified. Retry in a moment.</div>'; return; }
-          box.innerHTML=(j.connectors||[]).map(function(c){
-            var chip=c.connected
-              ?'<span class="stchip '+(c.needs_reconnect?"pending":"connected")+'">'+(c.needs_reconnect?"reconnect":"connected")+'</span>'
-              :'<span class="stchip">not connected</span>';
-            var act=c.connected||!c.connect_url
-              ?''
-              :'<a class="btn conn-btn" style="text-decoration:none" href="'+esc(c.connect_url)+'" target="_blank" rel="noopener">Connect</a>';
-            return '<div class="crow"><div style="min-width:0"><div class="cn">'+esc(c.name)+'</div>'+
-              '<div class="cd">'+esc(c.account?("· "+c.account):c.description)+'</div></div>'+chip+act+'</div>';
-          }).join("")+
-          (j.manage_url?'<div class="cnote">These are the brain’s own connections — it executes with them. '+
-            '<a href="'+esc(j.manage_url)+'" target="_blank" rel="noopener" style="color:var(--live)">Manage in Cedric ↗</a></div>':'');
+          // Display map: which brain connectors to surface, and how. Keyed by the
+          // connector key (falls back to its name), normalized to lowercase-alnum.
+          //   real → connectable now: live state from Cedric's catalog + "Connect".
+          //   soon → non-clickable "coming soon" chip (rendered statically; these
+          //          need not be in the live catalog yet).
+          // A connector NOT listed here is hidden. To promote a tool later, just
+          // move its key from soon → real (or add a new real key).
+          var CONN_MAP={
+            gmail:{s:"real"}, googlecalendar:{s:"real"}, calendar:{s:"real"},
+            slack:{s:"real"}, github:{s:"real"}, notion:{s:"real"},
+            hubspot:{s:"soon",name:"HubSpot"}, linear:{s:"soon",name:"Linear"}
+          };
+          var norm=function(x){return String(x||"").toLowerCase().replace(/[^a-z0-9]/g,"");};
+          var mapOf=function(c){return CONN_MAP[norm(c.key)]||CONN_MAP[norm(c.name)];};
+          // REAL: only catalog connectors mapped "real" — with live state + Connect.
+          var real=(j.connectors||[]).filter(function(c){var m=mapOf(c);return m&&m.s==="real";})
+            .map(function(c){
+              var chip=c.connected
+                ?'<span class="stchip '+(c.needs_reconnect?"pending":"connected")+'">'+(c.needs_reconnect?"reconnect":"connected")+'</span>'
+                :'<span class="stchip">not connected</span>';
+              var act=c.connected||!c.connect_url
+                ?''
+                :'<a class="btn conn-btn" style="text-decoration:none" href="'+esc(c.connect_url)+'" target="_blank" rel="noopener">Connect</a>';
+              return '<div class="crow"><div style="min-width:0"><div class="cn">'+esc(c.name)+'</div>'+
+                '<div class="cd">'+esc(c.account?("· "+c.account):c.description)+'</div></div>'+chip+act+'</div>';
+            });
+          // COMING SOON: static rows straight from the map (display-only, no button).
+          var soon=Object.keys(CONN_MAP).filter(function(k){return CONN_MAP[k].s==="soon";})
+            .map(function(k){ return '<div class="crow"><div style="min-width:0"><div class="cn">'+
+              esc(CONN_MAP[k].name||k)+'</div><div class="cd">Coming soon</div></div>'+
+              '<span class="stchip" style="opacity:.65">coming soon</span></div>'; });
+          box.innerHTML=real.join("")+soon.join("")
+            || '<div class="cnote">No tools available to connect yet.</div>';
         })
         .catch(function(){ box.innerHTML='<div class="cnote">Brain connectors unavailable right now.</div>'; });
     }
