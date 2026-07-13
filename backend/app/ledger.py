@@ -151,7 +151,7 @@ def _init_db() -> None:
         # stable action_id the events carry. Latest state only — the dashboard
         # shows where each action stands, not a full audit trail.
         conn.executescript(
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS action_status (
                 org_id TEXT NOT NULL DEFAULT '{demo}',
                 action_id TEXT NOT NULL,
