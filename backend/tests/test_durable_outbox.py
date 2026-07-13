@@ -650,6 +650,11 @@ def test_finalize_keeps_session_when_artifact_postgres_is_down(
     monkeypatch.setattr(main.outbox, "begin_action_finalize", lambda *args: [])
     monkeypatch.setattr(main.cedric, "deliver_ended", lambda *args: True)
     monkeypatch.setattr(control_plane, "enabled", lambda: True)
+    monkeypatch.setattr(
+        store.settings,
+        "laura_database_url",
+        "postgresql://configured-artifact-test",
+    )
 
     def postgres_down(*args, **kwargs):
         raise RuntimeError("durable artifact database unavailable")
