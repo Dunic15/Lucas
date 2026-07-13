@@ -235,7 +235,7 @@ def _create_checkout(org: str, email: str) -> str:
             control_plane.release_checkout(org, revision)
             raise
 
-    expires_at = int(time.time()) + 30 * 60
+    expires_at = int(time.time()) + 31 * 60
     session = sdk.checkout.Session.create(
         mode="subscription",
         line_items=[
