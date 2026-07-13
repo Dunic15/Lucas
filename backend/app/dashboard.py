@@ -879,7 +879,6 @@ async def disconnect_brain_remote(request: Request) -> JSONResponse:
         return True
 
     async def tombstone_all() -> bool:
-    async def tombstone_all() -> bool:
         """Revoke the labelled bearer and persist a non-resurrectable marker.
         Durable rows are committed before refreshing the SQLite cache."""
         for row in brain:
