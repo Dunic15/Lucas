@@ -776,6 +776,7 @@ def test_slack_complete_mirrors_durable_control_plane(client, monkeypatch):
     store.set_connection(user["org_id"], "cedric", "cedric-brain", "pending", {})
     completed: list[tuple] = []
     monkeypatch.setattr(control_plane, "enabled", lambda: True)
+    monkeypatch.setattr(control_plane, "is_durable_org", lambda org: True)
     monkeypatch.setattr(control_plane, "get_connections", lambda org: [])
     monkeypatch.setattr(
         control_plane,
@@ -815,6 +816,7 @@ def test_durable_replay_stays_pending_until_secret_sync_succeeds(
     user = store.upsert_user("durable-replay-pending@example.com")
     store.set_connection(user["org_id"], "cedric", "cedric-brain", "pending", {})
     monkeypatch.setattr(control_plane, "enabled", lambda: True)
+    monkeypatch.setattr(control_plane, "is_durable_org", lambda org: True)
     monkeypatch.setattr(control_plane, "get_connections", lambda org: [])
     seen: list[str] = []
 
