@@ -4,6 +4,8 @@ from __future__ import annotations
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from app import ledger, main, outbox, store, tools
 from app.cedric import integration
 
@@ -120,6 +122,56 @@ def test_permanent_4xx_waits_for_manual_retry(tmp_path, monkeypatch):
         "action.requested:action-permanent",
         "action.requested:action-permanent",
     ]
+
+
+def test_scoped_delivery_never_nudges_another_org(tmp_path, monkeypatch):
+    _fresh(tmp_path, monkeypatch)
+    first = outbox.enqueue_action_requested(
+        _integration("org-a"),
+        "bot-a",
+        {"action_id": "action-a", "action": "A"},
+    )
+    second = outbox.enqueue_action_requested(
+        _integration("org-b"),
+        "bot-b",
+        {"action_id": "action-b", "action": "B"},
+    )
+    calls = []
+    from app.cedric import callback
+
+    def fake_post(url, payload, *, idempotency_key=""):
+        calls.append((payload["org_id"], idempotency_key))
+        return SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr(callback, "_post", fake_post)
+    assert outbox.process_due(
+        now=time.time() + 1, org_id="org-a", outbox_id=first
+    ) == 1
+
+    assert calls == [("org-a", "action.requested:action-a")]
+    assert outbox.delivery_rows("org-a")[0]["status"] == "delivered"
+    assert outbox.delivery_rows("org-b")[0]["status"] == "pending"
+    assert outbox.delivery_rows("org-b")[0]["id"] == second
+
+
+def test_customer_callback_without_both_credentials_opens_no_socket(
+    monkeypatch,
+):
+    from app.cedric import callback
+
+    monkeypatch.setattr(callback.secret_registry, "secret_for", lambda org_id: "")
+    monkeypatch.setattr(callback.secret_registry, "bearer_for", lambda org_id: "")
+
+    def should_not_open(*args, **kwargs):
+        pytest.fail("HTTP client opened before customer credentials were available")
+
+    monkeypatch.setattr(callback.httpx, "Client", should_not_open)
+    with pytest.raises(callback.CallbackCredentialsUnavailable):
+        callback._post(
+            "https://surface.example/events",
+            {"event": "action.requested", "org_id": "org-customer"},
+            idempotency_key="action.requested:a-1",
+        )
 
 
 def test_redelivery_uses_original_org_team_channel(tmp_path, monkeypatch):
