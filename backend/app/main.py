@@ -594,7 +594,7 @@ def _status_change_epoch(
 
 
 async def _close_usage_for(
-    bot_id: str, end_epoch: float | None, reason: str
+    org_id: str, bot_id: str, end_epoch: float | None, reason: str
 ) -> None:
     """Close the durable usage row for a finished bot (PR B). Idempotent —
     entitlements.close_usage's ``WHERE state != 'closed'`` means the FIRST
@@ -608,13 +608,13 @@ async def _close_usage_for(
     if not control_plane.enabled():
         return
     try:
-        row = await run_in_threadpool(entitlements.usage_row, bot_id)
+        row = await run_in_threadpool(entitlements.usage_row, org_id, bot_id)
         if row is None or row.get("state") == "closed":
             return
         in_call = row.get("in_call_at")
         if in_call is None:
             await run_in_threadpool(
-                entitlements.close_usage, bot_id, 0, "never_joined"
+                entitlements.close_usage, org_id, bot_id, 0, "never_joined"
             )
             return
         end = end_epoch
@@ -623,7 +623,9 @@ async def _close_usage_for(
             if row.get("deadline"):
                 end = min(end, float(row["deadline"]))
         consumed = max(0, int(round(end - in_call)))
-        await run_in_threadpool(entitlements.close_usage, bot_id, consumed, reason)
+        await run_in_threadpool(
+            entitlements.close_usage, org_id, bot_id, consumed, reason
+        )
     except Exception as e:  # noqa: BLE001 — reconcile's restore pass heals it
         print(
             f"[usage] close failed for bot={bot_id} ({type(e).__name__}); "
@@ -632,19 +634,24 @@ async def _close_usage_for(
         )
 
 
-async def _assign_usage_bot_id(provisional_bot_id: str, real_bot_id: str) -> None:
+async def _assign_usage_bot_id(
+    org_id: str, provisional_bot_id: str, real_bot_id: str
+) -> bool:
     """Swap the gate's provisional usage bot_id ('pending:<uuid>') for the real
     Recall id, RETRYING a few times on a transient DB blip (PR B BLOCKER 1: a
     single swallowed swap failure left the usage row stranded under the
     provisional id → the live bot ran untracked → unmetered forever). If every
-    attempt fails the reconcile self-heal (_repair_untracked_usage) re-associates
-    the row, so this never blocks the join — it just narrows the repair window."""
+    attempt fails, the caller stops the born bot and fails closed. The reconcile
+    self-heal remains a backstop when a leave cannot be verified immediately."""
     for attempt in range(3):
         try:
-            await run_in_threadpool(
-                entitlements.assign_bot_id, provisional_bot_id, real_bot_id
+            changed = await run_in_threadpool(
+                entitlements.assign_bot_id, org_id, provisional_bot_id, real_bot_id
             )
-            return  # a non-raising return (True or False) means no more to do
+            if changed:
+                return True
+            # False is NOT success: retry, then force the caller down the
+            # fail-closed cleanup path instead of running an unmetered bot.
         except Exception:  # noqa: BLE001 — transient billing-DB blip; retry
             if attempt == 2:
                 print(
@@ -652,8 +659,9 @@ async def _assign_usage_bot_id(provisional_bot_id: str, real_bot_id: str) -> Non
                     "reconcile self-heals",
                     flush=True,
                 )
-                return
+                return False
             await asyncio.sleep(0.2 * (attempt + 1))
+    return False
 
 
 async def _abandon_orphan_session(bot_id: str) -> None:
@@ -682,7 +690,7 @@ async def _abandon_orphan_session(bot_id: str) -> None:
                 pass
         # PR B: a no-show bot consumed nothing — release its usage row so the
         # org's one-active-meeting slot frees up (idempotent; never raises).
-        await _close_usage_for(bot_id, None, "never_joined")
+        await _close_usage_for(session.org_id, bot_id, None, "never_joined")
         store.remove(bot_id)
     finally:
         _finalizing.discard(bot_id)
@@ -736,6 +744,7 @@ async def _retry_leave(bot_id: str, session: store.Session) -> bool:
         # this both resolve to one honest close. consumed = confirmed-stop
         # moment (now, capped at the deadline); reason carried from finalize.
         await _close_usage_for(
+            session.org_id,
             bot_id,
             getattr(session, "usage_end_epoch", None),
             getattr(session, "usage_close_reason", "") or "ended",
@@ -849,7 +858,7 @@ async def _reconcile_once() -> None:
                 if started is not None or code in _IN_CALL_CODES:
                     try:
                         deadline = await run_in_threadpool(
-                            entitlements.mark_in_call, bid, started or time.time()
+                            entitlements.mark_in_call, session.org_id, bid, started or time.time()
                         )
                         usage["in_call_at"] = started or time.time()
                         usage["deadline"] = deadline
@@ -922,7 +931,7 @@ async def _repair_untracked_usage(
             and org_row.get("in_call_at") is None
         ):
             prov = org_row["bot_id"]
-            if await run_in_threadpool(entitlements.assign_bot_id, prov, real):
+            if await run_in_threadpool(entitlements.assign_bot_id, org, prov, real):
                 usage_by_bot.pop(prov, None)
                 org_row["bot_id"] = real
                 usage_by_bot[real] = org_row
@@ -978,7 +987,7 @@ async def _reconcile_usage_orphan(
             if live_orgs is not None and usage.get("org_id") in live_orgs:
                 return
             if time.time() - float(usage.get("created_at") or 0) > 600:
-                await run_in_threadpool(entitlements.close_usage, bid, 0, "orphaned")
+                await run_in_threadpool(entitlements.close_usage, usage["org_id"], bid, 0, "orphaned")
             return
         if not settings.recall_api_key.strip():
             return  # no key → can't reach Recall; leave the row for a keyed instance
@@ -996,7 +1005,7 @@ async def _reconcile_usage_orphan(
             _reconcile_missing[bid] = misses
             if misses >= _RECONCILE_MISSING_LIMIT:
                 _reconcile_missing.pop(bid, None)
-                await _close_usage_for(bid, None, "bot_missing")
+                await _close_usage_for(usage["org_id"], bid, None, "bot_missing")
             return
         r.raise_for_status()
         _reconcile_missing.pop(bid, None)
@@ -1005,7 +1014,8 @@ async def _reconcile_usage_orphan(
         if code in _BOT_TERMINAL:
             # Ended while we were down: consumed from Recall's own timestamps.
             await _close_usage_for(
-                bid, _status_change_epoch(bot, {code}, first=False), "ended"
+                usage["org_id"], bid,
+                _status_change_epoch(bot, {code}, first=False), "ended"
             )
             return
         # Still live: restore the clock if the row never got one…
@@ -1014,7 +1024,7 @@ async def _reconcile_usage_orphan(
             started = _status_change_epoch(bot, _IN_CALL_CODES)
             if started is not None or code in _IN_CALL_CODES:
                 deadline = await run_in_threadpool(
-                    entitlements.mark_in_call, bid, started or time.time()
+                    entitlements.mark_in_call, usage["org_id"], bid, started or time.time()
                 )
         # …then enforce the deadline. No local session → no artifact to build;
         # just stop the meter the VERIFIED way (same classification as #148)
@@ -1025,7 +1035,7 @@ async def _reconcile_usage_orphan(
             except Exception as e:  # noqa: BLE001 — classified below
                 if not _leave_confirmed_stopped(e):
                     return  # UNVERIFIED — bot may still bill; retry next pass
-            await _close_usage_for(bid, None, "limit_reached")
+            await _close_usage_for(usage["org_id"], bid, None, "limit_reached")
     except Exception:  # noqa: BLE001 — an orphan hiccup must never break the pass
         pass
 
@@ -1592,18 +1602,33 @@ async def _start_avatar_session(
         if usage_bot_id:
             try:
                 await run_in_threadpool(
-                    entitlements.close_usage, usage_bot_id, 0, "dispatch_failed"
+                    entitlements.close_usage, org_id, usage_bot_id, 0, "dispatch_failed"
                 )
             except Exception:  # noqa: BLE001 — reconcile's restore heals orphans
                 print("[usage] dispatch_failed close deferred to reconcile", flush=True)
         raise
     realtime_capability = str(bot.pop("_laura_realtime_capability", "") or "")
-    if usage_bot_id:
-        await _assign_usage_bot_id(usage_bot_id, bot["id"])
     session = store.create(
         bot_id=bot["id"], meeting_url=meeting_url, avatar_id=avatar.id,
         org_id=org_id,
     )
+    if usage_bot_id and not await _assign_usage_bot_id(
+        org_id, usage_bot_id, bot["id"]
+    ):
+        # A born bot without a durable usage binding is never returned to the
+        # customer. The hardened finalize attempts an immediate verified leave;
+        # if Recall is temporarily unreachable the kept local session lets the
+        # reconcile pass repair the provisional row and retry the stop.
+        await _finalize_session(
+            bot["id"], source="usage_binding_failed",
+            usage_reason="usage_binding_failed",
+        )
+        if store.get(bot["id"]) is None:
+            await run_in_threadpool(
+                entitlements.close_usage,
+                org_id, usage_bot_id, 0, "usage_binding_failed",
+            )
+        raise entitlements.EntitlementsUnavailable("usage_bot_binding_failed")
     if realtime_capability and not store.register_recall_realtime_capability(
         bot["id"], realtime_capability
     ):
@@ -2236,7 +2261,7 @@ async def _finalize_session_locked(
         # Meter CONFIRMED off → NOW close the durable usage row (first close
         # wins; idempotent across manual end + webhook + reconcile). Best-effort
         # — a billing hiccup leaves the row for the reconcile restore pass.
-        await _close_usage_for(bot_id, usage_end_epoch, usage_close_reason)
+        await _close_usage_for(session.org_id, bot_id, usage_end_epoch, usage_close_reason)
         store.remove(bot_id)
         # Photoreal only: last session out turns off the GPU meter (after a grace
         # window, in case another meeting starts right away).
@@ -2373,7 +2398,7 @@ async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
     # PR B: meter confirmed off → release the usage row (a never-joined
     # scheduled bot closes 0; a live one closes with its elapsed) so the org
     # can book its next meeting.
-    await _close_usage_for(bot_id, None, "cancelled")
+    await _close_usage_for(session.org_id, bot_id, None, "cancelled")
     store.remove(bot_id)
     gpu_runtime.on_session_ended(len(store.all_sessions()))
     runpod_runtime.on_session_ended(len(store.all_sessions()))
@@ -3644,7 +3669,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                     try:
                         await run_in_threadpool(
                             entitlements.close_usage,
-                            usage_bot_id, 0, "dispatch_failed",
+                            settings.demo_org_id, usage_bot_id, 0, "dispatch_failed",
                         )
                     except Exception:  # noqa: BLE001 — reconcile heals orphans
                         pass
@@ -3652,8 +3677,6 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             realtime_capability = str(
                 bot.pop("_laura_realtime_capability", "") or ""
             )
-            if usage_bot_id:
-                await _assign_usage_bot_id(usage_bot_id, bot["id"])
             # Calendar auto-join has no authenticated principal (a webhook on
             # Laura's one Google account) → the Demo org (§5, intrinsically
             # single-tenant until calendar connections become per-org).
@@ -3661,6 +3684,22 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id,
                 org_id=settings.demo_org_id,
             )
+            if usage_bot_id and not await _assign_usage_bot_id(
+                settings.demo_org_id, usage_bot_id, bot["id"]
+            ):
+                await _finalize_session(
+                    bot["id"], source="usage_binding_failed",
+                    usage_reason="usage_binding_failed",
+                )
+                if store.get(bot["id"]) is None:
+                    await run_in_threadpool(
+                        entitlements.close_usage,
+                        settings.demo_org_id, usage_bot_id, 0,
+                        "usage_binding_failed",
+                    )
+                raise entitlements.EntitlementsUnavailable(
+                    "usage_bot_binding_failed"
+                )
             if realtime_capability and not store.register_recall_realtime_capability(
                 bot["id"], realtime_capability
             ):
