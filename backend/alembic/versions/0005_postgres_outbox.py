@@ -106,7 +106,7 @@ def upgrade() -> None:
         )
         RETURNS SETOF uuid
         LANGUAGE sql
-        STABLE
+        VOLATILE
         SECURITY DEFINER
         SET search_path = ''
         AS $function$
