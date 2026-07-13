@@ -527,7 +527,9 @@ async def retry_callback_delivery(request: Request) -> JSONResponse:
     exists = await run_in_threadpool(outbox.retry, user["org_id"], outbox_id)
     if not exists:
         return JSONResponse({"error": "delivery not found"}, status_code=404)
-    await run_in_threadpool(outbox.process_due)
+    await run_in_threadpool(
+        outbox.process_due, org_id=user["org_id"], outbox_id=outbox_id
+    )
     rows = await run_in_threadpool(outbox.delivery_rows, user["org_id"])
     row = next((item for item in rows if item["id"] == outbox_id), None)
     return JSONResponse({"ok": True, "delivery": row})
