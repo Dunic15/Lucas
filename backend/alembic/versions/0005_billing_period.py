@@ -34,7 +34,12 @@ def upgrade() -> None:
           ADD COLUMN IF NOT EXISTS last_checkout_session_id text,
           ADD COLUMN IF NOT EXISTS last_checkout_subscription_id text,
           ADD COLUMN IF NOT EXISTS checkout_revision bigint NOT NULL DEFAULT 0,
-          ADD COLUMN IF NOT EXISTS checkout_pending_until timestamptz;
+          ADD COLUMN IF NOT EXISTS checkout_pending_until timestamptz,
+          ADD COLUMN IF NOT EXISTS verified_paid_subscription_id text,
+          ADD COLUMN IF NOT EXISTS verified_paid_period_start timestamptz,
+          ADD COLUMN IF NOT EXISTS verified_paid_period_end timestamptz,
+          ADD COLUMN IF NOT EXISTS verified_paid_event_created bigint NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS verified_paid_event_id text NOT NULL DEFAULT '';
 
         CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_stripe_customer
           ON public.billing_accounts (stripe_customer_id)
@@ -199,4 +204,3 @@ def downgrade() -> None:
         "0005 is the money and privilege boundary; replace it with a reviewed "
         "forward migration instead of weakening subscription state."
     )
-
