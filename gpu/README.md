@@ -112,5 +112,10 @@ if this track stalls.)
 ## Protocol (page <-> GPU server)
 One websocket `/stream`: client sends `{"type":"speak","audio_b64":<mp3>}`;
 server sends `hello/talk_start/talk_end` JSON text frames + continuous binary
-JPEG frames (idle loop when silent, lip-synced frames while talking). The page
-starts audio playback on `talk_start` so mouth and sound line up.
+JPEG frames (idle loop when silent, lip-synced frames while talking). While
+talking, each kept JPEG is immediately preceded by a `{"type":"frame","i":N}`
+text message giving that frame's index on the native (pre-decimation) timeline,
+so the page can lock frame presentation to the audio clock (frame `i` belongs at
+audio second `i/fps`) instead of newest-wins. The tag is additive: a page that
+doesn't know it ignores the text and renders the bare JPEG. The page starts audio
+playback on the clip's first frame so mouth and sound line up.

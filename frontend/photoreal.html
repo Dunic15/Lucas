@@ -75,21 +75,46 @@
   let pendingAudio = [];   // audio clips awaiting their first frame
   let waitingFirstFrame = false; // talk_start seen, audio starts on next frame
 
-  // Frame pacing: paint at most one frame per display tick, always the NEWEST.
-  // If the network delivers a burst (proxy hiccup), stale frames are dropped
-  // instead of queued — the face skips ahead to stay with the audio rather
-  // than drifting further behind for the rest of the utterance.
-  let nextBlob = null;
-  let paintScheduled = false;
-  function paintLatest() {
-    paintScheduled = false;
-    if (!nextBlob) return;
-    const url = URL.createObjectURL(nextBlob);
-    nextBlob = null;
+  // Frame presentation is locked to the AUDIO clock, not to frame arrival.
+  // The GPU tags each talk frame with its native-timeline index (frame i belongs
+  // at audio second i/nativeFps). We buffer a clip's frames and, every display
+  // tick, paint the newest frame whose moment the audio has already reached —
+  // holding the last one if the next hasn't been generated yet, dropping
+  // intermediates after a stall. This is what keeps the mouth on the voice when
+  // generation runs below realtime (the drift the newest-wins scheme couldn't
+  // correct). A server that doesn't tag frames (legacy/stub) or an idle frame
+  // between clips falls back to newest-wins.
+  let nextBlob = null;        // newest-wins fallback (untagged / idle frames)
+  let frameBuf = new Map();   // native index -> blob, for the current clip
+  let pendingIdx = null;      // index the next binary frame carries (from text)
+  let usingClock = false;     // is the current clip audio-clock driven?
+  let clipStart = null;       // actx.currentTime when this clip's audio started
+  let shownIdx = -1;
+  let nativeFps = 25;
+  function paintBlob(blob) {
+    const url = URL.createObjectURL(blob);
     frameEl.src = url;
     if (lastUrl) URL.revokeObjectURL(lastUrl);
     lastUrl = url;
   }
+  function renderLoop() {
+    if (usingClock && clipStart != null && frameBuf.size) {
+      const target = Math.floor((actx.currentTime - clipStart) * nativeFps);
+      let best = -1;
+      for (const k of frameBuf.keys()) { if (k <= target && k > best) best = k; }
+      if (best < 0) { for (const k of frameBuf.keys()) if (best < 0 || k < best) best = k; }
+      if (best !== shownIdx && frameBuf.has(best)) {
+        paintBlob(frameBuf.get(best));
+        shownIdx = best;
+        for (const k of [...frameBuf.keys()]) if (k < best) frameBuf.delete(k);
+      }
+    } else if (nextBlob) {
+      paintBlob(nextBlob);
+      nextBlob = null;
+    }
+    requestAnimationFrame(renderLoop);
+  }
+  requestAnimationFrame(renderLoop);
 
   async function connectGpu() {
     let streamUrl = params.get("stream_url");
@@ -110,25 +135,43 @@
       if (typeof ev.data === "string") {
         try {
           const msg = JSON.parse(ev.data);
-          if (msg.type === "hello") { gpuReady = true; status(`live — ${msg.mode} engine @ ${msg.fps}fps`); }
-          // audio starts on the FIRST FRAME of the clip, not on talk_start:
-          // the GPU takes ~200-400ms to produce it, and starting the sound
-          // early is exactly the head start the lips never recover from.
-          if (msg.type === "talk_start" && pendingAudio.length) waitingFirstFrame = true;
+          if (msg.type === "hello") {
+            gpuReady = true;
+            if (msg.fps) nativeFps = msg.fps;
+            status(`live — ${msg.mode} engine @ ${msg.fps}fps`);
+          }
+          // New clip: reset the frame clock + ring. Audio still starts on the
+          // clip's FIRST frame (the GPU takes ~200-400ms to produce it, and
+          // starting the sound early is a head start the lips never recover).
+          if (msg.type === "talk_start") {
+            frameBuf.clear(); pendingIdx = null; usingClock = false;
+            clipStart = null; shownIdx = -1;
+            if (pendingAudio.length) waitingFirstFrame = true;
+          }
+          // Each talk frame's native-timeline index arrives just before its JPEG.
+          if (msg.type === "frame") { pendingIdx = msg.i; usingClock = true; }
         } catch (_) {}
         return;
       }
+      // binary JPEG frame
+      if (pendingIdx != null) {
+        frameBuf.set(pendingIdx, ev.data); pendingIdx = null;
+        // Defence-in-depth cap: pruning normally keeps this at 1-2 entries, but
+        // never let a clock-skew regression grow it unbounded — drop oldest.
+        while (frameBuf.size > 120) frameBuf.delete(Math.min(...frameBuf.keys()));
+      } else { nextBlob = ev.data; }            // untagged (legacy/idle) → newest-wins
       if (waitingFirstFrame && pendingAudio.length) {
         waitingFirstFrame = false;
-        playClip(pendingAudio.shift());
-      }
-      nextBlob = ev.data;
-      if (!paintScheduled) {
-        paintScheduled = true;
-        requestAnimationFrame(paintLatest);
+        playClip(pendingAudio.shift());          // anchors clipStart to audio start
       }
     };
-    ws.onclose = () => { gpu = null; gpuReady = false; status("GPU stream lost — retrying"); setTimeout(connectGpu, 3000); };
+    ws.onclose = () => {
+      gpu = null; gpuReady = false;
+      // Drop any half-presented clip state so a reconnect starts clean.
+      frameBuf.clear(); pendingIdx = null; usingClock = false;
+      clipStart = null; shownIdx = -1; nextBlob = null;
+      status("GPU stream lost — retrying"); setTimeout(connectGpu, 3000);
+    };
   }
   connectGpu();
 
@@ -139,7 +182,15 @@
     unlockAudio();
     const audio = await actx.decodeAudioData(buf.slice(0));
     const src = actx.createBufferSource();
-    src.buffer = audio; src.connect(actx.destination); src.start();
+    src.buffer = audio; src.connect(actx.destination);
+    const when = actx.currentTime;
+    // Anchor the frame clock to the audio start: frame i is due at when + i/fps.
+    // On audio end, release to idle newest-wins — but ONLY if this is still the
+    // live clip (guard on `when`, so a previous clip's late onended can't cancel
+    // the clock of the clip that already replaced it).
+    src.onended = () => { if (clipStart === when) { usingClock = false; clipStart = null; } };
+    src.start(when);
+    if (usingClock) clipStart = when;
   }
 
   // ── speak: TTS -> GPU (frames) + local playback, serialized in order ────

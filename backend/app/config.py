@@ -405,6 +405,14 @@ class Settings(BaseSettings):
     #    not for a talk-over decision): a full second of no one talking.
     interject_min_completeness: float = 0.6
     interject_min_pause_seconds: float = 1.0
+    # Cross-talk / locked-dyad suppression (decision.in_locked_dyad): when two
+    # humans are in a tight back-and-forth, an unaddressed interjection reads as
+    # butting in — hold it back to a SILENT raised hand and wait longer instead.
+    # Suppression-only (never speaks). Default OFF like every comparable knob.
+    cross_talk_suppression_enabled: bool = False
+    cross_talk_min_turns: int = 4
+    cross_talk_max_gap_seconds: float = 8.0
+    cross_talk_window: int = 6
     # Talk-over guard for the interjection escape: in hand_mode the WHOLE
     # contribution is generated (deference sleep + full answer collected — several
     # seconds) BEFORE the floor-open check. `interjection_floor_open` judged the
@@ -497,6 +505,18 @@ class Settings(BaseSettings):
     # stays byte-identical while every persisted row still carries a non-null
     # org_id (the "start right so we never re-architect" invariant, §0).
     demo_org_id: str = "00000000-0000-0000-0000-0000000000de"
+    # ── usage metering / the free entitlement (backend/app/entitlements.py) ──
+    # Only active when laura_database_url is set (the durable control plane);
+    # the key-free demo has NO metering and NO enforcement. Seconds of included
+    # avatar time a brand-new free org gets (the "15 free minutes"). Used as the
+    # default included_seconds when the billing row is created.
+    free_trial_seconds: int = 900
+    # Included seconds for the paid solo plan (PR C's checkout flips
+    # billing_accounts to plan='solo' with this allowance — 300 min/month).
+    solo_included_seconds: int = 18000
+    # Spoken heads-up near the usage deadline (~5 min and ~1 min before the
+    # avatar must leave). Fires from the reconcile pass — never the hot path.
+    usage_warnings_enabled: bool = True
     # Seed the first REAL org (SFF Studio) + its verified domain + agent grants
     # at store init, so the org_id seam is actually exercised (a member of that
     # org sees only its granted avatars). Idempotent, safe to run every boot —

@@ -24,9 +24,11 @@ L40S / 4090). The pytorch checkpoints are offline-only; keep them for clip
 generation, not live.
 
 Env knobs:
-  DITTO_REPO         path of the cloned repo      (default /opt/ditto/repo)
-  DITTO_CHECKPOINTS  path of the checkpoints dir  (default /opt/ditto/checkpoints)
-  DITTO_CHUNK        override chunksize, "3,5,2"
+  DITTO_REPO           path of the cloned repo      (default /opt/ditto/repo)
+  DITTO_CHECKPOINTS    path of the checkpoints dir  (default /opt/ditto/checkpoints)
+  DITTO_CHUNK          override chunksize, "3,5,2"
+  DITTO_EMO_INTENSITY  0..1 emotion strength (default 0.5) — full 1.0 overrides
+                       lip articulation (closed-smile mid-syllable); 0 disables
 
 Expect a tuning session on the real GPU (chunk pacing, queue depths, fade
 settings) — that was always the plan for launch day.
@@ -56,6 +58,25 @@ _WINDOW_PAD = 80     # alignment pad Ditto's online examples add to the window
 # verified in its condition_handler.py: 0 Angry, 1 Disgust, 2 Fear, 3 Happy,
 # 4 Neutral, 5 Sad, 6 Surprise, 7 Contempt. Unknown labels render neutral.
 _EMO_FOR = {"neutral": 4, "happy": 3, "excited": 3, "serious": 4, "concerned": 5}
+
+# How hard the emotion drives the face, 0..1. A FULL emotion row overrides lip
+# articulation — the 2026-07-12 A/B (same audio, aligned frames) caught "happy"
+# rendering a CLOSED smile mid-syllable where neutral had parted, articulating
+# lips. Blending the emotion row with neutral keeps the expression as a tint
+# the mouth can articulate through. 0 = always neutral, 1 = full (old behavior).
+def _read_emo_intensity() -> float:
+    """Parse DITTO_EMO_INTENSITY, clamped to [0,1]. Runs at import (inside
+    DittoEngine.start); a typo'd env must NOT crash the server's whole startup —
+    a wrong intensity beats a dead face. Falls back to the 0.5 default."""
+    raw = os.environ.get("DITTO_EMO_INTENSITY", "0.5")
+    try:
+        return min(1.0, max(0.0, float(raw)))
+    except ValueError:
+        print(f"[ditto] bad DITTO_EMO_INTENSITY={raw!r} — using 0.5", flush=True)
+        return 0.5
+
+
+_EMO_INTENSITY = _read_emo_intensity()
 
 
 def _ffmpeg_bin() -> str:
@@ -186,7 +207,13 @@ class DittoPipeline:
         if idx == getattr(self, "_cur_emo", 4):
             return
         try:
-            ch.emo_lst = ch._parse_emo_seq(idx)  # [1, 8] softmax row
+            row = ch._parse_emo_seq(idx)  # [1, 8] softmax row
+            if idx != 4 and _EMO_INTENSITY < 1.0:
+                # Tint, don't override: mix with neutral so the mouth keeps
+                # articulating through the expression (see _EMO_INTENSITY).
+                neutral = ch._parse_emo_seq(4)
+                row = _EMO_INTENSITY * row + (1.0 - _EMO_INTENSITY) * neutral
+            ch.emo_lst = row
             ch.num_emo = 1
             ch.emo_seq = np.concatenate([ch.emo_lst] * ch.seq_frames, 0)
             self._cur_emo = idx
