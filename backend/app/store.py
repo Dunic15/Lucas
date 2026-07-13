@@ -164,6 +164,20 @@ class Session:
     hand_last_raise_at: float = field(default=0.0, repr=False, compare=False)
     hand_last_ignored: bool = field(default=False, repr=False, compare=False)
     hand_last_contribution: str = field(default="", repr=False, compare=False)
+    # One-shot flags for the spoken usage-deadline warnings (~5 min / ~1 min
+    # before the entitlement runs out — main._usage_warn). In-memory only: a
+    # mid-meeting restart repeating one warning is harmless, and the durable
+    # deadline itself lives in Postgres (entitlements.usage_sessions).
+    usage_warned_5m: bool = field(default=False, repr=False, compare=False)
+    usage_warned_1m: bool = field(default=False, repr=False, compare=False)
+    # Deferred usage-close context (PR B BLOCKER 2): when finalize could NOT
+    # confirm the Recall meter stopped (leave_pending), the usage row is left
+    # OPEN so the slot stays held until the meter is verified off — these carry
+    # the close reason + Recall end timestamp to the eventual _retry_leave that
+    # confirms the stop and closes the row. In-memory only (a restart re-derives
+    # a safe default: reason 'ended', consumed capped at the deadline).
+    usage_close_reason: str = field(default="", repr=False, compare=False)
+    usage_end_epoch: Any = field(default=None, repr=False, compare=False)
     _persist_enabled: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
