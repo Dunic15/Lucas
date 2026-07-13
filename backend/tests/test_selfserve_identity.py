@@ -87,6 +87,24 @@ def test_upsert_user_unchanged_when_control_plane_off(client):
     assert user["org_id"] == user["user_id"]
 
 
+def test_control_plane_failure_rejects_login_without_local_tenant(client, monkeypatch):
+    """A durable-control-plane outage cannot mint a parallel local org."""
+    monkeypatch.setattr(control_plane, "enabled", lambda: True)
+
+    def unavailable(*args, **kwargs):
+        raise ValueError("synthetic database outage")
+
+    monkeypatch.setattr(control_plane, "ensure_user", unavailable)
+    with pytest.raises(RuntimeError, match="durable identity is temporarily unavailable"):
+        store.upsert_user("failclosed@example.com", google_sub="sub-failclosed")
+    with store._connect() as conn:
+        count = conn.execute(
+            "SELECT count(*) FROM users WHERE email = ?",
+            ("failclosed@example.com",),
+        ).fetchone()[0]
+    assert count == 0
+
+
 # ── per-org machine tokens (SQLite fallback) ───────────────────────────
 
 def test_store_org_token_roundtrip(client):
