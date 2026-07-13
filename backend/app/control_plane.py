@@ -405,11 +405,12 @@ def accept_brain_install(
     raw = (raw_token or "").strip()
     team = (team_id or "").strip()
     callback_secret = (webhook_secret or "").strip()
+    # Optional: Cedric's shipped install callback sends webhook_secret only.
+    # An empty per-org bearer completes the install (tenancy = per-org HMAC);
+    # the shared bearer covers Laura->Cedric until Option A lands.
     callback_token = (webhook_token or "").strip()
     callback_channel = (channel or "").strip()
-    if not all(
-        (org, avatar, install_nonce, raw, team, callback_secret, callback_token)
-    ):
+    if not all((org, avatar, install_nonce, raw, team, callback_secret)):
         return "invalid"
     from sqlalchemy import text
 
@@ -527,11 +528,12 @@ def complete_brain_install(
     raw = (raw_token or "").strip()
     team = (team_id or "").strip()
     callback_secret = (webhook_secret or "").strip()
+    # Optional: Cedric's shipped install callback sends webhook_secret only.
+    # An empty per-org bearer completes the install (tenancy = per-org HMAC);
+    # the shared bearer covers Laura->Cedric until Option A lands.
     callback_token = (webhook_token or "").strip()
     callback_channel = (channel or "").strip()
-    if not all(
-        (org, avatar, install_nonce, raw, team, callback_secret, callback_token)
-    ):
+    if not all((org, avatar, install_nonce, raw, team, callback_secret)):
         return "invalid"
 
     from sqlalchemy import text

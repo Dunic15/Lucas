@@ -1355,11 +1355,12 @@ def accept_brain_install(
     raw = (raw_token or "").strip()
     team = (team_id or "").strip()
     callback_secret = (webhook_secret or "").strip()
+    # Optional per-org bearer (see control_plane.complete_brain_install): the
+    # shipped Cedric callback sends webhook_secret only; an empty token still
+    # completes the install and tenancy holds via the per-org HMAC.
     callback_token = (webhook_token or "").strip()
     callback_channel = (channel or "").strip()
-    if not all(
-        (org, avatar, install_nonce, raw, team, callback_secret, callback_token)
-    ):
+    if not all((org, avatar, install_nonce, raw, team, callback_secret)):
         return "invalid"
     token_hash = hashlib.sha256(raw.encode()).hexdigest()
     secret_hash = hashlib.sha256(callback_secret.encode()).hexdigest()
@@ -1459,11 +1460,12 @@ def complete_brain_install(
     raw = (raw_token or "").strip()
     team = (team_id or "").strip()
     callback_secret = (webhook_secret or "").strip()
+    # Optional per-org bearer (see control_plane.complete_brain_install): the
+    # shipped Cedric callback sends webhook_secret only; an empty token still
+    # completes the install and tenancy holds via the per-org HMAC.
     callback_token = (webhook_token or "").strip()
     callback_channel = (channel or "").strip()
-    if not all(
-        (org, avatar, install_nonce, raw, team, callback_secret, callback_token)
-    ):
+    if not all((org, avatar, install_nonce, raw, team, callback_secret)):
         return "invalid"
 
     token_hash = hashlib.sha256(raw.encode()).hexdigest()
