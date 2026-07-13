@@ -338,7 +338,7 @@ def test_slack_start_complete_full_roundtrip(client, monkeypatch, google_on):
     writes: list[tuple[str, str]] = []
     monkeypatch.setattr(
         secret_registry,
-        "upsert_org_secret",
+        "upsert_org_credentials",
         lambda org, secret, token: writes.append((org, secret, token)) or True,
     )
 
@@ -679,6 +679,7 @@ def test_remove_org_secret_drops_cache_without_ssm(monkeypatch):
     """Local/dev semantics: no boto3/SSM → the cache drop alone succeeds (the
     env snapshot is not resurrected within this process)."""
     monkeypatch.setattr(secret_registry, "boto3", None)
+    monkeypatch.setattr(settings, "laura_webhook_registry_ssm_parameter", "")
     monkeypatch.setattr(secret_registry, "_env_snapshot", "")
     monkeypatch.setattr(secret_registry, "_cache", {"org_x": "s3cret", "org_y": "k"})
     assert secret_registry.remove_org_credentials("org_x") is True
