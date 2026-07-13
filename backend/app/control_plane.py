@@ -7,13 +7,12 @@ no-op returning ``None``/``False`` and **no engine is ever created**, so the
 SQLite runtime paths are byte-identical to today.
 
 What lives here vs. SQLite (store.py):
-- SQLite remains the RUNTIME store: sessions, utterances, routes, artifacts —
-  the live-meeting hot path NEVER touches this module (latency is the product;
-  control-plane calls happen on login/start/dashboard paths only).
-- Postgres holds the DURABLE identity + billing spine: users (google_sub),
-  orgs (UUID personal/domain orgs), memberships, org_agents grants, org_tokens
-  (per-org machine bearers) and billing_accounts (plan + included_seconds) —
-  the rows a redeploy must not wipe. store.py's tables become a warm cache.
+- SQLite remains the live RUNTIME store for sessions, utterances, and routes.
+  The live-meeting utterance hot path NEVER touches this module (latency is the
+  product).
+- Postgres holds the DURABLE identity + billing spine and the private completed
+  meeting artifacts customers expect after a redeploy. Artifact calls happen
+  only on finalize/archive/dashboard paths; store.py keeps a warm local cache.
 
 ROLE / RLS CONTRACT:
 ``LAURA_DATABASE_URL`` is runtime-only and MUST authenticate as the dedicated
