@@ -159,11 +159,32 @@ def load(avatar_id: str) -> Avatar:
     return avatar
 
 
+def is_internal(avatar_id: str) -> bool:
+    """Whether this id is an INTERNAL persona (settings.internal_avatar_ids):
+    hidden from every roster and refused by session dispatch for every caller.
+    The folder may still exist (its removal is a separate track) and load()
+    still works for direct/legacy uses — this only gates listing + dispatch.
+    Reviewed decision (2026-07-13): /demo/ask can still load an internal
+    avatar by explicit id — the guard is dispatch-scoped (per-minute meter +
+    meeting presence), not knowledge-access control; folder removal (Codex's
+    track) closes the rest."""
+    return (avatar_id or "").strip().lower() in settings.internal_avatar_id_set
+
+
 def list_ids() -> list[str]:
+    """Installed, LISTABLE avatar folders. Internal personas
+    (settings.internal_avatar_ids) are excluded here — the single choke point
+    all rosters flow through (/avatars, dashboard, org grants, invite-tag
+    routing) — so an internal folder can never be enumerated or summoned by
+    tag even while it exists on disk. load() is deliberately NOT filtered."""
     root = settings.avatars_dir
     if not root.exists():
         return []
-    return sorted(p.name for p in root.iterdir() if (p / "avatar.yaml").exists())
+    return sorted(
+        p.name
+        for p in root.iterdir()
+        if (p / "avatar.yaml").exists() and not is_internal(p.name)
+    )
 
 
 def list_for_org(org_id: str) -> list[str]:

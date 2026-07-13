@@ -758,20 +758,47 @@ def org_id_for_email(email: str) -> str:
     return user_id_for_email(email)
 
 
-def upsert_user(email: str, name: str = "", picture: str = "") -> dict:
+def upsert_user(
+    email: str, name: str = "", picture: str = "", google_sub: str = ""
+) -> dict:
     """Create-or-refresh a user row at login. Returns the user dict + created.
 
     org_id resolves via org_id_for_email: a verified corporate domain maps to
     its shared org (and an active membership row is created), everything else
-    keeps the personal-org invariant org_id == user_id (backward-compatible)."""
+    keeps the personal-org invariant org_id == user_id (backward-compatible).
+
+    DURABLE control plane (LAURA_DATABASE_URL set): the Postgres signup
+    (control_plane.ensure_user) is the identity source of truth — its UUID
+    org wins and is stored on this row, while user_id stays the email-derived
+    ``u_<hash>`` (the cookie cache key; this SQLite row is ephemeral and the
+    cookie must land on the same user after a redeploy). ``google_sub`` is the
+    Google OIDC subject from auth.py's verified claims; empty for direct
+    test/tool callers. Control plane off → exactly today's behavior."""
     email = (email or "").strip().lower()
     uid = user_id_for_email(email)
     org_id = org_id_for_email(email)
+    from . import control_plane  # lazy: control_plane imports store at load
+
+    if control_plane.enabled():
+        try:
+            durable = control_plane.ensure_user(google_sub, email, name, picture)
+        except Exception as exc:  # noqa: BLE001 — login must not hard-fail
+            # PII-safe: type only, never the email/sub. Falling back to the
+            # local org keeps login working; the next login retries.
+            print(
+                "[control_plane] ensure_user failed "
+                f"({type(exc).__name__}); using local org resolution",
+                flush=True,
+            )
+            durable = None
+        if durable:
+            org_id = durable["org_id"]
     now = time.time()
     with _LOCK, _connect() as conn:
-        created = conn.execute(
-            "SELECT 1 FROM users WHERE user_id = ?", (uid,)
-        ).fetchone() is None
+        prev = conn.execute(
+            "SELECT org_id FROM users WHERE user_id = ?", (uid,)
+        ).fetchone()
+        created = prev is None
         conn.execute(
             """
             INSERT INTO users (user_id, email, name, picture, org_id,
@@ -781,10 +808,9 @@ def upsert_user(email: str, name: str = "", picture: str = "") -> dict:
             -- login takes effect on their next one. Safe on THIS ephemeral
             -- SQLite store (wiped + re-seeded every boot, so resolution is
             -- deterministic from a user's first login of the boot and there is
-            -- no persisted pre-seed history to orphan). PORTABILITY NOTE for the
-            -- Postgres control-plane: there, reassigning a returning user's org
-            -- must be paired with a backfill of their prior artifacts/sessions
-            -- org_id, else old rows fall outside the new org's visibility.
+            -- no persisted pre-seed history to orphan). The CONTROL-PLANE
+            -- cutover (u_<hash> -> durable UUID org) is the one reassignment
+            -- with prior rows to keep: _restamp_personal_org below moves them.
             ON CONFLICT(user_id) DO UPDATE SET
                 name=excluded.name,
                 picture=excluded.picture,
@@ -793,6 +819,18 @@ def upsert_user(email: str, name: str = "", picture: str = "") -> dict:
             """,
             (uid, email, name, picture, org_id, now, now),
         )
+        # Cutover backfill (adversarial review 2026-07-13, blocker 2): when
+        # the resolved org CHANGES from the row's previous one AND that
+        # previous org was the user's own personal u_<hash> org, re-stamp
+        # their existing rows in the SAME transaction — otherwise the moment
+        # the control plane flips on, a returning user's history (artifacts/
+        # sessions/ledger stamped u_<hash>) silently falls outside the new
+        # org's visibility set. Idempotent and one-time per user: after this
+        # login the users row carries the new org, so the condition is False.
+        # A previous SHARED org (verified-domain, e.g. org_sff) is never
+        # touched — those rows belong to the org, not the person.
+        if prev is not None and prev["org_id"] == uid and org_id != uid:
+            _restamp_personal_org(conn, uid, org_id)
         # A real org (resolved org differs from the personal uid) gets an
         # explicit membership row so the org↔user link exists for roles /
         # governance. Personal orgs (org_id == user_id) need no membership.
@@ -804,6 +842,50 @@ def upsert_user(email: str, name: str = "", picture: str = "") -> dict:
             )
     return {"user_id": uid, "email": email, "name": name, "picture": picture,
             "org_id": org_id, "created": created}
+
+
+def _restamp_personal_org(conn: sqlite3.Connection, old_org: str, new_org: str) -> None:
+    """Move every row owned by a user's PERSONAL org (org_id == u_<hash>) to
+    their new durable org — the control-plane cutover backfill (see the call
+    site in upsert_user). Runs on the caller's connection/transaction.
+
+    Artifacts need BOTH the column and the JSON's own org_id field re-stamped:
+    /meetings/list and dashboard._meeting_row scope on the artifact JSON, so a
+    column-only update would leave the history invisible anyway. In-memory
+    caches (_artifacts, _sessions) are synced so the change is visible without
+    a restart; live Session objects are updated via object.__setattr__ (the
+    row is already written here — no need to re-trigger per-field persistence).
+    """
+    rows = conn.execute(
+        "SELECT bot_id, artifact_json FROM artifacts WHERE org_id = ?", (old_org,)
+    ).fetchall()
+    for r in rows:
+        try:
+            artifact = json.loads(r["artifact_json"]) if r["artifact_json"] else {}
+        except ValueError:
+            artifact = {}
+        artifact["org_id"] = new_org
+        conn.execute(
+            "UPDATE artifacts SET org_id = ?, artifact_json = ? WHERE bot_id = ?",
+            (new_org, json.dumps(artifact), r["bot_id"]),
+        )
+        if r["bot_id"] in _artifacts:
+            _artifacts[r["bot_id"]]["org_id"] = new_org
+    conn.execute(
+        "UPDATE sessions SET org_id = ? WHERE org_id = ?", (new_org, old_org)
+    )
+    for s in _sessions.values():
+        if s.org_id == old_org:
+            object.__setattr__(s, "org_id", new_org)
+    try:
+        # ledger_items shares the sqlite file but is owned by ledger.py — its
+        # table may not exist in store-only unit contexts; best-effort.
+        conn.execute(
+            "UPDATE ledger_items SET org_id = ? WHERE org_id = ?",
+            (new_org, old_org),
+        )
+    except sqlite3.OperationalError:
+        pass
 
 
 def list_org_agent_ids(org_id: str) -> list[str]:
@@ -830,6 +912,45 @@ def get_user(user_id: str) -> dict | None:
             (user_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def resolve_org_token(raw_token: str) -> str | None:
+    """org_id owning this raw machine bearer, or None. Same contract as
+    control_plane.resolve_org_token (sha256(raw) looked up in org_tokens) —
+    the SQLite fallback so per-org service starts work before/without the
+    Postgres control plane. Never logs the token."""
+    import hashlib
+
+    raw = (raw_token or "").strip()
+    if not raw:
+        return None
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT org_id FROM org_tokens WHERE token_hash = ?", (token_hash,)
+        ).fetchone()
+    return row["org_id"] if row else None
+
+
+def mint_org_token(org_id: str, label: str = "") -> str | None:
+    """Mint a per-org machine bearer in the SQLite org_tokens table: store
+    sha256(raw), return the raw ONCE (provisioning / tests). None on empty
+    org_id. NOTE: this store is ephemeral on App Runner — durable tokens come
+    from control_plane.mint_org_token; this is the local/dev twin."""
+    import hashlib
+    import secrets
+
+    if not (org_id or "").strip():
+        return None
+    raw = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            "INSERT INTO org_tokens (token_hash, org_id, label, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (token_hash, org_id.strip(), (label or "")[:80], time.time()),
+        )
+    return raw
 
 
 def org_exists(org_id: str) -> bool:

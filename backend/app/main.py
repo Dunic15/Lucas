@@ -14,6 +14,7 @@ Flow:
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import random
 import re
@@ -46,6 +47,7 @@ from . import (
     anam_client,
     auth,
     cedric,
+    control_plane,
     dashboard,
     drive_client,
     emotion,
@@ -1210,7 +1212,13 @@ async def _start_avatar_session(
     org_id is the owning tenant when a logged-in user dispatched (auth.py);
     the Demo org for service starts (Cedric, calendar auto-join, Gmail watcher).
     """
-    avatar = avatars.load(avatar_id or settings.default_avatar_id)  # raises if unknown
+    requested = (avatar_id or settings.default_avatar_id).strip()
+    if avatars.is_internal(requested):
+        # Internal personas are not dispatchable for ANY entry point (manual
+        # start, calendar auto-join, Gmail watcher) — same error an unknown
+        # folder raises, so callers treat it as a nonexistent avatar.
+        raise FileNotFoundError(f"No avatar '{requested}'")
+    avatar = avatars.load(requested)  # raises if unknown
     conversation_id = uuid.uuid4().hex
     # avatar.page: per-avatar face tier (3D "talk" vs photoreal), falling back
     # to the global AVATAR_PAGE — the dashboard's "choose your avatar" knob.
@@ -1320,16 +1328,47 @@ def _schedule_start_reconcile(meeting_url: str, bot_id: str) -> None:
         pass  # no running loop to schedule on (shouldn't happen in the handler)
 
 
+def _org_token_bearer_org(request: Request) -> Optional[str]:
+    """The org owning the request's Bearer, when it is a PER-ORG machine token
+    (org_tokens: durable control plane first, SQLite fallback). None for no/
+    non-org bearers — including the GLOBAL laura_api_token, which keeps its
+    demo-org behavior. A raw secret is compared/hashed, never logged. Called
+    on /sessions/start, /sessions/{id}/end and /sessions/{id}/redeliver —
+    control-plane paths, never the live hot path. SYNC (SQLite + optionally
+    the Postgres control plane): async handlers must call it via
+    run_in_threadpool so it never blocks the shared event loop (single
+    instance — a blocked loop stalls every live meeting)."""
+    provided = request.headers.get("authorization", "")
+    if not provided.startswith("Bearer "):
+        return None
+    raw = provided[len("Bearer "):].strip()
+    if not raw:
+        return None
+    global_token = settings.laura_api_token.strip()
+    if global_token and hmac.compare_digest(raw, global_token):
+        return None  # the global service bearer: today's behavior (Demo org)
+    org = control_plane.resolve_org_token(raw)
+    if org is None:
+        org = store.resolve_org_token(raw)
+    return org
+
+
 @app.post("/sessions/start")
 async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     # A logged-in human (dashboard cookie) or a machine bearer (Cedric). The
     # shared auth.gate closes the "login enabled + no token" hole: an anonymous
     # caller can NOT dispatch a per-minute bot on a login-protected deployment.
     # A valid cookie stamps the session with the user's org for later scoping.
+    # A PER-ORG machine bearer (org_tokens) both authenticates the start and
+    # scopes it to ITS org — the service twin of the cookie principal.
     user = auth.current_user(request)
+    token_org: Optional[str] = None
     if user is None:
-        if err := auth.gate(request):
-            return err
+        # Threadpooled: the resolver is sync DB I/O (see its docstring).
+        token_org = await run_in_threadpool(_org_token_bearer_org, request)
+        if token_org is None:
+            if err := auth.gate(request):
+                return err
     try:
         recall_client.assert_ready()
     except RuntimeError as e:
@@ -1338,10 +1377,17 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     brief = req.context.brief_markdown if req.context else ""  # CEDRIC
     if err := cedric.brief_too_large(brief):  # CEDRIC
         return err
-    # The owning tenant: the logged-in user's org, else the Demo org for the
-    # machine/anon/service path (Cedric bearer, key-free demo). Never derived
-    # from a request parameter or a meeting participant (MULTI-TENANCY §0/§3.1).
-    caller_org = user["org_id"] if user else settings.demo_org_id
+    # The owning tenant: the logged-in user's org, else the org-token's org,
+    # else the Demo org for the global-bearer/anon service path (Cedric
+    # bearer, key-free demo). NEVER derived from a request body field or a
+    # meeting participant (MULTI-TENANCY §0/§3.1) — StartRequest deliberately
+    # has no org field; keep it that way.
+    caller_org = user["org_id"] if user else (token_org or settings.demo_org_id)
+    # Internal personas (INTERNAL_AVATAR_IDS) are not dispatchable by ANY
+    # caller — same 404 an unknown avatar id gets (defense-in-depth while the
+    # folder still exists; see config.internal_avatar_ids).
+    if avatars.is_internal(req.avatar_id or settings.default_avatar_id):
+        return JSONResponse({"error": "unknown avatar_id"}, status_code=404)
     # One live/scheduled booking per meeting URL: rebooking must cancel first
     # (otherwise two bots — and two per-minute meters — end up in one call).
     # Fast path: an obvious local-store clash needs no lock or Recall round-trip
@@ -1764,19 +1810,29 @@ async def end_session(bot_id: str, request: Request) -> JSONResponse:
     # Cookie (dashboard) or bearer (machine). auth.gate blocks an anonymous
     # caller from force-ending a bot (DoS + meter) on a login-protected
     # deployment. A logged-in user may end their own org's and unowned/service
-    # sessions — never another org's.
+    # sessions — never another org's. A PER-ORG machine bearer (org_tokens)
+    # may end ONLY sessions of ITS org — never demo/unowned/another org's —
+    # so a token that can start a session can also stop its meter (PR D
+    # symmetry) without gaining the global bearer's reach.
     user = auth.current_user(request)
+    token_org: Optional[str] = None
     if user is None:
-        if err := auth.gate(request):
-            return err
+        # Threadpooled: sync DB I/O (see _org_token_bearer_org's docstring).
+        token_org = await run_in_threadpool(_org_token_bearer_org, request)
+        if token_org is None:
+            if err := auth.gate(request):
+                return err
     else:
         live = store.get(bot_id)
-        # Shared/service sessions (empty or the Demo org) stay endable by any
-        # logged-in user — that's virtually all live traffic today, and this is
-        # the manual meter-kill switch. Only a DIFFERENT real org is blocked.
-        if live is not None and live.org_id not in (
-            "", settings.demo_org_id, user["org_id"]
-        ):
+        # A logged-in user may end their own org's and legacy unowned ("")
+        # sessions. Demo-org sessions are NOT theirs — self-serve product
+        # decision (2026-07-13): the Demo org is the anonymous showroom, and a
+        # real signup must not be able to kill (or see) another visitor's demo.
+        if live is not None and live.org_id not in ("", user["org_id"]):
+            return JSONResponse({"error": "not your session"}, status_code=403)
+    if token_org is not None:
+        live = store.get(bot_id)
+        if live is not None and live.org_id != token_org:
             return JSONResponse({"error": "not your session"}, status_code=403)
     artifact = await _finalize_session(bot_id, source="manual")
     if artifact is None:
@@ -1921,20 +1977,28 @@ async def redeliver_artifact(bot_id: str, request: Request) -> JSONResponse:
     Callback delivery is deliberately best-effort during meeting cleanup, so
     the stored artifact is the recovery source of truth.  This endpoint gives
     a logged-in owner (or the machine bearer) a bounded retry without ever
-    sending the transcript across the PII boundary.
+    sending the transcript across the PII boundary. A PER-ORG bearer may
+    redeliver ONLY its own org's artifacts (never demo/unowned/another org's).
     """
     user = auth.current_user(request)
+    token_org: Optional[str] = None
     if user is None:
-        if err := auth.gate(request):
-            return err
+        # Threadpooled: sync DB I/O (see _org_token_bearer_org's docstring).
+        token_org = await run_in_threadpool(_org_token_bearer_org, request)
+        if token_org is None:
+            if err := auth.gate(request):
+                return err
 
     artifact = store.get_artifact(bot_id)
     if artifact is None:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     artifact_org = str(artifact.get("org_id") or "")
-    if user is not None and artifact_org not in (
-        "", settings.demo_org_id, user["org_id"]
-    ):
+    # Own-org + legacy unowned ("") only — demo-org artifacts excluded for
+    # logged-in users (self-serve product decision, 2026-07-13; same rule as
+    # /sessions/{id}/end and dashboard.visible).
+    if user is not None and artifact_org not in ("", user["org_id"]):
+        return JSONResponse({"error": "not your session"}, status_code=403)
+    if token_org is not None and artifact_org != token_org:
         return JSONResponse({"error": "not your session"}, status_code=403)
 
     integration = cedric.default_integration()
@@ -1973,13 +2037,16 @@ def meetings_list(request: Request) -> JSONResponse:
     artifacts = store.list_artifacts()
     if user is not None:
         # Cookie login: scope to the caller's org. Unowned/legacy artifacts
-        # (empty org_id) stay visible, mirroring the /sessions/*/redeliver rule.
+        # (empty org_id) stay visible, mirroring the /sessions/*/redeliver
+        # rule; DEMO-org artifacts do not — self-serve product decision
+        # (2026-07-13): the anonymous showroom's transcripts never appear in a
+        # real signup's archive.
         org = str(user["org_id"])
         artifacts = [
             a
             for a in artifacts
             if (art_org := str((a.get("artifact") or {}).get("org_id") or ""))
-            in ("", settings.demo_org_id, org)
+            in ("", org)
         ]
     return JSONResponse({"meetings": artifacts})
 
