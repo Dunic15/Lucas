@@ -1,10 +1,9 @@
 """Alembic environment for Laura's control plane.
 
-Key property: this is a **no-op when LAURA_DATABASE_URL is empty**. The key-free
-SQLite demo (and the whole test suite) never touches Alembic — the store/ledger
-bootstrap mirrors the same org_id schema in SQLite. Alembic exists only for the
-future Supabase Postgres control plane; the URL is read from settings (never
-hard-coded), so no connection string lands in git.
+Key property: migrations use **only** LAURA_DATABASE_ADMIN_URL. The runtime
+LAURA_DATABASE_URL is deliberately ignored here: it belongs to the policy-bound
+`laura_app` role and must never be promoted into a DDL/owner credential. When
+the admin URL is empty Alembic is a clean no-op, preserving the key-free demo.
 """
 from __future__ import annotations
 
@@ -32,7 +31,7 @@ if config.config_file_name is not None:
 # SQLAlchemy metadata), so target_metadata stays None.
 target_metadata = None
 
-DATABASE_URL = (settings.laura_database_url or "").strip()
+DATABASE_URL = (settings.laura_database_admin_url or "").strip()
 # Same dialect normalization as control_plane._engine(): Supabase hands out
 # `postgresql://`, which SQLAlchemy routes to the UNinstalled psycopg2 driver;
 # we ship psycopg (v3), so pin the dialect explicitly.
@@ -65,11 +64,20 @@ def run_migrations_online() -> None:
 
 
 if not DATABASE_URL:
-    # The SQLite demo path: there is no control-plane database, so Alembic has
-    # nothing to do. Exit cleanly instead of erroring on an empty URL.
+    runtime_configured = bool((settings.laura_database_url or "").strip())
+    migration_required = bool(settings.laura_require_migrations)
+    if runtime_configured or migration_required:
+        # A configured runtime with no migration owner is a production
+        # misconfiguration, not a demo. Exit non-zero before attempting any
+        # connection and never echo either URL.
+        raise RuntimeError(
+            "LAURA_DATABASE_ADMIN_URL is required for this configured "
+            "runtime/migration job; refusing to skip migrations"
+        )
+    # Both URLs empty is the intentional key-free SQLite demo.
     print(
-        "LAURA_DATABASE_URL is empty — SQLite demo runs no migrations "
-        "(store.py/ledger.py already mirror the org_id schema). Skipping."
+        "Both database URLs are empty — key-free SQLite demo runs no "
+        "control-plane migrations. Skipping."
     )
 elif context.is_offline_mode():
     run_migrations_offline()
