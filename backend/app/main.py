@@ -2293,6 +2293,24 @@ _QUIET_NUDGE_LINES_IT = [
     "Un attimo prima di chiudere: {name}, tutto chiaro dal tuo lato?",
 ]
 
+# One-time self-introduction spoken shortly after join (settings.
+# self_introduce_on_join). It breaks the "joined-but-mute" first impression
+# WITHOUT breaking the etiquette: it names herself and tells the room how to
+# call her in, then she goes back to waiting to be addressed. {name} slots the
+# avatar's name — dynamic, so never TTS-prewarmed.
+_SELF_INTRO_LINES = [
+    "Hi, I'm {name} — here to help if you need me. Just say my name whenever "
+    "you'd like me to jump in.",
+    "Hey everyone, {name} here — I'll be listening. Say my name any time you "
+    "want me to weigh in.",
+]
+_SELF_INTRO_LINES_IT = [
+    "Ciao, sono {name} — sono qui se vi serve. Chiamatemi per nome quando "
+    "volete che intervenga.",
+    "Ciao a tutti, sono {name} — resto in ascolto. Ditemi il mio nome quando "
+    "volete un mio contributo.",
+]
+
 _SPEECH_WORDS_PER_SECOND = 2.6  # ~ElevenLabs/edge-tts pace, for the barge-in window
 
 
@@ -2605,6 +2623,111 @@ def _in_opening_grace(session: store.Session) -> bool:
     if settings.opening_grace_seconds <= 0:
         return False
     return (time.time() - session.created_at) < settings.opening_grace_seconds
+
+
+# Strong refs to in-flight self-intro tasks: a bare create_task is only weakly
+# held by the loop and can be GC'd mid-sleep, silently killing the feature (same
+# pattern as _summary_tasks above).
+_self_intro_tasks: set = set()
+
+# Recheck cadence while waiting for the floor to open before the self-intro.
+_SELF_INTRO_RECHECK_SECONDS = 2.0
+
+
+def _self_intro_already_active(session: store.Session) -> bool:
+    """True when the meeting has already activated her (named her, or she
+    already spoke/acked) — the self-introduction's whole job (tell the room how
+    to call her in) is then moot, so it must NOT fire."""
+    return session.addressed_once or session.last_spoke_at > 0
+
+
+def _self_intro_floor_busy(session: store.Session) -> bool:
+    """True when a human is audibly mid-utterance right now — introducing herself
+    over them is the exact talk-over the etiquette avoids. Uses the same signal
+    the interjection floor gate uses: a human partial landed within
+    interject_min_pause_seconds (last_human_partial_at is stamped on EVERY human
+    partial regardless of addressing)."""
+    return (
+        time.time() - session.last_human_partial_at
+    ) < settings.interject_min_pause_seconds
+
+
+def maybe_self_introduce(session: store.Session) -> bool:
+    """One-time self-introduction on join (settings.self_introduce_on_join).
+
+    First-call etiquette keeps her a SILENT guest until someone says her name,
+    which on a first-time room (nobody knows to call her by name) leaves a
+    joined-but-mute avatar with no cue how to activate her. Once per session,
+    shortly after she is proven to be in the call (the FIRST transcript webhook,
+    the same "proof the bot is in the call" trigger cedric.maybe_refresh_context
+    uses), schedule ONE short spoken line introducing herself and telling the
+    room how to call her in — then she goes back to waiting to be addressed.
+
+    Fire-and-forget and OFF the live hot path: this does only flag checks; the
+    delay + speak run inside a detached task. The one-shot flag is flipped BEFORE
+    the task launches (no await between check and flip) so racing partial/final
+    webhooks on the same event loop cannot double-launch. Returns True when a
+    self-intro task was scheduled."""
+    if not settings.self_introduce_on_join:
+        return False
+    if session.self_introduced:
+        return False
+    if _self_intro_already_active(session):
+        # The meeting named her / she spoke before the first transcript we saw —
+        # the intro is moot. Mark it done so we stop re-checking every webhook.
+        session.self_introduced = True
+        return False
+    session.self_introduced = True  # flip first: intro schedules exactly once
+    task = asyncio.create_task(_self_introduce_after_delay(session))
+    _self_intro_tasks.add(task)  # strong ref so the task isn't GC'd mid-sleep
+    task.add_done_callback(_self_intro_tasks.discard)
+    return True
+
+
+async def _self_introduce_after_delay(session: store.Session) -> None:
+    """The delayed body behind maybe_self_introduce. Waits the settle-in delay,
+    then introduces herself at the first OPEN floor — never over a human.
+
+    Two guards, re-checked on every loop:
+      - suppression: if the room activated her (named her or heard her speak),
+        abort — the intro is now redundant;
+      - talk-over: if a human is audibly mid-utterance, do NOT speak. Re-poll for
+        a natural pause every _SELF_INTRO_RECHECK_SECONDS and introduce at the
+        first open floor, up to self_introduce_max_wait_seconds — after which the
+        moment has passed and she gives up silently.
+
+    So she self-introduces at the first natural pause, never over a human, and
+    never if the room engaged her first."""
+    try:
+        await asyncio.sleep(max(0.0, settings.self_introduce_after_seconds))
+        deadline = time.time() + max(0.0, settings.self_introduce_max_wait_seconds)
+        while _self_intro_floor_busy(session):
+            # Someone is talking right now — don't barge in. Abort if she got
+            # engaged meanwhile, or if the wait cap is reached (moment passed).
+            if _self_intro_already_active(session) or time.time() >= deadline:
+                return
+            await asyncio.sleep(_SELF_INTRO_RECHECK_SECONDS)
+    except asyncio.CancelledError:  # pragma: no cover — loop teardown
+        return
+    if _self_intro_already_active(session):
+        return  # activated during the wait — the intro is now redundant
+    # Session finalized/removed while she waited → don't speak into an orphaned
+    # object (the meeting is over; the meter has stopped).
+    if store.get(session.bot_id) is None:
+        return
+    try:
+        avatar = avatars.load(session.avatar_id)
+    except Exception:  # noqa: BLE001 — never let a config read crash a bg task
+        return
+    # Language follows the room if anything was heard, else defaults to English.
+    heard = session.recent_transcript(3) if session.transcript else ""
+    line = _line_for(heard, _SELF_INTRO_LINES, _SELF_INTRO_LINES_IT).format(
+        name=avatar.name
+    )
+    # Normal speak path: _make_avatar_speak honours the silent-notetaker gate,
+    # the repetition guard, and ws/HTTP delivery. force=True so the intro is
+    # never dropped by the repeat guard.
+    await _make_avatar_speak(session, line, force=True)
 
 
 def _is_echo(session: store.Session, text: str) -> bool:
@@ -2983,6 +3106,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # the same one-shot refresh here. Flag-guarded (runs once per session),
         # sync dict checks + create_task only — zero latency on the live path.
         cedric.maybe_refresh_context(session)
+        # One-time self-introduction: the first transcript is proof she's in the
+        # call — schedule the delayed intro off it (one-shot, non-blocking).
+        maybe_self_introduce(session)
         words = data.get("words", [])
         text = " ".join(w.get("text", "") for w in words).strip()
         participant = data.get("participant") or {}
@@ -3149,6 +3275,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # CEDRIC: fallback context pull — see the partial path above. Finals cover
     # the (rare) delivery where the session's very first webhook is a final.
     cedric.maybe_refresh_context(session)
+    # One-time self-introduction — same one-shot trigger as the partial path,
+    # for the (rare) delivery whose very first webhook is a final.
+    maybe_self_introduce(session)
 
     words = data.get("words", [])
     text = " ".join(w.get("text", "") for w in words).strip()
@@ -3634,6 +3763,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # score), read back after the stream ends to gate the interjection escape —
     # no second model call. Only consulted on the hand-raise path below.
     _answer_meta: dict = {}
+    # Talk-over guard baseline (interject_recheck_floor_at_speak): snapshot the
+    # transcript length and the turn-start clock BEFORE generation, so the
+    # interjection floor check below can tell whether a human took the floor while
+    # she was generating (a new final landed, or a human partial arrived during
+    # the generation window). Cheap ints — no latency on the hot path.
+    _interject_len0 = len(session.transcript)
+    _interject_t0 = time.time()
     try:
         async for sentence in iterate_in_threadpool(
             answer_question_stream(
@@ -3773,6 +3909,17 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     since_human_partial=time.time() - session.last_human_partial_at,
                     active_partial_seconds=settings.interject_min_pause_seconds,
                     min_completeness=settings.interject_min_completeness,
+                    # Re-check the floor at SPEAK time: a human may have taken it
+                    # while she generated. Off → today's single trigger-time read.
+                    transcript_grew=(
+                        settings.interject_recheck_floor_at_speak
+                        and len(session.transcript) > _interject_len0
+                    ),
+                    generation_elapsed=(
+                        time.time() - _interject_t0
+                        if settings.interject_recheck_floor_at_speak
+                        else None
+                    ),
                 ),
             ):
                 # Charge the interjection to the shared budget EXACTLY as

@@ -136,6 +136,12 @@ class Session:
     # once per meeting. In-memory only (a restart forgiving a second nudge is
     # harmless).
     quiet_nudge_done: bool = field(default=False, repr=False, compare=False)
+    # One-shot flag: the self-introduction on join (main.maybe_self_introduce)
+    # is scheduled at most once per session. Set BEFORE the delayed task launches
+    # so racing transcript webhooks can't double-schedule it. In-memory only (a
+    # mid-meeting restart re-introducing once is harmless, and it self-suppresses
+    # if she has spoken since).
+    self_introduced: bool = field(default=False, repr=False, compare=False)
     # Opening settle-in ("wait to be called"): she stays silent unless directly
     # addressed for the first settings.opening_grace_seconds after joining, so
     # she never talks over the room while it settles (hellos, "can you hear me?",
