@@ -20,7 +20,7 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
-from . import auth, avatars, control_plane, ledger, outbox, store
+from . import auth, avatars, ledger, outbox, store
 from .config import settings
 
 router = APIRouter(tags=["dashboard"])
