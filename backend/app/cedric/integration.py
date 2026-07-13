@@ -16,6 +16,7 @@ import hmac
 import json
 import threading
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
@@ -100,10 +101,65 @@ def resolve_machine_org(request: Request) -> Optional[str]:
     # control_plane at import time; mirrors auth.py's local `import cedric`).
     from .. import control_plane, store
 
-    org = control_plane.resolve_org_token(raw)
-    if org is None:
-        org = store.resolve_org_token(raw)
-    return org
+    # In production the durable control plane is authoritative. Falling back
+    # to SQLite after a durable miss would resurrect a token revoked in
+    # Postgres. SQLite is only the key-free/local control plane.
+    if control_plane.enabled():
+        return control_plane.resolve_org_token(raw)
+    return store.resolve_org_token(raw)
+
+
+def provisioning_auth_ok(request: Request) -> bool:
+    """True only for the dedicated Laura↔Cedric OAuth bootstrap credential.
+
+    This credential is accepted solely by Slack install completion. It is not
+    a session/archive bearer and therefore cannot become a cross-tenant master
+    key. Empty is always disabled.
+    """
+    token = settings.cedric_orgs_token.strip()
+    if not token:
+        return False
+    provided = request.headers.get("authorization", "")
+    return hmac.compare_digest(provided, f"Bearer {token}")
+
+
+def _origin(url: str) -> tuple[str, str, int | None] | None:
+    try:
+        p = urlsplit((url or "").strip())
+    except ValueError:
+        return None
+    if p.scheme.lower() != "https" or not p.hostname:
+        return None
+    return (p.scheme.lower(), p.hostname.lower(), p.port)
+
+
+def request_integration_urls_allowed(req: Any, org_id: str) -> bool:
+    """Reject customer-supplied callback/context endpoints outside Cedric.
+
+    Per-org callbacks carry workspace credentials. They may only go to an HTTPS
+    origin configured by the operator; Demo/key-free traffic keeps its legacy
+    behavior. Server-owned default URLs are already trusted configuration.
+    """
+    org = (org_id or "").strip()
+    if not org or org == settings.demo_org_id:
+        return True
+    supplied = [
+        str(getattr(req, "callback_url", "") or "").strip(),
+        str(getattr(req, "context_url", "") or "").strip(),
+    ]
+    supplied = [url for url in supplied if url]
+    if not supplied:
+        return True
+    trusted = {
+        origin
+        for origin in (
+            _origin(settings.cedric_orgs_url),
+            _origin(settings.surface_webhook_url),
+            _origin(settings.surface_context_url),
+        )
+        if origin is not None
+    }
+    return bool(trusted) and all(_origin(url) in trusted for url in supplied)
 
 
 def brief_too_large(brief: str) -> Optional[JSONResponse]:
