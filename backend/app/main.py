@@ -1349,11 +1349,12 @@ def _org_token_bearer_org(request: Request) -> Optional[str]:
         return None
     global_token = settings.laura_api_token.strip()
     if global_token and hmac.compare_digest(raw, global_token):
-        return None  # the global service bearer: today's behavior (Demo org)
-    org = control_plane.resolve_org_token(raw)
-    if org is None:
-        org = store.resolve_org_token(raw)
-    return org
+        return settings.demo_org_id
+    # Durable revocation is authoritative in production: never resurrect a
+    # token from the ephemeral SQLite cache after Postgres rejects it.
+    if control_plane.enabled():
+        return control_plane.resolve_org_token(raw)
+    return store.resolve_org_token(raw)
 
 
 @app.post("/sessions/start")
@@ -1398,7 +1399,14 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     if clash := _existing_session_clash(req.meeting_url, caller_org):
         return clash
 
+    if not cedric.request_integration_urls_allowed(req, caller_org):
+        return JSONResponse(
+            {"error": "callback_url/context_url must use the configured Cedric HTTPS origin"},
+            status_code=400,
+        )
     integration = cedric.build_integration(req, brief)  # CEDRIC
+    if integration is not None:
+        integration = {**integration, "org_id": caller_org}
     # Serialize the guard→create window PER MEETING so two concurrent starts for
     # the same link can't both pass the dedup checks and both create a bot.
     # DIFFERENT meetings hold different locks and still dispatch in parallel.
@@ -1871,7 +1879,6 @@ async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
     # bot_id exists). Adversarial review 2026-07-13, should-fix 2.
     if session is None or (
         machine_org is not None
-        and machine_org != settings.demo_org_id
         and session.org_id != machine_org
     ):
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
@@ -1917,7 +1924,6 @@ async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -
     # bearers). Adversarial review 2026-07-13, should-fix 2.
     if artifact is None or (
         machine_org is not None
-        and machine_org != settings.demo_org_id
         and str(artifact.get("org_id") or "") != machine_org
     ):
         return JSONResponse({"error": "no artifact for this bot_id"}, status_code=404)
@@ -1996,7 +2002,7 @@ def session_artifact(bot_id: str, request: Request) -> JSONResponse:
     if machine_org is None:
         if err := cedric.auth_error(request):  # CEDRIC
             return err
-    org_scoped = machine_org is not None and machine_org != settings.demo_org_id
+    org_scoped = machine_org is not None
     live = store.get(bot_id)
     if live is not None:
         if org_scoped and live.org_id != machine_org:
@@ -2071,11 +2077,20 @@ def meetings_list(request: Request) -> JSONResponse:
     never served to the anonymous internet — and never logged. Same guard as
     /dashboard/summary; the HTML shell (/meetings) stays open like /dashboard."""
     user = auth.current_user(request)
+    machine_org = None
     if user is None:
-        if err := auth.gate(request):
-            return err
+        machine_org = cedric.resolve_machine_org(request)
+        if machine_org is None:
+            if err := auth.gate(request):
+                return err
     artifacts = store.list_artifacts()
-    if user is not None:
+    if machine_org is not None:
+        artifacts = [
+            a
+            for a in artifacts
+            if str((a.get("artifact") or {}).get("org_id") or "") == machine_org
+        ]
+    elif user is not None:
         # Cookie login: scope to the caller's org. Unowned/legacy artifacts
         # (empty org_id) stay visible, mirroring the /sessions/*/redeliver
         # rule; DEMO-org artifacts do not — self-serve product decision
@@ -3094,7 +3109,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             # the email path did. None when no SURFACE_* is set.
             default_integ = cedric.default_integration()
             if default_integ:
-                s.integration = default_integ
+                s.integration = {**default_integ, "org_id": settings.demo_org_id}
             s.anam_conversation_id = conversation_id
             store.register_conversation(
                 conversation_id, bot["id"], org_id=settings.demo_org_id
