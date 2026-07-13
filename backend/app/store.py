@@ -682,13 +682,31 @@ def mark_scheduled(event_id: str, *, org_id: str = DEMO_ORG_ID) -> None:
 
 
 def save_artifact(bot_id: str, artifact: dict, *, org_id: str | None = None) -> None:
-    """Persist a finished meeting's distilled artifact (never raw transcript on
-    the wire; the store keeps the full copy). The row's org_id column comes from
-    the explicit ``org_id`` when given, else the artifact's own ``org_id`` field
-    (finalize stamps it from the session), else the Demo org — so the column and
-    the artifact JSON agree and single-tenant stays byte-identical."""
-    _artifacts[bot_id] = artifact
+    """Persist a finished meeting's complete private artifact.
+
+    In production Postgres is the source of truth and is written FIRST. A
+    configured database outage therefore propagates before the local cache is
+    mutated, leaving finalize retryable instead of reporting a false success.
+    SQLite remains the key-free/demo store and the live utterance hot path.
+    """
     row_org = org_id if org_id is not None else (artifact.get("org_id") or DEMO_ORG_ID)
+    saved_at = time.time()
+
+    # Lazy import avoids the control_plane -> store constants import cycle.
+    from . import control_plane
+
+    if control_plane.enabled():
+        control_plane.save_artifact(
+            row_org,
+            bot_id,
+            artifact,
+            visibility=str(artifact.get("visibility") or "participants"),
+            saved_at=saved_at,
+        )
+
+    # The local copy is a same-process warm cache in production and remains the
+    # complete persistence path for key-free/demo deployments.
+    _artifacts[bot_id] = artifact
     with _LOCK, _connect() as conn:
         conn.execute(
             """
@@ -699,23 +717,43 @@ def save_artifact(bot_id: str, artifact: dict, *, org_id: str | None = None) -> 
                 artifact_json=excluded.artifact_json,
                 saved_at=excluded.saved_at
             """,
-            (bot_id, row_org, json.dumps(artifact), time.time()),
+            (bot_id, row_org, json.dumps(artifact), saved_at),
         )
 
 
-def get_artifact(bot_id: str) -> dict | None:
+def get_artifact(bot_id: str, org_id: str | None = None) -> dict | None:
+    """Get a private artifact.
+
+    A production durable lookup is permitted only when its org is already
+    trusted. A bot-only call deliberately remains local/same-process: resolving
+    an org from a caller-controlled bot_id would require a forbidden global
+    artifact lookup. Key-free SQLite behavior is unchanged.
+    """
+    if org_id is not None:
+        from . import control_plane
+
+        if control_plane.enabled():
+            return control_plane.get_artifact(org_id, bot_id)
     return _artifacts.get(bot_id)
 
 
 def list_artifacts(org_id: str | None = None) -> list[dict]:
-    """Every saved artifact with its metadata, newest first (meetings page).
-    Reads the DB (not the in-memory cache) so it sees rows written by other
-    processes — e.g. tests or scripts seeding the store.
+    """Every saved artifact with its metadata, newest first.
 
-    ``org_id`` seals the enumeration to one tenant (``WHERE org_id=?``); the
-    default (None) returns every row for the callers that apply their own
-    visibility policy downstream (dashboard.visible / /meetings/list scope on
-    the artifact's own org_id, which keeps the legacy ""=shared semantics)."""
+    Production enumeration always requires a trusted org and is served from
+    Postgres under transaction-local RLS. The optional global SQLite path is
+    retained only for the key-free demo and legacy callers that apply their own
+    local visibility policy.
+    """
+    from . import control_plane
+
+    if control_plane.enabled():
+        if not (org_id or "").strip():
+            raise ValueError(
+                "org_id is required for production artifact enumeration"
+            )
+        return control_plane.list_artifacts(str(org_id)) or []
+
     with _LOCK, _connect() as conn:
         if org_id is None:
             rows = conn.execute(
@@ -729,14 +767,19 @@ def list_artifacts(org_id: str | None = None) -> list[dict]:
                 (org_id,),
             ).fetchall()
     out = []
-    for r in rows:
+    for row in rows:
         try:
-            artifact = json.loads(r["artifact_json"])
+            saved = json.loads(row["artifact_json"])
         except (TypeError, ValueError):
-            artifact = {}
-        out.append({"bot_id": r["bot_id"], "saved_at": r["saved_at"], "artifact": artifact})
+            saved = {}
+        out.append(
+            {
+                "bot_id": row["bot_id"],
+                "saved_at": row["saved_at"],
+                "artifact": saved,
+            }
+        )
     return out
-
 
 def create(
     bot_id: str, meeting_url: str, avatar_id: str = "laura", org_id: str = DEMO_ORG_ID
