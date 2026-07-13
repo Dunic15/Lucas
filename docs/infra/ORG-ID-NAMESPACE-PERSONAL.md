@@ -10,6 +10,37 @@ connect flow alive while this lands. Bug memory: `laura-orgid-namespace-split-br
 
 ---
 
+## 0. Reality check after a code audit (IMPORTANT)
+
+**Most of the runtime resolution is already on `main`** (audited at commit `2ae548b`):
+
+- `store.upsert_user` (control plane enabled) already calls `control_plane.ensure_user`
+  and sets **`org_id = durable["org_id"]` (the durable uuid)** + stores the durable user
+  uuid as **`member_uid`**. If `ensure_user` fails, login is **rejected** (no silent
+  `u_<hash>` tenant).
+- The SQLite `users` table already has the **`member_uid`** column; `get_user` /
+  `auth.current_user` already surface `org_id` (the uuid) + `member_uid`.
+- Therefore, with the control plane **on**, `user["org_id"]` is **already a durable
+  uuid**, `is_durable_org` is True, and the connect flow persists durably. **The
+  split-brain is structurally fixed on `main`** — once session A deploys `main`, "Add to
+  Slack" works durably (PR #175 was the interim mitigation for the pre-rework deploy).
+
+So §3.2 (cache the uuid on the SQLite row) is **already done** (as `member_uid` + the
+`org_id` override). The only piece left for the owner's decision is the **policy** below.
+
+### What actually remains: the personal-vs-domain **policy**
+`main` resolves a **verified corporate domain** to a *shared* org (`org_id_for_email`
+on SQLite; the mirror `_resolve_domain_org` / migration on the durable side). The owner
+wants **personal for now**. Because `upsert_user` overwrites `org_id` with the *durable*
+value, forcing personal on the SQLite side alone is not enough — **the durable
+resolution must return a personal org**. That is the contested `control_plane` /
+migration area (`selfserve-a-identity`). Proposed lever: a setting
+**`LAURA_SHARED_DOMAIN_ORGS` (default off = personal)** honored by BOTH
+`org_id_for_email` and the durable resolver; ship the durable half with / after
+`selfserve-a`. No uncontested runtime work is left to do independently.
+
+---
+
 ## 1. Problem (split-brain), in one paragraph
 
 Two org-id namespaces live in two stores:
