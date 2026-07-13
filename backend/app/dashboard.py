@@ -284,8 +284,6 @@ def dashboard_summary(request: Request) -> JSONResponse:
         # Sync handler: FastAPI already runs this off the event loop, so the
         # sync token resolver is safe to call inline.
         machine_org = cedric.resolve_machine_org(request)
-        if machine_org == settings.demo_org_id:
-            machine_org = None  # global bearer: today's unscoped service view
         if machine_org is None:
             if err := auth.gate(request):
                 return err
@@ -513,6 +511,13 @@ async def connect_brain(request: Request) -> JSONResponse:
         if err := auth.gate(request):
             return err
         return JSONResponse({"error": "login required to connect the brain"}, status_code=401)
+    # Manual workspace IDs are not proof of Slack ownership. Public linking is
+    # OAuth-only through /brain/slack/start and its signed state.
+    return JSONResponse(
+        {"error": "manual workspace linking is retired; use Slack OAuth"},
+        status_code=410,
+    )
+
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001 — malformed JSON is a client error
@@ -635,15 +640,14 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
     # This endpoint carries a credential. Never inherit the key-free/demo
     # fail-open behavior used by public session APIs. A PER-ORG bearer is a
     # recognized machine credential too — scoped below to its own org.
+    provisioning_ok = cedric.provisioning_auth_ok(request)
     machine_org = await run_in_threadpool(cedric.resolve_machine_org, request)
-    if machine_org is None:
-        if not settings.laura_api_token.strip():
+    if not provisioning_ok and machine_org is None:
+        if not settings.cedric_orgs_token.strip():
             return JSONResponse(
-                {"error": "machine auth is not configured"}, status_code=503
+                {"error": "provisioning auth is not configured"}, status_code=503
             )
-        return cedric.auth_error(request) or JSONResponse(
-            {"error": "unauthorized"}, status_code=401
-        )
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -658,7 +662,7 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
     state = str((body or {}).get("state") or "").strip()
     if not all((org_id, avatar_id, team_id, webhook_secret, webhook_token, state)):
         return JSONResponse({"error": "missing required fields"}, status_code=400)
-    if machine_org != settings.demo_org_id and org_id != machine_org:
+    if not provisioning_ok and org_id != machine_org:
         return JSONResponse({"error": "not your org"}, status_code=403)
     if avatar_id not in avatars.list_ids():
         return JSONResponse({"error": "unknown avatar"}, status_code=404)
@@ -861,7 +865,12 @@ def disconnect_brain(avatar_id: str, request: Request) -> JSONResponse:
         if err := auth.gate(request):
             return err
         return JSONResponse({"error": "login required"}, status_code=401)
-    ok = store.set_connection(user["org_id"], avatar_id, "cedric-brain", "disconnected", {})
-    if not ok:
-        return JSONResponse({"error": "unknown avatar_id"}, status_code=400)
-    return JSONResponse({"provider": "cedric-brain", "avatar_id": avatar_id, "status": "disconnected"})
+    return JSONResponse(
+        {
+            "error": (
+                "legacy local-only disconnect is retired; "
+                "use POST /dashboard/connections/brain/disconnect"
+            )
+        },
+        status_code=410,
+    )
