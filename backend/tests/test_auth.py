@@ -86,7 +86,11 @@ def test_summary_open_when_auth_not_configured(client):
 def test_login_page_served(client):
     resp = client.get("/login")
     assert resp.status_code == 200
-    assert "Continue with Google" in resp.text
+    assert "Start free with Google" in resp.text
+    assert "15 avatar minutes" in resp.text
+    assert "No card required" in resp.text
+    assert "Enterprise early access" in resp.text
+    assert "Private beta" not in resp.text
 
 
 # ── login required when configured ─────────────────────────────────────

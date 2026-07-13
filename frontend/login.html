@@ -85,6 +85,19 @@
   .demo{margin-top:26px;font-size:.85rem;color:var(--faint);}
   .demo a{color:var(--dim);}
   .hint{margin-top:16px;font-size:.78rem;color:var(--faint);}
+  .trial{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin:-14px 0 24px;
+    color:var(--dim);font-size:.82rem;}
+  .trial span{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;
+    border:1px solid var(--line);border-radius:999px;background:var(--surface);}
+  .trial b{color:var(--text);font-weight:600;}
+  .enterprise{margin-top:24px;padding:17px 18px;text-align:left;border:1px solid var(--line);
+    border-radius:16px;background:var(--surface);}
+  .enterprise .top{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+  .enterprise h2{font-size:.98rem;letter-spacing:-.02em;margin:0;}
+  .enterprise p{color:var(--dim);font-size:.82rem;line-height:1.5;margin:7px 0 12px;}
+  .enterprise .badge{font-family:var(--mono);font-size:.58rem;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--g2);border:1px solid rgba(126,182,255,.35);border-radius:999px;padding:3px 8px;}
+  .enterprise a{color:var(--text);font-size:.82rem;font-weight:600;text-underline-offset:3px;}
 
   footer{position:relative;z-index:2;display:flex;justify-content:space-between;gap:12px;
     padding:0 clamp(22px,5vw,52px) 28px;font-family:var(--mono);
@@ -100,11 +113,14 @@
   <header><span class="dot"></span><b>Laura</b></header>
   <main>
     <div class="card">
-      <p class="eyebrow"><span class="pip"></span>Private beta</p>
+      <p class="eyebrow"><span class="pip"></span>Start free</p>
       <h1>Your avatars,<br /><span class="grad">under your command.</span></h1>
-      <p class="sub">Dispatch your avatars into meetings, watch them live, and read everything they did for you.</p>
+      <p class="sub">Bring Laura or Cedric into Meet, Zoom or Teams. They answer, capture decisions and bring the follow-through back to you.</p>
+      <div class="trial" aria-label="Free trial details">
+        <span><b>15 avatar minutes</b> included</span><span>No card required</span>
+      </div>
 
-      <!-- email gate (shown when the beta allow-list is on) -->
+      <!-- optional access gate for a private deployment -->
       <form id="email-form" hidden>
         <input class="email" id="email" type="email" placeholder="you@company.com" autocomplete="email" required />
         <button class="primary" id="continue" type="submit">Continue</button>
@@ -113,19 +129,25 @@
       <!-- direct Google (shown when no allow-list is configured) -->
       <a class="primary" href="/auth/google/start" id="google-btn" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M23.5 12.3c0-.9-.1-1.5-.3-2.2H12v4.4h6.5c-.1 1.1-.8 2.7-2.4 3.8l3.8 2.9c2.3-2.1 3.6-5.2 3.6-8.9z"/><path fill="#34A853" d="M12 24c3.2 0 5.9-1.1 7.9-2.9l-3.8-2.9c-1 .7-2.4 1.2-4.1 1.2-3.1 0-5.8-2.1-6.7-4.9L1.3 17.4C3.3 21.3 7.3 24 12 24z"/><path fill="#FBBC05" d="M5.3 14.5c-.2-.7-.4-1.4-.4-2.2s.1-1.5.4-2.2L1.3 7C.5 8.6 0 10.4 0 12.3s.5 3.7 1.3 5.2l4-3z"/><path fill="#EA4335" d="M12 4.8c1.8 0 3 .8 3.7 1.4l3.4-3.3C17.9 1 15.2 0 12 0 7.3 0 3.3 2.7 1.3 6.9l4 3.1c.9-2.9 3.6-5.2 6.7-5.2z"/></svg>
-        Continue with Google
+        Start free with Google
       </a>
 
-      <!-- coming soon (shown when the email isn't on the beta list) -->
+      <!-- shown only when an operator has intentionally restricted this deploy -->
       <div class="coming" id="coming">
-        <h2><span class="grad">Coming soon.</span></h2>
-        <p>Laura is in private beta. We've noted your interest and we'll email you the moment early access opens.</p>
+        <h2><span class="grad">This workspace is restricted.</span></h2>
+        <p>This deployment isn't accepting this account. Ask the workspace owner for access or use the public Laura signup.</p>
         <p class="who" id="coming-who"></p>
       </div>
 
       <p class="err" id="err"></p>
       <p class="hint" id="hint" hidden>We use your email only to check early access.</p>
       <p class="demo" id="demo" hidden>Login isn't configured on this deployment — <a href="/dashboard">open the dashboard in demo mode</a>.</p>
+
+      <aside class="enterprise" aria-labelledby="enterprise-title">
+        <div class="top"><h2 id="enterprise-title">Enterprise early access</h2><span class="badge">Early access</span></div>
+        <p>For teams planning shared workspaces, SSO, roles, auditability, retention controls and guided rollout.</p>
+        <a href="mailto:hello@lauravatar.com?subject=Laura%20enterprise%20early%20access">Talk to us →</a>
+      </aside>
     </div>
   </main>
   <footer><span>LAURA — AI PROCESS EXPERT</span><span>lauravatar.com</span></footer>
@@ -144,7 +166,7 @@
       function showGoogleDirect(){ $("email-form").hidden=true; $("google-btn").hidden=false; }
       function showEmailGate(){ $("email-form").hidden=false; $("hint").hidden=false; }
 
-      // the callback bounced this email as not-allowed -> coming soon
+      // the callback bounced this email from an intentionally restricted deploy
       if (q.get("error") === "not_allowed") { showComing(""); }
       else if (q.get("error") === "not_configured") { showDemo(); }
       else {

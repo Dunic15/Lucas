@@ -1,6 +1,6 @@
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DEMO_LINK, Reveal } from "./primitives";
+import { Reveal, SALES_LINK, START_LINK } from "./primitives";
 
 export function FinalCTA() {
   return (
@@ -13,15 +13,17 @@ export function FinalCTA() {
               Bring Laura into your next meeting.
             </h2>
             <p className="relative mx-auto mt-5 max-w-xl text-lg text-muted-foreground">
-              See how a live AI process expert keeps your team aligned, grounded, and one step
-              ahead.
+              Start with 15 avatar-minutes shared across Laura and Cedric. No card required.
             </p>
-            <div className="relative mt-9 flex justify-center">
+            <div className="relative mt-9 flex flex-col justify-center gap-3 sm:flex-row">
               <Button asChild variant="hero" size="xl">
-                <a href={DEMO_LINK}>
-                  Book a demo
+                <a href={START_LINK}>
+                  Start free
                   <ArrowRight />
                 </a>
+              </Button>
+              <Button asChild variant="soft" size="xl">
+                <a href={SALES_LINK}>Enterprise early access</a>
               </Button>
             </div>
           </div>
@@ -35,7 +37,8 @@ const footerLinks = [
   { label: "How it works", href: "#solution" },
   { label: "Product", href: "#product" },
   { label: "Use Cases", href: "#use-cases" },
-  { label: "Contact", href: DEMO_LINK },
+  { label: "Pricing", href: "#pricing" },
+  { label: "Enterprise", href: "#enterprise" },
 ];
 
 export function Footer() {
