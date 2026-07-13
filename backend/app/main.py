@@ -2101,6 +2101,7 @@ async def _finalize_session(
     failed_code: str = "",
     usage_reason: str = "",
     usage_end_epoch: float | None = None,
+    artifact_org_id: str | None = None,
 ) -> dict | None:
     """End a session once: stop both vendors, build + store the artifact.
 
@@ -2119,13 +2120,19 @@ async def _finalize_session(
     natural ends default to 'ended') and Recall's own terminal timestamp when
     the caller had one. The close itself is idempotent (first close wins), so
     the same bot finalizing via manual end + webhook + reconcile still writes
-    consumed_seconds exactly once.
+    consumed_seconds exactly once. artifact_org_id is accepted only from an
+    already-authenticated endpoint; it enables an RLS-scoped idempotent read
+    after process replacement without adding a global bot-id lookup.
     """
     session = store.get(bot_id)
     if session is None:
         # Without a trusted org there is deliberately no global Postgres
-        # bot-id lookup. Same-process idempotency still hits the warm cache;
-        # authenticated archive endpoints pass their org explicitly.
+        # bot-id lookup. Same-process internal idempotency still hits the warm
+        # cache; authenticated archive endpoints pass their org explicitly.
+        if artifact_org_id is not None:
+            return await run_in_threadpool(
+                store.get_artifact, bot_id, org_id=artifact_org_id
+            )
         return store.get_artifact(bot_id)
     # A prior finalize already built + delivered this session's artifact but its
     # Recall meter-stop (leave_call) was not confirmed, so the session was KEPT
@@ -2424,7 +2431,13 @@ async def end_session(bot_id: str, request: Request) -> JSONResponse:
         live = store.get(bot_id)
         if live is not None and live.org_id != token_org:
             return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    artifact = await _finalize_session(bot_id, source="manual")
+    artifact_scope = (
+        token_org
+        or (str(user["org_id"]) if user is not None else None)
+    )
+    artifact = await _finalize_session(
+        bot_id, source="manual", artifact_org_id=artifact_scope
+    )
     if artifact is None:
         # _finalize_session returns None only when the session is already gone
         # AND no artifact was stored — i.e. a genuinely unknown bot, OR a
@@ -2434,6 +2447,11 @@ async def end_session(bot_id: str, request: Request) -> JSONResponse:
         # answer 202 "finalizing" while another path owns it.
         if bot_id in _finalizing or store.get(bot_id) is not None:
             return JSONResponse({"ok": True, "finalizing": bot_id}, status_code=202)
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
+    artifact_org = str(artifact.get("org_id") or "")
+    if user is not None and artifact_org not in ("", str(user["org_id"])):
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
+    if token_org is not None and artifact_org != token_org:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     return JSONResponse(cedric.wire_artifact(artifact))  # CEDRIC: PII stays home
 
