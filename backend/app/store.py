@@ -37,9 +37,13 @@ STORE_PATH = Path(os.getenv("LAURA_STORE_PATH", str(_default_store_path())))
 
 @dataclass
 class Utterance:
+    # participant_id is the stable internal identity. speaker remains the
+    # presentation label only; two people may legitimately share it.
     speaker: str
     text: str
     ts: float
+    participant_id: str = ""
+    speaker_kind: str = "human"  # human | agent
 
 
 _PERSISTED_SESSION_FIELDS = {
@@ -190,36 +194,92 @@ class Session:
         ):
             _persist_session(self)
 
-    def resolve_speaker(self, name: str | None, participant_id: Any = None) -> str:
-        """Human-readable speaker label for a transcript utterance.
+    @staticmethod
+    def _explicit_agent_metadata(participant: dict | None) -> bool:
+        """Conservative Recall participant classifier.
 
-        Named participants keep their real name (Recall gets it from the meeting
-        platform login — stable across meetings, no voice ID needed). Anonymous
-        participants (phone dial-ins, unnamed guests) have no name but DO carry a
-        stable per-meeting participant id, so map each distinct id to its own
-        "Guest N" — otherwise two silent callers both collapse into one label and
-        the avatar can't tell them apart.
+        Names are NEVER identity. We accept only explicit bot/agent metadata,
+        a bot_id binding to this Session, or participant_id == bot_id. If the
+        provider omits all of those signals we deliberately classify as human
+        rather than guessing from a display name.
         """
-        name = (name or "").strip()
-        if name:
-            return name
+        if not isinstance(participant, dict):
+            return False
+        containers = [participant]
+        for key in ("metadata", "extra_data"):
+            value = participant.get(key)
+            if isinstance(value, dict):
+                containers.append(value)
+        for value in containers:
+            if value.get("is_bot") is True or value.get("is_agent") is True:
+                return True
+            role = str(value.get("kind") or value.get("type") or value.get("role") or "").lower()
+            if role in {"bot", "agent", "meeting_bot"}:
+                return True
+        return False
+
+    def resolve_participant(
+        self,
+        name: str | None,
+        participant_id: Any = None,
+        *,
+        metadata: dict | None = None,
+    ) -> dict[str, str]:
+        """Resolve a canonical participant, keyed by Recall participant_id.
+
+        A later transcript without a name reuses the name learned from the
+        participant-event map. The returned display name is presentation only.
+        """
         key = "" if participant_id is None else str(participant_id)
+        supplied_name = (name or "").strip()
         if not key:
-            return "Guest"
-        label = self._anon_labels.get(key)
-        if label is None:
-            label = f"Guest {len(self._anon_labels) + 1}"
-            self._anon_labels[key] = label
-        return label
+            key = f"legacy:{supplied_name.lower()}" if supplied_name else "legacy:guest"
+
+        existing = self.participants.get(key) or {}
+        display_name = supplied_name or str(existing.get("name") or "").strip()
+        if not display_name:
+            label = self._anon_labels.get(key)
+            if label is None:
+                label = f"Guest {len(self._anon_labels) + 1}"
+                self._anon_labels[key] = label
+            display_name = label
+
+        explicit_agent = (
+            key == self.bot_id
+            or str((metadata or {}).get("bot_id") or "") == self.bot_id
+            or self._explicit_agent_metadata(metadata)
+        )
+        kind = "agent" if explicit_agent else str(existing.get("kind") or "human")
+        here = bool(existing.get("here", True))
+        identity = {"id": key, "name": display_name, "kind": kind, "here": here}
+        changed = (
+            not existing
+            or str(existing.get("name") or "") != display_name
+            or str(existing.get("kind") or "human") != kind
+        )
+        self.participants[key] = identity
+        if changed:
+            _persist_participant(self.org_id, self.bot_id, identity)
+        return identity
+
+    def resolve_speaker(self, name: str | None, participant_id: Any = None) -> str:
+        """Backward-compatible presentation label; use resolve_participant for logic."""
+        return self.resolve_participant(name, participant_id)["name"]
 
     def participant_event(
-        self, name: str | None, participant_id: Any, *, here: bool
-    ) -> str:
-        """Fold a Recall participant_events.join/leave into the live roster."""
-        label = self.resolve_speaker(name, participant_id)
-        key = str(participant_id) if participant_id is not None else label
-        self.participants[key] = {"name": label, "here": here}
-        return label
+        self,
+        name: str | None,
+        participant_id: Any,
+        *,
+        here: bool,
+        metadata: dict | None = None,
+    ) -> dict[str, str]:
+        """Fold a Recall join/leave into the canonical, persisted roster."""
+        identity = self.resolve_participant(name, participant_id, metadata=metadata)
+        identity["here"] = bool(here)
+        self.participants[identity["id"]] = identity
+        _persist_participant(self.org_id, self.bot_id, identity)
+        return identity
 
     def present_names(self, avatar_name: str = "") -> list[str]:
         """First names to EXCLUDE from the FUZZY wake match: everyone else known
@@ -240,47 +300,80 @@ class Session:
         return self.roster(avatar_name)
 
     def roster(self, avatar_name: str = "") -> list[str]:
-        """Who is in the meeting right now, besides the avatar itself.
+        """Human roster, keyed internally by participant_id.
 
-        Prefers the event-driven roster (it sees silent participants); merges in
-        transcript speakers as a net for missed events / process restarts.
-
-        Only the running avatar's OWN name (passed in as ``avatar_name``) and the
-        empty string are stripped — NOT a hardcoded "laura", which would erase a
-        human named Laura from a Cedric/SFF/Duccio meeting's roster and misfire
-        the hand-raise / adaptive-deference human-count gates.
+        avatar_name is retained for API compatibility but is intentionally
+        not used for classification: a human may share the avatar's display
+        name. Agent rows are filtered by persisted kind/id instead.
         """
-        skip = {avatar_name.strip().lower(), ""}
         names: list[str] = []
-        for p in self.participants.values():
-            if p.get("here") and p["name"].strip().lower() not in skip:
-                names.append(p["name"])
-        gone = {
-            p["name"].strip().lower()
-            for p in self.participants.values()
-            if not p.get("here")
+        seen_ids: set[str] = set()
+        gone_ids = {
+            str(pid)
+            for pid, p in self.participants.items()
+            if not p.get("here", True)
         }
-        seen = {n.strip().lower() for n in names}
+        for pid, p in self.participants.items():
+            if p.get("here", True) and p.get("kind", "human") != "agent":
+                names.append(str(p.get("name") or "Guest"))
+                seen_ids.add(str(pid))
         for u in self.transcript:
-            low = u.speaker.strip().lower()
-            if low not in skip and low not in seen and low not in gone:
-                seen.add(low)
+            pid = u.participant_id or f"legacy:{u.speaker.lower()}"
+            if (
+                u.speaker_kind != "agent"
+                and pid not in seen_ids
+                and pid not in gone_ids
+            ):
                 names.append(u.speaker)
+                seen_ids.add(pid)
         return names
 
-    def add_utterance(self, speaker: str, text: str) -> None:
-        utterance = Utterance(speaker=speaker, text=text, ts=time.time())
+    def add_utterance(
+        self,
+        speaker: str,
+        text: str,
+        *,
+        participant_id: str = "",
+        speaker_kind: str = "human",
+    ) -> None:
+        resolved_id = str(participant_id or "")
+        resolved_kind = speaker_kind
+        if not resolved_id:
+            # Backward-compatible direct callers: bind by name only when the
+            # live participant map has exactly one unambiguous match.
+            matches = [
+                (str(pid), p)
+                for pid, p in self.participants.items()
+                if str(p.get("name") or "").strip().lower()
+                == speaker.strip().lower()
+            ]
+            if len(matches) == 1:
+                resolved_id, participant = matches[0]
+                resolved_kind = str(participant.get("kind") or speaker_kind)
+        utterance = Utterance(
+            speaker=speaker,
+            text=text,
+            ts=time.time(),
+            participant_id=resolved_id,
+            speaker_kind="agent" if resolved_kind == "agent" else "human",
+        )
         self.transcript.append(utterance)
         # Hot path: the per-utterance write stays on local SQLite (never a
         # network DB — latency is the product). org inherited from the session.
         _persist_utterance(self.org_id, self.bot_id, utterance)
 
-    def transcript_text(self) -> str:
-        return "\n".join(f"{u.speaker}: {u.text}" for u in self.transcript)
+    def transcript_text(self, *, include_agents: bool = True) -> str:
+        utterances = (
+            self.transcript
+            if include_agents
+            else [u for u in self.transcript if u.speaker_kind != "agent"]
+        )
+        return "\n".join(f"{u.speaker}: {u.text}" for u in utterances)
 
     def recent_transcript(self, n: int = 8) -> str:
-        """The last n turns, so the avatar has the immediate meeting context."""
-        return "\n".join(f"{u.speaker}: {u.text}" for u in self.transcript[-n:])
+        """Recent HUMAN turns; agent output is never evidence for a new answer."""
+        human = [u for u in self.transcript if u.speaker_kind != "agent"]
+        return "\n".join(f"{u.speaker}: {u.text}" for u in human[-n:])
 
     def in_cooldown(self, cooldown_seconds: float) -> bool:
         return (time.time() - self.last_spoke_at) < cooldown_seconds
@@ -407,6 +500,8 @@ def _init_db() -> None:
                 org_id TEXT NOT NULL DEFAULT '{demo}',
                 bot_id TEXT NOT NULL,
                 speaker TEXT NOT NULL,
+                participant_id TEXT NOT NULL DEFAULT '',
+                speaker_kind TEXT NOT NULL DEFAULT 'human',
                 text TEXT NOT NULL,
                 ts REAL NOT NULL,
                 FOREIGN KEY(bot_id) REFERENCES sessions(bot_id) ON DELETE CASCADE
@@ -429,6 +524,18 @@ def _init_db() -> None:
                 capability_hash TEXT PRIMARY KEY,
                 bot_id TEXT NOT NULL UNIQUE,
                 created_at REAL NOT NULL,
+                FOREIGN KEY(bot_id) REFERENCES sessions(bot_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS session_participants (
+                bot_id TEXT NOT NULL,
+                org_id TEXT NOT NULL DEFAULT '{demo}',
+                participant_id TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                speaker_kind TEXT NOT NULL DEFAULT 'human',
+                here INTEGER NOT NULL DEFAULT 1,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (bot_id, participant_id),
                 FOREIGN KEY(bot_id) REFERENCES sessions(bot_id) ON DELETE CASCADE
             );
 
@@ -483,6 +590,8 @@ def _init_db() -> None:
         # org_id on the remaining persisted tables (idempotent; a new NOT NULL
         # column backfills existing rows to the Demo org).
         _add_column(conn, "utterances", f"org_id TEXT NOT NULL DEFAULT '{demo}'")
+        _add_column(conn, "utterances", "participant_id TEXT NOT NULL DEFAULT ''")
+        _add_column(conn, "utterances", "speaker_kind TEXT NOT NULL DEFAULT 'human'")
         _add_column(
             conn, "conversation_routes", f"org_id TEXT NOT NULL DEFAULT '{demo}'"
         )
@@ -495,6 +604,8 @@ def _init_db() -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS uq_sessions_org_bot
                 ON sessions(org_id, bot_id);
             CREATE INDEX IF NOT EXISTS idx_utt_org_bot ON utterances(org_id, bot_id, id);
+            CREATE INDEX IF NOT EXISTS idx_participants_org_bot
+                ON session_participants(org_id, bot_id);
             CREATE INDEX IF NOT EXISTS idx_conv_routes_org ON conversation_routes(org_id);
             CREATE INDEX IF NOT EXISTS idx_artifacts_org_saved
                 ON artifacts(org_id, saved_at);
@@ -581,7 +692,12 @@ def _load_from_db() -> None:
     with _LOCK, _connect() as conn:
         session_rows = conn.execute("SELECT * FROM sessions").fetchall()
         utterance_rows = conn.execute(
-            "SELECT bot_id, speaker, text, ts FROM utterances ORDER BY id"
+            "SELECT bot_id, speaker, participant_id, speaker_kind, text, ts "
+            "FROM utterances ORDER BY id"
+        ).fetchall()
+        participant_rows = conn.execute(
+            "SELECT bot_id, participant_id, display_name, speaker_kind, here "
+            "FROM session_participants"
         ).fetchall()
         routes = conn.execute(
             "SELECT conversation_id, bot_id FROM conversation_routes"
@@ -592,7 +708,13 @@ def _load_from_db() -> None:
     utterances_by_bot: dict[str, list[Utterance]] = {}
     for row in utterance_rows:
         utterances_by_bot.setdefault(row["bot_id"], []).append(
-            Utterance(speaker=row["speaker"], text=row["text"], ts=float(row["ts"]))
+            Utterance(
+                speaker=row["speaker"],
+                text=row["text"],
+                ts=float(row["ts"]),
+                participant_id=row["participant_id"],
+                speaker_kind=row["speaker_kind"],
+            )
         )
 
     _sessions.clear()
@@ -604,6 +726,15 @@ def _load_from_db() -> None:
             for row in session_rows
         }
     )
+    for row in participant_rows:
+        session = _sessions.get(row["bot_id"])
+        if session is not None:
+            session.participants[row["participant_id"]] = {
+                "id": row["participant_id"],
+                "name": row["display_name"],
+                "kind": row["speaker_kind"],
+                "here": bool(row["here"]),
+            }
     _by_conversation.clear()
     _by_conversation.update({row["conversation_id"]: row["bot_id"] for row in routes})
     _artifacts.clear()
@@ -658,10 +789,52 @@ def _persist_utterance(org_id: str, bot_id: str, utterance: Utterance) -> None:
     with _LOCK, _connect() as conn:
         conn.execute(
             """
-            INSERT INTO utterances (org_id, bot_id, speaker, text, ts)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO utterances (
+                org_id, bot_id, speaker, participant_id, speaker_kind, text, ts
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (org_id, bot_id, utterance.speaker, utterance.text, float(utterance.ts)),
+            (
+                org_id,
+                bot_id,
+                utterance.speaker,
+                utterance.participant_id,
+                utterance.speaker_kind,
+                utterance.text,
+                float(utterance.ts),
+            ),
+        )
+
+
+def _persist_participant(org_id: str, bot_id: str, identity: dict) -> None:
+    """Persist identity/classification so restart uses the same decisions."""
+    with _LOCK, _connect() as conn:
+        # Unit-level Session objects may not be store-backed. Production
+        # sessions are persisted before participant events arrive.
+        if conn.execute(
+            "SELECT 1 FROM sessions WHERE bot_id=?", (bot_id,)
+        ).fetchone() is None:
+            return
+        conn.execute(
+            """
+            INSERT INTO session_participants (
+                bot_id, org_id, participant_id, display_name,
+                speaker_kind, here, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(bot_id, participant_id) DO UPDATE SET
+                display_name=excluded.display_name,
+                speaker_kind=excluded.speaker_kind,
+                here=excluded.here,
+                updated_at=excluded.updated_at
+            """,
+            (
+                bot_id,
+                org_id,
+                identity["id"],
+                identity["name"],
+                identity.get("kind", "human"),
+                int(bool(identity.get("here", True))),
+                time.time(),
+            ),
         )
 
 
@@ -1708,3 +1881,4 @@ def remove(bot_id: str) -> None:
 
 _init_db()
 _load_from_db()
+
