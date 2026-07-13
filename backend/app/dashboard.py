@@ -270,6 +270,26 @@ def dashboard_page() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "dashboard.html")
 
 
+def _json_safe(obj):
+    """Recursively coerce values that the durable Postgres control plane returns
+    but stdlib json can't encode — NUMERIC -> Decimal (whole numbers back to
+    int, else float) and datetime/date -> ISO string. Prevents a single Decimal
+    (e.g. a billing/usage field) from 500ing the whole /dashboard/summary."""
+    import datetime
+    from decimal import Decimal
+
+    if isinstance(obj, Decimal):
+        f = float(obj)
+        return int(f) if f.is_integer() else f
+    if isinstance(obj, (datetime.datetime, datetime.date)):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
 @router.get("/dashboard/summary")
 def dashboard_summary(request: Request) -> JSONResponse:
     # One gate for all four worlds (see auth.gate): logged-in cookie user,
@@ -494,7 +514,7 @@ def dashboard_summary(request: Request) -> JSONResponse:
     )
 
     return JSONResponse(
-        {
+        _json_safe({
             "avatars": avatar_rows,
             "live": live,
             "meetings": meetings[:60],
@@ -514,7 +534,7 @@ def dashboard_summary(request: Request) -> JSONResponse:
                 if user
                 else None
             ),
-        }
+        })
     )
 
 
