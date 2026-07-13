@@ -99,6 +99,44 @@ def test_resolve_machine_org_contract(client, monkeypatch):
     assert cedric.resolve_machine_org(_request_with(raw)) == "org_sff"
 
 
+
+def test_durable_token_miss_never_falls_back_to_sqlite(client, monkeypatch):
+    """A token revoked in Postgres cannot survive in the local cache."""
+    monkeypatch.setattr(control_plane, "enabled", lambda: True)
+    monkeypatch.setattr(control_plane, "resolve_org_token", lambda raw: None)
+    local_calls: list[str] = []
+    monkeypatch.setattr(
+        store,
+        "resolve_org_token",
+        lambda raw: local_calls.append(raw) or "org_stale",
+    )
+    request = _request_with("stale-token")
+    assert cedric.resolve_machine_org(request) is None
+    assert main_module._org_token_bearer_org(request) is None
+    assert local_calls == []
+
+
+def test_customer_callback_urls_are_bound_to_cedric_https_origin(monkeypatch):
+    monkeypatch.setattr(
+        settings, "cedric_orgs_url", "https://www.meet-cedric.com/api/laura/orgs"
+    )
+    safe = types.SimpleNamespace(
+        callback_url="https://www.meet-cedric.com/api/laura/events",
+        context_url="https://www.meet-cedric.com/api/laura/context",
+    )
+    hostile = types.SimpleNamespace(
+        callback_url="https://attacker.example/steal", context_url=""
+    )
+    insecure = types.SimpleNamespace(
+        callback_url="http://www.meet-cedric.com/api/laura/events", context_url=""
+    )
+    assert cedric.request_integration_urls_allowed(safe, "org_customer") is True
+    assert cedric.request_integration_urls_allowed(hostile, "org_customer") is False
+    assert cedric.request_integration_urls_allowed(insecure, "org_customer") is False
+    # Demo/key-free wiring is unchanged.
+    assert cedric.request_integration_urls_allowed(hostile, settings.demo_org_id) is True
+
+
 def test_org_token_scopes_cancel(client, monkeypatch):
     """A per-org bearer cancels ONLY its own org's sessions; another org's
     stays running and answers a 404 BYTE-IDENTICAL to a nonexistent bot_id —
@@ -400,6 +438,45 @@ def test_slack_start_complete_full_roundtrip(client, monkeypatch, google_on):
     assert token not in hashes
 
 
+
+def test_reinstall_rotates_token_and_consumes_state(client, monkeypatch):
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
+    user = store.upsert_user("rotate@example.com")
+    monkeypatch.setattr(secret_registry, "upsert_org_credentials", lambda *a: True)
+
+    def complete(state: str):
+        return client.post(
+            "/dashboard/connections/brain/slack/complete",
+            headers=_bearer("provisioning-token"),
+            json={
+                "org_id": user["org_id"],
+                "avatar_id": "cedric",
+                "team_id": "T_ROT",
+                "channel": "",
+                "webhook_secret": "secret",
+                "webhook_token": "peer",
+                "state": state,
+            },
+        )
+
+    first_state = install_state.pack(user["org_id"], "cedric", "", "")
+    first = complete(first_state)
+    assert first.status_code == 200
+    first_token = first.json()["org_token"]
+
+    second_state = install_state.pack(user["org_id"], "cedric", "", "")
+    second = complete(second_state)
+    assert second.status_code == 200
+    second_token = second.json()["org_token"]
+    assert second_token != first_token
+    assert store.resolve_org_token(first_token) is None
+    assert store.resolve_org_token(second_token) == user["org_id"]
+
+    replay = complete(second_state)
+    assert replay.status_code == 409
+    assert replay.json()["error"] == "install state already consumed"
+
+
 def test_slack_complete_state_alone_proves_initiation(client, monkeypatch):
     """A valid signed state binds the install even if the pending row was lost
     (redeploy wiped the ephemeral store between start and complete)."""
@@ -688,6 +765,62 @@ def test_disconnect_without_orchestrator_is_local_only(client, monkeypatch, goog
     assert resp.status_code == 200
     assert resp.json()["remote_revoked"] is False
     assert store.connections_for_org(user["org_id"])[0]["status"] == "disconnected"
+
+
+
+def test_disconnect_retry_resumes_after_remote_revoke(client, monkeypatch, google_on):
+    monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
+    user = _login(client)
+    store.set_connection(
+        user["org_id"], "cedric", "cedric-brain", "connected", {"team_id": "T1"}
+    )
+    remote_calls: list[str] = []
+    monkeypatch.setattr(
+        cedric, "revoke_org", lambda org: remote_calls.append(org) or 204
+    )
+    cleanup_results = iter((False, True))
+    monkeypatch.setattr(
+        secret_registry, "remove_org_credentials", lambda org: next(cleanup_results)
+    )
+
+    first = client.post(
+        "/dashboard/connections/brain/disconnect", json={"avatar_id": "cedric"}
+    )
+    assert first.status_code == 502
+    checkpoint = store.connections_for_org(user["org_id"])[0]
+    assert checkpoint["status"] == "disconnecting"
+    assert checkpoint["config"]["disconnect_phase"] == "remote_revoked"
+
+    second = client.post(
+        "/dashboard/connections/brain/disconnect", json={"avatar_id": "cedric"}
+    )
+    assert second.status_code == 200
+    assert remote_calls == [user["org_id"]]
+    assert store.connections_for_org(user["org_id"])[0]["status"] == "disconnected"
+
+
+def test_disconnect_is_org_wide_and_revokes_local_token(
+    client, monkeypatch, google_on
+):
+    monkeypatch.setattr(settings, "cedric_orgs_url", "")
+    user = _login(client)
+    for avatar in ("laura", "cedric"):
+        store.set_connection(
+            user["org_id"], avatar, "cedric-brain", "connected", {"team_id": "T1"}
+        )
+    monkeypatch.setattr(secret_registry, "remove_org_credentials", lambda org: True)
+    raw = store.rotate_org_token(user["org_id"], "cedric-slack-install")
+    assert store.resolve_org_token(raw) == user["org_id"]
+
+    response = client.post(
+        "/dashboard/connections/brain/disconnect", json={"avatar_id": "cedric"}
+    )
+    assert response.status_code == 200
+    assert {
+        row["status"] for row in store.connections_for_org(user["org_id"])
+        if row["provider"] == "cedric-brain"
+    } == {"disconnected"}
+    assert store.resolve_org_token(raw) is None
 
 
 def test_disconnect_rejects_cross_site_and_unknown(client, monkeypatch, google_on):
