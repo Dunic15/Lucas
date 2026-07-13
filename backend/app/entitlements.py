@@ -99,7 +99,13 @@ def _used_seconds(conn, org_id: str, *, exclude_bot_id: str | None = None) -> fl
     if windowed:
         closed = conn.execute(
             text(
-                "SELECT COALESCE(SUM(consumed_seconds), 0) "
+                "SELECT COALESCE(SUM(LEAST("
+                "  consumed_seconds, "
+                "  GREATEST(0, EXTRACT(EPOCH FROM ("
+                "    closed_at - "
+                "    to_timestamp(CAST(:period_start AS double precision))"
+                "  )))"
+                ")), 0) "
                 "FROM usage_sessions "
                 "WHERE org_id = :o AND state = 'closed' "
                 "AND closed_at >= "
@@ -116,16 +122,36 @@ def _used_seconds(conn, org_id: str, *, exclude_bot_id: str | None = None) -> fl
             ),
             {"o": org_id},
         ).scalar()
-    active = conn.execute(
-        text(
-            "SELECT COALESCE(SUM(GREATEST(0, "
-            "  EXTRACT(EPOCH FROM (now() - in_call_at)))), 0) "
-            "FROM usage_sessions "
-            "WHERE org_id = :o AND state = 'active' AND in_call_at IS NOT NULL "
-            "AND bot_id <> :skip"
-        ),
-        {"o": org_id, "skip": exclude_bot_id or ""},
-    ).scalar()
+    if windowed:
+        active = conn.execute(
+            text(
+                "SELECT COALESCE(SUM(GREATEST(0, EXTRACT(EPOCH FROM ("
+                "  now() - GREATEST("
+                "    in_call_at, "
+                "    to_timestamp(CAST(:period_start AS double precision))"
+                "  )"
+                ")))), 0) "
+                "FROM usage_sessions "
+                "WHERE org_id = :o AND state = 'active' "
+                "AND in_call_at IS NOT NULL AND bot_id <> :skip"
+            ),
+            {
+                "o": org_id,
+                "skip": exclude_bot_id or "",
+                "period_start": float(meta[1]),
+            },
+        ).scalar()
+    else:
+        active = conn.execute(
+            text(
+                "SELECT COALESCE(SUM(GREATEST(0, "
+                "  EXTRACT(EPOCH FROM (now() - in_call_at)))), 0) "
+                "FROM usage_sessions "
+                "WHERE org_id = :o AND state = 'active' "
+                "AND in_call_at IS NOT NULL AND bot_id <> :skip"
+            ),
+            {"o": org_id, "skip": exclude_bot_id or ""},
+        ).scalar()
     return float(closed or 0) + float(active or 0)
 
 
