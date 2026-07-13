@@ -175,6 +175,21 @@ def test_human_sharing_avatar_display_name_is_not_agent(tmp_path, monkeypatch):
     store.remove(session.bot_id)
 
 
+def test_explicit_agent_without_participant_id_does_not_poison_same_name_human(
+    tmp_path, monkeypatch
+):
+    session = _session(tmp_path, monkeypatch, "identity-missing-agent-id")
+
+    agent = session.resolve_participant("Laura", None, metadata={"is_bot": True})
+    human = session.resolve_participant("Laura", None, metadata={})
+
+    assert agent["id"] == f"agent:{session.bot_id}"
+    assert agent["kind"] == "agent"
+    assert human["id"] == "legacy:laura"
+    assert human["kind"] == "human"
+    store.remove(session.bot_id)
+
+
 def test_agent_assertion_stays_in_transcript_but_not_meeting_state(
     tmp_path, monkeypatch
 ):

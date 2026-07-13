@@ -232,8 +232,24 @@ class Session:
         """
         key = "" if participant_id is None else str(participant_id)
         supplied_name = (name or "").strip()
+        explicit_agent = (
+            key == self.bot_id
+            or str((metadata or {}).get("bot_id") or "") == self.bot_id
+            or self._explicit_agent_metadata(metadata)
+        )
         if not key:
-            key = f"legacy:{supplied_name.lower()}" if supplied_name else "legacy:guest"
+            # An explicit bot event without a provider participant_id must not
+            # poison a same-name human's legacy identity. Bind it to this
+            # session bot; never infer that later name-only lines are the bot.
+            key = (
+                f"agent:{self.bot_id}"
+                if explicit_agent
+                else (
+                    f"legacy:{supplied_name.lower()}"
+                    if supplied_name
+                    else "legacy:guest"
+                )
+            )
 
         existing = self.participants.get(key) or {}
         display_name = supplied_name or str(existing.get("name") or "").strip()
@@ -244,11 +260,6 @@ class Session:
                 self._anon_labels[key] = label
             display_name = label
 
-        explicit_agent = (
-            key == self.bot_id
-            or str((metadata or {}).get("bot_id") or "") == self.bot_id
-            or self._explicit_agent_metadata(metadata)
-        )
         kind = "agent" if explicit_agent else str(existing.get("kind") or "human")
         here = bool(existing.get("here", True))
         identity = {"id": key, "name": display_name, "kind": kind, "here": here}
