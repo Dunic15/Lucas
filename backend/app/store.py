@@ -1316,8 +1316,14 @@ def begin_brain_install(
         status = "pending"
         if row is not None:
             current_status = str(row["status"] or "")
-            if current_status == "disconnecting":
-                return False
+            # An explicit, user-initiated install supersedes a row stuck in
+            # "disconnecting": a disconnect that fenced the org token but never
+            # finished its cleanup would otherwise lock re-install forever (the
+            # /slack/start route turns this False into a bogus 503 "connection
+            # persistence failed"). The token is already revoked at that point,
+            # so resetting to a fresh pending install is safe — the stale
+            # disconnect marker is dropped below. Only a still-connected row
+            # keeps "connected" while its OAuth is re-initiated.
             status = "connected" if current_status == "connected" else "pending"
             try:
                 config = json.loads(row["config_json"]) if row["config_json"] else {}
@@ -1327,6 +1333,7 @@ def begin_brain_install(
                 config = {}
         config.pop("install_tombstone", None)
         config.pop("revoked_install_nonce", None)
+        config.pop("disconnect_phase", None)
         config["pending_install_nonce"] = install_nonce
         config["channel"] = (channel or "").strip()
         conn.execute(

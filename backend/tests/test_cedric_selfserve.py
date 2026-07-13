@@ -492,6 +492,40 @@ def test_slack_start_complete_full_roundtrip(client, monkeypatch, google_on):
     assert replay.json()["idempotent_replay"] is True
 
 
+def test_slack_start_supersedes_stuck_disconnecting(client, google_on, monkeypatch):
+    """A cedric-brain row stuck in 'disconnecting' (a disconnect that fenced the
+    token but never finished) must not lock re-install: a fresh "Add to Slack"
+    supersedes it → 302, not a 503 'connection persistence failed'."""
+    monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
+    monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
+    user = _login(client)
+    # Seed the exact stuck state: an install, then a disconnect that only ran
+    # its first (fencing) phase and never completed.
+    assert store.begin_brain_install(user["org_id"], "cedric", "old-nonce") is True
+    assert store.begin_brain_disconnect(
+        user["org_id"], "cedric", "revoke_pending"
+    ) is True
+    stuck = store.connections_for_org(user["org_id"])[0]
+    assert stuck["status"] == "disconnecting"
+    assert stuck["config"].get("disconnect_phase") == "revoke_pending"
+
+    start = client.get(
+        "/dashboard/connections/brain/slack/start",
+        params={"avatar_id": "cedric", "channel": "#approvals"},
+        follow_redirects=False,
+    )
+    assert start.status_code == 302  # regression: was 503 before the fix
+
+    row = store.connections_for_org(user["org_id"])[0]
+    assert row["status"] == "pending"
+    assert "disconnect_phase" not in row["config"]
+    state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+    assert (
+        row["config"]["pending_install_nonce"]
+        == install_state.unpack(state)["nonce"]
+    )
+
+
 
 def test_same_state_replay_is_bound_to_original_workspace_envelope(
     client, monkeypatch
