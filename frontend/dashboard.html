@@ -693,11 +693,13 @@
     $("#plan-solo").classList.toggle("featured",plan!=="solo"&&eligible);
     $("#plan-free").classList.toggle("featured",plan==="free");
   }
-  function openBilling(path,button){
+  function openBilling(path,button,bodyObj){
     button.disabled=true;
     var old=button.textContent;
     button.textContent="Opening…";
-    fetch(path,{method:"POST",headers:headers(),body:"{}"})
+    // Per-call body: /billing/checkout requires EXACTLY {"plan":"solo"} (the
+    // backend rejects anything else as invalid_plan); /billing/portal takes {}.
+    fetch(path,{method:"POST",headers:headers(),body:JSON.stringify(bodyObj||{})})
       .then(function(r){return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,j:j};});})
       .then(function(res){
         if(!res.ok) throw new Error(res.j.error||"billing request failed");
@@ -1012,8 +1014,8 @@
       .finally(function(){ b.disabled=false; b.textContent="Send"; });
   });
 
-  $("#billing-upgrade").addEventListener("click",function(){openBilling("/billing/checkout",this);});
-  $("#billing-manage").addEventListener("click",function(){openBilling("/billing/portal",this);});
+  $("#billing-upgrade").addEventListener("click",function(){openBilling("/billing/checkout",this,{plan:"solo"});});
+  $("#billing-manage").addEventListener("click",function(){openBilling("/billing/portal",this,{});});
 
   $$("#seg-theme button").forEach(function(b){ b.addEventListener("click",function(){
     $$("#seg-theme button").forEach(function(x){x.classList.remove("on");}); b.classList.add("on");
