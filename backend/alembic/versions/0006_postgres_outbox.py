@@ -1,18 +1,17 @@
 """Durable multi-instance callback outbox on the RLS control plane.
 
-Revision ID: 0005_postgres_outbox
-Revises: 0004_runtime_privilege_boundary
+Revision ID: 0006_postgres_outbox
+Revises: 0005_billing_period
 Create Date: 2026-07-13
 
-Provisional numbering: if Stripe PR C takes 0005, rename this revision to 0006
-and point down_revision at C's migration before either PR merges.
+Stacked after the Stripe billing-period migration so Alembic retains one head.
 """
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0005_postgres_outbox"
-down_revision = "0004_runtime_privilege_boundary"
+revision = "0006_postgres_outbox"
+down_revision = "0005_billing_period"
 branch_labels = None
 depends_on = None
 
