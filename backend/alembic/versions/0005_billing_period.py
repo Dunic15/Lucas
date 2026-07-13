@@ -39,7 +39,8 @@ def upgrade() -> None:
           ADD COLUMN IF NOT EXISTS verified_paid_period_start timestamptz,
           ADD COLUMN IF NOT EXISTS verified_paid_period_end timestamptz,
           ADD COLUMN IF NOT EXISTS verified_paid_event_created bigint NOT NULL DEFAULT 0,
-          ADD COLUMN IF NOT EXISTS verified_paid_event_id text NOT NULL DEFAULT '';
+          ADD COLUMN IF NOT EXISTS verified_paid_event_id text NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS invoice_event_subscription_id text;
 
         CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_stripe_customer
           ON public.billing_accounts (stripe_customer_id)
