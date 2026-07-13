@@ -14,8 +14,10 @@ Flow:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
+import math
 import random
 import re
 import time
@@ -47,6 +49,7 @@ from . import (
     recall_client,
     anam_client,
     auth,
+    billing,
     cedric,
     control_plane,
     dashboard,
@@ -61,6 +64,7 @@ from . import (
     gpu_runtime,
     runpod_runtime,
     ledger,
+    outbox,
     meeting_state,
     org_api,
     security,
@@ -117,6 +121,15 @@ async def _lifespan(app: FastAPI):
     watcher from dispatching at once, so the old + new instances don't both put a
     bot in the same meeting during the overlap.
     """
+    global _shutting_down
+    _shutting_down = False
+
+    # Production must prove the exact policy-bound runtime credential before
+    # warming indexes or launching any worker that could serve/dispatch work.
+    # Key-free demo: enabled() is false, so no engine or network connection.
+    if control_plane.enabled():
+        await run_in_threadpool(control_plane.runtime_role_status)
+
     _prebuild_indexes()
 
     if settings.autopilot_nudge:
@@ -142,6 +155,26 @@ async def _lifespan(app: FastAPI):
         # status webhook never arrived — keeps the per-minute meter from leaking.
         asyncio.create_task(_reconcile_sessions_loop())
 
+    async def _outbox_loop() -> None:
+        while not _shutting_down:
+            try:
+                # SQLite demo reconciliation is harmless; production claims
+                # durable Postgres rows with SKIP LOCKED + expiring leases.
+                await run_in_threadpool(outbox.reconcile_sessions)
+                await run_in_threadpool(outbox.process_due)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # never log payload, URL, org or action text
+                print(
+                    f"[outbox] worker iteration failed: {type(exc).__name__}",
+                    flush=True,
+                )
+            await asyncio.sleep(5)
+
+    # Retain the task so shutdown cancels and awaits it deterministically.
+    # Delivery ownership is the committed row, not this in-memory task.
+    outbox_task = asyncio.create_task(_outbox_loop())
+
     if settings.elevenlabs_api_key:
         # Pre-synthesize the fixed conversational furniture so the FIRST
         # ack/backchannel/goodbye of a meeting comes from cache, not a
@@ -151,8 +184,12 @@ async def _lifespan(app: FastAPI):
     try:
         yield
     finally:
-        global _shutting_down
         _shutting_down = True
+        outbox_task.cancel()
+        try:
+            await outbox_task
+        except asyncio.CancelledError:
+            pass
         print("[gmail-watch] shutdown signal — watcher draining", flush=True)
 
 
@@ -165,6 +202,7 @@ security.install(app)
 app.include_router(tts.router)  # POST /tts (open-source avatar voice)
 app.include_router(org_api.router)  # /org/* — org-memory seam for surfaces (#48)
 app.include_router(auth.router)  # /auth/* — dashboard login (Google Sign-In)
+app.include_router(billing.router)  # /billing/* + signed /webhooks/stripe
 app.include_router(dashboard.router)  # /dashboard — owner control view
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
@@ -594,7 +632,7 @@ def _status_change_epoch(
 
 
 async def _close_usage_for(
-    bot_id: str, end_epoch: float | None, reason: str
+    org_id: str, bot_id: str, end_epoch: float | None, reason: str
 ) -> None:
     """Close the durable usage row for a finished bot (PR B). Idempotent —
     entitlements.close_usage's ``WHERE state != 'closed'`` means the FIRST
@@ -608,13 +646,13 @@ async def _close_usage_for(
     if not control_plane.enabled():
         return
     try:
-        row = await run_in_threadpool(entitlements.usage_row, bot_id)
+        row = await run_in_threadpool(entitlements.usage_row, org_id, bot_id)
         if row is None or row.get("state") == "closed":
             return
         in_call = row.get("in_call_at")
         if in_call is None:
             await run_in_threadpool(
-                entitlements.close_usage, bot_id, 0, "never_joined"
+                entitlements.close_usage, org_id, bot_id, 0, "never_joined"
             )
             return
         end = end_epoch
@@ -623,7 +661,9 @@ async def _close_usage_for(
             if row.get("deadline"):
                 end = min(end, float(row["deadline"]))
         consumed = max(0, int(round(end - in_call)))
-        await run_in_threadpool(entitlements.close_usage, bot_id, consumed, reason)
+        await run_in_threadpool(
+            entitlements.close_usage, org_id, bot_id, consumed, reason
+        )
     except Exception as e:  # noqa: BLE001 — reconcile's restore pass heals it
         print(
             f"[usage] close failed for bot={bot_id} ({type(e).__name__}); "
@@ -632,19 +672,24 @@ async def _close_usage_for(
         )
 
 
-async def _assign_usage_bot_id(provisional_bot_id: str, real_bot_id: str) -> None:
+async def _assign_usage_bot_id(
+    org_id: str, provisional_bot_id: str, real_bot_id: str
+) -> bool:
     """Swap the gate's provisional usage bot_id ('pending:<uuid>') for the real
     Recall id, RETRYING a few times on a transient DB blip (PR B BLOCKER 1: a
     single swallowed swap failure left the usage row stranded under the
     provisional id → the live bot ran untracked → unmetered forever). If every
-    attempt fails the reconcile self-heal (_repair_untracked_usage) re-associates
-    the row, so this never blocks the join — it just narrows the repair window."""
+    attempt fails, the caller stops the born bot and fails closed. The reconcile
+    self-heal remains a backstop when a leave cannot be verified immediately."""
     for attempt in range(3):
         try:
-            await run_in_threadpool(
-                entitlements.assign_bot_id, provisional_bot_id, real_bot_id
+            changed = await run_in_threadpool(
+                entitlements.assign_bot_id, org_id, provisional_bot_id, real_bot_id
             )
-            return  # a non-raising return (True or False) means no more to do
+            if changed:
+                return True
+            # False is NOT success: retry, then force the caller down the
+            # fail-closed cleanup path instead of running an unmetered bot.
         except Exception:  # noqa: BLE001 — transient billing-DB blip; retry
             if attempt == 2:
                 print(
@@ -652,8 +697,9 @@ async def _assign_usage_bot_id(provisional_bot_id: str, real_bot_id: str) -> Non
                     "reconcile self-heals",
                     flush=True,
                 )
-                return
+                return False
             await asyncio.sleep(0.2 * (attempt + 1))
+    return False
 
 
 async def _abandon_orphan_session(bot_id: str) -> None:
@@ -682,7 +728,7 @@ async def _abandon_orphan_session(bot_id: str) -> None:
                 pass
         # PR B: a no-show bot consumed nothing — release its usage row so the
         # org's one-active-meeting slot frees up (idempotent; never raises).
-        await _close_usage_for(bot_id, None, "never_joined")
+        await _close_usage_for(session.org_id, bot_id, None, "never_joined")
         store.remove(bot_id)
     finally:
         _finalizing.discard(bot_id)
@@ -736,6 +782,7 @@ async def _retry_leave(bot_id: str, session: store.Session) -> bool:
         # this both resolve to one honest close. consumed = confirmed-stop
         # moment (now, capped at the deadline); reason carried from finalize.
         await _close_usage_for(
+            session.org_id,
             bot_id,
             getattr(session, "usage_end_epoch", None),
             getattr(session, "usage_close_reason", "") or "ended",
@@ -796,6 +843,47 @@ async def _reconcile_once() -> None:
         # retry the leave directly. On success the session is dropped; the
         # artifact already went out, so there is NO re-delivery.
         if getattr(session, "leave_pending", False):
+            # P0: finalize may have kept the session after BOTH the provisional
+            # usage-id swap and the first Recall leave failed. Repair the meter
+            # before retrying leave; otherwise this early continue can strand a
+            # live real bot behind a pending:<uuid> row forever.
+            usage = usage_by_bot.get(bid)
+            if (
+                usage is None
+                and usage_fetch_ok
+                and session.org_id
+                and not bid.startswith("pending:")
+            ):
+                usage = await _repair_untracked_usage(
+                    session, usage_by_bot, force_finalize=False
+                )
+            if usage is not None and usage.get("in_call_at") is None:
+                try:
+                    status = await run_in_threadpool(
+                        lambda b=bid: httpx.get(
+                            f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/{b}/",
+                            headers=_recall_list_headers(),
+                            timeout=20.0,
+                        )
+                    )
+                    status.raise_for_status()
+                    bot = status.json()
+                    code = _bot_status_code(bot)
+                    started = _status_change_epoch(bot, _IN_CALL_CODES)
+                    if started is not None or code in _IN_CALL_CODES:
+                        started_at = started or time.time()
+                        deadline = await run_in_threadpool(
+                            entitlements.mark_in_call,
+                            session.org_id,
+                            bid,
+                            started_at,
+                        )
+                        usage["in_call_at"] = started_at
+                        usage["deadline"] = deadline
+                except Exception:
+                    # Leave is still retried below. A status/DB blip gets
+                    # another repair+clock attempt on the next pass.
+                    pass
             await _retry_leave(bid, session)
             continue
         try:
@@ -849,7 +937,7 @@ async def _reconcile_once() -> None:
                 if started is not None or code in _IN_CALL_CODES:
                     try:
                         deadline = await run_in_threadpool(
-                            entitlements.mark_in_call, bid, started or time.time()
+                            entitlements.mark_in_call, session.org_id, bid, started or time.time()
                         )
                         usage["in_call_at"] = started or time.time()
                         usage["deadline"] = deadline
@@ -898,7 +986,10 @@ async def _reconcile_once() -> None:
 
 
 async def _repair_untracked_usage(
-    session: store.Session, usage_by_bot: dict[str, dict]
+    session: store.Session,
+    usage_by_bot: dict[str, dict],
+    *,
+    force_finalize: bool = True,
 ) -> dict | None:
     """BLOCKER 1 self-heal: a LIVE local session whose usage row is missing —
     the provisional-id swap failed after create_bot, so the real bot runs
@@ -922,7 +1013,7 @@ async def _repair_untracked_usage(
             and org_row.get("in_call_at") is None
         ):
             prov = org_row["bot_id"]
-            if await run_in_threadpool(entitlements.assign_bot_id, prov, real):
+            if await run_in_threadpool(entitlements.assign_bot_id, org, prov, real):
                 usage_by_bot.pop(prov, None)
                 org_row["bot_id"] = real
                 usage_by_bot[real] = org_row
@@ -950,10 +1041,13 @@ async def _repair_untracked_usage(
             return row
     except entitlements.EntitlementsUnavailable:
         return None  # billing down this pass — retry next pass, bot kept
-    # Can't meter it (org exhausted, slot held by another live meeting). Never
-    # let it bill free: stop the meter the hardened way (artifact preserved).
-    print(f"[usage] cannot meter untracked bot={real} — cutting off", flush=True)
-    await _finalize_session(real, source="reconcile", usage_reason="limit_reached")
+    # Can't meter it (org exhausted, slot held by another live meeting). A
+    # normal live session is force-finalized. A leave-pending session was
+    # ALREADY finalized/delivered, so its caller retries the meter-stop without
+    # rebuilding or re-delivering the artifact.
+    if force_finalize:
+        print(f"[usage] cannot meter untracked bot={real} — cutting off", flush=True)
+        await _finalize_session(real, source="reconcile", usage_reason="limit_reached")
     return None
 
 
@@ -978,7 +1072,7 @@ async def _reconcile_usage_orphan(
             if live_orgs is not None and usage.get("org_id") in live_orgs:
                 return
             if time.time() - float(usage.get("created_at") or 0) > 600:
-                await run_in_threadpool(entitlements.close_usage, bid, 0, "orphaned")
+                await run_in_threadpool(entitlements.close_usage, usage["org_id"], bid, 0, "orphaned")
             return
         if not settings.recall_api_key.strip():
             return  # no key → can't reach Recall; leave the row for a keyed instance
@@ -996,7 +1090,7 @@ async def _reconcile_usage_orphan(
             _reconcile_missing[bid] = misses
             if misses >= _RECONCILE_MISSING_LIMIT:
                 _reconcile_missing.pop(bid, None)
-                await _close_usage_for(bid, None, "bot_missing")
+                await _close_usage_for(usage["org_id"], bid, None, "bot_missing")
             return
         r.raise_for_status()
         _reconcile_missing.pop(bid, None)
@@ -1005,7 +1099,8 @@ async def _reconcile_usage_orphan(
         if code in _BOT_TERMINAL:
             # Ended while we were down: consumed from Recall's own timestamps.
             await _close_usage_for(
-                bid, _status_change_epoch(bot, {code}, first=False), "ended"
+                usage["org_id"], bid,
+                _status_change_epoch(bot, {code}, first=False), "ended"
             )
             return
         # Still live: restore the clock if the row never got one…
@@ -1014,7 +1109,7 @@ async def _reconcile_usage_orphan(
             started = _status_change_epoch(bot, _IN_CALL_CODES)
             if started is not None or code in _IN_CALL_CODES:
                 deadline = await run_in_threadpool(
-                    entitlements.mark_in_call, bid, started or time.time()
+                    entitlements.mark_in_call, usage["org_id"], bid, started or time.time()
                 )
         # …then enforce the deadline. No local session → no artifact to build;
         # just stop the meter the VERIFIED way (same classification as #148)
@@ -1025,7 +1120,7 @@ async def _reconcile_usage_orphan(
             except Exception as e:  # noqa: BLE001 — classified below
                 if not _leave_confirmed_stopped(e):
                     return  # UNVERIFIED — bot may still bill; retry next pass
-            await _close_usage_for(bid, None, "limit_reached")
+            await _close_usage_for(usage["org_id"], bid, None, "limit_reached")
     except Exception:  # noqa: BLE001 — an orphan hiccup must never break the pass
         pass
 
@@ -1273,25 +1368,50 @@ def photoreal_page() -> FileResponse:
 
 
 @app.get("/photoreal/config")
-def photoreal_config() -> JSONResponse:
-    """Where the photoreal page finds the GPU frame stream (empty = fallback)."""
+def photoreal_config(avatar_id: str = "") -> JSONResponse:
+    """GPU endpoint plus identity-safe readiness for the requested avatar."""
+    try:
+        avatar = avatars.load(avatar_id or settings.default_avatar_id)
+        renderer = avatar.renderer_readiness
+    except (FileNotFoundError, ValueError):
+        return JSONResponse(
+            {"error": "face_unavailable", "avatar_id": avatar_id},
+            status_code=404,
+            headers={"Cache-Control": "no-store"},
+        )
     return JSONResponse(
-        {"stream_url": settings.gpu_stream_url},
+        {
+            "stream_url": settings.gpu_stream_url,
+            "avatar_id": avatar.id,
+            "face_ready": renderer["photoreal"]["ready"],
+            "fallback": renderer["fallback"],
+        },
         headers={"Cache-Control": "no-store"},
     )
 
 
 @app.get("/laura-reference.jpg")
-def photoreal_reference(avatar_id: str = "") -> FileResponse:
-    """Static reference portrait — the photoreal page's no-GPU fallback face.
-    Per-avatar when gpu/assets/reference-<id>.jpg exists (the wake-up window
-    must show the RIGHT face); the legacy Laura file otherwise. The route name
-    predates multi-avatar and is kept for cached pages."""
+def photoreal_reference(avatar_id: str = "") -> Response:
+    """Return only the requested avatar's portrait; never another identity."""
     assets = REPO_ROOT_DIR / "gpu" / "assets"
-    safe = "".join(c for c in avatar_id.lower() if c.isalnum() or c in "-_")
-    per_avatar = assets / f"reference-{safe}.jpg"
+    if not avatar_id:
+        # Legacy/manual preview without an identity remains Laura-only.
+        path = assets / "reference.jpg"
+    elif not re.fullmatch(r"[a-z0-9_-]{1,64}", avatar_id.lower()):
+        return JSONResponse({"error": "face_unavailable"}, status_code=404)
+    else:
+        try:
+            avatar = avatars.load(avatar_id.lower())
+            name = avatar.photoreal_reference or f"reference-{avatar.id}.jpg"
+            path = assets / name if Path(name).name == name else assets / "__missing__"
+        except FileNotFoundError:
+            path = assets / "__missing__"
+    if not path.is_file():
+        return JSONResponse(
+            {"error": "face_unavailable", "avatar_id": avatar_id}, status_code=404
+        )
     return FileResponse(
-        per_avatar if safe and per_avatar.exists() else assets / "reference.jpg",
+        path,
         media_type="image/jpeg",
         headers={"Cache-Control": "public, max-age=86400"},
     )
@@ -1302,8 +1422,9 @@ def talk_avatar_model(avatar_id: str) -> Response:
     """Per-avatar 3D model for /talk (laura.glb, cedric.glb, …), served
     same-origin on purpose: Ready Player Me's CDN shutdown (Jan 2026) killed our
     previous third-party model URL, so the models (TalkingHead-repo samples) are
-    vendored into frontend/. /talk HEAD-probes /{avatar_id}.glb and falls back to
-    /laura.glb, so a missing model 404s here without ever breaking the page.
+    vendored into frontend/. /talk HEAD-probes /{avatar_id}.glb and may fall
+    back only to that same avatar's configured renderer; a missing model 404s
+    explicitly and never borrows another identity.
     HEAD must be explicit — FastAPI's @app.get alone 405s it, which would have
     silently defeated the probe (curl -I caught this; FileResponse handles HEAD
     natively). Whitelisted to simple ids resolving to real files — never a
@@ -1560,7 +1681,7 @@ async def _start_avatar_session(
     avatar_url = (
         f"{settings.public_base_url.rstrip('/')}/{avatar.page.strip('/')}"
         f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
-        f"&body={avatar.talk_body}"
+        f"&body={avatar.talk_body}&face_fallback={avatar.face_fallback}"
     )
     # ── entitlement gate (PR B) — THE single choke point for paid bots ──
     # Every entry point (manual start, calendar auto-join, Gmail watcher,
@@ -1592,18 +1713,33 @@ async def _start_avatar_session(
         if usage_bot_id:
             try:
                 await run_in_threadpool(
-                    entitlements.close_usage, usage_bot_id, 0, "dispatch_failed"
+                    entitlements.close_usage, org_id, usage_bot_id, 0, "dispatch_failed"
                 )
             except Exception:  # noqa: BLE001 — reconcile's restore heals orphans
                 print("[usage] dispatch_failed close deferred to reconcile", flush=True)
         raise
     realtime_capability = str(bot.pop("_laura_realtime_capability", "") or "")
-    if usage_bot_id:
-        await _assign_usage_bot_id(usage_bot_id, bot["id"])
     session = store.create(
         bot_id=bot["id"], meeting_url=meeting_url, avatar_id=avatar.id,
         org_id=org_id,
     )
+    if usage_bot_id and not await _assign_usage_bot_id(
+        org_id, usage_bot_id, bot["id"]
+    ):
+        # A born bot without a durable usage binding is never returned to the
+        # customer. The hardened finalize attempts an immediate verified leave;
+        # if Recall is temporarily unreachable the kept local session lets the
+        # reconcile pass repair the provisional row and retry the stop.
+        await _finalize_session(
+            bot["id"], source="usage_binding_failed",
+            usage_reason="usage_binding_failed",
+        )
+        if store.get(bot["id"]) is None:
+            await run_in_threadpool(
+                entitlements.close_usage,
+                org_id, usage_bot_id, 0, "usage_binding_failed",
+            )
+        raise entitlements.EntitlementsUnavailable("usage_bot_binding_failed")
     if realtime_capability and not store.register_recall_realtime_capability(
         bot["id"], realtime_capability
     ):
@@ -1991,6 +2127,7 @@ async def _finalize_session(
     failed_code: str = "",
     usage_reason: str = "",
     usage_end_epoch: float | None = None,
+    artifact_org_id: str | None = None,
 ) -> dict | None:
     """End a session once: stop both vendors, build + store the artifact.
 
@@ -2009,10 +2146,19 @@ async def _finalize_session(
     natural ends default to 'ended') and Recall's own terminal timestamp when
     the caller had one. The close itself is idempotent (first close wins), so
     the same bot finalizing via manual end + webhook + reconcile still writes
-    consumed_seconds exactly once.
+    consumed_seconds exactly once. artifact_org_id is accepted only from an
+    already-authenticated endpoint; it enables an RLS-scoped idempotent read
+    after process replacement without adding a global bot-id lookup.
     """
     session = store.get(bot_id)
     if session is None:
+        # Without a trusted org there is deliberately no global Postgres
+        # bot-id lookup. Same-process internal idempotency still hits the warm
+        # cache; authenticated archive endpoints pass their org explicitly.
+        if artifact_org_id is not None:
+            return await run_in_threadpool(
+                store.get_artifact, bot_id, org_id=artifact_org_id
+            )
         return store.get_artifact(bot_id)
     # A prior finalize already built + delivered this session's artifact but its
     # Recall meter-stop (leave_call) was not confirmed, so the session was KEPT
@@ -2023,7 +2169,9 @@ async def _finalize_session(
     # /end still answers 200 with the deliverable.
     if getattr(session, "leave_pending", False):
         await _retry_leave(bot_id, session)
-        return store.get_artifact(bot_id)
+        return await run_in_threadpool(
+            store.get_artifact, bot_id, org_id=session.org_id
+        )
     # Concurrency guard. store.remove(bot_id) — the thing that makes the
     # `session is None` check above idempotent — only runs at the very END of
     # the body, past several awaits (the multi-second post_meeting LLM call
@@ -2033,7 +2181,9 @@ async def _finalize_session(
     # Cedric. Check-and-add is synchronous — no await between here and the add —
     # so it is atomic under asyncio's single-threaded loop.
     if bot_id in _finalizing:
-        return store.get_artifact(bot_id)
+        return await run_in_threadpool(
+            store.get_artifact, bot_id, org_id=session.org_id
+        )
     _finalizing.add(bot_id)
     try:
         return await _finalize_session_locked(
@@ -2057,6 +2207,9 @@ async def _finalize_session_locked(
     if failed_code == "fatal":
         cedric.notify_failed(session, bot_id, failed_code)  # CEDRIC
     transcript_text = session.transcript_text()
+    # Raw transcript retains agent output for the archive. Intelligence,
+    # decisions and actions use human evidence only.
+    analysis_transcript_text = session.transcript_text(include_agents=False)
 
     # Stop billing on both vendors. leave_call is the Recall meter-stop and now
     # RAISES on a persistent failure (retry=True + raise_for_status). The stop is
@@ -2105,16 +2258,28 @@ async def _finalize_session_locked(
     # shown to the summarizer as "already captured, do not re-extract" (dedup
     # prevention at the source, cross-language included) and then merged into
     # the artifact's actions[] below.
-    queued_actions = list(getattr(session, "queued_actions", None) or [])
-    if transcript_text.strip():
+    queued_actions = await run_in_threadpool(
+        outbox.begin_action_finalize, session.org_id, bot_id
+    )
+    if not queued_actions:
+        # Compatibility for synthetic/key-free sessions captured before the
+        # durable queue existed.
+        queued_actions = list(getattr(session, "queued_actions", None) or [])
+    if analysis_transcript_text.strip():
         avatar = avatars.load(session.avatar_id)
+        analysis_state = session.meeting_state
+        if analysis_state is None:
+            analysis_state = meeting_state.build_from_utterances(
+                avatar, session.human_transcript()
+            )
         try:
             artifact = await run_in_threadpool(
                 lambda: post_meeting(
                     avatar,
-                    transcript_text,
+                    analysis_transcript_text,
                     context=(integration or {}).get("brief", ""),  # CEDRIC: brief-grounded summary
                     live_actions=queued_actions,
+                    state=analysis_state,
                 )
             )
         except Exception as e:  # noqa: BLE001 — a transient post-model failure must
@@ -2132,7 +2297,10 @@ async def _finalize_session_locked(
             )
             try:
                 artifact = await run_in_threadpool(
-                    degraded_post_meeting, avatar, transcript_text
+                    degraded_post_meeting,
+                    avatar,
+                    analysis_transcript_text,
+                    state=analysis_state,
                 )
             except Exception as e2:  # noqa: BLE001 — the degraded rebuild ALSO failed.
                 # This is no longer a transient LLM blip: degraded_post_meeting
@@ -2198,7 +2366,17 @@ async def _finalize_session_locked(
             session.transcript[-1].ts - session.transcript[0].ts
         )
 
-    store.save_artifact(bot_id, artifact, org_id=session.org_id)
+    # PRODUCTION DURABILITY ORDER: for orchestrated sessions, commit the
+    # transcript-free session.ended envelope to Postgres BEFORE any local
+    # artifact write, ledger write, or session cleanup. If Postgres is
+    # configured but unavailable, OutboxUnavailable propagates and the local
+    # session remains available for a retry; we never claim completion while
+    # the only customer delivery record could still be lost.
+    orchestrated = cedric.deliver_ended(integration, bot_id, artifact)  # CEDRIC
+
+    await run_in_threadpool(
+        store.save_artifact, bot_id, artifact, org_id=session.org_id
+    )
     # Cross-meeting memory: fold this meeting's extracted facts into the
     # ledger. Best-effort — memory must never block the cleanup below
     # (session removal + GPU meter signal), so a ledger hiccup is swallowed.
@@ -2209,7 +2387,6 @@ async def _finalize_session_locked(
         )
     except Exception:
         pass
-    orchestrated = cedric.deliver_ended(integration, bot_id, artifact)  # CEDRIC
     if orchestrated:
         pass  # orchestrated session: the orchestrator owns delivery, skip autopilot
     elif settings.autopilot_deliver:
@@ -2236,7 +2413,7 @@ async def _finalize_session_locked(
         # Meter CONFIRMED off → NOW close the durable usage row (first close
         # wins; idempotent across manual end + webhook + reconcile). Best-effort
         # — a billing hiccup leaves the row for the reconcile restore pass.
-        await _close_usage_for(bot_id, usage_end_epoch, usage_close_reason)
+        await _close_usage_for(session.org_id, bot_id, usage_end_epoch, usage_close_reason)
         store.remove(bot_id)
         # Photoreal only: last session out turns off the GPU meter (after a grace
         # window, in case another meeting starts right away).
@@ -2292,7 +2469,13 @@ async def end_session(bot_id: str, request: Request) -> JSONResponse:
         live = store.get(bot_id)
         if live is not None and live.org_id != token_org:
             return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    artifact = await _finalize_session(bot_id, source="manual")
+    artifact_scope = (
+        token_org
+        or (str(user["org_id"]) if user is not None else None)
+    )
+    artifact = await _finalize_session(
+        bot_id, source="manual", artifact_org_id=artifact_scope
+    )
     if artifact is None:
         # _finalize_session returns None only when the session is already gone
         # AND no artifact was stored — i.e. a genuinely unknown bot, OR a
@@ -2302,6 +2485,11 @@ async def end_session(bot_id: str, request: Request) -> JSONResponse:
         # answer 202 "finalizing" while another path owns it.
         if bot_id in _finalizing or store.get(bot_id) is not None:
             return JSONResponse({"ok": True, "finalizing": bot_id}, status_code=202)
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
+    artifact_org = str(artifact.get("org_id") or "")
+    if user is not None and artifact_org not in ("", str(user["org_id"])):
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
+    if token_org is not None and artifact_org != token_org:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     return JSONResponse(cedric.wire_artifact(artifact))  # CEDRIC: PII stays home
 
@@ -2373,7 +2561,7 @@ async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
     # PR B: meter confirmed off → release the usage row (a never-joined
     # scheduled bot closes 0; a live one closes with its elapsed) so the org
     # can book its next meeting.
-    await _close_usage_for(bot_id, None, "cancelled")
+    await _close_usage_for(session.org_id, bot_id, None, "cancelled")
     store.remove(bot_id)
     gpu_runtime.on_session_ended(len(store.all_sessions()))
     runpod_runtime.on_session_ended(len(store.all_sessions()))
@@ -2394,7 +2582,9 @@ async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -
     if machine_org is None:
         if err := cedric.auth_error(request):  # CEDRIC
             return err
-    artifact = store.get_artifact(bot_id)
+    artifact = await run_in_threadpool(
+        store.get_artifact, bot_id, org_id=machine_org
+    )
     # Wrong-org == not-found, byte-identical (no existence oracle for per-org
     # bearers). Adversarial review 2026-07-13, should-fix 2.
     if artifact is None or (
@@ -2483,7 +2673,7 @@ def session_artifact(bot_id: str, request: Request) -> JSONResponse:
         if org_scoped and live.org_id != machine_org:
             return JSONResponse({"error": "unknown bot_id"}, status_code=404)
         return JSONResponse({"status": "in_progress", "bot_id": bot_id})
-    artifact = store.get_artifact(bot_id)
+    artifact = store.get_artifact(bot_id, org_id=machine_org)
     if artifact is None or (
         org_scoped and str(artifact.get("org_id") or "") != machine_org
     ):
@@ -2510,7 +2700,10 @@ async def redeliver_artifact(bot_id: str, request: Request) -> JSONResponse:
             if err := auth.gate(request):
                 return err
 
-    artifact = store.get_artifact(bot_id)
+    lookup_org = str(user["org_id"]) if user is not None else token_org
+    artifact = await run_in_threadpool(
+        store.get_artifact, bot_id, org_id=lookup_org
+    )
     if artifact is None:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     artifact_org = str(artifact.get("org_id") or "")
@@ -2558,7 +2751,19 @@ def meetings_list(request: Request) -> JSONResponse:
         if machine_org is None:
             if err := auth.gate(request):
                 return err
-    artifacts = store.list_artifacts()
+    artifact_scope = None
+    if store.durable_artifacts_enabled():
+        artifact_scope = (
+            machine_org
+            or (str(user["org_id"]) if user is not None else None)
+        )
+        # A deployment-level service bearer is never permission to enumerate
+        # every tenant. In production it retains only the Demo workspace.
+        if artifact_scope is None:
+            artifact_scope = settings.demo_org_id
+    # Key-free SQLite intentionally keeps its historical global read followed
+    # by the legacy/unowned visibility filter below.
+    artifacts = store.list_artifacts(artifact_scope)
     if machine_org is not None:
         artifacts = [
             a
@@ -2715,8 +2920,15 @@ async def _refresh_rolling_summary(
 ) -> None:
     try:
         cutoff = max(0, len(session.transcript) - _SUMMARY_KEEP_RECENT)
-        lines = session.transcript[session.summary_upto : cutoff]
+        lines = [
+            u
+            for u in session.transcript[session.summary_upto : cutoff]
+            if u.speaker_kind != "agent"
+        ]
         if not lines:
+            # Progress the raw-transcript cursor even when this entire fold was
+            # agent output, otherwise every future human line retries it.
+            session.summary_upto = cutoff
             return
         text = "\n".join(f"{u.speaker}: {u.text}" for u in lines)
         notes = await run_in_threadpool(
@@ -2926,7 +3138,8 @@ async def _usage_warn(session: store.Session, deadline: float) -> None:
         return
     try:
         left = deadline - time.time()
-        heard = session.transcript[-1].text if session.transcript else ""
+        human = session.human_transcript()
+        heard = human[-1].text if human else ""
         if left <= 60 and left > 5 and not session.usage_warned_1m:
             session.usage_warned_1m = True
             session.usage_warned_5m = True  # never follow with the milder one
@@ -3243,14 +3456,17 @@ async def _lower_hand(session: store.Session) -> None:
     await _send_avatar_control(session, {"type": "lower_hand"})
 
 
-def _is_own_speech(avatar_name: str, speaker: str) -> bool:
-    """True when a transcript line is the avatar's OWN voice — the meeting bot
-    hears the avatar too. The Recall bot's display name is the avatar's name
-    (recall_client.create_bot(bot_name=avatar.name)), so one comparison covers
-    both; no hardcoded persona name, so a human participant who shares a name
-    with a DIFFERENT avatar is never silenced."""
-    return speaker.strip().lower() == avatar_name.strip().lower()
+def _is_own_speech(
+    avatar_name: str,
+    speaker: str,
+    speaker_kind: str = "human",
+) -> bool:
+    """Own speech is an identity classification, never a name comparison.
 
+    avatar_name/speaker remain in the signature for call-site compatibility;
+    a real human is allowed to share the avatar's display name.
+    """
+    return speaker_kind == "agent"
 
 def _in_opening_grace(session: store.Session) -> bool:
     """Opening settle-in ("wait to be called"): True while she should stay silent
@@ -3403,7 +3619,14 @@ _FILLER_ONLY = re.compile(
 )
 
 
-def _should_barge_in(session: store.Session, avatar_name: str, speaker: str, text: str) -> bool:
+def _should_barge_in(
+    session: store.Session,
+    avatar_name: str,
+    speaker: str,
+    text: str,
+    *,
+    speaker_kind: str = "human",
+) -> bool:
     """A human talked while Laura is (estimated) still speaking -> interrupt her.
 
     Not her own transcribed speech (the meeting bot hears her too), not her own
@@ -3412,7 +3635,7 @@ def _should_barge_in(session: store.Session, avatar_name: str, speaker: str, tex
     """
     if not settings.barge_in_enabled:
         return False
-    if _is_own_speech(avatar_name, speaker):
+    if _is_own_speech(avatar_name, speaker, speaker_kind):
         return False
     if len(text.split()) < 3:
         return False
@@ -3615,7 +3838,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             avatar_url = (
                 f"{settings.public_base_url.rstrip('/')}/{avatar.page.strip('/')}"
                 f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
-                f"&body={avatar.talk_body}"
+                f"&body={avatar.talk_body}&face_fallback={avatar.face_fallback}"
             )
             # Entitlement gate (PR B): calendar auto-join takes this INLINED
             # dispatch path (not _start_avatar_session), so it must be gated
@@ -3644,7 +3867,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                     try:
                         await run_in_threadpool(
                             entitlements.close_usage,
-                            usage_bot_id, 0, "dispatch_failed",
+                            settings.demo_org_id, usage_bot_id, 0, "dispatch_failed",
                         )
                     except Exception:  # noqa: BLE001 — reconcile heals orphans
                         pass
@@ -3652,8 +3875,6 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             realtime_capability = str(
                 bot.pop("_laura_realtime_capability", "") or ""
             )
-            if usage_bot_id:
-                await _assign_usage_bot_id(usage_bot_id, bot["id"])
             # Calendar auto-join has no authenticated principal (a webhook on
             # Laura's one Google account) → the Demo org (§5, intrinsically
             # single-tenant until calendar connections become per-org).
@@ -3661,6 +3882,22 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id,
                 org_id=settings.demo_org_id,
             )
+            if usage_bot_id and not await _assign_usage_bot_id(
+                settings.demo_org_id, usage_bot_id, bot["id"]
+            ):
+                await _finalize_session(
+                    bot["id"], source="usage_binding_failed",
+                    usage_reason="usage_binding_failed",
+                )
+                if store.get(bot["id"]) is None:
+                    await run_in_threadpool(
+                        entitlements.close_usage,
+                        settings.demo_org_id, usage_bot_id, 0,
+                        "usage_binding_failed",
+                    )
+                raise entitlements.EntitlementsUnavailable(
+                    "usage_bot_binding_failed"
+                )
             if realtime_capability and not store.register_recall_realtime_capability(
                 bot["id"], realtime_capability
             ):
@@ -3742,7 +3979,8 @@ def _closing_signal(session: store.Session, text: str) -> bool:
     trigger, never bypass a safety gate."""
     if detect_closing(text):
         return True
-    prev_ts = session.transcript[-2].ts if len(session.transcript) >= 2 else 0.0
+    human = session.human_transcript()
+    prev_ts = human[-2].ts if len(human) >= 2 else 0.0
     return closing_fallback_fires(
         enabled=settings.closing_fallback_enabled,
         now=time.time(),
@@ -3751,6 +3989,78 @@ def _closing_signal(session: store.Session, text: str) -> bool:
         idle_seconds=settings.closing_fallback_idle_seconds,
         min_meeting_seconds=settings.closing_fallback_min_meeting_seconds,
     )
+
+
+def _capture_digest(*parts: object) -> str:
+    canonical = "\x1f".join(str(part or "") for part in parts)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _recall_capture_identity(
+    payload: dict,
+    headers: object,
+    *,
+    signed: bool,
+    org_id: str,
+    bot_id: str,
+    participant: dict,
+    words: list,
+    text: str,
+) -> tuple[str, str]:
+    """Build PII-free hashes that survive webhook retry and process restart.
+
+    Recall's normalized final has no per-utterance id.  Its transcript id plus
+    participant and relative word interval is the stable event identity.  A
+    verified Svix/webhook id wins when present.  Legacy payloads without timing
+    fall back to a bounded same-speaker/text fingerprint in the outbox DAL.
+    """
+    get_header = getattr(headers, "get", lambda _name, _default="": _default)
+    webhook_id = ""
+    if signed:
+        webhook_id = str(
+            get_header("webhook-id", "")
+            or get_header("svix-id", "")
+            or ""
+        ).strip()
+    data = payload.get("data") or {}
+    transcript_id = str((data.get("transcript") or {}).get("id") or "")
+    recording_id = str((data.get("recording") or {}).get("id") or "")
+    endpoint_id = str((data.get("realtime_endpoint") or {}).get("id") or "")
+    participant_id = str(participant.get("id") or participant.get("name") or "")
+    normalized_text = " ".join((text or "").split()).casefold()
+
+    def relative(word: dict, field: str) -> str:
+        try:
+            value = float(((word.get(field) or {}).get("relative")))
+        except (TypeError, ValueError, AttributeError):
+            return ""
+        if not math.isfinite(value):
+            return ""
+        return format(value, ".6f")
+
+    start = relative(words[0], "start_timestamp") if words else ""
+    end = ""
+    if words:
+        end = relative(words[-1], "end_timestamp") or relative(
+            words[-1], "start_timestamp"
+        )
+
+    event_key = ""
+    if webhook_id:
+        event_key = _capture_digest(
+            "recall-webhook-v1", org_id, bot_id, webhook_id
+        )
+    elif transcript_id and start:
+        event_key = _capture_digest(
+            "recall-final-v1", org_id, bot_id, transcript_id,
+            recording_id, endpoint_id, participant_id, start, end,
+            normalized_text,
+        )
+    fingerprint = _capture_digest(
+        "recall-final-fallback-v1", org_id, bot_id,
+        participant_id, normalized_text,
+    )
+    return event_key, fingerprint
 
 
 # ───────────────────────── recall webhook ──────────────────────────
@@ -3833,13 +4143,25 @@ async def recall_webhook(request: Request) -> JSONResponse:
         words = data.get("words", [])
         text = " ".join(w.get("text", "") for w in words).strip()
         participant = data.get("participant") or {}
-        speaker = session.resolve_speaker(participant.get("name"), participant.get("id"))
+        identity = session.resolve_participant(
+            participant.get("name"),
+            participant.get("id"),
+            metadata=participant,
+        )
+        speaker = identity["name"]
+        speaker_kind = identity["kind"]
         if not text:
             return JSONResponse({"ok": True})
         avatar = avatars.load(session.avatar_id)
-        if _should_barge_in(session, avatar.name, speaker, text):
+        if _should_barge_in(
+            session,
+            avatar.name,
+            speaker,
+            text,
+            speaker_kind=speaker_kind,
+        ):
             await _make_avatar_stop(session)
-        if _is_own_speech(avatar.name, speaker):
+        if _is_own_speech(avatar.name, speaker, speaker_kind):
             return JSONResponse({"ok": True, "partial": True})
         # Her own echo through an open mic is not a human talking: it must not
         # ack, backchannel, or (via the stamp below) cancel a deference wait.
@@ -3915,15 +4237,17 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if session is not None:
             data = payload.get("data", {}).get("data", {})
             p = data.get("participant") or {}
-            label = session.resolve_speaker(p.get("name"), p.get("id"))
+            key = str(p.get("id")) if p.get("id") is not None else ""
+            is_new = bool(key and key not in session.participants)
+            identity = session.participant_event(
+                p.get("name"),
+                p.get("id"),
+                here=(event == "participant_events.join"),
+                metadata=p,
+            )
+            label = identity["name"]
             avatar = avatars.load(session.avatar_id)
-            if not _is_own_speech(avatar.name, label):  # the bot joins too
-                key = str(p.get("id")) if p.get("id") is not None else label
-                is_new = key not in session.participants
-                session.participant_event(
-                    p.get("name"), p.get("id"),
-                    here=(event == "participant_events.join"),
-                )
+            if identity["kind"] != "agent":
                 # ── footing: greet a late joiner by name ──
                 # Only when the meeting is genuinely underway (start-of-call
                 # joins greet each other anyway), only for NEW named humans,
@@ -3933,7 +4257,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     event == "participant_events.join"
                     and settings.greet_joiners
                     and is_new
-                    and len(session.transcript) >= 4
+                    and len(session.human_transcript()) >= 4
                     and not _in_opening_grace(session)  # not while the room settles
                     and not label.lower().startswith("guest")
                     and time.time() > session.speaking_until
@@ -4003,23 +4327,52 @@ async def recall_webhook(request: Request) -> JSONResponse:
     words = data.get("words", [])
     text = " ".join(w.get("text", "") for w in words).strip()
     participant = data.get("participant") or {}
-    speaker = session.resolve_speaker(participant.get("name"), participant.get("id"))
+    identity = session.resolve_participant(
+        participant.get("name"),
+        participant.get("id"),
+        metadata=participant,
+    )
+    speaker = identity["name"]
+    speaker_id = identity["id"]
+    speaker_kind = identity["kind"]
     if not text:
         return JSONResponse({"ok": True})
+    capture_event_key, capture_fingerprint = _recall_capture_identity(
+        payload,
+        request.headers,
+        signed=has_signature,
+        org_id=session.org_id,
+        bot_id=bot_id,
+        participant=participant,
+        words=words,
+        text=text,
+    )
 
     # Her own voice re-entering through a participant's open mic: not a human
-    # line. Keep it out of the transcript (it would pollute per-person
-    # tracking and could even get ANSWERED as if a person said it).
+    # line. Keep it out of the transcript entirely.
     if _is_echo(session, text):
         return JSONResponse({"ok": True, "spoke": False, "reason": "echo"})
 
-    session.add_utterance(speaker, text)
+    # Agent speech may remain in the transcript for audit/presentation, but it
+    # must exit before barge-in, MeetingState, actions, readiness or prompts.
+    session.add_utterance(
+        speaker,
+        text,
+        participant_id=speaker_id,
+        speaker_kind=speaker_kind,
+    )
     avatar = avatars.load(session.avatar_id)
+    if _is_own_speech(avatar.name, speaker, speaker_kind):
+        return JSONResponse({"ok": True, "spoke": False, "reason": "own speech"})
 
     # ── barge-in: never talk over a human ──
-    # If someone starts speaking while Laura is still talking, stop her mouth
-    # first (the page cancels TTS instantly), then process what they said.
-    if _should_barge_in(session, avatar.name, speaker, text):
+    if _should_barge_in(
+        session,
+        avatar.name,
+        speaker,
+        text,
+        speaker_kind=speaker_kind,
+    ):
         await _make_avatar_stop(session)
 
     # ── silent intelligence layer ──
@@ -4027,20 +4380,20 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # owners, deadlines, risks) BEFORE any speak decision. Pure regex — adds no
     # latency to the live path — and informs both the closing intervention below
     # and the post-meeting artifact.
-    state = meeting_state.observe(session, avatar, speaker, text)
+    state = meeting_state.observe(
+        session,
+        avatar,
+        speaker,
+        text,
+        participant_id=speaker_id,
+        speaker_kind=speaker_kind,
+    )
 
     # ── rolling meeting notes (background) ──
     # Every ~20 lines, fold the transcript older than the live history window
     # into short running notes (fast model, off the hot path) so her context
     # is the WHOLE meeting, not just the last 8 lines.
     _maybe_refresh_rolling_summary(session, avatar)
-
-    # ── never converse with yourself ──
-    # The bot transcribes Laura's own speech too. Answering it creates greeting
-    # loops ("I'm doing well…" -> hears it -> replies -> …). Her lines stay in
-    # the transcript and state above, but never reach the speak gates below.
-    if _is_own_speech(avatar.name, speaker):
-        return JSONResponse({"ok": True, "spoke": False, "reason": "own speech"})
 
     # Cross-meeting memory: lazily (re)load after a process restart, scoped to
     # this session's org (never another tenant's open items in the live prompt).
@@ -4071,7 +4424,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
         and not session.in_cooldown(avatar.speak_cooldown_seconds)
     ):
         flag = await run_in_threadpool(
-            proactive_flag, avatar, session.transcript_text(), state=state, memory=memory
+            proactive_flag,
+            avatar,
+            session.transcript_text(include_agents=False),
+            state=state,
+            memory=memory,
         )
         conf = float(flag.get("confidence", 0.0))
         if flag.get("should_speak") and flag.get("line") and conf >= settings.proactive_min_confidence:
@@ -4116,16 +4473,81 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # (decision.py) rejects acknowledgement openers and wrap-up lines.
     pending = getattr(session, "last_capture", None)
     if pending is not None:
-        p_item, p_speaker, p_ts = pending
+        p_item, p_speaker, p_ts = pending[:3]
+        p_event_key = pending[3] if len(pending) > 3 else ""
+        p_fingerprint = pending[4] if len(pending) > 4 else ""
+        same_source = bool(
+            (capture_event_key and capture_event_key == p_event_key)
+            or (
+                not capture_event_key
+                and capture_fingerprint
+                and capture_fingerprint == p_fingerprint
+            )
+        )
+        if same_source:
+            # The 2xx for either the initial final or its continuation was
+            # lost. Preserve the continuation window; clearing last_capture
+            # here would make the genuinely next ASR fragment disappear.
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": False,
+                    "action_capture": True,
+                    "duplicate": True,
+                }
+            )
         if (
             not called
-            and speaker == p_speaker
+            and speaker_id == p_speaker
             and time.time() - p_ts < 4.0
             and is_capture_continuation(text)
         ):
-            p_item["action"] = " ".join((p_item["action"] + " " + text).split())[:300]
-            session.last_capture = (p_item, p_speaker, time.time())
-            return JSONResponse({"ok": True, "spoke": False, "capture_extended": True})
+            try:
+                updated_item, extended = await run_in_threadpool(
+                    tools.extend_action_once,
+                    session,
+                    p_item,
+                    text,
+                    source_event_key=capture_event_key,
+                    source_fingerprint=capture_fingerprint,
+                )
+            except outbox.ActionCaptureClosed:
+                session.last_capture = None
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "spoke": False,
+                        "capture_rejected": "meeting_finalizing",
+                    }
+                )
+            if extended:
+                session.last_capture = (
+                    updated_item,
+                    p_speaker,
+                    time.time(),
+                    capture_event_key,
+                    capture_fingerprint,
+                )
+            else:
+                # An older ASR final can replay after a newer continuation.
+                # Durable dedupe correctly rejects it; do not let that replay
+                # roll the in-memory source identity backward or refresh the
+                # four-second continuation window.
+                session.last_capture = (
+                    updated_item,
+                    p_speaker,
+                    p_ts,
+                    p_event_key,
+                    p_fingerprint,
+                )
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": False,
+                    "capture_extended": True,
+                    "duplicate": not extended,
+                }
+            )
         session.last_capture = None
 
     # ── voice stop ("Laura, stop / aspetta") ──
@@ -4182,7 +4604,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if not leave_now and addressed is not None:
             a_speaker, a_ts, a_text = addressed
             if (
-                speaker == a_speaker
+                speaker_id == a_speaker
                 and time.time() - a_ts < 8.0
                 # Addressee guard: the follow-up must START like a command
                 # aimed at the avatar ("you can…", "esci…") — a leading name
@@ -4241,9 +4663,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # a new speaker or a stale (>8s) window clears the arm, so it can never
     # linger into unrelated speech.
     if called:
-        session.last_addressed = (speaker, time.time(), text)
+        session.last_addressed = (speaker_id, time.time(), text)
     elif getattr(session, "last_addressed", None) is not None and (
-        speaker != session.last_addressed[0]
+        speaker_id != session.last_addressed[0]
         or time.time() - session.last_addressed[1] >= 8.0
     ):
         session.last_addressed = None
@@ -4298,16 +4720,21 @@ async def recall_webhook(request: Request) -> JSONResponse:
         and not session.quiet_nudge_done
         and not _in_opening_grace(session)  # never activated → stays a silent guest
         and _closing_signal(session, text)
-        and len(session.transcript) >= 12
+        and len(session.human_transcript()) >= 12
         and not session.in_cooldown(avatar.speak_cooldown_seconds)
     ):
-        spoken_names = {u.speaker.strip().lower() for u in session.transcript}
-        quiet = [
-            n
-            for n in session.roster(avatar.name)
-            if n.strip().lower() not in spoken_names
-            and not n.lower().startswith("guest")
+        # Names are presentation only. Consume one spoken occurrence per
+        # roster occurrence so two humans called Alex don't collapse together.
+        spoken_names = [
+            u.speaker.strip().lower() for u in session.human_transcript()
         ]
+        quiet = []
+        for name in session.roster(avatar.name):
+            normalized = name.strip().lower()
+            if normalized in spoken_names:
+                spoken_names.remove(normalized)
+            elif not normalized.startswith("guest"):
+                quiet.append(name)
         if quiet:
             session.quiet_nudge_done = True
             nudge = _line_for(
@@ -4357,7 +4784,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # (a partial lands or the transcript grows), yield silently. Deliberately
     # AFTER the cheap gates — a line that would be skipped anyway never waits.
     if not called and not followup and settings.deference_seconds > 0:
-        _defer_mark = len(session.transcript)
+        _defer_mark = len(session.human_transcript())
         _defer_t0 = time.time()
         # Size ONLY the wait — the yield decision below is unchanged. Adaptation
         # is off by default (returns deference_seconds verbatim).
@@ -4378,7 +4805,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # own the floor — wait the MAX rather than the sized window so she never
         # clips their volley. Suppression-only (still just a wait).
         if settings.cross_talk_suppression_enabled and in_locked_dyad(
-            session.transcript,
+            session.human_transcript(),
             avatar_name=avatar.name,
             now=_defer_t0,
             min_turns=settings.cross_talk_min_turns,
@@ -4388,7 +4815,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             _defer_wait = max(_defer_wait, settings.deference_max_seconds)
         await asyncio.sleep(_defer_wait)
         if (
-            len(session.transcript) > _defer_mark
+            len(session.human_transcript()) > _defer_mark
             or session.last_human_partial_at > _defer_t0
         ):
             return JSONResponse(
@@ -4417,12 +4844,57 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if called and wants_action_capture(question) and not wants_web_search(question):
         # detect_wake already stripped the wake word: `question` is the ask
         # itself ("please schedule a follow-up with Marco on Friday").
-        item = tools.capture_action(session, question.strip())
+        # One bounded tenant transaction, off the shared event loop. No
+        # callback network occurs on the live transcript path.
+        try:
+            item, created = await run_in_threadpool(
+                tools.capture_action_once,
+                session,
+                question.strip(),
+                source_event_key=capture_event_key,
+                source_fingerprint=capture_fingerprint,
+            )
+        except outbox.ActionCaptureClosed:
+            session.last_capture = None
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": False,
+                    "capture_rejected": "meeting_finalizing",
+                }
+            )
+        if not created:
+            # A restart may have dropped the in-memory continuation window.
+            # Re-arm it from the canonical durable row so the next genuine ASR
+            # fragment is not lost after this initial-final replay.
+            session.last_capture = (
+                item,
+                speaker_id,
+                time.time(),
+                capture_event_key,
+                capture_fingerprint,
+            )
+            # Recall retry after a lost 2xx: the original durable action and
+            # callback already own the acknowledgement. Never speak/kick twice.
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": False,
+                    "action_capture": True,
+                    "duplicate": True,
+                }
+            )
         # ASR often splits one ask across finals ("Cedric, can you send" +
         # "the recap by Friday"). Remember this capture so a same-speaker
         # follow-up within a few seconds extends its text (see the
         # continuation check after wake detection).
-        session.last_capture = (item, speaker, time.time())
+        session.last_capture = (
+            item,
+            speaker_id,
+            time.time(),
+            capture_event_key,
+            capture_fingerprint,
+        )
         if session.speech_generation != turn_gen:  # barge-in since the final landed
             return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
         line = _line_for(question, _QUEUE_LINES, _QUEUE_LINES_IT)
@@ -4501,7 +4973,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # interjection floor check below can tell whether a human took the floor while
     # she was generating (a new final landed, or a human partial arrived during
     # the generation window). Cheap ints — no latency on the hot path.
-    _interject_len0 = len(session.transcript)
+    _interject_len0 = len(session.human_transcript())
     _interject_t0 = time.time()
     try:
         async for sentence in iterate_in_threadpool(
@@ -4637,7 +5109,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # UNPROMPTED interjection — she falls to the audio-silent raised hand
             # (waiting to be invited) instead of talking over their volley.
             _dyad = settings.cross_talk_suppression_enabled and in_locked_dyad(
-                session.transcript,
+                session.human_transcript(),
                 avatar_name=avatar.name,
                 now=time.time(),
                 min_turns=settings.cross_talk_min_turns,
@@ -4657,7 +5129,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     # while she generated. Off → today's single trigger-time read.
                     transcript_grew=(
                         settings.interject_recheck_floor_at_speak
-                        and len(session.transcript) > _interject_len0
+                        and len(session.human_transcript()) > _interject_len0
                     ),
                     generation_elapsed=(
                         time.time() - _interject_t0

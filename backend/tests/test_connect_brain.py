@@ -90,6 +90,13 @@ def test_add_to_slack_start_carries_signed_org_state(client, monkeypatch):
     assert data["avatar_id"] == "cedric"
     assert data["channel"] == "#approvals"
     assert data["return_url"] == "https://laura.example/dashboard"
+    assert data["complete_url"] == (
+        "https://laura.example/dashboard/connections/brain/slack/complete"
+    )
+    row = store.connections_for_org(user["org_id"])[0]
+    assert row["config"]["pending_install_nonce"] == data["nonce"]
+    # Neither browser URL nor signed state contains the Cedric→Laura org token.
+    assert "org_token" not in data
 
 
 def test_slack_complete_hot_writes_registry_and_connection(client, monkeypatch):
@@ -141,13 +148,16 @@ def test_dashboard_uses_add_to_slack_not_team_id_field():
     assert "Slack team ID" not in dashboard
 
 
-def test_legacy_local_disconnect_is_retired(client):
+def test_legacy_local_disconnect_is_removed(client):
+    """The legacy DELETE route is gone entirely: the dashboard button posts to
+    /dashboard/connections/brain/disconnect (remote-revoke-first). A stray
+    DELETE must not resolve to any endpoint — and must never flip local state."""
     user = _login(client)
     store.set_connection(
         user["org_id"], "cedric", "cedric-brain", "connected", {"team_id": "T1"}
     )
     response = client.delete("/dashboard/connections/brain/cedric")
-    assert response.status_code == 410
+    assert response.status_code in (404, 405)
     assert store.connections_for_org(user["org_id"])[0]["status"] == "connected"
 
 def test_org_connections_scoped_to_owner(client, monkeypatch):

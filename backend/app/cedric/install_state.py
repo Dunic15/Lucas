@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 from ..config import settings
 
 _PURPOSE = b"laura-slack-install:"
+_ORG_TOKEN_PURPOSE = b"laura-org-token:"
 _TTL_SECONDS = 600
 
 
@@ -27,6 +28,24 @@ def _sign(payload: str) -> str:
     if not key:
         raise RuntimeError("brain provisioning is not configured")
     return hmac.new(key.encode(), _PURPOSE + payload.encode(), hashlib.sha256).hexdigest()
+
+
+def derive_org_token(org_id: str, nonce: str) -> str:
+    """Deterministic, retry-safe Cedric→Laura bearer for one verified install.
+
+    The raw token is returned only on the authenticated server-to-server
+    completion response. Laura persists SHA-256(raw) only. The purpose label is
+    deliberately distinct from Slack-state signing, and a new install nonce
+    rotates the credential while a lost-response retry derives the same value.
+    """
+    org = (org_id or "").strip()
+    install_nonce = (nonce or "").strip()
+    key = settings.cedric_orgs_token.strip()
+    if not key or not org or not install_nonce:
+        raise RuntimeError("brain provisioning is not configured")
+    material = f"{org}:{install_nonce}".encode()
+    digest = hmac.new(key.encode(), _ORG_TOKEN_PURPOSE + material, hashlib.sha256).digest()
+    return "laura_org_" + _b64(digest)
 
 
 def pack(
@@ -80,6 +99,24 @@ def unpack(state: str, *, now: float | None = None) -> dict | None:
     return data
 
 
+def install_url_and_state(
+    org_id: str,
+    avatar_id: str,
+    channel: str = "",
+    return_url: str = "",
+    complete_url: str = "",
+) -> tuple[str, str]:
+    """Build Cedric's stable install URL and return its opaque state for the
+    server-side pending-nonce checkpoint. The raw state goes only in the
+    browser redirect; no org bearer is embedded in it."""
+    orgs_url = settings.cedric_orgs_url.strip()
+    if not orgs_url:
+        raise RuntimeError("brain provisioning is not configured")
+    base = orgs_url.rstrip("/").rsplit("/api/laura/orgs", 1)[0]
+    state = pack(org_id, avatar_id, channel, return_url, complete_url)
+    return f"{base}/api/slack/install?{urlencode({'state': state})}", state
+
+
 def install_url(
     org_id: str,
     avatar_id: str,
@@ -87,9 +124,6 @@ def install_url(
     return_url: str = "",
     complete_url: str = "",
 ) -> str:
-    orgs_url = settings.cedric_orgs_url.strip()
-    if not orgs_url:
-        raise RuntimeError("brain provisioning is not configured")
-    base = orgs_url.rstrip("/").rsplit("/api/laura/orgs", 1)[0]
-    state = pack(org_id, avatar_id, channel, return_url, complete_url)
-    return f"{base}/api/slack/install?{urlencode({'state': state})}"
+    return install_url_and_state(
+        org_id, avatar_id, channel, return_url, complete_url
+    )[0]

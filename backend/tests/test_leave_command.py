@@ -191,7 +191,11 @@ def _transcript_payload(bot_id: str, speaker: str, text: str) -> dict:
             "bot": {"id": bot_id},
             "data": {
                 "words": [{"text": w} for w in text.split()],
-                "participant": {"name": speaker, "id": 1},
+                # Recall participant ids, not names, define continuity.
+                "participant": {
+                    "name": speaker,
+                    "id": f"speaker:{speaker.strip().lower()}",
+                },
             },
         },
     }
@@ -566,3 +570,4 @@ def test_webhook_split_leave_skips_dismissal_of_named_participant(monkeypatch, t
     assert calls["leave"] == 0
     assert store.get(bot_id) is not None
     store.remove(bot_id)
+

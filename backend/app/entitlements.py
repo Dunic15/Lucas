@@ -32,12 +32,12 @@ Latency: NOTHING here runs on the transcript→token hot path. The gate runs at
 session start, the clock at the ~60s reconcile pass — both via
 ``run_in_threadpool`` (sync engine) so the event loop never blocks.
 
-Role/RLS contract: identical to control_plane's (see its module docstring).
-Org-scoped operations SET ``app.current_org`` so RLS is exercised; bot_id
-lookups (``mark_in_call``/``close_usage``/``open_usage_rows``) are inherently
-cross-tenant — the org is the *answer* — and rely on the owner/BYPASSRLS role
-the control plane already requires. RLS remains the safety net for any
-lower-privileged role.
+Role/RLS contract: the runtime is always ``laura_app`` (NOSUPERUSER and
+NOBYPASSRLS). Every per-bot mutation/read requires its caller's org_id, sets
+transaction-local ``app.current_org`` before the first query, and includes
+org_id in the predicate. The only cross-tenant operation is restart recovery's
+read-only list of pending/active rows; it uses the narrow
+``laura_private.list_open_usage_sessions`` definer function.
 
 Nothing here ever logs transcripts, emails, tokens, or any PII.
 """
@@ -81,29 +81,99 @@ def _included_default() -> int:
 # ── internal SQL helpers (all run inside a caller-owned connection) ─────
 
 def _used_seconds(conn, org_id: str, *, exclude_bot_id: str | None = None) -> float:
-    """closed consumption + live elapsed of active rows (pending rows count 0).
-    ``exclude_bot_id`` leaves one row's OWN elapsed out (mark_in_call computes
-    the deadline for that row, so it must not count against itself)."""
+    """Consumption in the current paid period, or lifetime for the free plan."""
     from sqlalchemy import text
 
-    closed = conn.execute(
+    meta = conn.execute(
         text(
-            "SELECT COALESCE(SUM(consumed_seconds), 0) FROM usage_sessions "
-            "WHERE org_id = :o AND state = 'closed'"
+            "SELECT plan, EXTRACT(EPOCH FROM current_period_start) "
+            "FROM billing_accounts WHERE org_id = :o"
         ),
         {"o": org_id},
-    ).scalar()
-    active = conn.execute(
-        text(
-            "SELECT COALESCE(SUM(GREATEST(0, "
-            "  EXTRACT(EPOCH FROM (now() - in_call_at)))), 0) "
-            "FROM usage_sessions "
-            "WHERE org_id = :o AND state = 'active' AND in_call_at IS NOT NULL "
-            "AND bot_id <> :skip"
-        ),
-        {"o": org_id, "skip": exclude_bot_id or ""},
-    ).scalar()
+    ).fetchone()
+    windowed = bool(
+        meta
+        and str(meta[0]) == "solo"
+        and meta[1] is not None
+    )
+    if windowed:
+        closed = conn.execute(
+            text(
+                "SELECT COALESCE(SUM(LEAST("
+                "  consumed_seconds, "
+                "  GREATEST(0, EXTRACT(EPOCH FROM ("
+                "    closed_at - "
+                "    to_timestamp(CAST(:period_start AS double precision))"
+                "  )))"
+                ")), 0) "
+                "FROM usage_sessions "
+                "WHERE org_id = :o AND state = 'closed' "
+                "AND closed_at >= "
+                "to_timestamp(CAST(:period_start AS double precision))"
+            ),
+            {"o": org_id, "period_start": float(meta[1])},
+        ).scalar()
+    else:
+        closed = conn.execute(
+            text(
+                "SELECT COALESCE(SUM(consumed_seconds), 0) "
+                "FROM usage_sessions "
+                "WHERE org_id = :o AND state = 'closed'"
+            ),
+            {"o": org_id},
+        ).scalar()
+    if windowed:
+        active = conn.execute(
+            text(
+                "SELECT COALESCE(SUM(GREATEST(0, EXTRACT(EPOCH FROM ("
+                "  now() - GREATEST("
+                "    in_call_at, "
+                "    to_timestamp(CAST(:period_start AS double precision))"
+                "  )"
+                ")))), 0) "
+                "FROM usage_sessions "
+                "WHERE org_id = :o AND state = 'active' "
+                "AND in_call_at IS NOT NULL AND bot_id <> :skip"
+            ),
+            {
+                "o": org_id,
+                "skip": exclude_bot_id or "",
+                "period_start": float(meta[1]),
+            },
+        ).scalar()
+    else:
+        active = conn.execute(
+            text(
+                "SELECT COALESCE(SUM(GREATEST(0, "
+                "  EXTRACT(EPOCH FROM (now() - in_call_at)))), 0) "
+                "FROM usage_sessions "
+                "WHERE org_id = :o AND state = 'active' "
+                "AND in_call_at IS NOT NULL AND bot_id <> :skip"
+            ),
+            {"o": org_id, "skip": exclude_bot_id or ""},
+        ).scalar()
     return float(closed or 0) + float(active or 0)
+
+
+def _effective_allowance(row) -> int:
+    """Paid access is valid only through its verified Stripe period end."""
+    if row is None:
+        return _included_default()
+    included = int(row[0])
+    plan = str(row[1] or "free")
+    if plan != "solo":
+        return included
+    status = str(row[2] or "none")
+    period_end = float(row[3]) if row[3] is not None else None
+    period_start = float(row[4]) if row[4] is not None else None
+    if (
+        status not in {"active", "past_due"}
+        or period_start is None
+        or period_end is None
+        or period_end <= time.time()
+    ):
+        return 0
+    return included
 
 
 def _lock_billing_row(conn, org_id: str) -> int:
@@ -114,7 +184,10 @@ def _lock_billing_row(conn, org_id: str) -> int:
 
     row = conn.execute(
         text(
-            "SELECT included_seconds FROM billing_accounts "
+            "SELECT included_seconds, plan, subscription_status, "
+            "EXTRACT(EPOCH FROM current_period_end), "
+            "EXTRACT(EPOCH FROM current_period_start) "
+            "FROM billing_accounts "
             "WHERE org_id = :o FOR UPDATE"
         ),
         {"o": org_id},
@@ -130,12 +203,15 @@ def _lock_billing_row(conn, org_id: str) -> int:
         # Re-read under the lock: on a conflict the WINNER's row is what counts.
         row = conn.execute(
             text(
-                "SELECT included_seconds FROM billing_accounts "
+                "SELECT included_seconds, plan, subscription_status, "
+                "EXTRACT(EPOCH FROM current_period_end), "
+                "EXTRACT(EPOCH FROM current_period_start) "
+                "FROM billing_accounts "
                 "WHERE org_id = :o FOR UPDATE"
             ),
             {"o": org_id},
         ).fetchone()
-    return int(row[0]) if row else _included_default()
+    return _effective_allowance(row)
 
 
 def _unavailable(exc: Exception) -> EntitlementsUnavailable:
@@ -161,10 +237,15 @@ def remaining_seconds(org_id: str) -> Optional[int]:
         with _engine().begin() as conn:
             control_plane._set_org(conn, org)
             row = conn.execute(
-                text("SELECT included_seconds FROM billing_accounts WHERE org_id = :o"),
+                text(
+                    "SELECT included_seconds, plan, subscription_status, "
+                    "EXTRACT(EPOCH FROM current_period_end), "
+                    "EXTRACT(EPOCH FROM current_period_start) "
+                    "FROM billing_accounts WHERE org_id = :o"
+                ),
                 {"o": org},
             ).fetchone()
-            included = int(row[0]) if row else _included_default()
+            included = _effective_allowance(row)
             used = _used_seconds(conn, org)
     except SQLAlchemyError as e:
         raise _unavailable(e) from e
@@ -226,81 +307,82 @@ def open_usage(org_id: str, bot_id: str, avatar_id: str = "") -> Optional[dict]:
         raise _unavailable(e) from e
 
 
-def assign_bot_id(provisional_bot_id: str, bot_id: str) -> bool:
-    """Swap the gate's provisional id ('pending:<uuid>') for the real Recall
-    bot id right after create_bot returns (both inside the meeting lock).
-    Returns whether a row was updated. Never touches closed rows."""
+def assign_bot_id(org_id: str, provisional_bot_id: str, bot_id: str) -> bool:
+    """Swap a provisional id for the real Recall bot inside one tenant.
+
+    False means no row changed and MUST NOT be treated as successful binding.
+    """
     if not enabled():
         return False
     from sqlalchemy import text
     from sqlalchemy.exc import SQLAlchemyError
 
+    org = (org_id or "").strip()
+    provisional = (provisional_bot_id or "").strip()
+    real = (bot_id or "").strip()
+    if not org or not provisional or not real:
+        return False
     try:
         with _engine().begin() as conn:
+            control_plane._set_org(conn, org)
             res = conn.execute(
                 text(
                     "UPDATE usage_sessions SET bot_id = :real "
-                    "WHERE bot_id = :prov AND state != 'closed'"
+                    "WHERE org_id = :o AND bot_id = :prov AND state != 'closed'"
                 ),
-                {"real": (bot_id or "").strip(), "prov": (provisional_bot_id or "").strip()},
+                {"o": org, "real": real, "prov": provisional},
             )
-            changed = bool(res.rowcount)
-        return changed
-    except SQLAlchemyError as e:
-        raise _unavailable(e) from e
+            return bool(res.rowcount)
+    except SQLAlchemyError as exc:
+        raise _unavailable(exc) from exc
 
 
-def mark_in_call(bot_id: str, in_call_at_epoch: float) -> Optional[float]:
-    """The clock starts: Recall reported the bot in-call at
-    ``in_call_at_epoch`` (Recall's OWN status timestamp — authoritative for
-    what Recall bills). Sets state='active' and computes the hard deadline =
-    in_call_at + the org's remaining seconds at this moment (recomputed under
-    the billing-row lock, excluding this row's own elapsed).
+def mark_in_call(
+    org_id: str, bot_id: str, in_call_at_epoch: float
+) -> Optional[float]:
+    """Start one org's Recall-status clock and return its hard deadline.
 
-    Idempotent: only the FIRST call (in_call_at IS NULL) writes; later calls
-    return the already-set deadline. Returns the deadline epoch, or ``None``
-    when disabled / row unknown / row closed.
-
-    Lock order matches open_usage (billing row first, then the usage row) so
-    a racing gate and a racing clock-start can never deadlock.
+    The org is supplied by the authenticated/local session or durable restart
+    row; it is never discovered with a global bot_id lookup.
     """
     if not enabled():
         return None
     from sqlalchemy import text
     from sqlalchemy.exc import SQLAlchemyError
 
+    org = (org_id or "").strip()
     bot = (bot_id or "").strip()
-    if not bot:
+    if not org or not bot:
         return None
     try:
         with _engine().begin() as conn:
+            control_plane._set_org(conn, org)
             peek = conn.execute(
                 text(
-                    "SELECT org_id, state, "
-                    "EXTRACT(EPOCH FROM in_call_at), EXTRACT(EPOCH FROM deadline) "
-                    "FROM usage_sessions WHERE bot_id = :b"
+                    "SELECT state, EXTRACT(EPOCH FROM in_call_at), "
+                    "EXTRACT(EPOCH FROM deadline) FROM usage_sessions "
+                    "WHERE org_id = :o AND bot_id = :b"
                 ),
-                {"b": bot},
+                {"o": org, "b": bot},
             ).fetchone()
-            if peek is None or str(peek[1]) == "closed":
+            if peek is None or str(peek[0]) == "closed":
                 return None
-            org = str(peek[0])
-            if peek[2] is not None:  # already marked — idempotent fast path
-                return float(peek[3]) if peek[3] is not None else None
-            control_plane._set_org(conn, org)
-            included = _lock_billing_row(conn, org)  # billing lock FIRST
+            if peek[1] is not None:
+                return float(peek[2]) if peek[2] is not None else None
+
+            included = _lock_billing_row(conn, org)
             row = conn.execute(
                 text(
                     "SELECT id, EXTRACT(EPOCH FROM in_call_at), "
-                    "EXTRACT(EPOCH FROM deadline) "
-                    "FROM usage_sessions WHERE bot_id = :b AND state != 'closed' "
+                    "EXTRACT(EPOCH FROM deadline) FROM usage_sessions "
+                    "WHERE org_id = :o AND bot_id = :b AND state != 'closed' "
                     "FOR UPDATE"
                 ),
-                {"b": bot},
+                {"o": org, "b": bot},
             ).fetchone()
             if row is None:
                 return None
-            if row[1] is not None:  # raced another marker — keep the first write
+            if row[1] is not None:
                 return float(row[2]) if row[2] is not None else None
             remaining = max(
                 0.0, included - _used_seconds(conn, org, exclude_bot_id=bot)
@@ -310,91 +392,95 @@ def mark_in_call(bot_id: str, in_call_at_epoch: float) -> Optional[float]:
                 text(
                     "UPDATE usage_sessions SET state = 'active', "
                     "in_call_at = to_timestamp(:t), deadline = to_timestamp(:d) "
-                    "WHERE id = :id"
+                    "WHERE org_id = :o AND id = :id"
                 ),
-                {"t": float(in_call_at_epoch), "d": deadline, "id": row[0]},
+                {
+                    "o": org,
+                    "t": float(in_call_at_epoch),
+                    "d": deadline,
+                    "id": row[0],
+                },
             )
             return deadline
-    except SQLAlchemyError as e:
-        raise _unavailable(e) from e
+    except SQLAlchemyError as exc:
+        raise _unavailable(exc) from exc
 
 
-def close_usage(bot_id: str, consumed_seconds: int, reason: str) -> bool:
-    """Finalize the row — IDEMPOTENT: ``WHERE state != 'closed'`` means the
-    FIRST close wins and a retry (manual end + webhook + reconcile can all
-    race) can never rewrite consumed_seconds to a different value. A row that
-    never went in-call (failed/cancelled join) closes with consumed 0
-    regardless of the passed value. Returns whether a row transitioned."""
+def close_usage(
+    org_id: str, bot_id: str, consumed_seconds: int, reason: str
+) -> bool:
+    """Finalize one tenant's row, idempotently (first close wins)."""
     if not enabled():
         return False
     from sqlalchemy import text
     from sqlalchemy.exc import SQLAlchemyError
 
+    org = (org_id or "").strip()
     bot = (bot_id or "").strip()
-    if not bot:
+    if not org or not bot:
         return False
     try:
         with _engine().begin() as conn:
+            control_plane._set_org(conn, org)
             res = conn.execute(
                 text(
                     "UPDATE usage_sessions SET state = 'closed', "
                     "consumed_seconds = CASE WHEN in_call_at IS NULL "
                     "  THEN 0 ELSE :c END, "
                     "closed_at = now(), close_reason = :r "
-                    "WHERE bot_id = :b AND state != 'closed'"
+                    "WHERE org_id = :o AND bot_id = :b AND state != 'closed'"
                 ),
                 {
+                    "o": org,
                     "c": max(0, int(consumed_seconds or 0)),
                     "r": (reason or "")[:80],
                     "b": bot,
                 },
             )
-            changed = bool(res.rowcount)
-        return changed
-    except SQLAlchemyError as e:
-        raise _unavailable(e) from e
+            return bool(res.rowcount)
+    except SQLAlchemyError as exc:
+        raise _unavailable(exc) from exc
 
 
-def usage_row(bot_id: str) -> Optional[dict]:
-    """The one usage row for a bot (state / in_call_at / deadline as epochs),
-    or ``None``. Finalize reads this to compute consumed_seconds."""
+def usage_row(org_id: str, bot_id: str) -> Optional[dict]:
+    """One usage row, visible only inside the supplied org."""
     if not enabled():
         return None
     from sqlalchemy import text
     from sqlalchemy.exc import SQLAlchemyError
 
+    org = (org_id or "").strip()
     bot = (bot_id or "").strip()
-    if not bot:
+    if not org or not bot:
         return None
     try:
-        with _engine().connect() as conn:
+        with _engine().begin() as conn:
+            control_plane._set_org(conn, org)
             row = conn.execute(
                 text(
-                    "SELECT org_id, state, EXTRACT(EPOCH FROM in_call_at), "
+                    "SELECT state, EXTRACT(EPOCH FROM in_call_at), "
                     "EXTRACT(EPOCH FROM deadline), consumed_seconds, close_reason "
-                    "FROM usage_sessions WHERE bot_id = :b"
+                    "FROM usage_sessions WHERE org_id = :o AND bot_id = :b"
                 ),
-                {"b": bot},
+                {"o": org, "b": bot},
             ).fetchone()
-    except SQLAlchemyError as e:
-        raise _unavailable(e) from e
+    except SQLAlchemyError as exc:
+        raise _unavailable(exc) from exc
     if row is None:
         return None
     return {
-        "org_id": str(row[0]),
+        "org_id": org,
         "bot_id": bot,
-        "state": str(row[1]),
-        "in_call_at": float(row[2]) if row[2] is not None else None,
-        "deadline": float(row[3]) if row[3] is not None else None,
-        "consumed_seconds": int(row[4] or 0),
-        "close_reason": str(row[5] or ""),
+        "state": str(row[0]),
+        "in_call_at": float(row[1]) if row[1] is not None else None,
+        "deadline": float(row[2]) if row[2] is not None else None,
+        "consumed_seconds": int(row[3] or 0),
+        "close_reason": str(row[4] or ""),
     }
 
 
 def open_usage_rows() -> list[dict[str, Any]]:
-    """Every pending/active row — the restart-restore read: a row whose bot is
-    NOT in the (ephemeral) local store is still enforced by the reconcile
-    loop. Cross-tenant service read (owner role; see module docstring)."""
+    """Read-only global restart inventory through the exact private RPC."""
     if not enabled():
         return []
     from sqlalchemy import text
@@ -404,25 +490,24 @@ def open_usage_rows() -> list[dict[str, Any]]:
         with _engine().connect() as conn:
             rows = conn.execute(
                 text(
-                    "SELECT org_id, bot_id, avatar_id, state, "
-                    "EXTRACT(EPOCH FROM created_at), "
-                    "EXTRACT(EPOCH FROM in_call_at), EXTRACT(EPOCH FROM deadline) "
-                    "FROM usage_sessions WHERE state IN ('pending', 'active')"
+                    "SELECT org_id, bot_id, avatar_id, state, created_at_epoch, "
+                    "in_call_at_epoch, deadline_epoch "
+                    "FROM laura_private.list_open_usage_sessions()"
                 )
             ).fetchall()
-    except SQLAlchemyError as e:
-        raise _unavailable(e) from e
+    except SQLAlchemyError as exc:
+        raise _unavailable(exc) from exc
     return [
         {
-            "org_id": str(r[0]),
-            "bot_id": str(r[1]),
-            "avatar_id": str(r[2] or ""),
-            "state": str(r[3]),
-            "created_at": float(r[4]) if r[4] is not None else time.time(),
-            "in_call_at": float(r[5]) if r[5] is not None else None,
-            "deadline": float(r[6]) if r[6] is not None else None,
+            "org_id": str(row[0]),
+            "bot_id": str(row[1]),
+            "avatar_id": str(row[2] or ""),
+            "state": str(row[3]),
+            "created_at": float(row[4]) if row[4] is not None else time.time(),
+            "in_call_at": float(row[5]) if row[5] is not None else None,
+            "deadline": float(row[6]) if row[6] is not None else None,
         }
-        for r in rows
+        for row in rows
     ]
 
 
@@ -440,13 +525,20 @@ def usage_summary(org_id: str) -> Optional[dict]:
             control_plane._set_org(conn, org)
             row = conn.execute(
                 text(
-                    "SELECT plan, included_seconds FROM billing_accounts "
+                    "SELECT plan, included_seconds, subscription_status, "
+                    "EXTRACT(EPOCH FROM current_period_end), "
+                    "EXTRACT(EPOCH FROM current_period_start) "
+                    "FROM billing_accounts "
                     "WHERE org_id = :o"
                 ),
                 {"o": org},
             ).fetchone()
             plan = str(row[0]) if row else "free"
             included = int(row[1]) if row else _included_default()
+            effective = _effective_allowance(
+                (row[1], row[0], row[2], row[3], row[4])
+                if row else None
+            )
             used = int(_used_seconds(conn, org))
     except SQLAlchemyError as e:
         raise _unavailable(e) from e
@@ -454,5 +546,28 @@ def usage_summary(org_id: str) -> Optional[dict]:
         "plan": plan,
         "included_seconds": included,
         "used_seconds": used,
-        "remaining_seconds": max(0, included - used),
+        "remaining_seconds": max(0, effective - used),
     }
+
+
+def has_active_session(org_id: str) -> bool:
+    """Whether this org's one meeting slot is currently occupied."""
+    if not enabled() or not (org_id or "").strip():
+        return False
+    from sqlalchemy import text
+    from sqlalchemy.exc import SQLAlchemyError
+
+    org = org_id.strip()
+    try:
+        with _engine().begin() as conn:
+            control_plane._set_org(conn, org)
+            return conn.execute(
+                text(
+                    "SELECT 1 FROM usage_sessions "
+                    "WHERE org_id = :o AND state IN ('pending', 'active') "
+                    "LIMIT 1"
+                ),
+                {"o": org},
+            ).fetchone() is not None
+    except SQLAlchemyError:
+        return False

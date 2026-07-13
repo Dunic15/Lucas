@@ -39,11 +39,14 @@ def test_roster_tracks_joins_and_leaves(tmp_path, monkeypatch):
     store.remove(s.bot_id)
 
 
-def test_roster_excludes_the_avatar_itself(tmp_path, monkeypatch):
+def test_roster_excludes_explicit_agent_not_same_name_human(tmp_path, monkeypatch):
     s = _session(tmp_path, monkeypatch)
-    s.participant_event("Laura", 99, here=True)
+    s.participant_event(
+        "Laura", 99, here=True, metadata={"id": 99, "is_bot": True}
+    )
+    s.participant_event("Laura", 100, here=True, metadata={"id": 100})
     s.participant_event("Duccio", 1, here=True)
-    assert s.roster("Laura") == ["Duccio"]
+    assert s.roster("Laura") == ["Laura", "Duccio"]
     store.remove(s.bot_id)
 
 
@@ -52,7 +55,12 @@ def test_roster_falls_back_to_transcript_speakers(tmp_path, monkeypatch):
     s = _session(tmp_path, monkeypatch)
     s.add_utterance("Duccio", "let's get started")
     s.add_utterance("Marco", "sounds good")
-    s.add_utterance("Laura", "happy to help")  # her own lines never count
+    s.add_utterance(
+        "Laura",
+        "happy to help",
+        participant_id="bot-participant",
+        speaker_kind="agent",
+    )
     assert s.roster("Laura") == ["Duccio", "Marco"]
     store.remove(s.bot_id)
 
@@ -77,12 +85,20 @@ def test_anonymous_participants_get_distinct_guest_labels(tmp_path, monkeypatch)
 # ── webhook: participant_events reach the session roster ──
 
 
-def _participant_payload(bot_id: str, event: str, name: str, pid) -> dict:
+def _participant_payload(
+    bot_id: str, event: str, name: str, pid, **participant_metadata
+) -> dict:
     return {
         "event": event,
         "data": {
             "bot": {"id": bot_id},
-            "data": {"participant": {"id": pid, "name": name}},
+            "data": {
+                "participant": {
+                    "id": pid,
+                    "name": name,
+                    **participant_metadata,
+                }
+            },
         },
     }
 
@@ -102,7 +118,11 @@ def test_webhook_participant_events_update_roster(tmp_path, monkeypatch):
     s = _session(tmp_path, monkeypatch, bot_id="roster-webhook-bot")
     _post(_participant_payload(s.bot_id, "participant_events.join", "Duccio", 1))
     _post(_participant_payload(s.bot_id, "participant_events.join", "Marco", 2))
-    _post(_participant_payload(s.bot_id, "participant_events.join", "Laura", 9))
+    _post(
+        _participant_payload(
+            s.bot_id, "participant_events.join", "Laura", 9, is_bot=True
+        )
+    )
     assert s.roster("Laura") == ["Duccio", "Marco"]
     _post(_participant_payload(s.bot_id, "participant_events.leave", "Marco", 2))
     assert s.roster("Laura") == ["Duccio"]
@@ -794,3 +814,4 @@ def test_unaddressed_lull_still_enters_proactive_path(tmp_path, monkeypatch):
     _post(_line_payload(s.bot_id, "Duccio", "so, where does that leave everyone?"))
     assert calls["n"] == 1  # proactive check ran on the unaddressed lull
     store.remove(s.bot_id)
+

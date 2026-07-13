@@ -56,6 +56,11 @@ class Avatar:
     # Per-avatar so the dashboard can flip a single avatar's tier by writing
     # this one field (avatar.yaml is mtime-cached: picked up with no restart).
     face: str = ""
+    # Identity-safe renderer chain. Asset filenames are explicit in avatar.yaml;
+    # a missing asset is surfaced as unavailable, never borrowed from an avatar.
+    face_fallback: str = "talk"
+    talk_model: str = ""
+    photoreal_reference: str = ""
 
     @property
     def page(self) -> str:
@@ -63,6 +68,31 @@ class Avatar:
         tier when set, else the global default. Values match the route names
         ("talk" | "photoreal" | "avatar")."""
         return self.face or settings.avatar_page
+
+    @property
+    def renderer_readiness(self) -> dict:
+        """Configured face assets and their on-disk readiness, safe for the API."""
+        repo = self.dir.parent.parent
+        talk_name = self.talk_model or f"{self.id}.glb"
+        portrait_name = self.photoreal_reference or f"reference-{self.id}.jpg"
+        talk_safe = Path(talk_name).name == talk_name
+        portrait_safe = Path(portrait_name).name == portrait_name
+        talk_ready = talk_safe and (repo / "frontend" / talk_name).is_file()
+        photoreal_ready = (
+            portrait_safe and (repo / "gpu" / "assets" / portrait_name).is_file()
+        )
+        preferred_ready = (
+            photoreal_ready if self.page == "photoreal"
+            else talk_ready if self.page == "talk"
+            else bool(self.anam_avatar_id)
+        )
+        return {
+            "preferred": self.page,
+            "fallback": self.face_fallback,
+            "ready": preferred_ready,
+            "talk": {"ready": talk_ready, "asset": talk_name},
+            "photoreal": {"ready": photoreal_ready, "asset": portrait_name},
+        }
 
     @property
     def knowledge_dir(self) -> Path:
@@ -152,6 +182,13 @@ def load(avatar_id: str) -> Avatar:
         face=(lambda f: f if f in ("talk", "photoreal", "avatar") else "")(
             str(_coalesce(raw.get("face"), "")).strip().lower()
         ),
+        face_fallback=(
+            lambda f: f if f in ("talk", "photoreal", "avatar", "none") else "talk"
+        )(str(_coalesce(raw.get("face_fallback"), "talk")).strip().lower()),
+        talk_model=str(_coalesce(raw.get("talk_model"), f"{avatar_id}.glb")).strip(),
+        photoreal_reference=str(
+            _coalesce(raw.get("photoreal_reference"), f"reference-{avatar_id}.jpg")
+        ).strip(),
         dir=folder,
         knowledge_packs=[str(k) for k in (raw.get("knowledge_packs") or [])],
     )

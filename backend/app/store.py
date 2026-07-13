@@ -37,9 +37,13 @@ STORE_PATH = Path(os.getenv("LAURA_STORE_PATH", str(_default_store_path())))
 
 @dataclass
 class Utterance:
+    # participant_id is the stable internal identity. speaker remains the
+    # presentation label only; two people may legitimately share it.
     speaker: str
     text: str
     ts: float
+    participant_id: str = ""
+    speaker_kind: str = "human"  # human | agent
 
 
 _PERSISTED_SESSION_FIELDS = {
@@ -190,36 +194,103 @@ class Session:
         ):
             _persist_session(self)
 
-    def resolve_speaker(self, name: str | None, participant_id: Any = None) -> str:
-        """Human-readable speaker label for a transcript utterance.
+    @staticmethod
+    def _explicit_agent_metadata(participant: dict | None) -> bool:
+        """Conservative Recall participant classifier.
 
-        Named participants keep their real name (Recall gets it from the meeting
-        platform login — stable across meetings, no voice ID needed). Anonymous
-        participants (phone dial-ins, unnamed guests) have no name but DO carry a
-        stable per-meeting participant id, so map each distinct id to its own
-        "Guest N" — otherwise two silent callers both collapse into one label and
-        the avatar can't tell them apart.
+        Names are NEVER identity. We accept only explicit bot/agent metadata,
+        a bot_id binding to this Session, or participant_id == bot_id. If the
+        provider omits all of those signals we deliberately classify as human
+        rather than guessing from a display name.
         """
-        name = (name or "").strip()
-        if name:
-            return name
+        if not isinstance(participant, dict):
+            return False
+        containers = [participant]
+        for key in ("metadata", "extra_data"):
+            value = participant.get(key)
+            if isinstance(value, dict):
+                containers.append(value)
+        for value in containers:
+            if value.get("is_bot") is True or value.get("is_agent") is True:
+                return True
+            role = str(value.get("kind") or value.get("type") or value.get("role") or "").lower()
+            if role in {"bot", "agent", "meeting_bot"}:
+                return True
+        return False
+
+    def resolve_participant(
+        self,
+        name: str | None,
+        participant_id: Any = None,
+        *,
+        metadata: dict | None = None,
+    ) -> dict[str, str]:
+        """Resolve a canonical participant, keyed by Recall participant_id.
+
+        A later transcript without a name reuses the name learned from the
+        participant-event map. The returned display name is presentation only.
+        """
         key = "" if participant_id is None else str(participant_id)
+        supplied_name = (name or "").strip()
+        explicit_agent = (
+            key == self.bot_id
+            or str((metadata or {}).get("bot_id") or "") == self.bot_id
+            or self._explicit_agent_metadata(metadata)
+        )
         if not key:
-            return "Guest"
-        label = self._anon_labels.get(key)
-        if label is None:
-            label = f"Guest {len(self._anon_labels) + 1}"
-            self._anon_labels[key] = label
-        return label
+            # An explicit bot event without a provider participant_id must not
+            # poison a same-name human's legacy identity. Bind it to this
+            # session bot; never infer that later name-only lines are the bot.
+            key = (
+                f"agent:{self.bot_id}"
+                if explicit_agent
+                else (
+                    f"legacy:{supplied_name.lower()}"
+                    if supplied_name
+                    else "legacy:guest"
+                )
+            )
+
+        existing = self.participants.get(key) or {}
+        display_name = supplied_name or str(existing.get("name") or "").strip()
+        if not display_name:
+            label = self._anon_labels.get(key)
+            if label is None:
+                label = f"Guest {len(self._anon_labels) + 1}"
+                self._anon_labels[key] = label
+            display_name = label
+
+        kind = "agent" if explicit_agent else str(existing.get("kind") or "human")
+        here = bool(existing.get("here", True))
+        identity = {"id": key, "name": display_name, "kind": kind, "here": here}
+        changed = (
+            not existing
+            or str(existing.get("name") or "") != display_name
+            or str(existing.get("kind") or "human") != kind
+        )
+        self.participants[key] = identity
+        if changed:
+            _persist_participant(self.org_id, self.bot_id, identity)
+        return identity
+
+    def resolve_speaker(self, name: str | None, participant_id: Any = None) -> str:
+        """Backward-compatible presentation label; use resolve_participant for logic."""
+        return self.resolve_participant(name, participant_id)["name"]
 
     def participant_event(
-        self, name: str | None, participant_id: Any, *, here: bool
-    ) -> str:
-        """Fold a Recall participant_events.join/leave into the live roster."""
-        label = self.resolve_speaker(name, participant_id)
-        key = str(participant_id) if participant_id is not None else label
-        self.participants[key] = {"name": label, "here": here}
-        return label
+        self,
+        name: str | None,
+        participant_id: Any,
+        *,
+        here: bool,
+        metadata: dict | None = None,
+    ) -> dict[str, str]:
+        """Fold a Recall join/leave into the canonical, persisted roster."""
+        identity = self.resolve_participant(name, participant_id, metadata=metadata)
+        identity["here"] = bool(here)
+        self.participants[identity["id"]] = identity
+        _persist_participant(self.org_id, self.bot_id, identity)
+        return identity
 
     def present_names(self, avatar_name: str = "") -> list[str]:
         """First names to EXCLUDE from the FUZZY wake match: everyone else known
@@ -240,47 +311,81 @@ class Session:
         return self.roster(avatar_name)
 
     def roster(self, avatar_name: str = "") -> list[str]:
-        """Who is in the meeting right now, besides the avatar itself.
+        """Human roster, keyed internally by participant_id.
 
-        Prefers the event-driven roster (it sees silent participants); merges in
-        transcript speakers as a net for missed events / process restarts.
-
-        Only the running avatar's OWN name (passed in as ``avatar_name``) and the
-        empty string are stripped — NOT a hardcoded "laura", which would erase a
-        human named Laura from a Cedric/SFF/Duccio meeting's roster and misfire
-        the hand-raise / adaptive-deference human-count gates.
+        avatar_name is retained for API compatibility but is intentionally
+        not used for classification: a human may share the avatar's display
+        name. Agent rows are filtered by persisted kind/id instead.
         """
-        skip = {avatar_name.strip().lower(), ""}
         names: list[str] = []
-        for p in self.participants.values():
-            if p.get("here") and p["name"].strip().lower() not in skip:
-                names.append(p["name"])
-        gone = {
-            p["name"].strip().lower()
-            for p in self.participants.values()
-            if not p.get("here")
+        seen_ids: set[str] = set()
+        gone_ids = {
+            str(pid)
+            for pid, p in self.participants.items()
+            if not p.get("here", True)
         }
-        seen = {n.strip().lower() for n in names}
+        for pid, p in self.participants.items():
+            if p.get("here", True) and p.get("kind", "human") != "agent":
+                names.append(str(p.get("name") or "Guest"))
+                seen_ids.add(str(pid))
         for u in self.transcript:
-            low = u.speaker.strip().lower()
-            if low not in skip and low not in seen and low not in gone:
-                seen.add(low)
+            pid = u.participant_id or f"legacy:{u.speaker.lower()}"
+            if (
+                u.speaker_kind != "agent"
+                and pid not in seen_ids
+                and pid not in gone_ids
+            ):
                 names.append(u.speaker)
+                seen_ids.add(pid)
         return names
 
-    def add_utterance(self, speaker: str, text: str) -> None:
-        utterance = Utterance(speaker=speaker, text=text, ts=time.time())
+    def add_utterance(
+        self,
+        speaker: str,
+        text: str,
+        *,
+        participant_id: str = "",
+        speaker_kind: str = "human",
+    ) -> None:
+        resolved_id = str(participant_id or "")
+        resolved_kind = speaker_kind
+        if not resolved_id:
+            # Backward-compatible direct callers: bind by name only when the
+            # live participant map has exactly one unambiguous match.
+            matches = [
+                (str(pid), p)
+                for pid, p in self.participants.items()
+                if str(p.get("name") or "").strip().lower()
+                == speaker.strip().lower()
+            ]
+            if len(matches) == 1:
+                resolved_id, participant = matches[0]
+                resolved_kind = str(participant.get("kind") or speaker_kind)
+        utterance = Utterance(
+            speaker=speaker,
+            text=text,
+            ts=time.time(),
+            participant_id=resolved_id,
+            speaker_kind="agent" if resolved_kind == "agent" else "human",
+        )
         self.transcript.append(utterance)
         # Hot path: the per-utterance write stays on local SQLite (never a
         # network DB — latency is the product). org inherited from the session.
         _persist_utterance(self.org_id, self.bot_id, utterance)
 
-    def transcript_text(self) -> str:
-        return "\n".join(f"{u.speaker}: {u.text}" for u in self.transcript)
+    def transcript_text(self, *, include_agents: bool = True) -> str:
+        utterances = self.transcript if include_agents else self.human_transcript()
+        return "\n".join(f"{u.speaker}: {u.text}" for u in utterances)
+
+    def human_transcript(self) -> list[Utterance]:
+        """Human-only evidence for every live and post-meeting decision path."""
+        return [u for u in self.transcript if u.speaker_kind != "agent"]
 
     def recent_transcript(self, n: int = 8) -> str:
-        """The last n turns, so the avatar has the immediate meeting context."""
-        return "\n".join(f"{u.speaker}: {u.text}" for u in self.transcript[-n:])
+        """Recent HUMAN turns; agent output is never evidence for a new answer."""
+        return "\n".join(
+            f"{u.speaker}: {u.text}" for u in self.human_transcript()[-n:]
+        )
 
     def in_cooldown(self, cooldown_seconds: float) -> bool:
         return (time.time() - self.last_spoke_at) < cooldown_seconds
@@ -407,6 +512,8 @@ def _init_db() -> None:
                 org_id TEXT NOT NULL DEFAULT '{demo}',
                 bot_id TEXT NOT NULL,
                 speaker TEXT NOT NULL,
+                participant_id TEXT NOT NULL DEFAULT '',
+                speaker_kind TEXT NOT NULL DEFAULT 'human',
                 text TEXT NOT NULL,
                 ts REAL NOT NULL,
                 FOREIGN KEY(bot_id) REFERENCES sessions(bot_id) ON DELETE CASCADE
@@ -429,6 +536,18 @@ def _init_db() -> None:
                 capability_hash TEXT PRIMARY KEY,
                 bot_id TEXT NOT NULL UNIQUE,
                 created_at REAL NOT NULL,
+                FOREIGN KEY(bot_id) REFERENCES sessions(bot_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS session_participants (
+                bot_id TEXT NOT NULL,
+                org_id TEXT NOT NULL DEFAULT '{demo}',
+                participant_id TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                speaker_kind TEXT NOT NULL DEFAULT 'human',
+                here INTEGER NOT NULL DEFAULT 1,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (bot_id, participant_id),
                 FOREIGN KEY(bot_id) REFERENCES sessions(bot_id) ON DELETE CASCADE
             );
 
@@ -483,6 +602,8 @@ def _init_db() -> None:
         # org_id on the remaining persisted tables (idempotent; a new NOT NULL
         # column backfills existing rows to the Demo org).
         _add_column(conn, "utterances", f"org_id TEXT NOT NULL DEFAULT '{demo}'")
+        _add_column(conn, "utterances", "participant_id TEXT NOT NULL DEFAULT ''")
+        _add_column(conn, "utterances", "speaker_kind TEXT NOT NULL DEFAULT 'human'")
         _add_column(
             conn, "conversation_routes", f"org_id TEXT NOT NULL DEFAULT '{demo}'"
         )
@@ -495,6 +616,8 @@ def _init_db() -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS uq_sessions_org_bot
                 ON sessions(org_id, bot_id);
             CREATE INDEX IF NOT EXISTS idx_utt_org_bot ON utterances(org_id, bot_id, id);
+            CREATE INDEX IF NOT EXISTS idx_participants_org_bot
+                ON session_participants(org_id, bot_id);
             CREATE INDEX IF NOT EXISTS idx_conv_routes_org ON conversation_routes(org_id);
             CREATE INDEX IF NOT EXISTS idx_artifacts_org_saved
                 ON artifacts(org_id, saved_at);
@@ -581,7 +704,12 @@ def _load_from_db() -> None:
     with _LOCK, _connect() as conn:
         session_rows = conn.execute("SELECT * FROM sessions").fetchall()
         utterance_rows = conn.execute(
-            "SELECT bot_id, speaker, text, ts FROM utterances ORDER BY id"
+            "SELECT bot_id, speaker, participant_id, speaker_kind, text, ts "
+            "FROM utterances ORDER BY id"
+        ).fetchall()
+        participant_rows = conn.execute(
+            "SELECT bot_id, participant_id, display_name, speaker_kind, here "
+            "FROM session_participants"
         ).fetchall()
         routes = conn.execute(
             "SELECT conversation_id, bot_id FROM conversation_routes"
@@ -592,7 +720,13 @@ def _load_from_db() -> None:
     utterances_by_bot: dict[str, list[Utterance]] = {}
     for row in utterance_rows:
         utterances_by_bot.setdefault(row["bot_id"], []).append(
-            Utterance(speaker=row["speaker"], text=row["text"], ts=float(row["ts"]))
+            Utterance(
+                speaker=row["speaker"],
+                text=row["text"],
+                ts=float(row["ts"]),
+                participant_id=row["participant_id"],
+                speaker_kind=row["speaker_kind"],
+            )
         )
 
     _sessions.clear()
@@ -604,6 +738,15 @@ def _load_from_db() -> None:
             for row in session_rows
         }
     )
+    for row in participant_rows:
+        session = _sessions.get(row["bot_id"])
+        if session is not None:
+            session.participants[row["participant_id"]] = {
+                "id": row["participant_id"],
+                "name": row["display_name"],
+                "kind": row["speaker_kind"],
+                "here": bool(row["here"]),
+            }
     _by_conversation.clear()
     _by_conversation.update({row["conversation_id"]: row["bot_id"] for row in routes})
     _artifacts.clear()
@@ -658,10 +801,52 @@ def _persist_utterance(org_id: str, bot_id: str, utterance: Utterance) -> None:
     with _LOCK, _connect() as conn:
         conn.execute(
             """
-            INSERT INTO utterances (org_id, bot_id, speaker, text, ts)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO utterances (
+                org_id, bot_id, speaker, participant_id, speaker_kind, text, ts
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (org_id, bot_id, utterance.speaker, utterance.text, float(utterance.ts)),
+            (
+                org_id,
+                bot_id,
+                utterance.speaker,
+                utterance.participant_id,
+                utterance.speaker_kind,
+                utterance.text,
+                float(utterance.ts),
+            ),
+        )
+
+
+def _persist_participant(org_id: str, bot_id: str, identity: dict) -> None:
+    """Persist identity/classification so restart uses the same decisions."""
+    with _LOCK, _connect() as conn:
+        # Unit-level Session objects may not be store-backed. Production
+        # sessions are persisted before participant events arrive.
+        if conn.execute(
+            "SELECT 1 FROM sessions WHERE bot_id=?", (bot_id,)
+        ).fetchone() is None:
+            return
+        conn.execute(
+            """
+            INSERT INTO session_participants (
+                bot_id, org_id, participant_id, display_name,
+                speaker_kind, here, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(bot_id, participant_id) DO UPDATE SET
+                display_name=excluded.display_name,
+                speaker_kind=excluded.speaker_kind,
+                here=excluded.here,
+                updated_at=excluded.updated_at
+            """,
+            (
+                bot_id,
+                org_id,
+                identity["id"],
+                identity["name"],
+                identity.get("kind", "human"),
+                int(bool(identity.get("here", True))),
+                time.time(),
+            ),
         )
 
 
@@ -681,41 +866,108 @@ def mark_scheduled(event_id: str, *, org_id: str = DEMO_ORG_ID) -> None:
         )
 
 
+
+def durable_artifacts_enabled() -> bool:
+    """Whether Postgres is actually configured as the artifact authority.
+
+    Some key-free identity tests replace control_plane.enabled while leaving
+    LAURA_DATABASE_URL empty. That simulates an OAuth cutover, not a reachable
+    archive database; artifact routing must remain SQLite in that state.
+    """
+    from . import control_plane
+
+    return control_plane.enabled() and bool(
+        (settings.laura_database_url or "").strip()
+    )
+
+
 def save_artifact(bot_id: str, artifact: dict, *, org_id: str | None = None) -> None:
-    """Persist a finished meeting's distilled artifact (never raw transcript on
-    the wire; the store keeps the full copy). The row's org_id column comes from
-    the explicit ``org_id`` when given, else the artifact's own ``org_id`` field
-    (finalize stamps it from the session), else the Demo org — so the column and
-    the artifact JSON agree and single-tenant stays byte-identical."""
-    _artifacts[bot_id] = artifact
+    """Persist a finished meeting's complete private artifact.
+
+    In production Postgres is the source of truth and is written FIRST. A
+    configured database outage therefore propagates before the local cache is
+    mutated, leaving finalize retryable instead of reporting a false success.
+    SQLite remains the key-free/demo store and the live utterance hot path.
+    """
     row_org = org_id if org_id is not None else (artifact.get("org_id") or DEMO_ORG_ID)
-    with _LOCK, _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO artifacts (bot_id, org_id, artifact_json, saved_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(bot_id) DO UPDATE SET
-                org_id=excluded.org_id,
-                artifact_json=excluded.artifact_json,
-                saved_at=excluded.saved_at
-            """,
-            (bot_id, row_org, json.dumps(artifact), time.time()),
+    saved_at = time.time()
+
+    # Lazy import avoids the control_plane -> store constants import cycle.
+    from . import control_plane
+
+    durable_enabled = durable_artifacts_enabled()
+    if durable_enabled:
+        control_plane.save_artifact(
+            row_org,
+            bot_id,
+            artifact,
+            visibility=str(artifact.get("visibility") or "participants"),
+            saved_at=saved_at,
         )
 
+    # The local copy is a same-process warm cache in production and remains the
+    # complete persistence path for key-free/demo deployments. Once Postgres
+    # committed, a broken ephemeral SQLite mirror must not turn durable success
+    # into an endless finalize retry; without Postgres, the same error remains
+    # fatal so the key-free demo never reports a false save.
+    _artifacts[bot_id] = artifact
+    try:
+        with _LOCK, _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO artifacts (bot_id, org_id, artifact_json, saved_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(bot_id) DO UPDATE SET
+                    org_id=excluded.org_id,
+                    artifact_json=excluded.artifact_json,
+                    saved_at=excluded.saved_at
+                """,
+                (bot_id, row_org, json.dumps(artifact), saved_at),
+            )
+    except Exception:
+        if not durable_enabled:
+            _artifacts.pop(bot_id, None)
+            raise
 
-def get_artifact(bot_id: str) -> dict | None:
-    return _artifacts.get(bot_id)
+
+def get_artifact(bot_id: str, org_id: str | None = None) -> dict | None:
+    """Get a private artifact.
+
+    A production durable lookup is permitted only when its org is already
+    trusted. A bot-only call deliberately remains local/same-process: resolving
+    an org from a caller-controlled bot_id would require a forbidden global
+    artifact lookup. Key-free SQLite behavior is unchanged.
+    """
+    if org_id is not None:
+        from . import control_plane
+
+        if durable_artifacts_enabled():
+            return control_plane.get_artifact(org_id, bot_id)
+    artifact = _artifacts.get(bot_id)
+    if artifact is not None and org_id is not None:
+        artifact_org = str(artifact.get("org_id") or "")
+        if artifact_org not in ("", str(org_id)):
+            return None
+    return artifact
 
 
 def list_artifacts(org_id: str | None = None) -> list[dict]:
-    """Every saved artifact with its metadata, newest first (meetings page).
-    Reads the DB (not the in-memory cache) so it sees rows written by other
-    processes — e.g. tests or scripts seeding the store.
+    """Every saved artifact with its metadata, newest first.
 
-    ``org_id`` seals the enumeration to one tenant (``WHERE org_id=?``); the
-    default (None) returns every row for the callers that apply their own
-    visibility policy downstream (dashboard.visible / /meetings/list scope on
-    the artifact's own org_id, which keeps the legacy ""=shared semantics)."""
+    Production enumeration always requires a trusted org and is served from
+    Postgres under transaction-local RLS. The optional global SQLite path is
+    retained only for the key-free demo and legacy callers that apply their own
+    local visibility policy.
+    """
+    from . import control_plane
+
+    if durable_artifacts_enabled():
+        if not (org_id or "").strip():
+            raise ValueError(
+                "org_id is required for production artifact enumeration"
+            )
+        return control_plane.list_artifacts(str(org_id)) or []
+
     with _LOCK, _connect() as conn:
         if org_id is None:
             rows = conn.execute(
@@ -729,14 +981,19 @@ def list_artifacts(org_id: str | None = None) -> list[dict]:
                 (org_id,),
             ).fetchall()
     out = []
-    for r in rows:
+    for row in rows:
         try:
-            artifact = json.loads(r["artifact_json"])
+            saved = json.loads(row["artifact_json"])
         except (TypeError, ValueError):
-            artifact = {}
-        out.append({"bot_id": r["bot_id"], "saved_at": r["saved_at"], "artifact": artifact})
+            saved = {}
+        out.append(
+            {
+                "bot_id": row["bot_id"],
+                "saved_at": row["saved_at"],
+                "artifact": saved,
+            }
+        )
     return out
-
 
 def create(
     bot_id: str, meeting_url: str, avatar_id: str = "laura", org_id: str = DEMO_ORG_ID
@@ -806,17 +1063,20 @@ def upsert_user(
     if control_plane.enabled():
         try:
             durable = control_plane.ensure_user(google_sub, email, name, picture)
-        except Exception as exc:  # noqa: BLE001 — login must not hard-fail
-            # PII-safe: type only, never the email/sub. Falling back to the
-            # local org keeps login working; the next login retries.
+        except Exception as exc:  # noqa: BLE001 — convert to a PII-safe failure
+            # Fail closed: a local u_<hash> fallback is not a durable UUID org
+            # and could create a parallel tenant. Do not let the original
+            # SQLAlchemy exception (which may render bound email/sub values)
+            # escape into logs.
             print(
                 "[control_plane] ensure_user failed "
-                f"({type(exc).__name__}); using local org resolution",
+                f"({type(exc).__name__}); rejecting login",
                 flush=True,
             )
-            durable = None
-        if durable:
-            org_id = durable["org_id"]
+            raise RuntimeError("durable identity is temporarily unavailable") from None
+        if not durable:
+            raise RuntimeError("durable identity is temporarily unavailable")
+        org_id = durable["org_id"]
     now = time.time()
     with _LOCK, _connect() as conn:
         prev = conn.execute(
@@ -999,6 +1259,427 @@ def rotate_org_token(org_id: str, label: str) -> str | None:
             (token_hash, org, token_label, time.time()),
         )
     return raw
+
+
+def set_org_token(org_id: str, label: str, raw_token: str) -> bool:
+    """Atomically replace one labelled bearer with SHA-256(raw).
+
+    Used by retry-safe Slack completion: the raw value is deterministically
+    re-derived from the verified install nonce and is never stored.
+    """
+    import hashlib
+
+    org = (org_id or "").strip()
+    token_label = (label or "").strip()[:80]
+    raw = (raw_token or "").strip()
+    if not org or not token_label or not raw:
+        return False
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            "DELETE FROM org_tokens WHERE org_id = ? AND label = ?",
+            (org, token_label),
+        )
+        conn.execute(
+            "INSERT INTO org_tokens (token_hash, org_id, label, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (token_hash, org, token_label, time.time()),
+        )
+    return True
+
+
+
+def begin_brain_install(
+    org_id: str, avatar_id: str, nonce: str, channel: str = ""
+) -> bool:
+    """Persist the only nonce the next OAuth completion may claim."""
+    org = (org_id or "").strip()
+    avatar = (avatar_id or "").strip()
+    install_nonce = (nonce or "").strip()
+    if not org or not avatar or not install_nonce:
+        return False
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT status, config_json FROM org_connections "
+            "WHERE org_id = ? AND avatar_id = ? AND provider = 'cedric-brain'",
+            (org, avatar),
+        ).fetchone()
+        config: dict = {}
+        status = "pending"
+        if row is not None:
+            current_status = str(row["status"] or "")
+            if current_status == "disconnecting":
+                return False
+            status = "connected" if current_status == "connected" else "pending"
+            try:
+                config = json.loads(row["config_json"]) if row["config_json"] else {}
+            except ValueError:
+                config = {}
+            if not isinstance(config, dict):
+                config = {}
+        config.pop("install_tombstone", None)
+        config.pop("revoked_install_nonce", None)
+        config["pending_install_nonce"] = install_nonce
+        config["channel"] = (channel or "").strip()
+        conn.execute(
+            """
+            INSERT INTO org_connections
+                (org_id, avatar_id, provider, status, config_json, updated_at)
+            VALUES (?, ?, 'cedric-brain', ?, ?, ?)
+            ON CONFLICT(org_id, avatar_id, provider) DO UPDATE SET
+                status = excluded.status,
+                config_json = excluded.config_json,
+                updated_at = excluded.updated_at
+            """,
+            (org, avatar, status, json.dumps(config), time.time()),
+        )
+    return True
+
+
+def accept_brain_install(
+    org_id: str,
+    avatar_id: str,
+    nonce: str,
+    raw_token: str,
+    team_id: str,
+    channel: str,
+    webhook_secret: str,
+    webhook_token: str,
+) -> str:
+    """CAS one completion and bind retries to its exact accepted envelope."""
+    import hashlib
+
+    org = (org_id or "").strip()
+    avatar = (avatar_id or "").strip()
+    install_nonce = (nonce or "").strip()
+    raw = (raw_token or "").strip()
+    team = (team_id or "").strip()
+    callback_secret = (webhook_secret or "").strip()
+    callback_token = (webhook_token or "").strip()
+    callback_channel = (channel or "").strip()
+    if not all(
+        (org, avatar, install_nonce, raw, team, callback_secret, callback_token)
+    ):
+        return "invalid"
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    secret_hash = hashlib.sha256(callback_secret.encode()).hexdigest()
+    peer_hash = hashlib.sha256(callback_token.encode()).hexdigest()
+    label = "cedric-slack-install"
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT status, config_json FROM org_connections "
+            "WHERE org_id = ? AND avatar_id = ? AND provider = 'cedric-brain'",
+            (org, avatar),
+        ).fetchone()
+        config: dict = {}
+        current_status = ""
+        if row is not None:
+            current_status = str(row["status"] or "")
+            try:
+                config = json.loads(row["config_json"]) if row["config_json"] else {}
+            except ValueError:
+                config = {}
+            if not isinstance(config, dict):
+                config = {}
+        if current_status in ("disconnecting", "disconnected") or bool(
+            config.get("install_tombstone")
+        ):
+            return "stale"
+
+        installed = str(config.get("install_nonce") or "")
+        pending = str(config.get("pending_install_nonce") or "")
+        if pending:
+            if pending != install_nonce:
+                return "stale"
+        elif installed == install_nonce:
+            expected = (
+                str(config.get("team_id") or ""),
+                str(config.get("channel") or ""),
+                str(config.get("webhook_secret_sha256") or ""),
+                str(config.get("webhook_token_sha256") or ""),
+            )
+            presented = (team, callback_channel, secret_hash, peer_hash)
+            return "replay" if expected == presented else "conflict"
+        elif installed:
+            return "stale"
+
+        conn.execute(
+            "DELETE FROM org_tokens WHERE org_id = ? AND label = ?",
+            (org, label),
+        )
+        conn.execute(
+            "INSERT INTO org_tokens (token_hash, org_id, label, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (token_hash, org, label, time.time()),
+        )
+        config.update(
+            {
+                "team_id": team,
+                "channel": callback_channel,
+                "install_nonce": install_nonce,
+                "webhook_secret_sha256": secret_hash,
+                "webhook_token_sha256": peer_hash,
+            }
+        )
+        config.pop("pending_install_nonce", None)
+        config.pop("install_tombstone", None)
+        config.pop("revoked_install_nonce", None)
+        conn.execute(
+            """
+            INSERT INTO org_connections
+                (org_id, avatar_id, provider, status, config_json, updated_at)
+            VALUES (?, ?, 'cedric-brain', 'pending', ?, ?)
+            ON CONFLICT(org_id, avatar_id, provider) DO UPDATE SET
+                status = excluded.status,
+                config_json = excluded.config_json,
+                updated_at = excluded.updated_at
+            """,
+            (org, avatar, json.dumps(config), time.time()),
+        )
+    return "applied"
+
+
+def complete_brain_install(
+    org_id: str,
+    avatar_id: str,
+    nonce: str,
+    raw_token: str,
+    team_id: str,
+    channel: str,
+    webhook_secret: str,
+    webhook_token: str,
+) -> str:
+    """Run SQLite validation, registry sync and connect under one process lock."""
+    import hashlib
+    from .cedric import secret_registry
+
+    org = (org_id or "").strip()
+    avatar = (avatar_id or "").strip()
+    install_nonce = (nonce or "").strip()
+    raw = (raw_token or "").strip()
+    team = (team_id or "").strip()
+    callback_secret = (webhook_secret or "").strip()
+    callback_token = (webhook_token or "").strip()
+    callback_channel = (channel or "").strip()
+    if not all(
+        (org, avatar, install_nonce, raw, team, callback_secret, callback_token)
+    ):
+        return "invalid"
+
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    secret_hash = hashlib.sha256(callback_secret.encode()).hexdigest()
+    peer_hash = hashlib.sha256(callback_token.encode()).hexdigest()
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT status, config_json FROM org_connections "
+            "WHERE org_id = ? AND avatar_id = ? AND provider = 'cedric-brain'",
+            (org, avatar),
+        ).fetchone()
+        config: dict = {}
+        current_status = ""
+        if row is not None:
+            current_status = str(row["status"] or "")
+            try:
+                config = json.loads(row["config_json"]) if row["config_json"] else {}
+            except ValueError:
+                config = {}
+            if not isinstance(config, dict):
+                config = {}
+        if current_status in ("disconnecting", "disconnected") or bool(
+            config.get("install_tombstone")
+        ):
+            return "stale"
+
+        installed = str(config.get("install_nonce") or "")
+        pending = str(config.get("pending_install_nonce") or "")
+        replay = False
+        if pending:
+            if pending != install_nonce:
+                return "stale"
+        elif installed == install_nonce:
+            expected = (
+                str(config.get("team_id") or ""),
+                str(config.get("channel") or ""),
+                str(config.get("webhook_secret_sha256") or ""),
+                str(config.get("webhook_token_sha256") or ""),
+            )
+            presented = (team, callback_channel, secret_hash, peer_hash)
+            if expected != presented:
+                return "conflict"
+            replay = True
+        elif installed:
+            return "stale"
+
+        # Keep the process-wide RLock while updating the external registry.
+        # A concurrent start/disconnect therefore cannot make this callback
+        # stale between validation and the SSM write.
+        if not secret_registry.upsert_org_credentials(
+            org, callback_secret, callback_token
+        ):
+            return "registry_failed"
+
+        conn.execute(
+            "DELETE FROM org_tokens "
+            "WHERE org_id = ? AND label = 'cedric-slack-install'",
+            (org,),
+        )
+        conn.execute(
+            "INSERT INTO org_tokens (token_hash, org_id, label, created_at) "
+            "VALUES (?, ?, 'cedric-slack-install', ?)",
+            (token_hash, org, time.time()),
+        )
+        config.update(
+            {
+                "team_id": team,
+                "channel": callback_channel,
+                "install_nonce": install_nonce,
+                "webhook_secret_sha256": secret_hash,
+                "webhook_token_sha256": peer_hash,
+            }
+        )
+        config.pop("pending_install_nonce", None)
+        config.pop("install_tombstone", None)
+        config.pop("revoked_install_nonce", None)
+        config.pop("disconnect_phase", None)
+        conn.execute(
+            """
+            INSERT INTO org_connections
+                (org_id, avatar_id, provider, status, config_json, updated_at)
+            VALUES (?, ?, 'cedric-brain', 'connected', ?, ?)
+            ON CONFLICT(org_id, avatar_id, provider) DO UPDATE SET
+                status = excluded.status,
+                config_json = excluded.config_json,
+                updated_at = excluded.updated_at
+            """,
+            (org, avatar, json.dumps(config), time.time()),
+        )
+    return "replay" if replay else "applied"
+
+
+def finish_brain_install(org_id: str, avatar_id: str, nonce: str) -> str:
+    """Move the accepted install to connected under the same SQLite lock."""
+    org = (org_id or "").strip()
+    avatar = (avatar_id or "").strip()
+    install_nonce = (nonce or "").strip()
+    if not org or not avatar or not install_nonce:
+        return "invalid"
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT status, config_json FROM org_connections "
+            "WHERE org_id = ? AND avatar_id = ? AND provider = 'cedric-brain'",
+            (org, avatar),
+        ).fetchone()
+        if row is None:
+            return "stale"
+        try:
+            config = json.loads(row["config_json"]) if row["config_json"] else {}
+        except ValueError:
+            config = {}
+        if not isinstance(config, dict):
+            config = {}
+        if str(row["status"] or "") in ("disconnecting", "disconnected") or bool(
+            config.get("install_tombstone")
+        ):
+            return "stale"
+        if str(config.get("pending_install_nonce") or ""):
+            return "stale"
+        if str(config.get("install_nonce") or "") != install_nonce:
+            return "stale"
+        conn.execute(
+            "UPDATE org_connections SET status = 'connected', updated_at = ? "
+            "WHERE org_id = ? AND avatar_id = ? AND provider = 'cedric-brain'",
+            (time.time(), org, avatar),
+        )
+    return "connected"
+
+
+def begin_brain_disconnect(
+    org_id: str, avatar_id: str, phase: str = "revoke_pending"
+) -> bool:
+    """Fence every SQLite brain row before org-wide credential cleanup."""
+    org = (org_id or "").strip()
+    requested_avatar = (avatar_id or "").strip()
+    if not org or not requested_avatar:
+        return False
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            "SELECT avatar_id, config_json FROM org_connections "
+            "WHERE org_id = ? AND provider = 'cedric-brain'",
+            (org,),
+        ).fetchall()
+        if not rows or requested_avatar not in {str(row["avatar_id"]) for row in rows}:
+            return False
+        # Revoke the org-wide Cedric→Laura bearer in the same SQLite
+        # transaction/RLock that fences every connection row.
+        conn.execute(
+            "DELETE FROM org_tokens "
+            "WHERE org_id = ? AND label = 'cedric-slack-install'",
+            (org,),
+        )
+        for row in rows:
+            try:
+                config = json.loads(row["config_json"]) if row["config_json"] else {}
+            except ValueError:
+                config = {}
+            if not isinstance(config, dict):
+                config = {}
+            config["disconnect_phase"] = (phase or "revoke_pending").strip()
+            conn.execute(
+                "UPDATE org_connections SET status = 'disconnecting', "
+                "config_json = ?, updated_at = ? "
+                "WHERE org_id = ? AND avatar_id = ? AND provider = 'cedric-brain'",
+                (json.dumps(config), time.time(), org, str(row["avatar_id"])),
+            )
+    return True
+
+
+def tombstone_brain_install(org_id: str, avatar_id: str) -> bool:
+    """Revoke the org token and tombstone every SQLite brain row atomically."""
+    org = (org_id or "").strip()
+    requested_avatar = (avatar_id or "").strip()
+    if not org or not requested_avatar:
+        return False
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            "SELECT avatar_id, config_json FROM org_connections "
+            "WHERE org_id = ? AND provider = 'cedric-brain'",
+            (org,),
+        ).fetchall()
+        if not rows or requested_avatar not in {str(row["avatar_id"]) for row in rows}:
+            return False
+        conn.execute(
+            "DELETE FROM org_tokens "
+            "WHERE org_id = ? AND label = 'cedric-slack-install'",
+            (org,),
+        )
+        for row in rows:
+            try:
+                old = json.loads(row["config_json"]) if row["config_json"] else {}
+            except ValueError:
+                old = {}
+            if not isinstance(old, dict):
+                old = {}
+            revoked_nonce = str(
+                old.get("pending_install_nonce")
+                or old.get("install_nonce")
+                or old.get("revoked_install_nonce")
+                or ""
+            )
+            tombstone = {"install_tombstone": True}
+            if revoked_nonce:
+                tombstone["revoked_install_nonce"] = revoked_nonce
+            conn.execute(
+                "UPDATE org_connections SET status = 'disconnected', "
+                "config_json = ?, updated_at = ? "
+                "WHERE org_id = ? AND avatar_id = ? AND provider = 'cedric-brain'",
+                (
+                    json.dumps(tombstone),
+                    time.time(),
+                    org,
+                    str(row["avatar_id"]),
+                ),
+            )
+    return True
 
 
 def revoke_org_tokens(org_id: str, label: str = "") -> bool:

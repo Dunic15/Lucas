@@ -104,21 +104,30 @@
   // (Jan 2026) killed the previous third-party URL — never again. Override for
   // A/B tests with ?avatar_url=<glb url> (must have ARKit+Oculus viseme morphs).
   const avatarId = params.get("avatar_id") || "laura";
-  // Per-avatar model convention: an explicit ?avatar_url= always wins; otherwise
-  // a non-laura avatar_id probes same-origin /{avatar_id}.glb (e.g. /cedric.glb)
-  // and uses it if the backend serves one, falling back to /laura.glb. The HEAD
-  // probe is fired NOW, unawaited, so it overlaps Three.js/TalkingHead init
-  // below; Laura herself never probes — zero added latency on today's live path.
-  const explicitAvatarUrl = params.get("avatar_url");
+  // Identity-safe model resolution: a meeting may only render the selected
+  // avatar's own file. Explicit URL overrides remain a preview-only developer
+  // feature; they are ignored for Recall meeting pages.
+  const explicitAvatarUrl = params.get("conversation_id") ? null : params.get("avatar_url");
+  const configuredFallback = params.get("face_fallback") || "none";
   const avatarUrlPromise = (async () => {
     if (explicitAvatarUrl) return explicitAvatarUrl;
-    if (avatarId === "laura" || !/^[a-z0-9_-]+$/i.test(avatarId)) return "/laura.glb";
+    if (!/^[a-z0-9_-]+$/i.test(avatarId)) throw new Error("face_unavailable");
     try {
       const probe = await fetch(`/${avatarId}.glb`, { method: "HEAD" });
       if (probe.ok) return `/${avatarId}.glb`;
-    } catch (_) { /* backend doesn't serve one — fall back */ }
-    return "/laura.glb";
+    } catch (_) {}
+    throw new Error("face_unavailable");
   })();
+  function sameAvatarFallback(reason) {
+    if (params.get("fallback_attempted") === "1" ||
+        configuredFallback !== "photoreal") return false;
+    const next = new URL(location.href);
+    next.pathname = "/photoreal";
+    next.searchParams.set("avatar_id", avatarId);
+    next.searchParams.set("fallback_attempted", "1");
+    location.replace(next.pathname + next.search);
+    return true;
+  }
   // TalkingHead pose/gesture set ("F" | "M"). "F" is the historical default
   // (Laura); male avatars pass ?body=M until gender travels with avatar config.
   const BODY = (params.get("body") || "F").toUpperCase() === "M" ? "M" : "F";
@@ -259,11 +268,19 @@
     setTimeout(reveal, 2500); // fallback: never leave the stage hidden, even if it never settles
     status("live — avatar rendering ✅ (type + Speak to test lip-sync)");
   } catch (e) {
-    status("avatar failed to load: " + (e?.message || e) + " — try a different AVATAR_URL");
+    const reason = e?.message || String(e);
+    if (!sameAvatarFallback(reason)) {
+      status("face_unavailable: " + avatarId);
+      const stage = document.getElementById("stage");
+      stage.replaceChildren();
+      const notice = document.createElement("div");
+      notice.setAttribute("role", "alert");
+      notice.style.cssText = "margin:auto;padding:24px;text-align:center;font:600 24px system-ui;color:#26313d";
+      notice.textContent = avatarId + " face unavailable";
+      stage.appendChild(notice);
+      stage.classList.add("live");
+    }
     console.error(e);
-    // Still reveal the stage: a load failure should show the office backdrop
-    // ("empty room"), never a permanently blank black frame in a meeting.
-    document.getElementById("stage").classList.add("live");
   }
 
   // ── TTS: turn text into { audio, words, wtimes, wdurations } for speakAudio ──

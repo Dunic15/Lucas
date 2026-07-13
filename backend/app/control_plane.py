@@ -7,39 +7,26 @@ no-op returning ``None``/``False`` and **no engine is ever created**, so the
 SQLite runtime paths are byte-identical to today.
 
 What lives here vs. SQLite (store.py):
-- SQLite remains the RUNTIME store: sessions, utterances, routes, artifacts —
-  the live-meeting hot path NEVER touches this module (latency is the product;
-  control-plane calls happen on login/start/dashboard paths only).
-- Postgres holds the DURABLE identity + billing spine: users (google_sub),
-  orgs (UUID personal/domain orgs), memberships, org_agents grants, org_tokens
-  (per-org machine bearers) and billing_accounts (plan + included_seconds) —
-  the rows a redeploy must not wipe. store.py's tables become a warm cache.
+- SQLite remains the live RUNTIME store for sessions, utterances, and routes.
+  The live-meeting utterance hot path NEVER touches this module (latency is the
+  product).
+- Postgres holds the DURABLE identity + billing spine and the private completed
+  meeting artifacts customers expect after a redeploy. Artifact calls happen
+  only on finalize/archive/dashboard paths; store.py keeps a warm local cache.
 
-ROLE / RLS CONTRACT (read this before pointing LAURA_DATABASE_URL anywhere):
-Alembic 0001 puts FORCE ROW LEVEL SECURITY + a ``current_setting('app.
-current_org')`` policy on the identity tables (orgs, memberships, org_domains,
-org_agents, org_tokens) as well as the data-plane tables, and FORCE means even
-the table owner is policy-bound. Two classes of operation live in this module:
+ROLE / RLS CONTRACT:
+``LAURA_DATABASE_URL`` is runtime-only and MUST authenticate as the dedicated
+``laura_app`` role (NOSUPERUSER, NOBYPASSRLS). Alembic uses the separate
+``LAURA_DATABASE_ADMIN_URL``; the owner credential is never available to
+App Runner.
 
-1. **Tenant-scoped ops** (``set_connection`` / ``get_connections`` /
-   ``org_plan`` / ``mint_org_token``, and every insert ``ensure_user`` makes
-   for the org it is creating): these SET ``app.current_org`` on the
-   connection (``SELECT set_config('app.current_org', :org, true)`` inside the
-   transaction — txn-local) so RLS is *exercised*, not bypassed. For a brand
-   new org the UUID is generated client-side first, so the bootstrap inserts
-   satisfy the WITH CHECK policy even under a policy-enforcing role.
-2. **Cross-tenant identity lookups** — finding a user by google_sub/email,
-   resolving an email domain via ``org_domains``, and resolving a raw token
-   via ``org_tokens`` (``resolve_org_token``) — are inherently org-less: the
-   org is the *answer*, not an input. Under 0001's FORCE RLS these lookups
-   return nothing for a plain policy-bound role. THEREFORE this module assumes
-   the connection role is the **migration/owner role** (the same
-   LAURA_DATABASE_URL used for ``alembic upgrade head`` — on Supabase the
-   ``postgres`` role, which carries BYPASSRLS; in the pg test suite the
-   embedded-Postgres superuser). RLS remains the safety net for the tenant
-   DATA-plane and for any lower-privileged role (the ``laura_app`` pattern
-   0001 provisions for): the two-org test suite proves the policies hold on
-   the new tables for exactly such a role.
+Tenant CRUD — including mint/rotate/revoke of Cedric machine tokens — stays on short transactions with transaction-local
+``app.current_org``, so FORCE RLS is the database backstop. The two operations
+whose tenant is the answer rather than an input — Google signup/domain
+provisioning and token-hash-to-org resolution — call narrowly scoped
+``SECURITY DEFINER`` functions in the non-exposed ``laura_private`` schema.
+Migration 0004 pins their search_path, fully qualifies every object, revokes
+PUBLIC/anon/authenticated, and grants only exact EXECUTE to ``laura_app``.
 
 Nothing here ever logs emails, tokens, or any transcript/PII.
 """
@@ -63,6 +50,7 @@ from .store import CONNECTION_PROVIDERS, CONNECTION_STATUSES
 _LOCK = threading.Lock()
 _engine = None
 _engine_url: str = ""
+_RUNTIME_ROLE = "laura_app"
 
 
 def enabled() -> bool:
@@ -82,9 +70,42 @@ def _sqlalchemy_url(raw: str) -> str:
     return url
 
 
+def _assert_runtime_role(engine) -> dict:
+    """Fail closed unless this engine is the exact policy-bound runtime role.
+
+    The error is intentionally credential/URL-free. It protects every caller,
+    including health probes that force engine creation, from an accidentally
+    injected owner or BYPASSRLS DSN.
+    """
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT current_user, rolsuper, rolbypassrls "
+                "FROM pg_roles WHERE rolname = current_user"
+            )
+        ).fetchone()
+    safe = (
+        row is not None
+        and str(row[0]) == _RUNTIME_ROLE
+        and row[1] is False
+        and row[2] is False
+    )
+    if not safe:
+        raise RuntimeError(
+            "unsafe runtime database role; expected laura_app with "
+            "NOSUPERUSER NOBYPASSRLS"
+        )
+    return {
+        "current_user": str(row[0]),
+        "rolsuper": bool(row[1]),
+        "rolbypassrls": bool(row[2]),
+    }
+
+
 def _get_engine():
-    """Lazily-created module-level engine (pool_pre_ping so a dropped pooler
-    connection is replaced, not surfaced). Rebuilt if the URL changes (tests)."""
+    """Lazily create and role-verify the runtime engine before publishing it."""
     global _engine, _engine_url
     url = _sqlalchemy_url(settings.laura_database_url or "")
     if not url:
@@ -93,11 +114,30 @@ def _get_engine():
         if _engine is None or _engine_url != url:
             from sqlalchemy import create_engine
 
+            candidate = create_engine(url, pool_pre_ping=True)
+            try:
+                _assert_runtime_role(candidate)
+            except RuntimeError:
+                candidate.dispose()
+                raise
+            except Exception:
+                candidate.dispose()
+                # Startup/health logs must never render a DSN, host, username,
+                # or password from a failed SQLAlchemy/driver connection.
+                raise RuntimeError(
+                    "runtime database role verification failed"
+                ) from None
             if _engine is not None:
                 _engine.dispose()
-            _engine = create_engine(url, pool_pre_ping=True)
+            _engine = candidate
             _engine_url = url
         return _engine
+
+
+def runtime_role_status() -> Optional[dict]:
+    """Health/preflight proof for the configured runtime connection."""
+    engine = _get_engine()
+    return _assert_runtime_role(engine) if engine is not None else None
 
 
 def reset_engine() -> None:
@@ -130,221 +170,66 @@ def _hash_token(raw: str) -> str:
 def ensure_user(
     google_sub: str, email: str, name: str = "", picture: str = ""
 ) -> Optional[dict]:
-    """The durable signup: find-or-create the user + their org. Idempotent —
-    a re-login returns the same UUIDs.
+    """Find or provision the durable Google identity and its org.
 
-    Lookup order: users.google_sub, then email (backfilling google_sub — a
-    user who existed before sub tracking, or whose first login predates 0002).
-    Org resolution mirrors ``store.org_id_for_email``: a VERIFIED domain in
-    org_domains maps the login to THAT shared org (membership role 'member',
-    no personal org is created); otherwise the user's existing owned personal
-    org, else a brand new one — orgs row (name = email local-part, plan
-    'free'), an 'owner' membership, org_agents grants for exactly
-    ('laura','cedric'), and a billing_accounts row (plan 'free',
-    included_seconds 900 — the 15-minute trial PR B enforces).
-
-    Returns ``{user_id, org_id, email, created}`` (UUIDs as str; ``created``
-    is True only when the users row was created now). ``None`` when the
-    control plane is disabled.
+    The tenant is not known until this lookup finishes, so runtime never reads
+    ``users`` or ``org_domains`` directly. Migration 0004 exposes one
+    exact, server-only SECURITY DEFINER entry point which performs the
+    idempotent identity/domain/personal-org bundle and returns its resolved
+    tenant. Raw profile fields are never logged.
     """
     if not enabled():
         return None
-    from sqlalchemy import text
-
     email = (email or "").strip().lower()
     google_sub = (google_sub or "").strip()
     if not email:
         return None
+
+    from sqlalchemy import text
+
     engine = _get_engine()
-
     with engine.begin() as conn:
-        # 1. find the user (sub first, then email → backfill the sub).
-        row = None
-        if google_sub:
-            row = conn.execute(
-                text("SELECT id, email FROM users WHERE google_sub = :sub"),
-                {"sub": google_sub},
-            ).fetchone()
-        if row is None:
-            row = conn.execute(
-                text("SELECT id, email FROM users WHERE email = :email"),
-                {"email": email},
-            ).fetchone()
-            if row is not None and google_sub:
-                conn.execute(
-                    text(
-                        "UPDATE users SET google_sub = :sub WHERE id = :id "
-                        "AND (google_sub IS NULL OR google_sub = '')"
-                    ),
-                    {"sub": google_sub, "id": row[0]},
-                )
-        created = row is None
-        if created:
-            user_id = str(uuid.uuid4())
-            # ON CONFLICT with NO arbiter: a concurrent same-person signup can
-            # lose on EITHER unique constraint — users.email OR
-            # uq_users_google_sub — and naming only (email) as the arbiter
-            # left the sub collision raising IntegrityError (adversarial
-            # review 2026-07-13; reproduced under a 12-thread race). The
-            # arbiter-less DO NOTHING suppresses both; the winner re-read
-            # below recovers either way. (Postgres parks the losing INSERT on
-            # the speculative-insert lock until the winner's whole txn
-            # commits, so the loser's re-read — and its owner-membership
-            # lookup further down — always sees the winner's committed signup,
-            # never a half-provisioned one.)
-            conn.execute(
-                text(
-                    "INSERT INTO users (id, email, name, google_sub, provider, "
-                    "auth_method) VALUES (:id, :email, :name, "
-                    "NULLIF(:sub, ''), 'google', 'google') "
-                    "ON CONFLICT DO NOTHING"
-                ),
-                {"id": user_id, "email": email, "name": name or "", "sub": google_sub},
-            )
-            # Re-read the winner: by sub first (a sub-constraint loss can sit
-            # on a row whose email differs), then by email. Losing the race
-            # means the row pre-existed → created False.
-            got = None
-            if google_sub:
-                got = conn.execute(
-                    text("SELECT id FROM users WHERE google_sub = :sub"),
-                    {"sub": google_sub},
-                ).fetchone()
-            if got is None:
-                got = conn.execute(
-                    text("SELECT id FROM users WHERE email = :email"),
-                    {"email": email},
-                ).fetchone()
-            created = str(got[0]) == user_id
-            user_id = str(got[0])
-        else:
-            user_id = str(row[0])
-            # Refresh the profile on re-login: name when Google sent one, and
-            # ALWAYS the email — a sub-matched login is the same person even
-            # after a Google-account address change (the sub is the durable
-            # key; without this the row kept the signup-era email forever).
-            # An email that moved to a DIFFERENT account would violate the
-            # unique index and raise; upsert_user's caller falls back to
-            # local resolution for that pathological case.
-            conn.execute(
-                text(
-                    "UPDATE users SET "
-                    "name = CASE WHEN :name <> '' THEN :name ELSE name END, "
-                    "email = :email WHERE id = :id"
-                ),
-                {"name": name or "", "email": email, "id": user_id},
-            )
-
-        # 2. resolve the org: verified domain > existing owned org > new one.
-        org_id = _resolve_domain_org(conn, email)
-        if org_id is not None:
-            _set_org(conn, org_id)
-            conn.execute(
-                text(
-                    "INSERT INTO memberships (user_id, org_id, role, status) "
-                    "VALUES (:u, :o, 'member', 'active') ON CONFLICT DO NOTHING"
-                ),
-                {"u": user_id, "o": org_id},
-            )
-        else:
-            row = conn.execute(
-                text(
-                    "SELECT m.org_id FROM memberships m JOIN orgs o "
-                    "ON o.id = m.org_id AND o.deleted_at IS NULL "
-                    "WHERE m.user_id = :u AND m.role = 'owner' "
-                    "ORDER BY o.created_at LIMIT 1"
-                ),
-                {"u": user_id},
-            ).fetchone()
-            if row is not None:
-                org_id = str(row[0])
-            else:
-                org_id = _create_personal_org(conn, user_id, email)
-
-    return {"user_id": user_id, "org_id": org_id, "email": email, "created": created}
-
-
-def _resolve_domain_org(conn, email: str) -> Optional[str]:
-    """org_id for the email's VERIFIED corporate domain, or None. Mirrors
-    store.org_id_for_email: only rows with a non-null verified_at count, and
-    free-mail domains are never in org_domains by contract."""
-    from sqlalchemy import text
-
-    _, _, domain = email.partition("@")
-    if not domain:
-        return None
-    row = conn.execute(
-        text(
-            "SELECT org_id FROM org_domains "
-            "WHERE domain = :d AND verified_at IS NOT NULL"
-        ),
-        {"d": domain},
-    ).fetchone()
-    return str(row[0]) if row else None
-
-
-def _create_personal_org(conn, user_id: str, email: str) -> str:
-    """Provision the personal org bundle: orgs row + owner membership +
-    laura/cedric grants + the free-plan billing account. The org UUID is
-    generated client-side and set as ``app.current_org`` FIRST, so every
-    insert satisfies the WITH CHECK tenant policy even under FORCE RLS."""
-    from sqlalchemy import text
-
-    org_id = str(uuid.uuid4())
-    _set_org(conn, org_id)
-    local = email.partition("@")[0] or "personal"
-    conn.execute(
-        text(
-            "INSERT INTO orgs (id, name, slug, plan) "
-            "VALUES (:id, :name, :slug, 'free') ON CONFLICT (id) DO NOTHING"
-        ),
-        {"id": org_id, "name": local[:80], "slug": f"org-{uuid.UUID(org_id).hex[:12]}"},
-    )
-    conn.execute(
-        text(
-            "INSERT INTO memberships (user_id, org_id, role, status) "
-            "VALUES (:u, :o, 'owner', 'active') ON CONFLICT DO NOTHING"
-        ),
-        {"u": user_id, "o": org_id},
-    )
-    for avatar_id in ("laura", "cedric"):
-        conn.execute(
+        row = conn.execute(
             text(
-                "INSERT INTO org_agents (org_id, avatar_id) "
-                "VALUES (:o, :a) ON CONFLICT DO NOTHING"
+                "SELECT user_id, org_id, normalized_email, created "
+                "FROM laura_private.ensure_user(:sub, :email, :name)"
             ),
-            {"o": org_id, "a": avatar_id},
-        )
-    conn.execute(
-        text(
-            "INSERT INTO billing_accounts (org_id, plan, included_seconds) "
-            "VALUES (:o, 'free', 900) ON CONFLICT (org_id) DO NOTHING"
-        ),
-        {"o": org_id},
-    )
-    return org_id
+            {"sub": google_sub, "email": email, "name": name or ""},
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "user_id": str(row[0]),
+        "org_id": str(row[1]),
+        "email": str(row[2]),
+        "created": bool(row[3]),
+    }
 
 
 # ── per-org machine tokens ─────────────────────────────────────────────
 
 def resolve_org_token(raw_token: str) -> Optional[str]:
-    """org_id owning this raw bearer (sha256 lookup in org_tokens), or None.
-    Cross-tenant by nature (the org is the answer) — see the role contract in
-    the module docstring. Never logs the token."""
+    """Resolve a raw machine bearer to its org without granting table access.
+
+    The runtime sends only sha256(raw) into the exact
+    ``laura_private.resolve_org_token`` SECURITY DEFINER function; the raw
+    bearer is never stored or logged.
+    """
     if not enabled():
         return None
     raw = (raw_token or "").strip()
     if not raw:
         return None
+
     from sqlalchemy import text
 
     engine = _get_engine()
     with engine.connect() as conn:
         row = conn.execute(
-            text("SELECT org_id FROM org_tokens WHERE token_hash = :h"),
-            {"h": _hash_token(raw)},
+            text("SELECT laura_private.resolve_org_token(:token_hash)"),
+            {"token_hash": _hash_token(raw)},
         ).fetchone()
-    return str(row[0]) if row else None
+    return str(row[0]) if row and row[0] is not None else None
 
 
 def mint_org_token(org_id: str, label: str = "") -> Optional[str]:
@@ -392,6 +277,544 @@ def rotate_org_token(org_id: str, label: str) -> Optional[str]:
             {"h": _hash_token(raw), "o": org, "l": token_label},
         )
     return raw
+
+
+def set_org_token(org_id: str, label: str, raw_token: str) -> bool:
+    """Atomically replace one labelled bearer with SHA-256(raw)."""
+    if (
+        not enabled()
+        or not (org_id or "").strip()
+        or not (label or "").strip()
+        or not (raw_token or "").strip()
+    ):
+        return False
+    from sqlalchemy import text
+
+    org = org_id.strip()
+    token_label = label.strip()[:80]
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        conn.execute(
+            text("DELETE FROM org_tokens WHERE org_id = :o AND label = :l"),
+            {"o": org, "l": token_label},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO org_tokens (token_hash, org_id, label) "
+                "VALUES (:h, :o, :l)"
+            ),
+            {"h": _hash_token(raw_token.strip()), "o": org, "l": token_label},
+        )
+    return True
+
+
+def _brain_install_lock(conn: Any, org_id: str, avatar_id: str = "") -> None:
+    """Serialize every Cedric credential mutation for one organization.
+
+    The webhook secret, peer bearer and Laura org-token label are org-wide, so
+    an avatar-scoped lock is too narrow: a callback for one avatar could race a
+    disconnect or reinstall initiated from another.  The transaction-scoped
+    advisory lock also protects the no-row case.
+    """
+    from sqlalchemy import text
+
+    conn.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+        {"key": f"laura-brain-credentials:{org_id}"},
+    )
+
+
+def begin_brain_install(
+    org_id: str, avatar_id: str, nonce: str, channel: str = ""
+) -> bool:
+    """Persist the only nonce the next OAuth completion may claim."""
+    if (
+        not enabled()
+        or not (org_id or "").strip()
+        or not (avatar_id or "").strip()
+        or not (nonce or "").strip()
+    ):
+        return False
+    from sqlalchemy import text
+
+    org = org_id.strip()
+    avatar = avatar_id.strip()
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        _brain_install_lock(conn, org, avatar)
+        row = conn.execute(
+            text(
+                "SELECT status, config_json FROM org_connections "
+                "WHERE org_id = :o AND avatar_id = :a "
+                "AND provider = 'cedric-brain' FOR UPDATE"
+            ),
+            {"o": org, "a": avatar},
+        ).fetchone()
+        config: dict[str, Any] = {}
+        status = "pending"
+        if row is not None:
+            current_status = str(row[0] or "")
+            if current_status == "disconnecting":
+                return False
+            status = "connected" if current_status == "connected" else "pending"
+            try:
+                config = json.loads(row[1]) if row[1] else {}
+            except ValueError:
+                config = {}
+            if not isinstance(config, dict):
+                config = {}
+        config.pop("install_tombstone", None)
+        config.pop("revoked_install_nonce", None)
+        config["pending_install_nonce"] = nonce.strip()
+        config["channel"] = (channel or "").strip()
+        conn.execute(
+            text(
+                """
+                INSERT INTO org_connections
+                    (org_id, avatar_id, provider, status, config_json, updated_at)
+                VALUES (:o, :a, 'cedric-brain', :s, :c, now())
+                ON CONFLICT (org_id, avatar_id, provider) DO UPDATE SET
+                    status = excluded.status,
+                    config_json = excluded.config_json,
+                    updated_at = excluded.updated_at
+                """
+            ),
+            {"o": org, "a": avatar, "s": status, "c": json.dumps(config)},
+        )
+    return True
+
+
+def accept_brain_install(
+    org_id: str,
+    avatar_id: str,
+    nonce: str,
+    raw_token: str,
+    team_id: str,
+    channel: str,
+    webhook_secret: str,
+    webhook_token: str,
+) -> Optional[str]:
+    """CAS one completion and bind retries to its exact accepted envelope."""
+    if not enabled():
+        return None
+    org = (org_id or "").strip()
+    avatar = (avatar_id or "").strip()
+    install_nonce = (nonce or "").strip()
+    raw = (raw_token or "").strip()
+    team = (team_id or "").strip()
+    callback_secret = (webhook_secret or "").strip()
+    callback_token = (webhook_token or "").strip()
+    callback_channel = (channel or "").strip()
+    if not all(
+        (org, avatar, install_nonce, raw, team, callback_secret, callback_token)
+    ):
+        return "invalid"
+    from sqlalchemy import text
+
+    secret_hash = _hash_token(callback_secret)
+    peer_hash = _hash_token(callback_token)
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        _brain_install_lock(conn, org, avatar)
+        row = conn.execute(
+            text(
+                "SELECT status, config_json FROM org_connections "
+                "WHERE org_id = :o AND avatar_id = :a "
+                "AND provider = 'cedric-brain' FOR UPDATE"
+            ),
+            {"o": org, "a": avatar},
+        ).fetchone()
+        config: dict[str, Any] = {}
+        current_status = ""
+        if row is not None:
+            current_status = str(row[0] or "")
+            try:
+                config = json.loads(row[1]) if row[1] else {}
+            except ValueError:
+                config = {}
+            if not isinstance(config, dict):
+                config = {}
+        if current_status in ("disconnecting", "disconnected") or bool(
+            config.get("install_tombstone")
+        ):
+            return "stale"
+
+        installed = str(config.get("install_nonce") or "")
+        pending = str(config.get("pending_install_nonce") or "")
+        if pending:
+            if pending != install_nonce:
+                return "stale"
+        elif installed == install_nonce:
+            expected = (
+                str(config.get("team_id") or ""),
+                str(config.get("channel") or ""),
+                str(config.get("webhook_secret_sha256") or ""),
+                str(config.get("webhook_token_sha256") or ""),
+            )
+            presented = (team, callback_channel, secret_hash, peer_hash)
+            return "replay" if expected == presented else "conflict"
+        elif installed:
+            return "stale"
+
+        conn.execute(
+            text(
+                "DELETE FROM org_tokens "
+                "WHERE org_id = :o AND label = 'cedric-slack-install'"
+            ),
+            {"o": org},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO org_tokens (token_hash, org_id, label) "
+                "VALUES (:h, :o, 'cedric-slack-install')"
+            ),
+            {"h": _hash_token(raw), "o": org},
+        )
+        config.update(
+            {
+                "team_id": team,
+                "channel": callback_channel,
+                "install_nonce": install_nonce,
+                "webhook_secret_sha256": secret_hash,
+                "webhook_token_sha256": peer_hash,
+            }
+        )
+        config.pop("pending_install_nonce", None)
+        config.pop("install_tombstone", None)
+        config.pop("revoked_install_nonce", None)
+        conn.execute(
+            text(
+                """
+                INSERT INTO org_connections
+                    (org_id, avatar_id, provider, status, config_json, updated_at)
+                VALUES (:o, :a, 'cedric-brain', 'pending', :c, now())
+                ON CONFLICT (org_id, avatar_id, provider) DO UPDATE SET
+                    status = excluded.status,
+                    config_json = excluded.config_json,
+                    updated_at = excluded.updated_at
+                """
+            ),
+            {"o": org, "a": avatar, "c": json.dumps(config)},
+        )
+    return "applied"
+
+
+def complete_brain_install(
+    org_id: str,
+    avatar_id: str,
+    nonce: str,
+    raw_token: str,
+    team_id: str,
+    channel: str,
+    webhook_secret: str,
+    webhook_token: str,
+) -> Optional[str]:
+    """Atomically validate, sync the external registry and connect one install.
+
+    The per-org advisory lock remains held while SSM is updated.  Therefore a
+    newer install or disconnect cannot interpose between the compare-and-swap
+    and the external write.  Database mutations happen only after the registry
+    succeeds; a registry failure leaves the pending nonce retryable.
+    """
+    if not enabled():
+        return None
+    org = (org_id or "").strip()
+    avatar = (avatar_id or "").strip()
+    install_nonce = (nonce or "").strip()
+    raw = (raw_token or "").strip()
+    team = (team_id or "").strip()
+    callback_secret = (webhook_secret or "").strip()
+    callback_token = (webhook_token or "").strip()
+    callback_channel = (channel or "").strip()
+    if not all(
+        (org, avatar, install_nonce, raw, team, callback_secret, callback_token)
+    ):
+        return "invalid"
+
+    from sqlalchemy import text
+    from .cedric import secret_registry
+
+    secret_hash = _hash_token(callback_secret)
+    peer_hash = _hash_token(callback_token)
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        _brain_install_lock(conn, org)
+        row = conn.execute(
+            text(
+                "SELECT status, config_json FROM org_connections "
+                "WHERE org_id = :o AND avatar_id = :a "
+                "AND provider = 'cedric-brain' FOR UPDATE"
+            ),
+            {"o": org, "a": avatar},
+        ).fetchone()
+        config: dict[str, Any] = {}
+        current_status = ""
+        if row is not None:
+            current_status = str(row[0] or "")
+            try:
+                config = json.loads(row[1]) if row[1] else {}
+            except ValueError:
+                config = {}
+            if not isinstance(config, dict):
+                config = {}
+        if current_status in ("disconnecting", "disconnected") or bool(
+            config.get("install_tombstone")
+        ):
+            return "stale"
+
+        installed = str(config.get("install_nonce") or "")
+        pending = str(config.get("pending_install_nonce") or "")
+        replay = False
+        if pending:
+            if pending != install_nonce:
+                return "stale"
+        elif installed == install_nonce:
+            expected = (
+                str(config.get("team_id") or ""),
+                str(config.get("channel") or ""),
+                str(config.get("webhook_secret_sha256") or ""),
+                str(config.get("webhook_token_sha256") or ""),
+            )
+            presented = (team, callback_channel, secret_hash, peer_hash)
+            if expected != presented:
+                return "conflict"
+            replay = True
+        elif installed:
+            return "stale"
+
+        # This bounded network write deliberately occurs while the org-wide
+        # transaction lock is held.  Provisioning is rare; correctness beats
+        # releasing the lock and allowing stale SSM resurrection.
+        if not secret_registry.upsert_org_credentials(
+            org, callback_secret, callback_token
+        ):
+            return "registry_failed"
+
+        conn.execute(
+            text(
+                "DELETE FROM org_tokens "
+                "WHERE org_id = :o AND label = 'cedric-slack-install'"
+            ),
+            {"o": org},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO org_tokens (token_hash, org_id, label) "
+                "VALUES (:h, :o, 'cedric-slack-install')"
+            ),
+            {"h": _hash_token(raw), "o": org},
+        )
+        config.update(
+            {
+                "team_id": team,
+                "channel": callback_channel,
+                "install_nonce": install_nonce,
+                "webhook_secret_sha256": secret_hash,
+                "webhook_token_sha256": peer_hash,
+            }
+        )
+        config.pop("pending_install_nonce", None)
+        config.pop("install_tombstone", None)
+        config.pop("revoked_install_nonce", None)
+        config.pop("disconnect_phase", None)
+        conn.execute(
+            text(
+                """
+                INSERT INTO org_connections
+                    (org_id, avatar_id, provider, status, config_json, updated_at)
+                VALUES (:o, :a, 'cedric-brain', 'connected', :c, now())
+                ON CONFLICT (org_id, avatar_id, provider) DO UPDATE SET
+                    status = excluded.status,
+                    config_json = excluded.config_json,
+                    updated_at = excluded.updated_at
+                """
+            ),
+            {"o": org, "a": avatar, "c": json.dumps(config)},
+        )
+    return "replay" if replay else "applied"
+
+
+def finish_brain_install(org_id: str, avatar_id: str, nonce: str) -> Optional[str]:
+    """Move one accepted install to connected under the install lock."""
+    if (
+        not enabled()
+        or not (org_id or "").strip()
+        or not (avatar_id or "").strip()
+        or not (nonce or "").strip()
+    ):
+        return None
+    from sqlalchemy import text
+
+    org = org_id.strip()
+    avatar = avatar_id.strip()
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        _brain_install_lock(conn, org, avatar)
+        row = conn.execute(
+            text(
+                "SELECT status, config_json FROM org_connections "
+                "WHERE org_id = :o AND avatar_id = :a "
+                "AND provider = 'cedric-brain' FOR UPDATE"
+            ),
+            {"o": org, "a": avatar},
+        ).fetchone()
+        if row is None:
+            return "stale"
+        try:
+            config = json.loads(row[1]) if row[1] else {}
+        except ValueError:
+            config = {}
+        if not isinstance(config, dict):
+            config = {}
+        if str(row[0] or "") in ("disconnecting", "disconnected") or bool(
+            config.get("install_tombstone")
+        ):
+            return "stale"
+        # Any pending nonce was written by a newer /slack/start.  The legacy
+        # split accept/finish helper must never connect the older install.
+        if str(config.get("pending_install_nonce") or ""):
+            return "stale"
+        if str(config.get("install_nonce") or "") != nonce.strip():
+            return "stale"
+        conn.execute(
+            text(
+                "UPDATE org_connections SET status = 'connected', updated_at = now() "
+                "WHERE org_id = :o AND avatar_id = :a "
+                "AND provider = 'cedric-brain'"
+            ),
+            {"o": org, "a": avatar},
+        )
+    return "connected"
+
+
+def begin_brain_disconnect(
+    org_id: str, avatar_id: str, phase: str = "revoke_pending"
+) -> bool:
+    """Fence every brain row before org-wide remote/registry cleanup."""
+    if (
+        not enabled()
+        or not (org_id or "").strip()
+        or not (avatar_id or "").strip()
+    ):
+        return False
+    from sqlalchemy import text
+
+    org = org_id.strip()
+    requested_avatar = avatar_id.strip()
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        _brain_install_lock(conn, org)
+        rows = conn.execute(
+            text(
+                "SELECT avatar_id, config_json FROM org_connections "
+                "WHERE org_id = :o AND provider = 'cedric-brain' FOR UPDATE"
+            ),
+            {"o": org},
+        ).fetchall()
+        if not rows or requested_avatar not in {str(row[0]) for row in rows}:
+            return False
+        # Fail closed at the START of disconnect. The Cedric→Laura bearer is
+        # org-wide and must stop authenticating before remote/SSM cleanup can
+        # block or fail.
+        conn.execute(
+            text(
+                "DELETE FROM org_tokens "
+                "WHERE org_id = :o AND label = 'cedric-slack-install'"
+            ),
+            {"o": org},
+        )
+        for row in rows:
+            try:
+                config = json.loads(row[1]) if row[1] else {}
+            except ValueError:
+                config = {}
+            if not isinstance(config, dict):
+                config = {}
+            config["disconnect_phase"] = (phase or "revoke_pending").strip()
+            conn.execute(
+                text(
+                    "UPDATE org_connections SET status = 'disconnecting', "
+                    "config_json = :c, updated_at = now() "
+                    "WHERE org_id = :o AND avatar_id = :a "
+                    "AND provider = 'cedric-brain'"
+                ),
+                {
+                    "o": org,
+                    "a": str(row[0]),
+                    "c": json.dumps(config),
+                },
+            )
+    return True
+
+
+def tombstone_brain_install(org_id: str, avatar_id: str) -> bool:
+    """Revoke the org token and tombstone every brain row in one transaction."""
+    if (
+        not enabled()
+        or not (org_id or "").strip()
+        or not (avatar_id or "").strip()
+    ):
+        return False
+    from sqlalchemy import text
+
+    org = org_id.strip()
+    requested_avatar = avatar_id.strip()
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        _brain_install_lock(conn, org)
+        rows = conn.execute(
+            text(
+                "SELECT avatar_id, config_json FROM org_connections "
+                "WHERE org_id = :o AND provider = 'cedric-brain' FOR UPDATE"
+            ),
+            {"o": org},
+        ).fetchall()
+        if not rows or requested_avatar not in {str(row[0]) for row in rows}:
+            return False
+        conn.execute(
+            text(
+                "DELETE FROM org_tokens "
+                "WHERE org_id = :o AND label = 'cedric-slack-install'"
+            ),
+            {"o": org},
+        )
+        for row in rows:
+            try:
+                old = json.loads(row[1]) if row[1] else {}
+            except ValueError:
+                old = {}
+            if not isinstance(old, dict):
+                old = {}
+            revoked_nonce = str(
+                old.get("pending_install_nonce")
+                or old.get("install_nonce")
+                or old.get("revoked_install_nonce")
+                or ""
+            )
+            tombstone: dict[str, Any] = {"install_tombstone": True}
+            if revoked_nonce:
+                tombstone["revoked_install_nonce"] = revoked_nonce
+            conn.execute(
+                text(
+                    "UPDATE org_connections SET status = 'disconnected', "
+                    "config_json = :c, updated_at = now() "
+                    "WHERE org_id = :o AND avatar_id = :a "
+                    "AND provider = 'cedric-brain'"
+                ),
+                {
+                    "o": org,
+                    "a": str(row[0]),
+                    "c": json.dumps(tombstone),
+                },
+            )
+    return True
 
 
 def revoke_org_tokens(org_id: str, label: str = "") -> bool:
@@ -503,6 +926,160 @@ def get_connections(org_id: str) -> Optional[list[dict[str, Any]]]:
     return out
 
 
+_ARTIFACT_VISIBILITIES = frozenset({"participants", "org", "private"})
+
+
+def _artifact_payload(value: Any) -> dict:
+    """Normalize psycopg's jsonb result without ever rendering its PII."""
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def save_artifact(
+    org_id: str,
+    bot_id: str,
+    artifact: dict,
+    *,
+    visibility: str = "participants",
+    saved_at: float | None = None,
+    delete_by: float | None = None,
+) -> Optional[bool]:
+    """Durably upsert one full meeting artifact inside one tenant.
+
+    The payload intentionally includes the transcript: this is the private,
+    RLS-protected customer archive, not a Cedric wire envelope. delete_by is
+    stamped from the owning org's existing retention_days contract when the
+    caller does not provide it. There is no delete worker or DELETE grant here.
+    """
+    if not enabled():
+        return None
+    org = (org_id or "").strip()
+    bot = (bot_id or "").strip()
+    if not org or not bot:
+        raise ValueError("org_id and bot_id are required for durable artifacts")
+    if not isinstance(artifact, dict):
+        raise ValueError("artifact must be a JSON object")
+
+    payload = dict(artifact)
+    # The RLS column and private JSON must never disagree.
+    payload["org_id"] = org
+    saved_epoch = time.time() if saved_at is None else float(saved_at)
+    row_visibility = (
+        visibility if visibility in _ARTIFACT_VISIBILITIES else "participants"
+    )
+
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        retention_row = conn.execute(
+            text(
+                "SELECT retention_days FROM public.orgs "
+                "WHERE id = CAST(:o AS uuid)"
+            ),
+            {"o": org},
+        ).fetchone()
+        if retention_row is None:
+            raise RuntimeError("artifact owner org is unavailable")
+        retention_days = max(0, int(retention_row[0]))
+        delete_epoch = (
+            saved_epoch + retention_days * 86400
+            if delete_by is None
+            else float(delete_by)
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO public.artifacts AS current
+                    (org_id, bot_id, artifact, visibility, saved_at, delete_by)
+                VALUES (
+                    CAST(:o AS uuid), :b, CAST(:a AS jsonb), :v,
+                    to_timestamp(CAST(:saved AS double precision)),
+                    to_timestamp(CAST(:delete AS double precision))
+                )
+                ON CONFLICT (org_id, bot_id) DO UPDATE SET
+                    artifact = excluded.artifact,
+                    visibility = excluded.visibility,
+                    saved_at = excluded.saved_at,
+                    delete_by = excluded.delete_by
+                """
+            ),
+            {
+                "o": org,
+                "b": bot,
+                "a": json.dumps(payload),
+                "v": row_visibility,
+                "saved": saved_epoch,
+                "delete": delete_epoch,
+            },
+        )
+    return True
+
+
+def get_artifact(org_id: str, bot_id: str) -> Optional[dict]:
+    """Return one tenant's private artifact, never a global bot-id lookup."""
+    if not enabled():
+        return None
+    org = (org_id or "").strip()
+    bot = (bot_id or "").strip()
+    if not org or not bot:
+        return None
+
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        row = conn.execute(
+            text(
+                "SELECT artifact FROM public.artifacts "
+                "WHERE org_id = CAST(:o AS uuid) AND bot_id = :b"
+            ),
+            {"o": org, "b": bot},
+        ).fetchone()
+    return _artifact_payload(row[0]) if row is not None else None
+
+
+def list_artifacts(org_id: str) -> Optional[list[dict[str, Any]]]:
+    """List one tenant's private archive in the legacy dashboard row shape."""
+    if not enabled():
+        return None
+    org = (org_id or "").strip()
+    if not org:
+        raise ValueError("org_id is required for durable artifact enumeration")
+
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        rows = conn.execute(
+            text(
+                "SELECT bot_id, extract(epoch FROM saved_at), artifact "
+                "FROM public.artifacts "
+                "WHERE org_id = CAST(:o AS uuid) "
+                "ORDER BY saved_at DESC, bot_id DESC"
+            ),
+            {"o": org},
+        ).fetchall()
+    return [
+        {
+            "bot_id": str(row[0]),
+            "saved_at": float(row[1] or 0),
+            "artifact": _artifact_payload(row[2]),
+        }
+        for row in rows
+    ]
+
+
 def org_plan(org_id: str) -> Optional[dict]:
     """``{plan, included_seconds}`` for an org's billing account (PR B's trial
     enforcement reads this), or None when disabled / no billing row."""
@@ -523,3 +1100,636 @@ def org_plan(org_id: str) -> Optional[dict]:
     if row is None:
         return None
     return {"plan": str(row[0]), "included_seconds": int(row[1])}
+
+
+# ── Stripe billing control plane (PR C, migration 0005) ────────────────
+
+_BILLING_TERMINAL = {
+    "canceled", "unpaid", "incomplete_expired", "incomplete", "paused",
+    "invalid", "none",
+}
+_BILLING_IRREVERSIBLE = {
+    "canceled", "unpaid", "incomplete_expired", "invalid",
+}
+
+
+def billing_boundary_ready() -> bool:
+    """Prove both the runtime role and migration 0005 private boundary."""
+    if not enabled():
+        return False
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.connect() as conn:
+        return bool(
+            conn.execute(
+                text("SELECT laura_private.billing_boundary_ready()")
+            ).scalar()
+        )
+
+
+def _billing_dict(row) -> Optional[dict]:
+    if row is None:
+        return None
+    return {
+        "plan": str(row[0]),
+        "included_seconds": int(row[1]),
+        "subscription_status": str(row[2]),
+        "current_period_start": int(row[3]) if row[3] is not None else None,
+        "current_period_end": int(row[4]) if row[4] is not None else None,
+        "stripe_customer_id": str(row[5]) if row[5] else None,
+        "stripe_subscription_id": str(row[6]) if row[6] else None,
+        "checkout_revision": int(row[7] or 0),
+        "checkout_pending_until": int(row[8]) if row[8] is not None else None,
+    }
+
+
+def get_billing(org_id: str) -> Optional[dict]:
+    """Tenant-scoped billing state. Customer ids are returned only for this org."""
+    if not enabled() or not (org_id or "").strip():
+        return None
+    from sqlalchemy import text
+
+    org = org_id.strip()
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        row = conn.execute(
+            text(
+                """
+                SELECT plan, included_seconds, subscription_status,
+                       EXTRACT(EPOCH FROM current_period_start),
+                       EXTRACT(EPOCH FROM current_period_end),
+                       stripe_customer_id, stripe_subscription_id,
+                       checkout_revision,
+                       EXTRACT(EPOCH FROM checkout_pending_until)
+                  FROM billing_accounts
+                 WHERE org_id = :o
+                """
+            ),
+            {"o": org},
+        ).fetchone()
+    return _billing_dict(row)
+
+
+def member_role(org_id: str, user_id: str) -> Optional[str]:
+    """Return only this member's active role through the private boundary."""
+    if (
+        not enabled()
+        or not (org_id or "").strip()
+        or not (user_id or "").strip()
+    ):
+        return None
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.connect() as conn:
+        role = conn.execute(
+            text(
+                "SELECT laura_private.billing_member_role("
+                "CAST(:o AS uuid), CAST(:u AS uuid))"
+            ),
+            {"o": org_id.strip(), "u": user_id.strip()},
+        ).scalar()
+    return str(role) if role is not None else None
+
+
+def reserve_checkout(org_id: str) -> Optional[dict]:
+    """Serialize Checkout for one org and reserve one revision for a short TTL."""
+    if not enabled() or not (org_id or "").strip():
+        return None
+    from sqlalchemy import text
+
+    org = org_id.strip()
+    ttl = max(30, int(settings.billing_checkout_reservation_seconds))
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        conn.execute(
+            text(
+                "INSERT INTO billing_accounts (org_id, plan, included_seconds) "
+                "VALUES (:o, 'free', :inc) ON CONFLICT (org_id) DO NOTHING"
+            ),
+            {"o": org, "inc": int(settings.free_trial_seconds)},
+        )
+        row = conn.execute(
+            text(
+                """
+                SELECT stripe_customer_id, stripe_subscription_id,
+                       subscription_status, checkout_revision,
+                       checkout_pending_until > now()
+                  FROM billing_accounts
+                 WHERE org_id = :o
+                 FOR UPDATE
+                """
+            ),
+            {"o": org},
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("billing account unavailable")
+        customer = str(row[0]) if row[0] else None
+        subscription = str(row[1]) if row[1] else None
+        status = str(row[2] or "none").lower()
+        if subscription and status not in _BILLING_TERMINAL:
+            return {
+                "ok": False,
+                "reason": "subscription_exists",
+                "customer_id": customer,
+            }
+        if bool(row[4]):
+            return {"ok": False, "reason": "checkout_in_progress"}
+        revision = int(row[3] or 0) + 1
+        conn.execute(
+            text(
+                """
+                UPDATE billing_accounts
+                   SET checkout_revision = :r,
+                       checkout_pending_until =
+                         now() + (:ttl * interval '1 second'),
+                       updated_at = now()
+                 WHERE org_id = :o
+                """
+            ),
+            {"o": org, "r": revision, "ttl": ttl},
+        )
+    return {
+        "ok": True,
+        "revision": revision,
+        "customer_id": customer,
+    }
+
+
+def bind_stripe_customer(
+    org_id: str, revision: int, customer_id: str
+) -> bool:
+    """Bind the first Stripe Customer exactly once; rebinding is forbidden."""
+    if (
+        not enabled()
+        or not (org_id or "").strip()
+        or not (customer_id or "").strip()
+    ):
+        return False
+    from sqlalchemy import text
+
+    org = org_id.strip()
+    customer = customer_id.strip()
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        row = conn.execute(
+            text(
+                """
+                SELECT stripe_customer_id, checkout_revision
+                  FROM billing_accounts
+                 WHERE org_id = :o
+                 FOR UPDATE
+                """
+            ),
+            {"o": org},
+        ).fetchone()
+        if row is None or int(row[1] or 0) != int(revision):
+            return False
+        existing = str(row[0]) if row[0] else None
+        if existing is not None and existing != customer:
+            return False
+        conn.execute(
+            text(
+                """
+                UPDATE billing_accounts
+                   SET stripe_customer_id = COALESCE(stripe_customer_id, :c),
+                       updated_at = now()
+                 WHERE org_id = :o
+                """
+            ),
+            {"o": org, "c": customer},
+        )
+    return True
+
+
+def finish_checkout(
+    org_id: str,
+    revision: int,
+    customer_id: str,
+    session_id: str,
+    expires_at: int,
+) -> bool:
+    """Clear only the matching reservation after Stripe created the session."""
+    if not enabled() or not (org_id or "").strip():
+        return False
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id.strip())
+        result = conn.execute(
+            text(
+                """
+                UPDATE billing_accounts
+                   SET checkout_pending_until =
+                         to_timestamp(CAST(:expires AS double precision)),
+                       last_checkout_session_id = :s,
+                       updated_at = now()
+                 WHERE org_id = :o
+                   AND checkout_revision = :r
+                   AND stripe_customer_id = :c
+                """
+            ),
+            {
+                "o": org_id.strip(),
+                "r": int(revision),
+                "c": customer_id.strip(),
+                "s": session_id.strip() or None,
+                "expires": int(expires_at),
+            },
+        )
+    return result.rowcount == 1
+
+
+def release_checkout(org_id: str, revision: int) -> None:
+    """Release only this failed attempt; never clear a newer reservation."""
+    if not enabled() or not (org_id or "").strip():
+        return
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id.strip())
+        conn.execute(
+            text(
+                "UPDATE billing_accounts SET checkout_pending_until = NULL "
+                "WHERE org_id = :o AND checkout_revision = :r"
+            ),
+            {"o": org_id.strip(), "r": int(revision)},
+        )
+
+
+def _event_is_newer(created: int, event_id: str, old_created: int, old_id: str) -> bool:
+    return (int(created), str(event_id)) > (int(old_created or 0), str(old_id or ""))
+
+
+def apply_stripe_event(
+    event_id: str,
+    event_type: str,
+    customer_id: str | None,
+    effect: dict | None,
+) -> Optional[bool]:
+    """Claim and apply one signed Stripe event in one database transaction.
+
+    The SECURITY DEFINER call can only insert the global event id and resolve
+    one customer to one locked org. All state mutation after that is normal
+    laura_app tenant CRUD under FORCE RLS. Any exception rolls both back, so
+    Stripe receives a 5xx and retries.
+    """
+    if not enabled():
+        return None
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        claim = conn.execute(
+            text(
+                "SELECT claimed, resolved_org_id "
+                "FROM laura_private.claim_billing_event(:e, :t, :c)"
+            ),
+            {
+                "e": event_id,
+                "t": event_type,
+                "c": (customer_id or "").strip() or None,
+            },
+        ).fetchone()
+        if claim is None or not bool(claim[0]):
+            return False
+        if effect is None:
+            return True
+        if claim[1] is None:
+            raise RuntimeError("stripe customer is not bound")
+        org = str(claim[1])
+        asserted_org = str(effect.get("asserted_org") or "").strip()
+        if asserted_org and asserted_org != org:
+            return True
+
+        _set_org(conn, org)
+        row = conn.execute(
+            text(
+                """
+                SELECT plan, included_seconds, subscription_status,
+                       EXTRACT(EPOCH FROM current_period_start),
+                       EXTRACT(EPOCH FROM current_period_end),
+                       stripe_customer_id, stripe_subscription_id,
+                       subscription_event_created, subscription_event_id,
+                       invoice_event_created, invoice_event_id,
+                       checkout_event_created, checkout_event_id,
+                       verified_paid_subscription_id,
+                       EXTRACT(EPOCH FROM verified_paid_period_start),
+                       EXTRACT(EPOCH FROM verified_paid_period_end),
+                       verified_paid_event_created, verified_paid_event_id,
+                       invoice_event_subscription_id
+                  FROM billing_accounts
+                 WHERE org_id = :o
+                 FOR UPDATE
+                """
+            ),
+            {"o": org},
+        ).fetchone()
+        if row is None or str(row[5] or "") != str(customer_id or ""):
+            raise RuntimeError("stripe customer binding changed")
+
+        kind = str(effect.get("kind") or "")
+        created = int(effect.get("event_created") or 0)
+        current_sub = str(row[6] or "")
+        current_status = str(row[2] or "none").lower()
+
+        if kind == "checkout_link":
+            if not _event_is_newer(created, event_id, int(row[11] or 0), str(row[12] or "")):
+                return True
+            conn.execute(
+                text(
+                    """
+                    UPDATE billing_accounts
+                       SET checkout_event_created = :created,
+                           checkout_event_id = :event_id,
+                           last_checkout_session_id = :session_id,
+                           last_checkout_subscription_id = :subscription_id,
+                           updated_at = now()
+                     WHERE org_id = :o
+                    """
+                ),
+                {
+                    "o": org,
+                    "created": created,
+                    "event_id": event_id,
+                    "session_id": effect.get("session_id") or None,
+                    "subscription_id": effect.get("subscription_id") or None,
+                },
+            )
+            return True
+
+        if kind == "subscription":
+            sub = str(effect.get("subscription_id") or "")
+            status = str(effect.get("status") or "invalid").lower()
+            access = str(effect.get("access") or "terminal")
+            old_created = int(row[7] or 0)
+            if not sub or created < old_created:
+                return True
+            if current_sub and sub != current_sub:
+                if current_status not in _BILLING_TERMINAL or access == "terminal":
+                    return True
+            if (
+                current_sub == sub
+                and current_status in _BILLING_IRREVERSIBLE
+                and access != "terminal"
+            ):
+                return True
+            if created == old_created and current_sub == sub:
+                priority = {"active": 1, "past_due": 2, "terminal": 3}
+                current_access = (
+                    "terminal"
+                    if current_status in _BILLING_TERMINAL
+                    else ("past_due" if current_status == "past_due" else "active")
+                )
+                if priority.get(access, 3) <= priority[current_access]:
+                    return True
+            if not bool(effect.get("price_valid")):
+                if current_sub == sub:
+                    access = "terminal"
+                    status = "invalid"
+                else:
+                    return True
+
+            proof_sub = str(row[13] or "")
+            proof_start = int(row[14]) if row[14] is not None else None
+            proof_end = int(row[15]) if row[15] is not None else None
+            verified_window = bool(
+                proof_sub == sub
+                and proof_start is not None
+                and proof_end is not None
+                and proof_end > proof_start
+            )
+            if access == "terminal":
+                plan = "free"
+                included = int(settings.free_trial_seconds)
+                stored_status = status or "canceled"
+                period_start = None
+                period_end = None
+            elif access == "active" and verified_window:
+                plan = "solo"
+                included = int(settings.solo_included_seconds)
+                stored_status = "active"
+                period_start = proof_start
+                period_end = proof_end
+            elif (
+                access == "past_due"
+                and current_sub == sub
+                and str(row[0]) == "solo"
+                and row[3] is not None
+                and row[4] is not None
+            ):
+                # A failed renewal never advances or resets the last paid
+                # allowance window. Access lasts only through its paid end.
+                plan = "solo"
+                included = int(settings.solo_included_seconds)
+                stored_status = "past_due"
+                period_start = int(row[3])
+                period_end = int(row[4])
+            else:
+                # Subscription state alone is not proof of payment. The exact
+                # invoice.paid signal may arrive before or after this event.
+                plan = "free"
+                included = int(settings.free_trial_seconds)
+                stored_status = (
+                    "past_due" if access == "past_due" else "awaiting_payment"
+                )
+                period_start = None
+                period_end = None
+
+            conn.execute(
+                text(
+                    """
+                    UPDATE billing_accounts
+                       SET plan = :plan,
+                           included_seconds = :included,
+                           subscription_status = :status,
+                           current_period_start =
+                             CASE
+                               WHEN CAST(:ps AS double precision) IS NULL
+                                 THEN NULL
+                               ELSE to_timestamp(
+                                 CAST(:ps AS double precision)
+                               )
+                             END,
+                           current_period_end =
+                             CASE
+                               WHEN CAST(:pe AS double precision) IS NULL
+                                 THEN NULL
+                               ELSE to_timestamp(
+                                 CAST(:pe AS double precision)
+                               )
+                             END,
+                           stripe_subscription_id = :sub,
+                           subscription_event_created = :created,
+                           subscription_event_id = :event_id,
+                           checkout_pending_until = NULL,
+                           updated_at = now()
+                     WHERE org_id = :o
+                    """
+                ),
+                {
+                    "o": org,
+                    "plan": plan,
+                    "included": included,
+                    "status": stored_status,
+                    "ps": period_start,
+                    "pe": period_end,
+                    "sub": sub,
+                    "created": created,
+                    "event_id": event_id,
+                },
+            )
+            return True
+
+        if kind in {"invoice_paid", "invoice_failed"}:
+            sub = str(effect.get("subscription_id") or "")
+            old_invoice_sub = str(row[18] or "")
+            if (
+                not sub
+                or not bool(effect.get("price_valid"))
+                or (
+                    old_invoice_sub == sub
+                    and created < int(row[9] or 0)
+                )
+                or (
+                    old_invoice_sub == sub
+                    and created == int(row[9] or 0)
+                    and kind != "invoice_failed"
+                )
+            ):
+                return True
+
+            params = {
+                "o": org,
+                "created": created,
+                "event_id": event_id,
+                "sub": sub,
+            }
+            if kind == "invoice_failed":
+                if (
+                    sub == current_sub
+                    and current_status
+                    in {"active", "past_due", "awaiting_payment"}
+                ):
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE billing_accounts
+                               SET subscription_status = 'past_due',
+                                   invoice_event_created = :created,
+                                   invoice_event_id = :event_id,
+                                   invoice_event_subscription_id = :sub,
+                                   updated_at = now()
+                             WHERE org_id = :o
+                            """
+                        ),
+                        params,
+                    )
+                return True
+
+            ps = effect.get("period_start")
+            pe = effect.get("period_end")
+            if (
+                ps is None
+                or pe is None
+                or int(pe) <= int(ps)
+            ):
+                return True
+
+            # Do not let an old subscription's invoice touch a newer active
+            # subscription. A paid invoice may be remembered before its own
+            # subscription event only when there is no current subscription or
+            # the old one is terminal.
+            if (
+                current_sub
+                and sub != current_sub
+                and current_status not in _BILLING_TERMINAL
+            ):
+                return True
+            if (
+                current_status in _BILLING_TERMINAL
+                and created < int(row[7] or 0)
+            ):
+                return True
+
+            proof_sub = str(row[13] or "")
+            proof_start = int(row[14]) if row[14] is not None else None
+            proof_created = int(row[16] or 0)
+            if proof_sub == sub and (
+                int(ps) < int(proof_start or 0)
+                or created < proof_created
+            ):
+                return True
+
+            params.update(
+                {
+                    "ps": int(ps),
+                    "pe": int(pe),
+                    "sub": sub,
+                    "adopt": bool(
+                        not current_sub
+                        or (
+                            sub != current_sub
+                            and current_status in _BILLING_TERMINAL
+                        )
+                    ),
+                    "grant": bool(
+                        sub == current_sub
+                        and current_status
+                        in {"active", "past_due", "awaiting_payment"}
+                    ),
+                    "solo": int(settings.solo_included_seconds),
+                }
+            )
+            conn.execute(
+                text(
+                    """
+                    UPDATE billing_accounts
+                       SET verified_paid_subscription_id = :sub,
+                           verified_paid_period_start =
+                             to_timestamp(CAST(:ps AS double precision)),
+                           verified_paid_period_end =
+                             to_timestamp(CAST(:pe AS double precision)),
+                           verified_paid_event_created = :created,
+                           verified_paid_event_id = :event_id,
+                           stripe_subscription_id =
+                             CASE WHEN :adopt THEN :sub
+                                  ELSE stripe_subscription_id END,
+                           subscription_status =
+                             CASE WHEN :grant THEN 'active'
+                                  WHEN :adopt THEN 'awaiting_subscription'
+                                  ELSE subscription_status END,
+                           plan = CASE WHEN :grant THEN 'solo' ELSE plan END,
+                           included_seconds =
+                             CASE WHEN :grant THEN :solo
+                                  ELSE included_seconds END,
+                           current_period_start =
+                             CASE WHEN :grant
+                                  THEN to_timestamp(
+                                    CAST(:ps AS double precision)
+                                  )
+                                  ELSE current_period_start END,
+                           current_period_end =
+                             CASE WHEN :grant
+                                  THEN to_timestamp(
+                                    CAST(:pe AS double precision)
+                                  )
+                                  ELSE current_period_end END,
+                           invoice_event_created = :created,
+                           invoice_event_id = :event_id,
+                           invoice_event_subscription_id = :sub,
+                           updated_at = now()
+                     WHERE org_id = :o
+                    """
+                ),
+                params,
+            )
+            return True
+
+        return True

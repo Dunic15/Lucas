@@ -39,9 +39,20 @@
     padding: 6px 10px; border-radius: 8px; max-width: 70vw;
   }
   body.meeting #hud, body.meeting #status { display: none; }
+  #raisedHand {
+    position: fixed; right: 6%; top: 8%; z-index: 12; display: none;
+    font-size: clamp(64px, 12vw, 150px); filter: drop-shadow(0 8px 18px #0008);
+  }
+  #faceUnavailable {
+    position: fixed; inset: 0; z-index: 20; display: none; place-items: center;
+    padding: 24px; text-align: center; color: #fff; background: #10161d;
+    font: 600 24px/1.4 system-ui, sans-serif;
+  }
 </style>
 
 <div id="stage"><img id="frame" alt="" /></div>
+<div id="raisedHand" aria-label="Hand raised">✋</div>
+<div id="faceUnavailable" role="alert"></div>
 <div id="status">connecting…</div>
 <div id="hud">
   <input id="q" placeholder="Type something for Laura to say…" />
@@ -54,8 +65,27 @@
   const conversationId = params.get("conversation_id");
   const status = (t) => (document.getElementById("status").textContent = t);
   const frameEl = document.getElementById("frame");
-  // static portrait until the stream is up — per-avatar so the wake-up
-  // window shows the right face (route falls back to Laura if unknown)
+  const configuredFallback = params.get("face_fallback") || "talk";
+  function faceUnavailable(reason) {
+    const box = document.getElementById("faceUnavailable");
+    box.textContent = `${avatarId} face unavailable (${reason}).`;
+    box.style.display = "grid";
+    status("face_unavailable");
+  }
+  function fallbackSameAvatar(reason) {
+    if (params.get("fallback_attempted") === "1" ||
+        !["talk", "photoreal", "avatar"].includes(configuredFallback) ||
+        configuredFallback === "photoreal") {
+      faceUnavailable(reason); return;
+    }
+    const next = new URL(location.href);
+    next.pathname = "/" + configuredFallback;
+    next.searchParams.set("avatar_id", avatarId);
+    next.searchParams.set("fallback_attempted", "1");
+    location.replace(next.pathname + next.search);
+  }
+  // Static portrait until the stream is up. The backend returns only this
+  // avatar's configured portrait; missing/unknown identities fail closed.
   frameEl.src = "/laura-reference.jpg?avatar_id=" + encodeURIComponent(avatarId);
 
   // Fallback chain (issue #3): GPU stream -> static portrait -> /talk avatar.
@@ -63,8 +93,8 @@
   // hand the meeting to the 3D /talk page so she always has a face.
   frameEl.onerror = () => {
     if (!gpuReady && frameEl.src.includes("/laura-reference.jpg")) {
-      status("static portrait unavailable — falling back to /talk");
-      location.replace("/talk" + location.search);
+      status("static portrait unavailable — trying same-avatar fallback");
+      fallbackSameAvatar("portrait");
     }
   };
 
@@ -72,8 +102,20 @@
   let gpu = null;          // websocket to gpu/server.py
   let gpuReady = false;
   let lastUrl = null;      // revoke previous blob URL to avoid leaking
-  let pendingAudio = [];   // audio clips awaiting their first frame
+  let pendingAudio = [];   // {bytes,generation,epoch,text} awaiting first frame
   let waitingFirstFrame = false; // talk_start seen, audio starts on next frame
+  let activeSource = null;
+  let activeGpuGeneration = null;
+  let staleBefore = -Infinity;
+  let playbackEpoch = 0;
+  let dropNextBinary = false;
+
+  const genOf = (msg) => {
+    const g = msg?.generation_id ?? msg?.speech_generation_id ?? msg?.generation;
+    return typeof g === "number" ? g : null;
+  };
+  const isStale = (generation, epoch) =>
+    epoch !== playbackEpoch || (generation !== null && generation <= staleBefore);
 
   // Frame presentation is locked to the AUDIO clock, not to frame arrival.
   // The GPU tags each talk frame with its native-timeline index (frame i belongs
@@ -120,8 +162,16 @@
     let streamUrl = params.get("stream_url");
     if (!streamUrl) {
       try {
-        const r = await fetch("/photoreal/config");
-        streamUrl = (await r.json()).stream_url;
+        const r = await fetch(
+          "/photoreal/config?avatar_id=" + encodeURIComponent(avatarId),
+          { cache: "no-store" }
+        );
+        const cfg = await r.json();
+        if (!r.ok || cfg.face_ready === false) {
+          fallbackSameAvatar("photoreal asset");
+          return;
+        }
+        streamUrl = cfg.stream_url;
       } catch (_) { /* backend unreachable */ }
     }
     if (!streamUrl) { status("no GPU stream configured — static portrait mode"); return; }
@@ -143,17 +193,46 @@
           // New clip: reset the frame clock + ring. Audio still starts on the
           // clip's FIRST frame (the GPU takes ~200-400ms to produce it, and
           // starting the sound early is a head start the lips never recover).
+          if (msg.type === "face_unavailable") {
+            gpuReady = false;
+            status("photoreal face unavailable — trying same-avatar fallback");
+            fallbackSameAvatar("GPU face");
+            return;
+          }
           if (msg.type === "talk_start") {
+            const g = genOf(msg);
+            if (g !== null && g <= staleBefore) {
+              activeGpuGeneration = null; waitingFirstFrame = false;
+              return;
+            }
+            activeGpuGeneration = g;
             frameBuf.clear(); pendingIdx = null; usingClock = false;
             clipStart = null; shownIdx = -1;
-            if (pendingAudio.length) waitingFirstFrame = true;
+            if (pendingAudio.length) {
+              const match = g === null ? 0 : pendingAudio.findIndex((x) => x.generation === g);
+              if (match > 0) pendingAudio.unshift(pendingAudio.splice(match, 1)[0]);
+              waitingFirstFrame = match >= 0 || g === null;
+            }
+          }
+          if (msg.type === "talk_end") {
+            const g = genOf(msg);
+            if (g === null || g === activeGpuGeneration) activeGpuGeneration = null;
           }
           // Each talk frame's native-timeline index arrives just before its JPEG.
-          if (msg.type === "frame") { pendingIdx = msg.i; usingClock = true; }
+          if (msg.type === "frame") {
+            const g = genOf(msg);
+            if ((g !== null && g <= staleBefore) ||
+                (activeGpuGeneration !== null && g !== null && g !== activeGpuGeneration)) {
+              dropNextBinary = true; pendingIdx = null; return;
+            }
+            pendingIdx = msg.i; usingClock = true; dropNextBinary = false;
+          }
         } catch (_) {}
         return;
       }
-      // binary JPEG frame
+      // binary JPEG frame. A stale generation's frame is discarded instead of
+      // becoming an idle frame that could visually restart cancelled speech.
+      if (dropNextBinary) { dropNextBinary = false; return; }
       if (pendingIdx != null) {
         frameBuf.set(pendingIdx, ev.data); pendingIdx = null;
         // Defence-in-depth cap: pruning normally keeps this at 1-2 entries, but
@@ -162,15 +241,24 @@
       } else { nextBlob = ev.data; }            // untagged (legacy/idle) → newest-wins
       if (waitingFirstFrame && pendingAudio.length) {
         waitingFirstFrame = false;
-        playClip(pendingAudio.shift());          // anchors clipStart to audio start
+        const item = pendingAudio.shift();
+        if (!isStale(item.generation, item.epoch)) playClip(item);
       }
     };
     ws.onclose = () => {
       gpu = null; gpuReady = false;
-      // Drop any half-presented clip state so a reconnect starts clean.
+      // Drop any half-presented clip state so a reconnect starts clean, then
+      // promptly play clips that were waiting for their first GPU frame using
+      // the static portrait. They keep their original generation/cancel guards.
       frameBuf.clear(); pendingIdx = null; usingClock = false;
-      clipStart = null; shownIdx = -1; nextBlob = null;
-      status("GPU stream lost — retrying"); setTimeout(connectGpu, 3000);
+      clipStart = null; shownIdx = -1; nextBlob = null; activeGpuGeneration = null;
+      const stranded = pendingAudio.splice(0).filter(
+        (item) => !isStale(item.generation, item.epoch)
+      );
+      waitingFirstFrame = false;
+      stranded.reduce((p, item) => p.then(() => playClip(item)), Promise.resolve());
+      status("GPU stream lost — static portrait mode; retrying");
+      setTimeout(connectGpu, 3000);
     };
   }
   connectGpu();
@@ -178,19 +266,44 @@
   // ── audio playback (the page is the meeting's audio source) ─────────────
   const actx = new (window.AudioContext || window.webkitAudioContext)();
   const unlockAudio = () => { try { actx.resume(); } catch (_) {} };
-  async function playClip(buf) {
+  async function playClip(item) {
+    if (!item || isStale(item.generation, item.epoch)) return;
     unlockAudio();
-    const audio = await actx.decodeAudioData(buf.slice(0));
+    const audio = await actx.decodeAudioData(item.bytes.slice(0));
+    if (isStale(item.generation, item.epoch)) return;
     const src = actx.createBufferSource();
     src.buffer = audio; src.connect(actx.destination);
     const when = actx.currentTime;
-    // Anchor the frame clock to the audio start: frame i is due at when + i/fps.
-    // On audio end, release to idle newest-wins — but ONLY if this is still the
-    // live clip (guard on `when`, so a previous clip's late onended can't cancel
-    // the clock of the clip that already replaced it).
-    src.onended = () => { if (clipStart === when) { usingClock = false; clipStart = null; } };
-    src.start(when);
-    if (usingClock) clipStart = when;
+    activeSource = src;
+    await new Promise((resolve) => {
+      src.onended = () => {
+        if (activeSource === src) activeSource = null;
+        if (clipStart === when) { usingClock = false; clipStart = null; }
+        resolve();
+      };
+      src.start(when);
+      if (usingClock) clipStart = when;
+    });
+  }
+
+  function stopPlayback(generation = null) {
+    if (generation !== null) staleBefore = Math.max(staleBefore, generation);
+    playbackEpoch += 1;
+    if (activeSource) {
+      try { activeSource.stop(); } catch (_) {}
+      try { activeSource.disconnect(); } catch (_) {}
+      activeSource = null;
+    }
+    pendingAudio.length = 0;
+    waitingFirstFrame = false; activeGpuGeneration = null;
+    frameBuf.clear(); pendingIdx = null; usingClock = false;
+    // Preserve dropNextBinary: a stale frame tag may already have arrived
+    // while its paired JPEG is still in flight on the GPU socket.
+    clipStart = null; shownIdx = -1; nextBlob = null;
+    chain = Promise.resolve();
+    if (gpu && gpu.readyState === WebSocket.OPEN) {
+      gpu.send(JSON.stringify({ type: "stop", generation_id: generation }));
+    }
   }
 
   // ── speak: TTS -> GPU (frames) + local playback, serialized in order ────
@@ -210,37 +323,43 @@
     return chunks;
   }
   let chain = Promise.resolve();
-  function say(text, emotion) {
+  function say(text, payload = {}) {
     if (!text || !text.trim()) return chain;
-    // Whole-answer emotion applies to each sentence clip it's split into.
-    for (const piece of sentenceChunks(text)) sayOne(piece, emotion);
+    if (typeof payload === "string") payload = { emotion: payload };
+    // A backend-synthesized clip already matches the whole sentence/answer.
+    // Reuse it byte-for-byte: never pay for or race a second /tts request.
+    if (payload.audio) sayOne(text, payload);
+    else for (const piece of sentenceChunks(text)) sayOne(piece, payload);
     return chain;
   }
-  function sayOne(text, emotion) {
-    const synth = (async () => {
+  function sayOne(text, payload = {}) {
+    const generation = genOf(payload);
+    const epoch = playbackEpoch;
+    const synth = payload.audio ? Promise.resolve(payload.audio) : (async () => {
       const r = await fetch("/tts", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ text, avatar_id: avatarId }),
       });
       const j = await r.json();
       if (j.error) throw new Error(j.error);
-      return j.audio; // base64 mp3
+      return j.audio;
     })();
     chain = chain.then(async () => {
       try {
         const audioB64 = await synth;
+        if (isStale(generation, epoch)) return;
         const bytes = Uint8Array.from(atob(audioB64), (c) => c.charCodeAt(0)).buffer;
-        if (gpu && gpuReady) {
-          pendingAudio.push(bytes);                 // played on the clip's first frame
-          // emotion rides the speak message (additive): the GPU maps it to
-          // Ditto's `emo` so the whole face leans, not just the mouth. A
-          // single-mood server ignores the field.
-          gpu.send(JSON.stringify({ type: "speak", audio_b64: audioB64,
-                                    emotion: emotion || "neutral" }));
-        } else {
-          await playClip(bytes);                    // static-portrait fallback
-        }
+        const item = { bytes, generation, epoch, text };
         status("speaking: " + text.slice(0, 60));
+        if (gpu && gpuReady) {
+          pendingAudio.push(item);
+          gpu.send(JSON.stringify({
+            type: "speak", audio_b64: audioB64,
+            emotion: payload.emotion || "neutral", generation_id: generation,
+          }));
+        } else {
+          await playClip(item);
+        }
       } catch (e) { status("speak failed: " + (e?.message || e)); }
     });
     return chain;
@@ -251,7 +370,20 @@
   // ── meeting mode: identical to talk.html (SSE push + slow poll) ─────────
   if (conversationId) {
     document.body.classList.add("meeting");
-    const handle = (msg) => { if (msg && msg.type === "speak" && msg.text) { unlockAudio(); say(msg.text, msg.emotion); } };
+    const handle = (msg) => {
+      if (!msg) return;
+      if (msg.type === "speak" && msg.text) {
+        const g = genOf(msg);
+        if (g !== null && g <= staleBefore) return;
+        unlockAudio(); say(msg.text, msg);
+      } else if (msg.type === "stop") {
+        stopPlayback(genOf(msg));
+      } else if (msg.type === "raise_hand") {
+        document.getElementById("raisedHand").style.display = "block";
+      } else if (msg.type === "lower_hand") {
+        document.getElementById("raisedHand").style.display = "none";
+      }
+    };
     const es = new EventSource(`/avatar/stream/${encodeURIComponent(conversationId)}`);
     es.onmessage = (ev) => { try { handle(JSON.parse(ev.data)); } catch (_) {} };
     const poll = async () => {
@@ -262,5 +394,18 @@
       setTimeout(poll, 2000);
     };
     poll();
+
+    // Report real playback/queue state, matching /talk. This makes barge-in use
+    // the audio source of truth rather than a words-per-second estimate.
+    let reportedSpeaking = false;
+    setInterval(() => {
+      const speaking = !!activeSource || pendingAudio.length > 0 || waitingFirstFrame;
+      if (!speaking && !reportedSpeaking) return;
+      reportedSpeaking = speaking;
+      fetch(`/avatar/speaking/${encodeURIComponent(conversationId)}`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ speaking }),
+      }).catch(() => {});
+    }, 700);
   }
 </script>

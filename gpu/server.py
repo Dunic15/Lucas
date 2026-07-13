@@ -19,10 +19,11 @@ Three engines behind one seam (pick with AVATAR_ENGINE=stub|musetalk|ditto):
               See Dockerfile.ditto + DITTO-LIVE.md; expect launch-day tuning.
 
 WebSocket protocol (single socket, /stream):
-  client -> server:  {"type":"speak","audio_b64":"<mp3 base64>"}
+  client -> server:  {"type":"speak","audio_b64":"<mp3 base64>","generation_id":N}
+                     {"type":"stop","generation_id":N}
   server -> client:  text {"type":"hello","mode":...,"fps":N}
-                     text {"type":"talk_start"}   (page starts audio playback)
-                     text {"type":"talk_end"}
+                     text {"type":"talk_start","generation_id":N}
+                     text {"type":"talk_end","generation_id":N,"cancelled":bool}
                      binary <JPEG frame>          (continuous, idle or talking)
 
 Run:  AVATAR_ENGINE=stub REFERENCE_IMAGE=assets/reference.jpg \
@@ -218,7 +219,9 @@ for _pair in filter(None, os.environ.get("REFERENCE_IMAGES", "").split(",")):
     if _aid.strip() and _path.strip():
         _FACES[_aid.strip()] = _path.strip()
 if not _FACES:
-    _FACES["default"] = REFERENCE_IMAGE
+    # A single legacy REFERENCE_IMAGE is explicitly Laura's by default. It may
+    # never silently become Cedric/another avatar's face.
+    _FACES[os.environ.get("DEFAULT_AVATAR_ID", "laura")] = REFERENCE_IMAGE
 
 engines: dict[str, object] = {aid: _ENGINE_CLS(path) for aid, path in _FACES.items()}
 engine = next(iter(engines.values()))  # default + retrocompatibilità
@@ -236,7 +239,10 @@ async def _warmup() -> None:
 
 @app.get("/health")
 def health() -> JSONResponse:
-    return JSONResponse({"ok": True, "engine": ENGINE, "fps": FPS})
+    return JSONResponse({
+        "ok": True, "engine": ENGINE, "fps": FPS,
+        "faces": {aid: {"ready": True} for aid in engines},
+    })
 
 
 @app.get("/metrics")
@@ -269,43 +275,83 @@ def metrics() -> JSONResponse:
 async def stream(ws: WebSocket) -> None:
     global CLIENTS, IDLE_SINCE
     await ws.accept()
-    # multi-volto: la pagina passa ?avatar_id=; id ignoto -> engine di default
-    aid = ws.query_params.get("avatar_id", "")
-    eng = engines.get(aid, engine)
+    # Face identity is fail-closed. A requested avatar must have its own engine;
+    # an unknown id never inherits the first/default face.
+    aid = (
+        ws.query_params.get("avatar_id", "")
+        or os.environ.get("DEFAULT_AVATAR_ID", "laura")
+    )
+    if aid not in engines:
+        await ws.send_text(json.dumps({
+            "type": "face_unavailable", "avatar_id": aid,
+            "available": sorted(engines),
+        }))
+        await ws.close(code=4404, reason="face_unavailable")
+        return
+    eng = engines[aid]
     CLIENTS += 1
     IDLE_SINCE = None
     await ws.send_text(json.dumps({"type": "hello", "mode": ENGINE, "fps": FPS,
-                                   "face": aid if aid in engines else next(iter(engines))}))
-    # Each queued item is (audio, emotion|None): the page may tag a clip with
-    # a mood (backend emotion.py) and the engine leans the whole face into it.
-    # Absent/unknown labels render neutral, exactly as before.
+                                   "face": aid}))
+    # Queue entries carry a command epoch as well as an optional backend speech
+    # generation. Stop increments the epoch, invalidating every queued/active
+    # pre-stop clip; newer commands remain playable even without generation ids.
     speak_queue: asyncio.Queue = asyncio.Queue()
+    command_epoch = 0
+    cancel_before = float("-inf")
 
     async def reader() -> None:
+        nonlocal command_epoch, cancel_before
         while True:
             msg = json.loads(await ws.receive_text())
-            if msg.get("type") == "speak" and msg.get("audio_b64"):
-                await speak_queue.put(
-                    (base64.b64decode(msg["audio_b64"]), msg.get("emotion"))
-                )
+            kind = msg.get("type")
+            generation = msg.get("generation_id")
+            generation = generation if isinstance(generation, (int, float)) else None
+            if kind == "stop":
+                command_epoch += 1
+                if generation is not None:
+                    cancel_before = max(cancel_before, generation)
+            elif kind == "speak" and msg.get("audio_b64"):
+                await speak_queue.put((
+                    base64.b64decode(msg["audio_b64"]),
+                    msg.get("emotion"),
+                    generation,
+                    command_epoch,
+                ))
 
     reader_task = asyncio.create_task(reader())
     frame_interval = 1.0 / FPS
     try:
         while True:
             try:
-                audio, emotion = speak_queue.get_nowait()
+                audio, emotion, generation, item_epoch = speak_queue.get_nowait()
             except asyncio.QueueEmpty:
                 audio = None
 
             if audio is not None:
+                # A queued command that predates a stop is discarded before it
+                # can emit talk_start or a frame.
+                if item_epoch != command_epoch or (
+                    generation is not None and generation <= cancel_before
+                ):
+                    continue
                 t_speak = time.perf_counter()
-                await ws.send_text(json.dumps({"type": "talk_start"}))
+                await ws.send_text(json.dumps({
+                    "type": "talk_start", "generation_id": generation,
+                }))
                 first_frame = True
+                cancelled = False
                 send_ratio = min(1.0, SEND_FPS / FPS) if SEND_FPS else 1.0
                 send_acc = 1.0  # the first frame always goes out
                 n_native = 0  # position of this frame on the FPS-native timeline
                 async for frame in eng.talk_frames(audio, emotion=emotion):
+                    # Cancellation is observed between generated frames. This
+                    # bounds stop latency to one frame and prevents late output.
+                    if item_epoch != command_epoch or (
+                        generation is not None and generation <= cancel_before
+                    ):
+                        cancelled = True
+                        break
                     t0 = time.perf_counter()
                     send_acc += send_ratio
                     if send_acc >= 1.0:
@@ -316,7 +362,10 @@ async def stream(ws: WebSocket) -> None:
                         # which is what lets sub-realtime generation drift the mouth
                         # off the voice. Additive: a legacy page ignores this text
                         # and the binary stays a bare JPEG.
-                        await ws.send_text(json.dumps({"type": "frame", "i": n_native}))
+                        await ws.send_text(json.dumps({
+                            "type": "frame", "i": n_native,
+                            "generation_id": generation,
+                        }))
                         await ws.send_bytes(frame)
                         _note_frame()
                     if first_frame:
@@ -328,7 +377,10 @@ async def stream(ws: WebSocket) -> None:
                     if delay > 0:
                         await asyncio.sleep(delay)
                     n_native += 1  # advance one native-timeline slot per frame
-                await ws.send_text(json.dumps({"type": "talk_end"}))
+                await ws.send_text(json.dumps({
+                    "type": "talk_end", "generation_id": generation,
+                    "cancelled": cancelled,
+                }))
             else:
                 await ws.send_bytes(eng.next_idle_frame())
                 _note_frame()
