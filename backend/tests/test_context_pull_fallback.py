@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app.main as main_module
 from app import cedric, ledger, store
 from app.cedric import callback as cedric_callback
+from app.config import settings
 
 
 @pytest.fixture
@@ -277,3 +278,69 @@ def test_fetch_context_sends_routing_params(monkeypatch):
     assert seen == [
         (f"{CONTEXT_URL}?team=T1&channel=%23cedric", "Bearer workspace-token")
     ]
+
+
+# ── per-session authentication on unsigned Recall realtime events ──
+
+
+def test_recall_realtime_capability_rejects_missing_wrong_and_cross_session(
+    fresh_store, monkeypatch
+):
+    """Production rejects before parsing, and one bot's URL cannot mutate another."""
+    monkeypatch.setattr(settings, "recall_api_key", "prod-recall-key")
+    bot_a = fresh_store.create(
+        "bot_cap_a", "https://meet.google.com/cap-a", "cedric"
+    )
+    bot_b = fresh_store.create(
+        "bot_cap_b", "https://meet.google.com/cap-b", "cedric"
+    )
+    assert fresh_store.register_recall_realtime_capability("bot_cap_a", "cap-a")
+    assert fresh_store.register_recall_realtime_capability("bot_cap_b", "cap-b")
+
+    joined_b = {
+        "event": "participant_events.join",
+        "data": {
+            "bot": {"id": "bot_cap_b"},
+            "data": {"participant": {"id": "p1", "name": "Alice"}},
+        },
+    }
+
+    async def _run():
+        transport = httpx.ASGITransport(app=main_module.app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as ac:
+            missing = await ac.post("/webhooks/recall", content=b"{not-json")
+            wrong = await ac.post(
+                "/webhooks/recall?cap=wrong", content=b"{not-json"
+            )
+            cross = await ac.post(
+                "/webhooks/recall?cap=cap-a", json=joined_b
+            )
+            # Cross-session rejection happened before any roster side effect.
+            assert bot_a.participants == {}
+            assert bot_b.participants == {}
+            valid = await ac.post(
+                "/webhooks/recall?cap=cap-b", json=joined_b
+            )
+            return missing, wrong, cross, valid
+
+    missing, wrong, cross, valid = asyncio.run(_run())
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
+    assert cross.status_code == 403
+    assert valid.status_code == 200
+    assert bot_b.participants["p1"]["name"] == "Alice"
+
+
+def test_recall_capability_is_deleted_with_session(fresh_store):
+    fresh_store.create("bot_cap_cleanup", "https://meet.google.com/cap-c", "cedric")
+    assert fresh_store.register_recall_realtime_capability(
+        "bot_cap_cleanup", "cap-cleanup"
+    )
+    assert (
+        fresh_store.resolve_recall_realtime_capability("cap-cleanup")
+        == "bot_cap_cleanup"
+    )
+    fresh_store.remove("bot_cap_cleanup")
+    assert fresh_store.resolve_recall_realtime_capability("cap-cleanup") is None
