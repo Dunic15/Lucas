@@ -318,9 +318,13 @@ def test_finalize_enqueues_ended_before_local_artifact_and_cleanup(
         "record_meeting",
         lambda *args, **kwargs: order.append("local_ledger"),
     )
-    monkeypatch.setattr(
-        store, "remove", lambda bot: order.append("local_cleanup")
-    )
+    original_remove = store.remove
+
+    def remove_with_trace(bot):
+        order.append("local_cleanup")
+        original_remove(bot)
+
+    monkeypatch.setattr(store, "remove", remove_with_trace)
     monkeypatch.setattr(
         main.gpu_runtime, "on_session_ended", lambda count: None
     )
@@ -371,6 +375,7 @@ def test_finalize_keeps_local_session_when_durable_enqueue_fails(
         "save_artifact",
         lambda *args, **kwargs: local_writes.append("artifact"),
     )
+    original_remove = store.remove
     monkeypatch.setattr(
         store, "remove", lambda bot: local_writes.append("cleanup")
     )
@@ -384,3 +389,4 @@ def test_finalize_keeps_local_session_when_durable_enqueue_fails(
 
     assert local_writes == []
     assert store.get("bot-order-fail") is session
+    original_remove("bot-order-fail")
