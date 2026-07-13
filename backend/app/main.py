@@ -117,6 +117,12 @@ async def _lifespan(app: FastAPI):
     watcher from dispatching at once, so the old + new instances don't both put a
     bot in the same meeting during the overlap.
     """
+    # Production must prove the exact policy-bound runtime credential before
+    # warming indexes or launching any worker that could serve/dispatch work.
+    # Key-free demo: enabled() is false, so no engine or network connection.
+    if control_plane.enabled():
+        await run_in_threadpool(control_plane.runtime_role_status)
+
     _prebuild_indexes()
 
     if settings.autopilot_nudge:
@@ -805,6 +811,47 @@ async def _reconcile_once() -> None:
         # retry the leave directly. On success the session is dropped; the
         # artifact already went out, so there is NO re-delivery.
         if getattr(session, "leave_pending", False):
+            # P0: finalize may have kept the session after BOTH the provisional
+            # usage-id swap and the first Recall leave failed. Repair the meter
+            # before retrying leave; otherwise this early continue can strand a
+            # live real bot behind a pending:<uuid> row forever.
+            usage = usage_by_bot.get(bid)
+            if (
+                usage is None
+                and usage_fetch_ok
+                and session.org_id
+                and not bid.startswith("pending:")
+            ):
+                usage = await _repair_untracked_usage(
+                    session, usage_by_bot, force_finalize=False
+                )
+            if usage is not None and usage.get("in_call_at") is None:
+                try:
+                    status = await run_in_threadpool(
+                        lambda b=bid: httpx.get(
+                            f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/{b}/",
+                            headers=_recall_list_headers(),
+                            timeout=20.0,
+                        )
+                    )
+                    status.raise_for_status()
+                    bot = status.json()
+                    code = _bot_status_code(bot)
+                    started = _status_change_epoch(bot, _IN_CALL_CODES)
+                    if started is not None or code in _IN_CALL_CODES:
+                        started_at = started or time.time()
+                        deadline = await run_in_threadpool(
+                            entitlements.mark_in_call,
+                            session.org_id,
+                            bid,
+                            started_at,
+                        )
+                        usage["in_call_at"] = started_at
+                        usage["deadline"] = deadline
+                except Exception:
+                    # Leave is still retried below. A status/DB blip gets
+                    # another repair+clock attempt on the next pass.
+                    pass
             await _retry_leave(bid, session)
             continue
         try:
@@ -907,7 +954,10 @@ async def _reconcile_once() -> None:
 
 
 async def _repair_untracked_usage(
-    session: store.Session, usage_by_bot: dict[str, dict]
+    session: store.Session,
+    usage_by_bot: dict[str, dict],
+    *,
+    force_finalize: bool = True,
 ) -> dict | None:
     """BLOCKER 1 self-heal: a LIVE local session whose usage row is missing —
     the provisional-id swap failed after create_bot, so the real bot runs
@@ -959,10 +1009,13 @@ async def _repair_untracked_usage(
             return row
     except entitlements.EntitlementsUnavailable:
         return None  # billing down this pass — retry next pass, bot kept
-    # Can't meter it (org exhausted, slot held by another live meeting). Never
-    # let it bill free: stop the meter the hardened way (artifact preserved).
-    print(f"[usage] cannot meter untracked bot={real} — cutting off", flush=True)
-    await _finalize_session(real, source="reconcile", usage_reason="limit_reached")
+    # Can't meter it (org exhausted, slot held by another live meeting). A
+    # normal live session is force-finalized. A leave-pending session was
+    # ALREADY finalized/delivered, so its caller retries the meter-stop without
+    # rebuilding or re-delivering the artifact.
+    if force_finalize:
+        print(f"[usage] cannot meter untracked bot={real} — cutting off", flush=True)
+        await _finalize_session(real, source="reconcile", usage_reason="limit_reached")
     return None
 
 
