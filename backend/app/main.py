@@ -18,6 +18,7 @@ import json
 import random
 import re
 import time
+import traceback
 import uuid
 import weakref
 from contextlib import asynccontextmanager
@@ -74,6 +75,7 @@ from .brain import (
     wants_deep_thought,
     wants_web_search,
     post_meeting,
+    degraded_post_meeting,
     proactive_flag,
     effective_provider,
     semantic_action_duplicates,
@@ -863,7 +865,15 @@ class PostMeetingRequest(BaseModel):
 @app.post("/demo/post_meeting")
 async def demo_post_meeting(req: PostMeetingRequest) -> JSONResponse:
     """Turn a meeting transcript into the full post-meeting artifact."""
-    avatar = avatars.load(req.avatar_id)
+    try:
+        avatar = avatars.load(req.avatar_id)
+    except FileNotFoundError:
+        # A bogus avatar_id would otherwise raise an unhandled 500 and the demo
+        # page shows a bare "HTTP 500" — answer a clear 404 with the choices.
+        return JSONResponse(
+            {"error": "unknown avatar_id", "available": avatars.list_ids()},
+            status_code=404,
+        )
     artifact = await run_in_threadpool(post_meeting, avatar, req.transcript)
     # Echo the transcript so the demo artifact matches the live one
     # (_finalize_session does the same); the page shows it in a transcript tab.
@@ -874,7 +884,13 @@ async def demo_post_meeting(req: PostMeetingRequest) -> JSONResponse:
 @app.get("/demo/sample")
 def demo_sample(avatar_id: str = "laura") -> JSONResponse:
     """A sample transcript to load into the post-meeting demo, if the avatar has one."""
-    avatar = avatars.load(avatar_id)
+    try:
+        avatar = avatars.load(avatar_id)
+    except FileNotFoundError:
+        return JSONResponse(
+            {"error": "unknown avatar_id", "available": avatars.list_ids()},
+            status_code=404,
+        )
     sample = avatar.dir / "sample_meeting.txt"
     text = sample.read_text() if sample.exists() else ""
     return JSONResponse({"avatar_id": avatar_id, "transcript": text})
@@ -1597,14 +1613,63 @@ async def _finalize_session_locked(
     queued_actions = list(getattr(session, "queued_actions", None) or [])
     if transcript_text.strip():
         avatar = avatars.load(session.avatar_id)
-        artifact = await run_in_threadpool(
-            lambda: post_meeting(
-                avatar,
-                transcript_text,
-                context=(integration or {}).get("brief", ""),  # CEDRIC: brief-grounded summary
-                live_actions=queued_actions,
+        try:
+            artifact = await run_in_threadpool(
+                lambda: post_meeting(
+                    avatar,
+                    transcript_text,
+                    context=(integration or {}).get("brief", ""),  # CEDRIC: brief-grounded summary
+                    live_actions=queued_actions,
+                )
             )
-        )
+        except Exception as e:  # noqa: BLE001 — a transient post-model failure must
+            # not 500 /end and lose the whole deliverable. post_meeting passes an
+            # EXPLICIT provider, so llm.complete's 'never go dark' Haiku fallback
+            # (gated on provider is None) does NOT run and a 429/529/timeout
+            # re-raises up to here. Degrade to the deterministic tracker recap so
+            # the artifact still saves + delivers below; the meter-stop already
+            # ran above and the leave-retry path stays intact. (No transcript is
+            # logged — PII: only the exception class name.)
+            print(
+                f"[finalize] bot={bot_id} post_meeting failed "
+                f"({type(e).__name__}); degrading to deterministic recap",
+                flush=True,
+            )
+            try:
+                artifact = await run_in_threadpool(
+                    degraded_post_meeting, avatar, transcript_text
+                )
+            except Exception as e2:  # noqa: BLE001 — the degraded rebuild ALSO failed.
+                # This is no longer a transient LLM blip: degraded_post_meeting
+                # re-runs build_from_text/_finish_artifact, so a real bug there
+                # would re-raise and 500 /end + lose the artifact — the exact
+                # failure Fix 3 exists to prevent. Save + deliver a bare
+                # deterministic scaffold so _finalize_session_locked can NEVER
+                # throw on the post-meeting build (the full transcript is still
+                # persisted into the artifact below + served by the archive), and
+                # SURFACE the stack so a genuine code bug is diagnosable instead of
+                # silently degrading every meeting forever. PII-safe: a traceback
+                # carries the exception + code frames, never transcript/recap text.
+                print(
+                    f"[finalize] bot={bot_id} degraded recap ALSO failed "
+                    f"({type(e2).__name__}); saving bare scaffold\n"
+                    f"{traceback.format_exc()}",
+                    flush=True,
+                )
+                artifact = {
+                    "summary": (
+                        "Automated recap unavailable — the post-meeting summarizer "
+                        "failed. The full transcript is preserved in the meeting "
+                        "archive."
+                    ),
+                    "decisions": [],
+                    "actions": [],
+                    "checklist": [],
+                    "missing_steps": [],
+                    "readiness_score": 0,
+                    "risks": [],
+                    "follow_up_email": {},
+                }
 
     # Fold the live captures into the artifact's actions[] ahead of the
     # summarizer's extraction, deduped on normalized item text. Runs BEFORE
@@ -1776,8 +1841,17 @@ async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -
     if artifact is None:
         return JSONResponse({"error": "no artifact for this bot_id"}, status_code=404)
 
-    avatar = avatars.load(store.get(bot_id).avatar_id) if store.get(bot_id) else None
-    name = avatar.name if avatar else avatars.load(settings.default_avatar_id).name
+    # Finalize already ran store.remove(bot_id), so store.get(bot_id) is None here
+    # and the live session no longer carries the avatar identity. The saved
+    # artifact does (avatar_id stamped at finalize) — resolve the follow-up's
+    # name from there first, so a Cedric meeting's Slack header reads "Cedric"
+    # and not the default "Laura". Fall back to the default only when absent
+    # (pre-finalize / legacy artifacts) or on an unknown id.
+    avatar_id = artifact.get("avatar_id") or settings.default_avatar_id
+    try:
+        name = avatars.load(avatar_id).name
+    except Exception:  # noqa: BLE001 — an unknown avatar id must never block delivery
+        name = avatars.load(settings.default_avatar_id).name
     email = artifact.get("follow_up_email", {}) or {}
 
     email_res = await run_in_threadpool(
@@ -1869,15 +1943,15 @@ async def redeliver_artifact(bot_id: str, request: Request) -> JSONResponse:
             {"error": "orchestrator callback is not configured"}, status_code=503
         )
     integration = {**integration, "org_id": artifact_org}
-    delivered = await run_in_threadpool(
-        cedric.callback.send_ended,
-        integration,
-        bot_id,
-        cedric.wire_artifact(artifact),
-    )
-    if not delivered:
-        return JSONResponse({"error": "callback delivery failed"}, status_code=502)
-    return JSONResponse({"ok": True, "bot_id": bot_id})
+    # send_ended retries up to 4x with BLOCKING time.sleep (5s + 25s + 120s), so
+    # awaiting it inline hangs the request ~150s and 504s at the proxy. Hand it to
+    # the SAME fire-and-forget seam finalize uses (cedric.deliver_ended: distils
+    # via wire_artifact, then schedules the retrying send off the request) and
+    # answer 202 immediately. Delivery semantics are unchanged (still the full
+    # retry chain, still the distilled/no-transcript payload) — only the blocking
+    # of the HTTP request is removed.
+    cedric.deliver_ended(integration, bot_id, artifact)
+    return JSONResponse({"status": "retrying", "bot_id": bot_id}, status_code=202)
 
 
 @app.get("/meetings")
@@ -2099,6 +2173,20 @@ _THINK_LINES_IT = [
     "Un secondo che ci ragiono.",
 ]
 
+# Spoken when the answer stream drops AFTER the first token (a fast-provider
+# blip that llm.stream_complete deliberately re-raises to avoid duplicate
+# output). She has already started talking, so one honest recovery beat beats a
+# 500 that cuts her off mid-sentence and makes Recall re-deliver. Fixed + short
+# so they're TTS-prewarmed and land instantly.
+_STREAM_RECOVERY_LINES = [
+    "— sorry, I lost my train of thought there.",
+    "— hmm, my thought dropped out there for a second. Give me a nudge?",
+]
+_STREAM_RECOVERY_LINES_IT = [
+    "— scusa, ho perso il filo un attimo.",
+    "— mmh, mi si è interrotto il pensiero. Rilanciatemi pure.",
+]
+
 # Confirmation for a captured action request (queue_action seam): promises
 # follow-up after the call, never execution. Fixed lines so they're TTS-
 # prewarmed — the confirmation must land as fast as an ack.
@@ -2231,6 +2319,8 @@ async def _prewarm_tts_cache() -> None:
         *_ACK_LINES_IT,
         *_THINK_LINES,
         *_THINK_LINES_IT,
+        *_STREAM_RECOVERY_LINES,
+        *_STREAM_RECOVERY_LINES_IT,
         *_QUEUE_LINES,
         *_QUEUE_LINES_IT,
         *_BACKCHANNEL_LINES,
@@ -2911,7 +3001,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # A human is audibly talking right now — any deference window waiting
         # on the final-transcript path sees this and yields to them.
         session.last_human_partial_at = time.time()
-        called, question = detect_wake(avatar, text, session.present_names())
+        called, question = detect_wake(avatar, text, session.present_names(avatar.name))
         # "Laura, stop / aspetta / basta" — obey on the PARTIAL, before the
         # sentence even finalizes. Complements barge-in (which needs 3+ words):
         # a two-word "Laura stop" must cut her off instantly, not get answered.
@@ -2928,7 +3018,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # question is actually forming (3+ words): a bare "Laura…" pause
             # acked instantly reads as talking over the person.
             and len(text.split()) >= 3
-            and detect_wake(avatar, text, session.present_names(), fuzzy=False)[0]
+            and detect_wake(avatar, text, session.present_names(avatar.name), fuzzy=False)[0]
             # Search questions are announced by the answer stream itself.
             and not wants_web_search(question or text)
             # One ack per turn: partial streams repeat the same growing text.
@@ -3119,7 +3209,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # path owns that turn, and the wrap-up check only looks at the next UNADDRESSED
     # lull. (Without this, the idle closing-fallback would fire the proactive
     # retrieve+LLM in front of her first token on any "Laura, …?" after a pause.)
-    called, question = detect_wake(avatar, text, session.present_names())
+    called, question = detect_wake(avatar, text, session.present_names(avatar.name))
 
     # ── proactive intervention (fires once, as the meeting wraps up) ──
     if (
@@ -3544,45 +3634,87 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # score), read back after the stream ends to gate the interjection escape —
     # no second model call. Only consulted on the hand-raise path below.
     _answer_meta: dict = {}
-    async for sentence in iterate_in_threadpool(
-        answer_question_stream(
-            avatar,
-            question or text,
-            history=history,
-            memory=memory,
-            state=state,
-            summary=session.rolling_summary,
-            speaker=speaker,
-            roster=roster,
-            k=4,  # leaner context: input tokens ARE first-token latency live
-            min_chars=45,  # coalesce tiny fragments so the TTS voice flows
-            meta=_answer_meta,
-        )
-    ):
-        # Interrupted (barge-in) or superseded by a newer turn while this
-        # sentence was generating: abandon the rest of the answer. The page
-        # already dropped the stale generation; don't keep paying for tokens.
-        if session.speech_generation != turn_gen:
-            interrupted = True
-            break
-        if hand_mode:
-            hand_sentences.append(sentence)
-            continue
-        # Called by name -> answer even if it repeats a recent line; an
-        # unaddressed duplicate is suppressed (and reported honestly below).
-        # Speaking is pipelined: sentence N synthesizes server-side while
-        # N+1 is still generating; the prev-chain keeps the spoken order.
-        prev_task = asyncio.create_task(
-            _speak_with_audio(
-                session,
-                sentence,
-                force=called,
-                generation=turn_gen,
-                prev=prev_task,
-                t0=_t_wake if not speak_tasks else None,
+    try:
+        async for sentence in iterate_in_threadpool(
+            answer_question_stream(
+                avatar,
+                question or text,
+                history=history,
+                memory=memory,
+                state=state,
+                summary=session.rolling_summary,
+                speaker=speaker,
+                roster=roster,
+                k=4,  # leaner context: input tokens ARE first-token latency live
+                min_chars=45,  # coalesce tiny fragments so the TTS voice flows
+                meta=_answer_meta,
             )
+        ):
+            # Interrupted (barge-in) or superseded by a newer turn while this
+            # sentence was generating: abandon the rest of the answer. The page
+            # already dropped the stale generation; don't keep paying for tokens.
+            if session.speech_generation != turn_gen:
+                interrupted = True
+                break
+            if hand_mode:
+                hand_sentences.append(sentence)
+                continue
+            # Called by name -> answer even if it repeats a recent line; an
+            # unaddressed duplicate is suppressed (and reported honestly below).
+            # Speaking is pipelined: sentence N synthesizes server-side while
+            # N+1 is still generating; the prev-chain keeps the spoken order.
+            prev_task = asyncio.create_task(
+                _speak_with_audio(
+                    session,
+                    sentence,
+                    force=called,
+                    generation=turn_gen,
+                    prev=prev_task,
+                    t0=_t_wake if not speak_tasks else None,
+                )
+            )
+            speak_tasks.append(prev_task)
+    except Exception as e:  # noqa: BLE001 — a mid-stream provider drop must not 500
+        # llm.stream_complete deliberately RE-RAISES a fast-provider error that
+        # lands AFTER the first token (a pre-token failure is already covered by
+        # its Haiku fallback), so a Cerebras/Groq blip mid-answer arrives here.
+        # If she has ALREADY started speaking, do NOT let it 500: Recall would
+        # re-deliver the turn and she'd be cut off mid-sentence. Finish the
+        # sentences in flight, say ONE short recovery line on the SAME speak path
+        # the loop uses, and return 200 so Recall does not re-deliver.
+        #
+        # Nothing spoken yet (no speak task created) OR the hand-raise path (which
+        # only queues, never speaks) -> re-raise to preserve today's behavior; a
+        # pre-token failure must not be swallowed into silence when llm.py's
+        # fallback (or Recall's re-delivery) is the existing recovery. No
+        # transcript is logged — PII: only the exception class name.
+        if hand_mode or not speak_tasks:
+            raise
+        print(
+            f"[live] answer stream dropped after first token "
+            f"({type(e).__name__}); speaking one recovery line",
+            flush=True,
         )
-        speak_tasks.append(prev_task)
+        if session.speech_generation == turn_gen:
+            recovery = _line_for(
+                question or text, _STREAM_RECOVERY_LINES, _STREAM_RECOVERY_LINES_IT
+            )
+            speak_tasks.append(
+                asyncio.create_task(
+                    _speak_with_audio(
+                        session,
+                        recovery,
+                        force=True,
+                        generation=turn_gen,
+                        prev=prev_task,  # chain after the in-flight sentence(s)
+                    )
+                )
+            )
+        results = await asyncio.gather(*speak_tasks, return_exceptions=True)
+        spoke_any = any(r is True for r in results)
+        return JSONResponse(
+            {"ok": True, "spoke": spoke_any, "streamed": True, "recovered": True}
+        )
 
     if hand_mode:
         if interrupted or session.speech_generation != turn_gen:

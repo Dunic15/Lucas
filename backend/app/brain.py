@@ -1211,6 +1211,21 @@ def post_meeting(
     return _finish_artifact(artifact, state)
 
 
+def degraded_post_meeting(avatar: Avatar, transcript_text: str) -> dict:
+    """A complete deterministic recap for when the post-meeting model call FAILS
+    outright (a transient 429/529/timeout that re-raises) rather than returning
+    malformed JSON.
+
+    post_meeting() already rebuilds a real recap from the silent tracker when the
+    model returns unusable JSON; this reuses that exact path for the harder case
+    where the model call itself raised — so a finalize-time model hiccup DEGRADES
+    to a plain (but full) artifact — summary + follow-up email + actions — instead
+    of losing the whole deliverable. Off the live path (finalize only)."""
+    state = meeting_state.build_from_text(avatar, transcript_text)
+    artifact = _stub_post_meeting(avatar, transcript_text, state, degraded=True)
+    return _finish_artifact(artifact, state)
+
+
 # A decision/risk is one short line. The model occasionally (a) emits malformed
 # JSON — _parse_json then returns an {"answer": <raw>} shape with no summary —
 # or (b) echoes whole transcript chunks into a list field. Either way garbled
