@@ -448,6 +448,41 @@ def test_live_route_capture_continuation_extends_item(
     assert body3.get("capture_extended") is None
 
 
+def test_replayed_older_continuation_does_not_refresh_window(
+    client, recall_stubbed, spoken, monkeypatch
+):
+    """A late replay of continuation A after B must not roll the source key
+    backward or create a fresh four-second window for unrelated speech."""
+    monkeypatch.setattr(
+        main_module.cedric, "notify_action_requested", lambda *args: None
+    )
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+
+    _post_final(client, bot_id, "Ben", "Cedric, please send the recap")
+    _post_final(client, bot_id, "Ben", "to the whole team")
+    _post_final(client, bot_id, "Ben", "by Friday")
+
+    session = store.get(bot_id)
+    before_replay = session.last_capture
+    captured = session.queued_actions[0]["action"]
+    replay = _post_final(client, bot_id, "Ben", "to the whole team")
+
+    assert replay.get("capture_extended") is True
+    assert replay.get("duplicate") is True
+    assert session.last_capture[2:] == before_replay[2:]
+    assert session.queued_actions[0]["action"] == captured
+
+    # Once the original window expires, a new fragment cannot be glued on just
+    # because the older replay arrived late.
+    item, speaker, _ts, event_key, fingerprint = session.last_capture
+    session.last_capture = (
+        item, speaker, time.time() - 5.0, event_key, fingerprint
+    )
+    later = _post_final(client, bot_id, "Ben", "and email it to Marco")
+    assert later.get("capture_extended") is None
+    assert session.queued_actions[0]["action"] == captured
+
+
 def test_live_route_capture_window_rejects_closing_followup(
     client, recall_stubbed, spoken, monkeypatch
 ):

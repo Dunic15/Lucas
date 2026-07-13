@@ -330,10 +330,10 @@ def test_deliver_ended_commits_outbox_before_return(monkeypatch):
     kicks: list[bool] = []
     monkeypatch.setattr(
         ci.outbox,
-        "enqueue_session_ended",
+        "checkpoint_session_ended",
         lambda integration, bot_id, artifact: calls.append(
             (integration, bot_id, artifact)
-        ) or "outbox-1",
+        ) or dict(artifact),
     )
     monkeypatch.setattr(ci, "_kick_outbox", lambda: kicks.append(True))
 

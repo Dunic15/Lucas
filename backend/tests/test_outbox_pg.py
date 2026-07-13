@@ -179,6 +179,11 @@ def _enqueue(org: str, bot: str, key: str) -> int:
     return value
 
 
+def _due_after_settle(offset: float = 1.0) -> float:
+    """Clock safely beyond the intentional live-action settle fence."""
+    return time.time() + outbox._ACTION_SETTLE_SECONDS + offset
+
+
 def test_runtime_role_grants_and_force_rls(cp, pg):
     org_a = _org(cp, "grant-a")
     org_b = _org(cp, "grant-b")
@@ -298,7 +303,7 @@ def test_two_org_reads_claims_and_retry_are_isolated(cp):
     assert [row["id"] for row in outbox.delivery_rows(org_a)] == [id_a]
     assert [row["id"] for row in outbox.delivery_rows(org_b)] == [id_b]
     assert outbox.retry_status(org_a, id_b) == "missing"
-    claimed = outbox_pg.claim_due(org_a, 10, now=time.time() + 1)
+    claimed = outbox_pg.claim_due(org_a, 10, now=_due_after_settle())
     assert [row["id"] for row in claimed] == [id_a]
     assert [row["id"] for row in outbox.delivery_rows(org_b)] == [id_b]
 
@@ -320,7 +325,7 @@ def test_restart_worker_discovers_tenants_without_local_sessions(
     # No org_id and no local Session objects: the runtime role discovers only
     # due tenant UUIDs through the private function, then claims payloads under
     # each tenant's FORCE-RLS context.
-    assert outbox.process_due(limit=10, now=time.time() + 2) == 2
+    assert outbox.process_due(limit=10, now=_due_after_settle(2)) == 2
     assert set(sent) == {
         "action.requested:restart-a",
         "action.requested:restart-b",
@@ -335,7 +340,7 @@ def test_multi_worker_skip_locked_and_lease_recovery(cp):
         _enqueue(org, "bot-1", "action.requested:worker-1"),
         _enqueue(org, "bot-2", "action.requested:worker-2"),
     }
-    now = time.time() + 2
+    now = _due_after_settle(2)
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(
             pool.map(
@@ -373,7 +378,7 @@ def test_transient_failure_retries_same_idempotency_key(cp, monkeypatch):
         return SimpleNamespace(status_code=200)
 
     monkeypatch.setattr(callback, "_post", post)
-    now = time.time() + 2
+    now = _due_after_settle(2)
     assert outbox.process_due(limit=1, now=now, org_id=org) == 0
     failed = outbox.delivery_rows(org)[0]
     assert failed["id"] == outbox_id
@@ -411,7 +416,7 @@ def test_crash_after_send_recovers_expired_lease_with_same_key(
 
     monkeypatch.setattr(callback, "_post", post)
     monkeypatch.setattr(outbox_pg, "finish_attempt", crash_once)
-    now = time.time() + 2
+    now = _due_after_settle(2)
     with pytest.raises(outbox.OutboxUnavailable):
         outbox.process_due(limit=1, now=now, org_id=org)
     row = outbox.delivery_rows(org)[0]
@@ -432,7 +437,9 @@ def test_manual_retry_does_not_steal_live_lease(cp, pg):
     outbox_id = _enqueue(
         org, "bot-busy", "action.requested:manual-busy"
     )
-    outbox_pg.claim_due(org, 1, outbox_id=outbox_id)
+    outbox_pg.claim_due(
+        org, 1, outbox_id=outbox_id, now=_due_after_settle()
+    )
     assert outbox.retry_status(org, outbox_id) == "busy"
     with _admin(pg) as conn:
         conn.execute(

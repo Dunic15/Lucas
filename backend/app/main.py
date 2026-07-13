@@ -4380,13 +4380,26 @@ async def recall_webhook(request: Request) -> JSONResponse:
                         "capture_rejected": "meeting_finalizing",
                     }
                 )
-            session.last_capture = (
-                updated_item,
-                p_speaker,
-                time.time(),
-                capture_event_key,
-                capture_fingerprint,
-            )
+            if extended:
+                session.last_capture = (
+                    updated_item,
+                    p_speaker,
+                    time.time(),
+                    capture_event_key,
+                    capture_fingerprint,
+                )
+            else:
+                # An older ASR final can replay after a newer continuation.
+                # Durable dedupe correctly rejects it; do not let that replay
+                # roll the in-memory source identity backward or refresh the
+                # four-second continuation window.
+                session.last_capture = (
+                    updated_item,
+                    p_speaker,
+                    p_ts,
+                    p_event_key,
+                    p_fingerprint,
+                )
             return JSONResponse(
                 {
                     "ok": True,

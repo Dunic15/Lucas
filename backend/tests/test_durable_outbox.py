@@ -28,6 +28,11 @@ def _integration(org_id="org-a", *, team="T-1", channel="C-1"):
     }
 
 
+def _due_after_settle(offset: float = 1.0) -> float:
+    """Clock safely beyond the intentional live-action settle fence."""
+    return time.time() + outbox._ACTION_SETTLE_SECONDS + offset
+
+
 def test_capture_reload_finalize_keeps_stable_action_id(tmp_path, monkeypatch):
     _fresh(tmp_path, monkeypatch)
     monkeypatch.setattr(integration, "_kick_outbox", lambda: None)
@@ -76,7 +81,7 @@ def test_transient_5xx_retries_same_idempotency_key_once(tmp_path, monkeypatch):
     from app.cedric import callback
 
     monkeypatch.setattr(callback, "_post", fake_post)
-    now = time.time() + 1
+    now = _due_after_settle()
     assert outbox.process_due(now=now) == 0
     assert outbox.process_due(now=now + 2) == 1
 
@@ -106,7 +111,7 @@ def test_permanent_4xx_waits_for_manual_retry(tmp_path, monkeypatch):
         return SimpleNamespace(status_code=code)
 
     monkeypatch.setattr(callback, "_post", fake_post)
-    now = time.time() + 1
+    now = _due_after_settle()
     assert outbox.process_due(now=now) == 0
     row = outbox.delivery_rows("org-a")[0]
     assert row["status"] == "failed"
@@ -146,7 +151,7 @@ def test_scoped_delivery_never_nudges_another_org(tmp_path, monkeypatch):
 
     monkeypatch.setattr(callback, "_post", fake_post)
     assert outbox.process_due(
-        now=time.time() + 1, org_id="org-a", outbox_id=first
+        now=_due_after_settle(), org_id="org-a", outbox_id=first
     ) == 1
 
     assert calls == [("org-a", "action.requested:action-a")]
@@ -194,7 +199,7 @@ def test_redelivery_uses_original_org_team_channel(tmp_path, monkeypatch):
         return SimpleNamespace(status_code=200)
 
     monkeypatch.setattr(callback, "_post", fake_post)
-    assert outbox.process_due(now=time.time() + 1) == 1
+    assert outbox.process_due(now=_due_after_settle()) == 1
     row = outbox.delivery_rows("org-original")[0]
 
     assert observed["payload"]["org_id"] == "org-original"
@@ -246,7 +251,7 @@ def test_manual_retry_is_idempotent_after_delivery(tmp_path, monkeypatch):
             or SimpleNamespace(status_code=200)
         ),
     )
-    outbox.process_due(now=time.time() + 1)
+    outbox.process_due(now=_due_after_settle())
     row = outbox.delivery_rows("org-a")[0]
 
     assert outbox.retry("org-a", row["id"])
