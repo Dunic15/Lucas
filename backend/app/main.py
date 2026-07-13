@@ -1384,6 +1384,16 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
         if token_org is None:
             if err := auth.gate(request):
                 return err
+    # Browser/cookie users choose only meeting + avatar. Integration wiring
+    # is server-owned per org; reject it before any vendor readiness check,
+    # database enumeration or paid bot creation.
+    if user is not None and (
+        req.callback_url or req.context_url or req.external_ref
+    ):
+        return JSONResponse(
+            {"error": "integration wiring is managed by your workspace"},
+            status_code=400,
+        )
     try:
         recall_client.assert_ready()
     except RuntimeError as e:
@@ -1410,16 +1420,6 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     if clash := _existing_session_clash(req.meeting_url, caller_org):
         return clash
 
-    # Browser/cookie users choose only meeting + avatar. Integration wiring
-    # is server-owned per org; accepting it from the browser would let a user
-    # redirect workspace credentials even if the hostname were allowlisted.
-    if user is not None and (
-        req.callback_url or req.context_url or req.external_ref
-    ):
-        return JSONResponse(
-            {"error": "integration wiring is managed by your workspace"},
-            status_code=400,
-        )
     if not cedric.request_integration_urls_allowed(req, caller_org):
         return JSONResponse(
             {"error": "callback_url/context_url must use the configured Cedric HTTPS origin"},
