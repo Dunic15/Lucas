@@ -571,7 +571,11 @@ def _init_db() -> None:
                 picture TEXT NOT NULL DEFAULT '',
                 org_id TEXT NOT NULL,
                 created_at REAL NOT NULL,
-                last_login_at REAL NOT NULL
+                last_login_at REAL NOT NULL,
+                -- Durable control-plane user UUID (from control_plane.ensure_user)
+                -- when configured; '' otherwise. The billing member-role lookup
+                -- keys on this UUID, NOT the ephemeral u_<hash> cache-key user_id.
+                member_uid TEXT NOT NULL DEFAULT ''
             );
 
             -- Per-org avatar connections (the Configure tab). One row per
@@ -590,6 +594,7 @@ def _init_db() -> None:
             """
         )
         # Migration for stores created before the Cedric integration column.
+        _add_column(conn, "users", "member_uid TEXT NOT NULL DEFAULT ''")
         _add_column(conn, "sessions", "integration_json TEXT NOT NULL DEFAULT ''")
         # Migration for stores created before the meter-stop retry flag. A
         # pre-existing session predates any leave failure, so 0 (not pending) is
@@ -1058,6 +1063,7 @@ def upsert_user(
     email = (email or "").strip().lower()
     uid = user_id_for_email(email)
     org_id = org_id_for_email(email)
+    member_uid = ""  # durable Postgres user UUID; set below when configured
     from . import control_plane  # lazy: control_plane imports store at load
 
     if control_plane.enabled():
@@ -1077,6 +1083,7 @@ def upsert_user(
         if not durable:
             raise RuntimeError("durable identity is temporarily unavailable")
         org_id = durable["org_id"]
+        member_uid = str(durable.get("user_id") or "")
     now = time.time()
     with _LOCK, _connect() as conn:
         prev = conn.execute(
@@ -1086,8 +1093,8 @@ def upsert_user(
         conn.execute(
             """
             INSERT INTO users (user_id, email, name, picture, org_id,
-                               created_at, last_login_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                               created_at, last_login_at, member_uid)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             -- org_id is refreshed so a domain verified AFTER a user's first
             -- login takes effect on their next one. Safe on THIS ephemeral
             -- SQLite store (wiped + re-seeded every boot, so resolution is
@@ -1099,9 +1106,10 @@ def upsert_user(
                 name=excluded.name,
                 picture=excluded.picture,
                 org_id=excluded.org_id,
-                last_login_at=excluded.last_login_at
+                last_login_at=excluded.last_login_at,
+                member_uid=excluded.member_uid
             """,
-            (uid, email, name, picture, org_id, now, now),
+            (uid, email, name, picture, org_id, now, now, member_uid),
         )
         # Cutover backfill (adversarial review 2026-07-13, blocker 2): when
         # the resolved org CHANGES from the row's previous one AND that
@@ -1125,7 +1133,7 @@ def upsert_user(
                 (uid, org_id),
             )
     return {"user_id": uid, "email": email, "name": name, "picture": picture,
-            "org_id": org_id, "created": created}
+            "org_id": org_id, "member_uid": member_uid, "created": created}
 
 
 def _restamp_personal_org(conn: sqlite3.Connection, old_org: str, new_org: str) -> None:
@@ -1191,7 +1199,7 @@ def list_org_agent_ids(org_id: str) -> list[str]:
 def get_user(user_id: str) -> dict | None:
     with _LOCK, _connect() as conn:
         row = conn.execute(
-            "SELECT user_id, email, name, picture, org_id FROM users "
+            "SELECT user_id, email, name, picture, org_id, member_uid FROM users "
             "WHERE user_id = ?",
             (user_id,),
         ).fetchone()

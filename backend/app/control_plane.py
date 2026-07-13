@@ -1174,12 +1174,27 @@ def get_billing(org_id: str) -> Optional[dict]:
     return _billing_dict(row)
 
 
+def _is_uuid(value: str) -> bool:
+    """The durable control plane keys on UUIDs; the ephemeral session layer
+    keys personal identities on ``u_<hash>`` cache keys. Guard the uuid cast so
+    a session-shaped id can never crash a billing lookup (would surface as 500)."""
+    import uuid as _uuid
+
+    try:
+        _uuid.UUID(str(value).strip())
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
 def member_role(org_id: str, user_id: str) -> Optional[str]:
     """Return only this member's active role through the private boundary."""
     if (
         not enabled()
         or not (org_id or "").strip()
         or not (user_id or "").strip()
+        or not _is_uuid(org_id)
+        or not _is_uuid(user_id)
     ):
         return None
     from sqlalchemy import text
