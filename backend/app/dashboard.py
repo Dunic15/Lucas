@@ -240,25 +240,29 @@ def _org_connected(rows: list[dict], provider: str) -> bool:
 def _set_connection_all(
     org_id: str, avatar_id: str, provider: str, status: str, config: dict
 ) -> bool:
-    """Upsert one connection in the runtime store AND its durable
-    control-plane mirror (when configured). Mirror failures are logged and
-    swallowed — the SQLite row is the runtime truth and the next write
-    re-mirrors. Sync DB I/O: threadpool it from async handlers."""
-    ok = store.set_connection(org_id, avatar_id, provider, status, config)
-    if not ok:
-        return False
+    """Durably upsert one connection, then refresh the SQLite runtime cache.
+
+    When Postgres is enabled it is authoritative: a failed mirror returns
+    False instead of acknowledging a connection/disconnect that a redeploy
+    would undo. Sync DB I/O: threadpool it from async handlers.
+    """
     from . import control_plane  # lazy: control_plane imports store at load
 
     if control_plane.enabled():
         try:
-            control_plane.set_connection(org_id, avatar_id, provider, status, config)
-        except Exception as exc:  # noqa: BLE001 — never fail the runtime write
+            durable = control_plane.set_connection(
+                org_id, avatar_id, provider, status, config
+            )
+        except Exception as exc:  # noqa: BLE001
             print(
-                "[dashboard] control-plane connection mirror failed "
+                "[dashboard] control-plane connection write failed "
                 f"({type(exc).__name__})",
                 flush=True,
             )
-    return True
+            return False
+        if durable is not True:
+            return False
+    return store.set_connection(org_id, avatar_id, provider, status, config)
 
 
 @router.get("/dashboard")
@@ -530,19 +534,22 @@ async def connect_brain(request: Request) -> JSONResponse:
     registry_synced = False
     if provisioned:
         minted_secret = getattr(provisioned, "webhook_secret", "")
-        if minted_secret:
+        minted_token = getattr(provisioned, "webhook_token", "")
+        if minted_secret and minted_token:
             registry_synced = await run_in_threadpool(
-                secret_registry.upsert_org_secret, user["org_id"], minted_secret
+                secret_registry.upsert_org_credentials,
+                user["org_id"], minted_secret, minted_token,
             )
-    # A Cedric link without its per-org signing key is not operational.  Keep
-    # it pending so retrying Connect repairs SSM; never claim connected and
-    # silently fall back to the global key.
+    # Both directions must be workspace-scoped. Keep the link pending when
+    # either credential or the durable connection row is unavailable.
     status = "connected" if provisioned and registry_synced else "pending"
-    await run_in_threadpool(
+    persisted = await run_in_threadpool(
         _set_connection_all,
         user["org_id"], avatar_id, "cedric-brain", status,
         {"team_id": team_id, "channel": channel},
     )
+    if not persisted:
+        return JSONResponse({"error": "connection persistence failed"}, status_code=503)
     return JSONResponse(
         {
             "provider": "cedric-brain", "avatar_id": avatar_id, "status": status,
@@ -570,11 +577,13 @@ def connect_brain_slack_start(
     from .cedric import install_state
 
     try:
+        base_url = settings.public_base_url.rstrip("/")
         target = install_state.install_url(
             user["org_id"],
             avatar_id,
             channel.strip(),
-            f"{settings.public_base_url.rstrip('/')}/dashboard",
+            f"{base_url}/dashboard",
+            f"{base_url}/dashboard/connections/brain/slack/complete",
         )
     except RuntimeError as exc:
         return JSONResponse({"error": str(exc)}, status_code=503)
@@ -593,10 +602,13 @@ def connect_brain_slack_start(
         None,
     )
     if current is None or current["status"] != "connected":
-        _set_connection_all(
+        if not _set_connection_all(
             user["org_id"], avatar_id, "cedric-brain", "pending",
             {"channel": channel.strip()},
-        )
+        ):
+            return JSONResponse(
+                {"error": "connection persistence failed"}, status_code=503
+            )
     return RedirectResponse(target, status_code=302)
 
 
@@ -642,53 +654,64 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
     team_id = str((body or {}).get("team_id") or "").strip()
     channel = str((body or {}).get("channel") or "").strip()
     webhook_secret = str((body or {}).get("webhook_secret") or "").strip()
+    webhook_token = str((body or {}).get("webhook_token") or "").strip()
     state = str((body or {}).get("state") or "").strip()
-    if not org_id or not avatar_id or not team_id or not webhook_secret:
+    if not all((org_id, avatar_id, team_id, webhook_secret, webhook_token, state)):
         return JSONResponse({"error": "missing required fields"}, status_code=400)
-    # A per-org bearer may complete installs ONLY for its own org.
     if machine_org != settings.demo_org_id and org_id != machine_org:
         return JSONResponse({"error": "not your org"}, status_code=403)
-    # org_id may be a PERSONAL org (== a users row) or a SHARED org (an orgs
-    # row resolved from a verified domain, e.g. org_sff) — accept either. Using
-    # get_user alone would 404 every shared org and silently wedge its brain
-    # connect flow in "pending" forever.
     org_known = store.get_user(org_id) is not None or store.org_exists(org_id)
     if avatar_id not in avatars.list_ids() or not org_known:
         return JSONResponse({"error": "unknown org or avatar"}, status_code=404)
 
-    # ── the install-binding proof ──
-    bound = False
-    if state:
-        data = install_state.unpack(state)
-        if data is not None:
-            # A state WE signed: hard-fail a mismatch (someone splicing a
-            # stolen state onto another org's complete), accept a match.
-            if data.get("org_id") != org_id or data.get("avatar_id") != avatar_id:
-                return JSONResponse(
-                    {"error": "state does not match this install"}, status_code=403
-                )
-            bound = True
-        # invalid/expired state falls through to the pending-row check — the
-        # org may still prove initiation via its connection row.
-    if not bound:
-        rows = await run_in_threadpool(_org_connection_rows, org_id)
-        bound = any(
-            r["avatar_id"] == avatar_id
-            and r["provider"] == "cedric-brain"
-            and r["status"] in ("pending", "connected")
-            for r in rows
-        )
-    if not bound:
+    # Cedric carries Laura's state opaquely through Slack OAuth. Completion
+    # requires that signed proof; a pending row alone is not an authenticator.
+    data = install_state.unpack(state)
+    if (
+        data is None
+        or data.get("org_id") != org_id
+        or data.get("avatar_id") != avatar_id
+    ):
         return JSONResponse(
-            {"error": "install was not initiated by this org"}, status_code=403
+            {"error": "state does not match this install"}, status_code=403
         )
 
     synced = await run_in_threadpool(
-        secret_registry.upsert_org_secret, org_id, webhook_secret
+        secret_registry.upsert_org_credentials,
+        org_id, webhook_secret, webhook_token,
     )
     if not synced:
         return JSONResponse({"error": "registry update failed"}, status_code=503)
-    await run_in_threadpool(
+
+    # Laura is authoritative for the bearer Cedric uses when calling Laura.
+    # Rotate the labelled token on every completed install so re-installation
+    # invalidates the previous credential; never fall back to ephemeral SQLite
+    # when the durable control plane is enabled.
+    org_token = None
+    if control_plane.enabled():
+        try:
+            org_token = await run_in_threadpool(
+                control_plane.rotate_org_token,
+                org_id,
+                "cedric-slack-install",
+            )
+            await run_in_threadpool(
+                store.revoke_org_tokens, org_id, "cedric-slack-install"
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"[dashboard] durable org-token rotation failed ({type(exc).__name__})",
+                flush=True,
+            )
+            return JSONResponse({"error": "org token rotation failed"}, status_code=503)
+    else:
+        org_token = await run_in_threadpool(
+            store.rotate_org_token, org_id, "cedric-slack-install"
+        )
+    if not org_token:
+        return JSONResponse({"error": "org token rotation failed"}, status_code=503)
+
+    persisted = await run_in_threadpool(
         _set_connection_all,
         org_id,
         avatar_id,
@@ -696,25 +719,8 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
         "connected",
         {"team_id": team_id, "channel": channel},
     )
-    # Mint the per-workspace bearer the orchestrator will call Laura with from
-    # now on. Durable control plane first; SQLite fallback keeps local/dev
-    # working. The raw token appears ONLY in this response — never logged,
-    # never stored raw (both stores keep sha256 only).
-    org_token = None
-    if control_plane.enabled():
-        try:
-            org_token = await run_in_threadpool(
-                control_plane.mint_org_token, org_id, "cedric-slack-install"
-            )
-        except Exception as exc:  # noqa: BLE001 — fall back to the local mint
-            print(
-                f"[dashboard] durable org-token mint failed ({type(exc).__name__})",
-                flush=True,
-            )
-    if not org_token:
-        org_token = await run_in_threadpool(
-            store.mint_org_token, org_id, "cedric-slack-install"
-        )
+    if not persisted:
+        return JSONResponse({"error": "connection persistence failed"}, status_code=503)
     return JSONResponse({"ok": True, "status": "connected", "org_token": org_token})
 
 
@@ -789,20 +795,51 @@ async def disconnect_brain_remote(request: Request) -> JSONResponse:
     from . import cedric  # local import, same reason as connect_brain's
     from .cedric import secret_registry
 
-    # Remote revoke first — timeout-bounded (callback_timeout_seconds) and
-    # threadpooled, never on the event loop. None = no orchestrator configured
-    # (nothing remote exists to revoke — local-only disconnect is honest).
+    # Remote revoke first, while Laura still has Cedric's per-workspace
+    # bearer. 404 means the remote side is already detached and cleanup may
+    # continue.
     status_code = await run_in_threadpool(cedric.revoke_org, user["org_id"])
     revoked_remotely = status_code is not None and (
         200 <= status_code < 300 or status_code == 404
     )
     if status_code is not None and not revoked_remotely:
         return JSONResponse({"error": "remote_revoke_failed"}, status_code=502)
+
+    # Credential deletion and org-token revocation are release-critical. Any
+    # failure leaves the UI connected/retryable; it must never report success
+    # while an old bearer can still authenticate after a cache refresh.
+    credentials_removed = await run_in_threadpool(
+        secret_registry.remove_org_credentials, user["org_id"]
+    )
+    if not credentials_removed:
+        return JSONResponse({"error": "credential_cleanup_failed"}, status_code=502)
+
+    from . import control_plane
+    if control_plane.enabled():
+        try:
+            revoked_tokens = await run_in_threadpool(
+                control_plane.revoke_org_tokens,
+                user["org_id"],
+                "cedric-slack-install",
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"[dashboard] durable org-token revoke failed ({type(exc).__name__})",
+                flush=True,
+            )
+            revoked_tokens = False
+        if not revoked_tokens:
+            return JSONResponse({"error": "token_revoke_failed"}, status_code=502)
     await run_in_threadpool(
+        store.revoke_org_tokens, user["org_id"], "cedric-slack-install"
+    )
+
+    persisted = await run_in_threadpool(
         _set_connection_all, user["org_id"], avatar_id, "cedric-brain",
         "disconnected", {},
     )
-    await run_in_threadpool(secret_registry.remove_org_secret, user["org_id"])
+    if not persisted:
+        return JSONResponse({"error": "connection persistence failed"}, status_code=503)
     return JSONResponse(
         {
             "provider": "cedric-brain",
