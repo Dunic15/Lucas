@@ -702,3 +702,32 @@ def test_keyfree_artifact_sqlite_behavior_is_unchanged(tmp_path, monkeypatch):
         }
     ]
     store._artifacts.pop(bot_id, None)
+
+
+def test_finalize_idempotent_artifact_read_is_org_scoped(
+    tmp_path, monkeypatch
+):
+    _fresh(tmp_path, monkeypatch)
+    bot_id = "bot-finished-org-a"
+    artifact = {
+        "org_id": "org-a",
+        "summary": "A private summary",
+        "transcript": "A private transcript",
+    }
+    monkeypatch.setattr(control_plane, "enabled", lambda: False)
+    store.save_artifact(bot_id, artifact, org_id="org-a")
+    store._sessions.pop(bot_id, None)
+
+    # This is the exact session-missing path reached by a repeated /end. A
+    # trusted org-B principal gets not-found, never A's cached artifact.
+    assert asyncio.run(
+        main._finalize_session(
+            bot_id, source="test", artifact_org_id="org-b"
+        )
+    ) is None
+    assert asyncio.run(
+        main._finalize_session(
+            bot_id, source="test", artifact_org_id="org-a"
+        )
+    ) == artifact
+    store._artifacts.pop(bot_id, None)
