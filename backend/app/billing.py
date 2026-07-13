@@ -68,6 +68,13 @@ def _public_origin() -> Optional[str]:
         ):
             return None
         host = parsed.hostname.lower()
+        allowed_host = (
+            host == "lauravatar.com"
+            or host.endswith(".lauravatar.com")
+            or host.endswith(".awsapprunner.com")
+        )
+        if not allowed_host:
+            return None
         if parsed.port is not None and parsed.port != 443:
             host = f"{host}:{parsed.port}"
         return f"https://{host}"
@@ -77,8 +84,8 @@ def _public_origin() -> Optional[str]:
 
 def _mode_matches() -> bool:
     key = settings.stripe_secret_key.strip()
-    prefix = "sk_live_" if settings.stripe_live_mode else "sk_test_"
-    return key.startswith(prefix)
+    mode = "live" if settings.stripe_live_mode else "test"
+    return key.startswith((f"sk_{mode}_", f"rk_{mode}_"))
 
 
 def _billing_ready() -> bool:
@@ -210,14 +217,23 @@ def _create_checkout(org: str, email: str) -> str:
     revision = int(reservation["revision"])
     customer_id = str(reservation.get("customer_id") or "")
     if not customer_id:
-        customer = sdk.Customer.create(
-            email=email or None,
-            metadata={"org_id": org},
-            idempotency_key=f"customer:{org}",
-        )
-        customer_id = str(customer.id)
-        if not control_plane.bind_stripe_customer(org, revision, customer_id):
-            raise RuntimeError("customer binding rejected")
+        try:
+            customer = sdk.Customer.create(
+                email=email or None,
+                metadata={"org_id": org},
+                idempotency_key=f"customer:{org}",
+            )
+            customer_id = str(customer.id)
+            if not control_plane.bind_stripe_customer(
+                org, revision, customer_id
+            ):
+                raise RuntimeError("customer binding rejected")
+        except Exception:
+            # No Checkout Session call has started, so releasing this exact
+            # reservation is safe. Customer creation is itself stably
+            # idempotent if the network result was ambiguous.
+            control_plane.release_checkout(org, revision)
+            raise
 
     expires_at = int(time.time()) + 30 * 60
     session = sdk.checkout.Session.create(
@@ -513,8 +529,15 @@ def _bad_signature(exc: Exception) -> bool:
     if isinstance(exc, ValueError):
         return True
     errors = getattr(stripe, "error", None)
-    signature_error = getattr(errors, "SignatureVerificationError", None)
-    return bool(signature_error and isinstance(exc, signature_error))
+    signature_errors = tuple(
+        error
+        for error in (
+            getattr(errors, "SignatureVerificationError", None),
+            getattr(stripe, "SignatureVerificationError", None),
+        )
+        if isinstance(error, type)
+    )
+    return bool(signature_errors and isinstance(exc, signature_errors))
 
 
 def _process_webhook(
@@ -552,17 +575,18 @@ async def stripe_webhook(request: Request) -> JSONResponse:
             return JSONResponse({"error": "payload_too_large"}, status_code=413)
     except ValueError:
         return JSONResponse({"error": "invalid_content_length"}, status_code=400)
-    raw_body = await request.body()
-    if len(raw_body) > limit:
-        return JSONResponse({"error": "payload_too_large"}, status_code=413)
+    raw_body = bytearray()
+    async for chunk in request.stream():
+        raw_body.extend(chunk)
+        if len(raw_body) > limit:
+            return JSONResponse({"error": "payload_too_large"}, status_code=413)
     signature = request.headers.get("stripe-signature", "")
     if not signature:
         return JSONResponse({"error": "invalid_signature"}, status_code=400)
     try:
         status, body = await run_in_threadpool(
-            _process_webhook, raw_body, signature
+            _process_webhook, bytes(raw_body), signature
         )
     except Exception:
         return JSONResponse({"error": "webhook_retry"}, status_code=503)
     return JSONResponse(body, status_code=status)
-
