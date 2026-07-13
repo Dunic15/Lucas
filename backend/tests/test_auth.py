@@ -93,6 +93,20 @@ def test_login_page_served(client):
     assert "Private beta" not in resp.text
 
 
+@pytest.mark.parametrize("avatar_id", ["laura", "sff", "duccio"])
+def test_slack_install_start_is_cedric_only(client, google_on, avatar_id):
+    _login(client, "customer@example.com")
+    denied = client.get(
+        "/dashboard/connections/brain/slack/start",
+        params={"avatar_id": avatar_id},
+        follow_redirects=False,
+    )
+    assert denied.status_code == 400
+    assert denied.json() == {
+        "error": "only Cedric can connect a customer workspace"
+    }
+
+
 # ── login required when configured ─────────────────────────────────────
 
 def test_summary_requires_login_when_auth_enabled(client, google_on):
@@ -344,7 +358,7 @@ def test_cannot_end_another_orgs_session(client, google_on):
     store.create("bot_eve", "https://meet.google.com/e2", "laura", org_id=eve["org_id"])
     try:
         resp = client.post("/sessions/bot_eve/end")
-        assert resp.status_code == 403
+        assert resp.status_code == 404
     finally:
         store.remove("bot_eve")
 
@@ -420,25 +434,31 @@ def test_token_plus_login_anonymous_gets_google_gate(client, google_on, monkeypa
     assert resp.json().get("auth_enabled") is True
 
 
-def test_logged_in_user_can_end_demo_org_session(client, google_on, monkeypatch):
-    """Regression (code-review catch): real service/anon/auto-join sessions are
-    now stamped DEMO_ORG_ID (not ''), and a logged-in beta user of a DIFFERENT
-    org must still be able to end them — the manual meter-kill switch for ~all
-    live traffic today. Exercises the REAL store.create default, not org_id=''."""
-    from app import cedric, recall_client
+def test_logged_in_user_cannot_end_demo_org_session(client, google_on, monkeypatch):
+    """Self-serve product decision (2026-07-13): the Demo org is the anonymous
+    showroom, NOT part of a logged-in user's allow-set — a real signup must not
+    be able to force-end another visitor's demo session. (Flips the pre-self-
+    serve beta behavior, where demo rows were shared with every login.) Legacy
+    unowned ('') sessions stay endable — see .._can_end_unowned_session below."""
+    from app import recall_client
 
     _login(client, "alice@example.com")
     s = store.create("bot_demo", "https://meet.google.com/d", "laura")
     assert s.org_id == settings.demo_org_id and s.org_id != ""
-    monkeypatch.setattr(cedric, "wire_artifact", lambda a: a)
     monkeypatch.setattr(recall_client, "leave_call", lambda bot_id: None)
-    resp = client.post("/sessions/bot_demo/end")
-    assert resp.status_code in (200, 202), resp.json()
+    try:
+        resp = client.post("/sessions/bot_demo/end")
+        assert resp.status_code == 404
+        assert store.get("bot_demo") is not None  # not finalized/removed
+    finally:
+        store.remove("bot_demo")
 
 
-def test_meetings_list_shows_demo_org_rows_to_logged_in_user(client, google_on):
-    """Regression: demo/service artifacts (DEMO_ORG_ID) must stay visible to a
-    logged-in beta user — the dashboard/meetings blank-out the review caught."""
+def test_meetings_list_hides_demo_org_rows_from_logged_in_user(client, google_on):
+    """Self-serve product decision (2026-07-13): demo/service artifacts
+    (DEMO_ORG_ID) are invisible to a logged-in user — the anonymous showroom's
+    transcripts never land in a real signup's archive. (Flips the beta-era
+    shared-demo behavior.) Legacy unowned ('') rows remain visible."""
     _login(client, "alice@example.com")
     store.save_artifact(
         "bot_demo_art",
@@ -446,7 +466,7 @@ def test_meetings_list_shows_demo_org_rows_to_logged_in_user(client, google_on):
         org_id=settings.demo_org_id,
     )
     bots = {m["bot_id"] for m in client.get("/meetings/list").json()["meetings"]}
-    assert "bot_demo_art" in bots
+    assert "bot_demo_art" not in bots
 
 
 def test_logged_in_user_can_end_unowned_session(client, google_on, monkeypatch):
