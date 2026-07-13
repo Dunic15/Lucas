@@ -953,6 +953,7 @@ async def _reconcile_once() -> None:
                     source="reconcile",
                     failed_code=code,
                     usage_end_epoch=_status_change_epoch(bot, {code}, first=False),
+                    bot_terminal=True,  # Recall reports terminal → meter already off
                 )
                 continue
             # Live bot with a usage deadline: warn near it, hard-stop at it.
@@ -2142,6 +2143,7 @@ async def _finalize_session(
     usage_reason: str = "",
     usage_end_epoch: float | None = None,
     artifact_org_id: str | None = None,
+    bot_terminal: bool = False,
 ) -> dict | None:
     """End a session once: stop both vendors, build + store the artifact.
 
@@ -2163,6 +2165,16 @@ async def _finalize_session(
     consumed_seconds exactly once. artifact_org_id is accepted only from an
     already-authenticated endpoint; it enables an RLS-scoped idempotent read
     after process replacement without adding a global bot-id lookup.
+
+    ``bot_terminal`` (set by the two callers that KNOW Recall already reports the
+    bot terminal — the reconcile terminal-status poll and the account terminal
+    webhook) means the meter is ALREADY stopped: a bot in done/call_ended/fatal
+    is not in a call and cannot bill. The courtesy leave_call below may then be
+    rejected by Recall (e.g. 400 "bot is not in a call" for an already-ended
+    bot) — which must NOT be treated as an UNVERIFIED stop, or the session is
+    kept as leave_pending and retried forever, inflating active_sessions (the
+    phantom that blocks the pre-deploy gate). Only a leave for a possibly-still-
+    live bot (manual /end, bot_terminal=False) requires a verified stop.
     """
     session = store.get(bot_id)
     if session is None:
@@ -2201,7 +2213,8 @@ async def _finalize_session(
     _finalizing.add(bot_id)
     try:
         return await _finalize_session_locked(
-            bot_id, session, source, failed_code, usage_reason, usage_end_epoch
+            bot_id, session, source, failed_code, usage_reason, usage_end_epoch,
+            bot_terminal,
         )
     finally:
         _finalizing.discard(bot_id)
@@ -2214,6 +2227,7 @@ async def _finalize_session_locked(
     failed_code: str = "",
     usage_reason: str = "",
     usage_end_epoch: float | None = None,
+    bot_terminal: bool = False,
 ) -> dict | None:
     """The actual finalize body, run under the ``_finalizing`` in-flight guard."""
     # Join-failed notification (fatal): fire here, under the guard, so it runs at
@@ -2237,7 +2251,12 @@ async def _finalize_session_locked(
     try:
         await run_in_threadpool(recall_client.leave_call, bot_id)
     except Exception as e:  # noqa: BLE001 — classified by _leave_confirmed_stopped
-        leave_verified = _leave_confirmed_stopped(e)
+        # A bot Recall ALREADY reports terminal (bot_terminal) is not billing —
+        # leave_call is a courtesy and its rejection (e.g. 400 "not in a call"
+        # for an already-ended bot) must not strand the session as leave_pending
+        # (phantom active_sessions). A possibly-still-live bot still needs a
+        # verified stop (404/410/success) — the fleet meter-leak guard.
+        leave_verified = bot_terminal or _leave_confirmed_stopped(e)
     if session.anam_conversation_id:
         try:
             await run_in_threadpool(
@@ -4317,7 +4336,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
         session = store.get(bid) if bid else None
         if term and session is not None:
             await _finalize_session(
-                bid, source="webhook", failed_code="fatal" if failed else ""
+                bid, source="webhook", failed_code="fatal" if failed else "",
+                bot_terminal=True,  # terminal webhook → Recall meter already off
             )
             return JSONResponse({"ok": True, "finalized": bid})
         # CEDRIC: relay non-terminal join progress to the orchestrator + a
