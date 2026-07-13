@@ -205,6 +205,19 @@ class Settings(BaseSettings):
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.
     proactive_enabled: bool = True
     proactive_min_confidence: float = 0.7
+    # Closing fallback (DEMO-READY-ROADMAP §5 item 12): the proactive wrap-up AND
+    # the quiet-participant nudge fire only when detect_closing()'s regex matches
+    # an exact wrap-up phrase. This ADDS a second trigger (never replaces the
+    # regex) so both facilitation beats also fire on a natural end-of-meeting
+    # LULL: when the room has been idle ≥ closing_fallback_idle_seconds since the
+    # last substantive line AND the meeting has run ≥ closing_fallback_min_
+    # meeting_seconds. Both gates must hold, so it never fires early in a short or
+    # actively-talking call; the beats' own one-shot flags + confidence bar still
+    # apply. Conservative defaults (25s lull after a ≥3-min meeting); lower them
+    # via env for a short demo, or set the bool False to keep regex-only.
+    closing_fallback_enabled: bool = True
+    closing_fallback_idle_seconds: float = 25.0
+    closing_fallback_min_meeting_seconds: float = 180.0
     # General intelligence on the live path:
     #  - questions that ask for fresh/web info route to Claude's NATIVE web_search
     #    tool (not Groq) on live_search_model — Haiku by default for a low-latency
@@ -247,7 +260,15 @@ class Settings(BaseSettings):
     # this long before answering — if a human starts talking meanwhile, she
     # yields silently (humans get first right of reply to room-open
     # questions). Direct asks by name are never deferred. 0 disables.
-    deference_seconds: float = 1.8
+    #   Trimmed 1.8 → 1.2 (2026-07-13, DEMO-READY-ROADMAP §5 item 11): the wait
+    #   is DEAD AIR before generation even starts, so an unprompted contribution
+    #   was landing ~3-4s after the human stopped (reads as "slow"). This is the
+    #   base the adaptive sizer below scales from — a pure latency cut, the
+    #   post-sleep yield check is unchanged so barge-in/yield are untouched. The
+    #   mid-thought / active-partial branches still stretch to deference_max, so
+    #   the classic false-start (jumping a held floor) stays covered. Env-tunable
+    #   (DEFERENCE_SECONDS) — raise it to defer harder, 0 to disable the wait.
+    deference_seconds: float = 1.2
     # Adaptive deference: when enabled, the deference wait is SIZED (not decided)
     # by context instead of the one fixed `deference_seconds` compromise — a
     # mid-utterance human partial lengthens it toward max, a single-human room
@@ -307,6 +328,46 @@ class Settings(BaseSettings):
     hand_raise_max_per_meeting: int = 4
     hand_raise_min_gap_seconds: float = 90.0
     hand_raise_ignored_gap_seconds: float = 240.0
+    # High-confidence interjection escape (DEMO-READY-ROADMAP §5 item 10 — the
+    # "wow fires reliably" fix). The marquee multi-person moment is otherwise
+    # DOUBLE-gated: she's silent until named, and every unaddressed grounded
+    # point becomes a SILENT raised hand the room must notice + invite (lost on
+    # the 120s timeout). When her unaddressed contribution is STRONGLY grounded
+    # AND the floor is open (the line that opened it sounds finished and no human
+    # is audibly mid-utterance), she says ONE grounded line directly instead of
+    # raising a silent hand. LOWER-confidence points keep the safe raised-hand
+    # default. Reuses the grounding confidence the answer path ALREADY computes —
+    # the top retrieval-chunk score, exactly what rag_min_context_score /
+    # answer_grounding_floor already threshold on — so there is NO extra LLM call.
+    hand_raise_interject_when_confident: bool = True
+    # On the SAME 0..1 scale as the retrieval score. IMPORTANT calibration note:
+    # the model's in-stream SKIP gate is the PRIMARY "is this grounded + worth
+    # saying" decision — a contribution only reaches this bar once SKIP passed
+    # and chunks cleared rag_min_context_score. This bar is the SECONDARY "strong
+    # enough to interject vs. politely raise a hand" ranker. Default 0.45 mirrors
+    # answer_grounding_floor — the codebase's own "this answer is GENUINELY
+    # document-grounded" line — so she only interjects when grounding clears the
+    # same standard the system trusts a citation on. Measured on the key-free
+    # `hash` default (the live path augments the query with history): grounded
+    # flagship contributions land ~0.42-0.53, so 0.45 fires the marquee beat
+    # out-of-the-box while weaker grounded points keep the safe raised hand. A
+    # literal 0.85 would be UNREACHABLE with hash embeddings → the escape would be
+    # dead code (why this deviates from the roadmap's illustrative 0.85). Raise it
+    # (semantic/voyage embeddings score higher), lower it, or set it above 1.0 to
+    # disable interjection — all via env (HAND_RAISE_INTERJECT_MIN_CONFIDENCE), no
+    # redeploy. Setting the bool above to False disables it outright.
+    hand_raise_interject_min_confidence: float = 0.45
+    # The floor must be genuinely OPEN before she interjects a spoken line (both
+    # env-tunable). These are a HARD talk-over gate, deliberately stricter than
+    # the deference wait-sizing knobs:
+    #  - min completeness of the line that opened the floor. 0.6 (not 0.5 — per
+    #    end_of_turn.py 0.5 reads as "can't tell", not "finished"): she only
+    #    interjects after a line that clearly sounds DONE.
+    #  - min silence since the last human partial. 1.0s (larger than the 0.6s
+    #    deference_active_partial_seconds, which is calibrated for sizing a wait,
+    #    not for a talk-over decision): a full second of no one talking.
+    interject_min_completeness: float = 0.6
+    interject_min_pause_seconds: float = 1.0
 
     # Vendor subscription/credit watchdog (vendor_health.py): daily sweep of
     # ElevenLabs characters, Google refresh token, Recall/LLM keys, RunPod

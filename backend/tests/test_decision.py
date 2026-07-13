@@ -199,3 +199,138 @@ def test_detect_wake_cedric_asr_spellings_via_fuzzy():
         assert called, utt
     # a genuinely different name must not wake him
     assert detect_wake(cedric, "Frederick, can you take this?")[0] is False
+
+
+# ── high-confidence interjection escape (decision.interjection_floor_open /
+#    decision.should_interject) — DEMO-READY-ROADMAP §5 item 10 ──
+
+
+def test_floor_open_when_line_finished_and_no_partial():
+    from app.decision import interjection_floor_open
+    # A finished-sounding line (completeness high) with no human partial in
+    # flight (the last one was long ago) → the floor is open to interject.
+    assert interjection_floor_open(
+        turn_completeness=0.9, since_human_partial=10.0, active_partial_seconds=0.6
+    )
+    # No completeness estimate at all still opens if nobody is talking now.
+    assert interjection_floor_open(
+        turn_completeness=None, since_human_partial=10.0, active_partial_seconds=0.6
+    )
+
+
+def test_floor_closed_when_speaker_mid_thought():
+    from app.decision import interjection_floor_open
+    # The line sounds mid-thought (low completeness) — hold the floor, raise the
+    # hand instead of interjecting.
+    assert not interjection_floor_open(
+        turn_completeness=0.1, since_human_partial=10.0, active_partial_seconds=0.6
+    )
+
+
+def test_floor_closed_when_human_partial_in_flight():
+    from app.decision import interjection_floor_open
+    # A human partial landed 0.2s ago (< active_partial_seconds) — someone is
+    # audibly talking right now, so never interject even on a finished line.
+    assert not interjection_floor_open(
+        turn_completeness=0.95, since_human_partial=0.2, active_partial_seconds=0.6
+    )
+
+
+def test_should_interject_only_on_high_confidence_open_floor():
+    from app.decision import should_interject
+    # High confidence + open floor → interject.
+    assert should_interject(
+        enabled=True, confidence=0.62, min_confidence=0.5, floor_open=True
+    )
+    # Below the bar → keep the safe raised hand.
+    assert not should_interject(
+        enabled=True, confidence=0.44, min_confidence=0.5, floor_open=True
+    )
+    # High confidence but the floor is busy → raise the hand.
+    assert not should_interject(
+        enabled=True, confidence=0.9, min_confidence=0.5, floor_open=False
+    )
+    # Feature disabled → never interject, whatever the confidence.
+    assert not should_interject(
+        enabled=False, confidence=0.99, min_confidence=0.5, floor_open=True
+    )
+    # A bar above 1.0 is the "disable" escape hatch — nothing clears it.
+    assert not should_interject(
+        enabled=True, confidence=1.0, min_confidence=1.5, floor_open=True
+    )
+
+
+# ── closing fallback (decision.closing_fallback_fires) — §5 item 12 ──
+
+
+def test_closing_fallback_fires_on_idle_after_long_meeting():
+    from app.decision import closing_fallback_fires
+    now = 10_000.0
+    # Meeting started 300s ago; last substantive line was 30s ago (idle) → fires.
+    assert closing_fallback_fires(
+        enabled=True, now=now, meeting_start=now - 300,
+        last_line_at=now - 30, idle_seconds=25.0, min_meeting_seconds=180.0,
+    )
+
+
+def test_closing_fallback_silent_in_short_call():
+    from app.decision import closing_fallback_fires
+    now = 10_000.0
+    # A long lull but the whole meeting is only 60s old → duration gate blocks it.
+    assert not closing_fallback_fires(
+        enabled=True, now=now, meeting_start=now - 60,
+        last_line_at=now - 40, idle_seconds=25.0, min_meeting_seconds=180.0,
+    )
+
+
+def test_closing_fallback_silent_in_active_call():
+    from app.decision import closing_fallback_fires
+    now = 10_000.0
+    # Long meeting, but the room is actively talking (last line 5s ago) → idle
+    # gate blocks it.
+    assert not closing_fallback_fires(
+        enabled=True, now=now, meeting_start=now - 600,
+        last_line_at=now - 5, idle_seconds=25.0, min_meeting_seconds=180.0,
+    )
+
+
+def test_closing_fallback_disabled_and_no_prior_line():
+    from app.decision import closing_fallback_fires
+    now = 10_000.0
+    # Disabled → never fires even when both gates would pass.
+    assert not closing_fallback_fires(
+        enabled=False, now=now, meeting_start=now - 600,
+        last_line_at=now - 40, idle_seconds=25.0, min_meeting_seconds=180.0,
+    )
+    # No previous line seen (last_line_at <= 0) → never fires.
+    assert not closing_fallback_fires(
+        enabled=True, now=now, meeting_start=now - 600,
+        last_line_at=0.0, idle_seconds=25.0, min_meeting_seconds=180.0,
+    )
+    # A non-positive threshold disables the fallback too.
+    assert not closing_fallback_fires(
+        enabled=True, now=now, meeting_start=now - 600,
+        last_line_at=now - 40, idle_seconds=0.0, min_meeting_seconds=180.0,
+    )
+
+
+def test_deference_default_trimmed_reduces_dead_air():
+    """Item 11: the base deference wait was trimmed 1.8 → 1.2 to cut the dead air
+    before an unprompted line. It flows through the adaptive sizer as the base,
+    so an unprompted STATEMENT now waits 1.2s (was 1.8s), a real latency cut with
+    the yield check unchanged."""
+    from app.config import settings
+    from app.decision import adaptive_deference_seconds
+    assert settings.deference_seconds == 1.2
+    wait = adaptive_deference_seconds(
+        settings.deference_seconds,
+        enabled=True,
+        lo=settings.deference_min_seconds,
+        hi=settings.deference_max_seconds,
+        since_partial=10.0,
+        active_partial_seconds=settings.deference_active_partial_seconds,
+        n_humans=3,
+        is_question=False,
+        turn_completeness=0.9,  # clearly finished
+    )
+    assert wait == 1.2  # the trimmed base, < the old 1.8s dead-air wait

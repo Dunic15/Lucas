@@ -323,6 +323,36 @@ def detect_closing(utterance: str) -> bool:
     return bool(_CLOSING.search(utterance))
 
 
+def closing_fallback_fires(
+    *,
+    enabled: bool,
+    now: float,
+    meeting_start: float,
+    last_line_at: float,
+    idle_seconds: float,
+    min_meeting_seconds: float,
+) -> bool:
+    """Additive wrap-up trigger for the facilitation beats (proactive wrap-up +
+    quiet-participant nudge) — it NEVER replaces ``detect_closing``, only ORs an
+    extra path so both beats can also fire on a natural end-of-meeting LULL that
+    carries no exact closing phrase.
+
+    Fires only when BOTH hold: the room has been idle ≥ ``idle_seconds`` since
+    the last substantive line (``now - last_line_at``) AND the meeting has run at
+    least ``min_meeting_seconds`` (``now - meeting_start``). Conservative by
+    construction — it can never fire early in a short call (duration gate) or an
+    actively-talking one (idle gate). Disabled by ``enabled`` False or a
+    non-positive threshold; a never-seen previous line (``last_line_at`` <= 0)
+    never fires."""
+    if not enabled or not (idle_seconds > 0) or not (min_meeting_seconds > 0):
+        return False
+    if last_line_at <= 0:
+        return False
+    if (now - meeting_start) < min_meeting_seconds:
+        return False
+    return (now - last_line_at) >= idle_seconds
+
+
 # ── action-capture continuation guard ──
 # main.py keeps a short same-speaker window after a captured action so an ask
 # that ASR split across two finals ("send the recap" + "to the whole team by
@@ -482,6 +512,57 @@ def should_raise_hand(
         if now - last_at < gap:
             return False
     return True
+
+
+# ── high-confidence interjection escape (spoken complement to should_raise_hand) ──
+# The SKIP gate already decided a contribution is GROUNDED; should_raise_hand
+# decided raising a hand for it is socially worth it. These two decide the
+# stronger move: when the contribution is ALSO high-confidence AND the floor is
+# genuinely open, say ONE line directly instead of raising a silent hand nobody
+# may notice in time. Pure functions — the webhook passes in signals it already
+# holds (top retrieval score, end-of-turn completeness, time since the last human
+# partial), so there is no extra model call and the logic stays unit-testable.
+
+
+def interjection_floor_open(
+    *,
+    turn_completeness: float | None,
+    since_human_partial: float,
+    active_partial_seconds: float,
+    min_completeness: float = 0.6,
+) -> bool:
+    """True when it is socially safe to interject a single grounded line: the
+    line that just opened the floor SOUNDS finished (``turn_completeness`` at or
+    above ``min_completeness`` — 0.6, since 0.5 reads as "can't tell", not
+    "finished", per end_of_turn.py) AND no human is audibly mid-utterance right
+    now (the last human partial is older than ``active_partial_seconds``). Either
+    signal failing keeps the safe raised hand — interrupting a held floor is
+    exactly what the hand-raise exists to avoid.
+
+    Deliberately conservative: a wrong "open" talks over someone, while a wrong
+    "not open" merely falls back to raising the hand (no harm). ``turn_
+    completeness`` None (no estimate) does not by itself block — the partial-gap
+    check still guards the "someone is talking right now" case."""
+    if since_human_partial < active_partial_seconds:
+        return False  # a human partial is in flight — someone is talking now
+    if turn_completeness is not None and turn_completeness < min_completeness:
+        return False  # the speaker sounded mid-thought — hold the floor for them
+    return True
+
+
+def should_interject(
+    *,
+    enabled: bool,
+    confidence: float,
+    min_confidence: float,
+    floor_open: bool,
+) -> bool:
+    """Speak ONE grounded line instead of raising a silent hand. True only when
+    the escape is enabled, the grounded contribution clears the HIGH confidence
+    bar, AND the floor is open (``interjection_floor_open``). Any miss → the
+    caller raises the hand exactly as before. ``confidence`` is the answer path's
+    already-computed grounding signal (top retrieval-chunk score); no LLM call."""
+    return bool(enabled) and floor_open and confidence >= min_confidence
 
 
 # Dismissal ("Laura, you can leave"). Only ever checked on the wake-stripped
