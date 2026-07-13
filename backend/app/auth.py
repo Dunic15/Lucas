@@ -31,7 +31,7 @@ import json
 import secrets
 import time
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 from fastapi import APIRouter, Request
@@ -338,13 +338,43 @@ def _decode_id_token(id_token: str) -> Optional[dict]:
     return claims
 
 
+def _first_party_origin(origin: str) -> bool:
+    """True if ``origin`` is one of Laura's OWN browser-facing origins.
+
+    ``public_base_url`` is the App Runner URL (it backs the OAuth redirect_uri and
+    internal links), but real users reach the dashboard at **lauravatar.com**
+    through the Cloudflare Worker — so their genuinely same-origin logout POST
+    carries ``Origin: https://lauravatar.com``, which is first-party, NOT
+    cross-site. Comparing only against ``public_base_url`` 403'd every real logout
+    (and the two dashboard POSTs that share this check). The host allowlist mirrors
+    billing._public_origin so the app's CSRF checks agree on what is first-party."""
+    o = (origin or "").rstrip("/")
+    if not o:
+        return False
+    if o == settings.public_base_url.rstrip("/"):
+        return True
+    try:
+        parsed = urlsplit(o)
+    except ValueError:
+        return False
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower()
+    return (
+        host == "lauravatar.com"
+        or host.endswith(".lauravatar.com")
+        or host.endswith(".awsapprunner.com")
+    )
+
+
 def _same_origin(request: Request) -> bool:
     """Reject a cross-site POST (forced-logout CSRF). SameSite=Lax already keeps
     the cookie off cross-site POSTs, but this is cheap defense-in-depth: allow
-    only same-origin or fetch-metadata same-origin requests."""
+    only a first-party origin (see _first_party_origin) or a fetch-metadata
+    same-origin request."""
     origin = request.headers.get("origin", "")
     if origin:
-        return origin.rstrip("/") == settings.public_base_url.rstrip("/")
+        return _first_party_origin(origin)
     # No Origin header (older browsers / same-origin navigations): fall back to
     # the fetch-metadata site signal when present.
     site = request.headers.get("sec-fetch-site", "")
