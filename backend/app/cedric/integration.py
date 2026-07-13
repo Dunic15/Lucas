@@ -15,7 +15,6 @@ import asyncio
 import hmac
 import ipaddress
 import json
-import threading
 from typing import Any, Optional
 from urllib.parse import urlsplit
 
@@ -31,13 +30,6 @@ from . import callback
 # Meeting briefs are markdown from the orchestrator; cap so a runaway payload
 # can't blow up prompts (the orchestrator summarizes down, we never truncate).
 MAX_BRIEF_BYTES = 32 * 1024
-
-# Strong refs to in-flight fire-and-forget ``session.ended`` sends. asyncio only
-# holds a WEAK reference to a bare create_task, so a running task can be GC'd
-# mid-flight (Python docs) — dropping the delivery. /redeliver now makes this
-# path directly (and repeatably) HTTP-triggerable, so keep each task alive until
-# it finishes, then drop it. Same pattern as main.py's _summary_tasks.
-_ended_tasks: set = set()
 
 # Recall bot status_code -> orchestrator session.status, for non-terminal
 # join-progress relaying.
@@ -298,11 +290,16 @@ def wire_artifact(artifact: dict) -> dict:
 
 
 def _kick_outbox() -> None:
-    """Nudge delivery off-path; the lifespan worker remains the crash backstop."""
+    """Nudge delivery off-path; the lifespan worker remains the crash backstop.
+
+    When called from a worker thread there is no running event loop. In that
+    case the durable row is already committed and the lifespan worker will
+    deliver it; starting a detached thread here can race process shutdown (and
+    tests that swap SQLite files), which defeats the durability guarantee.
+    """
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        threading.Thread(target=outbox.process_due, daemon=True).start()
         return
     asyncio.create_task(run_in_threadpool(outbox.process_due))
 
