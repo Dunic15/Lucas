@@ -155,14 +155,20 @@ def test_cancel_removes_session_without_artifact(client, recall_stubbed):
 
 def test_end_delivers_ended_callback(client, recall_stubbed, monkeypatch):
     delivered: list[tuple] = []
-    monkeypatch.setattr(
-        cedric_callback,
-        "send_ended",
-        lambda integration, bot_id, artifact: delivered.append(
-            (integration, bot_id, artifact)
+
+    # Capture on the SYNCHRONOUS delivery seam. cedric.deliver_ended runs
+    # in-request at finalize and distils via wire_artifact BEFORE scheduling the
+    # fire-and-forget send_ended. Mocking send_ended — the async inner — is
+    # flaky under TestClient: its create_task is orphaned once the request's
+    # portal closes, so `delivered` may never fill under CI load. Distil here
+    # exactly as the real async path would, so the assertions are deterministic.
+    def fake_deliver_ended(integration, bot_id, artifact):
+        delivered.append(
+            (integration, bot_id, main_module.cedric.wire_artifact(artifact))
         )
-        or True,
-    )
+        return bool(integration and integration.get("callback_url"))
+
+    monkeypatch.setattr(main_module.cedric, "deliver_ended", fake_deliver_ended)
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
     session = store.get(bot_id)
     session.add_utterance("Ben", "Let's decide the roadmap. John owns rollout.")
