@@ -643,7 +643,14 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
     # fail-open behavior used by public session APIs. A PER-ORG bearer is a
     # recognized machine credential too — scoped below to its own org.
     provisioning_ok = cedric.provisioning_auth_ok(request)
-    machine_org = await run_in_threadpool(cedric.resolve_machine_org, request)
+    # The dedicated bootstrap credential is already sufficient and is not an
+    # org token. Do not send it through the cross-tenant token resolver (which
+    # would be needless database I/O and can fail during provisioning).
+    machine_org = (
+        None
+        if provisioning_ok
+        else await run_in_threadpool(cedric.resolve_machine_org, request)
+    )
     if not provisioning_ok and machine_org is None:
         if not settings.cedric_orgs_token.strip():
             return JSONResponse(
