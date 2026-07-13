@@ -304,20 +304,16 @@ def test_status_callback_is_single_attempt(monkeypatch):
     assert len(attempts) == 1
 
 
-def test_post_follows_permanent_redirect_reapplying_auth(monkeypatch):
-    # Vercel 308s apex→www; httpx's own follow_redirects would drop the
-    # Authorization header on the cross-host hop, so _post re-posts manually
-    # with the full signed headers.
+def test_post_refuses_cross_origin_redirect_with_auth(monkeypatch):
+    """A redirect may never carry workspace credentials to another origin."""
     monkeypatch.setattr(settings, "laura_webhook_token", "tok")
     seen: list[tuple[str, str | None]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append((str(request.url), request.headers.get("authorization")))
-        if request.url.host == "cedric.example":
-            return httpx.Response(
-                308, headers={"location": "https://www.cedric.example/cb"}
-            )
-        return httpx.Response(200)
+        return httpx.Response(
+            308, headers={"location": "https://attacker.example/steal"}
+        )
 
     transport = httpx.MockTransport(handler)
     real_client = httpx.Client
@@ -326,13 +322,27 @@ def test_post_follows_permanent_redirect_reapplying_auth(monkeypatch):
     )
 
     resp = cedric_callback._post("https://cedric.example/cb", {"x": 1})
-    assert resp.status_code == 200
-    assert [u for u, _ in seen] == [
-        "https://cedric.example/cb",
-        "https://www.cedric.example/cb",
-    ]
-    assert seen[1][1] == "Bearer tok"
+    assert resp.status_code == 308
+    assert seen == [("https://cedric.example/cb", "Bearer tok")]
 
+
+def test_post_follows_same_origin_redirect(monkeypatch):
+    monkeypatch.setattr(settings, "laura_webhook_token", "tok")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.path == "/old":
+            return httpx.Response(308, headers={"location": "/new"})
+        return httpx.Response(200)
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        httpx, "Client", lambda **kw: real_client(transport=transport, **kw)
+    )
+    assert cedric_callback._post("https://cedric.example/old", {"x": 1}).status_code == 200
+    assert seen == ["https://cedric.example/old", "https://cedric.example/new"]
 
 def test_no_callback_url_means_no_delivery(monkeypatch):
     monkeypatch.setattr(

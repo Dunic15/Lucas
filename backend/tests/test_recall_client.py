@@ -127,7 +127,7 @@ def test_create_bot_uses_default_recallai_low_latency_transcription(monkeypatch)
 
     monkeypatch.setattr(recall_client, "_request", fake_request)
 
-    recall_client.create_bot(
+    result = recall_client.create_bot(
         "https://meet.google.com/abc-defg-hij",
         "https://laura.example/avatar",
     )
@@ -144,6 +144,10 @@ def test_create_bot_uses_default_recallai_low_latency_transcription(monkeypatch)
         "google_meet": "web_gpu",
         "microsoft_teams": "web_gpu",
     }
+    endpoint = captured["json"]["recording_config"]["realtime_endpoints"][0]["url"]
+    capability = endpoint.split("?cap=", 1)[1]
+    assert capability
+    assert result["_laura_realtime_capability"] == capability
 
 
 def test_create_bot_can_use_elevenlabs_streaming_transcription(monkeypatch):

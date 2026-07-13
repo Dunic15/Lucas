@@ -12,6 +12,7 @@ thin wrappers over ledger.py, which remains the single source of truth.
 from __future__ import annotations
 
 import json
+from typing import Optional
 
 from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
@@ -23,12 +24,19 @@ from .config import settings
 router = APIRouter(prefix="/org", tags=["org-memory"])
 
 
-def _org_for(request: Request) -> str:
-    """The tenant whose memory a surface may read. These routes sit behind the
-    machine Bearer gate (Cedric), with no cookie principal, so today they map to
-    the Demo org. A per-org token→org resolver (org_tokens) is a later,
-    auth-blocked PR (MULTI-TENANCY §5); until then the fallback is Demo."""
-    return settings.demo_org_id
+async def _machine_gate(request: Request) -> tuple[Optional[JSONResponse], str]:
+    """Authenticate the machine caller and resolve the tenant whose memory it
+    may touch: a PER-ORG bearer (org_tokens, PR A/D) → its own org; the global
+    bearer and the key-free open demo → the Demo org (exactly today's scope).
+    Returns ``(error_response, org_id)`` — send the error when it is not None.
+    The resolver is sync DB I/O, so it runs in the threadpool (every route
+    here is async; never the live hot path)."""
+    org = await run_in_threadpool(cedric.resolve_machine_org, request)
+    if org is None:
+        if err := cedric.auth_error(request):
+            return err, ""
+        org = settings.demo_org_id  # key-free/open: today's demo scope
+    return None, org
 
 
 def _search_artifacts(query: str, limit: int, org_id: str) -> list[dict]:
@@ -62,9 +70,9 @@ def _search_artifacts(query: str, limit: int, org_id: str) -> list[dict]:
 async def org_brief(meeting_url: str, request: Request) -> JSONResponse:
     """The carryover brief for a meeting link: what previous sessions left
     open (process steps, actions with owners, recent decisions)."""
-    if err := cedric.auth_error(request):
+    err, org = await _machine_gate(request)
+    if err:
         return err
-    org = _org_for(request)
     brief = await run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org)
     return JSONResponse(
         {"meeting_key": ledger.meeting_key(meeting_url), "brief": brief}
@@ -74,9 +82,10 @@ async def org_brief(meeting_url: str, request: Request) -> JSONResponse:
 @router.get("/actions")
 async def org_actions(request: Request) -> JSONResponse:
     """Open ledger items across all meetings, grouped by meeting key."""
-    if err := cedric.auth_error(request):
+    err, org = await _machine_gate(request)
+    if err:
         return err
-    grouped = await run_in_threadpool(ledger.open_by_meeting, org_id=_org_for(request))
+    grouped = await run_in_threadpool(ledger.open_by_meeting, org_id=org)
     return JSONResponse({"open": grouped})
 
 
@@ -86,13 +95,13 @@ async def org_search(q: str, request: Request, limit: int = 20) -> JSONResponse:
     matching ledger items (actions/decisions with owners + status) and matching
     meeting artifacts (a distilled snippet each). The 'employee that remembers'
     query — distilled data only, same Bearer gate."""
-    if err := cedric.auth_error(request):
+    err, org = await _machine_gate(request)
+    if err:
         return err
     query = (q or "").strip()
     if not query:
         return JSONResponse({"error": "missing query ?q="}, status_code=400)
     limit = max(1, min(limit, 50))
-    org = _org_for(request)
     ledger_hits = await run_in_threadpool(ledger.search, query, limit=limit, org_id=org)
     meeting_hits = await run_in_threadpool(_search_artifacts, query, limit, org)
     return JSONResponse(
@@ -114,7 +123,8 @@ async def org_resolve(ref: str, request: Request) -> JSONResponse:
     Absent/empty body means "done", so today's body-less callers keep working
     identically. All three outcomes are terminal; the response echoes the
     status actually applied."""
-    if err := cedric.auth_error(request):
+    err, org = await _machine_gate(request)
+    if err:
         return err
     raw = await request.body()
     if raw.strip():
@@ -133,7 +143,6 @@ async def org_resolve(ref: str, request: Request) -> JSONResponse:
             status_code=400,
         )
     detail = str((body or {}).get("detail") or "").strip()[:300]
-    org = _org_for(request)
     if ref.isdigit():
         ok = await run_in_threadpool(
             ledger.resolve_item, int(ref), "", outcome, detail, org_id=org
@@ -155,7 +164,8 @@ async def org_action_status(action_id: str, request: Request) -> JSONResponse:
     latest wins; 'done' also closes the ledger item (same as /resolve). The
     dashboard shows this per action — the meter of 'my avatar's asks actually
     got executed'. Body: {"status": "...", "detail": "one-liner, optional"}."""
-    if err := cedric.auth_error(request):
+    err, org = await _machine_gate(request)
+    if err:
         return err
     try:
         body = await request.json()
@@ -163,7 +173,13 @@ async def org_action_status(action_id: str, request: Request) -> JSONResponse:
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     status = str((body or {}).get("status") or "")
     detail = str((body or {}).get("detail") or "")
-    ok = await run_in_threadpool(ledger.set_action_status, action_id, status, detail)
+    # action_status is keyed by (org_id, action_id), so a per-workspace
+    # principal may safely report proposed/approved before meeting finalization.
+    # The eventual ledger row consults only this org's status and cannot collide
+    # with an identical action_id in another tenant.
+    ok = await run_in_threadpool(
+        ledger.set_action_status, action_id, status, detail, org_id=org
+    )
     if not ok:
         return JSONResponse(
             {"error": f"status must be one of {list(ledger.EXECUTION_STATUSES)}"},

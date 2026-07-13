@@ -152,21 +152,24 @@ def test_callback_payloads_carry_org_id(monkeypatch):
     assert sent[1]["action_id"] == "a1"
 
 
-def test_signing_secret_per_org_with_fallback(monkeypatch):
+def test_signing_secret_is_per_org_and_customers_fail_closed(monkeypatch):
     # Pure env-registry behaviour: disable the SSM source so the lookup doesn't
-    # reach a real parameter (the registry now consults SSM on the first call
-    # after boot).
+    # reach a real parameter (the registry consults SSM on the first call).
     monkeypatch.setattr(settings, "laura_webhook_registry_ssm_parameter", "")
     monkeypatch.setattr(settings, "laura_webhook_secret", "global-secret")
     monkeypatch.setattr(
         settings, "laura_webhook_secrets_by_org", json.dumps({"org-42": "org-secret"})
     )
     assert callback._secret_for("org-42") == "org-secret"
-    assert callback._secret_for("org-other") == "global-secret"
+    # A customer org never inherits the deployment-wide HMAC key.
+    assert callback._secret_for("org-other") == ""
+    # Empty and Demo are the explicit legacy/service scope.
     assert callback._secret_for("") == "global-secret"
-    # a broken registry never blocks sending — falls back to the global secret
+    assert callback._secret_for(settings.demo_org_id) == "global-secret"
+    # A broken registry fails closed for customers instead of signing with a
+    # cross-tenant key.
     monkeypatch.setattr(settings, "laura_webhook_secrets_by_org", "{not json")
-    assert callback._secret_for("org-42") == "global-secret"
+    assert callback._secret_for("org-42") == ""
 
 
 def test_ssm_registry_merge_preserves_existing_orgs_and_hot_reloads(monkeypatch):
@@ -263,8 +266,10 @@ def test_signature_differs_by_org_secret(monkeypatch):
     monkeypatch.setattr(
         settings, "laura_webhook_secrets_by_org", json.dumps({"org-42": "org-secret"})
     )
+    monkeypatch.setattr(secret_registry, "_bearer_cache", {"org-42": "workspace-token"})
     body = b'{"event":"session.status"}'
     h_global = callback._signature_headers(body)
     h_org = callback._signature_headers(body, "org-42")
-    assert h_global["Authorization"] == h_org["Authorization"] == "Bearer tok"
+    assert h_global["Authorization"] == "Bearer tok"
+    assert h_org["Authorization"] == "Bearer workspace-token"
     assert h_global["X-Laura-Signature"] != h_org["X-Laura-Signature"]

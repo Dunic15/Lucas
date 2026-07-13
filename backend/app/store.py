@@ -422,6 +422,16 @@ def _init_db() -> None:
                 FOREIGN KEY(bot_id) REFERENCES sessions(bot_id) ON DELETE CASCADE
             );
 
+            -- Raw capabilities never enter SQLite. A random URL capability is
+            -- hashed and bound to exactly one Recall bot before realtime
+            -- transcript events are accepted.
+            CREATE TABLE IF NOT EXISTS recall_realtime_capabilities (
+                capability_hash TEXT PRIMARY KEY,
+                bot_id TEXT NOT NULL UNIQUE,
+                created_at REAL NOT NULL,
+                FOREIGN KEY(bot_id) REFERENCES sessions(bot_id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS artifacts (
                 bot_id TEXT PRIMARY KEY,
                 org_id TEXT NOT NULL DEFAULT '{demo}',
@@ -967,6 +977,46 @@ def mint_org_token(org_id: str, label: str = "") -> str | None:
     return raw
 
 
+def rotate_org_token(org_id: str, label: str) -> str | None:
+    """Atomically replace one labelled SQLite bearer and return it once."""
+    import hashlib
+    import secrets
+
+    org = (org_id or "").strip()
+    token_label = (label or "").strip()[:80]
+    if not org or not token_label:
+        return None
+    raw = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            "DELETE FROM org_tokens WHERE org_id = ? AND label = ?",
+            (org, token_label),
+        )
+        conn.execute(
+            "INSERT INTO org_tokens (token_hash, org_id, label, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (token_hash, org, token_label, time.time()),
+        )
+    return raw
+
+
+def revoke_org_tokens(org_id: str, label: str = "") -> bool:
+    """Revoke SQLite machine bearers for an org."""
+    org = (org_id or "").strip()
+    if not org:
+        return False
+    with _LOCK, _connect() as conn:
+        if (label or "").strip():
+            conn.execute(
+                "DELETE FROM org_tokens WHERE org_id = ? AND label = ?",
+                (org, label.strip()[:80]),
+            )
+        else:
+            conn.execute("DELETE FROM org_tokens WHERE org_id = ?", (org,))
+    return True
+
+
 def org_exists(org_id: str) -> bool:
     """Whether ``org_id`` is a provisioned org row. A SHARED org (e.g. org_sff,
     resolved from a verified domain) lives in ``orgs`` and is NEVER a ``users``
@@ -984,7 +1034,7 @@ def org_exists(org_id: str) -> bool:
 # ── org connections (the Configure tab) ──
 
 CONNECTION_PROVIDERS = ("cedric-brain", "gmail", "calendar", "slack", "drive")
-CONNECTION_STATUSES = ("connected", "pending", "disconnected")
+CONNECTION_STATUSES = ("connected", "pending", "disconnecting", "disconnected")
 
 
 def set_connection(
@@ -1043,6 +1093,49 @@ def connections_for_org(org_id: str) -> list[dict]:
             }
         )
     return out
+
+
+def register_recall_realtime_capability(bot_id: str, capability: str) -> bool:
+    """Persist a one-bot realtime capability as SHA-256(raw).
+
+    The raw token only exists in Recall's endpoint URL and the request query;
+    it is never stored or logged.
+    """
+    import hashlib
+
+    bot = (bot_id or "").strip()
+    raw = (capability or "").strip()
+    if not bot or not raw:
+        return False
+    digest = hashlib.sha256(raw.encode()).hexdigest()
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            "DELETE FROM recall_realtime_capabilities WHERE bot_id = ?",
+            (bot,),
+        )
+        conn.execute(
+            "INSERT INTO recall_realtime_capabilities "
+            "(capability_hash, bot_id, created_at) VALUES (?, ?, ?)",
+            (digest, bot, time.time()),
+        )
+    return True
+
+
+def resolve_recall_realtime_capability(capability: str) -> str | None:
+    """Return the single bot bound to raw capability, else None."""
+    import hashlib
+
+    raw = (capability or "").strip()
+    if not raw:
+        return None
+    digest = hashlib.sha256(raw.encode()).hexdigest()
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT bot_id FROM recall_realtime_capabilities "
+            "WHERE capability_hash = ?",
+            (digest,),
+        ).fetchone()
+    return row["bot_id"] if row else None
 
 
 def register_conversation(
@@ -1110,6 +1203,9 @@ def remove(bot_id: str) -> None:
             _by_conversation.pop(conversation_id, None)
 
     with _LOCK, _connect() as conn:
+        conn.execute(
+            "DELETE FROM recall_realtime_capabilities WHERE bot_id = ?", (bot_id,)
+        )
         conn.execute("DELETE FROM sessions WHERE bot_id = ?", (bot_id,))
         conn.execute("DELETE FROM conversation_routes WHERE bot_id = ?", (bot_id,))
 

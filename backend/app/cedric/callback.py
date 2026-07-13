@@ -12,7 +12,8 @@ A session started with a `callback_url` gets three kinds of events POSTed back
 
 Requests are signed with `X-Laura-Signature: t=<unix_ts>,v1=<hmac_sha256_hex>`
 over `t + "." + raw_body` using LAURA_WEBHOOK_SECRET (Slack/Stripe-style), and
-carry `Authorization: Bearer LAURA_WEBHOOK_TOKEN` as a cheap first-line check.
+carry a per-workspace bearer for customer orgs. The deployment-level
+`LAURA_WEBHOOK_TOKEN` remains only for the Demo/legacy service path.
 
 Everything here is best-effort by design: a callback failure must NEVER block
 or fail the meeting lifecycle (finalize already saved the artifact — the
@@ -45,9 +46,15 @@ def _secret_for(org_id: str) -> str:
     present, else the global LAURA_WEBHOOK_SECRET. The registry is how each
     connected workspace gets its own credential (minted by the orchestrator's
     /api/laura/orgs provisioning) without rotating anyone else's."""
-    per_org = secret_registry.secret_for(org_id)
+    org = (org_id or "").strip()
+    per_org = secret_registry.secret_for(org)
     if per_org:
         return per_org
+    # A real customer callback must never fall back to a deployment-wide HMAC
+    # secret. Missing per-org credentials fail closed (no signature) and the
+    # delivery remains retryable.
+    if org and org != settings.demo_org_id:
+        return ""
     return settings.laura_webhook_secret.strip()
 
 
@@ -57,6 +64,7 @@ class ProvisionResult:
 
     status_code: int
     webhook_secret: str = ""
+    webhook_token: str = ""
 
     def __bool__(self) -> bool:
         return 200 <= self.status_code < 300
@@ -64,13 +72,26 @@ class ProvisionResult:
     def __repr__(self) -> str:
         return (
             f"ProvisionResult(status_code={self.status_code}, "
-            f"webhook_secret={'<redacted>' if self.webhook_secret else '<missing>'})"
+            f"webhook_secret={'<redacted>' if self.webhook_secret else '<missing>'}, "
+            f"webhook_token={'<redacted>' if self.webhook_token else '<missing>'})"
         )
+
+
+def _bearer_for(org_id: str, legacy: str = "") -> str:
+    """Bearer for Laura→Cedric calls.
+
+    Real customer orgs must use Cedric's per-workspace token; the deployment
+    token is retained only for empty/Demo bootstrap and legacy traffic.
+    """
+    org = (org_id or "").strip()
+    if org and org != settings.demo_org_id:
+        return secret_registry.bearer_for(org)
+    return (legacy or "").strip()
 
 
 def _signature_headers(body: bytes, org_id: str = "") -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    token = settings.laura_webhook_token.strip()
+    token = _bearer_for(org_id, settings.laura_webhook_token)
     if token:
         headers["Authorization"] = f"Bearer {token}"
     secret = _secret_for(org_id)
@@ -89,8 +110,25 @@ _REDIRECTS = (301, 307, 308)
 
 
 def _redirect_target(resp: httpx.Response) -> str | None:
+    """Follow at most one same-origin redirect.
+
+    Workspace Authorization/HMAC credentials must never cross an origin
+    boundary. A cross-origin redirect is returned to the caller as a failed
+    delivery instead of being followed with secrets attached.
+    """
     loc = resp.headers.get("location")
-    return str(resp.url.join(loc)) if resp.status_code in _REDIRECTS and loc else None
+    if resp.status_code not in _REDIRECTS or not loc:
+        return None
+    target = str(resp.url.join(loc))
+    source_parts = urlsplit(str(resp.url))
+    target_parts = urlsplit(target)
+    source_origin = (
+        source_parts.scheme.lower(), (source_parts.hostname or "").lower(), source_parts.port
+    )
+    target_origin = (
+        target_parts.scheme.lower(), (target_parts.hostname or "").lower(), target_parts.port
+    )
+    return target if source_origin == target_origin else None
 
 
 def _post(url: str, payload: dict) -> httpx.Response:
@@ -265,7 +303,8 @@ def fetch_context(integration: dict | None) -> dict | None:
     if not url:
         return None
     headers = {}
-    token = settings.laura_context_token.strip()
+    org_id = str((integration or {}).get("org_id") or "")
+    token = _bearer_for(org_id, settings.laura_context_token)
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
@@ -299,21 +338,20 @@ def provision_org(
     to its Slack team even without external_ref, and mint the org's own
     webhook credentials on his side.
 
-    Returns a truthy ProvisionResult on 2xx (including the minted webhook
-    secret for immediate SSM write-through), a falsey result on refusal/error,
-    or None when the endpoint isn't
-    configured yet (the connection stays 'pending' — contract step B, Cedric's
-    /api/laura/orgs, is in flight). Best-effort: any minted credentials in the
-    response are handled by ops (the signing registry env), NEVER stored or
-    logged here."""
+    Returns a truthy ProvisionResult on 2xx (including both minted workspace
+    credentials for immediate SSM write-through), a falsey result on refusal/error,
+    or None when the endpoint isn't configured yet (the connection stays
+    'pending'). Minted credentials are returned only in the redacted result;
+    dashboard.py persists them as per-org SecureStrings and never logs them."""
     url = settings.cedric_orgs_url.strip()
     if not url:
         return None
     target_url = f"{url.rstrip('/')}/pending" if not team_id else url
     headers = {"Content-Type": "application/json"}
-    token = settings.cedric_orgs_token.strip() or settings.laura_api_token.strip()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    token = settings.cedric_orgs_token.strip()
+    if not token:
+        return ProvisionResult(0)
+    headers["Authorization"] = f"Bearer {token}"
     payload = {
         "org_id": org_id,
         "team_id": team_id or None,
@@ -327,6 +365,7 @@ def provision_org(
             if target:
                 resp = client.post(target, json=payload, headers=headers)
         secret = ""
+        peer_token = ""
         if 200 <= resp.status_code < 300:
             try:
                 data = resp.json()
@@ -334,10 +373,12 @@ def provision_org(
                 if isinstance(credentials, dict):
                     candidate = credentials.get("webhook_secret")
                     secret = candidate.strip() if isinstance(candidate, str) else ""
+                    candidate = credentials.get("webhook_token")
+                    peer_token = candidate.strip() if isinstance(candidate, str) else ""
             except ValueError:
                 pass
         print(f"[cedric-callback] org provisioning HTTP {resp.status_code}", flush=True)
-        return ProvisionResult(resp.status_code, secret)
+        return ProvisionResult(resp.status_code, secret, peer_token)
     except Exception as e:  # noqa: BLE001 — connection stays pending, retry later
         print(
             f"[cedric-callback] org provisioning failed ({type(e).__name__})",
@@ -346,11 +387,14 @@ def provision_org(
         return ProvisionResult(0)
 
 
-def fetch_org_connectors(org_id: str) -> dict | None:
+def fetch_org_connectors(org_id: str, team_id: str = "") -> dict | None:
     """The product bridge, read side: what the brain can touch for this org.
-    GET {orchestrator}/api/laura/connectors?org_id= — returns Cedric's
+    GET {orchestrator}/api/laura/connectors?org_id=&team= — returns Cedric's
     connector catalog with live state (connected / account label /
-    needs-reconnect) plus browser connect_url/manage_url links. PII-light by
+    needs-reconnect) plus browser connect_url/manage_url links. ``team_id``
+    (the org's OWN Slack workspace, from its org_connections config) pins the
+    upstream query to the caller's workspace so an org the orchestrator can't
+    resolve never falls back to another team's catalog. PII-light by
     contract (no account ids or tokens); Laura renders it verbatim in the
     avatar's Configure tab and never stores it. None when the orchestrator
     isn't configured/linked or on any failure."""
@@ -360,15 +404,20 @@ def fetch_org_connectors(org_id: str) -> dict | None:
     # CEDRIC_ORGS_URL points at .../api/laura/orgs — the sibling route.
     url = base.rstrip("/").rsplit("/", 1)[0] + "/connectors"
     headers = {}
-    token = settings.cedric_orgs_token.strip() or settings.laura_api_token.strip()
+    token = _bearer_for(
+        org_id, settings.cedric_orgs_token.strip() or settings.laura_api_token.strip()
+    )
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    params = {"org_id": org_id}
+    if (team_id or "").strip():
+        params["team"] = team_id.strip()
     try:
         with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
-            resp = client.get(url, params={"org_id": org_id}, headers=headers)
+            resp = client.get(url, params=params, headers=headers)
             target = _redirect_target(resp)
             if target:
-                resp = client.get(target, params={"org_id": org_id}, headers=headers)
+                resp = client.get(target, params=params, headers=headers)
         if resp.status_code != 200:
             return None
         data = resp.json()
@@ -376,3 +425,43 @@ def fetch_org_connectors(org_id: str) -> dict | None:
     except Exception as e:  # noqa: BLE001 — the Configure tab just shows "unavailable"
         print(f"[cedric-callback] connectors fetch failed: {e}", flush=True)
         return None
+
+
+def revoke_org(org_id: str) -> int | None:
+    """Remote revoke, the write half of disconnect: DELETE the org→workspace
+    link on the orchestrator (``DELETE {CEDRIC_ORGS_URL}/{org_id}`` — the
+    contract's `/api/laura/orgs/{org_id}` mirror of provisioning). Returns the
+    HTTP status code (0 on transport error / an org_id unsafe for a URL path),
+    or None when CEDRIC_ORGS_URL isn't configured (no remote side exists —
+    the caller may disconnect locally). The caller treats 2xx and 404
+    (already gone) as revoked and MUST leave local state untouched on
+    anything else — never claim a disconnection the orchestrator didn't
+    confirm."""
+    base = settings.cedric_orgs_url.strip()
+    if not base:
+        return None
+    org = (org_id or "").strip()
+    # Laura generates org ids, but validate before splicing one into a URL
+    # path anyway (same rule as secret_registry._org_parameter_name).
+    import re
+
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", org):
+        return 0
+    url = f"{base.rstrip('/')}/{org}"
+    headers = {}
+    token = _bearer_for(
+        org, settings.cedric_orgs_token.strip() or settings.laura_api_token.strip()
+    )
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
+            resp = client.delete(url, headers=headers)
+            target = _redirect_target(resp)
+            if target:
+                resp = client.delete(target, headers=headers)
+        print(f"[cedric-callback] org revoke HTTP {resp.status_code}", flush=True)
+        return resp.status_code
+    except Exception as e:  # noqa: BLE001 — local state must stay 'connected'
+        print(f"[cedric-callback] org revoke failed ({type(e).__name__})", flush=True)
+        return 0

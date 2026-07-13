@@ -1597,12 +1597,23 @@ async def _start_avatar_session(
             except Exception:  # noqa: BLE001 — reconcile's restore heals orphans
                 print("[usage] dispatch_failed close deferred to reconcile", flush=True)
         raise
+    realtime_capability = str(bot.pop("_laura_realtime_capability", "") or "")
     if usage_bot_id:
         await _assign_usage_bot_id(usage_bot_id, bot["id"])
     session = store.create(
         bot_id=bot["id"], meeting_url=meeting_url, avatar_id=avatar.id,
         org_id=org_id,
     )
+    if realtime_capability and not store.register_recall_realtime_capability(
+        bot["id"], realtime_capability
+    ):
+        # Never leave a paid bot alive if its inbound realtime channel cannot
+        # be authenticated.
+        try:
+            await run_in_threadpool(recall_client.leave_call, bot["id"])
+        finally:
+            store.remove(bot["id"])
+        raise RuntimeError("could not secure Recall realtime endpoint")
     # CEDRIC: a summon that didn't carry its own wiring (the Gmail auto-join
     # watcher passes integration=None) still gets the Model A default routing —
     # otherwise an email-summoned meeting silently falls to Model B (no context
@@ -1701,7 +1712,10 @@ def _org_token_bearer_org(request: Request) -> Optional[str]:
     """The org owning the request's Bearer, when it is a PER-ORG machine token
     (org_tokens: durable control plane first, SQLite fallback). None for no/
     non-org bearers — including the GLOBAL laura_api_token, which keeps its
-    demo-org behavior. A raw secret is compared/hashed, never logged. Called
+    demo-org behavior. Sibling of cedric.resolve_machine_org (PR D), which
+    additionally maps the global bearer to the Demo org — kept separate so PR
+    A's start/end/redeliver semantics stay untouched.
+    A raw secret is compared/hashed, never logged. Called
     on /sessions/start, /sessions/{id}/end and /sessions/{id}/redeliver —
     control-plane paths, never the live hot path. SYNC (SQLite + optionally
     the Postgres control plane): async handlers must call it via
@@ -1715,11 +1729,12 @@ def _org_token_bearer_org(request: Request) -> Optional[str]:
         return None
     global_token = settings.laura_api_token.strip()
     if global_token and hmac.compare_digest(raw, global_token):
-        return None  # the global service bearer: today's behavior (Demo org)
-    org = control_plane.resolve_org_token(raw)
-    if org is None:
-        org = store.resolve_org_token(raw)
-    return org
+        return settings.demo_org_id
+    # Durable revocation is authoritative in production: never resurrect a
+    # token from the ephemeral SQLite cache after Postgres rejects it.
+    if control_plane.enabled():
+        return control_plane.resolve_org_token(raw)
+    return store.resolve_org_token(raw)
 
 
 @app.post("/sessions/start")
@@ -1738,6 +1753,16 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
         if token_org is None:
             if err := auth.gate(request):
                 return err
+    # Browser/cookie users choose only meeting + avatar. Integration wiring
+    # is server-owned per org; reject it before any vendor readiness check,
+    # database enumeration or paid bot creation.
+    if user is not None and (
+        req.callback_url or req.context_url or req.external_ref
+    ):
+        return JSONResponse(
+            {"error": "integration wiring is managed by your workspace"},
+            status_code=400,
+        )
     try:
         recall_client.assert_ready()
     except RuntimeError as e:
@@ -1764,7 +1789,14 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     if clash := _existing_session_clash(req.meeting_url, caller_org):
         return clash
 
+    if not cedric.request_integration_urls_allowed(req, caller_org):
+        return JSONResponse(
+            {"error": "callback_url/context_url must use the configured Cedric HTTPS origin"},
+            status_code=400,
+        )
     integration = cedric.build_integration(req, brief)  # CEDRIC
+    if integration is not None:
+        integration = {**integration, "org_id": caller_org}
     # Serialize the guard→create window PER MEETING so two concurrent starts for
     # the same link can't both pass the dedup checks and both create a bot.
     # DIFFERENT meetings hold different locks and still dispatch in parallel.
@@ -2255,11 +2287,11 @@ async def end_session(bot_id: str, request: Request) -> JSONResponse:
         # decision (2026-07-13): the Demo org is the anonymous showroom, and a
         # real signup must not be able to kill (or see) another visitor's demo.
         if live is not None and live.org_id not in ("", user["org_id"]):
-            return JSONResponse({"error": "not your session"}, status_code=403)
+            return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     if token_org is not None:
         live = store.get(bot_id)
         if live is not None and live.org_id != token_org:
-            return JSONResponse({"error": "not your session"}, status_code=403)
+            return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     artifact = await _finalize_session(bot_id, source="manual")
     if artifact is None:
         # _finalize_session returns None only when the session is already gone
@@ -2281,10 +2313,21 @@ async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
     Used by the orchestrator when a calendar event moves or is cancelled (it
     rebooks afterwards). `end` keeps its meaning: finalize + artifact.
     """
-    if err := cedric.auth_error(request):  # CEDRIC
-        return err
+    # PER-ORG machine bearers are first-class here (PR D): they authenticate
+    # like the global bearer but may cancel ONLY their own org's sessions. The
+    # global bearer keeps its full legacy service scope; key-free stays open.
+    machine_org = await run_in_threadpool(cedric.resolve_machine_org, request)
+    if machine_org is None:
+        if err := cedric.auth_error(request):  # CEDRIC
+            return err
     session = store.get(bot_id)
-    if session is None:
+    # Wrong-org answers the IDENTICAL body as not-found: a distinct 403 would
+    # be an existence oracle (a per-org bearer probing whether another org's
+    # bot_id exists). Adversarial review 2026-07-13, should-fix 2.
+    if session is None or (
+        machine_org is not None
+        and session.org_id != machine_org
+    ):
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     # Stop the meter: works for live bots; scheduled bots may reject leave_call,
     # so fall back to deleting the scheduled bot. Track whether the meter is
@@ -2345,10 +2388,19 @@ class DeliverRequest(BaseModel):
 @app.post("/sessions/{bot_id}/deliver")
 async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -> JSONResponse:
     """Actually send the finished meeting's follow-up email + post it to Slack."""
-    if err := cedric.auth_error(request):  # CEDRIC
-        return err
+    # Same machine-auth seam as /cancel: a PER-ORG bearer may deliver ONLY its
+    # own org's artifacts; the global bearer keeps today's full service scope.
+    machine_org = await run_in_threadpool(cedric.resolve_machine_org, request)
+    if machine_org is None:
+        if err := cedric.auth_error(request):  # CEDRIC
+            return err
     artifact = store.get_artifact(bot_id)
-    if artifact is None:
+    # Wrong-org == not-found, byte-identical (no existence oracle for per-org
+    # bearers). Adversarial review 2026-07-13, should-fix 2.
+    if artifact is None or (
+        machine_org is not None
+        and str(artifact.get("org_id") or "") != machine_org
+    ):
         return JSONResponse({"error": "no artifact for this bot_id"}, status_code=404)
 
     # Finalize already ran store.remove(bot_id), so store.get(bot_id) is None here
@@ -2395,11 +2447,14 @@ def vendors_view(request: Request) -> JSONResponse:
 def ledger_view(meeting_url: str, request: Request) -> JSONResponse:
     """Cross-meeting memory for a meeting link: every ledger item plus the
     carryover brief the avatar gets injected at the next session."""
-    if err := cedric.auth_error(request):  # CEDRIC
-        return err
-    # Machine/service seam (Cedric bearer): no cookie principal, so the Demo
-    # org. A per-org token→org resolver is a later, auth-blocked PR (§5).
-    org = settings.demo_org_id
+    # Machine/service seam: a PER-ORG bearer reads ITS org's memory; the
+    # global bearer (and the key-free open demo) keeps the Demo org, exactly
+    # as today. Sync handler → FastAPI already runs this off the event loop.
+    machine_org = cedric.resolve_machine_org(request)
+    if machine_org is None:
+        if err := cedric.auth_error(request):  # CEDRIC
+            return err
+    org = machine_org or settings.demo_org_id
     key = ledger.meeting_key(meeting_url)
     return JSONResponse(
         {
@@ -2413,13 +2468,25 @@ def ledger_view(meeting_url: str, request: Request) -> JSONResponse:
 @app.get("/sessions/{bot_id}/artifact")
 def session_artifact(bot_id: str, request: Request) -> JSONResponse:
     """Retrieve a finished session's artifact (summary + checklist + email)."""
-    if err := cedric.auth_error(request):  # CEDRIC
-        return err
+    # A PER-ORG bearer may read ONLY its own org's sessions/artifacts. Another
+    # org's bot_id — live OR finalized — answers the IDENTICAL not-found body,
+    # so the endpoint is never an existence/progress oracle (adversarial
+    # review 2026-07-13, should-fix 2). The global bearer and the key-free
+    # demo keep today's full service scope.
+    machine_org = cedric.resolve_machine_org(request)
+    if machine_org is None:
+        if err := cedric.auth_error(request):  # CEDRIC
+            return err
+    org_scoped = machine_org is not None
     live = store.get(bot_id)
     if live is not None:
+        if org_scoped and live.org_id != machine_org:
+            return JSONResponse({"error": "unknown bot_id"}, status_code=404)
         return JSONResponse({"status": "in_progress", "bot_id": bot_id})
     artifact = store.get_artifact(bot_id)
-    if artifact is None:
+    if artifact is None or (
+        org_scoped and str(artifact.get("org_id") or "") != machine_org
+    ):
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     return JSONResponse({"status": "done", **cedric.wire_artifact(artifact)})  # CEDRIC: PII stays home
 
@@ -2451,9 +2518,9 @@ async def redeliver_artifact(bot_id: str, request: Request) -> JSONResponse:
     # logged-in users (self-serve product decision, 2026-07-13; same rule as
     # /sessions/{id}/end and dashboard.visible).
     if user is not None and artifact_org not in ("", user["org_id"]):
-        return JSONResponse({"error": "not your session"}, status_code=403)
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     if token_org is not None and artifact_org != token_org:
-        return JSONResponse({"error": "not your session"}, status_code=403)
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
 
     integration = cedric.default_integration()
     if not integration or not integration.get("callback_url"):
@@ -2485,11 +2552,20 @@ def meetings_list(request: Request) -> JSONResponse:
     never served to the anonymous internet — and never logged. Same guard as
     /dashboard/summary; the HTML shell (/meetings) stays open like /dashboard."""
     user = auth.current_user(request)
+    machine_org = None
     if user is None:
-        if err := auth.gate(request):
-            return err
+        machine_org = cedric.resolve_machine_org(request)
+        if machine_org is None:
+            if err := auth.gate(request):
+                return err
     artifacts = store.list_artifacts()
-    if user is not None:
+    if machine_org is not None:
+        artifacts = [
+            a
+            for a in artifacts
+            if str((a.get("artifact") or {}).get("org_id") or "") == machine_org
+        ]
+    elif user is not None:
         # Cookie login: scope to the caller's org. Unowned/legacy artifacts
         # (empty org_id) stay visible, mirroring the /sessions/*/redeliver
         # rule; DEMO-org artifacts do not — self-serve product decision
@@ -3573,6 +3649,9 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                     except Exception:  # noqa: BLE001 — reconcile heals orphans
                         pass
                 raise
+            realtime_capability = str(
+                bot.pop("_laura_realtime_capability", "") or ""
+            )
             if usage_bot_id:
                 await _assign_usage_bot_id(usage_bot_id, bot["id"])
             # Calendar auto-join has no authenticated principal (a webhook on
@@ -3582,6 +3661,14 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id,
                 org_id=settings.demo_org_id,
             )
+            if realtime_capability and not store.register_recall_realtime_capability(
+                bot["id"], realtime_capability
+            ):
+                try:
+                    await run_in_threadpool(recall_client.leave_call, bot["id"])
+                finally:
+                    store.remove(bot["id"])
+                raise RuntimeError("could not secure Recall realtime endpoint")
             runpod_runtime.on_session_started(avatar.page)
             # CEDRIC: calendar-summoned (scheduled) bots take this inlined path,
             # NOT _start_avatar_session, so wire the Model A default here too —
@@ -3589,7 +3676,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             # the email path did. None when no SURFACE_* is set.
             default_integ = cedric.default_integration()
             if default_integ:
-                s.integration = default_integ
+                s.integration = {**default_integ, "org_id": settings.demo_org_id}
             s.anam_conversation_id = conversation_id
             store.register_conversation(
                 conversation_id, bot["id"], org_id=settings.demo_org_id
@@ -3669,22 +3756,54 @@ def _closing_signal(session: store.Session, text: str) -> bool:
 # ───────────────────────── recall webhook ──────────────────────────
 @app.post("/webhooks/recall")
 async def recall_webhook(request: Request) -> JSONResponse:
-    raw_body = await request.body()
-    # Realtime transcript webhooks (from the bot's realtime_endpoints) arrive
-    # UNSIGNED — unlike the Svix-signed calendar/dashboard webhooks. If we required
-    # a signature we'd 401 every transcript and the avatar would never hear its
-    # wake word. So verify only when a signature is actually present (still reject
-    # a bad one); accept unsigned realtime transcripts.
-    has_signature = any(
+    # Recall realtime endpoints are unsigned. Production bot URLs therefore
+    # carry a random per-session capability. Missing/wrong capabilities are
+    # rejected before the body is read or parsed; the stored value is SHA-256
+    # only. Svix-signed dashboard/status webhooks remain independently valid.
+    signature_present = any(
         h in request.headers for h in ("webhook-signature", "svix-signature")
     )
+    # An attacker can add a signature-looking header. It is an authentication
+    # method only when the operator configured the verification secret; without
+    # that secret the request remains unsigned and must present its capability.
+    has_signature = signature_present and bool(
+        settings.recall_webhook_secret.strip()
+    )
+    capability_bot_id: str | None = None
+    if not has_signature:
+        query_params = getattr(request, "query_params", {})
+        capability = (query_params.get("cap") or "").strip()
+        capability_required = bool(settings.recall_api_key.strip())
+        if capability_required and not capability:
+            return JSONResponse({"error": "missing realtime capability"}, status_code=401)
+        if capability:
+            capability_bot_id = await run_in_threadpool(
+                store.resolve_recall_realtime_capability, capability
+            )
+            if capability_bot_id is None:
+                return JSONResponse({"error": "invalid realtime capability"}, status_code=401)
+
+    raw_body = await request.body()
     if has_signature:
         try:
             recall_client.verify_webhook(raw_body, request.headers)
         except RuntimeError as e:
             return JSONResponse({"error": str(e)}, status_code=401)
 
-    payload = json.loads(raw_body or b"{}")
+    try:
+        payload = json.loads(raw_body or b"{}")
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+
+    # A valid capability authorizes exactly one bot. A payload claiming any
+    # other session is rejected before transcript/roster/status side effects.
+    if capability_bot_id is not None:
+        claimed_bot_id = str(
+            ((payload.get("data") or {}).get("bot") or {}).get("id") or ""
+        )
+        if not hmac.compare_digest(claimed_bot_id, capability_bot_id):
+            return JSONResponse({"error": "capability/session mismatch"}, status_code=403)
+
     event = payload.get("event", "")
 
     if event == "transcript.partial_data":

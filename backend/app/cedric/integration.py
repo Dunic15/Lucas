@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import ipaddress
 import json
 import threading
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
@@ -64,6 +66,124 @@ def auth_error(request: Request) -> Optional[JSONResponse]:
     if hmac.compare_digest(provided, f"Bearer {token}"):
         return None
     return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+
+def resolve_machine_org(request: Request) -> Optional[str]:
+    """The org this request's MACHINE bearer is scoped to, or None when the
+    request carries no recognized machine credential.
+
+      - The GLOBAL ``laura_api_token`` (when configured) → ``settings.
+        demo_org_id``: the legacy service scope. Endpoints treat it exactly as
+        today (Cedric's deployment credential, never narrowed by this PR).
+      - A PER-ORG token (org_tokens — durable control plane first, SQLite
+        fallback; PR A) → its org_id. Callers MUST enforce that such a bearer
+        only touches its own org's rows.
+      - Anything else (no/blank/unknown bearer) → None; callers fall back to
+        ``auth_error`` / ``auth.gate`` so the key-free demo stays
+        byte-identical (open when no token is configured).
+
+    Sibling of ``main._org_token_bearer_org`` (PR A), which returns None for
+    the global bearer instead — deliberately NOT consolidated so PR A's
+    start/end/redeliver semantics stay untouched.
+
+    SYNC (SQLite + optionally a Postgres round-trip): async handlers must call
+    it via ``run_in_threadpool`` — never on the live hot path. The raw secret
+    is compared/hashed only, never logged."""
+    provided = request.headers.get("authorization", "")
+    if not provided.startswith("Bearer "):
+        return None
+    raw = provided[len("Bearer "):].strip()
+    if not raw:
+        return None
+    global_token = settings.laura_api_token.strip()
+    if global_token and hmac.compare_digest(raw, global_token):
+        return settings.demo_org_id
+    # Lazy imports keep the module graph flat (cedric never needs store/
+    # control_plane at import time; mirrors auth.py's local `import cedric`).
+    from .. import control_plane, store
+
+    # In production the durable control plane is authoritative. Falling back
+    # to SQLite after a durable miss would resurrect a token revoked in
+    # Postgres. SQLite is only the key-free/local control plane.
+    if control_plane.enabled():
+        return control_plane.resolve_org_token(raw)
+    return store.resolve_org_token(raw)
+
+
+def provisioning_auth_ok(request: Request) -> bool:
+    """True only for the dedicated Laura↔Cedric OAuth bootstrap credential.
+
+    This credential is accepted solely by Slack install completion. It is not
+    a session/archive bearer and therefore cannot become a cross-tenant master
+    key. Empty is always disabled.
+    """
+    token = settings.cedric_orgs_token.strip()
+    if not token:
+        return False
+    provided = request.headers.get("authorization", "")
+    return hmac.compare_digest(provided, f"Bearer {token}")
+
+
+def _origin(url: str) -> tuple[str, str, int | None] | None:
+    """Return a safe public HTTPS origin, otherwise None.
+
+    Credentials are attached to these requests, so userinfo, custom ports and
+    local/private/link-local/reserved literal IPs are never valid integration
+    destinations even when an operator accidentally configures one.
+    """
+    try:
+        p = urlsplit((url or "").strip())
+        port = p.port
+    except ValueError:
+        return None
+    host = (p.hostname or "").lower().rstrip(".")
+    if (
+        p.scheme.lower() != "https"
+        or not host
+        or p.username is not None
+        or p.password is not None
+        or port not in (None, 443)
+        or host == "localhost"
+        or host.endswith(".localhost")
+    ):
+        return None
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        pass  # DNS name; exact-origin allowlisting below remains authoritative.
+    else:
+        if not address.is_global:
+            return None
+    return ("https", host, port)
+
+
+def request_integration_urls_allowed(req: Any, org_id: str) -> bool:
+    """Reject customer-supplied callback/context endpoints outside Cedric.
+
+    Per-org callbacks carry workspace credentials. They may only go to an HTTPS
+    origin configured by the operator; Demo/key-free traffic keeps its legacy
+    behavior. Server-owned default URLs are already trusted configuration.
+    """
+    org = (org_id or "").strip()
+    if not org or org == settings.demo_org_id:
+        return True
+    supplied = [
+        str(getattr(req, "callback_url", "") or "").strip(),
+        str(getattr(req, "context_url", "") or "").strip(),
+    ]
+    supplied = [url for url in supplied if url]
+    if not supplied:
+        return True
+    trusted = {
+        origin
+        for origin in (
+            _origin(settings.cedric_orgs_url),
+            _origin(settings.surface_webhook_url),
+            _origin(settings.surface_context_url),
+        )
+        if origin is not None
+    }
+    return bool(trusted) and all(_origin(url) in trusted for url in supplied)
 
 
 def brief_too_large(brief: str) -> Optional[JSONResponse]:

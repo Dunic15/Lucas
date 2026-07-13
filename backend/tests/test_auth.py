@@ -340,7 +340,7 @@ def test_cannot_end_another_orgs_session(client, google_on):
     store.create("bot_eve", "https://meet.google.com/e2", "laura", org_id=eve["org_id"])
     try:
         resp = client.post("/sessions/bot_eve/end")
-        assert resp.status_code == 403
+        assert resp.status_code == 404
     finally:
         store.remove("bot_eve")
 
@@ -430,7 +430,7 @@ def test_logged_in_user_cannot_end_demo_org_session(client, google_on, monkeypat
     monkeypatch.setattr(recall_client, "leave_call", lambda bot_id: None)
     try:
         resp = client.post("/sessions/bot_demo/end")
-        assert resp.status_code == 403
+        assert resp.status_code == 404
         assert store.get("bot_demo") is not None  # not finalized/removed
     finally:
         store.remove("bot_demo")

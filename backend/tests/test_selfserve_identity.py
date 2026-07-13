@@ -254,7 +254,7 @@ def test_redeliver_refuses_demo_org_artifact_for_logged_in_user(
     client, google_on, monkeypatch
 ):
     """Same allow-set on /sessions/{id}/redeliver: a demo-org artifact is not
-    the logged-in user's to redeliver (403)."""
+    the logged-in user's to redeliver (404, indistinguishable from missing)."""
     monkeypatch.setattr(settings, "surface_webhook_url", "https://cedric/api/laura/events")
     _login(client, "alice@example.com")
     store.save_artifact(
@@ -263,7 +263,7 @@ def test_redeliver_refuses_demo_org_artifact_for_logged_in_user(
         org_id=settings.demo_org_id,
     )
     resp = client.post("/sessions/b_demo_rd/redeliver")
-    assert resp.status_code == 403
+    assert resp.status_code == 404
 
 
 def test_anonymous_demo_caller_unchanged(client):
@@ -367,7 +367,7 @@ def test_cutover_never_restamps_shared_org_rows(client, monkeypatch):
 def test_org_token_can_end_only_its_own_org_sessions(client, stub_recall, monkeypatch):
     """The per-org bearer that can START a session can also END it (meter
     symmetry, PR D) — but ONLY sessions of ITS org; demo-org and other-org
-    sessions answer 403 and stay running."""
+    sessions answer 404 and stay running without becoming an existence oracle."""
     from app import recall_client
 
     monkeypatch.setattr(recall_client, "leave_call", lambda bot_id: None)
@@ -381,20 +381,20 @@ def test_org_token_can_end_only_its_own_org_sessions(client, stub_recall, monkey
     if store.get("bot_own"):
         store.remove("bot_own")
 
-    # another org's session: 403, session left running
+    # another org's session: 404, session left running
     store.create("bot_theirs", "https://meet.google.com/th", "laura", org_id="org_other")
     try:
         resp = client.post("/sessions/bot_theirs/end", headers=headers)
-        assert resp.status_code == 403
+        assert resp.status_code == 404
         assert store.get("bot_theirs") is not None
     finally:
         store.remove("bot_theirs")
 
-    # the demo org's session: 403 too (never demo/other)
+    # the demo org's session: 404 too (never demo/other)
     store.create("bot_demo_tok", "https://meet.google.com/dm", "laura")
     try:
         resp = client.post("/sessions/bot_demo_tok/end", headers=headers)
-        assert resp.status_code == 403
+        assert resp.status_code == 404
         assert store.get("bot_demo_tok") is not None
     finally:
         store.remove("bot_demo_tok")
@@ -422,5 +422,5 @@ def test_org_token_can_redeliver_only_its_own_org_artifacts(client, monkeypatch)
     assert delivered == ["b_rd_own"]
 
     denied = client.post("/sessions/b_rd_other/redeliver", headers=headers)
-    assert denied.status_code == 403
+    assert denied.status_code == 404
     assert delivered == ["b_rd_own"]  # nothing new was scheduled
