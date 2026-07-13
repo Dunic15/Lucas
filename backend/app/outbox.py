@@ -1,9 +1,10 @@
 """Durable, org-scoped callback outbox and queued-action store.
 
-SQLite is intentionally local: enqueue is one bounded transaction and delivery
-runs outside live speech/finalize. The idempotency key is stable across retries
-and process restarts; Cedric must dedupe that key because a crash can happen
-after its 2xx and before Laura commits delivered_at.
+Production uses the FORCE-RLS Postgres control plane: capture/enqueue commits in
+one bounded tenant transaction, and multi-instance workers claim with SKIP
+LOCKED plus expiring leases. The key-free demo retains the local SQLite path.
+The idempotency key is stable across retries; Cedric must dedupe it because a
+crash can happen after its 2xx and before Laura commits delivered_at.
 """
 from __future__ import annotations
 
@@ -476,24 +477,33 @@ def retry_status(org_id: str, outbox_id: int) -> str:
             outbox_pg.retry, org_id or settings.demo_org_id, int(outbox_id)
         )
     _ensure_schema()
+    now = time.time()
     with store._LOCK, store._connect() as conn:
-        cur = conn.execute(
+        row = conn.execute(
+            """
+            SELECT status, next_attempt_at
+            FROM callback_outbox WHERE id=? AND org_id=?
+            """,
+            (int(outbox_id), org_id or settings.demo_org_id),
+        ).fetchone()
+        if row is None:
+            return "missing"
+        if row["status"] == "delivered":
+            return "already_delivered"
+        if (
+            row["status"] == "sending"
+            and float(row["next_attempt_at"] or 0) > now
+        ):
+            return "busy"
+        conn.execute(
             """
             UPDATE callback_outbox
             SET status='pending', next_attempt_at=?, last_error=''
-            WHERE id=? AND org_id=? AND status!='delivered'
+            WHERE id=? AND org_id=?
             """,
-            (time.time(), int(outbox_id), org_id or settings.demo_org_id),
+            (now, int(outbox_id), org_id or settings.demo_org_id),
         )
-        if cur.rowcount:
-            return "queued"
-        row = conn.execute(
-            "SELECT status FROM callback_outbox WHERE id=? AND org_id=?",
-            (int(outbox_id), org_id or settings.demo_org_id),
-        ).fetchone()
-    if row and row["status"] == "delivered":
-        return "already_delivered"
-    return "missing"
+    return "queued"
 
 
 def retry(org_id: str, outbox_id: int) -> bool:
