@@ -208,6 +208,7 @@ def test_context_url_gains_team_and_channel_params():
     url = cedric_callback._context_request_url(
         {
             "context_url": CONTEXT_URL,
+            "org_id": "org_customer",
             "external_ref": {"team": "T1", "slack_channel": "#cedric"},
         }
     )
@@ -246,10 +247,15 @@ def test_context_url_unchanged_without_routing_ref():
 
 
 def test_fetch_context_sends_routing_params(monkeypatch):
-    seen: list[str] = []
+    seen: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        cedric_callback.secret_registry,
+        "bearer_for",
+        lambda org: "workspace-token" if org == "org_customer" else "",
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(str(request.url))
+        seen.append((str(request.url), request.headers.get("authorization")))
         return httpx.Response(
             200, json={"context": {"meeting": {}, "brief_markdown": "B"}}
         )
@@ -267,4 +273,6 @@ def test_fetch_context_sends_routing_params(monkeypatch):
         }
     )
     assert ctx == {"meeting": {}, "brief_markdown": "B"}
-    assert seen == [f"{CONTEXT_URL}?team=T1&channel=%23cedric"]
+    assert seen == [
+        (f"{CONTEXT_URL}?team=T1&channel=%23cedric", "Bearer workspace-token")
+    ]
