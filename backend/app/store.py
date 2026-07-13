@@ -806,17 +806,20 @@ def upsert_user(
     if control_plane.enabled():
         try:
             durable = control_plane.ensure_user(google_sub, email, name, picture)
-        except Exception as exc:  # noqa: BLE001 — login must not hard-fail
-            # PII-safe: type only, never the email/sub. Falling back to the
-            # local org keeps login working; the next login retries.
+        except Exception as exc:  # noqa: BLE001 — convert to a PII-safe failure
+            # Fail closed: a local u_<hash> fallback is not a durable UUID org
+            # and could create a parallel tenant. Do not let the original
+            # SQLAlchemy exception (which may render bound email/sub values)
+            # escape into logs.
             print(
                 "[control_plane] ensure_user failed "
-                f"({type(exc).__name__}); using local org resolution",
+                f"({type(exc).__name__}); rejecting login",
                 flush=True,
             )
-            durable = None
-        if durable:
-            org_id = durable["org_id"]
+            raise RuntimeError("durable identity is temporarily unavailable") from None
+        if not durable:
+            raise RuntimeError("durable identity is temporarily unavailable")
+        org_id = durable["org_id"]
     now = time.time()
     with _LOCK, _connect() as conn:
         prev = conn.execute(
