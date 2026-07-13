@@ -245,7 +245,10 @@ def _roster_block(
         f"{'person' if len(roster) == 1 else 'people'})."
     )
     if state is not None and len(roster) > 1:
-        spoke = {n.split()[0].lower() for n in state.per_person}
+        spoke = {
+            str(p.get("name") or key).split()[0].lower()
+            for key, p in state.per_person.items()
+        }
         quiet = [n for n in roster if n.split()[0].lower() not in spoke]
         if quiet:
             block += f" Not yet heard from: {', '.join(quiet)}."
