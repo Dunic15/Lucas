@@ -301,6 +301,32 @@ def test_two_org_reads_claims_and_retry_are_isolated(cp):
     assert [row["id"] for row in outbox.delivery_rows(org_b)] == [id_b]
 
 
+def test_restart_worker_discovers_tenants_without_local_sessions(
+    cp, monkeypatch
+):
+    org_a = _org(cp, "restart-a")
+    org_b = _org(cp, "restart-b")
+    _enqueue(org_a, "bot-restart-a", "action.requested:restart-a")
+    _enqueue(org_b, "bot-restart-b", "action.requested:restart-b")
+    sent: list[str] = []
+
+    def post(url, payload, *, idempotency_key=""):
+        sent.append(idempotency_key)
+        return SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr(callback, "_post", post)
+    # No org_id and no local Session objects: the runtime role discovers only
+    # due tenant UUIDs through the private function, then claims payloads under
+    # each tenant's FORCE-RLS context.
+    assert outbox.process_due(limit=10, now=time.time() + 2) == 2
+    assert set(sent) == {
+        "action.requested:restart-a",
+        "action.requested:restart-b",
+    }
+    assert outbox.delivery_rows(org_a)[0]["status"] == "delivered"
+    assert outbox.delivery_rows(org_b)[0]["status"] == "delivered"
+
+
 def test_multi_worker_skip_locked_and_lease_recovery(cp):
     org = _org(cp, "workers")
     ids = {
