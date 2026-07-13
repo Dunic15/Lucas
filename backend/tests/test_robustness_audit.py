@@ -320,34 +320,31 @@ def test_redeliver_returns_202_without_blocking_on_send_retries(fresh_store, mon
     assert elapsed < 0.4
 
 
-def test_deliver_ended_holds_strong_ref_until_task_done(monkeypatch):
-    # Hardening on Fix 4: the fire-and-forget send_ended task must be kept alive
-    # (asyncio only weak-refs a bare create_task → it could be GC'd mid-flight),
-    # then dropped on completion. /redeliver now makes this HTTP-triggerable.
+def test_deliver_ended_commits_outbox_before_return(monkeypatch):
+    # Durable delivery replaces fragile in-memory task ownership: the callback
+    # envelope must be committed first, then delivery may be nudged off-path.
     from app.cedric import integration as ci
 
-    calls: list[str] = []
+    calls: list[tuple] = []
+    kicks: list[bool] = []
     monkeypatch.setattr(
-        ci.callback, "send_ended",
-        lambda integration, bot_id, artifact: calls.append(bot_id) or True,
+        ci.outbox,
+        "enqueue_session_ended",
+        lambda integration, bot_id, artifact: calls.append(
+            (integration, bot_id, artifact)
+        ) or "outbox-1",
+    )
+    monkeypatch.setattr(ci, "_kick_outbox", lambda: kicks.append(True))
+
+    ok = ci.deliver_ended(
+        {"callback_url": "https://cb"}, "bot_ref", {"summary": "s"}
     )
 
-    async def run():
-        ci._ended_tasks.clear()
-        ok = ci.deliver_ended({"callback_url": "https://cb"}, "bot_ref", {"summary": "s"})
-        assert ok is True
-        # Strong ref held the moment the task is scheduled (before it runs).
-        assert len(ci._ended_tasks) == 1
-        # Deterministically wait for the send_ended task to finish (it runs on a
-        # threadpool thread, so a bare `sleep(0)` yield loop can starve under CI
-        # load), then a single yield lets its done-callback run …
-        await asyncio.gather(*list(ci._ended_tasks), return_exceptions=True)
-        await asyncio.sleep(0)
-        # … which discards it (no leak); and it actually ran.
-        assert ci._ended_tasks == set()
-        assert calls == ["bot_ref"]
-
-    asyncio.run(run())
+    assert ok is True
+    assert len(calls) == 1
+    assert calls[0][1] == "bot_ref"
+    assert calls[0][2]["summary"] == "s"
+    assert kicks == [True]
 
 
 # ── Fix 5: manual /deliver stamps the correct avatar name after finalize ─────
