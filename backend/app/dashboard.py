@@ -928,24 +928,6 @@ async def disconnect_brain_remote(request: Request) -> JSONResponse:
     )
 
 
-@router.delete("/dashboard/connections/brain/{avatar_id}")
-def disconnect_brain(avatar_id: str, request: Request) -> JSONResponse:
-    """LEGACY local-only marker: flip the avatar's brain link to disconnected
-    without touching the orchestrator or the secret registry. Prefer
-    POST /dashboard/connections/brain/disconnect (remote-revoke-first).
-    Kept because frontend/dashboard.html still calls this route (Codex's
-    file) — retire it once the button moves to the POST."""
-    user = auth.current_user(request)
-    if user is None:
-        if err := auth.gate(request):
-            return err
-        return JSONResponse({"error": "login required"}, status_code=401)
-    return JSONResponse(
-        {
-            "error": (
-                "legacy local-only disconnect is retired; "
-                "use POST /dashboard/connections/brain/disconnect"
-            )
-        },
-        status_code=410,
-    )
+# The legacy DELETE /dashboard/connections/brain/{avatar_id} route is gone:
+# the dashboard button posts to /dashboard/connections/brain/disconnect
+# (remote-revoke-first saga above), so the local-only marker had no callers.

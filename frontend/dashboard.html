@@ -180,6 +180,14 @@
   .dispatch input{flex:1;min-width:220px;padding:11px 14px;border-radius:12px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font-size:.88rem;}
   .dispatch input::placeholder{color:var(--faint);}
   .dispatch select{padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font-size:.88rem;}
+  .dsp-brief{margin-top:10px;}
+  .dsp-brief summary{cursor:pointer;font-size:.84rem;color:var(--dim);user-select:none;}
+  .dsp-brief summary:hover{color:var(--fg);}
+  .brief-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;}
+  @media (max-width:700px){.brief-grid{grid-template-columns:1fr;}}
+  .brief-grid input,.brief-grid textarea{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font-size:.86rem;font-family:inherit;resize:vertical;}
+  .brief-grid input::placeholder,.brief-grid textarea::placeholder{color:var(--faint);}
+  .brief-grid input:focus,.brief-grid textarea:focus{outline:none;border-color:rgba(126,182,255,.5);}
   .note{font-size:.78rem;color:var(--faint);margin-top:9px;}
 
   .tbl-wrap{background:var(--panel);border:1px solid var(--line-soft);border-radius:18px;box-shadow:var(--shadow-sm);overflow:hidden;backdrop-filter:var(--glass);}
@@ -278,6 +286,11 @@
   .brainform input{flex:1;min-width:150px;padding:9px 11px;border-radius:10px;border:1px solid var(--line);
     background:var(--panel);color:var(--text);font-family:var(--font);font-size:.85rem;}
   .brainform input:focus{outline:none;border-color:rgba(126,182,255,.5);}
+  .brain-adv{flex-basis:100%;margin-top:6px;}
+  .brain-adv summary{cursor:pointer;font-size:.82rem;color:var(--dim);user-select:none;}
+  .brain-adv summary:hover{color:var(--fg);}
+  .brain-adv .adv-lbl{display:block;font-size:.8rem;color:var(--dim);margin:8px 0 6px;}
+  .brain-adv input{width:100%;box-sizing:border-box;}
   .exec{font-family:var(--mono);font-size:.58rem;letter-spacing:.04em;text-transform:uppercase;
     padding:2px 7px;border-radius:999px;margin-left:8px;border:1px solid var(--line);color:var(--faint);white-space:nowrap;}
   .exec.done{color:#54D28F;border-color:rgba(84,210,143,.4);}
@@ -421,10 +434,22 @@
           <input id="dsp-url" type="url" inputmode="url" autocomplete="off" aria-label="Meeting link" placeholder="https://meet.google.com/…" />
           <button class="btn primary" id="dsp-go">Send</button>
         </div>
+        <!-- Optional pre-meeting brief: mapped onto the live-session contract
+             (context.meeting.title / context.meeting.attendees +
+             context.brief_markdown) so a dashboard-launched avatar enters the
+             call already prepared — same mechanism the orchestrator uses. -->
+        <details class="dsp-brief" id="dsp-brief">
+          <summary>Add a brief (optional) — the avatar walks in prepared</summary>
+          <div class="brief-grid">
+            <input id="dsp-title" type="text" autocomplete="off" aria-label="Meeting title (optional)" placeholder="Meeting title — e.g. Demo with Acme" />
+            <input id="dsp-parts" type="text" autocomplete="off" aria-label="Participants (optional)" placeholder="Participants — e.g. Anna (Ops), Marco (CTO)" />
+            <textarea id="dsp-obj" rows="2" aria-label="Objective (optional)" placeholder="Objective — what should this meeting achieve?"></textarea>
+            <textarea id="dsp-notes" rows="2" aria-label="Notes (optional)" placeholder="Notes — anything the avatar should know walking in"></textarea>
+          </div>
+        </details>
         <div class="note">The host may need to admit it from the waiting room. Sessions bill per minute — end them from the live bar above.</div>
       </div>
 
-      <div class="tiles" id="tiles"></div>
       <div class="grid2">
         <div class="panel">
           <h2>Activity</h2><div class="ph">Meetings per week · last 8 weeks</div>
@@ -435,13 +460,7 @@
           <div class="avcards" id="avcards"></div>
         </div>
       </div>
-      <div class="tbl-wrap">
-        <div class="tbl-top"><h2>Recent meetings</h2><div class="tabs" id="tabs-ov"></div></div>
-        <div class="scroll"><table class="tbl"><thead><tr>
-          <th>Avatar</th><th>Platform</th><th>When</th><th>Duration</th><th class="r">Action</th><th class="r">Readiness</th>
-        </tr></thead><tbody id="tbody-ov"></tbody></table></div>
-      </div>
-      <div class="foot">AVATARS ACT AUTONOMOUSLY — THIS IS THE RECORD OF WHAT THEY DID. TRANSCRIPTS NEVER LEAVE THE STORE.</div>
+      <div class="foot">AVATARS ACT AUTONOMOUSLY — SEE MEETINGS FOR THE RECORD OF WHAT THEY DID. TRANSCRIPTS NEVER LEAVE THE STORE.</div>
     </section>
 
     <!-- AVATARS -->
@@ -599,7 +618,7 @@
     window.history.replaceState({},"",window.location.pathname);
   }
 
-  var DATA=null, filterOv="all", filterMt="all";
+  var DATA=null, filterMt="all";
 
   var VIEWS=["overview","avatars","meetings","usage","connections","settings"];
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
@@ -731,11 +750,6 @@
     $("#dsp-avatar").innerHTML = d.avatars.map(function(a){return '<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>';}).join("");
     if(prevAvatar) $("#dsp-avatar").value=prevAvatar;
 
-    var T=[["Meetings · 30d",d.stats.meetings_30d],["Hours in calls",d.stats.hours_30d+"h"],
-           ["Actions captured",d.stats.actions_30d],["Follow-ups drafted",d.stats.followups_30d],
-           ["Avg readiness",d.stats.avg_readiness_30d?d.stats.avg_readiness_30d+"%":"—"]];
-    $("#tiles").innerHTML = T.map(function(t){return '<div class="tile"><div class="k">'+t[0]+'</div><div class="v tnum">'+t[1]+'</div></div>';}).join("");
-
     renderChart(d.stats.weekly);
 
     $("#avcards").innerHTML = d.avatars.map(function(a){
@@ -762,10 +776,16 @@
           '<span class="stchip '+esc(bst)+'">'+(bst==="off"?"not connected":esc(bst))+'</span>'+
           (bst==="connected"||bst==="pending"
             ?'<button class="btn conn-btn" data-brain-off="'+esc(a.id)+'">Disconnect</button>'
-            :'<button class="btn conn-btn" data-brain-on="'+esc(a.id)+'">Connect</button>')+'</div>'+
+            :'<button class="btn conn-btn" data-brain-on="'+esc(a.id)+'">'+(bst==="disconnected"?"Reconnect":"Connect")+'</button>')+'</div>'+
+          // One-click connect: "Add to Slack" is the whole flow. The approvals
+          // channel is optional (empty = the installer's DM, per the install
+          // contract) so it hides behind a collapsed Advanced toggle.
           '<div class="brainform" id="bf-'+esc(a.id)+'">'+
-          '<input id="bf-chan-'+esc(a.id)+'" placeholder="#channel for approvals (optional)" />'+
-          '<button class="btn primary" data-brain-slack="'+esc(a.id)+'">Add to Slack</button></div></div>'+
+          '<button class="btn primary" data-brain-slack="'+esc(a.id)+'">Add to Slack</button>'+
+          '<details class="brain-adv"><summary>Advanced / optional</summary>'+
+          '<label class="adv-lbl" for="bf-chan-'+esc(a.id)+'">Slack channel for approvals — leave empty and Cedric DMs you</label>'+
+          '<input id="bf-chan-'+esc(a.id)+'" placeholder="#channel (optional)" aria-label="Slack channel for approvals (optional)" />'+
+          '</details></div></div>'+
           // the brain's own connectors, fetched live once linked
           '<div id="brain-conns" class="conns-list" style="margin-top:10px"></div>';
       }
@@ -800,12 +820,19 @@
     document.querySelectorAll("#av-grid [data-brain-off]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation();
       var avatarId=b.getAttribute("data-brain-off");
+      // Remote-revoke-first saga: if Cedric's revoke fails (502 remote_revoke_failed)
+      // the link is STILL live remotely — keep showing "connected" (no load()) and
+      // tell the user to retry. Fixed strings only: never surface server internals.
+      b.disabled=true; var prevLabel=b.textContent; b.textContent="Disconnecting…";
       fetch("/dashboard/connections/brain/disconnect",{
           method:"POST",headers:headers(),body:JSON.stringify({avatar_id:avatarId})})
         .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){
-          if(!r.ok) throw new Error(j.error||"could not disconnect");
+          if(r.status===502||j.error==="remote_revoke_failed"){
+            var eRetry=new Error("Couldn't disconnect. Try again."); eRetry.keepState=true; throw eRetry; }
+          if(!r.ok){ var eGen=new Error("Couldn't disconnect. Try again."); eGen.keepState=true; throw eGen; }
           toast("Brain disconnected."); load(); }); })
-        .catch(function(err){ toast(err.message,true); }); }); });
+        .catch(function(err){ toast(err.message||"Couldn't disconnect. Try again.",true);
+          b.disabled=false; b.textContent=prevLabel; }); }); });
 
     // the brain's own connectors (the product bridge): what Cedric can touch,
     // fetched live from the orchestrator once the org is linked.
@@ -862,13 +889,7 @@
       $$("tr.row",tb).forEach(function(r){ r.addEventListener("click",function(){
         var dEl=tb.querySelector('tr.detail[data-d="'+r.getAttribute("data-i")+'"]'); if(dEl) dEl.hidden=!dEl.hidden; }); });
     }
-    // overview: avatar tabs
-    function tabs(el,cur,onpick){ var ids=[["all","All"]].concat(d.avatars.map(function(a){return [a.id,a.name];}));
-      el.innerHTML = ids.map(function(t){return '<button data-f="'+esc(t[0])+'"'+(t[0]===cur?' class="on"':'')+'>'+esc(t[1])+'</button>';}).join("");
-      $$("button",el).forEach(function(b){ b.addEventListener("click",function(){
-        $$("button",el).forEach(function(x){x.classList.remove("on");}); b.classList.add("on"); onpick(b.getAttribute("data-f")); }); }); }
-    tabs($("#tabs-ov"),filterOv,function(f){filterOv=f;renderRows("#tbody-ov",{avatar:f},8);});
-    renderRows("#tbody-ov",{avatar:filterOv},8);
+    // (overview "Recent meetings" removed — the record lives in the Meetings view)
     // meetings: excel-style filters ON the column headers (Avatar / Platform / When)
     (function(){ var fa=$("#f-avatar"), fp=$("#f-platform"), fw=$("#f-when");
       var pa=fa.value||"all", pp=fp.value||"all", pw=fw.value||"all";
@@ -928,7 +949,28 @@
     if(!/^https:\/\/(meet\.google\.com|([a-z0-9-]+\.)*zoom\.us|teams\.(microsoft\.com|live\.com))\//i.test(url)){
       toast("Paste a Google Meet, Zoom or Microsoft Teams meeting link.",true); $("#dsp-url").focus(); return; }
     var b=this; b.disabled=true; b.textContent="Sending…";
-    fetch("/sessions/start",{method:"POST",headers:headers(),body:JSON.stringify({meeting_url:url,avatar_id:avatar})})
+    // Optional brief → the live-session contract: context.meeting carries
+    // title/attendees, context.brief_markdown carries the narrative the avatar
+    // is grounded on. Only attached when the user actually wrote something —
+    // a bare link keeps today's exact request shape.
+    var body={meeting_url:url,avatar_id:avatar};
+    var title=($("#dsp-title")||{value:""}).value.trim(),
+        parts=($("#dsp-parts")||{value:""}).value.trim(),
+        obj=($("#dsp-obj")||{value:""}).value.trim(),
+        notes=($("#dsp-notes")||{value:""}).value.trim();
+    if(title||parts||obj||notes){
+      var meeting={}, briefParts=[];
+      if(title){ meeting.title=title; briefParts.push("# "+title); }
+      if(obj) briefParts.push("## Objective\n"+obj);
+      if(parts){ meeting.attendees=parts.split(/[,\n]/).map(function(s){return s.trim();}).filter(Boolean);
+        briefParts.push("## Participants\n"+meeting.attendees.map(function(p){return "- "+p;}).join("\n")); }
+      if(notes) briefParts.push("## Notes\n"+notes);
+      var ctx={};
+      if(Object.keys(meeting).length) ctx.meeting=meeting;
+      if(briefParts.length) ctx.brief_markdown=briefParts.join("\n\n");
+      body.context=ctx;
+    }
+    fetch("/sessions/start",{method:"POST",headers:headers(),body:JSON.stringify(body)})
       .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); })
       .then(function(res){ if(!res.ok){
           if(res.status===402){
@@ -939,8 +981,11 @@
           var msg=res.j.error==="avatar_busy" ? res.j.detail : (res.j.error||res.j.detail||"request failed");
           throw new Error(msg); }
         var picked=(DATA&&DATA.avatars||[]).find(function(a){return a.id===avatar;});
-        toast((picked?picked.name:"Avatar")+" is joining — admit them from the waiting room if asked.");
-        $("#dsp-url").value=""; setTimeout(load,1500); })
+        toast((picked?picked.name:"Avatar")+" is joining"+(body.context?" with your brief":"")+" — admit them from the waiting room if asked.");
+        $("#dsp-url").value="";
+        ["dsp-title","dsp-parts","dsp-obj","dsp-notes"].forEach(function(id){var el=document.getElementById(id); if(el) el.value="";});
+        var det=document.getElementById("dsp-brief"); if(det) det.open=false;
+        setTimeout(load,1500); })
       .catch(function(e){ toast(e.billing?e.message:"Could not send: "+e.message,true); })
       .finally(function(){ b.disabled=false; b.textContent="Send"; });
   });
