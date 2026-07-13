@@ -927,6 +927,160 @@ def get_connections(org_id: str) -> Optional[list[dict[str, Any]]]:
     return out
 
 
+_ARTIFACT_VISIBILITIES = frozenset({"participants", "org", "private"})
+
+
+def _artifact_payload(value: Any) -> dict:
+    """Normalize psycopg's jsonb result without ever rendering its PII."""
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def save_artifact(
+    org_id: str,
+    bot_id: str,
+    artifact: dict,
+    *,
+    visibility: str = "participants",
+    saved_at: float | None = None,
+    delete_by: float | None = None,
+) -> Optional[bool]:
+    """Durably upsert one full meeting artifact inside one tenant.
+
+    The payload intentionally includes the transcript: this is the private,
+    RLS-protected customer archive, not a Cedric wire envelope. delete_by is
+    stamped from the owning org's existing retention_days contract when the
+    caller does not provide it. There is no delete worker or DELETE grant here.
+    """
+    if not enabled():
+        return None
+    org = (org_id or "").strip()
+    bot = (bot_id or "").strip()
+    if not org or not bot:
+        raise ValueError("org_id and bot_id are required for durable artifacts")
+    if not isinstance(artifact, dict):
+        raise ValueError("artifact must be a JSON object")
+
+    payload = dict(artifact)
+    # The RLS column and private JSON must never disagree.
+    payload["org_id"] = org
+    saved_epoch = time.time() if saved_at is None else float(saved_at)
+    row_visibility = (
+        visibility if visibility in _ARTIFACT_VISIBILITIES else "participants"
+    )
+
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        retention_row = conn.execute(
+            text(
+                "SELECT retention_days FROM public.orgs "
+                "WHERE id = CAST(:o AS uuid)"
+            ),
+            {"o": org},
+        ).fetchone()
+        if retention_row is None:
+            raise RuntimeError("artifact owner org is unavailable")
+        retention_days = max(0, int(retention_row[0]))
+        delete_epoch = (
+            saved_epoch + retention_days * 86400
+            if delete_by is None
+            else float(delete_by)
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO public.artifacts AS current
+                    (org_id, bot_id, artifact, visibility, saved_at, delete_by)
+                VALUES (
+                    CAST(:o AS uuid), :b, CAST(:a AS jsonb), :v,
+                    to_timestamp(CAST(:saved AS double precision)),
+                    to_timestamp(CAST(:delete AS double precision))
+                )
+                ON CONFLICT (org_id, bot_id) DO UPDATE SET
+                    artifact = excluded.artifact,
+                    visibility = excluded.visibility,
+                    saved_at = excluded.saved_at,
+                    delete_by = excluded.delete_by
+                """
+            ),
+            {
+                "o": org,
+                "b": bot,
+                "a": json.dumps(payload),
+                "v": row_visibility,
+                "saved": saved_epoch,
+                "delete": delete_epoch,
+            },
+        )
+    return True
+
+
+def get_artifact(org_id: str, bot_id: str) -> Optional[dict]:
+    """Return one tenant's private artifact, never a global bot-id lookup."""
+    if not enabled():
+        return None
+    org = (org_id or "").strip()
+    bot = (bot_id or "").strip()
+    if not org or not bot:
+        return None
+
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        row = conn.execute(
+            text(
+                "SELECT artifact FROM public.artifacts "
+                "WHERE org_id = CAST(:o AS uuid) AND bot_id = :b"
+            ),
+            {"o": org, "b": bot},
+        ).fetchone()
+    return _artifact_payload(row[0]) if row is not None else None
+
+
+def list_artifacts(org_id: str) -> Optional[list[dict[str, Any]]]:
+    """List one tenant's private archive in the legacy dashboard row shape."""
+    if not enabled():
+        return None
+    org = (org_id or "").strip()
+    if not org:
+        raise ValueError("org_id is required for durable artifact enumeration")
+
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        rows = conn.execute(
+            text(
+                "SELECT bot_id, extract(epoch FROM saved_at), artifact "
+                "FROM public.artifacts "
+                "WHERE org_id = CAST(:o AS uuid) "
+                "ORDER BY saved_at DESC, bot_id DESC"
+            ),
+            {"o": org},
+        ).fetchall()
+    return [
+        {
+            "bot_id": str(row[0]),
+            "saved_at": float(row[1] or 0),
+            "artifact": _artifact_payload(row[2]),
+        }
+        for row in rows
+    ]
+
+
 def org_plan(org_id: str) -> Optional[dict]:
     """``{plan, included_seconds}`` for an org's billing account (PR B's trial
     enforcement reads this), or None when disabled / no billing row."""
