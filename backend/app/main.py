@@ -59,6 +59,7 @@ from . import (
     gpu_runtime,
     runpod_runtime,
     ledger,
+    outbox,
     meeting_state,
     org_api,
     security,
@@ -138,6 +139,15 @@ async def _lifespan(app: FastAPI):
         # Backstop that finalizes sessions whose Recall bot is terminal but whose
         # status webhook never arrived — keeps the per-minute meter from leaking.
         asyncio.create_task(_reconcile_sessions_loop())
+
+    async def _outbox_loop() -> None:
+        while not _shutting_down:
+            await run_in_threadpool(outbox.reconcile_sessions)
+            await run_in_threadpool(outbox.process_due)
+            await asyncio.sleep(5)
+
+    # Callback delivery is durable and never tied to a request/task lifetime.
+    asyncio.create_task(_outbox_loop())
 
     if settings.elevenlabs_api_key:
         # Pre-synthesize the fixed conversational furniture so the FIRST
@@ -1691,7 +1701,13 @@ async def _finalize_session_locked(
     # shown to the summarizer as "already captured, do not re-extract" (dedup
     # prevention at the source, cross-language included) and then merged into
     # the artifact's actions[] below.
-    queued_actions = list(getattr(session, "queued_actions", None) or [])
+    queued_actions = await run_in_threadpool(
+        outbox.queued_actions, session.org_id, bot_id
+    )
+    if not queued_actions:
+        # Compatibility for synthetic tests/legacy sessions captured before the
+        # durable queue existed.
+        queued_actions = list(getattr(session, "queued_actions", None) or [])
     if analysis_transcript_text.strip():
         avatar = avatars.load(session.avatar_id)
         try:
@@ -3635,6 +3651,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             and is_capture_continuation(text)
         ):
             p_item["action"] = " ".join((p_item["action"] + " " + text).split())[:300]
+            outbox.persist_queued_action(session, p_item)
             session.last_capture = (p_item, p_speaker, time.time())
             return JSONResponse({"ok": True, "spoke": False, "capture_extended": True})
         session.last_capture = None
