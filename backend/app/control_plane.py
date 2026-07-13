@@ -731,7 +731,8 @@ def apply_stripe_event(
                        verified_paid_subscription_id,
                        EXTRACT(EPOCH FROM verified_paid_period_start),
                        EXTRACT(EPOCH FROM verified_paid_period_end),
-                       verified_paid_event_created, verified_paid_event_id
+                       verified_paid_event_created, verified_paid_event_id,
+                       invoice_event_subscription_id
                   FROM billing_accounts
                  WHERE org_id = :o
                  FOR UPDATE
@@ -897,18 +898,28 @@ def apply_stripe_event(
 
         if kind in {"invoice_paid", "invoice_failed"}:
             sub = str(effect.get("subscription_id") or "")
+            old_invoice_sub = str(row[18] or "")
             if (
                 not sub
                 or not bool(effect.get("price_valid"))
-                or created < int(row[9] or 0)
                 or (
-                    created == int(row[9] or 0)
+                    old_invoice_sub == sub
+                    and created < int(row[9] or 0)
+                )
+                or (
+                    old_invoice_sub == sub
+                    and created == int(row[9] or 0)
                     and kind != "invoice_failed"
                 )
             ):
                 return True
 
-            params = {"o": org, "created": created, "event_id": event_id}
+            params = {
+                "o": org,
+                "created": created,
+                "event_id": event_id,
+                "sub": sub,
+            }
             if kind == "invoice_failed":
                 if (
                     sub == current_sub
@@ -922,6 +933,7 @@ def apply_stripe_event(
                                SET subscription_status = 'past_due',
                                    invoice_event_created = :created,
                                    invoice_event_id = :event_id,
+                                   invoice_event_subscription_id = :sub,
                                    updated_at = now()
                              WHERE org_id = :o
                             """
@@ -1020,6 +1032,7 @@ def apply_stripe_event(
                                   ELSE current_period_end END,
                            invoice_event_created = :created,
                            invoice_event_id = :event_id,
+                           invoice_event_subscription_id = :sub,
                            updated_at = now()
                      WHERE org_id = :o
                     """
