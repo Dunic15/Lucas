@@ -281,10 +281,34 @@ def default_integration() -> Optional[dict]:
 ARTIFACT_VERSION = 1
 
 
+_WIRE_ARTIFACT_KEYS = {
+    "summary",
+    "decisions",
+    "actions",
+    "checklist",
+    "missing_steps",
+    "readiness_score",
+    "risks",
+    "follow_up_email",
+    "avatar_id",
+    "org_id",
+    "duration_seconds",
+}
+
+
 def wire_artifact(artifact: dict) -> dict:
-    """The orchestrator-facing copy of an artifact: distilled fields only, no
-    raw transcript, stamped with ``artifact_version``."""
-    wire = {k: v for k, v in artifact.items() if k != "transcript"}
+    """Distilled orchestrator copy, built from an allowlist.
+
+    A negative transcript filter is not future-safe: a later archive field
+    such as raw_transcript/utterances/segments could silently enter the durable
+    Postgres payload. Only the reviewed product artifact crosses this boundary;
+    the meeting URL is already represented by the callback routing envelope.
+    """
+    wire = {
+        key: artifact[key]
+        for key in _WIRE_ARTIFACT_KEYS
+        if key in artifact
+    }
     wire["artifact_version"] = ARTIFACT_VERSION
     return wire
 
