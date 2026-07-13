@@ -660,9 +660,8 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
         return JSONResponse({"error": "missing required fields"}, status_code=400)
     if machine_org != settings.demo_org_id and org_id != machine_org:
         return JSONResponse({"error": "not your org"}, status_code=403)
-    org_known = store.get_user(org_id) is not None or store.org_exists(org_id)
-    if avatar_id not in avatars.list_ids() or not org_known:
-        return JSONResponse({"error": "unknown org or avatar"}, status_code=404)
+    if avatar_id not in avatars.list_ids():
+        return JSONResponse({"error": "unknown avatar"}, status_code=404)
 
     # Cedric carries Laura's state opaquely through Slack OAuth. Completion
     # requires that signed proof; a pending row alone is not an authenticator.
