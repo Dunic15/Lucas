@@ -37,7 +37,8 @@ psycopg = pytest.importorskip("psycopg")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import control_plane  # noqa: E402
+from app import control_plane, main  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 from app.config import settings  # noqa: E402
 
 pytestmark = pytest.mark.pg
@@ -501,6 +502,39 @@ def test_owner_dsn_is_rejected_by_runtime_guard(pg, monkeypatch):
     assert control_plane._engine is None
     control_plane.reset_engine()
 
+
+
+def test_lifespan_rejects_owner_dsn_before_background_start(pg, monkeypatch):
+    monkeypatch.setattr(settings, "laura_database_url", pg["admin_sa_url"])
+    control_plane.reset_engine()
+    try:
+        with pytest.raises(RuntimeError, match="unsafe runtime database role") as exc:
+            with TestClient(main.app):
+                pass
+        assert pg["admin_sa_url"] not in str(exc.value)
+        assert control_plane._engine is None
+    finally:
+        control_plane.reset_engine()
+
+
+def test_lifespan_rejects_unreachable_dsn_without_leaking_it(monkeypatch):
+    secret = "startup-password-must-not-appear"
+    dsn = f"postgresql://laura_app:{secret}@127.0.0.1:1/laura"
+    monkeypatch.setattr(settings, "laura_database_url", dsn)
+    control_plane.reset_engine()
+    try:
+        with pytest.raises(
+            RuntimeError, match="runtime database role verification failed"
+        ) as exc:
+            with TestClient(main.app):
+                pass
+        rendered = str(exc.value)
+        assert secret not in rendered
+        assert dsn not in rendered
+        assert "127.0.0.1" not in rendered
+        assert control_plane._engine is None
+    finally:
+        control_plane.reset_engine()
 
 def test_definer_owner_is_not_runtime_and_can_bypass_rls(pg):
     with _admin(pg) as conn:
