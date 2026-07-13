@@ -35,6 +35,16 @@ _ROUTING_KEYS = {
     "booking_id", "meeting_id",
 }
 
+# Defense in depth: enqueue_session_ended is callable outside cedric.integration,
+# so the storage boundary has its own allowlist. Raw transcript/utterance fields
+# and meeting URLs can never enter callback_outbox even if a future caller passes
+# the complete local archive object directly.
+_ARTIFACT_KEYS = {
+    "summary", "decisions", "actions", "checklist", "missing_steps",
+    "readiness_score", "risks", "follow_up_email", "avatar_id", "org_id",
+    "duration_seconds", "artifact_version",
+}
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -288,8 +298,9 @@ def enqueue_session_ended(
         "external_ref": ref,
         "ended_at": _now_iso(),
         "artifact": {
-            key: value for key, value in (artifact or {}).items()
-            if key != "transcript"
+            key: (artifact or {})[key]
+            for key in _ARTIFACT_KEYS
+            if key in (artifact or {})
         },
     }
     return _enqueue(
