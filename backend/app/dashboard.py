@@ -20,7 +20,7 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
-from . import auth, avatars, ledger, outbox, store
+from . import auth, avatars, control_plane, ledger, outbox, store
 from .config import settings
 
 router = APIRouter(tags=["dashboard"])
@@ -301,7 +301,12 @@ def dashboard_summary(request: Request) -> JSONResponse:
         return caller_org is None or row_org in ("", caller_org)
 
     now = time.time()
-    artifact_rows = store.list_artifacts()  # newest first
+    artifact_scope = caller_org
+    # A global deployment bearer is not a cross-tenant archive credential.
+    # Preserve its Demo view in production; key-free SQLite remains unchanged.
+    if artifact_scope is None and control_plane.enabled():
+        artifact_scope = settings.demo_org_id
+    artifact_rows = store.list_artifacts(artifact_scope)  # newest first
     meetings = [
         m
         for m in (_meeting_row(r) for r in artifact_rows)
