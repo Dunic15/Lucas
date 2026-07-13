@@ -281,7 +281,13 @@ def dashboard_summary(request: Request) -> JSONResponse:
 
     avatar_rows = []
     drive_connected = False
-    for aid in avatars.list_ids():
+    # Per-org roster: a logged-in user sees only their org's granted avatars
+    # (org_agents); an anonymous/demo/bearer caller (user is None) sees ALL —
+    # today's behavior, key-free demo unchanged (docs/infra/MULTI-TENANCY.md).
+    roster_ids = (
+        avatars.list_for_org(user["org_id"]) if user else avatars.list_ids()
+    )
+    for aid in roster_ids:
         a = avatars.load(aid)
         drive_connected = drive_connected or bool(a.drive_folder_id)
         # Knowledge-pack folders (avatar.yaml `hidden: true`, e.g. sff which
@@ -519,7 +525,12 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
     webhook_secret = str((body or {}).get("webhook_secret") or "").strip()
     if not org_id or not avatar_id or not team_id or not webhook_secret:
         return JSONResponse({"error": "missing required fields"}, status_code=400)
-    if avatar_id not in avatars.list_ids() or store.get_user(org_id) is None:
+    # org_id may be a PERSONAL org (== a users row) or a SHARED org (an orgs
+    # row resolved from a verified domain, e.g. org_sff) — accept either. Using
+    # get_user alone would 404 every shared org and silently wedge its brain
+    # connect flow in "pending" forever.
+    org_known = store.get_user(org_id) is not None or store.org_exists(org_id)
+    if avatar_id not in avatars.list_ids() or not org_known:
         return JSONResponse({"error": "unknown org or avatar"}, status_code=404)
 
     synced = await run_in_threadpool(

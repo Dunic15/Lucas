@@ -435,6 +435,12 @@ class Settings(BaseSettings):
     # stays byte-identical while every persisted row still carries a non-null
     # org_id (the "start right so we never re-architect" invariant, §0).
     demo_org_id: str = "00000000-0000-0000-0000-0000000000de"
+    # Seed the first REAL org (SFF Studio) + its verified domain + agent grants
+    # at store init, so the org_id seam is actually exercised (a member of that
+    # org sees only its granted avatars). Idempotent, safe to run every boot —
+    # the store is ephemeral and re-seeds on redeploy. Set False to disable
+    # (a test toggles it to assert the un-seeded fallback).
+    seed_builtin_orgs: bool = True
     # HMAC key for signing dashboard login cookies (auth.py). Empty = a random
     # per-boot key is derived, which just means users re-login after a restart
     # — fine for now, set a stable value in a real deployment.

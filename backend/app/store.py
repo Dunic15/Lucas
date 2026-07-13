@@ -455,6 +455,50 @@ def _init_db() -> None:
             "VALUES (?, 'Demo', 'demo', 'demo', ?)",
             (demo, time.time()),
         )
+    # Seed the first REAL org (outside the txn above so its own connection is a
+    # clean commit; _LOCK is reentrant so nesting would be safe regardless).
+    seed_builtin_orgs()
+
+
+def seed_builtin_orgs() -> None:
+    """Seed the first REAL tenant — SFF Studio (Swiss Founders Fund) — so the
+    org_id seam is exercised for the first time: a member of an org sees only
+    that org's granted agents.
+
+    Idempotent (INSERT OR IGNORE) and safe to run on every boot — the store is
+    ephemeral and re-seeds on redeploy. Gated by ``settings.seed_builtin_orgs``
+    so a test can assert the un-seeded fallback.
+
+    Only the CORPORATE domain is mapped (never a free-mail domain — org_domains
+    is the trusted domain→org map; the schema comment says NEVER map gmail.com).
+    Agent grants are made ONLY for avatar folders that actually exist, so a
+    removed/renamed folder never leaves a dangling grant."""
+    if not settings.seed_builtin_orgs:
+        return
+    # Lazy import keeps the module graph cycle-free: avatars never imports store
+    # at load time, and store never imports avatars at load time.
+    from . import avatars
+
+    installed = set(avatars.list_ids())
+    now = time.time()
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO orgs (id, name, slug, created_at) "
+            "VALUES ('org_sff', 'Swiss Founders Fund', 'sff', ?)",
+            (now,),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO org_domains (org_id, domain, verified_at) "
+            "VALUES ('org_sff', 'sffstudio.com', ?)",
+            (now,),
+        )
+        for avatar_id in ("laura", "cedric"):
+            if avatar_id in installed:
+                conn.execute(
+                    "INSERT OR IGNORE INTO org_agents (org_id, avatar_id) "
+                    "VALUES ('org_sff', ?)",
+                    (avatar_id,),
+                )
 
 
 def _session_from_row(row: sqlite3.Row, utterances: list[Utterance]) -> Session:
@@ -663,10 +707,35 @@ def user_id_for_email(email: str) -> str:
     return "u_" + hashlib.sha256(normalized.encode()).hexdigest()[:16]
 
 
+def org_id_for_email(email: str) -> str:
+    """The org a login resolves to. A VERIFIED corporate domain (a row in
+    org_domains with a non-null verified_at) maps every login at that domain to
+    the shared org; everything else falls back to the personal org
+    (org_id == user_id today). org_domains never contains a free-mail domain
+    (the seed enforces that), so gmail/outlook logins always stay personal."""
+    normalized = (email or "").strip().lower()
+    _, _, domain = normalized.partition("@")
+    if domain:
+        with _LOCK, _connect() as conn:
+            row = conn.execute(
+                "SELECT org_id FROM org_domains "
+                "WHERE domain = ? AND verified_at IS NOT NULL",
+                (domain,),
+            ).fetchone()
+        if row:
+            return row["org_id"]
+    return user_id_for_email(email)
+
+
 def upsert_user(email: str, name: str = "", picture: str = "") -> dict:
-    """Create-or-refresh a user row at login. Returns the user dict + created."""
+    """Create-or-refresh a user row at login. Returns the user dict + created.
+
+    org_id resolves via org_id_for_email: a verified corporate domain maps to
+    its shared org (and an active membership row is created), everything else
+    keeps the personal-org invariant org_id == user_id (backward-compatible)."""
     email = (email or "").strip().lower()
     uid = user_id_for_email(email)
+    org_id = org_id_for_email(email)
     now = time.time()
     with _LOCK, _connect() as conn:
         created = conn.execute(
@@ -677,15 +746,49 @@ def upsert_user(email: str, name: str = "", picture: str = "") -> dict:
             INSERT INTO users (user_id, email, name, picture, org_id,
                                created_at, last_login_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
+            -- org_id is refreshed so a domain verified AFTER a user's first
+            -- login takes effect on their next one. Safe on THIS ephemeral
+            -- SQLite store (wiped + re-seeded every boot, so resolution is
+            -- deterministic from a user's first login of the boot and there is
+            -- no persisted pre-seed history to orphan). PORTABILITY NOTE for the
+            -- Postgres control-plane: there, reassigning a returning user's org
+            -- must be paired with a backfill of their prior artifacts/sessions
+            -- org_id, else old rows fall outside the new org's visibility.
             ON CONFLICT(user_id) DO UPDATE SET
                 name=excluded.name,
                 picture=excluded.picture,
+                org_id=excluded.org_id,
                 last_login_at=excluded.last_login_at
             """,
-            (uid, email, name, picture, uid, now, now),
+            (uid, email, name, picture, org_id, now, now),
         )
+        # A real org (resolved org differs from the personal uid) gets an
+        # explicit membership row so the org↔user link exists for roles /
+        # governance. Personal orgs (org_id == user_id) need no membership.
+        if org_id != uid:
+            conn.execute(
+                "INSERT OR IGNORE INTO memberships "
+                "(user_id, org_id, role, status) VALUES (?, ?, 'member', 'active')",
+                (uid, org_id),
+            )
     return {"user_id": uid, "email": email, "name": name, "picture": picture,
-            "org_id": uid, "created": created}
+            "org_id": org_id, "created": created}
+
+
+def list_org_agent_ids(org_id: str) -> list[str]:
+    """The avatar_ids granted to an org (active org_agents rows), sorted. Empty
+    when the org has no grants — the caller (avatars.list_for_org) then falls
+    back to the full avatar list, so personal/demo/unknown orgs stay
+    all-avatars (backward-compatible)."""
+    if not (org_id or "").strip():
+        return []
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            "SELECT avatar_id FROM org_agents "
+            "WHERE org_id = ? AND status = 'active' ORDER BY avatar_id",
+            (org_id.strip(),),
+        ).fetchall()
+    return [r["avatar_id"] for r in rows]
 
 
 def get_user(user_id: str) -> dict | None:
@@ -696,6 +799,20 @@ def get_user(user_id: str) -> dict | None:
             (user_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def org_exists(org_id: str) -> bool:
+    """Whether ``org_id`` is a provisioned org row. A SHARED org (e.g. org_sff,
+    resolved from a verified domain) lives in ``orgs`` and is NEVER a ``users``
+    row — so callers validating an org must not use ``get_user`` alone, which
+    only matches personal orgs where org_id == user_id."""
+    if not (org_id or "").strip():
+        return False
+    with _LOCK, _connect() as conn:
+        return conn.execute(
+            "SELECT 1 FROM orgs WHERE id = ? AND deleted_at IS NULL",
+            (org_id.strip(),),
+        ).fetchone() is not None
 
 
 # ── org connections (the Configure tab) ──

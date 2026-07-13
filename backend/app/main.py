@@ -650,10 +650,16 @@ def health() -> dict:
 
 
 @app.get("/avatars")
-def list_avatars() -> dict:
-    """List installed avatars (one folder each under avatars/)."""
+def list_avatars(request: Request) -> dict:
+    """List installed avatars (one folder each under avatars/). A logged-in
+    user sees only their org's granted avatars; the anonymous/demo caller sees
+    ALL — the key-free demo picker is unchanged."""
+    user = auth.current_user(request)
+    roster = (
+        avatars.list_for_org(user["org_id"]) if user else avatars.list_ids()
+    )
     out = []
-    for aid in avatars.list_ids():
+    for aid in roster:
         a = avatars.load(aid)
         out.append({"id": a.id, "name": a.name, "role": a.role,
                     "wake_words": a.wake_words})
