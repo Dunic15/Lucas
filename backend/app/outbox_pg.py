@@ -427,6 +427,35 @@ def enqueue_callback(callback: dict[str, Any]) -> Optional[int]:
         return _callback_insert(conn, callback)
 
 
+def session_ended_artifact(org_id: str, bot_id: str) -> dict[str, Any]:
+    """Return the first committed distilled artifact for one session."""
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                """
+                SELECT payload_json
+                FROM callback_outbox
+                WHERE org_id=:org_id AND bot_id=:bot_id
+                  AND event='session.ended'
+                ORDER BY id
+                LIMIT 1
+                """
+            ),
+            {"org_id": org_id, "bot_id": bot_id},
+        ).mappings().first()
+    if row is None:
+        raise RuntimeError("session ended checkpoint missing")
+    payload = row["payload_json"]
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    artifact = (payload or {}).get("artifact")
+    if not isinstance(artifact, dict):
+        raise RuntimeError("session ended artifact checkpoint invalid")
+    return dict(artifact)
+
+
 def due_orgs(limit: int = 20) -> list[str]:
     engine = _engine()
     with engine.connect() as conn:

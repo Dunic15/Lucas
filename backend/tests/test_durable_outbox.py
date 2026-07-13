@@ -579,3 +579,49 @@ def test_initial_final_replay_preserves_next_continuation_window(
     )
     assert applied is True
     assert updated["action"] == "Send the recap by Friday"
+
+
+
+def test_crash_after_ended_checkpoint_reuses_first_wire_action_ids(
+    tmp_path, monkeypatch
+):
+    _fresh(tmp_path, monkeypatch)
+    monkeypatch.setattr(integration, "_kick_outbox", lambda: None)
+    integ = _integration("org-checkpoint")
+    first = {
+        "summary": "First canonical summary",
+        "actions": [{"action_id": "action-first", "item": "Send recap"}],
+        "checklist": [{"action_id": "action-first", "item": "Send recap"}],
+        "transcript": "local transcript first",
+        "meeting_url": "https://meet.google.com/private",
+        "org_id": "org-checkpoint",
+    }
+    assert integration.deliver_ended(integ, "bot-checkpoint", first) is True
+
+    rebuilt_after_crash = {
+        "summary": "Second nondeterministic summary",
+        "actions": [{"action_id": "action-second", "item": "Send recap"}],
+        "checklist": [{"action_id": "action-second", "item": "Send recap"}],
+        "transcript": "local transcript preserved on retry",
+        "meeting_url": "https://meet.google.com/private",
+        "org_id": "org-checkpoint",
+    }
+    assert integration.deliver_ended(
+        integ, "bot-checkpoint", rebuilt_after_crash
+    ) is True
+
+    assert rebuilt_after_crash["summary"] == "First canonical summary"
+    assert rebuilt_after_crash["actions"][0]["action_id"] == "action-first"
+    assert rebuilt_after_crash["checklist"][0]["action_id"] == "action-first"
+    assert rebuilt_after_crash["transcript"] == "local transcript preserved on retry"
+    assert rebuilt_after_crash["meeting_url"] == "https://meet.google.com/private"
+
+    with store._LOCK, store._connect() as conn:
+        payloads = conn.execute(
+            "SELECT payload_json FROM callback_outbox "
+            "WHERE org_id=? AND bot_id=? AND event='session.ended'",
+            ("org-checkpoint", "bot-checkpoint"),
+        ).fetchall()
+    assert len(payloads) == 1
+    assert '"action-first"' in payloads[0]["payload_json"]
+    assert '"action-second"' not in payloads[0]["payload_json"]

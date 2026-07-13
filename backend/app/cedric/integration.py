@@ -331,9 +331,15 @@ def _kick_outbox() -> None:
 def deliver_ended(integration: Optional[dict], bot_id: str, artifact: dict) -> bool:
     """Durably enqueue session.ended; network delivery never blocks finalize."""
     if integration and integration.get("callback_url"):
-        outbox.enqueue_session_ended(
-            dict(integration), bot_id, wire_artifact(artifact)
+        wire = wire_artifact(artifact)
+        canonical = outbox.checkpoint_session_ended(
+            dict(integration), bot_id, wire
         )
+        # The first durable wire envelope is canonical after a crash/retry.
+        # Replace only distilled fields; local transcript/meeting URL stay local.
+        for key in _WIRE_ARTIFACT_KEYS | {"artifact_version"}:
+            artifact.pop(key, None)
+        artifact.update(canonical)
         _kick_outbox()
         return True
     return False

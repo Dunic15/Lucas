@@ -588,6 +588,43 @@ def enqueue_session_ended(
     )
 
 
+def _session_ended_artifact(org_id: str, bot_id: str) -> dict:
+    if control_plane.enabled():
+        return _pg_call(
+            outbox_pg.session_ended_artifact,
+            org_id or settings.demo_org_id,
+            bot_id,
+        )
+    _ensure_schema()
+    with store._LOCK, store._connect() as conn:
+        row = conn.execute(
+            """
+            SELECT payload_json FROM callback_outbox
+            WHERE org_id=? AND bot_id=? AND event='session.ended'
+            ORDER BY id LIMIT 1
+            """,
+            (org_id or settings.demo_org_id, bot_id),
+        ).fetchone()
+    if row is None:
+        raise OutboxUnavailable("session ended checkpoint missing")
+    payload = json.loads(row["payload_json"])
+    artifact = (payload or {}).get("artifact")
+    if not isinstance(artifact, dict):
+        raise OutboxUnavailable("session ended artifact checkpoint invalid")
+    return dict(artifact)
+
+
+def checkpoint_session_ended(
+    integration: dict, bot_id: str, artifact: dict
+) -> dict:
+    """Commit once, then return the canonical first wire artifact."""
+    org_id, _team, _channel, _ref = _routing(integration)
+    outbox_id = enqueue_session_ended(integration, bot_id, artifact)
+    if outbox_id is None:
+        raise OutboxUnavailable("session ended callback was not checkpointed")
+    return _session_ended_artifact(org_id, bot_id)
+
+
 def reconcile_sessions() -> int:
     """Heal a crash between durable action capture and outbox enqueue."""
     count = 0
