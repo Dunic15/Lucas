@@ -356,8 +356,12 @@ def begin_brain_install(
         status = "pending"
         if row is not None:
             current_status = str(row[0] or "")
-            if current_status == "disconnecting":
-                return False
+            # An explicit user install supersedes a disconnect that was started
+            # but never finished: leaving the row at "disconnecting" would lock
+            # every retry at 503 (a re-tested account could never reconnect). We
+            # already hold the per-(org, avatar) install lock, so a real in-flight
+            # disconnect is serialized before us — reset to "pending" and proceed;
+            # the fresh nonce below is the new completion authority.
             status = "connected" if current_status == "connected" else "pending"
             try:
                 config = json.loads(row[1]) if row[1] else {}

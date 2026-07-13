@@ -99,6 +99,42 @@ def test_add_to_slack_start_carries_signed_org_state(client, monkeypatch):
     assert "org_token" not in data
 
 
+def test_slack_start_supersedes_a_stuck_disconnecting_row(client, monkeypatch):
+    """A disconnect that started but never finished leaves the row at
+    "disconnecting"; without supersede, every re-install 503s and a re-tested
+    account can never reconnect. An explicit "Add to Slack" resets it to pending
+    and proceeds (302, not 503)."""
+    monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
+    monkeypatch.setattr(settings, "cedric_orgs_token", "shared-test-token")
+    monkeypatch.setattr(settings, "public_base_url", "https://laura.example")
+    user = _login(client)
+    store.set_connection(
+        user["org_id"], "cedric", "cedric-brain", "disconnecting", {"team_id": "T_OLD"}
+    )
+
+    response = client.get(
+        "/dashboard/connections/brain/slack/start",
+        params={"avatar_id": "cedric"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302  # not 503 "connection persistence failed"
+    row = store.connections_for_org(user["org_id"])[0]
+    assert row["status"] == "pending"
+    assert row["config"]["pending_install_nonce"]
+
+
+def test_store_begin_brain_install_supersedes_disconnecting():
+    """The SQLite mirror: a disconnecting row re-installs (True + pending) rather
+    than returning False (which the handler turns into a 503)."""
+    org = "org_supersede_x"
+    store.set_connection(org, "cedric", "cedric-brain", "disconnecting", {})
+    assert store.begin_brain_install(org, "cedric", "nonce-xyz", "") is True
+    row = store.connections_for_org(org)[0]
+    assert row["status"] == "pending"
+    assert row["config"]["pending_install_nonce"] == "nonce-xyz"
+
+
 def test_slack_complete_hot_writes_registry_and_connection(client, monkeypatch):
     monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
     user = store.upsert_user("owner@example.com", "Owner")
