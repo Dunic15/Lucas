@@ -2126,7 +2126,9 @@ async def _finalize_session(
         # Without a trusted org there is deliberately no global Postgres
         # bot-id lookup. Same-process idempotency still hits the warm cache;
         # authenticated archive endpoints pass their org explicitly.
-        return store.get_artifact(bot_id, org_id=session.org_id)
+        return await run_in_threadpool(
+            store.get_artifact, bot_id, org_id=session.org_id
+        )
     # A prior finalize already built + delivered this session's artifact but its
     # Recall meter-stop (leave_call) was not confirmed, so the session was KEPT
     # for retry (see _finalize_session_locked). Re-finalizing must NOT rebuild or
@@ -2146,7 +2148,9 @@ async def _finalize_session(
     # Cedric. Check-and-add is synchronous — no await between here and the add —
     # so it is atomic under asyncio's single-threaded loop.
     if bot_id in _finalizing:
-        return store.get_artifact(bot_id, org_id=session.org_id)
+        return await run_in_threadpool(
+            store.get_artifact, bot_id, org_id=session.org_id
+        )
     _finalizing.add(bot_id)
     try:
         return await _finalize_session_locked(
@@ -2325,7 +2329,9 @@ async def _finalize_session_locked(
     # the only customer delivery record could still be lost.
     orchestrated = cedric.deliver_ended(integration, bot_id, artifact)  # CEDRIC
 
-    store.save_artifact(bot_id, artifact, org_id=session.org_id)
+    await run_in_threadpool(
+        store.save_artifact, bot_id, artifact, org_id=session.org_id
+    )
     # Cross-meeting memory: fold this meeting's extracted facts into the
     # ledger. Best-effort — memory must never block the cleanup below
     # (session removal + GPU meter signal), so a ledger hiccup is swallowed.
@@ -2520,7 +2526,9 @@ async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -
     if machine_org is None:
         if err := cedric.auth_error(request):  # CEDRIC
             return err
-    artifact = store.get_artifact(bot_id, org_id=machine_org)
+    artifact = await run_in_threadpool(
+        store.get_artifact, bot_id, org_id=machine_org
+    )
     # Wrong-org == not-found, byte-identical (no existence oracle for per-org
     # bearers). Adversarial review 2026-07-13, should-fix 2.
     if artifact is None or (
@@ -2609,7 +2617,9 @@ def session_artifact(bot_id: str, request: Request) -> JSONResponse:
         if org_scoped and live.org_id != machine_org:
             return JSONResponse({"error": "unknown bot_id"}, status_code=404)
         return JSONResponse({"status": "in_progress", "bot_id": bot_id})
-    artifact = store.get_artifact(bot_id, org_id=machine_org)
+    artifact = await run_in_threadpool(
+        store.get_artifact, bot_id, org_id=machine_org
+    )
     if artifact is None or (
         org_scoped and str(artifact.get("org_id") or "") != machine_org
     ):
@@ -2637,7 +2647,9 @@ async def redeliver_artifact(bot_id: str, request: Request) -> JSONResponse:
                 return err
 
     lookup_org = str(user["org_id"]) if user is not None else token_org
-    artifact = store.get_artifact(bot_id, org_id=lookup_org)
+    artifact = await run_in_threadpool(
+        store.get_artifact, bot_id, org_id=lookup_org
+    )
     if artifact is None:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     artifact_org = str(artifact.get("org_id") or "")
