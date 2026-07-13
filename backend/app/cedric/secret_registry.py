@@ -232,8 +232,13 @@ def upsert_org_bearer(org_id: str, bearer: str) -> bool:
     value = (bearer or "").strip()
     name = settings.laura_webhook_registry_ssm_parameter.strip()
     dedicated = _bearer_parameter_name(name, org) if name else ""
-    if not org or not value:
+    if not org:
         return False
+    if not value:
+        # Per-org bearer is optional: the shared deployment bearer covers
+        # Laura->Cedric until Cedric sends webhook_token. An absent bearer is
+        # a benign no-op, not a registry failure that blocks the whole install.
+        return True
     with _lock:
         if not name:
             _bearer_cache = {**_bearer_cache, org: value}
