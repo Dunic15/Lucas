@@ -878,18 +878,7 @@ async def disconnect_brain_remote(request: Request) -> JSONResponse:
                 return False
         return True
 
-    async def restore_all() -> None:
-        """Best-effort restore only when Cedric confirmed no remote change."""
-        for row in brain:
-            await run_in_threadpool(
-                _set_connection_all,
-                user["org_id"],
-                row["avatar_id"],
-                "cedric-brain",
-                row["status"],
-                dict(row.get("config") or {}),
-            )
-
+    async def tombstone_all() -> bool:
     async def tombstone_all() -> bool:
         """Revoke the labelled bearer and persist a non-resurrectable marker.
         Durable rows are committed before refreshing the SQLite cache."""
@@ -959,9 +948,9 @@ async def disconnect_brain_remote(request: Request) -> JSONResponse:
             200 <= status_code < 300 or status_code == 404
         )
         if status_code is not None and not revoked_remotely:
-            # No irreversible remote change was confirmed, so the original
-            # customer-visible rows may safely be restored.
-            await restore_all()
+            # Fail closed: begin_disconnect_all already revoked the inbound
+            # org token and fenced every row. Keep disconnecting so a retry can
+            # resume remote cleanup; never reopen customer access on a 5xx.
             return JSONResponse({"error": "remote_revoke_failed"}, status_code=502)
 
         if not await begin_disconnect_all("remote_revoked"):

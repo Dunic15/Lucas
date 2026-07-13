@@ -531,6 +531,36 @@ def test_postgres_completion_disconnect_race_converges_to_tombstone(
     assert row["config"]["install_tombstone"] is True
 
 
+def test_begin_disconnect_immediately_revokes_only_own_org_token(cp):
+    a = cp.ensure_user(
+        "sub-disconnect-fence-a", "disconnect-fence-a@freemail.test", "A", ""
+    )
+    b = cp.ensure_user(
+        "sub-disconnect-fence-b", "disconnect-fence-b@freemail.test", "B", ""
+    )
+    assert cp.set_connection(
+        a["org_id"], "cedric", "cedric-brain", "connected", {"team_id": "T_A"}
+    )
+    assert cp.set_connection(
+        b["org_id"], "cedric", "cedric-brain", "connected", {"team_id": "T_B"}
+    )
+    token_a = cp.rotate_org_token(a["org_id"], "cedric-slack-install")
+    token_b = cp.rotate_org_token(b["org_id"], "cedric-slack-install")
+    assert cp.resolve_org_token(token_a) == a["org_id"]
+    assert cp.resolve_org_token(token_b) == b["org_id"]
+
+    assert cp.begin_brain_disconnect(
+        a["org_id"], "cedric", "revoke_pending"
+    ) is True
+
+    assert cp.resolve_org_token(token_a) is None
+    assert cp.resolve_org_token(token_b) == b["org_id"]
+    rows_a = cp.get_connections(a["org_id"])
+    rows_b = cp.get_connections(b["org_id"])
+    assert {row["status"] for row in rows_a} == {"disconnecting"}
+    assert {row["status"] for row in rows_b} == {"connected"}
+
+
 # ── production role + SECURITY DEFINER boundary + real RLS ──────────────
 
 def test_runtime_engine_is_exact_policy_bound_role(cp):

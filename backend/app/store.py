@@ -1352,6 +1352,13 @@ def begin_brain_disconnect(
         ).fetchall()
         if not rows or requested_avatar not in {str(row["avatar_id"]) for row in rows}:
             return False
+        # Revoke the org-wide Cedric→Laura bearer in the same SQLite
+        # transaction/RLock that fences every connection row.
+        conn.execute(
+            "DELETE FROM org_tokens "
+            "WHERE org_id = ? AND label = 'cedric-slack-install'",
+            (org,),
+        )
         for row in rows:
             try:
                 config = json.loads(row["config_json"]) if row["config_json"] else {}

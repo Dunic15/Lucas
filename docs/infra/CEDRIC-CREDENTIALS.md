@@ -72,6 +72,25 @@ The aggregate parameter is compatibility-only; dedicated `orgs/*` HMAC
 secrets and `bearers/*` peer tokens are authoritative. Do not grant the
 runtime role access to `LAURA_DATABASE_ADMIN_URL`.
 
+## Bootstrap-token rotation gate
+
+`CEDRIC_ORGS_TOKEN` signs the ten-minute Slack install state and is also the
+domain-separated key for deterministic org-token derivation. Never rotate it
+while an install is in flight: doing so invalidates outstanding state and can
+change the retry token for the same nonce.
+
+Production rotation is a coordinated drain:
+
+1. disable new Connect-to-Slack starts;
+2. wait at least the install-state TTL (10 minutes) and confirm no pending
+   installs remain;
+3. rotate the value on Laura and Cedric together;
+4. run one same-state retry/isolation smoke test, then re-enable installs.
+
+Emergency rotation deliberately invalidates pending installs; affected users
+must restart Connect to Slack. Do not keep the old value as an unbounded
+fallback.
+
 ## Release proof
 
 Before customer traffic, run two real Slack workspaces through connect,

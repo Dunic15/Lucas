@@ -720,6 +720,16 @@ def begin_brain_disconnect(
         ).fetchall()
         if not rows or requested_avatar not in {str(row[0]) for row in rows}:
             return False
+        # Fail closed at the START of disconnect. The Cedric→Laura bearer is
+        # org-wide and must stop authenticating before remote/SSM cleanup can
+        # block or fail.
+        conn.execute(
+            text(
+                "DELETE FROM org_tokens "
+                "WHERE org_id = :o AND label = 'cedric-slack-install'"
+            ),
+            {"o": org},
+        )
         for row in rows:
             try:
                 config = json.loads(row[1]) if row[1] else {}

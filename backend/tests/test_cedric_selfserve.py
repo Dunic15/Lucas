@@ -891,38 +891,116 @@ def test_connectors_upstream_query_carries_callers_team(client, monkeypatch, goo
     ]
 
 
-def test_disconnect_remote_revoke_failure_keeps_local_state(client, monkeypatch, google_on):
-    """Remote revoke 5xx → 502, the connection stays 'connected' and the
-    signing secret is NOT dropped — never lie about a disconnection."""
+def test_disconnect_fences_org_token_before_remote_cleanup_and_retries(
+    client, monkeypatch, google_on
+):
+    """Once disconnect starts, an old Cedric bearer cannot dispatch even while
+    remote cleanup is blocked/failing. Retry stays fail-closed and converges."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from app import recall_client
+
     monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
+    monkeypatch.setattr(settings, "laura_api_token", "deployment-token")
     user = _login(client)
+    other = store.upsert_user("disconnect-other@example.com")
     store.set_connection(
         user["org_id"], "cedric", "cedric-brain", "connected", {"team_id": "T1"}
     )
-    removed: list = []
+    raw = store.rotate_org_token(user["org_id"], "cedric-slack-install")
+    other_raw = store.rotate_org_token(other["org_id"], "cedric-slack-install")
+    assert store.resolve_org_token(raw) == user["org_id"]
+    assert store.resolve_org_token(other_raw) == other["org_id"]
+
+    created: list[str] = []
+    monkeypatch.setattr(recall_client, "assert_ready", lambda: None)
+
+    def create_bot(*args, **kwargs):
+        bot_id = f"bot-disconnect-auth-{len(created) + 1}"
+        created.append(bot_id)
+        return {"id": bot_id}
+
+    monkeypatch.setattr(recall_client, "create_bot", create_bot)
+    machine = TestClient(main_module.app)
+    before = machine.post(
+        "/sessions/start",
+        headers=_bearer(raw),
+        json={"meeting_url": "https://meet.google.com/disconnect-before"},
+    )
+    assert before.status_code == 200, before.text
+    store.remove(created[-1])
+
+    remote_entered = Event()
+    release_remote = Event()
+    remote_calls: list[str] = []
+
+    def blocked_failure(org):
+        remote_calls.append(org)
+        remote_entered.set()
+        assert release_remote.wait(10)
+        return 500
+
+    monkeypatch.setattr(cedric, "revoke_org", blocked_failure)
+    removed: list[str] = []
     monkeypatch.setattr(
-        secret_registry, "remove_org_credentials", lambda org: removed.append(org) or True
+        secret_registry,
+        "remove_org_credentials",
+        lambda org: removed.append(org) or True,
     )
 
-    class FakeClient:
-        def __init__(self, *a, **k): ...
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def delete(self, url, headers=None):
-            return _FakeResponse(500)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            client.post,
+            "/dashboard/connections/brain/disconnect",
+            json={"avatar_id": "cedric"},
+        )
+        assert remote_entered.wait(10)
+        # The token revoke and disconnecting fence committed before the remote
+        # call began. A machine request cannot use the logged-in browser cookie.
+        assert store.resolve_org_token(raw) is None
+        denied = machine.post(
+            "/sessions/start",
+            headers=_bearer(raw),
+            json={"meeting_url": "https://meet.google.com/disconnect-blocked"},
+        )
+        assert denied.status_code == 401
+        other_ok = machine.post(
+            "/sessions/start",
+            headers=_bearer(other_raw),
+            json={"meeting_url": "https://meet.google.com/disconnect-other"},
+        )
+        assert other_ok.status_code == 200, other_ok.text
+        store.remove(created[-1])
+        release_remote.set()
+        failed = future.result(timeout=10)
 
-    monkeypatch.setattr(callback.httpx, "Client", FakeClient)
-    resp = client.post(
-        "/dashboard/connections/brain/disconnect", json={"avatar_id": "cedric"}
-    )
-    assert resp.status_code == 502
-    assert resp.json() == {"error": "remote_revoke_failed"}
+    assert failed.status_code == 502
+    assert failed.json() == {"error": "remote_revoke_failed"}
     assert removed == []
-    row = store.connections_for_org(user["org_id"])[0]
-    assert row["status"] == "connected"  # unchanged
+    checkpoint = store.connections_for_org(user["org_id"])[0]
+    assert checkpoint["status"] == "disconnecting"
+    assert checkpoint["config"]["disconnect_phase"] == "revoke_pending"
+    assert store.resolve_org_token(raw) is None
+    assert store.resolve_org_token(other_raw) == other["org_id"]
+
+    monkeypatch.setattr(
+        cedric, "revoke_org", lambda org: remote_calls.append(org) or 204
+    )
+    retry = client.post(
+        "/dashboard/connections/brain/disconnect",
+        json={"avatar_id": "cedric"},
+    )
+    assert retry.status_code == 200
+    assert remote_calls == [user["org_id"], user["org_id"]]
+    assert removed == [user["org_id"]]
+    final = store.connections_for_org(user["org_id"])[0]
+    assert final["status"] == "disconnected"
+    assert final["config"]["install_tombstone"] is True
+    assert store.resolve_org_token(raw) is None
+    assert store.resolve_org_token(other_raw) == other["org_id"]
 
 
-def test_disconnect_remote_revoke_ok_drops_secret(client, monkeypatch, google_on):
+def test_disconnect_remote_revoke_ok_drops_secret(def test_disconnect_remote_revoke_ok_drops_secret(client, monkeypatch, google_on):
     monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
     user = _login(client)
     store.set_connection(
