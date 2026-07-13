@@ -805,3 +805,107 @@ def test_pg_execution_state_is_monotonic_under_out_of_order_events(cp):
     state = outbox_pg.action_statuses(org, [action_id])[action_id]
     assert state["status"] == "done"
     assert state["detail"] == "executed"
+
+
+def test_durable_artifact_survives_engine_reset_with_retention(cp, pg):
+    org = _org(cp, "artifact-restart")
+    saved_at = 1_700_000_000.0
+    artifact = {
+        "org_id": org,
+        "avatar_id": "laura",
+        "summary": "Private durable summary",
+        "transcript": "Alex: private transcript",
+        "actions": [{"item": "Ship it", "action_id": "a-1"}],
+    }
+
+    assert cp.save_artifact(
+        org,
+        "bot-artifact-restart",
+        artifact,
+        visibility="private",
+        saved_at=saved_at,
+    ) is True
+    rows = cp.list_artifacts(org)
+    assert rows == [
+        {
+            "bot_id": "bot-artifact-restart",
+            "saved_at": saved_at,
+            "artifact": artifact,
+        }
+    ]
+
+    # A fresh engine is the process-replacement boundary. The artifact must not
+    # depend on store._artifacts or the App Runner instance filesystem.
+    cp.reset_engine()
+    assert cp.get_artifact(org, "bot-artifact-restart") == artifact
+
+    with _admin(pg) as conn:
+        metadata = conn.execute(
+            """
+            SELECT visibility, extract(epoch FROM (delete_by - saved_at))
+              FROM public.artifacts
+             WHERE org_id = %s AND bot_id = %s
+            """,
+            (org, "bot-artifact-restart"),
+        ).fetchone()
+    assert metadata[0] == "private"
+    assert float(metadata[1]) == pytest.approx(90 * 86400)
+
+
+def test_durable_artifacts_are_rls_isolated_and_keep_composite_pk(cp, pg):
+    from sqlalchemy import text
+
+    org_a = _org(cp, "artifact-a")
+    org_b = _org(cp, "artifact-b")
+    shared_bot = "bot-same-id"
+    artifact_a = {
+        "org_id": org_a,
+        "summary": "A only",
+        "transcript": "tenant A private transcript",
+    }
+    artifact_b = {
+        "org_id": org_b,
+        "summary": "B only",
+        "transcript": "tenant B private transcript",
+    }
+    cp.save_artifact(org_a, shared_bot, artifact_a)
+
+    assert cp.get_artifact(org_b, shared_bot) is None
+    assert cp.list_artifacts(org_b) == []
+
+    # Even a deliberately hostile UPDATE under B's transaction-local tenant
+    # context cannot see or mutate A's row.
+    engine = cp._get_engine()
+    with engine.begin() as conn:
+        cp._set_org(conn, org_b)
+        changed = conn.execute(
+            text(
+                "UPDATE public.artifacts "
+                "SET visibility = 'org' "
+                "WHERE org_id = CAST(:a AS uuid) AND bot_id = :b"
+            ),
+            {"a": org_a, "b": shared_bot},
+        ).rowcount
+    assert changed == 0
+
+    # The documented composite PK permits the same external bot id in two
+    # isolated orgs without either row overwriting the other.
+    cp.save_artifact(org_b, shared_bot, artifact_b)
+    assert cp.get_artifact(org_a, shared_bot) == artifact_a
+    assert cp.get_artifact(org_b, shared_bot) == artifact_b
+
+    with _admin(pg) as conn:
+        pk_columns = conn.execute(
+            """
+            SELECT array_agg(a.attname ORDER BY key_column.ordinality)
+              FROM pg_constraint AS c
+              CROSS JOIN LATERAL
+                unnest(c.conkey) WITH ORDINALITY AS key_column(attnum, ordinality)
+              JOIN pg_attribute AS a
+                ON a.attrelid = c.conrelid
+               AND a.attnum = key_column.attnum
+             WHERE c.conrelid = 'public.artifacts'::regclass
+               AND c.contype = 'p'
+            """
+        ).fetchone()[0]
+    assert pk_columns == ["org_id", "bot_id"]
