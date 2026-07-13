@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import ipaddress
 import json
 import threading
 from typing import Any, Optional
@@ -124,13 +125,36 @@ def provisioning_auth_ok(request: Request) -> bool:
 
 
 def _origin(url: str) -> tuple[str, str, int | None] | None:
+    """Return a safe public HTTPS origin, otherwise None.
+
+    Credentials are attached to these requests, so userinfo, custom ports and
+    local/private/link-local/reserved literal IPs are never valid integration
+    destinations even when an operator accidentally configures one.
+    """
     try:
         p = urlsplit((url or "").strip())
+        port = p.port
     except ValueError:
         return None
-    if p.scheme.lower() != "https" or not p.hostname:
+    host = (p.hostname or "").lower().rstrip(".")
+    if (
+        p.scheme.lower() != "https"
+        or not host
+        or p.username is not None
+        or p.password is not None
+        or port not in (None, 443)
+        or host == "localhost"
+        or host.endswith(".localhost")
+    ):
         return None
-    return (p.scheme.lower(), p.hostname.lower(), p.port)
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        pass  # DNS name; exact-origin allowlisting below remains authoritative.
+    else:
+        if not address.is_global:
+            return None
+    return ("https", host, port)
 
 
 def request_integration_urls_allowed(req: Any, org_id: str) -> bool:
