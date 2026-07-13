@@ -532,12 +532,10 @@ def update(
         _append(state.open_questions, text[:160])
 
     # ── per-person tracking ──
-    # Fold this line into the speaker's own view (talk share, self-commitments,
-    # questions, risks). The avatar's lines are excluded — its name is the wake
-    # word. An extracted owner is credited even when someone ELSE assigned it
-    # ("Marco will own the rollout" credits Marco, whoever said it).
-    wake_set = {str(w).strip().lower() for w in wake_words}
-    if speaker and speaker.strip().lower() not in wake_set:
+    # Agent lines already returned above. Human identity is never inferred from
+    # a wake/display name, so a real human named Laura/Cedric remains visible.
+    # An extracted owner is credited even when someone else assigned it.
+    if speaker:
         p = _person(state, participant_id, speaker)
         if p is not None:
             p["lines"] += 1
@@ -547,7 +545,7 @@ def update(
                 _person_append(p["questions"], text[:120])
             if _RISK.search(text):
                 _person_append(p["risks"], text[:120])
-    if owner and owner.strip().lower() not in wake_set:
+    if owner:
         target = _person(
             state,
             participant_id if owner_is_speaker else "",
