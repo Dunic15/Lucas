@@ -84,12 +84,20 @@ class ProvisionResult:
 def _bearer_for(org_id: str, legacy: str = "") -> str:
     """Bearer for Laura→Cedric calls.
 
-    Real customer orgs must use Cedric's per-workspace token; the deployment
-    token is retained only for empty/Demo bootstrap and legacy traffic.
+    A real customer org uses Cedric's per-workspace bearer WHEN ONE EXISTS, but
+    Cedric's shipped install contract sends only the per-org HMAC secret (never a
+    per-org bearer), so ``secret_registry.bearer_for`` is empty for those orgs.
+    Fall back to the deployment-level ``legacy`` bearer in that case — Cedric's
+    ``verifyLauraContextBearer``/``verifyLauraBearer`` accept it and event/context
+    calls still verify the per-org HMAC. Without this fallback the org-provisioning
+    DELETE (disconnect) sent NO Authorization header → Cedric 401 → the dashboard
+    surfaced a 502 "remote_revoke_failed" ("couldn't disconnect. Try again.").
     """
     org = (org_id or "").strip()
     if org and org != settings.demo_org_id:
-        return secret_registry.bearer_for(org)
+        per_org = secret_registry.bearer_for(org)
+        if per_org:
+            return per_org
     return (legacy or "").strip()
 
 
