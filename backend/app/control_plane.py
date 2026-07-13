@@ -617,6 +617,7 @@ def finish_checkout(
     revision: int,
     customer_id: str,
     session_id: str,
+    expires_at: int,
 ) -> bool:
     """Clear only the matching reservation after Stripe created the session."""
     if not enabled() or not (org_id or "").strip():
@@ -630,7 +631,8 @@ def finish_checkout(
             text(
                 """
                 UPDATE billing_accounts
-                   SET checkout_pending_until = NULL,
+                   SET checkout_pending_until =
+                         to_timestamp(CAST(:expires AS double precision)),
                        last_checkout_session_id = :s,
                        updated_at = now()
                  WHERE org_id = :o
@@ -643,6 +645,7 @@ def finish_checkout(
                 "r": int(revision),
                 "c": customer_id.strip(),
                 "s": session_id.strip() or None,
+                "expires": int(expires_at),
             },
         )
     return result.rowcount == 1
@@ -911,4 +914,3 @@ def apply_stripe_event(
             return True
 
         return True
-
