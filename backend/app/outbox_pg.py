@@ -38,8 +38,10 @@ def _callback_insert(conn, callback: dict[str, Any]) -> Optional[int]:
               :callback_url, :team_id, :channel,
               CAST(:external_ref_json AS jsonb),
               CAST(:payload_json AS jsonb),
-              'pending', 0, clock_timestamp(), '',
-              clock_timestamp(), clock_timestamp()
+              'pending', 0,
+              clock_timestamp()
+                + (:not_before_seconds * interval '1 second'),
+              '', clock_timestamp(), clock_timestamp()
             )
             ON CONFLICT (org_id, idempotency_key) DO NOTHING
             RETURNING id
@@ -47,6 +49,9 @@ def _callback_insert(conn, callback: dict[str, Any]) -> Optional[int]:
         ),
         {
             **callback,
+            "not_before_seconds": max(
+                0.0, min(float(callback.get("not_before_seconds") or 0), 30.0)
+            ),
             "external_ref_json": json.dumps(
                 callback.get("external_ref") or {},
                 separators=(",", ":"),
@@ -192,6 +197,175 @@ def persist_action_capture(
         org_id, bot_id, item, callback
     )
     return outbox_id
+
+
+def extend_action_capture_once(
+    org_id: str,
+    bot_id: str,
+    action_id: str,
+    fragment: str,
+    *,
+    source_event_key: str = "",
+    source_fingerprint: str = "",
+    dedupe_window_seconds: float = 30.0,
+) -> tuple[dict[str, str], bool]:
+    """Append one ASR continuation and refresh its pending callback atomically."""
+    event_key = str(source_event_key or "")[:128]
+    fingerprint = str(source_fingerprint or "")[:128]
+    window = max(1.0, min(float(dedupe_window_seconds), 300.0))
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        conn.execute(
+            text(
+                "SELECT pg_catalog.pg_advisory_xact_lock("
+                "pg_catalog.hashtextextended(:lock_key, 0))"
+            ),
+            {"lock_key": f"{org_id}:{bot_id}:action:{action_id}"},
+        )
+        row = conn.execute(
+            text(
+                """
+                SELECT action_id, action, owner, due
+                FROM queued_actions
+                WHERE org_id=:org_id AND bot_id=:bot_id
+                  AND action_id=:action_id
+                FOR UPDATE
+                """
+            ),
+            {
+                "org_id": org_id,
+                "bot_id": bot_id,
+                "action_id": action_id,
+            },
+        ).mappings().first()
+        if row is None:
+            raise RuntimeError("queued action missing during continuation")
+
+        duplicate = None
+        if event_key:
+            duplicate = conn.execute(
+                text(
+                    """
+                    SELECT 1 FROM action_capture_events
+                    WHERE org_id=:org_id AND action_id=:action_id
+                      AND source_event_key=:source_event_key
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "org_id": org_id,
+                    "action_id": action_id,
+                    "source_event_key": event_key,
+                },
+            ).first()
+        elif fingerprint:
+            duplicate = conn.execute(
+                text(
+                    """
+                    SELECT 1 FROM action_capture_events
+                    WHERE org_id=:org_id AND action_id=:action_id
+                      AND source_fingerprint=:source_fingerprint
+                      AND created_at >= clock_timestamp()
+                        - (:window * interval '1 second')
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "org_id": org_id,
+                    "action_id": action_id,
+                    "source_fingerprint": fingerprint,
+                    "window": window,
+                },
+            ).first()
+        if duplicate is not None:
+            return _capture_item(row), False
+
+        updated = " ".join(
+            (str(row["action"]) + " " + str(fragment or "")).split()
+        )[:300]
+        conn.execute(
+            text(
+                """
+                INSERT INTO action_capture_events (
+                  org_id, action_id, source_event_key,
+                  source_fingerprint, created_at
+                ) VALUES (
+                  :org_id, :action_id, :source_event_key,
+                  :source_fingerprint, clock_timestamp()
+                )
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": action_id,
+                "source_event_key": event_key,
+                "source_fingerprint": fingerprint,
+            },
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE queued_actions
+                SET action=:action, updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND bot_id=:bot_id
+                  AND action_id=:action_id
+                """
+            ),
+            {
+                "org_id": org_id,
+                "bot_id": bot_id,
+                "action_id": action_id,
+                "action": updated,
+            },
+        )
+        # action.requested starts behind a settle fence.  A continuation both
+        # changes the durable action and the exact pending wire payload, then
+        # nudges the fence so a concurrent worker cannot observe half-state.
+        callback = conn.execute(
+            text(
+                """
+                UPDATE callback_outbox
+                SET payload_json=jsonb_set(
+                      payload_json, '{action}',
+                      to_jsonb(CAST(:action AS text)), true
+                    ),
+                    next_attempt_at=GREATEST(
+                      next_attempt_at,
+                      clock_timestamp() + interval '1 second'
+                    ),
+                    updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND action_id=:action_id
+                  AND event='action.requested'
+                  AND status IN ('pending', 'failed')
+                RETURNING id
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": action_id,
+                "action": updated,
+            },
+        ).first()
+        if callback is None:
+            status = conn.execute(
+                text(
+                    """
+                    SELECT status FROM callback_outbox
+                    WHERE org_id=:org_id AND action_id=:action_id
+                      AND event='action.requested'
+                    """
+                ),
+                {"org_id": org_id, "action_id": action_id},
+            ).first()
+            if status is not None:
+                raise RuntimeError("action callback escaped settle fence")
+        return {
+            "action_id": str(row["action_id"]),
+            "action": updated,
+            "owner": str(row["owner"]),
+            "due": str(row["due"]),
+        }, True
 
 
 def update_queued_action(

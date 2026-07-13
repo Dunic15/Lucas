@@ -175,6 +175,32 @@ def capture_action(session, action: str, owner: str = "", due: str = "") -> dict
     return item
 
 
+def extend_action_once(
+    session,
+    item: dict,
+    fragment: str,
+    *,
+    source_event_key: str = "",
+    source_fingerprint: str = "",
+    dedupe_window_seconds: float = 30.0,
+) -> tuple[dict, bool]:
+    """Durably append one ASR continuation; retries return the same item."""
+    from . import outbox
+
+    canonical, extended = outbox.extend_action_capture_once(
+        session,
+        item,
+        fragment,
+        source_event_key=source_event_key,
+        source_fingerprint=source_fingerprint,
+        dedupe_window_seconds=dedupe_window_seconds,
+    )
+    if isinstance(item, dict):
+        item.clear()
+        item.update(canonical)
+    return canonical, extended
+
+
 def queue_action(
     action: str = "", owner: str = "", due: str = "", session=None
 ) -> str:

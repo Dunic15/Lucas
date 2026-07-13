@@ -4340,23 +4340,25 @@ async def recall_webhook(request: Request) -> JSONResponse:
             and time.time() - p_ts < 4.0
             and is_capture_continuation(text)
         ):
-            previous_action = p_item["action"]
-            p_item["action"] = " ".join(
-                (previous_action + " " + text).split()
-            )[:300]
-            # Keep the stable action/callback row in sync before acknowledging
-            # the extended capture. Production uses one tenant-scoped PG tx.
-            # Restore memory on failure so an HTTP retry cannot append the same
-            # ASR fragment twice to a row that never committed.
-            try:
-                await run_in_threadpool(
-                    outbox.persist_queued_action, session, p_item
-                )
-            except Exception:
-                p_item["action"] = previous_action
-                raise
-            session.last_capture = (p_item, p_speaker, time.time())
-            return JSONResponse({"ok": True, "spoke": False, "capture_extended": True})
+            updated_item, extended = await run_in_threadpool(
+                tools.extend_action_once,
+                session,
+                p_item,
+                text,
+                source_event_key=capture_event_key,
+                source_fingerprint=capture_fingerprint,
+            )
+            session.last_capture = (
+                updated_item, p_speaker, time.time()
+            )
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": False,
+                    "capture_extended": True,
+                    "duplicate": not extended,
+                }
+            )
         session.last_capture = None
 
     # ── voice stop ("Laura, stop / aspetta") ──

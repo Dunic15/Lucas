@@ -122,6 +122,7 @@ def cp(pg, monkeypatch):
     control_plane.reset_engine()
     with _admin(pg) as conn:
         conn.execute("DELETE FROM callback_outbox")
+        conn.execute("DELETE FROM action_capture_events")
         conn.execute("DELETE FROM queued_actions")
     yield control_plane
     control_plane.reset_engine()
@@ -494,3 +495,50 @@ def test_duplicate_recall_final_concurrent_and_restart_is_one_capture(cp, pg):
     )
     assert later_created is True
     assert later["action_id"] != action_id
+
+
+
+def test_continuation_is_append_once_and_updates_wire_before_claim(cp, pg):
+    org = _org(cp, "continuation")
+    session = SimpleNamespace(
+        org_id=org,
+        bot_id="bot-continuation",
+        integration=_integration(org),
+        queued_actions=[],
+    )
+    item, created = tools.capture_action_once(
+        session,
+        "Send the recap",
+        source_event_key="initial-" + "a" * 56,
+        source_fingerprint="initial-" + "b" * 56,
+    )
+    assert created is True
+
+    # The card cannot leave during the four-second ASR continuation window.
+    assert outbox_pg.claim_due(org, 10, now=time.time() + 1) == []
+
+    def extend(_n):
+        return tools.extend_action_once(
+            session,
+            item,
+            "by Friday",
+            source_event_key="continuation-" + "c" * 51,
+            source_fingerprint="continuation-" + "d" * 51,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(extend, range(2)))
+    assert sum(1 for _item_value, applied in results if applied) == 1
+
+    claimed = outbox_pg.claim_due(org, 10, now=time.time() + 10)
+    assert len(claimed) == 1
+    payload = claimed[0]["payload_json"]
+    assert payload["action"] == "Send the recap by Friday"
+    assert claimed[0]["idempotency_key"] == (
+        f"action.requested:{item['action_id']}"
+    )
+    with _admin(pg) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM action_capture_events WHERE org_id=%s",
+            (org,),
+        ).fetchone()[0] == 1

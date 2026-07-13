@@ -17,6 +17,9 @@ from . import control_plane, outbox_pg, store
 from .config import settings
 
 _RETRY_SECONDS = (1.0, 5.0, 30.0, 120.0, 600.0)
+_ACTION_SETTLE_SECONDS = 5.0
+
+
 class OutboxUnavailable(RuntimeError):
     """Configured durable store is unavailable; callers must fail closed."""
 
@@ -71,6 +74,26 @@ def _ensure_schema() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_queued_actions_bot
                 ON queued_actions(org_id, bot_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS action_capture_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                org_id TEXT NOT NULL,
+                action_id TEXT NOT NULL,
+                source_event_key TEXT NOT NULL DEFAULT '',
+                source_fingerprint TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                FOREIGN KEY (org_id, action_id)
+                    REFERENCES queued_actions(org_id, action_id)
+                    ON DELETE CASCADE
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_action_capture_events_source
+                ON action_capture_events(org_id, action_id, source_event_key)
+                WHERE source_event_key <> '';
+            CREATE INDEX IF NOT EXISTS idx_action_capture_events_fingerprint
+                ON action_capture_events(
+                    org_id, action_id, source_fingerprint, created_at DESC
+                )
+                WHERE source_fingerprint <> '';
 
             CREATE TABLE IF NOT EXISTS callback_outbox (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -206,6 +229,7 @@ def _callback_record(session: Any, item: dict) -> tuple[str, dict | None]:
             "callback_url": str(integration.get("callback_url") or "").strip(),
             "team_id": team, "channel": channel,
             "external_ref": ref, "payload": payload,
+            "not_before_seconds": _ACTION_SETTLE_SECONDS,
         }
     return org_id, callback_record
 
@@ -307,7 +331,10 @@ def persist_action_capture_once(
                         callback_record["payload"],
                         separators=(",", ":"), sort_keys=True,
                     ),
-                    now, now,
+                    now + float(
+                        callback_record.get("not_before_seconds") or 0
+                    ),
+                    now,
                 ),
             )
             row = conn.execute(
@@ -325,6 +352,116 @@ def persist_action_capture(session: Any, item: dict) -> int | None:
     """Compatibility wrapper for callers without producer identity."""
     _item, _created, outbox_id = persist_action_capture_once(session, item)
     return outbox_id
+
+
+def extend_action_capture_once(
+    session: Any,
+    item: dict,
+    fragment: str,
+    *,
+    source_event_key: str = "",
+    source_fingerprint: str = "",
+    dedupe_window_seconds: float = 30.0,
+) -> tuple[dict, bool]:
+    """Append a continuation once; queued action + wire payload share one tx."""
+    org_id = str(getattr(session, "org_id", "") or settings.demo_org_id)
+    action_id = str((item or {}).get("action_id") or "")
+    event_key = str(source_event_key or "")[:128]
+    fingerprint = str(source_fingerprint or "")[:128]
+    window = max(1.0, min(float(dedupe_window_seconds), 300.0))
+    if control_plane.enabled():
+        return _pg_call(
+            outbox_pg.extend_action_capture_once,
+            org_id,
+            str(session.bot_id),
+            action_id,
+            fragment,
+            source_event_key=event_key,
+            source_fingerprint=fingerprint,
+            dedupe_window_seconds=window,
+        )
+
+    _ensure_schema()
+    now = time.time()
+    with store._LOCK, store._connect() as conn:
+        row = conn.execute(
+            """
+            SELECT action_id, action, owner, due
+            FROM queued_actions
+            WHERE org_id=? AND bot_id=? AND action_id=?
+            """,
+            (org_id, str(session.bot_id), action_id),
+        ).fetchone()
+        if row is None:
+            raise OutboxUnavailable("queued action missing during continuation")
+        duplicate = None
+        if event_key:
+            duplicate = conn.execute(
+                """
+                SELECT 1 FROM action_capture_events
+                WHERE org_id=? AND action_id=? AND source_event_key=?
+                LIMIT 1
+                """,
+                (org_id, action_id, event_key),
+            ).fetchone()
+        elif fingerprint:
+            duplicate = conn.execute(
+                """
+                SELECT 1 FROM action_capture_events
+                WHERE org_id=? AND action_id=? AND source_fingerprint=?
+                  AND created_at >= ?
+                LIMIT 1
+                """,
+                (org_id, action_id, fingerprint, now - window),
+            ).fetchone()
+        if duplicate is not None:
+            return dict(row), False
+
+        updated = " ".join(
+            (str(row["action"]) + " " + str(fragment or "")).split()
+        )[:300]
+        conn.execute(
+            """
+            INSERT INTO action_capture_events (
+              org_id, action_id, source_event_key,
+              source_fingerprint, created_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (org_id, action_id, event_key, fingerprint, now),
+        )
+        conn.execute(
+            """
+            UPDATE queued_actions SET action=?, updated_at=?
+            WHERE org_id=? AND bot_id=? AND action_id=?
+            """,
+            (updated, now, org_id, str(session.bot_id), action_id),
+        )
+        callback = conn.execute(
+            """
+            UPDATE callback_outbox
+            SET payload_json=json_set(payload_json, '$.action', ?),
+                next_attempt_at=MAX(next_attempt_at, ?)
+            WHERE org_id=? AND action_id=? AND event='action.requested'
+              AND status IN ('pending', 'failed')
+            """,
+            (updated, now + 1.0, org_id, action_id),
+        )
+        if callback.rowcount == 0:
+            status = conn.execute(
+                """
+                SELECT status FROM callback_outbox
+                WHERE org_id=? AND action_id=? AND event='action.requested'
+                """,
+                (org_id, action_id),
+            ).fetchone()
+            if status is not None:
+                raise OutboxUnavailable("action callback escaped settle fence")
+        return {
+            "action_id": str(row["action_id"]),
+            "action": updated,
+            "owner": str(row["owner"]),
+            "due": str(row["due"]),
+        }, True
 
 
 def queued_actions(org_id: str, bot_id: str) -> list[dict]:
@@ -362,6 +499,10 @@ def _enqueue(
                 "bot_id": bot_id, "action_id": action_id, "event": event,
                 "callback_url": callback_url, "team_id": team,
                 "channel": channel, "external_ref": ref, "payload": payload,
+                "not_before_seconds": (
+                    _ACTION_SETTLE_SECONDS
+                    if event == "action.requested" else 0.0
+                ),
             },
         )
     _ensure_schema()
@@ -381,7 +522,11 @@ def _enqueue(
                 callback_url, team, channel,
                 json.dumps(ref, separators=(",", ":"), sort_keys=True),
                 json.dumps(payload, separators=(",", ":"), sort_keys=True),
-                now, now,
+                (
+                    now + _ACTION_SETTLE_SECONDS
+                    if event == "action.requested" else now
+                ),
+                now,
             ),
         )
         row = conn.execute(

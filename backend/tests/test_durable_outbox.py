@@ -476,3 +476,63 @@ def test_sqlite_fallback_fingerprint_is_bounded(tmp_path, monkeypatch):
     )
     assert later_created is True
     assert later["action_id"] != first["action_id"]
+
+
+
+def test_duplicate_continuation_updates_pending_wire_once(
+    tmp_path, monkeypatch
+):
+    _fresh(tmp_path, monkeypatch)
+    monkeypatch.setattr(integration, "_kick_outbox", lambda: None)
+    session = store.create(
+        "bot-continuation", "https://meet.google.com/abc-defg-hij", "laura",
+        org_id="org-a",
+    )
+    session.integration = _integration()
+    item, created = tools.capture_action_once(
+        session,
+        "Send the recap",
+        source_event_key="initial-event",
+    )
+    assert created is True
+
+    first, applied = tools.extend_action_once(
+        session,
+        item,
+        "by Friday",
+        source_event_key="continuation-event",
+    )
+    replay, replay_applied = tools.extend_action_once(
+        session,
+        item,
+        "by Friday",
+        source_event_key="continuation-event",
+    )
+    assert applied is True and replay_applied is False
+    assert first["action"] == replay["action"] == "Send the recap by Friday"
+
+    # The initial worker nudge cannot deliver the incomplete first fragment.
+    sent = []
+    from app.cedric import callback
+
+    monkeypatch.setattr(
+        callback,
+        "_post",
+        lambda url, payload, *, idempotency_key="": (
+            sent.append((payload["action"], idempotency_key))
+            or SimpleNamespace(status_code=200)
+        ),
+    )
+    now = time.time()
+    assert outbox.process_due(now=now + 1) == 0
+    assert outbox.process_due(now=now + 10) == 1
+    assert sent == [
+        (
+            "Send the recap by Friday",
+            f"action.requested:{item['action_id']}",
+        )
+    ]
+    with store._LOCK, store._connect() as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM action_capture_events"
+        ).fetchone()[0] == 1
