@@ -766,16 +766,12 @@ async def brain_connectors(request: Request) -> JSONResponse:
 
 @router.post("/dashboard/connections/brain/disconnect")
 async def disconnect_brain_remote(request: Request) -> JSONResponse:
-    """Disconnect the brain, remote-revoke FIRST (PR D). Body: {avatar_id}.
+    """Disconnect Cedric with a retry-safe, org-wide saga.
 
-    Order matters: Cedric's side is detached (DELETE /api/laura/orgs/{org})
-    before ANY local state changes. Only a confirmed revoke — 2xx, or 404 =
-    already gone, or no orchestrator configured at all — flips the local row
-    to 'disconnected' (+ durable mirror) and drops the org's signing secret
-    from the registry. A failed/unreachable revoke answers 502 and leaves
-    local state UNTOUCHED: the dashboard must never claim a disconnection the
-    orchestrator didn't confirm. Cookie-auth + same-origin (a cross-site POST
-    must not be able to tear down a customer's brain link)."""
+    The remote link and credentials belong to the org, not one avatar. A
+    durable disconnect_phase is written before/after remote revoke so a later
+    retry can resume cleanup without a bearer that may already be deleted.
+    """
     user = auth.current_user(request)
     if user is None:
         if err := auth.gate(request):
@@ -785,41 +781,93 @@ async def disconnect_brain_remote(request: Request) -> JSONResponse:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+    except Exception:  # noqa: BLE001
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     avatar_id = str((body or {}).get("avatar_id") or "").strip()
     if not avatar_id or avatar_id not in avatars.list_ids():
         return JSONResponse({"error": "unknown avatar_id"}, status_code=400)
-    rows = await run_in_threadpool(_org_connection_rows, user["org_id"])
-    if not any(
-        r["avatar_id"] == avatar_id and r["provider"] == "cedric-brain"
-        for r in rows
-    ):
-        return JSONResponse({"error": "brain is not connected"}, status_code=404)
 
-    from . import cedric  # local import, same reason as connect_brain's
+    rows = await run_in_threadpool(_org_connection_rows, user["org_id"])
+    brain = [r for r in rows if r["provider"] == "cedric-brain"]
+    if not brain or not any(r["avatar_id"] == avatar_id for r in brain):
+        return JSONResponse({"error": "brain is not connected"}, status_code=404)
+    if all(r["status"] == "disconnected" for r in brain):
+        return JSONResponse(
+            {
+                "provider": "cedric-brain",
+                "avatar_id": avatar_id,
+                "status": "disconnected",
+                "remote_revoked": True,
+            }
+        )
+
+    async def persist_all(status: str, phase: str = "", clear: bool = False) -> bool:
+        ok = True
+        for row in brain:
+            config = {} if clear else dict(row.get("config") or {})
+            if phase:
+                config["disconnect_phase"] = phase
+            else:
+                config.pop("disconnect_phase", None)
+            saved = await run_in_threadpool(
+                _set_connection_all,
+                user["org_id"],
+                row["avatar_id"],
+                "cedric-brain",
+                status,
+                config,
+            )
+            ok = bool(saved) and ok
+        return ok
+
+    from . import cedric, control_plane
     from .cedric import secret_registry
 
-    # Remote revoke first, while Laura still has Cedric's per-workspace
-    # bearer. 404 means the remote side is already detached and cleanup may
-    # continue.
-    status_code = await run_in_threadpool(cedric.revoke_org, user["org_id"])
-    revoked_remotely = status_code is not None and (
-        200 <= status_code < 300 or status_code == 404
+    remote_done = any(
+        str((r.get("config") or {}).get("disconnect_phase") or "")
+        == "remote_revoked"
+        for r in brain
     )
-    if status_code is not None and not revoked_remotely:
-        return JSONResponse({"error": "remote_revoke_failed"}, status_code=502)
+    revoked_remotely = remote_done
 
-    # Credential deletion and org-token revocation are release-critical. Any
-    # failure leaves the UI connected/retryable; it must never report success
-    # while an old bearer can still authenticate after a cache refresh.
+    if not remote_done:
+        # Persist intent before the irreversible call. If the call succeeds but
+        # the next write fails, retrying the remote is still safe (404 = gone).
+        if not await persist_all("disconnecting", "revoke_pending"):
+            return JSONResponse(
+                {"error": "connection persistence failed"}, status_code=503
+            )
+
+        status_code = await run_in_threadpool(cedric.revoke_org, user["org_id"])
+        revoked_remotely = status_code is not None and (
+            200 <= status_code < 300 or status_code == 404
+        )
+        if status_code is not None and not revoked_remotely:
+            # Restore the customer-visible state when no irreversible remote
+            # change was confirmed.
+            for row in brain:
+                await run_in_threadpool(
+                    _set_connection_all,
+                    user["org_id"],
+                    row["avatar_id"],
+                    "cedric-brain",
+                    row["status"],
+                    dict(row.get("config") or {}),
+                )
+            return JSONResponse({"error": "remote_revoke_failed"}, status_code=502)
+
+        if not await persist_all("disconnecting", "remote_revoked"):
+            return JSONResponse(
+                {"error": "disconnect checkpoint failed"}, status_code=503
+            )
+
+    # From this point retries skip the remote call and converge on cleanup.
     credentials_removed = await run_in_threadpool(
         secret_registry.remove_org_credentials, user["org_id"]
     )
     if not credentials_removed:
         return JSONResponse({"error": "credential_cleanup_failed"}, status_code=502)
 
-    from . import control_plane
     if control_plane.enabled():
         try:
             revoked_tokens = await run_in_threadpool(
@@ -839,12 +887,12 @@ async def disconnect_brain_remote(request: Request) -> JSONResponse:
         store.revoke_org_tokens, user["org_id"], "cedric-slack-install"
     )
 
-    persisted = await run_in_threadpool(
-        _set_connection_all, user["org_id"], avatar_id, "cedric-brain",
-        "disconnected", {},
-    )
-    if not persisted:
-        return JSONResponse({"error": "connection persistence failed"}, status_code=503)
+    # Cedric is one org-wide brain connection. Mark every avatar row together
+    # so disconnecting one cannot leave another falsely displayed as connected.
+    if not await persist_all("disconnected", clear=True):
+        return JSONResponse(
+            {"error": "connection persistence failed"}, status_code=503
+        )
     return JSONResponse(
         {
             "provider": "cedric-brain",
