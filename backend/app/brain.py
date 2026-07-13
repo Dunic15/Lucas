@@ -245,8 +245,20 @@ def _roster_block(
         f"{'person' if len(roster) == 1 else 'people'})."
     )
     if state is not None and len(roster) > 1:
-        spoke = {n.split()[0].lower() for n in state.per_person}
-        quiet = [n for n in roster if n.split()[0].lower() not in spoke]
+        # Preserve multiplicity: if two humans are both named Alex and only
+        # one has spoken, the other must still count as quiet. Names are for
+        # presentation only; identity remains participant-id based in state.
+        spoke = [
+            str(p.get("name") or key).split()[0].lower()
+            for key, p in state.per_person.items()
+        ]
+        quiet = []
+        for name in roster:
+            first = name.split()[0].lower()
+            if first in spoke:
+                spoke.remove(first)
+            else:
+                quiet.append(name)
         if quiet:
             block += f" Not yet heard from: {', '.join(quiet)}."
     return block + "\n\n"
@@ -1422,12 +1434,12 @@ def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dic
     total_lines = sum(p["lines"] for p in state.per_person.values()) or 1
     artifact["participation"] = [
         {
-            "name": name,
+            "name": str(p.get("name") or participant_key),
             "lines": p["lines"],
             "talk_share": round(100 * p["lines"] / total_lines),
             "commitments": list(p["commitments"]),
         }
-        for name, p in sorted(
+        for participant_key, p in sorted(
             state.per_person.items(), key=lambda kv: -kv[1]["lines"]
         )
     ]
