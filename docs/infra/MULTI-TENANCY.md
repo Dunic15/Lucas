@@ -79,14 +79,16 @@ pins/exhausts the Supabase pooler and risks the documented GUC-leak footgun
 Trimmed to only what is genuinely painful to retrofit. Identity tables, RLS
 polish, and the write-behind queue are fast-follow, not blockers.
 
-1. **Durable Postgres behind the store/ledger DAO seam, with Alembic.**
-   Add `LAURA_DATABASE_URL` to `config.py`; `store._connect()` picks Postgres
-   when set, else the current SQLite file (keeps the zero-key demo). **Adopt
-   Alembic on day one** — NEXT/LATER explicitly add columns (usage, audit,
-   pgvector, connectors), so migrations *will* happen; they must be repeatable
-   and reviewable. This step alone fixes the ephemeral-state bug that wipes
-   `ledger`/`artifacts` on every App Runner deploy — independent of tenancy.
-   *Files:* `store.py`, `ledger.py`, `config.py`, new `alembic/`.
+1. **Durable Postgres control plane, with separate runtime/DDL roles.**
+   `LAURA_DATABASE_URL` is the policy-bound `laura_app` pooler credential
+   used by App Runner; `LAURA_DATABASE_ADMIN_URL` is the owner credential used
+   only by an explicit Alembic migration job. The admin URL is never injected
+   into the service. Empty runtime URL keeps the key-free SQLite demo.
+   **Adopt Alembic on day one** — NEXT/LATER explicitly add columns (usage,
+   audit, pgvector, connectors), so migrations must be repeatable and
+   reviewable. The live sessions/utterances hot path remains local SQLite.
+   *Files:* `control_plane.py`, `config.py`, `backend/alembic/`; deployment
+   mapping: [`PRODUCTION-DATABASE-ROLES.md`](PRODUCTION-DATABASE-ROLES.md).
 
 2. **Define the single meeting→org binding, then `org_id NOT NULL` on every
    table** in the same migration: `sessions`, `utterances`,
