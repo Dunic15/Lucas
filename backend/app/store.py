@@ -681,6 +681,21 @@ def mark_scheduled(event_id: str, *, org_id: str = DEMO_ORG_ID) -> None:
         )
 
 
+
+def durable_artifacts_enabled() -> bool:
+    """Whether Postgres is actually configured as the artifact authority.
+
+    Some key-free identity tests replace control_plane.enabled while leaving
+    LAURA_DATABASE_URL empty. That simulates an OAuth cutover, not a reachable
+    archive database; artifact routing must remain SQLite in that state.
+    """
+    from . import control_plane
+
+    return control_plane.enabled() and bool(
+        (settings.laura_database_url or "").strip()
+    )
+
+
 def save_artifact(bot_id: str, artifact: dict, *, org_id: str | None = None) -> None:
     """Persist a finished meeting's complete private artifact.
 
@@ -695,7 +710,7 @@ def save_artifact(bot_id: str, artifact: dict, *, org_id: str | None = None) -> 
     # Lazy import avoids the control_plane -> store constants import cycle.
     from . import control_plane
 
-    durable_enabled = control_plane.enabled()
+    durable_enabled = durable_artifacts_enabled()
     if durable_enabled:
         control_plane.save_artifact(
             row_org,
@@ -741,7 +756,7 @@ def get_artifact(bot_id: str, org_id: str | None = None) -> dict | None:
     if org_id is not None:
         from . import control_plane
 
-        if control_plane.enabled():
+        if durable_artifacts_enabled():
             return control_plane.get_artifact(org_id, bot_id)
     artifact = _artifacts.get(bot_id)
     if artifact is not None and org_id is not None:
@@ -761,7 +776,7 @@ def list_artifacts(org_id: str | None = None) -> list[dict]:
     """
     from . import control_plane
 
-    if control_plane.enabled():
+    if durable_artifacts_enabled():
         if not (org_id or "").strip():
             raise ValueError(
                 "org_id is required for production artifact enumeration"
