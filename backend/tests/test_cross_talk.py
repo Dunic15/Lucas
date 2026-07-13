@@ -142,12 +142,18 @@ def test_locked_dyad_holds_interjection_to_a_raised_hand(tmp_path, monkeypatch):
     store.remove(s.bot_id)
 
 
-def test_disabled_flag_is_a_noop(tmp_path, monkeypatch):
+def test_disabled_flag_never_consults_the_detector(tmp_path, monkeypatch):
     s = _session(tmp_path, monkeypatch, bot_id="dyad-off")
     monkeypatch.setattr(settings, "cross_talk_suppression_enabled", False)
     _seed_dyad(s)
     _stub_stream(monkeypatch, ["A grounded point."])
-    # With the flag off, behaviour is exactly today's (no dyad suppression path).
+
+    # With the flag off, in_locked_dyad must NEVER be consulted — behaviour is
+    # byte-identical to pre-PR. A tripwire proves the `and`-short-circuit holds.
+    def _boom(*a, **k):
+        raise AssertionError("in_locked_dyad called while suppression disabled")
+
+    monkeypatch.setattr(main, "in_locked_dyad", _boom)
     body = _post(_line(s.bot_id, "Lia", "and then what happens after that step?"))
-    assert "reason" in body or "spoke" in body  # went down the normal path
+    assert "reason" in body or "spoke" in body  # completed normally, tripwire unhit
     store.remove(s.bot_id)

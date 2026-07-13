@@ -313,11 +313,18 @@ def in_locked_dyad(
 
     The avatar's OWN turns are excluded (they're in the transcript too) — without
     that, an avatar↔single-human 1:1 would look like a dyad and wrongly suppress.
-    Pure and O(window): no transcript rescan, no model. `ts` is arrival time so
-    gaps are a noisy proxy, but every fuzzy case errs toward NOT suppressing.
+    Pure and ~O(window): walks back from the end collecting at most `window`
+    non-avatar turns, no full rescan, no model. `ts` is arrival time so gaps are
+    a noisy proxy, but every fuzzy case errs toward NOT suppressing.
     """
     av = (avatar_name or "").strip().lower()
-    turns = [u for u in transcript if (u.speaker or "").strip().lower() != av][-window:]
+    turns = []  # last `window` NON-avatar turns, newest last — walk from the end
+    for u in reversed(transcript):
+        if (u.speaker or "").strip().lower() != av:
+            turns.append(u)
+            if len(turns) >= window:
+                break
+    turns.reverse()
     if len(turns) < min_turns:
         return False
     speakers = [(u.speaker or "").strip().lower() for u in turns]
