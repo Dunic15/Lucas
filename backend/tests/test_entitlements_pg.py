@@ -729,6 +729,77 @@ def test_swap_failure_fails_closed_and_stops_born_bot(
     assert store.get("bot_1") is None
     assert entitlements.open_usage_rows() == []
 
+
+def test_swap_failure_and_unverified_leave_repairs_meter_before_retry(
+    cp, start_env, fresh_store, monkeypatch
+):
+    # Exact P0: binding fails, then the immediate Recall leave also fails.
+    # The kept leave_pending session must rebind + start its clock BEFORE the
+    # next leave retry, so a still-running vendor bot is never unmetered.
+    monkeypatch.setattr(settings, "recall_api_key", "recall-key")
+    _stub_finalize_offline(monkeypatch)
+    real_assign = entitlements.assign_bot_id
+    db_recovered = {"value": False}
+
+    def assign(org_id, provisional, real):
+        if not db_recovered["value"]:
+            return False
+        return real_assign(org_id, provisional, real)
+
+    monkeypatch.setattr(main.entitlements, "assign_bot_id", assign)
+    leave_recovers = {"value": False}
+    leave_attempts: list[str] = []
+
+    def leave(bot_id):
+        leave_attempts.append(bot_id)
+        if not leave_recovers["value"]:
+            raise _http_status_error(503)
+
+    monkeypatch.setattr(main.recall_client, "leave_call", leave)
+
+    resp = TestClient(main.app).post(
+        "/sessions/start", json={"meeting_url": _MEET_URL}
+    )
+
+    assert resp.status_code == 503
+    assert resp.json() == {"error": "billing_unavailable"}
+    kept = store.get("bot_1")
+    assert kept is not None and kept.leave_pending is True
+    stranded = entitlements.open_usage_rows()
+    assert len(stranded) == 1
+    provisional = stranded[0]["bot_id"]
+    assert provisional.startswith("pending:")
+
+    # DB recovers; Recall confirms the bot is in-call, but leave is still 503.
+    db_recovered["value"] = True
+    started = time.time() - 30
+    monkeypatch.setattr(
+        main.httpx,
+        "get",
+        lambda url, *, headers, timeout: _FakeResponse(
+            _bot_json("bot_1", [("in_call_recording", started)])
+        ),
+    )
+    asyncio.run(main._reconcile_once())
+
+    assert store.get("bot_1") is not None
+    assert entitlements.usage_row(settings.demo_org_id, provisional) is None
+    metered = entitlements.usage_row(settings.demo_org_id, "bot_1")
+    assert metered is not None and metered["state"] == "active"
+    assert abs(metered["in_call_at"] - started) < 3
+    assert metered["deadline"] > time.time()
+    assert {row["bot_id"] for row in entitlements.open_usage_rows()} == {"bot_1"}
+
+    # Once Recall verifies the stop, the already-delivered session is removed
+    # and the now-real usage row closes exactly once.
+    leave_recovers["value"] = True
+    asyncio.run(main._reconcile_once())
+    assert store.get("bot_1") is None
+    closed = entitlements.usage_row(settings.demo_org_id, "bot_1")
+    assert closed["state"] == "closed"
+    assert closed["close_reason"] == "usage_binding_failed"
+    assert len(leave_attempts) == 3
+
 def test_untracked_live_bot_over_budget_is_cut_off(cp, fresh_store, monkeypatch):
     # A live local session whose org is EXHAUSTED and has no usage row (swap lost
     # + orphan already freed the provisional) can't be metered → it must be
