@@ -533,14 +533,19 @@ def test_connectors_upstream_query_carries_callers_team(client, monkeypatch, goo
         user["org_id"], "cedric", "cedric-brain", "connected",
         {"team_id": "T_MINE", "channel": "#ops"},
     )
-    calls: list[tuple[str, dict]] = []
+    calls: list[tuple[str, dict, str | None]] = []
+    monkeypatch.setattr(
+        secret_registry, "bearer_for", lambda org: "workspace-token"
+    )
 
     class FakeClient:
         def __init__(self, *a, **k): ...
         def __enter__(self): return self
         def __exit__(self, *a): return False
         def get(self, url, params=None, headers=None):
-            calls.append((url, dict(params or {})))
+            calls.append(
+                (url, dict(params or {}), (headers or {}).get("Authorization"))
+            )
             return _FakeResponse(200, {"org_id": user["org_id"], "connectors": []})
 
     monkeypatch.setattr(callback.httpx, "Client", FakeClient)
@@ -550,6 +555,7 @@ def test_connectors_upstream_query_carries_callers_team(client, monkeypatch, goo
         (
             "https://cedric/api/laura/connectors",
             {"org_id": user["org_id"], "team": "T_MINE"},
+            "Bearer workspace-token",
         )
     ]
 
@@ -595,14 +601,17 @@ def test_disconnect_remote_revoke_ok_drops_secret(client, monkeypatch, google_on
     monkeypatch.setattr(
         secret_registry, "remove_org_credentials", lambda org: removed.append(org) or True
     )
-    deleted: list[str] = []
+    deleted: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        secret_registry, "bearer_for", lambda org: "workspace-token"
+    )
 
     class FakeClient:
         def __init__(self, *a, **k): ...
         def __enter__(self): return self
         def __exit__(self, *a): return False
         def delete(self, url, headers=None):
-            deleted.append(url)
+            deleted.append((url, (headers or {}).get("Authorization")))
             return _FakeResponse(204)
 
     monkeypatch.setattr(callback.httpx, "Client", FakeClient)
@@ -612,7 +621,12 @@ def test_disconnect_remote_revoke_ok_drops_secret(client, monkeypatch, google_on
     assert resp.status_code == 200
     assert resp.json()["status"] == "disconnected"
     assert resp.json()["remote_revoked"] is True
-    assert deleted == [f"https://cedric/api/laura/orgs/{user['org_id']}"]
+    assert deleted == [
+        (
+            f"https://cedric/api/laura/orgs/{user['org_id']}",
+            "Bearer workspace-token",
+        )
+    ]
     assert removed == [user["org_id"]]
     row = store.connections_for_org(user["org_id"])[0]
     assert row["status"] == "disconnected"
