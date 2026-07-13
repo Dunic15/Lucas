@@ -435,3 +435,128 @@ def test_checkout_releases_only_before_session_call(stripe_config, monkeypatch):
     with pytest.raises(RuntimeError):
         billing._create_checkout("org-a", "owner@example.test")
     assert released == [("org-a", 9)]
+
+
+# ── self-serve eligibility surfaced in the summary (no bare "forbidden") ──
+
+
+_ORG = "00000000-0000-0000-0000-0000000000aa"
+_UID = "00000000-0000-0000-0000-0000000000bb"
+
+
+def _summary_client(monkeypatch, *, role, plan, included, sub_status="none",
+                    user=True):
+    app = FastAPI()
+    app.include_router(billing.router)
+    monkeypatch.setattr(billing, "_billing_ready", lambda: True)
+    monkeypatch.setattr(billing.control_plane, "enabled", lambda: True)
+    monkeypatch.setattr(
+        billing.auth,
+        "current_user",
+        lambda request: (
+            {
+                "org_id": _ORG,
+                "member_uid": _UID,
+                "user_id": "u_hash",
+                "email": "member@example.test",
+            }
+            if user
+            else None
+        ),
+    )
+    monkeypatch.setattr(billing, "_resolve_org", lambda request: _ORG)
+    monkeypatch.setattr(
+        billing.entitlements,
+        "usage_summary",
+        lambda org: {
+            "plan": plan,
+            "included_seconds": included,
+            "used_seconds": 0,
+            "remaining_seconds": included,
+        },
+    )
+    monkeypatch.setattr(
+        billing.control_plane,
+        "get_billing",
+        lambda org: {
+            "plan": plan,
+            "included_seconds": included,
+            "subscription_status": sub_status,
+            "current_period_end": None,
+        },
+    )
+    monkeypatch.setattr(
+        billing.entitlements, "has_active_session", lambda org: False
+    )
+    monkeypatch.setattr(billing.control_plane, "member_role", lambda *_: role)
+    return TestClient(app)
+
+
+def test_summary_managed_org_is_not_self_serve_eligible(
+    stripe_config, monkeypatch
+):
+    # An SFF-style org granted far more than Solo out-of-band (no Stripe sub):
+    # "Upgrade to Solo" is a downgrade AND its member would 403 on checkout.
+    client = _summary_client(
+        monkeypatch, role="member", plan="free", included=2_000_000_000
+    )
+    body = client.get("/billing/summary").json()
+    assert body["managed_plan"] is True
+    assert body["self_serve_eligible"] is False
+    assert body["can_manage_billing"] is False
+
+
+def test_summary_owner_of_personal_trial_can_self_serve(
+    stripe_config, monkeypatch
+):
+    client = _summary_client(
+        monkeypatch, role="owner", plan="free", included=900
+    )
+    body = client.get("/billing/summary").json()
+    assert body["managed_plan"] is False
+    assert body["self_serve_eligible"] is True
+    assert body["can_manage_billing"] is True
+
+
+def test_summary_member_of_small_org_cannot_manage_but_stays_eligible(
+    stripe_config, monkeypatch
+):
+    # A plain member of an ordinary (not-yet-entitled) org: the plan is still
+    # self-serve eligible, but THIS member can't open billing — so the dashboard
+    # hides the button rather than letting the click 403.
+    client = _summary_client(
+        monkeypatch, role="member", plan="free", included=900
+    )
+    body = client.get("/billing/summary").json()
+    assert body["can_manage_billing"] is False
+    assert body["self_serve_eligible"] is True
+    assert body["managed_plan"] is False
+
+
+def test_checkout_member_role_is_forbidden(stripe_config, monkeypatch):
+    # Regression lock: the checkout role-gate must keep 403ing a non-owner even
+    # though the dashboard no longer shows them the button.
+    app = FastAPI()
+    app.include_router(billing.router)
+    monkeypatch.setattr(billing, "_billing_ready", lambda: True)
+    monkeypatch.setattr(
+        billing.auth,
+        "current_user",
+        lambda request: {
+            "org_id": _ORG,
+            "member_uid": _UID,
+            "user_id": "u_hash",
+            "email": "member@example.test",
+        },
+    )
+    monkeypatch.setattr(
+        billing.control_plane, "member_role", lambda *_: "member"
+    )
+    client = TestClient(app)
+    denied = client.post(
+        "/billing/checkout",
+        json={"plan": "solo"},
+        headers={"origin": "https://app.lauravatar.com"},
+    )
+    assert denied.status_code == 403
+    assert denied.json()["error"] == "forbidden"

@@ -144,7 +144,28 @@ def _resolve_org(request: Request) -> Optional[str]:
     return control_plane.resolve_org_token(raw) or store.resolve_org_token(raw)
 
 
-def _summary_for_org(org: Optional[str]) -> dict:
+def _member_billing_role(user: Optional[dict]) -> Optional[str]:
+    """This user's active org role through the private boundary, or None.
+
+    Bill against the DURABLE identity: member_uid is the Postgres user UUID;
+    user_id is the ephemeral u_<hash> cookie cache-key (not a UUID — member_role
+    guards the uuid cast, so a session-shaped id resolves to None, not a 500).
+    Fall back to user_id for the key-free path.
+    """
+    if not user:
+        return None
+    return control_plane.member_role(
+        user["org_id"],
+        str(user.get("member_uid") or user.get("user_id") or ""),
+    )
+
+
+def _can_manage_billing(role: Optional[str]) -> bool:
+    """Only an owner or a billing admin may open self-serve checkout/portal."""
+    return role in ("owner", "billing")
+
+
+def _summary_for_org(org: Optional[str], user: Optional[dict] = None) -> dict:
     live = _billing_ready()
     trial = int(settings.free_trial_seconds)
     base = {
@@ -160,6 +181,13 @@ def _summary_for_org(org: Optional[str]) -> dict:
         "current_period_end": None,
         "checkout_path": CHECKOUT_PATH,
         "portal_path": PORTAL_PATH,
+        # Whether THIS caller may open self-serve billing, and whether the org
+        # is even eligible for a self-serve Solo plan. Defaults suit the
+        # key-free demo and personal orgs (own-org owners); tightened below once
+        # the control plane can resolve a real membership role + entitlement.
+        "can_manage_billing": True,
+        "self_serve_eligible": True,
+        "managed_plan": False,
     }
     if not control_plane.enabled() or not org:
         return base
@@ -169,18 +197,33 @@ def _summary_for_org(org: Optional[str]) -> dict:
     used = int(summary.get("used_seconds", 0))
     remaining = int(summary.get("remaining_seconds", max(0, included - used)))
     active = entitlements.has_active_session(org)
+    plan = str(summary.get("plan") or billing.get("plan") or "free")
+    sub_status = str(billing.get("subscription_status") or "none")
+    role = _member_billing_role(user)
+    # An org granted more avatar-seconds than the self-serve Solo allotment
+    # WITHOUT a Stripe subscription is on a managed/comped plan (e.g. an
+    # enterprise grant). Self-serve "Upgrade to Solo" would be a downgrade, and
+    # the checkout role-gate would 403 any non-owner member — so mark it
+    # ineligible and let the dashboard hide the button instead of surfacing a
+    # bare "forbidden".
+    managed = (
+        plan != "solo"
+        and sub_status == "none"
+        and included > int(settings.solo_included_seconds)
+    )
     base.update(
         {
-            "plan": str(summary.get("plan") or billing.get("plan") or "free"),
+            "plan": plan,
             "included_seconds": included,
             "used_seconds": used,
             "remaining_seconds": remaining,
             "can_start_session": remaining > 0 and not active,
             "active_session": active,
-            "subscription_status": str(
-                billing.get("subscription_status") or "none"
-            ),
+            "subscription_status": sub_status,
             "current_period_end": billing.get("current_period_end"),
+            "can_manage_billing": _can_manage_billing(role),
+            "self_serve_eligible": not managed,
+            "managed_plan": managed,
         }
     )
     return base
@@ -188,8 +231,9 @@ def _summary_for_org(org: Optional[str]) -> dict:
 
 @router.get("/billing/summary")
 async def billing_summary(request: Request) -> JSONResponse:
+    user = await run_in_threadpool(auth.current_user, request)
     org = await run_in_threadpool(_resolve_org, request)
-    data = await run_in_threadpool(_summary_for_org, org)
+    data = await run_in_threadpool(_summary_for_org, org, user)
     return JSONResponse(data)
 
 
@@ -197,15 +241,8 @@ async def _billing_principal(request: Request):
     user = auth.current_user(request)
     if user is None or not _exact_same_origin(request):
         return None, JSONResponse({"error": "forbidden"}, status_code=403)
-    # Bill against the DURABLE identity: member_uid is the Postgres user UUID;
-    # user_id is the ephemeral u_<hash> cookie cache-key (not a UUID, would 500
-    # the member-role uuid cast). Fall back to user_id for the key-free path.
-    role = await run_in_threadpool(
-        control_plane.member_role,
-        user["org_id"],
-        str(user.get("member_uid") or user.get("user_id") or ""),
-    )
-    if role not in ("owner", "billing"):
+    role = await run_in_threadpool(_member_billing_role, user)
+    if not _can_manage_billing(role):
         return None, JSONResponse({"error": "forbidden"}, status_code=403)
     return user, None
 
