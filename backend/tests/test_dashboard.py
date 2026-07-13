@@ -214,8 +214,8 @@ def test_dashboard_is_customer_facing_and_enterprise_is_honest(client):
     assert "Enterprise ready" not in html
     # Collection handlers must use querySelectorAll ($), not querySelector ($).
     # A single Element has no forEach and would break nav/disconnect at runtime.
-    assert '$("#nav button").forEach' not in html
-    assert '$("#av-grid [data-brain-off]").forEach' not in html
+    assert '    $("#nav button").forEach' not in html
+    assert '    $("#av-grid [data-brain-off]").forEach' not in html
 
 
 def test_dashboard_rejects_non_meeting_links_before_dispatch(client):
