@@ -2126,9 +2126,7 @@ async def _finalize_session(
         # Without a trusted org there is deliberately no global Postgres
         # bot-id lookup. Same-process idempotency still hits the warm cache;
         # authenticated archive endpoints pass their org explicitly.
-        return await run_in_threadpool(
-            store.get_artifact, bot_id, org_id=session.org_id
-        )
+        return store.get_artifact(bot_id)
     # A prior finalize already built + delivered this session's artifact but its
     # Recall meter-stop (leave_call) was not confirmed, so the session was KEPT
     # for retry (see _finalize_session_locked). Re-finalizing must NOT rebuild or
@@ -2138,7 +2136,9 @@ async def _finalize_session(
     # /end still answers 200 with the deliverable.
     if getattr(session, "leave_pending", False):
         await _retry_leave(bot_id, session)
-        return store.get_artifact(bot_id)
+        return await run_in_threadpool(
+            store.get_artifact, bot_id, org_id=session.org_id
+        )
     # Concurrency guard. store.remove(bot_id) — the thing that makes the
     # `session is None` check above idempotent — only runs at the very END of
     # the body, past several awaits (the multi-second post_meeting LLM call
@@ -2617,9 +2617,7 @@ def session_artifact(bot_id: str, request: Request) -> JSONResponse:
         if org_scoped and live.org_id != machine_org:
             return JSONResponse({"error": "unknown bot_id"}, status_code=404)
         return JSONResponse({"status": "in_progress", "bot_id": bot_id})
-    artifact = await run_in_threadpool(
-        store.get_artifact, bot_id, org_id=machine_org
-    )
+    artifact = store.get_artifact(bot_id, org_id=machine_org)
     if artifact is None or (
         org_scoped and str(artifact.get("org_id") or "") != machine_org
     ):
