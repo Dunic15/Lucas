@@ -90,6 +90,7 @@ from .decision import (
     detect_invite,
     detect_leave_command,
     detect_stop_command,
+    in_locked_dyad,
     interjection_floor_open,
     is_capture_continuation,
     plausible_leave_followup,
@@ -3653,6 +3654,18 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # long (speaker mid-thought); "What's the deadline?" answers fast.
             turn_completeness=end_of_turn.completeness(text),
         )
+        # Cross-talk: if two humans are in a tight back-and-forth right now, they
+        # own the floor — wait the MAX rather than the sized window so she never
+        # clips their volley. Suppression-only (still just a wait).
+        if settings.cross_talk_suppression_enabled and in_locked_dyad(
+            session.transcript,
+            avatar_name=avatar.name,
+            now=_defer_t0,
+            min_turns=settings.cross_talk_min_turns,
+            max_gap_seconds=settings.cross_talk_max_gap_seconds,
+            window=settings.cross_talk_window,
+        ):
+            _defer_wait = max(_defer_wait, settings.deference_max_seconds)
         await asyncio.sleep(_defer_wait)
         if (
             len(session.transcript) > _defer_mark
@@ -3900,11 +3913,22 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # barge-in during generation is caught by the interrupted check above,
             # so speaking under turn_gen here is safe.
             _top_score = float(_answer_meta.get("top_score", 0.0))
+            # Cross-talk: a tight two-human back-and-forth closes the floor for an
+            # UNPROMPTED interjection — she falls to the audio-silent raised hand
+            # (waiting to be invited) instead of talking over their volley.
+            _dyad = settings.cross_talk_suppression_enabled and in_locked_dyad(
+                session.transcript,
+                avatar_name=avatar.name,
+                now=time.time(),
+                min_turns=settings.cross_talk_min_turns,
+                max_gap_seconds=settings.cross_talk_max_gap_seconds,
+                window=settings.cross_talk_window,
+            )
             if should_interject(
                 enabled=settings.hand_raise_interject_when_confident,
                 confidence=_top_score,
                 min_confidence=settings.hand_raise_interject_min_confidence,
-                floor_open=interjection_floor_open(
+                floor_open=(not _dyad) and interjection_floor_open(
                     turn_completeness=end_of_turn.completeness(text),
                     since_human_partial=time.time() - session.last_human_partial_at,
                     active_partial_seconds=settings.interject_min_pause_seconds,

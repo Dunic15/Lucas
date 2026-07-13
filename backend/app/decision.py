@@ -294,6 +294,53 @@ def adaptive_deference_seconds(
     return max(lo, min(hi, wait))
 
 
+def in_locked_dyad(
+    transcript,
+    *,
+    avatar_name: str,
+    now: float,
+    min_turns: int = 4,
+    max_gap_seconds: float = 8.0,
+    window: int = 6,
+) -> bool:
+    """True when the room is a tight two-party back-and-forth right now: the last
+    few NON-avatar turns alternate between exactly two humans with short gaps.
+
+    Butting into a locked dyad ("Marco↔Lia rapid exchange") reads as
+    interrupting; the caller uses this to hold her interjection back to a SILENT
+    raised hand and to wait longer, never to speak. Suppression-only, so a wrong
+    read can only cost a beat, never emit unaddressed speech.
+
+    The avatar's OWN turns are excluded (they're in the transcript too) — without
+    that, an avatar↔single-human 1:1 would look like a dyad and wrongly suppress.
+    Pure and ~O(window): walks back from the end collecting at most `window`
+    non-avatar turns, no full rescan, no model. `ts` is arrival time so gaps are
+    a noisy proxy, but every fuzzy case errs toward NOT suppressing.
+    """
+    av = (avatar_name or "").strip().lower()
+    turns = []  # last `window` NON-avatar turns, newest last — walk from the end
+    for u in reversed(transcript):
+        if (u.speaker or "").strip().lower() != av:
+            turns.append(u)
+            if len(turns) >= window:
+                break
+    turns.reverse()
+    if len(turns) < min_turns:
+        return False
+    speakers = [(u.speaker or "").strip().lower() for u in turns]
+    if len(set(speakers)) != 2:  # exactly two humans holding the floor
+        return False
+    for a, b in zip(speakers, speakers[1:]):
+        if a == b:  # someone spoke twice in a row → not a tight alternation
+            return False
+    for a, b in zip(turns, turns[1:]):
+        if b.ts - a.ts > max_gap_seconds:  # a lull → the floor reopened
+            return False
+    if now - turns[-1].ts > max_gap_seconds:  # the exchange has gone quiet
+        return False
+    return True
+
+
 def passes_confidence(avatar: Avatar, result: dict) -> bool:
     """LEGACY — not used on the live streaming path (the in-stream SKIP sentinel
     replaced it). Kept for back-compat + unit tests. Speak only if the model had
