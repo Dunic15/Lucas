@@ -33,6 +33,13 @@ if config.config_file_name is not None:
 target_metadata = None
 
 DATABASE_URL = (settings.laura_database_url or "").strip()
+# Same dialect normalization as control_plane._engine(): Supabase hands out
+# `postgresql://`, which SQLAlchemy routes to the UNinstalled psycopg2 driver;
+# we ship psycopg (v3), so pin the dialect explicitly.
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[len("postgresql://"):]
+elif DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[len("postgres://"):]
 
 
 def run_migrations_offline() -> None:
