@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import secrets
 import time
 from collections.abc import Mapping
 from urllib.parse import urlparse
@@ -250,8 +251,14 @@ def _create_bot_body(
     provider: dict,
     variant: str | None,
     bot_name: str = "Laura",
+    realtime_capability: str,
 ) -> dict:
-    webhook_url = f"{settings.public_base_url.rstrip('/')}/webhooks/recall"
+    # Recall realtime endpoints are not Svix-signed. Bind the URL to this one
+    # bot with an unpredictable capability; only its SHA-256 is persisted.
+    webhook_url = (
+        f"{settings.public_base_url.rstrip('/')}/webhooks/recall"
+        f"?cap={realtime_capability}"
+    )
 
     body = {
         "meeting_url": meeting_url,
@@ -304,6 +311,7 @@ def _create_bot_attempts(
     avatar_page_url: str,
     join_at: str | None,
     bot_name: str = "Laura",
+    realtime_capability: str = "",
 ) -> list[tuple[str, dict]]:
     configured_provider = _transcript_provider_config()
     attempts: list[tuple[str, dict]] = []
@@ -319,6 +327,7 @@ def _create_bot_attempts(
                     provider=configured_provider,
                     variant=variant,
                     bot_name=bot_name,
+                    realtime_capability=realtime_capability,
                 ),
             )
         )
@@ -339,6 +348,7 @@ def _create_bot_attempts(
                     provider=recallai_provider,
                     variant="web_4_core",
                     bot_name=bot_name,
+                    realtime_capability=realtime_capability,
                 ),
             )
         )
@@ -352,6 +362,7 @@ def _create_bot_attempts(
                     provider=recallai_provider,
                     variant=None,
                     bot_name=bot_name,
+                    realtime_capability=realtime_capability,
                 ),
             )
         )
@@ -366,6 +377,7 @@ def _create_bot_attempts(
                     provider=configured_provider,
                     variant=None,
                     bot_name=bot_name,
+                    realtime_capability=realtime_capability,
                 ),
             )
         )
@@ -439,7 +451,14 @@ def create_bot(
     bot to join then — this is how calendar auto-join dispatches bots ahead of time.
     Returns the created bot object (includes its `id`).
     """
-    attempts = _create_bot_attempts(meeting_url, avatar_page_url, join_at, bot_name)
+    realtime_capability = secrets.token_urlsafe(32)
+    attempts = _create_bot_attempts(
+        meeting_url,
+        avatar_page_url,
+        join_at,
+        bot_name,
+        realtime_capability,
+    )
     last_error: httpx.HTTPStatusError | None = None
 
     for idx, (label, body) in enumerate(attempts):
@@ -472,7 +491,11 @@ def create_bot(
                 )
                 continue
             raise
-        return resp.json()
+        result = resp.json()
+        # Private hand-off to main.py. This key is removed before any API
+        # response is built and the raw capability is never persisted/logged.
+        result["_laura_realtime_capability"] = realtime_capability
+        return result
 
     if last_error:
         raise last_error
