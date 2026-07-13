@@ -37,7 +37,10 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt 'pytest>=8,<10'
+        # pgserver = embedded Postgres so the control-plane RLS tests
+        # (backend/tests/test_control_plane_pg.py, marker `pg`) RUN in CI
+        # instead of skipping; the rest of the suite stays key-free.
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt 'pytest>=8,<10' pgserver
 
       - name: Backend tests
         run: python -m pytest backend/tests -q -p no:cacheprovider

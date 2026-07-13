@@ -35,6 +35,7 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.background import BackgroundTask
 
@@ -274,10 +275,18 @@ async def google_callback(request: Request) -> RedirectResponse:
     if not email_allowed(claims["email"]):
         return _err_redirect("not_allowed")
 
-    user = store.upsert_user(
+    # Threadpooled: upsert_user is sync SQLite and — when the control plane is
+    # configured — a sync Postgres round-trip (ensure_user). This handler is
+    # async, so running it inline would block the shared event loop that also
+    # serves every live meeting (single instance).
+    user = await run_in_threadpool(
+        store.upsert_user,
         email=claims["email"],
         name=str(claims.get("name") or ""),
         picture=str(claims.get("picture") or ""),
+        # The Google OIDC subject: the durable control plane (when configured)
+        # keys the user on it, so an email change never forks the identity.
+        google_sub=str(claims.get("sub") or ""),
     )
     background = None
     if settings.cedric_orgs_url.strip():

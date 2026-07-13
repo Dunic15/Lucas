@@ -483,6 +483,14 @@ class Settings(BaseSettings):
     # ── Cedric integration (docs/ in the Cedric X Laura project) ──
     # Avatar used when a session/dispatch doesn't name one explicitly.
     default_avatar_id: str = "laura"
+    # INTERNAL avatar folders (comma-separated ids): personas that exist as
+    # folders but are not a product surface — excluded from every roster
+    # (/avatars, avatars.list_ids/list_for_org, dashboard) and REFUSED by
+    # session dispatch for every caller (404 unknown avatar). Backend
+    # defense-in-depth for the self-serve launch: even while the folder exists
+    # (its removal is a separate track), the internal persona can never be
+    # listed or dispatched. Empty = no internal avatars.
+    internal_avatar_ids: str = "duccio"
     # Static bearer token for the session API (/sessions/*, /ledger). Empty =
     # open (preserves the zero-key local demo); set in any real deployment.
     laura_api_token: str = ""
@@ -564,6 +572,16 @@ class Settings(BaseSettings):
     def wake_word_list(self) -> list[str]:
         """Global fallback wake words (per-avatar wake_words usually win)."""
         return [w.strip().lower() for w in self.wake_words.split(",") if w.strip()]
+
+    @property
+    def internal_avatar_id_set(self) -> set[str]:
+        """Parsed INTERNAL_AVATAR_IDS — folder ids hidden from every roster and
+        refused by dispatch (see the field's comment above)."""
+        return {
+            a.strip().lower()
+            for a in self.internal_avatar_ids.split(",")
+            if a.strip()
+        }
 
     @property
     def avatars_dir(self) -> Path:

@@ -34,6 +34,14 @@ from app import llm
 from app.config import Settings, settings
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "pg: control-plane tests against embedded Postgres (pgserver); "
+        "auto-skipped when pgserver isn't installed",
+    )
+
+
 @pytest.fixture(autouse=True)
 def _keyfree_settings(monkeypatch):
     """Pin every setting to its code default for the duration of each test."""

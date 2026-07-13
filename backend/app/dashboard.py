@@ -227,12 +227,13 @@ def dashboard_summary(request: Request) -> JSONResponse:
         if err := auth.gate(request):
             return err
 
-    # Tenancy scoping (org_id == user_id today): a logged-in user sees their
-    # own rows plus shared rows — unowned ("") and the Demo org that every
-    # service/anon/auto-join session is stamped with. Strict isolation lands
-    # with the Postgres/RLS track (docs/infra/MULTI-TENANCY.md); seam is here.
+    # Tenancy scoping: a logged-in user sees their own org's rows plus legacy
+    # unowned ("") rows — NOT the Demo org's. Self-serve product decision
+    # (2026-07-13): demo/service rows are the anonymous showroom, and a real
+    # signup's dashboard must contain only their workspace, or every customer
+    # sees every other anonymous demo. Anonymous/demo callers are unchanged.
     def visible(row_org: str) -> bool:
-        return user is None or row_org in ("", settings.demo_org_id, user["org_id"])
+        return user is None or row_org in ("", user["org_id"])
 
     now = time.time()
     artifact_rows = store.list_artifacts()  # newest first
