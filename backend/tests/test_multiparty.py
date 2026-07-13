@@ -55,7 +55,12 @@ def test_roster_falls_back_to_transcript_speakers(tmp_path, monkeypatch):
     s = _session(tmp_path, monkeypatch)
     s.add_utterance("Duccio", "let's get started")
     s.add_utterance("Marco", "sounds good")
-    s.add_utterance("Laura", "happy to help")  # her own lines never count
+    s.add_utterance(
+        "Laura",
+        "happy to help",
+        participant_id="bot-participant",
+        speaker_kind="agent",
+    )
     assert s.roster("Laura") == ["Duccio", "Marco"]
     store.remove(s.bot_id)
 
