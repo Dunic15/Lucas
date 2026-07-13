@@ -650,6 +650,23 @@ def build_from_text(avatar: Avatar, transcript_text: str) -> MeetingState:
     return state
 
 
+def build_from_utterances(avatar: Avatar, utterances: Iterable) -> MeetingState:
+    """Rebuild state without flattening canonical participant identities."""
+    state = MeetingState()
+    templates = templates_for(avatar)
+    for utterance in utterances:
+        update(
+            state,
+            str(getattr(utterance, "speaker", "") or ""),
+            str(getattr(utterance, "text", "") or ""),
+            participant_id=str(getattr(utterance, "participant_id", "") or ""),
+            speaker_kind=str(getattr(utterance, "speaker_kind", "human") or "human"),
+            templates=templates,
+            wake_words=avatar.wake_words,
+        )
+    return state
+
+
 def state_summary(state: MeetingState) -> str:
     """Compact structured block for prompt injection (no raw transcript)."""
     lines = [
@@ -699,4 +716,3 @@ def state_summary(state: MeetingState) -> str:
     if person_bits:
         lines.append("Per person:\n  " + "\n  ".join(person_bits[:6]))
     return "\n".join(lines)
-

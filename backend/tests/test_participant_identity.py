@@ -126,6 +126,33 @@ def test_duplicate_names_keep_presentation_names_and_quiet_multiplicity():
     ]
 
 
+def test_post_meeting_keeps_duplicate_participant_ids_distinct(monkeypatch):
+    avatar = avatars.load("laura")
+    state = meeting_state.MeetingState()
+    for participant_id, item in (
+        ("alex-1", "security follow-up"),
+        ("alex-2", "DPA follow-up"),
+    ):
+        meeting_state.update(
+            state,
+            "Alex",
+            f"I'll take the {item}.",
+            participant_id=participant_id,
+        )
+    monkeypatch.setattr(brain, "post_provider", lambda: "stub")
+
+    artifact = brain.post_meeting(
+        avatar,
+        "Alex: I'll take the security follow-up.\n"
+        "Alex: I'll take the DPA follow-up.",
+        state=state,
+    )
+
+    assert len(artifact["participation"]) == 2
+    assert [row["name"] for row in artifact["participation"]] == ["Alex", "Alex"]
+    assert [row["talk_share"] for row in artifact["participation"]] == [50, 50]
+
+
 def test_human_sharing_avatar_display_name_is_not_agent(tmp_path, monkeypatch):
     session = _session(tmp_path, monkeypatch, "identity-human-laura")
     identity = session.resolve_participant("Laura", "human-7", metadata={})
