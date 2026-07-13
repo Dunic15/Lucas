@@ -743,7 +743,12 @@ def get_artifact(bot_id: str, org_id: str | None = None) -> dict | None:
 
         if control_plane.enabled():
             return control_plane.get_artifact(org_id, bot_id)
-    return _artifacts.get(bot_id)
+    artifact = _artifacts.get(bot_id)
+    if artifact is not None and org_id is not None:
+        artifact_org = str(artifact.get("org_id") or "")
+        if artifact_org not in ("", str(org_id)):
+            return None
+    return artifact
 
 
 def list_artifacts(org_id: str | None = None) -> list[dict]:
