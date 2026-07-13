@@ -695,7 +695,8 @@ def save_artifact(bot_id: str, artifact: dict, *, org_id: str | None = None) -> 
     # Lazy import avoids the control_plane -> store constants import cycle.
     from . import control_plane
 
-    if control_plane.enabled():
+    durable_enabled = control_plane.enabled()
+    if durable_enabled:
         control_plane.save_artifact(
             row_org,
             bot_id,
@@ -705,20 +706,28 @@ def save_artifact(bot_id: str, artifact: dict, *, org_id: str | None = None) -> 
         )
 
     # The local copy is a same-process warm cache in production and remains the
-    # complete persistence path for key-free/demo deployments.
+    # complete persistence path for key-free/demo deployments. Once Postgres
+    # committed, a broken ephemeral SQLite mirror must not turn durable success
+    # into an endless finalize retry; without Postgres, the same error remains
+    # fatal so the key-free demo never reports a false save.
     _artifacts[bot_id] = artifact
-    with _LOCK, _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO artifacts (bot_id, org_id, artifact_json, saved_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(bot_id) DO UPDATE SET
-                org_id=excluded.org_id,
-                artifact_json=excluded.artifact_json,
-                saved_at=excluded.saved_at
-            """,
-            (bot_id, row_org, json.dumps(artifact), saved_at),
-        )
+    try:
+        with _LOCK, _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO artifacts (bot_id, org_id, artifact_json, saved_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(bot_id) DO UPDATE SET
+                    org_id=excluded.org_id,
+                    artifact_json=excluded.artifact_json,
+                    saved_at=excluded.saved_at
+                """,
+                (bot_id, row_org, json.dumps(artifact), saved_at),
+            )
+    except Exception:
+        if not durable_enabled:
+            _artifacts.pop(bot_id, None)
+            raise
 
 
 def get_artifact(bot_id: str, org_id: str | None = None) -> dict | None:
