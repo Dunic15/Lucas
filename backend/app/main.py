@@ -3225,8 +3225,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # carry a random per-session capability. Missing/wrong capabilities are
     # rejected before the body is read or parsed; the stored value is SHA-256
     # only. Svix-signed dashboard/status webhooks remain independently valid.
-    has_signature = any(
+    signature_present = any(
         h in request.headers for h in ("webhook-signature", "svix-signature")
+    )
+    # An attacker can add a signature-looking header. It is an authentication
+    # method only when the operator configured the verification secret; without
+    # that secret the request remains unsigned and must present its capability.
+    has_signature = signature_present and bool(
+        settings.recall_webhook_secret.strip()
     )
     capability_bot_id: str | None = None
     if not has_signature:
