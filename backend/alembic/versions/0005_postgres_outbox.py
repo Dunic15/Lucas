@@ -31,10 +31,24 @@ def upgrade() -> None:
           source_fingerprint text NOT NULL DEFAULT '',
           created_at timestamptz NOT NULL DEFAULT now(),
           updated_at timestamptz NOT NULL DEFAULT now(),
+          execution_status text NOT NULL DEFAULT ''
+            CHECK (
+              execution_status IN (
+                '', 'proposed', 'approved', 'rejected', 'done', 'failed'
+              )
+            ),
+          execution_detail text NOT NULL DEFAULT '',
+          execution_updated_at timestamptz,
+          resolved_at timestamptz,
           PRIMARY KEY (org_id, action_id)
         );
         CREATE INDEX idx_queued_actions_bot
           ON public.queued_actions(org_id, bot_id, created_at, action_id);
+        CREATE INDEX idx_queued_actions_execution
+          ON public.queued_actions(
+            org_id, execution_status, execution_updated_at DESC, action_id
+          )
+          WHERE execution_status <> '';
         CREATE UNIQUE INDEX uq_queued_actions_source_event
           ON public.queued_actions(org_id, source_event_key)
           WHERE source_event_key <> '';

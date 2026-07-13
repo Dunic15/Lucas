@@ -16,6 +16,10 @@ from . import control_plane
 from .config import settings
 
 
+_EXECUTION_STATUSES = ("proposed", "approved", "rejected", "done", "failed")
+_TERMINAL_EXECUTION_STATUSES = ("rejected", "done", "failed")
+
+
 class ActionCaptureClosed(RuntimeError):
     """The durable finalizer fenced this bot before a late capture."""
 
@@ -48,6 +52,74 @@ def _require_capture_open(conn, org_id: str, bot_id: str) -> None:
     ).first()
     if row is not None:
         raise ActionCaptureClosed(str(row[0]))
+
+
+def _index_session_ended_actions(
+    conn, org_id: str, bot_id: str, outbox_id: int
+) -> None:
+    """Index the canonical ended artifact's stable actions in this transaction.
+
+    The callback row is the first-write-wins session checkpoint. Reading its
+    stored payload (rather than a retry payload) prevents nondeterministic
+    summarizer ids from creating phantom actions after a crash.
+    """
+    row = conn.execute(
+        text(
+            """
+            SELECT payload_json
+            FROM callback_outbox
+            WHERE org_id=:org_id AND id=:outbox_id
+              AND event='session.ended'
+            """
+        ),
+        {"org_id": org_id, "outbox_id": int(outbox_id)},
+    ).mappings().first()
+    if row is None:
+        raise RuntimeError("session ended checkpoint missing during action index")
+    payload = row["payload_json"]
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    artifact = (payload or {}).get("artifact")
+    actions = artifact.get("actions") if isinstance(artifact, dict) else []
+    for action in actions or []:
+        if not isinstance(action, dict):
+            continue
+        action_id = str(action.get("action_id") or "").strip()
+        if not action_id:
+            continue
+        conn.execute(
+            text(
+                """
+                INSERT INTO queued_actions (
+                  org_id, bot_id, action_id, action, owner, due,
+                  created_at, updated_at
+                ) VALUES (
+                  :org_id, :bot_id, :action_id, :action, :owner, :due,
+                  clock_timestamp(), clock_timestamp()
+                )
+                ON CONFLICT (org_id, action_id) DO UPDATE SET
+                  action=CASE WHEN excluded.action <> ''
+                              THEN excluded.action ELSE queued_actions.action END,
+                  owner=CASE WHEN excluded.owner <> ''
+                             THEN excluded.owner ELSE queued_actions.owner END,
+                  due=CASE WHEN excluded.due <> ''
+                           THEN excluded.due ELSE queued_actions.due END,
+                  updated_at=clock_timestamp()
+                """
+            ),
+            {
+                "org_id": org_id,
+                "bot_id": bot_id,
+                "action_id": action_id[:128],
+                "action": str(
+                    action.get("item") or action.get("action") or ""
+                )[:300],
+                "owner": str(action.get("owner") or "")[:100],
+                "due": str(
+                    action.get("deadline") or action.get("due") or ""
+                )[:100],
+            },
+        )
 
 
 def _callback_insert(conn, callback: dict[str, Any]) -> Optional[int]:
@@ -98,7 +170,12 @@ def _callback_insert(conn, callback: dict[str, Any]) -> Optional[int]:
             ),
             callback,
         ).fetchone()
-    return int(row[0]) if row else None
+    outbox_id = int(row[0]) if row else None
+    if outbox_id is not None and callback.get("event") == "session.ended":
+        _index_session_ended_actions(
+            conn, str(callback["org_id"]), str(callback["bot_id"]), outbox_id
+        )
+    return outbox_id
 
 
 def _capture_item(row: Any) -> dict[str, str]:
@@ -485,6 +562,138 @@ def queued_actions(org_id: str, bot_id: str) -> list[dict[str, Any]]:
             {"org_id": org_id, "bot_id": bot_id},
         ).mappings().all()
     return [dict(row) for row in rows]
+
+
+def set_action_status(
+    org_id: str, action_id: str, status: str, detail: str = ""
+) -> bool:
+    """Persist one org's monotonic execution state on its durable action."""
+    aid = str(action_id or "").strip()
+    state = str(status or "").strip().lower()
+    if not aid or state not in _EXECUTION_STATUSES:
+        return False
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                """
+                SELECT execution_status
+                FROM queued_actions
+                WHERE org_id=:org_id AND action_id=:action_id
+                FOR UPDATE
+                """
+            ),
+            {"org_id": org_id, "action_id": aid},
+        ).first()
+        if row is None:
+            return False
+        if str(row[0] or "") in _TERMINAL_EXECUTION_STATUSES:
+            return True
+        conn.execute(
+            text(
+                """
+                UPDATE queued_actions
+                SET execution_status=:status,
+                    execution_detail=:detail,
+                    execution_updated_at=clock_timestamp(),
+                    resolved_at=CASE
+                      WHEN :terminal THEN clock_timestamp()
+                      ELSE resolved_at
+                    END,
+                    updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND action_id=:action_id
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": aid,
+                "status": state,
+                "detail": str(detail or "").strip()[:300],
+                "terminal": state in _TERMINAL_EXECUTION_STATUSES,
+            },
+        )
+    return True
+
+
+def resolve_action(
+    org_id: str, action_id: str, outcome: str, detail: str = ""
+) -> bool:
+    """Resolve an existing durable action once; another tenant sees missing."""
+    aid = str(action_id or "").strip()
+    state = str(outcome or "").strip().lower()
+    if not aid or state not in _TERMINAL_EXECUTION_STATUSES:
+        return False
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                """
+                SELECT execution_status
+                FROM queued_actions
+                WHERE org_id=:org_id AND action_id=:action_id
+                FOR UPDATE
+                """
+            ),
+            {"org_id": org_id, "action_id": aid},
+        ).first()
+        if row is None or str(row[0] or "") in _TERMINAL_EXECUTION_STATUSES:
+            return False
+        result = conn.execute(
+            text(
+                """
+                UPDATE queued_actions
+                SET execution_status=:status,
+                    execution_detail=:detail,
+                    execution_updated_at=clock_timestamp(),
+                    resolved_at=clock_timestamp(),
+                    updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND action_id=:action_id
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": aid,
+                "status": state,
+                "detail": str(detail or "").strip()[:300],
+            },
+        )
+    return bool(result.rowcount)
+
+
+def action_statuses(
+    org_id: str, action_ids: list[str]
+) -> dict[str, dict[str, Any]]:
+    """Latest durable states for one tenant; FORCE RLS is the final boundary."""
+    ids = sorted({str(value or "").strip() for value in action_ids if value})
+    if not ids:
+        return {}
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        rows = conn.execute(
+            text(
+                """
+                SELECT action_id, execution_status AS status,
+                       execution_detail AS detail,
+                       extract(epoch from execution_updated_at) AS updated_at
+                FROM queued_actions
+                WHERE org_id=:org_id
+                  AND action_id = ANY(CAST(:action_ids AS text[]))
+                  AND execution_status <> ''
+                """
+            ),
+            {"org_id": org_id, "action_ids": ids},
+        ).mappings().all()
+    return {
+        str(row["action_id"]): {
+            "status": str(row["status"]),
+            "detail": str(row["detail"]),
+            "updated_at": float(row["updated_at"]),
+        }
+        for row in rows
+    }
 
 
 def enqueue_callback(callback: dict[str, Any]) -> Optional[int]:

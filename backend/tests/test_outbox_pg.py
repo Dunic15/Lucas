@@ -20,7 +20,7 @@ psycopg = pytest.importorskip("psycopg")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import control_plane, outbox, outbox_pg, tools  # noqa: E402
+from app import control_plane, ledger, outbox, outbox_pg, store, tools  # noqa: E402
 from app.cedric import callback, integration  # noqa: E402
 from app.config import settings  # noqa: E402
 
@@ -600,3 +600,117 @@ def test_finalize_fence_drains_inflight_capture_and_rejects_late(
         assert conn.execute(
             "SELECT count(*) FROM callback_outbox WHERE org_id=%s", (org,)
         ).fetchone()[0] == 1
+
+
+
+def _fresh_local_ledger(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(store, "STORE_PATH", tmp_path / "ledger-instance.sqlite3")
+    ledger._init_db()
+
+
+def test_status_on_instance_b_closes_when_instance_a_finalizes(
+    cp, tmp_path, monkeypatch
+):
+    org = _org(cp, "roundtrip-status")
+    action_id = "action-cross-instance"
+    artifact = {
+        "summary": "Done",
+        "actions": [{
+            "action_id": action_id,
+            "item": "Send the final rollout note",
+            "owner": "Alex",
+            "deadline": "Friday",
+        }],
+    }
+    assert outbox.enqueue_session_ended(
+        _integration(org), "bot-cross-instance", artifact
+    ) is not None
+
+    control_plane.reset_engine()  # instance B
+    assert ledger.set_action_status(
+        action_id, "done", "Slack execution complete", org_id=org
+    )
+
+    control_plane.reset_engine()  # instance A finalizes later
+    _fresh_local_ledger(tmp_path, monkeypatch)
+    ledger.record_meeting(
+        "https://meet.google.com/abc-defg-hij",
+        "laura",
+        "bot-cross-instance",
+        artifact,
+        org_id=org,
+    )
+    rows = ledger.items("abc-defg-hij", org_id=org)
+    assert len(rows) == 1
+    assert rows[0]["action_id"] == action_id
+    assert rows[0]["status"] == "done"
+    assert rows[0]["resolution_detail"] == "Slack execution complete"
+
+    control_plane.reset_engine()  # dashboard process
+    state = ledger.action_statuses([action_id], org_id=org)[action_id]
+    assert state["status"] == "done"
+    assert state["detail"] == "Slack execution complete"
+    assert state["updated_at"] > 0
+
+
+def test_resolve_survives_restart_without_local_ledger(
+    cp, tmp_path, monkeypatch
+):
+    org = _org(cp, "roundtrip-resolve")
+    action_id = "action-after-restart"
+    assert outbox.enqueue_session_ended(
+        _integration(org),
+        "bot-after-restart",
+        {"actions": [
+            {"action_id": action_id, "item": "Close the release ticket"}
+        ]},
+    ) is not None
+
+    _fresh_local_ledger(tmp_path, monkeypatch)
+    control_plane.reset_engine()
+    assert ledger.resolve_by_action_id(
+        action_id,
+        outcome="rejected",
+        detail="Owner declined in Slack",
+        org_id=org,
+    )
+    control_plane.reset_engine()
+    state = ledger.action_statuses([action_id], org_id=org)[action_id]
+    assert state["status"] == "rejected"
+    assert state["detail"] == "Owner declined in Slack"
+    assert ledger.resolve_by_action_id(
+        action_id, outcome="done", org_id=org
+    ) is False
+
+
+def test_action_index_status_and_resolve_are_force_rls_isolated(cp, pg):
+    org_a = _org(cp, "action-rls-a")
+    org_b = _org(cp, "action-rls-b")
+    action_id = "same-visible-ref"
+    assert outbox.enqueue_session_ended(
+        _integration(org_a),
+        "bot-action-a",
+        {"actions": [{"action_id": action_id, "item": "A-only action"}]},
+    ) is not None
+
+    assert outbox_pg.set_action_status(org_b, action_id, "done") is False
+    assert outbox_pg.resolve_action(org_b, action_id, "done") is False
+    assert outbox_pg.action_statuses(org_b, [action_id]) == {}
+
+    with psycopg.connect(pg["app_uri"], autocommit=True) as conn:
+        conn.execute(
+            "SELECT set_config('app.current_org', %s, false)", (org_b,)
+        )
+        changed = conn.execute(
+            "UPDATE queued_actions SET execution_status='done' "
+            "WHERE org_id=%s AND action_id=%s",
+            (org_a, action_id),
+        )
+        assert changed.rowcount == 0
+
+    assert outbox_pg.set_action_status(
+        org_a, action_id, "approved", "approved by owner"
+    )
+    assert outbox_pg.action_statuses(org_a, [action_id])[action_id][
+        "status"
+    ] == "approved"

@@ -213,6 +213,24 @@ def record_meeting(
 
     current_missing = {str(s) for s in artifact.get("missing_steps") or []}
 
+    # App Runner instances do not share SQLite. In production the durable
+    # queued_actions row is the action index and execution source of truth.
+    action_ids = [
+        str(action.get("action_id") or "")
+        for action in (artifact.get("actions") or [])
+        if isinstance(action, dict) and action.get("action_id")
+    ]
+    from . import control_plane
+
+    durable_status_source = control_plane.enabled()
+    durable_statuses: dict[str, dict[str, Any]] = {}
+    if durable_status_source and action_ids:
+        from . import outbox_pg
+
+        # Fail closed: do not resurrect a durable terminal action as open when
+        # Postgres is temporarily unavailable.
+        durable_statuses = outbox_pg.action_statuses(org_id, action_ids)
+
     with store._LOCK, store._connect() as conn:
         # 1. Resolve: step was open from an earlier session of the same
         #    org+meeting+type, and this meeting no longer lists it as missing.
@@ -251,11 +269,13 @@ def record_meeting(
             resolved_at = None
             resolution_detail = ""
             if kind == "action" and action_id:
-                execution = conn.execute(
-                    """SELECT status, detail, updated_at FROM action_status
-                       WHERE org_id=? AND action_id=?""",
-                    (org_id, action_id),
-                ).fetchone()
+                execution = durable_statuses.get(action_id)
+                if not durable_status_source:
+                    execution = conn.execute(
+                        """SELECT status, detail, updated_at FROM action_status
+                           WHERE org_id=? AND action_id=?""",
+                        (org_id, action_id),
+                    ).fetchone()
                 if execution and execution["status"] in _TERMINAL_STATUS_OUTCOME:
                     # Cedric may report completion before finalize creates this
                     # row. Preserve that terminal state instead of resurrecting
@@ -388,14 +408,36 @@ def resolve_by_action_id(
     aid = (action_id or "").strip()
     if not aid or outcome not in RESOLUTION_OUTCOMES:
         return False
+    from . import control_plane
+
+    durable_resolved = False
+    if control_plane.enabled():
+        from . import outbox_pg
+
+        durable_resolved = outbox_pg.resolve_action(
+            org_id, aid, outcome, detail
+        )
+        if not durable_resolved:
+            return False
+    now = time.time()
     with store._LOCK, store._connect() as conn:
         cur = conn.execute(
             """UPDATE ledger_items
                SET status=?, resolved_at=?, resolved_by_bot_id=?, resolution_detail=?
                WHERE action_id=? AND org_id=? AND status='open'""",
-            (outcome, time.time(), bot_id, (detail or "").strip()[:300], aid, org_id),
+            (outcome, now, bot_id, (detail or "").strip()[:300], aid, org_id),
         )
-        return cur.rowcount > 0
+        if durable_resolved:
+            conn.execute(
+                """INSERT INTO action_status
+                       (org_id, action_id, status, detail, updated_at)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(org_id, action_id) DO UPDATE SET
+                     status=excluded.status, detail=excluded.detail,
+                     updated_at=excluded.updated_at""",
+                (org_id, aid, outcome, (detail or "").strip()[:300], now),
+            )
+        return durable_resolved or cur.rowcount > 0
 
 
 # Execution states the orchestrator may report — the brain's lifecycle for an
@@ -427,6 +469,14 @@ def set_action_status(
     st = (status or "").strip().lower()
     if not aid or st not in EXECUTION_STATUSES:
         return False
+    from . import control_plane
+
+    durable_status = control_plane.enabled()
+    if durable_status:
+        from . import outbox_pg
+
+        if not outbox_pg.set_action_status(org_id, aid, st, detail):
+            return False
     with store._LOCK, store._connect() as conn:
         current = conn.execute(
             "SELECT status FROM action_status WHERE org_id=? AND action_id=?",
@@ -448,7 +498,21 @@ def set_action_status(
         )
     outcome = _TERMINAL_STATUS_OUTCOME.get(st)
     if outcome:
-        resolve_by_action_id(aid, "", outcome, (detail or "").strip()[:300], org_id=org_id)
+        if durable_status:
+            with store._LOCK, store._connect() as conn:
+                conn.execute(
+                    """UPDATE ledger_items
+                       SET status=?, resolved_at=?, resolution_detail=?
+                       WHERE action_id=? AND org_id=? AND status='open'""",
+                    (
+                        outcome, time.time(), (detail or "").strip()[:300],
+                        aid, org_id,
+                    ),
+                )
+        else:
+            resolve_by_action_id(
+                aid, "", outcome, (detail or "").strip()[:300], org_id=org_id
+            )
     return True
 
 
@@ -474,6 +538,12 @@ def action_statuses(
     ids = [a for a in {(i or "").strip() for i in action_ids} if a]
     if not ids:
         return {}
+    from . import control_plane
+
+    if control_plane.enabled():
+        from . import outbox_pg
+
+        return outbox_pg.action_statuses(org_id, ids)
     marks = ",".join("?" * len(ids))
     with store._LOCK, store._connect() as conn:
         rows = conn.execute(
