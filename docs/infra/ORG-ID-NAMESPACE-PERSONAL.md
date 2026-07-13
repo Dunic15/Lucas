@@ -143,12 +143,40 @@ harness):
 5. **Only then** remove #175's SQLite-fallback branch (it becomes dead once every user
    resolves to a uuid). Until step 4 is verified, #175 stays as the safety net.
 
-## 6. Coordination
-`selfserve-a-identity` rewrites `control_plane.ensure_user` toward **domain** orgs
-(`_resolve_domain_org`, `_create_personal_org`). Per the owner decision this must
-resolve **personal for now**. Reconcile before/at merge: keep `_create_personal_org`
-as the resolver, defer `_resolve_domain_org` behind a flag (off). Hand the merge order
-to session A (billing + self-serve + this all touch `control_plane.py`/`dashboard.py`).
+## 6. Coordination — the one remaining change (durable gate)
+
+Audit result: on `main`, `laura_private.ensure_user` (migration `0004`, lines ~161–202)
+already resolves **verified corporate domain → shared org, else → a fresh personal
+uuid org**. The SQLite `org_id_for_email` mirrors it. So:
+
+- **"Personal for now" is already the live behavior UNLESS a corporate domain is
+  verified** in `public.org_domains` (`verified_at IS NOT NULL`). Free-mail
+  (gmail/outlook) is personal by seed — **the demo/beta users are personal, guaranteed.**
+- The SQLite lever alone is **inert in prod**: `upsert_user` overwrites `org_id` with
+  the durable value, so the only effective gate is the **Postgres function**.
+
+**Contract for the durable gate (owned with `selfserve-a-identity`, NOT shipped here
+to avoid clobbering its rewrite / its domain tests):**
+1. Introduce a policy flag **`LAURA_SHARED_DOMAIN_ORGS` (default off = personal)**.
+   Since a SQL function can't read a process env var, back it with a one-row
+   `laura_private.settings(shared_domain_orgs boolean)` (or a GUC) that
+   `ensure_user` reads; the app writes it once at boot from the env.
+2. In `ensure_user`, wrap the "verified corporate domain wins" branch in
+   `IF shared_domain_orgs THEN … END IF;` — off ⇒ always create/return the personal
+   uuid org (the existing `else` path).
+3. Mirror the same flag in `store.org_id_for_email` (control-plane-off parity).
+4. Test: with the flag off, a login on a **verified** corporate domain still resolves
+   to a **personal** org (not the shared one). With it on, current behavior.
+
+**Verify current prod state (needs owner-level DB creds — the runtime `laura_app` role
+is RLS-blocked on `org_domains`):**
+```sql
+SELECT count(*) FROM public.org_domains WHERE verified_at IS NOT NULL;
+```
+If `0`, personal is already the live policy and the flag is pure belt-and-suspenders.
+
+Hand the merge order to **session A** (billing + self-serve + this all touch
+`control_plane.py` / `dashboard.py` / migrations).
 
 ## 7. Risks
 - **Hot-path DB call:** resolving durable org per request would add Postgres latency to
