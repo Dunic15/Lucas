@@ -223,7 +223,7 @@ def _org_connection_rows(org_id: str) -> list[dict]:
     }
     from . import control_plane  # lazy: control_plane imports store at load
 
-    if control_plane.enabled():
+    if control_plane.is_durable_org(org_id):
         try:
             durable = control_plane.get_connections(org_id) or []
         except Exception:  # noqa: BLE001 — the local rows still serve the read
@@ -248,7 +248,7 @@ def _set_connection_all(
     """
     from . import control_plane  # lazy: control_plane imports store at load
 
-    if control_plane.enabled():
+    if control_plane.is_durable_org(org_id):
         try:
             durable = control_plane.set_connection(
                 org_id, avatar_id, provider, status, config
@@ -680,7 +680,7 @@ def connect_brain_slack_start(
     # Persist the one nonce completion may claim. A connected row stays
     # connected while OAuth is in flight, but its pending nonce is replaced so
     # an older browser tab can never rotate credentials after a newer install.
-    if control_plane.enabled():
+    if control_plane.is_durable_org(user["org_id"]):
         try:
             durable = control_plane.begin_brain_install(
                 user["org_id"], avatar_id, nonce, channel.strip()
@@ -789,7 +789,7 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
     except RuntimeError:
         return JSONResponse({"error": "org token derivation failed"}, status_code=503)
 
-    durable_control_plane = control_plane.enabled()
+    durable_control_plane = control_plane.is_durable_org(org_id)
     saga = (
         control_plane.complete_brain_install
         if durable_control_plane
@@ -917,7 +917,7 @@ async def disconnect_brain_remote(request: Request) -> JSONResponse:
         used by OAuth start/completion.  Postgres is authoritative when
         enabled; SQLite mirrors only after the durable transition succeeds."""
         for row in brain:
-            if control_plane.enabled():
+            if control_plane.is_durable_org(user["org_id"]):
                 try:
                     durable = await run_in_threadpool(
                         control_plane.begin_brain_disconnect,
@@ -966,7 +966,7 @@ async def disconnect_brain_remote(request: Request) -> JSONResponse:
         """Revoke the labelled bearer and persist a non-resurrectable marker.
         Durable rows are committed before refreshing the SQLite cache."""
         for row in brain:
-            if control_plane.enabled():
+            if control_plane.is_durable_org(user["org_id"]):
                 try:
                     durable = await run_in_threadpool(
                         control_plane.tombstone_brain_install,

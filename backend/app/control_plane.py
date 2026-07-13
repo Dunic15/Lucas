@@ -1187,6 +1187,17 @@ def _is_uuid(value: str) -> bool:
         return False
 
 
+def is_durable_org(org_id: str) -> bool:
+    """True when this org is a durable control-plane tenant (a real UUID), not a
+    personal session identity (``u_<hash>``). Durable writes cast org_id to uuid
+    and RLS pins ``app.current_org::uuid``, so a session-shaped id must never
+    reach a durable write — it fails the cast and, in the connect/disconnect
+    paths, surfaces as a bogus "connection persistence failed" 503. Personal
+    orgs fall back to the SQLite store (the pre-control-plane behavior). Mirrors
+    the ``_is_uuid`` guard ``member_role`` already applies to reads."""
+    return enabled() and _is_uuid(org_id)
+
+
 def member_role(org_id: str, user_id: str) -> Optional[str]:
     """Return only this member's active role through the private boundary."""
     if (
