@@ -953,6 +953,46 @@ def mint_org_token(org_id: str, label: str = "") -> str | None:
     return raw
 
 
+def rotate_org_token(org_id: str, label: str) -> str | None:
+    """Atomically replace one labelled SQLite bearer and return it once."""
+    import hashlib
+    import secrets
+
+    org = (org_id or "").strip()
+    token_label = (label or "").strip()[:80]
+    if not org or not token_label:
+        return None
+    raw = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            "DELETE FROM org_tokens WHERE org_id = ? AND label = ?",
+            (org, token_label),
+        )
+        conn.execute(
+            "INSERT INTO org_tokens (token_hash, org_id, label, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (token_hash, org, token_label, time.time()),
+        )
+    return raw
+
+
+def revoke_org_tokens(org_id: str, label: str = "") -> bool:
+    """Revoke SQLite machine bearers for an org."""
+    org = (org_id or "").strip()
+    if not org:
+        return False
+    with _LOCK, _connect() as conn:
+        if (label or "").strip():
+            conn.execute(
+                "DELETE FROM org_tokens WHERE org_id = ? AND label = ?",
+                (org, label.strip()[:80]),
+            )
+        else:
+            conn.execute("DELETE FROM org_tokens WHERE org_id = ?", (org,))
+    return True
+
+
 def org_exists(org_id: str) -> bool:
     """Whether ``org_id`` is a provisioned org row. A SHARED org (e.g. org_sff,
     resolved from a verified domain) lives in ``orgs`` and is NEVER a ``users``
