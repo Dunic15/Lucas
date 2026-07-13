@@ -1230,10 +1230,21 @@ async def _start_avatar_session(
     bot = await run_in_threadpool(
         recall_client.create_bot, meeting_url, avatar_url, join_at, avatar.name
     )
+    realtime_capability = str(bot.pop("_laura_realtime_capability", "") or "")
     session = store.create(
         bot_id=bot["id"], meeting_url=meeting_url, avatar_id=avatar.id,
         org_id=org_id,
     )
+    if realtime_capability and not store.register_recall_realtime_capability(
+        bot["id"], realtime_capability
+    ):
+        # Never leave a paid bot alive if its inbound realtime channel cannot
+        # be authenticated.
+        try:
+            await run_in_threadpool(recall_client.leave_call, bot["id"])
+        finally:
+            store.remove(bot["id"])
+        raise RuntimeError("could not secure Recall realtime endpoint")
     # CEDRIC: a summon that didn't carry its own wiring (the Gmail auto-join
     # watcher passes integration=None) still gets the Model A default routing —
     # otherwise an email-summoned meeting silently falls to Model B (no context
@@ -1399,6 +1410,16 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     if clash := _existing_session_clash(req.meeting_url, caller_org):
         return clash
 
+    # Browser/cookie users choose only meeting + avatar. Integration wiring
+    # is server-owned per org; accepting it from the browser would let a user
+    # redirect workspace credentials even if the hostname were allowlisted.
+    if user is not None and (
+        req.callback_url or req.context_url or req.external_ref
+    ):
+        return JSONResponse(
+            {"error": "integration wiring is managed by your workspace"},
+            status_code=400,
+        )
     if not cedric.request_integration_urls_allowed(req, caller_org):
         return JSONResponse(
             {"error": "callback_url/context_url must use the configured Cedric HTTPS origin"},
@@ -3095,6 +3116,9 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             bot = await run_in_threadpool(
                 recall_client.create_bot, url, avatar_url, start, avatar.name
             )
+            realtime_capability = str(
+                bot.pop("_laura_realtime_capability", "") or ""
+            )
             # Calendar auto-join has no authenticated principal (a webhook on
             # Laura's one Google account) → the Demo org (§5, intrinsically
             # single-tenant until calendar connections become per-org).
@@ -3102,6 +3126,14 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id,
                 org_id=settings.demo_org_id,
             )
+            if realtime_capability and not store.register_recall_realtime_capability(
+                bot["id"], realtime_capability
+            ):
+                try:
+                    await run_in_threadpool(recall_client.leave_call, bot["id"])
+                finally:
+                    store.remove(bot["id"])
+                raise RuntimeError("could not secure Recall realtime endpoint")
             runpod_runtime.on_session_started(avatar.page)
             # CEDRIC: calendar-summoned (scheduled) bots take this inlined path,
             # NOT _start_avatar_session, so wire the Model A default here too —
@@ -3189,22 +3221,47 @@ def _closing_signal(session: store.Session, text: str) -> bool:
 # ───────────────────────── recall webhook ──────────────────────────
 @app.post("/webhooks/recall")
 async def recall_webhook(request: Request) -> JSONResponse:
-    raw_body = await request.body()
-    # Realtime transcript webhooks (from the bot's realtime_endpoints) arrive
-    # UNSIGNED — unlike the Svix-signed calendar/dashboard webhooks. If we required
-    # a signature we'd 401 every transcript and the avatar would never hear its
-    # wake word. So verify only when a signature is actually present (still reject
-    # a bad one); accept unsigned realtime transcripts.
+    # Recall realtime endpoints are unsigned. Production bot URLs therefore
+    # carry a random per-session capability. Missing/wrong capabilities are
+    # rejected before the body is read or parsed; the stored value is SHA-256
+    # only. Svix-signed dashboard/status webhooks remain independently valid.
     has_signature = any(
         h in request.headers for h in ("webhook-signature", "svix-signature")
     )
+    capability_bot_id: str | None = None
+    if not has_signature:
+        capability = (request.query_params.get("cap") or "").strip()
+        capability_required = bool(settings.recall_api_key.strip())
+        if capability_required and not capability:
+            return JSONResponse({"error": "missing realtime capability"}, status_code=401)
+        if capability:
+            capability_bot_id = await run_in_threadpool(
+                store.resolve_recall_realtime_capability, capability
+            )
+            if capability_bot_id is None:
+                return JSONResponse({"error": "invalid realtime capability"}, status_code=401)
+
+    raw_body = await request.body()
     if has_signature:
         try:
             recall_client.verify_webhook(raw_body, request.headers)
         except RuntimeError as e:
             return JSONResponse({"error": str(e)}, status_code=401)
 
-    payload = json.loads(raw_body or b"{}")
+    try:
+        payload = json.loads(raw_body or b"{}")
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+
+    # A valid capability authorizes exactly one bot. A payload claiming any
+    # other session is rejected before transcript/roster/status side effects.
+    if capability_bot_id is not None:
+        claimed_bot_id = str(
+            ((payload.get("data") or {}).get("bot") or {}).get("id") or ""
+        )
+        if not hmac.compare_digest(claimed_bot_id, capability_bot_id):
+            return JSONResponse({"error": "capability/session mismatch"}, status_code=403)
+
     event = payload.get("event", "")
 
     if event == "transcript.partial_data":
