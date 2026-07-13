@@ -582,7 +582,7 @@
   var VIEWS=["overview","avatars","meetings","usage","connections","settings"];
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
-    $("#nav button").forEach(function(a){var current=a.getAttribute("data-view")===name;a.classList.toggle("on",current);if(current)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current");});
+    document.querySelectorAll("#nav button").forEach(function(a){var current=a.getAttribute("data-view")===name;a.classList.toggle("on",current);if(current)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current");});
     window.scrollTo(0,0); }
   $$("#nav button").forEach(function(a){a.addEventListener("click",function(e){e.preventDefault();go(a.getAttribute("data-view"));});});
   document.addEventListener("click",function(e){var t=e.target.closest("[data-goto]");if(t){go(t.getAttribute("data-goto"));}});
@@ -727,7 +727,7 @@
       var chan=($("#bf-chan-"+id)||{value:""}).value.trim();
       window.location.assign("/dashboard/connections/brain/slack/start?avatar_id="+
         encodeURIComponent(id)+"&channel="+encodeURIComponent(chan)); }); });
-    $("#av-grid [data-brain-off]").forEach(function(b){ b.addEventListener("click",function(e){
+    document.querySelectorAll("#av-grid [data-brain-off]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation();
       var avatarId=b.getAttribute("data-brain-off");
       fetch("/dashboard/connections/brain/disconnect",{
