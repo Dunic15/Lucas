@@ -2713,15 +2713,18 @@ def meetings_list(request: Request) -> JSONResponse:
         if machine_org is None:
             if err := auth.gate(request):
                 return err
-    artifact_scope = (
-        machine_org
-        or (str(user["org_id"]) if user is not None else None)
-    )
-    # A deployment-level service bearer is never permission to enumerate every
-    # tenant. In configured production it retains only the Demo workspace;
-    # key-free SQLite keeps the historical local/global behavior.
-    if artifact_scope is None and control_plane.enabled():
-        artifact_scope = settings.demo_org_id
+    artifact_scope = None
+    if store.durable_artifacts_enabled():
+        artifact_scope = (
+            machine_org
+            or (str(user["org_id"]) if user is not None else None)
+        )
+        # A deployment-level service bearer is never permission to enumerate
+        # every tenant. In production it retains only the Demo workspace.
+        if artifact_scope is None:
+            artifact_scope = settings.demo_org_id
+    # Key-free SQLite intentionally keeps its historical global read followed
+    # by the legacy/unowned visibility filter below.
     artifacts = store.list_artifacts(artifact_scope)
     if machine_org is not None:
         artifacts = [
