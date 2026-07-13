@@ -75,15 +75,15 @@ def test_connect_connected_when_provisioning_succeeds(client, monkeypatch):
 
     def fake_provision(org_id, team_id, channel="", avatar_id=""):
         calls.append((org_id, team_id, channel, avatar_id))
-        return callback.ProvisionResult(200, "minted-test-secret")
+        return callback.ProvisionResult(200, "minted-test-secret", "minted-test-token")
 
     # dashboard.py calls the package re-export, so patch that binding
     monkeypatch.setattr(cedric, "provision_org", fake_provision)
-    registry_calls: list[tuple[str, str]] = []
+    registry_calls: list[tuple[str, str, str]] = []
     monkeypatch.setattr(
         secret_registry,
-        "upsert_org_secret",
-        lambda org, secret: registry_calls.append((org, secret)) or True,
+        "upsert_org_credentials",
+        lambda org, secret, token: registry_calls.append((org, secret, token)) or True,
     )
     user = _login(client)
     r = client.post(
@@ -94,15 +94,18 @@ def test_connect_connected_when_provisioning_succeeds(client, monkeypatch):
     assert r.json()["status"] == "connected"
     assert r.json()["registry_synced"] is True
     assert calls == [(user["org_id"], "T9", "#ops", "cedric")]
-    assert registry_calls == [(user["org_id"], "minted-test-secret")]
+    assert registry_calls == [
+        (user["org_id"], "minted-test-secret", "minted-test-token")
+    ]
 
 
 def test_connect_stays_pending_when_registry_write_fails(client, monkeypatch):
     monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
     monkeypatch.setattr(
-        cedric, "provision_org", lambda *a, **k: callback.ProvisionResult(200, "minted")
+        cedric, "provision_org",
+        lambda *a, **k: callback.ProvisionResult(200, "minted", "peer-token"),
     )
-    monkeypatch.setattr(secret_registry, "upsert_org_secret", lambda *a: False)
+    monkeypatch.setattr(secret_registry, "upsert_org_credentials", lambda *a: False)
     _login(client)
     r = client.post(
         "/dashboard/connections/brain",
@@ -279,9 +282,10 @@ def test_brain_connectors_not_connected_until_linked(client):
 def test_brain_connectors_proxies_when_linked(client, monkeypatch):
     monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
     monkeypatch.setattr(
-        cedric, "provision_org", lambda *a, **k: callback.ProvisionResult(200, "minted")
+        cedric, "provision_org",
+        lambda *a, **k: callback.ProvisionResult(200, "minted", "peer-token"),
     )
-    monkeypatch.setattr(secret_registry, "upsert_org_secret", lambda *a: True)
+    monkeypatch.setattr(secret_registry, "upsert_org_credentials", lambda *a: True)
     _login(client)
     client.post(
         "/dashboard/connections/brain",
