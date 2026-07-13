@@ -39,11 +39,14 @@ def test_roster_tracks_joins_and_leaves(tmp_path, monkeypatch):
     store.remove(s.bot_id)
 
 
-def test_roster_excludes_the_avatar_itself(tmp_path, monkeypatch):
+def test_roster_excludes_explicit_agent_not_same_name_human(tmp_path, monkeypatch):
     s = _session(tmp_path, monkeypatch)
-    s.participant_event("Laura", 99, here=True)
+    s.participant_event(
+        "Laura", 99, here=True, metadata={"id": 99, "is_bot": True}
+    )
+    s.participant_event("Laura", 100, here=True, metadata={"id": 100})
     s.participant_event("Duccio", 1, here=True)
-    assert s.roster("Laura") == ["Duccio"]
+    assert s.roster("Laura") == ["Laura", "Duccio"]
     store.remove(s.bot_id)
 
 
@@ -77,12 +80,20 @@ def test_anonymous_participants_get_distinct_guest_labels(tmp_path, monkeypatch)
 # ── webhook: participant_events reach the session roster ──
 
 
-def _participant_payload(bot_id: str, event: str, name: str, pid) -> dict:
+def _participant_payload(
+    bot_id: str, event: str, name: str, pid, **participant_metadata
+) -> dict:
     return {
         "event": event,
         "data": {
             "bot": {"id": bot_id},
-            "data": {"participant": {"id": pid, "name": name}},
+            "data": {
+                "participant": {
+                    "id": pid,
+                    "name": name,
+                    **participant_metadata,
+                }
+            },
         },
     }
 
@@ -102,7 +113,11 @@ def test_webhook_participant_events_update_roster(tmp_path, monkeypatch):
     s = _session(tmp_path, monkeypatch, bot_id="roster-webhook-bot")
     _post(_participant_payload(s.bot_id, "participant_events.join", "Duccio", 1))
     _post(_participant_payload(s.bot_id, "participant_events.join", "Marco", 2))
-    _post(_participant_payload(s.bot_id, "participant_events.join", "Laura", 9))
+    _post(
+        _participant_payload(
+            s.bot_id, "participant_events.join", "Laura", 9, is_bot=True
+        )
+    )
     assert s.roster("Laura") == ["Duccio", "Marco"]
     _post(_participant_payload(s.bot_id, "participant_events.leave", "Marco", 2))
     assert s.roster("Laura") == ["Duccio"]
