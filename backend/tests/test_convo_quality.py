@@ -58,7 +58,13 @@ def test_barge_in_ignores_self_and_backchannel():
     s = _session()
     _speak(s, "a fairly long sentence that keeps her talking for a while now")
     # her own transcribed voice must never interrupt her
-    assert main._should_barge_in(s, "Laura", "Laura", "and the next step is provisioning") is False
+    assert main._should_barge_in(
+        s,
+        "Laura",
+        "Laura",
+        "and the next step is provisioning",
+        speaker_kind="agent",
+    ) is False
     # two-word backchannel shouldn't cut her off
     assert main._should_barge_in(s, "Laura", "Priya", "yeah right") is False
     # disabled flag wins
@@ -162,15 +168,11 @@ def test_repair_line_suppression_is_visible():
     assert _speak(s, line) is False
 
 
-def test_own_speech_helper():
-    assert main._is_own_speech("Laura", "Laura") is True
-    assert main._is_own_speech("Laura", " LAURA ") is True
-    assert main._is_own_speech("Cedric", "Cedric") is True
-    assert main._is_own_speech("Laura", "Priya") is False
-    # The Recall bot label now IS the avatar name (create_bot bot_name=avatar.name),
-    # so a HUMAN participant named like a different avatar is never silenced.
-    assert main._is_own_speech("Laura SFF Expert", "laura") is False
-    assert main._is_own_speech("Cedric", "Laura") is False
+def test_own_speech_helper_uses_identity_kind_not_name():
+    assert main._is_own_speech("Laura", "Laura", "agent") is True
+    assert main._is_own_speech("Cedric", "Anything", "agent") is True
+    assert main._is_own_speech("Laura", "Laura", "human") is False
+    assert main._is_own_speech("Cedric", "Cedric", "human") is False
 
 
 def test_ack_lines_are_short_and_varied():
