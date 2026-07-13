@@ -309,12 +309,22 @@ def test_two_org_reads_claims_and_retry_are_isolated(cp):
 
 
 def test_restart_worker_discovers_tenants_without_local_sessions(
-    cp, monkeypatch
+    cp, pg, monkeypatch
 ):
     org_a = _org(cp, "restart-a")
     org_b = _org(cp, "restart-b")
     _enqueue(org_a, "bot-restart-a", "action.requested:restart-a")
     _enqueue(org_b, "bot-restart-b", "action.requested:restart-b")
+    # Global tenant discovery intentionally uses the database clock rather
+    # than the worker's injected test clock. Backdate the real rows so the
+    # discovery query sees them as due without weakening production semantics.
+    with _admin(pg) as conn:
+        conn.execute(
+            "UPDATE callback_outbox "
+            "SET next_attempt_at=clock_timestamp()-interval '1 second' "
+            "WHERE org_id IN (%s, %s)",
+            (org_a, org_b),
+        )
     sent: list[str] = []
 
     def post(url, payload, *, idempotency_key=""):
