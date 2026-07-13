@@ -23,6 +23,7 @@ import traceback
 import uuid
 import weakref
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
@@ -50,6 +51,7 @@ from . import (
     control_plane,
     dashboard,
     drive_client,
+    entitlements,
     emotion,
     end_of_turn,
     granola_client,
@@ -560,6 +562,100 @@ def _bot_status_code(bot: dict) -> str | None:
     return (bot.get("status_changes") or [{}])[-1].get("code")
 
 
+# Recall status codes that mean the bot is IN the meeting and the per-minute
+# meter is running — the usage clock (entitlements.mark_in_call) starts on the
+# FIRST of these. Status-based on purpose: a silent meeting consumes minutes
+# exactly like a talkative one (Recall bills either way).
+_IN_CALL_CODES = {"in_call_recording", "in_call_not_recording"}
+
+
+def _status_change_epoch(
+    bot: dict, codes: set[str], *, first: bool = True
+) -> float | None:
+    """Epoch of the first (or last) status_changes entry whose code is in
+    ``codes``. Recall stamps every status with its own created_at — the
+    authoritative record of when the meter actually started/stopped, immune
+    to our own polling lag. None when absent or unparsable."""
+    changes = bot.get("status_changes") or []
+    for ch in changes if first else reversed(changes):
+        if ch.get("code") in codes:
+            ts = str(ch.get("created_at") or "")
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            # A timestamp with no offset would otherwise be read as LOCAL time —
+            # off by the host's UTC offset (hours of phantom consumed_seconds).
+            # Recall stamps UTC; treat a naive value as UTC.
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+    return None
+
+
+async def _close_usage_for(
+    bot_id: str, end_epoch: float | None, reason: str
+) -> None:
+    """Close the durable usage row for a finished bot (PR B). Idempotent —
+    entitlements.close_usage's ``WHERE state != 'closed'`` means the FIRST
+    close wins, so manual end + webhook + reconcile retries can never rewrite
+    consumed_seconds. consumed = end - in_call_at, where ``end`` is Recall's
+    terminal-status timestamp when the caller had one, else now CAPPED at the
+    deadline (our own enforcement lag is never billed to the org). A row that
+    never went in-call closes 0 'never_joined'. Best-effort: a failure leaves
+    the row open for the reconcile restore pass — it must NEVER break
+    finalize. No-op in the key-free demo (control plane disabled)."""
+    if not control_plane.enabled():
+        return
+    try:
+        row = await run_in_threadpool(entitlements.usage_row, bot_id)
+        if row is None or row.get("state") == "closed":
+            return
+        in_call = row.get("in_call_at")
+        if in_call is None:
+            await run_in_threadpool(
+                entitlements.close_usage, bot_id, 0, "never_joined"
+            )
+            return
+        end = end_epoch
+        if end is None:
+            end = time.time()
+            if row.get("deadline"):
+                end = min(end, float(row["deadline"]))
+        consumed = max(0, int(round(end - in_call)))
+        await run_in_threadpool(entitlements.close_usage, bot_id, consumed, reason)
+    except Exception as e:  # noqa: BLE001 — reconcile's restore pass heals it
+        print(
+            f"[usage] close failed for bot={bot_id} ({type(e).__name__}); "
+            f"reconcile will heal",
+            flush=True,
+        )
+
+
+async def _assign_usage_bot_id(provisional_bot_id: str, real_bot_id: str) -> None:
+    """Swap the gate's provisional usage bot_id ('pending:<uuid>') for the real
+    Recall id, RETRYING a few times on a transient DB blip (PR B BLOCKER 1: a
+    single swallowed swap failure left the usage row stranded under the
+    provisional id → the live bot ran untracked → unmetered forever). If every
+    attempt fails the reconcile self-heal (_repair_untracked_usage) re-associates
+    the row, so this never blocks the join — it just narrows the repair window."""
+    for attempt in range(3):
+        try:
+            await run_in_threadpool(
+                entitlements.assign_bot_id, provisional_bot_id, real_bot_id
+            )
+            return  # a non-raising return (True or False) means no more to do
+        except Exception:  # noqa: BLE001 — transient billing-DB blip; retry
+            if attempt == 2:
+                print(
+                    "[usage] provisional bot_id swap failed after retries — "
+                    "reconcile self-heals",
+                    flush=True,
+                )
+                return
+            await asyncio.sleep(0.2 * (attempt + 1))
+
+
 async def _abandon_orphan_session(bot_id: str) -> None:
     """Drop a local session whose Recall bot no longer exists and that never
     captured anything — a cancelled or no-show scheduled bot. Stops the Anam
@@ -584,6 +680,9 @@ async def _abandon_orphan_session(bot_id: str) -> None:
                 )
             except Exception:
                 pass
+        # PR B: a no-show bot consumed nothing — release its usage row so the
+        # org's one-active-meeting slot frees up (idempotent; never raises).
+        await _close_usage_for(bot_id, None, "never_joined")
         store.remove(bot_id)
     finally:
         _finalizing.discard(bot_id)
@@ -631,6 +730,16 @@ async def _retry_leave(bot_id: str, session: store.Session) -> bool:
             if not _leave_confirmed_stopped(e):
                 return False  # UNVERIFIED — keep the session, retry next pass
             # 404/410: bot genuinely gone → not billing → fall through and drop.
+        # PR B BLOCKER 2: the meter is NOW confirmed off — close the usage row
+        # here (finalize deferred it on the unverified leave to keep the slot
+        # held). First-close-wins, so a manual /end + a reconcile tick racing
+        # this both resolve to one honest close. consumed = confirmed-stop
+        # moment (now, capped at the deadline); reason carried from finalize.
+        await _close_usage_for(
+            bot_id,
+            getattr(session, "usage_end_epoch", None),
+            getattr(session, "usage_close_reason", "") or "ended",
+        )
         store.remove(bot_id)
         gpu_runtime.on_session_ended(len(store.all_sessions()))
         runpod_runtime.on_session_ended(len(store.all_sessions()))
@@ -643,11 +752,38 @@ async def _reconcile_once() -> None:
     """One reconciliation pass: finalize every active session whose Recall bot is
     terminal, and drop orphaned sessions whose bot Recall no longer knows about.
     Extracted from the loop so it is unit-testable without touching asyncio.sleep.
-    Best-effort per session — a bad poll skips that bot, never the whole pass."""
+    Best-effort per session — a bad poll skips that bot, never the whole pass.
+
+    PR B threads the usage clock + entitlement enforcement through this SAME
+    pass (gate at start, clock at reconcile — nothing on the live hot path):
+    - a store session whose usage row has no in_call_at yet gets its clock
+      started from Recall's OWN in-call status timestamp (mark_in_call);
+    - live sessions get the spoken ~5min/~1min warnings and the hard stop
+      at/after the deadline (the hardened finalize path: verified leave,
+      artifact preserved, usage closed 'limit_reached');
+    - durable usage rows whose bot is NOT in the (ephemeral) local store —
+      a redeploy wiped it — are STILL enforced straight from Recall
+      (_reconcile_usage_orphan): the restart-restore that heals the
+      orphan-meter class. All of it disabled when the control plane is
+      (the key-free demo runs this pass byte-identically to before)."""
     active = store.all_sessions()  # a COPY — safe while finalize removes
+    # Durable pending/active usage rows, fetched ONCE per pass (threadpooled —
+    # sync engine). {} when the control plane is disabled (no engine touched)
+    # or momentarily unreachable (skip usage work this pass, never the pass).
+    usage_by_bot: dict[str, dict] = {}
+    usage_fetch_ok = False  # only self-heal / orphan-sweep on a GOOD read
+    if control_plane.enabled():
+        try:
+            rows = await run_in_threadpool(entitlements.open_usage_rows)
+            usage_by_bot = {u["bot_id"]: u for u in rows}
+            usage_fetch_ok = True
+        except Exception:  # noqa: BLE001 — a PG blip must not kill the meter backstop
+            usage_by_bot = {}
+            usage_fetch_ok = False
     # Prune miss-counters for bots that already left the store by ANY path
     # (finalized via webhook, cancelled) so the dict can't grow dead entries.
-    live_ids = {s.bot_id for s in active}
+    # Usage-tracked orphans (restart restore below) keep their counters.
+    live_ids = {s.bot_id for s in active} | set(usage_by_bot)
     for gone in [b for b in _reconcile_missing if b not in live_ids]:
         _reconcile_missing.pop(gone, None)
     for session in active:
@@ -687,13 +823,211 @@ async def _reconcile_once() -> None:
                 continue
             r.raise_for_status()
             _reconcile_missing.pop(bid, None)  # reachable again
-            code = _bot_status_code(r.json())
+            bot = r.json()
+            code = _bot_status_code(bot)
+            usage = usage_by_bot.get(bid)
+            # BLOCKER 1 self-heal: a LIVE local session with an org but NO usage
+            # row means the provisional-id swap failed after create_bot — the
+            # bot is running untracked. Re-associate the stranded provisional
+            # row (or open a fresh one); if it genuinely can't be metered, cut
+            # it off rather than let it bill free. Only on a good usage read and
+            # a real (non-provisional) bot id.
+            if (
+                usage is None
+                and usage_fetch_ok
+                and session.org_id
+                and not bid.startswith("pending:")
+            ):
+                usage = await _repair_untracked_usage(session, usage_by_bot)
+                if store.get(bid) is None:
+                    continue  # repair force-finalized it (can't meter) — gone
+            if usage is not None and usage.get("in_call_at") is None:
+                # Start the usage clock on Recall's OWN in-call timestamp —
+                # status-based, so a silent meeting consumes exactly like a
+                # talkative one. Idempotent; a PG blip just retries next pass.
+                started = _status_change_epoch(bot, _IN_CALL_CODES)
+                if started is not None or code in _IN_CALL_CODES:
+                    try:
+                        deadline = await run_in_threadpool(
+                            entitlements.mark_in_call, bid, started or time.time()
+                        )
+                        usage["in_call_at"] = started or time.time()
+                        usage["deadline"] = deadline
+                    except Exception:  # noqa: BLE001 — clock starts next pass
+                        pass
             if code in _BOT_TERMINAL:
                 # notify_failed fires ONCE, inside the guarded finalize body, so a
                 # fatal seen by both this poll and the webhook notifies Cedric once.
-                await _finalize_session(bid, source="reconcile", failed_code=code)
+                # The terminal status carries Recall's own end timestamp — the
+                # authoritative consumed_seconds source for the usage close.
+                await _finalize_session(
+                    bid,
+                    source="reconcile",
+                    failed_code=code,
+                    usage_end_epoch=_status_change_epoch(bot, {code}, first=False),
+                )
+                continue
+            # Live bot with a usage deadline: warn near it, hard-stop at it.
+            deadline = (usage or {}).get("deadline")
+            if deadline:
+                if time.time() >= deadline:
+                    # Same hardened finalize as every other end: verified
+                    # leave_call (#148), artifact built + preserved, usage
+                    # closed 'limit_reached' (first close wins).
+                    await _finalize_session(
+                        bid, source="reconcile", usage_reason="limit_reached"
+                    )
+                else:
+                    await _usage_warn(session, deadline)
         except Exception:
             continue  # best-effort: a bad poll must never break the loop
+    # ── restart restore (PR B): enforce usage rows the local store forgot ──
+    if usage_fetch_ok and usage_by_bot:
+        local_ids = {s.bot_id for s in active}
+        # Orgs that still have a LIVE local session: a stranded provisional row
+        # of such an org belongs to its live meeting (one row per org) — the
+        # orphan sweep must NOT free that slot (BLOCKER 1). list() so a repair
+        # that mutated usage_by_bot mid-pass can't trip "changed during iteration".
+        live_orgs = {s.org_id for s in active}
+        for bid, usage in list(usage_by_bot.items()):
+            if _shutting_down:
+                break
+            if bid in local_ids:
+                continue
+            await _reconcile_usage_orphan(bid, usage, live_orgs)
+
+
+async def _repair_untracked_usage(
+    session: store.Session, usage_by_bot: dict[str, dict]
+) -> dict | None:
+    """BLOCKER 1 self-heal: a LIVE local session whose usage row is missing —
+    the provisional-id swap failed after create_bot, so the real bot runs
+    untracked (no clock, no deadline, no cutoff → unmetered forever). Re-point
+    the org's stranded provisional row at this real bot id, else open a fresh
+    row; if the org genuinely can't host it (budget exhausted, or the slot is
+    held by a DIFFERENT live meeting), FORCE-FINALIZE so the meter stops the
+    hardened way instead of billing free. Returns the usage dict to meter from
+    now on, or None (billing down this pass — bot kept; or force-finalized —
+    the caller checks store.get()). At most one pending/active row exists per
+    org (the partial unique index), so the org's row, if any, is unambiguous."""
+    org = session.org_id
+    real = session.bot_id
+    org_row = next(
+        (u for u in usage_by_bot.values() if u.get("org_id") == org), None
+    )
+    try:
+        if (
+            org_row is not None
+            and str(org_row["bot_id"]).startswith("pending:")
+            and org_row.get("in_call_at") is None
+        ):
+            prov = org_row["bot_id"]
+            if await run_in_threadpool(entitlements.assign_bot_id, prov, real):
+                usage_by_bot.pop(prov, None)
+                org_row["bot_id"] = real
+                usage_by_bot[real] = org_row
+                print(
+                    f"[usage] re-associated stranded usage row to bot={real}",
+                    flush=True,
+                )
+                return org_row
+            # reassign found no row (raced closed) → the slot is free; fall
+            # through to open a fresh one.
+        gate = await run_in_threadpool(
+            entitlements.open_usage, org, real, session.avatar_id
+        )
+        if gate is not None and gate.get("ok"):
+            row = {
+                "org_id": org, "bot_id": real, "avatar_id": session.avatar_id,
+                "state": "pending", "created_at": time.time(),
+                "in_call_at": None, "deadline": None,
+            }
+            usage_by_bot[real] = row
+            print(
+                f"[usage] opened repair usage row for untracked bot={real}",
+                flush=True,
+            )
+            return row
+    except entitlements.EntitlementsUnavailable:
+        return None  # billing down this pass — retry next pass, bot kept
+    # Can't meter it (org exhausted, slot held by another live meeting). Never
+    # let it bill free: stop the meter the hardened way (artifact preserved).
+    print(f"[usage] cannot meter untracked bot={real} — cutting off", flush=True)
+    await _finalize_session(real, source="reconcile", usage_reason="limit_reached")
+    return None
+
+
+async def _reconcile_usage_orphan(
+    bid: str, usage: dict, live_orgs: set[str] | None = None
+) -> None:
+    """Restart restore: a durable pending/active usage row whose bot is NOT in
+    the local store — the process restarted (App Runner's store is ephemeral)
+    or a provisional gate row was stranded mid-dispatch. Without this, a
+    redeploy would both leak the Recall meter AND grant unmetered minutes; the
+    deadline is enforced straight from Recall instead. Best-effort per row —
+    never raises, never breaks the pass."""
+    try:
+        if bid.startswith("pending:"):
+            # The gate's provisional id: create_bot never completed, or the
+            # id swap was interrupted. If the OWNING org still has a live local
+            # session, this provisional belongs to THAT live meeting (one row
+            # per org) and the store-loop self-heal will re-associate it — do
+            # NOT free the slot out from under a billing bot (BLOCKER 1). Only
+            # when the org has no live session, and after a grace window, is it
+            # a true orphan → close it (consumes 0: it never went in-call).
+            if live_orgs is not None and usage.get("org_id") in live_orgs:
+                return
+            if time.time() - float(usage.get("created_at") or 0) > 600:
+                await run_in_threadpool(entitlements.close_usage, bid, 0, "orphaned")
+            return
+        if not settings.recall_api_key.strip():
+            return  # no key → can't reach Recall; leave the row for a keyed instance
+        r = await run_in_threadpool(
+            lambda b=bid: httpx.get(
+                f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/{b}/",
+                headers=_recall_list_headers(),
+                timeout=20.0,
+            )
+        )
+        if r.status_code == 404:
+            # Same consecutive-miss patience as the store loop: one 404 can be
+            # a Recall blip; three in a row means the bot is genuinely gone.
+            misses = _reconcile_missing.get(bid, 0) + 1
+            _reconcile_missing[bid] = misses
+            if misses >= _RECONCILE_MISSING_LIMIT:
+                _reconcile_missing.pop(bid, None)
+                await _close_usage_for(bid, None, "bot_missing")
+            return
+        r.raise_for_status()
+        _reconcile_missing.pop(bid, None)
+        bot = r.json()
+        code = _bot_status_code(bot)
+        if code in _BOT_TERMINAL:
+            # Ended while we were down: consumed from Recall's own timestamps.
+            await _close_usage_for(
+                bid, _status_change_epoch(bot, {code}, first=False), "ended"
+            )
+            return
+        # Still live: restore the clock if the row never got one…
+        deadline = usage.get("deadline")
+        if usage.get("in_call_at") is None:
+            started = _status_change_epoch(bot, _IN_CALL_CODES)
+            if started is not None or code in _IN_CALL_CODES:
+                deadline = await run_in_threadpool(
+                    entitlements.mark_in_call, bid, started or time.time()
+                )
+        # …then enforce the deadline. No local session → no artifact to build;
+        # just stop the meter the VERIFIED way (same classification as #148)
+        # and close the row. An unverified leave keeps the row for next pass.
+        if deadline and time.time() >= deadline:
+            try:
+                await run_in_threadpool(recall_client.leave_call, bid)
+            except Exception as e:  # noqa: BLE001 — classified below
+                if not _leave_confirmed_stopped(e):
+                    return  # UNVERIFIED — bot may still bill; retry next pass
+            await _close_usage_for(bid, None, "limit_reached")
+    except Exception:  # noqa: BLE001 — an orphan hiccup must never break the pass
+        pass
 
 
 async def _reconcile_sessions_loop() -> None:
@@ -1228,9 +1562,43 @@ async def _start_avatar_session(
         f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
         f"&body={avatar.talk_body}"
     )
-    bot = await run_in_threadpool(
-        recall_client.create_bot, meeting_url, avatar_url, join_at, avatar.name
-    )
+    # ── entitlement gate (PR B) — THE single choke point for paid bots ──
+    # Every entry point (manual start, calendar auto-join, Gmail watcher,
+    # Cedric dispatch) funnels through here, so gating BEFORE create_bot is
+    # gating everywhere. Only when the durable control plane is configured;
+    # the key-free demo skips this entirely (byte-identical behaviour). The
+    # usage row is inserted under a PROVISIONAL bot_id (the real id doesn't
+    # exist until Recall answers) and swapped to the real one right after —
+    # both inside the caller's per-meeting lock. open_usage raising
+    # EntitlementsUnavailable (billing DB outage) or UsageDenied propagates
+    # to the caller BEFORE any vendor dispatch: fail closed, never free.
+    usage_bot_id = ""
+    if control_plane.enabled():
+        usage_bot_id = f"pending:{uuid.uuid4().hex}"
+        gate = await run_in_threadpool(
+            entitlements.open_usage, org_id, usage_bot_id, avatar.id
+        )
+        if gate is not None and not gate.get("ok"):
+            raise entitlements.UsageDenied(
+                gate.get("reason") or "usage_limit_reached"
+            )
+    try:
+        bot = await run_in_threadpool(
+            recall_client.create_bot, meeting_url, avatar_url, join_at, avatar.name
+        )
+    except Exception:
+        # No bot was born — release the pending usage row (consumes 0) so the
+        # org's one-active-meeting slot isn't stranded by a failed dispatch.
+        if usage_bot_id:
+            try:
+                await run_in_threadpool(
+                    entitlements.close_usage, usage_bot_id, 0, "dispatch_failed"
+                )
+            except Exception:  # noqa: BLE001 — reconcile's restore heals orphans
+                print("[usage] dispatch_failed close deferred to reconcile", flush=True)
+        raise
+    if usage_bot_id:
+        await _assign_usage_bot_id(usage_bot_id, bot["id"])
     session = store.create(
         bot_id=bot["id"], meeting_url=meeting_url, avatar_id=avatar.id,
         org_id=org_id,
@@ -1429,6 +1797,25 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
                 status_code=503,
                 headers={"Retry-After": "60"},
             )
+        except entitlements.EntitlementsUnavailable:
+            # Billing DB outage: fail CLOSED before any vendor dispatch —
+            # never hand out unmetered paid minutes because Postgres blinked.
+            return JSONResponse({"error": "billing_unavailable"}, status_code=503)
+        except entitlements.UsageDenied as e:
+            if e.reason == "active_session_exists":
+                # One concurrent meeting per org (DB-enforced partial unique).
+                return JSONResponse(
+                    {"error": "active_session_exists"}, status_code=409
+                )
+            # Free allowance exhausted — the upgrade path (PR C) is the fix.
+            return JSONResponse(
+                {
+                    "error": "usage_limit_reached",
+                    "remaining_seconds": 0,
+                    "checkout_path": "/billing/checkout",
+                },
+                status_code=402,
+            )
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=400)
     # Resolve any deploy-overlap duplicate the way the Gmail loop does, without
@@ -1567,7 +1954,11 @@ def _fold_into_live(live: dict, extracted: object) -> None:
 
 
 async def _finalize_session(
-    bot_id: str, source: str = "manual", failed_code: str = ""
+    bot_id: str,
+    source: str = "manual",
+    failed_code: str = "",
+    usage_reason: str = "",
+    usage_end_epoch: float | None = None,
 ) -> dict | None:
     """End a session once: stop both vendors, build + store the artifact.
 
@@ -1580,6 +1971,13 @@ async def _finalize_session(
     ('fatal' when the join fatally failed) fires the Cedric join-failed
     notification ONCE, inside the guard — so a fatal seen by both the webhook and
     the poll notifies the orchestrator a single time, not twice.
+
+    ``usage_reason``/``usage_end_epoch`` (PR B) shape the durable usage close:
+    the reason recorded on the row ('limit_reached' for the entitlement stop;
+    natural ends default to 'ended') and Recall's own terminal timestamp when
+    the caller had one. The close itself is idempotent (first close wins), so
+    the same bot finalizing via manual end + webhook + reconcile still writes
+    consumed_seconds exactly once.
     """
     session = store.get(bot_id)
     if session is None:
@@ -1606,13 +2004,20 @@ async def _finalize_session(
         return store.get_artifact(bot_id)
     _finalizing.add(bot_id)
     try:
-        return await _finalize_session_locked(bot_id, session, source, failed_code)
+        return await _finalize_session_locked(
+            bot_id, session, source, failed_code, usage_reason, usage_end_epoch
+        )
     finally:
         _finalizing.discard(bot_id)
 
 
 async def _finalize_session_locked(
-    bot_id: str, session: store.Session, source: str, failed_code: str = ""
+    bot_id: str,
+    session: store.Session,
+    source: str,
+    failed_code: str = "",
+    usage_reason: str = "",
+    usage_end_epoch: float | None = None,
 ) -> dict | None:
     """The actual finalize body, run under the ``_finalizing`` in-flight guard."""
     # Join-failed notification (fatal): fire here, under the guard, so it runs at
@@ -1641,6 +2046,17 @@ async def _finalize_session_locked(
             )
         except Exception:
             pass
+
+    # PR B BLOCKER 2: the usage close is DEFERRED to the verified-stop branch
+    # below — closing here (before the leave is confirmed off) would free the
+    # org's one-meeting slot while the bot may still be live+billing, letting a
+    # 2nd meeting start against a still-running meter. On a VERIFIED stop we
+    # close (first-close-wins); on an UNVERIFIED leave we stash the reason/end
+    # and leave the row OPEN so the slot stays held until _retry_leave confirms
+    # the meter is off and closes it. The resolved reason is computed once here.
+    usage_close_reason = usage_reason or (
+        "failed" if failed_code == "fatal" else "ended"
+    )
 
     artifact: dict = {
         "summary": "",
@@ -1785,6 +2201,10 @@ async def _finalize_session_locked(
         flush=True,
     )
     if leave_verified:
+        # Meter CONFIRMED off → NOW close the durable usage row (first close
+        # wins; idempotent across manual end + webhook + reconcile). Best-effort
+        # — a billing hiccup leaves the row for the reconcile restore pass.
+        await _close_usage_for(bot_id, usage_end_epoch, usage_close_reason)
         store.remove(bot_id)
         # Photoreal only: last session out turns off the GPU meter (after a grace
         # window, in case another meeting starts right away).
@@ -1797,7 +2217,12 @@ async def _finalize_session_locked(
         # still-live bot billing forever. The artifact is already saved and
         # delivered above; the retry routes through leave_pending so it must NOT
         # re-deliver. (No transcript is logged — PII.)
+        # PR B BLOCKER 2: DO NOT close the usage row here — the slot stays held
+        # (a 2nd meeting for this org is correctly refused) until _retry_leave
+        # confirms the meter is off. Stash the reason/end so that close is honest.
         session.leave_pending = True
+        session.usage_close_reason = usage_close_reason
+        session.usage_end_epoch = usage_end_epoch
         print(
             f"[finalize] bot={bot_id} leave_call unverified — session kept for "
             f"reconcile meter-stop retry",
@@ -1862,15 +2287,22 @@ async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
     if session is None:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     # Stop the meter: works for live bots; scheduled bots may reject leave_call,
-    # so fall back to deleting the scheduled bot. Best-effort on both — the
-    # session is removed either way and never produces an artifact.
+    # so fall back to deleting the scheduled bot. Track whether the meter is
+    # CONFIRMED off (leave succeeded, bot already gone 404/410, or the scheduled
+    # bot was deleted) — PR B BLOCKER 2 gates the slot-release on that.
+    meter_off = False
     try:
         await run_in_threadpool(recall_client.leave_call, bot_id)
-    except Exception:
-        try:
-            await run_in_threadpool(recall_client.delete_bot, bot_id)
-        except Exception as e:  # noqa: BLE001 — surface but don't fail the cancel
-            print(f"[sessions] cancel: recall cleanup failed: {e}", flush=True)
+        meter_off = True
+    except Exception as e:  # noqa: BLE001 — classified by _leave_confirmed_stopped
+        if _leave_confirmed_stopped(e):
+            meter_off = True  # 404/410: bot genuinely gone → not billing
+        else:
+            try:
+                await run_in_threadpool(recall_client.delete_bot, bot_id)
+                meter_off = True  # a scheduled bot deleted → never billed
+            except Exception as e2:  # noqa: BLE001 — surface but don't fail cancel
+                print(f"[sessions] cancel: recall cleanup failed: {e2}", flush=True)
     if session.anam_conversation_id:
         try:
             await run_in_threadpool(
@@ -1878,6 +2310,27 @@ async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
             )
         except Exception:
             pass
+    if not meter_off:
+        # Meter-stop UNVERIFIED (Recall 5xx/network on BOTH leave and delete):
+        # the bot may still be live+billing. Keep the session (leave_pending) so
+        # the reconcile backstop retries the leave, and DO NOT close the usage
+        # row / free the slot — a 2nd meeting for this org stays correctly
+        # refused until the meter is confirmed off. _retry_leave closes the row.
+        session.leave_pending = True
+        session.usage_close_reason = "cancelled"
+        session.usage_end_epoch = None
+        print(
+            f"[sessions] cancel: leave unverified — bot={bot_id} kept for "
+            f"reconcile meter-stop retry",
+            flush=True,
+        )
+        return JSONResponse(
+            {"cancelled": False, "leave_pending": bot_id}, status_code=202
+        )
+    # PR B: meter confirmed off → release the usage row (a never-joined
+    # scheduled bot closes 0; a live one closes with its elapsed) so the org
+    # can book its next meeting.
+    await _close_usage_for(bot_id, None, "cancelled")
     store.remove(bot_id)
     gpu_runtime.on_session_ended(len(store.all_sessions()))
     runpod_runtime.on_session_ended(len(store.all_sessions()))
@@ -2360,6 +2813,56 @@ _QUIET_NUDGE_LINES_IT = [
     "Prima di chiudere — {name}, qualcosa da aggiungere?",
     "Un attimo prima di chiudere: {name}, tutto chiaro dal tuo lato?",
 ]
+
+# Usage-deadline warnings (PR B): ONE short heads-up ~5 minutes before the
+# included avatar time runs out, and one ~1 minute before she must leave.
+# Spoken from the reconcile pass — never the live hot path. Each fires at most
+# once per session (Session.usage_warned_5m / usage_warned_1m).
+_USAGE_WARN_5M_LINES = [
+    "Quick heads-up — about five minutes of included avatar time left for "
+    "this workspace.",
+    "Just so you know, this workspace has roughly five minutes of included "
+    "time left.",
+]
+_USAGE_WARN_5M_LINES_IT = [
+    "Un avviso veloce — restano circa cinque minuti di tempo incluso per "
+    "questo workspace.",
+    "Solo per informarvi: restano più o meno cinque minuti di tempo incluso.",
+]
+_USAGE_WARN_1M_LINES = [
+    "We're at the last minute of included time — I'll have to leave shortly.",
+    "One minute of included time left — I'll drop off in a moment.",
+]
+_USAGE_WARN_1M_LINES_IT = [
+    "Siamo all'ultimo minuto di tempo incluso — tra poco dovrò uscire.",
+    "Resta un minuto di tempo incluso — tra pochissimo dovrò lasciarvi.",
+]
+
+
+async def _usage_warn(session: store.Session, deadline: float) -> None:
+    """Speak the ~5-min / ~1-min usage-deadline heads-up (config-gated via
+    settings.usage_warnings_enabled). Reuses the proactive speak path
+    (_make_avatar_speak honours the silent-notetaker gate and the repetition
+    guard); each warning fires ONCE per session, skips when the timing is
+    unsafe (too close to the cutoff to be useful), and never lets a failure
+    escape into the reconcile pass."""
+    if not settings.usage_warnings_enabled:
+        return
+    try:
+        left = deadline - time.time()
+        heard = session.transcript[-1].text if session.transcript else ""
+        if left <= 60 and left > 5 and not session.usage_warned_1m:
+            session.usage_warned_1m = True
+            session.usage_warned_5m = True  # never follow with the milder one
+            line = _line_for(heard, _USAGE_WARN_1M_LINES, _USAGE_WARN_1M_LINES_IT)
+            await _make_avatar_speak(session, line, force=True)
+        elif left <= 300 and left > 75 and not session.usage_warned_5m:
+            session.usage_warned_5m = True
+            line = _line_for(heard, _USAGE_WARN_5M_LINES, _USAGE_WARN_5M_LINES_IT)
+            await _make_avatar_speak(session, line, force=True)
+    except Exception:  # noqa: BLE001 — a warning must never crash the pass
+        pass
+
 
 # One-time self-introduction spoken shortly after join (settings.
 # self_introduce_on_join). It breaks the "joined-but-mute" first impression
@@ -3038,9 +3541,40 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
                 f"&body={avatar.talk_body}"
             )
-            bot = await run_in_threadpool(
-                recall_client.create_bot, url, avatar_url, start, avatar.name
-            )
+            # Entitlement gate (PR B): calendar auto-join takes this INLINED
+            # dispatch path (not _start_avatar_session), so it must be gated
+            # here too — every paid bot passes an open_usage gate. Same
+            # provisional-id dance; a refusal marks the event skipped (fail
+            # closed) and an EntitlementsUnavailable falls to the per-event
+            # error handler below — either way no unmetered bot is born.
+            usage_bot_id = ""
+            if control_plane.enabled():
+                usage_bot_id = f"pending:{uuid.uuid4().hex}"
+                gate = await run_in_threadpool(
+                    entitlements.open_usage,
+                    settings.demo_org_id, usage_bot_id, avatar.id,
+                )
+                if gate is not None and not gate.get("ok"):
+                    scheduled.append(
+                        {"event": eid, "skipped": gate.get("reason")}
+                    )
+                    continue
+            try:
+                bot = await run_in_threadpool(
+                    recall_client.create_bot, url, avatar_url, start, avatar.name
+                )
+            except Exception:
+                if usage_bot_id:  # release the slot — no bot was born
+                    try:
+                        await run_in_threadpool(
+                            entitlements.close_usage,
+                            usage_bot_id, 0, "dispatch_failed",
+                        )
+                    except Exception:  # noqa: BLE001 — reconcile heals orphans
+                        pass
+                raise
+            if usage_bot_id:
+                await _assign_usage_bot_id(usage_bot_id, bot["id"])
             # Calendar auto-join has no authenticated principal (a webhook on
             # Laura's one Google account) → the Demo org (§5, intrinsically
             # single-tenant until calendar connections become per-org).
