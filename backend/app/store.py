@@ -50,6 +50,7 @@ _PERSISTED_SESSION_FIELDS = {
     "anam_conversation_url",
     "last_spoke_at",
     "proactive_done",
+    "leave_pending",
     "integration",
 }
 
@@ -69,6 +70,12 @@ class Session:
     transcript: list[Utterance] = field(default_factory=list)
     last_spoke_at: float = 0.0
     proactive_done: bool = False  # the one proactive flag fires at most once
+    # Meter-stop retry flag: a finalized session whose Recall leave_call could
+    # NOT be confirmed (auth/rate-limit/5xx/network) is kept in the store with
+    # this set so the reconcile backstop retries the leave. PERSISTED — a deploy
+    # restart (App Runner is ephemeral) must not drop it back to "in progress"
+    # and re-strand the per-minute meter leak this flag exists to close.
+    leave_pending: bool = False
     # Orchestrator (Cedric) integration state for this session:
     # {callback_url, context_url, external_ref, brief, meeting, context_refreshed}.
     # None = plain session with no orchestrator attached. Persisted as JSON so a
@@ -360,6 +367,7 @@ def _init_db() -> None:
                 anam_conversation_url TEXT NOT NULL DEFAULT '',
                 last_spoke_at REAL NOT NULL DEFAULT 0,
                 proactive_done INTEGER NOT NULL DEFAULT 0,
+                leave_pending INTEGER NOT NULL DEFAULT 0,
                 integration_json TEXT NOT NULL DEFAULT '',
                 updated_at REAL NOT NULL
             );
@@ -424,6 +432,10 @@ def _init_db() -> None:
         )
         # Migration for stores created before the Cedric integration column.
         _add_column(conn, "sessions", "integration_json TEXT NOT NULL DEFAULT ''")
+        # Migration for stores created before the meter-stop retry flag. A
+        # pre-existing session predates any leave failure, so 0 (not pending) is
+        # the correct backfill.
+        _add_column(conn, "sessions", "leave_pending INTEGER NOT NULL DEFAULT 0")
         # Migration for stores created before per-user session ownership. The
         # pre-existing column defaults to '' (legacy/unowned stays visible);
         # new sessions stamp DEMO_ORG_ID via Session.org_id.
@@ -517,6 +529,7 @@ def _session_from_row(row: sqlite3.Row, utterances: list[Utterance]) -> Session:
         anam_conversation_url=row["anam_conversation_url"],
         last_spoke_at=float(row["last_spoke_at"]),
         proactive_done=bool(row["proactive_done"]),
+        leave_pending=bool(row["leave_pending"]) if "leave_pending" in row.keys() else False,
         integration=integration,
     )
     object.__setattr__(session, "transcript", utterances)
@@ -570,9 +583,9 @@ def _persist_session(session: Session) -> None:
             INSERT INTO sessions (
                 bot_id, meeting_url, avatar_id, org_id, anam_conversation_id,
                 anam_conversation_url, last_spoke_at, proactive_done,
-                integration_json, updated_at
+                leave_pending, integration_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(bot_id) DO UPDATE SET
                 meeting_url=excluded.meeting_url,
                 avatar_id=excluded.avatar_id,
@@ -581,6 +594,7 @@ def _persist_session(session: Session) -> None:
                 anam_conversation_url=excluded.anam_conversation_url,
                 last_spoke_at=excluded.last_spoke_at,
                 proactive_done=excluded.proactive_done,
+                leave_pending=excluded.leave_pending,
                 integration_json=excluded.integration_json,
                 updated_at=excluded.updated_at
             """,
@@ -593,6 +607,7 @@ def _persist_session(session: Session) -> None:
                 session.anam_conversation_url,
                 float(session.last_spoke_at),
                 int(session.proactive_done),
+                int(session.leave_pending),
                 json.dumps(session.integration) if session.integration else "",
                 time.time(),
             ),
