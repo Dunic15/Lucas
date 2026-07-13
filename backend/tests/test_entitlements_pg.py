@@ -92,17 +92,39 @@ def pg(tmp_path_factory):
         conn.execute(
             f"CREATE ROLE {APP_ROLE} LOGIN PASSWORD 'pw' NOSUPERUSER NOBYPASSRLS"
         )
-    sa_url = uri.replace("postgresql://", "postgresql+psycopg://")
+    admin_sa_url = uri.replace("postgresql://", "postgresql+psycopg://")
+
+    import psycopg.conninfo as _ci
+    from sqlalchemy.engine import URL
+
+    info = _ci.conninfo_to_dict(uri)
+    query = {
+        key: str(info[key])
+        for key in ("host", "port")
+        if info.get(key) is not None
+    }
+    app_sa_url = URL.create(
+        "postgresql+psycopg",
+        username=APP_ROLE,
+        password="pw",
+        database=info.get("dbname"),
+        query=query,
+    ).render_as_string(hide_password=False)
     proc = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
         cwd=str(BACKEND_DIR),
-        env={**os.environ, "LAURA_DATABASE_URL": sa_url},
+        env={
+            **os.environ,
+            "LAURA_DATABASE_ADMIN_URL": admin_sa_url,
+            "LAURA_DATABASE_URL": "",
+            "LAURA_REQUIRE_MIGRATIONS": "1",
+        },
         capture_output=True,
         text=True,
         timeout=600,
     )
     assert proc.returncode == 0, f"alembic upgrade failed:\n{proc.stdout}\n{proc.stderr}"
-    yield {"uri": uri, "sa_url": sa_url}
+    yield {"uri": uri, "admin_sa_url": admin_sa_url, "app_sa_url": app_sa_url}
     control_plane.reset_engine()
     srv.cleanup()
 
@@ -116,7 +138,7 @@ def cp(pg, monkeypatch):
     """Control plane + entitlements pointed at the embedded PG, with a CLEAN
     usage table per test (rows persist across the module-scoped server, and a
     leftover pending/active row would trip the one-per-org unique index)."""
-    monkeypatch.setattr(settings, "laura_database_url", pg["sa_url"])
+    monkeypatch.setattr(settings, "laura_database_url", pg["app_sa_url"])
     control_plane.reset_engine()
     with _admin(pg) as conn:  # superuser: bypasses RLS by attribute
         conn.execute("DELETE FROM usage_sessions")
@@ -244,16 +266,16 @@ def test_remaining_seconds_math_closed_plus_active_elapsed(cp):
     # pending consumes NOTHING
     assert entitlements.remaining_seconds(org) == 900
     # active consumes live wall-clock from Recall's in_call timestamp
-    deadline = entitlements.mark_in_call("m-bot1", time.time() - 120)
+    deadline = entitlements.mark_in_call(org, "m-bot1", time.time() - 120)
     assert deadline is not None
     r = entitlements.remaining_seconds(org)
     assert 750 <= r <= 782, f"active elapsed not counted: {r}"  # ~900-120, loose
     # band: the elapsed keeps growing while the test itself runs
     # the deadline is in_call + remaining-at-that-moment (own elapsed excluded)
-    row = entitlements.usage_row("m-bot1")
+    row = entitlements.usage_row(org, "m-bot1")
     assert abs(row["deadline"] - (row["in_call_at"] + 900)) < 3
     # closed consumption is durable
-    assert entitlements.close_usage("m-bot1", 300, "ended") is True
+    assert entitlements.close_usage(org, "m-bot1", 300, "ended") is True
     assert entitlements.remaining_seconds(org) == 600
     gate2 = entitlements.open_usage(org, "m-bot2", "cedric")
     assert gate2["ok"] is True and gate2["remaining_seconds"] == 600
@@ -263,12 +285,12 @@ def test_mark_in_call_is_idempotent(cp):
     org = _org(cp, "idem")
     entitlements.open_usage(org, "i-bot", "laura")
     t0 = time.time() - 60
-    first = entitlements.mark_in_call("i-bot", t0)
-    again = entitlements.mark_in_call("i-bot", time.time())  # later ts ignored
+    first = entitlements.mark_in_call(org, "i-bot", t0)
+    again = entitlements.mark_in_call(org, "i-bot", time.time())  # later ts ignored
     # epsilon, not ==: the deadline round-trips through Postgres timestamptz
     # (microsecond truncation) so an exact float compare is ~50% flaky.
     assert abs(again - first) < 1e-3
-    assert abs(entitlements.usage_row("i-bot")["in_call_at"] - t0) < 2
+    assert abs(entitlements.usage_row(org, "i-bot")["in_call_at"] - t0) < 2
 
 
 # ── 10 min Laura + 5 min Cedric exhaust ONE shared allowance ─────────────
@@ -279,12 +301,12 @@ def test_shared_allowance_exhausted_across_avatars(cp):
     now = time.time()
     g1 = entitlements.open_usage(org, "s-laura", "laura")
     assert g1["ok"] is True
-    entitlements.mark_in_call("s-laura", now - 600)
-    entitlements.close_usage("s-laura", 600, "ended")     # 10 min of Laura
+    entitlements.mark_in_call(org, "s-laura", now - 600)
+    entitlements.close_usage(org, "s-laura", 600, "ended")     # 10 min of Laura
     g2 = entitlements.open_usage(org, "s-cedric", "cedric")
     assert g2["ok"] is True and g2["remaining_seconds"] == 300
-    entitlements.mark_in_call("s-cedric", now - 300)
-    entitlements.close_usage("s-cedric", 300, "ended")    # 5 min of Cedric
+    entitlements.mark_in_call(org, "s-cedric", now - 300)
+    entitlements.close_usage(org, "s-cedric", 300, "ended")    # 5 min of Cedric
     assert entitlements.remaining_seconds(org) == 0
     refused = entitlements.open_usage(org, "s-third", "laura")
     assert refused == {"ok": False, "reason": "usage_limit_reached"}
@@ -296,11 +318,11 @@ def test_route_returns_exact_402_body_when_exhausted(cp, start_env):
     demo = settings.demo_org_id
     now = time.time()
     entitlements.open_usage(demo, "d-laura", "laura")
-    entitlements.mark_in_call("d-laura", now - 600)
-    entitlements.close_usage("d-laura", 600, "ended")
+    entitlements.mark_in_call(demo, "d-laura", now - 600)
+    entitlements.close_usage(demo, "d-laura", 600, "ended")
     entitlements.open_usage(demo, "d-cedric", "cedric")
-    entitlements.mark_in_call("d-cedric", now - 300)
-    entitlements.close_usage("d-cedric", 300, "ended")
+    entitlements.mark_in_call(demo, "d-cedric", now - 300)
+    entitlements.close_usage(demo, "d-cedric", 300, "ended")
     assert entitlements.remaining_seconds(demo) == 0
 
     resp = TestClient(main.app).post("/sessions/start", json={"meeting_url": _MEET_URL})
@@ -331,7 +353,7 @@ def test_route_start_swaps_provisional_for_real_bot_id(cp, start_env):
     resp = TestClient(main.app).post("/sessions/start", json={"meeting_url": _MEET_URL})
     assert resp.status_code == 200
     bid = resp.json()["bot_id"]
-    row = entitlements.usage_row(bid)
+    row = entitlements.usage_row(settings.demo_org_id, bid)
     assert row is not None and row["state"] == "pending"
     # no stranded provisional row: the org's single slot is held by the REAL id
     open_ids = {r["bot_id"] for r in entitlements.open_usage_rows()}
@@ -346,13 +368,13 @@ def test_failed_join_consumes_zero(cp):
     org = _org(cp, "failedjoin")
     entitlements.open_usage(org, "f-bot", "laura")
     # never went in-call: whatever value is passed, a pending row closes at 0
-    assert entitlements.close_usage("f-bot", 999, "dispatch_failed") is True
-    row = entitlements.usage_row("f-bot")
+    assert entitlements.close_usage(org, "f-bot", 999, "dispatch_failed") is True
+    row = entitlements.usage_row(org, "f-bot")
     assert row["state"] == "closed" and row["consumed_seconds"] == 0
     assert entitlements.remaining_seconds(org) == 900
     # idempotent: the second close is a no-op and can't rewrite the value
-    assert entitlements.close_usage("f-bot", 500, "ended") is False
-    assert entitlements.usage_row("f-bot")["consumed_seconds"] == 0
+    assert entitlements.close_usage(org, "f-bot", 500, "ended") is False
+    assert entitlements.usage_row(org, "f-bot")["consumed_seconds"] == 0
 
 
 def test_dispatch_failure_releases_pending_row(cp, start_env, monkeypatch):
@@ -376,11 +398,11 @@ def test_silent_meeting_consumes_wall_clock(cp):
     entitlements.open_usage(org, "q-bot", "laura")
     now = time.time()
     # the clock is Recall-status-based: mark from the in-call status ts …
-    entitlements.mark_in_call("q-bot", now - 240)
+    entitlements.mark_in_call(org, "q-bot", now - 240)
     # … and close with the status-derived duration. No transcript anywhere.
-    assert entitlements.close_usage("q-bot", 240, "ended") is True
+    assert entitlements.close_usage(org, "q-bot", 240, "ended") is True
     assert entitlements.remaining_seconds(org) == 660
-    assert entitlements.usage_row("q-bot")["consumed_seconds"] == 240
+    assert entitlements.usage_row(org, "q-bot")["consumed_seconds"] == 240
 
 
 # ── concurrency: racing starts cannot overspend ──────────────────────────
@@ -408,8 +430,8 @@ def test_concurrent_starts_with_one_second_left(cp):
     # still admit exactly one — never two paid bots on a 1-second balance.
     org = _org(cp, "race-1s")
     entitlements.open_usage(org, "r1-old", "laura")
-    entitlements.mark_in_call("r1-old", time.time() - 899)
-    entitlements.close_usage("r1-old", 899, "ended")
+    entitlements.mark_in_call(org, "r1-old", time.time() - 899)
+    entitlements.close_usage(org, "r1-old", 899, "ended")
     assert entitlements.remaining_seconds(org) == 1
 
     barrier = threading.Barrier(2)
@@ -436,7 +458,7 @@ def test_limit_stops_avatar_and_preserves_artifact(cp, fresh_store, monkeypatch)
     session.add_utterance("Ben", "Let's keep going.")
     # deadline already in the past: in-call 1000s ago on a 900s allowance
     entitlements.open_usage(org, "bot_lim", "laura")
-    entitlements.mark_in_call("bot_lim", time.time() - 1000)
+    entitlements.mark_in_call(org, "bot_lim", time.time() - 1000)
     left: list[str] = []
     monkeypatch.setattr(main.recall_client, "leave_call", left.append)
     monkeypatch.setattr(
@@ -453,7 +475,7 @@ def test_limit_stops_avatar_and_preserves_artifact(cp, fresh_store, monkeypatch)
     artifact = store.get_artifact("bot_lim")
     assert artifact is not None                       # deliverable PRESERVED
     assert artifact["summary"] == "s"
-    row = entitlements.usage_row("bot_lim")
+    row = entitlements.usage_row(org, "bot_lim")
     assert row["state"] == "closed"
     assert row["close_reason"] == "limit_reached"
     assert 890 <= row["consumed_seconds"] <= 905      # capped at the deadline
@@ -466,7 +488,7 @@ def test_usage_warning_speaks_once_near_deadline(cp, fresh_store, monkeypatch):
     session.memory_brief = ""
     entitlements.open_usage(org, "bot_warn", "laura")
     # ~3 minutes left → inside the 5-min window, outside the 1-min one
-    entitlements.mark_in_call("bot_warn", time.time() - 720)
+    entitlements.mark_in_call(org, "bot_warn", time.time() - 720)
     spoken: list[str] = []
 
     async def fake_speak(sess, text, *a, **k):
@@ -487,7 +509,7 @@ def test_usage_warning_speaks_once_near_deadline(cp, fresh_store, monkeypatch):
     assert len(spoken) == 1                            # one-shot heads-up
     assert store.get("bot_warn") is not None           # still live, not cut off
     store.remove("bot_warn")
-    entitlements.close_usage("bot_warn", 0, "ended")   # tidy the module PG
+    entitlements.close_usage(org, "bot_warn", 0, "ended")   # tidy the module PG
 
 
 # ── restart restore: the local store is gone, enforcement is not ─────────
@@ -497,7 +519,7 @@ def test_restart_restores_deadline_and_stops_orphan(cp, fresh_store, monkeypatch
     monkeypatch.setattr(settings, "recall_api_key", "recall-key")
     org = _org(cp, "restore-live")
     entitlements.open_usage(org, "bot_orphan", "laura")
-    entitlements.mark_in_call("bot_orphan", time.time() - 2000)  # way past deadline
+    entitlements.mark_in_call(org, "bot_orphan", time.time() - 2000)  # way past deadline
     assert store.all_sessions() == []                  # the store was WIPED
     left: list[str] = []
     monkeypatch.setattr(main.recall_client, "leave_call", left.append)
@@ -511,7 +533,7 @@ def test_restart_restores_deadline_and_stops_orphan(cp, fresh_store, monkeypatch
     asyncio.run(main._reconcile_once())
 
     assert left == ["bot_orphan"]                      # enforced from PG alone
-    row = entitlements.usage_row("bot_orphan")
+    row = entitlements.usage_row(org, "bot_orphan")
     assert row["state"] == "closed"
     assert row["close_reason"] == "limit_reached"
 
@@ -523,7 +545,7 @@ def test_restart_closes_terminal_orphan_from_recall_timestamps(
     org = _org(cp, "restore-done")
     now = time.time()
     entitlements.open_usage(org, "bot_done", "laura")
-    entitlements.mark_in_call("bot_done", now - 500)
+    entitlements.mark_in_call(org, "bot_done", now - 500)
     monkeypatch.setattr(
         main.httpx, "get",
         lambda url, *, headers, timeout: _FakeResponse(
@@ -536,7 +558,7 @@ def test_restart_closes_terminal_orphan_from_recall_timestamps(
 
     asyncio.run(main._reconcile_once())
 
-    row = entitlements.usage_row("bot_done")
+    row = entitlements.usage_row(org, "bot_done")
     assert row["state"] == "closed" and row["close_reason"] == "ended"
     assert 295 <= row["consumed_seconds"] <= 305       # done_ts - in_call_ts
 
@@ -559,11 +581,11 @@ def test_restart_starts_clock_for_orphan_from_recall_status(
 
     asyncio.run(main._reconcile_once())
 
-    row = entitlements.usage_row("bot_clock")
+    row = entitlements.usage_row(org, "bot_clock")
     assert row["state"] == "active"
     assert abs(row["in_call_at"] - (now - 50)) < 3     # Recall's ts, not ours
     assert abs(row["deadline"] - (now - 50 + 900)) < 5
-    entitlements.close_usage("bot_clock", 0, "ended")  # tidy the module PG
+    entitlements.close_usage(org, "bot_clock", 0, "ended")  # tidy the module PG
 
 
 def test_orphaned_provisional_row_is_released(cp, fresh_store, monkeypatch, pg):
@@ -587,7 +609,7 @@ def test_orphaned_provisional_row_is_released(cp, fresh_store, monkeypatch, pg):
 
     asyncio.run(main._reconcile_once())
 
-    row = entitlements.usage_row(prov)
+    row = entitlements.usage_row(org, prov)
     assert row["state"] == "closed" and row["consumed_seconds"] == 0
     assert row["close_reason"] == "orphaned"
     assert entitlements.remaining_seconds(org) == 900
@@ -644,10 +666,10 @@ def test_key_free_entitlement_api_is_inert():
     # Every DAL function no-ops when disabled — the offline contract.
     assert entitlements.remaining_seconds("any-org") is None
     assert entitlements.open_usage("any-org", "any-bot") is None
-    assert entitlements.mark_in_call("any-bot", time.time()) is None
-    assert entitlements.close_usage("any-bot", 10, "ended") is False
+    assert entitlements.mark_in_call("any-org", "any-bot", time.time()) is None
+    assert entitlements.close_usage("any-org", "any-bot", 10, "ended") is False
     assert entitlements.open_usage_rows() == []
-    assert entitlements.usage_row("any-bot") is None
+    assert entitlements.usage_row("any-org", "any-bot") is None
     assert entitlements.usage_summary("any-org") is None
     assert control_plane._engine is None
 
@@ -659,9 +681,6 @@ def test_rls_isolates_usage_sessions_for_app_role(cp, pg):
     a, b = _org(cp, "rls-a"), _org(cp, "rls-b")
     entitlements.open_usage(a, "rls-bot-a", "laura")
     entitlements.open_usage(b, "rls-bot-b", "laura")
-    with _admin(pg) as conn:
-        conn.execute(f"GRANT SELECT ON usage_sessions TO {APP_ROLE}")
-
     import psycopg.conninfo as _ci
 
     app_kwargs = {
@@ -688,59 +707,27 @@ def test_rls_isolates_usage_sessions_for_app_role(cp, pg):
 # ── BLOCKER 1: provisional-bot_id swap failure must NOT run free-forever ──
 
 
-def test_swap_failure_self_heals_and_meters(cp, start_env, fresh_store, monkeypatch):
-    # The swap after a successful create_bot throws (DB blip) → the usage row is
-    # stranded under pending:<uuid> and the live bot is untracked. The next
-    # reconcile pass MUST re-associate the row (clock + deadline + cutoff), and
-    # the orphan sweep must NOT free the org's slot while the bot is live.
-    monkeypatch.setattr(settings, "recall_api_key", "recall-key")
-    demo = settings.demo_org_id
-    real_assign = entitlements.assign_bot_id
-    blip = {"on": True}
-
-    def flaky_assign(prov, real):
-        if blip["on"]:
-            raise entitlements.EntitlementsUnavailable("blip")
-        return real_assign(prov, real)
-
-    monkeypatch.setattr(main.entitlements, "assign_bot_id", flaky_assign)
-
-    bot_id = (
-        TestClient(main.app)
-        .post("/sessions/start", json={"meeting_url": _MEET_URL})
-        .json()["bot_id"]
-    )
-    # swap failed → row is stranded under a provisional id, real bot untracked
-    assert entitlements.usage_row(bot_id) is None
-    stranded = entitlements.open_usage_rows()
-    assert len(stranded) == 1 and stranded[0]["bot_id"].startswith("pending:")
-
-    blip["on"] = False  # the DB blip is over
+def test_swap_failure_fails_closed_and_stops_born_bot(
+    cp, start_env, fresh_store, monkeypatch
+):
+    # A false/no-row provisional swap is NOT success. A born bot without a
+    # durable meter is stopped before the route can return it to the customer.
+    _stub_finalize_vendors(monkeypatch)
     left: list[str] = []
     monkeypatch.setattr(main.recall_client, "leave_call", left.append)
     monkeypatch.setattr(
-        main.httpx, "get",
-        lambda url, *, headers, timeout: _FakeResponse(
-            _bot_json(bot_id, [("in_call_recording", time.time() - 30)])
-        ),
+        main.entitlements, "assign_bot_id", lambda org, provisional, real: False
     )
 
-    asyncio.run(main._reconcile_once())
-
-    row = entitlements.usage_row(bot_id)
-    assert row is not None and row["state"] == "active"      # re-associated
-    assert row["in_call_at"] is not None                     # clock started
-    assert row["deadline"] > time.time()                     # deadline set
-    assert left == []                                        # within budget, not cut
-    # exactly one row, now under the REAL id — no stranded provisional survives
-    assert [r["bot_id"] for r in entitlements.open_usage_rows()] == [bot_id]
-    # the org slot is HELD (a 2nd meeting is refused) — the sweep did NOT free it
-    assert (
-        entitlements.open_usage(demo, "second", "laura")["reason"]
-        == "active_session_exists"
+    resp = TestClient(main.app).post(
+        "/sessions/start", json={"meeting_url": _MEET_URL}
     )
-    store.remove(bot_id)
 
+    assert resp.status_code == 503
+    assert resp.json() == {"error": "billing_unavailable"}
+    assert left == ["bot_1"]
+    assert store.get("bot_1") is None
+    assert entitlements.open_usage_rows() == []
 
 def test_untracked_live_bot_over_budget_is_cut_off(cp, fresh_store, monkeypatch):
     # A live local session whose org is EXHAUSTED and has no usage row (swap lost
@@ -751,8 +738,8 @@ def test_untracked_live_bot_over_budget_is_cut_off(cp, fresh_store, monkeypatch)
     org = _org(cp, "untracked-broke")
     # exhaust the org with a prior closed meeting
     entitlements.open_usage(org, "prior", "laura")
-    entitlements.mark_in_call("prior", time.time() - 900)
-    entitlements.close_usage("prior", 900, "ended")
+    entitlements.mark_in_call(org, "prior", time.time() - 900)
+    entitlements.close_usage(org, "prior", 900, "ended")
     assert entitlements.remaining_seconds(org) == 0
 
     s = store.create("ghost-bot", _MEET_URL, "laura", org_id=org)
@@ -787,10 +774,10 @@ def test_orphan_sweep_preserves_slot_while_org_is_live(cp, fresh_store):
     }
     # org has a LIVE session → slot preserved
     asyncio.run(main._reconcile_usage_orphan(prov, usage, {org}))
-    assert entitlements.usage_row(prov)["state"] == "pending"
+    assert entitlements.usage_row(org, prov)["state"] == "pending"
     # org has no live session → now a true orphan, freed
     asyncio.run(main._reconcile_usage_orphan(prov, usage, set()))
-    closed = entitlements.usage_row(prov)
+    closed = entitlements.usage_row(org, prov)
     assert closed["state"] == "closed" and closed["close_reason"] == "orphaned"
 
 
@@ -805,7 +792,7 @@ def test_finalize_unverified_leave_holds_slot_until_retry(cp, fresh_store, monke
     s.memory_brief = ""
     s.add_utterance("Ben", "ship the DPA to Acme")
     entitlements.open_usage(org, "b2-bot", "laura")
-    entitlements.mark_in_call("b2-bot", time.time() - 120)
+    entitlements.mark_in_call(org, "b2-bot", time.time() - 120)
     monkeypatch.setattr(
         main.recall_client, "leave_call", _raise(_http_status_error(503))
     )
@@ -813,7 +800,7 @@ def test_finalize_unverified_leave_holds_slot_until_retry(cp, fresh_store, monke
     asyncio.run(main._finalize_session("b2-bot", source="webhook"))
 
     # usage NOT closed, slot NOT freed, session kept for the reconcile retry
-    row = entitlements.usage_row("b2-bot")
+    row = entitlements.usage_row(org, "b2-bot")
     assert row["state"] == "active"
     kept = store.get("b2-bot")
     assert kept is not None and kept.leave_pending is True
@@ -826,7 +813,7 @@ def test_finalize_unverified_leave_holds_slot_until_retry(cp, fresh_store, monke
     # the leave now confirms → _retry_leave closes the row ONCE, honest consumed
     monkeypatch.setattr(main.recall_client, "leave_call", lambda b: None)
     assert asyncio.run(main._retry_leave("b2-bot", kept)) is True
-    closed = entitlements.usage_row("b2-bot")
+    closed = entitlements.usage_row(org, "b2-bot")
     assert closed["state"] == "closed"
     assert closed["close_reason"] == "ended"
     assert 115 <= closed["consumed_seconds"] <= 140    # ~ now - in_call (120s)
@@ -843,7 +830,7 @@ def test_cancel_unverified_leave_holds_slot(cp, fresh_store, monkeypatch):
     org = _org(cp, "cancel-b2")
     store.create("c-bot", _MEET_URL, "laura", org_id=org)
     entitlements.open_usage(org, "c-bot", "laura")
-    entitlements.mark_in_call("c-bot", time.time() - 60)
+    entitlements.mark_in_call(org, "c-bot", time.time() - 60)
     monkeypatch.setattr(
         main.recall_client, "leave_call", _raise(_http_status_error(503))
     )
@@ -854,7 +841,7 @@ def test_cancel_unverified_leave_holds_slot(cp, fresh_store, monkeypatch):
     resp = TestClient(main.app).post("/sessions/c-bot/cancel")
 
     assert resp.status_code == 202 and resp.json()["cancelled"] is False
-    row = entitlements.usage_row("c-bot")
+    row = entitlements.usage_row(org, "c-bot")
     assert row["state"] == "active"                    # slot held, not freed
     assert store.get("c-bot").leave_pending is True
     assert (
@@ -862,4 +849,61 @@ def test_cancel_unverified_leave_holds_slot(cp, fresh_store, monkeypatch):
         == "active_session_exists"
     )
     store.remove("c-bot")
-    entitlements.close_usage("c-bot", 0, "ended")      # tidy the module PG
+    entitlements.close_usage(org, "c-bot", 0, "ended")      # tidy the module PG
+
+# ── app-role enforcement + per-bot tenant scoping ────────────────────────
+
+
+def test_entitlement_runtime_is_exact_policy_bound_role(cp):
+    from sqlalchemy import text
+
+    with cp._get_engine().connect() as conn:
+        assert conn.execute(
+            text(
+                "SELECT current_user, rolsuper, rolbypassrls "
+                "FROM pg_roles WHERE rolname = current_user"
+            )
+        ).fetchone() == (APP_ROLE, False, False)
+
+
+def test_per_bot_operations_cannot_cross_org(cp):
+    a, b = _org(cp, "per-bot-a"), _org(cp, "per-bot-b")
+    assert entitlements.open_usage(a, "tenant-bot", "laura")["ok"] is True
+
+    # Knowing a foreign bot id is never enough: every per-bot operation pins
+    # RLS before its first query and includes org_id in the statement itself.
+    assert entitlements.usage_row(b, "tenant-bot") is None
+    assert entitlements.mark_in_call(b, "tenant-bot", time.time()) is None
+    assert entitlements.close_usage(b, "tenant-bot", 900, "ended") is False
+    assert entitlements.assign_bot_id(b, "tenant-bot", "stolen-bot") is False
+
+    own = entitlements.usage_row(a, "tenant-bot")
+    assert own is not None and own["state"] == "pending"
+    assert entitlements.assign_bot_id(a, "tenant-bot", "owned-bot") is True
+    assert entitlements.usage_row(a, "owned-bot") is not None
+    assert entitlements.usage_row(b, "owned-bot") is None
+
+
+def test_restart_enumeration_uses_private_read_only_definer(cp, pg):
+    a, b = _org(cp, "restart-a"), _org(cp, "restart-b")
+    entitlements.open_usage(a, "restart-bot-a", "laura")
+    entitlements.open_usage(b, "restart-bot-b", "cedric")
+
+    # The one intentionally global operation is an exact private definer.
+    assert {row["org_id"] for row in entitlements.open_usage_rows()} == {a, b}
+
+    import psycopg.conninfo as _ci
+
+    kwargs = {
+        **_ci.conninfo_to_dict(pg["uri"]),
+        "user": APP_ROLE,
+        "password": "pw",
+    }
+    with psycopg.connect(**kwargs, autocommit=True) as conn:
+        assert conn.execute(
+            "SELECT current_user, rolsuper, rolbypassrls "
+            "FROM pg_roles WHERE rolname = current_user"
+        ).fetchone() == (APP_ROLE, False, False)
+        # A bare runtime SELECT remains RLS-bound and cannot enumerate tenants.
+        assert conn.execute("SELECT count(*) FROM usage_sessions").fetchone()[0] == 0
+
