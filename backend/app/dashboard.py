@@ -212,6 +212,59 @@ def _avatar_email(avatar_id: str) -> str:
     return f"{base}+{avatar_id}@{domain}"
 
 
+def _org_connection_rows(org_id: str) -> list[dict]:
+    """One org's connection rows for reads: the SQLite runtime rows overlaid
+    with the durable control-plane mirror when configured — the mirror
+    survives the ephemeral store, so a redeploy doesn't blank the Configure
+    tab or un-flag a customer's connected tools. Sync DB I/O: call from sync
+    handlers, or via run_in_threadpool from async ones."""
+    rows = {
+        (r["avatar_id"], r["provider"]): r for r in store.connections_for_org(org_id)
+    }
+    from . import control_plane  # lazy: control_plane imports store at load
+
+    if control_plane.enabled():
+        try:
+            durable = control_plane.get_connections(org_id) or []
+        except Exception:  # noqa: BLE001 — the local rows still serve the read
+            durable = []
+        for r in durable:
+            rows[(r["avatar_id"], r["provider"])] = r
+    return list(rows.values())
+
+
+def _org_connected(rows: list[dict], provider: str) -> bool:
+    return any(r["provider"] == provider and r["status"] == "connected" for r in rows)
+
+
+def _set_connection_all(
+    org_id: str, avatar_id: str, provider: str, status: str, config: dict
+) -> bool:
+    """Durably upsert one connection, then refresh the SQLite runtime cache.
+
+    When Postgres is enabled it is authoritative: a failed mirror returns
+    False instead of acknowledging a connection/disconnect that a redeploy
+    would undo. Sync DB I/O: threadpool it from async handlers.
+    """
+    from . import control_plane  # lazy: control_plane imports store at load
+
+    if control_plane.enabled():
+        try:
+            durable = control_plane.set_connection(
+                org_id, avatar_id, provider, status, config
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                "[dashboard] control-plane connection write failed "
+                f"({type(exc).__name__})",
+                flush=True,
+            )
+            return False
+        if durable is not True:
+            return False
+    return store.set_connection(org_id, avatar_id, provider, status, config)
+
+
 @router.get("/dashboard")
 def dashboard_page() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "dashboard.html")
@@ -219,20 +272,33 @@ def dashboard_page() -> FileResponse:
 
 @router.get("/dashboard/summary")
 def dashboard_summary(request: Request) -> JSONResponse:
-    # One gate for all three worlds (see auth.gate): logged-in cookie user,
-    # machine bearer, or key-free demo. An anonymous browser on a login-enabled
-    # deployment gets login_required so the page shows the sign-in gate.
-    user = auth.current_user(request)
-    if user is None:
-        if err := auth.gate(request):
-            return err
+    # One gate for all four worlds (see auth.gate): logged-in cookie user,
+    # PER-ORG machine bearer (scoped like the cookie user, PR D), global
+    # machine bearer, or key-free demo. An anonymous browser on a
+    # login-enabled deployment gets login_required (the sign-in gate).
+    from . import cedric  # local import, same reason as auth.gate's
 
-    # Tenancy scoping (org_id == user_id today): a logged-in user sees their
-    # own rows plus shared rows — unowned ("") and the Demo org that every
-    # service/anon/auto-join session is stamped with. Strict isolation lands
-    # with the Postgres/RLS track (docs/infra/MULTI-TENANCY.md); seam is here.
+    user = auth.current_user(request)
+    machine_org = None
+    if user is None:
+        # Sync handler: FastAPI already runs this off the event loop, so the
+        # sync token resolver is safe to call inline.
+        machine_org = cedric.resolve_machine_org(request)
+        if machine_org is None:
+            if err := auth.gate(request):
+                return err
+    # The tenant this response is scoped to: the cookie user's org or the
+    # per-org bearer's org. None = the unscoped worlds (global bearer /
+    # key-free demo), byte-identical to today.
+    caller_org = user["org_id"] if user else machine_org
+
+    # Tenancy scoping: a scoped caller sees their own org's rows plus legacy
+    # unowned ("") rows — NOT the Demo org's. Self-serve product decision
+    # (2026-07-13): demo/service rows are the anonymous showroom, and a real
+    # signup's dashboard must contain only their workspace, or every customer
+    # sees every other anonymous demo. Anonymous/demo callers are unchanged.
     def visible(row_org: str) -> bool:
-        return user is None or row_org in ("", settings.demo_org_id, user["org_id"])
+        return caller_org is None or row_org in ("", caller_org)
 
     now = time.time()
     artifact_rows = store.list_artifacts()  # newest first
@@ -245,7 +311,9 @@ def dashboard_summary(request: Request) -> JSONResponse:
     # Execution provenance: decorate each action with the state the brain
     # (Cedric) reported via POST /org/actions/{id}/status — one batched query.
     all_ids = [a["action_id"] for m in meetings for a in m["actions"] if a["action_id"]]
-    statuses = ledger.action_statuses(all_ids)
+    statuses = ledger.action_statuses(
+        all_ids, org_id=caller_org or settings.demo_org_id
+    )
     for m in meetings:
         for a in m["actions"]:
             ex = statuses.get(a["action_id"])
@@ -281,11 +349,11 @@ def dashboard_summary(request: Request) -> JSONResponse:
 
     avatar_rows = []
     drive_connected = False
-    # Per-org roster: a logged-in user sees only their org's granted avatars
-    # (org_agents); an anonymous/demo/bearer caller (user is None) sees ALL —
+    # Per-org roster: a scoped caller (cookie user or per-org bearer) sees only
+    # their org's granted avatars (org_agents); the unscoped worlds see ALL —
     # today's behavior, key-free demo unchanged (docs/infra/MULTI-TENANCY.md).
     roster_ids = (
-        avatars.list_for_org(user["org_id"]) if user else avatars.list_ids()
+        avatars.list_for_org(caller_org) if caller_org else avatars.list_ids()
     )
     for aid in roster_ids:
         a = avatars.load(aid)
@@ -385,15 +453,32 @@ def dashboard_summary(request: Request) -> JSONResponse:
     }
 
     # Booleans only — which integrations are configured, never the secrets.
-    connections = {
-        "calendar": bool(settings.google_calendar_client_id),
-        "gmail": bool(settings.google_calendar_client_id)
-        and bool(settings.gmail_watch_enabled),
-        "drive": drive_connected,
-        "slack": bool(settings.slack_webhook_url),
-        "voice": bool(settings.elevenlabs_api_key),
-        "meetings": bool(settings.recall_api_key),
-    }
+    # A SCOPED caller's calendar/gmail/drive/slack flags come from THEIR
+    # org_connections rows only (PR D): a fresh org reads NOT connected even
+    # though the platform's global Google/Slack account exists — the global
+    # env is Laura's own plumbing, not the customer's connection. voice and
+    # meetings stay platform capabilities (the product works for every org
+    # through them). Anonymous/demo/global callers keep today's global flags.
+    org_rows = _org_connection_rows(caller_org) if caller_org else []
+    if caller_org is not None:
+        connections = {
+            "calendar": _org_connected(org_rows, "calendar"),
+            "gmail": _org_connected(org_rows, "gmail"),
+            "drive": _org_connected(org_rows, "drive"),
+            "slack": _org_connected(org_rows, "slack"),
+            "voice": bool(settings.elevenlabs_api_key),
+            "meetings": bool(settings.recall_api_key),
+        }
+    else:
+        connections = {
+            "calendar": bool(settings.google_calendar_client_id),
+            "gmail": bool(settings.google_calendar_client_id)
+            and bool(settings.gmail_watch_enabled),
+            "drive": drive_connected,
+            "slack": bool(settings.slack_webhook_url),
+            "voice": bool(settings.elevenlabs_api_key),
+            "meetings": bool(settings.recall_api_key),
+        }
 
     return JSONResponse(
         {
@@ -404,11 +489,9 @@ def dashboard_summary(request: Request) -> JSONResponse:
             "billing": billing,
             "connections": connections,
             # Per-org avatar connections (the Configure tab): the brain link
-            # and, later, per-avatar Gmail/Calendar/Slack/Drive. Config is
-            # non-secret wiring only.
-            "org_connections": (
-                store.connections_for_org(user["org_id"]) if user else []
-            ),
+            # and per-avatar Gmail/Calendar/Slack/Drive. Config is non-secret
+            # wiring only. Durable mirror overlaid when configured (PR D).
+            "org_connections": org_rows,
             "auth_enabled": auth.enabled(),
             "user": (
                 {k: user[k] for k in ("user_id", "email", "name", "picture")}
@@ -430,6 +513,13 @@ async def connect_brain(request: Request) -> JSONResponse:
         if err := auth.gate(request):
             return err
         return JSONResponse({"error": "login required to connect the brain"}, status_code=401)
+    # Manual workspace IDs are not proof of Slack ownership. Public linking is
+    # OAuth-only through /brain/slack/start and its signed state.
+    return JSONResponse(
+        {"error": "manual workspace linking is retired; use Slack OAuth"},
+        status_code=410,
+    )
+
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001 — malformed JSON is a client error
@@ -451,18 +541,22 @@ async def connect_brain(request: Request) -> JSONResponse:
     registry_synced = False
     if provisioned:
         minted_secret = getattr(provisioned, "webhook_secret", "")
-        if minted_secret:
+        minted_token = getattr(provisioned, "webhook_token", "")
+        if minted_secret and minted_token:
             registry_synced = await run_in_threadpool(
-                secret_registry.upsert_org_secret, user["org_id"], minted_secret
+                secret_registry.upsert_org_credentials,
+                user["org_id"], minted_secret, minted_token,
             )
-    # A Cedric link without its per-org signing key is not operational.  Keep
-    # it pending so retrying Connect repairs SSM; never claim connected and
-    # silently fall back to the global key.
+    # Both directions must be workspace-scoped. Keep the link pending when
+    # either credential or the durable connection row is unavailable.
     status = "connected" if provisioned and registry_synced else "pending"
-    store.set_connection(
+    persisted = await run_in_threadpool(
+        _set_connection_all,
         user["org_id"], avatar_id, "cedric-brain", status,
         {"team_id": team_id, "channel": channel},
     )
+    if not persisted:
+        return JSONResponse({"error": "connection persistence failed"}, status_code=503)
     return JSONResponse(
         {
             "provider": "cedric-brain", "avatar_id": avatar_id, "status": status,
@@ -484,35 +578,89 @@ def connect_brain_slack_start(
         if err := auth.gate(request):
             return err
         return JSONResponse({"error": "login required"}, status_code=401)
-    if not avatar_id or avatar_id not in avatars.list_ids():
-        return JSONResponse({"error": "unknown avatar_id"}, status_code=400)
+    allowed_avatar_ids = set(avatars.list_for_org(user["org_id"]))
+    if avatar_id != "cedric" or avatar_id not in allowed_avatar_ids:
+        return JSONResponse(
+            {"error": "only Cedric can connect a customer workspace"},
+            status_code=400,
+        )
 
     from .cedric import install_state
 
     try:
+        base_url = settings.public_base_url.rstrip("/")
         target = install_state.install_url(
             user["org_id"],
             avatar_id,
             channel.strip(),
-            f"{settings.public_base_url.rstrip('/')}/dashboard",
+            f"{base_url}/dashboard",
+            f"{base_url}/dashboard/connections/brain/slack/complete",
         )
     except RuntimeError as exc:
         return JSONResponse({"error": str(exc)}, status_code=503)
+    # Record that THIS org initiated an install (PR D): /slack/complete binds
+    # a secret only to an org with a pending/connected row (or a valid signed
+    # state), so a machine caller can never attach credentials to an org that
+    # never clicked Connect. An already-connected row is left untouched — a
+    # re-install must not degrade a working link if the user abandons OAuth.
+    rows = _org_connection_rows(user["org_id"])
+    current = next(
+        (
+            r
+            for r in rows
+            if r["avatar_id"] == avatar_id and r["provider"] == "cedric-brain"
+        ),
+        None,
+    )
+    if current is None or current["status"] != "connected":
+        if not _set_connection_all(
+            user["org_id"], avatar_id, "cedric-brain", "pending",
+            {"channel": channel.strip()},
+        ):
+            return JSONResponse(
+                {"error": "connection persistence failed"}, status_code=503
+            )
     return RedirectResponse(target, status_code=302)
 
 
 @router.post("/dashboard/connections/brain/slack/complete")
 async def complete_brain_slack_install(request: Request) -> JSONResponse:
-    """Cedric's OAuth callback writes the minted secret back server-to-server."""
-    from . import cedric
-    from .cedric import secret_registry
+    """Cedric's OAuth callback writes the minted secret back server-to-server.
+
+    Binding rule (PR D): a secret may only be attached to an org that
+    INITIATED an install. Proof is either the ``state`` Laura's own
+    /slack/start minted (echoed back opaquely by the orchestrator — signature
+    + TTL verified, org/avatar must match the POST) or, absent a valid state,
+    an existing cedric-brain org_connections row (pending from /slack/start
+    or POST /connections/brain, connected for a re-install/secret rotation).
+    Neither → 403, nothing written. So a caller holding the machine bearer
+    can never bind credentials to an arbitrary org.
+
+    On success the response carries ``org_token`` — a freshly minted PER-ORG
+    machine bearer (durable control plane when configured, SQLite fallback)
+    for the orchestrator to store and use on all its later Laura calls.
+    Returned exactly ONCE; Laura keeps only its hash."""
+    from . import cedric, control_plane
+    from .cedric import install_state, secret_registry
 
     # This endpoint carries a credential. Never inherit the key-free/demo
-    # fail-open behavior used by public session APIs.
-    if not settings.laura_api_token.strip():
-        return JSONResponse({"error": "machine auth is not configured"}, status_code=503)
-    if err := cedric.auth_error(request):
-        return err
+    # fail-open behavior used by public session APIs. A PER-ORG bearer is a
+    # recognized machine credential too — scoped below to its own org.
+    provisioning_ok = cedric.provisioning_auth_ok(request)
+    # The dedicated bootstrap credential is already sufficient and is not an
+    # org token. Do not send it through the cross-tenant token resolver (which
+    # would be needless database I/O and can fail during provisioning).
+    machine_org = (
+        None
+        if provisioning_ok
+        else await run_in_threadpool(cedric.resolve_machine_org, request)
+    )
+    if not provisioning_ok and machine_org is None:
+        if not settings.cedric_orgs_token.strip():
+            return JSONResponse(
+                {"error": "provisioning auth is not configured"}, status_code=503
+            )
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -523,29 +671,86 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
     team_id = str((body or {}).get("team_id") or "").strip()
     channel = str((body or {}).get("channel") or "").strip()
     webhook_secret = str((body or {}).get("webhook_secret") or "").strip()
-    if not org_id or not avatar_id or not team_id or not webhook_secret:
+    webhook_token = str((body or {}).get("webhook_token") or "").strip()
+    state = str((body or {}).get("state") or "").strip()
+    if not all((org_id, avatar_id, team_id, webhook_secret, webhook_token, state)):
         return JSONResponse({"error": "missing required fields"}, status_code=400)
-    # org_id may be a PERSONAL org (== a users row) or a SHARED org (an orgs
-    # row resolved from a verified domain, e.g. org_sff) — accept either. Using
-    # get_user alone would 404 every shared org and silently wedge its brain
-    # connect flow in "pending" forever.
-    org_known = store.get_user(org_id) is not None or store.org_exists(org_id)
-    if avatar_id not in avatars.list_ids() or not org_known:
-        return JSONResponse({"error": "unknown org or avatar"}, status_code=404)
+    if not provisioning_ok and org_id != machine_org:
+        return JSONResponse({"error": "not your org"}, status_code=403)
+    if avatar_id not in avatars.list_ids():
+        return JSONResponse({"error": "unknown avatar"}, status_code=404)
+
+    # Cedric carries Laura's state opaquely through Slack OAuth. Completion
+    # requires that signed proof; a pending row alone is not an authenticator.
+    data = install_state.unpack(state)
+    if (
+        data is None
+        or data.get("org_id") != org_id
+        or data.get("avatar_id") != avatar_id
+        or (
+            str(data.get("channel") or "")
+            and str(data.get("channel") or "") != channel
+        )
+    ):
+        return JSONResponse(
+            {"error": "state does not match this install"}, status_code=403
+        )
+    nonce = str(data.get("nonce") or "")
+    existing = await run_in_threadpool(_org_connection_rows, org_id)
+    if any(
+        r["provider"] == "cedric-brain"
+        and r["avatar_id"] == avatar_id
+        and str((r.get("config") or {}).get("install_nonce") or "") == nonce
+        for r in existing
+    ):
+        return JSONResponse({"error": "install state already consumed"}, status_code=409)
 
     synced = await run_in_threadpool(
-        secret_registry.upsert_org_secret, org_id, webhook_secret
+        secret_registry.upsert_org_credentials,
+        org_id, webhook_secret, webhook_token,
     )
     if not synced:
         return JSONResponse({"error": "registry update failed"}, status_code=503)
-    store.set_connection(
+
+    # Laura is authoritative for the bearer Cedric uses when calling Laura.
+    # Rotate the labelled token on every completed install so re-installation
+    # invalidates the previous credential; never fall back to ephemeral SQLite
+    # when the durable control plane is enabled.
+    org_token = None
+    if control_plane.enabled():
+        try:
+            org_token = await run_in_threadpool(
+                control_plane.rotate_org_token,
+                org_id,
+                "cedric-slack-install",
+            )
+            await run_in_threadpool(
+                store.revoke_org_tokens, org_id, "cedric-slack-install"
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"[dashboard] durable org-token rotation failed ({type(exc).__name__})",
+                flush=True,
+            )
+            return JSONResponse({"error": "org token rotation failed"}, status_code=503)
+    else:
+        org_token = await run_in_threadpool(
+            store.rotate_org_token, org_id, "cedric-slack-install"
+        )
+    if not org_token:
+        return JSONResponse({"error": "org token rotation failed"}, status_code=503)
+
+    persisted = await run_in_threadpool(
+        _set_connection_all,
         org_id,
         avatar_id,
         "cedric-brain",
         "connected",
-        {"team_id": team_id, "channel": channel},
+        {"team_id": team_id, "channel": channel, "install_nonce": nonce},
     )
-    return JSONResponse({"ok": True, "status": "connected"})
+    if not persisted:
+        return JSONResponse({"error": "connection persistence failed"}, status_code=503)
+    return JSONResponse({"ok": True, "status": "connected", "org_token": org_token})
 
 
 @router.get("/dashboard/connections/brain/connectors")
@@ -554,7 +759,11 @@ async def brain_connectors(request: Request) -> JSONResponse:
     Proxies Cedric's GET /api/laura/connectors for the caller's org — live
     connector catalog (connected / account label / needs-reconnect) plus his
     browser consent links. PII-light passthrough by contract; nothing stored.
-    Requires the logged-in owner; org not linked yet → {"status":"pending"}."""
+    Requires the logged-in owner. Scoped to THE CALLER'S org only (PR D): the
+    upstream query carries their workspace team_id from their own connection
+    row, an install mid-flow → {"status":"pending"}, and an org with no brain
+    connection at all gets {"status":"not_connected"} + an empty catalog —
+    never the global demo team's."""
     user = auth.current_user(request)
     if user is None:
         if err := auth.gate(request):
@@ -563,28 +772,179 @@ async def brain_connectors(request: Request) -> JSONResponse:
 
     from . import cedric  # local import, same reason as connect_brain's
 
-    linked = any(
-        c["provider"] == "cedric-brain" and c["status"] == "connected"
-        for c in store.connections_for_org(user["org_id"])
+    rows = await run_in_threadpool(_org_connection_rows, user["org_id"])
+    brain = [r for r in rows if r["provider"] == "cedric-brain"]
+    connected = next((r for r in brain if r["status"] == "connected"), None)
+    if connected is None:
+        if any(r["status"] == "pending" for r in brain):
+            return JSONResponse({"status": "pending", "connectors": []})
+        return JSONResponse({"status": "not_connected", "connectors": []})
+    team_id = str((connected.get("config") or {}).get("team_id") or "")
+    data = await run_in_threadpool(
+        cedric.fetch_org_connectors, user["org_id"], team_id
     )
-    if not linked:
-        return JSONResponse({"status": "pending", "connectors": []})
-    data = await run_in_threadpool(cedric.fetch_org_connectors, user["org_id"])
     if data is None:
         return JSONResponse({"status": "unavailable", "connectors": []})
     return JSONResponse({"status": "ok", **data})
 
 
-@router.delete("/dashboard/connections/brain/{avatar_id}")
-def disconnect_brain(avatar_id: str, request: Request) -> JSONResponse:
-    """Mark the avatar's brain link disconnected (local state; the orchestrator
-    side is detached by ops/Cedric's DELETE when that route ships)."""
+@router.post("/dashboard/connections/brain/disconnect")
+async def disconnect_brain_remote(request: Request) -> JSONResponse:
+    """Disconnect Cedric with a retry-safe, org-wide saga.
+
+    The remote link and credentials belong to the org, not one avatar. A
+    durable disconnect_phase is written before/after remote revoke so a later
+    retry can resume cleanup without a bearer that may already be deleted.
+    """
     user = auth.current_user(request)
     if user is None:
         if err := auth.gate(request):
             return err
         return JSONResponse({"error": "login required"}, status_code=401)
-    ok = store.set_connection(user["org_id"], avatar_id, "cedric-brain", "disconnected", {})
-    if not ok:
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    avatar_id = str((body or {}).get("avatar_id") or "").strip()
+    if not avatar_id or avatar_id not in avatars.list_ids():
         return JSONResponse({"error": "unknown avatar_id"}, status_code=400)
-    return JSONResponse({"provider": "cedric-brain", "avatar_id": avatar_id, "status": "disconnected"})
+
+    rows = await run_in_threadpool(_org_connection_rows, user["org_id"])
+    brain = [r for r in rows if r["provider"] == "cedric-brain"]
+    if not brain or not any(r["avatar_id"] == avatar_id for r in brain):
+        return JSONResponse({"error": "brain is not connected"}, status_code=404)
+    if all(r["status"] == "disconnected" for r in brain):
+        return JSONResponse(
+            {
+                "provider": "cedric-brain",
+                "avatar_id": avatar_id,
+                "status": "disconnected",
+                "remote_revoked": True,
+            }
+        )
+
+    async def persist_all(status: str, phase: str = "", clear: bool = False) -> bool:
+        ok = True
+        for row in brain:
+            config = {} if clear else dict(row.get("config") or {})
+            if phase:
+                config["disconnect_phase"] = phase
+            else:
+                config.pop("disconnect_phase", None)
+            saved = await run_in_threadpool(
+                _set_connection_all,
+                user["org_id"],
+                row["avatar_id"],
+                "cedric-brain",
+                status,
+                config,
+            )
+            ok = bool(saved) and ok
+        return ok
+
+    from . import cedric, control_plane
+    from .cedric import secret_registry
+
+    remote_done = any(
+        str((r.get("config") or {}).get("disconnect_phase") or "")
+        == "remote_revoked"
+        for r in brain
+    )
+    revoked_remotely = remote_done
+
+    if not remote_done:
+        # Persist intent before the irreversible call. If the call succeeds but
+        # the next write fails, retrying the remote is still safe (404 = gone).
+        if not await persist_all("disconnecting", "revoke_pending"):
+            return JSONResponse(
+                {"error": "connection persistence failed"}, status_code=503
+            )
+
+        status_code = await run_in_threadpool(cedric.revoke_org, user["org_id"])
+        revoked_remotely = status_code is not None and (
+            200 <= status_code < 300 or status_code == 404
+        )
+        if status_code is not None and not revoked_remotely:
+            # Restore the customer-visible state when no irreversible remote
+            # change was confirmed.
+            for row in brain:
+                await run_in_threadpool(
+                    _set_connection_all,
+                    user["org_id"],
+                    row["avatar_id"],
+                    "cedric-brain",
+                    row["status"],
+                    dict(row.get("config") or {}),
+                )
+            return JSONResponse({"error": "remote_revoke_failed"}, status_code=502)
+
+        if not await persist_all("disconnecting", "remote_revoked"):
+            return JSONResponse(
+                {"error": "disconnect checkpoint failed"}, status_code=503
+            )
+
+    # From this point retries skip the remote call and converge on cleanup.
+    credentials_removed = await run_in_threadpool(
+        secret_registry.remove_org_credentials, user["org_id"]
+    )
+    if not credentials_removed:
+        return JSONResponse({"error": "credential_cleanup_failed"}, status_code=502)
+
+    if control_plane.enabled():
+        try:
+            revoked_tokens = await run_in_threadpool(
+                control_plane.revoke_org_tokens,
+                user["org_id"],
+                "cedric-slack-install",
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"[dashboard] durable org-token revoke failed ({type(exc).__name__})",
+                flush=True,
+            )
+            revoked_tokens = False
+        if not revoked_tokens:
+            return JSONResponse({"error": "token_revoke_failed"}, status_code=502)
+    await run_in_threadpool(
+        store.revoke_org_tokens, user["org_id"], "cedric-slack-install"
+    )
+
+    # Cedric is one org-wide brain connection. Mark every avatar row together
+    # so disconnecting one cannot leave another falsely displayed as connected.
+    if not await persist_all("disconnected", clear=True):
+        return JSONResponse(
+            {"error": "connection persistence failed"}, status_code=503
+        )
+    return JSONResponse(
+        {
+            "provider": "cedric-brain",
+            "avatar_id": avatar_id,
+            "status": "disconnected",
+            "remote_revoked": bool(revoked_remotely),
+        }
+    )
+
+
+@router.delete("/dashboard/connections/brain/{avatar_id}")
+def disconnect_brain(avatar_id: str, request: Request) -> JSONResponse:
+    """LEGACY local-only marker: flip the avatar's brain link to disconnected
+    without touching the orchestrator or the secret registry. Prefer
+    POST /dashboard/connections/brain/disconnect (remote-revoke-first).
+    Kept because frontend/dashboard.html still calls this route (Codex's
+    file) — retire it once the button moves to the POST."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    return JSONResponse(
+        {
+            "error": (
+                "legacy local-only disconnect is retired; "
+                "use POST /dashboard/connections/brain/disconnect"
+            )
+        },
+        status_code=410,
+    )
