@@ -323,13 +323,28 @@ def test_per_person_merges_owner_first_name_with_full_speaker_name():
     assert state.per_person["Marco Rossi"]["commitments"]
 
 
-def test_per_person_excludes_the_avatar_itself():
-    state = _feed(
-        MeetingState(),
-        ("Laura", "I'll take the notes for this meeting."),
-        ("Duccio", "Laura will own the summary."),
+def test_per_person_excludes_explicit_agent_but_keeps_same_name_human():
+    state = MeetingState()
+    update(
+        state,
+        "Laura",
+        "I'll take the notes for this meeting.",
+        participant_id="bot-participant",
+        speaker_kind="agent",
+        templates=[ONBOARDING],
+        wake_words=["laura"],
     )
-    assert "Laura" not in state.per_person
+    update(
+        state,
+        "Laura",
+        "I'll take the human follow-up.",
+        participant_id="human-laura",
+        speaker_kind="human",
+        templates=[ONBOARDING],
+        wake_words=["laura"],
+    )
+    assert "bot-participant" not in state.per_person
+    assert state.per_person["human-laura"]["name"] == "Laura"
 
 
 def test_per_person_in_summary_and_dict():
