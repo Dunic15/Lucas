@@ -408,6 +408,16 @@ def _init_db() -> None:
                 FOREIGN KEY(bot_id) REFERENCES sessions(bot_id) ON DELETE CASCADE
             );
 
+            -- Raw capabilities never enter SQLite. A random URL capability is
+            -- hashed and bound to exactly one Recall bot before realtime
+            -- transcript events are accepted.
+            CREATE TABLE IF NOT EXISTS recall_realtime_capabilities (
+                capability_hash TEXT PRIMARY KEY,
+                bot_id TEXT NOT NULL UNIQUE,
+                created_at REAL NOT NULL,
+                FOREIGN KEY(bot_id) REFERENCES sessions(bot_id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS artifacts (
                 bot_id TEXT PRIMARY KEY,
                 org_id TEXT NOT NULL DEFAULT '{demo}',
@@ -1071,6 +1081,49 @@ def connections_for_org(org_id: str) -> list[dict]:
     return out
 
 
+def register_recall_realtime_capability(bot_id: str, capability: str) -> bool:
+    """Persist a one-bot realtime capability as SHA-256(raw).
+
+    The raw token only exists in Recall's endpoint URL and the request query;
+    it is never stored or logged.
+    """
+    import hashlib
+
+    bot = (bot_id or "").strip()
+    raw = (capability or "").strip()
+    if not bot or not raw:
+        return False
+    digest = hashlib.sha256(raw.encode()).hexdigest()
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            "DELETE FROM recall_realtime_capabilities WHERE bot_id = ?",
+            (bot,),
+        )
+        conn.execute(
+            "INSERT INTO recall_realtime_capabilities "
+            "(capability_hash, bot_id, created_at) VALUES (?, ?, ?)",
+            (digest, bot, time.time()),
+        )
+    return True
+
+
+def resolve_recall_realtime_capability(capability: str) -> str | None:
+    """Return the single bot bound to raw capability, else None."""
+    import hashlib
+
+    raw = (capability or "").strip()
+    if not raw:
+        return None
+    digest = hashlib.sha256(raw.encode()).hexdigest()
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT bot_id FROM recall_realtime_capabilities "
+            "WHERE capability_hash = ?",
+            (digest,),
+        ).fetchone()
+    return row["bot_id"] if row else None
+
+
 def register_conversation(
     conversation_id: str, bot_id: str, *, org_id: str = DEMO_ORG_ID
 ) -> None:
@@ -1136,6 +1189,9 @@ def remove(bot_id: str) -> None:
             _by_conversation.pop(conversation_id, None)
 
     with _LOCK, _connect() as conn:
+        conn.execute(
+            "DELETE FROM recall_realtime_capabilities WHERE bot_id = ?", (bot_id,)
+        )
         conn.execute("DELETE FROM sessions WHERE bot_id = ?", (bot_id,))
         conn.execute("DELETE FROM conversation_routes WHERE bot_id = ?", (bot_id,))
 
