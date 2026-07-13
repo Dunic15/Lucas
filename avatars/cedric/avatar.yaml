@@ -81,3 +81,9 @@ talk_body: M
 min_confidence:
 speak_cooldown_seconds:
 
+# Identity-safe renderer assets. Cedric uses his own 3D model for the public
+# product; if unavailable, only his own photoreal portrait may be attempted.
+face: talk
+face_fallback: photoreal
+talk_model: cedric.glb
+photoreal_reference: reference-cedric.jpg

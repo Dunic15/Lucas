@@ -1368,25 +1368,50 @@ def photoreal_page() -> FileResponse:
 
 
 @app.get("/photoreal/config")
-def photoreal_config() -> JSONResponse:
-    """Where the photoreal page finds the GPU frame stream (empty = fallback)."""
+def photoreal_config(avatar_id: str = "") -> JSONResponse:
+    """GPU endpoint plus identity-safe readiness for the requested avatar."""
+    try:
+        avatar = avatars.load(avatar_id or settings.default_avatar_id)
+        renderer = avatar.renderer_readiness
+    except (FileNotFoundError, ValueError):
+        return JSONResponse(
+            {"error": "face_unavailable", "avatar_id": avatar_id},
+            status_code=404,
+            headers={"Cache-Control": "no-store"},
+        )
     return JSONResponse(
-        {"stream_url": settings.gpu_stream_url},
+        {
+            "stream_url": settings.gpu_stream_url,
+            "avatar_id": avatar.id,
+            "face_ready": renderer["photoreal"]["ready"],
+            "fallback": renderer["fallback"],
+        },
         headers={"Cache-Control": "no-store"},
     )
 
 
 @app.get("/laura-reference.jpg")
-def photoreal_reference(avatar_id: str = "") -> FileResponse:
-    """Static reference portrait — the photoreal page's no-GPU fallback face.
-    Per-avatar when gpu/assets/reference-<id>.jpg exists (the wake-up window
-    must show the RIGHT face); the legacy Laura file otherwise. The route name
-    predates multi-avatar and is kept for cached pages."""
+def photoreal_reference(avatar_id: str = "") -> Response:
+    """Return only the requested avatar's portrait; never another identity."""
     assets = REPO_ROOT_DIR / "gpu" / "assets"
-    safe = "".join(c for c in avatar_id.lower() if c.isalnum() or c in "-_")
-    per_avatar = assets / f"reference-{safe}.jpg"
+    if not avatar_id:
+        # Legacy/manual preview without an identity remains Laura-only.
+        path = assets / "reference.jpg"
+    elif not re.fullmatch(r"[a-z0-9_-]{1,64}", avatar_id.lower()):
+        return JSONResponse({"error": "face_unavailable"}, status_code=404)
+    else:
+        try:
+            avatar = avatars.load(avatar_id.lower())
+            name = avatar.photoreal_reference or f"reference-{avatar.id}.jpg"
+            path = assets / name if Path(name).name == name else assets / "__missing__"
+        except FileNotFoundError:
+            path = assets / "__missing__"
+    if not path.is_file():
+        return JSONResponse(
+            {"error": "face_unavailable", "avatar_id": avatar_id}, status_code=404
+        )
     return FileResponse(
-        per_avatar if safe and per_avatar.exists() else assets / "reference.jpg",
+        path,
         media_type="image/jpeg",
         headers={"Cache-Control": "public, max-age=86400"},
     )
@@ -1397,8 +1422,9 @@ def talk_avatar_model(avatar_id: str) -> Response:
     """Per-avatar 3D model for /talk (laura.glb, cedric.glb, …), served
     same-origin on purpose: Ready Player Me's CDN shutdown (Jan 2026) killed our
     previous third-party model URL, so the models (TalkingHead-repo samples) are
-    vendored into frontend/. /talk HEAD-probes /{avatar_id}.glb and falls back to
-    /laura.glb, so a missing model 404s here without ever breaking the page.
+    vendored into frontend/. /talk HEAD-probes /{avatar_id}.glb and may fall
+    back only to that same avatar's configured renderer; a missing model 404s
+    explicitly and never borrows another identity.
     HEAD must be explicit — FastAPI's @app.get alone 405s it, which would have
     silently defeated the probe (curl -I caught this; FileResponse handles HEAD
     natively). Whitelisted to simple ids resolving to real files — never a
@@ -1655,7 +1681,7 @@ async def _start_avatar_session(
     avatar_url = (
         f"{settings.public_base_url.rstrip('/')}/{avatar.page.strip('/')}"
         f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
-        f"&body={avatar.talk_body}"
+        f"&body={avatar.talk_body}&face_fallback={avatar.face_fallback}"
     )
     # ── entitlement gate (PR B) — THE single choke point for paid bots ──
     # Every entry point (manual start, calendar auto-join, Gmail watcher,
@@ -3738,7 +3764,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             avatar_url = (
                 f"{settings.public_base_url.rstrip('/')}/{avatar.page.strip('/')}"
                 f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
-                f"&body={avatar.talk_body}"
+                f"&body={avatar.talk_body}&face_fallback={avatar.face_fallback}"
             )
             # Entitlement gate (PR B): calendar auto-join takes this INLINED
             # dispatch path (not _start_avatar_session), so it must be gated
