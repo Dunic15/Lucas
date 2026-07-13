@@ -335,7 +335,7 @@ def test_slack_start_complete_full_roundtrip(client, monkeypatch, google_on):
     monkeypatch.setattr(settings, "cedric_orgs_token", "shared-test-token")
     monkeypatch.setattr(settings, "laura_api_token", "machine-token")
     user = _login(client)
-    writes: list[tuple[str, str]] = []
+    writes: list[tuple[str, str, str]] = []
     monkeypatch.setattr(
         secret_registry,
         "upsert_org_credentials",
