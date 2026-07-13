@@ -259,6 +259,10 @@ def test_old_subscription_cannot_cancel_new_subscription(cp):
             access="terminal",
         ),
     )
+    _pay(
+        cp, customer, "sub_old",
+        event_id="evt_old_invoice_after_cancel", created=500,
+    )
     cp.apply_stripe_event(
         "evt_new_active", "customer.subscription.created", customer,
         _subscription(org, "sub_new", created=300),
@@ -490,6 +494,53 @@ def test_past_due_does_not_reset_and_expires_at_paid_through(cp, pg):
     assert entitlements.remaining_seconds(org) == 0
     denied = entitlements.open_usage(org, "bot-expired", "laura")
     assert denied == {"ok": False, "reason": "usage_limit_reached"}
+
+
+def test_usage_spanning_renewal_counts_only_post_period_overlap(cp, pg):
+    org = _org(cp, "period-overlap")
+    customer, _ = _bind(cp, org, "periodoverlap")
+    now = int(time.time())
+    cp.apply_stripe_event(
+        "evt_overlap_subscription",
+        "customer.subscription.created",
+        customer,
+        _subscription(
+            org, "sub_overlap", created=100,
+            start=now - 100, end=now + 3600,
+        ),
+    )
+    _pay(
+        cp, customer, "sub_overlap",
+        event_id="evt_overlap_paid", created=200,
+        start=now - 100, end=now + 3600,
+    )
+    with psycopg.connect(pg["uri"], autocommit=True) as conn:
+        # 600s meeting ended 50s into this period: only 50s belongs here.
+        conn.execute(
+            """
+            INSERT INTO usage_sessions
+              (org_id, bot_id, avatar_id, state, in_call_at, closed_at,
+               consumed_seconds, close_reason)
+            VALUES
+              (%s, 'bot-overlap-closed', 'laura', 'closed',
+               to_timestamp(%s), to_timestamp(%s), 600, 'ended')
+            """,
+            (org, now - 650, now - 50),
+        )
+        # Active meeting began before renewal: count from period start, not
+        # from its pre-renewal in_call_at.
+        conn.execute(
+            """
+            INSERT INTO usage_sessions
+              (org_id, bot_id, avatar_id, state, in_call_at, deadline)
+            VALUES
+              (%s, 'bot-overlap-active', 'laura', 'active',
+               to_timestamp(%s), to_timestamp(%s))
+            """,
+            (org, now - 200, now + 1000),
+        )
+    used = entitlements.usage_summary(org)["used_seconds"]
+    assert 149 <= used <= 155
 
 
 def test_paused_update_fails_closed(cp):
