@@ -440,13 +440,13 @@ def test_past_due_does_not_reset_and_expires_at_paid_through(cp, pg):
         "evt_dunning_active", "customer.subscription.created", customer,
         _subscription(
             org, "sub_dunning", created=100,
-            start=now - 100, end=now + 1000,
+            start=now - 1000, end=now + 1000,
         ),
     )
     _pay(
         cp, customer, "sub_dunning",
         event_id="evt_dunning_paid", created=150,
-        start=now - 100, end=now + 1000,
+        start=now - 1000, end=now + 1000,
     )
     assert entitlements.open_usage(
         org, "bot-dunning-used", "laura"
