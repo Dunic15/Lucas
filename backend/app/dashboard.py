@@ -553,7 +553,7 @@ async def connect_brain(request: Request) -> JSONResponse:
     persisted = await run_in_threadpool(
         _set_connection_all,
         user["org_id"], avatar_id, "cedric-brain", status,
-        {"team_id": team_id, "channel": channel, "install_nonce": nonce},
+        {"team_id": team_id, "channel": channel},
     )
     if not persisted:
         return JSONResponse({"error": "connection persistence failed"}, status_code=503)
@@ -735,7 +735,7 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
         avatar_id,
         "cedric-brain",
         "connected",
-        {"team_id": team_id, "channel": channel},
+        {"team_id": team_id, "channel": channel, "install_nonce": nonce},
     )
     if not persisted:
         return JSONResponse({"error": "connection persistence failed"}, status_code=503)
