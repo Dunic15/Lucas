@@ -1000,7 +1000,7 @@ def test_disconnect_fences_org_token_before_remote_cleanup_and_retries(
     assert store.resolve_org_token(other_raw) == other["org_id"]
 
 
-def test_disconnect_remote_revoke_ok_drops_secret(def test_disconnect_remote_revoke_ok_drops_secret(client, monkeypatch, google_on):
+def test_disconnect_remote_revoke_ok_drops_secret(client, monkeypatch, google_on):
     monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
     user = _login(client)
     store.set_connection(
