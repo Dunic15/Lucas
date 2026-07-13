@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app import auth, cedric, ledger, store
-from app.cedric import callback, secret_registry
+from app.cedric import callback, install_state, secret_registry
 from app.config import settings
 
 
@@ -149,9 +149,11 @@ def test_slack_complete_hot_writes_registry_and_connection(client, monkeypatch):
     writes: list[tuple[str, str]] = []
     monkeypatch.setattr(
         secret_registry,
-        "upsert_org_secret",
-        lambda org, secret: writes.append((org, secret)) or True,
+        "upsert_org_credentials",
+        lambda org, secret, token: writes.append((org, secret, token)) or True,
     )
+
+    state = install_state.pack(user["org_id"], "cedric", "#approvals", "")
 
     response = client.post(
         "/dashboard/connections/brain/slack/complete",
@@ -162,11 +164,15 @@ def test_slack_complete_hot_writes_registry_and_connection(client, monkeypatch):
             "team_id": "T_NEW",
             "channel": "#approvals",
             "webhook_secret": "minted-test-secret",
+            "webhook_token": "minted-peer-token",
+            "state": state,
         },
     )
 
     assert response.status_code == 200
-    assert writes == [(user["org_id"], "minted-test-secret")]
+    assert writes == [
+        (user["org_id"], "minted-test-secret", "minted-peer-token")
+    ]
     row = store.connections_for_org(user["org_id"])[0]
     assert row["status"] == "connected"
     assert row["config"] == {"team_id": "T_NEW", "channel": "#approvals"}
