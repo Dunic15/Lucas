@@ -173,20 +173,10 @@ async def org_action_status(action_id: str, request: Request) -> JSONResponse:
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     status = str((body or {}).get("status") or "")
     detail = str((body or {}).get("detail") or "")
-    # Org ownership for PER-ORG bearers: a per-org caller may write ONLY when
-    # the ledger row for this action_id resolves to ITS org. Unknown and
-    # pre-finalize ids (action_org → None) and another org's ids all answer
-    # the IDENTICAL 404 — otherwise a per-org bearer could plant a status on
-    # an action_id it doesn't own before the owning org's meeting finalizes
-    # (action_status is tenant-less today), and a distinct wrong-org reply
-    # would double as a cross-tenant existence oracle. The GLOBAL bearer keeps
-    # today's behavior — the trusted service path that legitimately writes
-    # pre-finalize statuses. (Adversarial review 2026-07-13, should-fix 3;
-    # follow-up hardening: an org_id column on action_status itself.)
-    if org != settings.demo_org_id:
-        owner = await run_in_threadpool(ledger.action_org, action_id)
-        if owner != org:
-            return JSONResponse({"error": "unknown action_id"}, status_code=404)
+    # action_status is keyed by (org_id, action_id), so a per-workspace
+    # principal may safely report proposed/approved before meeting finalization.
+    # The eventual ledger row consults only this org's status and cannot collide
+    # with an identical action_id in another tenant.
     ok = await run_in_threadpool(
         ledger.set_action_status, action_id, status, detail, org_id=org
     )
