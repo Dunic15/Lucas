@@ -20,7 +20,7 @@ psycopg = pytest.importorskip("psycopg")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import control_plane, outbox, outbox_pg  # noqa: E402
+from app import control_plane, outbox, outbox_pg, tools  # noqa: E402
 from app.cedric import callback, integration  # noqa: E402
 from app.config import settings  # noqa: E402
 
@@ -439,3 +439,58 @@ def test_manual_retry_does_not_steal_live_lease(cp, pg):
             (outbox_id,),
         )
     assert outbox.retry_status(org, outbox_id) == "queued"
+
+
+
+def test_duplicate_recall_final_concurrent_and_restart_is_one_capture(cp, pg):
+    org = _org(cp, "producer-replay")
+    integration_data = _integration(org)
+
+    def session():
+        return SimpleNamespace(
+            org_id=org,
+            bot_id="bot-producer-replay",
+            integration=integration_data,
+            queued_actions=[],
+        )
+
+    def capture(_n):
+        return tools.capture_action_once(
+            session(),
+            "Send the approved recap",
+            source_event_key="a" * 64,
+            source_fingerprint="b" * 64,
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(capture, range(4)))
+    assert sum(1 for _item_value, created in results if created) == 1
+    assert len({item_value["action_id"] for item_value, _ in results}) == 1
+
+    # Process restart: no Session memory survives, but the same final still
+    # resolves to the original action and stable Slack idempotency key.
+    replay_item, replay_created = capture(99)
+    assert replay_created is False
+    action_id = replay_item["action_id"]
+
+    with _admin(pg) as conn:
+        actions = conn.execute(
+            "SELECT action_id FROM queued_actions WHERE org_id=%s", (org,)
+        ).fetchall()
+        callbacks = conn.execute(
+            "SELECT idempotency_key FROM callback_outbox WHERE org_id=%s",
+            (org,),
+        ).fetchall()
+    assert actions == [(action_id,)]
+    assert callbacks == [(f"action.requested:{action_id}",)]
+
+    # Same words at a genuinely later Recall interval have another exact key
+    # and therefore represent a new requested action, not a retry.
+    later, later_created = tools.capture_action_once(
+        session(),
+        "Send the approved recap",
+        source_event_key="c" * 64,
+        source_fingerprint="b" * 64,
+    )
+    assert later_created is True
+    assert later["action_id"] != action_id

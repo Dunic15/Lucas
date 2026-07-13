@@ -126,44 +126,52 @@ def lookup_record(record_id: str = "", query: str = "") -> str:
 # post-meeting artifact's actions[] at finalize (main._finalize_session) and,
 # for orchestrated sessions, announced immediately via the action.requested
 # webhook (fired OFF the live path by cedric.notify_action_requested).
-def capture_action(session, action: str, owner: str = "", due: str = "") -> dict:
-    """The one capture primitive, shared by the queue_action tool handler and
-    main.py's deterministic live-path branch: append {action, owner, due} to
-    the session's list, persist its stable id, and enqueue the callback.
-    No network occurs here; the outbox worker delivers off the live path.
-    """
-    item = {
-        # Stable id assigned ONCE here, at capture. It rides the live
-        # action.requested webhook AND survives into the artifact's actions[],
-        # so the orchestrator (Cedric) correlates the two — and dedupes — on the
-        # id, not on text (which the ASR-continuation window can still extend
-        # after the webhook already fired). Also the key the /org resolve
-        # endpoint accepts back for the ack loop.
+def capture_action_once(
+    session,
+    action: str,
+    owner: str = "",
+    due: str = "",
+    *,
+    source_event_key: str = "",
+    source_fingerprint: str = "",
+    dedupe_window_seconds: float = 30.0,
+) -> tuple[dict, bool]:
+    """Capture once even when Recall concurrently retries the same final."""
+    proposed = {
         "action_id": uuid.uuid4().hex[:16],
         "action": " ".join((action or "").split())[:300],
         "owner": " ".join((owner or "").split())[:100],
         "due": " ".join((due or "").split())[:100],
     }
-    # One bounded local SQLite transaction makes the action_id survive a
-    # process restart before finalize. No network occurs on the live path.
     from . import outbox
 
-    outbox.persist_action_capture(session, item)
+    item, created, _outbox_id = outbox.persist_action_capture_once(
+        session,
+        proposed,
+        source_event_key=source_event_key,
+        source_fingerprint=source_fingerprint,
+        dedupe_window_seconds=dedupe_window_seconds,
+    )
+    if not created:
+        return item, False
+
     queued = getattr(session, "queued_actions", None)
     if queued is None:
         queued = []
         session.queued_actions = queued
     queued.append(item)
     try:
-        # Orchestrated sessions get the action.requested webhook NOW (so the
-        # approval card is ready before the meeting ends). notify_ is a no-op
-        # for plain sessions and always dispatches off the live path. Lazy
-        # import keeps this module import-light and dependency-free offline.
         from .cedric import notify_action_requested
 
         notify_action_requested(session, session.bot_id, item)
-    except Exception:  # noqa: BLE001 — the webhook is a bonus; capture never fails
+    except Exception:  # noqa: BLE001 — durable worker owns delivery
         pass
+    return item, True
+
+
+def capture_action(session, action: str, owner: str = "", due: str = "") -> dict:
+    """Compatibility capture primitive for tool calls without Recall identity."""
+    item, _created = capture_action_once(session, action, owner, due)
     return item
 
 

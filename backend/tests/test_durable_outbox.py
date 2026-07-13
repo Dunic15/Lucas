@@ -390,3 +390,89 @@ def test_finalize_keeps_local_session_when_durable_enqueue_fails(
     assert local_writes == []
     assert store.get("bot-order-fail") is session
     original_remove("bot-order-fail")
+
+
+
+def test_recall_capture_identity_retries_but_later_words_are_distinct():
+    base = {
+        "event": "transcript.data",
+        "data": {
+            "bot": {"id": "bot-identity"},
+            "transcript": {"id": "tr-1"},
+            "recording": {"id": "rec-1"},
+            "realtime_endpoint": {"id": "ep-1"},
+        },
+    }
+    participant = {"id": 7, "name": "Alex"}
+    words = [
+        {
+            "text": "Laura,",
+            "start_timestamp": {"relative": 12.0},
+            "end_timestamp": {"relative": 12.4},
+        },
+        {
+            "text": "send the recap",
+            "start_timestamp": {"relative": 12.5},
+            "end_timestamp": {"relative": 13.2},
+        },
+    ]
+    kwargs = {
+        "signed": False,
+        "org_id": "org-a",
+        "bot_id": "bot-identity",
+        "participant": participant,
+        "text": "Laura, send the recap",
+    }
+    first = main._recall_capture_identity(base, {}, words=words, **kwargs)
+    retry = main._recall_capture_identity(base, {}, words=list(words), **kwargs)
+    later_words = [dict(word) for word in words]
+    later_words[0] = {
+        **later_words[0],
+        "start_timestamp": {"relative": 52.0},
+    }
+    later = main._recall_capture_identity(
+        base, {}, words=later_words, **kwargs
+    )
+
+    assert first == retry
+    assert first[0]
+    assert later[0] != first[0]
+
+
+def test_sqlite_fallback_fingerprint_is_bounded(tmp_path, monkeypatch):
+    _fresh(tmp_path, monkeypatch)
+    monkeypatch.setattr(integration, "_kick_outbox", lambda: None)
+    session = store.create(
+        "bot-fallback", "https://meet.google.com/abc-defg-hij", "laura",
+        org_id="org-a",
+    )
+    session.integration = _integration()
+    first, created = tools.capture_action_once(
+        session,
+        "Send the recap",
+        source_fingerprint="d" * 64,
+        dedupe_window_seconds=30,
+    )
+    replay, replay_created = tools.capture_action_once(
+        session,
+        "Send the recap",
+        source_fingerprint="d" * 64,
+        dedupe_window_seconds=30,
+    )
+    assert created is True and replay_created is False
+    assert replay["action_id"] == first["action_id"]
+
+    with store._LOCK, store._connect() as conn:
+        conn.execute(
+            "UPDATE queued_actions SET created_at=created_at-60 "
+            "WHERE org_id=? AND action_id=?",
+            ("org-a", first["action_id"]),
+        )
+    later, later_created = tools.capture_action_once(
+        session,
+        "Send the recap",
+        source_fingerprint="d" * 64,
+        dedupe_window_seconds=30,
+    )
+    assert later_created is True
+    assert later["action_id"] != first["action_id"]

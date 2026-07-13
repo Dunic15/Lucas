@@ -70,44 +70,128 @@ def _callback_insert(conn, callback: dict[str, Any]) -> Optional[int]:
     return int(row[0]) if row else None
 
 
+def _capture_item(row: Any) -> dict[str, str]:
+    return {
+        "action_id": str(row["action_id"]),
+        "action": str(row["action"]),
+        "owner": str(row["owner"]),
+        "due": str(row["due"]),
+    }
+
+
+def persist_action_capture_once(
+    org_id: str,
+    bot_id: str,
+    item: dict[str, Any],
+    callback: Optional[dict[str, Any]],
+    *,
+    source_event_key: str = "",
+    source_fingerprint: str = "",
+    dedupe_window_seconds: float = 30.0,
+) -> tuple[dict[str, str], bool, Optional[int]]:
+    """Atomically dedupe a Recall final, then persist action + callback.
+
+    Only hashes enter these columns.  Exact source keys (signed webhook id, or
+    transcript id + relative word timing) dedupe for the life of the meeting.
+    The fingerprint path is a bounded fallback for legacy payloads with no
+    timing.  An org-scoped advisory transaction lock makes concurrent workers
+    and process restarts converge on one action_id and one callback row.
+    """
+    event_key = str(source_event_key or "")[:128]
+    fingerprint = str(source_fingerprint or "")[:128]
+    window = max(1.0, min(float(dedupe_window_seconds), 300.0))
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        lock_key = event_key or fingerprint
+        if lock_key:
+            conn.execute(
+                text(
+                    "SELECT pg_catalog.pg_advisory_xact_lock("
+                    "pg_catalog.hashtextextended(:lock_key, 0))"
+                ),
+                {"lock_key": f"{org_id}:{bot_id}:{lock_key}"},
+            )
+
+        existing = None
+        if event_key:
+            existing = conn.execute(
+                text(
+                    """
+                    SELECT action_id, action, owner, due
+                    FROM queued_actions
+                    WHERE org_id=:org_id AND source_event_key=:source_event_key
+                    LIMIT 1
+                    """
+                ),
+                {"org_id": org_id, "source_event_key": event_key},
+            ).mappings().first()
+        elif fingerprint:
+            existing = conn.execute(
+                text(
+                    """
+                    SELECT action_id, action, owner, due
+                    FROM queued_actions
+                    WHERE org_id=:org_id AND bot_id=:bot_id
+                      AND source_fingerprint=:source_fingerprint
+                      AND created_at >= clock_timestamp()
+                        - (:window * interval '1 second')
+                    ORDER BY created_at DESC, action_id
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "org_id": org_id,
+                    "bot_id": bot_id,
+                    "source_fingerprint": fingerprint,
+                    "window": window,
+                },
+            ).mappings().first()
+        if existing is not None:
+            return _capture_item(existing), False, None
+
+        values = {
+            "org_id": org_id,
+            "bot_id": bot_id,
+            "action_id": str(item.get("action_id") or ""),
+            "action": str(item.get("action") or "")[:300],
+            "owner": str(item.get("owner") or "")[:100],
+            "due": str(item.get("due") or "")[:100],
+            "source_event_key": event_key,
+            "source_fingerprint": fingerprint,
+        }
+        row = conn.execute(
+            text(
+                """
+                INSERT INTO queued_actions (
+                  org_id, bot_id, action_id, action, owner, due,
+                  source_event_key, source_fingerprint,
+                  created_at, updated_at
+                ) VALUES (
+                  :org_id, :bot_id, :action_id, :action, :owner, :due,
+                  :source_event_key, :source_fingerprint,
+                  clock_timestamp(), clock_timestamp()
+                )
+                RETURNING action_id, action, owner, due
+                """
+            ),
+            values,
+        ).mappings().one()
+        outbox_id = _callback_insert(conn, callback) if callback else None
+        return _capture_item(row), True, outbox_id
+
+
 def persist_action_capture(
     org_id: str,
     bot_id: str,
     item: dict[str, Any],
     callback: Optional[dict[str, Any]],
 ) -> Optional[int]:
-    """Atomically persist the stable action and its callback routing."""
-    engine = _engine()
-    with engine.begin() as conn:
-        _set_org(conn, org_id)
-        conn.execute(
-            text(
-                """
-                INSERT INTO queued_actions (
-                  org_id, bot_id, action_id, action, owner, due,
-                  created_at, updated_at
-                ) VALUES (
-                  :org_id, :bot_id, :action_id, :action, :owner, :due,
-                  clock_timestamp(), clock_timestamp()
-                )
-                ON CONFLICT (org_id, action_id) DO UPDATE SET
-                  bot_id=excluded.bot_id,
-                  action=excluded.action,
-                  owner=excluded.owner,
-                  due=excluded.due,
-                  updated_at=clock_timestamp()
-                """
-            ),
-            {
-                "org_id": org_id,
-                "bot_id": bot_id,
-                "action_id": str(item.get("action_id") or ""),
-                "action": str(item.get("action") or "")[:300],
-                "owner": str(item.get("owner") or "")[:100],
-                "due": str(item.get("due") or "")[:100],
-            },
-        )
-        return _callback_insert(conn, callback) if callback else None
+    """Compatibility wrapper for non-Recall callers without a source key."""
+    _item, _created, outbox_id = persist_action_capture_once(
+        org_id, bot_id, item, callback
+    )
+    return outbox_id
 
 
 def update_queued_action(

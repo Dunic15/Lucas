@@ -63,6 +63,8 @@ def _ensure_schema() -> None:
                 action TEXT NOT NULL,
                 owner TEXT NOT NULL DEFAULT '',
                 due TEXT NOT NULL DEFAULT '',
+                source_event_key TEXT NOT NULL DEFAULT '',
+                source_fingerprint TEXT NOT NULL DEFAULT '',
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 PRIMARY KEY (org_id, action_id)
@@ -93,6 +95,32 @@ def _ensure_schema() -> None:
                 ON callback_outbox(status, next_attempt_at);
             CREATE INDEX IF NOT EXISTS idx_callback_outbox_org
                 ON callback_outbox(org_id, created_at DESC);
+            """
+        )
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(queued_actions)").fetchall()
+        }
+        if "source_event_key" not in columns:
+            conn.execute(
+                "ALTER TABLE queued_actions "
+                "ADD COLUMN source_event_key TEXT NOT NULL DEFAULT ''"
+            )
+        if "source_fingerprint" not in columns:
+            conn.execute(
+                "ALTER TABLE queued_actions "
+                "ADD COLUMN source_fingerprint TEXT NOT NULL DEFAULT ''"
+            )
+        conn.executescript(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_queued_actions_source_event
+                ON queued_actions(org_id, source_event_key)
+                WHERE source_event_key <> '';
+            CREATE INDEX IF NOT EXISTS idx_queued_actions_fingerprint
+                ON queued_actions(
+                    org_id, bot_id, source_fingerprint, created_at DESC
+                )
+                WHERE source_fingerprint <> '';
             """
         )
 
@@ -154,8 +182,7 @@ def persist_queued_action(session: Any, item: dict) -> None:
         )
 
 
-def persist_action_capture(session: Any, item: dict) -> int | None:
-    """Persist action + callback atomically before any spoken confirmation."""
+def _callback_record(session: Any, item: dict) -> tuple[str, dict | None]:
     integration = dict(getattr(session, "integration", None) or {})
     org_id, team, channel, ref = _routing(
         {**integration, "org_id": getattr(session, "org_id", "")}
@@ -180,21 +207,124 @@ def persist_action_capture(session: Any, item: dict) -> int | None:
             "team_id": team, "channel": channel,
             "external_ref": ref, "payload": payload,
         }
+    return org_id, callback_record
+
+
+def persist_action_capture_once(
+    session: Any,
+    item: dict,
+    *,
+    source_event_key: str = "",
+    source_fingerprint: str = "",
+    dedupe_window_seconds: float = 30.0,
+) -> tuple[dict, bool, int | None]:
+    """Return (canonical item, created, outbox id) after one durable tx."""
+    org_id, callback_record = _callback_record(session, item)
+    event_key = str(source_event_key or "")[:128]
+    fingerprint = str(source_fingerprint or "")[:128]
+    window = max(1.0, min(float(dedupe_window_seconds), 300.0))
     if control_plane.enabled():
         return _pg_call(
-            outbox_pg.persist_action_capture, org_id,
-            str(session.bot_id), item, callback_record,
+            outbox_pg.persist_action_capture_once,
+            org_id,
+            str(session.bot_id),
+            item,
+            callback_record,
+            source_event_key=event_key,
+            source_fingerprint=fingerprint,
+            dedupe_window_seconds=window,
         )
-    persist_queued_action(session, item)
-    if callback_record:
-        return _enqueue(
-            event="action.requested",
-            idempotency_key=callback_record["idempotency_key"],
-            integration={**integration, "org_id": org_id},
-            bot_id=str(session.bot_id), action_id=action_id,
-            payload=callback_record["payload"],
+
+    _ensure_schema()
+    now = time.time()
+    with store._LOCK, store._connect() as conn:
+        existing = None
+        if event_key:
+            existing = conn.execute(
+                """
+                SELECT action_id, action, owner, due
+                FROM queued_actions
+                WHERE org_id=? AND source_event_key=?
+                LIMIT 1
+                """,
+                (org_id, event_key),
+            ).fetchone()
+        elif fingerprint:
+            existing = conn.execute(
+                """
+                SELECT action_id, action, owner, due
+                FROM queued_actions
+                WHERE org_id=? AND bot_id=? AND source_fingerprint=?
+                  AND created_at >= ?
+                ORDER BY created_at DESC, action_id
+                LIMIT 1
+                """,
+                (org_id, str(session.bot_id), fingerprint, now - window),
+            ).fetchone()
+        if existing is not None:
+            return dict(existing), False, None
+
+        canonical = {
+            "action_id": str(item.get("action_id") or ""),
+            "action": str(item.get("action") or "")[:300],
+            "owner": str(item.get("owner") or "")[:100],
+            "due": str(item.get("due") or "")[:100],
+        }
+        conn.execute(
+            """
+            INSERT INTO queued_actions (
+                org_id, bot_id, action_id, action, owner, due,
+                source_event_key, source_fingerprint, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                org_id, str(session.bot_id), canonical["action_id"],
+                canonical["action"], canonical["owner"], canonical["due"],
+                event_key, fingerprint, now, now,
+            ),
         )
-    return None
+        outbox_id = None
+        if callback_record:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO callback_outbox (
+                    idempotency_key, org_id, bot_id, action_id, event,
+                    callback_url, team_id, channel, external_ref_json,
+                    payload_json, status, attempts, next_attempt_at,
+                    last_error, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, '', ?)
+                """,
+                (
+                    callback_record["idempotency_key"], org_id,
+                    callback_record["bot_id"], callback_record["action_id"],
+                    callback_record["event"], callback_record["callback_url"],
+                    callback_record["team_id"], callback_record["channel"],
+                    json.dumps(
+                        callback_record["external_ref"],
+                        separators=(",", ":"), sort_keys=True,
+                    ),
+                    json.dumps(
+                        callback_record["payload"],
+                        separators=(",", ":"), sort_keys=True,
+                    ),
+                    now, now,
+                ),
+            )
+            row = conn.execute(
+                """
+                SELECT id FROM callback_outbox
+                WHERE org_id=? AND idempotency_key=?
+                """,
+                (org_id, callback_record["idempotency_key"]),
+            ).fetchone()
+            outbox_id = int(row["id"]) if row else None
+        return canonical, True, outbox_id
+
+
+def persist_action_capture(session: Any, item: dict) -> int | None:
+    """Compatibility wrapper for callers without producer identity."""
+    _item, _created, outbox_id = persist_action_capture_once(session, item)
+    return outbox_id
 
 
 def queued_actions(org_id: str, bot_id: str) -> list[dict]:

@@ -14,8 +14,10 @@ Flow:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
+import math
 import random
 import re
 import time
@@ -3886,6 +3888,78 @@ def _closing_signal(session: store.Session, text: str) -> bool:
     )
 
 
+def _capture_digest(*parts: object) -> str:
+    canonical = "\x1f".join(str(part or "") for part in parts)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _recall_capture_identity(
+    payload: dict,
+    headers: object,
+    *,
+    signed: bool,
+    org_id: str,
+    bot_id: str,
+    participant: dict,
+    words: list,
+    text: str,
+) -> tuple[str, str]:
+    """Build PII-free hashes that survive webhook retry and process restart.
+
+    Recall's normalized final has no per-utterance id.  Its transcript id plus
+    participant and relative word interval is the stable event identity.  A
+    verified Svix/webhook id wins when present.  Legacy payloads without timing
+    fall back to a bounded same-speaker/text fingerprint in the outbox DAL.
+    """
+    get_header = getattr(headers, "get", lambda _name, _default="": _default)
+    webhook_id = ""
+    if signed:
+        webhook_id = str(
+            get_header("webhook-id", "")
+            or get_header("svix-id", "")
+            or ""
+        ).strip()
+    data = payload.get("data") or {}
+    transcript_id = str((data.get("transcript") or {}).get("id") or "")
+    recording_id = str((data.get("recording") or {}).get("id") or "")
+    endpoint_id = str((data.get("realtime_endpoint") or {}).get("id") or "")
+    participant_id = str(participant.get("id") or participant.get("name") or "")
+    normalized_text = " ".join((text or "").split()).casefold()
+
+    def relative(word: dict, field: str) -> str:
+        try:
+            value = float(((word.get(field) or {}).get("relative")))
+        except (TypeError, ValueError, AttributeError):
+            return ""
+        if not math.isfinite(value):
+            return ""
+        return format(value, ".6f")
+
+    start = relative(words[0], "start_timestamp") if words else ""
+    end = ""
+    if words:
+        end = relative(words[-1], "end_timestamp") or relative(
+            words[-1], "start_timestamp"
+        )
+
+    event_key = ""
+    if webhook_id:
+        event_key = _capture_digest(
+            "recall-webhook-v1", org_id, bot_id, webhook_id
+        )
+    elif transcript_id and start:
+        event_key = _capture_digest(
+            "recall-final-v1", org_id, bot_id, transcript_id,
+            recording_id, endpoint_id, participant_id, start, end,
+            normalized_text,
+        )
+    fingerprint = _capture_digest(
+        "recall-final-fallback-v1", org_id, bot_id,
+        participant_id, normalized_text,
+    )
+    return event_key, fingerprint
+
+
 # ───────────────────────── recall webhook ──────────────────────────
 @app.post("/webhooks/recall")
 async def recall_webhook(request: Request) -> JSONResponse:
@@ -4139,6 +4213,16 @@ async def recall_webhook(request: Request) -> JSONResponse:
     speaker = session.resolve_speaker(participant.get("name"), participant.get("id"))
     if not text:
         return JSONResponse({"ok": True})
+    capture_event_key, capture_fingerprint = _recall_capture_identity(
+        payload,
+        request.headers,
+        signed=has_signature,
+        org_id=session.org_id,
+        bot_id=bot_id,
+        participant=participant,
+        words=words,
+        text=text,
+    )
 
     # Her own voice re-entering through a participant's open mic: not a human
     # line. Keep it out of the transcript (it would pollute per-person
@@ -4566,9 +4650,24 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # itself ("please schedule a follow-up with Marco on Friday").
         # One bounded tenant transaction, off the shared event loop. No
         # callback network occurs on the live transcript path.
-        item = await run_in_threadpool(
-            tools.capture_action, session, question.strip()
+        item, created = await run_in_threadpool(
+            tools.capture_action_once,
+            session,
+            question.strip(),
+            source_event_key=capture_event_key,
+            source_fingerprint=capture_fingerprint,
         )
+        if not created:
+            # Recall retry after a lost 2xx: the original durable action and
+            # callback already own the acknowledgement.  Never speak/kick twice.
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": False,
+                    "action_capture": True,
+                    "duplicate": True,
+                }
+            )
         # ASR often splits one ask across finals ("Cedric, can you send" +
         # "the recap by Friday"). Remember this capture so a same-speaker
         # follow-up within a few seconds extends its text (see the
