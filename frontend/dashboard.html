@@ -581,10 +581,14 @@
   var query=new URLSearchParams(window.location.search);
   var oauthResult=query.get("brain");
   var billingResult=query.get("billing");
-  if(oauthResult){
-    toast(oauthResult==="connected"
-      ?"Brain linked — meeting actions will flow to your Slack."
-      :"Slack was installed, but the brain link is still pending.",oauthResult!=="connected");
+  if(oauthResult==="connected"){
+    toast("Brain linked — meeting actions will flow to your Slack.",false);
+  } else if(oauthResult==="pending"){
+    toast("Slack is installed, but the secure brain link is still pending. Retry Connect if it does not finish.",true);
+  } else if(oauthResult==="error"){
+    toast("Slack could not be connected. No new workspace access was enabled; retry Connect.",true);
+  } else if(oauthResult){
+    toast("The Slack connection result could not be verified. Check Connections before continuing.",true);
   }
   if(billingResult){
     toast(billingResult==="success"
@@ -617,7 +621,7 @@
   function loadBilling(){
     fetch("/billing/summary",{headers:headers()})
       .then(function(r){
-        if(r.status===404||r.status===503) return null;
+        if(r.status===404||r.status===503) throw new Error("billing unavailable");
         if(!r.ok) throw new Error("HTTP "+r.status);
         return r.json();
       })
@@ -810,8 +814,10 @@
       fetch("/dashboard/connections/brain/connectors",{headers:headers()})
         .then(function(r){ return r.json(); })
         .then(function(j){
-          if(j.status==="pending"){ box.innerHTML='<div class="cnote">Link the brain to see and connect the tools it executes with.</div>'; return; }
-          if(j.status!=="ok"){ box.innerHTML='<div class="cnote">Brain connectors unavailable right now — retry in a moment.</div>'; return; }
+          if(j.status==="pending"){ box.innerHTML='<div class="cnote">Slack install started, but the secure brain link is still pending. Retry Connect if it does not finish.</div>'; return; }
+          if(j.status==="not_connected"){ box.innerHTML='<div class="cnote">Connect Cedric to Slack to choose the workspace tools he may use.</div>'; return; }
+          if(j.status==="unavailable"){ box.innerHTML='<div class="cnote">Cedric is connected, but its tool catalog is temporarily unavailable. Retry in a moment.</div>'; return; }
+          if(j.status!=="ok"){ box.innerHTML='<div class="cnote">The tool connection state could not be verified. Retry in a moment.</div>'; return; }
           box.innerHTML=(j.connectors||[]).map(function(c){
             var chip=c.connected
               ?'<span class="stchip '+(c.needs_reconnect?"pending":"connected")+'">'+(c.needs_reconnect?"reconnect":"connected")+'</span>'
