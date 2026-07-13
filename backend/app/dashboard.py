@@ -553,7 +553,7 @@ async def connect_brain(request: Request) -> JSONResponse:
     persisted = await run_in_threadpool(
         _set_connection_all,
         user["org_id"], avatar_id, "cedric-brain", status,
-        {"team_id": team_id, "channel": channel},
+        {"team_id": team_id, "channel": channel, "install_nonce": nonce},
     )
     if not persisted:
         return JSONResponse({"error": "connection persistence failed"}, status_code=503)
@@ -676,10 +676,23 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
         data is None
         or data.get("org_id") != org_id
         or data.get("avatar_id") != avatar_id
+        or (
+            str(data.get("channel") or "")
+            and str(data.get("channel") or "") != channel
+        )
     ):
         return JSONResponse(
             {"error": "state does not match this install"}, status_code=403
         )
+    nonce = str(data.get("nonce") or "")
+    existing = await run_in_threadpool(_org_connection_rows, org_id)
+    if any(
+        r["provider"] == "cedric-brain"
+        and r["avatar_id"] == avatar_id
+        and str((r.get("config") or {}).get("install_nonce") or "") == nonce
+        for r in existing
+    ):
+        return JSONResponse({"error": "install state already consumed"}, status_code=409)
 
     synced = await run_in_threadpool(
         secret_registry.upsert_org_credentials,
