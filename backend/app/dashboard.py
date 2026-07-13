@@ -578,8 +578,12 @@ def connect_brain_slack_start(
         if err := auth.gate(request):
             return err
         return JSONResponse({"error": "login required"}, status_code=401)
-    if not avatar_id or avatar_id not in avatars.list_ids():
-        return JSONResponse({"error": "unknown avatar_id"}, status_code=400)
+    allowed_avatar_ids = set(avatars.list_for_org(user["org_id"]))
+    if avatar_id != "cedric" or avatar_id not in allowed_avatar_ids:
+        return JSONResponse(
+            {"error": "only Cedric can connect a customer workspace"},
+            status_code=400,
+        )
 
     from .cedric import install_state
 

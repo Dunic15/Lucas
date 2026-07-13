@@ -1,6 +1,6 @@
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DEMO_LINK, Reveal } from "./primitives";
+import { Reveal, SALES_LINK, START_LINK } from "./primitives";
 
 export function FinalCTA() {
   return (
@@ -13,15 +13,17 @@ export function FinalCTA() {
               Bring Laura into your next meeting.
             </h2>
             <p className="relative mx-auto mt-5 max-w-xl text-lg text-muted-foreground">
-              See how a live AI process expert keeps your team aligned, grounded, and one step
-              ahead.
+              Start with 15 avatar-minutes shared across Laura and Cedric. No card required.
             </p>
-            <div className="relative mt-9 flex justify-center">
+            <div className="relative mt-9 flex flex-col justify-center gap-3 sm:flex-row">
               <Button asChild variant="hero" size="xl">
-                <a href={DEMO_LINK}>
-                  Book a demo
+                <a href={START_LINK}>
+                  Start free
                   <ArrowRight />
                 </a>
+              </Button>
+              <Button asChild variant="soft" size="xl">
+                <a href={SALES_LINK}>Enterprise early access</a>
               </Button>
             </div>
           </div>
@@ -35,7 +37,10 @@ const footerLinks = [
   { label: "How it works", href: "#solution" },
   { label: "Product", href: "#product" },
   { label: "Use Cases", href: "#use-cases" },
-  { label: "Contact", href: DEMO_LINK },
+  { label: "Pricing", href: "#pricing" },
+  { label: "Enterprise", href: "#enterprise" },
+  { label: "Privacy", href: "/privacy" },
+  { label: "Terms", href: "/terms" },
 ];
 
 export function Footer() {
@@ -54,7 +59,7 @@ export function Footer() {
           </p>
         </div>
 
-        <nav className="flex flex-wrap gap-x-8 gap-y-3">
+        <nav className="flex flex-wrap gap-x-8 gap-y-3" aria-label="Footer">
           {footerLinks.map((link) => (
             <a
               key={link.label}
@@ -67,10 +72,14 @@ export function Footer() {
         </nav>
       </div>
 
-      <div className="mx-auto mt-10 w-full max-w-6xl border-t border-border pt-6">
-        <p className="text-xs text-muted-foreground">
-          © {new Date().getFullYear()} Laura. All rights reserved.
-        </p>
+      <div className="mx-auto mt-10 flex w-full max-w-6xl flex-col gap-3 border-t border-border pt-6 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+        <p>© {new Date().getFullYear()} Laura. All rights reserved.</p>
+        <a
+          href="mailto:duccio@sffstudio.com"
+          className="transition-colors hover:text-foreground"
+        >
+          duccio@sffstudio.com
+        </a>
       </div>
     </footer>
   );

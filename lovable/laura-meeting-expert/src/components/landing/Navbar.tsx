@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { DEMO_LINK } from "./primitives";
+import { START_LINK } from "./primitives";
 
 const navLinks = [
   { label: "How it works", href: "#solution" },
   { label: "Product", href: "#product" },
   { label: "Use Cases", href: "#use-cases" },
-  { label: "Contact", href: DEMO_LINK },
+  { label: "Pricing", href: "#pricing" },
+  { label: "Enterprise", href: "#enterprise" },
 ];
 
 export function Navbar() {
@@ -50,7 +51,7 @@ export function Navbar() {
         </nav>
 
         <Button asChild variant="hero" size="sm" className="h-9 px-4">
-          <a href={DEMO_LINK}>Book a demo</a>
+          <a href={START_LINK}>Start free</a>
         </Button>
       </div>
     </header>

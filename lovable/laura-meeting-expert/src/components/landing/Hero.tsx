@@ -1,7 +1,7 @@
 import { ArrowRight, FileText, Mic, Video, Users, MessageSquare, PhoneOff } from "lucide-react";
 import meetingStartImg from "@/assets/laura-meeting-start.png";
 import { Button } from "@/components/ui/button";
-import { DEMO_LINK, Eyebrow, Reveal } from "./primitives";
+import { Eyebrow, Reveal, START_LINK } from "./primitives";
 
 export function Hero() {
   return (
@@ -12,7 +12,7 @@ export function Hero() {
       <div className="mx-auto grid w-full max-w-6xl items-center gap-16 lg:grid-cols-[1.05fr_0.95fr]">
         <div className="max-w-2xl">
           <Reveal>
-            <Eyebrow>Live AI Process Expert</Eyebrow>
+            <Eyebrow>15 free avatar-minutes</Eyebrow>
           </Reveal>
           <Reveal delay={80}>
             <h1 className="mt-6 text-4xl font-semibold leading-[1.05] tracking-tight sm:text-5xl md:text-6xl">
@@ -29,8 +29,8 @@ export function Hero() {
           <Reveal delay={240}>
             <div className="mt-9 flex flex-col gap-3 sm:flex-row">
               <Button asChild variant="hero" size="xl">
-                <a href={DEMO_LINK}>
-                  Book a demo
+                <a href={START_LINK}>
+                  Start free
                   <ArrowRight />
                 </a>
               </Button>
@@ -40,6 +40,7 @@ export function Hero() {
             </div>
           </Reveal>
           <Reveal delay={320}>
+            <p className="mt-4 text-sm font-medium text-foreground/70">No card required.</p>
             <div className="mt-10 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-muted-foreground">
               <span className="font-medium text-foreground/70">Works with</span>
               <span>Zoom</span>

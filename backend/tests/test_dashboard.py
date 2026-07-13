@@ -82,6 +82,8 @@ def test_summary_shape_and_attribution(client):
     cedric = next(a for a in data["avatars"] if a["id"] == "cedric")
     assert laura["meetings_total"] == 1
     assert cedric["meetings_total"] == 0
+    assert "SFF" not in cedric["role"]
+    assert cedric["drive_folder"] is False
 
     stats = data["stats"]
     assert stats["meetings_30d"] == 1
@@ -158,11 +160,17 @@ def test_hidden_avatar_excluded_and_enriched(client):
     ids = {a["id"] for a in data["avatars"]}
     assert "sff" not in ids
     assert {"laura", "cedric"} <= ids
+    assert "duccio" not in ids
 
     laura = next(a for a in data["avatars"] if a["id"] == "laura")
     assert isinstance(laura["capabilities"], list) and laura["capabilities"]
     assert "knowledge_topics" in laura and "process_templates" in laura
     assert "minutes_total" in laura
+
+
+def test_public_avatar_picker_is_customer_roster_only(client):
+    ids = {row["id"] for row in client.get("/avatars").json()["avatars"]}
+    assert ids == {"laura", "cedric"}
 
 
 def test_avatar_email_default_bare_others_tagged(client):
@@ -191,6 +199,54 @@ def test_dashboard_page_served(client):
     resp = client.get("/dashboard")
     assert resp.status_code == 200
     assert "Laura — Dashboard" in resp.text
+
+
+def test_dashboard_is_customer_facing_and_enterprise_is_honest(client):
+    html = client.get("/dashboard").text
+    assert "/laura-reference.jpg?avatar_id=" in html
+    assert 'loading="lazy"' in html
+    assert 'aria-live="polite"' in html
+    assert "onerror=" not in html
+    assert "SELF-SERVE WIZARD IS ON THE ROADMAP" not in html
+    assert "Estimated cost" not in html
+    assert "15 min" in html
+    assert "Enterprise" in html and "Early access" in html
+    assert "Enterprise ready" not in html
+    # Collection handlers must use querySelectorAll ($), not querySelector ($).
+    # A single Element has no forEach and would break nav/disconnect at runtime.
+    assert '    $("#nav button").forEach' not in html
+    assert '    $("#av-grid [data-brain-off]").forEach' not in html
+
+
+def test_dashboard_wires_real_selfserve_billing_flow(client):
+    html = client.get("/dashboard").text
+    assert "€49" in html and "300 avatar-minutes" in html
+    assert 'fetch("/billing/summary"' in html
+    assert 'openBilling("/billing/checkout"' in html
+    assert 'openBilling("/billing/portal"' in html
+    assert "res.status===402" in html
+    assert 'go("usage"); loadBilling();' in html
+    assert "Your included minutes are used. Upgrade to Solo to continue." in html
+
+
+def test_dashboard_reports_brain_and_connector_states_truthfully(client):
+    html = client.get("/dashboard").text
+    assert 'oauthResult==="connected"' in html
+    assert 'oauthResult==="pending"' in html
+    assert 'oauthResult==="error"' in html
+    assert "Slack could not be connected. No new workspace access was enabled" in html
+    assert 'j.status==="not_connected"' in html
+    assert 'j.status==="unavailable"' in html
+    assert 'method:"POST",headers:headers(),body:JSON.stringify({avatar_id:avatarId})' in html
+    assert 'method:"DELETE"' not in html
+
+
+def test_dashboard_rejects_non_meeting_links_before_dispatch(client):
+    html = client.get("/dashboard").text
+    assert "meet\\.google\\.com" in html
+    assert "zoom\\.us" in html
+    assert "teams\\.(microsoft\\.com|live\\.com)" in html
+    assert "Paste a Google Meet, Zoom or Microsoft Teams meeting link." in html
 
 
 def test_legacy_artifact_without_avatar_id(client):

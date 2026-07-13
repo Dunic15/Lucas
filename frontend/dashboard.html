@@ -70,16 +70,23 @@
   .brand .dot{width:12px;height:12px;border-radius:50%;background:var(--grad);position:relative;box-shadow:0 0 14px rgba(126,150,255,.6);}
   .brand .dot::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:1px solid rgba(127,150,200,.4);animation:ring 3.4s ease-out infinite;}
   .nav{display:flex;flex-direction:column;gap:2px;}
-  .nav a{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:10px;
+  .nav button{appearance:none;width:100%;border:0;background:transparent;font:inherit;text-align:left;
+    display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:10px;
     color:var(--dim);text-decoration:none;font-size:.9rem;cursor:pointer;position:relative;}
-  .nav a .ic{width:16px;text-align:center;opacity:.85;}
-  .nav a.on{background:var(--panel-2);color:var(--text);font-weight:600;}
-  .nav a.on::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2.5px;border-radius:3px;background:var(--grad);}
-  .nav a:not(.on):hover{background:var(--panel);color:var(--text);}
+  .nav button:focus-visible{outline:2px solid var(--g2);outline-offset:2px;}
+  .nav button .ic{width:16px;text-align:center;opacity:.85;}
+  .nav button.on{background:var(--panel-2);color:var(--text);font-weight:600;}
+  .nav button.on::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2.5px;border-radius:3px;background:var(--grad);}
+  .nav button:not(.on):hover{background:var(--panel);color:var(--text);}
   .lbl{font-family:var(--mono);font-size:.62rem;letter-spacing:.22em;text-transform:uppercase;color:var(--faint);padding:0 4px;margin-bottom:7px;}
   .rost{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:10px;color:inherit;cursor:pointer;}
   .rost:hover{background:var(--panel);}
   .av{border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:600;flex:0 0 auto;letter-spacing:-.02em;}
+  .avatar-photo{position:relative;overflow:hidden;isolation:isolate;background:var(--panel-2);}
+  .avatar-photo .fallback{position:absolute;inset:0;display:grid;place-items:center;z-index:0;}
+  .avatar-photo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 22%;z-index:1;}
+  .avatar-photo.broken img{display:none;}
+  .av.mini{width:20px;height:20px;font-size:.62rem;}
   .rost .av{width:25px;height:25px;font-size:.76rem;}
   .rost .nm{font-size:.86rem;flex:1;}
   .sdot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:0 0 auto;}
@@ -137,6 +144,8 @@
   .step .n{font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;color:transparent;background:var(--grad);-webkit-background-clip:text;background-clip:text;font-weight:700;}
   .step h3{font-size:.98rem;font-weight:600;letter-spacing:-.02em;margin:6px 0 5px;}
   .step p{font-size:.83rem;color:var(--dim);margin:0;line-height:1.5;}
+  .step.done{border-color:rgba(79,192,138,.35);}
+  .step.done .n{color:var(--ok);background:none;-webkit-text-fill-color:var(--ok);}
   .how-foot{grid-column:1/-1;font-size:.82rem;color:var(--faint);text-align:center;margin-top:-4px;}
 
   .tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;}
@@ -289,6 +298,17 @@
   .ubar .fill{height:100%;border-radius:6px;background:var(--grad);}
   .ubar .val{font-family:var(--mono);font-size:.8rem;color:var(--dim);width:60px;text-align:right;flex:0 0 auto;}
   .soon{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--warn);background:var(--warn-soft);padding:4px 10px;border-radius:999px;}
+  .plans{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:16px;}
+  @media (max-width:700px){.plans{grid-template-columns:1fr;}}
+  .plan{border:1px solid var(--line);border-radius:16px;padding:18px;background:var(--panel);display:flex;flex-direction:column;gap:12px;}
+  .plan.featured{border-color:rgba(126,182,255,.35);background:linear-gradient(145deg,var(--live-soft),var(--panel));}
+  .plan .ptop{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+  .plan h3{margin:0;font-size:1.05rem;letter-spacing:-.025em;}
+  .plan .price{font-size:1.7rem;font-weight:650;letter-spacing:-.04em;}
+  .plan .price small{font-size:.75rem;color:var(--faint);font-weight:500;letter-spacing:0;}
+  .plan ul{padding:0;margin:0;list-style:none;display:flex;flex-direction:column;gap:7px;color:var(--dim);font-size:.83rem;}
+  .plan li::before{content:"✓";color:var(--ok);margin-right:8px;}
+  .plan .btn{align-self:flex-start;text-decoration:none;}
 
   .conns{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;}
   @media (max-width:640px){ .conns{grid-template-columns:1fr;} }
@@ -322,6 +342,15 @@
   @keyframes drift1{0%,100%{transform:translate(0,0);}50%{transform:translate(-60px,40px);}}
   @keyframes drift2{0%,100%{transform:translate(0,0);}50%{transform:translate(50px,-30px);}}
   @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms !important;}}
+  @media (max-width:860px){
+    .side{position:sticky;top:0;z-index:20;padding:12px 14px;gap:10px;background:var(--bg);}
+    .side .nav{flex-direction:row;overflow-x:auto;padding-bottom:3px;scrollbar-width:none;}
+    .side .nav::-webkit-scrollbar{display:none;}
+    .side .nav button{white-space:nowrap;}
+    .side>div:not(.brand):not(:last-child){display:none;}
+    .side>div:last-child{margin-top:0 !important;}
+    .side>div:last-child>div:first-child{display:none;}
+  }
 </style>
 </head>
 <body>
@@ -331,12 +360,12 @@
   <aside class="side">
     <div class="brand"><span class="dot"></span>Laura</div>
     <nav class="nav" id="nav">
-      <a data-view="overview" class="on"><span class="ic">▦</span> Overview</a>
-      <a data-view="avatars"><span class="ic">◐</span> Avatars</a>
-      <a data-view="meetings"><span class="ic">▤</span> Meetings</a>
-      <a data-view="usage"><span class="ic">◇</span> Usage &amp; billing</a>
-      <a data-view="connections"><span class="ic">⇄</span> Connections</a>
-      <a data-view="settings"><span class="ic">⚙</span> Settings</a>
+      <button type="button" data-view="overview" class="on" aria-current="page"><span class="ic">▦</span> Overview</button>
+      <button type="button" data-view="avatars"><span class="ic">◐</span> Avatars</button>
+      <button type="button" data-view="meetings"><span class="ic">▤</span> Meetings</button>
+      <button type="button" data-view="usage"><span class="ic">◇</span> Usage &amp; billing</button>
+      <button type="button" data-view="connections"><span class="ic">⇄</span> Connections</button>
+      <button type="button" data-view="settings"><span class="ic">⚙</span> Settings</button>
     </nav>
     <div>
       <div class="lbl">Your avatars</div>
@@ -378,18 +407,18 @@
       <div class="livewrap" id="livewrap"></div>
 
       <div class="how">
-        <div class="step"><div class="n">01 / CONNECT YOUR TOOLS</div><h3>Connected to your tools</h3><p>Connect each avatar to your Gmail, Calendar and Slack. It works inside your world — reading context and acting on your behalf, with your permission.</p></div>
-        <div class="step"><div class="n">02 / SEND IT IN</div><h3>Into any meeting</h3><p>Paste a Zoom, Meet or Teams link below (or invite its email to the calendar). It joins as a participant, on camera.</p></div>
-        <div class="step"><div class="n">03 / GET THE WORK BACK</div><h3>It does the follow-through</h3><p>Live it tracks the checklist and answers. The moment the call ends, the summary and action items land here.</p></div>
-        <div class="how-foot">Avatars act on their own — this is where you watch them and steer.</div>
+        <div class="step" id="step-avatar"><div class="n">01 / MEET</div><h3>Meet Laura and Cedric</h3><p>Choose the colleague that fits each call. Your 15 free avatar-minutes are shared across both.</p></div>
+        <div class="step" id="step-connect"><div class="n">02 / CONNECT</div><h3>Connect Cedric and your tools</h3><p>Install Cedric in Slack, then authorize only the tools you want him to use.</p></div>
+        <div class="step" id="step-meeting"><div class="n">03 / TRY IT</div><h3>Send one into a meeting</h3><p>Paste a Meet, Zoom or Teams link. The avatar joins as a participant and brings the work back here.</p></div>
+        <div class="how-foot">No card is required for the first 15 avatar-minutes.</div>
       </div>
 
       <div class="panel" style="margin-bottom:20px">
         <h2>Send an avatar to a meeting</h2>
         <div class="ph">Paste a Zoom / Meet / Teams link — the avatar joins as a participant.</div>
         <div class="dispatch">
-          <select id="dsp-avatar"></select>
-          <input id="dsp-url" placeholder="https://meet.google.com/…" />
+          <select id="dsp-avatar" aria-label="Avatar"></select>
+          <input id="dsp-url" type="url" inputmode="url" autocomplete="off" aria-label="Meeting link" placeholder="https://meet.google.com/…" />
           <button class="btn primary" id="dsp-go">Send</button>
         </div>
         <div class="note">The host may need to admit it from the waiting room. Sessions bill per minute — end them from the live bar above.</div>
@@ -419,7 +448,7 @@
     <section class="view" id="view-avatars" hidden>
       <div class="head"><div><h1>Avatars</h1><div class="sub">Your AI colleagues — who they are, what they know, what they can do</div></div></div>
       <div id="av-grid"></div>
-      <div class="foot">A NEW AVATAR IS A FOLDER UNDER avatars/ TODAY — THE SELF-SERVE WIZARD IS ON THE ROADMAP.</div>
+      <div class="foot">LAURA AND CEDRIC SHARE ONE ACCOUNT BALANCE. CHOOSE PER MEETING.</div>
     </section>
 
     <!-- MEETINGS -->
@@ -439,39 +468,62 @@
       <div id="mt-upcoming" hidden>
         <div class="panel" style="text-align:center;padding:44px 20px">
           <div style="font-size:1.7rem;margin-bottom:8px">📅</div>
-          <h2 style="margin:0 0 6px">Connect your calendar</h2>
-          <div class="ph" style="max-width:46ch;margin:0 auto 18px">See upcoming meetings here and let your avatars auto-join them — or schedule an avatar into a meeting straight from the dashboard.</div>
-          <button class="btn primary" id="cal-connect">Connect Google Calendar</button>
-          <div class="cnote" style="margin-top:14px">Calendar auto-join &amp; scheduling is the next connector we're wiring up.</div>
+          <h2 style="margin:0 0 6px">Connect calendars through Cedric</h2>
+          <div class="ph" style="max-width:46ch;margin:0 auto 18px">Link your Slack workspace first, then authorize Calendar and the other tools you want Cedric to use.</div>
+          <button class="btn primary" data-goto="connections">Open connections</button>
+          <div class="cnote" style="margin-top:14px">Personal calendar connection is enabled only after it is scoped to your workspace.</div>
         </div>
       </div>
     </section>
 
     <!-- USAGE & BILLING -->
     <section class="view" id="view-usage" hidden>
-      <div class="head"><div><h1>Usage &amp; billing</h1><div class="sub">Live avatar-minutes and what they cost</div></div></div>
+      <div class="head"><div><h1>Usage &amp; billing</h1><div class="sub">One balance shared by Laura and Cedric</div></div></div>
       <div class="usage-hero">
-        <div class="ubig"><div class="k">Avatar minutes · 30 days</div><div class="v tnum" id="u-min">—</div><div class="s" id="u-min-tot"></div></div>
-        <div class="ubig"><div class="k">Estimated cost · 30 days</div><div class="v tnum gradtext" id="u-cost">—</div><div class="s" id="u-rate"></div></div>
+        <div class="ubig"><div class="k">Minutes remaining</div><div class="v tnum" id="u-remaining">—</div><div class="s" id="u-included">Loading your entitlement…</div></div>
+        <div class="ubig"><div class="k">Minutes used this period</div><div class="v tnum" id="u-used">—</div><div class="s" id="u-period">Shared across Laura and Cedric</div></div>
       </div>
       <div class="panel" style="margin-bottom:16px">
-        <h2>Minutes by avatar</h2><div class="ph">All time</div>
+        <h2>Minutes by avatar</h2><div class="ph">Meeting history</div>
         <div id="u-bars"></div>
       </div>
       <div class="panel">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-          <div><h2>Plan &amp; invoicing</h2><div class="ph" style="margin:0">Current plan: <b id="u-plan">Demo</b></div></div>
-          <span class="soon">◷ Billing — coming soon</span>
+          <div><h2>Plan &amp; invoicing</h2><div class="ph" style="margin:0">Current plan: <b id="u-plan">Loading…</b></div></div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span class="soon" id="billing-state">Checking billing</span>
+            <button class="btn" id="billing-manage" hidden>Manage billing</button>
+          </div>
         </div>
-        <p style="color:var(--dim);font-size:.86rem;margin:12px 0 0;line-height:1.55">Usage is metered per avatar-minute today. Plans, payment and invoices arrive with the multi-tenant launch — the numbers above are a real usage measure with an estimated rate.</p>
+        <div class="plans">
+          <article class="plan" id="plan-free">
+            <div class="ptop"><h3>Free</h3><span class="stchip" id="free-state">15 minutes</span></div>
+            <div class="price">€0 <small>no card required</small></div>
+            <ul><li>15 avatar-minutes once</li><li>Laura and Cedric</li><li>Meet, Zoom and Teams</li><li>Recaps, decisions and actions</li></ul>
+            <button class="btn" data-goto="overview">Start with a meeting</button>
+          </article>
+          <article class="plan featured" id="plan-solo">
+            <div class="ptop"><h3>Solo</h3><span class="stchip connected">Best for individuals</span></div>
+            <div class="price">€49 <small>/ month</small></div>
+            <ul><li>300 avatar-minutes each billing period</li><li>Laura and Cedric</li><li>Connected tools through Cedric</li><li>Customer billing portal</li></ul>
+            <button class="btn primary" id="billing-upgrade">Upgrade to Solo</button>
+          </article>
+          <article class="plan">
+            <div class="ptop"><h3>Enterprise</h3><span class="stchip pending">Early access</span></div>
+            <div class="price">Talk to us</div>
+            <p class="ph">Design-partner scope — enterprise controls are not presented as live today.</p>
+            <ul><li>Planned: shared workspaces and roles</li><li>Planned: SSO, auditability and retention</li><li>Planned: security review and guided rollout</li></ul>
+            <a class="btn" href="mailto:duccio@sffstudio.com?subject=Laura%20enterprise%20early%20access">Contact sales</a>
+          </article>
+        </div>
       </div>
     </section>
 
     <!-- CONNECTIONS -->
     <section class="view" id="view-connections" hidden>
-      <div class="head"><div><h1>Connections</h1><div class="sub">What your avatars can reach — configured on the server</div></div></div>
+      <div class="head"><div><h1>Connections</h1><div class="sub">Choose what Cedric can reach for your workspace</div></div></div>
       <div class="conns" id="conns"></div>
-      <div class="foot">CONNECTIONS ARE CONFIGURED VIA ENVIRONMENT/OAUTH ON THE DEPLOYMENT. CALENDAR CONNECT OPENS THE GOOGLE CONSENT FLOW.</div>
+      <div class="foot">EACH TOOL NEEDS ITS OWN AUTHORIZATION. CONNECTED NEVER MEANS UNRESTRICTED ACCESS.</div>
     </section>
 
     <!-- SETTINGS -->
@@ -482,7 +534,7 @@
           <div class="frow"><div><div class="t">Theme</div><div class="h">Dashboard appearance</div></div>
             <div class="seg" id="seg-theme"><button class="on" data-t="">Dark</button><button data-t="light">Light</button></div></div>
         </div>
-        <div class="fset">
+        <div class="fset" id="api-token-settings">
           <div class="frow"><div><div class="t">API token</div><div class="h">Sent as Bearer on session and dashboard calls (stored in this browser only)</div></div>
             <input type="password" id="set-tok" placeholder="LAURA_API_TOKEN" /></div>
           <div class="frow"><div><div class="t"></div></div><button class="btn" id="set-tok-save">Save token</button></div>
@@ -493,7 +545,7 @@
     </div>
   </main>
 </div>
-<div class="toasts" id="toasts"></div>
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="true"></div>
 
 <script>
 (function(){
@@ -506,16 +558,44 @@
              "linear-gradient(135deg,#8b5cf6,#c4b5fd)","linear-gradient(135deg,#1F9D63,#4FC08A)"];
   var gradOf={};
   function grad(id){ if(!(id in gradOf)) gradOf[id]=GRADS[Object.keys(gradOf).length%GRADS.length]; return gradOf[id]; }
+  function avatarBadge(id,name,size){
+    var safeId=encodeURIComponent(id||"laura"), letter=esc((name||id||"?")[0].toUpperCase());
+    return '<span class="av avatar-photo'+(size==="mini"?" mini":"")+'" style="background:'+grad(id)+'">'+
+      '<span class="fallback" aria-hidden="true">'+letter+'</span><img src="/laura-reference.jpg?avatar_id='+safeId+
+      '" alt="" aria-hidden="true" loading="lazy" decoding="async" /></span>';
+  }
+  function wireAvatarImages(){
+    $$(".avatar-photo img").forEach(function(img){
+      if(img.getAttribute("data-wired")==="1") return;
+      img.setAttribute("data-wired","1");
+      var fail=function(){img.parentNode.classList.add("broken");};
+      img.addEventListener("error",fail);
+      if(img.complete&&!img.naturalWidth) fail();
+    });
+  }
 
   var token=localStorage.getItem("LAURA_API_TOKEN")||"";
   function headers(){ var h={"Content-Type":"application/json"}; if(token) h["Authorization"]="Bearer "+token; return h; }
-  function toast(msg,err){ var t=document.createElement("div"); t.className="toast"+(err?" err":""); t.innerHTML='<span class="dt"></span>'+esc(msg);
+  function toast(msg,err){ var t=document.createElement("div"); t.className="toast"+(err?" err":""); t.setAttribute("role",err?"alert":"status"); t.innerHTML='<span class="dt"></span>'+esc(msg);
     $("#toasts").appendChild(t); setTimeout(function(){ t.style.opacity="0"; t.style.transition="opacity .3s"; setTimeout(function(){t.remove();},300); },3000); }
-  var oauthResult=new URLSearchParams(window.location.search).get("brain");
-  if(oauthResult){
-    toast(oauthResult==="connected"
-      ?"Brain linked — meeting actions will flow to your Slack."
-      :"Slack was installed, but the brain link is still pending.",oauthResult!=="connected");
+  var query=new URLSearchParams(window.location.search);
+  var oauthResult=query.get("brain");
+  var billingResult=query.get("billing");
+  if(oauthResult==="connected"){
+    toast("Brain linked — meeting actions will flow to your Slack.",false);
+  } else if(oauthResult==="pending"){
+    toast("Slack is installed, but the secure brain link is still pending. Retry Connect if it does not finish.",true);
+  } else if(oauthResult==="error"){
+    toast("Slack could not be connected. No new workspace access was enabled; retry Connect.",true);
+  } else if(oauthResult){
+    toast("The Slack connection result could not be verified. Check Connections before continuing.",true);
+  }
+  if(billingResult){
+    toast(billingResult==="success"
+      ?"Solo is activating — your allowance updates after Stripe confirms payment."
+      :"Checkout was cancelled; your current plan is unchanged.",billingResult!=="success");
+  }
+  if(oauthResult||billingResult){
     window.history.replaceState({},"",window.location.pathname);
   }
 
@@ -524,9 +604,9 @@
   var VIEWS=["overview","avatars","meetings","usage","connections","settings"];
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
-    $$("#nav a").forEach(function(a){a.classList.toggle("on",a.getAttribute("data-view")===name);});
+    document.querySelectorAll("#nav button").forEach(function(a){var current=a.getAttribute("data-view")===name;a.classList.toggle("on",current);if(current)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current");});
     window.scrollTo(0,0); }
-  $$("#nav a").forEach(function(a){a.addEventListener("click",function(e){e.preventDefault();go(a.getAttribute("data-view"));});});
+  $$("#nav button").forEach(function(a){a.addEventListener("click",function(e){e.preventDefault();go(a.getAttribute("data-view"));});});
   document.addEventListener("click",function(e){var t=e.target.closest("[data-goto]");if(t){go(t.getAttribute("data-goto"));}});
 
   function load(){
@@ -535,8 +615,56 @@
         if(r.status===401){ return r.json().catch(function(){return {};}).then(function(j){ showGate(true, !!j.auth_enabled); throw new Error("401"); }); }
         showGate(false,false); return r.json();
       })
-      .then(function(d){ DATA=d; renderAll(d); })
+      .then(function(d){ DATA=d; renderAll(d); if(d.user) loadBilling(); })
       .catch(function(e){ if(String(e.message)!=="401") toast("Could not load: "+e.message,true); });
+  }
+  function loadBilling(){
+    fetch("/billing/summary",{headers:headers()})
+      .then(function(r){
+        if(r.status===404||r.status===503) throw new Error("billing unavailable");
+        if(!r.ok) throw new Error("HTTP "+r.status);
+        return r.json();
+      })
+      .then(function(b){ if(b) renderBilling(b); })
+      .catch(function(){ $("#billing-state").textContent="Billing temporarily unavailable"; });
+  }
+  function secondsOf(b,key){
+    var direct=Number(b[key+"_seconds"]);
+    if(Number.isFinite(direct)) return Math.max(0,direct);
+    var fallback=Number(b[key]);
+    return Number.isFinite(fallback)?Math.max(0,fallback):0;
+  }
+  function minuteLabel(seconds){ return Math.max(0,Math.ceil(seconds/60))+" min"; }
+  function renderBilling(b){
+    var plan=String(b.plan||"free").toLowerCase();
+    var used=secondsOf(b,"used"), remaining=secondsOf(b,"remaining"), included=secondsOf(b,"included");
+    $("#u-used").textContent=minuteLabel(used);
+    $("#u-remaining").textContent=minuteLabel(remaining);
+    $("#u-included").textContent=minuteLabel(included)+" included in this "+(plan==="solo"?"billing period":"trial");
+    $("#u-period").textContent=b.current_period_end
+      ?"Renews "+new Date(b.current_period_end*1000).toLocaleDateString()
+      :"Shared across Laura and Cedric";
+    $("#u-plan").textContent=plan==="solo"?"Solo":"Free";
+    $("#billing-state").textContent=plan==="solo"?"Billing active":"Free trial";
+    $("#free-state").textContent=plan==="solo"?"Previous plan":"15 minutes";
+    $("#billing-upgrade").hidden=plan==="solo";
+    $("#billing-manage").hidden=plan!=="solo";
+    $("#plan-solo").classList.toggle("featured",plan!=="solo");
+    $("#plan-free").classList.toggle("featured",plan==="free");
+  }
+  function openBilling(path,button){
+    button.disabled=true;
+    var old=button.textContent;
+    button.textContent="Opening…";
+    fetch(path,{method:"POST",headers:headers(),body:"{}"})
+      .then(function(r){return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,j:j};});})
+      .then(function(res){
+        if(!res.ok) throw new Error(res.j.error||"billing request failed");
+        var url=res.j.url||res.j.checkout_url||res.j.portal_url;
+        if(!url) throw new Error("billing URL missing");
+        window.location.assign(url);
+      })
+      .catch(function(e){toast("Could not open billing: "+e.message,true);button.disabled=false;button.textContent=old;});
   }
   function showGate(on, authEnabled){
     $("#authgate").hidden=!on; $("#views").hidden=on;
@@ -557,8 +685,13 @@
   function title(m){ return m.meeting_type ? m.meeting_type.replace(/_/g," ") : (m.platform!=="—" ? m.platform+" meeting" : "Meeting"); }
 
   function renderAll(d){
+    $("#api-token-settings").hidden=!!d.user;
     var avById={}; d.avatars.forEach(function(a){avById[a.id]=a;});
     function avName(id){ return (avById[id]||{}).name || (id?id:"—"); }
+    var brainConnected=(d.org_connections||[]).some(function(x){return x.avatar_id==="cedric"&&x.provider==="cedric-brain"&&x.status==="connected";});
+    $("#step-avatar").classList.toggle("done",d.avatars.some(function(a){return a.id==="laura"||a.id==="cedric";}));
+    $("#step-connect").classList.toggle("done",brainConnected);
+    $("#step-meeting").classList.toggle("done",(d.meetings||[]).length>0||(d.live||[]).length>0);
 
     var uc=$("#userchip");
     if(d.user){
@@ -571,13 +704,12 @@
     } else { uc.hidden=true; }
 
     $("#side-roster").innerHTML = d.avatars.map(function(a){
-      return '<div class="rost" data-goto="avatars"><span class="av" style="background:'+grad(a.id)+'">'+esc(a.name[0]||"?")+'</span>'+
+      return '<div class="rost" data-goto="avatars">'+avatarBadge(a.id,a.name)+
         '<span class="nm">'+esc(a.name)+'</span><span class="sdot'+(a.live_now?" live":"")+'"></span></div>';}).join("")
       || '<div class="empty" style="padding:8px;font-size:.78rem">No avatars installed</div>';
     var connNames={calendar:"Google Calendar",gmail:"Gmail watch",drive:"Google Drive",slack:"Slack",voice:"Voice (ElevenLabs)",meetings:"Meetings (Recall)"};
-    $("#side-conns").innerHTML = ["calendar","gmail","slack"].map(function(k){
-      return '<div class="rost" data-goto="connections"><span class="sdot'+(d.connections[k]?" ok":"")+'"></span>'+
-        '<span class="nm" style="font-size:.82rem;color:'+(d.connections[k]?"inherit":"var(--faint)")+'">'+connNames[k]+'</span></div>';}).join("");
+    $("#side-conns").innerHTML = '<div class="rost" data-goto="connections"><span class="sdot'+(brainConnected?" ok":"")+'"></span>'+
+      '<span class="nm" style="font-size:.82rem;color:'+(brainConnected?"inherit":"var(--faint)")+'">'+connNames.slack+'</span></div>';
 
     var liveN=d.live.length;
     $("#ov-sub").textContent = d.avatars.length+" avatar"+(d.avatars.length===1?"":"s")+" · "+
@@ -607,7 +739,7 @@
     renderChart(d.stats.weekly);
 
     $("#avcards").innerHTML = d.avatars.map(function(a){
-      return '<div class="avc" data-goto="avatars"><span class="av" style="background:'+grad(a.id)+'">'+esc(a.name[0]||"?")+'</span>'+
+      return '<div class="avc" data-goto="avatars">'+avatarBadge(a.id,a.name)+
         '<div><div class="nm">'+esc(a.name)+' <span class="pill '+(a.live_now?"live":"idle")+'">'+(a.live_now?"in call":"idle")+'</span>'+(a.silent?' <span class="pill silent">silent</span>':'')+'</div>'+
         '<div class="ro">'+esc(a.role)+' · '+a.knowledge_docs+' docs</div></div>'+
         '<div class="stat"><div class="n tnum">'+a.meetings_total+'</div><div class="l">meetings</div></div></div>';}).join("")
@@ -638,7 +770,7 @@
           '<div id="brain-conns" class="conns-list" style="margin-top:10px"></div>';
       }
       return '<div class="avd"><div class="top">'+
-          '<div class="idn"><span class="av" style="background:'+grad(a.id)+'">'+esc(a.name[0]||"?")+'</span>'+
+          '<div class="idn">'+avatarBadge(a.id,a.name)+
           '<div><div class="nm">'+esc(a.name)+' <span class="pill '+(a.live_now?"live":"idle")+'">'+(a.live_now?"in call":"idle")+'</span></div>'+
           '<div class="ro">'+esc(a.role)+' · '+a.meetings_total+' meeting'+(a.meetings_total===1?"":"s")+(a.last_meeting_at?' · last '+fmtWhen(a.last_meeting_at):'')+'</div>'+
           (a.persona?'<div class="persona">'+esc(a.persona)+(a.persona.length>=220?"…":"")+'</div>':'')+
@@ -665,11 +797,14 @@
       var chan=($("#bf-chan-"+id)||{value:""}).value.trim();
       window.location.assign("/dashboard/connections/brain/slack/start?avatar_id="+
         encodeURIComponent(id)+"&channel="+encodeURIComponent(chan)); }); });
-    $$("#av-grid [data-brain-off]").forEach(function(b){ b.addEventListener("click",function(e){
+    document.querySelectorAll("#av-grid [data-brain-off]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation();
-      fetch("/dashboard/connections/brain/"+encodeURIComponent(b.getAttribute("data-brain-off")),
-          {method:"DELETE",headers:headers()})
-        .then(function(r){ if(!r.ok) throw new Error("could not disconnect"); toast("Brain disconnected."); load(); })
+      var avatarId=b.getAttribute("data-brain-off");
+      fetch("/dashboard/connections/brain/disconnect",{
+          method:"POST",headers:headers(),body:JSON.stringify({avatar_id:avatarId})})
+        .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){
+          if(!r.ok) throw new Error(j.error||"could not disconnect");
+          toast("Brain disconnected."); load(); }); })
         .catch(function(err){ toast(err.message,true); }); }); });
 
     // the brain's own connectors (the product bridge): what Cedric can touch,
@@ -679,8 +814,10 @@
       fetch("/dashboard/connections/brain/connectors",{headers:headers()})
         .then(function(r){ return r.json(); })
         .then(function(j){
-          if(j.status==="pending"){ box.innerHTML='<div class="cnote">Link the brain to see and connect the tools it executes with.</div>'; return; }
-          if(j.status!=="ok"){ box.innerHTML='<div class="cnote">Brain connectors unavailable right now — retry in a moment.</div>'; return; }
+          if(j.status==="pending"){ box.innerHTML='<div class="cnote">Slack install started, but the secure brain link is still pending. Retry Connect if it does not finish.</div>'; return; }
+          if(j.status==="not_connected"){ box.innerHTML='<div class="cnote">Connect Cedric to Slack to choose the workspace tools he may use.</div>'; return; }
+          if(j.status==="unavailable"){ box.innerHTML='<div class="cnote">Cedric is connected, but its tool catalog is temporarily unavailable. Retry in a moment.</div>'; return; }
+          if(j.status!=="ok"){ box.innerHTML='<div class="cnote">The tool connection state could not be verified. Retry in a moment.</div>'; return; }
           box.innerHTML=(j.connectors||[]).map(function(c){
             var chip=c.connected
               ?'<span class="stchip '+(c.needs_reconnect?"pending":"connected")+'">'+(c.needs_reconnect?"reconnect":"connected")+'</span>'
@@ -701,7 +838,7 @@
     function platformsIn(){ var s={}; (d.meetings||[]).forEach(function(m){ if(m.platform&&m.platform!=="—") s[m.platform]=1; }); return Object.keys(s); }
     function rowHTML(m,i){ var nm=avName(m.avatar_id);
       return '<tr class="row" data-i="'+i+'"><td><div class="cell-av">'+
-        '<span class="av" style="background:'+(m.avatar_id?grad(m.avatar_id):"var(--faint)")+'">'+esc(nm[0]||"?")+'</span><span>'+esc(nm)+'</span></div></td>'+
+        (m.avatar_id&&avById[m.avatar_id]?avatarBadge(m.avatar_id,nm):'<span class="av" style="background:var(--faint)">'+esc(nm[0]||"?")+'</span>')+'<span>'+esc(nm)+'</span></div></td>'+
         '<td><span class="platc">'+esc(m.platform)+'</span></td>'+
         '<td class="when">'+fmtWhen(m.saved_at)+'</td><td class="dur">'+fmtDur(m.duration_seconds)+'</td>'+
         '<td class="r tnum">'+m.actions.length+'</td>'+
@@ -744,31 +881,28 @@
       fa.onchange=apply; fp.onchange=apply; fw.onchange=apply; apply();
     })();
 
-    // usage & billing
+    // Usage history is available immediately. The authoritative entitlement
+    // overlays this block from /billing/summary for logged-in customers.
     var b=d.billing||{};
-    $("#u-min").textContent = (b.minutes_30d||0)+" min";
-    $("#u-min-tot").textContent = (b.total_minutes||0)+" min all-time";
-    $("#u-cost").textContent = "$"+(b.est_cost_30d||0).toFixed(2);
-    $("#u-rate").textContent = "estimated at $"+(b.rate_per_min||0).toFixed(2)+"/min (all-in)";
-    $("#u-plan").textContent = b.plan||"Demo";
+    $("#u-used").textContent=(b.minutes_30d||0)+" min";
+    $("#u-remaining").textContent="15 min";
+    $("#u-included").textContent="15 min included in this trial";
+    $("#u-plan").textContent=(b.plan&&b.plan!=="Demo")?b.plan:"Free";
+    $("#billing-state").textContent="Free trial";
     var byAv=b.by_avatar||{}, maxMin=Math.max.apply(null,Object.keys(byAv).map(function(k){return byAv[k];}).concat([1]));
     var visIds=d.avatars.map(function(a){return a.id;});
     $("#u-bars").innerHTML = (visIds.filter(function(id){return byAv[id]!=null;}).length ? visIds : Object.keys(byAv)).filter(function(id){return byAv[id]!=null;}).map(function(id){
       var mins=byAv[id]||0;
-      return '<div class="ubar"><div class="nm"><span class="av" style="width:20px;height:20px;font-size:.62rem;background:'+grad(id)+'">'+esc(avName(id)[0]||"?")+'</span>'+esc(avName(id))+'</div>'+
+      return '<div class="ubar"><div class="nm">'+(avById[id]?avatarBadge(id,avName(id),"mini"):'<span class="av mini" style="background:var(--faint)">'+esc(avName(id)[0]||"?")+'</span>')+esc(avName(id))+'</div>'+
         '<div class="track"><div class="fill" style="width:'+Math.round(mins/maxMin*100)+'%"></div></div><div class="val tnum">'+mins+'m</div></div>';}).join("")
       || '<div class="empty" style="padding:10px 0">No usage yet.</div>';
 
-    var CONN=[["calendar","Google Calendar","Auto-join meetings on the calendar","/oauth/google/connect"],
-              ["gmail","Gmail watch","Join from emailed Meet links · follow-up delivery",null],
-              ["drive","Google Drive","Per-avatar knowledge from a Drive folder",null],
-              ["slack","Slack","Post-meeting summary to a channel",null],
-              ["voice","Voice (ElevenLabs)","Natural voice for the avatars",null],
-              ["meetings","Meetings (Recall)","The bot that joins Zoom / Meet / Teams",null]];
-    $("#conns").innerHTML = CONN.map(function(c){ var on=!!d.connections[c[0]];
-      return '<div class="conn"><div class="nm">'+c[1]+'</div><div class="ds">'+c[2]+'</div>'+
-        '<div class="foot"><span class="cstat'+(on?" on":"")+'"><b></b>'+(on?"Connected":"Not configured")+'</span>'+
-        (c[3]&&!on?'<a class="btn primary" style="text-decoration:none" href="'+c[3]+'">Connect</a>':'')+'</div></div>'; }).join("");
+    $("#conns").innerHTML = '<div class="conn"><div class="nm">Cedric + Slack</div><div class="ds">Link your workspace for approvals and meeting follow-through. After linking, connect each tool from Cedric\'s live catalog.</div>'+
+      '<div class="foot"><span class="cstat'+(brainConnected?" on":"")+'"><b></b>'+(brainConnected?"Connected":"Not connected")+'</span>'+
+      (!brainConnected?'<button class="btn primary" data-connection-brain>Connect Slack</button>':'<button class="btn" data-goto="avatars">Manage tools</button>')+'</div></div>';
+    $$("[data-connection-brain]").forEach(function(btn){btn.addEventListener("click",function(){go("avatars");
+      var c=$("[data-brain-on=\"cedric\"]");if(c){c.click();c.scrollIntoView({behavior:"smooth",block:"center"});}});});
+    wireAvatarImages();
   }
 
   function renderChart(weekly){
@@ -791,19 +925,30 @@
   $("#dsp-go").addEventListener("click",function(){
     var url=$("#dsp-url").value.trim(), avatar=$("#dsp-avatar").value;
     if(!url){ $("#dsp-url").focus(); return; }
+    if(!/^https:\/\/(meet\.google\.com|([a-z0-9-]+\.)*zoom\.us|teams\.(microsoft\.com|live\.com))\//i.test(url)){
+      toast("Paste a Google Meet, Zoom or Microsoft Teams meeting link.",true); $("#dsp-url").focus(); return; }
     var b=this; b.disabled=true; b.textContent="Sending…";
     fetch("/sessions/start",{method:"POST",headers:headers(),body:JSON.stringify({meeting_url:url,avatar_id:avatar})})
-      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); })
       .then(function(res){ if(!res.ok){
+          if(res.status===402){
+            go("usage"); loadBilling();
+            var upgradeError=new Error("Your included minutes are used. Upgrade to Solo to continue.");
+            upgradeError.billing=true; throw upgradeError;
+          }
           var msg=res.j.error==="avatar_busy" ? res.j.detail : (res.j.error||res.j.detail||"request failed");
           throw new Error(msg); }
-        toast((avatar||"Avatar")+" is joining — admit it from the waiting room if asked.");
+        var picked=(DATA&&DATA.avatars||[]).find(function(a){return a.id===avatar;});
+        toast((picked?picked.name:"Avatar")+" is joining — admit them from the waiting room if asked.");
         $("#dsp-url").value=""; setTimeout(load,1500); })
-      .catch(function(e){ toast("Could not send: "+e.message,true); })
+      .catch(function(e){ toast(e.billing?e.message:"Could not send: "+e.message,true); })
       .finally(function(){ b.disabled=false; b.textContent="Send"; });
   });
 
-  $$("#seg-theme button").forEach(function(b){ b.addEventListener("click",function(){
+  $("#billing-upgrade").addEventListener("click",function(){openBilling("/billing/checkout",this);});
+  $("#billing-manage").addEventListener("click",function(){openBilling("/billing/portal",this);});
+
+  $("#seg-theme button").forEach(function(b){ b.addEventListener("click",function(){
     $$("#seg-theme button").forEach(function(x){x.classList.remove("on");}); b.classList.add("on");
     var t=b.getAttribute("data-t");
     if(t){ document.documentElement.setAttribute("data-theme",t); localStorage.setItem("laura_theme",t); }
@@ -819,7 +964,6 @@
     $$("#seg-when button").forEach(function(x){x.classList.remove("on");}); b.classList.add("on");
     var w=b.getAttribute("data-w");
     $("#mt-past").hidden = (w!=="past"); $("#mt-upcoming").hidden = (w!=="upcoming"); }); });
-  $("#cal-connect").addEventListener("click",function(){ window.location.href="/oauth/google/connect"; });
 
   $("#refresh").addEventListener("click",load);
   load();
