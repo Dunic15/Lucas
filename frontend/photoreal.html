@@ -154,14 +154,24 @@
         return;
       }
       // binary JPEG frame
-      if (pendingIdx != null) { frameBuf.set(pendingIdx, ev.data); pendingIdx = null; }
-      else { nextBlob = ev.data; }              // untagged (legacy/idle) → newest-wins
+      if (pendingIdx != null) {
+        frameBuf.set(pendingIdx, ev.data); pendingIdx = null;
+        // Defence-in-depth cap: pruning normally keeps this at 1-2 entries, but
+        // never let a clock-skew regression grow it unbounded — drop oldest.
+        while (frameBuf.size > 120) frameBuf.delete(Math.min(...frameBuf.keys()));
+      } else { nextBlob = ev.data; }            // untagged (legacy/idle) → newest-wins
       if (waitingFirstFrame && pendingAudio.length) {
         waitingFirstFrame = false;
         playClip(pendingAudio.shift());          // anchors clipStart to audio start
       }
     };
-    ws.onclose = () => { gpu = null; gpuReady = false; status("GPU stream lost — retrying"); setTimeout(connectGpu, 3000); };
+    ws.onclose = () => {
+      gpu = null; gpuReady = false;
+      // Drop any half-presented clip state so a reconnect starts clean.
+      frameBuf.clear(); pendingIdx = null; usingClock = false;
+      clipStart = null; shownIdx = -1; nextBlob = null;
+      status("GPU stream lost — retrying"); setTimeout(connectGpu, 3000);
+    };
   }
   connectGpu();
 
