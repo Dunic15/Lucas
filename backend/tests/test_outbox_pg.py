@@ -807,7 +807,9 @@ def test_pg_execution_state_is_monotonic_under_out_of_order_events(cp):
     assert state["detail"] == "executed"
 
 
-def test_durable_artifact_survives_engine_reset_with_retention(cp, pg):
+def test_durable_artifact_survives_engine_reset_with_retention(
+    cp, pg, monkeypatch
+):
     org = _org(cp, "artifact-restart")
     saved_at = 1_700_000_000.0
     artifact = {
@@ -850,6 +852,26 @@ def test_durable_artifact_survives_engine_reset_with_retention(cp, pg):
         ).fetchone()
     assert metadata[0] == "private"
     assert float(metadata[1]) == pytest.approx(90 * 86400)
+
+    # App Runner's SQLite mirror is ephemeral. Once the PG transaction commits,
+    # a local disk failure must not turn success into an endless finalize retry.
+    mirror_artifact = {
+        "org_id": org,
+        "summary": "Postgres remains authoritative",
+        "transcript": "Private durable mirror-failure transcript",
+    }
+
+    def local_sqlite_down():
+        raise RuntimeError("ephemeral SQLite unavailable")
+
+    monkeypatch.setattr(store, "_connect", local_sqlite_down)
+    store.save_artifact(
+        "bot-local-mirror-down", mirror_artifact, org_id=org
+    )
+    assert store.get_artifact(
+        "bot-local-mirror-down", org_id=org
+    ) == mirror_artifact
+    store._artifacts.pop("bot-local-mirror-down", None)
 
 
 def test_durable_artifacts_are_rls_isolated_and_keep_composite_pk(cp, pg):
