@@ -87,6 +87,41 @@ def test_transient_5xx_retries_same_idempotency_key_once(tmp_path, monkeypatch):
     ]
 
 
+def test_permanent_4xx_waits_for_manual_retry(tmp_path, monkeypatch):
+    _fresh(tmp_path, monkeypatch)
+    outbox.enqueue_action_requested(
+        _integration(),
+        "bot-permanent",
+        {"action_id": "action-permanent", "action": "Send recap"},
+    )
+    calls = []
+    from app.cedric import callback
+
+    def fake_post(url, payload, *, idempotency_key=""):
+        calls.append(idempotency_key)
+        code = 400 if len(calls) == 1 else 200
+        return SimpleNamespace(status_code=code)
+
+    monkeypatch.setattr(callback, "_post", fake_post)
+    now = time.time() + 1
+    assert outbox.process_due(now=now) == 0
+    row = outbox.delivery_rows("org-a")[0]
+    assert row["status"] == "failed"
+    assert row["next_attempt_at"] == 0
+
+    # A permanent response stays visible for operator intervention; the
+    # periodic worker must not hammer Cedric every five seconds.
+    assert outbox.process_due(now=now + 10_000) == 0
+    assert calls == ["action.requested:action-permanent"]
+
+    assert outbox.retry("org-a", row["id"])
+    assert outbox.process_due(now=now + 10_001) == 1
+    assert calls == [
+        "action.requested:action-permanent",
+        "action.requested:action-permanent",
+    ]
+
+
 def test_redelivery_uses_original_org_team_channel(tmp_path, monkeypatch):
     _fresh(tmp_path, monkeypatch)
     original = _integration("org-original", team="T-original", channel="C-original")
