@@ -263,8 +263,10 @@ def test_signature_differs_by_org_secret(monkeypatch):
     monkeypatch.setattr(
         settings, "laura_webhook_secrets_by_org", json.dumps({"org-42": "org-secret"})
     )
+    monkeypatch.setattr(secret_registry, "_bearer_cache", {"org-42": "workspace-token"})
     body = b'{"event":"session.status"}'
     h_global = callback._signature_headers(body)
     h_org = callback._signature_headers(body, "org-42")
-    assert h_global["Authorization"] == h_org["Authorization"] == "Bearer tok"
+    assert h_global["Authorization"] == "Bearer tok"
+    assert h_org["Authorization"] == "Bearer workspace-token"
     assert h_global["X-Laura-Signature"] != h_org["X-Laura-Signature"]
