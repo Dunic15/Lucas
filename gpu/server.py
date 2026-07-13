@@ -304,11 +304,19 @@ async def stream(ws: WebSocket) -> None:
                 first_frame = True
                 send_ratio = min(1.0, SEND_FPS / FPS) if SEND_FPS else 1.0
                 send_acc = 1.0  # the first frame always goes out
+                n_native = 0  # position of this frame on the FPS-native timeline
                 async for frame in eng.talk_frames(audio, emotion=emotion):
                     t0 = time.perf_counter()
                     send_acc += send_ratio
                     if send_acc >= 1.0:
                         send_acc -= 1.0
+                        # Tag each kept frame with its native-timeline index so the
+                        # page can lock presentation to the AUDIO clock (frame i
+                        # belongs at audio second i/FPS) instead of newest-wins —
+                        # which is what lets sub-realtime generation drift the mouth
+                        # off the voice. Additive: a legacy page ignores this text
+                        # and the binary stays a bare JPEG.
+                        await ws.send_text(json.dumps({"type": "frame", "i": n_native}))
                         await ws.send_bytes(frame)
                         _note_frame()
                     if first_frame:
@@ -319,6 +327,7 @@ async def stream(ws: WebSocket) -> None:
                     delay = frame_interval - (time.perf_counter() - t0)
                     if delay > 0:
                         await asyncio.sleep(delay)
+                    n_native += 1  # advance one native-timeline slot per frame
                 await ws.send_text(json.dumps({"type": "talk_end"}))
             else:
                 await ws.send_bytes(eng.next_idle_frame())
