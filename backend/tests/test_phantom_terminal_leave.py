@@ -138,3 +138,66 @@ def test_manual_end_live_bot_still_kept_on_unverified_leave(fresh_store, monkeyp
     kept = store.get("bot_x")
     assert kept is not None
     assert getattr(kept, "leave_pending") is True
+
+
+# ── restored leave_pending phantom: _retry_leave must DRAIN a terminal bot ──
+# leave_pending IS persisted (SQLite → S3), so a phantom reappears after a
+# redeploy and lands in _retry_leave. A 400 "not in a call" is NOT a gone-status,
+# so without the status-poll drain it retries forever (the observed reappearance).
+
+def test_retry_leave_drains_terminal_bot_on_400(fresh_store, monkeypatch):
+    s = _session("bot_x")
+    s.leave_pending = True
+    monkeypatch.setattr(main.recall_client, "leave_call",
+                        lambda bot_id: (_ for _ in ()).throw(_http_status_error(400)))
+    # Recall reports the bot terminal → not billing → drain, don't retry forever.
+    monkeypatch.setattr(main.httpx, "get",
+                        lambda url, *, headers, timeout: _FakeResponse(_bot("done")))
+
+    assert asyncio.run(main._retry_leave("bot_x", s)) is True
+    assert store.get("bot_x") is None
+
+
+def test_retry_leave_drains_when_status_poll_404(fresh_store, monkeypatch):
+    # A 429 leave (auth/rate — not a gone-status) but the status poll 404s → the
+    # bot is gone → not billing → drain.
+    s = _session("bot_x")
+    s.leave_pending = True
+    monkeypatch.setattr(main.recall_client, "leave_call",
+                        lambda bot_id: (_ for _ in ()).throw(_http_status_error(429)))
+    monkeypatch.setattr(main.httpx, "get",
+                        lambda url, *, headers, timeout: _FakeResponse(status_code=404))
+
+    assert asyncio.run(main._retry_leave("bot_x", s)) is True
+    assert store.get("bot_x") is None
+
+
+def test_retry_leave_keeps_when_bot_still_live_on_400(fresh_store, monkeypatch):
+    # Safety: a 400 leave but the bot is STILL in call per the poll → possibly
+    # billing → keep (never drop a live bot on an ambiguous leave).
+    s = _session("bot_x")
+    s.leave_pending = True
+    monkeypatch.setattr(main.recall_client, "leave_call",
+                        lambda bot_id: (_ for _ in ()).throw(_http_status_error(400)))
+    monkeypatch.setattr(main.httpx, "get",
+                        lambda url, *, headers, timeout: _FakeResponse(_bot("in_call_recording")))
+
+    assert asyncio.run(main._retry_leave("bot_x", s)) is False
+    assert store.get("bot_x") is not None
+
+
+def test_restored_leave_pending_phantom_drains_via_reconcile(fresh_store, monkeypatch):
+    # End-to-end reappearance: a persisted leave_pending session (as restored from
+    # S3 after a redeploy) whose bot is terminal must drain on the reconcile pass,
+    # not linger as active_sessions forever.
+    _stub_offline(monkeypatch)
+    s = _session("bot_x")
+    s.leave_pending = True  # what the SQLite restore sets on a phantom
+    monkeypatch.setattr(main.recall_client, "leave_call",
+                        lambda bot_id: (_ for _ in ()).throw(_http_status_error(400)))
+    monkeypatch.setattr(main.httpx, "get",
+                        lambda url, *, headers, timeout: _FakeResponse(_bot("done")))
+
+    asyncio.run(main._reconcile_once())
+
+    assert store.get("bot_x") is None, "restored leave_pending phantom not drained"

@@ -426,6 +426,11 @@ def test_retry_leave_keeps_on_persistent_5xx(fresh_store, monkeypatch):
         main.recall_client, "leave_call",
         lambda bot_id: (_ for _ in ()).throw(_http_status_error(503)),
     )
+    # Status poll (the terminal-drain check) sees a STILL-LIVE bot → keep it.
+    monkeypatch.setattr(
+        main.httpx, "get",
+        lambda url, *, headers, timeout: _FakeResponse({"status_changes": [{"code": "in_call_recording"}]}),
+    )
     assert asyncio.run(main._retry_leave("bot_x", s)) is False
     assert store.get("bot_x") is not None
     store.remove("bot_x")

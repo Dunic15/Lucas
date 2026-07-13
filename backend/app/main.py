@@ -754,6 +754,37 @@ def _leave_confirmed_stopped(exc: BaseException | None) -> bool:
     return False
 
 
+async def _bot_reports_terminal(bot_id: str) -> bool:
+    """Best-effort status poll: True iff Recall AFFIRMATIVELY confirms the bot is
+    not billing — its latest status is terminal (done/call_ended/fatal) or Recall
+    no longer knows it (404/410 → gone). Used to DRAIN a leave_pending session
+    whose leave_call keeps being rejected with a non-gone status (e.g. Recall's
+    400 "bot is not in a call" for an already-ended bot): leave_pending IS a
+    persisted field, so a phantom survives a redeploy (SQLite → S3 restore) and
+    would otherwise be retried every reconcile pass FOREVER, inflating
+    active_sessions. Any ambiguity — a still-live/non-terminal status, a non-200
+    that isn't a gone-status, or a poll error — returns False so the caller KEEPS
+    the session (never drop a possibly-live, possibly-billing bot)."""
+    try:
+        r = await run_in_threadpool(
+            lambda: httpx.get(
+                f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/{bot_id}/",
+                headers=_recall_list_headers(),
+                timeout=20.0,
+            )
+        )
+    except Exception:  # noqa: BLE001 — a poll error keeps the session (retry next pass)
+        return False
+    if r.status_code in _LEAVE_GONE_STATUSES:
+        return True  # Recall no longer has the bot → gone → not billing
+    if r.status_code != 200:
+        return False  # auth/rate/5xx — unknown, keep the session
+    try:
+        return _bot_status_code(r.json()) in _BOT_TERMINAL
+    except Exception:  # noqa: BLE001 — unparseable body → treat as unknown
+        return False
+
+
 async def _retry_leave(bot_id: str, session: store.Session) -> bool:
     """Retry ONLY the Recall meter-stop for a session whose artifact was already
     built + delivered but whose leave_call could not be confirmed (so it was kept
@@ -774,8 +805,15 @@ async def _retry_leave(bot_id: str, session: store.Session) -> bool:
             await run_in_threadpool(recall_client.leave_call, bot_id)
         except Exception as e:  # noqa: BLE001 — classified below
             if not _leave_confirmed_stopped(e):
-                return False  # UNVERIFIED — keep the session, retry next pass
-            # 404/410: bot genuinely gone → not billing → fall through and drop.
+                # The leave itself didn't confirm the stop. But a bot Recall now
+                # reports terminal/gone is not billing — an already-ended bot
+                # rejects the courtesy leave with 400 "not in a call", which is
+                # NOT a gone-status, so without this a restored leave_pending
+                # phantom (leave_pending is persisted → survives redeploy) would
+                # retry forever. Confirm via a status poll before giving up.
+                if not await _bot_reports_terminal(bot_id):
+                    return False  # UNVERIFIED and not terminal — keep, retry next pass
+            # 404/410 leave, OR Recall confirms terminal/gone → not billing → drop.
         # PR B BLOCKER 2: the meter is NOW confirmed off — close the usage row
         # here (finalize deferred it on the unverified leave to keep the slot
         # held). First-close-wins, so a manual /end + a reconcile tick racing
