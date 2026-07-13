@@ -70,12 +70,12 @@
   .brand .dot{width:12px;height:12px;border-radius:50%;background:var(--grad);position:relative;box-shadow:0 0 14px rgba(126,150,255,.6);}
   .brand .dot::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:1px solid rgba(127,150,200,.4);animation:ring 3.4s ease-out infinite;}
   .nav{display:flex;flex-direction:column;gap:2px;}
-  .nav a{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:10px;
+  .nav button{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:10px;
     color:var(--dim);text-decoration:none;font-size:.9rem;cursor:pointer;position:relative;}
-  .nav a .ic{width:16px;text-align:center;opacity:.85;}
-  .nav a.on{background:var(--panel-2);color:var(--text);font-weight:600;}
-  .nav a.on::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2.5px;border-radius:3px;background:var(--grad);}
-  .nav a:not(.on):hover{background:var(--panel);color:var(--text);}
+  .nav button .ic{width:16px;text-align:center;opacity:.85;}
+  .nav button.on{background:var(--panel-2);color:var(--text);font-weight:600;}
+  .nav button.on::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2.5px;border-radius:3px;background:var(--grad);}
+  .nav button:not(.on):hover{background:var(--panel);color:var(--text);}
   .lbl{font-family:var(--mono);font-size:.62rem;letter-spacing:.22em;text-transform:uppercase;color:var(--faint);padding:0 4px;margin-bottom:7px;}
   .rost{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:10px;color:inherit;cursor:pointer;}
   .rost:hover{background:var(--panel);}
@@ -344,7 +344,7 @@
     .side{position:sticky;top:0;z-index:20;padding:12px 14px;gap:10px;background:var(--bg);}
     .side .nav{flex-direction:row;overflow-x:auto;padding-bottom:3px;scrollbar-width:none;}
     .side .nav::-webkit-scrollbar{display:none;}
-    .side .nav a{white-space:nowrap;}
+    .side .nav button{white-space:nowrap;}
     .side>div:not(.brand):not(:last-child){display:none;}
     .side>div:last-child{margin-top:0 !important;}
     .side>div:last-child>div:first-child{display:none;}
@@ -358,12 +358,12 @@
   <aside class="side">
     <div class="brand"><span class="dot"></span>Laura</div>
     <nav class="nav" id="nav">
-      <a data-view="overview" class="on"><span class="ic">▦</span> Overview</a>
-      <a data-view="avatars"><span class="ic">◐</span> Avatars</a>
-      <a data-view="meetings"><span class="ic">▤</span> Meetings</a>
-      <a data-view="usage"><span class="ic">◇</span> Usage &amp; billing</a>
-      <a data-view="connections"><span class="ic">⇄</span> Connections</a>
-      <a data-view="settings"><span class="ic">⚙</span> Settings</a>
+      <button type="button" data-view="overview" class="on" aria-current="page"><span class="ic">▦</span> Overview</button>
+      <button type="button" data-view="avatars"><span class="ic">◐</span> Avatars</button>
+      <button type="button" data-view="meetings"><span class="ic">▤</span> Meetings</button>
+      <button type="button" data-view="usage"><span class="ic">◇</span> Usage &amp; billing</button>
+      <button type="button" data-view="connections"><span class="ic">⇄</span> Connections</button>
+      <button type="button" data-view="settings"><span class="ic">⚙</span> Settings</button>
     </nav>
     <div>
       <div class="lbl">Your avatars</div>
@@ -405,7 +405,7 @@
       <div class="livewrap" id="livewrap"></div>
 
       <div class="how">
-        <div class="step" id="step-avatar"><div class="n">01 / CHOOSE</div><h3>Choose Laura or Cedric</h3><p>Pick the colleague that fits the call. Your 15 free avatar-minutes are shared across both.</p></div>
+        <div class="step" id="step-avatar"><div class="n">01 / MEET</div><h3>Meet Laura and Cedric</h3><p>Choose the colleague that fits each call. Your 15 free avatar-minutes are shared across both.</p></div>
         <div class="step" id="step-connect"><div class="n">02 / CONNECT</div><h3>Connect Cedric and your tools</h3><p>Install Cedric in Slack, then authorize only the tools you want him to use.</p></div>
         <div class="step" id="step-meeting"><div class="n">03 / TRY IT</div><h3>Send one into a meeting</h3><p>Paste a Meet, Zoom or Teams link. The avatar joins as a participant and brings the work back here.</p></div>
         <div class="how-foot">No card is required for the first 15 avatar-minutes.</div>
@@ -466,10 +466,10 @@
       <div id="mt-upcoming" hidden>
         <div class="panel" style="text-align:center;padding:44px 20px">
           <div style="font-size:1.7rem;margin-bottom:8px">📅</div>
-          <h2 style="margin:0 0 6px">Connect your calendar</h2>
-          <div class="ph" style="max-width:46ch;margin:0 auto 18px">See upcoming meetings here and let your avatars auto-join them — or schedule an avatar into a meeting straight from the dashboard.</div>
-          <button class="btn primary" id="cal-connect">Connect Google Calendar</button>
-          <div class="cnote" style="margin-top:14px">Connect tools through Cedric after linking your Slack workspace.</div>
+          <h2 style="margin:0 0 6px">Connect calendars through Cedric</h2>
+          <div class="ph" style="max-width:46ch;margin:0 auto 18px">Link your Slack workspace first, then authorize Calendar and the other tools you want Cedric to use.</div>
+          <button class="btn primary" data-goto="connections">Open connections</button>
+          <div class="cnote" style="margin-top:14px">Personal calendar connection is enabled only after it is scoped to your workspace.</div>
         </div>
       </div>
     </section>
@@ -492,7 +492,7 @@
         </div>
         <div class="plans">
           <article class="plan featured">
-            <div class="ptop"><h3>Individual</h3><span class="stchip connected">Normal user</span></div>
+            <div class="ptop"><h3>Individual</h3><span class="stchip connected">Free trial</span></div>
             <div class="price">15 min <small>free to start</small></div>
             <ul><li>Laura and Cedric</li><li>Meet, Zoom and Teams</li><li>Recaps, decisions and actions</li><li>Connected tools through Cedric</li></ul>
             <button class="btn primary" data-goto="overview">Start with a meeting</button>
@@ -500,7 +500,8 @@
           <article class="plan">
             <div class="ptop"><h3>Enterprise</h3><span class="stchip pending">Early access</span></div>
             <div class="price">Talk to us</div>
-            <ul><li>Shared workspaces and roles</li><li>SSO, auditability and retention controls</li><li>Security review and guided rollout</li></ul>
+            <p class="ph">Design-partner scope — these controls are not live in the individual dashboard today.</p>
+            <ul><li>Planned: shared workspaces and roles</li><li>Planned: SSO, auditability and retention controls</li><li>Planned: security review and guided rollout</li></ul>
             <a class="btn" href="mailto:hello@lauravatar.com?subject=Laura%20enterprise%20early%20access">Contact sales</a>
           </article>
         </div>
@@ -522,7 +523,7 @@
           <div class="frow"><div><div class="t">Theme</div><div class="h">Dashboard appearance</div></div>
             <div class="seg" id="seg-theme"><button class="on" data-t="">Dark</button><button data-t="light">Light</button></div></div>
         </div>
-        <div class="fset">
+        <div class="fset" id="api-token-settings">
           <div class="frow"><div><div class="t">API token</div><div class="h">Sent as Bearer on session and dashboard calls (stored in this browser only)</div></div>
             <input type="password" id="set-tok" placeholder="LAURA_API_TOKEN" /></div>
           <div class="frow"><div><div class="t"></div></div><button class="btn" id="set-tok-save">Save token</button></div>
@@ -579,9 +580,9 @@
   var VIEWS=["overview","avatars","meetings","usage","connections","settings"];
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
-    $$("#nav a").forEach(function(a){a.classList.toggle("on",a.getAttribute("data-view")===name);});
+    $("#nav button").forEach(function(a){var current=a.getAttribute("data-view")===name;a.classList.toggle("on",current);if(current)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current");});
     window.scrollTo(0,0); }
-  $$("#nav a").forEach(function(a){a.addEventListener("click",function(e){e.preventDefault();go(a.getAttribute("data-view"));});});
+  $$("#nav button").forEach(function(a){a.addEventListener("click",function(e){e.preventDefault();go(a.getAttribute("data-view"));});});
   document.addEventListener("click",function(e){var t=e.target.closest("[data-goto]");if(t){go(t.getAttribute("data-goto"));}});
 
   function load(){
@@ -612,6 +613,7 @@
   function title(m){ return m.meeting_type ? m.meeting_type.replace(/_/g," ") : (m.platform!=="—" ? m.platform+" meeting" : "Meeting"); }
 
   function renderAll(d){
+    $("#api-token-settings").hidden=!!d.user;
     var avById={}; d.avatars.forEach(function(a){avById[a.id]=a;});
     function avName(id){ return (avById[id]||{}).name || (id?id:"—"); }
     var brainConnected=(d.org_connections||[]).some(function(x){return x.avatar_id==="cedric"&&x.provider==="cedric-brain"&&x.status==="connected";});
@@ -875,7 +877,6 @@
     $$("#seg-when button").forEach(function(x){x.classList.remove("on");}); b.classList.add("on");
     var w=b.getAttribute("data-w");
     $("#mt-past").hidden = (w!=="past"); $("#mt-upcoming").hidden = (w!=="upcoming"); }); });
-  $("#cal-connect").addEventListener("click",function(){ window.location.href="/oauth/google/connect"; });
 
   $("#refresh").addEventListener("click",load);
   load();
