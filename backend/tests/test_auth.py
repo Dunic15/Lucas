@@ -340,7 +340,7 @@ def test_cannot_end_another_orgs_session(client, google_on):
     store.create("bot_eve", "https://meet.google.com/e2", "laura", org_id=eve["org_id"])
     try:
         resp = client.post("/sessions/bot_eve/end")
-        assert resp.status_code == 403
+        assert resp.status_code == 404
     finally:
         store.remove("bot_eve")
 
