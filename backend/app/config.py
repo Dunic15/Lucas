@@ -522,6 +522,20 @@ class Settings(BaseSettings):
     # Included seconds for the paid solo plan (PR C's checkout flips
     # billing_accounts to plan='solo' with this allowance — 300 min/month).
     solo_included_seconds: int = 18000
+    # Stripe Billing is deliberately fail-closed. Production stays key-free and
+    # unchanged until every value below is configured and the runtime database
+    # proves it is the least-privileged laura_app role.
+    billing_enabled: bool = False
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_solo: str = ""
+    stripe_portal_configuration_id: str = ""
+    # False means Stripe test mode; True means live mode. The key and every
+    # signed webhook event must agree with this explicit switch.
+    stripe_live_mode: bool = False
+    stripe_api_version: str = "2026-02-25.clover"
+    stripe_webhook_max_body_bytes: int = 262144
+    billing_checkout_reservation_seconds: int = 300
     # Spoken heads-up near the usage deadline (~5 min and ~1 min before the
     # avatar must leave). Fires from the reconcile pass — never the hot path.
     usage_warnings_enabled: bool = True
