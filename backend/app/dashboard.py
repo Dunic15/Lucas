@@ -311,7 +311,9 @@ def dashboard_summary(request: Request) -> JSONResponse:
     # Execution provenance: decorate each action with the state the brain
     # (Cedric) reported via POST /org/actions/{id}/status — one batched query.
     all_ids = [a["action_id"] for m in meetings for a in m["actions"] if a["action_id"]]
-    statuses = ledger.action_statuses(all_ids)
+    statuses = ledger.action_statuses(
+        all_ids, org_id=caller_org or settings.demo_org_id
+    )
     for m in meetings:
         for a in m["actions"]:
             ex = statuses.get(a["action_id"])
