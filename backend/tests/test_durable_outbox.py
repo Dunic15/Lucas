@@ -1,6 +1,7 @@
 """Crash-safe action/callback outbox regressions (#138)."""
 from __future__ import annotations
 
+import asyncio
 import time
 from types import SimpleNamespace
 
@@ -285,3 +286,101 @@ def test_restart_preserves_outbox_correlation(tmp_path, monkeypatch):
     assert rows[0]["bot_id"] == "bot-restart"
     assert rows[0]["team_id"] == "T-1"
     store.remove("bot-restart")
+
+
+
+def test_finalize_enqueues_ended_before_local_artifact_and_cleanup(
+    tmp_path, monkeypatch
+):
+    _fresh(tmp_path, monkeypatch)
+    session = store.create(
+        "bot-order",
+        "https://meet.google.com/abc-defg-hij",
+        "laura",
+        org_id="org-order",
+    )
+    session.integration = _integration("org-order")
+    order: list[str] = []
+
+    monkeypatch.setattr(main.recall_client, "leave_call", lambda bot: None)
+    monkeypatch.setattr(
+        main.cedric,
+        "deliver_ended",
+        lambda integration_data, bot, artifact: order.append("pg_enqueue") or True,
+    )
+    monkeypatch.setattr(
+        store,
+        "save_artifact",
+        lambda *args, **kwargs: order.append("local_artifact"),
+    )
+    monkeypatch.setattr(
+        main.ledger,
+        "record_meeting",
+        lambda *args, **kwargs: order.append("local_ledger"),
+    )
+    monkeypatch.setattr(
+        store, "remove", lambda bot: order.append("local_cleanup")
+    )
+    monkeypatch.setattr(
+        main.gpu_runtime, "on_session_ended", lambda count: None
+    )
+    monkeypatch.setattr(
+        main.runpod_runtime, "on_session_ended", lambda count: None
+    )
+
+    async def no_close(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(main, "_close_usage_for", no_close)
+    artifact = asyncio.run(
+        main._finalize_session_locked(
+            "bot-order", session, "test", usage_reason="ended"
+        )
+    )
+
+    assert artifact is not None
+    assert order == [
+        "pg_enqueue",
+        "local_artifact",
+        "local_ledger",
+        "local_cleanup",
+    ]
+
+
+def test_finalize_keeps_local_session_when_durable_enqueue_fails(
+    tmp_path, monkeypatch
+):
+    _fresh(tmp_path, monkeypatch)
+    session = store.create(
+        "bot-order-fail",
+        "https://meet.google.com/abc-defg-hij",
+        "laura",
+        org_id="org-order",
+    )
+    session.integration = _integration("org-order")
+    local_writes: list[str] = []
+
+    monkeypatch.setattr(main.recall_client, "leave_call", lambda bot: None)
+
+    def unavailable(*args, **kwargs):
+        raise outbox.OutboxUnavailable("simulated")
+
+    monkeypatch.setattr(main.cedric, "deliver_ended", unavailable)
+    monkeypatch.setattr(
+        store,
+        "save_artifact",
+        lambda *args, **kwargs: local_writes.append("artifact"),
+    )
+    monkeypatch.setattr(
+        store, "remove", lambda bot: local_writes.append("cleanup")
+    )
+
+    with pytest.raises(outbox.OutboxUnavailable):
+        asyncio.run(
+            main._finalize_session_locked(
+                "bot-order-fail", session, "test", usage_reason="ended"
+            )
+        )
+
+    assert local_writes == []
+    assert store.get("bot-order-fail") is session
