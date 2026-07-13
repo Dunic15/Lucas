@@ -47,3 +47,9 @@ speak_cooldown_seconds:     # seconds of silence to keep after speaking
 # Volto in riunione: Ultra-HD fotorealistico (Ditto sul GPU pod).
 # Rimuovi o svuota per tornare al 3D gratuito. Cache mtime: niente restart.
 face: photoreal
+
+# Identity-safe renderer assets. Missing files are reported as unavailable;
+# Laura may fall back only to Laura's own 3D model.
+face_fallback: talk
+talk_model: laura.glb
+photoreal_reference: reference-laura.jpg

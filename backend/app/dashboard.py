@@ -385,6 +385,7 @@ def dashboard_summary(request: Request) -> JSONResponse:
                 "wake_words": a.wake_words,
                 "voice_id": a.elevenlabs_voice_id,
                 "talk_body": a.talk_body,
+                "renderer": a.renderer_readiness,
                 "silent": a.silent,
                 "knowledge_docs": knowledge,
                 "knowledge_topics": _knowledge_topics(a),
