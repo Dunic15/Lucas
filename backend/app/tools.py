@@ -10,7 +10,7 @@ Deliberately tiny, deterministic, and KEY-FREE so the demo runs offline:
   - date_math     : today's date, or how many days until a deadline
   - lookup_record : a SYNTHETIC in-memory 'system of record' (demo data only)
   - queue_action  : capture a requested action for approval AFTER the call
-                    (in-memory on the live session — instant, zero I/O)
+                    (durable local capture; callback delivery is off-path)
 
 Safety: the calculator parses an AST and only allows numeric arithmetic (never
 eval()); lookup_record returns SYNTHETIC data only — no real PII, matching the
@@ -121,16 +121,16 @@ def lookup_record(record_id: str = "", query: str = "") -> str:
 # lives behind an approval after the call — e.g. Cedric's Slack cards, or
 # Laura's autopilot follow-up). When someone asks the avatar to DO something
 # ("send the recap", "book a follow-up"), this captures {action, owner, due}
-# on the live session, in memory only: no network, no disk, no sqlite —
-# latency is the product on the live path. Captured items are merged into the
+# on the live session and in local SQLite. No network occurs on the live path;
+# the callback outbox worker delivers asynchronously. Captured items are merged into the
 # post-meeting artifact's actions[] at finalize (main._finalize_session) and,
 # for orchestrated sessions, announced immediately via the action.requested
 # webhook (fired OFF the live path by cedric.notify_action_requested).
 def capture_action(session, action: str, owner: str = "", due: str = "") -> dict:
     """The one capture primitive, shared by the queue_action tool handler and
     main.py's deterministic live-path branch: append {action, owner, due} to
-    the session's in-memory list and fire the (off-path) webhook. Instant —
-    no network, no disk, no sqlite here.
+    the session's list, persist its stable id, and enqueue the callback.
+    No network occurs here; the outbox worker delivers off the live path.
     """
     item = {
         # Stable id assigned ONCE here, at capture. It rides the live
@@ -144,11 +144,13 @@ def capture_action(session, action: str, owner: str = "", due: str = "") -> dict
         "owner": " ".join((owner or "").split())[:100],
         "due": " ".join((due or "").split())[:100],
     }
+    # One bounded local SQLite transaction makes the action_id survive a
+    # process restart before finalize. No network occurs on the live path.
+    from . import outbox
+
+    outbox.persist_action_capture(session, item)
     queued = getattr(session, "queued_actions", None)
     if queued is None:
-        # In-memory only by design: "queued_actions" is not a persisted Session
-        # field, so this never touches sqlite on the live path. Items survive in
-        # the session object until finalize folds them into the artifact.
         queued = []
         session.queued_actions = queued
     queued.append(item)
@@ -168,7 +170,7 @@ def capture_action(session, action: str, owner: str = "", due: str = "") -> dict
 def queue_action(
     action: str = "", owner: str = "", due: str = "", session=None
 ) -> str:
-    """Capture a requested action on the live session. Instant, in-memory."""
+    """Capture a requested action durably; delivery remains asynchronous."""
     if not (action or "").strip():
         return "error: 'action' is required — one short line saying what should be done"
     if session is None:
@@ -178,7 +180,16 @@ def queue_action(
             "note: there is no live meeting session, so nothing was queued — "
             "tell the person you can only queue actions during a meeting."
         )
-    capture_action(session, action, owner, due)
+    try:
+        capture_action(session, action, owner, due)
+    except Exception as exc:
+        from .outbox import OutboxUnavailable
+        if isinstance(exc, OutboxUnavailable):
+            return (
+                "error: I couldn't save that action safely — please try again "
+                "in a moment."
+            )
+        raise
     return "Noted — I'll queue that for approval in Slack right after the call."
 
 
