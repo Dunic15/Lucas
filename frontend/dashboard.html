@@ -727,11 +727,14 @@
       var chan=($("#bf-chan-"+id)||{value:""}).value.trim();
       window.location.assign("/dashboard/connections/brain/slack/start?avatar_id="+
         encodeURIComponent(id)+"&channel="+encodeURIComponent(chan)); }); });
-    $$("#av-grid [data-brain-off]").forEach(function(b){ b.addEventListener("click",function(e){
+    $("#av-grid [data-brain-off]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation();
-      fetch("/dashboard/connections/brain/"+encodeURIComponent(b.getAttribute("data-brain-off")),
-          {method:"DELETE",headers:headers()})
-        .then(function(r){ if(!r.ok) throw new Error("could not disconnect"); toast("Brain disconnected."); load(); })
+      var avatarId=b.getAttribute("data-brain-off");
+      fetch("/dashboard/connections/brain/disconnect",{
+          method:"POST",headers:headers(),body:JSON.stringify({avatar_id:avatarId})})
+        .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){
+          if(!r.ok) throw new Error(j.error||"could not disconnect");
+          toast("Brain disconnected."); load(); }); })
         .catch(function(err){ toast(err.message,true); }); }); });
 
     // the brain's own connectors (the product bridge): what Cedric can touch,
