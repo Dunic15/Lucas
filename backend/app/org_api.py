@@ -171,8 +171,15 @@ async def org_action_status(action_id: str, request: Request) -> JSONResponse:
         body = await request.json()
     except Exception:  # noqa: BLE001 — malformed JSON is a client error
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-    status = str((body or {}).get("status") or "")
+    status = str((body or {}).get("status") or "").strip().lower()
     detail = str((body or {}).get("detail") or "")
+    # Validate the status VALUE here so a genuinely bad state is still a 400 —
+    # distinct from "valid state, but this org has no durable action row yet".
+    if status not in ledger.EXECUTION_STATUSES:
+        return JSONResponse(
+            {"error": f"status must be one of {list(ledger.EXECUTION_STATUSES)}"},
+            status_code=400,
+        )
     # action_status is keyed by (org_id, action_id), so a per-workspace
     # principal may safely report proposed/approved before meeting finalization.
     # The eventual ledger row consults only this org's status and cannot collide
@@ -180,9 +187,11 @@ async def org_action_status(action_id: str, request: Request) -> JSONResponse:
     ok = await run_in_threadpool(
         ledger.set_action_status, action_id, status, detail, org_id=org
     )
-    if not ok:
-        return JSONResponse(
-            {"error": f"status must be one of {list(ledger.EXECUTION_STATUSES)}"},
-            status_code=400,
-        )
-    return JSONResponse({"recorded": True, "action_id": action_id, "status": status.lower()})
+    # Orchestrated mode: Cedric owns the action id. When the control-plane path
+    # has no queued_actions row for (org, action_id) it returns False — a clean
+    # no-op (nothing to decorate on the dashboard), NOT a client error. Return
+    # recorded=false + 200 so Cedric's best-effort provenance loop stops getting
+    # 400s (and stops falling back to /resolve, which 404s).
+    return JSONResponse(
+        {"recorded": bool(ok), "action_id": action_id, "status": status}
+    )

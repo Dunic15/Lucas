@@ -971,7 +971,11 @@ def list_artifacts(org_id: str | None = None) -> list[dict]:
             raise ValueError(
                 "org_id is required for production artifact enumeration"
             )
-        return control_plane.list_artifacts(str(org_id)) or []
+        # A session-shaped personal org (u_<hash>) has no durable archive and
+        # would crash the WHERE org_id = CAST(:o AS uuid) / RLS uuid cast.
+        # Degrade to the SQLite warm cache instead of a 500.
+        if control_plane.is_durable_org(str(org_id)):
+            return control_plane.list_artifacts(str(org_id)) or []
 
     with _LOCK, _connect() as conn:
         if org_id is None:

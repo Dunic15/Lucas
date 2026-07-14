@@ -558,7 +558,9 @@ def action_statuses(
         return {}
     from . import control_plane
 
-    if control_plane.enabled():
+    # Session-shaped orgs (u_<hash>) would crash the Postgres uuid cast — they
+    # fall through to the SQLite action_status query (local/empty statuses).
+    if control_plane.enabled() and control_plane.is_durable_org(org_id):
         from . import outbox_pg
 
         return outbox_pg.action_statuses(org_id, ids)

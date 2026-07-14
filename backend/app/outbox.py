@@ -832,6 +832,11 @@ def process_due(
 def delivery_rows(org_id: str, *, limit: int = 100) -> list[dict]:
     """PII-safe delivery state; payload and callback URL stay private."""
     if control_plane.enabled():
+        # Only durable (uuid) orgs have a Postgres outbox; a session-shaped org
+        # (u_<hash>) would crash the callback_outbox RLS uuid cast and has no
+        # SQLite outbox either (its schema is control-plane-gated). No deliveries.
+        if not control_plane.is_durable_org(org_id or settings.demo_org_id):
+            return []
         return _pg_call(
             outbox_pg.delivery_rows, org_id or settings.demo_org_id, limit=limit
         )
