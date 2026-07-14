@@ -233,7 +233,12 @@ def build_integration(req: Any, brief: str) -> Optional[dict]:
     # so the avatar walks in already knowing the people. Explicit per-session
     # context_url still wins. Unset = only the local Drive/ledger brief.
     context_url = req.context_url or settings.surface_context_url
-    if not (callback or context_url or req.external_ref or brief):
+    # A per-meeting MISSION alone is enough to build a session integration: a
+    # dashboard dispatch that sets only a mission (no callback/context_url/
+    # external_ref/brief) must still carry it, else resolve_mission() finds
+    # nothing and the objective is silently dropped. Empty mission = unchanged.
+    mission = (req.context.mission if req.context else "") or ""
+    if not (callback or context_url or req.external_ref or brief or mission):
         return None
     return {
         "callback_url": callback or "",
@@ -242,7 +247,7 @@ def build_integration(req: Any, brief: str) -> Optional[dict]:
         "brief": brief,
         "meeting": (req.context.meeting if req.context else {}) or {},
         # Per-meeting mission (admin objective) carried on the session, if any.
-        "mission": (req.context.mission if req.context else "") or "",
+        "mission": mission,
         "context_refreshed": False,
     }
 

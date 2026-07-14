@@ -299,6 +299,13 @@
   /* Executed-action receipt: the "Done ↗" pill links to the real event/message. */
   a.exec{text-decoration:none;cursor:pointer;}
   a.exec.done:hover{background:rgba(84,210,143,.12);}
+  /* Per-row "Approve & run" — the native executor's human-authed door. Same
+     compact pill footprint as .exec so the row stays tidy. */
+  .btn-appr{font-family:var(--mono);font-size:.58rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 9px;border-radius:999px;margin-left:8px;white-space:nowrap;cursor:pointer;
+    border:1px solid rgba(126,182,255,.5);background:transparent;color:var(--live);transition:background .15s,filter .15s;}
+  .btn-appr:hover{background:rgba(126,182,255,.12);}
+  .btn-appr:disabled{opacity:.55;cursor:default;}
 
   /* usage & billing */
   .usage-hero{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;}
@@ -448,6 +455,7 @@
             <input id="dsp-parts" type="text" autocomplete="off" aria-label="Participants (optional)" placeholder="Participants — e.g. Anna (Ops), Marco (CTO)" />
             <textarea id="dsp-obj" rows="2" aria-label="Objective (optional)" placeholder="Objective — what should this meeting achieve?"></textarea>
             <textarea id="dsp-notes" rows="2" aria-label="Notes (optional)" placeholder="Notes — anything the avatar should know walking in"></textarea>
+            <input id="dsp-mission" type="text" autocomplete="off" aria-label="Mission (optional)" placeholder="Mission — an aim the avatar keeps in mind and raises if left unmet" />
           </div>
         </details>
         <div class="note">The host may need to admit it from the waiting room. Sessions bill per minute — end them from the live bar above.</div>
@@ -997,6 +1005,37 @@
       if(s==="done"&&url) return '<a class="exec done" href="'+esc(url)+'" target="_blank" rel="noopener" title="'+esc(det)+'">Done ↗</a>';
       return '<span class="exec '+esc(s)+'" title="'+esc(det)+'">'+esc(s)+'</span>';
     }
+    // Per-row "Approve & run" — only for a native-typed action (calendar/email
+    // spec) that hasn't already been run. Posts to the human-authed approve door
+    // (POST /dashboard/actions/{id}/approve); with the executor flag OFF the
+    // endpoint marks it approved and runs nothing (handled in approveAction).
+    function apprBtn(a){
+      if(!a.typed||!a.action_id) return "";
+      if(a.execution&&a.execution.status==="done") return "";  // ran already → receipt shows
+      return '<button class="btn-appr" data-approve="'+esc(a.action_id)+'">Approve &amp; run</button>';
+    }
+    function approveAction(btn){
+      var aid=btn.getAttribute("data-approve"); if(!aid) return;
+      var old=btn.innerHTML; btn.disabled=true; btn.textContent="Approving…";
+      fetch("/dashboard/actions/"+encodeURIComponent(aid)+"/approve",{method:"POST",headers:headers()})
+        .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); })
+        .then(function(res){
+          if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
+          var j=res.j, st=j.status||null;
+          // Flag OFF (or nothing ran): captured + marked approved, but not
+          // executed — say so plainly rather than surfacing it as an error.
+          if(!j.executed){
+            btn.outerHTML='<span class="exec approved" title="Marked approved. Turn on the native executor to run it automatically.">captured · execution off</span>';
+            toast("Action approved — captured (native execution is off).");
+            return;
+          }
+          // Executed: render the SAME receipt the row uses (Done ↗ / failed pill).
+          var failed=st&&st.status==="failed";
+          btn.outerHTML=execChip({execution:st})||'<span class="exec done">done</span>';
+          toast(failed?("Approved, but it couldn't run: "+((st&&st.detail)||"see receipt")):"Approved & run — receipt attached.",failed);
+        })
+        .catch(function(e){ btn.disabled=false; btn.innerHTML=old; toast("Could not approve: "+e.message,true); });
+    }
     function rowHTML(m,i){ var nm=avName(m.avatar_id);
       return '<tr class="row" data-i="'+i+'"><td><div class="cell-av">'+
         (m.avatar_id&&avById[m.avatar_id]?avatarBadge(m.avatar_id,nm):'<span class="av" style="background:var(--faint)">'+esc(nm[0]||"?")+'</span>')+'<span>'+esc(nm)+'</span></div></td>'+
@@ -1008,7 +1047,7 @@
         '<div><div class="sm-h">AI summary</div><div class="summary">'+(m.summary?esc(m.summary):'<span style="color:var(--faint)">No summary captured.</span>')+'</div>'+
         (m.follow_up_subject?'<div class="sm-h" style="margin-top:12px">Follow-up email</div><div class="summary">'+esc(m.follow_up_subject)+'</div>':'')+'</div>'+
         '<div><div class="sm-h">Actions</div><div class="did">'+
-        (m.actions.length? m.actions.map(function(a){return '<div class="d'+(a.done?"":" attn")+'"><span class="ic">'+(a.done?"✓":"→")+'</span><span>'+esc(a.item)+(a.owner?' <span class="ow">· '+esc(a.owner)+'</span>':'')+execChip(a)+'</span></div>';}).join("") : '<div class="empty" style="padding:6px 0;text-align:left">'+((brainConnected||m.avatar_id==="cedric")?'Actions handled by Cedric <a data-goto="connections" title="Cedric proposes and runs these; approved from Slack" style="cursor:pointer;text-decoration:none">↗</a>':'No actions captured.')+'</div>')+
+        (m.actions.length? m.actions.map(function(a){return '<div class="d'+(a.done?"":" attn")+'"><span class="ic">'+(a.done?"✓":"→")+'</span><span>'+esc(a.item)+(a.owner?' <span class="ow">· '+esc(a.owner)+'</span>':'')+execChip(a)+apprBtn(a)+'</span></div>';}).join("") : '<div class="empty" style="padding:6px 0;text-align:left">'+((brainConnected||m.avatar_id==="cedric")?'Actions handled by Cedric <a data-goto="connections" title="Cedric proposes and runs these; approved from Slack" style="cursor:pointer;text-decoration:none">↗</a>':'No actions captured.')+'</div>')+
         (m.missing_steps.length?'<div class="sm-h" style="margin-top:12px">Missing steps</div>'+m.missing_steps.map(function(s){return '<div class="d attn"><span class="ic">!</span><span>'+esc(s.replace(/_/g," "))+'</span></div>';}).join(""):'')+
         '</div></div></td></tr>';
     }
@@ -1022,6 +1061,8 @@
         : '<tr><td colspan="6"><div class="empty">No meetings match.</div></td></tr>';
       $$("tr.row",tb).forEach(function(r){ r.addEventListener("click",function(){
         var dEl=tb.querySelector('tr.detail[data-d="'+r.getAttribute("data-i")+'"]'); if(dEl) dEl.hidden=!dEl.hidden; }); });
+      // Per-row Approve & run (lives inside the expandable detail row).
+      $$("button[data-approve]",tb).forEach(function(b){ b.addEventListener("click",function(e){ e.stopPropagation(); approveAction(b); }); });
     }
     // (overview "Recent meetings" removed — the record lives in the Meetings view)
     // meetings: excel-style filters ON the column headers (Avatar / Platform / When)
@@ -1091,8 +1132,9 @@
     var title=($("#dsp-title")||{value:""}).value.trim(),
         parts=($("#dsp-parts")||{value:""}).value.trim(),
         obj=($("#dsp-obj")||{value:""}).value.trim(),
-        notes=($("#dsp-notes")||{value:""}).value.trim();
-    if(title||parts||obj||notes){
+        notes=($("#dsp-notes")||{value:""}).value.trim(),
+        mission=($("#dsp-mission")||{value:""}).value.trim();
+    if(title||parts||obj||notes||mission){
       var meeting={}, briefParts=[];
       if(title){ meeting.title=title; briefParts.push("# "+title); }
       if(obj) briefParts.push("## Objective\n"+obj);
@@ -1102,6 +1144,9 @@
       var ctx={};
       if(Object.keys(meeting).length) ctx.meeting=meeting;
       if(briefParts.length) ctx.brief_markdown=briefParts.join("\n\n");
+      // Per-meeting MISSION (admin objective) → MeetingContext.mission: an aim the
+      // avatar keeps in mind and RESURFACES if left unmet. Empty = today's shape.
+      if(mission) ctx.mission=mission;
       body.context=ctx;
     }
     fetch("/sessions/start",{method:"POST",headers:headers(),body:JSON.stringify(body)})
@@ -1117,7 +1162,7 @@
         var picked=(DATA&&DATA.avatars||[]).find(function(a){return a.id===avatar;});
         toast((picked?picked.name:"Avatar")+" is joining"+(body.context?" with your brief":"")+" — admit them from the waiting room if asked.");
         $("#dsp-url").value="";
-        ["dsp-title","dsp-parts","dsp-obj","dsp-notes"].forEach(function(id){var el=document.getElementById(id); if(el) el.value="";});
+        ["dsp-title","dsp-parts","dsp-obj","dsp-notes","dsp-mission"].forEach(function(id){var el=document.getElementById(id); if(el) el.value="";});
         var det=document.getElementById("dsp-brief"); if(det) det.open=false;
         setTimeout(load,1500); })
       .catch(function(e){ toast(e.billing?e.message:"Could not send: "+e.message,true); })
