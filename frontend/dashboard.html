@@ -485,12 +485,8 @@
         </div>
       </div>
       <div id="mt-upcoming" hidden>
-        <div class="panel" style="text-align:center;padding:44px 20px">
-          <div style="font-size:1.7rem;margin-bottom:8px">📅</div>
-          <h2 style="margin:0 0 6px">Connect calendars through Cedric</h2>
-          <div class="ph" style="max-width:46ch;margin:0 auto 18px">Link your Slack workspace first, then authorize Calendar and the other tools you want Cedric to use.</div>
-          <button class="btn primary" data-goto="connections">Open connections</button>
-          <div class="cnote" style="margin-top:14px">Personal calendar connection is enabled only after it is scoped to your workspace.</div>
+        <div class="panel" id="upcoming-panel">
+          <div class="ph" style="padding:24px;text-align:center">Loading calendar…</div>
         </div>
       </div>
     </section>
@@ -928,6 +924,60 @@
         .catch(function(){ box.innerHTML='<div class="cnote">Brain connectors unavailable right now.</div>'; });
     }
 
+    // upcoming meetings — the connected calendar's queue (auto-join inbox).
+    // Prefetched once per page (window-scoped guard: renderAll reruns on every
+    // summary refresh and must NOT refetch the calendar each tick); the ↻
+    // button and OAuth return force a refresh.
+    function fmtUpWhen(iso){
+      if(!iso) return "—";
+      var d=new Date(iso); if(isNaN(d)) return "—";
+      var days=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"], mo=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      var hm=("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);
+      var today=new Date(); var isToday=d.toDateString()===today.toDateString();
+      var tom=new Date(today.getTime()+86400000); var isTom=d.toDateString()===tom.toDateString();
+      if(isToday) return "Today · "+hm;
+      if(isTom) return "Tomorrow · "+hm;
+      return days[d.getDay()]+" "+d.getDate()+" "+mo[d.getMonth()]+" · "+hm;
+    }
+    function loadUpcoming(force){
+      var box=document.getElementById("upcoming-panel"); if(!box) return;
+      if(window._upcomingLoaded && !force) return;
+      window._upcomingLoaded=true;
+      fetch("/dashboard/upcoming",{headers:headers()})
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          var cal=j.calendar||{};
+          if(!cal.connected){
+            box.innerHTML='<div style="text-align:center;padding:44px 20px">'+
+              '<div style="font-size:1.7rem;margin-bottom:8px">📅</div>'+
+              '<h2 style="margin:0 0 6px">Connect a Google Calendar</h2>'+
+              '<div class="ph" style="max-width:46ch;margin:0 auto 18px">Connect the calendar your avatars watch — any meeting that invites their address shows up here and they join automatically.</div>'+
+              (cal.connect_url?'<a class="btn primary" style="text-decoration:none" href="'+esc(cal.connect_url)+'">Connect Google Calendar</a>':'<div class="cnote">Calendar is temporarily unavailable. Retry in a moment.</div>')+
+              '</div>';
+            return;
+          }
+          var head='<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)">'+
+            '<div><strong>Upcoming meetings</strong> <span class="cnote">· calendar '+esc(cal.email||"connected")+'</span></div>'+
+            '<button class="btn conn-btn" id="upcoming-reload">↻</button></div>';
+          var rows=(j.meetings||[]).map(function(m){
+            return '<tr><td>'+esc(m.title)+'</td>'+
+              '<td class="when">'+fmtUpWhen(m.start_time)+'</td>'+
+              '<td><span class="platc">'+esc(m.platform)+'</span></td>'+
+              '<td class="r tnum">'+(m.attendees||0)+'</td>'+
+              '<td class="r">'+(m.auto_join?'<span class="stchip connected">auto-join</span>':(m.has_link?'<span class="stchip">queued</span>':'<span class="stchip" style="opacity:.6">no link</span>'))+'</td></tr>';
+          }).join("");
+          box.innerHTML=head+(rows
+            ? '<div style="overflow-x:auto"><table><thead><tr><th>Meeting</th><th>When</th><th>Platform</th><th class="r">Guests</th><th class="r">Status</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+            : '<div class="ph" style="padding:28px;text-align:center">No upcoming meetings on the calendar yet.<br><span class="cnote">Invite your avatar\'s email to any event and it appears here — then joins on time.</span></div>');
+          var rl=document.getElementById("upcoming-reload");
+          if(rl) rl.addEventListener("click",function(){ loadUpcoming(true); });
+        })
+        .catch(function(){ window._upcomingLoaded=false;
+          box.innerHTML='<div class="cnote" style="padding:20px">Calendar unavailable right now.</div>'; });
+    }
+    window._loadUpcoming=loadUpcoming;
+    loadUpcoming(false);
+
     // meetings tables — clean filterable columns; click a row for AI summary + actions
     function platformsIn(){ var s={}; (d.meetings||[]).forEach(function(m){ if(m.platform&&m.platform!=="—") s[m.platform]=1; }); return Object.keys(s); }
     function rowHTML(m,i){ var nm=avName(m.avatar_id);
@@ -1075,7 +1125,8 @@
   $$("#seg-when button").forEach(function(b){ b.addEventListener("click",function(){
     $$("#seg-when button").forEach(function(x){x.classList.remove("on");}); b.classList.add("on");
     var w=b.getAttribute("data-w");
-    $("#mt-past").hidden = (w!=="past"); $("#mt-upcoming").hidden = (w!=="upcoming"); }); });
+    $("#mt-past").hidden = (w!=="past"); $("#mt-upcoming").hidden = (w!=="upcoming");
+    if(w==="upcoming" && window._loadUpcoming) window._loadUpcoming(false); }); });
 
   $("#refresh").addEventListener("click",load);
   // Returning from a connector OAuth (Pipedream opens a new tab / redirects back):

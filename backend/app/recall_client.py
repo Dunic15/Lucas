@@ -532,6 +532,20 @@ def create_calendar(
     return resp.json()
 
 
+def list_calendars() -> list[dict]:
+    """List Recall Calendar V2 connections (read-only; dashboard upcoming view)."""
+    resp = _request(
+        "GET",
+        f"{settings.recall_api_base.rstrip('/')}/api/v2/calendars/",
+        headers=_headers(),
+        retry=True,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    rows = data if isinstance(data, list) else (data.get("results") or [])
+    return [c for c in rows if isinstance(c, dict)]
+
+
 def list_calendar_events(
     *, calendar_id: str, updated_at_gte: str = "", is_deleted: bool = False
 ) -> list[dict]:

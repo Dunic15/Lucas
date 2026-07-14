@@ -14,6 +14,7 @@ router so main.py stays a 2-line include, like org_api.py.
 from __future__ import annotations
 
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -906,6 +907,96 @@ async def brain_connectors(request: Request) -> JSONResponse:
     if data is None:
         return JSONResponse({"status": "unavailable", "connectors": []}, headers=_NO_STORE)
     return JSONResponse({"status": "ok", **data}, headers=_NO_STORE)
+
+
+def _upcoming_platform(url: str) -> str:
+    u = (url or "").lower()
+    if "meet.google" in u:
+        return "Google Meet"
+    if "zoom." in u:
+        return "Zoom"
+    if "teams." in u or "teams/" in u:
+        return "Teams"
+    return "Other" if u else "—"
+
+
+@router.get("/dashboard/upcoming")
+async def dashboard_upcoming(request: Request) -> JSONResponse:
+    """Upcoming meetings from the connected calendar (Recall Calendar V2).
+
+    The deployment calendar is the avatar's own invite inbox: invite its
+    address to any event and the auto-join webhook dispatches a bot. This view
+    lets the owner SEE that queue — title, start, platform, whether a bot is
+    already scheduled — plus the calendar connection state (with the OAuth
+    connect link when none is connected). Read-only + PII-light: event titles
+    and counts, never attendee addresses. No server-side cache (no-store)."""
+    user = auth.current_user(request)
+    if user is None:
+        from . import cedric  # local import, same reason as auth.gate's
+
+        if cedric.resolve_machine_org(request) is None:
+            if err := auth.gate(request):
+                return err
+
+    def _load() -> dict:
+        from . import recall_client
+
+        cals = [
+            c
+            for c in recall_client.list_calendars()
+            if str(c.get("status") or "") in ("connected", "")
+        ]
+        if not cals:
+            return {
+                "calendar": {"connected": False, "connect_url": "/oauth/google/connect"},
+                "meetings": [],
+            }
+        cal = cals[0]
+        now = datetime.now(timezone.utc)
+        rows: list[dict] = []
+        for ev in recall_client.list_calendar_events(calendar_id=str(cal.get("id") or "")):
+            if ev.get("is_deleted"):
+                continue
+            start_raw = str(ev.get("start_time") or "")
+            try:
+                start = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            # keep meetings still in play: anything that started <90 min ago is
+            # plausibly in progress; older ones belong to the Past tab
+            if start < now - timedelta(minutes=90):
+                continue
+            raw = ev.get("raw") or {}
+            url = str(ev.get("meeting_url") or "")
+            rows.append(
+                {
+                    "id": str(ev.get("id") or ""),
+                    "title": str(raw.get("summary") or "Untitled meeting"),
+                    "start_time": start_raw,
+                    "end_time": str(ev.get("end_time") or ""),
+                    "platform": _upcoming_platform(url),
+                    "has_link": bool(url),
+                    "attendees": len(raw.get("attendees") or []),
+                    "auto_join": store.is_scheduled(str(ev.get("id") or "")),
+                }
+            )
+        rows.sort(key=lambda r: r["start_time"])
+        return {
+            "calendar": {
+                "connected": True,
+                "email": str(cal.get("oauth_email") or ""),
+            },
+            "meetings": rows[:20],
+        }
+
+    try:
+        data = await run_in_threadpool(_load)
+    except Exception:
+        data = {
+            "calendar": {"connected": False, "error": "calendar_unavailable"},
+            "meetings": [],
+        }
+    return JSONResponse(_json_safe(data), headers=_NO_STORE)
 
 
 @router.post("/dashboard/connections/brain/disconnect")
