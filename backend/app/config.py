@@ -74,6 +74,27 @@ class Settings(BaseSettings):
     # Realtime voice (Gemini Live) — used ONLY by the standalone spike, never the
     # live meeting path. gemini-live-2.5-flash on the global websocket host.
     vertex_live_model: str = "gemini-live-2.5-flash"
+    # Vertex auth for environments without gcloud/ADC (App Runner): the FULL
+    # service-account JSON, passed via env/SSM (GOOGLE_VERTEX_SA_JSON). When set,
+    # llm._vertex_token() mints tokens from it instead of ADC. Never in git.
+    google_vertex_sa_json: str = ""
+
+    # Gemini ears (issue: realtime turn-taking) — stream the meeting's mixed
+    # audio (Recall realtime websocket) into Gemini Live for native STT +
+    # natural end-of-turn detection. Three modes:
+    #   off    (default) — exactly today's behavior; no audio endpoint, no ears.
+    #   shadow — ears run alongside real meetings: transcribe + detect turns,
+    #            record METRICS ONLY (counts/timing — transcripts are PII and
+    #            are never logged). Zero effect on the live decision path.
+    #   on     — ears are authoritative: Gemini turns feed the SAME webhook
+    #            pipeline (synthesized transcript.data, speaker merged from
+    #            Recall finals); raw Recall finals are suppressed while the
+    #            ears session is healthy, and processing falls back to them
+    #            automatically if it dies. Flip only after shadow validation.
+    gemini_ears_mode: str = "off"
+    # Base URL the ears session uses to POST synthesized finals back into the
+    # app (on-mode only). Empty = http://127.0.0.1:$PORT (same container).
+    self_base_url: str = ""
 
     # Embeddings for RAG — pick a provider:
     #   hash   (free, offline, zero-dependency keyword vectors)  ← default

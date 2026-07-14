@@ -58,6 +58,7 @@ from . import (
     emotion,
     end_of_turn,
     executor,
+    gemini_ears,
     granola_client,
     actions,
     gmail_watcher,
@@ -2296,6 +2297,8 @@ async def _finalize_session_locked(
     bot_terminal: bool = False,
 ) -> dict | None:
     """The actual finalize body, run under the ``_finalizing`` in-flight guard."""
+    # Gemini ears: tear down this bot's audio session first (idempotent, sync).
+    gemini_ears.stop_session(bot_id)
     # Join-failed notification (fatal): fire here, under the guard, so it runs at
     # most once per bot even when the webhook and the poll both observe the fatal.
     if failed_code == "fatal":
@@ -4183,6 +4186,65 @@ def _recall_capture_identity(
 
 
 # ───────────────────────── recall webhook ──────────────────────────
+@app.websocket("/realtime/recall-audio")
+async def recall_audio_ws(websocket: WebSocket) -> None:
+    """Recall → us: the meeting's mixed raw audio for Gemini ears (flag-gated).
+
+    Same trust model as /webhooks/recall: realtime endpoints are unsigned, so
+    the URL carries the per-bot capability; an invalid/missing one is closed
+    before any audio is read. Frames are JSON text messages whose payload is
+    base64 s16le 16 kHz mono — forwarded verbatim to the bot's ears session.
+
+    Path note: deliberately OUTSIDE /ws/ — the live-meeting contract route
+    /ws/{conversation_id} is registered first and would capture any /ws/*
+    path (including this one) as a conversation id.
+    """
+    if not gemini_ears.enabled():
+        await websocket.close(code=1008)
+        return
+    capability = (websocket.query_params.get("cap") or "").strip()
+    bot_id: str | None = None
+    if capability:
+        bot_id = await run_in_threadpool(
+            store.resolve_recall_realtime_capability, capability
+        )
+    if not bot_id:
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    ears = gemini_ears.ensure_session(bot_id, capability)
+    try:
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+            raw = message.get("text")
+            if raw is None and message.get("bytes") is not None:
+                raw = message["bytes"].decode("utf-8", "replace")
+            if not raw:
+                continue
+            try:
+                event = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if event.get("event") != "audio_mixed_raw.data":
+                continue
+            buffer_b64 = (
+                ((event.get("data") or {}).get("data") or {}).get("buffer") or ""
+            )
+            if buffer_b64:
+                ears.feed_audio(buffer_b64)
+    except WebSocketDisconnect:
+        pass
+    # Recall reconnects on drops; the ears session survives to receive it.
+
+
+@app.get("/gemini-ears/status")
+def gemini_ears_status() -> JSONResponse:
+    """PII-safe ears telemetry: counts and timing only, never content."""
+    return JSONResponse(gemini_ears.status())
+
+
 @app.post("/webhooks/recall")
 async def recall_webhook(request: Request) -> JSONResponse:
     # Recall realtime endpoints are unsigned. Production bot URLs therefore
@@ -4457,6 +4519,21 @@ async def recall_webhook(request: Request) -> JSONResponse:
     speaker_kind = identity["kind"]
     if not text:
         return JSONResponse({"ok": True})
+
+    # ── Gemini ears (flag-gated; off = this block is dead code) ──
+    if gemini_ears.enabled():
+        # A RAW Recall final feeds the speaker ring (name only, no content) so
+        # ears turns can be attributed; synthesized finals skip it (they ARE
+        # the ears output re-entering the pipeline).
+        if not payload.get("laura_ears"):
+            gemini_ears.observe_recall_final(bot_id, speaker)
+        # on-mode with a healthy ears session: the synthesized final is the
+        # authoritative utterance — suppress the raw one BEFORE it can enter
+        # the transcript (no double lines, no double answers). The moment the
+        # ears session dies this returns False and Recall drives again.
+        if gemini_ears.should_suppress_recall_final(bot_id, payload):
+            return JSONResponse({"ok": True, "ears": "suppressed"})
+
     capture_event_key, capture_fingerprint = _recall_capture_identity(
         payload,
         request.headers,

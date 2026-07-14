@@ -243,6 +243,17 @@ def _variant_payload(variant: str | None) -> dict[str, str] | None:
     }
 
 
+def _ears_ws_url(realtime_capability: str) -> str:
+    """wss:// URL for the mixed-audio realtime endpoint (Gemini ears).
+
+    Path lives OUTSIDE /ws/ — /ws/{conversation_id} (the live-meeting contract
+    route) is registered first and would capture any /ws/* path.
+    """
+    base = settings.public_base_url.rstrip("/")
+    base = base.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
+    return f"{base}/realtime/recall-audio?cap={realtime_capability}"
+
+
 def _create_bot_body(
     meeting_url: str,
     avatar_page_url: str,
@@ -381,6 +392,29 @@ def _create_bot_attempts(
                 ),
             )
         )
+
+    if settings.gemini_ears_mode.strip().lower() in ("shadow", "on"):
+        # Gemini ears: Recall streams the meeting's mixed raw audio (s16le
+        # 16 kHz mono) over a websocket realtime endpoint — audio volume is
+        # too high for webhooks. Ears-enabled copies of every attempt go
+        # FIRST; the untouched originals remain as fallback, so a Recall 4xx
+        # on the audio config can never keep Laura out of a meeting.
+        import copy
+
+        audio_endpoint = {
+            "type": "websocket",
+            "url": _ears_ws_url(realtime_capability),
+            "events": ["audio_mixed_raw.data"],
+        }
+        eared: list[tuple[str, dict]] = []
+        for label, plain_body in attempts:
+            body = copy.deepcopy(plain_body)
+            body["recording_config"]["audio_mixed_raw"] = {}
+            body["recording_config"]["realtime_endpoints"] = list(
+                body["recording_config"]["realtime_endpoints"]
+            ) + [audio_endpoint]
+            eared.append((f"{label}+gemini-ears", body))
+        attempts = eared + attempts
 
     return attempts
 
