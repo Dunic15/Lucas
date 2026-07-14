@@ -600,6 +600,16 @@
   var query=new URLSearchParams(window.location.search);
   var oauthResult=query.get("brain");
   var billingResult=query.get("billing");
+  // Returned from a Cedric connector OAuth (Gmail/Calendar/…) — Cedric bounces
+  // the user back here with ?connected=<ok|norefresh|error>.
+  var connResult=query.get("connected");
+  if(connResult==="ok"){
+    toast("Tool connected — Cedric can use it now.",false);
+  } else if(connResult==="norefresh"){
+    toast("Almost there — the connection is still syncing. Reopen Connections in a moment.",true);
+  } else if(connResult){
+    toast("That tool couldn't be connected. Please try again.",true);
+  }
   if(oauthResult==="connected"){
     toast("Brain linked — meeting actions will flow to your Slack.",false);
   } else if(oauthResult==="pending"){
@@ -614,7 +624,7 @@
       ?"Solo is activating — your allowance updates after Stripe confirms payment."
       :"Checkout was cancelled; your current plan is unchanged.",billingResult!=="success");
   }
-  if(oauthResult||billingResult){
+  if(oauthResult||billingResult||connResult){
     window.history.replaceState({},"",window.location.pathname);
   }
 
@@ -889,9 +899,14 @@
               var chip=c.connected
                 ?'<span class="stchip '+(c.needs_reconnect?"pending":"connected")+'">'+(c.needs_reconnect?"reconnect":"connected")+'</span>'
                 :'<span class="stchip">not connected</span>';
+              // Tell Cedric where to send the user back once the OAuth completes:
+              // our dashboard, so the connection reflects here instead of leaving
+              // them on Cedric's site. Cedric validates this to a Laura origin.
+              var cu=c.connect_url+(c.connect_url.indexOf("?")>=0?"&":"?")+
+                "return_url="+encodeURIComponent(location.origin+"/dashboard");
               var act=c.connected||!c.connect_url
                 ?''
-                :'<a class="btn conn-btn" style="text-decoration:none" href="'+esc(c.connect_url)+'" target="_blank" rel="noopener">Connect</a>';
+                :'<a class="btn conn-btn" style="text-decoration:none" href="'+esc(cu)+'" target="_blank" rel="noopener">Connect</a>';
               return '<div class="crow"><div style="min-width:0"><div class="cn">'+esc(c.name)+'</div>'+
                 '<div class="cd">'+esc(c.account?("· "+c.account):c.description)+'</div></div>'+chip+act+'</div>';
             });
