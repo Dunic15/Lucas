@@ -13,6 +13,11 @@ id: cedric
 name: Cedric
 role: AI Colleague & Meeting Assistant (SFF Studio)
 
+# One-line, user-facing summary for the dashboard card (NOT the spoken persona).
+description: >-
+  Slack agent and meeting assistant — runs the actions from your meetings
+  (email, calendar, messages) and checks with you before doing them.
+
 # Names that "call" this avatar into the conversation.
 # The soft-C name is mis-transcribed by STT ("Cedric" -> "Sedric"/"Cedrick"),
 # which silently cost Cedric answers (and the "you can leave" dismissal). These

@@ -186,6 +186,20 @@ def _hidden(avatar_id: str) -> bool:
         return False
 
 
+def _description(avatar_id: str) -> str:
+    """User-facing one-liner for the dashboard avatar card. Read from the
+    avatar.yaml `description` field — NEVER the persona/system prompt, which is
+    written to be *spoken to the model* ("You are Laura…") and leaks that framing
+    into the owner UI. Falls back to empty so the card simply omits it."""
+    import yaml
+
+    p = settings.avatars_dir / avatar_id / "avatar.yaml"
+    try:
+        return str((yaml.safe_load(p.read_text()) or {}).get("description", "") or "")
+    except Exception:
+        return ""
+
+
 # Rough variable cost per live avatar-minute — mostly the Recall bot (~$0.01/min
 # on the web_4_core tier) plus modest LLM/TTS. A deliberate, conservative
 # ESTIMATE for the usage panel; real invoicing is a later track.
@@ -401,7 +415,7 @@ def dashboard_summary(request: Request) -> JSONResponse:
                 "name": a.name,
                 "role": a.role,
                 "email": _avatar_email(a.id),
-                "persona": (a.persona_prompt or "")[:220],
+                "persona": _description(a.id),
                 "wake_words": a.wake_words,
                 "voice_id": a.elevenlabs_voice_id,
                 "talk_body": a.talk_body,
