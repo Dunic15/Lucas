@@ -201,6 +201,21 @@ class Settings(BaseSettings):
     autopilot_nudge: bool = False          # periodic Slack digest of open ledger items
     autopilot_nudge_hours: float = 24.0
 
+    # Native Google executor (docs/product/NATIVE-INTEGRATIONS-PLAN.md, "Now"
+    # slice): Laura executes its OWN approved calendar/gmail actions on the
+    # user's Google account, instead of brokering through Cedric. OFF by default
+    # — with it off, behavior is byte-identical (Cedric path unchanged) and the
+    # zero-key demo never touches Google. Turning it on additionally needs the
+    # Google client id/secret and a completed /oauth/google/connect (which now
+    # asks for the calendar.events + gmail.send write scopes and persists the
+    # refresh token per org). See backend/app/executor.py + google_client.py.
+    native_executor: bool = False
+    # Key for encrypting the per-org Google refresh token at rest (store.py
+    # org_oauth). Empty ⇒ derived from session_secret, so tokens are never
+    # stored in plaintext even without extra config; set an explicit value to
+    # rotate independently of the session cookie key.
+    google_token_enc_key: str = ""
+
     # Proactive intervention (the differentiator): flag ONE missing step as the
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.
     proactive_enabled: bool = True

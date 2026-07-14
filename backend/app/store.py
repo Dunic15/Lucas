@@ -591,6 +591,20 @@ def _init_db() -> None:
                 updated_at REAL NOT NULL,
                 PRIMARY KEY (org_id, avatar_id, provider)
             );
+            -- Per-org OAuth refresh token for the NATIVE Google executor
+            -- (docs/product/NATIVE-INTEGRATIONS-PLAN.md). The token is stored
+            -- ENCRYPTED (crypto.encrypt), never in plaintext; scopes records
+            -- what the user consented to so the executor can fail soft when a
+            -- write scope is missing.
+            CREATE TABLE IF NOT EXISTS org_oauth (
+                org_id TEXT NOT NULL,
+                provider TEXT NOT NULL,      -- 'google'
+                refresh_token_enc TEXT NOT NULL DEFAULT '',
+                email TEXT NOT NULL DEFAULT '',
+                scopes TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (org_id, provider)
+            );
             """
         )
         # Migration for stores created before the Cedric integration column.
@@ -1795,6 +1809,73 @@ def connections_for_org(org_id: str) -> list[dict]:
             }
         )
     return out
+
+
+# ── per-org Google OAuth for the native executor ──
+# The refresh token is stored ENCRYPTED at rest (never plaintext) — see
+# backend/app/crypto.py + NATIVE-INTEGRATIONS-PLAN.md. The key derives from
+# settings.google_token_enc_key, else settings.session_secret.
+
+
+def _oauth_enc_secret() -> str:
+    return (settings.google_token_enc_key.strip() or settings.session_secret or "laura-oauth")
+
+
+def set_org_oauth(
+    org_id: str, refresh_token: str, *, provider: str = "google",
+    email: str = "", scopes: str = "",
+) -> bool:
+    """Persist (upsert) an org's Google refresh token, encrypted. Empty org or
+    token is a no-op (False)."""
+    from . import crypto
+
+    org = (org_id or "").strip()
+    rt = (refresh_token or "").strip()
+    if not org or not rt:
+        return False
+    enc = crypto.encrypt(rt, _oauth_enc_secret())
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            """INSERT INTO org_oauth
+                   (org_id, provider, refresh_token_enc, email, scopes, updated_at)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(org_id, provider) DO UPDATE SET
+                 refresh_token_enc=excluded.refresh_token_enc,
+                 email=excluded.email, scopes=excluded.scopes,
+                 updated_at=excluded.updated_at""",
+            (org, provider, enc, (email or "").strip().lower(),
+             (scopes or "").strip(), time.time()),
+        )
+    return True
+
+
+def get_org_oauth(org_id: str, *, provider: str = "google") -> dict | None:
+    """An org's stored OAuth: {refresh_token, email, scopes, updated_at} with the
+    token DECRYPTED, or None when there is no usable row (missing or a token that
+    can't be decrypted — e.g. the enc key rotated, which reads as 'reconnect')."""
+    from . import crypto
+
+    org = (org_id or "").strip()
+    if not org:
+        return None
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            """SELECT refresh_token_enc, email, scopes, updated_at
+                   FROM org_oauth WHERE org_id=? AND provider=?""",
+            (org, provider),
+        ).fetchone()
+    if not row or not row["refresh_token_enc"]:
+        return None
+    try:
+        rt = crypto.decrypt(row["refresh_token_enc"], _oauth_enc_secret())
+    except Exception:
+        return None
+    return {
+        "refresh_token": rt,
+        "email": row["email"] or "",
+        "scopes": row["scopes"] or "",
+        "updated_at": row["updated_at"],
+    }
 
 
 def register_recall_realtime_capability(bot_id: str, capability: str) -> bool:
