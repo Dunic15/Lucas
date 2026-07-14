@@ -96,6 +96,8 @@
 
 <script type="module">
   import { TalkingHead } from "talkinghead";
+  import * as THREE from "three";
+  import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 
   const params = new URLSearchParams(location.search);
 
@@ -148,6 +150,11 @@
     // guarantee — an unverified +78% render load on the LIVE camera isn't worth
     // it when the close-up framing already added face pixels). Meeting mode is
     // detectable here: Recall always renders us with ?conversation_id=.
+    // Off-Recall (standalone /talk) has NO 720p cap: 2x supersample already
+    // renders the face far beyond 720p (a ~4000px canvas on a retina display).
+    // Sharpness is not the bottleneck — physically-based lighting is (added
+    // below). Recall meeting mode keeps the proven 1.5 (web_4_core has no GPU
+    // guarantee) since TalkingHead multiplies this by devicePixelRatio.
     modelPixelRatio: params.get("conversation_id") ? 1.5 : 2,
     // Warm 3-point-ish light: sells skin as skin (values tuned live in-browser;
     // brighter blows out the cheeks, dimmer goes corpse-gray).
@@ -197,6 +204,41 @@
     if (head.armature?.getObjectByName?.("AvatarHead")) {
       head.setBaselineValue("headRotateX", -0.45);
       head.setBaselineValue("headRotateY", 0.08);
+    }
+    // ── Laura photoreal lift ──────────────────────────────────────────────
+    // SAME avatar (laura.glb) — just rendered as photoreal as a GLB gets. The
+    // GPU photoreal-VIDEO path (Ditto/MuseTalk on Runpod) is off, and the
+    // standalone /talk page is OFF-Recall (no 720p/15fps cap), so we spend the
+    // headroom on physically-based rendering: image-based lighting for real skin
+    // specular + reflections, ACES filmic tone mapping so highlights read like a
+    // photo instead of clipping flat, and sRGB output. Laura-only — Cedric keeps
+    // his separately-tuned MetaPerson look. Everything tunable live in-browser:
+    // ?env= (IBL strength, 0 disables) and ?exposure=.
+    if (avatarId === "laura") {
+      try {
+        const _f = (k, d) => { const v = parseFloat(params.get(k)); return Number.isNaN(v) ? d : v; };
+        if (head.renderer) {
+          head.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+          head.renderer.toneMappingExposure = _f("exposure", 1.0);
+          head.renderer.outputColorSpace = THREE.SRGBColorSpace;
+        }
+        const envI = _f("env", 0.35);
+        if (envI > 0 && head.scene && head.renderer) {
+          // Procedural neutral-studio IBL — no external HDR file, fully offline.
+          // A neutral, softer env at a controlled strength reads more natural than
+          // TalkingHead's default (intensity 1), whose brightness pushed the skin
+          // toward blown-out/waxy (the very "brighter blows out the cheeks" the
+          // light tuning fought). One knob — scene.environmentIntensity — scales it.
+          const pmrem = new THREE.PMREMGenerator(head.renderer);
+          head.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+          head.scene.environmentIntensity = envI;
+          pmrem.dispose();
+        }
+      } catch (err) {
+        // Never let a rendering-quality tweak break the avatar: fall back to the
+        // proven light-only look (Cedric's path never runs this at all).
+        console.warn("[talk] photoreal lift skipped:", err);
+      }
     }
     head.start();
     // Meeting-webcam framing: CLOSE face shot, eyes on the upper third, a hint
