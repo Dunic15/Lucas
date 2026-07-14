@@ -133,25 +133,46 @@ _vertex_token_cache = {"tok": "", "exp": 0.0}
 
 
 def _vertex_token() -> str:
-    """Mint (and cache) a Vertex access token via google-auth ADC / SA JSON.
+    """Mint (and cache) a Vertex access token via google-auth.
 
-    Set GOOGLE_APPLICATION_CREDENTIALS to a service-account JSON with the role
-    roles/aiplatform.user, or rely on ambient Application Default Credentials.
+    Credential resolution order:
+      1. GOOGLE_VERTEX_SA_JSON — the full service-account JSON as an env value
+         (how App Runner gets it, via SSM). Parsed here BEFORE importing google
+         libs so a malformed value fails with a clear message.
+      2. Ambient ADC — GOOGLE_APPLICATION_CREDENTIALS file / gcloud login (dev).
     Cached until ~1 min before expiry.
     """
     now = time.time()
     if _vertex_token_cache["tok"] and now < _vertex_token_cache["exp"] - 60:
         return _vertex_token_cache["tok"]
+    sa_raw = (settings.google_vertex_sa_json or "").strip()
+    sa_info = None
+    if sa_raw:
+        try:
+            import json as _json
+
+            sa_info = _json.loads(sa_raw)
+        except (TypeError, ValueError) as e:
+            raise RuntimeError(
+                "GOOGLE_VERTEX_SA_JSON is set but is not valid JSON."
+            ) from e
     try:
-        import google.auth
         from google.auth.transport.requests import Request
     except ImportError as e:  # pragma: no cover - depends on optional dep
         raise RuntimeError(
             "BRAIN_PROVIDER=vertex needs google-auth (pip install google-auth)."
         ) from e
-    creds, _ = google.auth.default(
-        scopes=["https://www.googleapis.com/auth/cloud-platform"]
-    )
+    scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+    if sa_info is not None:
+        from google.oauth2 import service_account
+
+        creds = service_account.Credentials.from_service_account_info(
+            sa_info, scopes=scopes
+        )
+    else:
+        import google.auth
+
+        creds, _ = google.auth.default(scopes=scopes)
     creds.refresh(Request())
     exp = getattr(creds, "expiry", None)
     if exp is not None:

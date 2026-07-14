@@ -17,6 +17,10 @@ anthropic>=0.40
 # Lazy-imported in llm.py, so nothing else (nor the tests) requires it.
 google-auth>=2.0
 
+# Gemini ears (GEMINI_EARS_MODE=shadow|on): websocket CLIENT to the Live API.
+# Lazy-imported in gemini_ears.py; usually already present via uvicorn[standard].
+websockets>=12
+
 # PDF ingestion (drop a PDF into an avatar knowledge/ folder)
 pypdf>=4.0
 

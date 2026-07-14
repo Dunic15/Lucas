@@ -65,7 +65,26 @@ Recommended split: **voice = Gemini** (see below), **brain/organization = Claude
 model and is **not** covered by the GCP Free Trial — use Claude on its own Anthropic
 API.
 
-## 3. Realtime voice (Gemini Live) — spike only
+## 3. Gemini ears in production (GEMINI_EARS_MODE)
+
+The live meeting integration (backend/app/gemini_ears.py): Recall streams the
+meeting's mixed raw audio (websocket realtime endpoint → `/realtime/recall-audio`,
+capability-bound) into a Gemini Live session for native STT + natural end-of-turn.
+
+```bash
+GEMINI_EARS_MODE=off      # default — today's exact behavior
+GEMINI_EARS_MODE=shadow   # ears run on real meetings, METRICS ONLY (no PII), zero live impact
+GEMINI_EARS_MODE=on       # ears authoritative: turns feed the same webhook pipeline
+                          # (synthesized transcript.data, speaker merged from Recall);
+                          # automatic failover to Recall finals if the session dies
+VERTEX_PROJECT=868562221752
+GOOGLE_VERTEX_SA_JSON=<the SA JSON — from SSM /laura/prod/GOOGLE_VERTEX_SA_JSON>
+```
+
+Telemetry: `GET /gemini-ears/status` (counts/timing only — transcripts are PII and
+never leave memory). Rollout: shadow first, validate a real meeting, then flip on.
+
+## 4. Realtime voice (Gemini Live) — spike only
 
 Not wired into the live meeting path yet. A standalone spike to feel it lives in
 [`backend/spikes/vertex_live/`](../../backend/spikes/vertex_live/). Key facts
