@@ -964,14 +964,14 @@
             '<div><strong>Upcoming meetings</strong> <span class="cnote">· calendar '+esc(cal.email||"connected")+'</span></div>'+
             '<button class="btn conn-btn" id="upcoming-reload">↻</button></div>';
           var rows=(j.meetings||[]).map(function(m){
-            return '<tr><td>'+esc(m.title)+'</td>'+
+            return '<tr style="border-bottom:1px solid var(--line-soft)"><td>'+esc(m.title)+'</td>'+
               '<td class="when">'+fmtUpWhen(m.start_time)+'</td>'+
               '<td><span class="platc">'+esc(m.platform)+'</span></td>'+
               '<td class="r tnum">'+(m.attendees||0)+'</td>'+
               '<td class="r">'+(m.auto_join?'<span class="stchip connected">auto-join</span>':(m.has_link?'<span class="stchip">queued</span>':'<span class="stchip" style="opacity:.6">no link</span>'))+'</td></tr>';
           }).join("");
           box.innerHTML=head+(rows
-            ? '<div style="overflow-x:auto"><table><thead><tr><th>Meeting</th><th>When</th><th>Platform</th><th class="r">Guests</th><th class="r">Status</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+            ? '<div class="scroll" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Meeting</th><th>When</th><th>Platform</th><th class="r">Guests</th><th class="r">Status</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
             : '<div class="ph" style="padding:28px;text-align:center">No upcoming meetings on the calendar yet.<br><span class="cnote">Invite your avatar\'s email to any event and it appears here — then joins on time.</span></div>');
           var rl=document.getElementById("upcoming-reload");
           if(rl) rl.addEventListener("click",function(){ loadUpcoming(true); });
