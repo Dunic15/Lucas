@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     cerebras_api_key: str = ""
     cerebras_base: str = "https://api.cerebras.ai/v1"
 
+    # Google Gemini (OpenAI-compatible via AI Studio; fast Flash models — fixes the
+    # Cerebras 429 flapping on the live path). BRAIN_PROVIDER=gemini;
+    # BRAIN_MODEL_FAST=gemini-2.5-flash (or gemini-2.0-flash). AI Studio API key is
+    # simplest. For Vertex, point gemini_base at the Vertex OpenAI endpoint and put
+    # an OAuth bearer in GEMINI_API_KEY.
+    gemini_api_key: str = ""
+    gemini_base: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+
     # Embeddings for RAG — pick a provider:
     #   hash   (free, offline, zero-dependency keyword vectors)  ← default
     #   local  (free, real semantic embeddings via fastembed)
