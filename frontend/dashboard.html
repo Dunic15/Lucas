@@ -547,7 +547,7 @@
 
     <!-- CONNECTIONS -->
     <section class="view" id="view-connections" hidden>
-      <div class="head"><div><h1>Connections</h1><div class="sub">Choose what Cedric can reach for your workspace</div></div></div>
+      <div class="head"><div><h1>Connections</h1><div class="sub">Connect Laura's native Google, or add Slack via Cedric — each is independent</div></div></div>
       <div class="conns" id="conns"></div>
       <div class="foot">EACH TOOL NEEDS ITS OWN AUTHORIZATION. CONNECTED NEVER MEANS UNRESTRICTED ACCESS.</div>
     </section>
@@ -607,6 +607,9 @@
   var query=new URLSearchParams(window.location.search);
   var oauthResult=query.get("brain");
   var billingResult=query.get("billing");
+  // Returned from the NATIVE Google OAuth (/oauth/google/callback bounces back
+  // here with ?google=<connected|error>). Independent of ?brain= (Cedric/Slack).
+  var googleResult=query.get("google");
   // Returned from a Cedric connector OAuth (Gmail/Calendar/…) — Cedric bounces
   // the user back here with ?connected=<ok|norefresh|error>.
   var connResult=query.get("connected");
@@ -626,12 +629,19 @@
   } else if(oauthResult){
     toast("The Slack connection result could not be verified. Check Connections before continuing.",true);
   }
+  if(googleResult==="connected"){
+    toast("Google connected — Laura can schedule and email on your account.",false);
+  } else if(googleResult==="error"){
+    toast("Google could not be connected. Retry Connect.",true);
+  } else if(googleResult){
+    toast("The Google connection result could not be verified. Check Connections before continuing.",true);
+  }
   if(billingResult){
     toast(billingResult==="success"
       ?"Solo is activating — your allowance updates after Stripe confirms payment."
       :"Checkout was cancelled; your current plan is unchanged.",billingResult!=="success");
   }
-  if(oauthResult||billingResult||connResult){
+  if(oauthResult||billingResult||connResult||googleResult){
     window.history.replaceState({},"",window.location.pathname);
   }
 
@@ -1093,11 +1103,56 @@
         '<div class="track"><div class="fill" style="width:'+Math.round(mins/maxMin*100)+'%"></div></div><div class="val tnum">'+mins+'m</div></div>';}).join("")
       || '<div class="empty" style="padding:10px 0">No usage yet.</div>';
 
-    $("#conns").innerHTML = '<div class="conn"><div class="nm">Cedric + Slack</div><div class="ds">Link your workspace for approvals and meeting follow-through. After linking, connect each tool from Cedric\'s live catalog.</div>'+
-      '<div class="foot"><span class="cstat'+(brainConnected?" on":"")+'"><b></b>'+(brainConnected?"Connected":"Not connected")+'</span>'+
-      (!brainConnected?'<button class="btn primary" data-connection-brain>Connect Slack</button>':'<button class="btn" data-goto="avatars">Manage tools</button>')+'</div></div>';
-    $$("[data-connection-brain]").forEach(function(btn){btn.addEventListener("click",function(){go("avatars");
-      var c=$("[data-brain-on=\"cedric\"]");if(c){c.click();c.scrollIntoView({behavior:"smooth",block:"center"});}});});
+    // TWO INDEPENDENT capability toggles. Laura is native-first: Google is her
+    // OWN OAuth (Calendar + Gmail, powers the native executor — no Cedric), Slack
+    // is the OPTIONAL Cedric add-on. Either/both/neither — the code paths never
+    // couple. NOTE: both cards build their connect target from FIXED URLs
+    // (/oauth/google/connect, /dashboard/connections/brain/slack/start), never a
+    // Cedric connect_url, so there is no null-connect_url .indexOf hazard here
+    // (the #197 class); the only connect_url access lives in loadBrainConnectors,
+    // which already guards it.
+    var googleNative=!!(d.connections&&d.connections.google_native);
+    var slackConnected=brainConnected; // cedric-brain connected row (the Slack add-on)
+    $("#conns").innerHTML =
+      // ── Google (native) — Laura's own Google, independent of Cedric ──
+      '<div class="conn"><div class="nm">Google <span class="stchip" style="margin-left:6px">native</span></div>'+
+      '<div class="ds">Native — Laura schedules &amp; emails on your Google directly. No Cedric. Grants Calendar + Gmail on your own account.</div>'+
+      '<div class="foot"><span class="cstat'+(googleNative?" on":"")+'"><b></b>'+(googleNative?"Connected":"Not connected")+'</span>'+
+      (googleNative
+        ?'<button class="btn" data-google-off>Disconnect</button>'
+        :'<a class="btn primary" style="text-decoration:none" href="/oauth/google/connect">Connect Google</a>')+
+      '</div></div>'+
+      // ── Slack (optional add-on via Cedric), independent of Google ──
+      '<div class="conn"><div class="nm">Slack <span class="stchip" style="margin-left:6px">add-on</span></div>'+
+      '<div class="ds">Optional add-on — post recaps &amp; cards to Slack via Cedric.</div>'+
+      '<div class="foot"><span class="cstat'+(slackConnected?" on":"")+'"><b></b>'+(slackConnected?"Connected":"Not connected")+'</span>'+
+      (slackConnected
+        ?'<button class="btn" data-slack-off>Disconnect</button>'
+        :'<button class="btn primary" data-slack-on>Add to Slack</button>')+
+      '</div></div>';
+    // Google (native) disconnect — clears ONLY the native token, never Slack.
+    $$("#conns [data-google-off]").forEach(function(btn){btn.addEventListener("click",function(){
+      btn.disabled=true; var prev=btn.textContent; btn.textContent="Disconnecting…";
+      fetch("/oauth/google/disconnect",{method:"POST",headers:headers()})
+        .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){
+          if(!r.ok||!j.ok){ throw new Error("Couldn't disconnect Google. Try again."); }
+          toast("Google disconnected."); load(); }); })
+        .catch(function(err){ toast(err.message||"Couldn't disconnect Google. Try again.",true);
+          btn.disabled=false; btn.textContent=prev; }); }); });
+    // Slack (add-on) connect — the existing Cedric Slack-install flow (fixed URL).
+    $$("#conns [data-slack-on]").forEach(function(btn){btn.addEventListener("click",function(){
+      window.location.assign("/dashboard/connections/brain/slack/start?avatar_id=cedric&channel="); }); });
+    // Slack (add-on) disconnect — the existing remote-revoke-first brain saga.
+    $$("#conns [data-slack-off]").forEach(function(btn){btn.addEventListener("click",function(){
+      btn.disabled=true; var prev=btn.textContent; btn.textContent="Disconnecting…";
+      fetch("/dashboard/connections/brain/disconnect",{
+          method:"POST",headers:headers(),body:JSON.stringify({avatar_id:"cedric"})})
+        .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){
+          if(r.status===502||j.error==="remote_revoke_failed"){ throw new Error("Couldn't disconnect Slack. Try again."); }
+          if(!r.ok){ throw new Error("Couldn't disconnect Slack. Try again."); }
+          toast("Slack disconnected."); load(); }); })
+        .catch(function(err){ toast(err.message||"Couldn't disconnect Slack. Try again.",true);
+          btn.disabled=false; btn.textContent=prev; }); }); });
     wireAvatarImages();
   }
 
