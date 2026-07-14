@@ -251,7 +251,11 @@ def _ears_ws_url(realtime_capability: str) -> str:
     """
     base = settings.public_base_url.rstrip("/")
     base = base.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
-    return f"{base}/realtime/recall-audio?cap={realtime_capability}"
+    # Capability in the PATH, not the query string: the first live run showed
+    # Recall never reaching the endpoint with a query-param URL (30 silent
+    # retries, endpoint marked failed) — a path segment survives any URL
+    # normalization. The route accepts both forms.
+    return f"{base}/realtime/recall-audio/{realtime_capability}"
 
 
 def _create_bot_body(
@@ -526,6 +530,9 @@ def create_bot(
                 continue
             raise
         result = resp.json()
+        # Which attempt won matters operationally (did the bot get the ears
+        # audio endpoint, or a fallback?) — label only, no meeting content.
+        print(f"[recall] bot created via {label}", flush=True)
         # Private hand-off to main.py. This key is removed before any API
         # response is built and the raw capability is never persisted/logged.
         result["_laura_realtime_capability"] = realtime_capability

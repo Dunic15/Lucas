@@ -4215,7 +4215,8 @@ def _recall_capture_identity(
 
 # ───────────────────────── recall webhook ──────────────────────────
 @app.websocket("/realtime/recall-audio")
-async def recall_audio_ws(websocket: WebSocket) -> None:
+@app.websocket("/realtime/recall-audio/{cap_path}")
+async def recall_audio_ws(websocket: WebSocket, cap_path: str = "") -> None:
     """Recall → us: the meeting's mixed raw audio for Gemini ears (flag-gated).
 
     Same trust model as /webhooks/recall: realtime endpoints are unsigned, so
@@ -4227,18 +4228,28 @@ async def recall_audio_ws(websocket: WebSocket) -> None:
     /ws/{conversation_id} is registered first and would capture any /ws/*
     path (including this one) as a conversation id.
     """
+    # PII-safe observability: connection attempts are invisible in uvicorn's
+    # access log (websockets aren't logged), so a silent no-show from Recall
+    # and a rejected handshake would look identical without these prints.
     if not gemini_ears.enabled():
+        print("[ears] audio ws attempt REJECTED: ears disabled", flush=True)
         await websocket.close(code=1008)
         return
-    capability = (websocket.query_params.get("cap") or "").strip()
+    capability = (cap_path or websocket.query_params.get("cap") or "").strip()
     bot_id: str | None = None
     if capability:
         bot_id = await run_in_threadpool(
             store.resolve_recall_realtime_capability, capability
         )
     if not bot_id:
+        print(
+            f"[ears] audio ws attempt REJECTED: capability "
+            f"{'missing' if not capability else 'unknown'}",
+            flush=True,
+        )
         await websocket.close(code=1008)
         return
+    print(f"[ears] audio ws ACCEPTED bot={bot_id[:8]}", flush=True)
     await websocket.accept()
     # Persona for reply mode: the session's avatar name (best-effort).
     _ears_avatar = "Laura"

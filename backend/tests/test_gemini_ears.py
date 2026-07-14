@@ -61,7 +61,7 @@ def test_shadow_mode_prepends_eared_attempts_with_plain_fallback(monkeypatch):
         assert len(audio_eps) == 1
         assert audio_eps[0]["events"] == ["audio_mixed_raw.data"]
         assert audio_eps[0]["url"] == (
-            "wss://prod.example/realtime/recall-audio?cap=capsecret"
+            "wss://prod.example/realtime/recall-audio/capsecret"
         )
     for _, body in plain:
         assert "audio_mixed_raw" not in body["recording_config"]
@@ -446,3 +446,29 @@ def test_on_mode_synthesized_final_still_uses_the_brain(tmp_path, monkeypatch):
     assert body.get("spoke") is True
     assert spoken == ["Risposta grounded dal RAG."]
     store.remove(s.bot_id)
+
+
+def test_audio_ws_accepts_capability_in_path(monkeypatch):
+    monkeypatch.setattr(settings, "gemini_ears_mode", "shadow")
+    monkeypatch.setattr(
+        store, "resolve_recall_realtime_capability",
+        lambda cap: "bot-9" if cap == "pathcap" else None,
+    )
+    fed: list[str] = []
+
+    class _StubSession:
+        def feed_audio(self, b64):
+            fed.append(b64)
+
+    monkeypatch.setattr(
+        gemini_ears,
+        "ensure_session",
+        lambda bot_id, cap, avatar_name="Laura": _StubSession(),
+    )
+    client = TestClient(main_module.app)
+    with client.websocket_connect("/realtime/recall-audio/pathcap") as ws:
+        ws.send_text(json.dumps({
+            "event": "audio_mixed_raw.data",
+            "data": {"data": {"buffer": "UEFUSA=="}},
+        }))
+    assert fed == ["UEFUSA=="]

@@ -194,6 +194,11 @@ class EarsSession:
                     if "setupComplete" not in first:
                         raise RuntimeError("gemini setup rejected")
                     self.metrics.connected = True
+                    print(
+                        f"[ears] gemini session UP bot={self.bot_id[:8]} "
+                        f"mode={mode()}",
+                        flush=True,
+                    )
                     backoff = 1.0
                     await asyncio.gather(
                         self._pump_audio(ws), self._pump_events(ws)
@@ -204,6 +209,11 @@ class EarsSession:
                 self.metrics.connected = False
                 self.metrics.last_error = type(e).__name__
                 self.metrics.reconnects += 1
+                print(
+                    f"[ears] gemini session error bot={self.bot_id[:8]}: "
+                    f"{type(e).__name__} (reconnect {self.metrics.reconnects})",
+                    flush=True,
+                )
                 if self._closed:
                     return
                 await asyncio.sleep(backoff)
