@@ -279,9 +279,25 @@ def _set_connection_all(
     return store.set_connection(org_id, avatar_id, provider, status, config)
 
 
+# Served behind the Cloudflare edge (lauravatar.com). Dynamic per-user state
+# (summary, live Cedric connectors) must NEVER be cached, or a connect/disconnect
+# isn't reflected until a manual/hard refresh: the app already re-fetches after the
+# mutation (dashboard.html load()), but a cached GET hands back the pre-change
+# state. The backend state itself is fresh (the disconnect saga is synchronous and
+# the reads are un-cached) — only the HTTP layer was serving it stale.
+_NO_STORE = {"Cache-Control": "no-store"}
+
+
 @router.get("/dashboard")
 def dashboard_page() -> FileResponse:
-    return FileResponse(FRONTEND_DIR / "dashboard.html")
+    # no-cache (revalidate), not no-store: the ETag still yields cheap 304s, but a
+    # deploy's new dashboard.html is picked up immediately instead of a heuristically
+    # cached shell lingering until a hard refresh (it shipped with ETag/Last-Modified
+    # but NO Cache-Control, which is exactly what enabled heuristic caching).
+    return FileResponse(
+        FRONTEND_DIR / "dashboard.html",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 def _json_safe(obj):
@@ -548,7 +564,8 @@ def dashboard_summary(request: Request) -> JSONResponse:
                 if user
                 else None
             ),
-        })
+        }),
+        headers=_NO_STORE,
     )
 
 
@@ -866,7 +883,9 @@ async def brain_connectors(request: Request) -> JSONResponse:
     if user is None:
         if err := auth.gate(request):
             return err
-        return JSONResponse({"error": "login required"}, status_code=401)
+        return JSONResponse(
+            {"error": "login required"}, status_code=401, headers=_NO_STORE
+        )
 
     from . import cedric  # local import, same reason as connect_brain's
 
@@ -875,15 +894,18 @@ async def brain_connectors(request: Request) -> JSONResponse:
     connected = next((r for r in brain if r["status"] == "connected"), None)
     if connected is None:
         if any(r["status"] == "pending" for r in brain):
-            return JSONResponse({"status": "pending", "connectors": []})
-        return JSONResponse({"status": "not_connected", "connectors": []})
+            return JSONResponse({"status": "pending", "connectors": []}, headers=_NO_STORE)
+        return JSONResponse({"status": "not_connected", "connectors": []}, headers=_NO_STORE)
     team_id = str((connected.get("config") or {}).get("team_id") or "")
+    # Live passthrough of Cedric's catalog — no server-side cache here, so a
+    # just-connected tool shows immediately; no-store keeps the browser/edge from
+    # re-serving a pre-connect snapshot.
     data = await run_in_threadpool(
         cedric.fetch_org_connectors, user["org_id"], team_id
     )
     if data is None:
-        return JSONResponse({"status": "unavailable", "connectors": []})
-    return JSONResponse({"status": "ok", **data})
+        return JSONResponse({"status": "unavailable", "connectors": []}, headers=_NO_STORE)
+    return JSONResponse({"status": "ok", **data}, headers=_NO_STORE)
 
 
 @router.post("/dashboard/connections/brain/disconnect")
