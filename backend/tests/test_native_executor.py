@@ -39,6 +39,36 @@ def test_crypto_roundtrip_and_tamper():
         crypto.decrypt(tok[:-6] + "AAAAAA", "k1")  # tampered ciphertext
 
 
+def test_crypto_new_tokens_are_fernet():
+    """New tokens use the vetted Fernet cipher (not the hand-rolled scheme)."""
+    from app import crypto
+
+    assert crypto.encrypt("x", "k").startswith("gAAAAA")  # Fernet version prefix
+
+
+def test_crypto_reads_legacy_tokens():
+    """decrypt() still reads tokens written by the pre-Fernet HMAC-CTR scheme, so
+    an in-place upgrade never invalidates an already-stored refresh token."""
+    import base64
+    import hashlib
+    import hmac
+    import os
+
+    from app import crypto
+
+    secret = "k1"
+    enc_key, mac_key = crypto._derive(secret)
+    nonce = os.urandom(16)
+    pt = b"1//legacy-refresh-token"
+    ct = bytes(a ^ b for a, b in zip(pt, crypto._keystream(enc_key, nonce, len(pt))))
+    tag = hmac.new(mac_key, nonce + ct, hashlib.sha256).digest()
+    legacy = base64.urlsafe_b64encode(nonce + tag + ct).decode()
+
+    assert crypto.decrypt(legacy, secret) == "1//legacy-refresh-token"
+    with pytest.raises(ValueError):
+        crypto.decrypt(legacy, "wrong-key")  # legacy token, wrong key
+
+
 # ── per-org token store ──
 
 def test_org_oauth_roundtrip_and_encryption(monkeypatch, tmp_path):
@@ -65,6 +95,19 @@ def test_org_oauth_roundtrip_and_encryption(monkeypatch, tmp_path):
     # "not connected" (reconnect), never a crash or a wrong token.
     monkeypatch.setattr(settings, "session_secret", "rotated")
     assert store.get_org_oauth("org-a") is None
+
+
+def test_org_oauth_fails_closed_without_key(monkeypatch, tmp_path):
+    """With neither GOOGLE_TOKEN_ENC_KEY nor SESSION_SECRET set, refuse to store a
+    token under a public default: the write fails closed and a read is a clean
+    'not connected' (never a plaintext token, never a crash)."""
+    _fresh_store(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "google_token_enc_key", "")
+    monkeypatch.setattr(settings, "session_secret", "")
+
+    with pytest.raises(RuntimeError):
+        store.set_org_oauth("org-x", "rt-999")
+    assert store.get_org_oauth("org-x") is None
 
 
 # ── google_client (Google mocked) ──

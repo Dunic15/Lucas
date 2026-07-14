@@ -9,6 +9,12 @@ python-dotenv>=1.0
 numpy>=1.26
 pyyaml>=6.0
 
+# Vetted symmetric encryption (Fernet) for the per-org Google refresh token at
+# rest (backend/app/crypto.py). Only imported on a real OAuth connect for the
+# native executor — the zero-key demo never touches it. Ships manylinux wheels,
+# so `pip install` needs no compiler on the python:3.12-slim image.
+cryptography>=42.0,<46
+
 # Optional — only needed for the "best quality" brain (BRAIN_PROVIDER=anthropic).
 # The free stub/ollama paths and the whole demo run without it.
 anthropic>=0.40

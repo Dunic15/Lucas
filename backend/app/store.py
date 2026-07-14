@@ -1813,12 +1813,29 @@ def connections_for_org(org_id: str) -> list[dict]:
 
 # ── per-org Google OAuth for the native executor ──
 # The refresh token is stored ENCRYPTED at rest (never plaintext) — see
-# backend/app/crypto.py + NATIVE-INTEGRATIONS-PLAN.md. The key derives from
-# settings.google_token_enc_key, else settings.session_secret.
+# backend/app/crypto.py (Fernet) + NATIVE-INTEGRATIONS-PLAN.md.
 
 
 def _oauth_enc_secret() -> str:
-    return (settings.google_token_enc_key.strip() or settings.session_secret or "laura-oauth")
+    """Key for encrypting per-org Google refresh tokens at rest (org_oauth).
+
+    Prefers the dedicated GOOGLE_TOKEN_ENC_KEY — set it to a random value sourced
+    from SSM SecureString / KMS in prod so it rotates independently of the session
+    cookie key. Falls back to the session secret so tokens are still never stored
+    in plaintext without extra config. It never encrypts under a public constant:
+    with neither set it fails closed (raises) rather than protect a live OAuth
+    token with a shared default. This path is only reachable through a real Google
+    OAuth connect — the zero-key demo never stores a token — so the raise cannot
+    hit the demo, and its one caller (main.oauth callback) treats it as a
+    best-effort skip."""
+    key = (settings.google_token_enc_key or "").strip() or (settings.session_secret or "").strip()
+    if not key:
+        raise RuntimeError(
+            "OAuth token encryption key missing: set GOOGLE_TOKEN_ENC_KEY "
+            "(preferred) or SESSION_SECRET before connecting Google for the "
+            "native executor"
+        )
+    return key
 
 
 def set_org_oauth(

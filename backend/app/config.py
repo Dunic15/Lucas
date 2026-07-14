@@ -211,9 +211,11 @@ class Settings(BaseSettings):
     # refresh token per org). See backend/app/executor.py + google_client.py.
     native_executor: bool = False
     # Key for encrypting the per-org Google refresh token at rest (store.py
-    # org_oauth). Empty ⇒ derived from session_secret, so tokens are never
-    # stored in plaintext even without extra config; set an explicit value to
-    # rotate independently of the session cookie key.
+    # org_oauth, Fernet). Empty ⇒ falls back to session_secret, so tokens are
+    # never stored in plaintext even without extra config; with neither set it
+    # fails closed (no public-default key). For the executor go-live, set this to
+    # a random value held in SSM SecureString (KMS at rest) so it rotates
+    # independently of the session cookie key.
     google_token_enc_key: str = ""
 
     # Proactive intervention (the differentiator): flag ONE missing step as the
