@@ -52,15 +52,19 @@ _FALLBACK_MODEL = "claude-haiku-4-5"
 # only the endpoint + API key differ. One implementation (_complete_groq /
 # _stream_groq / complete_with_tools) serves both; _compat_creds() picks the
 # right base URL + key for the resolved provider.
-_OPENAI_COMPAT = {"groq", "cerebras"}
+_OPENAI_COMPAT = {"groq", "cerebras", "gemini"}
 
 
 def _compat_creds(provider: str) -> tuple[str, str]:
-    """(base_url, api_key) for an OpenAI-compatible provider (groq | cerebras)."""
+    """(base_url, api_key) for an OpenAI-compatible provider (groq | cerebras | gemini)."""
     if provider == "cerebras":
         if not settings.cerebras_api_key:
             raise RuntimeError("BRAIN_PROVIDER=cerebras needs CEREBRAS_API_KEY.")
         return settings.cerebras_base, settings.cerebras_api_key
+    if provider == "gemini":
+        if not settings.gemini_api_key:
+            raise RuntimeError("BRAIN_PROVIDER=gemini needs GEMINI_API_KEY.")
+        return settings.gemini_base, settings.gemini_api_key
     if not settings.groq_api_key:
         raise RuntimeError("BRAIN_PROVIDER=groq needs GROQ_API_KEY.")
     return settings.groq_base, settings.groq_api_key
