@@ -22,6 +22,13 @@ Modes (settings.gemini_ears_mode):
            Recall finals are suppressed (they still feed the speaker ring);
            if the session dies, suppression lifts and Recall finals drive the
            meeting again — automatic failover, never a deaf avatar.
+  reply  — everything "on" does, plus TUTTO-GEMINI: the Live model also DRAFTS
+           the spoken reply from the audio it heard (persona system prompt,
+           ~150 tokens). The draft rides the synthesized payload
+           ("laura_ears_reply") and main.py speaks IT — through the same gates
+           and the same ElevenLabs voice — instead of calling the brain.
+           Trade: the spike's instant conversational feel, but the draft is
+           NOT grounded in the avatar's documents (no RAG). A/B against "on".
 
 Latency note: this module lives OFF the spoken hot path in shadow mode and
 adds one localhost POST in on mode. The Gemini reply is capped at 1 token
@@ -54,7 +61,7 @@ _MAX_RECONNECTS = 5
 
 
 def enabled() -> bool:
-    return settings.gemini_ears_mode.strip().lower() in ("shadow", "on")
+    return settings.gemini_ears_mode.strip().lower() in ("shadow", "on", "reply")
 
 
 def mode() -> str:
@@ -88,6 +95,7 @@ class _Metrics:
     dropped_frames: int = 0
     turns: int = 0
     turn_chars: int = 0
+    reply_chars: int = 0
     speaker_matched: int = 0
     speaker_unmatched: int = 0
     synthesized_finals: int = 0
@@ -101,6 +109,7 @@ class _Metrics:
 class EarsSession:
     bot_id: str
     capability: str
+    avatar_name: str = "Laura"  # persona for reply mode (from the session's avatar)
     metrics: _Metrics = field(default_factory=_Metrics)
     # ring of recent Recall finals for speaker attribution: (ts, speaker)
     # plus the text length only — the text itself is not retained here.
@@ -202,18 +211,28 @@ class EarsSession:
         self.metrics.connected = False
 
     def _setup_payload(self) -> dict:
+        if mode() == "reply":
+            # Tutto-Gemini: the Live model also DRAFTS the spoken reply (it has
+            # the audio in context, so the draft streams while the turn closes
+            # — the spike's instant feel). The gate downstream still decides
+            # whether the draft is ever spoken, and ElevenLabs speaks it.
+            gen = {"responseModalities": ["TEXT"], "maxOutputTokens": 150}
+            system = (
+                f"Sei {self.avatar_name}, un'assistente che partecipa a una "
+                "riunione di lavoro. Rispondi nella lingua della riunione, con "
+                "frasi brevi e naturali, come al telefono. Se non sai una "
+                "cosa, dillo brevemente. Non fare elenchi."
+            )
+        else:
+            # Ears-only: TEXT modality with a 1-token cap — we consume the
+            # *turn boundary* and the input transcription, not Gemini's answer.
+            gen = {"responseModalities": ["TEXT"], "maxOutputTokens": 1}
+            system = "Rispondi sempre e solo con: ."
         return {
             "setup": {
                 "model": _model_path(),
-                # TEXT modality with a 1-token cap: we consume the *turn
-                # boundary* and the input transcription, not Gemini's answer.
-                "generationConfig": {
-                    "responseModalities": ["TEXT"],
-                    "maxOutputTokens": 1,
-                },
-                "systemInstruction": {
-                    "parts": [{"text": "Rispondi sempre e solo con: ."}]
-                },
+                "generationConfig": gen,
+                "systemInstruction": {"parts": [{"text": system}]},
                 "inputAudioTranscription": {},
             }
         }
@@ -236,6 +255,7 @@ class EarsSession:
 
     async def _pump_events(self, ws) -> None:
         acc: list[str] = []
+        reply_acc: list[str] = []
         async for raw in ws:
             if isinstance(raw, bytes):
                 raw = raw.decode("utf-8", "replace")
@@ -243,19 +263,29 @@ class EarsSession:
                 msg = json.loads(raw)
             except (TypeError, ValueError):
                 continue
-            done = self._handle_gemini_message(msg, acc)
+            done = self._handle_gemini_message(msg, acc, reply_acc)
             if done:
                 utterance = "".join(acc).strip()
+                reply = "".join(reply_acc).strip()
                 acc.clear()
+                reply_acc.clear()
+                if reply in (".", ""):  # ears-only sentinel — not a real draft
+                    reply = ""
                 if utterance:
-                    await self._on_turn(utterance)
+                    await self._on_turn(utterance, reply)
 
-    def _handle_gemini_message(self, msg: dict, acc: list[str]) -> bool:
-        """Fold one server message into the accumulator; True on turn end."""
+    def _handle_gemini_message(
+        self, msg: dict, acc: list[str], reply_acc: list[str] | None = None
+    ) -> bool:
+        """Fold one server message into the accumulators; True on turn end."""
         sc = msg.get("serverContent") or {}
         it = (sc.get("inputTranscription") or {}).get("text")
         if it:
             acc.append(it)
+        if reply_acc is not None:
+            for part in (sc.get("modelTurn") or {}).get("parts", []):
+                if "text" in part:
+                    reply_acc.append(part["text"])
         return bool(sc.get("turnComplete"))
 
     # ── turn handling ──────────────────────────────────────────────────
@@ -269,11 +299,12 @@ class EarsSession:
         self.metrics.speaker_unmatched += 1
         return ""
 
-    async def _on_turn(self, utterance: str) -> None:
+    async def _on_turn(self, utterance: str, reply: str = "") -> None:
         self.metrics.turns += 1
         self.metrics.turn_chars += len(utterance)
+        self.metrics.reply_chars += len(reply)
         self.metrics.last_turn_at = time.time()
-        if mode() != "on":
+        if mode() not in ("on", "reply"):
             return  # shadow: metrics only — content goes nowhere
         speaker = self._match_speaker()
         if not speaker:
@@ -281,9 +312,13 @@ class EarsSession:
             # stretch of speech rather than mis-attributing it. The webhook
             # suppression checks synthesized turns first, so nothing is lost.
             return
-        await self._post_synthesized_final(speaker, utterance)
+        await self._post_synthesized_final(
+            speaker, utterance, reply if mode() == "reply" else ""
+        )
 
-    async def _post_synthesized_final(self, speaker: str, text: str) -> None:
+    async def _post_synthesized_final(
+        self, speaker: str, text: str, reply: str = ""
+    ) -> None:
         import httpx
 
         payload = {
@@ -297,6 +332,11 @@ class EarsSession:
                 },
             },
         }
+        if reply:
+            # reply mode: the draft the Live model already generated from the
+            # audio — main.py speaks THIS (via ElevenLabs) instead of calling
+            # the brain, IF the gates decide the turn deserves an answer.
+            payload["laura_ears_reply"] = reply
         url = f"{_self_base()}/webhooks/recall?cap={self.capability}"
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -317,6 +357,7 @@ class EarsSession:
             "dropped_frames": m.dropped_frames,
             "turns": m.turns,
             "avg_turn_chars": round(m.turn_chars / m.turns, 1) if m.turns else 0,
+            "reply_chars": m.reply_chars,
             "speaker_matched": m.speaker_matched,
             "speaker_unmatched": m.speaker_unmatched,
             "synthesized_finals": m.synthesized_finals,
@@ -332,10 +373,14 @@ class EarsSession:
 _sessions: dict[str, EarsSession] = {}
 
 
-def ensure_session(bot_id: str, capability: str) -> EarsSession:
+def ensure_session(
+    bot_id: str, capability: str, avatar_name: str = "Laura"
+) -> EarsSession:
     s = _sessions.get(bot_id)
     if s is None or s._closed:
-        s = EarsSession(bot_id=bot_id, capability=capability)
+        s = EarsSession(
+            bot_id=bot_id, capability=capability, avatar_name=avatar_name
+        )
         _sessions[bot_id] = s
         s.start()
     return s
@@ -361,11 +406,11 @@ def should_suppress_recall_final(bot_id: str, payload: dict) -> bool:
     """True when a RAW Recall final must be suppressed (ears authoritative).
 
     Synthesized payloads (marker "laura_ears") are never suppressed — they ARE
-    the ears output. Suppression requires on-mode AND a healthy live session;
-    the moment the session dies this returns False and Recall finals drive the
-    meeting again (failover).
+    the ears output. Suppression requires on/reply mode AND a healthy live
+    session; the moment the session dies this returns False and Recall finals
+    drive the meeting again (failover).
     """
-    if mode() != "on":
+    if mode() not in ("on", "reply"):
         return False
     if payload.get("laura_ears"):
         return False

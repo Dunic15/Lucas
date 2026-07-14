@@ -393,7 +393,7 @@ def _create_bot_attempts(
             )
         )
 
-    if settings.gemini_ears_mode.strip().lower() in ("shadow", "on"):
+    if settings.gemini_ears_mode.strip().lower() in ("shadow", "on", "reply"):
         # Gemini ears: Recall streams the meeting's mixed raw audio (s16le
         # 16 kHz mono) over a websocket realtime endpoint — audio volume is
         # too high for webhooks. Ears-enabled copies of every attempt go
