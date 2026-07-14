@@ -1,82 +1,80 @@
-# Repo hygiene — current vs. stale (updated 2026-07-06, declutter pass)
+# Repo hygiene — current state (updated 2026-07-14)
 
-First inventoried after the MeetingState + GPU cost-control work landed on `main`;
-updated by the **declutter pass** (branch `claude/repo-declutter`), which executed
-the approved moves. **Nothing has been deleted** — deletion candidates still need
-explicit owner approval. Owner: Claude 1 (docs/repo hygiene session).
+Living inventory of what's canonical vs. stale. Last full pass: **2026-07-14
+doc-consolidation + branch-realignment** (branch `claude/repo-hygiene-2026-07-14`,
+cut fresh from `origin/main`). Prior passes: 2026-07-06 declutter, 2026-07-07
+repo-alignment (history at the bottom).
 
-## Files kept in root (the essentials, nothing else)
+## Single sources of truth (start here)
 
-| Path | Why it must stay at root |
+| Question | Canonical doc |
 |---|---|
-| `README.md` | the front door |
-| `CODEX.md` | parallel-work brief + integration contract (linked from README/CONTEXT) |
-| `CLAUDE.md` | Claude Code reads it from repo root by convention |
-| `requirements.txt` | `pip install -r` quickstart path |
-| `.env.example` | `cp .env.example .env` quickstart path |
-| `.gitignore`, `.mcp.json` | git / Claude Code tooling — root-required |
+| What is Laura / the front door | [`../README.md`](../README.md) |
+| How it works today (architecture + seams) | [`ARCHITECTURE_CURRENT.md`](ARCHITECTURE_CURRENT.md) |
+| Why it wins (positioning) | [`product/WEDGE.md`](product/WEDGE.md) |
+| What we're building — Now/Next/Later | [`product/roadmap.md`](product/roadmap.md) |
+| Latest production-hardening handoff | [`product/SESSION-HANDOFF-2026-07-13-audit.md`](product/SESSION-HANDOFF-2026-07-13-audit.md) |
+| Flow-by-flow audit (repro + fixes) | [`product/FLOW-AUDIT-2026-07-13.md`](product/FLOW-AUDIT-2026-07-13.md) |
+| Parallel-session integration contract | [`../CODEX.md`](../CODEX.md) |
 
-(Local untracked `.env*` files also live at root but are gitignored — invisible
-on GitHub, never committed, not touched by the declutter.)
+## The 2026-07-14 pass — what it did
 
-## Files moved (declutter pass, all via `git mv` — history preserved)
+**Branch realignment (important).** The local working branch `claude/dash-detail`
+had **fully diverged history from `origin/main`** — no common ancestor (`git
+merge-base` empty). `origin/main` had been rewritten/squashed (its root is a recent
+commit) and is the **authoritative, fresh, CI-green line** (memory + verified: last
+commit hours old, contains #199–#204: native executor, per-meeting mission, Approve
+button, Gemini-via-Vertex brain). A normal merge/rebase was impossible.
 
-| From (repo root) | To |
+Resolution (owner-approved): cut a **fresh branch from `origin/main`**
+(`claude/repo-hygiene-2026-07-14`), carry over only the genuinely-new local docs,
+and **keep `claude/dash-detail` intact as a backup** — it still holds two
+local-only features not on `origin/main` (a *private-beta login gate* and the
+*excel-filter dashboard*) that can be re-PR'd from it if wanted. A full tarball of
+every untracked+modified file from the old branch is in the session scratchpad.
+
+**Junk deleted:**
+- 28 identical `X 2.ext` sync-collision duplicates (Drive/iCloud artifacts) — byte-for-byte copies of tracked files.
+- 20 untracked copies of files `origin/main` already tracks (took origin's canonical version).
+- stray root `SKILL.md` (an accidental copy of `.claude/skills/deploy-on-shared-vercel/SKILL.md`).
+
+**Docs consolidated:** the freshest roadmap (`ROADMAP-2026-07-14.md`) is now the
+canonical [`product/roadmap.md`](product/roadmap.md); ~11 overlapping
+roadmap/business-plan/handoff snapshots moved to
+[`archive/2026-07-14/`](archive/2026-07-14/) (banner + index there). Active plans
+(native integrations, photoreal-Ditto, connections, YC niche research) stay live in
+`product/`.
+
+**Gitignore hardened:** local A/V test dirs (`avatar-test-clips/`,
+`desktop-laura-stuff/`, `voice-previews/`, `images laura/`) and GTM lead lists with
+real prospect emails (`docs/gtm/*.xlsx`, `docs/gtm/recipients.csv` — PII) are now
+ignored. GTM *strategy* `.md` docs stay tracked; the raw contact data never enters git.
+
+**Not done (blocked):** re-adding `supabase` + `stripe` MCP servers to `.mcp.json`
+was blocked by the self-modification guard (adding a full-access Stripe server is
+out of scope for a hygiene task). The local variant is preserved in the scratchpad
+backup — re-apply deliberately if you want those MCP servers.
+
+## Files kept at root (essentials only)
+
+`README.md` · `CODEX.md` · `CLAUDE.md` · `requirements.txt` · `.env.example` ·
+`.gitignore` · `.mcp.json`. Local untracked `.env*` stay gitignored (may hold live
+keys) — never git-managed.
+
+## Follow-ups / known residue (owner decision)
+
+| Item | Note |
 |---|---|
-| 17 lookdev screenshots (`avatarsdk-hd.jpeg`, `avaturn-hd.jpeg`, `deployed-office-look.jpeg`, `final-frame-check.jpeg`, `final-meeting-view.jpeg`, `laura-hd-speaking.jpeg`, `lookdev-final.jpeg`, `lookdev-office.jpeg`, `meeting-final.jpeg`, `meeting-look-v1.jpeg`, `meeting-look-v2.jpeg`, `talk-avatar-live.jpeg`, `talk-avatar-test.jpeg`, `tune-v1-head.jpeg`, `tune-v2-upper-close.jpeg`, `tune-v3.jpeg`, `tune-v5-direct.jpeg`) | `docs/assets/lookdev/` |
-| `photoreal-e2e-proof.png` (was untracked) | `docs/assets/proofs/` (now tracked) |
+| `claude/dash-detail` local-only features | private-beta login gate + excel-filter dashboard live only on that backup branch — re-PR onto `origin/main` if still wanted (its dashboard is newer, expect conflicts). |
+| Stale remote branches | many merged `claude/*` / `codex/*` PR branches remain on the remote — prune with `gh` when convenient. |
+| `.claude/worktrees/` + `git worktree list` | several prunable/locked worktrees from parallel sessions — `git worktree prune` when no session is mid-flight. |
+| `docs/assets/lookdev/*` | avatar-iteration screenshots — keep 2–3, drop the rest (clone-size). |
 
-## Files archived (moved to `docs/archive/`, each with an "Archived" banner)
+## History (resolved earlier)
 
-| File | Why archived |
-|---|---|
-| `QUICKSTART.md` | duplicated the README quickstart; README is canonical |
-| `CLAUDE_CODE_STARTUP_AGENTS_PROMPT.md` | one-off session-bootstrap prompt, not product |
-| `render.yaml` | Render suspended; blueprint file kept for the fallback trail. **Known accepted risk:** Render Blueprints conventionally expect `render.yaml` at repo root — if the suspended service is ever resumed via Blueprint-sync, move it back first (reversible `git mv`) |
-| `Dockerfile` | generic container deploy; App Runner is source-based — unused |
-| `docs/DEPLOY.md` | claimed Render-primary + Claude-Haiku-live; both false (App Runner primary, Groq live). A fresh DEPLOY doc is a future todo for backend-infra |
-| `docs/AWS_MIGRATION_ASSESSMENT.md` | pre-migration decision doc; migration done 2026-07-03 — "why" trail only |
-| `docs/LATENCY_OPTIMIZATION.md` | Haiku-era analysis; superseded by the Groq switch |
-
-Cross-references updated: `.claude/agents/backend-infra.md` and
-`.claude/agents/finance-unit-economics.md` now point at the `docs/archive/` paths
-(and backend-infra reads `gpu/README.md` instead, which is current).
-
-## Still recommended for deletion later (needs explicit owner approval)
-
-| Path | Why |
-|---|---|
-| most of `docs/assets/lookdev/*` | iteration artifacts; keep 2–3 representative shots, drop the rest (they inflate clone size) |
-| `docs/archive/QUICKSTART.md` | zero unique content vs. README; archived only pending approval to delete |
-| remote branches: `claude/repo-hygiene`, `codex/eval-suite`, `claude/demo-readiness-ui` | merged into main (PRs #5/#4/#6) — safe to delete |
-| remote branch `optimize-cscs-latency-hop-metrics` | unmerged but fully superseded (47 behind / 1 ahead; Anam/Render-era diff) |
-| remote branch `codex/content-and-ui` + **PR #1** | superseded — PR #1 should be **closed without merging** (its commits re-introduce Anam-primary content; `CODEX.md` History already says don't reopen) |
-
-## Not touched, and why
-
-| Path | Why untouched |
-|---|---|
-| `backend/**`, `frontend/**`, `gpu/**`, `avatars/**`, `tests/**`, `scripts/` | product/runtime/tests — behavior changes are out of scope for a declutter |
-| `extensions/laura-meet/`, `lovable/laura-meeting-expert/` | working entry point / marketing-site source |
-| `docs/CALENDAR.md`, `docs/DEMO.md`, `docs/FREE_TIER.md` | mostly accurate setup notes — current, not clutter |
-| `docs/research/`, `docs/product/`, `docs/gtm/`, `docs/fundraise/` | current agent-team output directories |
-| local `.env`, `.env.filled`, `.env.qa-backup-20260706` | untracked + gitignored, may hold live keys — never git-managed |
-| `backend/app/decision.py` docstring | still says "speaks ONLY when called by name" (false since the SKIP-gate rewrite) — a **code** change for the backend owner, not a docs pass |
-
-## Resolved by the repo-alignment pass (2026-07-07)
-
-The drift below was flagged here and is now fixed on branch `claude/repo-alignment`.
-Single source of truth going forward: [`ARCHITECTURE_CURRENT.md`](ARCHITECTURE_CURRENT.md)
-(how it works) + [`product/WEDGE.md`](product/WEDGE.md) (why it wins).
-
-- `AVATAR_PAGE` code default → **`talk`** (was `avatar`); matches prod.
-- `RECALL_API_BASE` code default → **`eu-central-1`** (was `us-west-2`).
-- `MIN_CONFIDENCE` / `decision.passes_confidence()` — now **clearly labelled LEGACY**
-  in code + `.env.example` (dead on the live streaming path; kept for back-compat).
-- `decision.py` docstring no longer says "speaks ONLY when called by name" — it now
-  states the real behavior (silent tracking always; wake word optional).
-- `.env.example` now documents `AVATAR_PAGE`, `GROQ_API_KEY`/`GROQ_BASE`,
-  `BRAIN_MODEL_COMPLEX`, and the `GPU_*` vars; web-search text is Claude-native
-  (the stale Groq-`compound` references are gone).
-- Live default is **Claude Haiku**; Groq is optional behind a 429 circuit breaker.
-- **PR #1** (`codex/content-and-ui`, Anam-first) — **closed without merging.**
+- **2026-07-07 repo-alignment:** `AVATAR_PAGE`→`talk`, `RECALL_API_BASE`→`eu-central-1`,
+  `MIN_CONFIDENCE` labelled LEGACY, `decision.py` docstring corrected, `.env.example`
+  documents `AVATAR_PAGE`/`GROQ_*`/`GPU_*`. PR #1 (Anam-first) closed without merging.
+- **2026-07-06 declutter:** 17 lookdev screenshots → `docs/assets/lookdev/`; stale
+  root docs (`QUICKSTART.md`, `render.yaml`, `Dockerfile`, `DEPLOY.md`,
+  `AWS_MIGRATION_ASSESSMENT.md`, `LATENCY_OPTIMIZATION.md`) → `docs/archive/`.
