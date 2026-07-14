@@ -42,6 +42,31 @@ elevenlabs_voice_id: ""     # e.g. "EXAVITQu4..."  (overrides ELEVENLABS_VOICE_I
 min_confidence:             # 0.0–1.0 — higher = more cautious about speaking
 speak_cooldown_seconds:     # seconds of silence to keep after speaking
 
+# ── MISSION (optional) ──────────────────────────────────────────────
+# A per-meeting objective this avatar keeps in mind and RESURFACES if the room
+# leaves it unmet — raised ONCE, politely, at a natural moment (it never barges
+# in; turn-taking / hand-raise still decide when she speaks). Leave blank for
+# today's behaviour. A per-meeting mission set by the admin (the API's
+# context.mission) overrides this default.
+#   mission: >
+#     On investor calls, make sure market size is discussed. If the call is
+#     wrapping up and no one has covered it, raise it as a question.
+mission:
+
+# ── DETERMINISTIC TASK HINTS (optional) ─────────────────────────────
+# Recognizable asks this avatar can act on. They BIAS the post-meeting action
+# capture so an agreed, recognized ask is recorded as that typed action instead
+# of pure LLM improv. They never fabricate — an item is captured only when the
+# transcript actually contains the ask. Leave empty for unchanged behaviour.
+#   tasks:
+#     - name: send_recap_email
+#       triggers: ["send the recap", "email the summary", "send a follow-up email"]
+#       action: "Draft and send a recap email to the attendees"
+#     - name: schedule_followup
+#       triggers: ["schedule a follow-up", "book a follow-up", "set up the next call"]
+#       action: "Create a calendar event for the follow-up meeting"
+tasks: []
+
 # NOTE: the SFF fund/portfolio knowledge pack was intentionally removed — Laura
 # now answers SFF questions by SEARCHING THE WEB (see _SEARCH_INTENT in brain.py),
 # so the info is always current instead of a static local copy.

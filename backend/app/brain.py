@@ -43,6 +43,27 @@ def _format_context(chunks: list[Retrieved]) -> str:
     return "\n\n".join(blocks)
 
 
+def _mission_directive(mission: str) -> str:
+    """A standing per-meeting MISSION folded into the system prompt as an extra
+    instruction. Empty mission -> "" (the prompt is byte-identical to today).
+
+    The avatar keeps the objective in mind and RESURFACES it if left unmet — but
+    only at a natural opening. This is an INSTRUCTION, never a gate: the existing
+    turn-taking / hand-raise rules still decide WHEN she may speak, so she never
+    barges in to force the mission."""
+    m = (mission or "").strip()
+    if not m:
+        return ""
+    return (
+        "\n\nMISSION FOR THIS MEETING (set by the admin): "
+        + m
+        + " Keep this objective in mind throughout. If the meeting is nearing its "
+        "end and the objective is still unaddressed, raise it ONCE at a natural "
+        "opening — briefly and politely, phrased as a question. Never interrupt, "
+        "never force it, and let it go if no natural moment comes."
+    )
+
+
 def effective_provider() -> str:
     """The provider we'll actually use.
 
@@ -593,9 +614,15 @@ def answer_question_stream(
     k: int = 6,
     min_chars: int = 0,
     meta: "dict | None" = None,
+    mission: str = "",
 ):
     """Yield spoken sentences as they are generated. Yields nothing (stays silent)
     only when the model judges the speech was not addressed to Laura (SKIP).
+
+    `mission` is the optional per-meeting objective (admin-set, or the avatar's
+    default) she keeps in mind and raises if left unmet — folded into the system
+    prompt as an instruction only, so the caller's turn-taking / hand-raise gate
+    still owns WHEN she speaks. "" = no mission = today's prompt exactly.
 
     ``meta`` (optional out-param) is filled — before the first sentence — with
     ``{"top_score": <grounding confidence>}``: the top retrieved-chunk score that
@@ -684,7 +711,7 @@ def answer_question_stream(
     # which the transcript alone can't see. One short line — latency-neutral.
     roster_block = _roster_block(avatar, roster, state)
     asker = (speaker or "").strip() or "Someone"
-    system = ANSWER_STREAM_SYSTEM.format(persona=avatar.persona_prompt)
+    system = ANSWER_STREAM_SYSTEM.format(persona=avatar.persona_prompt) + _mission_directive(mission)
     user = (
         f"{context_block}"
         f"{state_block}"
@@ -1066,6 +1093,42 @@ def _live_actions_block(live_actions: list[dict] | None) -> str:
     )
 
 
+def _task_hints_block(tasks: list[dict] | None) -> str:
+    """The 'known task types' section of the post-meeting prompt: deterministic
+    task hints (avatar.yaml ``tasks``) that BIAS action capture toward this
+    avatar's recognized asks. Each hint pairs trigger phrases with the action
+    intent to record.
+
+    This never fabricates: the SOURCE BOUNDARY and the verbatim-evidence rule
+    still apply, so a hint only lands as an action when the TRANSCRIPT actually
+    contains that ask (``_scope_actions_to_transcript`` drops the rest). "" when
+    the avatar defines no tasks — the prompt is unchanged for every avatar
+    without hints.
+    """
+    lines = []
+    for t in tasks or []:
+        if not isinstance(t, dict):
+            continue
+        triggers = [str(x).strip() for x in (t.get("triggers") or []) if str(x).strip()]
+        action = (t.get("action") or "").strip()
+        label = action or (t.get("name") or "").strip()
+        if not label or not triggers:
+            continue
+        quoted = "; ".join(f'"{p}"' for p in triggers)
+        lines.append(f"- {label} — recognized when someone asks for something like {quoted}.")
+    if not lines:
+        return ""
+    return (
+        "KNOWN TASK TYPES this avatar can act on. If the MEETING TRANSCRIPT shows "
+        "the group asked for or agreed to any of these (even briefly or in "
+        "passing), make sure it appears in actions[], worded to match the task's "
+        "action, with the verbatim transcript excerpt as evidence. Do NOT invent "
+        "one the transcript does not support:\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
+
+
 # Safety net behind the prompt-level prevention above: the summarizer is a
 # model, so "do not re-extract" is obeyed almost always, not always. The merge
 # in main._merge_action_items catches same-language rephrases by content-word
@@ -1157,6 +1220,7 @@ def proactive_flag(
     state: "meeting_state.MeetingState | None" = None,
     memory: str = "",
     k: int = 6,
+    mission: str = "",
 ) -> dict:
     """Decide if the avatar should proactively flag ONE missing step. Default: no.
 
@@ -1165,6 +1229,11 @@ def proactive_flag(
     with no model call (reliable in stub AND Claude mode, zero extra latency).
     Otherwise the model judges from the transcript, with the structured state
     as extra grounding.
+
+    `mission` is the optional per-meeting objective: on the model path it is
+    folded into the system prompt so an unmet mission is a valid thing to raise
+    as the call wraps up, alongside a missing process step. "" leaves the prompt
+    unchanged (a missing critical step still short-circuits deterministically).
     """
     if state is not None and state.missing_critical():
         return {
@@ -1193,7 +1262,7 @@ def proactive_flag(
         else ""
     )
     raw = llm.complete(
-        PROACTIVE_SYSTEM.format(persona=avatar.persona_prompt),
+        PROACTIVE_SYSTEM.format(persona=avatar.persona_prompt) + _mission_directive(mission),
         (
             f"Company process context:\n\n{_format_context(chunks)}\n\n"
             f"{state_block}"
@@ -1272,11 +1341,15 @@ def post_meeting(
             else ""
         )
         live_block = _live_actions_block(live_actions)
+        # Deterministic task hints (avatar.yaml `tasks`): bias action capture
+        # toward this avatar's recognized asks. "" when the avatar has no tasks.
+        task_block = _task_hints_block(getattr(avatar, "tasks", None))
         raw = llm.complete(
             POSTMEETING_SYSTEM,
             (
                 f"{brief_block}"
                 f"{live_block}"
+                f"{task_block}"
                 f"Relevant company process context:\n\n{_format_context(chunks)}\n\n"
                 f"Structured meeting state (tracked during the meeting):\n"
                 f"{meeting_state.state_summary(state)}\n\n"

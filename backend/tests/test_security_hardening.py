@@ -62,7 +62,9 @@ def test_live_ask_streams_through_middleware_and_is_limited(client, monkeypatch)
     confirm the stream still arrives intact (headers layer doesn't buffer/break
     it) AND the limiter still guards it."""
     monkeypatch.setattr(
-        main, "answer_question_stream", lambda avatar, q: iter(["Hello there.", "Second."])
+        main,
+        "answer_question_stream",
+        lambda avatar, q, **kwargs: iter(["Hello there.", "Second."]),
     )
     monkeypatch.setattr(settings, "rate_limit_live_ask", 2)
     body = {"question": "hi", "avatar_id": "laura"}

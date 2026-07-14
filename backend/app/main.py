@@ -1281,7 +1281,7 @@ async def live_ask(req: AskRequest) -> StreamingResponse:
 
     async def gen():
         async for sentence in iterate_in_threadpool(
-            answer_question_stream(avatar, req.question)
+            answer_question_stream(avatar, req.question, mission=avatar.mission)
         ):
             yield f"data: {json.dumps({'content': sentence})}\n\n"
         yield "data: [DONE]\n\n"
@@ -4524,6 +4524,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
     memory = session.memory_brief or ""
     memory = cedric.inject_brief(session, memory)  # CEDRIC: brief ahead of carryover
 
+    # Per-meeting MISSION (admin objective): a per-session mission
+    # (MeetingContext.mission) wins, else the avatar's default (avatar.yaml). "" =
+    # no mission = today's behaviour exactly. Folded into the answer + closing
+    # prompts as an instruction — never a gate, so turn-taking still owns WHEN.
+    mission = cedric.resolve_mission(session) or avatar.mission
+
     # ── when-to-speak gate ──
     # By default (require_wake_word=False) she answers any grounded question; the
     # SKIP sentinel + cooldown keep her from interjecting on things she can't ground.
@@ -4549,6 +4555,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             session.transcript_text(include_agents=False),
             state=state,
             memory=memory,
+            mission=mission,
         )
         conf = float(flag.get("confidence", 0.0))
         if flag.get("should_speak") and flag.get("line") and conf >= settings.proactive_min_confidence:
@@ -5109,6 +5116,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 k=4,  # leaner context: input tokens ARE first-token latency live
                 min_chars=45,  # coalesce tiny fragments so the TTS voice flows
                 meta=_answer_meta,
+                mission=mission,
             )
         ):
             # Interrupted (barge-in) or superseded by a newer turn while this
