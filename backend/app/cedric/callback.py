@@ -293,25 +293,46 @@ def send_ended(integration: dict | None, bot_id: str, artifact: dict) -> bool:
 
 
 def _context_request_url(integration: dict | None) -> str:
-    """The context GET URL, with the routing hints Cedric's endpoint needs to
-    locate the brief appended as query params: ``external_ref.team`` ->
-    ``team``, ``external_ref.slack_channel`` -> ``channel`` (his side is
-    "No team => empty brief", so a bare URL comes back empty). Query params
-    already present in the configured URL are preserved, and an explicit
-    ``team``/``channel`` there wins over external_ref (never duplicated).
-    Routing metadata only — transcript content never rides this URL."""
+    """The context GET URL, with the hints Cedric's endpoint needs to build a
+    MEETING-SPECIFIC brief appended as query params:
+
+      - ``external_ref.team`` -> ``team`` and ``external_ref.slack_channel`` ->
+        ``channel`` (his side is "No team => empty brief"); and
+      - ``meeting.title`` -> ``title`` and the live Recall roster
+        ``meeting.attendees`` -> ``attendees`` (comma-separated display names)
+        so the returned brief names THIS call's people, not just the workspace.
+
+    Query params already present in the configured URL are preserved, and an
+    explicit value there wins (never duplicated). Meeting metadata only —
+    attendee display names and the title, never transcript content — rides
+    this URL."""
     url = (integration or {}).get("context_url") or ""
-    ref = (integration or {}).get("external_ref") or {}
-    if not url or not isinstance(ref, dict):
+    if not url:
         return url
+    ref = (integration or {}).get("external_ref") or {}
+    meeting = (integration or {}).get("meeting") or {}
     parts = urlsplit(url)
     query = parse_qsl(parts.query, keep_blank_values=True)
     configured = {k for k, _ in query}
     added = False
-    for ref_key, param in (("team", "team"), ("slack_channel", "channel")):
-        value = str(ref.get(ref_key) or "").strip()
-        if value and param not in configured:
-            query.append((param, value))
+    if isinstance(ref, dict):
+        for ref_key, param in (("team", "team"), ("slack_channel", "channel")):
+            value = str(ref.get(ref_key) or "").strip()
+            if value and param not in configured:
+                query.append((param, value))
+                added = True
+    if isinstance(meeting, dict):
+        title = str(meeting.get("title") or "").strip()
+        if title and "title" not in configured:
+            query.append(("title", title))
+            added = True
+        names = []
+        for a in meeting.get("attendees") or []:
+            name = str((a.get("name") if isinstance(a, dict) else a) or "").strip()
+            if name:
+                names.append(name)
+        if names and "attendees" not in configured:
+            query.append(("attendees", ", ".join(names)))
             added = True
     if not added:
         return url  # nothing to append: keep the configured URL byte-for-byte

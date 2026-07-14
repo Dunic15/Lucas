@@ -424,12 +424,31 @@ def maybe_refresh_context(session: Any) -> bool:
     return True
 
 
+def _with_live_meeting(session: Any, integration: dict) -> dict:
+    """A copy of ``integration`` whose ``meeting`` carries THIS call's identity —
+    the live Recall roster (everyone who's joined, incl. non-speakers) as
+    ``attendees`` and any known title — so ``fetch_context`` asks Cedric for a
+    MEETING-SPECIFIC brief instead of a workspace-only one. Best-effort: a
+    roster read failure or an already-populated booking meeting is left as-is."""
+    meeting = dict(integration.get("meeting") or {})
+    try:
+        roster = session.roster()
+    except Exception:  # noqa: BLE001 — enrichment must never break the pull
+        roster = []
+    if roster and not meeting.get("attendees"):
+        meeting["attendees"] = [{"name": name} for name in roster]
+    out = dict(integration)
+    out["meeting"] = meeting
+    return out
+
+
 async def _refresh_context(session: Any, integration: dict) -> None:
     """The refresh body behind ``maybe_refresh_context``: GET the fresh
     context off the event loop and fold it into the session. Best-effort —
     ``fetch_context`` swallows transport errors (returns None) and a
     malformed payload just keeps the booking-time brief."""
-    fresh = await run_in_threadpool(callback.fetch_context, integration)
+    outbound = _with_live_meeting(session, integration)
+    fresh = await run_in_threadpool(callback.fetch_context, outbound)
     if fresh and isinstance(fresh.get("brief_markdown"), str):
         integration = dict(integration)
         integration["brief"] = fresh["brief_markdown"]
