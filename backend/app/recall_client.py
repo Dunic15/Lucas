@@ -246,15 +246,13 @@ def _variant_payload(variant: str | None) -> dict[str, str] | None:
 def _ears_ws_url(realtime_capability: str) -> str:
     """wss:// URL for the mixed-audio realtime endpoint (Gemini ears).
 
-    Path lives OUTSIDE /ws/ — /ws/{conversation_id} (the live-meeting contract
-    route) is registered first and would capture any /ws/* path.
+    Points at the Cloudflare Worker RELAY (ears_relay_ws_base), NOT the backend:
+    AWS App Runner rejects inbound WebSockets, so Recall's audio can't reach it.
+    The relay accepts the audio WS, runs the Gemini session, and POSTs turns
+    back to the backend over HTTP. Capability goes in the PATH (survives URL
+    normalization; the query-param form was never reached in the first live run).
     """
-    base = settings.public_base_url.rstrip("/")
-    base = base.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
-    # Capability in the PATH, not the query string: the first live run showed
-    # Recall never reaching the endpoint with a query-param URL (30 silent
-    # retries, endpoint marked failed) — a path segment survives any URL
-    # normalization. The route accepts both forms.
+    base = settings.ears_relay_ws_base.strip().rstrip("/")
     return f"{base}/realtime/recall-audio/{realtime_capability}"
 
 
@@ -397,7 +395,9 @@ def _create_bot_attempts(
             )
         )
 
-    if settings.gemini_ears_mode.strip().lower() in ("shadow", "on", "reply"):
+    if settings.gemini_ears_mode.strip().lower() in ("shadow", "on", "reply") and (
+        settings.ears_relay_ws_base.strip()
+    ):
         # Gemini ears: Recall streams the meeting's mixed raw audio (s16le
         # 16 kHz mono) over a websocket realtime endpoint — audio volume is
         # too high for webhooks. Ears-enabled copies of every attempt go

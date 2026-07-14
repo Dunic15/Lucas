@@ -99,6 +99,12 @@ class Settings(BaseSettings):
     # Base URL the ears session uses to POST synthesized finals back into the
     # app (on-mode only). Empty = http://127.0.0.1:$PORT (same container).
     self_base_url: str = ""
+    # Gemini ears RELAY: App Runner can't accept inbound WebSockets, so Recall's
+    # audio can't reach it directly. A Cloudflare Worker relay accepts the audio
+    # WS, runs the Gemini Live session, and POSTs turns back here over HTTP. This
+    # is the wss:// base of that relay (e.g. wss://laura-ears.<sub>.workers.dev).
+    # Empty = no audio endpoint is attached to the bot (ears effectively off).
+    ears_relay_ws_base: str = ""
 
     # Embeddings for RAG — pick a provider:
     #   hash   (free, offline, zero-dependency keyword vectors)  ← default

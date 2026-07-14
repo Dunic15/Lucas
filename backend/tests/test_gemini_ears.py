@@ -46,7 +46,7 @@ def test_off_mode_keeps_bot_config_unchanged(monkeypatch):
 
 def test_shadow_mode_prepends_eared_attempts_with_plain_fallback(monkeypatch):
     monkeypatch.setattr(settings, "gemini_ears_mode", "shadow")
-    monkeypatch.setattr(settings, "public_base_url", "https://prod.example")
+    monkeypatch.setattr(settings, "ears_relay_ws_base", "wss://relay.example")
     attempts = _attempt_bodies()
     eared = [(l, b) for l, b in attempts if l.endswith("+gemini-ears")]
     plain = [(l, b) for l, b in attempts if not l.endswith("+gemini-ears")]
@@ -61,7 +61,7 @@ def test_shadow_mode_prepends_eared_attempts_with_plain_fallback(monkeypatch):
         assert len(audio_eps) == 1
         assert audio_eps[0]["events"] == ["audio_mixed_raw.data"]
         assert audio_eps[0]["url"] == (
-            "wss://prod.example/realtime/recall-audio/capsecret"
+            "wss://relay.example/realtime/recall-audio/capsecret"
         )
     for _, body in plain:
         assert "audio_mixed_raw" not in body["recording_config"]
@@ -198,17 +198,9 @@ def test_on_turn_with_attribution_synthesizes_final(monkeypatch):
 # ── suppression / failover ─────────────────────────────────────────────
 
 def _healthy_session(bot_id="bot-1"):
+    # Relay architecture: "healthy/active" = the CF relay POSTed a turn just now.
     s = gemini_ears.EarsSession(bot_id=bot_id, capability="c")
-    s.metrics.connected = True
-
-    class _FakeTask:
-        def done(self):
-            return False
-
-        def cancel(self):
-            return None
-
-    s._task = _FakeTask()
+    s.relay_active_at = time.time()
     gemini_ears._sessions[bot_id] = s
     return s
 
@@ -239,7 +231,8 @@ def test_synthesized_payload_is_never_suppressed(monkeypatch):
 def test_dead_session_fails_over_to_recall(monkeypatch):
     monkeypatch.setattr(settings, "gemini_ears_mode", "on")
     s = _healthy_session()
-    s.metrics.connected = False  # gemini WS died mid-meeting
+    # Relay went quiet (relay/Gemini died mid-meeting): last turn is stale.
+    s.relay_active_at = time.time() - (gemini_ears._RELAY_ACTIVE_WINDOW + 5)
     assert not gemini_ears.should_suppress_recall_final(
         "bot-1", {"event": "transcript.data"}
     )
@@ -472,3 +465,115 @@ def test_audio_ws_accepts_capability_in_path(monkeypatch):
             "data": {"data": {"buffer": "UEFUSA=="}},
         }))
     assert fed == ["UEFUSA=="]
+
+
+# ── relay architecture (CF Worker) ─────────────────────────────────────
+
+def test_note_relay_turn_marks_active_and_counts(monkeypatch):
+    monkeypatch.setattr(settings, "gemini_ears_mode", "reply")
+    gemini_ears.note_relay_turn("bot-relay")
+    s = gemini_ears._sessions["bot-relay"]
+    assert s.relay_active() is True
+    assert s.metrics.turns == 1
+    assert gemini_ears.should_suppress_recall_final(
+        "bot-relay", {"event": "transcript.data"}
+    )
+
+
+def test_attribute_speaker_from_recall_ring():
+    gemini_ears.observe_recall_final("bot-attr", "Ben")
+    gemini_ears.observe_recall_final("bot-attr", "Sara")
+    assert gemini_ears.attribute_speaker("bot-attr") == "Sara"
+    assert gemini_ears.attribute_speaker("unknown-bot") == ""
+
+
+def test_ears_config_requires_bearer(monkeypatch):
+    monkeypatch.setattr(settings, "gemini_ears_mode", "reply")
+    monkeypatch.setattr(settings, "laura_api_token", "secret-token")
+    client = TestClient(main_module.app)
+    r = client.get("/internal/ears-config/anycap")  # no bearer
+    assert r.status_code == 401
+    r = client.get("/internal/ears-config/anycap", headers={"Authorization": "Bearer wrong"})
+    assert r.status_code == 401
+
+
+def test_ears_config_returns_token_and_persona(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "gemini_ears_mode", "reply")
+    monkeypatch.setattr(settings, "laura_api_token", "secret-token")
+    monkeypatch.setattr(settings, "vertex_project", "proj-1")
+    monkeypatch.setattr(settings, "vertex_live_model", "gemini-live-2.5-flash")
+    monkeypatch.setattr(store, "STORE_PATH", tmp_path / "store.sqlite3")
+    store._init_db()
+    s = store.create("cfg-bot", "https://meet.google.com/abc-defg-hij", "laura")
+    monkeypatch.setattr(
+        store, "resolve_recall_realtime_capability",
+        lambda cap: "cfg-bot" if cap == "goodcap" else None,
+    )
+    from app import llm
+    monkeypatch.setattr(llm, "_vertex_token", lambda: "fake-vertex-token")
+    client = TestClient(main_module.app)
+    r = client.get("/internal/ears-config/goodcap", headers={"Authorization": "Bearer secret-token"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["enabled"] is True
+    assert body["mode"] == "reply"
+    assert body["bot_id"] == "cfg-bot"
+    assert body["project"] == "proj-1"
+    assert body["live_model"] == "gemini-live-2.5-flash"
+    assert body["vertex_token"] == "fake-vertex-token"
+    assert body["persona"]  # avatar name resolved
+    # invalid capability -> 404
+    r2 = client.get("/internal/ears-config/badcap", headers={"Authorization": "Bearer secret-token"})
+    assert r2.status_code == 404
+    store.remove("cfg-bot")
+
+
+def test_webhook_relay_turn_attributes_speaker(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "gemini_ears_mode", "reply")
+    monkeypatch.setattr(store, "STORE_PATH", tmp_path / "store.sqlite3")
+    store._init_db()
+    s = store.create("rt-bot", "https://meet.google.com/abc-defg-hij", "laura")
+    s.memory_brief = ""
+    s.addressed_once = True
+    s.participant_event("Ben", 1, here=True)
+    monkeypatch.setattr(settings, "deference_seconds", 0)
+    monkeypatch.setattr(settings, "recall_api_key", "")
+    monkeypatch.setattr(settings, "ack_enabled", False)
+    # seed the ring so the relay turn can be attributed
+    gemini_ears.observe_recall_final("rt-bot", "Ben")
+
+    def _brain_must_not_run(*a, **k):
+        raise AssertionError("reply mode must speak the draft, not call the brain")
+
+    monkeypatch.setattr(main_module, "answer_question_stream", _brain_must_not_run)
+    spoken = []
+
+    async def fake_speak(session, text, *, force, generation, prev, t0=None):
+        spoken.append(text)
+        return True
+
+    monkeypatch.setattr(main_module, "_speak_with_audio", fake_speak)
+
+    payload = {
+        "event": "transcript.data",
+        "laura_ears": True,
+        "laura_ears_text": "Laura ci sei ?",
+        "laura_ears_reply": "Sì, sono qui.",
+        "data": {
+            "bot": {"id": "rt-bot"},
+            "data": {"words": [{"text": w} for w in "Laura ci sei ?".split()], "participant": {}},
+        },
+    }
+
+    class FakeRequest:
+        headers: dict = {}
+
+        async def body(self) -> bytes:
+            return json.dumps(payload).encode()
+
+    body = json.loads(asyncio.run(main_module.recall_webhook(FakeRequest())).body)
+    assert body.get("spoke") is True
+    assert spoken == ["Sì, sono qui."]
+    # the relay turn marked the bot active -> a raw Recall final is now suppressed
+    assert gemini_ears.should_suppress_recall_final("rt-bot", {"event": "transcript.data"})
+    store.remove("rt-bot")
