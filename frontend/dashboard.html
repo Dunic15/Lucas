@@ -898,11 +898,15 @@
               // Tell Cedric where to send the user back once the OAuth completes:
               // our dashboard, so the connection reflects here instead of leaving
               // them on Cedric's site. Cedric validates this to a Laura origin.
-              var cu=c.connect_url+(c.connect_url.indexOf("?")>=0?"&":"?")+
-                "return_url="+encodeURIComponent(location.origin+"/dashboard");
+              // Built ONLY when connect_url exists — Slack ships connect_url:null
+              // (the workspace IS Slack) and null.indexOf threw, killing the whole
+              // render into the catch ("Brain connectors unavailable right now").
               var act=c.connected||!c.connect_url
                 ?''
-                :'<a class="btn conn-btn" style="text-decoration:none" href="'+esc(cu)+'" target="_blank" rel="noopener">Connect</a>';
+                :'<a class="btn conn-btn" style="text-decoration:none" href="'+
+                  esc(c.connect_url+(c.connect_url.indexOf("?")>=0?"&":"?")+
+                    "return_url="+encodeURIComponent(location.origin+"/dashboard"))+
+                  '" target="_blank" rel="noopener">Connect</a>';
               return '<div class="crow"><div style="min-width:0"><div class="cn">'+esc(c.name)+'</div>'+
                 '<div class="cd">'+esc(c.account?("· "+c.account):c.description)+'</div></div>'+chip+act+'</div>';
             });
