@@ -1,29 +1,69 @@
-"""Tiny authenticated symmetric encryption for secrets at rest — stdlib only.
+"""Authenticated symmetric encryption for secrets at rest.
 
-Used to keep the per-org Google refresh token out of plaintext in the store
-(docs/product/NATIVE-INTEGRATIONS-PLAN.md: "persist encrypted, never in git").
-The runtime image ships neither ``cryptography`` nor ``pynacl``, so this is a
-dependency-free encrypt-then-MAC construction: an HMAC-SHA256 keystream in
-counter mode XOR'd with the plaintext, plus an HMAC-SHA256 tag over
-(nonce || ciphertext). It is deliberately small and self-contained; it protects
-a token if the SQLite file leaks, and it is NOT a replacement for a real KMS —
-a production hardening (AWS KMS / SSM SecureString, as the Cedric bearer uses)
-is the documented next step, and callers can swap the key source without
-touching call sites.
+Protects the per-org Google refresh token (``store.py`` org_oauth) so a leak of
+the SQLite file never exposes a live OAuth credential — see
+docs/product/NATIVE-INTEGRATIONS-PLAN.md ("persist encrypted, never in git").
 
-Format (all base64url, one string): nonce(16) || tag(32) || ciphertext.
+Cipher: **Fernet** (AES-128-CBC + HMAC-SHA256) from the vetted ``cryptography``
+library — deliberately NOT a hand-rolled construction, so it survives a security
+review. The 32-byte Fernet key is derived from the caller's secret via SHA-256,
+so call sites keep passing an arbitrary key string and can source it from AWS SSM
+SecureString / KMS (see ``store._oauth_enc_secret``) without changing.
+
+Go-live: the secret must come from ``GOOGLE_TOKEN_ENC_KEY`` — a random value held
+in SSM SecureString (KMS-encrypted at rest, as the Cedric bearer is), rotated
+independently of the session cookie key.
+
+Backward compatibility: :func:`decrypt` still reads tokens written by the earlier
+dependency-free HMAC-CTR scheme (:func:`_legacy_decrypt`), so upgrading in place
+never invalidates already-stored tokens. New tokens are always Fernet.
 """
 from __future__ import annotations
 
 import base64
 import hashlib
 import hmac
-import os
 import struct
+
+from cryptography.fernet import Fernet
 
 _PURPOSE = b"laura-secret-v1:"
 
 
+def _fernet(secret: str) -> Fernet:
+    """A Fernet cipher whose key is derived (SHA-256) from the caller secret."""
+    key = base64.urlsafe_b64encode(
+        hashlib.sha256(_PURPOSE + (secret or "").encode()).digest()
+    )
+    return Fernet(key)
+
+
+def encrypt(plaintext: str, secret: str) -> str:
+    """Encrypt ``plaintext`` under ``secret``; returns an opaque Fernet token."""
+    return _fernet(secret).encrypt((plaintext or "").encode()).decode()
+
+
+def decrypt(token: str, secret: str) -> str:
+    """Inverse of :func:`encrypt`. Raises ``ValueError`` on a bad/forged/foreign
+    token (wrong key, truncation, tampering) — callers treat that as "no token".
+    Falls back to the legacy HMAC-CTR reader so tokens written before the Fernet
+    upgrade still decrypt."""
+    try:
+        return _fernet(secret).decrypt((token or "").encode()).decode()
+    except Exception:
+        pass  # not a Fernet token (or wrong key) — try the legacy reader below
+    try:
+        return _legacy_decrypt(token, secret)
+    except ValueError:
+        raise
+    except Exception as exc:  # malformed base64, bad utf-8, etc.
+        raise ValueError("authentication failed") from exc
+
+
+# ── legacy HMAC-CTR reader (pre-Fernet tokens) ──────────────────────────────
+# Kept ONLY so an in-place upgrade can still read tokens written by the previous
+# dependency-free scheme. New tokens are always Fernet (see :func:`encrypt`).
+# Legacy format (base64url, one string): nonce(16) || tag(32) || ciphertext.
 def _derive(secret: str) -> tuple[bytes, bytes]:
     """Two independent keys (encrypt, mac) from one caller secret."""
     root = hashlib.sha256(_PURPOSE + (secret or "").encode()).digest()
@@ -44,20 +84,7 @@ def _keystream(enc_key: bytes, nonce: bytes, n: int) -> bytes:
     return bytes(out[:n])
 
 
-def encrypt(plaintext: str, secret: str) -> str:
-    """Encrypt ``plaintext`` under ``secret``; returns an opaque base64url token."""
-    enc_key, mac_key = _derive(secret)
-    nonce = os.urandom(16)
-    pt = (plaintext or "").encode()
-    ks = _keystream(enc_key, nonce, len(pt))
-    ct = bytes(a ^ b for a, b in zip(pt, ks))
-    tag = hmac.new(mac_key, nonce + ct, hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(nonce + tag + ct).decode()
-
-
-def decrypt(token: str, secret: str) -> str:
-    """Inverse of :func:`encrypt`. Raises ValueError on a bad/forged token
-    (wrong key, truncation, tampering) — callers treat that as "no token"."""
+def _legacy_decrypt(token: str, secret: str) -> str:
     raw = base64.urlsafe_b64decode((token or "").encode())
     if len(raw) < 48:
         raise ValueError("ciphertext too short")
