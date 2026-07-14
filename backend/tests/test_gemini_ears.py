@@ -101,7 +101,9 @@ def test_audio_ws_feeds_frames_to_session(monkeypatch):
             fed.append(b64)
 
     monkeypatch.setattr(
-        gemini_ears, "ensure_session", lambda bot_id, cap: _StubSession()
+        gemini_ears,
+        "ensure_session",
+        lambda bot_id, cap, avatar_name="Laura": _StubSession(),
     )
     client = TestClient(main_module.app)
     with client.websocket_connect("/realtime/recall-audio?cap=goodcap") as ws:
@@ -185,7 +187,7 @@ def test_on_turn_with_attribution_synthesizes_final(monkeypatch):
     s.observe_recall("Alice")
     posted = []
 
-    async def _fake_post(speaker, text):
+    async def _fake_post(speaker, text, reply=""):
         posted.append((speaker, text))
 
     monkeypatch.setattr(s, "_post_synthesized_final", _fake_post)
@@ -267,3 +269,180 @@ def test_vertex_token_rejects_malformed_sa_json(monkeypatch):
     monkeypatch.setattr(settings, "google_vertex_sa_json", "{not json")
     with pytest.raises(RuntimeError, match="GOOGLE_VERTEX_SA_JSON"):
         llm._vertex_token()
+
+
+# ── reply mode (tutto-Gemini) ──────────────────────────────────────────
+
+def test_reply_mode_setup_uncaps_tokens_and_uses_persona(monkeypatch):
+    monkeypatch.setattr(settings, "gemini_ears_mode", "reply")
+    monkeypatch.setattr(settings, "vertex_project", "p")
+    s = gemini_ears.EarsSession(bot_id="b", capability="c", avatar_name="Laura")
+    setup = s._setup_payload()["setup"]
+    assert setup["generationConfig"]["maxOutputTokens"] > 1
+    assert "Laura" in setup["systemInstruction"]["parts"][0]["text"]
+    # ears-only modes keep the 1-token sentinel
+    monkeypatch.setattr(settings, "gemini_ears_mode", "on")
+    setup = s._setup_payload()["setup"]
+    assert setup["generationConfig"]["maxOutputTokens"] == 1
+
+
+def test_handle_message_accumulates_model_reply():
+    s = gemini_ears.EarsSession(bot_id="b", capability="c")
+    acc: list[str] = []
+    reply_acc: list[str] = []
+    s._handle_gemini_message(
+        {"serverContent": {"inputTranscription": {"text": "come va"}}},
+        acc, reply_acc,
+    )
+    s._handle_gemini_message(
+        {"serverContent": {"modelTurn": {"parts": [{"text": "Tutto bene, "}]}}},
+        acc, reply_acc,
+    )
+    done = s._handle_gemini_message(
+        {"serverContent": {"modelTurn": {"parts": [{"text": "grazie."}]},
+                           "turnComplete": True}},
+        acc, reply_acc,
+    )
+    assert done
+    assert "".join(acc) == "come va"
+    assert "".join(reply_acc) == "Tutto bene, grazie."
+
+
+def test_reply_mode_turn_attaches_draft_to_synthesized_final(monkeypatch):
+    monkeypatch.setattr(settings, "gemini_ears_mode", "reply")
+    s = gemini_ears.EarsSession(bot_id="b", capability="c")
+    s.observe_recall("Alice")
+    posted = []
+
+    async def _fake_post(speaker, text, reply=""):
+        posted.append((speaker, text, reply))
+
+    monkeypatch.setattr(s, "_post_synthesized_final", _fake_post)
+    asyncio.run(s._on_turn("Laura ci sei", "Sì, sono qui."))
+    assert posted == [("Alice", "Laura ci sei", "Sì, sono qui.")]
+    assert s.metrics.reply_chars == len("Sì, sono qui.")
+
+
+def test_on_mode_turn_never_forwards_the_draft(monkeypatch):
+    monkeypatch.setattr(settings, "gemini_ears_mode", "on")
+    s = gemini_ears.EarsSession(bot_id="b", capability="c")
+    s.observe_recall("Alice")
+    posted = []
+
+    async def _fake_post(speaker, text, reply=""):
+        posted.append(reply)
+
+    monkeypatch.setattr(s, "_post_synthesized_final", _fake_post)
+    asyncio.run(s._on_turn("una domanda", "Risposta indesiderata"))
+    assert posted == [""]  # on-mode: the brain answers, never the draft
+
+
+def test_suppression_active_in_reply_mode(monkeypatch):
+    monkeypatch.setattr(settings, "gemini_ears_mode", "reply")
+    _healthy_session()
+    assert gemini_ears.should_suppress_recall_final(
+        "bot-1", {"event": "transcript.data"}
+    )
+    assert not gemini_ears.should_suppress_recall_final(
+        "bot-1", {"event": "transcript.data", "laura_ears": True}
+    )
+
+
+# ── reply mode end-to-end through the webhook ──────────────────────────
+
+def _reply_session(tmp_path, monkeypatch, bot_id="reply-bot"):
+    monkeypatch.setattr(store, "STORE_PATH", tmp_path / "store.sqlite3")
+    store._init_db()
+    s = store.create(bot_id, "https://meet.google.com/abc-defg-hij", "laura")
+    s.memory_brief = ""
+    s.addressed_once = True
+    s.participant_event("Ben", 1, here=True)
+    monkeypatch.setattr(settings, "deference_seconds", 0)
+    monkeypatch.setattr(settings, "recall_api_key", "")
+    monkeypatch.setattr(settings, "ack_enabled", False)
+    return s
+
+
+def test_reply_mode_speaks_gemini_draft_and_skips_the_brain(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "gemini_ears_mode", "reply")
+    s = _reply_session(tmp_path, monkeypatch)
+
+    def _brain_must_not_run(*a, **k):
+        raise AssertionError("answer_question_stream must not be called in reply mode")
+
+    monkeypatch.setattr(main_module, "answer_question_stream", _brain_must_not_run)
+    spoken = []
+
+    async def fake_speak(session, text, *, force, generation, prev, t0=None):
+        spoken.append(text)
+        return True
+
+    monkeypatch.setattr(main_module, "_speak_with_audio", fake_speak)
+
+    payload = {
+        "event": "transcript.data",
+        "laura_ears": True,
+        "laura_ears_reply": "Certo, sono qui e vi ascolto.",
+        "data": {
+            "bot": {"id": s.bot_id},
+            "data": {
+                "words": [{"text": w} for w in "Laura ci sei ?".split()],
+                "participant": {"name": "Ben", "id": 1},
+            },
+        },
+    }
+
+    class FakeRequest:
+        headers: dict = {}
+
+        async def body(self) -> bytes:
+            return json.dumps(payload).encode()
+
+    body = json.loads(asyncio.run(main_module.recall_webhook(FakeRequest())).body)
+    assert body.get("spoke") is True
+    assert spoken == ["Certo, sono qui e vi ascolto."]
+    store.remove(s.bot_id)
+
+
+def test_on_mode_synthesized_final_still_uses_the_brain(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "gemini_ears_mode", "on")
+    s = _reply_session(tmp_path, monkeypatch, bot_id="on-bot")
+
+    def _grounded_stream(*a, **k):
+        if k.get("meta") is not None:
+            k["meta"]["top_score"] = 0.9
+        yield "Risposta grounded dal RAG."
+
+    monkeypatch.setattr(main_module, "answer_question_stream", _grounded_stream)
+    spoken = []
+
+    async def fake_speak(session, text, *, force, generation, prev, t0=None):
+        spoken.append(text)
+        return True
+
+    monkeypatch.setattr(main_module, "_speak_with_audio", fake_speak)
+
+    payload = {
+        "event": "transcript.data",
+        "laura_ears": True,
+        # a stray draft in ON mode must be ignored by main.py
+        "laura_ears_reply": "Draft che NON va parlato",
+        "data": {
+            "bot": {"id": s.bot_id},
+            "data": {
+                "words": [{"text": w} for w in "Laura ci sei ?".split()],
+                "participant": {"name": "Ben", "id": 1},
+            },
+        },
+    }
+
+    class FakeRequest:
+        headers: dict = {}
+
+        async def body(self) -> bytes:
+            return json.dumps(payload).encode()
+
+    body = json.loads(asyncio.run(main_module.recall_webhook(FakeRequest())).body)
+    assert body.get("spoke") is True
+    assert spoken == ["Risposta grounded dal RAG."]
+    store.remove(s.bot_id)

@@ -91,6 +91,10 @@ class Settings(BaseSettings):
     #            Recall finals); raw Recall finals are suppressed while the
     #            ears session is healthy, and processing falls back to them
     #            automatically if it dies. Flip only after shadow validation.
+    #   reply  — "on" + tutto-Gemini: the Live model also drafts the SPOKEN
+    #            reply (rides the synthesized payload as laura_ears_reply);
+    #            gates still decide whether to speak, ElevenLabs still speaks,
+    #            but the brain (RAG) is bypassed — instant feel, no grounding.
     gemini_ears_mode: str = "off"
     # Base URL the ears session uses to POST synthesized finals back into the
     # app (on-mode only). Empty = http://127.0.0.1:$PORT (same container).

@@ -4240,7 +4240,15 @@ async def recall_audio_ws(websocket: WebSocket) -> None:
         await websocket.close(code=1008)
         return
     await websocket.accept()
-    ears = gemini_ears.ensure_session(bot_id, capability)
+    # Persona for reply mode: the session's avatar name (best-effort).
+    _ears_avatar = "Laura"
+    _sess = store.get(bot_id)
+    if _sess is not None:
+        try:
+            _ears_avatar = avatars.load(_sess.avatar_id).name
+        except Exception:  # noqa: BLE001 — persona nicety, never block audio
+            pass
+    ears = gemini_ears.ensure_session(bot_id, capability, avatar_name=_ears_avatar)
     try:
         while True:
             message = await websocket.receive()
@@ -5178,6 +5186,17 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # context is insufficient the generator yields nothing and the avatar stays
     # silent (the streaming equivalent of the old confidence gate).
     history = session.recent_transcript(n=8)
+    # ── tutto-Gemini (GEMINI_EARS_MODE=reply) ──
+    # The ears session already DRAFTED the spoken reply from the live audio
+    # (same Live model that closed the turn — the draft streamed while the
+    # human was finishing, so it costs zero extra model latency). When the
+    # synthesized final carries it, speak THAT instead of calling the brain.
+    # Every gate above already ran (wake, cooldown, deference, hand-raise);
+    # ElevenLabs still speaks. Trade-off, by design for the A/B: the draft is
+    # NOT grounded in the avatar's documents.
+    ears_reply = ""
+    if payload.get("laura_ears") and gemini_ears.mode() == "reply":
+        ears_reply = str(payload.get("laura_ears_reply") or "").strip()
     _t_wake = time.perf_counter()
     spoke_any = False
     suppressed_any = False
@@ -5209,7 +5228,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
     _interject_t0 = time.time()
     try:
         async for sentence in iterate_in_threadpool(
-            answer_question_stream(
+            # reply mode with a draft on board: the Gemini draft IS the answer
+            # stream (single sentence-burst); otherwise the grounded brain.
+            iter([ears_reply])
+            if ears_reply
+            else answer_question_stream(
                 avatar,
                 question or text,
                 history=history,
