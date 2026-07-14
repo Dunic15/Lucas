@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<title>Laura — What it is · How it works · Economics</title>
+<style>
+  :root {
+    --bg:#F5F6F8; --surface:#FFFFFF; --surface-2:#EDEFF3; --border:#E0E3EA; --border-2:#CBD0DB;
+    --text:#161922; --text-2:#525A6B; --text-3:#828A9A;
+    --accent:#4B57E0; --accent-ink:#3A45C4; --accent-soft:#EAECFB;
+    --good:#177A52; --good-soft:#E4F2EB;
+    --warn:#A66A08; --warn-soft:#F8EEDA;
+    --crit:#BE352D; --crit-soft:#FAE6E4;
+    --shadow:0 1px 2px rgba(20,25,40,.04), 0 6px 18px -10px rgba(20,25,40,.12);
+    --sans:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0C0F16; --surface:#151A23; --surface-2:#1C222E; --border:#262D3A; --border-2:#39424F;
+      --text:#E8EBF1; --text-2:#A6AEBE; --text-3:#6D7688;
+      --accent:#8B93FF; --accent-ink:#AEB4FF; --accent-soft:rgba(139,147,255,.13);
+      --good:#45CD91; --good-soft:rgba(69,205,145,.13);
+      --warn:#E6AB4B; --warn-soft:rgba(230,171,75,.13);
+      --crit:#F1695F; --crit-soft:rgba(241,105,95,.13);
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 26px -14px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#F5F6F8; --surface:#FFFFFF; --surface-2:#EDEFF3; --border:#E0E3EA; --border-2:#CBD0DB;
+    --text:#161922; --text-2:#525A6B; --text-3:#828A9A; --accent:#4B57E0; --accent-ink:#3A45C4;
+    --accent-soft:#EAECFB; --good:#177A52; --good-soft:#E4F2EB; --warn:#A66A08; --warn-soft:#F8EEDA;
+    --crit:#BE352D; --crit-soft:#FAE6E4; --shadow:0 1px 2px rgba(20,25,40,.04),0 6px 18px -10px rgba(20,25,40,.12);
+  }
+  :root[data-theme="dark"]{
+    --bg:#0C0F16; --surface:#151A23; --surface-2:#1C222E; --border:#262D3A; --border-2:#39424F;
+    --text:#E8EBF1; --text-2:#A6AEBE; --text-3:#6D7688; --accent:#8B93FF; --accent-ink:#AEB4FF;
+    --accent-soft:rgba(139,147,255,.13); --good:#45CD91; --good-soft:rgba(69,205,145,.13);
+    --warn:#E6AB4B; --warn-soft:rgba(230,171,75,.13); --crit:#F1695F; --crit-soft:rgba(241,105,95,.13);
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 26px -14px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  @media (prefers-reduced-motion: reduce){ html{ scroll-behavior:auto; } }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:var(--sans);
+    font-size:17px; line-height:1.6; -webkit-font-smoothing:antialiased; }
+  a { color:var(--accent-ink); }
+  h1,h2,h3 { letter-spacing:-.02em; }
+
+  .top { position:sticky; top:0; z-index:40; background:color-mix(in srgb,var(--bg) 84%, transparent);
+    backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); border-bottom:1px solid var(--border); }
+  .top__in { max-width:900px; margin:0 auto; padding:11px 24px; display:flex; align-items:center; gap:16px; }
+  .brand { font-weight:650; display:flex; align-items:center; gap:9px; white-space:nowrap; }
+  .brand .d { width:8px; height:8px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 4px var(--accent-soft); }
+  .nav { margin-left:auto; display:flex; gap:4px; }
+  .nav a { font:600 12.5px/1 var(--mono); color:var(--text-3); text-decoration:none; padding:8px 12px;
+    border-radius:8px; white-space:nowrap; transition:.15s; }
+  .nav a:hover { color:var(--text); background:var(--surface-2); }
+  .nav a.active { color:var(--accent-ink); background:var(--accent-soft); }
+  @media (max-width:560px){ .top__in{ padding:10px 16px; } .nav a{ padding:8px 9px; } }
+
+  .wrap { max-width:900px; margin:0 auto; padding:0 24px; }
+  @media (max-width:560px){ .wrap{ padding:0 16px; } }
+
+  section { padding:60px 0 8px; }
+  h2 { font-size:clamp(1.6rem,3.4vw,2.15rem); line-height:1.12; margin:0 0 10px; }
+  .snum { display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:10px;
+    background:var(--accent); color:#fff; font:700 16px/1 var(--mono); margin-bottom:14px; }
+  .lead { font-size:1.12rem; color:var(--text-2); max-width:62ch; }
+  p { max-width:66ch; }
+  strong { font-weight:650; }
+  code { font-family:var(--mono); font-size:.85em; background:var(--surface-2); border:1px solid var(--border);
+    padding:.06em .36em; border-radius:5px; white-space:nowrap; }
+
+  /* hero */
+  .hero { padding-top:64px; }
+  .hero h1 { font-size:clamp(2.5rem,7vw,4.1rem); line-height:1.02; margin:8px 0 0; }
+  .hero h1 .q { color:var(--text-3); font-weight:500; }
+  .hero .sub { font-size:1.16rem; color:var(--text-2); max-width:58ch; margin:18px 0 0; }
+  .hero .tag { display:inline-block; margin-top:18px; font:600 12px/1 var(--mono); letter-spacing:.05em;
+    color:var(--accent-ink); background:var(--accent-soft); padding:8px 12px; border-radius:8px; }
+
+  /* pitch flow */
+  .pitch { margin-top:36px; }
+  .pstage__lbl { font:700 11px/1 var(--mono); letter-spacing:.1em; text-transform:uppercase; display:inline-block;
+    padding:5px 10px; border-radius:6px; margin-bottom:10px; }
+  .s-problem .pstage__lbl { color:var(--crit); background:var(--crit-soft); }
+  .s-solution .pstage__lbl { color:var(--accent-ink); background:var(--accent-soft); }
+  .s-data .pstage__lbl { color:var(--good); background:var(--good-soft); }
+  .pstage > p { font-size:1.12rem; line-height:1.5; margin:0; color:var(--text); max-width:62ch; }
+  .pstage > p strong { color:var(--text); }
+  .pconn { height:22px; display:flex; align-items:center; padding-left:13px; color:var(--text-3); font-size:17px; }
+  .pconn::before { content:"\2193"; }
+  .pstage .src { color:var(--text-3); font:600 11px/1 var(--mono); white-space:nowrap; }
+
+  /* notetaker contrast */
+  .kick { font:600 12px/1 var(--mono); letter-spacing:.13em; text-transform:uppercase; color:var(--accent-ink); margin:0 0 12px; }
+  .vs { margin-top:18px; display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .vs__col { border-radius:14px; padding:18px 20px; border:1px solid var(--border); box-shadow:var(--shadow); }
+  .vs__col.them { background:var(--surface-2); }
+  .vs__col.us { background:var(--accent-soft); border-color:color-mix(in srgb,var(--accent) 26%,transparent); }
+  .vs__h { font:700 12px/1 var(--mono); letter-spacing:.06em; text-transform:uppercase; margin:0; }
+  .vs__col.them .vs__h { color:var(--text-3); }
+  .vs__col.us .vs__h { color:var(--accent-ink); }
+  .vs__tag { font-size:.82rem; color:var(--text-3); margin:4px 0 14px; }
+  .vs__col ul { list-style:none; padding:0; margin:0; display:grid; gap:9px; }
+  .vs__col li { font-size:.93rem; padding-left:22px; position:relative; color:var(--text-2); line-height:1.4; }
+  .vs__col.them li::before { content:"\2715"; position:absolute; left:2px; top:.05em; color:var(--text-3); font-weight:700; }
+  .vs__col.us li { color:var(--text); }
+  .vs__col.us li::before { content:"\2713"; position:absolute; left:2px; top:.05em; color:var(--good); font-weight:700; }
+  @media (max-width:560px){ .vs{ grid-template-columns:1fr; } }
+
+  /* tracker */
+  .tracker { margin:22px 0 6px; position:relative; display:grid; grid-template-columns:repeat(4,1fr); gap:0; }
+  .tracker::before { content:""; position:absolute; left:12%; right:12%; top:19px; height:3px; border-radius:3px;
+    background:linear-gradient(90deg,var(--good) 0%,var(--good) 22%,var(--accent) 36%,var(--border-2) 62%); }
+  .stg { position:relative; text-align:center; padding:0 6px; }
+  .stg .node { width:38px; height:38px; margin:0 auto 12px; border-radius:50%; background:var(--surface);
+    border:3px solid var(--border-2); display:grid; place-items:center; font:700 13px/1 var(--mono); color:var(--text-3); position:relative; z-index:1; }
+  .stg.done .node { background:var(--good); border-color:var(--good); color:#fff; }
+  .stg.now .node { background:var(--accent); border-color:var(--accent); color:#fff; box-shadow:0 0 0 6px var(--accent-soft); }
+  .stg.next .node { border-color:var(--warn); color:var(--warn); }
+  .stg .youare { display:inline-block; font:700 9.5px/1 var(--mono); letter-spacing:.08em; text-transform:uppercase;
+    color:#fff; background:var(--accent); padding:4px 8px; border-radius:5px; margin-bottom:8px; }
+  .stg .ph { font:600 10.5px/1 var(--mono); letter-spacing:.06em; text-transform:uppercase; color:var(--text-3); }
+  .stg h4 { font-size:.98rem; margin:5px 0 4px; line-height:1.2; }
+  .stg .w { font:600 11.5px/1 var(--mono); color:var(--text-2); }
+  @media (max-width:640px){
+    .tracker { grid-template-columns:1fr; gap:14px; text-align:left; }
+    .tracker::before { left:19px; right:auto; top:19px; bottom:19px; width:3px; height:auto;
+      background:linear-gradient(var(--good),var(--accent) 42%,var(--border-2)); }
+    .stg { display:grid; grid-template-columns:38px 1fr; gap:14px; align-items:center; }
+    .stg .node { margin:0; } .stg .youare{ margin:0 0 4px; }
+  }
+
+  /* phase lines */
+  .plist { list-style:none; padding:0; margin:22px 0 0; display:grid; gap:10px; }
+  .plist li { display:grid; grid-template-columns:auto 1fr; gap:14px; align-items:baseline;
+    background:var(--surface); border:1px solid var(--border); border-radius:11px; padding:15px 18px; box-shadow:var(--shadow); }
+  .plist .pill { align-self:center; }
+  .plist b { font-size:1.02rem; }
+  .plist p { margin:3px 0 0; color:var(--text-2); font-size:.94rem; max-width:none; }
+  .pill { display:inline-flex; align-items:center; gap:6px; font:600 10.5px/1 var(--mono); letter-spacing:.04em;
+    text-transform:uppercase; padding:6px 10px; border-radius:999px; white-space:nowrap; }
+  .pill i { width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .pill.done{ color:var(--good); background:var(--good-soft); }
+  .pill.now{ color:var(--accent-ink); background:var(--accent-soft); }
+  .pill.next{ color:var(--warn); background:var(--warn-soft); }
+  .pill.later{ color:var(--text-3); background:var(--surface-2); }
+
+  /* FLOW */
+  .flow { margin:24px 0 0; position:relative; display:grid; gap:0; }
+  .step { position:relative; display:grid; grid-template-columns:44px 1fr; gap:18px; padding:0 0 22px; }
+  .step:last-child { padding-bottom:0; }
+  .step::before { content:""; position:absolute; left:21px; top:40px; bottom:-2px; width:2px; background:var(--border-2); }
+  .step:last-child::before { display:none; }
+  .step .num { width:44px; height:44px; border-radius:12px; background:var(--surface); border:2px solid var(--accent);
+    color:var(--accent-ink); display:grid; place-items:center; font:700 17px/1 var(--mono); z-index:1; }
+  .step .who { font:700 10px/1 var(--mono); letter-spacing:.07em; text-transform:uppercase; padding:3px 8px; border-radius:5px;
+    display:inline-block; margin-bottom:6px; }
+  .w-human{ color:var(--good); background:var(--good-soft); }
+  .w-bot{ color:var(--accent-ink); background:var(--accent-soft); }
+  .w-brain{ color:var(--warn); background:var(--warn-soft); }
+  .w-out{ color:var(--text-2); background:var(--surface-2); }
+  .step h4 { margin:0 0 3px; font-size:1.05rem; }
+  .step p { margin:0; color:var(--text-2); font-size:.95rem; }
+  .step .card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:15px 18px; box-shadow:var(--shadow); }
+
+  /* tables */
+  .tbl-wrap { overflow-x:auto; margin-top:16px; border:1px solid var(--border); border-radius:12px; }
+  table { width:100%; border-collapse:collapse; font-size:.95rem; min-width:440px; }
+  th,td { text-align:left; padding:12px 16px; border-bottom:1px solid var(--border); }
+  thead th { font:600 11px/1 var(--mono); letter-spacing:.06em; text-transform:uppercase; color:var(--text-3); background:var(--surface-2); }
+  tbody tr:last-child td { border-bottom:none; }
+  td.num, th.num { text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  tr.total td { font-weight:700; background:var(--surface-2); }
+  tr.total td.num { color:var(--accent-ink); }
+  td .g { color:var(--good); font-weight:700; }
+  .muted { color:var(--text-3); }
+
+  .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:16px; }
+  .metric { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px 18px; box-shadow:var(--shadow); }
+  .metric .big { font-size:1.55rem; font-weight:700; letter-spacing:-.02em; color:var(--accent-ink); font-variant-numeric:tabular-nums; }
+  .metric .lab { font:600 11px/1 var(--mono); letter-spacing:.05em; text-transform:uppercase; color:var(--text-3); margin-top:4px; }
+  .metric p { font-size:.85rem; color:var(--text-2); margin:8px 0 0; max-width:none; }
+  @media (max-width:640px){ .metrics{ grid-template-columns:1fr; } }
+
+  .note { border-radius:11px; padding:14px 18px; margin-top:16px; border:1px solid var(--border); background:var(--surface-2); font-size:.95rem; }
+  .note .lbl { font:700 11px/1 var(--mono); letter-spacing:.07em; text-transform:uppercase; color:var(--text-3); }
+  .note p { margin:5px 0 0; color:var(--text-2); max-width:none; }
+  .note.accent{ background:var(--accent-soft); border-color:color-mix(in srgb,var(--accent) 22%,transparent); }
+  .note.accent .lbl{ color:var(--accent-ink); }
+
+  h3 { font-size:1.05rem; margin:28px 0 6px; }
+
+  hr.rule { border:none; border-top:1px solid var(--border); margin:56px 0 0; }
+  footer { margin-top:56px; padding:28px 0 64px; border-top:1px solid var(--border); color:var(--text-3); font-size:.9rem; }
+</style>
+
+<div class="top">
+  <div class="top__in">
+    <div class="brand"><span class="d"></span> Laura</div>
+    <nav class="nav" id="nav">
+      <a href="#what">1 · What</a>
+      <a href="#how">2 · How</a>
+      <a href="#economics">3 · Economics</a>
+    </nav>
+  </div>
+</div>
+
+<main class="wrap">
+
+  <header class="hero">
+    <p style="font:600 12px/1 var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--accent-ink);margin:0">Product &amp; business · one page</p>
+    <h1>Laura<span class="q"> — in three parts.</span></h1>
+    <p class="sub">An AI process avatar you <strong>call into</strong> Zoom, Meet and Teams. It listens,
+      answers straight from your own company docs, and does the follow-up. Not a notetaker — an <strong>AI employee</strong>.</p>
+    <span class="tag">What it is → How it works → What it costs</span>
+  </header>
+
+  <!-- PITCH: problem -> solution -> data -> how -->
+  <section class="pitch">
+    <div class="pstage s-problem">
+      <span class="pstage__lbl">1 · The problem</span>
+      <p>The one person who knows the process is <strong>never in the room</strong>. Approvals get skipped,
+        decisions stall, the critical step is missed — then someone loses the next day chasing the answer down.</p>
+    </div>
+    <div class="pconn"></div>
+    <div class="pstage s-solution">
+      <span class="pstage__lbl">2 · The solution</span>
+      <p>You <strong>call Laura into the meeting</strong>. She knows the process cold, answers straight from your docs and cites them on the spot,
+        flags the step you're about to skip, and does the follow-up herself.</p>
+    </div>
+    <div class="pconn"></div>
+    <div class="pstage s-data">
+      <span class="pstage__lbl">3 · Why it matters</span>
+      <p>Knowledge workers already lose <strong>~1 day every week</strong> just searching for information, and <strong>56%</strong>
+        have to interrupt a colleague or book a meeting to get an answer — Laura is the colleague who's always in the room.
+        <span class="src">— McKinsey · Atlassian</span></p>
+    </div>
+  </section>
+
+  <!-- WHY NOT A NOTETAKER -->
+  <section>
+    <p class="kick">Why not just a notetaker?</p>
+    <h2 style="max-width:22ch">A notetaker records the meeting. Laura is <em>in</em> the meeting.</h2>
+    <p class="lead">Notetakers are a rear-view mirror — they transcribe what was said. They can't answer a question, they don't
+      know your process, and they can't act. Different category, different willingness to pay.</p>
+    <div class="vs">
+      <div class="vs__col them">
+        <div class="vs__h">Notetakers</div>
+        <p class="vs__tag">Otter · Fireflies · Fathom · Granola · tl;dv</p>
+        <ul>
+          <li>Summarize <strong>after</strong> the call</li>
+          <li>Know only the transcript — not your process</li>
+          <li>Flag the missed step in a summary nobody reads</li>
+          <li>"Action item: someone should do X"</li>
+        </ul>
+      </div>
+      <div class="vs__col us">
+        <div class="vs__h">Laura</div>
+        <p class="vs__tag">present · cited · acts</p>
+        <ul>
+          <li>Answers <strong>live, during</strong> the call</li>
+          <li>Knows your process (RAG over your docs)</li>
+          <li>Catches the skipped step before the call ends</li>
+          <li>Does the follow-up herself</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 1 · WHAT IT IS -->
+  <section id="what">
+    <div class="snum">1</div>
+    <h2>What it is</h2>
+    <p class="lead">You invite Laura to a meeting like a colleague. During the call it answers questions straight from your process docs, with citations. After the call it delivers an artifact: summary, decisions, actions, a
+      readiness score, and a draft follow-up email.</p>
+  </section>
+
+  <hr class="rule">
+
+  <!-- 2 · HOW IT WORKS -->
+  <section id="how">
+    <div class="snum">2</div>
+    <h2>How it works</h2>
+    <p class="lead">The whole flow, from a human inviting Laura to the avatar speaking back in the meeting — and the
+      artifact afterwards. The brain is ours; the meeting bot, face and voice are swappable parts around it.</p>
+
+    <div class="flow">
+      <div class="step">
+        <div class="num">1</div>
+        <div class="card"><span class="who w-human">Human</span><h4>You invite Laura</h4>
+          <p>Add the avatar to a calendar event, or drop it into a live call. It joins like any other participant, with a name, a face and a voice.</p></div>
+      </div>
+      <div class="step">
+        <div class="num">2</div>
+        <div class="card"><span class="who w-bot">Meeting bot · Recall</span><h4>A bot joins the call — its ears &amp; camera</h4>
+          <p>Recall.ai puts a bot in Zoom/Meet/Teams. It streams the live transcript to us, and renders our avatar page as the bot's camera.</p></div>
+      </div>
+      <div class="step">
+        <div class="num">3</div>
+        <div class="card"><span class="who w-brain">The brain · our backend</span><h4>Transcript → our backend</h4>
+          <p>Every line of speech reaches our FastAPI backend in real time. This is the part that thinks — everything else is plumbing.</p></div>
+      </div>
+      <div class="step">
+        <div class="num">4</div>
+        <div class="card"><span class="who w-brain">The brain</span><h4>It reads your docs &amp; tracks the meeting</h4>
+          <p>It pulls the relevant passages from your process docs <em>and</em> the history of your past calls — the Granola / Otter notes and prior transcripts included — so it always has the context to keep the conversation on point and answer correctly. Laura doesn't replace your notetaker; she works alongside it, turning its record into live context. In parallel she silently tracks the meeting against a checklist — required steps, decisions, owners — with zero added latency.</p></div>
+      </div>
+      <div class="step">
+        <div class="num">5</div>
+        <div class="card"><span class="who w-brain">The brain</span><h4>It decides when to speak, then answers with sources</h4>
+          <p>It stays silent unless addressed. When it speaks, the answer is drawn straight from your docs and cited back to them — fast (first word in well under a second), never a blocking pause.</p></div>
+      </div>
+      <div class="step">
+        <div class="num">6</div>
+        <div class="card"><span class="who w-bot">Face + voice</span><h4>The avatar speaks it back</h4>
+          <p>The answer is spoken by the avatar's face and voice, back in the meeting — the open-source in-browser face by default, a photoreal face as a premium upgrade.</p></div>
+      </div>
+      <div class="step">
+        <div class="num">7</div>
+        <div class="card"><span class="who w-out">After the call</span><h4>The artifact &amp; dashboard</h4>
+          <p>Summary, decisions, actions with owners, missing steps, a readiness score, and a draft follow-up email. It all lands in the dashboard — an admin panel showing every meeting Laura joined, the answers she gave and their sources, the actions she took, and the follow-ups still open across the team.</p></div>
+      </div>
+    </div>
+
+    <div class="note accent"><span class="lbl">Why it's a moat</span><p>The brain lives in <strong>our backend</strong>; the avatar is only a commandable mouth.
+      Adding an avatar = adding a folder — no new code. Defensibility is in knowledge grounding + process templates + verticalization, not the meeting plumbing (which is commoditizing).</p></div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- 3 · ECONOMICS -->
+  <section id="economics">
+    <div class="snum">3</div>
+    <h2>Economics</h2>
+    <p class="lead">What a meeting costs <em>us</em>, what we charge, and the margin. All numbers are
+      <strong>ballpark / rough estimates</strong> grounded in real vendor rates — verify per vendor before relying on them.</p>
+
+    <h3>What it costs us — per 30-min meeting, one avatar</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Component</th><th>What it is</th><th class="num">Cost</th></tr></thead>
+        <tbody>
+          <tr><td>Recall bot</td><td class="muted">recording + real-time transcription</td><td class="num">$0.33</td></tr>
+          <tr><td>LLM · live (Cerebras gemma-4-31b)</td><td class="muted">cited answers, in-call</td><td class="num">$0.01–0.02</td></tr>
+          <tr><td>LLM · artifact (Claude Sonnet)</td><td class="muted">the post-meeting document</td><td class="num">$0.03–0.04</td></tr>
+          <tr><td>AWS App Runner</td><td class="muted">our backend compute (allocated)</td><td class="num">$0.03</td></tr>
+          <tr><td>Face + voice (<code>/talk</code>)</td><td class="muted">open-source, in-browser</td><td class="num">$0.00</td></tr>
+          <tr class="total"><td>Variable cost</td><td class="muted">production default path</td><td class="num">~$0.40–0.42</td></tr>
+          <tr><td>+ Photoreal face (RunPod L4)</td><td class="muted">premium, only while GPU runs</td><td class="num">+$0.15–0.24</td></tr>
+          <tr class="total"><td>Full stack (photoreal + Sonnet)</td><td class="muted">everything on</td><td class="num">~$0.55–0.65</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted" style="font-size:.86rem;margin-top:10px">Recall is now <strong>75–85% of the bill</strong>; the LLM is 5–15%. One caveat: Recall's <em>output-media</em> surcharge (streaming our avatar as the camera) isn't separately published — if it carries a premium, the Recall line could be $0.49–0.65 and the totals rise accordingly.</p>
+
+    <div class="metrics" style="grid-template-columns:repeat(2,1fr)">
+      <div class="metric"><div class="big">~$0.014</div><div class="lab">cost per minute</div><p><code>/talk</code> path. Recall is the floor; the face is free — that's the margin. ~$0.020/min with photoreal.</p></div>
+      <div class="metric"><div class="big">~$37/mo</div><div class="lab">fixed monthly</div><p>AWS ~$15 + voice plan ~$22 (optional). SSO free until the first enterprise connection ($125/mo each after).</p></div>
+    </div>
+
+    <h3>Which engine where — the LLM slot</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Engine</th><th class="num">First token</th><th class="num">$/M in–out</th><th>Best use</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Cerebras (gemma-4-31b)</td><td class="num">~0.17s</td><td class="num">$0.85 / $1.20*</td><td class="muted">fastest live — the latency play</td><td><span class="pill now"><i></i>Prod · live</span></td></tr>
+          <tr><td>Claude Sonnet 5</td><td class="num">slower (thinking)</td><td class="num">$3 / $15</td><td class="muted">post-meeting artifact</td><td><span class="pill now"><i></i>Prod · artifact</span></td></tr>
+          <tr><td>Claude Haiku 4.5</td><td class="num">~0.6–0.75s</td><td class="num">$1 / $5</td><td class="muted">complex-tier + web search + breaker fallback</td><td><span class="pill now"><i></i>Prod · fallback</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted" style="font-size:.86rem;margin-top:10px">At ~8 answers per call, engine choice moves the 30-min total by only a few cents — so it's a <strong>latency decision, not a cost one</strong>. Cerebras (fastest by far, ~0.17s) is <strong>wired in and running live in prod</strong>; Claude Haiku is the automatic breaker fallback if it rate-limits. *Cerebras rate unverified (custom endpoint pricing).</p>
+
+    <h3>What we charge — subscription</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Plan</th><th>Who</th><th class="num">Price</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Free</strong></td><td class="muted">individuals · fuels the viral loop</td><td class="num">$0</td></tr>
+          <tr><td><strong>Pro</strong></td><td class="muted">power individuals · full clone</td><td class="num">$59 /user/mo</td></tr>
+          <tr><td><strong>Business</strong></td><td class="muted">teams (5+) · shared avatars + admin</td><td class="num">$149 /seat/mo</td></tr>
+          <tr><td><strong>Enterprise</strong></td><td class="muted">custom process solutions + SSO/audit</td><td class="num">$60k+/yr</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Cost vs price — the margin (ballpark)</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Plan</th><th class="num">Price / mo</th><th class="num">Included use</th><th class="num">Our cost</th><th class="num">Gross margin</th></tr></thead>
+        <tbody>
+          <tr><td>Free</td><td class="num">$0</td><td class="num">90 min</td><td class="num">~$1.23</td><td class="num muted">CAC (loop)</td></tr>
+          <tr><td>Pro</td><td class="num">$59</td><td class="num">10 hrs</td><td class="num">~$8</td><td class="num"><span class="g">~86%</span></td></tr>
+          <tr><td>Business</td><td class="num">$149 /seat</td><td class="num">15 hrs/seat</td><td class="num">~$12</td><td class="num"><span class="g">~92%</span></td></tr>
+          <tr><td>Enterprise</td><td class="num">$5k+ /mo</td><td class="num">~100 hrs*</td><td class="num">~$82</td><td class="num"><span class="g">~98%*</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted" style="font-size:.86rem;margin-top:10px">Blended variable rate ~$0.0137/min. *Enterprise usage is an assumption (no public comparable) — treat the 98% as indicative, not a quote.</p>
+
+    <div class="note"><span class="lbl">Read the estimate this way</span><p>At ~$0.014/min to run and $59–149+/seat to sell, a seat covers its meeting cost dozens of times over — the real
+      cost is <strong>acquisition, not delivery</strong>. Removing the paid third-party avatar face is what fixed the model: under that old ~$0.12/min face, Pro would have been
+      <strong>negative</strong> (20 hrs alone &gt; $59). The photoreal face now adds under $0.25/30-min, so it's a cheap premium, not a margin killer.
+      Willingness-to-pay anchor: the person who owns a process (RevOps/HR/IT) costs <strong>$80–130k/year</strong> — Laura is priced as a fraction of one hire.
+      Numbers are ballpark, grounded in verified 2026 vendor rates; full model in <code>docs/finance/cost-model.md</code>.</p></div>
+  </section>
+
+  <footer>
+    <p style="max-width:none;margin:0">Laura — Callable AI Process Avatars · one-page brief · 10 Jul 2026.
+      Costs are grounded estimates; prices are proposals to validate, not commitments.
+      Full detail: <code>docs/product/roadmap-startup.md</code>.</p>
+  </footer>
+
+</main>
+
+<script>
+  var links = [].slice.call(document.querySelectorAll('#nav a'));
+  var map = {}; links.forEach(function(a){ map[a.getAttribute('href').slice(1)] = a; });
+  var spy = new IntersectionObserver(function(es){
+    es.forEach(function(e){
+      if(e.isIntersecting){ links.forEach(function(l){ l.classList.remove('active'); }); var a=map[e.target.id]; if(a) a.classList.add('active'); }
+    });
+  }, { rootMargin:'-40% 0px -55% 0px' });
+  document.querySelectorAll('section[id]').forEach(function(s){ spy.observe(s); });
+</script>
+
+</body>
+</html>

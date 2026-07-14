@@ -44,3 +44,13 @@ lovable/laura-meeting-expert/package-lock.json
 /*.png
 /framer-*.yml
 /publish-panel.yml
+
+# Local A/V test clips + scratch capture dirs (media, not source — commit real assets to docs/assets/)
+avatar-test-clips/
+desktop-laura-stuff/
+voice-previews/
+images laura/
+
+# GTM lead lists — real prospect emails (PII); keep strategy .md docs, never the raw contact data
+docs/gtm/*.xlsx
+docs/gtm/recipients.csv
