@@ -75,6 +75,7 @@ def _session(tmp_path, monkeypatch, bot_id="policy-bot") -> store.Session:
     s.addressed_once = True
     s.participant_event("Ben", 1, here=True)
     s.participant_event("Marco", 2, here=True)
+    s.participant_event("Sara", 3, here=True)  # >3 participants → hand_mode
     monkeypatch.setattr(settings, "deference_seconds", 0)
     monkeypatch.setattr(settings, "recall_api_key", "")
     return s

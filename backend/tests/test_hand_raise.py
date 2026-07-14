@@ -69,9 +69,11 @@ def _session(tmp_path, monkeypatch, bot_id="hand-bot") -> store.Session:
     s = store.create(bot_id, "https://meet.google.com/abc-defg-hij", "laura")
     s.memory_brief = ""
     s.addressed_once = True  # already activated (first-call gate has its own tests)
-    # A multi-human room — the hand-raise only applies with >= min_humans.
+    # A crowded room (>3 participants incl. Laura) — the hand-raise only
+    # applies with roster >= hand_raise_min_humans (3 humans by default).
     s.participant_event("Ben", 1, here=True)
     s.participant_event("Marco", 2, here=True)
+    s.participant_event("Sara", 3, here=True)
     # Deterministic + offline: no deference wait, no real Recall chat call.
     monkeypatch.setattr(settings, "deference_seconds", 0)
     monkeypatch.setattr(settings, "recall_api_key", "")
@@ -142,13 +144,31 @@ def test_unaddressed_contribution_raises_hand_instead_of_speaking(tmp_path, monk
 def test_no_hand_raise_in_one_to_one(tmp_path, monkeypatch):
     """With a single human in the room she answers directly, as before."""
     s = _session(tmp_path, monkeypatch, bot_id="hand-bot-1to1")
-    s.participant_event("Marco", 2, here=False)  # Ben is alone with her
+    s.participant_event("Marco", 2, here=False)
+    s.participant_event("Sara", 3, here=False)  # Ben is alone with her
     _stub_stream(monkeypatch, ["Two weeks is the usual onboarding window."])
     spoken = _capture_speech(monkeypatch)
 
     body = _post(_line(s.bot_id, "Ben", "how long should we plan for onboarding?"))
     assert body.get("hand_raised") is None
     assert spoken  # direct answer
+    assert s.hand_raised_at == 0
+    store.remove(s.bot_id)
+
+
+def test_hand_raise_needs_more_than_three_participants(tmp_path, monkeypatch):
+    """Owner rule (2026-07-14): the hand only goes up when the meeting has MORE
+    than 3 participants. Laura + 2 humans (3 total) is below the bar and she
+    answers directly; the crowded fixture (Laura + 3 humans) raises it (covered
+    by test_unaddressed_contribution_raises_hand)."""
+    s = _session(tmp_path, monkeypatch, bot_id="hand-bot-threshold")
+    s.participant_event("Sara", 3, here=False)  # back down to 2 humans (3 total)
+    _stub_stream(monkeypatch, ["Onboarding usually runs about two weeks."])
+    spoken = _capture_speech(monkeypatch)
+
+    body = _post(_line(s.bot_id, "Ben", "how long should we plan for onboarding?"))
+    assert body.get("hand_raised") is None  # below the >3 bar → no hand
+    assert spoken  # answered directly instead
     assert s.hand_raised_at == 0
     store.remove(s.bot_id)
 

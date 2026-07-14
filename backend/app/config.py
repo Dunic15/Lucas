@@ -381,11 +381,16 @@ class Settings(BaseSettings):
     # itself (nobody addressed her) and she has a grounded contribution, she
     # does NOT speak over the conversation — she raises her hand (gesture on
     # her /talk tile + a meeting-chat line) and waits to be invited ("dimmi,
-    # Laura"). Only in multi-human meetings (min_humans); in a 1:1 she answers
-    # directly as before. The hand lowers silently after timeout_seconds if
-    # nobody invites her (the moment has passed).
+    # Laura"). Only in a genuinely crowded room (min_humans); with three or
+    # fewer people in the meeting she answers directly as before. The hand
+    # lowers silently after timeout_seconds if nobody invites her (the moment
+    # has passed).
     hand_raise_enabled: bool = True
-    hand_raise_min_humans: int = 2
+    # Owner rule (2026-07-14): raise the hand ONLY when the meeting has MORE than
+    # 3 participants. ``roster`` counts humans (Laura is the bot, not in it), so
+    # >3 participants incl. Laura == roster >= 3 humans. Below that the room is
+    # small enough to just answer. Override via HAND_RAISE_MIN_HUMANS.
+    hand_raise_min_humans: int = 3
     hand_raise_timeout_seconds: float = 120.0
     # Motivation gate (decision.should_raise_hand): the SKIP gate decides if a
     # contribution is grounded; these decide if raising the hand for it is

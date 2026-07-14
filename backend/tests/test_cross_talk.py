@@ -86,6 +86,7 @@ def _session(tmp_path, monkeypatch, bot_id="dyad-bot") -> store.Session:
     s.addressed_once = True
     s.participant_event("Marco", 1, here=True)
     s.participant_event("Lia", 2, here=True)
+    s.participant_event("Sam", 3, here=True)  # 3rd human present → clears the >3 gate (Marco↔Lia stay the locked dyad)
     monkeypatch.setattr(settings, "deference_seconds", 0)
     monkeypatch.setattr(settings, "recall_api_key", "")
     monkeypatch.setattr(settings, "cross_talk_suppression_enabled", True)
