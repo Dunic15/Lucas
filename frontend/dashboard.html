@@ -900,8 +900,16 @@
             .map(function(k){ return '<div class="crow"><div style="min-width:0"><div class="cn">'+
               esc(CONN_MAP[k].name||k)+'</div><div class="cd">Coming soon</div></div>'+
               '<span class="stchip" style="opacity:.65">coming soon</span></div>'; });
-          box.innerHTML=real.join("")+soon.join("")
-            || '<div class="cnote">No tools available to connect yet.</div>';
+          // MORE: one link to Cedric's full catalog for anyone who wants beyond the
+          // five surfaced here. Uses the manage_url Cedric returns on its connectors
+          // (present once the workspace is linked); hidden until one is available.
+          var mgr="";
+          (j.connectors||[]).some(function(c){ if(c&&c.manage_url){ mgr=String(c.manage_url); return true; } return false; });
+          var more = mgr
+            ? '<a href="'+esc(mgr)+'" target="_blank" rel="noopener" style="display:inline-block;margin-top:12px;font-size:13px;color:var(--faint);text-decoration:none">Need more tools? Manage in Cedric ↗</a>'
+            : '';
+          box.innerHTML=(real.join("")+soon.join("")
+            || '<div class="cnote">No tools available to connect yet.</div>')+more;
         })
         .catch(function(){ box.innerHTML='<div class="cnote">Brain connectors unavailable right now.</div>'; });
     }
