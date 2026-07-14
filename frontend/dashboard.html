@@ -296,6 +296,9 @@
   .exec.done{color:#54D28F;border-color:rgba(84,210,143,.4);}
   .exec.failed,.exec.rejected{color:var(--accent);border-color:rgba(245,72,77,.4);}
   .exec.proposed,.exec.approved{color:var(--live);border-color:rgba(126,182,255,.4);}
+  /* Executed-action receipt: the "Done ↗" pill links to the real event/message. */
+  a.exec{text-decoration:none;cursor:pointer;}
+  a.exec.done:hover{background:rgba(84,210,143,.12);}
 
   /* usage & billing */
   .usage-hero{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;}
@@ -984,6 +987,16 @@
 
     // meetings tables — clean filterable columns; click a row for AI summary + actions
     function platformsIn(){ var s={}; (d.meetings||[]).forEach(function(m){ if(m.platform&&m.platform!=="—") s[m.platform]=1; }); return Object.keys(s); }
+    // Execution receipt chip. When the native executor ran the action, the
+    // provenance detail carries the real Calendar event link / Gmail message id
+    // (from executor.execute_approved) — render a clickable "Done ↗". Otherwise
+    // the plain status pill (proposed/approved/failed) with the detail on hover.
+    function execChip(a){ if(!a.execution) return "";
+      var s=a.execution.status||"", det=a.execution.detail||"";
+      var url=(det.match(/https?:\/\/[^\s"'<>]+/)||[])[0];
+      if(s==="done"&&url) return '<a class="exec done" href="'+esc(url)+'" target="_blank" rel="noopener" title="'+esc(det)+'">Done ↗</a>';
+      return '<span class="exec '+esc(s)+'" title="'+esc(det)+'">'+esc(s)+'</span>';
+    }
     function rowHTML(m,i){ var nm=avName(m.avatar_id);
       return '<tr class="row" data-i="'+i+'"><td><div class="cell-av">'+
         (m.avatar_id&&avById[m.avatar_id]?avatarBadge(m.avatar_id,nm):'<span class="av" style="background:var(--faint)">'+esc(nm[0]||"?")+'</span>')+'<span>'+esc(nm)+'</span></div></td>'+
@@ -995,7 +1008,7 @@
         '<div><div class="sm-h">AI summary</div><div class="summary">'+(m.summary?esc(m.summary):'<span style="color:var(--faint)">No summary captured.</span>')+'</div>'+
         (m.follow_up_subject?'<div class="sm-h" style="margin-top:12px">Follow-up email</div><div class="summary">'+esc(m.follow_up_subject)+'</div>':'')+'</div>'+
         '<div><div class="sm-h">Actions</div><div class="did">'+
-        (m.actions.length? m.actions.map(function(a){return '<div class="d'+(a.done?"":" attn")+'"><span class="ic">'+(a.done?"✓":"→")+'</span><span>'+esc(a.item)+(a.owner?' <span class="ow">· '+esc(a.owner)+'</span>':'')+(a.execution?'<span class="exec '+esc(a.execution.status)+'" title="'+esc(a.execution.detail||"")+'">'+esc(a.execution.status)+'</span>':'')+'</span></div>';}).join("") : '<div class="empty" style="padding:6px 0;text-align:left">'+((brainConnected||m.avatar_id==="cedric")?'Actions handled by Cedric <a data-goto="connections" title="Cedric proposes and runs these; approved from Slack" style="cursor:pointer;text-decoration:none">↗</a>':'No actions captured.')+'</div>')+
+        (m.actions.length? m.actions.map(function(a){return '<div class="d'+(a.done?"":" attn")+'"><span class="ic">'+(a.done?"✓":"→")+'</span><span>'+esc(a.item)+(a.owner?' <span class="ow">· '+esc(a.owner)+'</span>':'')+execChip(a)+'</span></div>';}).join("") : '<div class="empty" style="padding:6px 0;text-align:left">'+((brainConnected||m.avatar_id==="cedric")?'Actions handled by Cedric <a data-goto="connections" title="Cedric proposes and runs these; approved from Slack" style="cursor:pointer;text-decoration:none">↗</a>':'No actions captured.')+'</div>')+
         (m.missing_steps.length?'<div class="sm-h" style="margin-top:12px">Missing steps</div>'+m.missing_steps.map(function(s){return '<div class="d attn"><span class="ic">!</span><span>'+esc(s.replace(/_/g," "))+'</span></div>';}).join(""):'')+
         '</div></div></td></tr>';
     }

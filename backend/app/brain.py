@@ -1454,6 +1454,249 @@ def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dic
     return artifact
 
 
+# ─────────────── typed-action producer (native executor) ────────────
+# The native executor (backend/app/executor.py) will run an APPROVED ledger
+# action only when it carries a TYPED spec — one of:
+#   {"type": "calendar.create_event", "args": {title, start, end, attendees?}}
+#   {"type": "email.send",            "args": {to, subject, body}}
+# type_actions() annotates the finalized artifact actions[] with such a spec
+# where an item CLEARLY maps, at finalize (off the live path). It mirrors the
+# summarizer's no-invented-recipients boundary: a recipient email is emitted
+# ONLY when it literally appears in that action's distilled text (item / owner /
+# deadline / summary brief), never guessed; a start/end must be a real ISO-8601
+# datetime. An item that does not clearly map stays generic (no `typed`), so the
+# dashboard still shows it and the Cedric path is unaffected. The raw transcript
+# is NOT passed here — only already-distilled fields flow — so this adds no PII
+# surface beyond what post_meeting already sent to the post model.
+TYPED_ACTION_SYSTEM = """You convert a meeting's action items into typed, \
+executable specs, but ONLY when an item unambiguously maps to one of the two \
+supported actions AND every required field is present in the SOURCE TEXT given \
+for that item. The two types:
+
+- "calendar.create_event": schedule a meeting/call. Required args: title, \
+start, end (both full ISO-8601 date-times, e.g. 2026-08-01T15:00:00). \
+attendees is optional (email addresses only). Use TODAY (given below) only to \
+resolve a date/time the item itself states ("Friday 3pm"); if the item states \
+no concrete time, DO NOT emit this type.
+- "email.send": send an email. Required args: to (one or more email addresses \
+that LITERALLY appear in the item's source text), subject. body is optional.
+
+HARD RULES (precision over recall):
+- NEVER invent a recipient, an email address, a date, or a time. Use ONLY \
+values that literally appear in the item's source text (you may normalise a \
+stated date/time to ISO using TODAY). If a required field is not present, DO \
+NOT emit a type for that item — leave it untyped.
+- If you are not sure, leave it untyped.
+
+Return ONLY a JSON object mapping the 0-based item index (as a string) to its \
+typed spec, omitting every item that does not map:
+{"0": {"type": "email.send", "args": {"to": ["a@b.com"], "subject": "...", "body": "..."}}}"""
+
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+_ISO_DT_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?")
+_EMAIL_INTENT_RE = re.compile(
+    r"\b(e-?mail|send (?:an? )?(?:email|note|recap|the recap)|reply to|write to)\b",
+    re.IGNORECASE,
+)
+_CAL_INTENT_RE = re.compile(
+    r"\b(schedule|calendar|set up (?:a )?(?:meeting|call)|book (?:a )?(?:meeting|call)|"
+    r"invite .* to|follow-?up (?:meeting|call))\b",
+    re.IGNORECASE,
+)
+
+CALENDAR_CREATE = "calendar.create_event"
+EMAIL_SEND = "email.send"
+
+
+def _grounded_emails(value: object, source: str) -> list[str]:
+    """Emails from ``value`` (str or list) that LITERALLY appear in ``source`` —
+    the mechanical no-invented-recipients guard. Case-insensitive, de-duped,
+    order-preserving."""
+    src = (source or "").lower()
+    raw: list[str] = []
+    if isinstance(value, str):
+        raw = _EMAIL_RE.findall(value)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            raw.extend(_EMAIL_RE.findall(str(v)))
+    out: list[str] = []
+    for e in raw:
+        e = e.strip()
+        if e and e.lower() in src and e not in out:
+            out.append(e)
+    return out
+
+
+def _is_isoish(value: object) -> bool:
+    """A plausible ISO-8601 date-time string (shape check, not a full parse)."""
+    return bool(_ISO_DT_RE.search(str(value or "")))
+
+
+def _action_source(action: dict, brief: str = "") -> str:
+    """The distilled text a typed spec's args may draw from — never the raw
+    transcript, only fields already extracted into the artifact."""
+    parts = [
+        str(action.get("item") or ""),
+        str(action.get("owner") or ""),
+        str(action.get("deadline") or ""),
+        brief or "",
+    ]
+    return "\n".join(p for p in parts if p)
+
+
+def _sanitize_typed(typed: object, action: dict, brief: str = "") -> dict | None:
+    """Validate + normalise one model/stub-proposed typed spec against its
+    action, or None when it doesn't cleanly map. Enforces grounded recipients
+    and ISO-shaped times so a hallucinated field can never reach the executor."""
+    if not isinstance(typed, dict):
+        return None
+    t = str(typed.get("type") or "").strip()
+    args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
+    source = _action_source(action, brief)
+    if t == EMAIL_SEND:
+        to = _grounded_emails(args.get("to"), source)
+        if not to:
+            return None  # no grounded recipient → never send
+        subject = str(args.get("subject") or "").strip()[:200]
+        body = str(args.get("body") or "").strip()[:4000]
+        if not subject and not body:
+            subject = str(action.get("item") or "").strip()[:200]
+        return {"type": t, "args": {"to": to, "subject": subject, "body": body}}
+    if t == CALENDAR_CREATE:
+        title = str(
+            args.get("title") or args.get("summary") or action.get("item") or ""
+        ).strip()[:200]
+        start = str(args.get("start") or "").strip()
+        end = str(args.get("end") or "").strip()
+        if not title or not _is_isoish(start) or not _is_isoish(end):
+            return None
+        spec_args = {"title": title, "start": start, "end": end}
+        attendees = _grounded_emails(args.get("attendees"), source)
+        if attendees:
+            spec_args["attendees"] = attendees
+        return {"type": t, "args": spec_args}
+    return None
+
+
+def _stub_type_actions(
+    indexed: list[tuple[int, dict]], brief: str = ""
+) -> dict[int, dict]:
+    """Deterministic, key-free mapping for the offline demo + tests: map the
+    obvious cases from literal values only (an email address / ISO datetimes
+    that actually appear). Precision over recall — anything ambiguous is left
+    untyped, exactly like the model path."""
+    out: dict[int, dict] = {}
+    for i, a in indexed:
+        item = str(a.get("item") or "")
+        source = _action_source(a, brief)
+        if _EMAIL_INTENT_RE.search(item):
+            emails = _grounded_emails(source, source)
+            if emails:
+                out[i] = _sanitize_typed(
+                    {"type": EMAIL_SEND, "args": {"to": emails, "subject": item}},
+                    a, brief,
+                ) or out.get(i)
+                if out.get(i):
+                    continue
+        if _CAL_INTENT_RE.search(item):
+            dts = _ISO_DT_RE.findall(source)
+            if len(dts) >= 2:
+                spec = _sanitize_typed(
+                    {
+                        "type": CALENDAR_CREATE,
+                        "args": {"title": item, "start": dts[0], "end": dts[1],
+                                 "attendees": _grounded_emails(source, source)},
+                    },
+                    a, brief,
+                )
+                if spec:
+                    out[i] = spec
+    return {k: v for k, v in out.items() if v}
+
+
+def _llm_type_actions(
+    indexed: list[tuple[int, dict]], brief: str, provider: str
+) -> dict[int, dict]:
+    """One post_provider() call to classify the actions; every returned spec is
+    re-validated by _sanitize_typed (grounded recipients, ISO times) before it
+    is trusted, so a hallucinated field can never survive."""
+    import time as _time
+
+    lines = []
+    for i, a in indexed:
+        owner = str(a.get("owner") or "").strip()
+        deadline = str(a.get("deadline") or "").strip()
+        suffix = (f" (owner: {owner})" if owner and owner.upper() != "UNASSIGNED" else "")
+        suffix += f" (deadline: {deadline})" if deadline else ""
+        lines.append(f"[{i}] {str(a.get('item') or '')}{suffix}")
+    raw = llm.complete(
+        TYPED_ACTION_SYSTEM,
+        (
+            f"TODAY: {_time.strftime('%Y-%m-%d')}\n\n"
+            + (f"Meeting summary (context only):\n{brief}\n\n" if brief.strip() else "")
+            + "ACTION ITEMS (0-based index in brackets — the source text for each):\n"
+            + "\n".join(lines)
+            + "\n\nRespond with the JSON object only."
+        ),
+        max_tokens=1200,
+        provider=provider,
+    )
+    parsed = _parse_json(raw)
+    if not isinstance(parsed, dict):
+        return {}
+    by_idx = {i: a for i, a in indexed}
+    out: dict[int, dict] = {}
+    for key, spec in parsed.items():
+        try:
+            i = int(key)
+        except (TypeError, ValueError):
+            continue
+        if i not in by_idx:
+            continue
+        clean = _sanitize_typed(spec, by_idx[i], brief)
+        if clean:
+            out[i] = clean
+    return out
+
+
+def type_actions(
+    actions: list, brief: str = "", *, provider: str | None = None
+) -> list:
+    """Annotate each action with a ``typed`` spec where it clearly maps to a
+    native-executor action (calendar.create_event / email.send).
+
+    Returns a NEW list; an action that doesn't map is returned unchanged (no
+    ``typed`` key). Never invents recipients or times — args draw only from that
+    action's distilled fields + the meeting ``brief`` (never the raw
+    transcript). Finalize-only, off the live path: it may make one
+    post_provider() call (stub = a deterministic regex mapping, so the key-free
+    demo still types the obvious cases). Best-effort: any failure returns the
+    actions unchanged, so it can never break finalize."""
+    src = list(actions or [])
+    indexed = [(i, a) for i, a in enumerate(src) if isinstance(a, dict)]
+    if not indexed:
+        return src
+    prov = (provider or post_provider()).lower()
+    try:
+        mapping = (
+            _stub_type_actions(indexed, brief)
+            if prov == "stub"
+            else _llm_type_actions(indexed, brief, prov)
+        )
+    except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
+        print(f"[type_actions] skipped ({type(e).__name__})", flush=True)
+        return src
+    if not mapping:
+        return src
+    out: list = []
+    for i, a in enumerate(src):
+        if i in mapping:
+            a = dict(a)
+            a["typed"] = mapping[i]
+        out.append(a)
+    return out
+
+
 # ─────────────────── stub (free, offline) reasoning ─────────────────
 def _stub_answer(chunks: list[Retrieved]) -> dict:
     """Deterministic extractive answer: quote the best-matching process chunk.

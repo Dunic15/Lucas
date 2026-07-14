@@ -618,6 +618,17 @@ class Settings(BaseSettings):
     # ── end Cedric integration ──
 
     @property
+    def execution_mode(self) -> str:
+        """Which engine runs an APPROVED meeting action — the single settings
+        concept the dashboard reads to show "who executes" (NATIVE-INTEGRATIONS-
+        PLAN.md "Cedric add-on toggle"). For the Now slice this is derived from
+        the native_executor flag: "native" = Laura runs calendar/gmail on the
+        user's own Google account; "cedric" = today's behaviour, an approved
+        action is brokered to Cedric. A real per-org setting can override this
+        property later without changing call sites."""
+        return "native" if self.native_executor else "cedric"
+
+    @property
     def wake_word_list(self) -> list[str]:
         """Global fallback wake words (per-avatar wake_words usually win)."""
         return [w.strip().lower() for w in self.wake_words.split(",") if w.strip()]
