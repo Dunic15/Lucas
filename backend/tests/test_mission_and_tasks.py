@@ -290,6 +290,37 @@ def test_build_integration_carries_mission():
     assert integ["mission"] == "Raise market size"
 
 
+def test_build_integration_carries_mission_only(monkeypatch):
+    """A per-meeting mission ALONE (no callback/context_url/external_ref/brief)
+    must still build a session integration — a plain dashboard dispatch that only
+    sets a mission would otherwise return None and silently drop the objective."""
+    import types
+
+    # No orchestrator surface configured, so nothing else can make it non-None.
+    monkeypatch.setattr(cedric.settings, "surface_webhook_url", "")
+    monkeypatch.setattr(cedric.settings, "surface_context_url", "")
+    req = types.SimpleNamespace(
+        callback_url=None, context_url=None, external_ref=None,
+        context=cedric.MeetingContext(mission="Raise market size"),
+    )
+    integ = cedric.build_integration(req, brief="")
+    assert integ is not None
+    assert integ["mission"] == "Raise market size"
+
+
+def test_build_integration_none_when_nothing_set(monkeypatch):
+    """Empty everything (incl. an empty mission) = today's behaviour exactly."""
+    import types
+
+    monkeypatch.setattr(cedric.settings, "surface_webhook_url", "")
+    monkeypatch.setattr(cedric.settings, "surface_context_url", "")
+    req = types.SimpleNamespace(
+        callback_url=None, context_url=None, external_ref=None,
+        context=cedric.MeetingContext(),
+    )
+    assert cedric.build_integration(req, brief="") is None
+
+
 def test_resolve_mission_reads_session_integration():
     import types
 

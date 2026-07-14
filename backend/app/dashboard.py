@@ -48,15 +48,21 @@ def _platform(meeting_url: str) -> str:
 def _action_entry(action) -> dict:
     """Normalize an artifact action (dict or bare string) for the wire.
     action_id rides along so summary() can decorate each action with the
-    execution state the orchestrator reported back (ledger.action_statuses)."""
+    execution state the orchestrator reported back (ledger.action_statuses).
+    ``typed`` is a bare bool (never the spec itself) so the dashboard can render
+    the per-row "Approve & run" control for actions the native executor can run
+    (calendar.create_event / email.send) without ever shipping the args."""
     if isinstance(action, dict):
         return {
             "action_id": str(action.get("action_id") or ""),
             "item": str(action.get("item") or action.get("step") or "")[:300],
             "owner": str(action.get("owner") or "")[:80],
             "done": bool(action.get("done") or action.get("status") == "done"),
+            "typed": isinstance(action.get("typed"), dict)
+            and bool(action["typed"].get("type")),
         }
-    return {"action_id": "", "item": str(action)[:300], "owner": "", "done": False}
+    return {"action_id": "", "item": str(action)[:300], "owner": "",
+            "done": False, "typed": False}
 
 
 def _delivered(
