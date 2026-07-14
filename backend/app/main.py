@@ -57,6 +57,7 @@ from . import (
     entitlements,
     emotion,
     end_of_turn,
+    executor,
     granola_client,
     actions,
     gmail_watcher,
@@ -87,6 +88,7 @@ from .brain import (
     proactive_flag,
     effective_provider,
     semantic_action_duplicates,
+    type_actions,
 )
 from .config import settings
 from .decision import (
@@ -2444,6 +2446,26 @@ async def _finalize_session_locked(
         _merge_action_items, queued_actions, artifact.get("actions") or []
     )
     artifact["checklist"] = artifact["actions"]  # legacy alias, same list
+
+    # Typed-action specs for the native executor (NATIVE-INTEGRATIONS-PLAN.md):
+    # annotate each action with a {type, args} spec where it CLEARLY maps
+    # (calendar.create_event / email.send) so an APPROVED action can be run
+    # natively. GATED on the flag — with NATIVE_EXECUTOR off this whole block is
+    # skipped, so finalize is byte-identical to today (no extra model call, no
+    # new field). Never invents recipients/times; unmapped actions stay generic.
+    # Best-effort (type_actions self-guards): typing must never break finalize.
+    if executor.enabled():
+        try:
+            artifact["actions"] = await run_in_threadpool(
+                type_actions, artifact["actions"], artifact.get("summary") or ""
+            )
+            artifact["checklist"] = artifact["actions"]
+        except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
+            print(
+                f"[finalize] bot={bot_id} typed-action producer skipped "
+                f"({type(e).__name__})",
+                flush=True,
+            )
 
     # The transcript is the raw material of the artifact — persist it so the
     # product output is complete (transcript + summary + checklist + email).

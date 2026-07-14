@@ -21,7 +21,7 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
-from . import auth, avatars, ledger, outbox, store
+from . import auth, avatars, executor, ledger, outbox, store
 from .config import settings
 
 router = APIRouter(tags=["dashboard"])
@@ -559,6 +559,14 @@ def dashboard_summary(request: Request) -> JSONResponse:
             # PII-safe callback delivery health. Payloads and callback URLs are
             # never exposed; owners see delivered/failed/next-attempt only.
             "callback_deliveries": callback_deliveries,
+            # Which engine executes an APPROVED action (NATIVE-INTEGRATIONS-PLAN
+            # "Cedric add-on toggle"). Read-only stub for now — derived from the
+            # NATIVE_EXECUTOR flag; a real per-org setting slots in behind this
+            # same key later. Lets the dashboard show "who runs my actions".
+            "settings": {
+                "execution_mode": settings.execution_mode,  # native | cedric
+                "native_executor": bool(settings.native_executor),
+            },
             "auth_enabled": auth.enabled(),
             "user": (
                 {k: user[k] for k in ("user_id", "email", "name", "picture")}
@@ -1194,3 +1202,116 @@ async def disconnect_brain_remote(request: Request) -> JSONResponse:
 # The legacy DELETE /dashboard/connections/brain/{avatar_id} route is gone:
 # the dashboard button posts to /dashboard/connections/brain/disconnect
 # (remote-revoke-first saga above), so the local-only marker had no callers.
+
+
+# ─────────────── native approve → execute (the loop's last mile) ────────────
+
+def _find_org_action(caller_org: str, action_id: str) -> dict | None:
+    """The stored artifact action with this ``action_id`` that is VISIBLE to
+    ``caller_org`` (its own org, or a legacy unowned '' row), or None.
+
+    The typed spec to execute lives on the SAVED artifact — the trusted source
+    for what an approve should run, never the client's request body. Scanning
+    artifacts is O(meetings) but this is a dashboard action off the live path.
+    Doubles as the org-scope check: a caller can only approve an action inside
+    an artifact its own org can see."""
+    aid = (action_id or "").strip()
+    if not aid:
+        return None
+    scope = None
+    if store.durable_artifacts_enabled():
+        scope = caller_org or settings.demo_org_id
+    for row in store.list_artifacts(scope):
+        art = row.get("artifact") or {}
+        row_org = art.get("org_id", "")
+        if caller_org is not None and row_org not in ("", caller_org):
+            continue
+        for a in art.get("actions") or []:
+            if isinstance(a, dict) and str(a.get("action_id") or "") == aid:
+                return a
+    return None
+
+
+def _executor_action(typed: dict | None) -> dict | None:
+    """Bridge a producer typed spec ``{type, args}`` to the executor's action
+    shape (``{type, event|message}``). None for a missing/non-native spec — the
+    signal to approve-without-executing (Cedric/manual keeps the action)."""
+    if not isinstance(typed, dict):
+        return None
+    t = str(typed.get("type") or "")
+    args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
+    if t == executor.CALENDAR_CREATE:
+        return {"type": t, "event": args}
+    if t == executor.EMAIL_SEND:
+        return {"type": t, "message": args}
+    return None
+
+
+@router.post("/dashboard/actions/{action_id}/approve")
+async def approve_action(action_id: str, request: Request) -> JSONResponse:
+    """Approve one finalized meeting action — the NATIVE approval surface.
+
+    Dashboard-authed: a logged-in owner only, scoped to their own org. Marks the
+    action ``approved`` in the ledger provenance channel and, when the NATIVE
+    executor is ON and the action carries a typed spec (calendar.create_event /
+    email.send), runs it on the caller's own Google account via
+    ``executor.execute_approved`` — which writes the ``done``/``failed`` receipt
+    (event link / message id) back to the SAME ledger channel the dashboard
+    reads. With the flag OFF (or the action untyped) it is marked approved and
+    nothing executes — byte-identical to today's brokered-to-Cedric behaviour.
+
+    This deliberately does NOT touch the machine-gated
+    ``POST /org/actions/{id}/resolve`` (Cedric's) — it reuses the ledger but is a
+    separate, human-authed door so the two execution engines never collide."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    aid = (action_id or "").strip()
+    if not aid:
+        return JSONResponse({"error": "action_id is required"}, status_code=400)
+    org = user["org_id"]
+
+    action = await run_in_threadpool(_find_org_action, org, aid)
+    if action is None:
+        return JSONResponse(
+            {"error": "unknown action for this org"}, status_code=404,
+            headers=_NO_STORE,
+        )
+
+    # Mark approved (non-terminal, monotonic) in the shared provenance channel.
+    # Best-effort: a durable-org no-op here (a native action has no Cedric
+    # queued_actions row) must not fail the approval — execution is the point.
+    await run_in_threadpool(
+        ledger.set_action_status, aid, "approved", "approved via dashboard",
+        org_id=org,
+    )
+
+    typed = action.get("typed") if isinstance(action.get("typed"), dict) else None
+    exec_action = _executor_action(typed)
+    executed = False
+    if exec_action is not None and executor.handles(exec_action):
+        # execute_approved writes its own done/failed receipt to the ledger.
+        await run_in_threadpool(
+            executor.execute_approved, org, aid, exec_action
+        )
+        executed = True
+
+    # Echo the latest provenance (status + distilled detail: event link /
+    # message id / error) — the receipt the row will render. Never transcript.
+    latest = await run_in_threadpool(ledger.action_statuses, [aid], org_id=org)
+    return JSONResponse(
+        {
+            "ok": True,
+            "action_id": aid,
+            "approved": True,
+            "executed": executed,
+            "typed": bool(typed),
+            "execution_mode": settings.execution_mode,
+            "status": latest.get(aid),
+        },
+        headers=_NO_STORE,
+    )
