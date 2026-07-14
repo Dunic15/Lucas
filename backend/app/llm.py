@@ -11,6 +11,11 @@ Pick the provider with BRAIN_PROVIDER in .env:
                       is what prod runs on the live spoken path.
   groq              — fast, cheap open models via an OpenAI-compatible API.
                       Streams + supports tool use. Needs GROQ_API_KEY.
+  vertex            — Google Gemini via Vertex AI (GCP-billed, so it can run on
+                      Google Cloud credits — unlike the AI Studio Gemini API).
+                      Auth via a service account / ADC (google-auth). Set
+                      VERTEX_PROJECT (+ optional VERTEX_LOCATION/VERTEX_MODEL).
+                      Text brain only here; realtime voice is a separate spike.
   ollama            — a local model via Ollama (free, runs on your machine).
                       `ollama run llama3.2` then BRAIN_PROVIDER=ollama.
   stub              — no model at all. Deterministic, offline, zero-cost. Used to
@@ -111,6 +116,101 @@ def _reset_groq_breaker() -> None:
     _groq_blocked_until = 0.0
 
 
+# ── Vertex AI (Google Gemini) ──────────────────────────────────────────
+# Gemini via Vertex AI (GCP-billed — funded by Google Cloud credits, unlike the
+# AI Studio Gemini API which the GCP Free Trial does NOT cover). Plain REST
+# generateContent with a bearer minted from Application Default Credentials / a
+# service account (google-auth, lazy-imported so the rest of the app and the
+# tests never need it). Opt-in via BRAIN_PROVIDER=vertex — the live spoken path
+# stays on cerebras/anthropic. Realtime *voice* (gemini-live-2.5-flash over a
+# websocket) is a separate concern and lives in the standalone spike, never here.
+#
+# Model/endpoint note (verified 2026-07-14): gemini-2.5-flash works on both a
+# region host and the `global` host; gemini-3.5-flash is `global`-only. So the
+# host is derived from vertex_location: "global" -> aiplatform.googleapis.com,
+# else "<loc>-aiplatform.googleapis.com".
+_vertex_token_cache = {"tok": "", "exp": 0.0}
+
+
+def _vertex_token() -> str:
+    """Mint (and cache) a Vertex access token via google-auth ADC / SA JSON.
+
+    Set GOOGLE_APPLICATION_CREDENTIALS to a service-account JSON with the role
+    roles/aiplatform.user, or rely on ambient Application Default Credentials.
+    Cached until ~1 min before expiry.
+    """
+    now = time.time()
+    if _vertex_token_cache["tok"] and now < _vertex_token_cache["exp"] - 60:
+        return _vertex_token_cache["tok"]
+    try:
+        import google.auth
+        from google.auth.transport.requests import Request
+    except ImportError as e:  # pragma: no cover - depends on optional dep
+        raise RuntimeError(
+            "BRAIN_PROVIDER=vertex needs google-auth (pip install google-auth)."
+        ) from e
+    creds, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    creds.refresh(Request())
+    exp = getattr(creds, "expiry", None)
+    if exp is not None:
+        import calendar
+
+        ttl_exp = float(calendar.timegm(exp.timetuple()))
+    else:
+        ttl_exp = now + 3000.0  # tokens live ~1h; be conservative
+    _vertex_token_cache.update(tok=creds.token, exp=ttl_exp)
+    return creds.token
+
+
+def _vertex_host(location: str) -> str:
+    return (
+        "aiplatform.googleapis.com"
+        if location == "global"
+        else f"{location}-aiplatform.googleapis.com"
+    )
+
+
+def _complete_vertex(
+    system: str, user: str, max_tokens: int, model: str | None = None
+) -> str:
+    import httpx
+
+    if not settings.vertex_project:
+        raise RuntimeError(
+            "BRAIN_PROVIDER=vertex needs VERTEX_PROJECT (the GCP project id)."
+        )
+    model = model or settings.vertex_model
+    loc = settings.vertex_location or "global"
+    url = (
+        f"https://{_vertex_host(loc)}/v1/projects/{settings.vertex_project}"
+        f"/locations/{loc}/publishers/google/models/{model}:generateContent"
+    )
+    body: dict = {
+        "contents": [{"role": "user", "parts": [{"text": user}]}],
+        "generationConfig": {"maxOutputTokens": max_tokens},
+    }
+    if system:
+        body["systemInstruction"] = {"parts": [{"text": system}]}
+    resp = httpx.post(
+        url,
+        json=body,
+        headers={
+            "Authorization": f"Bearer {_vertex_token()}",
+            "Content-Type": "application/json",
+        },
+        timeout=60.0,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    cands = data.get("candidates") or []
+    if not cands:
+        return ""
+    parts = (cands[0].get("content") or {}).get("parts") or []
+    return "".join(p.get("text", "") for p in parts if "text" in p)
+
+
 def _dispatch_complete(
     provider: str, system: str, user: str, max_tokens: int, model: str | None
 ) -> str:
@@ -118,6 +218,8 @@ def _dispatch_complete(
         return _complete_anthropic(system, user, max_tokens, model)
     if provider in _OPENAI_COMPAT:
         return _complete_groq(system, user, max_tokens, model, provider=provider)
+    if provider == "vertex":
+        return _complete_vertex(system, user, max_tokens, model)
     if provider == "ollama":
         return _complete_ollama(system, user, max_tokens)
     if provider == "stub":

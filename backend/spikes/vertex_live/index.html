@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Laura — Gemini Live spike</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 640px;
+         margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+  h1 { font-size: 1.3rem; }
+  .muted { opacity: .7; font-size: .9rem; }
+  button { font-size: 1rem; padding: 10px 18px; border-radius: 10px;
+           border: 1px solid currentColor; background: transparent; cursor: pointer; }
+  button:disabled { opacity: .4; cursor: default; }
+  #mic.on { background: #d33; color: #fff; border-color: #d33; }
+  .row { display: flex; gap: 10px; align-items: center; margin: 16px 0; flex-wrap: wrap; }
+  #status { font-weight: 600; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%;
+         background:#999; margin-right:6px; vertical-align: middle; }
+  .dot.ready { background:#2a2; } .dot.err { background:#d33; }
+  #log { border: 1px solid #8884; border-radius: 10px; padding: 12px; min-height: 120px;
+         margin-top: 12px; }
+  .sub { margin: 6px 0; } .sub b { opacity:.7; font-weight:600; }
+  .you { color:#37c; } .laura { color:#a4a; }
+  input[type=text] { flex:1; min-width: 180px; font-size: 1rem; padding: 9px 12px;
+                     border-radius: 10px; border: 1px solid #8886; background: transparent; }
+</style>
+</head>
+<body>
+  <h1>🎙️ Laura — Gemini Live <span class="muted">(spike)</span></h1>
+  <p class="muted">Parla e Laura ti risponde a voce in tempo reale
+    (<code>gemini-live-2.5-flash</code> su Vertex). Non tocca il path live di Laura.</p>
+
+  <div class="row">
+    <span id="status"><span class="dot" id="dot"></span>connessione…</span>
+  </div>
+  <div class="row">
+    <button id="mic" disabled>🎤 Parla</button>
+    <button id="stop" disabled>⏹ Stop</button>
+  </div>
+  <div class="row">
+    <input type="text" id="txt" placeholder="…o scrivi un messaggio (test senza mic)" disabled />
+    <button id="send" disabled>Invia</button>
+  </div>
+
+  <div id="log"></div>
+
+<script>
+const WS_URL = `ws://${location.hostname}:8778`;
+let ws, capCtx, processor, micStream, playCtx, nextTime = 0, sources = [], micOn = false;
+
+const $ = (id) => document.getElementById(id);
+function setStatus(text, cls) { $('status').innerHTML =
+  `<span class="dot ${cls||''}" id="dot"></span>${text}`; }
+function addSub(who, text) {
+  const el = document.createElement('div');
+  el.className = 'sub ' + (who === 'you' ? 'you' : 'laura');
+  el.innerHTML = `<b>${who === 'you' ? 'Tu' : 'Laura'}:</b> ${text}`;
+  $('log').appendChild(el); $('log').scrollTop = $('log').scrollHeight;
+}
+
+// ── audio helpers ──────────────────────────────────────────────────────
+function f32ToPcm16Base64(f32) {
+  const buf = new ArrayBuffer(f32.length * 2), view = new DataView(buf);
+  for (let i = 0; i < f32.length; i++) {
+    let s = Math.max(-1, Math.min(1, f32[i]));
+    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  const bytes = new Uint8Array(buf); let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000)
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+function base64ToF32(b64) {
+  const bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const view = new DataView(bytes.buffer), n = (bin.length / 2) | 0, f32 = new Float32Array(n);
+  for (let i = 0; i < n; i++) f32[i] = view.getInt16(i * 2, true) / 0x8000;
+  return f32;
+}
+function playChunk(f32) {              // Gemini streams PCM 24 kHz
+  if (!playCtx) playCtx = new AudioContext();
+  const buf = playCtx.createBuffer(1, f32.length, 24000);
+  buf.getChannelData(0).set(f32);
+  const src = playCtx.createBufferSource();
+  src.buffer = buf; src.connect(playCtx.destination);
+  const now = playCtx.currentTime;
+  if (nextTime < now) nextTime = now + 0.04;
+  src.start(nextTime); nextTime += buf.duration;
+  sources.push(src);
+  src.onended = () => { sources = sources.filter((s) => s !== src); };
+}
+function stopPlayback() {              // barge-in
+  sources.forEach((s) => { try { s.stop(); } catch (e) {} });
+  sources = []; nextTime = 0;
+}
+
+// ── mic capture (PCM 16 kHz) ───────────────────────────────────────────
+async function startMic() {
+  micStream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
+  capCtx = new AudioContext({ sampleRate: 16000 });
+  const src = capCtx.createMediaStreamSource(micStream);
+  processor = capCtx.createScriptProcessor(4096, 1, 1);
+  const mute = capCtx.createGain(); mute.gain.value = 0;
+  src.connect(processor); processor.connect(mute); mute.connect(capCtx.destination);
+  processor.onaudioprocess = (e) => {
+    if (!ws || ws.readyState !== 1 || !micOn) return;
+    ws.send(JSON.stringify({ type: 'audio', data: f32ToPcm16Base64(e.inputBuffer.getChannelData(0)) }));
+  };
+}
+function stopMic() {
+  micOn = false;
+  if (processor) { processor.disconnect(); processor.onaudioprocess = null; }
+  if (capCtx) capCtx.close().catch(() => {});
+  if (micStream) micStream.getTracks().forEach((t) => t.stop());
+  processor = capCtx = micStream = null;
+}
+
+// ── wiring ─────────────────────────────────────────────────────────────
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'ready') {
+      setStatus('pronta — premi Parla o scrivi', 'ready');
+      ['mic', 'txt', 'send'].forEach((id) => ($(id).disabled = false));
+    } else if (m.type === 'audio') {
+      playChunk(base64ToF32(m.data));
+    } else if (m.type === 'interrupted') {
+      stopPlayback();
+    } else if (m.type === 'subtitle') {
+      addSub(m.who, m.text);
+    } else if (m.type === 'error') {
+      setStatus('errore: ' + m.message, 'err');
+    }
+  };
+  ws.onclose = () => setStatus('connessione chiusa — ricarica la pagina', 'err');
+  ws.onerror = () => setStatus('errore websocket — è avviato server.py?', 'err');
+}
+
+$('mic').onclick = async () => {
+  if (playCtx) await playCtx.resume?.();
+  await startMic(); micOn = true;
+  $('mic').classList.add('on'); $('mic').disabled = true; $('stop').disabled = false;
+  setStatus('in ascolto… parla pure', 'ready');
+};
+$('stop').onclick = () => {
+  stopMic(); stopPlayback();
+  $('mic').classList.remove('on'); $('mic').disabled = false; $('stop').disabled = true;
+  setStatus('pronta', 'ready');
+};
+function sendText() {
+  const t = $('txt').value.trim(); if (!t || !ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type: 'text', text: t }));
+  addSub('you', t); $('txt').value = '';
+}
+$('send').onclick = sendText;
+$('txt').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendText(); });
+
+connect();
+</script>
+</body>
+</html>
