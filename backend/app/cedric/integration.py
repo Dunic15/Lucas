@@ -47,6 +47,12 @@ class MeetingContext(BaseModel):
 
     meeting: dict = {}          # title, starts_at, ends_at, organizer, attendees
     brief_markdown: str = ""    # the assembled pre-meeting brief
+    # Optional per-meeting MISSION (admin objective for THIS call): an aim the
+    # avatar keeps in mind and RESURFACES if left unmet ("on an investor call, if
+    # they haven't covered market size, raise it"). Overrides the avatar's default
+    # mission (avatar.yaml). "" = no per-meeting mission = the avatar default (or,
+    # if that too is empty, today's behaviour exactly).
+    mission: str = ""
 
 
 def auth_error(request: Request) -> Optional[JSONResponse]:
@@ -235,6 +241,8 @@ def build_integration(req: Any, brief: str) -> Optional[dict]:
         "external_ref": req.external_ref or default_external_ref(),
         "brief": brief,
         "meeting": (req.context.meeting if req.context else {}) or {},
+        # Per-meeting mission (admin objective) carried on the session, if any.
+        "mission": (req.context.mission if req.context else "") or "",
         "context_refreshed": False,
     }
 
@@ -270,6 +278,7 @@ def default_integration() -> Optional[dict]:
         "external_ref": default_external_ref(),
         "brief": "",
         "meeting": {},
+        "mission": "",
         "context_refreshed": False,
     }
 
@@ -467,3 +476,12 @@ def inject_brief(session: Any, memory: str) -> str:
             f"MEETING BRIEF (from the orchestrator):\n{brief}\n\n{memory}".strip()
         )
     return memory
+
+
+def resolve_mission(session: Any) -> str:
+    """The per-meeting mission set on THIS session (MeetingContext.mission,
+    carried on ``integration``), or "" when none was set. The caller falls back
+    to the avatar's default mission (avatar.yaml) — so a per-session mission
+    wins, an avatar default applies otherwise, and neither means today's
+    behaviour exactly."""
+    return ((session.integration or {}).get("mission", "") if session else "") or ""

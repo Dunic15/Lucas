@@ -25,6 +25,7 @@ Public surface:
                             first-transcript trigger)
   - notify_action_requested — fire action.requested when queue_action captures
   - inject_brief        — fold the meeting brief into the live prompt memory
+  - resolve_mission     — the per-session mission (MeetingContext.mission), if any
   - provision_org       — register an org→workspace link (Connect the brain)
   - revoke_org          — detach the org on the orchestrator (disconnect)
   - fetch_org_connectors — what the brain can touch (Configure tab bridge)
@@ -50,5 +51,6 @@ from .integration import (  # noqa: F401
     provisioning_auth_ok,
     request_integration_urls_allowed,
     resolve_machine_org,
+    resolve_mission,
     wire_artifact,
 )

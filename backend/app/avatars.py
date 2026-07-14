@@ -61,6 +61,21 @@ class Avatar:
     face_fallback: str = "talk"
     talk_model: str = ""
     photoreal_reference: str = ""
+    # Optional standing MISSION for this avatar's meetings — an objective she
+    # keeps in mind and RESURFACES if left unmet ("on an investor call, if they
+    # haven't covered market size, raise it"). A per-session mission
+    # (MeetingContext.mission) overrides this default. "" = no mission = today's
+    # behaviour exactly. Folded into the live + closing prompts as an instruction,
+    # never a gate: turn-taking / hand-raise still decide WHEN she may speak, so
+    # she never barges in.
+    mission: str = ""
+    # Optional DETERMINISTIC TASK HINTS: recognizable asks this avatar can act on,
+    # each a {name, triggers[], action} dict. They BIAS post-meeting action
+    # capture so an agreed, recognized ask is extracted as that typed action
+    # instead of pure LLM improv. Finalize-only (never on the live path); the
+    # transcript-evidence filter still applies, so a hint can never fabricate an
+    # action the transcript doesn't support. [] = no hints = unchanged.
+    tasks: list[dict] = None  # type: ignore[assignment]
 
     @property
     def page(self) -> str:
@@ -128,6 +143,34 @@ def _coalesce(value, fallback):
     return fallback if value in (None, "") else value
 
 
+def _normalize_tasks(raw_tasks) -> list[dict]:
+    """avatar.yaml ``tasks`` -> a clean list of ``{name, triggers[], action}``.
+
+    Deterministic task hints: recognizable asks this avatar can act on. Each
+    entry is a dict with a ``name``, one or more ``triggers`` (phrases that signal
+    the ask), and the ``action`` intent to record. Malformed or trigger-less
+    entries are dropped so a typo can never inject a blank hint; a missing/blank
+    ``tasks`` yields ``[]`` (behaviour identical to an avatar with no tasks)."""
+    out: list[dict] = []
+    for entry in raw_tasks or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        action = str(entry.get("action") or "").strip()
+        raw_triggers = entry.get("triggers") or entry.get("trigger") or []
+        if isinstance(raw_triggers, str):
+            raw_triggers = [raw_triggers]
+        triggers = [str(t).strip() for t in raw_triggers if str(t).strip()]
+        # A hint needs something to recognize (triggers) and something to record
+        # (an action or at least a name) — otherwise it can't bias anything.
+        if not triggers or not (name or action):
+            continue
+        out.append(
+            {"name": name or action, "triggers": triggers, "action": action or name}
+        )
+    return out
+
+
 # Config cache. The live webhook loads the avatar on EVERY transcript event —
 # and partial events arrive several times a second while anyone talks — so an
 # uncached YAML read is sync disk I/O on the hot path. Keyed by path + mtime:
@@ -189,6 +232,8 @@ def load(avatar_id: str) -> Avatar:
         photoreal_reference=str(
             _coalesce(raw.get("photoreal_reference"), f"reference-{avatar_id}.jpg")
         ).strip(),
+        mission=(raw.get("mission") or "").strip(),
+        tasks=_normalize_tasks(raw.get("tasks")),
         dir=folder,
         knowledge_packs=[str(k) for k in (raw.get("knowledge_packs") or [])],
     )
