@@ -56,6 +56,10 @@ _GEMINI_WS_URL = (
 # utterance seen within this many seconds. Beyond it, attribution is unsafe.
 _SPEAKER_WINDOW_S = 12.0
 _RING_MAX = 16
+# The relay is considered "delivering" for this long after its last turn POST.
+# While active, raw Recall finals are suppressed; when it goes quiet (relay or
+# Gemini died), suppression lifts and Recall drives the meeting again.
+_RELAY_ACTIVE_WINDOW = 20.0
 _AUDIO_QUEUE_MAX = 200  # ~20s of 100ms frames; drop-oldest beyond (never block)
 _MAX_RECONNECTS = 5
 
@@ -117,6 +121,17 @@ class EarsSession:
     _queue: asyncio.Queue | None = None
     _task: asyncio.Task | None = None
     _closed: bool = False
+    # RELAY architecture (App Runner can't accept inbound WS, so the Gemini
+    # session runs in a Cloudflare Worker; the backend keeps only this light
+    # state). Set every time the relay POSTs a turn — drives suppression:
+    # raw Recall finals are suppressed only while the relay is actively
+    # delivering, and resume the instant it goes quiet (failover).
+    relay_active_at: float = 0.0
+
+    def relay_active(self) -> bool:
+        return bool(self.relay_active_at) and (
+            time.time() - self.relay_active_at < _RELAY_ACTIVE_WINDOW
+        )
 
     # ── lifecycle ──────────────────────────────────────────────────────
 
@@ -361,6 +376,8 @@ class EarsSession:
         m = self.metrics
         return {
             "mode": mode(),
+            "relay_active": self.relay_active(),  # CF relay delivering turns?
+            "last_turn_ago_s": round(time.time() - m.last_turn_at, 1) if m.last_turn_at else None,
             "healthy": self.healthy,
             "connected": m.connected,
             "audio_frames": m.audio_frames,
@@ -406,10 +423,37 @@ def stop_session(bot_id: str) -> None:
         s.close()
 
 
-def observe_recall_final(bot_id: str, speaker: str) -> None:
+def _ensure_state(bot_id: str, capability: str = "", avatar_name: str = "Laura") -> EarsSession:
+    """Light per-bot state holder (ring + metrics + relay-active), NO local
+    Gemini task — in the relay architecture the Gemini session runs in the
+    Cloudflare Worker, and the backend only tracks attribution + suppression."""
     s = _sessions.get(bot_id)
-    if s is not None:
-        s.observe_recall(speaker)
+    if s is None or s._closed:
+        s = EarsSession(bot_id=bot_id, capability=capability, avatar_name=avatar_name)
+        _sessions[bot_id] = s
+    return s
+
+
+def observe_recall_final(bot_id: str, speaker: str) -> None:
+    # Auto-create the light state on the first Recall final so the ring exists
+    # for later relay-turn attribution (the relay hears mixed audio and can't
+    # attribute speakers itself).
+    _ensure_state(bot_id).observe_recall(speaker)
+
+
+def note_relay_turn(bot_id: str) -> None:
+    """Mark that the Cloudflare relay just delivered a turn for this bot."""
+    s = _ensure_state(bot_id)
+    s.relay_active_at = time.time()
+    s.metrics.turns += 1
+    s.metrics.synthesized_finals += 1
+    s.metrics.last_turn_at = time.time()
+
+
+def attribute_speaker(bot_id: str) -> str:
+    """Best-effort speaker for a relay turn, from this bot's Recall-final ring."""
+    s = _sessions.get(bot_id)
+    return s._match_speaker() if s is not None else ""
 
 
 def should_suppress_recall_final(bot_id: str, payload: dict) -> bool:
@@ -425,7 +469,11 @@ def should_suppress_recall_final(bot_id: str, payload: dict) -> bool:
     if payload.get("laura_ears"):
         return False
     s = _sessions.get(bot_id)
-    return s is not None and s.healthy
+    # Relay architecture: "active" = the Cloudflare relay POSTed a turn within
+    # the last _RELAY_ACTIVE_WINDOW seconds. If it goes quiet (relay down, or
+    # Gemini dropped and Recall hasn't reconnected the audio WS), suppression
+    # lifts and raw Recall finals drive the meeting again.
+    return s is not None and s.relay_active()
 
 
 def status() -> dict:

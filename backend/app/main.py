@@ -62,6 +62,7 @@ from . import (
     granola_client,
     actions,
     gmail_watcher,
+    llm,
     autopilot,
     gpu_runtime,
     runpod_runtime,
@@ -4292,6 +4293,54 @@ def gemini_ears_status() -> JSONResponse:
     return JSONResponse(gemini_ears.status())
 
 
+@app.get("/internal/ears-config/{capability}")
+async def ears_config(capability: str, request: Request) -> JSONResponse:
+    """Per-session config + a fresh Vertex token for the Cloudflare ears relay.
+
+    The relay (which accepts Recall's audio WS that App Runner can't) calls this
+    with the per-bot capability to learn the mode/model/persona and get a token
+    to open the Gemini Live session. Bearer-protected with LAURA_API_TOKEN; the
+    capability itself binds the response to exactly one bot. No transcript/PII
+    here — only config + a short-lived token.
+    """
+    expected = settings.laura_api_token.strip()
+    got = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+    if not expected or not hmac.compare_digest(got, expected):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if not gemini_ears.enabled():
+        return JSONResponse({"enabled": False, "reason": "ears off"})
+    bot_id = await run_in_threadpool(
+        store.resolve_recall_realtime_capability, capability
+    )
+    if not bot_id:
+        return JSONResponse({"error": "invalid capability"}, status_code=404)
+    session = store.get(bot_id)
+    persona = "Laura"
+    if session is not None:
+        try:
+            persona = avatars.load(session.avatar_id).name
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        token = await run_in_threadpool(llm._vertex_token)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"token: {type(e).__name__}"}, status_code=502)
+    # Prime the light per-bot state so the ring/attribution exist immediately.
+    gemini_ears._ensure_state(bot_id, capability, persona)
+    return JSONResponse(
+        {
+            "enabled": True,
+            "mode": gemini_ears.mode(),
+            "bot_id": bot_id,
+            "project": settings.vertex_project,
+            "location": settings.vertex_location or "us-central1",
+            "live_model": settings.vertex_live_model,
+            "persona": persona,
+            "vertex_token": token,
+        }
+    )
+
+
 @app.post("/webhooks/recall")
 async def recall_webhook(request: Request) -> JSONResponse:
     # Recall realtime endpoints are unsigned. Production bot URLs therefore
@@ -4556,6 +4605,19 @@ async def recall_webhook(request: Request) -> JSONResponse:
     words = data.get("words", [])
     text = " ".join(w.get("text", "") for w in words).strip()
     participant = data.get("participant") or {}
+    # ── Gemini ears RELAY turn: attribute the speaker here ──
+    # The Cloudflare relay hears mixed audio and can't tell WHO spoke, so its
+    # synthesized final arrives with no participant name. Attribute it from the
+    # backend's own Recall-final ring (most recent human within the window);
+    # fall back to a generic label so the turn still drives the pipeline. Also
+    # mark the relay active (drives suppression/failover of raw Recall finals).
+    if payload.get("laura_ears"):
+        gemini_ears.note_relay_turn(bot_id)
+        if not participant.get("name"):
+            participant = {
+                **participant,
+                "name": gemini_ears.attribute_speaker(bot_id) or "Partecipante",
+            }
     identity = session.resolve_participant(
         participant.get("name"),
         participant.get("id"),
