@@ -1676,7 +1676,10 @@ async def google_oauth_callback(
         print(f"[oauth] native token persist skipped ({type(e).__name__})", flush=True)
 
     try:
-        calendar = await run_in_threadpool(
+        # Side-effecting: registers Laura's calendar with Recall for auto-join.
+        # The returned record is no longer surfaced (the callback now redirects to
+        # the dashboard), so we don't bind it.
+        await run_in_threadpool(
             lambda: recall_client.create_calendar(
                 oauth_client_id=settings.google_calendar_client_id,
                 oauth_client_secret=settings.google_calendar_client_secret,
@@ -1691,14 +1694,39 @@ async def google_oauth_callback(
     except Exception as e:
         return JSONResponse({"error": f"Recall calendar creation failed: {e}"}, status_code=400)
 
+    # Land back on the dashboard so the "Google (native)" capability toggle
+    # live-refreshes on the next summary load — exactly like the ?brain= Slack
+    # return. This is an OAuth redirect target (the browser follows it), never an
+    # API a program consumes, so the calendar_id JSON is not needed here; the
+    # per-org native refresh token is already persisted above.
+    return RedirectResponse("/dashboard?google=connected", status_code=302)
+
+
+@app.post("/oauth/google/disconnect")
+async def google_oauth_disconnect(request: Request) -> JSONResponse:
+    """Disconnect Laura's NATIVE Google (Calendar + Gmail) for the owner's org.
+
+    Fully independent of the Cedric/Slack add-on: this clears ONLY the per-org
+    native refresh token the executor uses (``store.clear_org_oauth``), so a user
+    can drop native Google while keeping Slack — or have neither/both. Owner-authed
+    and same-origin, like the brain disconnect. The Recall calendar auto-join is a
+    separate capability and is intentionally left untouched. Pure SQLite delete
+    keyed by the org_id string — no ``::uuid`` cast, so it never trips the
+    u_hash/uuid split-brain."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    cleared = await run_in_threadpool(store.clear_org_oauth, user["org_id"])
     return JSONResponse(
         {
             "ok": True,
-            "calendar_id": calendar.get("id"),
-            "calendar_status": calendar.get("status"),
-            "connected_email": oauth_email or None,
-            "invite_filter": sorted(targets),
-            "webhook_url": f"{settings.public_base_url.rstrip('/')}/webhooks/recall-calendar",
+            "provider": "google",
+            "status": "disconnected",
+            "cleared": bool(cleared),
         }
     )
 

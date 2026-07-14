@@ -1878,6 +1878,25 @@ def get_org_oauth(org_id: str, *, provider: str = "google") -> dict | None:
     }
 
 
+def clear_org_oauth(org_id: str, *, provider: str = "google") -> bool:
+    """Delete an org's stored OAuth for a provider — the NATIVE disconnect.
+
+    Removes the encrypted per-org refresh token so the native executor can no
+    longer act on that Google account. Returns True when a row was removed,
+    False for an empty org or a no-op (nothing was connected). Pure SQLite,
+    keyed by the org_id string — no ``::uuid`` cast, so it is safe for both the
+    u_hash session orgs and durable uuid orgs (no split-brain crash)."""
+    org = (org_id or "").strip()
+    if not org:
+        return False
+    with _LOCK, _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM org_oauth WHERE org_id=? AND provider=?",
+            (org, provider),
+        )
+    return cur.rowcount > 0
+
+
 def register_recall_realtime_capability(bot_id: str, capability: str) -> bool:
     """Persist a one-bot realtime capability as SHA-256(raw).
 

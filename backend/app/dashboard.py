@@ -546,6 +546,18 @@ def dashboard_summary(request: Request) -> JSONResponse:
             "meetings": bool(settings.recall_api_key),
         }
 
+    # NATIVE Google — Laura's OWN Google OAuth (Calendar + Gmail write scopes),
+    # the engine behind the native executor. This is the ONLY signal the "Google
+    # (native)" capability toggle reads — deliberately NOT the Cedric connector
+    # rows above (calendar/gmail there mean a Cedric/Pipedream connector, a
+    # different, optional path). Connected == a per-org refresh token is stored
+    # by /oauth/google/callback. Keyed on the caller's org, else the demo/owner
+    # org (matching where the callback persists it). Pure SQLite read, no
+    # ::uuid cast → safe for u_hash and uuid orgs alike. Bool, so it satisfies
+    # the "connections values are all bool" contract.
+    native_google_org = caller_org or settings.demo_org_id
+    connections["google_native"] = bool(store.get_org_oauth(native_google_org))
+
     callback_deliveries = outbox.delivery_rows(
         caller_org or settings.demo_org_id
     )
