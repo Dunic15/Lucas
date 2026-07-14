@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Laura — Design B (Gemini ears + gate + ElevenLabs)</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 680px;
+         margin: 36px auto; padding: 0 20px; line-height: 1.5; }
+  h1 { font-size: 1.25rem; margin-bottom: 2px; }
+  .flow { font-size: .82rem; opacity: .7; margin: 0 0 18px; }
+  .muted { opacity: .7; font-size: .9rem; }
+  button { font-size: 1rem; padding: 10px 18px; border-radius: 10px;
+           border: 1px solid currentColor; background: transparent; cursor: pointer; }
+  button:disabled { opacity: .4; cursor: default; }
+  #mic.on { background: #d33; color: #fff; border-color: #d33; }
+  .row { display: flex; gap: 10px; align-items: center; margin: 14px 0; flex-wrap: wrap; }
+  #status { font-weight: 600; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%;
+         background:#999; margin-right:6px; vertical-align: middle; }
+  .dot.ready { background:#2a2; } .dot.err { background:#d33; }
+  #log { border: 1px solid #8884; border-radius: 12px; padding: 12px; min-height: 160px; margin-top: 10px; }
+  .turn { padding: 8px 0; border-bottom: 1px solid #8882; }
+  .turn:last-child { border-bottom: 0; }
+  .you { color:#37c; font-weight:600; }
+  .laura { color:#a4a; font-weight:600; }
+  .badge { display:inline-block; font-size:.72rem; padding:2px 8px; border-radius:10px;
+           margin-left:8px; vertical-align:middle; }
+  .badge.ok { background:#2a72; color:#2a7; } .badge.hold { background:#d732; color:#d73; }
+  input[type=text] { flex:1; min-width: 180px; font-size: 1rem; padding: 9px 12px;
+                     border-radius: 10px; border: 1px solid #8886; background: transparent; }
+  label.chk { font-size:.9rem; opacity:.85; display:flex; align-items:center; gap:6px; }
+</style>
+</head>
+<body>
+  <h1>🎙️ Laura — <span class="muted">Design B</span></h1>
+  <p class="flow">Gemini <b>ascolta</b> (orecchie + turni) → <b>decision.detect_wake</b> (il gate di Laura) → <b>ElevenLabs</b> parla con la voce di Laura</p>
+
+  <div class="row"><span id="status"><span class="dot" id="dot"></span>connessione…</span></div>
+  <div class="row">
+    <button id="mic" disabled>🎤 Parla</button>
+    <button id="stop" disabled>⏹ Stop</button>
+    <label class="chk"><input type="checkbox" id="wake" /> richiedi «Laura» (attiva il gate)</label>
+  </div>
+  <div class="row">
+    <input type="text" id="txt" placeholder="…o scrivi (prova: «Laura, riassumi» vs «riassumi»)" disabled />
+    <button id="send" disabled>Invia</button>
+  </div>
+
+  <div id="log"></div>
+
+<script>
+const WS_URL = `ws://${location.hostname}:8780`;
+let ws, capCtx, processor, micStream, playCtx, micOn = false;
+const $ = (id) => document.getElementById(id);
+function setStatus(t, cls) { $('status').innerHTML = `<span class="dot ${cls||''}"></span>${t}`; }
+
+let curTurn = null;
+function turnEl() {
+  const el = document.createElement('div'); el.className = 'turn';
+  $('log').appendChild(el); $('log').scrollTop = $('log').scrollHeight; return el;
+}
+
+// ── audio in (PCM 16 kHz) ──────────────────────────────────────────────
+function f32ToPcm16Base64(f32) {
+  const buf = new ArrayBuffer(f32.length * 2), v = new DataView(buf);
+  for (let i = 0; i < f32.length; i++) { let s = Math.max(-1, Math.min(1, f32[i]));
+    v.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true); }
+  const b = new Uint8Array(buf); let s = '';
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+async function startMic() {
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  capCtx = new AudioContext({ sampleRate: 16000 });
+  const src = capCtx.createMediaStreamSource(micStream);
+  processor = capCtx.createScriptProcessor(4096, 1, 1);
+  const mute = capCtx.createGain(); mute.gain.value = 0;
+  src.connect(processor); processor.connect(mute); mute.connect(capCtx.destination);
+  processor.onaudioprocess = (e) => {
+    if (!ws || ws.readyState !== 1 || !micOn) return;
+    ws.send(JSON.stringify({ type: 'audio', data: f32ToPcm16Base64(e.inputBuffer.getChannelData(0)) }));
+  };
+}
+function stopMic() {
+  micOn = false;
+  if (processor) { processor.disconnect(); processor.onaudioprocess = null; }
+  if (capCtx) capCtx.close().catch(() => {});
+  if (micStream) micStream.getTracks().forEach((t) => t.stop());
+  processor = capCtx = micStream = null;
+}
+
+// ── voice out (ElevenLabs mp3) ─────────────────────────────────────────
+async function playMp3(b64) {
+  if (!playCtx) playCtx = new AudioContext();
+  await playCtx.resume?.();
+  const bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const buf = await playCtx.decodeAudioData(bytes.buffer);
+  const src = playCtx.createBufferSource(); src.buffer = buf;
+  src.connect(playCtx.destination); src.start();
+}
+
+// ── wiring ─────────────────────────────────────────────────────────────
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'ready') {
+      setStatus(`pronta — voce ElevenLabs ${m.voice ? '✓' : '✗ (manca key)'}`, 'ready');
+      ['mic', 'txt', 'send'].forEach((id) => ($(id).disabled = false));
+    } else if (m.type === 'user') {
+      curTurn = turnEl();
+      curTurn.innerHTML = `<span class="you">Tu:</span> ${m.text || '<i>(silenzio)</i>'}`;
+    } else if (m.type === 'gate') {
+      const badge = m.addressed
+        ? `<span class="badge ok">gate: rivolto a Laura ✓</span>`
+        : `<span class="badge hold">gate: non rivolta a Laura${m.require_wake ? ' — resta zitta' : ''}</span>`;
+      if (curTurn) curTurn.innerHTML += badge;
+    } else if (m.type === 'silent') {
+      if (curTurn) curTurn.innerHTML += ` <i class="muted">(il gate l'ha trattenuta)</i>`;
+    } else if (m.type === 'reply') {
+      const el = turnEl(); el.innerHTML = `<span class="laura">Laura:</span> ${m.text} <span class="muted">🔊…</span>`;
+    } else if (m.type === 'tts_audio') {
+      playMp3(m.data);
+    } else if (m.type === 'error') {
+      setStatus('errore: ' + m.message, 'err');
+    }
+  };
+  ws.onclose = () => setStatus('connessione chiusa — ricarica', 'err');
+  ws.onerror = () => setStatus('errore websocket — è avviato server.py?', 'err');
+}
+
+$('wake').onchange = () => ws && ws.readyState === 1 &&
+  ws.send(JSON.stringify({ type: 'config', require_wake: $('wake').checked }));
+$('mic').onclick = async () => {
+  if (!playCtx) playCtx = new AudioContext(); await playCtx.resume?.();
+  await startMic(); micOn = true;
+  $('mic').classList.add('on'); $('mic').disabled = true; $('stop').disabled = false;
+  setStatus('in ascolto… parla pure', 'ready');
+};
+$('stop').onclick = () => {
+  stopMic(); $('mic').classList.remove('on'); $('mic').disabled = false; $('stop').disabled = true;
+  setStatus('pronta', 'ready');
+};
+function sendText() {
+  const t = $('txt').value.trim(); if (!t || !ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type: 'text', text: t })); $('txt').value = '';
+}
+$('send').onclick = sendText;
+$('txt').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendText(); });
+connect();
+</script>
+</body>
+</html>

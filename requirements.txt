@@ -13,6 +13,10 @@ pyyaml>=6.0
 # The free stub/ollama paths and the whole demo run without it.
 anthropic>=0.40
 
+# Optional — only needed for the Gemini-on-Vertex brain (BRAIN_PROVIDER=vertex).
+# Lazy-imported in llm.py, so nothing else (nor the tests) requires it.
+google-auth>=2.0
+
 # PDF ingestion (drop a PDF into an avatar knowledge/ folder)
 pypdf>=4.0
 

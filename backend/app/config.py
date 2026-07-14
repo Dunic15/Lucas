@@ -61,6 +61,20 @@ class Settings(BaseSettings):
     cerebras_api_key: str = ""
     cerebras_base: str = "https://api.cerebras.ai/v1"
 
+    # Vertex AI (Google Gemini) — brain provider that bills to GCP, so it can run
+    # on Google Cloud credits (the GCP Free Trial does NOT cover the AI Studio
+    # Gemini API, but DOES cover Vertex AI). Opt-in: BRAIN_PROVIDER=vertex. Auth
+    # via a service account with roles/aiplatform.user — set
+    # GOOGLE_APPLICATION_CREDENTIALS to its JSON, or rely on ADC. The live spoken
+    # path stays on cerebras/anthropic; this is for the text brain (and free-tier
+    # experimentation). gemini-3.5-flash requires VERTEX_LOCATION=global.
+    vertex_project: str = ""              # GCP project id, e.g. "868562221752"
+    vertex_location: str = "global"       # "global" serves 3.x; a region also works for 2.5
+    vertex_model: str = "gemini-2.5-flash"  # brain model (set gemini-3.5-flash on global)
+    # Realtime voice (Gemini Live) — used ONLY by the standalone spike, never the
+    # live meeting path. gemini-live-2.5-flash on the global websocket host.
+    vertex_live_model: str = "gemini-live-2.5-flash"
+
     # Embeddings for RAG — pick a provider:
     #   hash   (free, offline, zero-dependency keyword vectors)  ← default
     #   local  (free, real semantic embeddings via fastembed)
