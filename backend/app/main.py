@@ -222,6 +222,13 @@ GOOGLE_CALENDAR_SCOPES = (
     # meetings knowing the team's docs. See drive_client.py. Adding a scope
     # means reconnecting once via /oauth/google/connect.
     "https://www.googleapis.com/auth/drive.readonly",
+    # WRITE scopes for the native executor (NATIVE-INTEGRATIONS-PLAN.md): create
+    # calendar events and send Gmail on the connected account. The Google consent
+    # screen lists these; a user reconnects once via /oauth/google/connect to
+    # grant them. Harmless to request even with native_executor off (the executor
+    # is what actually uses them, and it stays gated by the flag).
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/gmail.send",
 )
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 ATTENDEE_CONTAINER_KEYS = {
@@ -1573,7 +1580,7 @@ def google_oauth_connect():
 
 @app.get("/oauth/google/callback")
 async def google_oauth_callback(
-    code: str = "", state: str = "", error: str = ""
+    request: Request, code: str = "", state: str = "", error: str = ""
 ) -> JSONResponse:
     """Finish Google OAuth, then create the Recall calendar connection."""
     if error:
@@ -1646,6 +1653,25 @@ async def google_oauth_callback(
             },
             status_code=400,
         )
+
+    # Persist the refresh token per org for the NATIVE executor (encrypted at
+    # rest — store.set_org_oauth). Keyed on the connecting user's durable org,
+    # else the demo/owner org (the "Now" slice is single-owner). Best-effort:
+    # never block the existing Recall calendar connection on this write, and
+    # store it regardless of native_executor (the flag gates USE, not consent),
+    # so enabling native later needs no reconnect.
+    try:
+        _user = auth.current_user(request)
+        _org = (_user or {}).get("org_id") or settings.demo_org_id
+        await run_in_threadpool(
+            store.set_org_oauth,
+            _org,
+            refresh_token,
+            email=oauth_email,
+            scopes=" ".join(GOOGLE_CALENDAR_SCOPES),
+        )
+    except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
+        print(f"[oauth] native token persist skipped ({type(e).__name__})", flush=True)
 
     try:
         calendar = await run_in_threadpool(
