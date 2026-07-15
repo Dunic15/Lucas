@@ -17,6 +17,7 @@ Contract for every entry point:
 from __future__ import annotations
 
 import base64
+import uuid
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from typing import Any
@@ -88,6 +89,18 @@ def create_calendar_event(org_id: str, event: dict) -> dict:
         "summary": summary,
         "start": {"dateTime": start, "timeZone": tz},
         "end": {"dateTime": end, "timeZone": tz},
+        # Provision a real Google Meet conference for the event so the scheduled
+        # meeting actually has a join link (not just a bare calendar hold). The
+        # avatar + humans join THIS Meet. requestId must be unique per create
+        # call; mint it the same way the ledger mints action ids (uuid4 hex).
+        # This runs at scheduling / finalize time — off the live-meeting hot
+        # path — so a uuid here is fine (the hot-path no-uuid rule is n/a here).
+        "conferenceData": {
+            "createRequest": {
+                "requestId": uuid.uuid4().hex,
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            }
+        },
     }
     if event.get("description"):
         body["description"] = str(event["description"])
@@ -98,7 +111,9 @@ def create_calendar_event(org_id: str, event: dict) -> dict:
     try:
         resp = httpx.post(
             _CAL_INSERT,
-            params={"sendUpdates": "all"},
+            # conferenceDataVersion=1 is REQUIRED for Google to honour the
+            # createRequest and actually mint the Meet link.
+            params={"sendUpdates": "all", "conferenceDataVersion": 1},
             headers={"Authorization": f"Bearer {token}"},
             json=body,
             timeout=_TIMEOUT,
@@ -112,7 +127,30 @@ def create_calendar_event(org_id: str, event: dict) -> dict:
         "ok": True,
         "event_id": data.get("id", ""),
         "event_url": data.get("htmlLink", ""),
+        # The Meet join URL: prefer the top-level hangoutLink, else the video
+        # entry point Google returns under conferenceData. Empty string when
+        # (for any reason) no conference was provisioned — callers guard null.
+        "meet_url": _meet_url(data),
     }
+
+
+def _meet_url(data: dict) -> str:
+    """The Google Meet join URL from an events.insert response, or ""."""
+    link = str(data.get("hangoutLink") or "").strip()
+    if link:
+        return link
+    conf = data.get("conferenceData") or {}
+    entry_points = conf.get("entryPoints") or []
+    video = next(
+        (e for e in entry_points if e.get("entryPointType") == "video" and e.get("uri")),
+        None,
+    )
+    if video:
+        return str(video.get("uri") or "").strip()
+    for e in entry_points:
+        if e.get("uri"):
+            return str(e["uri"]).strip()
+    return ""
 
 
 def list_calendar_events(org_id: str, *, max_results: int = 20) -> dict:

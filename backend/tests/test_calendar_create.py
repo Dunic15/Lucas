@@ -55,8 +55,18 @@ def _mock_create(monkeypatch, sink: list, result: dict | None = None):
     def fake_create(org_id, event):
         sink.append((org_id, event))
         return result or {"ok": True, "event_id": "evt_1",
-                          "event_url": "https://calendar.google.com/e/evt_1"}
+                          "event_url": "https://calendar.google.com/e/evt_1",
+                          "meet_url": "https://meet.google.com/evt-1abc-def"}
     monkeypatch.setattr(google_client, "create_calendar_event", fake_create)
+
+
+class _Resp:
+    def __init__(self, code: int, payload: dict):
+        self.status_code = code
+        self._p = payload
+
+    def json(self) -> dict:
+        return self._p
 
 
 def _future_iso(hours: int = 2) -> str:
@@ -95,6 +105,53 @@ def test_create_event_owner_creates(client, monkeypatch):
     assert event["title"] == "Board sync"
     assert event["start"] and event["end"]
     assert "attendees" not in event  # no avatar / explicit attendees
+    # the endpoint surfaces the Meet link the executor returns.
+    assert body["meet_url"] == "https://meet.google.com/evt-1abc-def"
+
+
+# ── scheduled event provisions a real Google Meet link (FIX A) ──────────
+
+def test_create_event_provisions_google_meet(client, monkeypatch):
+    """End-to-end (only httpx mocked, the REAL create_calendar_event runs): the
+    outgoing events.insert asks Google for a Meet conference (conferenceData
+    .createRequest + conferenceDataVersion=1) and the endpoint returns the
+    resulting hangoutLink as meet_url."""
+    user = _login(client)
+    store.set_org_oauth(user["org_id"], "rt-user", email="me@example.com")
+    monkeypatch.setattr(settings, "google_calendar_client_id", "cid")
+    monkeypatch.setattr(settings, "google_calendar_client_secret", "csec")
+
+    captured: dict = {}
+
+    def fake_post(url, **kw):
+        if url.endswith("/token"):
+            return _Resp(200, {"access_token": "at-1"})
+        if "calendar" in url:
+            captured["params"] = kw.get("params")
+            captured["json"] = kw.get("json")
+            return _Resp(200, {
+                "id": "evt_meet",
+                "htmlLink": "https://calendar.google.com/e/evt_meet",
+                "hangoutLink": "https://meet.google.com/xyz-abcd-efg",
+            })
+        return _Resp(404, {})
+
+    monkeypatch.setattr(google_client.httpx, "post", fake_post)
+
+    r = client.post("/dashboard/calendar/event",
+                    json={"title": "Board sync", "start": _future_iso(),
+                          "duration_min": 30})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    # the mocked hangoutLink flows back to the UI as meet_url.
+    assert body["meet_url"] == "https://meet.google.com/xyz-abcd-efg"
+    # conferenceDataVersion=1 is REQUIRED for Google to honour the createRequest.
+    assert captured["params"]["conferenceDataVersion"] == 1
+    # the outgoing body asks for a hangoutsMeet conference with a unique id.
+    cr = captured["json"]["conferenceData"]["createRequest"]
+    assert cr["requestId"]
+    assert cr["conferenceSolutionKey"]["type"] == "hangoutsMeet"
 
 
 # ── avatar_id adds the +tag invite alias so it auto-joins ───────────────
