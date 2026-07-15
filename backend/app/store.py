@@ -558,6 +558,17 @@ def _init_db() -> None:
                 saved_at REAL NOT NULL
             );
 
+            -- Per-avatar brain choice (dashboard toggle): "gemini" (tutto-Gemini
+            -- via the ears relay) or "cerebras" (the normal Deepgram+brain path).
+            -- Read at bot-start and in the webhook; changes take effect on the
+            -- NEXT meeting with no redeploy. Absent row = the global default
+            -- (settings.gemini_ears_mode).
+            CREATE TABLE IF NOT EXISTS avatar_brain_mode (
+                avatar_id TEXT PRIMARY KEY,
+                brain_mode TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS scheduled_events (
                 event_id TEXT PRIMARY KEY,
                 org_id TEXT NOT NULL DEFAULT '{demo}',
@@ -1938,6 +1949,48 @@ def register_recall_realtime_capability(bot_id: str, capability: str) -> bool:
             (digest, bot, time.time()),
         )
     return True
+
+
+_VALID_BRAIN_MODES = {"gemini", "cerebras"}
+
+
+def set_avatar_brain_mode(avatar_id: str, brain_mode: str) -> bool:
+    """Set an avatar's brain: "gemini" (relay) or "cerebras" (normal). Persisted
+    (Litestream-replicated), read on the NEXT meeting — no redeploy."""
+    aid = (avatar_id or "").strip()
+    mode = (brain_mode or "").strip().lower()
+    if not aid or mode not in _VALID_BRAIN_MODES:
+        return False
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            "INSERT INTO avatar_brain_mode (avatar_id, brain_mode, updated_at) "
+            "VALUES (?, ?, ?) ON CONFLICT(avatar_id) DO UPDATE SET "
+            "brain_mode = excluded.brain_mode, updated_at = excluded.updated_at",
+            (aid, mode, time.time()),
+        )
+    return True
+
+
+def get_avatar_brain_mode(avatar_id: str) -> str | None:
+    """The avatar's explicit brain choice, or None if it has never been set
+    (caller falls back to the global default)."""
+    aid = (avatar_id or "").strip()
+    if not aid:
+        return None
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT brain_mode FROM avatar_brain_mode WHERE avatar_id = ?", (aid,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def all_avatar_brain_modes() -> dict[str, str]:
+    """{avatar_id: brain_mode} for every avatar with an explicit choice."""
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            "SELECT avatar_id, brain_mode FROM avatar_brain_mode"
+        ).fetchall()
+    return {r[0]: r[1] for r in rows}
 
 
 def resolve_recall_realtime_capability(capability: str) -> str | None:

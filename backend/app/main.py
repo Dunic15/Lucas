@@ -1243,9 +1243,43 @@ def list_avatars(request: Request) -> dict:
     out = []
     for aid in roster:
         a = avatars.load(aid)
+        # Per-avatar brain choice for the dashboard toggle: the stored choice,
+        # else derived from the effective mode (global default).
+        _explicit = store.get_avatar_brain_mode(aid)
+        _brain = _explicit or (
+            "gemini"
+            if gemini_ears.mode_for_avatar(aid) in ("reply", "on")
+            else "cerebras"
+        )
         out.append({"id": a.id, "name": a.name, "role": a.role,
-                    "wake_words": a.wake_words})
+                    "wake_words": a.wake_words,
+                    "brain": _brain, "brain_explicit": _explicit is not None})
     return {"avatars": out}
+
+
+class BrainModeRequest(BaseModel):
+    brain: str  # "gemini" | "cerebras"
+
+
+@app.post("/avatars/{avatar_id}/brain-mode")
+def set_avatar_brain(
+    avatar_id: str, req: BrainModeRequest, request: Request
+) -> JSONResponse:
+    """Owner sets an avatar's brain from the dashboard: "gemini" (tutto-Gemini
+    via the relay) or "cerebras" (the normal Deepgram + grounded brain). Takes
+    effect on the avatar's NEXT meeting — no redeploy. Not anonymous: a logged-in
+    owner (or the machine bearer) only, so the demo can't flip prod behavior."""
+    if err := auth.gate(request):
+        return err
+    aid = (avatar_id or "").strip()
+    if aid not in set(avatars.list_ids()):
+        return JSONResponse({"error": "unknown avatar_id"}, status_code=404)
+    choice = (req.brain or "").strip().lower()
+    if not store.set_avatar_brain_mode(aid, choice):
+        return JSONResponse(
+            {"error": "brain must be 'gemini' or 'cerebras'"}, status_code=400
+        )
+    return JSONResponse({"ok": True, "avatar_id": aid, "brain": choice})
 
 
 # ─────────────────────────── demo console ──────────────────────────
@@ -1905,7 +1939,8 @@ async def _start_avatar_session(
             )
     try:
         bot = await run_in_threadpool(
-            recall_client.create_bot, meeting_url, avatar_url, join_at, avatar.name
+            recall_client.create_bot, meeting_url, avatar_url, join_at, avatar.name,
+            avatar.id,
         )
     except Exception:
         # No bot was born — release the pending usage row (consumes 0) so the
@@ -4100,7 +4135,8 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                     continue
             try:
                 bot = await run_in_threadpool(
-                    recall_client.create_bot, url, avatar_url, start, avatar.name
+                    recall_client.create_bot, url, avatar_url, start, avatar.name,
+                    avatar.id,
                 )
             except Exception:
                 if usage_bot_id:  # release the slot — no bot was born
@@ -4396,8 +4432,6 @@ async def ears_config(capability: str, request: Request) -> JSONResponse:
     got = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
     if not expected or not hmac.compare_digest(got, expected):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    if not gemini_ears.enabled():
-        return JSONResponse({"enabled": False, "reason": "ears off"})
     bot_id = await run_in_threadpool(
         store.resolve_recall_realtime_capability, capability
     )
@@ -4405,11 +4439,17 @@ async def ears_config(capability: str, request: Request) -> JSONResponse:
         return JSONResponse({"error": "invalid capability"}, status_code=404)
     session = store.get(bot_id)
     persona = "Laura"
+    avatar_id = session.avatar_id if session is not None else ""
     if session is not None:
         try:
-            persona = avatars.load(session.avatar_id).name
+            persona = avatars.load(avatar_id).name
         except Exception:  # noqa: BLE001
             pass
+    # Per-avatar brain choice: this avatar may be on Cerebras (ears off) even if
+    # another is on Gemini. Resolve AFTER the bot so we know which avatar it is.
+    _mode = gemini_ears.mode_for_avatar(avatar_id)
+    if not gemini_ears.mode_enabled(_mode):
+        return JSONResponse({"enabled": False, "reason": "brain not gemini"})
     try:
         token = await run_in_threadpool(llm._vertex_token)
     except Exception as e:  # noqa: BLE001
@@ -4419,7 +4459,7 @@ async def ears_config(capability: str, request: Request) -> JSONResponse:
     return JSONResponse(
         {
             "enabled": True,
-            "mode": gemini_ears.mode(),
+            "mode": _mode,
             "bot_id": bot_id,
             "project": settings.vertex_project,
             "location": settings.vertex_location or "us-central1",
@@ -4727,18 +4767,22 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if not text:
         return JSONResponse({"ok": True})
 
-    # ── Gemini ears (flag-gated; off = this block is dead code) ──
-    if gemini_ears.enabled():
+    # ── Gemini ears (PER-AVATAR; off = this block is dead code) ──
+    # The brain is chosen per avatar from the dashboard (store.avatar_brain_mode),
+    # falling back to the global default — so Laura can be Gemini while Cedric is
+    # Cerebras, changed live with no redeploy.
+    _ears_mode = gemini_ears.mode_for_avatar(session.avatar_id)
+    if gemini_ears.mode_enabled(_ears_mode):
         # A RAW Recall final feeds the speaker ring (name only, no content) so
         # ears turns can be attributed; synthesized finals skip it (they ARE
         # the ears output re-entering the pipeline).
         if not payload.get("laura_ears"):
             gemini_ears.observe_recall_final(bot_id, speaker)
-        # on-mode with a healthy ears session: the synthesized final is the
+        # on/reply with an active relay: the synthesized final is the
         # authoritative utterance — suppress the raw one BEFORE it can enter
         # the transcript (no double lines, no double answers). The moment the
-        # ears session dies this returns False and Recall drives again.
-        if gemini_ears.should_suppress_recall_final(bot_id, payload):
+        # relay goes quiet this returns False and Recall drives again.
+        if gemini_ears.should_suppress_recall_final(bot_id, payload, _ears_mode):
             # BUT let LEAVE / STOP commands through even when suppressed: they're
             # control commands that MUST be reliable, and Deepgram transcribes
             # command words ("go out of the meeting", "stop") far better than
@@ -5374,7 +5418,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # ElevenLabs still speaks. Trade-off, by design for the A/B: the draft is
     # NOT grounded in the avatar's documents.
     ears_reply = ""
-    if payload.get("laura_ears") and gemini_ears.mode() == "reply":
+    if payload.get("laura_ears") and _ears_mode == "reply":
         ears_reply = str(payload.get("laura_ears_reply") or "").strip()
     _t_wake = time.perf_counter()
     spoke_any = False

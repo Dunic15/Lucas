@@ -320,6 +320,13 @@
   .brain-adv summary:hover{color:var(--fg);}
   .brain-adv .adv-lbl{display:block;font-size:.8rem;color:var(--dim);margin:8px 0 6px;}
   .brain-adv input{width:100%;box-sizing:border-box;}
+  /* AI model per-avatar toggle (Gemini vs Cerebras) */
+  .modelpick{margin:10px 0;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2);}
+  .modelpick .mp-row{display:flex;gap:8px;margin-top:6px;}
+  .mp-opt{flex:1;padding:8px 10px;border-radius:9px;border:1px solid var(--line);background:transparent;color:var(--fg);cursor:pointer;font-size:.85rem;}
+  .mp-opt.on{border-color:rgba(126,182,255,.6);background:rgba(126,182,255,.12);font-weight:600;}
+  .mp-opt:hover{border-color:rgba(126,182,255,.4);}
+  .mp-hint{font-size:.75rem;color:var(--dim);margin-top:7px;line-height:1.4;}
   .exec{font-family:var(--mono);font-size:.58rem;letter-spacing:.04em;text-transform:uppercase;
     padding:2px 7px;border-radius:999px;margin-left:8px;border:1px solid var(--line);color:var(--faint);white-space:nowrap;}
   .exec.done{color:#54D28F;border-color:rgba(84,210,143,.4);}
@@ -883,6 +890,13 @@
             '<div class="al-hint">Add this address to any calendar invite — '+esc(a.name)+' joins the meeting.</div></div>':'')+
           '<div class="acts"><button class="btn primary" data-dispatch="'+esc(a.id)+'">Send to a meeting</button>'+
           '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a></div></div></div>'+
+          '<div class="modelpick"><div class="sm-h">AI model</div><div class="mp-row">'+
+            '<button class="mp-opt'+(a.brain==="gemini"?" on":"")+'" data-brain-set="gemini" data-brain-av="'+esc(a.id)+'">Gemini</button>'+
+            '<button class="mp-opt'+(a.brain==="cerebras"?" on":"")+'" data-brain-set="cerebras" data-brain-av="'+esc(a.id)+'">Cerebras</button></div>'+
+            '<div class="mp-hint">'+(a.brain==="gemini"
+              ?"Gemini Live listens and replies natively — the most conversational feel, on your Google credits."
+              :"Cerebras + "+esc(a.name)+"’s documents — fastest, grounded answers from what it knows.")+
+            ' Applies from the next meeting.</div></div>'+
           (hasBrain?'<div class="cfg"><div class="sm-h">Configure</div>'+brain+'</div>':'')+
           '</div>'+
         '</div>';}).join("") || '<div class="empty">No avatars installed</div>';
@@ -893,6 +907,22 @@
       e.stopPropagation(); var v=b.getAttribute("data-copy");
       if(navigator.clipboard) navigator.clipboard.writeText(v);
       toast("Copied "+v+" — invite it to a meeting to summon this avatar."); }); });
+    // AI model per avatar: Gemini (relay) vs Cerebras (normal). Applies next meeting.
+    $$("#av-grid [data-brain-set]").forEach(function(b){ b.addEventListener("click",function(e){
+      e.stopPropagation();
+      var av=b.getAttribute("data-brain-av"), br=b.getAttribute("data-brain-set");
+      fetch("/avatars/"+encodeURIComponent(av)+"/brain-mode",{method:"POST",
+        headers:{"content-type":"application/json"},body:JSON.stringify({brain:br})})
+      .then(function(r){return r.json();})
+      .then(function(j){
+        if(j&&j.ok){
+          var row=b.parentNode;
+          row.querySelectorAll(".mp-opt").forEach(function(o){
+            o.classList.toggle("on", o.getAttribute("data-brain-set")===br); });
+          toast(av+" → "+(br==="gemini"?"Gemini":"Cerebras")+" (from the next meeting)");
+        } else { toast((j&&j.error)||"Could not change the model"); }
+      }).catch(function(){ toast("Network error"); });
+    }); });
     // connect-the-brain: reveal Slack OAuth, install, or disconnect
     $$("#av-grid [data-brain-on]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); var f=$("#bf-"+b.getAttribute("data-brain-on")); if(f) f.classList.toggle("open"); }); });

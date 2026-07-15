@@ -45,9 +45,10 @@ def test_off_mode_keeps_bot_config_unchanged(monkeypatch):
 
 
 def test_shadow_mode_prepends_eared_attempts_with_plain_fallback(monkeypatch):
-    monkeypatch.setattr(settings, "gemini_ears_mode", "shadow")
+    # attach_ears is now resolved per-avatar (mode_enabled) by create_bot and
+    # passed in; here we pass it directly to exercise the attempt-builder.
     monkeypatch.setattr(settings, "ears_relay_ws_base", "wss://relay.example")
-    attempts = _attempt_bodies()
+    attempts = _attempt_bodies(attach_ears=True)
     eared = [(l, b) for l, b in attempts if l.endswith("+gemini-ears")]
     plain = [(l, b) for l, b in attempts if not l.endswith("+gemini-ears")]
     assert eared and plain and len(eared) == len(plain)

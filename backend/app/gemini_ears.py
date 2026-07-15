@@ -64,12 +64,37 @@ _AUDIO_QUEUE_MAX = 200  # ~20s of 100ms frames; drop-oldest beyond (never block)
 _MAX_RECONNECTS = 5
 
 
+_ENABLED_MODES = ("shadow", "on", "reply")
+
+
 def enabled() -> bool:
-    return settings.gemini_ears_mode.strip().lower() in ("shadow", "on", "reply")
+    return settings.gemini_ears_mode.strip().lower() in _ENABLED_MODES
 
 
 def mode() -> str:
     return settings.gemini_ears_mode.strip().lower()
+
+
+def mode_enabled(m: str) -> bool:
+    return (m or "").strip().lower() in _ENABLED_MODES
+
+
+def mode_for_avatar(avatar_id: str) -> str:
+    """Effective ears mode for ONE avatar. The dashboard per-avatar brain choice
+    ("gemini"/"cerebras") wins; otherwise the global default. This is what makes
+    each avatar's brain selectable at runtime with no redeploy:
+      gemini   -> reply  (tutto-Gemini via the relay)
+      cerebras -> off    (the normal Deepgram + brain path)
+      unset    -> settings.gemini_ears_mode (the global default)
+    """
+    from . import store
+
+    choice = store.get_avatar_brain_mode(avatar_id) if avatar_id else None
+    if choice == "gemini":
+        return "reply"
+    if choice == "cerebras":
+        return "off"
+    return mode()
 
 
 def _model_path() -> str:
@@ -467,15 +492,23 @@ def last_ring_speaker(bot_id: str) -> str:
     return s._ring[-1][1]
 
 
-def should_suppress_recall_final(bot_id: str, payload: dict) -> bool:
+def should_suppress_recall_final(
+    bot_id: str, payload: dict, resolved_mode: str | None = None
+) -> bool:
     """True when a RAW Recall final must be suppressed (ears authoritative).
 
+    ``resolved_mode`` is the effective mode for THIS bot's avatar (from
+    mode_for_avatar); callers pass it so the choice is per-avatar. Defaults to
+    the global mode for backward compatibility.
+
     Synthesized payloads (marker "laura_ears") are never suppressed — they ARE
-    the ears output. Suppression requires on/reply mode AND a healthy live
-    session; the moment the session dies this returns False and Recall finals
-    drive the meeting again (failover).
+    the ears output. Suppression requires on/reply mode AND an active relay;
+    the moment it goes quiet this returns False and Recall finals drive the
+    meeting again (failover).
     """
-    if mode() not in ("on", "reply"):
+    if resolved_mode is None:
+        resolved_mode = mode()
+    if resolved_mode not in ("on", "reply"):
         return False
     if payload.get("laura_ears"):
         return False
