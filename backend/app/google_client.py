@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timezone
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any
 
@@ -159,32 +160,69 @@ def list_calendar_events(org_id: str, *, max_results: int = 20) -> dict:
     return {"ok": True, "events": items if isinstance(items, list) else []}
 
 
+def _rfc822_id(value: Any) -> str:
+    """Normalize a Message-ID to its angle-bracketed RFC 822 form ('' if empty)."""
+    mid = str(value or "").strip()
+    if not mid:
+        return ""
+    return mid if mid.startswith("<") and mid.endswith(">") else f"<{mid}>"
+
+
 def send_gmail(org_id: str, message: dict) -> dict:
     """Send an email as the org's Google account (Gmail messages.send).
 
-    ``message``: {to (str|list of emails), subject, body}."""
+    ``message``: {to (str|list of emails), subject, body, cc?, bcc?,
+    html_body?, thread_id?, in_reply_to?}. All extras are optional and the
+    plain {to, subject, body} call is byte-identical to before:
+    - ``html_body`` → multipart/alternative (plaintext part first, so clients
+      that prefer HTML render it and plain-text clients still get the body).
+    - ``thread_id`` (Gmail's threadId) + ``in_reply_to`` (the RFC 822
+      Message-ID being answered) turn the send into a real reply: Gmail
+      threads on threadId, strict clients thread on In-Reply-To/References.
+    - ``bcc`` rides in the raw MIME; Gmail strips the header on delivery."""
     to = _emails(message.get("to"))
+    cc = _emails(message.get("cc"))
+    bcc = _emails(message.get("bcc"))
     subject = str(message.get("subject") or "").strip()
     text = str(message.get("body") or message.get("text") or "")
+    html = str(message.get("html_body") or message.get("html") or "")
     if not to:
         return {"ok": False, "error": "email needs at least one recipient"}
-    if not subject and not text:
+    if not subject and not text and not html:
         return {"ok": False, "error": "email needs a subject or a body"}
 
     token, err = _access_token(org_id)
     if err:
         return {"ok": False, "error": err}
 
-    mime = MIMEText(text, _charset="utf-8")
+    if html:
+        mime: Any = MIMEMultipart("alternative")
+        mime.attach(MIMEText(text, "plain", _charset="utf-8"))
+        mime.attach(MIMEText(html, "html", _charset="utf-8"))
+    else:
+        mime = MIMEText(text, _charset="utf-8")
     mime["To"] = ", ".join(to)
+    if cc:
+        mime["Cc"] = ", ".join(cc)
+    if bcc:
+        mime["Bcc"] = ", ".join(bcc)
     mime["Subject"] = subject
+    in_reply_to = _rfc822_id(message.get("in_reply_to"))
+    if in_reply_to:
+        mime["In-Reply-To"] = in_reply_to
+        mime["References"] = in_reply_to
     raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
+
+    payload: dict[str, Any] = {"raw": raw}
+    thread_id = str(message.get("thread_id") or "").strip()
+    if thread_id:
+        payload["threadId"] = thread_id
 
     try:
         resp = httpx.post(
             _GMAIL_SEND,
             headers={"Authorization": f"Bearer {token}"},
-            json={"raw": raw},
+            json=payload,
             timeout=_TIMEOUT,
         )
     except Exception as e:  # noqa: BLE001
