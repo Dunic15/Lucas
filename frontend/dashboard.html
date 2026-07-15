@@ -580,13 +580,6 @@
       </div>
       <div class="livewrap" id="livewrap"></div>
 
-      <div class="how">
-        <div class="step" id="step-avatar"><span class="n">01</span><h3>Meet the avatars</h3></div>
-        <div class="how-arrow" aria-hidden="true">→</div>
-        <div class="step" id="step-connect"><span class="n">02</span><h3>Connect your tools</h3></div>
-        <div class="how-arrow" aria-hidden="true">→</div>
-        <div class="step" id="step-meeting"><span class="n">03</span><h3>Send one into a meeting</h3></div>
-      </div>
 
       <div class="panel" style="margin-bottom:20px">
         <h2>Send an avatar to a meeting</h2>
@@ -656,7 +649,7 @@
 
     <!-- USAGE & BILLING -->
     <section class="view" id="view-usage" hidden>
-      <div class="head"><div><h1>Usage &amp; billing</h1><div class="sub">One balance shared by Laura and Cedric</div></div></div>
+      <div class="head"><div><h1>Usage &amp; billing</h1></div></div>
       <div class="usage-hero">
         <div class="ubig"><div class="k">Minutes remaining</div><div class="v tnum" id="u-remaining">—</div></div>
         <div class="ubig"><div class="k">Minutes used this period</div><div class="v tnum" id="u-used">—</div><div class="s" id="u-period">Shared across Laura and Cedric</div></div>
@@ -699,7 +692,7 @@
 
     <!-- CONNECTIONS -->
     <section class="view" id="view-connections" hidden>
-      <div class="head"><div><h1>Connections</h1><div class="sub">Connect Laura's native Google, or add Slack via Cedric — each is independent</div></div></div>
+      <div class="head"><div><h1>Connections</h1></div></div>
       <div class="conns" id="conns"></div>
       <div class="foot">EACH TOOL NEEDS ITS OWN AUTHORIZATION. CONNECTED NEVER MEANS UNRESTRICTED ACCESS.</div>
     </section>
@@ -942,9 +935,6 @@
     var avById={}; d.avatars.forEach(function(a){avById[a.id]=a;});
     function avName(id){ return (avById[id]||{}).name || (id?id:"—"); }
     var brainConnected=(d.org_connections||[]).some(function(x){return x.avatar_id==="cedric"&&x.provider==="cedric-brain"&&x.status==="connected";});
-    $("#step-avatar").classList.toggle("done",d.avatars.some(function(a){return a.id==="laura"||a.id==="cedric";}));
-    $("#step-connect").classList.toggle("done",brainConnected);
-    $("#step-meeting").classList.toggle("done",(d.meetings||[]).length>0||(d.live||[]).length>0);
 
     var uc=$("#userchip");
     if(d.user){
@@ -1493,15 +1483,32 @@
           var av0=avatars[0]||{id:"laura",name:"Laura"};
           var today=new Date(); today.setHours(0,0,0,0);
           function dayKey(d){ return d.getFullYear()+"-"+d.getMonth()+"-"+d.getDate(); }
-          var buckets={};
+          var buckets={}, parsed=[];
           meetings.forEach(function(m){
             var ev=parseEvent(m); if(!ev) return;   // bad/missing start_time → skip
+            parsed.push(ev);
             (buckets[dayKey(ev.s)]=buckets[dayKey(ev.s)]||[]).push(ev);
           });
+          // The grid shows a 7-day window and has no week navigation. Anchor it at
+          // today; BUT if there ARE upcoming meetings and NONE fall in the next 7
+          // days, start the window on the earliest one so the user's meetings are
+          // always visible. Fixes "connected + events fetched (items>0) but the grid
+          // shows nothing" when the next meeting is more than a week out.
+          var anchor=new Date(today.getTime());
+          var inNext7=parsed.some(function(ev){ var dk=Math.floor((ev.s-today)/86400000); return dk>=0&&dk<7; });
+          if(!inNext7&&parsed.length){
+            var earliest=parsed.reduce(function(a,b){ return b.s<a.s?b:a; }).s;
+            var e0=new Date(earliest); e0.setHours(0,0,0,0);
+            if(e0>today) anchor=e0;
+          }
+          var anchoredFuture=dayKey(anchor)!==dayKey(today);
+          var weekNote=anchoredFuture
+            ? '<div class="cnote" style="margin:-4px 0 10px;text-align:center">📅 Showing your next meetings — week of '+anchor.toLocaleDateString()+'</div>'
+            : '';
           var days=[];
           for(var i=0;i<7;i++){
-            var day=new Date(today.getTime()+i*86400000);
-            days.push({date:day,today:i===0,evs:(buckets[dayKey(day)]||[]).slice()});
+            var day=new Date(anchor.getTime()+i*86400000);
+            days.push({date:day,today:dayKey(day)===dayKey(today),evs:(buckets[dayKey(day)]||[]).slice()});
           }
           var anyMeeting=days.some(function(dd){ return dd.evs.length>0; });
           var desktop=!!(window.matchMedia && window.matchMedia("(min-width:820px)").matches);
@@ -1515,11 +1522,11 @@
           // above the grid when the week is empty. Mobile keeps its day-sections
           // fallback and shows a short hint on an empty week.
           if(desktop){
-            box.innerHTML=wkHead(cal,true)+
+            box.innerHTML=wkHead(cal,true)+weekNote+
               (anyMeeting?"":'<div class="cnote" style="margin:-4px 0 10px;text-align:center">No meetings this week — click a slot to add one.</div>')+
               renderHourGrid(days,multi,avOpts,av0);
           } else if(anyMeeting){
-            box.innerHTML=wkHead(cal,true)+renderSections(days,multi,avOpts,av0);
+            box.innerHTML=wkHead(cal,true)+weekNote+renderSections(days,multi,avOpts,av0);
           } else {
             box.innerHTML=wkHead(cal,true)+'<div class="ph" style="padding:34px;text-align:center">No meetings this week.<br>'+
               '<span class="cnote">Tap “+ New meeting” to schedule one — or your Google Calendar meetings appear here automatically.</span></div>';
