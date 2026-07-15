@@ -233,6 +233,28 @@ def _avatar_email(avatar_id: str) -> str:
     return f"{base}+{avatar_id}@{domain}"
 
 
+def _is_avatar_inbox(oauth: dict) -> bool:
+    """True when a native Google token belongs to the AVATAR's own invite inbox
+    (``calendar_invite_emails``) rather than a real user's personal account.
+
+    Native Google is keyed per-user (``org_id == user_id``), so a logged-in
+    user's own connect lands their own token. But if the account that was
+    connected IS the avatar's shared inbox (e.g. an early setup connect, or the
+    account registered for Recall auto-join), it is NOT that user's personal
+    calendar — surfacing it as "your week" is exactly the "why do I see Laura's
+    email?" bug. Callers treat such a token as unconnected for a logged-in user
+    (→ Connect-your-own-Google), while the key-free demo path is left untouched."""
+    email = str((oauth or {}).get("email") or "").lower()
+    if not email:
+        return False
+    bases = {
+        b.strip().lower()
+        for b in (settings.calendar_invite_emails or "").split(",")
+        if b.strip()
+    }
+    return email in bases
+
+
 def _org_connection_rows(org_id: str) -> list[dict]:
     """One org's connection rows for reads: the SQLite runtime rows overlaid
     with the durable control-plane mirror when configured — the mirror
@@ -1238,8 +1260,26 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
         # Prefer the caller's OWN Google Calendar when they've connected native
         # Google; otherwise fall back to the avatar's Recall Calendar V2 inbox.
         oauth = store.get_org_oauth(native_org)
+        # A logged-in user whose only native token is the AVATAR's shared inbox is
+        # NOT looking at their own calendar — treat it as unconnected so we prompt
+        # them to connect THEIR OWN Google instead of showing a foreign (Laura)
+        # email. The key-free demo path (user is None) keeps its existing behaviour.
+        if oauth and user is not None and _is_avatar_inbox(oauth):
+            oauth = None
         if oauth:
             return _load_native(native_org, oauth)
+        # Logged-in but no personal Google → an empty "connect your Google" state,
+        # never the avatar's shared Recall inbox (which shows the avatar's email).
+        if user is not None:
+            return {
+                "calendar": {
+                    "connected": False,
+                    "source": "google",
+                    "connect_url": "/oauth/google/connect",
+                },
+                "meetings": [],
+            }
+        # Demo / machine caller (no logged-in user): the avatar's Recall inbox.
         return _load_recall()
 
     try:
@@ -1313,9 +1353,14 @@ async def create_calendar_event_endpoint(request: Request) -> JSONResponse:
         if avatar_email and avatar_email.lower() not in {a.lower() for a in attendees}:
             attendees.append(avatar_email)
     # Write to the caller's OWN org native Google (mirrors dashboard_upcoming's
-    # native_org). No native token → the UI links to Connect Google.
+    # native_org). No native token → the UI links to Connect Google. A logged-in
+    # user whose only token is the avatar's shared inbox is treated as unconnected
+    # (never schedule on the avatar's own calendar); the demo path is untouched.
     native_org = (user["org_id"] if user else "") or settings.demo_org_id
-    if not await run_in_threadpool(store.get_org_oauth, native_org):
+    _oauth = await run_in_threadpool(store.get_org_oauth, native_org)
+    if _oauth and user is not None and _is_avatar_inbox(_oauth):
+        _oauth = None
+    if not _oauth:
         return JSONResponse({"ok": False, "error": "connect_google"})
     event: dict = {"title": title, "start": start, "end": end}
     if attendees:
