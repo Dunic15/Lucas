@@ -137,16 +137,15 @@
   .livestrip .txt b{font-weight:600;}
   .livestrip .meta{font-family:var(--mono);font-size:.74rem;color:var(--live);}
 
-  /* how it works */
-  .how{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px;}
-  @media (max-width:760px){ .how{grid-template-columns:1fr;} }
-  .step{background:var(--panel);border:1px solid var(--line-soft);border-radius:16px;padding:16px;backdrop-filter:var(--glass);position:relative;}
-  .step .n{font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;color:transparent;background:var(--grad);-webkit-background-clip:text;background-clip:text;font-weight:700;}
-  .step h3{font-size:.98rem;font-weight:600;letter-spacing:-.02em;margin:6px 0 5px;}
-  .step p{font-size:.83rem;color:var(--dim);margin:0;line-height:1.5;}
-  .step.done{border-color:rgba(79,192,138,.35);}
-  .step.done .n{color:var(--ok);background:none;-webkit-text-fill-color:var(--ok);}
-  .how-foot{grid-column:1/-1;font-size:.82rem;color:var(--faint);text-align:center;margin-top:-4px;}
+  /* how it works — compact 3-step title flow */
+  .how{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px 14px;margin-bottom:20px;}
+  .step{display:flex;align-items:baseline;gap:8px;background:none;border:none;padding:0;position:relative;}
+  .step .n{font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;color:transparent;background:var(--grad);-webkit-background-clip:text;background-clip:text;font-weight:700;}
+  .step h3{font-size:.98rem;font-weight:600;letter-spacing:-.02em;margin:0;}
+  .step.done .n,.step.done h3{color:var(--ok);background:none;-webkit-text-fill-color:var(--ok);}
+  .how-arrow{color:var(--faint);font-size:1.05rem;line-height:1;user-select:none;}
+  .how-foot{flex-basis:100%;font-size:.82rem;color:var(--faint);text-align:center;margin-top:2px;}
+  @media (max-width:760px){ .how{flex-direction:column;} .how-arrow{transform:rotate(90deg);} }
 
   .tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;}
   @media (max-width:980px){ .tiles{grid-template-columns:repeat(2,1fr);} }
@@ -373,6 +372,13 @@
   .wkpop-row select{flex:1;min-width:0;padding:7px 8px;border-radius:9px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font-size:.8rem;}
   .wkpop-row .btn{padding:7px 13px;font-size:.8rem;flex:0 0 auto;white-space:nowrap;}
   .wkpop-row .wkpop-send{flex:1;}
+  /* "+ New meeting" form fields (inside a .wkpop popover). */
+  .wkpop .np-title{width:100%;padding:8px 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font-size:.85rem;}
+  .wkpop input[type=date],.wkpop input[type=time]{flex:1;min-width:0;padding:7px 8px;border-radius:9px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font-size:.8rem;color-scheme:light dark;}
+  .wkpop .np-dur,.wkpop .np-av{flex:1;min-width:0;padding:7px 8px;border-radius:9px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font-size:.8rem;}
+  .wkpop .np-title:focus,.wkpop input[type=date]:focus,.wkpop input[type=time]:focus,.wkpop .np-dur:focus,.wkpop .np-av:focus{outline:none;border-color:rgba(126,182,255,.6);}
+  /* Empty calendar slots invite a click to schedule. */
+  .cal-col{cursor:pointer;}
   /* AI model per-avatar toggle (Gemini vs Cerebras) */
   .modelpick{margin:10px 0;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2);}
   .modelpick .mp-row{display:flex;gap:8px;margin-top:6px;}
@@ -556,9 +562,11 @@
       <div class="livewrap" id="livewrap"></div>
 
       <div class="how">
-        <div class="step" id="step-avatar"><div class="n">01 / MEET</div><h3>Meet the avatars</h3><p>Choose the colleague that fits each call. Your 15 free avatar-minutes are shared across them.</p></div>
-        <div class="step" id="step-connect"><div class="n">02 / CONNECT</div><h3>Connect your tools</h3><p>Connect Google (Calendar &amp; Gmail) and the Slack agent in Connections, then switch on what each avatar may use.</p></div>
-        <div class="step" id="step-meeting"><div class="n">03 / TRY IT</div><h3>Send one into a meeting</h3><p>Paste a Meet, Zoom or Teams link. The avatar joins as a participant and brings the work back here.</p></div>
+        <div class="step" id="step-avatar"><span class="n">01</span><h3>Meet the avatars</h3></div>
+        <div class="how-arrow" aria-hidden="true">→</div>
+        <div class="step" id="step-connect"><span class="n">02</span><h3>Connect your tools</h3></div>
+        <div class="how-arrow" aria-hidden="true">→</div>
+        <div class="step" id="step-meeting"><span class="n">03</span><h3>Send one into a meeting</h3></div>
         <div class="how-foot">No card is required for the first 15 avatar-minutes.</div>
       </div>
 
@@ -967,19 +975,17 @@
       // switch when the org has the integration connected, else a small "Connect
       // in Connections" link — same #221 wiring, unchanged. "Slack agent" unifies
       // what used to be the "Slack" row + the separate orchestrator block.
+      // RIGHT column: JUST the interactive controls — the Slack-agent + Google
+      // toggles (#221) and the AI-model Gemini/Cerebras buttons (#220). The
+      // explanatory copy is ERASED: the old "connect once in Connections…" note
+      // and the per-model description lines are gone; only the controls remain.
+      // ALL #220/#221 wiring (endpoints + data attributes) is unchanged.
       var capHtml='<div class="caps"><div class="sm-h">Capabilities</div><div class="cap-list">'+
           capRow(a,"slack","Slack agent","#")+capRow(a,"google","Google","G")+'</div>'+
-          '<div class="cap-note">Connect an integration once in Connections, then switch it on per avatar.</div>'+
-          // AI model (Gemini/Cerebras) — #220 wiring PRESERVED exactly (endpoint,
-          // data attrs, "applies next meeting" copy); now the panel's bottom
-          // section, borderless with a hairline divider.
           '<div class="modelpick sm"><div class="sm-h">AI model</div><div class="mp-row">'+
             '<button class="mp-opt'+(a.brain==="gemini"?" on":"")+'" data-brain-set="gemini" data-brain-av="'+esc(a.id)+'">Gemini</button>'+
             '<button class="mp-opt'+(a.brain==="cerebras"?" on":"")+'" data-brain-set="cerebras" data-brain-av="'+esc(a.id)+'">Cerebras</button></div>'+
-            '<div class="mp-hint">'+(a.brain==="gemini"
-              ?"Gemini Live listens and replies natively — the most conversational feel, on your Google credits."
-              :"Cerebras + "+esc(a.name)+"’s documents — fastest, grounded answers from what it knows.")+
-            ' Applies from the next meeting.</div></div>'+
+          '</div>'+
         '</div>';
       return '<div class="avd"><div class="avd-cols">'+
           '<div class="avd-left">'+
@@ -1059,8 +1065,9 @@
     var MON3=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     var DAYN=["SUN","MON","TUE","WED","THU","FRI","SAT"];
     function pad2(n){ return ("0"+n).slice(-2); }
-    // Calendar header — full month + year, the 7-day range, calendar account + ↻.
-    function wkHead(cal){
+    // Calendar header — full month + year, the 7-day range, calendar account,
+    // an optional "+ New meeting" action (showNew) and the ↻ reload.
+    function wkHead(cal,showNew){
       var t0=new Date(); t0.setHours(0,0,0,0);
       var t1=new Date(t0.getTime()+6*86400000);
       var month=MONTHS[t0.getMonth()]+" "+t0.getFullYear();
@@ -1069,6 +1076,7 @@
       return '<div class="wkbar"><div><div class="wk-month">'+esc(month)+'</div>'+
         '<div class="wkrange">'+esc(range)+'</div></div>'+
         '<div class="wk-head-r"><span class="wk-cal">📅 '+esc(cal.email||"Calendar connected")+'</span>'+
+        (showNew?'<button class="btn primary" id="wk-new" style="padding:6px 12px;font-size:.78rem" aria-label="Schedule a new meeting">+ New meeting</button>':'')+
         '<button class="btn" id="upcoming-reload" style="padding:6px 12px;font-size:.78rem" aria-label="Reload calendar">↻</button></div></div>';
     }
     // Resolve a friendly avatar name from its id (for the "🎭 name" badge).
@@ -1155,7 +1163,10 @@
         var timed=dd.evs.filter(function(ev){ return !ev.allDay; });
         var allday=dd.evs.filter(function(ev){ return ev.allDay; });
         layoutDay(timed);
-        var col='<div class="cal-col'+(dd.today?" today":"")+'" style="height:'+totalH+'px">';
+        // data-date (YYYY-MM-DD) + data-winstart let an empty-slot click resolve
+        // which day + hour was clicked → prefill the "+ New meeting" form.
+        var isoDate=dd.date.getFullYear()+"-"+pad2(dd.date.getMonth()+1)+"-"+pad2(dd.date.getDate());
+        var col='<div class="cal-col'+(dd.today?" today":"")+'" data-date="'+isoDate+'" data-winstart="'+winStart+'" style="height:'+totalH+'px">';
         allday.forEach(function(ev,ix){ col+=evBlockAllDay(ev,ix); });
         timed.forEach(function(ev){
           var top=(clampMin(ev.startMin,winStartMin,winEndMin)-winStartMin)/60*HOUR_PX;
@@ -1250,7 +1261,7 @@
         if(p._esc) document.removeEventListener("keydown",p._esc,true); p.remove(); }
     }
     function openPop(el,multi,avOpts,av0){
-      closePop();
+      closePop(); closeCreate();
       var url=el.getAttribute("data-url")||"", title=el.getAttribute("data-title")||"", going=el.getAttribute("data-going")==="1";
       var p=document.createElement("div"); p.className="wkpop"; p.id="wkpop";
       var inner='<div class="wkpop-t">'+esc(title||"Meeting")+'</div>';
@@ -1279,6 +1290,110 @@
       var esc2=function(e){ if(e.key==="Escape") closePop(); };
       p._outside=outside; p._esc=esc2;
       setTimeout(function(){ document.addEventListener("click",outside,true); document.addEventListener("keydown",esc2,true); },0);
+    }
+    // ── Create a meeting FROM the calendar ────────────────────────────────────
+    // "+ New meeting" in the week header AND a click on any empty slot open a
+    // small form (title / date / start / duration + optional avatar). Submitting
+    // POSTs /dashboard/calendar/event on the caller's OWN native Google, then
+    // re-fetches the week so the new event (with a 🎭 badge when an avatar was
+    // added) appears. A read-only (Recall-sourced) week shows a Connect-Google
+    // prompt instead. #197: every DOM/response read is null-guarded.
+    function pad2n(n){ return ("0"+n).slice(-2); }
+    function defaultSlot(){
+      var d=new Date(); d.setMinutes(0,0,0); d.setHours(d.getHours()+1);
+      return {date:d.getFullYear()+"-"+pad2n(d.getMonth()+1)+"-"+pad2n(d.getDate()),hour:d.getHours()};
+    }
+    function closeCreate(){
+      var p=document.getElementById("wkpop-new");
+      if(p){ if(p._outside) document.removeEventListener("click",p._outside,true);
+        if(p._esc) document.removeEventListener("keydown",p._esc,true); p.remove(); }
+    }
+    // Wire the header button + empty-slot clicks (desktop grid) to the form.
+    function wireCreate(box,nativeCal,avOpts,av0){
+      var nb=box.querySelector("#wk-new");
+      if(nb) nb.addEventListener("click",function(){ openCreateForm(defaultSlot(),nativeCal,avOpts,av0,nb); });
+      box.querySelectorAll(".cal-col").forEach(function(colEl){
+        colEl.addEventListener("click",function(e){
+          // Ignore clicks that land on an existing event block (those open the
+          // send/manage popover); only empty space creates a meeting.
+          if(e.target&&e.target.closest&&e.target.closest(".cal-ev")) return;
+          var rect=colEl.getBoundingClientRect(), y=(e.clientY||0)-rect.top;
+          var ws=parseInt(colEl.getAttribute("data-winstart"),10); if(!(ws>=0)) ws=7;
+          var hour=Math.max(0,Math.min(23,ws+Math.floor(y/HOUR_PX)));
+          openCreateForm({date:colEl.getAttribute("data-date")||defaultSlot().date,hour:hour},nativeCal,avOpts,av0,colEl,e);
+        });
+      });
+    }
+    function openCreateForm(prefill,nativeCal,avOpts,av0,anchorEl,evt){
+      closePop(); closeCreate();
+      prefill=prefill||{};
+      var p=document.createElement("div"); p.className="wkpop"; p.id="wkpop-new";
+      if(!nativeCal){
+        // Read-only week (no native Google token) — can't write events here.
+        p.innerHTML='<div class="wkpop-t">New meeting</div>'+
+          '<div class="wkpop-sub">Connect Google to schedule meetings straight from your calendar.</div>'+
+          '<div class="wkpop-row"><button class="btn primary np-goconn" style="flex:1">Connect Google to schedule</button></div>';
+      } else {
+        var date=esc(prefill.date||defaultSlot().date);
+        var hh=pad2n(prefill.hour!=null?prefill.hour:defaultSlot().hour);
+        var avSel=avOpts?('<select class="np-av" aria-label="Add an avatar"><option value="">No avatar</option>'+avOpts+'</select>'):"";
+        p.innerHTML='<div class="wkpop-t">New meeting</div>'+
+          '<input class="np-title" type="text" autocomplete="off" placeholder="Meeting title" aria-label="Meeting title" />'+
+          '<div class="wkpop-row"><input class="np-date" type="date" value="'+date+'" aria-label="Date" />'+
+            '<input class="np-time" type="time" value="'+hh+':00" aria-label="Start time" /></div>'+
+          '<div class="wkpop-row"><select class="np-dur" aria-label="Duration">'+
+            '<option value="30">30 min</option><option value="45">45 min</option>'+
+            '<option value="60" selected>1 hour</option><option value="90">1.5 hours</option></select>'+avSel+'</div>'+
+          '<div class="wkpop-row"><button class="btn primary np-create" style="flex:1">Create meeting</button></div>';
+      }
+      document.body.appendChild(p);
+      // Position: near the anchor, viewport-clamped (fixed → scroll-proof).
+      var pw=Math.min(300,window.innerWidth-16); p.style.width=pw+"px";
+      var ax=(evt&&evt.clientX)||(anchorEl&&anchorEl.getBoundingClientRect().left)||16;
+      var ay=(anchorEl&&anchorEl.getBoundingClientRect().bottom)||(evt&&evt.clientY)||60;
+      var left=Math.min(ax,window.innerWidth-pw-8), top=ay+6, ph=nativeCal?250:130;
+      if(top+ph>window.innerHeight) top=Math.max(8,window.innerHeight-ph-8);
+      p.style.left=Math.max(8,left)+"px"; p.style.top=top+"px";
+      var gc=p.querySelector(".np-goconn");
+      if(gc) gc.addEventListener("click",function(){ closeCreate(); go("connections"); });
+      var cb=p.querySelector(".np-create");
+      if(cb) cb.addEventListener("click",function(){ submitCreate(p,cb); });
+      var ti=p.querySelector(".np-title"); if(ti) setTimeout(function(){ ti.focus(); },0);
+      var outside=function(e){ if(!p.contains(e.target)&&!(e.target.closest&&e.target.closest("#wk-new"))) closeCreate(); };
+      var esc2=function(e){ if(e.key==="Escape") closeCreate(); };
+      p._outside=outside; p._esc=esc2;
+      setTimeout(function(){ document.addEventListener("click",outside,true); document.addEventListener("keydown",esc2,true); },0);
+    }
+    function submitCreate(p,btn){
+      var title=((p.querySelector(".np-title")||{}).value||"").trim();
+      var date=((p.querySelector(".np-date")||{}).value||"").trim();
+      var tmv=((p.querySelector(".np-time")||{}).value||"").trim();
+      var dur=parseInt(((p.querySelector(".np-dur")||{}).value||"60"),10)||60;
+      var avatar=((p.querySelector(".np-av")||{}).value||"").trim();
+      if(!title){ toast("Give the meeting a title.",true); var ti=p.querySelector(".np-title"); if(ti) ti.focus(); return; }
+      if(!date||!tmv){ toast("Pick a date and start time.",true); return; }
+      // Build an absolute start from the browser-local date+time. Guard NaN.
+      var startD=new Date(date+"T"+tmv); if(isNaN(startD)){ toast("That date/time isn't valid.",true); return; }
+      var body={title:title,start:startD.toISOString(),duration_min:dur};
+      if(avatar) body.avatar_id=avatar;
+      var orig=btn.textContent; btn.disabled=true; btn.textContent="Creating…";
+      fetch("/dashboard/calendar/event",{method:"POST",headers:headers(),body:JSON.stringify(body)})
+        .then(function(r){ return r.json().catch(function(){return {};}); })
+        .then(function(j){
+          j=j||{};
+          if(j.ok){
+            var who=avatar?(" — "+avName(avatar)+" will join"):"";
+            toast("Meeting scheduled"+who+".");
+            closeCreate();
+            loadUpcoming(true);           // re-fetch so the new event appears
+          } else if(j.error==="connect_google"){
+            toast("Connect Google first to schedule.",true); closeCreate(); go("connections");
+          } else {
+            toast((j.error?("Couldn't schedule: "+j.error):"Couldn't schedule the meeting."),true);
+            btn.disabled=false; btn.textContent=orig;
+          }
+        })
+        .catch(function(){ toast("Network error scheduling the meeting.",true); btn.disabled=false; btn.textContent=orig; });
     }
     function loadUpcoming(force){
       var box=document.getElementById("upcoming-panel"); if(!box) return;
@@ -1335,16 +1450,30 @@
           }
           var anyMeeting=days.some(function(dd){ return dd.evs.length>0; });
           var desktop=!!(window.matchMedia && window.matchMedia("(min-width:820px)").matches);
-          if(!anyMeeting){
-            box.innerHTML=wkHead(cal)+'<div class="ph" style="padding:34px;text-align:center">No meetings this week.<br>'+
-              '<span class="cnote">Your Google Calendar meetings appear here — then you can send an avatar with one click.</span></div>';
+          // Native Google (source=google) is the only calendar we can WRITE to —
+          // scheduling from the grid needs it. A Recall-sourced week is read-only,
+          // so the "+ New meeting" form points to Connect Google instead.
+          var nativeCal=(cal.source==="google");
+          // Desktop ALWAYS renders the full week hour-grid — time axis, 7 day
+          // columns, gridlines, today highlight, now-line — even with ZERO
+          // meetings (like Google Calendar), never a text block. A faint hint sits
+          // above the grid when the week is empty. Mobile keeps its day-sections
+          // fallback and shows a short hint on an empty week.
+          if(desktop){
+            box.innerHTML=wkHead(cal,true)+
+              (anyMeeting?"":'<div class="cnote" style="margin:-4px 0 10px;text-align:center">No meetings this week — click a slot to add one.</div>')+
+              renderHourGrid(days,multi,avOpts,av0);
+          } else if(anyMeeting){
+            box.innerHTML=wkHead(cal,true)+renderSections(days,multi,avOpts,av0);
           } else {
-            box.innerHTML=wkHead(cal)+(desktop?renderHourGrid(days,multi,avOpts,av0):renderSections(days,multi,avOpts,av0));
+            box.innerHTML=wkHead(cal,true)+'<div class="ph" style="padding:34px;text-align:center">No meetings this week.<br>'+
+              '<span class="cnote">Tap “+ New meeting” to schedule one — or your Google Calendar meetings appear here automatically.</span></div>';
           }
           var rl=document.getElementById("upcoming-reload");
           if(rl) rl.addEventListener("click",function(){ loadUpcoming(true); });
           wireSend(box);                        // mobile inline Send controls
           wirePopover(box,multi,avOpts,av0);    // desktop event-block popover
+          wireCreate(box,nativeCal,avOpts,av0); // "+ New meeting" + empty-slot click
           // Re-render once if the viewport crosses the desktop/mobile breakpoint
           // (the hour grid is desktop-only; sections are the mobile fallback).
           if(window.matchMedia && !window._wkMq){
