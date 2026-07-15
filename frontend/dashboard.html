@@ -137,16 +137,15 @@
   .livestrip .txt b{font-weight:600;}
   .livestrip .meta{font-family:var(--mono);font-size:.74rem;color:var(--live);}
 
-  /* how it works */
-  .how{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px;}
-  @media (max-width:760px){ .how{grid-template-columns:1fr;} }
-  .step{background:var(--panel);border:1px solid var(--line-soft);border-radius:16px;padding:16px;backdrop-filter:var(--glass);position:relative;}
-  .step .n{font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;color:transparent;background:var(--grad);-webkit-background-clip:text;background-clip:text;font-weight:700;}
-  .step h3{font-size:.98rem;font-weight:600;letter-spacing:-.02em;margin:6px 0 5px;}
-  .step p{font-size:.83rem;color:var(--dim);margin:0;line-height:1.5;}
-  .step.done{border-color:rgba(79,192,138,.35);}
-  .step.done .n{color:var(--ok);background:none;-webkit-text-fill-color:var(--ok);}
-  .how-foot{grid-column:1/-1;font-size:.82rem;color:var(--faint);text-align:center;margin-top:-4px;}
+  /* how it works — compact 3-step title flow */
+  .how{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px 14px;margin-bottom:20px;}
+  .step{display:flex;align-items:baseline;gap:8px;background:none;border:none;padding:0;position:relative;}
+  .step .n{font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;color:transparent;background:var(--grad);-webkit-background-clip:text;background-clip:text;font-weight:700;}
+  .step h3{font-size:.98rem;font-weight:600;letter-spacing:-.02em;margin:0;}
+  .step.done .n,.step.done h3{color:var(--ok);background:none;-webkit-text-fill-color:var(--ok);}
+  .how-arrow{color:var(--faint);font-size:1.05rem;line-height:1;user-select:none;}
+  .how-foot{flex-basis:100%;font-size:.82rem;color:var(--faint);text-align:center;margin-top:2px;}
+  @media (max-width:760px){ .how{flex-direction:column;} .how-arrow{transform:rotate(90deg);} }
 
   .tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;}
   @media (max-width:980px){ .tiles{grid-template-columns:repeat(2,1fr);} }
@@ -556,9 +555,11 @@
       <div class="livewrap" id="livewrap"></div>
 
       <div class="how">
-        <div class="step" id="step-avatar"><div class="n">01 / MEET</div><h3>Meet the avatars</h3><p>Choose the colleague that fits each call. Your 15 free avatar-minutes are shared across them.</p></div>
-        <div class="step" id="step-connect"><div class="n">02 / CONNECT</div><h3>Connect your tools</h3><p>Connect Google (Calendar &amp; Gmail) and the Slack agent in Connections, then switch on what each avatar may use.</p></div>
-        <div class="step" id="step-meeting"><div class="n">03 / TRY IT</div><h3>Send one into a meeting</h3><p>Paste a Meet, Zoom or Teams link. The avatar joins as a participant and brings the work back here.</p></div>
+        <div class="step" id="step-avatar"><span class="n">01</span><h3>Meet the avatars</h3></div>
+        <div class="how-arrow" aria-hidden="true">→</div>
+        <div class="step" id="step-connect"><span class="n">02</span><h3>Connect your tools</h3></div>
+        <div class="how-arrow" aria-hidden="true">→</div>
+        <div class="step" id="step-meeting"><span class="n">03</span><h3>Send one into a meeting</h3></div>
         <div class="how-foot">No card is required for the first 15 avatar-minutes.</div>
       </div>
 
