@@ -1195,6 +1195,14 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
                 }
             )
         rows.sort(key=lambda r: r["start_time"])
+        # Diagnostic (dates only, no titles/attendees): how many events survived the
+        # past-90min filter into meetings[], and on which days — distinguishes "no
+        # upcoming events" from "fetched but filtered/rendered wrong".
+        _dates = ",".join(sorted({str(r.get("start_time") or "")[:10] for r in rows}))
+        print(
+            f"[calendar] native org={str(org_id)[:10]} rows={len(rows)} dates={_dates}",
+            flush=True,
+        )
         return {
             "calendar": {"connected": True, "source": "google", "email": cal_email},
             "meetings": rows[:20],

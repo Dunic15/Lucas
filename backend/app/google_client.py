@@ -170,7 +170,7 @@ def list_calendar_events(org_id: str, *, max_results: int = 20) -> dict:
     if err:
         # Diagnostic (status only, no token/email/event content): why a connected
         # org's calendar shows empty — token-refresh rejected, not connected, etc.
-        print(f"[calendar] read blocked: {err}", flush=True)
+        print(f"[calendar] read blocked org={str(org_id)[:10]}: {err}", flush=True)
         return {"ok": False, "error": err}
     try:
         n = int(max_results or 20)
@@ -194,7 +194,7 @@ def list_calendar_events(org_id: str, *, max_results: int = 20) -> dict:
     if resp.status_code >= 300:
         # Diagnostic: a 403 here on a Workspace domain usually = admin/API access
         # restriction on the (unverified) app; 401 = token/scope. No PII logged.
-        print(f"[calendar] list HTTP {resp.status_code}", flush=True)
+        print(f"[calendar] list org={str(org_id)[:10]} HTTP {resp.status_code}", flush=True)
         return {"ok": False, "error": f"calendar list failed (HTTP {resp.status_code})"}
     try:
         items = resp.json().get("items", [])
@@ -203,7 +203,7 @@ def list_calendar_events(org_id: str, *, max_results: int = 20) -> dict:
     _n = len(items) if isinstance(items, list) else 0
     # Diagnostic: items=0 on a connected org = right token but no events in the
     # window (wrong account/calendar), vs a non-200 above = an API/auth failure.
-    print(f"[calendar] list ok items={_n}", flush=True)
+    print(f"[calendar] list org={str(org_id)[:10]} ok items={_n}", flush=True)
     return {"ok": True, "events": items if isinstance(items, list) else []}
 
 
