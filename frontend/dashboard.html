@@ -247,11 +247,12 @@
   .avd .ro{color:var(--faint);font-size:.84rem;margin-top:2px;}
   .avd .persona{color:var(--dim);font-size:.85rem;margin-top:9px;line-height:1.5;max-width:44ch;}
   .avd .acts{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;}
-  /* Configure (Cedric brain) — now a full-width stacked section on the card. */
-  .cfg{border-top:1px solid var(--line-soft);padding-top:14px;margin-top:14px;display:flex;flex-direction:column;gap:10px;}
-  .cfg .row{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:.86rem;}
-  .cfg .row .l{color:var(--faint);}
-  .cfg .row .v{font-weight:500;font-family:var(--mono);font-size:.78rem;}
+  /* Two-column avatar card: identity / description / alias / actions on the
+     LEFT, a compact Capabilities panel (Slack agent + Google toggles, AI model
+     at the bottom) on the RIGHT. Stacks to one column on narrow screens. */
+  .avd-cols{display:grid;grid-template-columns:1.55fr 1fr;gap:22px;align-items:start;}
+  @media (max-width:760px){ .avd-cols{grid-template-columns:1fr;gap:16px;} }
+  .avd-left,.avd-right{min-width:0;}
   .skills{margin-top:16px;padding-top:16px;border-top:1px solid var(--line-soft);display:grid;grid-template-columns:1fr 1fr;gap:18px;}
   @media (max-width:720px){ .skills{grid-template-columns:1fr;} }
   .cap{display:flex;flex-direction:column;gap:8px;}
@@ -272,62 +273,106 @@
   .al-addr{font-family:var(--mono);font-size:.9rem;font-weight:600;color:var(--text);word-break:break-all;flex:1;min-width:0;}
   .al-hint{margin-top:7px;font-size:.78rem;color:var(--dim);line-height:1.45;}
 
-  /* connect-the-brain row + status chips */
-  .brain{margin-bottom:10px;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2);}
-  .brain .br-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
-  .brain .bn{font-size:.9rem;font-weight:600;}
-  .brain .bd{font-size:.75rem;color:var(--dim);margin-top:1px;}
+  /* status chips (Connections view + billing plans) */
   .stchip{font-family:var(--mono);font-size:.62rem;letter-spacing:.05em;text-transform:uppercase;
     padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--faint);flex:0 0 auto;}
   .stchip.connected{color:#54D28F;border-color:rgba(84,210,143,.4);background:rgba(84,210,143,.08);}
   .stchip.pending{color:#F5C33B;border-color:rgba(245,195,59,.4);background:rgba(245,195,59,.08);}
-  /* Weekly calendar (Upcoming) — day COLUMNS on desktop, day SECTIONS on mobile.
-     Mobile-first: one column, empty days hidden. At >=820px the 7 days become a
-     week grid and empty days stay visible so the whole week reads at a glance. */
-  .wkbar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
-  .wkbar .wkcal{font-size:.85rem;color:var(--dim);}
-  .wkbar .wkcal b{color:var(--text);font-weight:600;}
-  .wkbar .wkrange{font-family:var(--mono);color:var(--text);font-size:.8rem;letter-spacing:.01em;}
+  /* Weekly calendar (Upcoming) — a real Apple/Google-style week view.
+     Mobile-first: day-grouped SECTION cards (one column, empty days hidden). At
+     >=820px the 7 days become ONE framed week grid with hairline column dividers
+     (a 1px gap over a line-coloured background), shared day headers, and today
+     subtly highlighted — it reads as a calendar, not a list. */
+  .wkbar{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;margin-bottom:16px;flex-wrap:wrap;}
+  .wk-month{font-size:1.2rem;font-weight:650;letter-spacing:-.03em;line-height:1;}
+  .wkrange{font-family:var(--mono);color:var(--faint);font-size:.72rem;letter-spacing:.03em;margin-top:5px;}
+  .wk-head-r{display:flex;align-items:center;gap:10px;min-width:0;}
+  .wk-cal{font-size:.76rem;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px;}
   .wkgrid{display:grid;grid-template-columns:1fr;gap:10px;}
   .wkgrid .wkday.empty{display:none;}
-  .wkday{display:flex;flex-direction:column;gap:8px;background:var(--panel);border:1px solid var(--line-soft);border-radius:14px;padding:11px 12px 13px;}
-  .wkday.today{border-color:rgba(126,182,255,.45);box-shadow:0 0 0 1px rgba(126,182,255,.18);}
-  .wkday-h{display:flex;align-items:baseline;justify-content:space-between;gap:6px;padding-bottom:6px;border-bottom:1px solid var(--line-soft);}
-  .wkday-h .dn{font-family:var(--mono);font-size:.58rem;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);}
-  .wkday.today .wkday-h .dn{color:var(--live);}
-  .wkday-h .dd{font-size:1.02rem;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums;}
-  .wkday-none{color:var(--faint);font-size:.72rem;padding:3px 1px;}
-  /* Calendar BLOCK: thin left accent bar, subtle time. A meeting the avatar is
-     being sent to (auto_join) becomes a filled/colored block with a "🎭 name"
-     badge; a plain meeting is an outlined block with the Send control. */
-  .mcard{background:var(--panel-2);border:1px solid var(--line-soft);border-left:3px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:5px;}
+  .wkday{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line-soft);border-radius:14px;overflow:hidden;}
+  .wkday-h{display:flex;align-items:baseline;gap:9px;padding:10px 12px 9px;border-bottom:1px solid var(--line-soft);}
+  .wkday-h .dn{font-family:var(--mono);font-size:.6rem;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);}
+  .wkday-h .dd{font-size:1.05rem;font-weight:650;color:var(--text);font-variant-numeric:tabular-nums;line-height:1;}
+  .wkday.today{background:var(--live-soft);}
+  .wkday.today .wkday-h{border-bottom-color:rgba(126,182,255,.3);}
+  .wkday.today .wkday-h .dn,.wkday.today .wkday-h .dd{color:var(--live);}
+  .wkday-body{display:flex;flex-direction:column;gap:7px;padding:9px 10px 11px;min-height:26px;}
+  /* Calendar EVENT block: hairline colored left edge, mono time, title, platform
+     tag. A meeting the avatar is being sent to (auto_join) is a filled/tinted
+     block with a "🎭 name" badge; a plain meeting is outlined with the Send
+     control. */
+  .mcard{background:var(--panel-2);border:1px solid var(--line-soft);border-left:3px solid var(--g2);border-radius:9px;padding:7px 9px;display:flex;flex-direction:column;gap:5px;}
   .mcard.going{background:var(--live-soft);border-color:rgba(126,182,255,.35);border-left-color:var(--live);}
   .mcard .mtop{display:flex;align-items:center;justify-content:space-between;gap:6px;}
-  .mcard .mtime{font-family:var(--mono);font-size:.68rem;color:var(--faint);letter-spacing:.02em;}
+  .mcard .mtime{font-family:var(--mono);font-size:.66rem;color:var(--faint);letter-spacing:.02em;white-space:nowrap;}
   .mcard.going .mtime{color:var(--live);}
-  .mcard .mtitle{font-size:.82rem;font-weight:600;line-height:1.3;color:var(--text);word-break:break-word;}
+  .mcard .mtitle{font-size:.8rem;font-weight:600;line-height:1.32;color:var(--text);word-break:break-word;}
   .mcard .mmeta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
   .mcard .avstate{margin-top:1px;}
-  .avbadge{display:inline-flex;align-items:center;gap:4px;font-size:.66rem;font-weight:600;color:var(--live);background:rgba(126,182,255,.16);border:1px solid rgba(126,182,255,.4);border-radius:999px;padding:2px 8px;white-space:nowrap;}
+  .avbadge{display:inline-flex;align-items:center;gap:4px;font-size:.64rem;font-weight:600;color:var(--live);background:rgba(126,182,255,.16);border:1px solid rgba(126,182,255,.4);border-radius:999px;padding:2px 8px;white-space:nowrap;}
   .wksend{display:flex;gap:5px;align-items:stretch;}
   .wksend select{flex:1;min-width:0;padding:6px 7px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:.72rem;}
-  .wksend .btn{padding:6px 11px;font-size:.74rem;flex:0 0 auto;white-space:nowrap;}
+  .wksend .btn{padding:6px 11px;font-size:.73rem;flex:0 0 auto;white-space:nowrap;}
   .wksend.solo .btn{flex:1;}
   @media(min-width:820px){
-    .wkgrid{grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;align-items:start;}
+    /* desktop: one framed grid; hairline column dividers via a 1px gap on a
+       line-coloured background, rounded + clipped by the container. */
+    .wkgrid{grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line-soft);
+      border:1px solid var(--line-soft);border-radius:14px;overflow:hidden;align-items:stretch;}
     .wkgrid .wkday.empty{display:flex;}
-    .wkday{padding:9px 8px 11px;}
+    .wkday{border:0;border-radius:0;}
+    .wkday-h{flex-direction:column;align-items:flex-start;gap:2px;padding:9px 9px 8px;}
+    .wkday-body{padding:8px;}
   }
-  .brainform{display:none;margin-top:10px;gap:8px;flex-wrap:wrap;}
-  .brainform.open{display:flex;}
-  .brainform input{flex:1;min-width:150px;padding:9px 11px;border-radius:10px;border:1px solid var(--line);
-    background:var(--panel);color:var(--text);font-family:var(--font);font-size:.85rem;}
-  .brainform input:focus{outline:none;border-color:rgba(126,182,255,.5);}
-  .brain-adv{flex-basis:100%;margin-top:6px;}
-  .brain-adv summary{cursor:pointer;font-size:.82rem;color:var(--dim);user-select:none;}
-  .brain-adv summary:hover{color:var(--fg);}
-  .brain-adv .adv-lbl{display:block;font-size:.8rem;color:var(--dim);margin:8px 0 6px;}
-  .brain-adv input{width:100%;box-sizing:border-box;}
+  /* ── Desktop HOUR GRID (rendered only >=820px): time axis + 7 day columns in one
+     scrollable grid; events are absolutely positioned by start/duration. The
+     44px gridline pitch below MUST equal JS HOUR_PX. ── */
+  .cal{border:1px solid var(--line-soft);border-radius:14px;overflow:hidden;background:var(--panel);}
+  .calscroll{overflow-y:auto;overflow-x:hidden;max-height:62vh;}
+  .calgrid{display:grid;grid-template-columns:54px repeat(7,minmax(0,1fr));}
+  .cal-corner{position:sticky;top:0;z-index:3;background:var(--panel);border-bottom:1px solid var(--line-soft);}
+  .cal-dh{position:sticky;top:0;z-index:3;display:flex;flex-direction:column;gap:2px;align-items:center;justify-content:center;
+    padding:8px 4px;background:var(--panel);border-bottom:1px solid var(--line-soft);border-left:1px solid var(--line-soft);}
+  .cal-dh .dn{font-family:var(--mono);font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);}
+  .cal-dh .dd{font-size:1.05rem;font-weight:650;color:var(--text);font-variant-numeric:tabular-nums;line-height:1;}
+  .cal-dh.today{background:var(--live-soft);}
+  .cal-dh.today .dn,.cal-dh.today .dd{color:var(--live);}
+  .cal-axis{position:relative;border-right:1px solid var(--line-soft);}
+  .cal-hr{position:absolute;right:6px;transform:translateY(-50%);font-family:var(--mono);font-size:.58rem;color:var(--faint);white-space:nowrap;}
+  .cal-col{position:relative;border-left:1px solid var(--line-soft);
+    background-image:repeating-linear-gradient(to bottom,var(--line-soft) 0,var(--line-soft) 1px,transparent 1px,transparent 44px);}
+  .cal-col.today{background-color:var(--live-soft);}
+  .cal-ev{position:absolute;left:2px;right:2px;overflow:hidden;border:1px solid var(--line-soft);border-left:3px solid var(--g2);
+    border-radius:7px;padding:2px 6px;background:var(--panel-2);display:flex;flex-direction:column;gap:0;
+    box-shadow:0 1px 2px rgba(0,0,0,.18);}
+  .cal-ev[role=button]{cursor:pointer;}
+  .cal-ev[role=button]:hover{filter:brightness(1.06);border-color:rgba(126,182,255,.5);}
+  .cal-ev[role=button]:focus-visible{outline:2px solid var(--g2);outline-offset:1px;}
+  .cal-ev.going{background:var(--live-soft);border-color:rgba(126,182,255,.4);border-left-color:var(--live);}
+  .cal-ev.nolink{opacity:.7;}
+  .cal-ev.allday{border-left-color:var(--g3);}
+  .cal-ev .ev-time{font-family:var(--mono);font-size:.6rem;color:var(--faint);letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .cal-ev.going .ev-time{color:var(--live);}
+  .cal-ev .ev-title{font-size:.72rem;font-weight:600;line-height:1.18;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .cal-ev .ev-send{font-size:.58rem;font-weight:700;color:var(--live);letter-spacing:.02em;}
+  /* short blocks (30-min slots) show the title only */
+  .cal-ev.short{justify-content:center;}
+  .cal-ev.short .ev-time,.cal-ev.short .ev-send,.cal-ev.short .ev-nolink{display:none;}
+  .cal-ev.short.going .avbadge{display:none;}
+  .cal-ev .ev-nolink{font-size:.56rem;color:var(--faint);}
+  .cal-ev .avbadge{align-self:flex-start;font-size:.58rem;padding:1px 6px;}
+  .cal-now{position:absolute;left:0;right:0;height:0;border-top:2px solid var(--accent);z-index:2;pointer-events:none;}
+  .cal-now::before{content:"";position:absolute;left:-1px;top:-4px;width:7px;height:7px;border-radius:50%;background:var(--accent);}
+  /* send/manage popover — fixed, viewport-clamped, scroll-proof */
+  .wkpop{position:fixed;z-index:60;background:var(--raised);border:1px solid var(--line);border-radius:12px;
+    box-shadow:var(--shadow);padding:12px;display:flex;flex-direction:column;gap:9px;}
+  .wkpop-t{font-size:.88rem;font-weight:650;letter-spacing:-.01em;line-height:1.25;word-break:break-word;}
+  .wkpop-sub{font-size:.74rem;color:var(--dim);line-height:1.4;}
+  .wkpop-row{display:flex;gap:7px;align-items:stretch;}
+  .wkpop-row select{flex:1;min-width:0;padding:7px 8px;border-radius:9px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font-size:.8rem;}
+  .wkpop-row .btn{padding:7px 13px;font-size:.8rem;flex:0 0 auto;white-space:nowrap;}
+  .wkpop-row .wkpop-send{flex:1;}
   /* AI model per-avatar toggle (Gemini vs Cerebras) */
   .modelpick{margin:10px 0;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2);}
   .modelpick .mp-row{display:flex;gap:8px;margin-top:6px;}
@@ -365,6 +410,10 @@
   .modelpick.sm .mp-row{margin-top:5px;}
   .modelpick.sm .mp-opt{padding:5px 8px;font-size:.78rem;}
   .modelpick.sm .mp-hint{font-size:.68rem;margin-top:5px;color:var(--faint);}
+  /* The Capabilities panel is the RIGHT column's top element (no margin), and the
+     AI model sits INSIDE it as a borderless bottom section split by a hairline. */
+  .avd-right .caps{margin-top:0;}
+  .avd-right .modelpick.sm{margin:11px 0 0;padding:11px 0 0;border:0;border-top:1px solid var(--line-soft);border-radius:0;background:transparent;}
   .exec{font-family:var(--mono);font-size:.58rem;letter-spacing:.04em;text-transform:uppercase;
     padding:2px 7px;border-radius:999px;margin-left:8px;border:1px solid var(--line);color:var(--faint);white-space:nowrap;}
   .exec.done{color:#54D28F;border-color:rgba(84,210,143,.4);}
@@ -416,10 +465,9 @@
   .cstat{font-family:var(--mono);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;display:inline-flex;align-items:center;gap:6px;color:var(--faint);}
   .cstat b{width:7px;height:7px;border-radius:50%;background:var(--faint);}
   .cstat.on{color:var(--ok);} .cstat.on b{background:var(--ok);box-shadow:0 0 8px rgba(79,192,138,.5);}
-  /* Cedric card → expandable catalog of every tool the one Slack link brokers. */
-  .ctools{border-top:1px solid var(--line-soft);margin-top:2px;padding-top:10px;}
-  .ctools-toggle{background:none;border:0;padding:0;cursor:pointer;font-family:var(--mono);font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);}
-  .ctools-toggle:hover{color:var(--text);}
+  /* Slack agent card → a single "Manage tools" action to the hosted connector page. */
+  .ctools{border-top:1px solid var(--line-soft);margin-top:2px;padding-top:12px;display:flex;flex-direction:column;gap:7px;align-items:flex-start;}
+  .ctools .btn{text-decoration:none;}
 
   .settings{max-width:620px;display:flex;flex-direction:column;gap:14px;}
   .fset{background:var(--panel);border:1px solid var(--line-soft);border-radius:16px;box-shadow:var(--shadow-sm);padding:6px 16px;backdrop-filter:var(--glass);}
@@ -855,7 +903,7 @@
       return '<div class="rost" data-goto="avatars">'+avatarBadge(a.id,a.name)+
         '<span class="nm">'+esc(a.name)+'</span><span class="sdot'+(a.live_now?" live":"")+'"></span></div>';}).join("")
       || '<div class="empty" style="padding:8px;font-size:.78rem">No avatars installed</div>';
-    var connNames={calendar:"Google Calendar",gmail:"Gmail watch",drive:"Google Drive",slack:"Slack",voice:"Voice (ElevenLabs)",meetings:"Meetings (Recall)"};
+    var connNames={calendar:"Google Calendar",gmail:"Gmail watch",drive:"Google Drive",slack:"Slack agent",voice:"Voice (ElevenLabs)",meetings:"Meetings (Recall)"};
     $("#side-conns").innerHTML = '<div class="rost" data-goto="connections"><span class="sdot'+(brainConnected?" ok":"")+'"></span>'+
       '<span class="nm" style="font-size:.82rem;color:'+(brainConnected?"inherit":"var(--faint)")+'">'+connNames.slack+'</span></div>';
 
@@ -908,45 +956,33 @@
         '<div style="min-width:0"><div class="cap-nm">'+esc(label)+'</div><div class="cap-sub">'+sub+'</div></div></div>'+
         '<div class="cap-ctl">'+ctl+'</div></div>';
     }
-    // avatar detail. Configure lives ONLY on the brain-driven avatar (Cedric):
-    // one real connection — the brain — and, once linked, the brain's OWN
-    // connector catalog (fetched live from Cedric). No per-avatar duplicates:
-    // the brain executes with ITS tools, so Gmail/Calendar wiring lives there.
+    // Avatar card — TWO columns. LEFT: identity/status, description, alias email
+    // (+Copy), "Send to a meeting"/"Talk to". RIGHT: a compact Capabilities panel
+    // — the per-avatar Slack-agent + Google toggles (#221) and the AI-model
+    // switch (#220) at the bottom. The old standalone "Cedric orchestrator" block
+    // is GONE from the card: the org-level Slack/Cedric connect+disconnect lives
+    // in the Connections view, so on the card "Slack agent" is just the toggle.
     $("#av-grid").innerHTML = d.avatars.map(function(a){
-      var hasBrain = a.id==="cedric";
-      var brain="";
-      if(hasBrain){
-        var bc=(d.org_connections||[]).find(function(x){return x.avatar_id===a.id&&x.provider==="cedric-brain";});
-        var bst=bc?bc.status:"off";
-        brain='<div class="brain"><div class="br-top"><div style="flex:1;min-width:0">'+
-          '<div class="bn">The brain — Cedric orchestrator</div>'+
-          '<div class="bd">Executes what’s agreed in meetings with its own tools'+
-          (bc&&bc.config&&bc.config.team_id?' · workspace '+esc(bc.config.team_id):'')+'</div></div>'+
-          '<span class="stchip '+esc(bst)+'">'+(bst==="off"?"not connected":esc(bst))+'</span>'+
-          (bst==="connected"||bst==="pending"
-            ?'<button class="btn conn-btn" data-brain-off="'+esc(a.id)+'">Disconnect</button>'
-            :'<button class="btn conn-btn" data-brain-on="'+esc(a.id)+'">'+(bst==="disconnected"?"Reconnect":"Connect")+'</button>')+'</div>'+
-          // One-click connect: "Add to Slack" is the whole flow. The approvals
-          // channel is optional (empty = the installer's DM, per the install
-          // contract) so it hides behind a collapsed Advanced toggle.
-          '<div class="brainform" id="bf-'+esc(a.id)+'">'+
-          '<button class="btn primary" data-brain-slack="'+esc(a.id)+'">Add to Slack</button>'+
-          '<details class="brain-adv"><summary>Advanced / optional</summary>'+
-          '<label class="adv-lbl" for="bf-chan-'+esc(a.id)+'">Slack channel for approvals — leave empty and Cedric DMs you</label>'+
-          '<input id="bf-chan-'+esc(a.id)+'" placeholder="#channel (optional)" aria-label="Slack channel for approvals (optional)" />'+
-          '</details></div></div>'+
-          // the brain's own connectors, fetched live once linked
-          '<div id="brain-conns" class="conns-list" style="margin-top:10px"></div>';
-      }
-      // Per-avatar capability toggles, driven by the summary's
-      // capabilities_toggle. connected=true → interactive switch (posts to the
-      // owner-only endpoint, optimistic); connected=false → greyed + a "Connect
-      // in Connections" link (the connect action itself lives in the Connections
-      // view, never on the card). Order: Slack, then Google.
+      // RIGHT column: compact Capabilities panel. capRow renders an interactive
+      // switch when the org has the integration connected, else a small "Connect
+      // in Connections" link — same #221 wiring, unchanged. "Slack agent" unifies
+      // what used to be the "Slack" row + the separate orchestrator block.
       var capHtml='<div class="caps"><div class="sm-h">Capabilities</div><div class="cap-list">'+
-          capRow(a,"slack","Slack","#")+capRow(a,"google","Google","G")+'</div>'+
-          '<div class="cap-note">Connect an integration once in Connections, then switch it on per avatar.</div></div>';
-      return '<div class="avd">'+
+          capRow(a,"slack","Slack agent","#")+capRow(a,"google","Google","G")+'</div>'+
+          '<div class="cap-note">Connect an integration once in Connections, then switch it on per avatar.</div>'+
+          // AI model (Gemini/Cerebras) — #220 wiring PRESERVED exactly (endpoint,
+          // data attrs, "applies next meeting" copy); now the panel's bottom
+          // section, borderless with a hairline divider.
+          '<div class="modelpick sm"><div class="sm-h">AI model</div><div class="mp-row">'+
+            '<button class="mp-opt'+(a.brain==="gemini"?" on":"")+'" data-brain-set="gemini" data-brain-av="'+esc(a.id)+'">Gemini</button>'+
+            '<button class="mp-opt'+(a.brain==="cerebras"?" on":"")+'" data-brain-set="cerebras" data-brain-av="'+esc(a.id)+'">Cerebras</button></div>'+
+            '<div class="mp-hint">'+(a.brain==="gemini"
+              ?"Gemini Live listens and replies natively — the most conversational feel, on your Google credits."
+              :"Cerebras + "+esc(a.name)+"’s documents — fastest, grounded answers from what it knows.")+
+            ' Applies from the next meeting.</div></div>'+
+        '</div>';
+      return '<div class="avd"><div class="avd-cols">'+
+          '<div class="avd-left">'+
           '<div class="idn">'+avatarBadge(a.id,a.name)+
           '<div style="min-width:0"><div class="nm">'+esc(a.name)+' <span class="pill '+(a.live_now?"live":"idle")+'">'+(a.live_now?"in call":"idle")+'</span></div>'+
           '<div class="ro">'+esc(a.role)+' · '+a.meetings_total+' meeting'+(a.meetings_total===1?"":"s")+(a.last_meeting_at?' · last '+fmtWhen(a.last_meeting_at):'')+'</div></div></div>'+
@@ -956,20 +992,9 @@
             '<div class="al-hint">Add this address to any calendar invite — '+esc(a.name)+' joins the meeting.</div></div>':'')+
           '<div class="acts"><button class="btn primary" data-dispatch="'+esc(a.id)+'">Send to a meeting</button>'+
           '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a></div>'+
-          capHtml+
-          (hasBrain?'<div class="cfg"><div class="sm-h">Configure</div>'+brain+'</div>':'')+
-          // AI model (Gemini/Cerebras) — kept from #220, moved to the BOTTOM and
-          // made smaller/subtler. Exact wiring preserved (endpoint, data attrs,
-          // "applies next meeting" copy).
-          '<div class="modelpick sm"><div class="sm-h">AI model</div><div class="mp-row">'+
-            '<button class="mp-opt'+(a.brain==="gemini"?" on":"")+'" data-brain-set="gemini" data-brain-av="'+esc(a.id)+'">Gemini</button>'+
-            '<button class="mp-opt'+(a.brain==="cerebras"?" on":"")+'" data-brain-set="cerebras" data-brain-av="'+esc(a.id)+'">Cerebras</button></div>'+
-            '<div class="mp-hint">'+(a.brain==="gemini"
-              ?"Gemini Live listens and replies natively — the most conversational feel, on your Google credits."
-              :"Cerebras + "+esc(a.name)+"’s documents — fastest, grounded answers from what it knows.")+
-            ' Applies from the next meeting.</div></div>'+
-        '</div>';}).join("") || '<div class="empty">No avatars installed</div>';
-    if(document.getElementById("brain-conns")) loadBrainConnectors();
+          '</div>'+
+          '<aside class="avd-right">'+capHtml+'</aside>'+
+        '</div></div>';}).join("") || '<div class="empty">No avatars installed</div>';
     $$("#av-grid [data-dispatch]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); go("overview"); $("#dsp-avatar").value=b.getAttribute("data-dispatch"); $("#dsp-url").focus(); }); });
     $$("#av-grid [data-copy]").forEach(function(b){ b.addEventListener("click",function(e){
@@ -1015,109 +1040,36 @@
     // view, never on the card.
     $$("#av-grid [data-goto-conn]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); go("connections"); }); });
-    // connect-the-brain: reveal Slack OAuth, install, or disconnect
-    $$("#av-grid [data-brain-on]").forEach(function(b){ b.addEventListener("click",function(e){
-      e.stopPropagation(); var f=$("#bf-"+b.getAttribute("data-brain-on")); if(f) f.classList.toggle("open"); }); });
-    $$("#av-grid [data-brain-slack]").forEach(function(b){ b.addEventListener("click",function(e){
-      e.stopPropagation(); var id=b.getAttribute("data-brain-slack");
-      var chan=($("#bf-chan-"+id)||{value:""}).value.trim();
-      window.location.assign("/dashboard/connections/brain/slack/start?avatar_id="+
-        encodeURIComponent(id)+"&channel="+encodeURIComponent(chan)); }); });
-    document.querySelectorAll("#av-grid [data-brain-off]").forEach(function(b){ b.addEventListener("click",function(e){
-      e.stopPropagation();
-      var avatarId=b.getAttribute("data-brain-off");
-      // Remote-revoke-first saga: if Cedric's revoke fails (502 remote_revoke_failed)
-      // the link is STILL live remotely — keep showing "connected" (no load()) and
-      // tell the user to retry. Fixed strings only: never surface server internals.
-      b.disabled=true; var prevLabel=b.textContent; b.textContent="Disconnecting…";
-      fetch("/dashboard/connections/brain/disconnect",{
-          method:"POST",headers:headers(),body:JSON.stringify({avatar_id:avatarId})})
-        .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){
-          if(r.status===502||j.error==="remote_revoke_failed"){
-            var eRetry=new Error("Couldn't disconnect. Try again."); eRetry.keepState=true; throw eRetry; }
-          if(!r.ok){ var eGen=new Error("Couldn't disconnect. Try again."); eGen.keepState=true; throw eGen; }
-          toast("Brain disconnected."); load(); }); })
-        .catch(function(err){ toast(err.message||"Couldn't disconnect. Try again.",true);
-          b.disabled=false; b.textContent=prevLabel; }); }); });
-
-    // the brain's own connectors (the product bridge): what Cedric can touch,
-    // fetched live from the orchestrator once the org is linked.
-    function loadBrainConnectors(){
-      var box=document.getElementById("brain-conns"); if(!box) return;
-      fetch("/dashboard/connections/brain/connectors",{headers:headers()})
-        .then(function(r){ return r.json(); })
-        .then(function(j){
-          if(j.status==="pending"){ box.innerHTML='<div class="cnote">Slack install started, but the secure brain link is still pending. Retry Connect if it does not finish.</div>'; return; }
-          if(j.status==="not_connected"){ box.innerHTML='<div class="cnote">Connect Cedric to Slack to choose the workspace tools he may use.</div>'; return; }
-          if(j.status==="unavailable"){ box.innerHTML='<div class="cnote">Cedric is connected, but its tool catalog is temporarily unavailable. Retry in a moment.</div>'; return; }
-          if(j.status!=="ok"){ box.innerHTML='<div class="cnote">The tool connection state could not be verified. Retry in a moment.</div>'; return; }
-          // Display map: which brain connectors to surface, and how. Keyed by the
-          // connector key (falls back to its name), normalized to lowercase-alnum.
-          //   real → connectable now: live state from Cedric's catalog + "Connect".
-          //   soon → non-clickable "coming soon" chip (rendered statically; these
-          //          need not be in the live catalog yet).
-          // A connector NOT listed here is hidden. To promote a tool later, just
-          // move its key from soon → real (or add a new real key).
-          var CONN_MAP={
-            gmail:{s:"real"}, googlecalendar:{s:"real"}, calendar:{s:"real"},
-            slack:{s:"real"}, github:{s:"real"}, notion:{s:"real"},
-            hubspot:{s:"soon",name:"HubSpot"}, linear:{s:"soon",name:"Linear"}
-          };
-          var norm=function(x){return String(x||"").toLowerCase().replace(/[^a-z0-9]/g,"");};
-          var mapOf=function(c){return CONN_MAP[norm(c.key)]||CONN_MAP[norm(c.name)];};
-          // REAL: only catalog connectors mapped "real" — with live state + Connect.
-          var real=(j.connectors||[]).filter(function(c){var m=mapOf(c);return m&&m.s==="real";})
-            .map(function(c){
-              var chip=c.connected
-                ?'<span class="stchip '+(c.needs_reconnect?"pending":"connected")+'">'+(c.needs_reconnect?"reconnect":"connected")+'</span>'
-                :'<span class="stchip">not connected</span>';
-              // Tell Cedric where to send the user back once the OAuth completes:
-              // our dashboard, so the connection reflects here instead of leaving
-              // them on Cedric's site. Cedric validates this to a Laura origin.
-              // Built ONLY when connect_url exists — Slack ships connect_url:null
-              // (the workspace IS Slack) and null.indexOf threw, killing the whole
-              // render into the catch ("Brain connectors unavailable right now").
-              var act=c.connected||!c.connect_url
-                ?''
-                :'<a class="btn conn-btn" style="text-decoration:none" href="'+
-                  esc(c.connect_url+(c.connect_url.indexOf("?")>=0?"&":"?")+
-                    "return_url="+encodeURIComponent(location.origin+"/dashboard"))+
-                  '" target="_blank" rel="noopener">Connect</a>';
-              return '<div class="crow"><div style="min-width:0"><div class="cn">'+esc(c.name)+'</div>'+
-                '<div class="cd">'+esc(c.account?("· "+c.account):c.description)+'</div></div>'+chip+act+'</div>';
-            });
-          // COMING SOON: static rows straight from the map (display-only, no button).
-          var soon=Object.keys(CONN_MAP).filter(function(k){return CONN_MAP[k].s==="soon";})
-            .map(function(k){ return '<div class="crow"><div style="min-width:0"><div class="cn">'+
-              esc(CONN_MAP[k].name||k)+'</div><div class="cd">Coming soon</div></div>'+
-              '<span class="stchip" style="opacity:.65">coming soon</span></div>'; });
-          // MORE: always-visible link to Cedric's full catalog for anyone who wants
-          // beyond the five surfaced here. Prefer a connector's manage_url deep link
-          // if Cedric returns one; otherwise fall back to the Cedric app so the link
-          // is NEVER missing (the owner asked to always offer "manage in Cedric").
-          var mgr="";
-          (j.connectors||[]).some(function(c){ if(c&&c.manage_url){ mgr=String(c.manage_url); return true; } return false; });
-          var more = '<a href="'+esc(mgr||"https://www.meet-cedric.com")+'" target="_blank" rel="noopener" style="display:inline-block;margin-top:12px;font-size:13px;color:var(--faint);text-decoration:none">Need more tools? Manage in Cedric ↗</a>';
-          box.innerHTML=(real.join("")+soon.join("")
-            || '<div class="cnote">No tools available to connect yet.</div>')+more;
-        })
-        .catch(function(){ box.innerHTML='<div class="cnote">Brain connectors unavailable right now.</div>'; });
-    }
+    // (The org-level Cedric brain connect/disconnect + its connector catalog now
+    // live ONLY in the Connections view — see #conns further below. The card no
+    // longer duplicates them; on the card Slack is just the per-avatar toggle.)
 
     // upcoming meetings — the connected calendar's queue (auto-join inbox).
     // Prefetched once per page (window-scoped guard: renderAll reruns on every
     // summary refresh and must NOT refetch the calendar each tick); the ↻
     // button and OAuth return force a refresh.
-    // Header bar for the weekly calendar: an Apple/Google-style week label
-    // (the date range for the 7 days starting today) + which calendar + reload.
+    // ── Weekly calendar (Upcoming) ─────────────────────────────────────────────
+    // Desktop: a real Apple/Google-style HOUR GRID — a left time axis + 7 day
+    // columns, each meeting an absolutely-positioned block (top = start time,
+    // height ∝ duration, overlapping meetings side-by-side). Narrow screens fall
+    // back to compact day-grouped sections. HOUR_PX MUST match the CSS gridline
+    // pitch (the 44px in .cal-col's repeating-linear-gradient).
+    var HOUR_PX=44;
+    var MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
     var MON3=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    var DAYN=["SUN","MON","TUE","WED","THU","FRI","SAT"];
+    function pad2(n){ return ("0"+n).slice(-2); }
+    // Calendar header — full month + year, the 7-day range, calendar account + ↻.
     function wkHead(cal){
       var t0=new Date(); t0.setHours(0,0,0,0);
       var t1=new Date(t0.getTime()+6*86400000);
-      var range=MON3[t0.getMonth()]+" "+t0.getDate()+" – "+MON3[t1.getMonth()]+" "+t1.getDate();
-      return '<div class="wkbar"><div class="wkcal">📅 <b>This week</b> · <span class="wkrange">'+range+'</span> · '+
-        esc(cal.email||"calendar connected")+'</div>'+
-        '<button class="btn" id="upcoming-reload" style="padding:6px 12px;font-size:.78rem">↻</button></div>';
+      var month=MONTHS[t0.getMonth()]+" "+t0.getFullYear();
+      var range=MON3[t0.getMonth()]+" "+t0.getDate()+" – "+
+        (t0.getMonth()===t1.getMonth()?"":MON3[t1.getMonth()]+" ")+t1.getDate();
+      return '<div class="wkbar"><div><div class="wk-month">'+esc(month)+'</div>'+
+        '<div class="wkrange">'+esc(range)+'</div></div>'+
+        '<div class="wk-head-r"><span class="wk-cal">📅 '+esc(cal.email||"Calendar connected")+'</span>'+
+        '<button class="btn" id="upcoming-reload" style="padding:6px 12px;font-size:.78rem" aria-label="Reload calendar">↻</button></div></div>';
     }
     // Resolve a friendly avatar name from its id (for the "🎭 name" badge).
     function avName(id){
@@ -1125,39 +1077,208 @@
       var a=((DATA&&DATA.avatars)||[]).find(function(x){return x.id===id;});
       return a?a.name:(id.charAt(0).toUpperCase()+id.slice(1));
     }
-    // One meeting BLOCK. multi = the org has >1 granted avatar (show a picker);
-    // otherwise a solo "Send <name>" button. A meeting the avatar is being
-    // sent/queued to (auto_join) becomes a filled block with a "🎭 name" badge
-    // and no Send control; a plain meeting is outlined with the Send control.
-    // NULL-URL GUARD (#197 class): meeting_url is coerced to a string and a card
-    // with no link never gets a send control (no string method on a null url).
-    function wkCard(m,multi,avOpts,av0){
-      var url=m.meeting_url||"";
-      var t=new Date(m.start_time);
-      var hm=isNaN(t)?"—":(("0"+t.getHours()).slice(-2)+":"+("0"+t.getMinutes()).slice(-2));
+    // Parse a meeting into calendar geometry. Returns null when start_time is
+    // missing/unparseable (robust — the caller skips it, never crashes). All-day
+    // events arrive as a bare date (no "T"); duration falls back to 40 min.
+    function parseEvent(m){
+      var raw=String(m.start_time||""), s=new Date(raw);
+      if(isNaN(s)) return null;
+      var allDay=(raw.indexOf("T")<0);
+      var e=m.end_time?new Date(m.end_time):null;
+      if(!e||isNaN(e)||e<=s) e=new Date(s.getTime()+40*60000);
+      return {m:m,s:s,e:e,allDay:allDay,startMin:s.getHours()*60+s.getMinutes(),endMin:e.getHours()*60+e.getMinutes()};
+    }
+    function timeLabel(ev){
+      if(ev.allDay) return "All day";
+      return pad2(ev.s.getHours())+":"+pad2(ev.s.getMinutes())+" – "+pad2(ev.e.getHours())+":"+pad2(ev.e.getMinutes());
+    }
+    function clampMin(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
+    // Interval-graph column assignment (Google-calendar style): a maximal set of
+    // mutually-overlapping events splits the width side-by-side; a gap resets the
+    // columns for the next group.
+    function layoutDay(evs){
+      evs.sort(function(a,b){ return a.startMin-b.startMin || a.endMin-b.endMin; });
+      var colEnds=[], group=[], groupMax=-1;
+      function flush(){ var n=Math.max(1,colEnds.length); group.forEach(function(ev){ ev.cols=n; }); colEnds=[]; group=[]; groupMax=-1; }
+      evs.forEach(function(ev){
+        if(group.length && ev.startMin>=groupMax) flush();
+        var placed=false;
+        for(var c=0;c<colEnds.length;c++){ if(colEnds[c]<=ev.startMin){ ev.col=c; colEnds[c]=ev.endMin; placed=true; break; } }
+        if(!placed){ ev.col=colEnds.length; colEnds.push(ev.endMin); }
+        group.push(ev); groupMax=Math.max(groupMax,ev.endMin);
+      });
+      flush();
+    }
+    // Shared dispatch — the exact POST /sessions/start the main form uses
+    // (org-scoped, billing-gated, one-bot-per-URL dedup server-side). #197 guard:
+    // an empty url never reaches here (a block with no link is not a send target).
+    function dispatchMeeting(url,title,avatar,btn,doneLabel){
+      if(!url){ toast("This meeting doesn't have a link yet.",true); return; }
+      var orig=btn.textContent; btn.disabled=true; btn.textContent="Sending…";
+      var body={meeting_url:url,avatar_id:avatar};
+      if(title) body.context={meeting:{title:title}};
+      fetch("/sessions/start",{method:"POST",headers:headers(),body:JSON.stringify(body)})
+        .then(function(r){ return r.json().then(function(jr){ return {ok:r.ok,status:r.status,j:jr}; }); })
+        .then(function(res){
+          if(!res.ok){
+            if(res.status===402){ go("usage"); loadBilling();
+              throw new Error("Included minutes used up. Upgrade to Solo to continue."); }
+            var msg=(res.j&&(res.j.error==="avatar_busy"?res.j.detail:(res.j.error||res.j.detail)))||"request failed";
+            throw new Error(msg);
+          }
+          var picked=(DATA&&DATA.avatars||[]).find(function(a){return a.id===avatar;});
+          toast((picked?picked.name:"Laura")+" is joining — admit it from the waiting room if prompted.");
+          btn.textContent=doneLabel||"Sent ✓"; closePop();
+          setTimeout(function(){ loadUpcoming(true); },1600);
+        })
+        .catch(function(e){ toast("Send failed: "+e.message,true); btn.disabled=false; btn.textContent=orig; });
+    }
+    // ── Desktop hour grid ──
+    function renderHourGrid(days,multi,avOpts,av0){
+      // Day window: default 07:00–21:00, widened to include any out-of-hours
+      // (timed) meeting so nothing is clipped.
+      var minM=7*60, maxM=21*60;
+      days.forEach(function(dd){ dd.evs.forEach(function(ev){ if(!ev.allDay){ minM=Math.min(minM,ev.startMin); maxM=Math.max(maxM,ev.endMin); } }); });
+      var winStart=Math.max(0,Math.floor(minM/60)), winEnd=Math.min(24,Math.ceil(maxM/60));
+      if(winEnd-winStart<8) winEnd=Math.min(24,winStart+10);
+      var winStartMin=winStart*60, winEndMin=winEnd*60, totalH=(winEnd-winStart)*HOUR_PX;
+      var head='<div class="cal-corner"></div>';
+      days.forEach(function(dd){
+        head+='<div class="cal-dh'+(dd.today?" today":"")+'"><span class="dn">'+
+          (dd.today?"TODAY":DAYN[dd.date.getDay()])+'</span><span class="dd">'+dd.date.getDate()+'</span></div>';
+      });
+      var axis='<div class="cal-axis" style="height:'+totalH+'px">';
+      for(var h=winStart;h<=winEnd;h++){ axis+='<span class="cal-hr" style="top:'+((h-winStart)*HOUR_PX)+'px">'+pad2(h)+':00</span>'; }
+      axis+='</div>';
+      var nowD=new Date(), nowMin=nowD.getHours()*60+nowD.getMinutes(), body="";
+      days.forEach(function(dd){
+        var timed=dd.evs.filter(function(ev){ return !ev.allDay; });
+        var allday=dd.evs.filter(function(ev){ return ev.allDay; });
+        layoutDay(timed);
+        var col='<div class="cal-col'+(dd.today?" today":"")+'" style="height:'+totalH+'px">';
+        allday.forEach(function(ev,ix){ col+=evBlockAllDay(ev,ix); });
+        timed.forEach(function(ev){
+          var top=(clampMin(ev.startMin,winStartMin,winEndMin)-winStartMin)/60*HOUR_PX;
+          var bot=(clampMin(ev.endMin,winStartMin,winEndMin)-winStartMin)/60*HOUR_PX;
+          var height=Math.max(18,bot-top), w=100/ev.cols, left=ev.col*w;
+          col+=evBlock(ev,{top:top,height:height,left:left,width:w});
+        });
+        if(dd.today && nowMin>=winStartMin && nowMin<=winEndMin){
+          col+='<div class="cal-now" style="top:'+((nowMin-winStartMin)/60*HOUR_PX).toFixed(1)+'px"></div>';
+        }
+        body+=col+'</div>';
+      });
+      return '<div class="cal"><div class="calscroll"><div class="calgrid">'+head+axis+body+'</div></div></div>';
+    }
+    function evBlock(ev,geo){
+      var m=ev.m, url=m.meeting_url||"", going=!!m.auto_join;
+      // A short block (a ~30-min slot, ~22px) can't show every line, so it gets
+      // .short — CSS then hides the time/affordance so the TITLE always wins.
+      var short=geo.height<30;
+      var cls=(short?" short":"");
+      var style='top:'+geo.top.toFixed(1)+'px;height:'+geo.height.toFixed(1)+'px;left:'+geo.left.toFixed(3)+'%;width:calc('+geo.width.toFixed(3)+'% - 3px);right:auto';
+      // Title FIRST (most important — survives clipping), then the time, then the
+      // state affordance. Platform is dropped on the compact grid.
+      var t='<span class="ev-title">'+esc(m.title||"Meeting")+'</span><span class="ev-time">'+esc(timeLabel(ev))+'</span>';
+      if(going) return '<div class="cal-ev going'+cls+'" style="'+style+'" data-url="'+esc(url)+'" data-title="'+esc(m.title||"")+'" data-going="1" role="button" tabindex="0" title="'+esc(avName(m.auto_join_avatar))+' is going — click for options">'+t+'<span class="avbadge">🎭 '+esc(avName(m.auto_join_avatar))+'</span></div>';
+      if(url) return '<div class="cal-ev avail'+cls+'" style="'+style+'" data-url="'+esc(url)+'" data-title="'+esc(m.title||"")+'" role="button" tabindex="0" title="Click to send an avatar">'+t+'<span class="ev-send">Send ▾</span></div>';
+      return '<div class="cal-ev nolink'+cls+'" style="'+style+'" title="No meeting link yet">'+t+'<span class="ev-nolink">No link</span></div>';
+    }
+    // All-day events (rare here; usually link-less) — small chips stacked at the
+    // top of the day column, off the hour axis.
+    function evBlockAllDay(ev,idx){
+      var m=ev.m, url=m.meeting_url||"", going=!!m.auto_join;
+      var cls=going?"going":(url?"avail":"nolink");
+      var extra=going?('<span class="avbadge">🎭 '+esc(avName(m.auto_join_avatar))+'</span>'):(url?'<span class="ev-send">Send ▾</span>':'<span class="ev-nolink">No link</span>');
+      var attrs=(going||url)?(' data-url="'+esc(url)+'" data-title="'+esc(m.title||"")+'"'+(going?' data-going="1"':'')+' role="button" tabindex="0"'):'';
+      return '<div class="cal-ev allday '+cls+'" style="top:'+(2+idx*22)+'px;left:2px;right:2px;height:20px"'+attrs+'><span class="ev-title">'+esc(m.title||"Meeting")+'</span><span class="ev-time">All day</span>'+extra+'</div>';
+    }
+    // ── Mobile fallback: compact day-grouped sections ──
+    function renderSections(days,multi,avOpts,av0){
+      var out='<div class="wkgrid">';
+      days.forEach(function(dd){
+        var evs=dd.evs.slice().sort(function(a,b){ return a.startMin-b.startMin; });
+        var cards=evs.map(function(ev){ return sectionCard(ev,multi,avOpts,av0); }).join("");
+        out+='<div class="wkday'+(dd.today?" today":"")+(evs.length?"":" empty")+'">'+
+          '<div class="wkday-h"><span class="dn">'+(dd.today?"TODAY":DAYN[dd.date.getDay()])+'</span>'+
+          '<span class="dd">'+dd.date.getDate()+' '+MON3[dd.date.getMonth()]+'</span></div>'+
+          '<div class="wkday-body">'+cards+'</div></div>';
+      });
+      return out+'</div>';
+    }
+    function sectionCard(ev,multi,avOpts,av0){
+      var m=ev.m, url=m.meeting_url||"", going=!!m.auto_join, badge="", state;
       var plat=(m.platform&&m.platform!=="—")?'<span class="platc">'+esc(m.platform)+'</span>':"";
-      var going=!!m.auto_join, badge="", state;
       if(going){
-        // Avatar going here → colored block + badge chip naming WHO. No send btn.
         badge='<span class="avbadge">🎭 '+esc(avName(m.auto_join_avatar))+'</span>';
-        state='<span class="stchip connected">✓ Queued</span>';
+        state='<span class="stchip connected">✓ Going</span>';
       } else if(url){
-        // Available → "Send [avatar ▾]". Reuse DATA.avatars (already in the
-        // summary payload) — a picker when there are several, a solo button
-        // when there is only one. Dispatch goes through POST /sessions/start.
         state=multi
           ? '<div class="wksend"><select class="wk-av" aria-label="Choose avatar">'+avOpts+'</select>'+
               '<button class="btn primary wk-send" data-send="'+esc(url)+'" data-title="'+esc(m.title||"")+'">Send</button></div>'
           : '<div class="wksend solo"><button class="btn primary wk-send" data-send="'+esc(url)+'" data-title="'+esc(m.title||"")+'" data-av="'+esc(av0.id)+'">Send '+esc(av0.name)+'</button></div>';
       } else {
-        // No join link yet — no send control, never a crash.
-        state='<span class="stchip" style="opacity:.6">no link</span>';
+        state='<span class="stchip" style="opacity:.6">No link</span>';
       }
-      return '<div class="mcard'+(going?' going':'')+'">'+
-        '<div class="mtop"><span class="mtime">'+hm+'</span>'+badge+'</div>'+
-        '<span class="mtitle">'+esc(m.title||"Meeting")+'</span>'+
-        (plat?'<div class="mmeta">'+plat+'</div>':"")+
+      return '<div class="mcard'+(going?' going':'')+'"><div class="mtop"><span class="mtime">'+esc(timeLabel(ev))+'</span>'+badge+'</div>'+
+        '<span class="mtitle">'+esc(m.title||"Meeting")+'</span>'+(plat?'<div class="mmeta">'+plat+'</div>':"")+
         '<div class="avstate">'+state+'</div></div>';
+    }
+    // Mobile inline Send buttons (the sections' own control).
+    function wireSend(box){
+      box.querySelectorAll(".wk-send").forEach(function(btn){
+        btn.addEventListener("click",function(){
+          var u=btn.getAttribute("data-send")||"", title=btn.getAttribute("data-title")||"";
+          var sel=btn.parentNode&&btn.parentNode.querySelector(".wk-av");
+          var avatar=(sel&&sel.value)||btn.getAttribute("data-av")||(document.getElementById("dsp-avatar")||{}).value||
+            ((DATA&&DATA.avatars&&DATA.avatars[0])?DATA.avatars[0].id:"laura");
+          dispatchMeeting(u,title,avatar,btn);
+        });
+      });
+    }
+    // Desktop: clicking (or Enter/Space on) an event block opens the send/manage
+    // popover — fixed-position + viewport-clamped so grid scroll never clips it.
+    function wirePopover(box,multi,avOpts,av0){
+      box.querySelectorAll(".cal-ev[role='button']").forEach(function(el){
+        el.addEventListener("click",function(){ openPop(el,multi,avOpts,av0); });
+        el.addEventListener("keydown",function(e){ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openPop(el,multi,avOpts,av0); } });
+      });
+    }
+    function closePop(){
+      var p=document.getElementById("wkpop");
+      if(p){ if(p._outside) document.removeEventListener("click",p._outside,true);
+        if(p._esc) document.removeEventListener("keydown",p._esc,true); p.remove(); }
+    }
+    function openPop(el,multi,avOpts,av0){
+      closePop();
+      var url=el.getAttribute("data-url")||"", title=el.getAttribute("data-title")||"", going=el.getAttribute("data-going")==="1";
+      var p=document.createElement("div"); p.className="wkpop"; p.id="wkpop";
+      var inner='<div class="wkpop-t">'+esc(title||"Meeting")+'</div>';
+      if(going){
+        inner+='<div class="wkpop-sub">An avatar is already going to this meeting.</div>';
+        if(url) inner+='<div class="wkpop-row"><a class="btn" style="text-decoration:none;flex:1;text-align:center" href="'+esc(url)+'" target="_blank" rel="noopener">Open link ↗</a></div>';
+      } else if(url){
+        inner+='<div class="wkpop-sub">Send an avatar to join this meeting.</div>'+
+          '<div class="wkpop-row">'+(multi?'<select class="wkpop-av" aria-label="Choose avatar">'+avOpts+'</select>':'')+
+          '<button class="btn primary wkpop-send">Send'+(multi?'':' '+esc(av0.name))+'</button></div>';
+      } else {
+        inner+='<div class="wkpop-sub">This meeting has no join link yet.</div>';
+      }
+      p.innerHTML=inner; document.body.appendChild(p);
+      var r=el.getBoundingClientRect(), pw=Math.min(288,window.innerWidth-16);
+      p.style.width=pw+"px";
+      var left=Math.min(r.left,window.innerWidth-pw-8), top=r.bottom+6;
+      if(top+160>window.innerHeight) top=Math.max(8,r.top-166);
+      p.style.left=Math.max(8,left)+"px"; p.style.top=top+"px";
+      var sendBtn=p.querySelector(".wkpop-send");
+      if(sendBtn) sendBtn.addEventListener("click",function(){
+        var sel=p.querySelector(".wkpop-av"); var avatar=(sel&&sel.value)||av0.id||"laura";
+        dispatchMeeting(url,title,avatar,sendBtn,"Sent ✓");
+      });
+      var outside=function(e){ if(!p.contains(e.target)&&!(e.target.closest&&e.target.closest(".cal-ev"))) closePop(); };
+      var esc2=function(e){ if(e.key==="Escape") closePop(); };
+      p._outside=outside; p._esc=esc2;
+      setTimeout(function(){ document.addEventListener("click",outside,true); document.addEventListener("keydown",esc2,true); },0);
     }
     function loadUpcoming(force){
       var box=document.getElementById("upcoming-panel"); if(!box) return;
@@ -1173,7 +1294,7 @@
           if(!cal.connected){
             box.innerHTML='<div style="text-align:center;padding:44px 20px">'+
               '<div style="font-size:1.7rem;margin-bottom:8px">📅</div>'+
-              '<h2 style="margin:0 0 6px">Connect Google to see your meetings</h2>'+
+              '<h2 style="margin:0 0 6px">Connect Google to see your week</h2>'+
               '<div class="ph" style="max-width:48ch;margin:0 auto 18px">Connect your Google Calendar: this week\'s meetings appear here and you can send an avatar with one click.</div>'+
               (cal.connect_url
                 ? '<a class="btn primary" style="text-decoration:none" href="'+esc(cal.connect_url)+'">Connect Google</a>'
@@ -1191,72 +1312,47 @@
             if(rb) rb.addEventListener("click",function(){ loadUpcoming(true); });
             return;
           }
-          // --- weekly grid: 7 day columns starting today, meetings bucketed by
-          // local date and time-ordered inside each day. ---
+          // ── Build the week: bucket meetings by local start date, skipping any
+          // with a bad/missing start_time (parseEvent → null → skipped, no crash).
+          // Then render the desktop HOUR GRID, or day-grouped sections on narrow
+          // screens (matchMedia; re-rendered once if the breakpoint is crossed). ──
           var meetings=(j.meetings||[]);
           var avatars=(DATA&&DATA.avatars)||[];
           var multi=avatars.length>1;
           var avOpts=avatars.map(function(a){ return '<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>'; }).join("");
           var av0=avatars[0]||{id:"laura",name:"Laura"};
-          var DAYN=["SUN","MON","TUE","WED","THU","FRI","SAT"];
+          var today=new Date(); today.setHours(0,0,0,0);
           function dayKey(d){ return d.getFullYear()+"-"+d.getMonth()+"-"+d.getDate(); }
           var buckets={};
           meetings.forEach(function(m){
-            var d=new Date(m.start_time); if(isNaN(d)) return;
-            (buckets[dayKey(d)]=buckets[dayKey(d)]||[]).push(m);
+            var ev=parseEvent(m); if(!ev) return;   // bad/missing start_time → skip
+            (buckets[dayKey(ev.s)]=buckets[dayKey(ev.s)]||[]).push(ev);
           });
-          var today=new Date(); today.setHours(0,0,0,0);
-          var cols=[];
+          var days=[];
           for(var i=0;i<7;i++){
             var day=new Date(today.getTime()+i*86400000);
-            var list=(buckets[dayKey(day)]||[]).slice().sort(function(a,b){ return (new Date(a.start_time))-(new Date(b.start_time)); });
-            var cards=list.map(function(m){ return wkCard(m,multi,avOpts,av0); }).join("");
-            cols.push('<div class="wkday'+(i===0?" today":"")+(list.length?"":" empty")+'">'+
-              '<div class="wkday-h"><span class="dn">'+DAYN[day.getDay()]+'</span><span class="dd">'+day.getDate()+'</span></div>'+
-              (cards||'<div class="wkday-none">—</div>')+'</div>');
+            days.push({date:day,today:i===0,evs:(buckets[dayKey(day)]||[]).slice()});
           }
-          var anyMeeting=meetings.length>0;
-          box.innerHTML=wkHead(cal)+(anyMeeting
-            ? '<div class="wkgrid">'+cols.join("")+'</div>'
-            : '<div class="ph" style="padding:28px;text-align:center">No meetings scheduled this week.<br><span class="cnote">Your Google Calendar meetings appear here — then you can send an avatar with one click.</span></div>');
+          var anyMeeting=days.some(function(dd){ return dd.evs.length>0; });
+          var desktop=!!(window.matchMedia && window.matchMedia("(min-width:820px)").matches);
+          if(!anyMeeting){
+            box.innerHTML=wkHead(cal)+'<div class="ph" style="padding:34px;text-align:center">No meetings this week.<br>'+
+              '<span class="cnote">Your Google Calendar meetings appear here — then you can send an avatar with one click.</span></div>';
+          } else {
+            box.innerHTML=wkHead(cal)+(desktop?renderHourGrid(days,multi,avOpts,av0):renderSections(days,multi,avOpts,av0));
+          }
           var rl=document.getElementById("upcoming-reload");
           if(rl) rl.addEventListener("click",function(){ loadUpcoming(true); });
-          // Per-card dispatch: reuse the exact POST /sessions/start the main
-          // dispatch form uses (org-scoped + billing-gated + one-bot-per-URL
-          // dedup server-side). The URL rides in a data attribute; the avatar
-          // is the card's own picker (multi) or its data-av (solo), falling
-          // back to the global dispatch selector then the first avatar.
-          box.querySelectorAll(".wk-send").forEach(function(btn){
-            btn.addEventListener("click",function(){
-              var u=btn.getAttribute("data-send")||"";
-              if(!u){ toast("This meeting doesn't have a link yet.",true); return; }
-              var title=btn.getAttribute("data-title")||"";
-              var sel=btn.parentNode&&btn.parentNode.querySelector(".wk-av");
-              var avatar=(sel&&sel.value) || btn.getAttribute("data-av") ||
-                (document.getElementById("dsp-avatar")||{}).value ||
-                ((DATA&&DATA.avatars&&DATA.avatars[0])?DATA.avatars[0].id:"laura");
-              var orig=btn.textContent;
-              btn.disabled=true; btn.textContent="Sending…";
-              var body={meeting_url:u,avatar_id:avatar};
-              if(title) body.context={meeting:{title:title}};
-              fetch("/sessions/start",{method:"POST",headers:headers(),body:JSON.stringify(body)})
-                .then(function(r){ return r.json().then(function(jr){ return {ok:r.ok,status:r.status,j:jr}; }); })
-                .then(function(res){
-                  if(!res.ok){
-                    if(res.status===402){ go("usage"); loadBilling();
-                      throw new Error("Included minutes used up. Upgrade to Solo to continue."); }
-                    var msg=(res.j&&(res.j.error==="avatar_busy"?res.j.detail:(res.j.error||res.j.detail)))||"request failed";
-                    throw new Error(msg);
-                  }
-                  var picked=(DATA&&DATA.avatars||[]).find(function(a){return a.id===avatar;});
-                  toast((picked?picked.name:"Laura")+" is joining — admit it from the waiting room if prompted.");
-                  btn.textContent="Sent ✓";
-                  setTimeout(function(){ loadUpcoming(true); },1600);
-                })
-                .catch(function(e){ toast("Send failed: "+e.message,true);
-                  btn.disabled=false; btn.textContent=orig; });
-            });
-          });
+          wireSend(box);                        // mobile inline Send controls
+          wirePopover(box,multi,avOpts,av0);    // desktop event-block popover
+          // Re-render once if the viewport crosses the desktop/mobile breakpoint
+          // (the hour grid is desktop-only; sections are the mobile fallback).
+          if(window.matchMedia && !window._wkMq){
+            window._wkMq=window.matchMedia("(min-width:820px)");
+            var onMq=function(){ if(window._upcomingLoaded) loadUpcoming(true); };
+            if(window._wkMq.addEventListener) window._wkMq.addEventListener("change",onMq);
+            else if(window._wkMq.addListener) window._wkMq.addListener(onMq);
+          }
         })
         .catch(function(){ window._upcomingLoaded=false;
           box.innerHTML='<div class="cnote" style="padding:20px">Calendar unavailable at the moment.</div>'; });
@@ -1370,33 +1466,37 @@
     // couple. NOTE: both cards build their connect target from FIXED URLs
     // (/oauth/google/connect, /dashboard/connections/brain/slack/start), never a
     // Cedric connect_url, so there is no null-connect_url .indexOf hazard here
-    // (the #197 class); the only connect_url access lives in loadBrainConnectors,
-    // which already guards it.
+    // (the #197 class); the Slack agent's "Manage tools" resolves manage_url in
+    // resolveSlackManageUrl, which is likewise null-guarded.
     var googleNative=!!(d.connections&&d.connections.google_native);
     var slackConnected=brainConnected; // cedric-brain connected row (the Slack add-on)
     $("#conns").innerHTML =
       // ── Google (native) — Laura's own Google, independent of Cedric ──
       '<div class="conn"><div class="nm">Google <span class="stchip" style="margin-left:6px">native</span></div>'+
-      '<div class="ds">Native — Laura schedules &amp; emails on your Google directly. No Cedric. Grants Calendar + Gmail on your own account.</div>'+
+      '<div class="ds">Native — Laura schedules &amp; emails on your Google directly. No add-on. Grants Calendar + Gmail on your own account.</div>'+
       '<div class="foot"><span class="cstat'+(googleNative?" on":"")+'"><b></b>'+(googleNative?"Connected":"Not connected")+'</span>'+
       (googleNative
         ?'<button class="btn" data-google-off>Disconnect</button>'
         :'<a class="btn primary" style="text-decoration:none" href="/oauth/google/connect">Connect Google</a>')+
       '</div></div>'+
-      // ── Slack (optional add-on via Cedric), independent of Google ──
-      // One "Add to Slack" link brokers a WHOLE catalog of tools (Slack, Notion,
-      // HubSpot, … via Pipedream). When connected the card expands to show every
-      // brokered tool with its live state — fetched from the Cedric proxy on demand.
-      '<div class="conn"><div class="nm">Slack <span class="stchip" style="margin-left:6px">add-on</span></div>'+
-      '<div class="ds">Optional add-on — one connection brokers Slack, Notion, HubSpot and more via Cedric.</div>'+
+      // ── Slack agent (optional add-on), independent of Google ──
+      // One connection lets the Slack agent use Slack + a catalog of tools
+      // (Notion, HubSpot, …). The tools are NOT dumped inline — a single "Manage
+      // tools" action opens the hosted connector page (manage_url) where they're
+      // added/managed. Connect + Disconnect (org-level) are preserved here.
+      '<div class="conn"><div class="nm">Slack agent <span class="stchip" style="margin-left:6px">add-on</span></div>'+
+      '<div class="ds">Optional add-on — one connection lets your Slack agent use Slack, Notion, HubSpot and more.</div>'+
       '<div class="foot"><span class="cstat'+(slackConnected?" on":"")+'"><b></b>'+(slackConnected?"Connected":"Not connected")+'</span>'+
       (slackConnected
         ?'<button class="btn" data-slack-off>Disconnect</button>'
         :'<button class="btn primary" data-slack-on>Add to Slack</button>')+
       '</div>'+
+      // When connected: ONE clean action → the hosted connector/manage page. Its
+      // href is resolved to manage_url after render (guarded); it starts on a
+      // safe fallback so the link is never dead (#197 class).
       (slackConnected
-        ?'<div class="ctools"><button type="button" class="ctools-toggle" data-cedric-tools-toggle aria-expanded="false" aria-controls="cedric-tools">▾ Show tools</button>'+
-          '<div class="conns-list" id="cedric-tools" hidden style="margin-top:10px"></div></div>'
+        ?'<div class="ctools"><a class="btn primary" data-slack-manage target="_blank" rel="noopener" style="text-decoration:none" href="https://www.meet-cedric.com">Manage tools ↗</a>'+
+          '<div class="cnote">Add and manage the tools your Slack agent can use.</div></div>'
         :'')+
       '</div>';
     // Google (native) disconnect — clears ONLY the native token, never Slack.
@@ -1422,81 +1522,36 @@
           toast("Slack disconnected."); load(); }); })
         .catch(function(err){ toast(err.message||"Couldn't disconnect Slack. Try again.",true);
           btn.disabled=false; btn.textContent=prev; }); }); });
-    // Slack (add-on) → expand to the FULL catalog of tools this one link brokers.
-    // Lazy: the Cedric proxy is only hit on first expand (no-store + cache-bust so
-    // a just-connected tool shows immediately, never a pre-connect snapshot).
-    $$("#conns [data-cedric-tools-toggle]").forEach(function(btn){ btn.addEventListener("click",function(){
-      var box=document.getElementById("cedric-tools"); if(!box) return;
-      if(box.hasAttribute("hidden")){
-        box.removeAttribute("hidden"); btn.setAttribute("aria-expanded","true"); btn.textContent="▴ Hide tools";
-        if(btn.getAttribute("data-loaded")!=="1"){ btn.setAttribute("data-loaded","1"); loadCedricTools(); }
-      } else {
-        box.setAttribute("hidden",""); btn.setAttribute("aria-expanded","false"); btn.textContent="▾ Show tools";
-      }
-    }); });
+    // Slack agent (add-on) → resolve the "Manage tools" button to the hosted
+    // connector/manage page (manage_url). No inline tool list any more.
+    if(slackConnected) resolveSlackManageUrl();
     wireAvatarImages();
   }
 
-  // The Cedric catalog, rendered under the Slack card: EVERY tool the one Slack
-  // link brokers (Slack + Notion + HubSpot + … via Pipedream), each with its live
-  // state. Reads the Laura proxy GET /dashboard/connections/brain/connectors,
-  // which passes Cedric's catalog through verbatim: top-level {status, connectors,
-  // manage_url?} and per-connector {key, name, connected, connect_url?, account?,
-  // needs_reconnect?, description?}. Renders from that real shape — nothing invented.
-  function loadCedricTools(){
-    var box=document.getElementById("cedric-tools"); if(!box) return;
-    box.innerHTML='<div class="cnote">Loading tools…</div>';
-    // cache-bust + no-store: the freshest catalog, never an edge/browser replay.
+  // Resolve the Slack agent's "Manage tools" button to the hosted connector/manage
+  // page. Reads the Laura proxy GET /dashboard/connections/brain/connectors and
+  // pulls the catalog's manage_url (top-level, else the first per-connector one).
+  // NULL-SAFE (#197 class): typeof checks before any string use; the button starts
+  // on a working fallback so the link is NEVER dead, and a failed fetch leaves that
+  // fallback in place (never a crash). Cached on window so the 15s summary refresh
+  // doesn't refetch. The tools themselves are added/managed on that page — never
+  // listed inline.
+  function resolveSlackManageUrl(){
+    var el=document.querySelector("#conns [data-slack-manage]"); if(!el) return;
+    if(window._slackManageUrl){ el.setAttribute("href",window._slackManageUrl); el.textContent="Manage tools ↗"; return; }
+    if(window._slackManageTried) return;   // one attempt per page; fallback href stands
+    window._slackManageTried=true;
     fetch("/dashboard/connections/brain/connectors?t="+Date.now(),{headers:headers(),cache:"no-store"})
       .then(function(r){ return r.json(); })
       .then(function(j){
-        var st=(j&&j.status)||"";
-        // pending → the secure link is still finishing; unavailable → the KNOWN
-        // Cedric stale-read (Ben's fix) — a soft line, NEVER a crash; not_connected
-        // → the card already offers "Add to Slack", so show no list.
-        if(st==="pending"){ box.innerHTML='<div class="cnote">Connecting… the secure brain link is still finishing. Retry in a moment.</div>'; return; }
-        if(st==="not_connected"){ box.innerHTML=''; return; }
-        if(st==="unavailable"){ box.innerHTML='<div class="cnote">Cedric tools temporarily unavailable. Retry in a moment.</div>'; return; }
-        if(st!=="ok"){ box.innerHTML='<div class="cnote">The tool catalog could not be verified. Retry in a moment.</div>'; return; }
-        var list=(j.connectors||[]);
-        if(!list.length){ box.innerHTML='<div class="cnote">No tools in this workspace yet.</div>'; return; }
-        // CRITICAL null-URL guard (#197: null.indexOf killed the whole render).
-        // Touch string methods ONLY on a confirmed non-empty string, and build a
-        // link ONLY then — a null/absent connect_url yields "" (no link), no throw.
-        var linkFor=function(url,label){
-          if(!url||typeof url!=="string"){ return ""; }
-          var sep=url.indexOf("?")>=0?"&":"?";
-          var href=url+sep+"return_url="+encodeURIComponent(location.origin+"/dashboard");
-          return '<a class="btn conn-btn" style="text-decoration:none" href="'+esc(href)+'" target="_blank" rel="noopener">'+esc(label)+'</a>';
-        };
-        var rows=list.map(function(c){
-          c=c||{};
-          var name=esc(c.name||c.key||"Tool"), chip, act="", sub="";
-          if(c.needs_reconnect){
-            chip='<span class="stchip pending">reconnect</span>';
-            act=linkFor(c.connect_url,"Reconnect");
-            if(c.account) sub="· "+c.account;
-          } else if(c.connected){
-            chip='<span class="stchip connected">connected</span>';
-            sub=c.account?("· "+c.account):(c.description||"");
-          } else {
-            chip='<span class="stchip">not connected</span>';
-            act=linkFor(c.connect_url,"+ Connect");
-            sub=c.description||"";
-          }
-          return '<div class="crow"><div style="min-width:0"><div class="cn">'+name+'</div>'+
-            (sub?'<div class="cd">'+esc(sub)+'</div>':'')+'</div>'+chip+act+'</div>';
-        }).join("");
-        // Escape hatch to Cedric's full manager. Prefer a catalog-provided
-        // manage_url (top-level or per-connector); fall back to the app so the
-        // link is NEVER missing. Same null-safety as above (typeof check first).
         var mgr="";
-        if(j.manage_url&&typeof j.manage_url==="string"){ mgr=j.manage_url; }
-        else { list.some(function(c){ if(c&&typeof c.manage_url==="string"&&c.manage_url){ mgr=c.manage_url; return true; } return false; }); }
-        var more='<a href="'+esc(mgr||"https://www.meet-cedric.com")+'" target="_blank" rel="noopener" style="display:inline-block;margin-top:11px;font-size:.74rem;color:var(--faint);text-decoration:none">Manage in Cedric ↗</a>';
-        box.innerHTML=rows+more;
+        if(j&&typeof j.manage_url==="string"&&j.manage_url){ mgr=j.manage_url; }
+        else { (j&&j.connectors||[]).some(function(c){ if(c&&typeof c.manage_url==="string"&&c.manage_url){ mgr=c.manage_url; return true; } return false; }); }
+        var a=document.querySelector("#conns [data-slack-manage]"); if(!a) return;
+        if(mgr){ window._slackManageUrl=mgr; a.setAttribute("href",mgr); a.textContent="Manage tools ↗"; }
+        else { a.setAttribute("href","https://www.meet-cedric.com"); a.textContent="Manage in Cedric ↗"; }
       })
-      .catch(function(){ box.innerHTML='<div class="cnote">Cedric tools temporarily unavailable. Retry in a moment.</div>'; });
+      .catch(function(){ /* keep the fallback href + label — never crash */ });
   }
 
   function renderChart(weekly){
@@ -1596,7 +1651,6 @@
   function refreshOnReturn(){
     if(!$("#authgate").hidden) return;
     var now=Date.now(); if(now-_lastReturnLoad<1500) return; _lastReturnLoad=now;
-    if(document.getElementById("brain-conns")) loadBrainConnectors();
     load();
   }
   document.addEventListener("visibilitychange",function(){ if(!document.hidden) refreshOnReturn(); });
