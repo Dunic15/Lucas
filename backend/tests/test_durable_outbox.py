@@ -62,6 +62,111 @@ def test_capture_reload_finalize_keeps_stable_action_id(tmp_path, monkeypatch):
     store.remove("bot-capture")
 
 
+# ── per-avatar Slack capability gate, enforced at CAPTURE (#221 TODO) ──────
+
+def test_capture_suppresses_cedric_callback_when_slack_off(tmp_path, monkeypatch):
+    """Explicit slack=OFF avatar: the action IS captured, the callback is NOT.
+
+    Closes the #221 capability-gate TODO — the Cedric callback-outbox is
+    Cedric's Slack broker, so a slack-off avatar must not fan out to it. The
+    queued_action must still persist; only the Slack callback is skipped.
+    """
+    _fresh(tmp_path, monkeypatch)
+    monkeypatch.setattr(integration, "_kick_outbox", lambda: None)
+    store.set_avatar_capability("laura", "slack", False)  # owner turns Slack OFF
+    session = store.create(
+        "bot-slackoff", "https://meet.google.com/abc-defg-hij", "laura",
+        org_id="org-a",
+    )
+    session.integration = _integration()
+    item = tools.capture_action(session, "Send the recap", "Marco", "Friday")
+
+    # The action record itself IS persisted (never lost)...
+    assert outbox.queued_actions("org-a", "bot-slackoff") == [
+        {
+            "action_id": item["action_id"],
+            "action": "Send the recap",
+            "owner": "Marco",
+            "due": "Friday",
+        }
+    ]
+    # ...but NO Cedric/Slack callback_outbox row was enqueued.
+    assert outbox.delivery_rows("org-a") == []
+
+
+def test_capture_enqueues_callback_when_slack_unset(tmp_path, monkeypatch):
+    """Unset switch → default-deliver: capture enqueues the callback as before."""
+    _fresh(tmp_path, monkeypatch)
+    monkeypatch.setattr(integration, "_kick_outbox", lambda: None)
+    session = store.create(
+        "bot-unset", "https://meet.google.com/abc-defg-hij", "laura",
+        org_id="org-a",
+    )
+    session.integration = _integration()
+    item = tools.capture_action(session, "Send the recap", "Marco", "Friday")
+
+    assert outbox.queued_actions("org-a", "bot-unset")  # persisted
+    rows = outbox.delivery_rows("org-a")
+    assert len(rows) == 1
+    assert rows[0]["event"] == "action.requested"
+    assert rows[0]["action_id"] == item["action_id"]
+
+    # Control: an EXPLICIT slack=True is likewise delivered.
+    store.set_avatar_capability("laura", "slack", True)
+    session2 = store.create(
+        "bot-on", "https://meet.google.com/abc-defg-hij", "laura",
+        org_id="org-a",
+    )
+    session2.integration = _integration()
+    tools.capture_action(session2, "Book the follow-up", "Ana", "Mon")
+    assert len(outbox.delivery_rows("org-a")) == 2
+
+
+def test_capture_enqueues_callback_when_avatar_id_missing(tmp_path, monkeypatch):
+    """Missing avatar_id fails OPEN even if some avatar's slack is off."""
+    _fresh(tmp_path, monkeypatch)
+    monkeypatch.setattr(integration, "_kick_outbox", lambda: None)
+    store.set_avatar_capability("laura", "slack", False)  # unrelated avatar off
+    session = store.create(
+        "bot-noavatar", "https://meet.google.com/abc-defg-hij", "laura",
+        org_id="org-a",
+    )
+    session.avatar_id = ""  # acting-avatar identity unknown → deliver as before
+    session.integration = _integration()
+    tools.capture_action(session, "Send the recap", "Marco", "Friday")
+
+    assert outbox.queued_actions("org-a", "bot-noavatar")  # persisted
+    assert len(outbox.delivery_rows("org-a")) == 1  # callback enqueued as before
+
+
+def test_session_ended_suppressed_when_slack_off(tmp_path, monkeypatch):
+    """slack=OFF suppresses the session.ended fan-out WITHOUT breaking finalize.
+
+    checkpoint_session_ended must still hand back a canonical artifact (the wire
+    copy) rather than raising, since no durable row is committed when gated.
+    """
+    _fresh(tmp_path, monkeypatch)
+    store.set_avatar_capability("laura", "slack", False)
+    artifact = {"avatar_id": "laura", "summary": "Kickoff", "actions": []}
+
+    canonical = outbox.checkpoint_session_ended(
+        _integration(), "bot-ended", artifact
+    )
+    assert canonical["summary"] == "Kickoff"
+    assert canonical["avatar_id"] == "laura"
+    assert outbox.delivery_rows("org-a") == []  # no Cedric fan-out
+
+
+def test_session_ended_enqueued_when_slack_unset(tmp_path, monkeypatch):
+    """Unset switch → the session.ended checkpoint enqueues as before."""
+    _fresh(tmp_path, monkeypatch)
+    artifact = {"avatar_id": "laura", "summary": "Kickoff", "actions": []}
+    outbox_id = outbox.enqueue_session_ended(_integration(), "bot-ended2", artifact)
+    assert outbox_id is not None
+    rows = outbox.delivery_rows("org-a")
+    assert len(rows) == 1 and rows[0]["event"] == "session.ended"
+
+
 def test_transient_5xx_retries_same_idempotency_key_once(tmp_path, monkeypatch):
     _fresh(tmp_path, monkeypatch)
     action = {

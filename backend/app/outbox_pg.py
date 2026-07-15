@@ -56,6 +56,57 @@ def _require_capture_open(conn, org_id: str, bot_id: str) -> None:
         raise ActionCaptureClosed(str(row[0]))
 
 
+# Shared upsert for indexing a session.ended artifact's stable actions into
+# queued_actions. Live captures keep the id assigned at capture time; a
+# summarizer-only action carries a fresh id. ON CONFLICT(org_id, action_id)
+# refreshes owner/due where the live capture had none — identical SQL for the
+# row-anchored path (_index_session_ended_actions) and the callback-free path
+# (index_session_ended_actions) so the two can never drift.
+_INDEX_ACTION_SQL = text(
+    """
+    INSERT INTO queued_actions (
+      org_id, bot_id, action_id, action, owner, due,
+      created_at, updated_at
+    ) VALUES (
+      :org_id, :bot_id, :action_id, :action, :owner, :due,
+      clock_timestamp(), clock_timestamp()
+    )
+    ON CONFLICT (org_id, action_id) DO UPDATE SET
+      action=CASE WHEN excluded.action <> ''
+                  THEN excluded.action ELSE queued_actions.action END,
+      owner=CASE WHEN excluded.owner <> ''
+                 THEN excluded.owner ELSE queued_actions.owner END,
+      due=CASE WHEN excluded.due <> ''
+               THEN excluded.due ELSE queued_actions.due END,
+      updated_at=clock_timestamp()
+    """
+)
+
+
+def _norm_action_text(value: Any) -> str:
+    return " ".join(str(value or "").split()).lower()
+
+
+def _indexed_action_params(org_id: str, bot_id: str, action: dict) -> dict[str, Any]:
+    return {
+        "org_id": org_id,
+        "bot_id": bot_id,
+        "action_id": str(action.get("action_id") or "").strip()[:128],
+        "action": str(action.get("item") or action.get("action") or "")[:300],
+        "owner": str(action.get("owner") or "")[:100],
+        "due": str(action.get("deadline") or action.get("due") or "")[:100],
+    }
+
+
+def _artifact_actions(artifact: Any) -> list[dict]:
+    actions = artifact.get("actions") if isinstance(artifact, dict) else []
+    return [
+        a
+        for a in (actions or [])
+        if isinstance(a, dict) and str(a.get("action_id") or "").strip()
+    ]
+
+
 def _index_session_ended_actions(
     conn, org_id: str, bot_id: str, outbox_id: int
 ) -> None:
@@ -81,47 +132,62 @@ def _index_session_ended_actions(
     payload = row["payload_json"]
     if isinstance(payload, str):
         payload = json.loads(payload)
-    artifact = (payload or {}).get("artifact")
-    actions = artifact.get("actions") if isinstance(artifact, dict) else []
-    for action in actions or []:
-        if not isinstance(action, dict):
-            continue
-        action_id = str(action.get("action_id") or "").strip()
-        if not action_id:
-            continue
+    for action in _artifact_actions((payload or {}).get("artifact")):
         conn.execute(
-            text(
-                """
-                INSERT INTO queued_actions (
-                  org_id, bot_id, action_id, action, owner, due,
-                  created_at, updated_at
-                ) VALUES (
-                  :org_id, :bot_id, :action_id, :action, :owner, :due,
-                  clock_timestamp(), clock_timestamp()
-                )
-                ON CONFLICT (org_id, action_id) DO UPDATE SET
-                  action=CASE WHEN excluded.action <> ''
-                              THEN excluded.action ELSE queued_actions.action END,
-                  owner=CASE WHEN excluded.owner <> ''
-                             THEN excluded.owner ELSE queued_actions.owner END,
-                  due=CASE WHEN excluded.due <> ''
-                           THEN excluded.due ELSE queued_actions.due END,
-                  updated_at=clock_timestamp()
-                """
-            ),
-            {
-                "org_id": org_id,
-                "bot_id": bot_id,
-                "action_id": action_id[:128],
-                "action": str(
-                    action.get("item") or action.get("action") or ""
-                )[:300],
-                "owner": str(action.get("owner") or "")[:100],
-                "due": str(
-                    action.get("deadline") or action.get("due") or ""
-                )[:100],
-            },
+            _INDEX_ACTION_SQL, _indexed_action_params(org_id, bot_id, action)
         )
+
+
+def index_session_ended_actions(
+    org_id: str, bot_id: str, artifact: dict[str, Any]
+) -> None:
+    """Back-fill queued_actions from a session.ended artifact WITHOUT enqueueing
+    a Cedric callback — used when the acting avatar's Slack switch is explicitly
+    off. The per-avatar `slack` toggle must suppress ONLY the Slack fan-out,
+    never the native action list: queued_actions feeds the native executor
+    (approve→calendar/gmail) and the dashboard approval queue, so a slack-off
+    (native-only) avatar must still get every post-meeting action indexed.
+
+    With no callback row as the first-write-wins anchor, idempotency across a
+    finalize retry (where a summarizer-only action is re-minted under a fresh
+    action_id) is preserved by skipping any re-extraction whose normalized text
+    already exists for this bot. Live captures keep their stable id and simply
+    refresh via ON CONFLICT.
+    """
+    actions = _artifact_actions(artifact)
+    if not actions:
+        return
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        rows = conn.execute(
+            text(
+                "SELECT action_id, action FROM queued_actions "
+                "WHERE org_id=:org_id AND bot_id=:bot_id"
+            ),
+            {"org_id": org_id, "bot_id": bot_id},
+        ).mappings().all()
+        known_ids = {str(r["action_id"]) for r in rows}
+        known_texts = {
+            _norm_action_text(r["action"])
+            for r in rows
+            if _norm_action_text(r["action"])
+        }
+        for action in actions:
+            action_id = str(action.get("action_id") or "").strip()
+            norm = _norm_action_text(
+                action.get("item") or action.get("action") or ""
+            )
+            # A summarizer-only action (id not yet indexed) whose text already
+            # exists is a retry re-extraction under a new id — skip the phantom.
+            if action_id not in known_ids and norm and norm in known_texts:
+                continue
+            conn.execute(
+                _INDEX_ACTION_SQL, _indexed_action_params(org_id, bot_id, action)
+            )
+            known_ids.add(action_id)
+            if norm:
+                known_texts.add(norm)
 
 
 def _callback_insert(conn, callback: dict[str, Any]) -> Optional[int]:
