@@ -988,12 +988,12 @@
     // button and OAuth return force a refresh.
     // Header bar for the weekly calendar: which calendar + a reload control.
     function wkHead(cal){
-      return '<div class="wkbar"><div class="wkcal">📅 <b>Questa settimana</b> · '+
-        esc(cal.email||"calendario connesso")+'</div>'+
+      return '<div class="wkbar"><div class="wkcal">📅 <b>This week</b> · '+
+        esc(cal.email||"calendar connected")+'</div>'+
         '<button class="btn" id="upcoming-reload" style="padding:6px 12px;font-size:.78rem">↻</button></div>';
     }
     // One meeting card. multi = the org has >1 granted avatar (show a picker);
-    // otherwise a solo "Manda <name>" button. NULL-URL GUARD (#197 class):
+    // otherwise a solo "Send <name>" button. NULL-URL GUARD (#197 class):
     // meeting_url is coerced to a string and a card with no link never gets a
     // send control (no string method is ever called on a possibly-null url).
     function wkCard(m,multi,avOpts,av0){
@@ -1004,15 +1004,15 @@
       var state;
       if(m.auto_join){
         // Already scheduled/queued for this org+URL — no send button.
-        state='<span class="stchip connected">✓ In coda</span>';
+        state='<span class="stchip connected">✓ Queued</span>';
       } else if(url){
-        // Available → "Manda [avatar ▾]". Reuse DATA.avatars (already in the
+        // Available → "Send [avatar ▾]". Reuse DATA.avatars (already in the
         // summary payload) — a picker when there are several, a solo button
         // when there is only one. Dispatch goes through POST /sessions/start.
         state=multi
-          ? '<div class="wksend"><select class="wk-av" aria-label="Scegli avatar">'+avOpts+'</select>'+
-              '<button class="btn primary wk-send" data-send="'+esc(url)+'" data-title="'+esc(m.title||"")+'">Manda</button></div>'
-          : '<div class="wksend solo"><button class="btn primary wk-send" data-send="'+esc(url)+'" data-title="'+esc(m.title||"")+'" data-av="'+esc(av0.id)+'">Manda '+esc(av0.name)+'</button></div>';
+          ? '<div class="wksend"><select class="wk-av" aria-label="Choose avatar">'+avOpts+'</select>'+
+              '<button class="btn primary wk-send" data-send="'+esc(url)+'" data-title="'+esc(m.title||"")+'">Send</button></div>'
+          : '<div class="wksend solo"><button class="btn primary wk-send" data-send="'+esc(url)+'" data-title="'+esc(m.title||"")+'" data-av="'+esc(av0.id)+'">Send '+esc(av0.name)+'</button></div>';
       } else {
         // No join link yet — no send control, never a crash.
         state='<span class="stchip" style="opacity:.6">no link</span>';
@@ -1036,11 +1036,11 @@
           if(!cal.connected){
             box.innerHTML='<div style="text-align:center;padding:44px 20px">'+
               '<div style="font-size:1.7rem;margin-bottom:8px">📅</div>'+
-              '<h2 style="margin:0 0 6px">Connetti Google per vedere i tuoi meeting</h2>'+
-              '<div class="ph" style="max-width:48ch;margin:0 auto 18px">Collega il tuo Google Calendar: i meeting della settimana appaiono qui e puoi mandare un avatar con un click.</div>'+
+              '<h2 style="margin:0 0 6px">Connect Google to see your meetings</h2>'+
+              '<div class="ph" style="max-width:48ch;margin:0 auto 18px">Connect your Google Calendar: this week\'s meetings appear here and you can send an avatar with one click.</div>'+
               (cal.connect_url
-                ? '<a class="btn primary" style="text-decoration:none" href="'+esc(cal.connect_url)+'">Connetti Google</a>'
-                : '<button class="btn primary" id="wk-goconn">Vai a Connessioni</button>')+
+                ? '<a class="btn primary" style="text-decoration:none" href="'+esc(cal.connect_url)+'">Connect Google</a>'
+                : '<button class="btn primary" id="wk-goconn">Go to Connections</button>')+
               '</div>';
             var gc=document.getElementById("wk-goconn");
             if(gc) gc.addEventListener("click",function(){ go("connections"); });
@@ -1049,7 +1049,7 @@
           // Connected but the calendar read failed (native token present, read
           // errored) — soft "connected, retry" state, not a hard error.
           if(cal.error){
-            box.innerHTML=wkHead(cal)+'<div class="ph" style="padding:26px;text-align:center">Calendario connesso ma momentaneamente non disponibile. <button class="btn" id="wk-retry" style="margin-left:8px;padding:6px 12px;font-size:.78rem">↻ Riprova</button></div>';
+            box.innerHTML=wkHead(cal)+'<div class="ph" style="padding:26px;text-align:center">Calendar connected but temporarily unavailable. <button class="btn" id="wk-retry" style="margin-left:8px;padding:6px 12px;font-size:.78rem">↻ Retry</button></div>';
             var rb=document.getElementById("wk-retry");
             if(rb) rb.addEventListener("click",function(){ loadUpcoming(true); });
             return;
@@ -1061,7 +1061,7 @@
           var multi=avatars.length>1;
           var avOpts=avatars.map(function(a){ return '<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>'; }).join("");
           var av0=avatars[0]||{id:"laura",name:"Laura"};
-          var DAYN=["DOM","LUN","MAR","MER","GIO","VEN","SAB"];
+          var DAYN=["SUN","MON","TUE","WED","THU","FRI","SAT"];
           function dayKey(d){ return d.getFullYear()+"-"+d.getMonth()+"-"+d.getDate(); }
           var buckets={};
           meetings.forEach(function(m){
@@ -1081,7 +1081,7 @@
           var anyMeeting=meetings.length>0;
           box.innerHTML=wkHead(cal)+(anyMeeting
             ? '<div class="wkgrid">'+cols.join("")+'</div>'
-            : '<div class="ph" style="padding:28px;text-align:center">Nessun meeting in programma questa settimana.<br><span class="cnote">I meeting del tuo Google Calendar appaiono qui — poi puoi mandare un avatar con un click.</span></div>');
+            : '<div class="ph" style="padding:28px;text-align:center">No meetings scheduled this week.<br><span class="cnote">Your Google Calendar meetings appear here — then you can send an avatar with one click.</span></div>');
           var rl=document.getElementById("upcoming-reload");
           if(rl) rl.addEventListener("click",function(){ loadUpcoming(true); });
           // Per-card dispatch: reuse the exact POST /sessions/start the main
@@ -1092,14 +1092,14 @@
           box.querySelectorAll(".wk-send").forEach(function(btn){
             btn.addEventListener("click",function(){
               var u=btn.getAttribute("data-send")||"";
-              if(!u){ toast("Questo meeting non ha ancora un link.",true); return; }
+              if(!u){ toast("This meeting doesn't have a link yet.",true); return; }
               var title=btn.getAttribute("data-title")||"";
               var sel=btn.parentNode&&btn.parentNode.querySelector(".wk-av");
               var avatar=(sel&&sel.value) || btn.getAttribute("data-av") ||
                 (document.getElementById("dsp-avatar")||{}).value ||
                 ((DATA&&DATA.avatars&&DATA.avatars[0])?DATA.avatars[0].id:"laura");
               var orig=btn.textContent;
-              btn.disabled=true; btn.textContent="Invio…";
+              btn.disabled=true; btn.textContent="Sending…";
               var body={meeting_url:u,avatar_id:avatar};
               if(title) body.context={meeting:{title:title}};
               fetch("/sessions/start",{method:"POST",headers:headers(),body:JSON.stringify(body)})
@@ -1107,22 +1107,22 @@
                 .then(function(res){
                   if(!res.ok){
                     if(res.status===402){ go("usage"); loadBilling();
-                      throw new Error("Minuti inclusi esauriti. Passa a Solo per continuare."); }
-                    var msg=(res.j&&(res.j.error==="avatar_busy"?res.j.detail:(res.j.error||res.j.detail)))||"richiesta fallita";
+                      throw new Error("Included minutes used up. Upgrade to Solo to continue."); }
+                    var msg=(res.j&&(res.j.error==="avatar_busy"?res.j.detail:(res.j.error||res.j.detail)))||"request failed";
                     throw new Error(msg);
                   }
                   var picked=(DATA&&DATA.avatars||[]).find(function(a){return a.id===avatar;});
-                  toast((picked?picked.name:"Laura")+" sta entrando — ammettila dalla waiting room se richiesto.");
-                  btn.textContent="Inviata ✓";
+                  toast((picked?picked.name:"Laura")+" is joining — admit it from the waiting room if prompted.");
+                  btn.textContent="Sent ✓";
                   setTimeout(function(){ loadUpcoming(true); },1600);
                 })
-                .catch(function(e){ toast("Invio non riuscito: "+e.message,true);
+                .catch(function(e){ toast("Send failed: "+e.message,true);
                   btn.disabled=false; btn.textContent=orig; });
             });
           });
         })
         .catch(function(){ window._upcomingLoaded=false;
-          box.innerHTML='<div class="cnote" style="padding:20px">Calendario non disponibile al momento.</div>'; });
+          box.innerHTML='<div class="cnote" style="padding:20px">Calendar unavailable at the moment.</div>'; });
     }
     window._loadUpcoming=loadUpcoming;
     loadUpcoming(false);
