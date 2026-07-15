@@ -464,6 +464,13 @@ def fetch_org_connectors(org_id: str, team_id: str = "") -> dict | None:
             target = _redirect_target(resp)
             if target:
                 resp = client.get(target, params=params, headers=headers)
+        if resp.status_code == 404:
+            # Cedric's 404 body is {"error": "org … is not linked to a
+            # workspace"} — a PERMANENT org↔workspace mismatch (the workspace
+            # points at a different Laura org), not a transient failure.
+            # Surface a sentinel so the dashboard can render the re-link CTA
+            # instead of a misleading "temporarily unavailable".
+            return {"not_linked": True}
         if resp.status_code != 200:
             return None
         data = resp.json()

@@ -490,6 +490,8 @@
   .ctool-chips{display:flex;flex-wrap:wrap;gap:6px;}
   .ctool-chips:empty{display:none;}
   .ctool-chip{font-size:.74rem;padding:3px 10px;border-radius:999px;background:var(--live-soft);border:1px solid rgba(126,182,255,.3);color:var(--live);font-weight:500;}
+  .ctool-chip.warn{color:#F5C33B;border-color:rgba(245,195,59,.4);background:rgba(245,195,59,.08);}
+  .cnote.warn{color:#F5C33B;}
   /* Inline brand logos on connection cards + capability rows (self-contained SVG). */
   .clogo{flex:0 0 auto;vertical-align:-3px;}
   .cap-ic svg{width:16px;height:16px;vertical-align:middle;}
@@ -778,10 +780,17 @@
   if(connResult==="ok"){
     toast("Tool connected — Cedric can use it now.",false);
   } else if(connResult==="norefresh"){
-    toast("Almost there — the connection is still syncing. Reopen Connections in a moment.",true);
+    toast("Almost there — the connection is still syncing. It will appear below in a moment.",true);
+  } else if(connResult==="signin"||connResult==="forbidden"){
+    // Cedric's connect flow needs the browser that installed Slack (or the
+    // consent expired). Actionable: re-run Add to Slack from here.
+    toast("Your browser isn't authorized on the Cedric workspace. Use “Add to Slack” below, then retry the tool.",true);
   } else if(connResult){
     toast("That tool couldn't be connected. Please try again.",true);
   }
+  // Back from a connect round-trip: the pending-connect eager refresh has done
+  // its job — stop the eager catalog re-fetching in THIS tab.
+  if(connResult){ try{ sessionStorage.removeItem("laura_pending_connect"); }catch(e){} }
   if(oauthResult==="connected"){
     toast("Brain linked — meeting actions will flow to your Slack.",false);
   } else if(oauthResult==="pending"){
@@ -831,6 +840,13 @@
   var _hashView=(window.location.hash||"").replace(/^#/,"");
   if(oauthResult||googleResult||connResult){ go("connections"); }
   else if(VIEWS.indexOf(_hashView)>=0){ go(_hashView); }
+  // After a norefresh return, Cedric's callback already burned its own retries —
+  // a couple of delayed catalog re-fetches usually catch the Pipedream lag so
+  // the new chip appears without a manual reload.
+  if(connResult==="norefresh"){
+    setTimeout(function(){ resolveSlackManageUrl(true); },4000);
+    setTimeout(function(){ resolveSlackManageUrl(true); },12000);
+  }
 
   function load(){
     fetch("/dashboard/summary",{headers:headers()})
@@ -1716,6 +1732,11 @@
           btn.disabled=false; btn.textContent=prev; }); }); });
     // Slack agent (add-on) → resolve the "Manage tools" button to the hosted
     // connector/manage page (manage_url). No inline tool list any more.
+    // Opening "Manage tools" marks a ~10min pending-connect window during which
+    // the catalog re-fetches eagerly, so a tool connected on the hosted page
+    // shows up here without a manual reload.
+    $$("#conns [data-slack-manage]").forEach(function(a){a.addEventListener("click",function(){
+      try{ sessionStorage.setItem("laura_pending_connect", String(Date.now())); }catch(e){} }); });
     if(slackConnected) resolveSlackManageUrl();
     wireAvatarImages();
   }
@@ -1730,6 +1751,25 @@
   // refresh doesn't refetch — but the chips + href are RE-APPLIED from cache on
   // every render because renderConnections rebuilds #conns each tick. Not-connected
   // tools are never listed inline; they're added/managed on the hosted page.
+  // Append return_url=<this dashboard> so Cedric can bounce the user straight
+  // back here after a connect on the hosted page. Cedric validates it
+  // server-side against its Laura-origin allow-list (isSafeLauraReturnUrl) —
+  // this is a hint, never trusted there.
+  function withReturnUrl(u){
+    if(typeof u!=="string"||!u) return u;
+    if(u.indexOf("return_url=")>=0) return u;
+    return u+(u.indexOf("?")>=0?"&":"?")+"return_url="+encodeURIComponent(location.origin+"/dashboard");
+  }
+  // A connect is likely in flight for ~10 min after "Manage tools" was opened —
+  // during that window the catalog re-fetches on every render/focus so the new
+  // tool appears in THIS tab without a manual reload. Cleared by ?connected=.
+  function pendingConnect(){
+    try{ var t=parseInt(sessionStorage.getItem("laura_pending_connect")||"0",10);
+      if(t && Date.now()-t<600000) return true;
+      if(t) sessionStorage.removeItem("laura_pending_connect");
+    }catch(e){}
+    return false;
+  }
   function applySlackTools(j){
     j=j||{};
     var a=document.querySelector("#conns [data-slack-manage]");
@@ -1737,19 +1777,35 @@
       var mgr="";
       if(typeof j.manage_url==="string"&&j.manage_url){ mgr=j.manage_url; }
       else { (j.connectors||[]).some(function(c){ if(c&&typeof c.manage_url==="string"&&c.manage_url){ mgr=c.manage_url; return true; } return false; }); }
-      if(mgr){ a.setAttribute("href",mgr); a.textContent="Manage tools ↗"; }
+      if(mgr){ a.setAttribute("href",withReturnUrl(mgr)); a.textContent="Manage tools ↗"; }
       else { a.setAttribute("href","https://www.meet-cedric.com"); a.textContent="Manage in Cedric ↗"; }
     }
     var box=document.querySelector("#conns #ctool-chips");
     if(box){
+      if(j.status==="not_linked"){
+        // Permanent org↔workspace mismatch (Cedric's 404): this workspace is
+        // linked to a DIFFERENT Laura account. The only safe re-link is the
+        // full Add-to-Slack flow (fresh creds via /complete) — never a bare
+        // org re-point. Same handler as the "Add to Slack" button.
+        box.innerHTML='<span class="cnote warn" style="margin-top:0">This Slack workspace is linked to a different Laura account.</span>'+
+          '<button class="btn" data-slack-relink>Reconnect Slack</button>';
+        var b=box.querySelector("[data-slack-relink]");
+        if(b) b.addEventListener("click",function(){ window.location.assign("/dashboard/connections/brain/slack/start?avatar_id=cedric&channel="); });
+        return;
+      }
       var on=(j.connectors||[]).filter(function(c){ return c&&c.connected===true; });
-      box.innerHTML=on.map(function(c){ return '<span class="ctool-chip">'+esc(String((c&&(c.name||c.key))||"Tool"))+'</span>'; }).join("");
+      box.innerHTML=on.map(function(c){
+        var warn=!!(c&&c.needs_reconnect);
+        return '<span class="ctool-chip'+(warn?" warn":"")+'"'+(warn?' title="Needs reconnect"':'')+'>'+esc(String((c&&(c.name||c.key))||"Tool"))+(warn?" ⚠":"")+'</span>';
+      }).join("");
     }
   }
-  function resolveSlackManageUrl(){
+  function resolveSlackManageUrl(force){
     if(!document.querySelector("#conns [data-slack-manage]")) return;
     if(window._connectorsCache){ applySlackTools(window._connectorsCache); }  // re-apply on rebuild
-    if(window._slackManageTried) return;   // fetch once per page; the cache re-applies
+    // Fetch once per page normally; a pending connect (or an explicit force —
+    // the post-norefresh retries) re-fetches so a just-connected tool shows up.
+    if(window._slackManageTried && !force && !pendingConnect()) return;
     window._slackManageTried=true;
     fetch("/dashboard/connections/brain/connectors?t="+Date.now(),{headers:headers(),cache:"no-store"})
       .then(function(r){ return r.json(); })
