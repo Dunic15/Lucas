@@ -193,6 +193,27 @@ def _routing(integration: dict | None) -> tuple[str, str, str, dict[str, str]]:
     return org_id, team, channel, ref
 
 
+def _slack_capability_off(avatar_id: str | None) -> bool:
+    """True ONLY when the acting avatar's ``slack`` switch is EXPLICITLY off.
+
+    This is the capture-side twin of the direct Slack seams gated in #221
+    (``main.deliver_artifact`` / ``autopilot.maybe_deliver``): the Cedric
+    callback-outbox is Cedric's Slack broker, so an avatar whose owner turned
+    Slack OFF must not fan a callback out to it. An UNSET/True switch, a
+    missing/empty ``avatar_id``, or any store hiccup all fall through to
+    deliver-as-before — fail-open, matching #221, so a store blip can never
+    silently drop a legitimate callback. Only an explicit ``False`` suppresses.
+    Reads the avatar-keyed switch only; no transcript/PII is touched.
+    """
+    aid = str(avatar_id or "").strip()
+    if not aid:
+        return False
+    try:
+        return store.get_avatar_capabilities(aid).get("slack") is False
+    except Exception:  # noqa: BLE001 — fail-open: delivery beats a store blip
+        return False
+
+
 def persist_queued_action(session: Any, item: dict) -> None:
     """Update one stable action. Production writes only the durable PG row."""
     org_id = str(getattr(session, "org_id", "") or settings.demo_org_id)
@@ -227,7 +248,15 @@ def _callback_record(session: Any, item: dict) -> tuple[str, dict | None]:
     )
     action_id = str((item or {}).get("action_id") or "").strip()
     callback_record = None
-    if action_id and str(integration.get("callback_url") or "").strip():
+    # Capability gate (migration-free): suppress the Cedric callback when the
+    # acting avatar's Slack switch is explicitly OFF. session.avatar_id is known
+    # here, so both backends stay ungated of avatar_id — the queued_action still
+    # persists below/at the caller; only the Slack fan-out is skipped.
+    if (
+        action_id
+        and str(integration.get("callback_url") or "").strip()
+        and not _slack_capability_off(getattr(session, "avatar_id", ""))
+    ):
         payload = {
             "event": "action.requested", "bot_id": str(session.bot_id),
             "action_id": action_id, "org_id": org_id, "external_ref": ref,
@@ -543,10 +572,16 @@ def queued_actions(org_id: str, bot_id: str) -> list[dict]:
 
 def _enqueue(
     *, event: str, idempotency_key: str, integration: dict,
-    bot_id: str, action_id: str, payload: dict,
+    bot_id: str, action_id: str, payload: dict, avatar_id: str = "",
 ) -> int | None:
     callback_url = str((integration or {}).get("callback_url") or "").strip()
     if not callback_url:
+        return None
+    # Same capture-side gate as _callback_record, for the enqueue helpers that
+    # take integration/bot_id rather than a session (reconcile heal + the
+    # session.ended checkpoint). avatar_id is threaded from the caller (session
+    # or artifact); unset/absent → deliver as before (fail-open).
+    if _slack_capability_off(avatar_id):
         return None
     org_id, team, channel, ref = _routing(integration)
     if control_plane.enabled():
@@ -594,7 +629,9 @@ def _enqueue(
     return int(row["id"]) if row else None
 
 
-def enqueue_action_requested(integration: dict, bot_id: str, item: dict) -> int | None:
+def enqueue_action_requested(
+    integration: dict, bot_id: str, item: dict, *, avatar_id: str = ""
+) -> int | None:
     org_id, _team, _channel, ref = _routing(integration)
     action_id = str((item or {}).get("action_id") or "").strip()
     if not action_id:
@@ -617,6 +654,7 @@ def enqueue_action_requested(integration: dict, bot_id: str, item: dict) -> int 
         bot_id=bot_id,
         action_id=action_id,
         payload=payload,
+        avatar_id=avatar_id,
     )
 
 
@@ -643,6 +681,7 @@ def enqueue_session_ended(
         bot_id=bot_id,
         action_id="",
         payload=payload,
+        avatar_id=str((artifact or {}).get("avatar_id") or ""),
     )
 
 
@@ -679,6 +718,13 @@ def checkpoint_session_ended(
     org_id, _team, _channel, _ref = _routing(integration)
     outbox_id = enqueue_session_ended(integration, bot_id, artifact)
     if outbox_id is None:
+        # The only non-error way to get here is the capability gate: the avatar's
+        # Slack switch is explicitly OFF, so the session.ended fan-out to Cedric
+        # is intentionally suppressed. No durable row was committed, so the wire
+        # artifact passed in IS canonical — return it rather than failing
+        # finalize. (A genuine store failure raises OutboxUnavailable upstream.)
+        if _slack_capability_off(str((artifact or {}).get("avatar_id") or "")):
+            return dict(artifact)
         raise OutboxUnavailable("session ended callback was not checkpointed")
     return _session_ended_artifact(org_id, bot_id)
 
@@ -691,7 +737,8 @@ def reconcile_sessions() -> int:
             continue
         for item in queued_actions(session.org_id, session.bot_id):
             if enqueue_action_requested(
-                dict(session.integration), session.bot_id, item
+                dict(session.integration), session.bot_id, item,
+                avatar_id=getattr(session, "avatar_id", ""),
             ) is not None:
                 count += 1
     return count
@@ -762,15 +809,12 @@ def process_due(
     org_id: str | None = None, outbox_id: int | None = None,
 ) -> int:
     """Deliver due rows without sleeping; claims are safe across instances."""
-    # TODO(capability-gate): the per-avatar `slack` toggle is NOT enforced on
-    # this Cedric callback-outbox delivery path. The callback_outbox row carries
-    # org_id/bot_id/team_id/channel/callback_url/payload but NOT avatar_id, so
-    # the acting avatar can't be resolved here without either (a) adding an
-    # avatar_id column to callback_outbox (schema + backfill + outbox_pg mirror)
-    # and stamping it at persist_action_capture_once (session.avatar_id is known
-    # there), or (b) gating earlier at capture. The direct Slack-post seams
-    # (main.deliver_artifact, autopilot.maybe_deliver) ARE gated; this brokered
-    # path is left honest rather than faked.
+    # Per-avatar `slack` capability is enforced at ENQUEUE (see
+    # _slack_capability_off, applied in _callback_record / _enqueue): a row only
+    # exists here if the acting avatar's Slack switch was unset/True/absent when
+    # captured. Gating at capture — where session.avatar_id is known — keeps this
+    # delivery path (and callback_outbox) free of an avatar_id column, so no
+    # schema change or migration is needed on either the SQLite or Postgres path.
     from .cedric import callback
     current = time.time() if now is None else float(now)
     delivered_count = 0
