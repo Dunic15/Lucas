@@ -294,6 +294,82 @@ def test_session_ended_payload_is_allowlisted_and_idempotent(cp, pg):
     assert "private-room" not in payload
 
 
+def _local_caps_store(tmp_path, monkeypatch, name: str) -> None:
+    """Point the avatar-keyed capability switch at a fresh local SQLite file.
+
+    Capabilities are read from the local store regardless of the Postgres
+    control plane (avatar-keyed, split-brain safe), so a PG test that flips a
+    switch must give store._connect() a table to read.
+    """
+    monkeypatch.setattr(store, "STORE_PATH", tmp_path / name)
+    store._init_db()
+
+
+def test_session_ended_slack_off_indexes_actions_without_callback(
+    cp, pg, tmp_path, monkeypatch
+):
+    """slack=OFF suppresses the Cedric fan-out but NOT the native action list:
+    queued_actions is fully indexed (incl. the artifact-only summarizer action)
+    and NO session.ended callback_outbox row is written."""
+    _local_caps_store(tmp_path, monkeypatch, "caps-off.sqlite3")
+    store.set_avatar_capability("laura", "slack", False)
+    org = _org(cp, "ended-slackoff")
+    artifact = {
+        "avatar_id": "laura",
+        "summary": "Reviewed summary",
+        "actions": [
+            {"action_id": "live-1", "item": "Send the recap", "owner": "Ben"},
+            {"action_id": "summ-1", "item": "Book the follow-up", "owner": ""},
+        ],
+    }
+    # No deliverable callback row is enqueued for a slack-off avatar.
+    assert outbox.enqueue_session_ended(
+        _integration(org), "bot-slackoff", artifact
+    ) is None
+    with _admin(pg) as conn:
+        callbacks = conn.execute(
+            "SELECT count(*) FROM callback_outbox "
+            "WHERE org_id=%s AND event='session.ended'",
+            (org,),
+        ).fetchone()[0]
+        actions = conn.execute(
+            "SELECT action_id FROM queued_actions WHERE org_id=%s "
+            "ORDER BY action_id",
+            (org,),
+        ).fetchall()
+    assert callbacks == 0  # NO Slack fan-out to Cedric
+    assert actions == [("live-1",), ("summ-1",)]  # native list fully indexed
+
+
+def test_session_ended_slack_off_indexing_is_retry_idempotent(
+    cp, pg, tmp_path, monkeypatch
+):
+    """A finalize retry re-mints the summarizer-only action under a fresh id;
+    with no callback row as the anchor, text-dedup still prevents a phantom."""
+    _local_caps_store(tmp_path, monkeypatch, "caps-retry.sqlite3")
+    store.set_avatar_capability("laura", "slack", False)
+    org = _org(cp, "ended-slackoff-retry")
+    first = {
+        "avatar_id": "laura", "summary": "s",
+        "actions": [{"action_id": "summ-A", "item": "Book the follow-up"}],
+    }
+    retry = {
+        "avatar_id": "laura", "summary": "s",
+        "actions": [{"action_id": "summ-B", "item": "Book the follow-up"}],
+    }
+    assert outbox.enqueue_session_ended(
+        _integration(org), "bot-retry", first
+    ) is None
+    assert outbox.enqueue_session_ended(
+        _integration(org), "bot-retry", retry
+    ) is None
+    with _admin(pg) as conn:
+        actions = conn.execute(
+            "SELECT action_id FROM queued_actions WHERE org_id=%s", (org,)
+        ).fetchall()
+    assert actions == [("summ-A",)]  # summ-B deduped by text — no phantom row
+
+
 def test_two_org_reads_claims_and_retry_are_isolated(cp):
     org_a = _org(cp, "iso-a")
     org_b = _org(cp, "iso-b")

@@ -577,10 +577,11 @@ def _enqueue(
     callback_url = str((integration or {}).get("callback_url") or "").strip()
     if not callback_url:
         return None
-    # Same capture-side gate as _callback_record, for the enqueue helpers that
-    # take integration/bot_id rather than a session (reconcile heal + the
-    # session.ended checkpoint). avatar_id is threaded from the caller (session
-    # or artifact); unset/absent → deliver as before (fail-open).
+    # Same capture-side gate as _callback_record, for the reconcile heal path
+    # (enqueue_action_requested), which takes integration/bot_id rather than a
+    # session. avatar_id is threaded from session.avatar_id; unset/absent →
+    # deliver as before (fail-open). session.ended gates in enqueue_session_ended
+    # (it must still index queued_actions), so it never passes avatar_id here.
     if _slack_capability_off(avatar_id):
         return None
     org_id, team, channel, ref = _routing(integration)
@@ -674,6 +675,19 @@ def enqueue_session_ended(
             if key in (artifact or {})
         },
     }
+    # Capability gate (migration-free): a slack-OFF avatar suppresses the Cedric
+    # fan-out but NEVER the native action list. On Postgres the session.ended
+    # actions are STILL indexed into queued_actions (the native executor +
+    # dashboard approval queue read them); only the deliverable callback row is
+    # skipped, so no callback_outbox row / avatar_id column is needed. The SQLite
+    # path never indexed from session.ended, so there is nothing extra to keep.
+    if _slack_capability_off(str((artifact or {}).get("avatar_id") or "")):
+        if control_plane.enabled():
+            _pg_call(
+                outbox_pg.index_session_ended_actions,
+                org_id, bot_id, dict(artifact or {}),
+            )
+        return None
     return _enqueue(
         event="session.ended",
         idempotency_key=f"session.ended:{bot_id}",
@@ -681,7 +695,6 @@ def enqueue_session_ended(
         bot_id=bot_id,
         action_id="",
         payload=payload,
-        avatar_id=str((artifact or {}).get("avatar_id") or ""),
     )
 
 
