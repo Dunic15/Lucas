@@ -177,3 +177,41 @@ def test_list_for_org_fails_open_when_grants_dangle(fresh_store):
     # Grants exist but none resolve → fail open to all avatars (not []).
     assert avatars.list_for_org("org_ghost") == avatars.list_ids()
     assert avatars.list_for_org("org_ghost") != []
+
+
+def test_seed_skipped_and_swept_when_control_plane_enabled(fresh_store, monkeypatch):
+    """DURABLE deployments: the SQLite org_sff seed is a non-uuid shadow tenant
+    no durable path can serve (billing/entitlements cast org_id to uuid) — with
+    the control plane enabled, seed_builtin_orgs must not mint it AND must
+    sweep rows left by an earlier boot / restored replica (idempotent)."""
+    store = fresh_store
+    # The fixture reload already seeded org_sff (control plane off) — the rows
+    # a Litestream-restored prod replica would carry.
+    with store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) c FROM orgs WHERE id='org_sff'"
+        ).fetchone()["c"] == 1
+
+    # Signal "durable control plane configured" the way the code actually
+    # checks it — settings.laura_database_url (NOT control_plane.enabled(),
+    # which store must not import at init: see the cycle note in store.py).
+    monkeypatch.setattr(settings, "laura_database_url", "postgres://ci-not-connected")
+    store.seed_builtin_orgs()  # sweep
+    store.seed_builtin_orgs()  # idempotent — second run is a no-op
+
+    with store._connect() as conn:
+        for table, col in (("orgs", "id"), ("org_domains", "org_id"), ("org_agents", "org_id")):
+            n = conn.execute(
+                f"SELECT COUNT(*) c FROM {table} WHERE {col}='org_sff'"
+            ).fetchone()["c"]
+            assert n == 0, f"{table} still carries org_sff"
+        # The Demo org (a uuid, load-bearing for key-free sessions) survives.
+        assert conn.execute(
+            "SELECT COUNT(*) c FROM orgs WHERE id=?", (settings.demo_org_id,)
+        ).fetchone()["c"] == 1
+    # With the control plane back OFF (a real durable login would need Postgres),
+    # a corporate login now falls back to the personal org — the swept domain
+    # row no longer maps it.
+    monkeypatch.setattr(settings, "laura_database_url", "")
+    user = store.upsert_user(email="ceo@sffstudio.com")
+    assert user["org_id"] == user["user_id"]

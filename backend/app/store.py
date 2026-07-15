@@ -700,6 +700,32 @@ def seed_builtin_orgs() -> None:
     # at load time, and store never imports avatars at load time.
     from . import avatars
 
+    # Is the durable control plane configured? Checked DIRECTLY off settings —
+    # NOT via control_plane.enabled() — ON PURPOSE: seed_builtin_orgs runs
+    # during store's OWN module init (_init_db at import tail), and
+    # control_plane imports names from store at its module top, so importing
+    # control_plane here creates a circular import that crashes with
+    # "partially initialized module" whenever control_plane is imported before
+    # store. This one line mirrors control_plane.enabled() exactly; keep them
+    # in sync.
+    control_plane_on = bool((settings.laura_database_url or "").strip())
+    if control_plane_on:
+        # Durable identity owns the domain→org mapping in production
+        # (laura_private.ensure_user + verified Postgres org_domains rows).
+        # The SQLite seed would mint a non-uuid shadow tenant ('org_sff') that
+        # no durable path can serve — billing/entitlements/outbox all cast
+        # org_id to uuid — and that sent a whole diagnosis down the wrong
+        # trail (2026-07-15). Skip the seed and sweep any previously seeded
+        # rows instead: idempotent, runs on every boot (init() → here) AFTER
+        # the Litestream restore, so an old replica self-heals. Data rows
+        # (sessions/artifacts/users/…) were verified to never carry org_sff;
+        # the sweep deliberately touches only the three seeded tables.
+        with _LOCK, _connect() as conn:
+            conn.execute("DELETE FROM org_domains WHERE org_id = 'org_sff'")
+            conn.execute("DELETE FROM org_agents WHERE org_id = 'org_sff'")
+            conn.execute("DELETE FROM orgs WHERE id = 'org_sff'")
+        return
+
     installed = set(avatars.list_ids())
     now = time.time()
     with _LOCK, _connect() as conn:
@@ -1074,7 +1100,12 @@ def org_id_for_email(email: str) -> str:
     org_domains with a non-null verified_at) maps every login at that domain to
     the shared org; everything else falls back to the personal org
     (org_id == user_id today). org_domains never contains a free-mail domain
-    (the seed enforces that), so gmail/outlook logins always stay personal."""
+    (the seed enforces that), so gmail/outlook logins always stay personal.
+
+    DURABLE deployments: this is only a pre-override hint — upsert_user replaces
+    the result with control_plane.ensure_user()'s uuid org (the identity source
+    of truth; verified Postgres org_domains rows do the domain mapping there).
+    Don't diagnose prod org resolution from this function alone."""
     normalized = (email or "").strip().lower()
     _, _, domain = normalized.partition("@")
     if domain:
