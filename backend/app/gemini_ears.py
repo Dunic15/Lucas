@@ -451,9 +451,20 @@ def note_relay_turn(bot_id: str) -> None:
 
 
 def attribute_speaker(bot_id: str) -> str:
-    """Best-effort speaker for a relay turn, from this bot's Recall-final ring."""
+    """Best-effort speaker for a relay turn, from this bot's Recall-final ring
+    (most recent within the window). "" when nothing recent enough."""
     s = _sessions.get(bot_id)
     return s._match_speaker() if s is not None else ""
+
+
+def last_ring_speaker(bot_id: str) -> str:
+    """The most recent Recall-final speaker for this bot, ANY age — the relay's
+    fallback so it attributes to a real human (after a pause) instead of
+    inventing a phantom name that would pollute the roster."""
+    s = _sessions.get(bot_id)
+    if s is None or not s._ring:
+        return ""
+    return s._ring[-1][1]
 
 
 def should_suppress_recall_final(bot_id: str, payload: dict) -> bool:

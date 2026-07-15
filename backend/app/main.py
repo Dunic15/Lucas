@@ -4703,10 +4703,19 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if payload.get("laura_ears"):
         gemini_ears.note_relay_turn(bot_id)
         if not participant.get("name"):
-            participant = {
-                **participant,
-                "name": gemini_ears.attribute_speaker(bot_id) or "Partecipante",
-            }
+            # Attribute to a REAL, already-known human — never invent a generic
+            # name. A phantom "Partecipante" would show up as an extra roster
+            # entry and (e.g.) trip the hand-raise threshold in a 1:1. Chain:
+            # recent Recall-final speaker -> last known ring speaker (any age) ->
+            # an existing roster human -> only then a generic placeholder.
+            _existing = session.roster()
+            attributed = (
+                gemini_ears.attribute_speaker(bot_id)
+                or gemini_ears.last_ring_speaker(bot_id)
+                or (_existing[-1] if _existing else "")
+            )
+            if attributed:
+                participant = {**participant, "name": attributed}
     identity = session.resolve_participant(
         participant.get("name"),
         participant.get("id"),
@@ -4730,7 +4739,15 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # the transcript (no double lines, no double answers). The moment the
         # ears session dies this returns False and Recall drives again.
         if gemini_ears.should_suppress_recall_final(bot_id, payload):
-            return JSONResponse({"ok": True, "ears": "suppressed"})
+            # BUT let LEAVE / STOP commands through even when suppressed: they're
+            # control commands that MUST be reliable, and Deepgram transcribes
+            # command words ("go out of the meeting", "stop") far better than
+            # Gemini's conversational STT (which garbles them). The downstream
+            # leave/stop guards still decide whether to actually act — this only
+            # stops the raw final from being dropped before they can see it.
+            _ctrl = detect_leave_command(text) or detect_stop_command(text)
+            if not _ctrl:
+                return JSONResponse({"ok": True, "ears": "suppressed"})
 
     capture_event_key, capture_fingerprint = _recall_capture_identity(
         payload,
