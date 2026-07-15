@@ -577,3 +577,13 @@ def test_webhook_relay_turn_attributes_speaker(tmp_path, monkeypatch):
     # the relay turn marked the bot active -> a raw Recall final is now suppressed
     assert gemini_ears.should_suppress_recall_final("rt-bot", {"event": "transcript.data"})
     store.remove("rt-bot")
+
+
+def test_last_ring_speaker_returns_recent_regardless_of_age():
+    gemini_ears.observe_recall_final("bot-lrs", "David")
+    # even after the attribution window, the relay must still get a real name
+    s = gemini_ears._sessions["bot-lrs"]
+    s._ring[-1] = (time.time() - 999, "David")  # very old
+    assert gemini_ears.attribute_speaker("bot-lrs") == ""      # too old for the window
+    assert gemini_ears.last_ring_speaker("bot-lrs") == "David"  # but still known
+    assert gemini_ears.last_ring_speaker("nope") == ""
