@@ -2886,9 +2886,17 @@ async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -
     )
     slack_res = {"sent": False, "reason": "disabled"}
     if req.slack:
-        slack_res = await run_in_threadpool(
-            actions.post_to_slack, actions.artifact_to_slack_text(name, artifact)
-        )
+        # CAPABILITY GATE: Slack delivery happens ONLY when this avatar's `slack`
+        # toggle is on. Read raw and skip on an explicit OFF — an untouched
+        # avatar keeps today's behaviour (default on when the org connected
+        # Slack via Cedric). avatar_id comes from the saved artifact above.
+        caps = await run_in_threadpool(store.get_avatar_capabilities, avatar_id)
+        if caps.get("slack") is False:
+            slack_res = {"sent": False, "reason": "slack capability off"}
+        else:
+            slack_res = await run_in_threadpool(
+                actions.post_to_slack, actions.artifact_to_slack_text(name, artifact)
+            )
     return JSONResponse({"email": email_res, "slack": slack_res})
 
 

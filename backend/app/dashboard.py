@@ -414,6 +414,21 @@ def dashboard_summary(request: Request) -> JSONResponse:
 
     avatar_rows = []
     drive_connected = False
+    # ── ORG-level connection state for the per-avatar capability toggles ──
+    # An integration is CONNECTED once at the org level (Connections view); each
+    # avatar then independently toggles whether it may USE it. Computed ONCE here
+    # (reused for the `connections` block below, no double I/O) so every avatar
+    # card reads the same truth. Keyed by the org_id string — no ::uuid cast, so
+    # u_<hash> and uuid orgs alike are safe (org_id split-brain).
+    #   google = the org's NATIVE Google OAuth (store.get_org_oauth) — the same
+    #            signal the "Google (native)" connection card reads.
+    #   slack  = the org's cedric-brain connection (Slack rides Cedric): a
+    #            connected cedric-brain row for any avatar in the org.
+    org_rows = _org_connection_rows(caller_org) if caller_org else []
+    _native_google_org = caller_org or settings.demo_org_id
+    google_connected = bool(store.get_org_oauth(_native_google_org))
+    slack_connected = _org_connected(org_rows, "cedric-brain")
+    all_caps = store.all_avatar_capabilities()  # {avatar_id: {cap: bool}} — one read
     # Per-org roster: a scoped caller (cookie user or per-org bearer) sees only
     # their org's granted avatars (org_agents); the unscoped worlds see ALL —
     # today's behavior, key-free demo unchanged (docs/infra/MULTI-TENANCY.md).
@@ -457,6 +472,21 @@ def dashboard_summary(request: Request) -> JSONResponse:
                     if gemini_ears.mode_for_avatar(a.id) in ("reply", "on")
                     else "cerebras"
                 ),
+                # Per-avatar capability toggles. `connected` = the ORG-level
+                # connection (shared by all cards); `on` = this avatar's stored
+                # switch, DEFAULTING to `connected` when the owner has never
+                # toggled it. The card renders an interactive toggle when
+                # connected, else a greyed "Connect in Connections" hint.
+                "capabilities_toggle": {
+                    "google": {
+                        "on": all_caps.get(aid, {}).get("google", google_connected),
+                        "connected": google_connected,
+                    },
+                    "slack": {
+                        "on": all_caps.get(aid, {}).get("slack", slack_connected),
+                        "connected": slack_connected,
+                    },
+                },
                 "live_now": live_by_avatar.get(aid, 0),
                 "meetings_total": len(mine),
                 "meetings_30d": sum(
@@ -533,7 +563,7 @@ def dashboard_summary(request: Request) -> JSONResponse:
     # env is Laura's own plumbing, not the customer's connection. voice and
     # meetings stay platform capabilities (the product works for every org
     # through them). Anonymous/demo/global callers keep today's global flags.
-    org_rows = _org_connection_rows(caller_org) if caller_org else []
+    # (org_rows was already read once above for the capability toggles.)
     if caller_org is not None:
         connections = {
             "calendar": _org_connected(org_rows, "calendar"),
@@ -562,9 +592,10 @@ def dashboard_summary(request: Request) -> JSONResponse:
     # by /oauth/google/callback. Keyed on the caller's org, else the demo/owner
     # org (matching where the callback persists it). Pure SQLite read, no
     # ::uuid cast → safe for u_hash and uuid orgs alike. Bool, so it satisfies
-    # the "connections values are all bool" contract.
-    native_google_org = caller_org or settings.demo_org_id
-    connections["google_native"] = bool(store.get_org_oauth(native_google_org))
+    # the "connections values are all bool" contract. (Same signal the
+    # per-avatar `google` capability toggle reads — computed once above as
+    # `google_connected`.)
+    connections["google_native"] = google_connected
 
     callback_deliveries = outbox.delivery_rows(
         caller_org or settings.demo_org_id
@@ -600,6 +631,50 @@ def dashboard_summary(request: Request) -> JSONResponse:
                 else None
             ),
         }),
+        headers=_NO_STORE,
+    )
+
+
+@router.post("/dashboard/avatar/{avatar_id}/capability")
+async def set_avatar_capability_endpoint(
+    avatar_id: str, request: Request
+) -> JSONResponse:
+    """Owner flips one capability ON/OFF for one avatar from its card.
+
+    The integration is connected ONCE at the org level (Connections view); this
+    only records whether THIS avatar may use it — e.g. Google connected once,
+    Laura's card ON while Cedric's is OFF. Owner-authed like the other dashboard
+    mutations: a logged-in owner + same-origin only (the brain-toggle door), so
+    the key-free demo can't flip real behaviour. Keyed by the avatar_id string
+    (no org, no ::uuid → org_id split-brain safe). Body: {capability, enabled}.
+    Takes effect at the next execute/deliver — no redeploy."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    aid = (avatar_id or "").strip()
+    if not aid or aid not in set(avatars.list_ids()):
+        return JSONResponse({"error": "unknown avatar_id"}, status_code=404)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    capability = str((body or {}).get("capability") or "").strip().lower()
+    enabled = bool((body or {}).get("enabled"))
+    ok = await run_in_threadpool(
+        store.set_avatar_capability, aid, capability, enabled
+    )
+    if not ok:
+        return JSONResponse(
+            {"error": "capability must be one of "
+             + ", ".join(store.KNOWN_CAPABILITIES)},
+            status_code=400,
+        )
+    return JSONResponse(
+        {"ok": True, "avatar_id": aid, "capability": capability, "enabled": enabled},
         headers=_NO_STORE,
     )
 
@@ -1033,10 +1108,12 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
             }
         now = datetime.now(timezone.utc)
         # meeting_urls this org already has a live/scheduled session for → the
-        # row shows "dispatched" instead of a Send button (one bot + one meter
-        # per URL, matching /sessions/start's own dedup).
+        # row shows the avatar-going treatment (badge) instead of a Send button
+        # (one bot + one meter per URL, matching /sessions/start's own dedup).
+        # Map url→avatar_id so the calendar block can name WHO is being sent
+        # ("🎭 Laura"); last write wins if two sessions share a URL (rare).
         booked = {
-            s.meeting_url
+            s.meeting_url: s.avatar_id
             for s in store.all_sessions()
             if s.meeting_url and s.org_id == org_id
         }
@@ -1066,6 +1143,9 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
                     "meeting_url": url,
                     "attendees": len(ev.get("attendees") or []),
                     "auto_join": bool(url) and url in booked,
+                    # WHO is being sent (empty when not auto-joining) — powers
+                    # the "🎭 <name>" badge on the calendar block.
+                    "auto_join_avatar": booked.get(url, "") if url else "",
                 }
             )
         rows.sort(key=lambda r: r["start_time"])
@@ -1115,6 +1195,9 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
                     "meeting_url": url,
                     "attendees": len(raw.get("attendees") or []),
                     "auto_join": store.is_scheduled(str(ev.get("id") or "")),
+                    # Recall inbox = the avatar's OWN invite queue; the specific
+                    # avatar isn't resolved per-URL here → generic badge.
+                    "auto_join_avatar": "",
                 }
             )
         rows.sort(key=lambda r: r["start_time"])
@@ -1344,12 +1427,15 @@ async def disconnect_brain_remote(request: Request) -> JSONResponse:
 
 # ─────────────── native approve → execute (the loop's last mile) ────────────
 
-def _find_org_action(caller_org: str, action_id: str) -> dict | None:
+def _find_org_action(caller_org: str, action_id: str) -> tuple[dict, str] | None:
     """The stored artifact action with this ``action_id`` that is VISIBLE to
-    ``caller_org`` (its own org, or a legacy unowned '' row), or None.
+    ``caller_org`` (its own org, or a legacy unowned '' row), as
+    ``(action, acting_avatar_id)``, or None.
 
     The typed spec to execute lives on the SAVED artifact — the trusted source
-    for what an approve should run, never the client's request body. Scanning
+    for what an approve should run, never the client's request body. The
+    artifact's ``avatar_id`` (stamped at finalize) is the ACTING avatar, so the
+    approve seam can honour that avatar's per-avatar capability toggle. Scanning
     artifacts is O(meetings) but this is a dashboard action off the live path.
     Doubles as the org-scope check: a caller can only approve an action inside
     an artifact its own org can see."""
@@ -1366,7 +1452,7 @@ def _find_org_action(caller_org: str, action_id: str) -> dict | None:
             continue
         for a in art.get("actions") or []:
             if isinstance(a, dict) and str(a.get("action_id") or "") == aid:
-                return a
+                return a, str(art.get("avatar_id") or "")
     return None
 
 
@@ -1413,12 +1499,13 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         return JSONResponse({"error": "action_id is required"}, status_code=400)
     org = user["org_id"]
 
-    action = await run_in_threadpool(_find_org_action, org, aid)
-    if action is None:
+    found = await run_in_threadpool(_find_org_action, org, aid)
+    if found is None:
         return JSONResponse(
             {"error": "unknown action for this org"}, status_code=404,
             headers=_NO_STORE,
         )
+    action, acting_avatar = found
 
     # Mark approved (non-terminal, monotonic) in the shared provenance channel.
     # Best-effort: a durable-org no-op here (a native action has no Cedric
@@ -1431,12 +1518,25 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     typed = action.get("typed") if isinstance(action.get("typed"), dict) else None
     exec_action = _executor_action(typed)
     executed = False
+    capability_blocked = False
     if exec_action is not None and executor.handles(exec_action):
-        # execute_approved writes its own done/failed receipt to the ledger.
-        await run_in_threadpool(
-            executor.execute_approved, org, aid, exec_action
+        # CAPABILITY GATE: the native executor runs a Google (calendar/gmail)
+        # action ONLY when the acting avatar's `google` toggle is on. Read raw
+        # and skip on an explicit OFF — an untouched avatar keeps today's
+        # behaviour (default on when the org connected Google, and the
+        # google_client soft-fails anyway when it hasn't). A blocked action
+        # stays `approved`, byte-identical to the executor being off.
+        caps = await run_in_threadpool(
+            store.get_avatar_capabilities, acting_avatar
         )
-        executed = True
+        if caps.get("google") is False:
+            capability_blocked = True
+        else:
+            # execute_approved writes its own done/failed receipt to the ledger.
+            await run_in_threadpool(
+                executor.execute_approved, org, aid, exec_action
+            )
+            executed = True
 
     # Echo the latest provenance (status + distilled detail: event link /
     # message id / error) — the receipt the row will render. Never transcript.
@@ -1447,6 +1547,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             "action_id": aid,
             "approved": True,
             "executed": executed,
+            "capability_blocked": capability_blocked,
             "typed": bool(typed),
             "execution_mode": settings.execution_mode,
             "status": latest.get(aid),

@@ -569,6 +569,22 @@ def _init_db() -> None:
                 updated_at REAL NOT NULL
             );
 
+            -- Per-avatar capability switches (dashboard toggles). One row per
+            -- (avatar, capability) — "google" | "slack" — so each avatar can
+            -- independently turn ON/OFF a capability the ORG connected once in
+            -- the Connections view. Absent row = unset → the caller applies the
+            -- default (ON when the org has that integration connected, else off).
+            -- Read at the execute/deliver seams; keyed by the avatar_id string
+            -- ONLY (no org, no ::uuid → split-brain safe). Litestream-replicated
+            -- like avatar_brain_mode.
+            CREATE TABLE IF NOT EXISTS avatar_capabilities (
+                avatar_id TEXT NOT NULL,
+                capability TEXT NOT NULL,
+                enabled INTEGER NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (avatar_id, capability)
+            );
+
             CREATE TABLE IF NOT EXISTS scheduled_events (
                 event_id TEXT PRIMARY KEY,
                 org_id TEXT NOT NULL DEFAULT '{demo}',
@@ -1991,6 +2007,70 @@ def all_avatar_brain_modes() -> dict[str, str]:
             "SELECT avatar_id, brain_mode FROM avatar_brain_mode"
         ).fetchall()
     return {r[0]: r[1] for r in rows}
+
+
+# The capabilities an avatar can independently toggle. An integration is
+# CONNECTED once at the org level (Connections view); each avatar then flips
+# whether it may USE it. Mirrors the brain-mode primitives above.
+KNOWN_CAPABILITIES = ("google", "slack")
+
+
+def set_avatar_capability(avatar_id: str, capability: str, enabled: bool) -> bool:
+    """Turn one capability ON/OFF for one avatar (dashboard toggle). Persisted
+    (Litestream-replicated), read at the execute/deliver seams — no redeploy.
+    False for an unknown capability (only ``KNOWN_CAPABILITIES`` are stored)."""
+    aid = (avatar_id or "").strip()
+    cap = (capability or "").strip().lower()
+    if not aid or cap not in KNOWN_CAPABILITIES:
+        return False
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            "INSERT INTO avatar_capabilities "
+            "(avatar_id, capability, enabled, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(avatar_id, capability) DO UPDATE SET "
+            "enabled = excluded.enabled, updated_at = excluded.updated_at",
+            (aid, cap, 1 if enabled else 0, time.time()),
+        )
+    return True
+
+
+def get_avatar_capabilities(avatar_id: str) -> dict[str, bool]:
+    """The avatar's EXPLICIT capability switches as ``{capability: bool}``.
+
+    Only capabilities the owner has actually toggled appear. A capability
+    ABSENT from the map has never been set — the caller applies the default:
+    ON when the org has that integration connected, else off (see
+    ``capability_enabled``). Enforcement reads this raw and skips only on an
+    explicit ``False`` (so an untouched avatar keeps today's behaviour)."""
+    aid = (avatar_id or "").strip()
+    if not aid:
+        return {}
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            "SELECT capability, enabled FROM avatar_capabilities WHERE avatar_id = ?",
+            (aid,),
+        ).fetchall()
+    return {r[0]: bool(r[1]) for r in rows}
+
+
+def capability_enabled(avatar_id: str, capability: str, *, connected: bool) -> bool:
+    """Resolve whether an avatar MAY use a capability: the explicit per-avatar
+    switch, defaulting to the org-level ``connected`` state when never toggled.
+    This is the "default ON when connected, else off" rule in one place."""
+    return get_avatar_capabilities(avatar_id).get(capability, connected)
+
+
+def all_avatar_capabilities() -> dict[str, dict[str, bool]]:
+    """{avatar_id: {capability: bool}} for every avatar with any explicit
+    switch — the bulk read the dashboard summary uses (one query, no N+1)."""
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            "SELECT avatar_id, capability, enabled FROM avatar_capabilities"
+        ).fetchall()
+    out: dict[str, dict[str, bool]] = {}
+    for r in rows:
+        out.setdefault(r[0], {})[r[1]] = bool(r[2])
+    return out
 
 
 def resolve_recall_realtime_capability(capability: str) -> str | None:

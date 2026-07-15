@@ -247,8 +247,8 @@
   .avd .ro{color:var(--faint);font-size:.84rem;margin-top:2px;}
   .avd .persona{color:var(--dim);font-size:.85rem;margin-top:9px;line-height:1.5;max-width:44ch;}
   .avd .acts{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;}
-  .cfg{border-left:1px solid var(--line-soft);padding-left:20px;display:flex;flex-direction:column;gap:10px;}
-  @media (max-width:720px){ .cfg{border-left:0;padding-left:0;border-top:1px solid var(--line-soft);padding-top:14px;} }
+  /* Configure (Cedric brain) — now a full-width stacked section on the card. */
+  .cfg{border-top:1px solid var(--line-soft);padding-top:14px;margin-top:14px;display:flex;flex-direction:column;gap:10px;}
   .cfg .row{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:.86rem;}
   .cfg .row .l{color:var(--faint);}
   .cfg .row .v{font-weight:500;font-family:var(--mono);font-size:.78rem;}
@@ -287,6 +287,7 @@
   .wkbar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
   .wkbar .wkcal{font-size:.85rem;color:var(--dim);}
   .wkbar .wkcal b{color:var(--text);font-weight:600;}
+  .wkbar .wkrange{font-family:var(--mono);color:var(--text);font-size:.8rem;letter-spacing:.01em;}
   .wkgrid{display:grid;grid-template-columns:1fr;gap:10px;}
   .wkgrid .wkday.empty{display:none;}
   .wkday{display:flex;flex-direction:column;gap:8px;background:var(--panel);border:1px solid var(--line-soft);border-radius:14px;padding:11px 12px 13px;}
@@ -296,11 +297,18 @@
   .wkday.today .wkday-h .dn{color:var(--live);}
   .wkday-h .dd{font-size:1.02rem;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums;}
   .wkday-none{color:var(--faint);font-size:.72rem;padding:3px 1px;}
-  .mcard{background:var(--panel-2);border:1px solid var(--line-soft);border-radius:11px;padding:9px 10px;display:flex;flex-direction:column;gap:6px;}
-  .mcard .mtime{font-family:var(--mono);font-size:.7rem;color:var(--live);letter-spacing:.02em;}
+  /* Calendar BLOCK: thin left accent bar, subtle time. A meeting the avatar is
+     being sent to (auto_join) becomes a filled/colored block with a "🎭 name"
+     badge; a plain meeting is an outlined block with the Send control. */
+  .mcard{background:var(--panel-2);border:1px solid var(--line-soft);border-left:3px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:5px;}
+  .mcard.going{background:var(--live-soft);border-color:rgba(126,182,255,.35);border-left-color:var(--live);}
+  .mcard .mtop{display:flex;align-items:center;justify-content:space-between;gap:6px;}
+  .mcard .mtime{font-family:var(--mono);font-size:.68rem;color:var(--faint);letter-spacing:.02em;}
+  .mcard.going .mtime{color:var(--live);}
   .mcard .mtitle{font-size:.82rem;font-weight:600;line-height:1.3;color:var(--text);word-break:break-word;}
   .mcard .mmeta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
   .mcard .avstate{margin-top:1px;}
+  .avbadge{display:inline-flex;align-items:center;gap:4px;font-size:.66rem;font-weight:600;color:var(--live);background:rgba(126,182,255,.16);border:1px solid rgba(126,182,255,.4);border-radius:999px;padding:2px 8px;white-space:nowrap;}
   .wksend{display:flex;gap:5px;align-items:stretch;}
   .wksend select{flex:1;min-width:0;padding:6px 7px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:.72rem;}
   .wksend .btn{padding:6px 11px;font-size:.74rem;flex:0 0 auto;white-space:nowrap;}
@@ -327,6 +335,36 @@
   .mp-opt.on{border-color:rgba(126,182,255,.6);background:rgba(126,182,255,.12);font-weight:600;}
   .mp-opt:hover{border-color:rgba(126,182,255,.4);}
   .mp-hint{font-size:.75rem;color:var(--dim);margin-top:7px;line-height:1.4;}
+  /* Per-avatar CAPABILITIES: connect once at org level (Connections), then each
+     avatar independently toggles whether it may use a connected integration. */
+  .avd .persona{margin-top:10px;}
+  .caps{margin-top:14px;padding:12px 13px;border:1px solid var(--line-soft);border-radius:12px;background:var(--panel-2);}
+  .cap-list{display:flex;flex-direction:column;gap:8px;margin-top:8px;}
+  .cap-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px;border:1px solid var(--line-soft);border-radius:10px;background:var(--panel);}
+  .cap-row.off{opacity:.75;}
+  .cap-info{display:flex;align-items:center;gap:10px;min-width:0;}
+  .cap-ic{flex:0 0 auto;width:24px;height:24px;border-radius:7px;display:grid;place-items:center;font-size:.72rem;font-weight:800;font-family:var(--mono);background:var(--live-soft);color:var(--live);}
+  .cap-nm{font-size:.88rem;font-weight:600;}
+  .cap-sub{font-size:.7rem;color:var(--faint);margin-top:1px;}
+  .cap-ctl{flex:0 0 auto;display:flex;align-items:center;}
+  .cap-connect{font-size:.72rem;color:var(--dim);background:transparent;border:1px dashed var(--line);border-radius:999px;padding:5px 10px;cursor:pointer;white-space:nowrap;font-family:inherit;}
+  .cap-connect:hover{color:var(--live);border-color:rgba(126,182,255,.5);}
+  .cap-note{font-size:.7rem;color:var(--faint);margin-top:9px;line-height:1.4;}
+  /* Accessible on/off switch (native checkbox under a styled track). */
+  .switch{position:relative;display:inline-flex;width:40px;height:23px;flex:0 0 auto;cursor:pointer;}
+  .switch input{position:absolute;opacity:0;width:0;height:0;margin:0;}
+  .switch .track{position:absolute;inset:0;border-radius:999px;background:var(--panel-2);border:1px solid var(--line);transition:background .15s,border-color .15s;}
+  .switch .knob{position:absolute;top:3px;left:3px;width:15px;height:15px;border-radius:50%;background:var(--faint);transition:transform .15s,background .15s;}
+  .switch input:checked + .track{background:var(--live-soft);border-color:var(--live);}
+  .switch input:checked + .track .knob{transform:translateX(17px);background:var(--live);}
+  .switch input:focus-visible + .track{box-shadow:0 0 0 2px var(--live-glow);}
+  .switch input:disabled + .track{opacity:.5;cursor:not-allowed;}
+  /* AI model moved to the card BOTTOM and made smaller/subtler (#220 wiring kept). */
+  .modelpick.sm{margin:12px 0 0;padding:9px 11px;background:transparent;border-color:var(--line-soft);}
+  .modelpick.sm .sm-h{font-size:.55rem;}
+  .modelpick.sm .mp-row{margin-top:5px;}
+  .modelpick.sm .mp-opt{padding:5px 8px;font-size:.78rem;}
+  .modelpick.sm .mp-hint{font-size:.68rem;margin-top:5px;color:var(--faint);}
   .exec{font-family:var(--mono);font-size:.58rem;letter-spacing:.04em;text-transform:uppercase;
     padding:2px 7px;border-radius:999px;margin-left:8px;border:1px solid var(--line);color:var(--faint);white-space:nowrap;}
   .exec.done{color:#54D28F;border-color:rgba(84,210,143,.4);}
@@ -850,6 +888,26 @@
         '<div class="stat"><div class="n tnum">'+a.meetings_total+'</div><div class="l">meetings</div></div></div>';}).join("")
       || '<div class="empty">No avatars installed</div>';
 
+    // One capability row: an interactive switch when the ORG has the
+    // integration connected, else a greyed "Connect in Connections" link. The
+    // switch reflects `on` (this avatar's stored flag, default = connected).
+    function capRow(a,key,label,icon){
+      var ct=(a.capabilities_toggle||{})[key]||{on:false,connected:false};
+      var ctl,sub;
+      if(ct.connected){
+        ctl='<label class="switch"><input type="checkbox"'+(ct.on?' checked':'')+
+          ' data-cap-av="'+esc(a.id)+'" data-cap="'+esc(key)+'"'+
+          ' aria-label="'+esc(label)+' for '+esc(a.name)+'"><span class="track"><span class="knob"></span></span></label>';
+        sub=ct.on?('On — '+esc(a.name)+' may use '+esc(label)):'Off for '+esc(a.name);
+      } else {
+        ctl='<button class="cap-connect" data-goto-conn="1" title="Connect '+esc(label)+' in the Connections view">Connect in Connections</button>';
+        sub='Not connected';
+      }
+      return '<div class="cap-row'+(ct.connected?'':' off')+'">'+
+        '<div class="cap-info"><span class="cap-ic">'+icon+'</span>'+
+        '<div style="min-width:0"><div class="cap-nm">'+esc(label)+'</div><div class="cap-sub">'+sub+'</div></div></div>'+
+        '<div class="cap-ctl">'+ctl+'</div></div>';
+    }
     // avatar detail. Configure lives ONLY on the brain-driven avatar (Cedric):
     // one real connection — the brain — and, once linked, the brain's OWN
     // connector catalog (fetched live from Cedric). No per-avatar duplicates:
@@ -880,25 +938,36 @@
           // the brain's own connectors, fetched live once linked
           '<div id="brain-conns" class="conns-list" style="margin-top:10px"></div>';
       }
-      return '<div class="avd"><div class="top">'+
+      // Per-avatar capability toggles, driven by the summary's
+      // capabilities_toggle. connected=true → interactive switch (posts to the
+      // owner-only endpoint, optimistic); connected=false → greyed + a "Connect
+      // in Connections" link (the connect action itself lives in the Connections
+      // view, never on the card). Order: Slack, then Google.
+      var capHtml='<div class="caps"><div class="sm-h">Capabilities</div><div class="cap-list">'+
+          capRow(a,"slack","Slack","#")+capRow(a,"google","Google","G")+'</div>'+
+          '<div class="cap-note">Connect an integration once in Connections, then switch it on per avatar.</div></div>';
+      return '<div class="avd">'+
           '<div class="idn">'+avatarBadge(a.id,a.name)+
-          '<div><div class="nm">'+esc(a.name)+' <span class="pill '+(a.live_now?"live":"idle")+'">'+(a.live_now?"in call":"idle")+'</span></div>'+
-          '<div class="ro">'+esc(a.role)+' · '+a.meetings_total+' meeting'+(a.meetings_total===1?"":"s")+(a.last_meeting_at?' · last '+fmtWhen(a.last_meeting_at):'')+'</div>'+
+          '<div style="min-width:0"><div class="nm">'+esc(a.name)+' <span class="pill '+(a.live_now?"live":"idle")+'">'+(a.live_now?"in call":"idle")+'</span></div>'+
+          '<div class="ro">'+esc(a.role)+' · '+a.meetings_total+' meeting'+(a.meetings_total===1?"":"s")+(a.last_meeting_at?' · last '+fmtWhen(a.last_meeting_at):'')+'</div></div></div>'+
           (a.persona?'<div class="persona">'+esc(a.persona)+(a.persona.length>=220?"…":"")+'</div>':'')+
           (a.email?'<div class="alias"><div class="al-row"><span class="al-ic">✉</span>'+
             '<span class="al-addr">'+esc(a.email)+'</span><button class="btn conn-btn" data-copy="'+esc(a.email)+'">Copy</button></div>'+
             '<div class="al-hint">Add this address to any calendar invite — '+esc(a.name)+' joins the meeting.</div></div>':'')+
           '<div class="acts"><button class="btn primary" data-dispatch="'+esc(a.id)+'">Send to a meeting</button>'+
-          '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a></div></div></div>'+
-          '<div class="modelpick"><div class="sm-h">AI model</div><div class="mp-row">'+
+          '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a></div>'+
+          capHtml+
+          (hasBrain?'<div class="cfg"><div class="sm-h">Configure</div>'+brain+'</div>':'')+
+          // AI model (Gemini/Cerebras) — kept from #220, moved to the BOTTOM and
+          // made smaller/subtler. Exact wiring preserved (endpoint, data attrs,
+          // "applies next meeting" copy).
+          '<div class="modelpick sm"><div class="sm-h">AI model</div><div class="mp-row">'+
             '<button class="mp-opt'+(a.brain==="gemini"?" on":"")+'" data-brain-set="gemini" data-brain-av="'+esc(a.id)+'">Gemini</button>'+
             '<button class="mp-opt'+(a.brain==="cerebras"?" on":"")+'" data-brain-set="cerebras" data-brain-av="'+esc(a.id)+'">Cerebras</button></div>'+
             '<div class="mp-hint">'+(a.brain==="gemini"
               ?"Gemini Live listens and replies natively — the most conversational feel, on your Google credits."
               :"Cerebras + "+esc(a.name)+"’s documents — fastest, grounded answers from what it knows.")+
             ' Applies from the next meeting.</div></div>'+
-          (hasBrain?'<div class="cfg"><div class="sm-h">Configure</div>'+brain+'</div>':'')+
-          '</div>'+
         '</div>';}).join("") || '<div class="empty">No avatars installed</div>';
     if(document.getElementById("brain-conns")) loadBrainConnectors();
     $$("#av-grid [data-dispatch]").forEach(function(b){ b.addEventListener("click",function(e){
@@ -923,6 +992,29 @@
         } else { toast((j&&j.error)||"Could not change the model"); }
       }).catch(function(){ toast("Network error"); });
     }); });
+    // Per-avatar capability switch (Slack/Google). Optimistic: the native
+    // checkbox flips instantly; on failure we revert and toast. Posts to the
+    // owner-only endpoint; effective at the next execute/deliver.
+    $$("#av-grid [data-cap]").forEach(function(cb){ cb.addEventListener("change",function(e){
+      e.stopPropagation();
+      var av=cb.getAttribute("data-cap-av"), cap=cb.getAttribute("data-cap"), on=cb.checked;
+      cb.disabled=true;
+      fetch("/dashboard/avatar/"+encodeURIComponent(av)+"/capability",{method:"POST",
+        headers:headers(),body:JSON.stringify({capability:cap,enabled:on})})
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,j:j};}); })
+      .then(function(res){
+        cb.disabled=false;
+        if(res.ok&&res.j&&res.j.ok){
+          var sub=cb.closest&&cb.closest(".cap-row")?cb.closest(".cap-row").querySelector(".cap-sub"):null;
+          if(sub) sub.textContent=on?("On — may use "+cap):("Off");
+          toast(cap.charAt(0).toUpperCase()+cap.slice(1)+(on?" enabled":" disabled")+" for "+av);
+        } else { cb.checked=!on; toast((res.j&&res.j.error)||"Could not change capability",true); }
+      }).catch(function(){ cb.disabled=false; cb.checked=!on; toast("Network error",true); });
+    }); });
+    // "Connect in Connections" — the connect action lives in the Connections
+    // view, never on the card.
+    $$("#av-grid [data-goto-conn]").forEach(function(b){ b.addEventListener("click",function(e){
+      e.stopPropagation(); go("connections"); }); });
     // connect-the-brain: reveal Slack OAuth, install, or disconnect
     $$("#av-grid [data-brain-on]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); var f=$("#bf-"+b.getAttribute("data-brain-on")); if(f) f.classList.toggle("open"); }); });
@@ -1016,24 +1108,38 @@
     // Prefetched once per page (window-scoped guard: renderAll reruns on every
     // summary refresh and must NOT refetch the calendar each tick); the ↻
     // button and OAuth return force a refresh.
-    // Header bar for the weekly calendar: which calendar + a reload control.
+    // Header bar for the weekly calendar: an Apple/Google-style week label
+    // (the date range for the 7 days starting today) + which calendar + reload.
+    var MON3=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     function wkHead(cal){
-      return '<div class="wkbar"><div class="wkcal">📅 <b>This week</b> · '+
+      var t0=new Date(); t0.setHours(0,0,0,0);
+      var t1=new Date(t0.getTime()+6*86400000);
+      var range=MON3[t0.getMonth()]+" "+t0.getDate()+" – "+MON3[t1.getMonth()]+" "+t1.getDate();
+      return '<div class="wkbar"><div class="wkcal">📅 <b>This week</b> · <span class="wkrange">'+range+'</span> · '+
         esc(cal.email||"calendar connected")+'</div>'+
         '<button class="btn" id="upcoming-reload" style="padding:6px 12px;font-size:.78rem">↻</button></div>';
     }
-    // One meeting card. multi = the org has >1 granted avatar (show a picker);
-    // otherwise a solo "Send <name>" button. NULL-URL GUARD (#197 class):
-    // meeting_url is coerced to a string and a card with no link never gets a
-    // send control (no string method is ever called on a possibly-null url).
+    // Resolve a friendly avatar name from its id (for the "🎭 name" badge).
+    function avName(id){
+      if(!id) return "Avatar";
+      var a=((DATA&&DATA.avatars)||[]).find(function(x){return x.id===id;});
+      return a?a.name:(id.charAt(0).toUpperCase()+id.slice(1));
+    }
+    // One meeting BLOCK. multi = the org has >1 granted avatar (show a picker);
+    // otherwise a solo "Send <name>" button. A meeting the avatar is being
+    // sent/queued to (auto_join) becomes a filled block with a "🎭 name" badge
+    // and no Send control; a plain meeting is outlined with the Send control.
+    // NULL-URL GUARD (#197 class): meeting_url is coerced to a string and a card
+    // with no link never gets a send control (no string method on a null url).
     function wkCard(m,multi,avOpts,av0){
       var url=m.meeting_url||"";
       var t=new Date(m.start_time);
       var hm=isNaN(t)?"—":(("0"+t.getHours()).slice(-2)+":"+("0"+t.getMinutes()).slice(-2));
       var plat=(m.platform&&m.platform!=="—")?'<span class="platc">'+esc(m.platform)+'</span>':"";
-      var state;
-      if(m.auto_join){
-        // Already scheduled/queued for this org+URL — no send button.
+      var going=!!m.auto_join, badge="", state;
+      if(going){
+        // Avatar going here → colored block + badge chip naming WHO. No send btn.
+        badge='<span class="avbadge">🎭 '+esc(avName(m.auto_join_avatar))+'</span>';
         state='<span class="stchip connected">✓ Queued</span>';
       } else if(url){
         // Available → "Send [avatar ▾]". Reuse DATA.avatars (already in the
@@ -1047,7 +1153,8 @@
         // No join link yet — no send control, never a crash.
         state='<span class="stchip" style="opacity:.6">no link</span>';
       }
-      return '<div class="mcard"><span class="mtime">'+hm+'</span>'+
+      return '<div class="mcard'+(going?' going':'')+'">'+
+        '<div class="mtop"><span class="mtime">'+hm+'</span>'+badge+'</div>'+
         '<span class="mtitle">'+esc(m.title||"Meeting")+'</span>'+
         (plat?'<div class="mmeta">'+plat+'</div>':"")+
         '<div class="avstate">'+state+'</div></div>';
