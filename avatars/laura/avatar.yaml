@@ -8,12 +8,10 @@
 
 id: laura
 name: Laura
-role: AI Assistant
+role: ultra HD avatar
 
 # One-line, user-facing summary for the dashboard card (NOT the spoken persona).
-description: >-
-  Joins your video calls as a teammate — answers from your process docs, tracks
-  decisions and action items, and drafts the follow-up.
+description: coming soon
 
 # Names that "call" this avatar into the conversation. Add nicknames here.
 # (Case-insensitive. The avatar only speaks when one of these is said.)
