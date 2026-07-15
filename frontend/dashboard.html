@@ -141,13 +141,15 @@
   .livestrip .meta{font-family:var(--mono);font-size:.74rem;color:var(--live);}
 
   /* how it works — compact 3-step title flow */
-  .how{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px 14px;margin-bottom:20px;}
+  /* Full-width stepper: the 3 steps + arrows stretch edge-to-edge (space-between),
+     never a narrow centered cluster. */
+  .how{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 14px;margin-bottom:20px;}
   .step{display:flex;align-items:baseline;gap:8px;background:none;border:none;padding:0;position:relative;}
   .step .n{font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;color:transparent;background:var(--grad);-webkit-background-clip:text;background-clip:text;font-weight:700;}
   .step h3{font-size:.98rem;font-weight:600;letter-spacing:-.02em;margin:0;}
-  .step.done .n,.step.done h3{color:var(--ok);background:none;-webkit-text-fill-color:var(--ok);}
+  /* completed step → BLUE (theme-aware --live), never green. */
+  .step.done .n,.step.done h3{color:var(--live);background:none;-webkit-text-fill-color:var(--live);}
   .how-arrow{color:var(--faint);font-size:1.05rem;line-height:1;user-select:none;}
-  .how-foot{flex-basis:100%;font-size:.82rem;color:var(--faint);text-align:center;margin-top:2px;}
   @media (max-width:760px){ .how{flex-direction:column;} .how-arrow{transform:rotate(90deg);} }
 
   .tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;}
@@ -482,8 +484,15 @@
   .cstat b{width:7px;height:7px;border-radius:50%;background:var(--faint);}
   .cstat.on{color:var(--ok);} .cstat.on b{background:var(--ok);box-shadow:0 0 8px rgba(79,192,138,.5);}
   /* Slack agent card → a single "Manage tools" action to the hosted connector page. */
-  .ctools{border-top:1px solid var(--line-soft);margin-top:2px;padding-top:12px;display:flex;flex-direction:column;gap:7px;align-items:flex-start;}
+  .ctools{border-top:1px solid var(--line-soft);margin-top:2px;padding-top:12px;display:flex;flex-direction:column;gap:9px;align-items:flex-start;}
   .ctools .btn{text-decoration:none;}
+  /* Connected brokered tools → compact chips (only the connected ones). */
+  .ctool-chips{display:flex;flex-wrap:wrap;gap:6px;}
+  .ctool-chips:empty{display:none;}
+  .ctool-chip{font-size:.74rem;padding:3px 10px;border-radius:999px;background:var(--live-soft);border:1px solid rgba(126,182,255,.3);color:var(--live);font-weight:500;}
+  /* Inline brand logos on connection cards + capability rows (self-contained SVG). */
+  .clogo{flex:0 0 auto;vertical-align:-3px;}
+  .cap-ic svg{width:16px;height:16px;vertical-align:middle;}
 
   .settings{max-width:620px;display:flex;flex-direction:column;gap:14px;}
   .fset{background:var(--panel);border:1px solid var(--line-soft);border-radius:16px;box-shadow:var(--shadow-sm);padding:6px 16px;backdrop-filter:var(--glass);}
@@ -577,7 +586,6 @@
         <div class="step" id="step-connect"><span class="n">02</span><h3>Connect your tools</h3></div>
         <div class="how-arrow" aria-hidden="true">→</div>
         <div class="step" id="step-meeting"><span class="n">03</span><h3>Send one into a meeting</h3></div>
-        <div class="how-foot">No card is required for the first 15 avatar-minutes.</div>
       </div>
 
       <div class="panel" style="margin-bottom:20px">
@@ -650,7 +658,7 @@
     <section class="view" id="view-usage" hidden>
       <div class="head"><div><h1>Usage &amp; billing</h1><div class="sub">One balance shared by Laura and Cedric</div></div></div>
       <div class="usage-hero">
-        <div class="ubig"><div class="k">Minutes remaining</div><div class="v tnum" id="u-remaining">—</div><div class="s" id="u-included">Loading your entitlement…</div></div>
+        <div class="ubig"><div class="k">Minutes remaining</div><div class="v tnum" id="u-remaining">—</div></div>
         <div class="ubig"><div class="k">Minutes used this period</div><div class="v tnum" id="u-used">—</div><div class="s" id="u-period">Shared across Laura and Cedric</div></div>
       </div>
       <div class="panel" style="margin-bottom:16px">
@@ -723,6 +731,23 @@
   var $=function(s,r){return (r||document).querySelector(s);};
   var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));};
   var esc=function(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c];});};
+
+  // Inline brand marks — self-contained SVG (no external assets, CSP-safe). Brand
+  // colours read fine in both themes. Used on the Connections cards + capability rows.
+  var LOGO_GOOGLE='<svg class="clogo" width="15" height="15" viewBox="0 0 48 48" aria-hidden="true" focusable="false">'+
+    '<path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>'+
+    '<path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>'+
+    '<path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>'+
+    '<path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>';
+  var LOGO_SLACK='<svg class="clogo" width="14" height="14" viewBox="0 0 122.8 122.8" aria-hidden="true" focusable="false">'+
+    '<path fill="#E01E5A" d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9z"/>'+
+    '<path fill="#E01E5A" d="M32.3 77.6c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z"/>'+
+    '<path fill="#36C5F0" d="M45.2 25.8c-7.1 0-12.9-5.8-12.9-12.9S38.1 0 45.2 0s12.9 5.8 12.9 12.9v12.9H45.2z"/>'+
+    '<path fill="#36C5F0" d="M45.2 32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H12.9C5.8 58.1 0 52.3 0 45.2s5.8-12.9 12.9-12.9h32.3z"/>'+
+    '<path fill="#2EB67D" d="M97 45.2c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9-5.8 12.9-12.9 12.9H97V45.2z"/>'+
+    '<path fill="#2EB67D" d="M90.5 45.2c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6 0s12.9 5.8 12.9 12.9v32.3z"/>'+
+    '<path fill="#ECB22E" d="M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9-12.9-5.8-12.9-12.9V97h12.9z"/>'+
+    '<path fill="#ECB22E" d="M77.6 90.5c-7.1 0-12.9-5.8-12.9-12.9s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H77.6z"/></svg>';
 
   var GRADS=["linear-gradient(135deg,#F5484D,#FFB49A)","linear-gradient(135deg,#4D7CFE,#7EB6FF)",
              "linear-gradient(135deg,#8b5cf6,#c4b5fd)","linear-gradient(135deg,#1F9D63,#4FC08A)"];
@@ -799,6 +824,14 @@
   $$("#nav button").forEach(function(a){a.addEventListener("click",function(e){e.preventDefault();go(a.getAttribute("data-view"));});});
   document.addEventListener("click",function(e){var t=e.target.closest("[data-goto]");if(t){go(t.getAttribute("data-goto"));}});
 
+  // A Slack/brain connect (?brain=), a native Google connect (?google=), or a
+  // brokered-tool connect (?connected=) all land back here — open the Connections
+  // view instead of dropping the user on Overview (E). Runs AFTER go()/VIEWS are
+  // defined (the return params were captured up top, before replaceState cleared
+  // the URL). The chosen view sticks through the auth gate and the first summary
+  // load. Billing keeps its own routing (402 → Usage), so ?billing= is not here.
+  if(oauthResult||googleResult||connResult){ go("connections"); }
+
   function load(){
     fetch("/dashboard/summary",{headers:headers()})
       .then(function(r){
@@ -843,9 +876,8 @@
     var used=secondsOf(b,"used"), remaining=secondsOf(b,"remaining"), included=secondsOf(b,"included");
     $("#u-used").textContent=minuteLabel(used);
     $("#u-remaining").textContent=minuteLabel(remaining);
-    $("#u-included").textContent=managed
-      ?minuteLabel(included)+" included by your organization"
-      :minuteLabel(included)+" included in this "+(plan==="solo"?"billing period":"trial");
+    // (The "N min included in this trial" sub-line was removed — the remaining
+    // minutes above are enough on their own.)
     $("#u-period").textContent=b.current_period_end
       ?"Renews "+new Date(b.current_period_end*1000).toLocaleDateString()
       :"Shared across Laura and Cedric";
@@ -992,7 +1024,7 @@
       // and the per-model description lines are gone; only the controls remain.
       // ALL #220/#221 wiring (endpoints + data attributes) is unchanged.
       var capHtml='<div class="caps"><div class="sm-h">Capabilities</div><div class="cap-list">'+
-          capRow(a,"slack","Slack agent","#")+capRow(a,"google","Google","G")+'</div>'+
+          capRow(a,"slack","Slack agent",LOGO_SLACK)+capRow(a,"google","Google",LOGO_GOOGLE)+'</div>'+
           '<div class="modelpick sm"><div class="sm-h">AI model</div><div class="mp-row">'+
             '<button class="mp-opt'+(a.brain==="gemini"?" on":"")+'" data-brain-set="gemini" data-brain-av="'+esc(a.id)+'">Gemini</button>'+
             '<button class="mp-opt'+(a.brain==="cerebras"?" on":"")+'" data-brain-set="cerebras" data-brain-av="'+esc(a.id)+'">Cerebras</button></div>'+
@@ -1591,7 +1623,7 @@
     var b=d.billing||{};
     $("#u-used").textContent=(b.minutes_30d||0)+" min";
     $("#u-remaining").textContent="15 min";
-    $("#u-included").textContent="15 min included in this trial";
+    // ("N min included in this trial" sub-line removed — remaining minutes suffice.)
     $("#u-plan").textContent=(b.plan&&b.plan!=="Demo")?b.plan:"Free";
     $("#billing-state").textContent="Free trial";
     var byAv=b.by_avatar||{}, maxMin=Math.max.apply(null,Object.keys(byAv).map(function(k){return byAv[k];}).concat([1]));
@@ -1613,9 +1645,9 @@
     var googleNative=!!(d.connections&&d.connections.google_native);
     var slackConnected=brainConnected; // cedric-brain connected row (the Slack add-on)
     $("#conns").innerHTML =
-      // ── Google (native) — Laura's own Google, independent of Cedric ──
-      '<div class="conn"><div class="nm">Google <span class="stchip" style="margin-left:6px">native</span></div>'+
-      '<div class="ds">Native — Laura schedules &amp; emails on your Google directly. No add-on. Grants Calendar + Gmail on your own account.</div>'+
+      // ── Google (native) — the avatars' own Google, independent of Cedric ──
+      '<div class="conn"><div class="nm">'+LOGO_GOOGLE+' Google <span class="stchip" style="margin-left:6px">native</span></div>'+
+      '<div class="ds">Native — avatars schedule &amp; email on your Google directly. No add-on. Grants Calendar + Gmail on your own account.</div>'+
       '<div class="foot"><span class="cstat'+(googleNative?" on":"")+'"><b></b>'+(googleNative?"Connected":"Not connected")+'</span>'+
       (googleNative
         ?'<button class="btn" data-google-off>Disconnect</button>'
@@ -1626,8 +1658,8 @@
       // (Notion, HubSpot, …). The tools are NOT dumped inline — a single "Manage
       // tools" action opens the hosted connector page (manage_url) where they're
       // added/managed. Connect + Disconnect (org-level) are preserved here.
-      '<div class="conn"><div class="nm">Slack agent <span class="stchip" style="margin-left:6px">add-on</span></div>'+
-      '<div class="ds">Optional add-on — one connection lets your Slack agent use Slack, Notion, HubSpot and more.</div>'+
+      '<div class="conn"><div class="nm">'+LOGO_SLACK+' Slack agent <span class="stchip" style="margin-left:6px">add-on</span></div>'+
+      '<div class="ds">Your Slack workspace assistant — brings meeting outcomes into Slack and runs approved actions.</div>'+
       '<div class="foot"><span class="cstat'+(slackConnected?" on":"")+'"><b></b>'+(slackConnected?"Connected":"Not connected")+'</span>'+
       (slackConnected
         ?'<button class="btn" data-slack-off>Disconnect</button>'
@@ -1637,7 +1669,8 @@
       // href is resolved to manage_url after render (guarded); it starts on a
       // safe fallback so the link is never dead (#197 class).
       (slackConnected
-        ?'<div class="ctools"><a class="btn primary" data-slack-manage target="_blank" rel="noopener" style="text-decoration:none" href="https://www.meet-cedric.com">Manage tools ↗</a>'+
+        ?'<div class="ctools"><div class="ctool-chips" id="ctool-chips"></div>'+
+          '<a class="btn primary" data-slack-manage target="_blank" rel="noopener" style="text-decoration:none" href="https://www.meet-cedric.com">Manage tools ↗</a>'+
           '<div class="cnote">Add and manage the tools your Slack agent can use.</div></div>'
         :'')+
       '</div>';
@@ -1670,30 +1703,41 @@
     wireAvatarImages();
   }
 
-  // Resolve the Slack agent's "Manage tools" button to the hosted connector/manage
-  // page. Reads the Laura proxy GET /dashboard/connections/brain/connectors and
-  // pulls the catalog's manage_url (top-level, else the first per-connector one).
-  // NULL-SAFE (#197 class): typeof checks before any string use; the button starts
-  // on a working fallback so the link is NEVER dead, and a failed fetch leaves that
-  // fallback in place (never a crash). Cached on window so the 15s summary refresh
-  // doesn't refetch. The tools themselves are added/managed on that page — never
-  // listed inline.
+  // Slack agent tools: resolve the "Manage tools" button to the hosted
+  // connector/manage page AND show which brokered tools are CONNECTED as compact
+  // chips. Reads the Laura proxy GET /dashboard/connections/brain/connectors
+  // (connector shape: {key,name,connected,manage_url?}). NULL-SAFE (#197 class):
+  // typeof/guard checks before any use; the button starts on a working fallback so
+  // the link is NEVER dead, a failed fetch leaves that fallback + empty chips in
+  // place (never a crash). The catalog is cached on window so the 15s summary
+  // refresh doesn't refetch — but the chips + href are RE-APPLIED from cache on
+  // every render because renderConnections rebuilds #conns each tick. Not-connected
+  // tools are never listed inline; they're added/managed on the hosted page.
+  function applySlackTools(j){
+    j=j||{};
+    var a=document.querySelector("#conns [data-slack-manage]");
+    if(a){
+      var mgr="";
+      if(typeof j.manage_url==="string"&&j.manage_url){ mgr=j.manage_url; }
+      else { (j.connectors||[]).some(function(c){ if(c&&typeof c.manage_url==="string"&&c.manage_url){ mgr=c.manage_url; return true; } return false; }); }
+      if(mgr){ a.setAttribute("href",mgr); a.textContent="Manage tools ↗"; }
+      else { a.setAttribute("href","https://www.meet-cedric.com"); a.textContent="Manage in Cedric ↗"; }
+    }
+    var box=document.querySelector("#conns #ctool-chips");
+    if(box){
+      var on=(j.connectors||[]).filter(function(c){ return c&&c.connected===true; });
+      box.innerHTML=on.map(function(c){ return '<span class="ctool-chip">'+esc(String((c&&(c.name||c.key))||"Tool"))+'</span>'; }).join("");
+    }
+  }
   function resolveSlackManageUrl(){
-    var el=document.querySelector("#conns [data-slack-manage]"); if(!el) return;
-    if(window._slackManageUrl){ el.setAttribute("href",window._slackManageUrl); el.textContent="Manage tools ↗"; return; }
-    if(window._slackManageTried) return;   // one attempt per page; fallback href stands
+    if(!document.querySelector("#conns [data-slack-manage]")) return;
+    if(window._connectorsCache){ applySlackTools(window._connectorsCache); }  // re-apply on rebuild
+    if(window._slackManageTried) return;   // fetch once per page; the cache re-applies
     window._slackManageTried=true;
     fetch("/dashboard/connections/brain/connectors?t="+Date.now(),{headers:headers(),cache:"no-store"})
       .then(function(r){ return r.json(); })
-      .then(function(j){
-        var mgr="";
-        if(j&&typeof j.manage_url==="string"&&j.manage_url){ mgr=j.manage_url; }
-        else { (j&&j.connectors||[]).some(function(c){ if(c&&typeof c.manage_url==="string"&&c.manage_url){ mgr=c.manage_url; return true; } return false; }); }
-        var a=document.querySelector("#conns [data-slack-manage]"); if(!a) return;
-        if(mgr){ window._slackManageUrl=mgr; a.setAttribute("href",mgr); a.textContent="Manage tools ↗"; }
-        else { a.setAttribute("href","https://www.meet-cedric.com"); a.textContent="Manage in Cedric ↗"; }
-      })
-      .catch(function(){ /* keep the fallback href + label — never crash */ });
+      .then(function(j){ window._connectorsCache=j||{}; applySlackTools(window._connectorsCache); })
+      .catch(function(){ /* keep the fallback href/label + empty chips — never crash */ });
   }
 
   function renderChart(weekly){
