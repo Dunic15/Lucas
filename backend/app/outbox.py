@@ -762,6 +762,15 @@ def process_due(
     org_id: str | None = None, outbox_id: int | None = None,
 ) -> int:
     """Deliver due rows without sleeping; claims are safe across instances."""
+    # TODO(capability-gate): the per-avatar `slack` toggle is NOT enforced on
+    # this Cedric callback-outbox delivery path. The callback_outbox row carries
+    # org_id/bot_id/team_id/channel/callback_url/payload but NOT avatar_id, so
+    # the acting avatar can't be resolved here without either (a) adding an
+    # avatar_id column to callback_outbox (schema + backfill + outbox_pg mirror)
+    # and stamping it at persist_action_capture_once (session.avatar_id is known
+    # there), or (b) gating earlier at capture. The direct Slack-post seams
+    # (main.deliver_artifact, autopilot.maybe_deliver) ARE gated; this brokered
+    # path is left honest rather than faked.
     from .cedric import callback
     current = time.time() if now is None else float(now)
     delivered_count = 0

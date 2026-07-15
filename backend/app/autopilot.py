@@ -26,7 +26,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from . import actions, ledger
+from . import actions, ledger, store
 from .config import settings
 
 
@@ -45,9 +45,16 @@ def maybe_deliver(avatar_name: str, artifact: dict[str, Any]) -> dict[str, Any]:
         email_res: dict[str, Any] = {"sent": False, "reason": "no recipients"}
         if to and email.get("subject") and email.get("body"):
             email_res = actions.send_email(to, email["subject"], email["body"])
-        slack_res = actions.post_to_slack(
-            actions.artifact_to_slack_text(avatar_name, artifact)
-        )
+        # CAPABILITY GATE: Slack delivery happens ONLY when the acting avatar's
+        # `slack` toggle is on. The avatar_id is stamped on the artifact at
+        # finalize; skip on an explicit OFF, default on otherwise.
+        avatar_id = str(artifact.get("avatar_id") or "")
+        if store.get_avatar_capabilities(avatar_id).get("slack") is False:
+            slack_res = {"sent": False, "reason": "slack capability off"}
+        else:
+            slack_res = actions.post_to_slack(
+                actions.artifact_to_slack_text(avatar_name, artifact)
+            )
         return {"delivered": True, "email": email_res, "slack": slack_res}
     except Exception as e:  # never block finalize on a vendor hiccup
         return {"delivered": False, "reason": type(e).__name__}
