@@ -126,7 +126,11 @@ def _mock_google(monkeypatch, *, token=("at-1", 200), cal=None, gmail=None):
 
     monkeypatch.setattr(settings, "google_calendar_client_id", "cid")
     monkeypatch.setattr(settings, "google_calendar_client_secret", "csec")
-    cal = cal if cal is not None else (200, {"id": "ev1", "htmlLink": "https://cal/ev1"})
+    cal = cal if cal is not None else (
+        200,
+        {"id": "ev1", "htmlLink": "https://cal/ev1",
+         "hangoutLink": "https://meet.google.com/aaa-bbbb-ccc"},
+    )
     gmail = gmail if gmail is not None else (200, {"id": "m1", "threadId": "t1"})
     calls: list[str] = []
 
@@ -156,7 +160,12 @@ def test_google_client_happy_path(monkeypatch, tmp_path):
         {"title": "Follow-up", "start": "2026-08-01T10:00:00",
          "end": "2026-08-01T10:30:00", "attendees": ["a@b.com", "c@d.com"]},
     )
-    assert ev == {"ok": True, "event_id": "ev1", "event_url": "https://cal/ev1"}
+    assert ev == {
+        "ok": True,
+        "event_id": "ev1",
+        "event_url": "https://cal/ev1",
+        "meet_url": "https://meet.google.com/aaa-bbbb-ccc",
+    }
 
     msg = gc.send_gmail("org-a", {"to": "a@b.com", "subject": "Recap", "body": "Notes"})
     assert msg["ok"] and msg["message_id"] == "m1"

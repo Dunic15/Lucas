@@ -15,6 +15,8 @@
     --grad:linear-gradient(92deg,var(--g1) 0%,var(--g2) 30%,var(--g3) 62%,var(--g4) 100%);
     --accent:#F5484D; --accent-soft:rgba(245,72,77,.12);
     --live:#7EB6FF; --live-soft:rgba(126,182,255,.12); --live-glow:rgba(126,182,255,.55);
+    /* Prominent primary BLUE for the capability toggles (ON state). */
+    --sw-on:#3B82F6; --sw-glow:rgba(59,130,246,.55);
     --ok:#4FC08A; --ok-soft:rgba(79,192,138,.13);
     --warn:#E8B24A; --warn-soft:rgba(232,178,74,.13);
     --grid:rgba(255,255,255,.05);
@@ -31,6 +33,7 @@
     --text:#0B0D12; --dim:#586173; --faint:#8A909B;
     --accent:#E23B40; --accent-soft:rgba(226,59,64,.09);
     --live:#3B72D9; --live-soft:rgba(59,114,217,.1); --live-glow:rgba(59,114,217,.35);
+    --sw-on:#2563EB; --sw-glow:rgba(37,99,235,.4);
     --ok:#1F9D63; --ok-soft:rgba(31,157,99,.1);
     --warn:#B7791F; --warn-soft:rgba(183,121,31,.11);
     --grid:rgba(10,12,16,.05);
@@ -326,7 +329,8 @@
   }
   /* ── Desktop HOUR GRID (rendered only >=820px): time axis + 7 day columns in one
      scrollable grid; events are absolutely positioned by start/duration. The
-     44px gridline pitch below MUST equal JS HOUR_PX. ── */
+     gridline pitch is driven by --hour-px (set from JS HOUR_PX on .calgrid), so
+     labels, hour lines and events all share one vertical pitch. ── */
   .cal{border:1px solid var(--line-soft);border-radius:14px;overflow:hidden;background:var(--panel);}
   .calscroll{overflow-y:auto;overflow-x:hidden;max-height:62vh;}
   .calgrid{display:grid;grid-template-columns:54px repeat(7,minmax(0,1fr));}
@@ -338,9 +342,15 @@
   .cal-dh.today{background:var(--live-soft);}
   .cal-dh.today .dn,.cal-dh.today .dd{color:var(--live);}
   .cal-axis{position:relative;border-right:1px solid var(--line-soft);}
-  .cal-hr{position:absolute;right:6px;transform:translateY(-50%);font-family:var(--mono);font-size:.58rem;color:var(--faint);white-space:nowrap;}
+  /* Each hour label is TOP-anchored to its gridline (its `top` == the line's y),
+     the SAME anchor events use — so "9:00" sits on the 9:00 line and lines up
+     with the top of a 9:00 event. The 1px nudge drops the glyphs just under the
+     hairline instead of straddling it. */
+  .cal-hr{position:absolute;right:6px;transform:translateY(1px);font-family:var(--mono);font-size:.58rem;color:var(--faint);white-space:nowrap;}
+  /* Gridline pitch is driven by --hour-px (set inline from JS HOUR_PX on
+     .calgrid) so the axis labels and the day-column hour lines can never drift. */
   .cal-col{position:relative;border-left:1px solid var(--line-soft);
-    background-image:repeating-linear-gradient(to bottom,var(--line-soft) 0,var(--line-soft) 1px,transparent 1px,transparent 44px);}
+    background-image:repeating-linear-gradient(to bottom,var(--line-soft) 0,var(--line-soft) 1px,transparent 1px,transparent var(--hour-px,44px));}
   .cal-col.today{background-color:var(--live-soft);}
   .cal-ev{position:absolute;left:2px;right:2px;overflow:hidden;border:1px solid var(--line-soft);border-left:3px solid var(--g2);
     border-radius:7px;padding:2px 6px;background:var(--panel-2);display:flex;flex-direction:column;gap:0;
@@ -396,19 +406,19 @@
   .cap-info{display:flex;align-items:center;gap:10px;min-width:0;}
   .cap-ic{flex:0 0 auto;width:24px;height:24px;border-radius:7px;display:grid;place-items:center;font-size:.72rem;font-weight:800;font-family:var(--mono);background:var(--live-soft);color:var(--live);}
   .cap-nm{font-size:.88rem;font-weight:600;}
-  .cap-sub{font-size:.7rem;color:var(--faint);margin-top:1px;}
   .cap-ctl{flex:0 0 auto;display:flex;align-items:center;}
   .cap-connect{font-size:.72rem;color:var(--dim);background:transparent;border:1px dashed var(--line);border-radius:999px;padding:5px 10px;cursor:pointer;white-space:nowrap;font-family:inherit;}
   .cap-connect:hover{color:var(--live);border-color:rgba(126,182,255,.5);}
   .cap-note{font-size:.7rem;color:var(--faint);margin-top:9px;line-height:1.4;}
-  /* Accessible on/off switch (native checkbox under a styled track). */
-  .switch{position:relative;display:inline-flex;width:40px;height:23px;flex:0 0 auto;cursor:pointer;}
+  /* Accessible on/off switch (native checkbox under a styled track). Sized as a
+     prominent PRIMARY control: larger track + a solid BLUE (--sw-on) ON state. */
+  .switch{position:relative;display:inline-flex;width:52px;height:30px;flex:0 0 auto;cursor:pointer;}
   .switch input{position:absolute;opacity:0;width:0;height:0;margin:0;}
   .switch .track{position:absolute;inset:0;border-radius:999px;background:var(--panel-2);border:1px solid var(--line);transition:background .15s,border-color .15s;}
-  .switch .knob{position:absolute;top:3px;left:3px;width:15px;height:15px;border-radius:50%;background:var(--faint);transition:transform .15s,background .15s;}
-  .switch input:checked + .track{background:var(--live-soft);border-color:var(--live);}
-  .switch input:checked + .track .knob{transform:translateX(17px);background:var(--live);}
-  .switch input:focus-visible + .track{box-shadow:0 0 0 2px var(--live-glow);}
+  .switch .knob{position:absolute;top:4px;left:4px;width:22px;height:22px;border-radius:50%;background:var(--faint);transition:transform .15s,background .15s;box-shadow:0 1px 2px rgba(0,0,0,.25);}
+  .switch input:checked + .track{background:var(--sw-on);border-color:var(--sw-on);}
+  .switch input:checked + .track .knob{transform:translateX(22px);background:#fff;}
+  .switch input:focus-visible + .track{box-shadow:0 0 0 3px var(--sw-glow);}
   .switch input:disabled + .track{opacity:.5;cursor:not-allowed;}
   /* AI model moved to the card BOTTOM and made smaller/subtler (#220 wiring kept). */
   .modelpick.sm{margin:12px 0 0;padding:9px 11px;background:transparent;border-color:var(--line-soft);}
@@ -949,19 +959,20 @@
     // switch reflects `on` (this avatar's stored flag, default = connected).
     function capRow(a,key,label,icon){
       var ct=(a.capabilities_toggle||{})[key]||{on:false,connected:false};
-      var ctl,sub;
+      // JUST the capability label + control. The per-toggle status line
+      // ("On — … may use …" / "Off for …" / "Not connected") is REMOVED: it was
+      // noise (and once wrongly named "Cedric"). The switch itself shows on/off.
+      var ctl;
       if(ct.connected){
         ctl='<label class="switch"><input type="checkbox"'+(ct.on?' checked':'')+
           ' data-cap-av="'+esc(a.id)+'" data-cap="'+esc(key)+'"'+
           ' aria-label="'+esc(label)+' for '+esc(a.name)+'"><span class="track"><span class="knob"></span></span></label>';
-        sub=ct.on?('On — '+esc(a.name)+' may use '+esc(label)):'Off for '+esc(a.name);
       } else {
         ctl='<button class="cap-connect" data-goto-conn="1" title="Connect '+esc(label)+' in the Connections view">Connect in Connections</button>';
-        sub='Not connected';
       }
       return '<div class="cap-row'+(ct.connected?'':' off')+'">'+
         '<div class="cap-info"><span class="cap-ic">'+icon+'</span>'+
-        '<div style="min-width:0"><div class="cap-nm">'+esc(label)+'</div><div class="cap-sub">'+sub+'</div></div></div>'+
+        '<div style="min-width:0"><div class="cap-nm">'+esc(label)+'</div></div></div>'+
         '<div class="cap-ctl">'+ctl+'</div></div>';
     }
     // Avatar card — TWO columns. LEFT: identity/status, description, alias email
@@ -1036,8 +1047,7 @@
       .then(function(res){
         cb.disabled=false;
         if(res.ok&&res.j&&res.j.ok){
-          var sub=cb.closest&&cb.closest(".cap-row")?cb.closest(".cap-row").querySelector(".cap-sub"):null;
-          if(sub) sub.textContent=on?("On — may use "+cap):("Off");
+          // The switch itself is the on/off indicator now — no status line to update.
           toast(cap.charAt(0).toUpperCase()+cap.slice(1)+(on?" enabled":" disabled")+" for "+av);
         } else { cb.checked=!on; toast((res.j&&res.j.error)||"Could not change capability",true); }
       }).catch(function(){ cb.disabled=false; cb.checked=!on; toast("Network error",true); });
@@ -1058,8 +1068,9 @@
     // Desktop: a real Apple/Google-style HOUR GRID — a left time axis + 7 day
     // columns, each meeting an absolutely-positioned block (top = start time,
     // height ∝ duration, overlapping meetings side-by-side). Narrow screens fall
-    // back to compact day-grouped sections. HOUR_PX MUST match the CSS gridline
-    // pitch (the 44px in .cal-col's repeating-linear-gradient).
+    // back to compact day-grouped sections. HOUR_PX is the single source of truth
+    // for the vertical pitch: it positions labels/events AND is fed to the CSS
+    // gridlines via the --hour-px custom property on .calgrid (so they can't drift).
     var HOUR_PX=44;
     var MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
     var MON3=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -1179,7 +1190,9 @@
         }
         body+=col+'</div>';
       });
-      return '<div class="cal"><div class="calscroll"><div class="calgrid">'+head+axis+body+'</div></div></div>';
+      // --hour-px feeds the CSS gridline pitch so the day-column hour lines share
+      // the exact vertical pitch the axis labels + events are positioned with.
+      return '<div class="cal"><div class="calscroll"><div class="calgrid" style="--hour-px:'+HOUR_PX+'px">'+head+axis+body+'</div></div></div>';
     }
     function evBlock(ev,geo){
       var m=ev.m, url=m.meeting_url||"", going=!!m.auto_join;

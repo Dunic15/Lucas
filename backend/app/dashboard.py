@@ -1335,6 +1335,9 @@ async def create_calendar_event_endpoint(request: Request) -> JSONResponse:
             "ok": True,
             "event_id": res.get("event_id", ""),
             "html_link": res.get("event_url", ""),
+            # The provisioned Google Meet join link (empty if none) — the UI can
+            # show/confirm it; the avatar joins THIS Meet via its invite alias.
+            "meet_url": res.get("meet_url", ""),
             "avatar_added": bool(avatar_email),
         },
         headers=_NO_STORE,
