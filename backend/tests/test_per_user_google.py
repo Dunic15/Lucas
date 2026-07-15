@@ -80,7 +80,7 @@ def _wire_callback(monkeypatch, *, oauth_email: str, invite_filter: str):
     monkeypatch.setattr(settings, "google_calendar_client_id", "cid")
     monkeypatch.setattr(settings, "google_calendar_client_secret", "csec")
     monkeypatch.setattr(settings, "calendar_invite_emails", invite_filter)
-    monkeypatch.setattr(settings, "calendar_oauth_state", "")  # no state gate in test
+    monkeypatch.setattr(settings, "laura_api_token", "")  # no machine bearer in test
     monkeypatch.setattr(main_module.httpx, "AsyncClient", _fake_async_client(oauth_email))
     # The connecting user's org comes ONLY from the session cookie resolver.
     monkeypatch.setattr(
@@ -97,6 +97,18 @@ def _wire_callback(monkeypatch, *, oauth_email: str, invite_filter: str):
     return calls
 
 
+def _connect_state(client) -> str:
+    """Drive /oauth/google/connect for THIS browser and return the signed `state`
+    it puts in the Google auth URL. The matching single-use nonce cookie is set
+    on the TestClient's cookie jar automatically, so a follow-up callback with
+    this state is correctly browser-bound."""
+    from urllib.parse import parse_qs, urlparse
+
+    r = client.get("/oauth/google/connect", follow_redirects=False)
+    assert r.status_code in (302, 307), r.text
+    return parse_qs(urlparse(r.headers["location"]).query)["state"][0]
+
+
 def test_callback_accepts_non_avatar_account_and_skips_recall(client, monkeypatch):
     """A normal user connecting their OWN Google is accepted (no more "Wrong
     account"), the token lands on THEIR org, and the avatar-only Recall
@@ -104,7 +116,12 @@ def test_callback_accepts_non_avatar_account_and_skips_recall(client, monkeypatc
     calls = _wire_callback(
         monkeypatch, oauth_email="alice@example.com", invite_filter=AVATAR_EMAIL
     )
-    resp = client.get("/oauth/google/callback?code=abc&state=", follow_redirects=False)
+    state = _connect_state(client)
+    resp = client.get(
+        "/oauth/google/callback",
+        params={"code": "abc", "state": state},
+        follow_redirects=False,
+    )
 
     assert resp.status_code == 302
     assert "/dashboard?google=connected" in resp.headers["location"]
@@ -121,7 +138,12 @@ def test_callback_avatar_account_still_creates_recall_calendar(client, monkeypat
     calls = _wire_callback(
         monkeypatch, oauth_email=AVATAR_EMAIL, invite_filter=AVATAR_EMAIL
     )
-    resp = client.get("/oauth/google/callback?code=abc&state=", follow_redirects=False)
+    state = _connect_state(client)
+    resp = client.get(
+        "/oauth/google/callback",
+        params={"code": "abc", "state": state},
+        follow_redirects=False,
+    )
 
     assert resp.status_code == 302
     assert store.get_org_oauth("u_connecting")  # token persisted too
@@ -130,12 +152,71 @@ def test_callback_avatar_account_still_creates_recall_calendar(client, monkeypat
 
 
 def test_callback_invalid_state_still_rejected(client, monkeypatch):
-    """Relaxing the ACCOUNT lock must not weaken the CSRF state check."""
+    """Relaxing the ACCOUNT lock must not weaken the CSRF state check. A callback
+    whose `state` isn't the signed nonce this browser was issued at /connect is
+    rejected (here: no /connect ran, so there is no bound cookie at all)."""
     _wire_callback(monkeypatch, oauth_email="alice@example.com", invite_filter=AVATAR_EMAIL)
-    monkeypatch.setattr(settings, "calendar_oauth_state", "expected-state")
-    resp = client.get("/oauth/google/callback?code=abc&state=wrong", follow_redirects=False)
+    resp = client.get(
+        "/oauth/google/callback",
+        params={"code": "abc", "state": "wrong"},
+        follow_redirects=False,
+    )
     assert resp.status_code == 400
     assert "state" in resp.json()["error"].lower()
+    # A rejected callback must never have stored a token.
+    assert store.get_org_oauth("u_connecting") is None
+
+
+def test_callback_rejects_state_not_bound_to_this_browser(client, monkeypatch):
+    """CSRF per-browser binding: a VALIDLY-SIGNED state that belongs to a
+    DIFFERENT flow (a different nonce than this browser's connect cookie) is
+    rejected — a signature alone is not enough, it must match the cookie set on
+    THIS browser. This is the login-CSRF / refresh-token-injection defense."""
+    _wire_callback(monkeypatch, oauth_email="alice@example.com", invite_filter=AVATAR_EMAIL)
+    # This browser starts a real flow → its nonce cookie is now in the jar.
+    _connect_state(client)
+    # An attacker crafts their OWN correctly-signed state (fresh, different nonce)
+    # and tries to replay it into the victim's browser.
+    _, attacker_state = main_module.auth.issue_oauth_state(
+        main_module.CALENDAR_STATE_PURPOSE
+    )
+    resp = client.get(
+        "/oauth/google/callback",
+        params={"code": "abc", "state": attacker_state},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+    assert "state" in resp.json()["error"].lower()
+    assert store.get_org_oauth("u_connecting") is None
+
+
+def test_connect_requires_login_when_enabled(client, monkeypatch):
+    """Login-enabled deployment: an UNAUTHENTICATED /oauth/google/connect is
+    rejected (401), so an anonymous browser can't even start the flow."""
+    monkeypatch.setattr(settings, "google_calendar_client_id", "cid")
+    monkeypatch.setattr(settings, "google_calendar_client_secret", "csec")  # auth.enabled()
+    monkeypatch.setattr(settings, "laura_api_token", "")
+    monkeypatch.setattr(main_module.auth, "current_user", lambda request: None)
+    resp = client.get("/oauth/google/connect", follow_redirects=False)
+    assert resp.status_code == 401
+
+
+def test_callback_login_enabled_unauth_not_stored_on_demo_org(client, monkeypatch):
+    """Login-enabled deployment: an UNAUTHENTICATED callback is rejected (401)
+    and NOTHING is stored on the shared demo/owner org — the old anonymous
+    fallback to settings.demo_org_id is closed."""
+    monkeypatch.setattr(settings, "google_calendar_client_id", "cid")
+    monkeypatch.setattr(settings, "google_calendar_client_secret", "csec")  # auth.enabled()
+    monkeypatch.setattr(settings, "laura_api_token", "")
+    monkeypatch.setattr(main_module.httpx, "AsyncClient", _fake_async_client("mallory@evil.com"))
+    monkeypatch.setattr(main_module.auth, "current_user", lambda request: None)
+    resp = client.get(
+        "/oauth/google/callback",
+        params={"code": "abc", "state": "anything"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 401
+    assert store.get_org_oauth(settings.demo_org_id) is None
 
 
 # ── /dashboard/upcoming: native vs Recall selection ──
