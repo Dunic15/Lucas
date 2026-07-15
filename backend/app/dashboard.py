@@ -1056,6 +1056,16 @@ def _native_event_url(ev: dict) -> str:
     return ""
 
 
+def _iso_plus_minutes(start_iso: str, minutes: int) -> str:
+    """``start_iso`` + ``minutes`` as an ISO8601 string, or "" when start can't be
+    parsed. Preserves the original offset (a "Z" is normalised to +00:00)."""
+    try:
+        dt = datetime.fromisoformat(str(start_iso or "").replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return ""
+    return (dt + timedelta(minutes=minutes)).isoformat()
+
+
 @router.get("/dashboard/upcoming")
 async def dashboard_upcoming(request: Request) -> JSONResponse:
     """Upcoming meetings — the caller's OWN Google Calendar when they've
@@ -1117,6 +1127,13 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
             for s in store.all_sessions()
             if s.meeting_url and s.org_id == org_id
         }
+        # The invite inbox base(s) — an event whose attendees include an avatar's
+        # +tag alias is one the avatar is set to auto-join, so it earns the same
+        # "🎭 <name>" badge as a live/scheduled session. Only the resolved
+        # avatar_id is exposed (never the attendee address — PII-light).
+        invite_bases = [
+            b for b in (settings.calendar_invite_emails or "").split(",") if b.strip()
+        ]
         rows: list[dict] = []
         for ev in res.get("events") or []:
             if str(ev.get("status") or "") == "cancelled":
@@ -1132,6 +1149,13 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
                 continue
             url = _native_event_url(ev)
             end = ev.get("end") or {}
+            invited = avatars.from_invite_email(
+                [str((a or {}).get("email") or "") for a in (ev.get("attendees") or [])],
+                invite_bases,
+            )
+            # WHO is being sent: a live/scheduled session for this URL, else an
+            # avatar invited by +tag alias. Empty when neither.
+            going_avatar = (booked.get(url, "") if url else "") or invited or ""
             rows.append(
                 {
                     "id": str(ev.get("id") or ""),
@@ -1142,10 +1166,10 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
                     "has_link": bool(url),
                     "meeting_url": url,
                     "attendees": len(ev.get("attendees") or []),
-                    "auto_join": bool(url) and url in booked,
-                    # WHO is being sent (empty when not auto-joining) — powers
-                    # the "🎭 <name>" badge on the calendar block.
-                    "auto_join_avatar": booked.get(url, "") if url else "",
+                    "auto_join": bool(going_avatar),
+                    # WHO is being sent (empty when none) — powers the
+                    # "🎭 <name>" badge on the calendar block.
+                    "auto_join_avatar": going_avatar,
                 }
             )
         rows.sort(key=lambda r: r["start_time"])
@@ -1226,6 +1250,95 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
             "meetings": [],
         }
     return JSONResponse(_json_safe(data), headers=_NO_STORE)
+
+
+@router.post("/dashboard/calendar/event")
+async def create_calendar_event_endpoint(request: Request) -> JSONResponse:
+    """Owner schedules a Google Calendar event straight from the dashboard week
+    grid — and, optionally, adds an avatar so it auto-joins.
+
+    Owner-authed like the other dashboard mutations: a logged-in owner +
+    same-origin (the same door as the capability/approve endpoints). The event is
+    created on the CALLER's OWN org native Google token
+    (``store.get_org_oauth`` → ``google_client.create_calendar_event``) — never a
+    shared/global account. When ``avatar_id`` is given, that avatar's invite alias
+    (the ``+tag`` address, ``_avatar_email``) is added to the attendees so the
+    auto-join webhook dispatches it into the meeting. Keyed by the org_id /
+    avatar_id STRINGS (no ``::uuid`` cast → org_id split-brain safe).
+
+    SOFT-FAILS by contract (this is off the live path): returns
+    ``{ok:false,error}`` for a bad body / no native token
+    (``error:"connect_google"``) / a Google hiccup — it never raises. Logs no
+    token, no attendee address, no transcript. Body:
+    ``{title, start (ISO), end (ISO) OR duration_min, attendees?[], avatar_id?}``.
+    """
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    from . import google_client  # lazy: mirrors the upcoming/native path
+
+    body = body or {}
+    title = str(body.get("title") or body.get("summary") or "").strip()
+    start = str(body.get("start") or "").strip()
+    if not title or not start:
+        return JSONResponse({"ok": False, "error": "title and start are required"})
+    # end wins when given; otherwise start + duration_min (default 30, clamped).
+    end = str(body.get("end") or "").strip()
+    if not end:
+        try:
+            mins = int(body.get("duration_min") or 30)
+        except (TypeError, ValueError):
+            mins = 30
+        mins = max(5, min(mins, 24 * 60))
+        end = _iso_plus_minutes(start, mins)
+        if not end:
+            return JSONResponse({"ok": False, "error": "start must be an ISO datetime"})
+    # Attendees: any explicit emails, plus (optionally) the avatar's invite alias
+    # so it auto-joins. avatar_id is validated against the listable registry.
+    attendees = google_client._emails(body.get("attendees"))
+    avatar_id = str(body.get("avatar_id") or "").strip()
+    avatar_email = ""
+    if avatar_id:
+        if avatar_id not in set(avatars.list_ids()):
+            return JSONResponse({"ok": False, "error": "unknown avatar_id"})
+        avatar_email = _avatar_email(avatar_id)
+        if avatar_email and avatar_email.lower() not in {a.lower() for a in attendees}:
+            attendees.append(avatar_email)
+    # Write to the caller's OWN org native Google (mirrors dashboard_upcoming's
+    # native_org). No native token → the UI links to Connect Google.
+    native_org = (user["org_id"] if user else "") or settings.demo_org_id
+    if not await run_in_threadpool(store.get_org_oauth, native_org):
+        return JSONResponse({"ok": False, "error": "connect_google"})
+    event: dict = {"title": title, "start": start, "end": end}
+    if attendees:
+        event["attendees"] = attendees
+    tz = str(body.get("timezone") or body.get("time_zone") or "").strip()
+    if tz:
+        event["timezone"] = tz
+    res = await run_in_threadpool(
+        google_client.create_calendar_event, native_org, event
+    )
+    if not res.get("ok"):
+        return JSONResponse(
+            {"ok": False, "error": res.get("error") or "calendar_failed"}
+        )
+    return JSONResponse(
+        {
+            "ok": True,
+            "event_id": res.get("event_id", ""),
+            "html_link": res.get("event_url", ""),
+            "avatar_added": bool(avatar_email),
+        },
+        headers=_NO_STORE,
+    )
 
 
 @router.post("/dashboard/connections/brain/disconnect")
