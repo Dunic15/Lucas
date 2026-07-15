@@ -1,13 +1,15 @@
-"""Watch Laura's Gmail for Google Meet invitations and auto-join them.
+"""Watch Laura's Gmail for meeting invitations and auto-join them.
 
 Product flow this enables (no extension, no calendar scheduling):
-  In a live meeting you click Meet's native "Add people" and add
-  laura.ai.122222@gmail.com  ->  Google emails Laura's inbox the meeting link
-  ->  this watcher sees the email, extracts the meet.google.com URL
-  ->  the backend sends a Recall bot into that exact meeting.
+  Any email that lands in Laura's inbox with a joinable meeting link — Meet's
+  native "Add people" (which emails the meet.google.com URL), a forwarded Zoom
+  invite, a forwarded Teams invite  ->  this watcher sees the email, extracts
+  the meeting URL  ->  the backend sends a Recall bot into that exact meeting.
 
-Native "Add people" does NOT create a calendar event, so Recall's calendar sync
+Meet's "Add people" does NOT create a calendar event, so Recall's calendar sync
 can't catch it — the reliable signal is the invitation email in Laura's inbox.
+Zoom/Teams links are kept whole (?pwd=, the meetup-join context) — stripping
+their join credentials would strand the bot at the passcode screen.
 
 Auth: reuses the same Google OAuth already set up for the calendar. The watcher
 needs the `gmail.readonly` scope on that consent. The refresh token comes from
@@ -29,6 +31,21 @@ GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
 
 # Standard Google Meet code: xxx-xxxx-xxx (lowercase letters).
 _MEET_RE = re.compile(r"https://meet\.google\.com/([a-z]{3}-[a-z]{4}-[a-z]{3})")
+# Zoom join links (any subdomain: zoom.us, us02web.zoom.us, company.zoom.us).
+# The whole URL is kept — ?pwd= is the embedded passcode the bot needs to join.
+_ZOOM_RE = re.compile(
+    r"https://(?:[\w-]+\.)?zoom\.us/(?:j|s|w|wc/join|wc)/\d{8,13}[^\s\"'<>]*"
+)
+# Teams deep links: classic /l/meetup-join/<thread>/… and new /meet/<id>?p=…
+# forms, on both teams.microsoft.com and teams.live.com. Kept whole for the
+# same reason (the context/passcode parts are load-bearing).
+_TEAMS_RE = re.compile(
+    r"https://teams\.(?:microsoft|live)\.com/(?:l/meetup-join|meet)/[^\s\"'<>]+"
+)
+# Gmail search that matches any of the three platforms' invite emails.
+_INVITE_QUERY = (
+    "newer_than:1h (meet.google.com OR zoom.us OR teams.microsoft.com OR teams.live.com)"
+)
 
 _client = httpx.Client(timeout=30.0)
 
@@ -75,8 +92,18 @@ def access_token(rt: str) -> str:
     return r.json().get("access_token", "")
 
 
-def _extract_meet_urls(text: str) -> set[str]:
-    return {f"https://meet.google.com/{code}" for code in _MEET_RE.findall(text or "")}
+def _extract_meeting_urls(text: str) -> set[str]:
+    """Every joinable Meet/Zoom/Teams URL in `text`, normalized.
+
+    Meet links are rebuilt from the room code (their query params are tracking
+    noise); Zoom/Teams links are kept whole minus trailing punctuation — their
+    query carries the passcode/context needed to actually get into the call.
+    """
+    text = text or ""
+    urls = {f"https://meet.google.com/{code}" for code in _MEET_RE.findall(text)}
+    for pattern in (_ZOOM_RE, _TEAMS_RE):
+        urls.update(u.rstrip(".,;:!)]") for u in pattern.findall(text))
+    return urls
 
 
 # Address-bearing headers: To/Cc name the invited alias; Delivered-To keeps the
@@ -94,8 +121,8 @@ def _recipient_addresses(msg: dict) -> set[str]:
     return out
 
 
-def _message_meet_urls(token: str, msg_id: str) -> tuple[set[str], set[str], float]:
-    """Fetch one message: (meet urls in snippet+body, recipient addresses,
+def _message_meeting_urls(token: str, msg_id: str) -> tuple[set[str], set[str], float]:
+    """Fetch one message: (meeting urls in snippet+body, recipient addresses,
     received-at epoch seconds — 0.0 when Gmail omits internalDate)."""
     r = _client.get(
         f"{GMAIL_API}/messages/{msg_id}",
@@ -104,7 +131,7 @@ def _message_meet_urls(token: str, msg_id: str) -> tuple[set[str], set[str], flo
     )
     r.raise_for_status()
     msg = r.json()
-    urls = _extract_meet_urls(msg.get("snippet", ""))
+    urls = _extract_meeting_urls(msg.get("snippet", ""))
 
     def walk(part: dict) -> None:
         body = (part.get("body") or {}).get("data")
@@ -113,7 +140,7 @@ def _message_meet_urls(token: str, msg_id: str) -> tuple[set[str], set[str], flo
                 decoded = base64.urlsafe_b64decode(body + "===").decode(
                     "utf-8", "ignore"
                 )
-                urls.update(_extract_meet_urls(decoded))
+                urls.update(_extract_meeting_urls(decoded))
             except Exception:
                 pass
         for child in part.get("parts", []) or []:
@@ -130,18 +157,19 @@ def _message_meet_urls(token: str, msg_id: str) -> tuple[set[str], set[str], flo
 def poll_new_invites(
     token: str, seen_ids: set[str]
 ) -> list[tuple[str, str, set[str], float]]:
-    """Return [(message_id, meet_url, recipient_addresses, received_at)] for
-    unseen invites.
+    """Return [(message_id, meeting_url, recipient_addresses, received_at)] for
+    unseen invites — Meet "Add people" invites plus forwarded Zoom/Teams
+    invitations.
 
-    Only looks at very recent mail so we react to a live "Add people" invite, not
-    stale ones. `seen_ids` is mutated to record everything we've processed. The
+    Only looks at very recent mail so we react to a live invite, not stale
+    ones. `seen_ids` is mutated to record everything we've processed. The
     recipient addresses let the caller route a plus-tagged alias (an avatar's
     email) to its avatar; received_at (epoch seconds) lets the caller's seeding
     pass tell a live invite from stale mail after a restart.
     """
     r = _client.get(
         f"{GMAIL_API}/messages",
-        params={"q": "newer_than:1h meet.google.com", "maxResults": 10},
+        params={"q": _INVITE_QUERY, "maxResults": 10},
         headers={"Authorization": f"Bearer {token}"},
     )
     r.raise_for_status()
@@ -152,7 +180,7 @@ def poll_new_invites(
             continue
         seen_ids.add(mid)
         try:
-            urls, addrs, received_at = _message_meet_urls(token, mid)
+            urls, addrs, received_at = _message_meeting_urls(token, mid)
             for url in urls:
                 out.append((mid, url, addrs, received_at))
         except Exception:

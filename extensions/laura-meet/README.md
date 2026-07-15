@@ -1,10 +1,19 @@
-# Laura for Google Meet
+# Laura for Meetings
 
-Chrome extension that adds a small Laura button inside `meet.google.com`.
+Chrome extension that adds a small Laura button inside `meet.google.com`,
+`*.zoom.us`, `teams.microsoft.com`, and `teams.live.com`.
 
-It does not use Google Meet's native **Add people** dialog. Instead, it sends the
-current meeting URL to Laura's backend, which asks Recall.ai to join the call.
-For Google Meet, the host may still need to admit Laura from the waiting room.
+It sends the current meeting URL to Laura's backend, which asks Recall.ai to
+join the call. The host may still need to admit Laura from the waiting room /
+lobby (Meet, Zoom, and Teams can all gate guests).
+
+Per platform:
+- **Google Meet** — works from inside the call (the room URL is the join URL).
+- **Zoom** — works on `/j/<id>` join pages and the `/wc/<id>` web client; the
+  `?pwd=` passcode is preserved.
+- **Teams** — works on the `/l/meetup-join/...` or `/meet/<id>` join-link page
+  (the in-app URL after joining doesn't carry the meeting link, so send Laura
+  from the join page).
 
 ## Install locally
 
@@ -12,9 +21,9 @@ For Google Meet, the host may still need to admit Laura from the waiting room.
 2. Enable **Developer mode**.
 3. Click **Load unpacked**.
 4. Select this folder:
-   `/Users/duccioo/Desktop/Laura/extensions/laura-meet`
-5. Join a Google Meet call.
-6. Click **Send Laura** in the bottom-right Meet overlay.
+   `extensions/laura-meet`
+5. Open a meeting (or its join link).
+6. Click **Send Laura** in the bottom-right overlay.
 
 ## Configure backend
 

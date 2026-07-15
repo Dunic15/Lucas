@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Laura for Google Meet",
-  "version": "0.1.1",
-  "description": "Adds an in-meeting control that sends Laura to the current Google Meet call.",
+  "name": "Laura for Meetings",
+  "version": "0.2.0",
+  "description": "Adds an in-meeting control that sends Laura to the current Google Meet, Zoom, or Microsoft Teams call.",
   "permissions": ["storage"],
   "host_permissions": ["https://*/*"],
   "background": {
@@ -10,7 +10,12 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://meet.google.com/*"],
+      "matches": [
+        "https://meet.google.com/*",
+        "https://*.zoom.us/*",
+        "https://teams.microsoft.com/*",
+        "https://teams.live.com/*"
+      ],
       "js": ["content.js"],
       "css": ["content.css"],
       "run_at": "document_idle"
@@ -18,6 +23,6 @@
   ],
   "options_page": "options.html",
   "action": {
-    "default_title": "Laura for Google Meet"
+    "default_title": "Laura for Meetings"
   }
 }
