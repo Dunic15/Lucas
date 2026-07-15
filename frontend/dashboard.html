@@ -820,6 +820,9 @@
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
     document.querySelectorAll("#nav button").forEach(function(a){var current=a.getAttribute("data-view")===name;a.classList.toggle("on",current);if(current)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current");});
+    // Persist the current view in the URL hash so a plain page refresh restores it
+    // (instead of resetting to Overview). replaceState = no new history entry, no jump.
+    try{ window.history.replaceState({},"",window.location.pathname+"#"+name); }catch(e){}
     window.scrollTo(0,0); }
   $$("#nav button").forEach(function(a){a.addEventListener("click",function(e){e.preventDefault();go(a.getAttribute("data-view"));});});
   document.addEventListener("click",function(e){var t=e.target.closest("[data-goto]");if(t){go(t.getAttribute("data-goto"));}});
@@ -830,7 +833,11 @@
   // defined (the return params were captured up top, before replaceState cleared
   // the URL). The chosen view sticks through the auth gate and the first summary
   // load. Billing keeps its own routing (402 → Usage), so ?billing= is not here.
+  // Otherwise, restore the view from the URL hash so a plain refresh keeps you
+  // where you were (Connections stays Connections) instead of resetting to Overview.
+  var _hashView=(window.location.hash||"").replace(/^#/,"");
   if(oauthResult||googleResult||connResult){ go("connections"); }
+  else if(VIEWS.indexOf(_hashView)>=0){ go(_hashView); }
 
   function load(){
     fetch("/dashboard/summary",{headers:headers()})
