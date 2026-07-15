@@ -465,10 +465,9 @@
   .cstat{font-family:var(--mono);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;display:inline-flex;align-items:center;gap:6px;color:var(--faint);}
   .cstat b{width:7px;height:7px;border-radius:50%;background:var(--faint);}
   .cstat.on{color:var(--ok);} .cstat.on b{background:var(--ok);box-shadow:0 0 8px rgba(79,192,138,.5);}
-  /* Cedric card → expandable catalog of every tool the one Slack link brokers. */
-  .ctools{border-top:1px solid var(--line-soft);margin-top:2px;padding-top:10px;}
-  .ctools-toggle{background:none;border:0;padding:0;cursor:pointer;font-family:var(--mono);font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);}
-  .ctools-toggle:hover{color:var(--text);}
+  /* Slack agent card → a single "Manage tools" action to the hosted connector page. */
+  .ctools{border-top:1px solid var(--line-soft);margin-top:2px;padding-top:12px;display:flex;flex-direction:column;gap:7px;align-items:flex-start;}
+  .ctools .btn{text-decoration:none;}
 
   .settings{max-width:620px;display:flex;flex-direction:column;gap:14px;}
   .fset{background:var(--panel);border:1px solid var(--line-soft);border-radius:16px;box-shadow:var(--shadow-sm);padding:6px 16px;backdrop-filter:var(--glass);}
@@ -904,7 +903,7 @@
       return '<div class="rost" data-goto="avatars">'+avatarBadge(a.id,a.name)+
         '<span class="nm">'+esc(a.name)+'</span><span class="sdot'+(a.live_now?" live":"")+'"></span></div>';}).join("")
       || '<div class="empty" style="padding:8px;font-size:.78rem">No avatars installed</div>';
-    var connNames={calendar:"Google Calendar",gmail:"Gmail watch",drive:"Google Drive",slack:"Slack",voice:"Voice (ElevenLabs)",meetings:"Meetings (Recall)"};
+    var connNames={calendar:"Google Calendar",gmail:"Gmail watch",drive:"Google Drive",slack:"Slack agent",voice:"Voice (ElevenLabs)",meetings:"Meetings (Recall)"};
     $("#side-conns").innerHTML = '<div class="rost" data-goto="connections"><span class="sdot'+(brainConnected?" ok":"")+'"></span>'+
       '<span class="nm" style="font-size:.82rem;color:'+(brainConnected?"inherit":"var(--faint)")+'">'+connNames.slack+'</span></div>';
 
@@ -1467,33 +1466,37 @@
     // couple. NOTE: both cards build their connect target from FIXED URLs
     // (/oauth/google/connect, /dashboard/connections/brain/slack/start), never a
     // Cedric connect_url, so there is no null-connect_url .indexOf hazard here
-    // (the #197 class); the only connect_url access lives in loadCedricTools,
-    // which already guards it.
+    // (the #197 class); the Slack agent's "Manage tools" resolves manage_url in
+    // resolveSlackManageUrl, which is likewise null-guarded.
     var googleNative=!!(d.connections&&d.connections.google_native);
     var slackConnected=brainConnected; // cedric-brain connected row (the Slack add-on)
     $("#conns").innerHTML =
       // ── Google (native) — Laura's own Google, independent of Cedric ──
       '<div class="conn"><div class="nm">Google <span class="stchip" style="margin-left:6px">native</span></div>'+
-      '<div class="ds">Native — Laura schedules &amp; emails on your Google directly. No Cedric. Grants Calendar + Gmail on your own account.</div>'+
+      '<div class="ds">Native — Laura schedules &amp; emails on your Google directly. No add-on. Grants Calendar + Gmail on your own account.</div>'+
       '<div class="foot"><span class="cstat'+(googleNative?" on":"")+'"><b></b>'+(googleNative?"Connected":"Not connected")+'</span>'+
       (googleNative
         ?'<button class="btn" data-google-off>Disconnect</button>'
         :'<a class="btn primary" style="text-decoration:none" href="/oauth/google/connect">Connect Google</a>')+
       '</div></div>'+
-      // ── Slack (optional add-on via Cedric), independent of Google ──
-      // One "Add to Slack" link brokers a WHOLE catalog of tools (Slack, Notion,
-      // HubSpot, … via Pipedream). When connected the card expands to show every
-      // brokered tool with its live state — fetched from the Cedric proxy on demand.
-      '<div class="conn"><div class="nm">Slack <span class="stchip" style="margin-left:6px">add-on</span></div>'+
-      '<div class="ds">Optional add-on — one connection brokers Slack, Notion, HubSpot and more via Cedric.</div>'+
+      // ── Slack agent (optional add-on), independent of Google ──
+      // One connection lets the Slack agent use Slack + a catalog of tools
+      // (Notion, HubSpot, …). The tools are NOT dumped inline — a single "Manage
+      // tools" action opens the hosted connector page (manage_url) where they're
+      // added/managed. Connect + Disconnect (org-level) are preserved here.
+      '<div class="conn"><div class="nm">Slack agent <span class="stchip" style="margin-left:6px">add-on</span></div>'+
+      '<div class="ds">Optional add-on — one connection lets your Slack agent use Slack, Notion, HubSpot and more.</div>'+
       '<div class="foot"><span class="cstat'+(slackConnected?" on":"")+'"><b></b>'+(slackConnected?"Connected":"Not connected")+'</span>'+
       (slackConnected
         ?'<button class="btn" data-slack-off>Disconnect</button>'
         :'<button class="btn primary" data-slack-on>Add to Slack</button>')+
       '</div>'+
+      // When connected: ONE clean action → the hosted connector/manage page. Its
+      // href is resolved to manage_url after render (guarded); it starts on a
+      // safe fallback so the link is never dead (#197 class).
       (slackConnected
-        ?'<div class="ctools"><button type="button" class="ctools-toggle" data-cedric-tools-toggle aria-expanded="false" aria-controls="cedric-tools">▾ Show tools</button>'+
-          '<div class="conns-list" id="cedric-tools" hidden style="margin-top:10px"></div></div>'
+        ?'<div class="ctools"><a class="btn primary" data-slack-manage target="_blank" rel="noopener" style="text-decoration:none" href="https://www.meet-cedric.com">Manage tools ↗</a>'+
+          '<div class="cnote">Add and manage the tools your Slack agent can use.</div></div>'
         :'')+
       '</div>';
     // Google (native) disconnect — clears ONLY the native token, never Slack.
@@ -1519,81 +1522,36 @@
           toast("Slack disconnected."); load(); }); })
         .catch(function(err){ toast(err.message||"Couldn't disconnect Slack. Try again.",true);
           btn.disabled=false; btn.textContent=prev; }); }); });
-    // Slack (add-on) → expand to the FULL catalog of tools this one link brokers.
-    // Lazy: the Cedric proxy is only hit on first expand (no-store + cache-bust so
-    // a just-connected tool shows immediately, never a pre-connect snapshot).
-    $$("#conns [data-cedric-tools-toggle]").forEach(function(btn){ btn.addEventListener("click",function(){
-      var box=document.getElementById("cedric-tools"); if(!box) return;
-      if(box.hasAttribute("hidden")){
-        box.removeAttribute("hidden"); btn.setAttribute("aria-expanded","true"); btn.textContent="▴ Hide tools";
-        if(btn.getAttribute("data-loaded")!=="1"){ btn.setAttribute("data-loaded","1"); loadCedricTools(); }
-      } else {
-        box.setAttribute("hidden",""); btn.setAttribute("aria-expanded","false"); btn.textContent="▾ Show tools";
-      }
-    }); });
+    // Slack agent (add-on) → resolve the "Manage tools" button to the hosted
+    // connector/manage page (manage_url). No inline tool list any more.
+    if(slackConnected) resolveSlackManageUrl();
     wireAvatarImages();
   }
 
-  // The Cedric catalog, rendered under the Slack card: EVERY tool the one Slack
-  // link brokers (Slack + Notion + HubSpot + … via Pipedream), each with its live
-  // state. Reads the Laura proxy GET /dashboard/connections/brain/connectors,
-  // which passes Cedric's catalog through verbatim: top-level {status, connectors,
-  // manage_url?} and per-connector {key, name, connected, connect_url?, account?,
-  // needs_reconnect?, description?}. Renders from that real shape — nothing invented.
-  function loadCedricTools(){
-    var box=document.getElementById("cedric-tools"); if(!box) return;
-    box.innerHTML='<div class="cnote">Loading tools…</div>';
-    // cache-bust + no-store: the freshest catalog, never an edge/browser replay.
+  // Resolve the Slack agent's "Manage tools" button to the hosted connector/manage
+  // page. Reads the Laura proxy GET /dashboard/connections/brain/connectors and
+  // pulls the catalog's manage_url (top-level, else the first per-connector one).
+  // NULL-SAFE (#197 class): typeof checks before any string use; the button starts
+  // on a working fallback so the link is NEVER dead, and a failed fetch leaves that
+  // fallback in place (never a crash). Cached on window so the 15s summary refresh
+  // doesn't refetch. The tools themselves are added/managed on that page — never
+  // listed inline.
+  function resolveSlackManageUrl(){
+    var el=document.querySelector("#conns [data-slack-manage]"); if(!el) return;
+    if(window._slackManageUrl){ el.setAttribute("href",window._slackManageUrl); el.textContent="Manage tools ↗"; return; }
+    if(window._slackManageTried) return;   // one attempt per page; fallback href stands
+    window._slackManageTried=true;
     fetch("/dashboard/connections/brain/connectors?t="+Date.now(),{headers:headers(),cache:"no-store"})
       .then(function(r){ return r.json(); })
       .then(function(j){
-        var st=(j&&j.status)||"";
-        // pending → the secure link is still finishing; unavailable → the KNOWN
-        // Cedric stale-read (Ben's fix) — a soft line, NEVER a crash; not_connected
-        // → the card already offers "Add to Slack", so show no list.
-        if(st==="pending"){ box.innerHTML='<div class="cnote">Connecting… the secure brain link is still finishing. Retry in a moment.</div>'; return; }
-        if(st==="not_connected"){ box.innerHTML=''; return; }
-        if(st==="unavailable"){ box.innerHTML='<div class="cnote">Cedric tools temporarily unavailable. Retry in a moment.</div>'; return; }
-        if(st!=="ok"){ box.innerHTML='<div class="cnote">The tool catalog could not be verified. Retry in a moment.</div>'; return; }
-        var list=(j.connectors||[]);
-        if(!list.length){ box.innerHTML='<div class="cnote">No tools in this workspace yet.</div>'; return; }
-        // CRITICAL null-URL guard (#197: null.indexOf killed the whole render).
-        // Touch string methods ONLY on a confirmed non-empty string, and build a
-        // link ONLY then — a null/absent connect_url yields "" (no link), no throw.
-        var linkFor=function(url,label){
-          if(!url||typeof url!=="string"){ return ""; }
-          var sep=url.indexOf("?")>=0?"&":"?";
-          var href=url+sep+"return_url="+encodeURIComponent(location.origin+"/dashboard");
-          return '<a class="btn conn-btn" style="text-decoration:none" href="'+esc(href)+'" target="_blank" rel="noopener">'+esc(label)+'</a>';
-        };
-        var rows=list.map(function(c){
-          c=c||{};
-          var name=esc(c.name||c.key||"Tool"), chip, act="", sub="";
-          if(c.needs_reconnect){
-            chip='<span class="stchip pending">reconnect</span>';
-            act=linkFor(c.connect_url,"Reconnect");
-            if(c.account) sub="· "+c.account;
-          } else if(c.connected){
-            chip='<span class="stchip connected">connected</span>';
-            sub=c.account?("· "+c.account):(c.description||"");
-          } else {
-            chip='<span class="stchip">not connected</span>';
-            act=linkFor(c.connect_url,"+ Connect");
-            sub=c.description||"";
-          }
-          return '<div class="crow"><div style="min-width:0"><div class="cn">'+name+'</div>'+
-            (sub?'<div class="cd">'+esc(sub)+'</div>':'')+'</div>'+chip+act+'</div>';
-        }).join("");
-        // Escape hatch to Cedric's full manager. Prefer a catalog-provided
-        // manage_url (top-level or per-connector); fall back to the app so the
-        // link is NEVER missing. Same null-safety as above (typeof check first).
         var mgr="";
-        if(j.manage_url&&typeof j.manage_url==="string"){ mgr=j.manage_url; }
-        else { list.some(function(c){ if(c&&typeof c.manage_url==="string"&&c.manage_url){ mgr=c.manage_url; return true; } return false; }); }
-        var more='<a href="'+esc(mgr||"https://www.meet-cedric.com")+'" target="_blank" rel="noopener" style="display:inline-block;margin-top:11px;font-size:.74rem;color:var(--faint);text-decoration:none">Manage in Cedric ↗</a>';
-        box.innerHTML=rows+more;
+        if(j&&typeof j.manage_url==="string"&&j.manage_url){ mgr=j.manage_url; }
+        else { (j&&j.connectors||[]).some(function(c){ if(c&&typeof c.manage_url==="string"&&c.manage_url){ mgr=c.manage_url; return true; } return false; }); }
+        var a=document.querySelector("#conns [data-slack-manage]"); if(!a) return;
+        if(mgr){ window._slackManageUrl=mgr; a.setAttribute("href",mgr); a.textContent="Manage tools ↗"; }
+        else { a.setAttribute("href","https://www.meet-cedric.com"); a.textContent="Manage in Cedric ↗"; }
       })
-      .catch(function(){ box.innerHTML='<div class="cnote">Cedric tools temporarily unavailable. Retry in a moment.</div>'; });
+      .catch(function(){ /* keep the fallback href + label — never crash */ });
   }
 
   function renderChart(weekly){
