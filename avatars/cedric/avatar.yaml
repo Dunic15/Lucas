@@ -15,7 +15,7 @@ role: AI colleague at SFF Studio
 
 # One-line, user-facing summary for the dashboard card (NOT the spoken persona).
 description: >-
-  Slack agent and meeting assistant — runs the actions from your meetings
+  Personal assistant and meeting assistant — runs the actions from your meetings
   (email, calendar, messages) and checks with you before doing them.
 
 # Names that "call" this avatar into the conversation.

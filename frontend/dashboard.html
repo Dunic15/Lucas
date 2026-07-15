@@ -950,7 +950,7 @@
       return '<div class="rost" data-goto="avatars">'+avatarBadge(a.id,a.name)+
         '<span class="nm">'+esc(a.name)+'</span><span class="sdot'+(a.live_now?" live":"")+'"></span></div>';}).join("")
       || '<div class="empty" style="padding:8px;font-size:.78rem">No avatars installed</div>';
-    var connNames={calendar:"Google Calendar",gmail:"Gmail watch",drive:"Google Drive",slack:"Personal assistant",voice:"Voice (ElevenLabs)",meetings:"Meetings (Recall)"};
+    var connNames={calendar:"Google Calendar",gmail:"Gmail watch",drive:"Google Drive",slack:"Slack agent",voice:"Voice (ElevenLabs)",meetings:"Meetings (Recall)"};
     $("#side-conns").innerHTML = '<div class="rost" data-goto="connections"><span class="sdot'+(brainConnected?" ok":"")+'"></span>'+
       '<span class="nm" style="font-size:.82rem;color:'+(brainConnected?"inherit":"var(--faint)")+'">'+connNames.slack+'</span></div>';
 
@@ -1021,7 +1021,7 @@
       // and the per-model description lines are gone; only the controls remain.
       // ALL #220/#221 wiring (endpoints + data attributes) is unchanged.
       var capHtml='<div class="caps"><div class="sm-h">Capabilities</div><div class="cap-list">'+
-          capRow(a,"slack","Personal assistant",LOGO_SLACK)+capRow(a,"google","Google",LOGO_GOOGLE)+'</div>'+
+          capRow(a,"slack","Slack agent",LOGO_SLACK)+capRow(a,"google","Google",LOGO_GOOGLE)+'</div>'+
           '<div class="modelpick sm"><div class="sm-h">AI model</div><div class="mp-row">'+
             '<button class="mp-opt'+(a.brain==="gemini"?" on":"")+'" data-brain-set="gemini" data-brain-av="'+esc(a.id)+'">Gemini</button>'+
             '<button class="mp-opt'+(a.brain==="cerebras"?" on":"")+'" data-brain-set="cerebras" data-brain-av="'+esc(a.id)+'">Cerebras</button></div>'+
@@ -1675,8 +1675,8 @@
       // (Notion, HubSpot, …). The tools are NOT dumped inline — a single "Manage
       // tools" action opens the hosted connector page (manage_url) where they're
       // added/managed. Connect + Disconnect (org-level) are preserved here.
-      '<div class="conn"><div class="nm">'+LOGO_SLACK+' Personal assistant <span class="stchip" style="margin-left:6px">add-on</span></div>'+
-      '<div class="ds">Personal assistant and meeting assistant — runs the actions from your meetings (email, calendar, messages) and checks with you before doing them.</div>'+
+      '<div class="conn"><div class="nm">'+LOGO_SLACK+' Slack agent <span class="stchip" style="margin-left:6px">add-on</span></div>'+
+      '<div class="ds">Slack agent and meeting assistant — runs the actions from your meetings (email, calendar, messages) and checks with you before doing them.</div>'+
       '<div class="foot"><span class="cstat'+(slackConnected?" on":"")+'"><b></b>'+(slackConnected?"Connected":"Not connected")+'</span>'+
       (slackConnected
         ?'<button class="btn" data-slack-off>Disconnect</button>'
@@ -1688,7 +1688,7 @@
       (slackConnected
         ?'<div class="ctools"><div class="ctool-chips" id="ctool-chips"></div>'+
           '<a class="btn primary" data-slack-manage target="_blank" rel="noopener" style="text-decoration:none" href="https://www.meet-cedric.com">Manage tools ↗</a>'+
-          '<div class="cnote">Add and manage the tools your personal assistant can use.</div></div>'
+          '<div class="cnote">Add and manage the tools your Slack agent can use.</div></div>'
         :'')+
       '</div>';
     // Google (native) disconnect — clears ONLY the native token, never Slack.
