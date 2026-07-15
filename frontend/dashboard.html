@@ -1047,7 +1047,10 @@
             '<span class="al-addr">'+esc(a.email)+'</span><button class="btn conn-btn" data-copy="'+esc(a.email)+'">Copy</button></div>'+
             '<div class="al-hint">Add this address to any calendar invite — '+esc(a.name)+' joins the meeting.</div></div>':'')+
           '<div class="acts"><button class="btn primary" data-dispatch="'+esc(a.id)+'">Send to a meeting</button>'+
-          '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a></div>'+
+          (a.id==="laura"
+            ? '<span class="btn" title="Ultra HD photorealistic avatar — in the works, not live yet" style="opacity:.55;cursor:default">🎬 Ultra HD realistic avatar · coming soon</span>'
+            : '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a>')+
+          '</div>'+
           '</div>'+
           '<aside class="avd-right">'+capHtml+'</aside>'+
         '</div></div>';}).join("") || '<div class="empty">No avatars installed</div>';
