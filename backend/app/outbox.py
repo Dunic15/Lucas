@@ -116,6 +116,10 @@ def _ensure_schema() -> None:
                 org_id TEXT NOT NULL,
                 bot_id TEXT NOT NULL,
                 action_id TEXT NOT NULL DEFAULT '',
+                -- Acting avatar (plain string, no ::uuid → split-brain safe).
+                -- Nullable: legacy/unknown rows stay NULL and deliver as before;
+                -- process_due only gates a row whose avatar has slack=False.
+                avatar_id TEXT,
                 event TEXT NOT NULL,
                 callback_url TEXT NOT NULL,
                 team_id TEXT NOT NULL DEFAULT '',
@@ -148,6 +152,17 @@ def _ensure_schema() -> None:
             conn.execute(
                 "ALTER TABLE queued_actions "
                 "ADD COLUMN source_fingerprint TEXT NOT NULL DEFAULT ''"
+            )
+        callback_columns = {
+            str(row["name"])
+            for row in conn.execute(
+                "PRAGMA table_info(callback_outbox)"
+            ).fetchall()
+        }
+        if "avatar_id" not in callback_columns:
+            # Idempotent: existing rows get NULL avatar_id → deliver as before.
+            conn.execute(
+                "ALTER TABLE callback_outbox ADD COLUMN avatar_id TEXT"
             )
         conn.executescript(
             """
@@ -243,6 +258,8 @@ def _callback_record(session: Any, item: dict) -> tuple[str, dict | None]:
             "event": "action.requested",
             "callback_url": str(integration.get("callback_url") or "").strip(),
             "team_id": team, "channel": channel,
+            # Acting avatar, stamped so process_due can honour its slack toggle.
+            "avatar_id": str(getattr(session, "avatar_id", "") or ""),
             "external_ref": ref, "payload": payload,
             "not_before_seconds": _ACTION_SETTLE_SECONDS,
         }
@@ -335,16 +352,19 @@ def persist_action_capture_once(
                 """
                 INSERT OR IGNORE INTO callback_outbox (
                     idempotency_key, org_id, bot_id, action_id, event,
-                    callback_url, team_id, channel, external_ref_json,
-                    payload_json, status, attempts, next_attempt_at,
-                    last_error, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, '', ?)
+                    callback_url, team_id, channel, avatar_id,
+                    external_ref_json, payload_json, status, attempts,
+                    next_attempt_at, last_error, created_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, '', ?
+                )
                 """,
                 (
                     callback_record["idempotency_key"], org_id,
                     callback_record["bot_id"], callback_record["action_id"],
                     callback_record["event"], callback_record["callback_url"],
                     callback_record["team_id"], callback_record["channel"],
+                    callback_record.get("avatar_id") or None,
                     json.dumps(
                         callback_record["external_ref"],
                         separators=(",", ":"), sort_keys=True,
@@ -543,12 +563,13 @@ def queued_actions(org_id: str, bot_id: str) -> list[dict]:
 
 def _enqueue(
     *, event: str, idempotency_key: str, integration: dict,
-    bot_id: str, action_id: str, payload: dict,
+    bot_id: str, action_id: str, payload: dict, avatar_id: str = "",
 ) -> int | None:
     callback_url = str((integration or {}).get("callback_url") or "").strip()
     if not callback_url:
         return None
     org_id, team, channel, ref = _routing(integration)
+    avatar = str(avatar_id or "")
     if control_plane.enabled():
         return _pg_call(
             outbox_pg.enqueue_callback,
@@ -556,7 +577,8 @@ def _enqueue(
                 "org_id": org_id, "idempotency_key": idempotency_key,
                 "bot_id": bot_id, "action_id": action_id, "event": event,
                 "callback_url": callback_url, "team_id": team,
-                "channel": channel, "external_ref": ref, "payload": payload,
+                "channel": channel, "avatar_id": avatar,
+                "external_ref": ref, "payload": payload,
                 "not_before_seconds": (
                     _ACTION_SETTLE_SECONDS
                     if event == "action.requested" else 0.0
@@ -570,14 +592,14 @@ def _enqueue(
             """
             INSERT OR IGNORE INTO callback_outbox (
                 idempotency_key, org_id, bot_id, action_id, event,
-                callback_url, team_id, channel, external_ref_json,
+                callback_url, team_id, channel, avatar_id, external_ref_json,
                 payload_json, status, attempts, next_attempt_at,
                 last_error, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, '', ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, '', ?)
             """,
             (
                 idempotency_key, org_id, bot_id, action_id, event,
-                callback_url, team, channel,
+                callback_url, team, channel, avatar or None,
                 json.dumps(ref, separators=(",", ":"), sort_keys=True),
                 json.dumps(payload, separators=(",", ":"), sort_keys=True),
                 (
@@ -594,7 +616,9 @@ def _enqueue(
     return int(row["id"]) if row else None
 
 
-def enqueue_action_requested(integration: dict, bot_id: str, item: dict) -> int | None:
+def enqueue_action_requested(
+    integration: dict, bot_id: str, item: dict, *, avatar_id: str = ""
+) -> int | None:
     org_id, _team, _channel, ref = _routing(integration)
     action_id = str((item or {}).get("action_id") or "").strip()
     if not action_id:
@@ -617,6 +641,7 @@ def enqueue_action_requested(integration: dict, bot_id: str, item: dict) -> int 
         bot_id=bot_id,
         action_id=action_id,
         payload=payload,
+        avatar_id=avatar_id,
     )
 
 
@@ -643,6 +668,9 @@ def enqueue_session_ended(
         bot_id=bot_id,
         action_id="",
         payload=payload,
+        # The finalized artifact carries the acting avatar; stamp it so the
+        # session.ended Slack post is gated the same way action.requested is.
+        avatar_id=str((artifact or {}).get("avatar_id") or ""),
     )
 
 
@@ -691,7 +719,8 @@ def reconcile_sessions() -> int:
             continue
         for item in queued_actions(session.org_id, session.bot_id):
             if enqueue_action_requested(
-                dict(session.integration), session.bot_id, item
+                dict(session.integration), session.bot_id, item,
+                avatar_id=str(getattr(session, "avatar_id", "") or ""),
             ) is not None:
                 count += 1
     return count
@@ -757,24 +786,71 @@ def _claim_due(
     return claimed
 
 
+def _slack_capability_off(avatar_id: Any) -> bool:
+    """True only when this avatar EXPLICITLY has slack=False (mirrors #221).
+
+    An unset/on avatar — and a NULL/absent avatar_id (legacy rows) — return
+    False so delivery is unchanged. Never raises: a store hiccup defaults to
+    delivering (fail-open), matching the direct Slack seams."""
+    aid = str(avatar_id or "")
+    if not aid:
+        return False
+    try:
+        return store.get_avatar_capabilities(aid).get("slack") is False
+    except Exception:  # noqa: BLE001 — an unknown capability state must not block
+        return False
+
+
+def _mark_skipped_capability(row: dict) -> None:
+    """Retire a Slack-bound callback the acting avatar may not use.
+
+    Terminal (never retried, not counted as delivered) so the action is not
+    lost silently: queued_actions still holds it — only the Slack fan-out is
+    suppressed. Logs org/id/avatar only, never payload/transcript content."""
+    reason = "slack capability off"
+    if control_plane.enabled():
+        _pg_call(
+            outbox_pg.mark_skipped_capability, str(row["org_id"]),
+            int(row["id"]), row["lease_token"], last_error=reason,
+        )
+    else:
+        with store._LOCK, store._connect() as conn:
+            conn.execute(
+                """
+                UPDATE callback_outbox
+                SET status='skipped_capability', next_attempt_at=0,
+                    last_error=?, delivered_at=?
+                WHERE id=?
+                """,
+                (reason, time.time(), row["id"]),
+            )
+    print(
+        "[outbox] skipped slack-capability-off callback "
+        f"(org={row.get('org_id')!r} id={row.get('id')!r} "
+        f"avatar={str(row.get('avatar_id') or '')!r} "
+        f"event={row.get('event')!r})",
+        flush=True,
+    )
+
+
 def process_due(
     *, limit: int = 20, now: float | None = None,
     org_id: str | None = None, outbox_id: int | None = None,
 ) -> int:
-    """Deliver due rows without sleeping; claims are safe across instances."""
-    # TODO(capability-gate): the per-avatar `slack` toggle is NOT enforced on
-    # this Cedric callback-outbox delivery path. The callback_outbox row carries
-    # org_id/bot_id/team_id/channel/callback_url/payload but NOT avatar_id, so
-    # the acting avatar can't be resolved here without either (a) adding an
-    # avatar_id column to callback_outbox (schema + backfill + outbox_pg mirror)
-    # and stamping it at persist_action_capture_once (session.avatar_id is known
-    # there), or (b) gating earlier at capture. The direct Slack-post seams
-    # (main.deliver_artifact, autopilot.maybe_deliver) ARE gated; this brokered
-    # path is left honest rather than faked.
+    """Deliver due rows without sleeping; claims are safe across instances.
+
+    Per-avatar capability gate: this callback_outbox path is Cedric's Slack
+    broker (both action.requested and session.ended surface in Slack), so a
+    claimed row whose acting avatar has slack EXPLICITLY off is retired as a
+    terminal skipped_capability instead of delivered. Legacy rows with a NULL
+    avatar_id, and unset/on avatars, deliver exactly as before (#221 style)."""
     from .cedric import callback
     current = time.time() if now is None else float(now)
     delivered_count = 0
     for row in _claim_due(current, limit, org_id=org_id, outbox_id=outbox_id):
+        if _slack_capability_off(row.get("avatar_id")):
+            _mark_skipped_capability(row)
+            continue
         try:
             raw_payload = row["payload_json"]
             payload = (

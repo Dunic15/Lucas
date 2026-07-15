@@ -130,12 +130,12 @@ def _callback_insert(conn, callback: dict[str, Any]) -> Optional[int]:
             """
             INSERT INTO callback_outbox (
               org_id, idempotency_key, bot_id, action_id, event,
-              callback_url, team_id, channel, external_ref_json,
+              callback_url, team_id, channel, avatar_id, external_ref_json,
               payload_json, status, attempts, next_attempt_at,
               last_error, created_at, updated_at
             ) VALUES (
               :org_id, :idempotency_key, :bot_id, :action_id, :event,
-              :callback_url, :team_id, :channel,
+              :callback_url, :team_id, :channel, :avatar_id,
               CAST(:external_ref_json AS jsonb),
               CAST(:payload_json AS jsonb),
               'pending', 0,
@@ -149,6 +149,7 @@ def _callback_insert(conn, callback: dict[str, Any]) -> Optional[int]:
         ),
         {
             **callback,
+            "avatar_id": str(callback.get("avatar_id") or "") or None,
             "not_before_seconds": max(
                 0.0, min(float(callback.get("not_before_seconds") or 0), 30.0)
             ),
@@ -804,7 +805,7 @@ def claim_due(
         WHERE o.id=due.id
         RETURNING
           o.id, o.org_id, o.idempotency_key, o.bot_id, o.action_id,
-          o.event, o.callback_url, o.team_id, o.channel,
+          o.event, o.callback_url, o.team_id, o.channel, o.avatar_id,
           o.external_ref_json, o.payload_json, o.status, o.attempts,
           o.lease_token
         """
@@ -877,6 +878,45 @@ def finish_attempt(
                 """
             ),
             params,
+        )
+    return bool(result.rowcount)
+
+
+def mark_skipped_capability(
+    org_id: str,
+    outbox_id: int,
+    lease_token: Any,
+    *,
+    last_error: str = "slack capability off",
+) -> bool:
+    """Retire one claimed row the acting avatar's slack toggle forbids.
+
+    Terminal (status='skipped_capability'): the discovery/claim queries only
+    look at pending/failed/sending, so it is never re-sent. Guarded by the
+    lease_token so only the worker that claimed it can retire it."""
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        result = conn.execute(
+            text(
+                """
+                UPDATE callback_outbox
+                SET status='skipped_capability',
+                    next_attempt_at=NULL,
+                    last_error=:last_error,
+                    delivered_at=clock_timestamp(),
+                    lease_token=NULL, lease_until=NULL,
+                    updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND id=:outbox_id
+                  AND status='sending' AND lease_token=:lease_token
+                """
+            ),
+            {
+                "org_id": org_id,
+                "outbox_id": int(outbox_id),
+                "lease_token": str(lease_token),
+                "last_error": (last_error or "")[:160],
+            },
         )
     return bool(result.rowcount)
 

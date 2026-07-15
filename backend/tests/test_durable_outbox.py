@@ -709,6 +709,123 @@ def test_keyfree_artifact_sqlite_behavior_is_unchanged(tmp_path, monkeypatch):
     store._artifacts.pop(bot_id, None)
 
 
+def test_process_due_skips_slack_off_avatar(tmp_path, monkeypatch):
+    """A slack=False avatar's captured action is retired, not delivered (#221
+    capability-gate on the Cedric callback path)."""
+    _fresh(tmp_path, monkeypatch)
+    monkeypatch.setattr(integration, "_kick_outbox", lambda: None)
+    assert store.set_avatar_capability("cedric", "slack", False)
+    session = store.create(
+        "bot-slackoff", "https://meet.google.com/abc-defg-hij", "cedric",
+        org_id="org-slackoff",
+    )
+    session.integration = _integration("org-slackoff")
+    tools.capture_action(session, "Post the recap to slack", "Marco", "Friday")
+
+    # avatar_id is stamped at capture (session.avatar_id) on the outbox row.
+    with store._LOCK, store._connect() as conn:
+        stamped = conn.execute(
+            "SELECT avatar_id FROM callback_outbox WHERE org_id=?",
+            ("org-slackoff",),
+        ).fetchone()[0]
+    assert stamped == "cedric"
+
+    sent: list[str] = []
+    from app.cedric import callback
+
+    monkeypatch.setattr(
+        callback, "_post",
+        lambda *a, **k: sent.append(k.get("idempotency_key"))
+        or SimpleNamespace(status_code=200),
+    )
+    # Never posted, and the row is a terminal skip (not retried, not delivered).
+    assert outbox.process_due(now=_due_after_settle()) == 0
+    assert sent == []
+    row = outbox.delivery_rows("org-slackoff")[0]
+    assert row["status"] == "skipped_capability"
+    # A second sweep long after does not resurrect it.
+    assert outbox.process_due(now=_due_after_settle(10_000)) == 0
+    assert sent == []
+    assert outbox.delivery_rows("org-slackoff")[0]["status"] == "skipped_capability"
+    store.remove("bot-slackoff")
+
+
+def test_process_due_delivers_legacy_null_avatar_row(tmp_path, monkeypatch):
+    """A row with NULL avatar_id (pre-gate / non-capture path) delivers as
+    before, even when some OTHER avatar has slack off."""
+    _fresh(tmp_path, monkeypatch)
+    assert store.set_avatar_capability("cedric", "slack", False)
+    # enqueue_action_requested without avatar_id → NULL column (legacy shape).
+    outbox.enqueue_action_requested(
+        _integration("org-legacy"),
+        "bot-legacy",
+        {"action_id": "action-legacy", "action": "Send recap"},
+    )
+    with store._LOCK, store._connect() as conn:
+        value = conn.execute(
+            "SELECT avatar_id FROM callback_outbox WHERE org_id=?",
+            ("org-legacy",),
+        ).fetchone()[0]
+    assert value is None
+
+    sent: list[str] = []
+    from app.cedric import callback
+
+    monkeypatch.setattr(
+        callback, "_post",
+        lambda *a, **k: sent.append(k.get("idempotency_key"))
+        or SimpleNamespace(status_code=200),
+    )
+    assert outbox.process_due(now=_due_after_settle()) == 1
+    assert sent == ["action.requested:action-legacy"]
+    assert outbox.delivery_rows("org-legacy")[0]["status"] == "delivered"
+
+
+def test_process_due_delivers_slack_unset_or_on_avatar(tmp_path, monkeypatch):
+    """An avatar that never toggled slack (unset) and one explicitly slack=True
+    both deliver — only an explicit False is gated."""
+    _fresh(tmp_path, monkeypatch)
+    outbox.enqueue_action_requested(
+        _integration("org-unset"), "bot-unset",
+        {"action_id": "action-unset", "action": "x"}, avatar_id="laura",
+    )
+    assert store.set_avatar_capability("cedric", "slack", True)
+    outbox.enqueue_action_requested(
+        _integration("org-on"), "bot-on",
+        {"action_id": "action-on", "action": "y"}, avatar_id="cedric",
+    )
+    sent: list[str] = []
+    from app.cedric import callback
+
+    monkeypatch.setattr(
+        callback, "_post",
+        lambda *a, **k: sent.append(k.get("idempotency_key"))
+        or SimpleNamespace(status_code=200),
+    )
+    assert outbox.process_due(now=_due_after_settle()) == 2
+    assert sorted(sent) == [
+        "action.requested:action-on",
+        "action.requested:action-unset",
+    ]
+    assert outbox.delivery_rows("org-unset")[0]["status"] == "delivered"
+    assert outbox.delivery_rows("org-on")[0]["status"] == "delivered"
+
+
+def test_ensure_schema_avatar_id_migration_is_idempotent(tmp_path, monkeypatch):
+    """Running the schema builder twice must not error on the added column."""
+    _fresh(tmp_path, monkeypatch)
+    outbox._ensure_schema()
+    outbox._ensure_schema()
+    with store._LOCK, store._connect() as conn:
+        columns = {
+            row["name"]
+            for row in conn.execute(
+                "PRAGMA table_info(callback_outbox)"
+            ).fetchall()
+        }
+    assert "avatar_id" in columns
+
+
 def test_finalize_idempotent_artifact_read_is_org_scoped(
     tmp_path, monkeypatch
 ):
