@@ -1507,6 +1507,17 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         )
     action, acting_avatar = found
 
+    # A rejected action is CLOSED. The monotonic status guard would keep the
+    # chip 'rejected' anyway, but without this check the executor below would
+    # still RUN the action — refuse outright; un-rejecting isn't a thing.
+    current = await run_in_threadpool(ledger.action_statuses, [aid], org_id=org)
+    if (current.get(aid) or {}).get("status") == "rejected":
+        return JSONResponse(
+            {"error": "action was rejected", "action_id": aid,
+             "status": current.get(aid)},
+            status_code=409, headers=_NO_STORE,
+        )
+
     # Mark approved (non-terminal, monotonic) in the shared provenance channel.
     # Best-effort: a durable-org no-op here (a native action has no Cedric
     # queued_actions row) must not fail the approval — execution is the point.
@@ -1551,6 +1562,54 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             "typed": bool(typed),
             "execution_mode": settings.execution_mode,
             "status": latest.get(aid),
+        },
+        headers=_NO_STORE,
+    )
+
+
+@router.post("/dashboard/actions/{action_id}/reject")
+async def reject_action(action_id: str, request: Request) -> JSONResponse:
+    """Reject one finalized meeting action — the approve door's mirror.
+
+    Same auth + org scoping as approve. Marks the action ``rejected`` in the
+    ledger provenance channel — a TERMINAL status, so ``set_action_status``
+    also closes the matching ledger item and the monotonic guard means a late
+    replay can't repaint the chip. Nothing ever executes on this path, and
+    the approve door refuses a rejected action (409) so it can't be run later.
+
+    If the action already reached a terminal state (done/failed), the mark is
+    a monotonic no-op — the response reports the real status rather than
+    pretending the reject took."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    aid = (action_id or "").strip()
+    if not aid:
+        return JSONResponse({"error": "action_id is required"}, status_code=400)
+    org = user["org_id"]
+
+    if await run_in_threadpool(_find_org_action, org, aid) is None:
+        return JSONResponse(
+            {"error": "unknown action for this org"}, status_code=404,
+            headers=_NO_STORE,
+        )
+
+    await run_in_threadpool(
+        ledger.set_action_status, aid, "rejected", "rejected via dashboard",
+        org_id=org,
+    )
+    latest = await run_in_threadpool(ledger.action_statuses, [aid], org_id=org)
+    status = latest.get(aid)
+    return JSONResponse(
+        {
+            "ok": True,
+            "action_id": aid,
+            "rejected": bool(status and status.get("status") == "rejected"),
+            "status": status,
         },
         headers=_NO_STORE,
     )

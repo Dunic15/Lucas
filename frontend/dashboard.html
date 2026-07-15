@@ -429,6 +429,12 @@
     border:1px solid rgba(126,182,255,.5);background:transparent;color:var(--live);transition:background .15s,filter .15s;}
   .btn-appr:hover{background:rgba(126,182,255,.12);}
   .btn-appr:disabled{opacity:.55;cursor:default;}
+  /* Per-row "Reject" — approve's mirror; accent-red like the rejected pill. */
+  .btn-rej{font-family:var(--mono);font-size:.58rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 9px;border-radius:999px;margin-left:6px;white-space:nowrap;cursor:pointer;
+    border:1px solid rgba(245,72,77,.4);background:transparent;color:var(--accent);transition:background .15s,filter .15s;}
+  .btn-rej:hover{background:rgba(245,72,77,.12);}
+  .btn-rej:disabled{opacity:.55;cursor:default;}
 
   /* usage & billing */
   .usage-hero{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;}
@@ -1378,8 +1384,30 @@
     // endpoint marks it approved and runs nothing (handled in approveAction).
     function apprBtn(a){
       if(!a.typed||!a.action_id) return "";
-      if(a.execution&&a.execution.status==="done") return "";  // ran already → receipt shows
+      if(a.execution&&(a.execution.status==="done"||a.execution.status==="rejected")) return "";  // terminal → pill shows
       return '<button class="btn-appr" data-approve="'+esc(a.action_id)+'">Approve &amp; run</button>';
+    }
+    // Per-row "Reject" — approve's mirror (POST /dashboard/actions/{id}/reject).
+    // Marks the action rejected (terminal) in the same provenance channel;
+    // nothing executes, and the approve door refuses it afterwards.
+    function rejBtn(a){
+      if(!a.typed||!a.action_id) return "";
+      if(a.execution&&(a.execution.status==="done"||a.execution.status==="rejected")) return "";
+      return '<button class="btn-rej" data-reject="'+esc(a.action_id)+'">Reject</button>';
+    }
+    function rejectAction(btn){
+      var aid=btn.getAttribute("data-reject"); if(!aid) return;
+      var old=btn.innerHTML; btn.disabled=true; btn.textContent="Rejecting…";
+      fetch("/dashboard/actions/"+encodeURIComponent(aid)+"/reject",{method:"POST",headers:headers()})
+        .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); })
+        .then(function(res){
+          if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
+          var appr=btn.parentElement&&btn.parentElement.querySelector("button[data-approve]");
+          if(appr) appr.remove();
+          btn.outerHTML='<span class="exec rejected" title="Rejected — it will not run.">rejected</span>';
+          toast("Action rejected — it will not run.");
+        })
+        .catch(function(e){ btn.disabled=false; btn.innerHTML=old; toast("Could not reject: "+e.message,true); });
     }
     function approveAction(btn){
       var aid=btn.getAttribute("data-approve"); if(!aid) return;
@@ -1414,7 +1442,7 @@
         '<div><div class="sm-h">AI summary</div><div class="summary">'+(m.summary?esc(m.summary):'<span style="color:var(--faint)">No summary captured.</span>')+'</div>'+
         (m.follow_up_subject?'<div class="sm-h" style="margin-top:12px">Follow-up email</div><div class="summary">'+esc(m.follow_up_subject)+'</div>':'')+'</div>'+
         '<div><div class="sm-h">Actions</div><div class="did">'+
-        (m.actions.length? m.actions.map(function(a){return '<div class="d'+(a.done?"":" attn")+'"><span class="ic">'+(a.done?"✓":"→")+'</span><span>'+esc(a.item)+(a.owner?' <span class="ow">· '+esc(a.owner)+'</span>':'')+execChip(a)+apprBtn(a)+'</span></div>';}).join("") : '<div class="empty" style="padding:6px 0;text-align:left">'+((brainConnected||m.avatar_id==="cedric")?'Actions handled by Cedric <a data-goto="connections" title="Cedric proposes and runs these; approved from Slack" style="cursor:pointer;text-decoration:none">↗</a>':'No actions captured.')+'</div>')+
+        (m.actions.length? m.actions.map(function(a){return '<div class="d'+(a.done?"":" attn")+'"><span class="ic">'+(a.done?"✓":"→")+'</span><span>'+esc(a.item)+(a.owner?' <span class="ow">· '+esc(a.owner)+'</span>':'')+execChip(a)+apprBtn(a)+rejBtn(a)+'</span></div>';}).join("") : '<div class="empty" style="padding:6px 0;text-align:left">'+((brainConnected||m.avatar_id==="cedric")?'Actions handled by Cedric <a data-goto="connections" title="Cedric proposes and runs these; approved from Slack" style="cursor:pointer;text-decoration:none">↗</a>':'No actions captured.')+'</div>')+
         (m.missing_steps.length?'<div class="sm-h" style="margin-top:12px">Missing steps</div>'+m.missing_steps.map(function(s){return '<div class="d attn"><span class="ic">!</span><span>'+esc(s.replace(/_/g," "))+'</span></div>';}).join(""):'')+
         '</div></div></td></tr>';
     }
@@ -1428,8 +1456,9 @@
         : '<tr><td colspan="6"><div class="empty">No meetings match.</div></td></tr>';
       $$("tr.row",tb).forEach(function(r){ r.addEventListener("click",function(){
         var dEl=tb.querySelector('tr.detail[data-d="'+r.getAttribute("data-i")+'"]'); if(dEl) dEl.hidden=!dEl.hidden; }); });
-      // Per-row Approve & run (lives inside the expandable detail row).
+      // Per-row Approve & run / Reject (live inside the expandable detail row).
       $$("button[data-approve]",tb).forEach(function(b){ b.addEventListener("click",function(e){ e.stopPropagation(); approveAction(b); }); });
+      $$("button[data-reject]",tb).forEach(function(b){ b.addEventListener("click",function(e){ e.stopPropagation(); rejectAction(b); }); });
     }
     // (overview "Recent meetings" removed — the record lives in the Meetings view)
     // meetings: excel-style filters ON the column headers (Avatar / Platform / When)
