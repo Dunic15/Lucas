@@ -331,18 +331,76 @@ TOOL_SPECS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_capabilities",
+            "description": (
+                "List what YOU can actually do in this meeting: native tools, "
+                "the Slack-agent tools that are connected for this org, and "
+                "what is NOT connected. Use when asked \"what can you do?\" or "
+                "before promising any action you are not sure about."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_tools",
+            "description": (
+                "Check whether a specific capability/tool exists for this org "
+                "(e.g. 'notion', 'github', 'calendar'): where it runs, whether "
+                "it is connected, and whether it needs approval. Use BEFORE "
+                "claiming you can or cannot do something with an external tool."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Tool or capability keyword, e.g. 'notion'.",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
+
+def list_capabilities(session=None) -> str:
+    """The org-scoped tool brief for THIS session — what the avatar can do
+    natively, what runs via the Slack agent, what is NOT connected. Reads the
+    snapshot assembled at session start (tool_registry.assemble) — zero
+    network on the live path."""
+    from . import tool_registry
+
+    reg = getattr(session, "tool_registry", None) if session else None
+    return tool_registry.brief(reg) or "capability list unavailable for this session"
+
+
+def search_tools(query: str = "", session=None) -> str:
+    """Look up whether a capability exists, where it runs (native vs Slack
+    agent), whether it is connected, and whether it needs approval. Snapshot
+    search only — never a live call."""
+    from . import tool_registry
+
+    reg = getattr(session, "tool_registry", None) if session else None
+    return tool_registry.search(reg, query)
+
 
 _DISPATCH = {
     "calculator": calculator,
     "date_math": date_math,
     "lookup_record": lookup_record,
     "queue_action": queue_action,
+    "list_capabilities": list_capabilities,
+    "search_tools": search_tools,
 }
 
 # Tools that receive the live session (to capture onto it). Everything else
 # keeps its plain signature — the session seam is strictly additive.
-_SESSION_TOOLS = {"queue_action"}
+_SESSION_TOOLS = {"queue_action", "list_capabilities", "search_tools"}
 
 
 def dispatch(name: str, args: dict, session=None) -> str:

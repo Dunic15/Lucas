@@ -66,6 +66,7 @@ from . import (
     autopilot,
     gpu_runtime,
     runpod_runtime,
+    tool_registry,
     ledger,
     outbox,
     meeting_state,
@@ -2025,6 +2026,22 @@ async def _start_avatar_session(
             session.memory_brief = (
                 f"[Shared Drive folder — current team docs]\n{folder}\n\n"
                 + (session.memory_brief or "")
+            )
+    # Tool context on join: the org-scoped registry (native tools + connected
+    # Slack-agent tools + knowledge sources) is assembled ONCE here — same
+    # contract as the Drive brief above: threadpool, best-effort, off the live
+    # path — and its compact brief rides the same memory_brief channel so the
+    # brain knows what it can actually do (and never promises a tool that
+    # isn't connected). The snapshot also feeds the list_capabilities /
+    # search_tools brain tools with zero network in-meeting. Carried as a
+    # plain session attribute (not persisted; rebuilt on the next join).
+    reg = await run_in_threadpool(tool_registry.assemble, org_id, avatar)
+    if reg:
+        session.tool_registry = reg
+        tools_brief = tool_registry.brief(reg)
+        if tools_brief:
+            session.memory_brief = (
+                tools_brief + "\n\n" + (session.memory_brief or "")
             )
     if settings.autopilot_brief and session.memory_brief:
         # Autopilot: mail/Slack "what's still open from last time" to the
