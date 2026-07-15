@@ -985,17 +985,59 @@
             '<div><strong>Upcoming meetings</strong> <span class="cnote">· calendar '+esc(cal.email||"connected")+'</span></div>'+
             '<button class="btn conn-btn" id="upcoming-reload">↻</button></div>';
           var rows=(j.meetings||[]).map(function(m){
+            // Guard the null-URL dispatch crash class (#197): only offer Send
+            // when the row actually has a join link. Already-scheduled rows show
+            // that state instead of a button.
+            var url=m.meeting_url||"";
+            var status=(m.auto_join?'<span class="stchip connected">auto-join</span>':(m.has_link?'<span class="stchip">queued</span>':'<span class="stchip" style="opacity:.6">no link</span>'));
+            var action=(m.auto_join
+              ? '<span class="cnote">scheduled</span>'
+              : (url
+                  ? '<button class="btn primary send-laura" data-send="'+esc(url)+'" data-title="'+esc(m.title||"")+'">Send Laura</button>'
+                  : '<span class="cnote" style="opacity:.6">—</span>'));
             return '<tr style="border-bottom:1px solid var(--line-soft)"><td>'+esc(m.title)+'</td>'+
               '<td class="when">'+fmtUpWhen(m.start_time)+'</td>'+
               '<td><span class="platc">'+esc(m.platform)+'</span></td>'+
               '<td class="r tnum">'+(m.attendees||0)+'</td>'+
-              '<td class="r">'+(m.auto_join?'<span class="stchip connected">auto-join</span>':(m.has_link?'<span class="stchip">queued</span>':'<span class="stchip" style="opacity:.6">no link</span>'))+'</td></tr>';
+              '<td class="r">'+status+'</td>'+
+              '<td class="r">'+action+'</td></tr>';
           }).join("");
           box.innerHTML=head+(rows
-            ? '<div class="scroll" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Meeting</th><th>When</th><th>Platform</th><th class="r">Guests</th><th class="r">Status</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+            ? '<div class="scroll" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Meeting</th><th>When</th><th>Platform</th><th class="r">Guests</th><th class="r">Status</th><th class="r">Action</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
             : '<div class="ph" style="padding:28px;text-align:center">No upcoming meetings on the calendar yet.<br><span class="cnote">Invite your avatar\'s email to any event and it appears here — then joins on time.</span></div>');
           var rl=document.getElementById("upcoming-reload");
           if(rl) rl.addEventListener("click",function(){ loadUpcoming(true); });
+          // Per-row dispatch: reuse the exact POST /sessions/start the main
+          // dispatch form uses (org-scoped + billing-gated server-side). The
+          // meeting URL rides in a data attribute; re-checked before send.
+          box.querySelectorAll(".send-laura").forEach(function(btn){
+            btn.addEventListener("click",function(){
+              var u=btn.getAttribute("data-send")||"";
+              if(!u){ toast("This meeting has no join link yet.",true); return; }
+              var title=btn.getAttribute("data-title")||"";
+              var avatar=(document.getElementById("dsp-avatar")||{}).value ||
+                ((DATA&&DATA.avatars&&DATA.avatars[0])?DATA.avatars[0].id:"laura");
+              btn.disabled=true; btn.textContent="Sending…";
+              var body={meeting_url:u,avatar_id:avatar};
+              if(title) body.context={meeting:{title:title}};
+              fetch("/sessions/start",{method:"POST",headers:headers(),body:JSON.stringify(body)})
+                .then(function(r){ return r.json().then(function(jr){ return {ok:r.ok,status:r.status,j:jr}; }); })
+                .then(function(res){
+                  if(!res.ok){
+                    if(res.status===402){ go("usage"); loadBilling();
+                      throw new Error("Your included minutes are used. Upgrade to Solo to continue."); }
+                    var msg=(res.j&&(res.j.error==="avatar_busy"?res.j.detail:(res.j.error||res.j.detail)))||"request failed";
+                    throw new Error(msg);
+                  }
+                  var picked=(DATA&&DATA.avatars||[]).find(function(a){return a.id===avatar;});
+                  toast((picked?picked.name:"Laura")+" is joining — admit them from the waiting room if asked.");
+                  btn.textContent="Sent ✓";
+                  setTimeout(function(){ loadUpcoming(true); },1600);
+                })
+                .catch(function(e){ toast("Could not send: "+e.message,true);
+                  btn.disabled=false; btn.textContent="Send Laura"; });
+            });
+          });
         })
         .catch(function(){ window._upcomingLoaded=false;
           box.innerHTML='<div class="cnote" style="padding:20px">Calendar unavailable right now.</div>'; });

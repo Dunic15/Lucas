@@ -188,6 +188,47 @@ def test_google_client_soft_failures(monkeypatch, tmp_path):
     assert gc3.send_gmail("org-a", {"to": "a@b.com", "subject": "s"})["ok"] is False
 
 
+# ── google_client.list_calendar_events (read side, Google mocked) ──
+
+def test_list_calendar_events_happy_and_soft(monkeypatch, tmp_path):
+    _fresh_store(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "session_secret", "sek")
+    monkeypatch.setattr(settings, "google_calendar_client_id", "cid")
+    monkeypatch.setattr(settings, "google_calendar_client_secret", "csec")
+    from app import google_client
+
+    store.set_org_oauth("org-a", "rt-123")
+
+    seen: dict = {}
+
+    def fake_get(url, **kw):
+        seen.update(kw.get("params") or {})
+        return _Resp(200, {"items": [{"id": "e1", "summary": "Sync"}]})
+
+    monkeypatch.setattr(google_client.httpx, "post", lambda url, **kw: _Resp(200, {"access_token": "at-1"}))
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+
+    res = google_client.list_calendar_events("org-a", max_results=25)
+    assert res["ok"] is True and res["events"][0]["id"] == "e1"
+    # Upcoming-only, expanded, chronological — the read-side query contract.
+    assert seen["singleEvents"] == "true" and seen["orderBy"] == "startTime"
+    assert "timeMin" in seen and seen["maxResults"] == 25
+
+    # No token for the org → soft "not connected", never raises.
+    assert google_client.list_calendar_events("no-token")["ok"] is False
+
+    # Google 5xx → ok False, never raises.
+    monkeypatch.setattr(google_client.httpx, "get", lambda url, **kw: _Resp(503, {}))
+    assert google_client.list_calendar_events("org-a")["ok"] is False
+
+    # Transport blow-up → ok False, never raises.
+    def boom(url, **kw):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(google_client.httpx, "get", boom)
+    assert google_client.list_calendar_events("org-a")["ok"] is False
+
+
 # ── executor (google_client mocked) ──
 
 def test_executor_off_is_noop(monkeypatch):

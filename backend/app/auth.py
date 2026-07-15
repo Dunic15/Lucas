@@ -124,6 +124,55 @@ def read_cookie(value: str) -> Optional[str]:
         return None
 
 
+# ── per-browser OAuth state (login-CSRF / token-injection defense) ──────
+#
+# The exact per-browser-nonce pattern the login flow (google_start /
+# google_callback) uses, factored out so OTHER OAuth entrypoints — e.g. the
+# native Google calendar connect in main.py — can bind their `state` the same
+# way without duplicating the crypto. A random nonce lives in an HttpOnly
+# cookie AND (signed) inside the `state` param; the callback requires both to
+# match, so an attacker's pre-obtained signed state can't be planted in a
+# victim's browser. `purpose` domain-separates the signature (reusing _sign's
+# purpose arg) so a state minted for one flow can never be replayed in another.
+# The login flow keeps its own inline copy untouched; this is additive.
+
+def issue_oauth_state(purpose: str) -> tuple[str, str]:
+    """Mint a fresh per-browser OAuth state for ``purpose``.
+
+    Returns ``(nonce, signed_state)``: set ``nonce`` in an HttpOnly cookie and
+    put ``signed_state`` in the provider's ``state`` query param. The callback
+    passes both to :func:`check_oauth_state` to prove the redirect came back to
+    the SAME browser that started the flow.
+    """
+    nonce = secrets.token_hex(16)
+    payload = _b64(
+        json.dumps({"n": nonce, "exp": time.time() + STATE_TTL_SECONDS}).encode()
+    )
+    return nonce, f"{payload}.{_sign(payload, purpose)}"
+
+
+def check_oauth_state(state: str, cookie_nonce: str, purpose: str) -> bool:
+    """True iff ``state`` is a fresh, correctly-signed token for ``purpose``
+    whose embedded nonce matches ``cookie_nonce`` (the value set in the browser
+    cookie at issue time). Never raises on hostile input. Single-use is the
+    caller's job: clear the cookie once this returns True."""
+    if not state or not cookie_nonce or "." not in state:
+        return False
+    payload, signature = state.rsplit(".", 1)
+    if not payload or not _verify(payload, signature, purpose):
+        return False
+    try:
+        data = json.loads(_unb64(payload))
+    except Exception:
+        return False
+    if float(data.get("exp", 0)) < time.time():
+        return False
+    return hmac.compare_digest(
+        cookie_nonce.encode("utf-8", "ignore"),
+        str(data.get("n", "")).encode(),
+    )
+
+
 def current_user(request: Request) -> Optional[dict]:
     """The logged-in user for this request, or None. A cookie whose user row
     vanished (ephemeral store wiped by a redeploy) is treated as logged-out —

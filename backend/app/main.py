@@ -1558,14 +1558,54 @@ def recall_status(check_auth: bool = False) -> JSONResponse:
 
 
 # ── Google Calendar OAuth: connect Laura's calendar to Recall Calendar V2 ──
+# Per-browser CSRF state for THIS flow. The nonce lives in an HttpOnly cookie
+# scoped to /oauth (covers both connect and callback) and, signed, inside the
+# `state` param — the callback requires both to match. CALENDAR_STATE_PURPOSE
+# domain-separates the signature from the login flow's "state", so neither
+# flow's state can be replayed in the other. This REPLACES the old static
+# settings.calendar_oauth_state as the real CSRF barrier.
+CALENDAR_STATE_COOKIE = "laura_calendar_oauth_state"
+CALENDAR_STATE_PURPOSE = "calendar_state"
+
+
+def _clear_calendar_state(response):
+    """Consume the single-use OAuth-state cookie (mirrors auth.py's callback)."""
+    response.delete_cookie(CALENDAR_STATE_COOKIE, path="/oauth")
+    return response
+
+
+def _oauth_login_required(request: Request):
+    """FIX: when login is enabled, the native-Google connect/callback flow must
+    be owner-authenticated — an anonymous browser must NOT be able to complete
+    OAuth and silently land a Google refresh token on demo_org_id. Returns an
+    error response to send, or None to allow. auth.enabled() is exactly "the
+    Google OAuth client is configured", which is also what this flow needs, so
+    the key-free demo path (no Google → these endpoints already 400) is left
+    unchanged: the gate only bites once real credentials exist."""
+    if auth.current_user(request) is not None:
+        return None
+    if not auth.enabled():
+        return None  # key-free / no-login demo path, unchanged
+    if err := auth.gate(request):
+        return err
+    # A valid machine bearer clears auth.gate with no cookie user; an interactive
+    # OAuth connect still needs a real logged-in owner to key the token to.
+    return JSONResponse({"error": "login required"}, status_code=401)
+
+
 @app.get("/oauth/google/connect")
-def google_oauth_connect():
+def google_oauth_connect(request: Request):
     """Start Google OAuth for the calendar account that should invite Laura."""
     if not settings.google_calendar_client_id:
         return JSONResponse(
             {"error": "GOOGLE_CALENDAR_CLIENT_ID is not set."}, status_code=400
         )
+    if err := _oauth_login_required(request):
+        return err
 
+    # Per-session single-use CSRF state (see auth.issue_oauth_state): the nonce
+    # goes in an HttpOnly cookie, the signed token in the `state` param.
+    nonce, signed_state = auth.issue_oauth_state(CALENDAR_STATE_PURPOSE)
     params = {
         "client_id": settings.google_calendar_client_id,
         "redirect_uri": _google_redirect_uri(),
@@ -1574,12 +1614,21 @@ def google_oauth_connect():
         "access_type": "offline",
         "prompt": "consent",
         "include_granted_scopes": "true",
+        "state": signed_state,
     }
-    if settings.calendar_oauth_state:
-        params["state"] = settings.calendar_oauth_state
 
     url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
-    return RedirectResponse(url)
+    resp = RedirectResponse(url)
+    resp.set_cookie(
+        CALENDAR_STATE_COOKIE,
+        nonce,
+        max_age=auth.STATE_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=settings.public_base_url.startswith("https"),
+        path="/oauth",
+    )
+    return resp
 
 
 @app.get("/oauth/google/callback")
@@ -1591,16 +1640,30 @@ async def google_oauth_callback(
         return JSONResponse({"error": error}, status_code=400)
     if not code:
         return JSONResponse({"error": "Missing Google OAuth code."}, status_code=400)
-    if settings.calendar_oauth_state and state != settings.calendar_oauth_state:
-        return JSONResponse({"error": "Invalid OAuth state."}, status_code=400)
+    # FIX (auth gate): on a login-enabled deployment this callback must belong to
+    # a logged-in owner, else an anonymous request could complete OAuth and store
+    # a token on demo_org_id. Checked BEFORE the state so an unauth caller never
+    # even reaches the token exchange.
+    if err := _oauth_login_required(request):
+        return err
+    # FIX (CSRF): the returned `state` must match the single-use signed nonce we
+    # set on THIS browser at /oauth/google/connect (cookie + signed param). This
+    # binds the callback to the browser that started the flow — the real barrier
+    # against login-CSRF / refresh-token injection, replacing the old static
+    # settings.calendar_oauth_state gate. Consume the cookie on every exit below.
+    cookie_nonce = request.cookies.get(CALENDAR_STATE_COOKIE, "")
+    if not auth.check_oauth_state(state, cookie_nonce, CALENDAR_STATE_PURPOSE):
+        return _clear_calendar_state(
+            JSONResponse({"error": "Invalid OAuth state."}, status_code=400)
+        )
     if not settings.google_calendar_client_id:
-        return JSONResponse(
+        return _clear_calendar_state(JSONResponse(
             {"error": "GOOGLE_CALENDAR_CLIENT_ID is not set."}, status_code=400
-        )
+        ))
     if not settings.google_calendar_client_secret:
-        return JSONResponse(
+        return _clear_calendar_state(JSONResponse(
             {"error": "GOOGLE_CALENDAR_CLIENT_SECRET is not set."}, status_code=400
-        )
+        ))
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -1619,7 +1682,7 @@ async def google_oauth_callback(
 
             refresh_token = token.get("refresh_token", "")
             if not refresh_token:
-                return JSONResponse(
+                return _clear_calendar_state(JSONResponse(
                     {
                         "error": (
                             "Google did not return a refresh_token. Re-open "
@@ -1628,7 +1691,7 @@ async def google_oauth_callback(
                         )
                     },
                     status_code=400,
-                )
+                ))
 
             oauth_email = ""
             access_token = token.get("access_token", "")
@@ -1640,30 +1703,42 @@ async def google_oauth_callback(
                 if 200 <= profile_resp.status_code < 300:
                     oauth_email = profile_resp.json().get("email", "").lower()
     except httpx.HTTPStatusError as e:
-        return JSONResponse(
+        return _clear_calendar_state(JSONResponse(
             {"error": "Google OAuth token exchange failed.", "status": e.response.status_code},
             status_code=400,
-        )
+        ))
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+        return _clear_calendar_state(JSONResponse({"error": str(e)}, status_code=400))
 
+    # PER-USER Google connect. This callback used to accept ONLY the avatar's own
+    # inbox (CALENDAR_INVITE_EMAILS) and reject everyone else with "Wrong Google
+    # account". Relaxed: ANY authenticated user may connect THEIR OWN Google
+    # (Calendar + Gmail) — the per-org refresh token stored below powers their
+    # native executor AND their own Upcoming calendar. The avatar-only Recall
+    # calendar auto-join step (further down) stays guarded to the avatar account,
+    # so a normal user's connect can never hijack the deployment's auto-join inbox.
     targets = _calendar_target_emails()
-    if targets and oauth_email not in targets:
-        return JSONResponse(
-            {
-                "error": "Wrong Google account connected.",
-                "connected_email": oauth_email or None,
-                "expected_email": sorted(targets),
-            },
-            status_code=400,
-        )
+    # The avatar's own account. With NO invite filter configured this is a
+    # single-tenant deployment where the connecting account IS the auto-join
+    # calendar (preserves the pre-per-user behavior); with a filter set, only a
+    # matching address is the avatar account and anyone else is a normal user.
+    is_avatar_account = (not targets) or (oauth_email in targets)
 
-    # Persist the refresh token per org for the NATIVE executor (encrypted at
-    # rest — store.set_org_oauth). Keyed on the connecting user's durable org,
-    # else the demo/owner org (the "Now" slice is single-owner). Best-effort:
-    # never block the existing Recall calendar connection on this write, and
-    # store it regardless of native_executor (the flag gates USE, not consent),
-    # so enabling native later needs no reconnect.
+    # Persist the refresh token per org for the NATIVE executor + Upcoming
+    # (encrypted at rest — store.set_org_oauth). SECURITY: the owning org is
+    # derived ONLY from the connecting browser's signed session cookie
+    # (auth.current_user), NEVER from the OAuth email or any request field — so a
+    # user's token can only ever land on THEIR OWN org, never someone else's. The
+    # per-session signed single-use `state` verified above (cookie-bound nonce)
+    # is the CSRF guard on this flow, and _oauth_login_required above guarantees a
+    # real logged-in owner whenever login is enabled. Falls back to the demo/owner
+    # org ONLY on the key-free/no-login demo path (login disabled) — exactly the
+    # org the dashboard reads it back from (dashboard.py: caller_org or
+    # demo_org_id), so connect + read always agree. Best-effort and independent of
+    # native_executor (the flag gates USE, not consent), so enabling native later
+    # needs no reconnect. Keyed by the org_id STRING — no ::uuid cast — so
+    # u_<hash> session orgs and durable uuid orgs are both safe (never trips the
+    # org_id split-brain).
     try:
         _user = auth.current_user(request)
         _org = (_user or {}).get("org_id") or settings.demo_org_id
@@ -1677,31 +1752,45 @@ async def google_oauth_callback(
     except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
         print(f"[oauth] native token persist skipped ({type(e).__name__})", flush=True)
 
-    try:
-        # Side-effecting: registers Laura's calendar with Recall for auto-join.
-        # The returned record is no longer surfaced (the callback now redirects to
-        # the dashboard), so we don't bind it.
-        await run_in_threadpool(
-            lambda: recall_client.create_calendar(
-                oauth_client_id=settings.google_calendar_client_id,
-                oauth_client_secret=settings.google_calendar_client_secret,
-                oauth_refresh_token=refresh_token,
-                oauth_email=oauth_email,
-                metadata={
-                    "avatar_id": "laura",
-                    "invite_filter": ",".join(sorted(targets)),
-                },
+    # Recall calendar auto-join is the AVATAR's capability: it registers the
+    # avatar's own inbox with Recall so any event that invites its address gets a
+    # bot. Only the avatar account (or a single-tenant deployment with no invite
+    # filter) may create it — a normal user connecting their own Google just
+    # keeps the per-org token stored above and SKIPS this step (their Upcoming
+    # comes from their own calendar via google_client.list_calendar_events and
+    # they dispatch the avatar manually). This guard is what lets per-user
+    # connects be safe without touching the existing auto-join behavior.
+    if is_avatar_account:
+        try:
+            # Side-effecting: registers Laura's calendar with Recall for auto-join.
+            # The returned record is no longer surfaced (the callback now redirects
+            # to the dashboard), so we don't bind it.
+            await run_in_threadpool(
+                lambda: recall_client.create_calendar(
+                    oauth_client_id=settings.google_calendar_client_id,
+                    oauth_client_secret=settings.google_calendar_client_secret,
+                    oauth_refresh_token=refresh_token,
+                    oauth_email=oauth_email,
+                    metadata={
+                        "avatar_id": "laura",
+                        "invite_filter": ",".join(sorted(targets)),
+                    },
+                )
             )
-        )
-    except Exception as e:
-        return JSONResponse({"error": f"Recall calendar creation failed: {e}"}, status_code=400)
+        except Exception as e:
+            return _clear_calendar_state(JSONResponse(
+                {"error": f"Recall calendar creation failed: {e}"}, status_code=400
+            ))
 
     # Land back on the dashboard so the "Google (native)" capability toggle
     # live-refreshes on the next summary load — exactly like the ?brain= Slack
     # return. This is an OAuth redirect target (the browser follows it), never an
     # API a program consumes, so the calendar_id JSON is not needed here; the
-    # per-org native refresh token is already persisted above.
-    return RedirectResponse("/dashboard?google=connected", status_code=302)
+    # per-org native refresh token is already persisted above. Consume the
+    # single-use CSRF-state cookie on the way out.
+    return _clear_calendar_state(
+        RedirectResponse("/dashboard?google=connected", status_code=302)
+    )
 
 
 @app.post("/oauth/google/disconnect")
