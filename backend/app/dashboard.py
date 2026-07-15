@@ -21,7 +21,7 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
-from . import auth, avatars, executor, ledger, outbox, store
+from . import auth, avatars, executor, gemini_ears, ledger, outbox, store
 from .config import settings
 
 router = APIRouter(tags=["dashboard"])
@@ -449,6 +449,14 @@ def dashboard_summary(request: Request) -> JSONResponse:
                 "process_templates": _process_templates(a),
                 "capabilities": _capabilities(a, knowledge),
                 "drive_folder": bool(a.drive_folder_id),
+                # Per-avatar brain choice for the dashboard toggle: the stored
+                # choice, else derived from the effective (global) mode.
+                "brain": store.get_avatar_brain_mode(a.id)
+                or (
+                    "gemini"
+                    if gemini_ears.mode_for_avatar(a.id) in ("reply", "on")
+                    else "cerebras"
+                ),
                 "live_now": live_by_avatar.get(aid, 0),
                 "meetings_total": len(mine),
                 "meetings_30d": sum(

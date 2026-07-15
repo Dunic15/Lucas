@@ -197,7 +197,7 @@ def start_env(fresh_store, monkeypatch):
     test_meter_safety); returns the list of create_bot calls."""
     created: list[str] = []
 
-    def fake_create_bot(meeting_url, avatar_page_url, join_at=None, bot_name="Laura"):
+    def fake_create_bot(meeting_url, avatar_page_url, join_at=None, bot_name="Laura", avatar_id=""):
         created.append(meeting_url)
         return {"id": f"bot_{len(created)}"}
 

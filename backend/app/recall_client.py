@@ -325,6 +325,7 @@ def _create_bot_attempts(
     join_at: str | None,
     bot_name: str = "Laura",
     realtime_capability: str = "",
+    attach_ears: bool = False,
 ) -> list[tuple[str, dict]]:
     configured_provider = _transcript_provider_config()
     attempts: list[tuple[str, dict]] = []
@@ -395,9 +396,7 @@ def _create_bot_attempts(
             )
         )
 
-    if settings.gemini_ears_mode.strip().lower() in ("shadow", "on", "reply") and (
-        settings.ears_relay_ws_base.strip()
-    ):
+    if attach_ears:
         # Gemini ears: Recall streams the meeting's mixed raw audio (s16le
         # 16 kHz mono) over a websocket realtime endpoint — audio volume is
         # too high for webhooks. Ears-enabled copies of every attempt go
@@ -482,20 +481,30 @@ def create_bot(
     avatar_page_url: str,
     join_at: str | None = None,
     bot_name: str = "Laura",
+    avatar_id: str = "",
 ) -> dict:
     """Send a bot into `meeting_url` showing `avatar_page_url` on its camera.
 
     If `join_at` (ISO 8601, >=10 min in the future) is given, Recall SCHEDULES the
     bot to join then — this is how calendar auto-join dispatches bots ahead of time.
     Returns the created bot object (includes its `id`).
+
+    Whether the bot streams audio to the Gemini ears relay is decided PER AVATAR
+    (dashboard brain choice), resolved here from `avatar_id`.
     """
+    from . import gemini_ears
+
     realtime_capability = secrets.token_urlsafe(32)
+    attach_ears = gemini_ears.mode_enabled(
+        gemini_ears.mode_for_avatar(avatar_id)
+    ) and bool(settings.ears_relay_ws_base.strip())
     attempts = _create_bot_attempts(
         meeting_url,
         avatar_page_url,
         join_at,
         bot_name,
         realtime_capability,
+        attach_ears=attach_ears,
     )
     last_error: httpx.HTTPStatusError | None = None
 

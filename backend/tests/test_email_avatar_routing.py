@@ -35,7 +35,7 @@ def client(tmp_path, monkeypatch):
 def recall_stubbed(monkeypatch):
     created: list[dict] = []
 
-    def fake_create_bot(meeting_url, avatar_page_url, join_at=None, bot_name="Laura"):
+    def fake_create_bot(meeting_url, avatar_page_url, join_at=None, bot_name="Laura", avatar_id=""):
         created.append({"meeting_url": meeting_url, "bot_name": bot_name,
                         "avatar_page_url": avatar_page_url})
         return {"id": f"bot_{len(created)}"}

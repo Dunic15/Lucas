@@ -214,7 +214,7 @@ def start_env(fresh_store, monkeypatch):
     meeting_urls that create_bot was called with."""
     created: list[str] = []
 
-    def fake_create_bot(meeting_url, avatar_page_url, join_at=None, bot_name="Laura"):
+    def fake_create_bot(meeting_url, avatar_page_url, join_at=None, bot_name="Laura", avatar_id=""):
         created.append(meeting_url)
         return {"id": f"bot_{len(created)}"}
 
@@ -270,7 +270,7 @@ def test_concurrent_double_start_creates_one_bot(start_env, monkeypatch):
     monkeypatch.setattr(main, "_meeting_has_active_bot", lambda url: False)
     calls: list[str] = []
 
-    def slow_create_bot(meeting_url, avatar_page_url, join_at=None, bot_name="Laura"):
+    def slow_create_bot(meeting_url, avatar_page_url, join_at=None, bot_name="Laura", avatar_id=""):
         calls.append(meeting_url)
         _time.sleep(0.1)  # hold the lock so the racing request must wait
         return {"id": f"bot_{len(calls)}"}
