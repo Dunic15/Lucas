@@ -1650,6 +1650,13 @@ def google_oauth_connect(request: Request):
         "include_granted_scopes": "true",
         "state": signed_state,
     }
+    # Default the calendar to the SAME Google account the user logged in with, so
+    # "log in -> see your own calendar" just works and you can't accidentally
+    # connect a different account's (empty) calendar. login_hint pre-selects it;
+    # the user can still switch to another account on Google's own screen.
+    _cu = auth.current_user(request)
+    if _cu and _cu.get("email"):
+        params["login_hint"] = _cu["email"]
 
     url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
     resp = RedirectResponse(url)
