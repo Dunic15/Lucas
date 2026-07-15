@@ -250,3 +250,60 @@ def test_brain_connectors_proxies_when_linked(client, monkeypatch):
 def test_brain_connectors_requires_login(client):
     r = client.get("/dashboard/connections/brain/connectors")
     assert r.status_code == 401
+
+
+def test_brain_connectors_not_linked_sentinel(client, monkeypatch):
+    """Cedric's 404 (the workspace points at a DIFFERENT Laura org) surfaces as
+    status=not_linked — the dashboard renders the Reconnect-to-Slack CTA instead
+    of a misleading 'temporarily unavailable'."""
+    monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
+    user = _login(client)
+    store.set_connection(
+        user["org_id"], "cedric", "cedric-brain", "connected", {"team_id": "T1"}
+    )
+    monkeypatch.setattr(
+        cedric, "fetch_org_connectors", lambda org, team="": {"not_linked": True}
+    )
+    r = client.get("/dashboard/connections/brain/connectors")
+    assert r.status_code == 200
+    assert r.json()["status"] == "not_linked"
+    assert r.json()["connectors"] == []
+
+
+def test_fetch_org_connectors_404_is_not_linked(monkeypatch):
+    """Upstream 404 → the not_linked sentinel (permanent link mismatch), while
+    any other non-200 stays None (transient 'unavailable')."""
+    monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
+
+    class _Resp:
+        def __init__(self, status):
+            self.status_code = status
+            self.headers = {}
+
+        def json(self):
+            return {"error": "org x is not linked to a workspace"}
+
+    class _Client:
+        def __init__(self, status):
+            self._status = status
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, params=None, headers=None):
+            return _Resp(self._status)
+
+    class _FakeHttpx:
+        def __init__(self, status):
+            self._status = status
+
+        def Client(self, **kw):  # noqa: N802 — mirrors httpx's API
+            return _Client(self._status)
+
+    monkeypatch.setattr(callback, "httpx", _FakeHttpx(404))
+    assert callback.fetch_org_connectors("org-x", "T1") == {"not_linked": True}
+    monkeypatch.setattr(callback, "httpx", _FakeHttpx(503))
+    assert callback.fetch_org_connectors("org-x", "T1") is None

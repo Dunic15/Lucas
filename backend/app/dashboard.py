@@ -1037,6 +1037,13 @@ async def brain_connectors(request: Request) -> JSONResponse:
     )
     if data is None:
         return JSONResponse({"status": "unavailable", "connectors": []}, headers=_NO_STORE)
+    if data.get("not_linked"):
+        # Permanent mismatch: the workspace this org's connection row points at
+        # is linked to a DIFFERENT Laura org on Cedric's side (his 404). The
+        # safe self-service fix is a fresh Add-to-Slack (full /complete flow —
+        # last-write-wins re-link + fresh creds into SSM); the frontend renders
+        # that CTA. Never a bare POST /api/laura/orgs (webhook-secret drift).
+        return JSONResponse({"status": "not_linked", "connectors": []}, headers=_NO_STORE)
     return JSONResponse({"status": "ok", **data}, headers=_NO_STORE)
 
 
