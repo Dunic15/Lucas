@@ -946,25 +946,127 @@ def _upcoming_platform(url: str) -> str:
     return "Other" if u else "—"
 
 
+def _native_event_start(ev: dict) -> str:
+    """RFC3339/ISO start for a Google Calendar event — ``dateTime`` for a timed
+    event, ``date`` for an all-day one — or "" when neither is present."""
+    start = ev.get("start") or {}
+    return str(start.get("dateTime") or start.get("date") or "")
+
+
+def _native_event_url(ev: dict) -> str:
+    """The join URL for a Google Calendar event, in priority order: hangoutLink,
+    then a "video" conferenceData entry point, then a URL-shaped location.
+    Returns "" when the event carries no meeting link (guards the null-URL
+    dispatch crash class downstream)."""
+    link = str(ev.get("hangoutLink") or "").strip()
+    if link:
+        return link
+    conf = ev.get("conferenceData") or {}
+    for ep in conf.get("entryPoints") or []:
+        if str((ep or {}).get("entryPointType") or "") == "video":
+            uri = str((ep or {}).get("uri") or "").strip()
+            if uri:
+                return uri
+    loc = str(ev.get("location") or "").strip()
+    if loc.startswith("http://") or loc.startswith("https://"):
+        return loc
+    return ""
+
+
 @router.get("/dashboard/upcoming")
 async def dashboard_upcoming(request: Request) -> JSONResponse:
-    """Upcoming meetings from the connected calendar (Recall Calendar V2).
+    """Upcoming meetings — the caller's OWN Google Calendar when they've
+    connected native Google, else the avatar's Recall Calendar V2 inbox.
 
-    The deployment calendar is the avatar's own invite inbox: invite its
-    address to any event and the auto-join webhook dispatches a bot. This view
-    lets the owner SEE that queue — title, start, platform, whether a bot is
-    already scheduled — plus the calendar connection state (with the OAuth
-    connect link when none is connected). Read-only + PII-light: event titles
-    and counts, never attendee addresses. No server-side cache (no-store)."""
+    NATIVE path (preferred when ``store.get_org_oauth`` has a token for the
+    caller's org): the events come from the user's own primary calendar
+    (``google_client.list_calendar_events``), so each user sees THEIR meetings
+    and can dispatch the avatar to any of them from the row.
+
+    RECALL fallback (no native token): the avatar's own invite inbox — invite
+    its address to any event and the auto-join webhook dispatches a bot; this
+    view shows that queue.
+
+    Either way the response shape is identical (calendar + meetings[]) so the
+    frontend is source-agnostic. Read-only + PII-light: titles, counts and the
+    join URL the owner needs to dispatch — never attendee addresses. No
+    server-side cache (no-store)."""
     user = auth.current_user(request)
+    machine_org = None
     if user is None:
         from . import cedric  # local import, same reason as auth.gate's
 
-        if cedric.resolve_machine_org(request) is None:
+        machine_org = cedric.resolve_machine_org(request)
+        if machine_org is None:
             if err := auth.gate(request):
                 return err
+    # The org whose native Google token we read — mirrors the dashboard summary
+    # (caller_org or demo_org_id) so connect + read always agree on the same org.
+    # Keyed by the org_id string; no ::uuid cast (org_id split-brain safe).
+    native_org = (user["org_id"] if user else machine_org) or settings.demo_org_id
 
-    def _load() -> dict:
+    def _load_native(org_id: str, oauth: dict) -> dict:
+        from . import google_client
+
+        cal_email = str(oauth.get("email") or "")
+        res = google_client.list_calendar_events(org_id, max_results=25)
+        if not res.get("ok"):
+            # The org HAS a native token but the read failed — surface a soft
+            # "connected but unavailable" state. Do NOT silently fall through to
+            # the avatar's Recall calendar (that would show a different inbox).
+            return {
+                "calendar": {
+                    "connected": True,
+                    "source": "google",
+                    "email": cal_email,
+                    "error": "calendar_unavailable",
+                },
+                "meetings": [],
+            }
+        now = datetime.now(timezone.utc)
+        # meeting_urls this org already has a live/scheduled session for → the
+        # row shows "dispatched" instead of a Send button (one bot + one meter
+        # per URL, matching /sessions/start's own dedup).
+        booked = {
+            s.meeting_url
+            for s in store.all_sessions()
+            if s.meeting_url and s.org_id == org_id
+        }
+        rows: list[dict] = []
+        for ev in res.get("events") or []:
+            if str(ev.get("status") or "") == "cancelled":
+                continue
+            start_raw = _native_event_start(ev)
+            try:
+                start = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if start.tzinfo is None:  # all-day 'date' has no offset
+                start = start.replace(tzinfo=timezone.utc)
+            if start < now - timedelta(minutes=90):
+                continue
+            url = _native_event_url(ev)
+            end = ev.get("end") or {}
+            rows.append(
+                {
+                    "id": str(ev.get("id") or ""),
+                    "title": str(ev.get("summary") or "Untitled meeting"),
+                    "start_time": start_raw,
+                    "end_time": str(end.get("dateTime") or end.get("date") or ""),
+                    "platform": _upcoming_platform(url),
+                    "has_link": bool(url),
+                    "meeting_url": url,
+                    "attendees": len(ev.get("attendees") or []),
+                    "auto_join": bool(url) and url in booked,
+                }
+            )
+        rows.sort(key=lambda r: r["start_time"])
+        return {
+            "calendar": {"connected": True, "source": "google", "email": cal_email},
+            "meetings": rows[:20],
+        }
+
+    def _load_recall() -> dict:
         from . import recall_client
 
         cals = [
@@ -1002,6 +1104,7 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
                     "end_time": str(ev.get("end_time") or ""),
                     "platform": _upcoming_platform(url),
                     "has_link": bool(url),
+                    "meeting_url": url,
                     "attendees": len(raw.get("attendees") or []),
                     "auto_join": store.is_scheduled(str(ev.get("id") or "")),
                 }
@@ -1010,10 +1113,19 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
         return {
             "calendar": {
                 "connected": True,
+                "source": "recall",
                 "email": str(cal.get("oauth_email") or ""),
             },
             "meetings": rows[:20],
         }
+
+    def _load() -> dict:
+        # Prefer the caller's OWN Google Calendar when they've connected native
+        # Google; otherwise fall back to the avatar's Recall Calendar V2 inbox.
+        oauth = store.get_org_oauth(native_org)
+        if oauth:
+            return _load_native(native_org, oauth)
+        return _load_recall()
 
     try:
         data = await run_in_threadpool(_load)

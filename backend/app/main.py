@@ -1647,23 +1647,33 @@ async def google_oauth_callback(
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
+    # PER-USER Google connect. This callback used to accept ONLY the avatar's own
+    # inbox (CALENDAR_INVITE_EMAILS) and reject everyone else with "Wrong Google
+    # account". Relaxed: ANY authenticated user may connect THEIR OWN Google
+    # (Calendar + Gmail) — the per-org refresh token stored below powers their
+    # native executor AND their own Upcoming calendar. The avatar-only Recall
+    # calendar auto-join step (further down) stays guarded to the avatar account,
+    # so a normal user's connect can never hijack the deployment's auto-join inbox.
     targets = _calendar_target_emails()
-    if targets and oauth_email not in targets:
-        return JSONResponse(
-            {
-                "error": "Wrong Google account connected.",
-                "connected_email": oauth_email or None,
-                "expected_email": sorted(targets),
-            },
-            status_code=400,
-        )
+    # The avatar's own account. With NO invite filter configured this is a
+    # single-tenant deployment where the connecting account IS the auto-join
+    # calendar (preserves the pre-per-user behavior); with a filter set, only a
+    # matching address is the avatar account and anyone else is a normal user.
+    is_avatar_account = (not targets) or (oauth_email in targets)
 
-    # Persist the refresh token per org for the NATIVE executor (encrypted at
-    # rest — store.set_org_oauth). Keyed on the connecting user's durable org,
-    # else the demo/owner org (the "Now" slice is single-owner). Best-effort:
-    # never block the existing Recall calendar connection on this write, and
-    # store it regardless of native_executor (the flag gates USE, not consent),
-    # so enabling native later needs no reconnect.
+    # Persist the refresh token per org for the NATIVE executor + Upcoming
+    # (encrypted at rest — store.set_org_oauth). SECURITY: the owning org is
+    # derived ONLY from the connecting browser's signed session cookie
+    # (auth.current_user), NEVER from the OAuth email or any request field — so a
+    # user's token can only ever land on THEIR OWN org, never someone else's. The
+    # static calendar_oauth_state check above (unchanged) is the CSRF guard on
+    # this flow. Falls back to the demo/owner org only for the key-free/no-login
+    # path — exactly the org the dashboard reads it back from (dashboard.py:
+    # caller_org or demo_org_id), so connect + read always agree. Best-effort and
+    # independent of native_executor (the flag gates USE, not consent), so
+    # enabling native later needs no reconnect. Keyed by the org_id STRING — no
+    # ::uuid cast — so u_<hash> session orgs and durable uuid orgs are both safe
+    # (never trips the org_id split-brain).
     try:
         _user = auth.current_user(request)
         _org = (_user or {}).get("org_id") or settings.demo_org_id
@@ -1677,24 +1687,35 @@ async def google_oauth_callback(
     except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
         print(f"[oauth] native token persist skipped ({type(e).__name__})", flush=True)
 
-    try:
-        # Side-effecting: registers Laura's calendar with Recall for auto-join.
-        # The returned record is no longer surfaced (the callback now redirects to
-        # the dashboard), so we don't bind it.
-        await run_in_threadpool(
-            lambda: recall_client.create_calendar(
-                oauth_client_id=settings.google_calendar_client_id,
-                oauth_client_secret=settings.google_calendar_client_secret,
-                oauth_refresh_token=refresh_token,
-                oauth_email=oauth_email,
-                metadata={
-                    "avatar_id": "laura",
-                    "invite_filter": ",".join(sorted(targets)),
-                },
+    # Recall calendar auto-join is the AVATAR's capability: it registers the
+    # avatar's own inbox with Recall so any event that invites its address gets a
+    # bot. Only the avatar account (or a single-tenant deployment with no invite
+    # filter) may create it — a normal user connecting their own Google just
+    # keeps the per-org token stored above and SKIPS this step (their Upcoming
+    # comes from their own calendar via google_client.list_calendar_events and
+    # they dispatch the avatar manually). This guard is what lets per-user
+    # connects be safe without touching the existing auto-join behavior.
+    if is_avatar_account:
+        try:
+            # Side-effecting: registers Laura's calendar with Recall for auto-join.
+            # The returned record is no longer surfaced (the callback now redirects
+            # to the dashboard), so we don't bind it.
+            await run_in_threadpool(
+                lambda: recall_client.create_calendar(
+                    oauth_client_id=settings.google_calendar_client_id,
+                    oauth_client_secret=settings.google_calendar_client_secret,
+                    oauth_refresh_token=refresh_token,
+                    oauth_email=oauth_email,
+                    metadata={
+                        "avatar_id": "laura",
+                        "invite_filter": ",".join(sorted(targets)),
+                    },
+                )
             )
-        )
-    except Exception as e:
-        return JSONResponse({"error": f"Recall calendar creation failed: {e}"}, status_code=400)
+        except Exception as e:
+            return JSONResponse(
+                {"error": f"Recall calendar creation failed: {e}"}, status_code=400
+            )
 
     # Land back on the dashboard so the "Google (native)" capability toggle
     # live-refreshes on the next summary load — exactly like the ?brain= Slack

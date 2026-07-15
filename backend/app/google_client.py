@@ -17,6 +17,7 @@ Contract for every entry point:
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from typing import Any
 
@@ -26,7 +27,9 @@ from . import store
 from .config import settings
 
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
+# Same collection endpoint serves events.insert (POST) and events.list (GET).
 _CAL_INSERT = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+_CAL_LIST = _CAL_INSERT
 _GMAIL_SEND = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 _TIMEOUT = 30.0
 
@@ -110,6 +113,50 @@ def create_calendar_event(org_id: str, event: dict) -> dict:
         "event_id": data.get("id", ""),
         "event_url": data.get("htmlLink", ""),
     }
+
+
+def list_calendar_events(org_id: str, *, max_results: int = 20) -> dict:
+    """List UPCOMING events on the org's primary Google Calendar (read-only).
+
+    Mirrors ``create_calendar_event`` / ``send_gmail``: mint a short-lived access
+    token from the org's stored refresh token, then GET events with
+    ``timeMin=now``, ``singleEvents=true``, ``orderBy=startTime`` and a small
+    ``maxResults``. The ``calendar.events.readonly`` scope is granted at connect.
+
+    Returns ``{"ok": True, "events": [...raw Google items...]}`` (the caller
+    distills title / start / attendees / meeting URL) or
+    ``{"ok": False, "error": str}``. It NEVER raises: this feeds a dashboard READ
+    off the live path, so a Google hiccup must degrade to an empty list, not a
+    500. Logs no token and no event content."""
+    token, err = _access_token(org_id)
+    if err:
+        return {"ok": False, "error": err}
+    try:
+        n = int(max_results or 20)
+    except (TypeError, ValueError):
+        n = 20
+    n = max(1, min(n, 50))
+    try:
+        resp = httpx.get(
+            _CAL_LIST,
+            params={
+                "timeMin": datetime.now(timezone.utc).isoformat(),
+                "singleEvents": "true",
+                "orderBy": "startTime",
+                "maxResults": n,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=_TIMEOUT,
+        )
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"calendar list failed ({type(e).__name__})"}
+    if resp.status_code >= 300:
+        return {"ok": False, "error": f"calendar list failed (HTTP {resp.status_code})"}
+    try:
+        items = resp.json().get("items", [])
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "error": "calendar list returned no JSON"}
+    return {"ok": True, "events": items if isinstance(items, list) else []}
 
 
 def send_gmail(org_id: str, message: dict) -> dict:
