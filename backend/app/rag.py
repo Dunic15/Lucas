@@ -211,6 +211,9 @@ def _read_pdf(path: Path) -> str:
     return "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
 
 
+_DOC_SUFFIXES = (".md", ".txt", ".pdf")
+
+
 def _collect_chunks(paths: list[Path]) -> list[Chunk]:
     all_chunks: list[Chunk] = []
     for path in paths:
@@ -223,7 +226,32 @@ def _collect_chunks(paths: list[Path]) -> list[Chunk]:
     return all_chunks
 
 
-def _write_index(index_path: Path, chunks: list[Chunk]) -> None:
+def _source_paths(dirs: list[Path]) -> list[Path]:
+    """The doc files that actually feed an index, in stable order. Filtered to
+    the indexable suffixes so a stray .DS_Store never triggers a rebuild."""
+    return [
+        p
+        for d in dirs
+        for p in sorted(d.glob("*"))
+        if p.suffix.lower() in _DOC_SUFFIXES
+    ]
+
+
+def _sources_signature(paths: list[Path]) -> list[dict]:
+    """Cheap freshness fingerprint of the source docs (no content read):
+    path + size + mtime. Any edit, add, delete, or rename changes it — that's
+    what lets _index_is_current spot a silently stale index."""
+    sig = []
+    for p in paths:
+        try:
+            st = p.stat()
+        except OSError:
+            continue  # racing delete: the file is gone, so it's not a source
+        sig.append({"path": str(p), "size": st.st_size, "mtime_ns": st.st_mtime_ns})
+    return sig
+
+
+def _write_index(index_path: Path, chunks: list[Chunk], source_paths: list[Path]) -> None:
     vectors = embed([c.text for c in chunks], input_type="document")
     index_path.write_text(
         json.dumps(
@@ -231,6 +259,7 @@ def _write_index(index_path: Path, chunks: list[Chunk]) -> None:
                 "provider": settings.embedding_provider,
                 "model": settings.embedding_model,
                 "version": INDEX_VERSION,
+                "sources": _sources_signature(source_paths),
                 "chunks": [asdict(c) for c in chunks],
                 "vectors": vectors,
             }
@@ -240,14 +269,13 @@ def _write_index(index_path: Path, chunks: list[Chunk]) -> None:
 
 def build_index(avatar: Avatar) -> int:
     """(Re)build one avatar's vector store from its knowledge/ docs (.md/.txt/.pdf)."""
-    all_chunks = _collect_chunks(
-        [p for d in avatar.knowledge_dirs for p in sorted(d.glob("*"))]
-    )
+    paths = _source_paths(avatar.knowledge_dirs)
+    all_chunks = _collect_chunks(paths)
     if not all_chunks:
         raise RuntimeError(
             f"No .md/.txt/.pdf docs found in {avatar.knowledge_dir}"
         )
-    _write_index(avatar.index_path, all_chunks)
+    _write_index(avatar.index_path, all_chunks, paths)
     _CACHE.pop(avatar.id, None)  # invalidate
     return len(all_chunks)
 
@@ -256,8 +284,12 @@ def build_index(avatar: Avatar) -> int:
 _CACHE: dict[str, dict] = {}
 
 
-def _index_is_current(index_path: Path) -> bool:
-    """True when the on-disk index matches the configured embedder + format."""
+def _index_is_current(index_path: Path, source_paths: list[Path]) -> bool:
+    """True when the on-disk index matches the configured embedder + format AND
+    the source docs it was built from. Editing/adding/removing a knowledge doc
+    changes the signature, so the next ensure_index rebuilds instead of serving
+    a silently stale index. (Indexes written before the signature existed lack
+    the key and rebuild once.)"""
     if not index_path.exists():
         return False
     try:
@@ -268,16 +300,20 @@ def _index_is_current(index_path: Path) -> bool:
         raw.get("provider") == settings.embedding_provider
         and raw.get("model") == settings.embedding_model
         and raw.get("version") == INDEX_VERSION
+        and raw.get("sources") == _sources_signature(source_paths)
     )
 
 
 def ensure_index(avatar: Avatar) -> None:
-    """Build the index if it's missing or was built with a different embedder.
+    """Build the index if it's missing, was built with a different embedder, or
+    the knowledge docs changed since it was built.
 
     Lets the demo 'just work' with no manual ingest step. Rebuilding is free and
     instant with the default hash embedder; other providers rebuild on switch.
+    Runs at boot, on ingest, and on first retrieval per process — an already-
+    warmed process keeps serving its in-memory cache until then.
     """
-    if _index_is_current(avatar.index_path):
+    if _index_is_current(avatar.index_path, _source_paths(avatar.knowledge_dirs)):
         return
     build_index(avatar)
 
@@ -295,26 +331,24 @@ _ABOUT_CACHE: dict[str, dict] = {}
 def _about_paths(avatar: Avatar) -> list[Path]:
     if not avatar.about_dir.exists():
         return []
-    return [
-        p
-        for p in sorted(avatar.about_dir.glob("*"))
-        if p.suffix.lower() in (".md", ".txt", ".pdf")
-    ]
+    return _source_paths([avatar.about_dir])
 
 
 def build_about_index(avatar: Avatar) -> int:
-    chunks = _collect_chunks(_about_paths(avatar))
+    paths = _about_paths(avatar)
+    chunks = _collect_chunks(paths)
     if not chunks:
         return 0
-    _write_index(avatar.about_index_path, chunks)
+    _write_index(avatar.about_index_path, chunks, paths)
     _ABOUT_CACHE.pop(avatar.id, None)
     return len(chunks)
 
 
 def ensure_about_index(avatar: Avatar) -> None:
-    if not _about_paths(avatar):
+    paths = _about_paths(avatar)
+    if not paths:
         return
-    if _index_is_current(avatar.about_index_path):
+    if _index_is_current(avatar.about_index_path, paths):
         return
     build_about_index(avatar)
 
