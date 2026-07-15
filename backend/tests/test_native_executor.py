@@ -183,8 +183,10 @@ def test_google_client_soft_failures(monkeypatch, tmp_path):
         "org-a", {"title": "t", "start": "s", "end": "e"}
     )["ok"] is False
 
-    # Token refresh rejected → soft error.
+    # Token refresh rejected → soft error. (Drop the token the gc2 call above
+    # legitimately cached for org-a, so this send actually re-mints.)
     gc3, _ = _mock_google(monkeypatch, token=("", 400))
+    gc3._reset_token_cache()
     assert gc3.send_gmail("org-a", {"to": "a@b.com", "subject": "s"})["ok"] is False
 
 
