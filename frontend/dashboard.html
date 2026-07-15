@@ -281,6 +281,35 @@
     padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--faint);flex:0 0 auto;}
   .stchip.connected{color:#54D28F;border-color:rgba(84,210,143,.4);background:rgba(84,210,143,.08);}
   .stchip.pending{color:#F5C33B;border-color:rgba(245,195,59,.4);background:rgba(245,195,59,.08);}
+  /* Weekly calendar (Upcoming) — day COLUMNS on desktop, day SECTIONS on mobile.
+     Mobile-first: one column, empty days hidden. At >=820px the 7 days become a
+     week grid and empty days stay visible so the whole week reads at a glance. */
+  .wkbar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
+  .wkbar .wkcal{font-size:.85rem;color:var(--dim);}
+  .wkbar .wkcal b{color:var(--text);font-weight:600;}
+  .wkgrid{display:grid;grid-template-columns:1fr;gap:10px;}
+  .wkgrid .wkday.empty{display:none;}
+  .wkday{display:flex;flex-direction:column;gap:8px;background:var(--panel);border:1px solid var(--line-soft);border-radius:14px;padding:11px 12px 13px;}
+  .wkday.today{border-color:rgba(126,182,255,.45);box-shadow:0 0 0 1px rgba(126,182,255,.18);}
+  .wkday-h{display:flex;align-items:baseline;justify-content:space-between;gap:6px;padding-bottom:6px;border-bottom:1px solid var(--line-soft);}
+  .wkday-h .dn{font-family:var(--mono);font-size:.58rem;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);}
+  .wkday.today .wkday-h .dn{color:var(--live);}
+  .wkday-h .dd{font-size:1.02rem;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums;}
+  .wkday-none{color:var(--faint);font-size:.72rem;padding:3px 1px;}
+  .mcard{background:var(--panel-2);border:1px solid var(--line-soft);border-radius:11px;padding:9px 10px;display:flex;flex-direction:column;gap:6px;}
+  .mcard .mtime{font-family:var(--mono);font-size:.7rem;color:var(--live);letter-spacing:.02em;}
+  .mcard .mtitle{font-size:.82rem;font-weight:600;line-height:1.3;color:var(--text);word-break:break-word;}
+  .mcard .mmeta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+  .mcard .avstate{margin-top:1px;}
+  .wksend{display:flex;gap:5px;align-items:stretch;}
+  .wksend select{flex:1;min-width:0;padding:6px 7px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:.72rem;}
+  .wksend .btn{padding:6px 11px;font-size:.74rem;flex:0 0 auto;white-space:nowrap;}
+  .wksend.solo .btn{flex:1;}
+  @media(min-width:820px){
+    .wkgrid{grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;align-items:start;}
+    .wkgrid .wkday.empty{display:flex;}
+    .wkday{padding:9px 8px 11px;}
+  }
   .brainform{display:none;margin-top:10px;gap:8px;flex-wrap:wrap;}
   .brainform.open{display:flex;}
   .brainform input{flex:1;min-width:150px;padding:9px 11px;border-radius:10px;border:1px solid var(--line);
@@ -957,16 +986,41 @@
     // Prefetched once per page (window-scoped guard: renderAll reruns on every
     // summary refresh and must NOT refetch the calendar each tick); the ↻
     // button and OAuth return force a refresh.
-    function fmtUpWhen(iso){
-      if(!iso) return "—";
-      var d=new Date(iso); if(isNaN(d)) return "—";
-      var days=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"], mo=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-      var hm=("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);
-      var today=new Date(); var isToday=d.toDateString()===today.toDateString();
-      var tom=new Date(today.getTime()+86400000); var isTom=d.toDateString()===tom.toDateString();
-      if(isToday) return "Today · "+hm;
-      if(isTom) return "Tomorrow · "+hm;
-      return days[d.getDay()]+" "+d.getDate()+" "+mo[d.getMonth()]+" · "+hm;
+    // Header bar for the weekly calendar: which calendar + a reload control.
+    function wkHead(cal){
+      return '<div class="wkbar"><div class="wkcal">📅 <b>Questa settimana</b> · '+
+        esc(cal.email||"calendario connesso")+'</div>'+
+        '<button class="btn" id="upcoming-reload" style="padding:6px 12px;font-size:.78rem">↻</button></div>';
+    }
+    // One meeting card. multi = the org has >1 granted avatar (show a picker);
+    // otherwise a solo "Manda <name>" button. NULL-URL GUARD (#197 class):
+    // meeting_url is coerced to a string and a card with no link never gets a
+    // send control (no string method is ever called on a possibly-null url).
+    function wkCard(m,multi,avOpts,av0){
+      var url=m.meeting_url||"";
+      var t=new Date(m.start_time);
+      var hm=isNaN(t)?"—":(("0"+t.getHours()).slice(-2)+":"+("0"+t.getMinutes()).slice(-2));
+      var plat=(m.platform&&m.platform!=="—")?'<span class="platc">'+esc(m.platform)+'</span>':"";
+      var state;
+      if(m.auto_join){
+        // Already scheduled/queued for this org+URL — no send button.
+        state='<span class="stchip connected">✓ In coda</span>';
+      } else if(url){
+        // Available → "Manda [avatar ▾]". Reuse DATA.avatars (already in the
+        // summary payload) — a picker when there are several, a solo button
+        // when there is only one. Dispatch goes through POST /sessions/start.
+        state=multi
+          ? '<div class="wksend"><select class="wk-av" aria-label="Scegli avatar">'+avOpts+'</select>'+
+              '<button class="btn primary wk-send" data-send="'+esc(url)+'" data-title="'+esc(m.title||"")+'">Manda</button></div>'
+          : '<div class="wksend solo"><button class="btn primary wk-send" data-send="'+esc(url)+'" data-title="'+esc(m.title||"")+'" data-av="'+esc(av0.id)+'">Manda '+esc(av0.name)+'</button></div>';
+      } else {
+        // No join link yet — no send control, never a crash.
+        state='<span class="stchip" style="opacity:.6">no link</span>';
+      }
+      return '<div class="mcard"><span class="mtime">'+hm+'</span>'+
+        '<span class="mtitle">'+esc(m.title||"Meeting")+'</span>'+
+        (plat?'<div class="mmeta">'+plat+'</div>':"")+
+        '<div class="avstate">'+state+'</div></div>';
     }
     function loadUpcoming(force){
       var box=document.getElementById("upcoming-panel"); if(!box) return;
@@ -976,52 +1030,76 @@
         .then(function(r){ return r.json(); })
         .then(function(j){
           var cal=j.calendar||{};
+          // Empty state — no calendar connected. Point to the Google connect
+          // (same flow as the Connections view); fall back to Connections when
+          // the endpoint couldn't hand back a connect URL.
           if(!cal.connected){
             box.innerHTML='<div style="text-align:center;padding:44px 20px">'+
               '<div style="font-size:1.7rem;margin-bottom:8px">📅</div>'+
-              '<h2 style="margin:0 0 6px">Connect a Google Calendar</h2>'+
-              '<div class="ph" style="max-width:46ch;margin:0 auto 18px">Connect the calendar your avatars watch — any meeting that invites their address shows up here and they join automatically.</div>'+
-              (cal.connect_url?'<a class="btn primary" style="text-decoration:none" href="'+esc(cal.connect_url)+'">Connect Google Calendar</a>':'<div class="cnote">Calendar is temporarily unavailable. Retry in a moment.</div>')+
+              '<h2 style="margin:0 0 6px">Connetti Google per vedere i tuoi meeting</h2>'+
+              '<div class="ph" style="max-width:48ch;margin:0 auto 18px">Collega il tuo Google Calendar: i meeting della settimana appaiono qui e puoi mandare un avatar con un click.</div>'+
+              (cal.connect_url
+                ? '<a class="btn primary" style="text-decoration:none" href="'+esc(cal.connect_url)+'">Connetti Google</a>'
+                : '<button class="btn primary" id="wk-goconn">Vai a Connessioni</button>')+
               '</div>';
+            var gc=document.getElementById("wk-goconn");
+            if(gc) gc.addEventListener("click",function(){ go("connections"); });
             return;
           }
-          var head='<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)">'+
-            '<div><strong>Upcoming meetings</strong> <span class="cnote">· calendar '+esc(cal.email||"connected")+'</span></div>'+
-            '<button class="btn conn-btn" id="upcoming-reload">↻</button></div>';
-          var rows=(j.meetings||[]).map(function(m){
-            // Guard the null-URL dispatch crash class (#197): only offer Send
-            // when the row actually has a join link. Already-scheduled rows show
-            // that state instead of a button.
-            var url=m.meeting_url||"";
-            var status=(m.auto_join?'<span class="stchip connected">auto-join</span>':(m.has_link?'<span class="stchip">queued</span>':'<span class="stchip" style="opacity:.6">no link</span>'));
-            var action=(m.auto_join
-              ? '<span class="cnote">scheduled</span>'
-              : (url
-                  ? '<button class="btn primary send-laura" data-send="'+esc(url)+'" data-title="'+esc(m.title||"")+'">Send Laura</button>'
-                  : '<span class="cnote" style="opacity:.6">—</span>'));
-            return '<tr style="border-bottom:1px solid var(--line-soft)"><td>'+esc(m.title)+'</td>'+
-              '<td class="when">'+fmtUpWhen(m.start_time)+'</td>'+
-              '<td><span class="platc">'+esc(m.platform)+'</span></td>'+
-              '<td class="r tnum">'+(m.attendees||0)+'</td>'+
-              '<td class="r">'+status+'</td>'+
-              '<td class="r">'+action+'</td></tr>';
-          }).join("");
-          box.innerHTML=head+(rows
-            ? '<div class="scroll" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Meeting</th><th>When</th><th>Platform</th><th class="r">Guests</th><th class="r">Status</th><th class="r">Action</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
-            : '<div class="ph" style="padding:28px;text-align:center">No upcoming meetings on the calendar yet.<br><span class="cnote">Invite your avatar\'s email to any event and it appears here — then joins on time.</span></div>');
+          // Connected but the calendar read failed (native token present, read
+          // errored) — soft "connected, retry" state, not a hard error.
+          if(cal.error){
+            box.innerHTML=wkHead(cal)+'<div class="ph" style="padding:26px;text-align:center">Calendario connesso ma momentaneamente non disponibile. <button class="btn" id="wk-retry" style="margin-left:8px;padding:6px 12px;font-size:.78rem">↻ Riprova</button></div>';
+            var rb=document.getElementById("wk-retry");
+            if(rb) rb.addEventListener("click",function(){ loadUpcoming(true); });
+            return;
+          }
+          // --- weekly grid: 7 day columns starting today, meetings bucketed by
+          // local date and time-ordered inside each day. ---
+          var meetings=(j.meetings||[]);
+          var avatars=(DATA&&DATA.avatars)||[];
+          var multi=avatars.length>1;
+          var avOpts=avatars.map(function(a){ return '<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>'; }).join("");
+          var av0=avatars[0]||{id:"laura",name:"Laura"};
+          var DAYN=["DOM","LUN","MAR","MER","GIO","VEN","SAB"];
+          function dayKey(d){ return d.getFullYear()+"-"+d.getMonth()+"-"+d.getDate(); }
+          var buckets={};
+          meetings.forEach(function(m){
+            var d=new Date(m.start_time); if(isNaN(d)) return;
+            (buckets[dayKey(d)]=buckets[dayKey(d)]||[]).push(m);
+          });
+          var today=new Date(); today.setHours(0,0,0,0);
+          var cols=[];
+          for(var i=0;i<7;i++){
+            var day=new Date(today.getTime()+i*86400000);
+            var list=(buckets[dayKey(day)]||[]).slice().sort(function(a,b){ return (new Date(a.start_time))-(new Date(b.start_time)); });
+            var cards=list.map(function(m){ return wkCard(m,multi,avOpts,av0); }).join("");
+            cols.push('<div class="wkday'+(i===0?" today":"")+(list.length?"":" empty")+'">'+
+              '<div class="wkday-h"><span class="dn">'+DAYN[day.getDay()]+'</span><span class="dd">'+day.getDate()+'</span></div>'+
+              (cards||'<div class="wkday-none">—</div>')+'</div>');
+          }
+          var anyMeeting=meetings.length>0;
+          box.innerHTML=wkHead(cal)+(anyMeeting
+            ? '<div class="wkgrid">'+cols.join("")+'</div>'
+            : '<div class="ph" style="padding:28px;text-align:center">Nessun meeting in programma questa settimana.<br><span class="cnote">I meeting del tuo Google Calendar appaiono qui — poi puoi mandare un avatar con un click.</span></div>');
           var rl=document.getElementById("upcoming-reload");
           if(rl) rl.addEventListener("click",function(){ loadUpcoming(true); });
-          // Per-row dispatch: reuse the exact POST /sessions/start the main
-          // dispatch form uses (org-scoped + billing-gated server-side). The
-          // meeting URL rides in a data attribute; re-checked before send.
-          box.querySelectorAll(".send-laura").forEach(function(btn){
+          // Per-card dispatch: reuse the exact POST /sessions/start the main
+          // dispatch form uses (org-scoped + billing-gated + one-bot-per-URL
+          // dedup server-side). The URL rides in a data attribute; the avatar
+          // is the card's own picker (multi) or its data-av (solo), falling
+          // back to the global dispatch selector then the first avatar.
+          box.querySelectorAll(".wk-send").forEach(function(btn){
             btn.addEventListener("click",function(){
               var u=btn.getAttribute("data-send")||"";
-              if(!u){ toast("This meeting has no join link yet.",true); return; }
+              if(!u){ toast("Questo meeting non ha ancora un link.",true); return; }
               var title=btn.getAttribute("data-title")||"";
-              var avatar=(document.getElementById("dsp-avatar")||{}).value ||
+              var sel=btn.parentNode&&btn.parentNode.querySelector(".wk-av");
+              var avatar=(sel&&sel.value) || btn.getAttribute("data-av") ||
+                (document.getElementById("dsp-avatar")||{}).value ||
                 ((DATA&&DATA.avatars&&DATA.avatars[0])?DATA.avatars[0].id:"laura");
-              btn.disabled=true; btn.textContent="Sending…";
+              var orig=btn.textContent;
+              btn.disabled=true; btn.textContent="Invio…";
               var body={meeting_url:u,avatar_id:avatar};
               if(title) body.context={meeting:{title:title}};
               fetch("/sessions/start",{method:"POST",headers:headers(),body:JSON.stringify(body)})
@@ -1029,22 +1107,22 @@
                 .then(function(res){
                   if(!res.ok){
                     if(res.status===402){ go("usage"); loadBilling();
-                      throw new Error("Your included minutes are used. Upgrade to Solo to continue."); }
-                    var msg=(res.j&&(res.j.error==="avatar_busy"?res.j.detail:(res.j.error||res.j.detail)))||"request failed";
+                      throw new Error("Minuti inclusi esauriti. Passa a Solo per continuare."); }
+                    var msg=(res.j&&(res.j.error==="avatar_busy"?res.j.detail:(res.j.error||res.j.detail)))||"richiesta fallita";
                     throw new Error(msg);
                   }
                   var picked=(DATA&&DATA.avatars||[]).find(function(a){return a.id===avatar;});
-                  toast((picked?picked.name:"Laura")+" is joining — admit them from the waiting room if asked.");
-                  btn.textContent="Sent ✓";
+                  toast((picked?picked.name:"Laura")+" sta entrando — ammettila dalla waiting room se richiesto.");
+                  btn.textContent="Inviata ✓";
                   setTimeout(function(){ loadUpcoming(true); },1600);
                 })
-                .catch(function(e){ toast("Could not send: "+e.message,true);
-                  btn.disabled=false; btn.textContent="Send Laura"; });
+                .catch(function(e){ toast("Invio non riuscito: "+e.message,true);
+                  btn.disabled=false; btn.textContent=orig; });
             });
           });
         })
         .catch(function(){ window._upcomingLoaded=false;
-          box.innerHTML='<div class="cnote" style="padding:20px">Calendar unavailable right now.</div>'; });
+          box.innerHTML='<div class="cnote" style="padding:20px">Calendario non disponibile al momento.</div>'; });
     }
     window._loadUpcoming=loadUpcoming;
     loadUpcoming(false);
