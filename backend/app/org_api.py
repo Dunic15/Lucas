@@ -195,3 +195,119 @@ async def org_action_status(action_id: str, request: Request) -> JSONResponse:
     return JSONResponse(
         {"recorded": bool(ok), "action_id": action_id, "status": status}
     )
+
+
+@router.post("/actions/{action_id}/approve")
+async def org_approve(action_id: str, request: Request) -> JSONResponse:
+    """The Slack-approval -> EXECUTION bridge (agreed action contract, aura v2).
+
+    ``/resolve`` and ``/status`` only RECORD an outcome; neither runs the
+    executor — which is why clicking Approve in Slack changed the message but
+    did nothing. This door closes that gap: a machine caller (Cedric, after it
+    signature-verifies the Slack interaction and resolves the Slack user to a
+    Laura user) POSTs here and Laura runs the SAME canonical transition + native
+    execution the dashboard's approve door runs, on the tool owner's own
+    credentials. Slack and dashboard now converge on one execution engine.
+
+    Machine-gated (per-org bearer -> its org; Demo scope for the open key-free
+    path). DECISION-BASED IDEMPOTENCY (contract M1): a repeat of the SAME
+    decision replays the recorded result and NEVER executes twice; a conflicting
+    decision after a terminal state is 409 ``decision_conflict``. The trusted
+    typed spec comes from the SAVED artifact, never the request body. Body
+    (all optional): {"decision":"approve"|"reject", "detail":str,
+    "idempotency_key":str, "selected_slot_id":str}; absent decision = approve.
+
+    Race note: the guard is the ledger's monotonic terminal status, which dedups
+    SEQUENTIAL approvals (the real-world case). A truly simultaneous
+    Slack+dashboard double-click within the same instant would need an atomic
+    claim primitive — tracked as a follow-up; it never downgrades a terminal
+    state, so at worst it is a rare double-execute, never a lost approval."""
+    err, org = await _machine_gate(request)
+    if err:
+        return err
+    aid = (action_id or "").strip()
+    if not aid:
+        return JSONResponse({"error": "action_id is required"}, status_code=400)
+    raw = await request.body()
+    body: dict = {}
+    if raw.strip():
+        try:
+            body = json.loads(raw) or {}
+        except ValueError:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    decision = str(body.get("decision") or "approve").strip().lower()
+    if decision not in ("approve", "reject"):
+        return JSONResponse(
+            {"error": "decision must be approve|reject"}, status_code=400
+        )
+    detail = str(body.get("detail") or "").strip()[:300]
+
+    # Canonical status is the idempotency basis. Terminal states (done/rejected/
+    # failed) are monotonic in the ledger, so a replay can't repaint them.
+    current = await run_in_threadpool(ledger.action_statuses, [aid], org_id=org)
+    cur = (current.get(aid) or {}).get("status") or ""
+
+    if decision == "reject":
+        if cur == "done":
+            return JSONResponse(
+                {"error": "decision_conflict", "action_id": aid,
+                 "current_status": cur, "decided_via": "slack"}, status_code=409)
+        replay = cur == "rejected"
+        if not replay:
+            await run_in_threadpool(
+                ledger.set_action_status, aid, "rejected",
+                detail or "rejected via Slack", org_id=org)
+        return JSONResponse(
+            {"ok": True, "action_id": aid, "decision": "reject",
+             "new_status": "rejected", "idempotent_replay": replay})
+
+    # decision == approve
+    if cur == "rejected":
+        return JSONResponse(
+            {"error": "decision_conflict", "action_id": aid,
+             "current_status": cur, "decided_via": "slack"}, status_code=409)
+    if cur in ("approved", "done"):
+        # Already approved (and maybe executed) — replay, NEVER execute again.
+        return JSONResponse(
+            {"ok": True, "action_id": aid, "decision": "approve",
+             "new_status": cur, "executed": cur == "done",
+             "idempotent_replay": True, "status": current.get(aid)})
+
+    # Fresh approve — load the trusted typed spec from the saved artifact and run
+    # the SAME executor path as the dashboard door. Lazy import: dashboard owns
+    # the artifact-scoped loader + the typed->executor bridge, so both approval
+    # doors stay in lockstep.
+    from . import executor
+    from .dashboard import _executor_action, _find_org_action
+
+    found = await run_in_threadpool(_find_org_action, org, aid)
+    if found is None:
+        return JSONResponse(
+            {"error": "unknown action for this org"}, status_code=404)
+    action, acting_avatar = found
+
+    await run_in_threadpool(
+        ledger.set_action_status, aid, "approved",
+        detail or "approved via Slack", org_id=org)
+
+    typed = action.get("typed") if isinstance(action.get("typed"), dict) else None
+    exec_action = _executor_action(typed)
+    executed = False
+    capability_blocked = False
+    if exec_action is not None and executor.handles(exec_action):
+        caps = await run_in_threadpool(store.get_avatar_capabilities, acting_avatar)
+        if caps.get(executor.capability_family(exec_action.get("type"))) is False:
+            capability_blocked = True
+        else:
+            # execute_approved writes its own done/failed receipt to the ledger.
+            await run_in_threadpool(executor.execute_approved, org, aid, exec_action)
+            executed = True
+
+    latest = await run_in_threadpool(ledger.action_statuses, [aid], org_id=org)
+    return JSONResponse(
+        {"ok": True, "action_id": aid, "decision": "approve", "approved": True,
+         "executed": executed, "capability_blocked": capability_blocked,
+         "typed": bool(typed), "idempotent_replay": False,
+         "status": latest.get(aid)})
