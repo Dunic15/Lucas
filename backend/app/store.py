@@ -967,7 +967,12 @@ def save_artifact(bot_id: str, artifact: dict, *, org_id: str | None = None) -> 
     # Lazy import avoids the control_plane -> store constants import cycle.
     from . import control_plane
 
-    durable_enabled = durable_artifacts_enabled()
+    # A session-shaped personal org (u_<hash>) has no durable archive and would
+    # crash the org_id uuid cast (same degrade as list_artifacts) — SQLite
+    # remains its complete persistence path, so save errors stay fatal for it.
+    durable_enabled = durable_artifacts_enabled() and control_plane.is_durable_org(
+        str(row_org)
+    )
     if durable_enabled:
         control_plane.save_artifact(
             row_org,
@@ -1013,7 +1018,11 @@ def get_artifact(bot_id: str, org_id: str | None = None) -> dict | None:
     if org_id is not None:
         from . import control_plane
 
-        if durable_artifacts_enabled():
+        # Personal (u_<hash>) orgs degrade to the SQLite warm cache below —
+        # the durable lookup's uuid cast would 500 (same rule as list_artifacts).
+        if durable_artifacts_enabled() and control_plane.is_durable_org(
+            str(org_id)
+        ):
             return control_plane.get_artifact(org_id, bot_id)
     artifact = _artifacts.get(bot_id)
     if artifact is not None and org_id is not None:
@@ -1970,6 +1979,32 @@ def clear_org_oauth(org_id: str, *, provider: str = "google") -> bool:
             (org, provider),
         )
     return cur.rowcount > 0
+
+
+def org_for_email(email: str) -> str | None:
+    """The org that owns an email address, or None when unknown.
+
+    The org whose CONNECTED Google account (org_oauth.email) matches wins —
+    that org demonstrably controls the inbox — else the org of a registered
+    user with that email. Callers use this to attribute an inbound meeting
+    (calendar/email invite) to its owner instead of the Demo org, so the
+    minutes meter — and any actions — land on the right tenant."""
+    addr = (email or "").strip().lower()
+    if not addr:
+        return None
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            """SELECT org_id FROM org_oauth WHERE email=?
+                   ORDER BY updated_at DESC LIMIT 1""",
+            (addr,),
+        ).fetchone()
+        if row is None:
+            row = conn.execute(
+                "SELECT org_id FROM users WHERE email=? LIMIT 1",
+                (addr,),
+            ).fetchone()
+    org = str(row["org_id"]).strip() if row and row["org_id"] else ""
+    return org or None
 
 
 def register_recall_realtime_capability(bot_id: str, capability: str) -> bool:

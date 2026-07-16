@@ -1157,6 +1157,10 @@ def get_billing(org_id: str) -> Optional[dict]:
     """Tenant-scoped billing state. Customer ids are returned only for this org."""
     if not enabled() or not (org_id or "").strip():
         return None
+    # A session-shaped personal identity (u_<hash>) has no billing_accounts row
+    # and would crash the RLS org_id uuid cast — the /billing/summary 500.
+    if not _is_uuid(org_id.strip()):
+        return None
     from sqlalchemy import text
 
     org = org_id.strip()

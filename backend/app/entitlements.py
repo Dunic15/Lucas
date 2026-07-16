@@ -516,6 +516,11 @@ def usage_summary(org_id: str) -> Optional[dict]:
     org — PR C's /billing/summary calls this. ``None`` when disabled."""
     if not enabled() or not (org_id or "").strip():
         return None
+    # A session-shaped personal identity (u_<hash>) has no durable billing row
+    # and would crash the RLS org_id uuid cast — a 500 on /billing/summary.
+    # Degrade to the free-tier defaults instead (see control_plane.is_durable_org).
+    if not control_plane._is_uuid(org_id.strip()):
+        return None
     from sqlalchemy import text
     from sqlalchemy.exc import SQLAlchemyError
 
@@ -553,6 +558,10 @@ def usage_summary(org_id: str) -> Optional[dict]:
 def has_active_session(org_id: str) -> bool:
     """Whether this org's one meeting slot is currently occupied."""
     if not enabled() or not (org_id or "").strip():
+        return False
+    # Personal (u_<hash>) orgs have no usage_sessions rows and would only burn
+    # a doomed uuid-cast query (caught below, but noisy) — answer directly.
+    if not control_plane._is_uuid(org_id.strip()):
         return False
     from sqlalchemy import text
     from sqlalchemy.exc import SQLAlchemyError

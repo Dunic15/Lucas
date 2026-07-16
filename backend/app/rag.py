@@ -21,7 +21,7 @@ import numpy as np
 
 from .avatars import Avatar
 from .config import settings
-from .embeddings import embed
+from .embeddings import embed, provider_signature
 
 
 INDEX_VERSION = 3
@@ -256,7 +256,9 @@ def _write_index(index_path: Path, chunks: list[Chunk], source_paths: list[Path]
     index_path.write_text(
         json.dumps(
             {
-                "provider": settings.embedding_provider,
+                # The EFFECTIVE provider (hash when local fell back at boot) —
+                # guarantees index/query vector agreement across restarts.
+                "provider": provider_signature(),
                 "model": settings.embedding_model,
                 "version": INDEX_VERSION,
                 "sources": _sources_signature(source_paths),
@@ -297,7 +299,7 @@ def _index_is_current(index_path: Path, source_paths: list[Path]) -> bool:
     except (json.JSONDecodeError, OSError):
         return False
     return (
-        raw.get("provider") == settings.embedding_provider
+        raw.get("provider") == provider_signature()
         and raw.get("model") == settings.embedding_model
         and raw.get("version") == INDEX_VERSION
         and raw.get("sources") == _sources_signature(source_paths)
@@ -466,8 +468,105 @@ def warm(avatar: Avatar) -> None:
         print(f"[startup] warm-up failed for '{avatar.id}': {e}", flush=True)
 
 
-def retrieve(avatar: Avatar, query: str, k: int = 4) -> list[Retrieved]:
-    return _rank(_load(avatar), query, k)
+def retrieve(
+    avatar: Avatar, query: str, k: int = 4, *, org_id: str = ""
+) -> list[Retrieved]:
+    """Top-k chunks for a query. With an ``org_id``, the org's PRIVATE index
+    (its own ingested docs — Drive sync, uploads) is searched alongside the
+    avatar's shared base pack and the merged top-k wins; without one, or when
+    the org has never ingested anything, behavior is exactly the base pack.
+    Isolation is structural: each org's index is its own file, so org A can
+    never retrieve org B's documents."""
+    base = _rank(_load(avatar), query, k)
+    org_store = _load_org(avatar, org_id) if org_id else None
+    if org_store is None:
+        return base
+    merged = _rank(org_store, query, k) + base
+    merged.sort(key=lambda r: -r.score)
+    return merged[:k]
+
+
+# ─────────────── per-org indexes: an org's OWN ingested docs ────────────────
+# The base knowledge pack (avatars/*/knowledge) is the avatar's shared,
+# synthetic SOP set. Real customer documents must never land there: they are
+# per-tenant. Each (org, avatar) pair gets its own index file next to the
+# SQLite store (the persistent mount in production), written by the ingest
+# paths (Drive folder sync, file upload) and merged at retrieval above.
+
+# (org_id, avatar.id) -> loaded store
+_ORG_CACHE: dict[tuple[str, str], dict] = {}
+
+
+def _org_slug(org_id: str) -> str:
+    """org ids are uuids or u_<hash> — keep the filename strictly safe anyway."""
+    return re.sub(r"[^A-Za-z0-9_-]", "_", (org_id or "").strip())
+
+
+def org_index_path(avatar: Avatar, org_id: str) -> Path:
+    from . import store  # sibling of the SQLite file → survives deploys together
+
+    base = store.STORE_PATH.parent / "org_indexes"
+    return base / f"{_org_slug(org_id)}__{avatar.id}.index.json"
+
+
+def build_org_index(avatar: Avatar, org_id: str, doc_paths: list[Path]) -> int:
+    """(Re)build one org's private index for one avatar from ITS documents.
+    Empty doc list removes the index (an org disconnecting its sources)."""
+    org = (org_id or "").strip()
+    if not org:
+        raise ValueError("org_id is required for a per-org index")
+    path = org_index_path(avatar, org)
+    paths = [p for p in doc_paths if p.exists()]
+    chunks = _collect_chunks(paths)
+    if not chunks:
+        path.unlink(missing_ok=True)
+        _ORG_CACHE.pop((org, avatar.id), None)
+        _ORG_MISS.pop((org, avatar.id), None)
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_index(path, chunks, paths)
+    _ORG_CACHE.pop((org, avatar.id), None)  # invalidate
+    _ORG_MISS.pop((org, avatar.id), None)  # a fresh ingest is instantly live
+    return len(chunks)
+
+
+# (org_id, avatar.id) -> epoch of a recent miss. retrieve() runs every live
+# turn; without this, an org that never ingested anything pays a (cheap but
+# pointless) disk stat per turn. A fresh ingest invalidates via build_org_index.
+_ORG_MISS: dict[tuple[str, str], float] = {}
+_ORG_MISS_TTL = 60.0
+
+
+def _load_org(avatar: Avatar, org_id: str) -> dict | None:
+    org = (org_id or "").strip()
+    if not org:
+        return None
+    key = (org, avatar.id)
+    if key not in _ORG_CACHE:
+        import time as _time
+
+        missed = _ORG_MISS.get(key)
+        if missed and _time.time() - missed < _ORG_MISS_TTL:
+            return None
+        path = org_index_path(avatar, org)
+        if not path.exists():
+            _ORG_MISS[key] = _time.time()
+            return None
+        try:
+            raw = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return None
+        # An index from another embedder/format would rank garbage — treat it
+        # as absent; the next ingest rewrites it with the current signature.
+        if (
+            raw.get("provider") != provider_signature()
+            or raw.get("model") != settings.embedding_model
+            or raw.get("version") != INDEX_VERSION
+        ):
+            return None
+        raw["matrix"] = np.array(raw["vectors"], dtype=np.float32)
+        _ORG_CACHE[key] = raw
+    return _ORG_CACHE[key]
 
 
 def _rank(store: dict, query: str, k: int) -> list[Retrieved]:

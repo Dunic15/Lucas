@@ -347,6 +347,19 @@ TOOL_SPECS = [
     {
         "type": "function",
         "function": {
+            "name": "upcoming_meetings",
+            "description": (
+                "The owner's upcoming Google Calendar meetings (read-only "
+                "snapshot taken at session start). Use for \"what's on my/our "
+                "calendar\", \"when is my next meeting\", or \"do I have a "
+                "meeting with X\"."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_tools",
             "description": (
                 "Check whether a specific capability/tool exists for this org "
@@ -389,6 +402,17 @@ def search_tools(query: str = "", session=None) -> str:
     return tool_registry.search(reg, query)
 
 
+def upcoming_meetings(session=None) -> str:
+    """The owner's upcoming-calendar snapshot for THIS session — assembled at
+    session start (google_client.calendar_brief), zero network on the live
+    path. "" from the assembler means no Google connected for the org."""
+    brief = getattr(session, "calendar_brief", "") if session else ""
+    return brief or (
+        "no calendar is connected for this meeting's org — connect Google "
+        "in the dashboard to give me calendar sight"
+    )
+
+
 _DISPATCH = {
     "calculator": calculator,
     "date_math": date_math,
@@ -396,11 +420,14 @@ _DISPATCH = {
     "queue_action": queue_action,
     "list_capabilities": list_capabilities,
     "search_tools": search_tools,
+    "upcoming_meetings": upcoming_meetings,
 }
 
 # Tools that receive the live session (to capture onto it). Everything else
 # keeps its plain signature — the session seam is strictly additive.
-_SESSION_TOOLS = {"queue_action", "list_capabilities", "search_tools"}
+_SESSION_TOOLS = {
+    "queue_action", "list_capabilities", "search_tools", "upcoming_meetings",
+}
 
 
 def dispatch(name: str, args: dict, session=None) -> str:

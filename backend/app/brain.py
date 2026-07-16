@@ -121,14 +121,17 @@ Return ONLY a JSON object:
 
 
 def answer_question(
-    avatar: Avatar, question: str, *, history: str = "", k: int = 4
+    avatar: Avatar, question: str, *, history: str = "", k: int = 4,
+    org_id: str = "",
 ) -> dict:
     """Retrieve + answer for one avatar. Returns answer/citations/confidence.
 
     `history` is the recent meeting conversation (last few "Speaker: line" turns)
     so the avatar understands *this* discussion, not just the isolated question.
+    `org_id` scopes retrieval to include that org's private ingested docs
+    (rag.retrieve) — "" keeps the shared base pack only.
     """
-    chunks = _retrieve_for(avatar, question, history, k)
+    chunks = _retrieve_for(avatar, question, history, k, org_id=org_id)
 
     if _is_stub():
         result = _stub_answer(chunks)
@@ -318,13 +321,21 @@ def _is_about_avatar(question: str) -> bool:
     return bool(_ABOUT_INTENT.search(question or ""))
 
 
-def _retrieve_for(avatar: Avatar, question: str, history: str, k: int) -> list[Retrieved]:
+def _retrieve_for(
+    avatar: Avatar, question: str, history: str, k: int, *, org_id: str = ""
+) -> list[Retrieved]:
     """Route retrieval: self-questions hit the about/ pack, everything else the
-    real knowledge docs. Self-questions retrieve on the bare ask (they're
-    direct), process questions keep the history-augmented query."""
+    real knowledge docs (plus the org's private index when org_id is given).
+    Self-questions retrieve on the bare ask (they're direct), process questions
+    keep the history-augmented query."""
     if _is_about_avatar(question):
         return retrieve_about(avatar, question, k=k)
-    return retrieve(avatar, _retrieval_query(question, history), k=k)
+    query = _retrieval_query(question, history)
+    if org_id:
+        return retrieve(avatar, query, k=k, org_id=org_id)
+    # No org scope → the pre-seam call shape, so tests/instrumentation that
+    # wrap retrieve() with the old signature keep working unchanged.
+    return retrieve(avatar, query, k=k)
 
 
 # Cheap language sniff for a live utterance: enough Italian function words →
@@ -615,6 +626,7 @@ def answer_question_stream(
     min_chars: int = 0,
     meta: "dict | None" = None,
     mission: str = "",
+    org_id: str = "",
 ):
     """Yield spoken sentences as they are generated. Yields nothing (stays silent)
     only when the model judges the speech was not addressed to Laura (SKIP).
@@ -656,7 +668,7 @@ def answer_question_stream(
     for smooth prosody.
     """
     _t0 = time.perf_counter()
-    chunks = _retrieve_for(avatar, question, history, k)
+    chunks = _retrieve_for(avatar, question, history, k, org_id=org_id)
     _retrieve_ms = (time.perf_counter() - _t0) * 1000
     # Only ground in the docs when they actually match the question —
     # irrelevant chunks bias the model into doc-quoting general answers.

@@ -747,9 +747,12 @@ def test_finalize_keeps_session_when_artifact_postgres_is_down(
         bot_id,
         "https://meet.google.com/abc-defg-hij",
         "laura",
-        org_id="org-artifact-pg-down",
+        # A DURABLE tenant is a uuid (control plane owns identity) — a
+        # session-shaped org would now correctly route to SQLite instead of
+        # exercising the Postgres-down propagation this test pins.
+        org_id="00000000-0000-4000-8000-000000000d01",
     )
-    session.integration = _integration("org-artifact-pg-down")
+    session.integration = _integration("00000000-0000-4000-8000-000000000d01")
 
     monkeypatch.setattr(main.recall_client, "leave_call", lambda bot: None)
     monkeypatch.setattr(main.outbox, "begin_action_finalize", lambda *args: [])
