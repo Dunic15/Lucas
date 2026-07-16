@@ -342,6 +342,10 @@ def test_upcoming_never_leaks_a_colleagues_calendar(client, monkeypatch):
         "id": "e1", "summary": "Duccio 1:1", "status": "confirmed",
         "start": {"dateTime": _future_iso()}, "end": {"dateTime": _future_iso(3)},
         "hangoutLink": "https://meet.google.com/pri-vate-cal",
+        "_laura_calendar": {
+            "id": "primary", "name": "Personal",
+            "color": "#4285f4", "primary": True,
+        },
     }
     seen_principals: list = []
 
@@ -366,6 +370,12 @@ def test_upcoming_never_leaks_a_colleagues_calendar(client, monkeypatch):
     assert j["calendar"]["source"] == "google"
     assert j["calendar"]["email"] == "duccio@sffstudio.com"
     assert j["meetings"][0]["title"] == "Duccio 1:1"
+    event_ref = j["meetings"][0]["event_ref"]
+    assert event_ref and "primary" not in event_ref  # opaque, not a raw calendar id
+    from app import dashboard
+    assert dashboard._read_calendar_event_ref(event_ref) == (
+        duccio["user_id"], "primary", "e1"
+    )
     assert seen_principals == [f"user:{duccio['user_id']}"]
 
 
@@ -389,6 +399,53 @@ def test_create_event_never_writes_to_a_colleagues_calendar(client, monkeypatch)
                     json={"title": "sneaky", "start": _future_iso()})
     assert r.json().get("error") == "connect_google"
     assert created == []  # nothing created on Duccio's calendar
+
+
+def test_add_avatar_to_existing_event_uses_callers_google(client, monkeypatch):
+    user = _login(client, "alice@sffstudio.com")
+    store.set_user_oauth(user["user_id"], "rt-alice", email="alice@sffstudio.com")
+    from app import dashboard, google_client
+
+    monkeypatch.setattr(
+        dashboard, "_avatar_email", lambda avatar_id: f"laura+{avatar_id}@example.com"
+    )
+    seen = {}
+
+    def fake_add(org, calendar_id, event_id, attendee_email, **kwargs):
+        seen.update({
+            "org": org, "calendar_id": calendar_id, "event_id": event_id,
+            "attendee_email": attendee_email, **kwargs,
+        })
+        return {"ok": True, "event_id": event_id, "idempotent": False}
+
+    monkeypatch.setattr(google_client, "add_calendar_event_attendee", fake_add)
+    event_ref = dashboard._calendar_event_ref(
+        user["user_id"], "team@group.calendar.google.com", "event-1"
+    )
+    response = client.post(
+        "/dashboard/calendar/event/avatar",
+        json={"event_ref": event_ref, "avatar_id": "laura"},
+    )
+    assert response.status_code == 200 and response.json()["ok"] is True
+    assert seen["calendar_id"] == "team@group.calendar.google.com"
+    assert seen["event_id"] == "event-1"
+    assert seen["attendee_email"] == "laura+laura@example.com"
+    assert seen["principal"] == f"user:{user['user_id']}"
+    assert seen["oauth"]["email"] == "alice@sffstudio.com"
+
+
+def test_event_ref_cannot_be_replayed_by_another_user(client):
+    alice = _login(client, "alice@sffstudio.com")
+    from app import dashboard
+
+    event_ref = dashboard._calendar_event_ref(alice["user_id"], "primary", "event-1")
+    _login(client, "bob@sffstudio.com")
+    response = client.post(
+        "/dashboard/calendar/event/avatar",
+        json={"event_ref": event_ref, "avatar_id": "laura"},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_event_ref"
 
 
 def test_disconnect_clears_the_per_user_token_too(client):
