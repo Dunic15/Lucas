@@ -115,14 +115,14 @@ def test_tool_registered_for_brain_and_session():
     assert "upcoming_meetings" in names  # the brain can actually see it
 
 
-# ── all-calendars fan-out: selected calendars merge into one upcoming view ──
+# ── all-calendars fan-out: every accessible calendar feeds the week view ──
 
 
 def _resp(json_data, status=200):
     return SimpleNamespace(status_code=status, json=lambda: json_data)
 
 
-def test_list_events_merges_selected_calendars(monkeypatch):
+def test_list_events_merges_all_accessible_calendars(monkeypatch):
     monkeypatch.setattr(
         google_client, "_access_token",
         lambda key, oauth=None, on_rotate=None, force_refresh=False: ("tok", ""),
@@ -131,9 +131,14 @@ def test_list_events_merges_selected_calendars(monkeypatch):
     def fake_get(url, params=None, headers=None, timeout=None):
         if "users/me/calendarList" in url:
             return _resp({"items": [
-                {"id": "duccio@example.com", "primary": True, "selected": True},
-                {"id": "team@group.calendar.google.com", "selected": True},
-                {"id": "ignored@cal", "selected": False},
+                {"id": "duccio@example.com", "summary": "Personal",
+                 "primary": True, "selected": True, "backgroundColor": "#4285f4"},
+                {"id": "team@group.calendar.google.com", "summary": "Team",
+                 "selected": True, "backgroundColor": "#0b8043"},
+                # Hidden in Google's sidebar, but still accessible: this used to
+                # be silently skipped and is the real missing-Meet regression.
+                {"id": "hidden@cal", "summary": "Customer calls",
+                 "selected": False, "backgroundColor": "#d50000"},
             ]})
         if "duccio%40example.com" in url:
             return _resp({"items": [
@@ -149,15 +154,69 @@ def test_list_events_merges_selected_calendars(monkeypatch):
                 {"id": "dup2", "iCalUID": "uid-shared", "summary": "Shared copy",
                  "start": {"dateTime": "2026-07-22T10:00:00Z"}},
             ]})
+        if "hidden%40cal" in url:
+            return _resp({"items": [
+                {"id": "meet-hidden", "iCalUID": "uid-hidden",
+                 "summary": "Hidden-calendar Google Meet",
+                 "hangoutLink": "https://meet.google.com/abc-defg-hij",
+                 "start": {"dateTime": "2026-07-20T08:00:00Z"}},
+            ]})
         raise AssertionError(f"unexpected URL {url}")
 
     monkeypatch.setattr(google_client.httpx, "get", fake_get)
     out = google_client.list_calendar_events("org-x")
     assert out["ok"] is True
     titles = [e["summary"] for e in out["events"]]
-    assert titles[0] == "Sooner"  # merged + sorted across calendars
+    assert titles[0] == "Hidden-calendar Google Meet"
+    assert "Sooner" in titles  # merged + sorted across calendars
     assert titles.count("Shared copy") == 1  # deduped on iCalUID
-    assert "ignored" not in str(out["events"])  # unselected calendar untouched
+    hidden = next(e for e in out["events"] if e["id"] == "meet-hidden")
+    assert hidden["_laura_calendar"] == {
+        "name": "Customer calls", "color": "#d50000", "primary": False
+    }
+
+
+def test_list_events_has_no_calendar_count_cap_and_paginates(monkeypatch):
+    """All calendarList pages are consumed and accounts with >32 calendars are
+    not truncated. Event reads may run concurrently, but every accessible
+    calendar must be requested."""
+    monkeypatch.setattr(
+        google_client, "_access_token",
+        lambda key, oauth=None, on_rotate=None, force_refresh=False: ("tok", ""),
+    )
+    event_urls: list[str] = []
+    page_tokens: list[str] = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        params = params or {}
+        if "users/me/calendarList" in url:
+            token = str(params.get("pageToken") or "")
+            page_tokens.append(token)
+            start = 20 if token == "page-2" else 0
+            payload = {
+                "items": [
+                    {"id": f"cal-{i}", "summary": f"Calendar {i}"}
+                    for i in range(start, start + 20)
+                ]
+            }
+            if not token:
+                payload["nextPageToken"] = "page-2"
+            return _resp(payload)
+        event_urls.append(url)
+        if "cal-39" in url:
+            return _resp({"items": [
+                {"id": "last", "iCalUID": "last", "summary": "Calendar forty",
+                 "start": {"dateTime": "2026-07-20T08:00:00Z"}},
+            ]})
+        return _resp({"items": []})
+
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+    out = google_client.list_calendar_events("org-many")
+
+    assert out["ok"] is True
+    assert page_tokens == ["", "page-2"]
+    assert len(event_urls) == 40
+    assert [e["summary"] for e in out["events"]] == ["Calendar forty"]
 
 
 def test_list_events_falls_back_to_primary_when_calendarlist_fails(monkeypatch):

@@ -1329,6 +1329,7 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
                 continue
             url = _native_event_url(ev)
             end = ev.get("end") or {}
+            cal_meta = ev.get("_laura_calendar") or {}
             invited = avatars.from_invite_email(
                 [str((a or {}).get("email") or "") for a in (ev.get("attendees") or [])],
                 invite_bases,
@@ -1346,6 +1347,11 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
                     "has_link": bool(url),
                     "meeting_url": url,
                     "attendees": len(ev.get("attendees") or []),
+                    # Friendly source-calendar identity for the week UI. The
+                    # Google calendar id/email stays private; only its summary
+                    # and display color leave this distillation boundary.
+                    "calendar_name": str(cal_meta.get("name") or ""),
+                    "calendar_color": str(cal_meta.get("color") or ""),
                     "auto_join": bool(going_avatar),
                     # WHO is being sent (empty when none) — powers the
                     # "🎭 <name>" badge on the calendar block.

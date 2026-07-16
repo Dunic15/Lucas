@@ -239,6 +239,9 @@ def test_upcoming_prefers_native_google_calendar(client, monkeypatch):
         "end": {"dateTime": _future_iso(3)},
         "hangoutLink": "https://meet.google.com/abc-defg-hij",
         "attendees": [{"email": "a@b.com"}, {"email": "c@d.com"}],
+        "_laura_calendar": {
+            "name": "Customer calls", "color": "#d50000", "primary": False,
+        },
     }
     monkeypatch.setattr(
         google_client, "list_calendar_events",
@@ -253,6 +256,9 @@ def test_upcoming_prefers_native_google_calendar(client, monkeypatch):
     assert m["meeting_url"] == "https://meet.google.com/abc-defg-hij"
     assert m["platform"] == "Google Meet"
     assert m["attendees"] == 2
+    assert m["calendar_name"] == "Customer calls"
+    assert m["calendar_color"] == "#d50000"
+    assert "@" not in m["calendar_name"]  # raw calendar id/email is not exposed
     assert m["auto_join"] is False  # nothing dispatched yet
 
 
