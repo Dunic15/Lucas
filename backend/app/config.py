@@ -263,6 +263,21 @@ class Settings(BaseSettings):
     # independently of the session cookie key.
     google_token_enc_key: str = ""
 
+    # ── Asana (project system of record — see docs/ASANA.md) ──
+    # Personal Access Token for the workspace, single-tenant fallback: a per-org
+    # token stored via store.set_org_oauth(org, pat, provider="asana") wins.
+    # Empty + no per-org row ⇒ Asana features are silently off (key-free demo
+    # untouched). The write path additionally needs NATIVE_EXECUTOR on.
+    asana_token: str = ""
+    # The workspace to operate in. Empty ⇒ auto-discovered from the token
+    # (most PATs see exactly one workspace).
+    asana_workspace_gid: str = ""
+    # Auto-push: with this ON, typed asana.* actions are executed at finalize
+    # WITHOUT waiting for dashboard approval (the receipt still lands in the
+    # same provenance channel). OFF by default — approval-gated is the safe
+    # default; this is the one-toggle "make it automatic" switch.
+    asana_auto_execute: bool = False
+
     # Proactive intervention (the differentiator): flag ONE missing step as the
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.
     proactive_enabled: bool = True

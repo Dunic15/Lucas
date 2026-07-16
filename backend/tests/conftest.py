@@ -62,6 +62,9 @@ def _clear_registries() -> None:
     google_client = sys.modules.get("app.google_client")
     if google_client is not None:
         google_client._reset_token_cache()
+    asana_client = sys.modules.get("app.asana_client")
+    if asana_client is not None:
+        asana_client._reset_brief_cache()
 
 
 @pytest.fixture(autouse=True)

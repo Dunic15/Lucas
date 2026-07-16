@@ -70,6 +70,21 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
             "kind": "native", "write": True, "approval": "approve", "connected": google_on,
         })
 
+        # Native Asana (per-org PAT or ASANA_TOKEN → the native executor).
+        asana_on = False
+        try:
+            from . import asana_client
+
+            asana_on = asana_client.connected(org_id)
+        except Exception:  # noqa: BLE001 — absence of a token is not an error
+            asana_on = False
+        reg["native"].append({
+            "name": "asana_tasks",
+            "does": "create and update tasks in the team's Asana workspace",
+            "kind": "native", "write": True, "approval": "approve",
+            "connected": asana_on,
+        })
+
         # Cedric connectors — only when this org has a connected Slack agent.
         cedric_reg: dict = {"connected": [], "available": [], "not_linked": False}
         team_id = ""
@@ -122,6 +137,9 @@ def brief(reg: dict | None) -> str:
     google_on = any(
         t.get("name") == "google_calendar" and t.get("connected") for t in native
     )
+    asana_on = any(
+        t.get("name") == "asana_tasks" and t.get("connected") for t in native
+    )
     ced = reg.get("cedric") or {}
     connected = [t["name"] for t in (ced.get("connected") or [])][:8]
     available = [str(n) for n in (ced.get("available") or [])][:6]
@@ -131,6 +149,8 @@ def brief(reg: dict | None) -> str:
         + ("Google Calendar + Gmail (connected — executed after owner approval); "
            if google_on else
            "Google Calendar + Gmail NOT connected (owner can connect in the dashboard); ")
+        + ("Asana tasks (connected — executed after owner approval); "
+           if asana_on else "")
         + "calculator; date math."
     )
     if connected:

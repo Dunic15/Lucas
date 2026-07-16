@@ -1565,6 +1565,24 @@ Return ONLY a JSON object mapping the 0-based item index (as a string) to its \
 typed spec, omitting every item that does not map:
 {"0": {"type": "email.send", "args": {"to": ["a@b.com"], "subject": "...", "body": "..."}}}"""
 
+# Appended to TYPED_ACTION_SYSTEM only when the org's Asana is connected and
+# the acting avatar may use it (type_actions allow_asana): action items become
+# proposed Asana tasks. Deliberately the LAST resort type — an item that maps
+# to calendar/email keeps that mapping.
+TYPED_ACTION_ASANA = """
+
+A third type is also supported for this meeting:
+- "asana.create_task": record an action item as a task in the team's Asana. \
+Required args: name (a short imperative task title drawn from the item). \
+Optional: notes (one sentence of context from the item), assignee (an email \
+address that LITERALLY appears in the item's source text), due_on \
+(YYYY-MM-DD — only when the item states a concrete date), project (a project \
+name that LITERALLY appears in the item's source text or the meeting summary).
+- Prefer calendar.create_event / email.send when an item maps to those; use \
+asana.create_task for every OTHER item that is a discrete piece of work \
+someone agreed to do. Do not create tasks for vague remarks, questions, or \
+things already done."""
+
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 _ISO_DT_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?")
 _EMAIL_INTENT_RE = re.compile(
@@ -1579,6 +1597,8 @@ _CAL_INTENT_RE = re.compile(
 
 CALENDAR_CREATE = "calendar.create_event"
 EMAIL_SEND = "email.send"
+ASANA_CREATE = "asana.create_task"
+_ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 
 
 def _grounded_emails(value: object, source: str) -> list[str]:
@@ -1648,16 +1668,43 @@ def _sanitize_typed(typed: object, action: dict, brief: str = "") -> dict | None
         if attendees:
             spec_args["attendees"] = attendees
         return {"type": t, "args": spec_args}
+    if t == ASANA_CREATE:
+        name = str(args.get("name") or action.get("item") or "").strip()[:200]
+        if not name:
+            return None
+        spec_args: dict = {"name": name}
+        notes = str(args.get("notes") or "").strip()[:1000]
+        if notes:
+            spec_args["notes"] = notes
+        # Assignee: a grounded email only — a bare first name can't be safely
+        # resolved to an Asana user, and inventing an assignee is worse than
+        # creating the task unassigned.
+        assignee = _grounded_emails(args.get("assignee"), source)
+        if assignee:
+            spec_args["assignee"] = assignee[0]
+        # Due date: ISO-date-shaped only (the model normalises a stated
+        # "Friday" using TODAY, same contract as calendar times).
+        due = str(args.get("due_on") or "").strip()
+        if _ISO_DATE_RE.fullmatch(due):
+            spec_args["due_on"] = due
+        # Project: only a name that literally appears in the source text —
+        # a wrong project is a misfiled task in someone's real board.
+        project = str(args.get("project") or "").strip()[:100]
+        if project and project.lower() in source.lower():
+            spec_args["project"] = project
+        return {"type": t, "args": spec_args}
     return None
 
 
 def _stub_type_actions(
-    indexed: list[tuple[int, dict]], brief: str = ""
+    indexed: list[tuple[int, dict]], brief: str = "", *, allow_asana: bool = False
 ) -> dict[int, dict]:
     """Deterministic, key-free mapping for the offline demo + tests: map the
     obvious cases from literal values only (an email address / ISO datetimes
     that actually appear). Precision over recall — anything ambiguous is left
-    untyped, exactly like the model path."""
+    untyped, exactly like the model path. With ``allow_asana``, every item
+    that didn't map to email/calendar becomes an asana.create_task (the item
+    text IS the task name, so it is grounded by construction)."""
     out: dict[int, dict] = {}
     for i, a in indexed:
         item = str(a.get("item") or "")
@@ -1684,11 +1731,29 @@ def _stub_type_actions(
                 )
                 if spec:
                     out[i] = spec
+                    continue
+        if allow_asana and i not in out and item.strip():
+            emails = _grounded_emails(source, source)
+            dates = _ISO_DATE_RE.findall(source)
+            spec = _sanitize_typed(
+                {
+                    "type": ASANA_CREATE,
+                    "args": {
+                        "name": item,
+                        "assignee": emails[0] if emails else "",
+                        "due_on": dates[0] if dates else "",
+                    },
+                },
+                a, brief,
+            )
+            if spec:
+                out[i] = spec
     return {k: v for k, v in out.items() if v}
 
 
 def _llm_type_actions(
-    indexed: list[tuple[int, dict]], brief: str, provider: str
+    indexed: list[tuple[int, dict]], brief: str, provider: str,
+    *, allow_asana: bool = False,
 ) -> dict[int, dict]:
     """One post_provider() call to classify the actions; every returned spec is
     re-validated by _sanitize_typed (grounded recipients, ISO times) before it
@@ -1703,7 +1768,7 @@ def _llm_type_actions(
         suffix += f" (deadline: {deadline})" if deadline else ""
         lines.append(f"[{i}] {str(a.get('item') or '')}{suffix}")
     raw = llm.complete(
-        TYPED_ACTION_SYSTEM,
+        TYPED_ACTION_SYSTEM + (TYPED_ACTION_ASANA if allow_asana else ""),
         (
             f"TODAY: {_time.strftime('%Y-%m-%d')}\n\n"
             + (f"Meeting summary (context only):\n{brief}\n\n" if brief.strip() else "")
@@ -1733,10 +1798,13 @@ def _llm_type_actions(
 
 
 def type_actions(
-    actions: list, brief: str = "", *, provider: str | None = None
+    actions: list, brief: str = "", *, provider: str | None = None,
+    allow_asana: bool = False,
 ) -> list:
     """Annotate each action with a ``typed`` spec where it clearly maps to a
-    native-executor action (calendar.create_event / email.send).
+    native-executor action (calendar.create_event / email.send, plus
+    asana.create_task when ``allow_asana`` — set by finalize only for an
+    avatar that MAY use the org's connected Asana).
 
     Returns a NEW list; an action that doesn't map is returned unchanged (no
     ``typed`` key). Never invents recipients or times — args draw only from that
@@ -1752,9 +1820,9 @@ def type_actions(
     prov = (provider or post_provider()).lower()
     try:
         mapping = (
-            _stub_type_actions(indexed, brief)
+            _stub_type_actions(indexed, brief, allow_asana=allow_asana)
             if prov == "stub"
-            else _llm_type_actions(indexed, brief, prov)
+            else _llm_type_actions(indexed, brief, prov, allow_asana=allow_asana)
         )
     except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
         print(f"[type_actions] skipped ({type(e).__name__})", flush=True)

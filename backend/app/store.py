@@ -2043,7 +2043,7 @@ def all_avatar_brain_modes() -> dict[str, str]:
 # The capabilities an avatar can independently toggle. An integration is
 # CONNECTED once at the org level (Connections view); each avatar then flips
 # whether it may USE it. Mirrors the brain-mode primitives above.
-KNOWN_CAPABILITIES = ("google", "slack")
+KNOWN_CAPABILITIES = ("google", "slack", "asana")
 
 
 def set_avatar_capability(avatar_id: str, capability: str, enabled: bool) -> bool:

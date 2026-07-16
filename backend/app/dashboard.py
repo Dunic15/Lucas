@@ -1626,17 +1626,11 @@ def _find_org_action(caller_org: str, action_id: str) -> tuple[dict, str] | None
 
 def _executor_action(typed: dict | None) -> dict | None:
     """Bridge a producer typed spec ``{type, args}`` to the executor's action
-    shape (``{type, event|message}``). None for a missing/non-native spec — the
-    signal to approve-without-executing (Cedric/manual keeps the action)."""
-    if not isinstance(typed, dict):
-        return None
-    t = str(typed.get("type") or "")
-    args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
-    if t == executor.CALENDAR_CREATE:
-        return {"type": t, "event": args}
-    if t == executor.EMAIL_SEND:
-        return {"type": t, "message": args}
-    return None
+    shape (``{type, event|message|task}``). None for a missing/non-native spec
+    — the signal to approve-without-executing (Cedric/manual keeps the
+    action). Delegates to executor.from_typed so this door and the finalize
+    auto-push can never disagree about the bridge."""
+    return executor.from_typed(typed)
 
 
 @router.post("/dashboard/actions/{action_id}/approve")
@@ -1699,16 +1693,17 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     executed = False
     capability_blocked = False
     if exec_action is not None and executor.handles(exec_action):
-        # CAPABILITY GATE: the native executor runs a Google (calendar/gmail)
-        # action ONLY when the acting avatar's `google` toggle is on. Read raw
-        # and skip on an explicit OFF — an untouched avatar keeps today's
-        # behaviour (default on when the org connected Google, and the
-        # google_client soft-fails anyway when it hasn't). A blocked action
-        # stays `approved`, byte-identical to the executor being off.
+        # CAPABILITY GATE: the native executor runs an action ONLY when the
+        # acting avatar's toggle for that action's FAMILY (google for
+        # calendar/gmail, asana for tasks) is on. Read raw and skip on an
+        # explicit OFF — an untouched avatar keeps today's behaviour (default
+        # on when the org connected that integration, and the clients
+        # soft-fail anyway when it hasn't). A blocked action stays
+        # `approved`, byte-identical to the executor being off.
         caps = await run_in_threadpool(
             store.get_avatar_capabilities, acting_avatar
         )
-        if caps.get("google") is False:
+        if caps.get(executor.capability_family(exec_action.get("type"))) is False:
             capability_blocked = True
         else:
             # execute_approved writes its own done/failed receipt to the ledger.

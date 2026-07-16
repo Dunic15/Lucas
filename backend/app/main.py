@@ -48,6 +48,7 @@ from . import (
     store,
     recall_client,
     anam_client,
+    asana_client,
     auth,
     billing,
     cedric,
@@ -262,6 +263,20 @@ def _google_redirect_uri() -> str:
     return settings.google_calendar_redirect_uri.strip() or (
         f"{settings.public_base_url.rstrip('/')}/oauth/google/callback"
     )
+
+
+def _avatar_asana_enabled(org_id: str, avatar_id: str) -> bool:
+    """Whether this avatar may use the org's Asana: the org is connected
+    (per-org token or ASANA_TOKEN) AND the per-avatar `asana` capability
+    toggle is not explicitly off (default ON when connected — the same rule
+    as the google toggle). Sync (may hit sqlite) — call via threadpool.
+    Best-effort: eligibility must never break a join or a finalize."""
+    try:
+        if not asana_client.connected(org_id):
+            return False
+        return store.capability_enabled(avatar_id, "asana", connected=True)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _prebuild_indexes() -> None:
@@ -2027,6 +2042,18 @@ async def _start_avatar_session(
                 f"[Shared Drive folder — current team docs]\n{folder}\n\n"
                 + (session.memory_brief or "")
             )
+    # Asana connector: for an avatar allowed to use the org's Asana (connected
+    # + per-avatar toggle, see _avatar_asana_enabled), a compact workspace
+    # snapshot — projects, open/overdue tasks, owners — rides the same brief
+    # channel. Fetched HERE: session start, off the live path, TTL-cached in
+    # asana_client, and best-effort exactly like the Drive brief above.
+    if await run_in_threadpool(_avatar_asana_enabled, org_id, avatar.id):
+        snapshot = await run_in_threadpool(asana_client.workspace_brief, org_id)
+        if snapshot:
+            session.memory_brief = (
+                f"[Asana workspace — live snapshot]\n{snapshot}\n\n"
+                + (session.memory_brief or "")
+            )
     # Tool context on join: the org-scoped registry (native tools + connected
     # Slack-agent tools + knowledge sources) is assembled ONCE here — same
     # contract as the Drive brief above: threadpool, best-effort, off the live
@@ -2629,17 +2656,41 @@ async def _finalize_session_locked(
 
     # Typed-action specs for the native executor (NATIVE-INTEGRATIONS-PLAN.md):
     # annotate each action with a {type, args} spec where it CLEARLY maps
-    # (calendar.create_event / email.send) so an APPROVED action can be run
-    # natively. GATED on the flag — with NATIVE_EXECUTOR off this whole block is
-    # skipped, so finalize is byte-identical to today (no extra model call, no
-    # new field). Never invents recipients/times; unmapped actions stay generic.
-    # Best-effort (type_actions self-guards): typing must never break finalize.
+    # (calendar.create_event / email.send — plus asana.create_task for an
+    # avatar allowed to use the org's connected Asana) so an APPROVED action
+    # can be run natively. GATED on the flag — with NATIVE_EXECUTOR off this
+    # whole block is skipped, so finalize is byte-identical to today (no extra
+    # model call, no new field). Never invents recipients/times; unmapped
+    # actions stay generic. Best-effort: typing must never break finalize.
     if executor.enabled():
         try:
+            allow_asana = await run_in_threadpool(
+                _avatar_asana_enabled, session.org_id, session.avatar_id
+            )
+            summary_brief = artifact.get("summary") or ""
             artifact["actions"] = await run_in_threadpool(
-                type_actions, artifact["actions"], artifact.get("summary") or ""
+                lambda: type_actions(
+                    artifact["actions"], summary_brief, allow_asana=allow_asana
+                )
             )
             artifact["checklist"] = artifact["actions"]
+            # Asana auto-push (ASANA_AUTO_EXECUTE, off by default): typed
+            # tasks land on the board NOW instead of waiting for dashboard
+            # approval; receipts (task URLs) go through the same provenance
+            # channel as approved runs. Best-effort — finalize (the meter
+            # stop) is already safe above and must never wait on Asana.
+            if allow_asana and settings.asana_auto_execute:
+                pushed = await run_in_threadpool(
+                    executor.auto_execute_asana,
+                    session.org_id,
+                    artifact["actions"],
+                )
+                if pushed:
+                    print(
+                        f"[finalize] bot={bot_id} asana auto-push: "
+                        f"{pushed} action(s)",
+                        flush=True,
+                    )
         except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
             print(
                 f"[finalize] bot={bot_id} typed-action producer skipped "
