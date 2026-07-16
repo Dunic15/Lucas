@@ -314,7 +314,14 @@ def test_upcoming_never_leaks_a_colleagues_calendar(client, monkeypatch):
 
     Duccio (alice@sffstudio.com) connects — dual-write: user_oauth[duccio] +
     org_oauth[org_sff], both his Google email. Ananth (bob@sffstudio.com) logs in
-    to the SAME org and must NOT see Duccio's calendar; Duccio still sees his."""
+    to the SAME org and must NOT see Duccio's calendar; Duccio still sees his.
+
+    Shared orgs only form under the parked flag now (personal-first default,
+    2026-07-16) — enable it so this per-user isolation invariant stays covered
+    for when teams ship. (Under the default the two are in different orgs, so
+    the leak is impossible by construction; per-user isolation WITHIN a shared
+    org is the harder property this pins.)"""
+    monkeypatch.setattr(settings, "shared_domain_orgs", True)
     duccio = store.upsert_user("alice@sffstudio.com")
     ananth = store.upsert_user("bob@sffstudio.com")
     assert duccio["org_id"] == ananth["org_id"] == "org_sff"  # shared org

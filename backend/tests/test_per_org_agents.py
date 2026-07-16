@@ -41,12 +41,17 @@ def _expected_sff_agents() -> list[str]:
     return sorted(a for a in ("cedric", "laura") if a in installed)
 
 
-def test_sff_login_resolves_org_and_scopes_agents(fresh_store):
+def test_sff_login_resolves_org_and_scopes_agents(fresh_store, monkeypatch):
     store = fresh_store
+    # Personal-first is the default (2026-07-16); the shared-domain grouping
+    # this test exercises is the parked "teams" feature behind the flag.
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "shared_domain_orgs", True)
     user = store.upsert_user(email="ceo@sffstudio.com", name="SFF CEO")
 
-    # A verified corporate domain resolves to the shared org (NOT the personal
-    # per-user org).
+    # With shared-domain routing ON, a verified corporate domain resolves to
+    # the shared org (NOT the personal per-user org).
     assert user["org_id"] == "org_sff"
     assert user["org_id"] != user["user_id"]
 
@@ -58,6 +63,16 @@ def test_sff_login_resolves_org_and_scopes_agents(fresh_store):
         ).fetchone()
     assert row is not None
     assert row["role"] == "member" and row["status"] == "active"
+
+
+def test_personal_first_default_ignores_verified_domain(fresh_store):
+    """Default (flag off): two colleagues on the verified domain each get their
+    OWN org — the whole point of personal-first."""
+    store = fresh_store
+    a = store.upsert_user(email="ceo@sffstudio.com", name="SFF CEO")
+    b = store.upsert_user(email="cfo@sffstudio.com", name="SFF CFO")
+    assert a["org_id"] == a["user_id"] and b["org_id"] == b["user_id"]
+    assert a["org_id"] != b["org_id"] != "org_sff"
 
     # The org sees ONLY its granted agents.
     expected = _expected_sff_agents()

@@ -384,6 +384,9 @@ def test_cutover_never_restamps_shared_org_rows(client, monkeypatch):
     the org, not the person — a member's cutover must not drag them along."""
     import uuid as _uuid
 
+    # Shared orgs only exist under the parked flag now (personal-first default,
+    # 2026-07-16); this test is specifically about NOT restamping a shared org.
+    monkeypatch.setattr(settings, "shared_domain_orgs", True)
     email = "ceo@sffstudio.com"  # seeded verified domain → org_sff
     first = store.upsert_user(email)
     assert first["org_id"] == "org_sff"

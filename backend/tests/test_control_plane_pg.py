@@ -174,6 +174,15 @@ def _admin(pg):
     return psycopg.connect(pg["uri"], autocommit=True)
 
 
+def _enable_shared_domain_orgs(pg) -> None:
+    """Turn the parked domain→shared-org policy ON (personal-first is the
+    default since 2026-07-16 / migration 0008). ensure_user reads the one-row
+    policy_settings table; the app normally pushes this at boot via
+    control_plane.sync_policy_flags."""
+    with _admin(pg) as conn:
+        conn.execute("SELECT laura_private.set_shared_domain_orgs(true)")
+
+
 def _app(pg):
     import psycopg.conninfo as _ci
 
@@ -299,7 +308,9 @@ def test_org_plan_reads_billing(cp):
 
 def test_verified_domain_resolves_to_shared_org(cp, pg):
     """A login whose VERIFIED domain is in org_domains joins THAT org as a
-    member — no personal org is created (mirrors store.org_id_for_email)."""
+    member — no personal org is created (mirrors store.org_id_for_email).
+    Requires the parked shared-domain policy ON (personal-first default)."""
+    _enable_shared_domain_orgs(pg)
     shared = str(uuid.uuid4())
     with _admin(pg) as conn:
         conn.execute("SELECT set_config('app.current_org', %s, false)", (shared,))
@@ -320,6 +331,40 @@ def test_verified_domain_resolves_to_shared_org(cp, pg):
             (user["user_id"], shared),
         ).fetchone()
         assert row == ("member",)
+
+
+def test_verified_domain_is_personal_by_default(cp, pg):
+    """Personal-first (2026-07-16): with the policy OFF (the migration-seeded
+    default), a login on a VERIFIED corporate domain gets its OWN personal
+    uuid org — NOT the shared one. Two colleagues → two orgs, each fully
+    provisioned (owner membership + free billing account)."""
+    shared = str(uuid.uuid4())
+    with _admin(pg) as conn:
+        # ensure the policy row is at its default (a prior test may have flipped it)
+        conn.execute("SELECT laura_private.set_shared_domain_orgs(false)")
+        conn.execute(
+            "INSERT INTO orgs (id, name, slug, plan) VALUES (%s, 'Beta', %s, 'free')",
+            (shared, f"beta-{shared[:8]}"),
+        )
+        conn.execute(
+            "INSERT INTO org_domains (org_id, domain, verified_at) "
+            "VALUES (%s, 'beta.test', now())",
+            (shared,),
+        )
+    a = cp.ensure_user("sub-a", "ananth@beta.test", "A", "")
+    b = cp.ensure_user("sub-b", "duccio@beta.test", "B", "")
+    assert a["org_id"] != shared and b["org_id"] != shared
+    assert a["org_id"] != b["org_id"]
+    with _admin(pg) as conn:
+        for u in (a, b):
+            assert conn.execute(
+                "SELECT role FROM memberships WHERE user_id=%s AND org_id=%s",
+                (u["user_id"], u["org_id"]),
+            ).fetchone() == ("owner",)
+            assert conn.execute(
+                "SELECT included_seconds FROM billing_accounts WHERE org_id=%s",
+                (u["org_id"],),
+            ).fetchone() == (900,)
 
 
 # ── per-org machine tokens ─────────────────────────────────────────────
@@ -808,6 +853,7 @@ def test_definer_owner_is_not_runtime_and_can_bypass_rls(pg):
 
 
 def test_inactive_corporate_membership_cannot_regain_access(cp, pg):
+    _enable_shared_domain_orgs(pg)
     shared = str(uuid.uuid4())
     with _admin(pg) as conn:
         conn.execute(

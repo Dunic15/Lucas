@@ -121,6 +121,14 @@ def _recipient_addresses(msg: dict) -> set[str]:
     return out
 
 
+# NOTE: the sender (From/Reply-To) is deliberately NOT extracted for org
+# attribution. Those headers are unauthenticated (Reply-To gets no SPF/DKIM/
+# DMARC check) and this watcher reads ONE shared inbox, so a forged header
+# could bill and arm an unrelated tenant's org inside an attacker's meeting.
+# Gmail-invited meetings stay on the Demo org (see main.py's gmail loop);
+# safe per-user attribution waits on a per-user mailbox trust anchor.
+
+
 def _message_meeting_urls(token: str, msg_id: str) -> tuple[set[str], set[str], float]:
     """Fetch one message: (meeting urls in snippet+body, recipient addresses,
     received-at epoch seconds — 0.0 when Gmail omits internalDate)."""
