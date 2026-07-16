@@ -1981,6 +1981,32 @@ def clear_org_oauth(org_id: str, *, provider: str = "google") -> bool:
     return cur.rowcount > 0
 
 
+def org_for_email(email: str) -> str | None:
+    """The org that owns an email address, or None when unknown.
+
+    The org whose CONNECTED Google account (org_oauth.email) matches wins —
+    that org demonstrably controls the inbox — else the org of a registered
+    user with that email. Callers use this to attribute an inbound meeting
+    (calendar/email invite) to its owner instead of the Demo org, so the
+    minutes meter — and any actions — land on the right tenant."""
+    addr = (email or "").strip().lower()
+    if not addr:
+        return None
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            """SELECT org_id FROM org_oauth WHERE email=?
+                   ORDER BY updated_at DESC LIMIT 1""",
+            (addr,),
+        ).fetchone()
+        if row is None:
+            row = conn.execute(
+                "SELECT org_id FROM users WHERE email=? LIMIT 1",
+                (addr,),
+            ).fetchone()
+    org = str(row["org_id"]).strip() if row and row["org_id"] else ""
+    return org or None
+
+
 def register_recall_realtime_capability(bot_id: str, capability: str) -> bool:
     """Persist a one-bot realtime capability as SHA-256(raw).
 

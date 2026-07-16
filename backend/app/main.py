@@ -4150,6 +4150,54 @@ def _calendar_event_targets_avatar(event: dict) -> bool:
     return bool(invited & targets)
 
 
+def _calendar_event_organizer_email(event: dict) -> str:
+    """The organizer/creator address of a provider/Recall calendar event, ""
+    when the payload variant doesn't carry one."""
+    raw = event.get("raw") if isinstance(event.get("raw"), dict) else {}
+    for container in (event, raw):
+        for key in ("organizer", "creator", "organizer_email", "organizerEmail"):
+            emails = _emails_under(container.get(key))
+            if emails:
+                return sorted(emails)[0]
+    return ""
+
+
+def _org_for_calendar_event(event: dict) -> str:
+    """Attribute a calendar-summoned meeting to the org that owns it.
+
+    The organizer's address (then any attendee's) resolves through
+    store.org_for_email — the org whose connected Google account or registered
+    user it is. That org's meter runs and its tools act, not the Demo org's.
+    Falls back to the Demo org (the pre-fix behavior) when nothing matches —
+    or when the control plane is on and the match is not a durable tenant: a
+    personal u_<hash> org would fail the usage-gate uuid cast and kill the
+    join outright, which is strictly worse than demo attribution.
+    """
+    def _base(addr: str) -> tuple[str, str]:
+        base, _tag, domain = avatars.email_parts(addr)
+        return base, domain
+
+    avatar_inboxes = {_base(t) for t in _calendar_target_emails()}
+    candidates: list[str] = []
+    organizer = _calendar_event_organizer_email(event)
+    if organizer:
+        candidates.append(organizer)
+    candidates.extend(sorted(_extract_invite_emails(event)))
+    seen: set[str] = set()
+    for addr in candidates:
+        a = addr.strip().lower()
+        if not a or a in seen or _base(a) in avatar_inboxes:
+            continue
+        seen.add(a)
+        org = store.org_for_email(a)
+        if not org:
+            continue
+        if control_plane.enabled() and not control_plane.is_durable_org(org):
+            continue
+        return org
+    return settings.demo_org_id
+
+
 @app.post("/webhooks/recall-calendar")
 async def recall_calendar_webhook(request: Request) -> JSONResponse:
     raw_body = await request.body()
@@ -4198,6 +4246,10 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
                 f"&body={avatar.talk_body}&face_fallback={avatar.face_fallback}"
             )
+            # Whose meeting is this? Attribute the dispatch to the owning org
+            # (organizer/attendee → connected-Google/registered-user match) so
+            # ITS meter runs and ITS tools act; Demo org only as the fallback.
+            dispatch_org = await run_in_threadpool(_org_for_calendar_event, ev)
             # Entitlement gate (PR B): calendar auto-join takes this INLINED
             # dispatch path (not _start_avatar_session), so it must be gated
             # here too — every paid bot passes an open_usage gate. Same
@@ -4209,7 +4261,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 usage_bot_id = f"pending:{uuid.uuid4().hex}"
                 gate = await run_in_threadpool(
                     entitlements.open_usage,
-                    settings.demo_org_id, usage_bot_id, avatar.id,
+                    dispatch_org, usage_bot_id, avatar.id,
                 )
                 if gate is not None and not gate.get("ok"):
                     scheduled.append(
@@ -4226,7 +4278,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                     try:
                         await run_in_threadpool(
                             entitlements.close_usage,
-                            settings.demo_org_id, usage_bot_id, 0, "dispatch_failed",
+                            dispatch_org, usage_bot_id, 0, "dispatch_failed",
                         )
                     except Exception:  # noqa: BLE001 — reconcile heals orphans
                         pass
@@ -4235,14 +4287,14 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 bot.pop("_laura_realtime_capability", "") or ""
             )
             # Calendar auto-join has no authenticated principal (a webhook on
-            # Laura's one Google account) → the Demo org (§5, intrinsically
-            # single-tenant until calendar connections become per-org).
+            # Laura's one Google account) — the owning org is resolved from the
+            # event itself (_org_for_calendar_event); Demo org is the fallback.
             s = store.create(
                 bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id,
-                org_id=settings.demo_org_id,
+                org_id=dispatch_org,
             )
             if usage_bot_id and not await _assign_usage_bot_id(
-                settings.demo_org_id, usage_bot_id, bot["id"]
+                dispatch_org, usage_bot_id, bot["id"]
             ):
                 await _finalize_session(
                     bot["id"], source="usage_binding_failed",
@@ -4251,7 +4303,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 if store.get(bot["id"]) is None:
                     await run_in_threadpool(
                         entitlements.close_usage,
-                        settings.demo_org_id, usage_bot_id, 0,
+                        dispatch_org, usage_bot_id, 0,
                         "usage_binding_failed",
                     )
                 raise entitlements.EntitlementsUnavailable(
@@ -4272,10 +4324,10 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             # the email path did. None when no SURFACE_* is set.
             default_integ = cedric.default_integration()
             if default_integ:
-                s.integration = {**default_integ, "org_id": settings.demo_org_id}
+                s.integration = {**default_integ, "org_id": dispatch_org}
             s.anam_conversation_id = conversation_id
             store.register_conversation(
-                conversation_id, bot["id"], org_id=settings.demo_org_id
+                conversation_id, bot["id"], org_id=dispatch_org
             )
             if eid:
                 store.mark_scheduled(eid)
