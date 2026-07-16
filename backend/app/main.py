@@ -1850,6 +1850,16 @@ async def google_oauth_callback(
                 email=oauth_email,
                 scopes=_scopes,
             )
+        # A reconnect that ADDED a scope (e.g. calendar.readonly for the
+        # all-calendars view) leaves the OLD, still time-valid access token in
+        # google_client's cache — old scopes, so calendarList keeps 403ing for
+        # up to an hour. Drop the cached token for both principals so THIS
+        # instance re-mints with the new grant on the very next read. (Other
+        # instances self-heal via the calendarList-403 re-mint; this makes the
+        # common single-instance case instant.)
+        google_client._drop_cached_token(_org)
+        if _uid:
+            google_client._drop_cached_token(f"user:{_uid}")
     except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
         print(f"[oauth] native token persist skipped ({type(e).__name__})", flush=True)
 
