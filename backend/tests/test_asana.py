@@ -267,3 +267,82 @@ def test_avatar_asana_enabled_rules(monkeypatch, tmp_path):
     # …until the per-avatar toggle is explicitly switched off.
     store.set_avatar_capability("petra", "asana", False)
     assert main_module._avatar_asana_enabled("org-a", "petra") is False
+
+
+# ── dashboard connect/disconnect (the Connections card) ──
+
+def _client(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    import app.main as main_module
+
+    _fresh_store(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "session_secret", "sek")
+    return TestClient(main_module.app)
+
+
+def _login(client) -> dict:
+    from app import auth
+
+    user = store.upsert_user("owner@x.com")
+    client.cookies.set(auth.COOKIE_NAME, auth.make_cookie(user["user_id"]))
+    return user
+
+
+def test_connect_asana_requires_login(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    r = client.post("/dashboard/connections/asana", json={"token": "pat-x"})
+    assert r.status_code == 401
+
+
+def test_connect_asana_verifies_stores_and_disconnects(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    user = _login(client)
+    monkeypatch.setattr(
+        asana_client, "verify_token",
+        lambda pat: {"ok": True, "email": "pm@acme.com",
+                     "workspace": "Acme HQ", "workspace_gid": "ws-9"},
+    )
+
+    r = client.post("/dashboard/connections/asana", json={"token": "pat-real"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["connected"] is True and body["workspace"] == "Acme HQ"
+    assert "pat-real" not in r.text  # the token is never echoed back
+    row = store.get_org_oauth(user["org_id"], provider="asana")
+    assert row["refresh_token"] == "pat-real" and row["scopes"] == "ws-9"
+    assert asana_client.connected(user["org_id"]) is True
+
+    r2 = client.post("/dashboard/connections/asana/disconnect")
+    assert r2.status_code == 200 and r2.json()["removed"] is True
+    assert store.get_org_oauth(user["org_id"], provider="asana") is None
+    assert asana_client.connected(user["org_id"]) is False
+
+
+def test_connect_asana_bad_token_stores_nothing(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    user = _login(client)
+    monkeypatch.setattr(
+        asana_client, "verify_token",
+        lambda pat: {"ok": False, "error": "asana rejected the token (HTTP 401)"},
+    )
+    r = client.post("/dashboard/connections/asana", json={"token": "typo"})
+    assert r.status_code == 400 and "rejected" in r.json()["error"]
+    assert store.get_org_oauth(user["org_id"], provider="asana") is None
+
+    r2 = client.post("/dashboard/connections/asana", json={})
+    assert r2.status_code == 400  # missing token is a clean client error
+
+
+def test_verify_token_reads_user_and_workspace(monkeypatch, tmp_path):
+    _fresh_store(monkeypatch, tmp_path)
+
+    def fake_get(url, *, params=None, headers=None, timeout=None):
+        assert headers["Authorization"] == "Bearer pat-x"
+        return _Resp(200, {"data": {"email": "pm@acme.com", "workspaces": [
+            {"gid": "ws-9", "name": "Acme HQ"}]}})
+
+    monkeypatch.setattr(asana_client.httpx, "get", fake_get)
+    info = asana_client.verify_token("pat-x")
+    assert info == {"ok": True, "email": "pm@acme.com",
+                    "workspace": "Acme HQ", "workspace_gid": "ws-9"}
+    assert asana_client.verify_token("")["ok"] is False

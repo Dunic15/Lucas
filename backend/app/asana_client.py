@@ -65,6 +65,29 @@ def connected(org_id: str) -> bool:
     return bool(_token(org_id)[0])
 
 
+def verify_token(pat: str) -> dict:
+    """Live check of a PAT for the dashboard connect flow: who it
+    authenticates as and which workspace it sees. {"ok", "email",
+    "workspace", "workspace_gid"} or {"ok": False, "error"}. Never raises,
+    never logs or returns the token."""
+    pat = (pat or "").strip()
+    if not pat:
+        return {"ok": False, "error": "token is required"}
+    me, err = _get(pat, "/users/me", {"opt_fields": "email,name,workspaces.name"})
+    if err:
+        return {"ok": False, "error": err}
+    workspaces = (me or {}).get("workspaces") or []
+    first = workspaces[0] if workspaces else {}
+    if not first:
+        return {"ok": False, "error": "the token sees no workspaces"}
+    return {
+        "ok": True,
+        "email": str((me or {}).get("email") or "")[:120],
+        "workspace": str(first.get("name") or "")[:120],
+        "workspace_gid": str(first.get("gid") or ""),
+    }
+
+
 def _headers(pat: str) -> dict:
     return {"Authorization": f"Bearer {pat}", "Accept": "application/json"}
 

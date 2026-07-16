@@ -740,6 +740,10 @@
     '<path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>'+
     '<path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>'+
     '<path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>';
+  var LOGO_ASANA='<svg class="clogo" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'+
+    '<circle fill="#F06A6A" cx="12" cy="6.5" r="4.5"/>'+
+    '<circle fill="#F06A6A" cx="5" cy="17" r="4.5"/>'+
+    '<circle fill="#F06A6A" cx="19" cy="17" r="4.5"/></svg>';
   var LOGO_SLACK='<svg class="clogo" width="14" height="14" viewBox="0 0 122.8 122.8" aria-hidden="true" focusable="false">'+
     '<path fill="#E01E5A" d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9z"/>'+
     '<path fill="#E01E5A" d="M32.3 77.6c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z"/>'+
@@ -1043,7 +1047,7 @@
       // and the per-model description lines are gone; only the controls remain.
       // ALL #220/#221 wiring (endpoints + data attributes) is unchanged.
       var capHtml='<div class="caps"><div class="sm-h">Capabilities</div><div class="cap-list">'+
-          capRow(a,"slack","Slack agent",LOGO_SLACK)+capRow(a,"google","Google",LOGO_GOOGLE)+'</div>'+
+          capRow(a,"slack","Slack agent",LOGO_SLACK)+capRow(a,"google","Google",LOGO_GOOGLE)+capRow(a,"asana","Asana",LOGO_ASANA)+'</div>'+
           '<div class="modelpick sm"><div class="sm-h">AI model</div><div class="mp-row">'+
             '<button class="mp-opt'+(a.brain==="gemini"?" on":"")+'" data-brain-set="gemini" data-brain-av="'+esc(a.id)+'">Gemini</button>'+
             '<button class="mp-opt'+(a.brain==="cerebras"?" on":"")+'" data-brain-set="cerebras" data-brain-av="'+esc(a.id)+'">Cerebras</button></div>'+
@@ -1706,6 +1710,7 @@
     // resolveSlackManageUrl, which is likewise null-guarded.
     var googleNative=!!(d.connections&&d.connections.google_native);
     var slackConnected=brainConnected; // cedric-brain connected row (the Slack add-on)
+    var asanaConnected=!!(d.connections&&d.connections.asana);
     $("#conns").innerHTML =
       // ── Google (native) — the avatars' own Google, independent of Cedric ──
       '<div class="conn"><div class="nm">'+LOGO_GOOGLE+' Google <span class="stchip" style="margin-left:6px">native</span></div>'+
@@ -1735,7 +1740,46 @@
           '<a class="btn primary" data-slack-manage target="_blank" rel="noopener" style="text-decoration:none" href="https://www.meet-cedric.com">Manage tools ↗</a>'+
           '<div class="cnote">Add and manage the tools your Slack agent can use.</div></div>'
         :'')+
-      '</div>';
+      '</div>'+
+      // ── Asana (native) — the project system of record (docs/ASANA.md) ──
+      // No OAuth app: the owner pastes a Personal Access Token; the backend
+      // verifies it LIVE against Asana before storing it encrypted per-org.
+      // The token never renders back into the page.
+      '<div class="conn"><div class="nm">'+LOGO_ASANA+' Asana <span class="stchip" style="margin-left:6px">native</span></div>'+
+      '<div class="ds">Project system of record — avatars read the workspace when they join (projects, open &amp; overdue tasks) and file approved action items as tasks. Token: Asana → Settings → Apps → Developer apps.</div>'+
+      '<div class="foot"><span class="cstat'+(asanaConnected?" on":"")+'"><b></b>'+(asanaConnected?"Connected":"Not connected")+'</span>'+
+      (asanaConnected
+        ?'<button class="btn" data-asana-off>Disconnect</button>'
+        :'<input type="password" id="asana-pat" placeholder="Personal Access Token" autocomplete="off" '+
+          'style="flex:1;min-width:120px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
+          '<button class="btn primary" data-asana-on>Connect</button>')+
+      '</div></div>';
+    // Asana (native) connect — verify + store the pasted PAT server-side.
+    $$("#conns [data-asana-on]").forEach(function(btn){btn.addEventListener("click",function(){
+      var input=$("#asana-pat"), token=(input&&input.value||"").trim();
+      if(!token){ toast("Paste your Asana Personal Access Token first.",true); return; }
+      btn.disabled=true; var prev=btn.textContent; btn.textContent="Connecting…";
+      fetch("/dashboard/connections/asana",{method:"POST",headers:headers(),body:JSON.stringify({token:token})})
+        .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,j:j}; }); })
+        .then(function(res){
+          if(!res.ok||!res.j.ok){ throw new Error(res.j.error||"Couldn't connect Asana. Check the token."); }
+          toast("Asana connected"+(res.j.workspace?" — workspace: "+res.j.workspace:"")+".");
+          load(); })
+        .catch(function(err){ toast(err.message||"Couldn't connect Asana. Try again.",true);
+          btn.disabled=false; btn.textContent=prev; }); }); });
+    // Asana (native) disconnect — clears ONLY the org's stored Asana token.
+    $$("#conns [data-asana-off]").forEach(function(btn){btn.addEventListener("click",function(){
+      btn.disabled=true; var prev=btn.textContent; btn.textContent="Disconnecting…";
+      fetch("/dashboard/connections/asana/disconnect",{method:"POST",headers:headers()})
+        .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,j:j}; }); })
+        .then(function(res){
+          if(!res.ok||!res.j.ok){ throw new Error("Couldn't disconnect Asana. Try again."); }
+          toast(res.j.still_connected_via_env
+            ?"Org token removed — the deployment's ASANA_TOKEN still applies."
+            :"Asana disconnected.");
+          load(); })
+        .catch(function(err){ toast(err.message||"Couldn't disconnect Asana. Try again.",true);
+          btn.disabled=false; btn.textContent=prev; }); }); });
     // Google (native) disconnect — clears ONLY the native token, never Slack.
     $$("#conns [data-google-off]").forEach(function(btn){btn.addEventListener("click",function(){
       btn.disabled=true; var prev=btn.textContent; btn.textContent="Disconnecting…";

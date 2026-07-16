@@ -38,14 +38,18 @@ knowledge pack — but the integration is avatar-agnostic: any avatar with the
 
 1. **Get a token**: Asana → your avatar (top right) → Settings → Apps →
    *Developer apps* → **Create personal access token**. Copy it once.
-2. **Configure** (either level):
-   - Single-tenant / simplest: set env vars on the deployment:
+2. **Connect** (any one of these):
+   - **Dashboard (recommended)**: Connections view → **Asana** card → paste
+     the token → Connect. The backend verifies it live against Asana before
+     storing it (encrypted per-org, same vault as the Google refresh token);
+     a bad token is a clean error, and the token is never echoed back to the
+     browser. Disconnect from the same card.
+   - Single-tenant env vars on the deployment:
      ```
      ASANA_TOKEN=<the PAT>
      ASANA_WORKSPACE_GID=          # optional; auto-discovered when blank
      ```
-   - Per-org (multi-tenant): store it encrypted, same vault as the Google
-     refresh token:
+   - Programmatic (what the dashboard button does under the hood):
      ```python
      store.set_org_oauth(org_id, pat, provider="asana")
      ```

@@ -21,7 +21,7 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
-from . import auth, avatars, executor, gemini_ears, ledger, outbox, store
+from . import asana_client, auth, avatars, executor, gemini_ears, ledger, outbox, store
 from .config import settings
 
 router = APIRouter(tags=["dashboard"])
@@ -450,6 +450,9 @@ def dashboard_summary(request: Request) -> JSONResponse:
     _native_google_org = caller_org or settings.demo_org_id
     google_connected = bool(store.get_org_oauth(_native_google_org))
     slack_connected = _org_connected(org_rows, "cedric-brain")
+    # asana = the org's stored PAT (provider="asana") or the ASANA_TOKEN env
+    # fallback — the same signal the executor/join-snapshot eligibility reads.
+    asana_connected = asana_client.connected(_native_google_org)
     all_caps = store.all_avatar_capabilities()  # {avatar_id: {cap: bool}} — one read
     # Per-org roster: a scoped caller (cookie user or per-org bearer) sees only
     # their org's granted avatars (org_agents); the unscoped worlds see ALL —
@@ -507,6 +510,10 @@ def dashboard_summary(request: Request) -> JSONResponse:
                     "slack": {
                         "on": all_caps.get(aid, {}).get("slack", slack_connected),
                         "connected": slack_connected,
+                    },
+                    "asana": {
+                        "on": all_caps.get(aid, {}).get("asana", asana_connected),
+                        "connected": asana_connected,
                     },
                 },
                 "live_now": live_by_avatar.get(aid, 0),
@@ -618,6 +625,9 @@ def dashboard_summary(request: Request) -> JSONResponse:
     # per-avatar `google` capability toggle reads — computed once above as
     # `google_connected`.)
     connections["google_native"] = google_connected
+    # NATIVE Asana — the org's PAT (Connections card) or the env fallback.
+    # Same bool contract; the same signal the per-avatar `asana` toggle reads.
+    connections["asana"] = asana_connected
 
     callback_deliveries = outbox.delivery_rows(
         caller_org or settings.demo_org_id
@@ -697,6 +707,88 @@ async def set_avatar_capability_endpoint(
         )
     return JSONResponse(
         {"ok": True, "avatar_id": aid, "capability": capability, "enabled": enabled},
+        headers=_NO_STORE,
+    )
+
+
+@router.post("/dashboard/connections/asana")
+async def connect_asana(request: Request) -> JSONResponse:
+    """Connect the org's Asana with a Personal Access Token (docs/ASANA.md).
+
+    Body: {token}. The token is verified LIVE against Asana before anything is
+    stored — a typo'd token is a clean 400, never a half-connected state. On
+    success it is persisted encrypted per-org (org_oauth, provider="asana";
+    the row's email/scopes carry the Asana account email + workspace gid for
+    the card), and the response names who/what it authenticated as — the
+    token itself is never echoed, logged, or shipped to the browser again.
+    Owner-authed like the other dashboard mutations (login + same-origin)."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    token = str((body or {}).get("token") or "").strip()
+    if not token:
+        return JSONResponse({"error": "token is required"}, status_code=400)
+
+    info = await run_in_threadpool(asana_client.verify_token, token)
+    if not info.get("ok"):
+        return JSONResponse(
+            {"error": f"Asana rejected the token — {info.get('error', 'unknown')}"},
+            status_code=400,
+        )
+    try:
+        stored = await run_in_threadpool(
+            lambda: store.set_org_oauth(
+                user["org_id"], token, provider="asana",
+                email=info.get("email", ""), scopes=info.get("workspace_gid", ""),
+            )
+        )
+    except RuntimeError:
+        # set_org_oauth fails CLOSED without an encryption key — surface it as
+        # a config problem, not a mystery.
+        return JSONResponse(
+            {"error": "token storage is not configured (set SESSION_SECRET "
+                      "or GOOGLE_TOKEN_ENC_KEY)"},
+            status_code=500,
+        )
+    if not stored:
+        return JSONResponse({"error": "could not store the token"}, status_code=500)
+    # A new token = a possibly different workspace: drop the snapshot cache so
+    # the next join reads the new board, not the old org's cached brief.
+    asana_client._reset_brief_cache()
+    return JSONResponse(
+        {"ok": True, "connected": True,
+         "email": info.get("email", ""), "workspace": info.get("workspace", "")},
+        headers=_NO_STORE,
+    )
+
+
+@router.post("/dashboard/connections/asana/disconnect")
+async def disconnect_asana(request: Request) -> JSONResponse:
+    """Remove the org's stored Asana token — the native disconnect, mirroring
+    Google's. Note: if the deployment sets the ASANA_TOKEN env fallback, the
+    platform-level connection remains (the response says so honestly)."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    removed = await run_in_threadpool(
+        lambda: store.clear_org_oauth(user["org_id"], provider="asana")
+    )
+    asana_client._reset_brief_cache()
+    return JSONResponse(
+        {"ok": True, "removed": bool(removed),
+         "still_connected_via_env": bool(settings.asana_token.strip())},
         headers=_NO_STORE,
     )
 
