@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -34,8 +35,35 @@ _TOKEN_URL = "https://oauth2.googleapis.com/token"
 # Same collection endpoint serves events.insert (POST) and events.list (GET).
 _CAL_INSERT = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 _CAL_LIST = _CAL_INSERT
+_CAL_CALENDARS = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
 _GMAIL_SEND = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 _TIMEOUT = 30.0
+# The upcoming-events read fans out over the user's SELECTED calendars (what
+# they actually display in their own Google UI), not just primary. Both caps
+# exist so a calendar hoarder can't turn one dashboard read into dozens of
+# Google round-trips or an unbounded wait on the in-meeting tool path.
+_MAX_CALENDARS = 8
+_LIST_DEADLINE_S = 20.0
+
+
+def _cal_events_url(cal_id: str) -> str:
+    """events.list URL for one calendar (ids contain '@' and '#' — quote them)."""
+    return f"https://www.googleapis.com/calendar/v3/calendars/{quote(cal_id, safe='')}/events"
+
+
+def _event_start_ts(item: dict) -> float:
+    """Sortable start of a Google event item; parse failures sort last. Mixed
+    tz-aware dateTime and all-day date values normalize to UTC timestamps —
+    plain string compare would misorder 'Z' vs '+02:00' offsets."""
+    s = item.get("start") or {}
+    raw = str(s.get("dateTime") or s.get("date") or "")
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return float("inf")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
 
 # ── per-principal access-token cache ──
 # One Google token round-trip per principal per ~hour instead of one per API
@@ -239,12 +267,14 @@ def list_calendar_events(
     org_id: str, *, max_results: int = 20,
     oauth: dict | None = None, principal: str = "", on_rotate=None,
 ) -> dict:
-    """List UPCOMING events on the primary Google Calendar (read-only).
+    """List UPCOMING events across the account's SELECTED calendars (read-only).
 
     Mirrors ``create_calendar_event`` / ``send_gmail``: mint a short-lived access
-    token, then GET events with ``timeMin=now``, ``singleEvents=true``,
-    ``orderBy=startTime`` and a small ``maxResults``. The
-    ``calendar.events.readonly`` scope is granted at connect.
+    token, list the user's calendarList (selected + primary, capped, fail-soft
+    to primary-only), then GET each calendar's events with ``timeMin=now``,
+    ``singleEvents=true``, ``orderBy=startTime`` and a small ``maxResults``;
+    results are deduped on iCalUID (invited copy vs shared calendar) and merged
+    in start order. The ``calendar.events.readonly`` scope is granted at connect.
 
     By default the token is resolved by ``org_id`` (native executor / demo view).
     The per-USER dashboard passes a resolved ``oauth`` dict + a distinct
@@ -268,36 +298,93 @@ def list_calendar_events(
     except (TypeError, ValueError):
         n = 20
     n = max(1, min(n, 50))
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Which calendars feed the view: the ones the user has SELECTED in their
+    # own Google UI (plus primary). Strictly an enhancement — any failure here
+    # degrades to the pre-existing primary-only read, never to an error.
+    cal_ids = ["primary"]
     try:
-        resp = httpx.get(
-            _CAL_LIST,
-            params={
-                "timeMin": datetime.now(timezone.utc).isoformat(),
-                "singleEvents": "true",
-                "orderBy": "startTime",
-                "maxResults": n,
-            },
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=_TIMEOUT,
+        listing = httpx.get(
+            _CAL_CALENDARS,
+            params={"maxResults": 50, "fields": "items(id,selected,primary)"},
+            headers=headers,
+            timeout=min(_TIMEOUT, 8.0),
         )
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"calendar list failed ({type(e).__name__})"}
-    if resp.status_code == 401:
-        _drop_cached_token(key)  # revoked early — next attempt re-mints
-    if resp.status_code >= 300:
-        # Diagnostic: a 403 here on a Workspace domain usually = admin/API access
-        # restriction on the (unverified) app; 401 = token/scope. No PII logged.
-        print(f"[calendar] list HTTP {resp.status_code}", flush=True)
-        return {"ok": False, "error": f"calendar list failed (HTTP {resp.status_code})"}
-    try:
-        items = resp.json().get("items", [])
-    except Exception:  # noqa: BLE001
-        return {"ok": False, "error": "calendar list returned no JSON"}
-    _n = len(items) if isinstance(items, list) else 0
+        if listing.status_code < 300:
+            cals = listing.json().get("items", [])
+            sel = [
+                c
+                for c in (cals if isinstance(cals, list) else [])
+                if isinstance(c, dict)
+                and c.get("id")
+                and (c.get("selected") or c.get("primary"))
+            ]
+            sel.sort(key=lambda c: 0 if c.get("primary") else 1)  # primary first
+            picked = [str(c["id"]) for c in sel][:_MAX_CALENDARS]
+            if picked:
+                cal_ids = picked
+    except Exception:  # noqa: BLE001 — calendarList is best-effort by design
+        pass
+
+    merged: list[dict] = []
+    seen: set[str] = set()
+    first_error = ""
+    deadline = time.monotonic() + _LIST_DEADLINE_S
+    for cid in cal_ids:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break  # budget spent — return what we have, off-path callers retry
+        try:
+            resp = httpx.get(
+                _cal_events_url(cid),
+                params={
+                    "timeMin": datetime.now(timezone.utc).isoformat(),
+                    "singleEvents": "true",
+                    "orderBy": "startTime",
+                    "maxResults": n,
+                },
+                headers=headers,
+                timeout=min(_TIMEOUT, max(2.0, remaining)),
+            )
+        except Exception as e:  # noqa: BLE001
+            first_error = first_error or f"calendar list failed ({type(e).__name__})"
+            continue
+        if resp.status_code == 401:
+            _drop_cached_token(key)  # revoked early — next attempt re-mints
+        if resp.status_code >= 300:
+            # Diagnostic: a 403 here on a Workspace domain usually = admin/API
+            # access restriction on the (unverified) app; 401 = token/scope.
+            print(f"[calendar] list HTTP {resp.status_code}", flush=True)
+            first_error = first_error or f"calendar list failed (HTTP {resp.status_code})"
+            continue
+        try:
+            items = resp.json().get("items", [])
+        except Exception:  # noqa: BLE001
+            first_error = first_error or "calendar list returned no JSON"
+            continue
+        for it in items if isinstance(items, list) else []:
+            if not isinstance(it, dict):
+                continue
+            # The same meeting shows up on several calendars (invited copy +
+            # a shared calendar) — iCalUID is stable across those copies.
+            dk = str(it.get("iCalUID") or it.get("id") or "")
+            if dk in seen:
+                continue
+            if dk:
+                seen.add(dk)
+            merged.append(it)
+    if not merged and first_error:
+        return {"ok": False, "error": first_error}
+    merged.sort(key=_event_start_ts)
+    merged = merged[:n]
     # Diagnostic: items=0 on a connected org = right token but no events in the
     # window (wrong account/calendar), vs a non-200 above = an API/auth failure.
-    print(f"[calendar] list ok items={_n}", flush=True)
-    return {"ok": True, "events": items if isinstance(items, list) else []}
+    print(
+        f"[calendar] list ok items={len(merged)} calendars={len(cal_ids)}",
+        flush=True,
+    )
+    return {"ok": True, "events": merged}
 
 
 # ── calendar brief: the avatar's read-side calendar sight ────────────────────
