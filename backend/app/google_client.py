@@ -37,13 +37,16 @@ _CAL_LIST = _CAL_INSERT
 _GMAIL_SEND = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 _TIMEOUT = 30.0
 
-# ── per-org access-token cache ──
-# One Google token round-trip per org per ~hour instead of one per API call.
-# Values live only in this process and are never persisted or logged; entries
-# expire shortly before Google's stated expiry, and a 401 from an API call
-# drops the entry so revocation heals on the next attempt, not in an hour.
+# ── per-principal access-token cache ──
+# One Google token round-trip per principal per ~hour instead of one per API
+# call. A principal is an org_id (native executor / demo) or "user:<user_id>"
+# (per-user dashboard calendar) — distinct keys, so a member's token never
+# shares a slot with the org's or a colleague's. Values live only in this
+# process and are never persisted or logged; entries expire shortly before
+# Google's stated expiry, and a 401 from an API call drops the entry so
+# revocation heals on the next attempt, not in an hour.
 _TOKEN_LOCK = threading.Lock()
-_TOKEN_CACHE: dict[str, tuple[str, float]] = {}  # org_id -> (token, expires_at)
+_TOKEN_CACHE: dict[str, tuple[str, float]] = {}  # principal -> (token, expires_at)
 _EXPIRY_MARGIN_S = 120.0  # re-mint this long before Google's stated expiry
 _DEFAULT_TTL_S = 3300.0  # expires_in missing → assume just under Google's 1h
 
@@ -59,16 +62,29 @@ def _drop_cached_token(org_id: str) -> None:
         _TOKEN_CACHE.pop(org_id, None)
 
 
-def _access_token(org_id: str) -> tuple[str, str]:
-    """(access_token, "") for the org, or ("", error) when unavailable."""
+def _access_token(
+    principal: str, oauth: dict | None = None, *, on_rotate=None
+) -> tuple[str, str]:
+    """(access_token, "") for a principal, or ("", error) when unavailable.
+
+    ``principal`` is the token-CACHE key. By default it is an ``org_id`` and the
+    refresh token is resolved from ``store.get_org_oauth`` — the native-executor
+    path, unchanged. A caller serving a PER-USER surface passes a pre-resolved
+    ``oauth`` dict (e.g. ``store.get_user_oauth``) plus a DISTINCT ``principal``
+    (e.g. ``"user:<user_id>"``), so one person's calendar token never shares a
+    cache slot with a colleague's. Refresh-token rotation is persisted back to
+    org_oauth for the org path, or via ``on_rotate(new_rt)`` for a supplied
+    (per-user) token — never discarded (that would strand a revoked credential)."""
     if not settings.google_calendar_client_id or not settings.google_calendar_client_secret:
         return "", "Google OAuth client is not configured"
     now = time.time()
     with _TOKEN_LOCK:
-        cached = _TOKEN_CACHE.get(org_id)
+        cached = _TOKEN_CACHE.get(principal)
         if cached and cached[1] > now:
             return cached[0], ""
-    oauth = store.get_org_oauth(org_id)
+    resolved_from_org = oauth is None
+    if resolved_from_org:
+        oauth = store.get_org_oauth(principal)
     if not oauth or not oauth.get("refresh_token"):
         return "", "Google is not connected for this org"
     try:
@@ -97,18 +113,22 @@ def _access_token(org_id: str) -> tuple[str, str]:
     if ttl <= 0:
         ttl = _DEFAULT_TTL_S
     with _TOKEN_LOCK:
-        _TOKEN_CACHE[org_id] = (tok, now + max(60.0, ttl - _EXPIRY_MARGIN_S))
+        _TOKEN_CACHE[principal] = (tok, now + max(60.0, ttl - _EXPIRY_MARGIN_S))
     # Refresh-token rotation: providers may return a NEW refresh token with
     # the access token (Google does under rotation policies). Discarding it
-    # strands the org on a revoked credential — persist it like connect does,
-    # keeping the row's email/scopes.
+    # strands the credential — persist it like connect does, keeping the row's
+    # email/scopes. Org path writes org_oauth; a supplied (per-user) token is
+    # rewritten by its owner via on_rotate.
     new_rt = str(data.get("refresh_token") or "").strip()
     if new_rt and new_rt != oauth["refresh_token"]:
-        store.set_org_oauth(
-            org_id, new_rt,
-            email=str(oauth.get("email") or ""),
-            scopes=str(oauth.get("scopes") or ""),
-        )
+        if resolved_from_org:
+            store.set_org_oauth(
+                principal, new_rt,
+                email=str(oauth.get("email") or ""),
+                scopes=str(oauth.get("scopes") or ""),
+            )
+        elif on_rotate is not None:
+            on_rotate(new_rt)
     return tok, ""
 
 
@@ -120,11 +140,19 @@ def _emails(value: Any) -> list[str]:
     return []
 
 
-def create_calendar_event(org_id: str, event: dict) -> dict:
-    """Create a Calendar event on the org's primary calendar (events.insert).
+def create_calendar_event(
+    org_id: str, event: dict, *,
+    oauth: dict | None = None, principal: str = "", on_rotate=None,
+) -> dict:
+    """Create a Calendar event on the primary calendar (events.insert).
 
     ``event``: {title/summary, start (RFC3339), end (RFC3339), attendees?,
-    description?, timezone?}. Attendees are invited (sendUpdates=all)."""
+    description?, timezone?}. Attendees are invited (sendUpdates=all).
+
+    Token resolves by ``org_id`` by default (native executor). A dashboard user
+    scheduling on THEIR OWN calendar passes ``oauth``/``principal`` the same way
+    as ``list_calendar_events`` — so a shared-org member creates events on their
+    own calendar, not a colleague's."""
     summary = str(event.get("title") or event.get("summary") or "").strip()
     start = str(event.get("start") or "").strip()
     end = str(event.get("end") or "").strip()
@@ -132,7 +160,8 @@ def create_calendar_event(org_id: str, event: dict) -> dict:
         return {"ok": False, "error": "event needs title, start and end"}
     tz = str(event.get("timezone") or event.get("time_zone") or "UTC").strip() or "UTC"
 
-    token, err = _access_token(org_id)
+    key = principal or org_id
+    token, err = _access_token(key, oauth, on_rotate=on_rotate)
     if err:
         return {"ok": False, "error": err}
 
@@ -172,7 +201,7 @@ def create_calendar_event(org_id: str, event: dict) -> dict:
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"calendar request failed ({type(e).__name__})"}
     if resp.status_code == 401:
-        _drop_cached_token(org_id)  # revoked early — next attempt re-mints
+        _drop_cached_token(key)  # revoked early — next attempt re-mints
     if resp.status_code >= 300:
         return {"ok": False, "error": f"calendar insert failed (HTTP {resp.status_code})"}
     data = resp.json()
@@ -206,20 +235,29 @@ def _meet_url(data: dict) -> str:
     return ""
 
 
-def list_calendar_events(org_id: str, *, max_results: int = 20) -> dict:
-    """List UPCOMING events on the org's primary Google Calendar (read-only).
+def list_calendar_events(
+    org_id: str, *, max_results: int = 20,
+    oauth: dict | None = None, principal: str = "", on_rotate=None,
+) -> dict:
+    """List UPCOMING events on the primary Google Calendar (read-only).
 
     Mirrors ``create_calendar_event`` / ``send_gmail``: mint a short-lived access
-    token from the org's stored refresh token, then GET events with
-    ``timeMin=now``, ``singleEvents=true``, ``orderBy=startTime`` and a small
-    ``maxResults``. The ``calendar.events.readonly`` scope is granted at connect.
+    token, then GET events with ``timeMin=now``, ``singleEvents=true``,
+    ``orderBy=startTime`` and a small ``maxResults``. The
+    ``calendar.events.readonly`` scope is granted at connect.
+
+    By default the token is resolved by ``org_id`` (native executor / demo view).
+    The per-USER dashboard passes a resolved ``oauth`` dict + a distinct
+    ``principal`` (cache key), so a member of a SHARED org only ever sees THEIR
+    own calendar — never a colleague's.
 
     Returns ``{"ok": True, "events": [...raw Google items...]}`` (the caller
     distills title / start / attendees / meeting URL) or
     ``{"ok": False, "error": str}``. It NEVER raises: this feeds a dashboard READ
     off the live path, so a Google hiccup must degrade to an empty list, not a
     500. Logs no token and no event content."""
-    token, err = _access_token(org_id)
+    key = principal or org_id
+    token, err = _access_token(key, oauth, on_rotate=on_rotate)
     if err:
         # Diagnostic (status only, no token/email/event content): why a connected
         # org's calendar shows empty — token-refresh rejected, not connected, etc.
@@ -245,7 +283,7 @@ def list_calendar_events(org_id: str, *, max_results: int = 20) -> dict:
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"calendar list failed ({type(e).__name__})"}
     if resp.status_code == 401:
-        _drop_cached_token(org_id)  # revoked early — next attempt re-mints
+        _drop_cached_token(key)  # revoked early — next attempt re-mints
     if resp.status_code >= 300:
         # Diagnostic: a 403 here on a Workspace domain usually = admin/API access
         # restriction on the (unverified) app; 401 = token/scope. No PII logged.

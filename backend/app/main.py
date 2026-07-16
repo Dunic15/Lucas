@@ -1808,13 +1808,30 @@ async def google_oauth_callback(
     try:
         _user = auth.current_user(request)
         _org = (_user or {}).get("org_id") or settings.demo_org_id
+        _scopes = " ".join(GOOGLE_CALENDAR_SCOPES)
+        # Org row — the NATIVE executor (Laura acting on the org's Google account)
+        # and the demo/machine Upcoming view. Unchanged.
         await run_in_threadpool(
             store.set_org_oauth,
             _org,
             refresh_token,
             email=oauth_email,
-            scopes=" ".join(GOOGLE_CALENDAR_SCOPES),
+            scopes=_scopes,
         )
+        # Per-USER row — the personal-calendar VIEW (/dashboard/upcoming) reads
+        # THIS, so a member of a SHARED org (a verified corporate domain maps
+        # every colleague onto one org_id) sees only their OWN calendar, never a
+        # co-worker's. Keyed on the connecting human from the signed session
+        # cookie (auth.current_user) — never the OAuth email or any request field.
+        _uid = (_user or {}).get("user_id") or ""
+        if _uid:
+            await run_in_threadpool(
+                store.set_user_oauth,
+                _uid,
+                refresh_token,
+                email=oauth_email,
+                scopes=_scopes,
+            )
     except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
         print(f"[oauth] native token persist skipped ({type(e).__name__})", flush=True)
 
@@ -1861,15 +1878,17 @@ async def google_oauth_callback(
 
 @app.post("/oauth/google/disconnect")
 async def google_oauth_disconnect(request: Request) -> JSONResponse:
-    """Disconnect Laura's NATIVE Google (Calendar + Gmail) for the owner's org.
+    """Disconnect Laura's NATIVE Google (Calendar + Gmail) for the caller.
 
-    Fully independent of the Cedric/Slack add-on: this clears ONLY the per-org
-    native refresh token the executor uses (``store.clear_org_oauth``), so a user
-    can drop native Google while keeping Slack — or have neither/both. Owner-authed
-    and same-origin, like the brain disconnect. The Recall calendar auto-join is a
-    separate capability and is intentionally left untouched. Pure SQLite delete
-    keyed by the org_id string — no ``::uuid`` cast, so it never trips the
-    u_hash/uuid split-brain."""
+    Fully independent of the Cedric/Slack add-on: this clears the per-org
+    native refresh token the executor uses (``store.clear_org_oauth``) AND the
+    caller's own per-user calendar token (``store.clear_user_oauth`` — the row
+    the personal Upcoming view reads first, so disconnect actually revokes
+    what the dashboard uses). A user can drop native Google while keeping
+    Slack — or have neither/both. Owner-authed and same-origin, like the brain
+    disconnect. The Recall calendar auto-join is a separate capability and is
+    intentionally left untouched. Pure SQLite deletes keyed by the id strings —
+    no ``::uuid`` cast, so it never trips the u_hash/uuid split-brain."""
     user = auth.current_user(request)
     if user is None:
         if err := auth.gate(request):
@@ -1878,12 +1897,13 @@ async def google_oauth_disconnect(request: Request) -> JSONResponse:
     if not auth._same_origin(request):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     cleared = await run_in_threadpool(store.clear_org_oauth, user["org_id"])
+    cleared_user = await run_in_threadpool(store.clear_user_oauth, user["user_id"])
     return JSONResponse(
         {
             "ok": True,
             "provider": "google",
             "status": "disconnected",
-            "cleared": bool(cleared),
+            "cleared": bool(cleared or cleared_user),
         }
     )
 
