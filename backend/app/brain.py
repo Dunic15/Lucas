@@ -330,7 +330,12 @@ def _retrieve_for(
     keep the history-augmented query."""
     if _is_about_avatar(question):
         return retrieve_about(avatar, question, k=k)
-    return retrieve(avatar, _retrieval_query(question, history), k=k, org_id=org_id)
+    query = _retrieval_query(question, history)
+    if org_id:
+        return retrieve(avatar, query, k=k, org_id=org_id)
+    # No org scope → the pre-seam call shape, so tests/instrumentation that
+    # wrap retrieve() with the old signature keep working unchanged.
+    return retrieve(avatar, query, k=k)
 
 
 # Cheap language sniff for a live utterance: enough Italian function words →
