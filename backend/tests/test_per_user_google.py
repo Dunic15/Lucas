@@ -339,7 +339,7 @@ def test_upcoming_never_leaks_a_colleagues_calendar(client, monkeypatch):
     }
     seen_principals: list = []
 
-    def _fake_list(org, max_results=25, *, oauth=None, principal="", on_rotate=None):
+    def _fake_list(org, max_results=25, *, oauth=None, principal="", on_rotate=None, **kw):
         seen_principals.append(principal)
         return {"ok": True, "events": [ev]}
 
