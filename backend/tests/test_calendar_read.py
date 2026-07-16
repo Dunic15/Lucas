@@ -176,6 +176,49 @@ def test_list_events_merges_all_accessible_calendars(monkeypatch):
     }
 
 
+def test_list_events_has_no_calendar_count_cap_and_paginates(monkeypatch):
+    """All calendarList pages are consumed and accounts with >32 calendars are
+    not truncated. Event reads may run concurrently, but every accessible
+    calendar must be requested."""
+    monkeypatch.setattr(
+        google_client, "_access_token",
+        lambda key, oauth=None, on_rotate=None, force_refresh=False: ("tok", ""),
+    )
+    event_urls: list[str] = []
+    page_tokens: list[str] = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        params = params or {}
+        if "users/me/calendarList" in url:
+            token = str(params.get("pageToken") or "")
+            page_tokens.append(token)
+            start = 20 if token == "page-2" else 0
+            payload = {
+                "items": [
+                    {"id": f"cal-{i}", "summary": f"Calendar {i}"}
+                    for i in range(start, start + 20)
+                ]
+            }
+            if not token:
+                payload["nextPageToken"] = "page-2"
+            return _resp(payload)
+        event_urls.append(url)
+        if "cal-39" in url:
+            return _resp({"items": [
+                {"id": "last", "iCalUID": "last", "summary": "Calendar forty",
+                 "start": {"dateTime": "2026-07-20T08:00:00Z"}},
+            ]})
+        return _resp({"items": []})
+
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+    out = google_client.list_calendar_events("org-many")
+
+    assert out["ok"] is True
+    assert page_tokens == ["", "page-2"]
+    assert len(event_urls) == 40
+    assert [e["summary"] for e in out["events"]] == ["Calendar forty"]
+
+
 def test_list_events_falls_back_to_primary_when_calendarlist_fails(monkeypatch):
     monkeypatch.setattr(
         google_client, "_access_token",
