@@ -571,3 +571,72 @@ def test_webhook_split_leave_skips_dismissal_of_named_participant(monkeypatch, t
     assert store.get(bot_id) is not None
     store.remove(bot_id)
 
+
+# ── name-free leave for a dismissal that NAMES the meeting itself ──
+
+
+def test_leave_it_accepts_a_article_preposition():
+    """'vai fuori al meeting' / 'esci alla riunione' — the a+article preposition
+    ('al'/'alla'/…) was previously unmatched, so the phrase never fired."""
+    from app.decision import detect_leave_command as d
+
+    for ask in ["vai fuori al meeting", "esci alla riunione", "vai via al meeting"]:
+        assert d(ask), f"should trigger: {ask!r}"
+
+
+def test_explicit_leave_fires_name_free_but_stays_safe():
+    from app.decision import detect_leave_command_explicit as e
+
+    for ask in [
+        "go out the meeting", "Go out the Meeting", "leave the meeting",
+        "exit the call", "please leave the call now",
+        "vai fuori al meeting", "esci dalla riunione", "esci pure dal meeting",
+    ]:
+        assert e(ask), f"explicit meeting-object leave should fire name-free: {ask!r}"
+    # Ambiguous / could-be-aimed-at-a-person → stay name-gated (meter safety).
+    for ask in [
+        "you can leave the meeting", "you should leave the meeting now",
+        "puoi uscire dalla riunione", "goodbye", "bye Laura",
+        "leave", "go out", "leave the pricing for the meeting later",
+    ]:
+        assert not e(ask), f"must stay name-gated: {ask!r}"
+
+
+def test_webhook_explicit_leave_fires_without_name_multiperson(monkeypatch, tmp_path):
+    """The reported gap: 'go out the meeting' (no avatar name) ends the bot even
+    when NO other path could be why — a 2-person room (not the 1:1 rule) where a
+    DIFFERENT speaker owns the armed window. Marco engages the avatar first (so
+    the opening grace is over and the window belongs to Marco); Duccio's later
+    name-free dismissal can only fire via the explicit-meeting-object path."""
+    bot_id = "leave-explicit-en"
+    calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+    _post_line_as(bot_id, "Cedric, what's the agenda?", "Marco")
+    b = _post_line_as(bot_id, "go out the meeting", "Duccio")
+    assert b.get("left") is True
+    assert calls["leave"] == 1, "bot must leave (meter stops)"
+    assert store.get(bot_id) is None
+
+
+def test_webhook_explicit_leave_italian_al_meeting(monkeypatch, tmp_path):
+    bot_id = "leave-explicit-it"
+    calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+    _post_line_as(bot_id, "Cedric, a che punto siamo?", "Marco")
+    b = _post_line_as(bot_id, "vai fuori al meeting", "Duccio")
+    assert b.get("left") is True
+    assert calls["leave"] == 1
+
+
+def test_webhook_permission_leave_stays_name_gated_multiperson(monkeypatch, tmp_path):
+    """Meter safety: a 2nd-person permission with no name ('you should leave the
+    meeting now'), from a DIFFERENT speaker than the one who holds the armed
+    window, in a 2-person room, could be aimed at a PERSON — it must NOT end the
+    bot via the name-free path."""
+    bot_id = "leave-explicit-safe"
+    calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
+    _post_line_as(bot_id, "Cedric, what's the agenda?", "Marco")
+    b = _post_line_as(bot_id, "you should leave the meeting now", "Duccio")
+    assert b.get("left") is None, "an ambiguous permission form must not end the bot"
+    assert calls["leave"] == 0
+    assert store.get(bot_id) is not None
+    store.remove(bot_id)
+

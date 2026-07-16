@@ -104,6 +104,7 @@ from .decision import (
     detect_closing,
     detect_invite,
     detect_leave_command,
+    detect_leave_command_explicit,
     detect_stop_command,
     in_locked_dyad,
     interjection_floor_open,
@@ -5253,6 +5254,20 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # capital, no name), so it's left as a documented trade-off, not a bug.
     leave_now = called and detect_leave_command(question)
     if settings.leave_on_command and not leave_now and not called:
+        # ── Unambiguous dismissal that NAMES the meeting itself ──
+        # "go out the meeting", "leave the meeting", "esci dalla riunione", "vai
+        # fuori al meeting": a whole-ask leave IMPERATIVE whose explicit object
+        # is the meeting/call/room is aimed at the bot even without its name — a
+        # human dismisses another human BY NAME, never with a bare imperative to
+        # the room. Fires in any room size and outside the split window (the
+        # owner naturally says "vai fuori al meeting" with no name). Kept safe by
+        # detect_leave_command_explicit (imperative-only, explicit object, no
+        # 2nd-person permission) PLUS the addressee guard: never a dismissal that
+        # names another participant.
+        if detect_leave_command_explicit(text) and not _names_another_participant(
+            text, session.roster(avatar.name), avatar.wake_words
+        ):
+            leave_now = True
         # ── 1:1 room: an unaddressed dismissal can only be aimed at the avatar ──
         # With a single human in the roster there is no other possible
         # addressee, so a whole-ask leave command fires without the name and
@@ -5262,7 +5277,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # never fires even here (the roster can undercount right after a
         # mid-meeting restart, when it reseeds from transcript speakers).
         if (
-            len(session.roster(avatar.name)) <= 1
+            not leave_now
+            and len(session.roster(avatar.name)) <= 1
             and plausible_leave_followup(text)
             and detect_leave_command(text)
         ):

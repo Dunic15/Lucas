@@ -708,10 +708,10 @@ _LEAVE_IT = re.compile(
     r"(?:esci(?:\s+fuori)?|vattene|vai via|vai fuori|scollegati|abbandona|vai pure|"
     r"lascia(?:ci)?(?=\s+(?:pure\s+)?(?:la|il|lo|questa|questo)\s+(?:riunione|call|chiamata|meeting|meet)))"
     r"(?:\s+pure)?"
-    r"(?:\s+(?:dalla|dal|dallo|da (?:questa|questo|qui)|la|il|lo|questa|questo)\s+(?:riunione|call|chiamata|meeting|meet))?"
+    r"(?:\s+(?:dalla|dal|dallo|al|allo|alla|all'|da (?:questa|questo|qui)|la|il|lo|questa|questo)\s+(?:riunione|call|chiamata|meeting|meet))?"
     r"(?:\s*,?\s*(?:ora|adesso|subito|pure|grazie|per favore|please))*[.!?\s]*$"
     r"|\b(?:puoi|potresti|potete)\s+(?:andare|andartene|uscire|lasciarci|abbandonare|scollegarti)"
-    r"(?:\s+(?:dalla|dal|dallo|da (?:questa|questo|qui)|la|il|lo|questa|questo)\s+(?:riunione|call|chiamata|meeting|meet))?"
+    r"(?:\s+(?:dalla|dal|dallo|al|allo|alla|all'|da (?:questa|questo|qui)|la|il|lo|questa|questo)\s+(?:riunione|call|chiamata|meeting|meet))?"
     r"(?:\s*,?\s*(?:ora|adesso|subito|pure|grazie|per favore|please))*\s*(?:[.!?,;]|$)"
     r"|\bte ne puoi andare\b|\bve ne potete andare\b"
     r"|\bsei liber[ao] di andare\b",
@@ -741,6 +741,40 @@ def detect_leave_command(question: str) -> bool:
         or _LEAVE_IT.search(q)
         or _LEAVE_FAREWELL.match(q)
     )
+
+
+# A leave command whose EXPLICIT object is the meeting/call/room itself.
+_LEAVE_MEETING_OBJECT = re.compile(
+    r"\b(?:meeting|meet|call|room|riunione|chiamata)\b", re.IGNORECASE
+)
+# 2nd-person / plural PERMISSION leads ("you can leave the meeting", "puoi
+# uscire", "we can leave") — these could be aimed at a PERSON, so they're
+# excluded from the name-free path below (they still fire the normal named /
+# 1:1-room / armed-window paths in main.py).
+_LEAVE_PERMISSION_LEAD = re.compile(
+    r"^(?:ok(?:ay)?\s+|so\s+|now\s+|please\s+|per favore\s+|ora\s+|adesso\s+|"
+    r"pure\s+|dai\s+|allora\s+)*"
+    r"(?:you|she|we|they|puoi|potresti|potete|possiamo|non)\b",
+    re.IGNORECASE,
+)
+
+
+def detect_leave_command_explicit(question: str) -> bool:
+    """A whole-ask leave IMPERATIVE whose explicit object is the meeting itself —
+    "leave the meeting", "go out the meeting", "esci dalla riunione", "vai fuori
+    al meeting". Unambiguous enough to act on WITHOUT the avatar's name: a human
+    dismisses another human BY NAME, never with a bare imperative to the room.
+
+    Deliberately tighter than ``detect_leave_command`` for the name-free path
+    (meter safety): it requires the meeting/call/room said out loud AND excludes
+    2nd-person permission ("you can leave the meeting") and bare farewells /
+    object-less commands, which could be spoken to a person. The addressee guard
+    (never a dismissal that names another participant) is applied by the caller.
+    """
+    q = (question or "").strip()
+    if not q or not _LEAVE_MEETING_OBJECT.search(q) or _LEAVE_PERMISSION_LEAD.match(q):
+        return False
+    return detect_leave_command(q)
 
 
 # First tokens a dismissal aimed at THE AVATAR can start with: the leave verbs
