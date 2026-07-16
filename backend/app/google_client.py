@@ -311,6 +311,10 @@ def list_calendar_events(
             headers=headers,
             timeout=min(_TIMEOUT, 8.0),
         )
+        if listing.status_code >= 300:
+            # Diagnostic (status only): 403 here = the token lacks
+            # calendar.readonly (pre-scope-change connection) — reconnect fixes.
+            print(f"[calendar] calendarList HTTP {listing.status_code}", flush=True)
         if listing.status_code < 300:
             cals = listing.json().get("items", [])
             sel = [
