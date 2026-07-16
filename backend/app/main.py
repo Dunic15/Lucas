@@ -3961,10 +3961,26 @@ def _is_echo(session: store.Session, text: str) -> bool:
     if len(norm) < 12 or len(norm.split()) < 3:
         return False  # too short to attribute — leave it to the other gates
     now = time.time()
-    return any(
-        now - ts < 45.0 and norm in spoken
-        for spoken, ts in session._recent_lines.items()
-    )
+    recent = [
+        spoken for spoken, ts in session._recent_lines.items() if now - ts < 45.0
+    ]
+    if any(norm in spoken for spoken in recent):
+        return True
+    # A Gemini-ears turn is ANOTHER model's transcription of her voice: the
+    # wording/segmentation drifts from what she spoke, and one aggregated turn
+    # can span several spoken lines — the substring test above misses both.
+    # Token coverage catches it: when nearly every word of a substantial turn
+    # appears in what she spoke inside the same window, it is her own voice
+    # coming back, not a human coincidentally quoting her.
+    words = norm.split()
+    if len(words) >= 5 and recent:
+        vocab: set[str] = set()
+        for spoken in recent:
+            vocab.update(spoken.split())
+        covered = sum(1 for w in words if w in vocab)
+        if covered >= 0.85 * len(words):
+            return True
+    return False
 
 
 # Partials made ONLY of filler/backchannel tokens ("yeah yeah", "uh uh ok",
