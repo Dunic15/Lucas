@@ -53,16 +53,24 @@ def _action_entry(action) -> dict:
     the per-row "Approve & run" control for actions the native executor can run
     (calendar.create_event / email.send) without ever shipping the args."""
     if isinstance(action, dict):
+        owner = str(action.get("owner") or "")[:80]
+        # UNASSIGNED is a VISIBLE triage state, not a silent dead-end: the
+        # producer emits owner="UNASSIGNED"/"" when it couldn't route the action
+        # (prompt contract). Surface that + the gap reason so the dashboard can
+        # flag "needs an owner" instead of showing a blank, ignorable row.
+        unassigned = (not owner) or owner.strip().upper() == "UNASSIGNED"
         return {
             "action_id": str(action.get("action_id") or ""),
             "item": str(action.get("item") or action.get("step") or "")[:300],
-            "owner": str(action.get("owner") or "")[:80],
+            "owner": owner,
+            "unassigned": unassigned,
+            "gap": str(action.get("gap_type") or "")[:24],
             "done": bool(action.get("done") or action.get("status") == "done"),
             "typed": isinstance(action.get("typed"), dict)
             and bool(action["typed"].get("type")),
         }
     return {"action_id": "", "item": str(action)[:300], "owner": "",
-            "done": False, "typed": False}
+            "unassigned": False, "gap": "", "done": False, "typed": False}
 
 
 def _delivered(

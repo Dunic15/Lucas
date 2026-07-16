@@ -239,6 +239,8 @@
   .did .d .ic{flex:0 0 auto;width:18px;height:18px;border-radius:6px;background:var(--ok-soft);color:var(--ok);display:grid;place-items:center;font-size:.62rem;font-weight:700;margin-top:1px;}
   .did .d.attn .ic{background:var(--warn-soft);color:var(--warn);}
   .did .d .ow{color:var(--faint);}
+  /* UNASSIGNED = a visible triage chip, not faint text an eye skips over. */
+  .did .d .ow.unassigned{color:var(--warn);background:var(--warn-soft);border-radius:999px;padding:1px 8px;font-size:.72rem;font-weight:600;}
   .empty{color:var(--faint);text-align:center;padding:40px 12px;font-size:.9rem;}
 
   /* avatar detail + skills */
@@ -1597,6 +1599,16 @@
     // provenance detail carries the real Calendar event link / Gmail message id
     // (from executor.execute_approved) — render a clickable "Done ↗". Otherwise
     // the plain status pill (proposed/approved/failed) with the detail on hover.
+    // Owner label OR — when the action couldn't be routed — a visible
+    // "Unassigned" triage chip (with the gap reason on hover) instead of the
+    // easily-skipped faint text it used to render.
+    function ownerChip(a){
+      if(a.unassigned){
+        var why=a.gap?("Needs "+esc(a.gap)+" — assign to route it"):"Needs an owner — assign to route it";
+        return ' <span class="ow unassigned" title="'+why+'">⚠ Unassigned</span>';
+      }
+      return a.owner?' <span class="ow">· '+esc(a.owner)+'</span>':'';
+    }
     function execChip(a){ if(!a.execution) return "";
       var s=a.execution.status||"", det=a.execution.detail||"";
       var url=(det.match(/https?:\/\/[^\s"'<>]+/)||[])[0];
@@ -1667,7 +1679,7 @@
         '<div><div class="sm-h">AI summary</div><div class="summary">'+(m.summary?esc(m.summary):'<span style="color:var(--faint)">No summary captured.</span>')+'</div>'+
         (m.follow_up_subject?'<div class="sm-h" style="margin-top:12px">Follow-up email</div><div class="summary">'+esc(m.follow_up_subject)+'</div>':'')+'</div>'+
         '<div><div class="sm-h">Actions</div><div class="did">'+
-        (m.actions.length? m.actions.map(function(a){return '<div class="d'+(a.done?"":" attn")+'"><span class="ic">'+(a.done?"✓":"→")+'</span><span>'+esc(a.item)+(a.owner?' <span class="ow">· '+esc(a.owner)+'</span>':'')+execChip(a)+apprBtn(a)+rejBtn(a)+'</span></div>';}).join("") : '<div class="empty" style="padding:6px 0;text-align:left">'+((brainConnected||m.avatar_id==="cedric")?'Actions handled by Cedric <a data-goto="connections" title="Cedric proposes and runs these; approved from Slack" style="cursor:pointer;text-decoration:none">↗</a>':'No actions captured.')+'</div>')+
+        (m.actions.length? m.actions.map(function(a){return '<div class="d'+(a.done?"":" attn")+'"><span class="ic">'+(a.done?"✓":"→")+'</span><span>'+esc(a.item)+ownerChip(a)+execChip(a)+apprBtn(a)+rejBtn(a)+'</span></div>';}).join("") : '<div class="empty" style="padding:6px 0;text-align:left">'+((brainConnected||m.avatar_id==="cedric")?'Actions handled by Cedric <a data-goto="connections" title="Cedric proposes and runs these; approved from Slack" style="cursor:pointer;text-decoration:none">↗</a>':'No actions captured.')+'</div>')+
         (m.missing_steps.length?'<div class="sm-h" style="margin-top:12px">Missing steps</div>'+m.missing_steps.map(function(s){return '<div class="d attn"><span class="ic">!</span><span>'+esc(s.replace(/_/g," "))+'</span></div>';}).join(""):'')+
         '</div></div></td></tr>';
     }
