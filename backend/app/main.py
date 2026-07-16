@@ -2869,6 +2869,32 @@ async def _finalize_session_locked(
                 )
             )
             artifact["checklist"] = artifact["actions"]
+            # Find-a-time (SCHEDULER_FIND_TIME, off by default): a VAGUE
+            # scheduling ask ("book 45 min with Ananth next week") is still
+            # untyped after type_actions (no ISO time), so it would otherwise be
+            # dropped. Attach ranked candidate slots (free/busy on the org's own
+            # calendar + any attendee emails named in the ask) so the approve
+            # doors can offer times. Runs AFTER type_actions so explicit-time
+            # asks (already typed) are skipped. Best-effort + off the hot path;
+            # any failure is caught by the same handler below (never fatal).
+            if settings.scheduler_find_time:
+                from . import scheduler
+
+                _org_oauth = await run_in_threadpool(
+                    store.get_org_oauth, session.org_id
+                )
+                _org_email = str((_org_oauth or {}).get("email") or "")
+                _tz = await run_in_threadpool(
+                    google_client.resolve_timezone, session.org_id
+                ) or "UTC"
+                artifact["actions"] = await run_in_threadpool(
+                    lambda: scheduler.enrich_actions(
+                        artifact["actions"], summary_brief,
+                        principal=session.org_id, organizer_email=_org_email,
+                        timezone=_tz,
+                    )
+                )
+                artifact["checklist"] = artifact["actions"]
             # Asana auto-push (ASANA_AUTO_EXECUTE, off by default): typed
             # tasks land on the board NOW instead of waiting for dashboard
             # approval; receipts (task URLs) go through the same provenance
