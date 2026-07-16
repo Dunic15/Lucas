@@ -148,6 +148,21 @@ def test_dashboard_uses_add_to_slack_not_team_id_field():
     assert "Slack team ID" not in dashboard
 
 
+def test_dashboard_renders_teamscope_connect_urls_not_only_the_grid():
+    """Return-flow contract v3 (hsk_con_4xqfrgkam59ypyteexyj): the dashboard must
+    render each connector's OWN team-scope connect_url as a direct connect action
+    (with return_url appended) so users connect team-scope straight from here and
+    never route new connects through Cedric's hosted grid, which defaults new
+    connections to PRIVATE scope Laura cannot see or use."""
+    dashboard = (Path(__file__).resolve().parents[2] / "frontend/dashboard.html").read_text()
+    # per-connector connect chips are built from the connector's OWN connect_url
+    assert "withReturnUrl(c.connect_url)" in dashboard
+    # ...tagged so the pending-connect refetch wires to them on return
+    assert "data-connect-tool" in dashboard
+    # return_url points back at this dashboard so Cedric can 302 the loop closed
+    assert 'location.origin+"/dashboard"' in dashboard
+
+
 def test_legacy_local_disconnect_is_removed(client):
     """The legacy DELETE route is gone entirely: the dashboard button posts to
     /dashboard/connections/brain/disconnect (remote-revoke-first). A stray

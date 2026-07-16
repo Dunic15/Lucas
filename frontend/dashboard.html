@@ -497,6 +497,12 @@
   .ctool-chips:empty{display:none;}
   .ctool-chip{font-size:.74rem;padding:3px 10px;border-radius:999px;background:var(--live-soft);border:1px solid rgba(126,182,255,.3);color:var(--live);font-weight:500;}
   .ctool-chip.warn{color:#F5C33B;border-color:rgba(245,195,59,.4);background:rgba(245,195,59,.08);}
+  /* Team-scope connect chips: a direct per-connector connect action rendered from
+     the connector's own connect_url (return-flow contract v3) — never the grid. */
+  .ctool-chip.connect{cursor:pointer;text-decoration:none;transition:border-color .15s,background .15s,color .15s;}
+  .ctool-chip.connect:hover{border-color:var(--live);background:var(--live-soft);}
+  .ctool-chip.add{color:var(--faint);background:transparent;border-style:dashed;}
+  .ctool-chip.add:hover{color:var(--live);border-color:rgba(126,182,255,.5);border-style:solid;}
   .cnote.warn{color:#F5C33B;}
   /* Inline brand logos on connection cards + capability rows (self-contained SVG). */
   .clogo{flex:0 0 auto;vertical-align:-3px;}
@@ -1731,9 +1737,10 @@
       '</div></div>'+
       // ── Slack agent (optional add-on), independent of Google ──
       // One connection lets the Slack agent use Slack + a catalog of tools
-      // (Notion, HubSpot, …). The tools are NOT dumped inline — a single "Manage
-      // tools" action opens the hosted connector page (manage_url) where they're
-      // added/managed. Connect + Disconnect (org-level) are preserved here.
+      // (Notion, HubSpot, …). Those tools render below as team-scope connect
+      // chips (each links its OWN connect_url — see applySlackTools); "Manage
+      // tools" is a secondary link to the hosted grid for advanced management.
+      // Connect + Disconnect (org-level) are preserved here.
       '<div class="conn"><div class="nm">'+LOGO_SLACK+' Slack agent <span class="stchip" style="margin-left:6px">add-on</span></div>'+
       '<div class="ds">Slack agent and meeting assistant — runs the actions from your meetings (email, calendar, messages) and checks with you before doing them.</div>'+
       '<div class="foot"><span class="cstat'+(slackConnected?" on":"")+'"><b></b>'+(slackConnected?"Connected":"Not connected")+'</span>'+
@@ -1741,13 +1748,16 @@
         ?'<button class="btn" data-slack-off>Disconnect</button>'
         :'<button class="btn primary" data-slack-on>Add to Slack</button>')+
       '</div>'+
-      // When connected: ONE clean action → the hosted connector/manage page. Its
-      // href is resolved to manage_url after render (guarded); it starts on a
-      // safe fallback so the link is never dead (#197 class).
+      // When connected: the team-scope connector chips (direct connect_url actions,
+      // filled by applySlackTools) PLUS a secondary "Manage tools" link to Cedric's
+      // hosted grid for advanced management. The grid link is target=_blank (not the
+      // connect loop); the per-connector chips navigate same-tab so ?connected=
+      // closes the loop. manage_url is resolved after render (guarded); it starts on
+      // a safe fallback so the link is never dead (#197 class).
       (slackConnected
         ?'<div class="ctools"><div class="ctool-chips" id="ctool-chips"></div>'+
-          '<a class="btn primary" data-slack-manage target="_blank" rel="noopener" style="text-decoration:none" href="https://www.meet-cedric.com">Manage tools ↗</a>'+
-          '<div class="cnote">Add and manage the tools your Slack agent can use.</div></div>'
+          '<a class="btn" data-slack-manage target="_blank" rel="noopener" style="text-decoration:none" href="https://www.meet-cedric.com">Manage tools ↗</a>'+
+          '<div class="cnote">Connect a tool above, or manage them on Cedric.</div></div>'
         :'')+
       '</div>'+
       // ── Asana (native) — the project system of record (docs/ASANA.md) ──
@@ -1828,16 +1838,19 @@
     wireAvatarImages();
   }
 
-  // Slack agent tools: resolve the "Manage tools" button to the hosted
-  // connector/manage page AND show which brokered tools are CONNECTED as compact
-  // chips. Reads the Laura proxy GET /dashboard/connections/brain/connectors
-  // (connector shape: {key,name,connected,manage_url?}). NULL-SAFE (#197 class):
-  // typeof/guard checks before any use; the button starts on a working fallback so
-  // the link is NEVER dead, a failed fetch leaves that fallback + empty chips in
-  // place (never a crash). The catalog is cached on window so the 15s summary
-  // refresh doesn't refetch — but the chips + href are RE-APPLIED from cache on
-  // every render because renderConnections rebuilds #conns each tick. Not-connected
-  // tools are never listed inline; they're added/managed on the hosted page.
+  // Slack agent tools: render the TEAM-SCOPE connector catalog as chips AND resolve
+  // the secondary "Manage tools" button to the hosted grid. Reads the Laura proxy
+  // GET /dashboard/connections/brain/connectors (connector shape per return-flow
+  // contract v3: {key,name,category,description,connected,account,needs_reconnect,
+  // read_only,connect_url}; response may also carry manage_url). Connected tools →
+  // status chips; available tools → direct "+ Connect" chips built from their own
+  // team-scope connect_url (so the user never routes through Cedric's private-
+  // defaulting grid). NULL-SAFE (#197 class): typeof/guard checks before any use;
+  // the button starts on a working fallback so the link is NEVER dead, a failed
+  // fetch leaves that fallback + empty chips in place (never a crash). The catalog
+  // is cached on window so the 15s summary refresh doesn't refetch — but the chips
+  // + href are RE-APPLIED from cache on every render because renderConnections
+  // rebuilds #conns each tick.
   // Append return_url=<this dashboard> so Cedric can bounce the user straight
   // back here after a connect on the hosted page. Cedric validates it
   // server-side against its Laura-origin allow-list (isSafeLauraReturnUrl) —
@@ -1880,11 +1893,37 @@
         if(b) b.addEventListener("click",function(){ window.location.assign("/dashboard/connections/brain/slack/start?avatar_id=cedric&channel="); });
         return;
       }
-      var on=(j.connectors||[]).filter(function(c){ return c&&c.connected===true; });
-      box.innerHTML=on.map(function(c){
-        var warn=!!(c&&c.needs_reconnect);
-        return '<span class="ctool-chip'+(warn?" warn":"")+'"'+(warn?' title="Needs reconnect"':'')+'>'+esc(String((c&&(c.name||c.key))||"Tool"))+(warn?" ⚠":"")+'</span>';
+      // Render the TEAM-SCOPE connector catalog. Connected tools show as status
+      // chips; AVAILABLE tools show as direct "+ Connect" chips whose href is the
+      // connector's OWN team-scope connect_url (with return_url appended) — so the
+      // user connects that specific tool straight from here and NEVER lands on
+      // Cedric's hosted grid, which defaults new connections to PRIVATE scope that
+      // Laura can't see or use (Handshake return-flow contract v3,
+      // hsk_con_4xqfrgkam59ypyteexyj). connect_url is BARE per contract; Laura owns
+      // appending return_url. Same-tab navigation so Cedric's ?connected= redirect
+      // lands back here and closes the loop. NULL-SAFE (#197): guard connect_url.
+      var cats=(j.connectors||[]).filter(function(c){ return c&&typeof c==="object"; });
+      cats.sort(function(a,b){ return (b.connected===true?1:0)-(a.connected===true?1:0); });
+      box.innerHTML=cats.map(function(c){
+        var nm=esc(String((c.name||c.key)||"Tool"));
+        var url=(typeof c.connect_url==="string"&&c.connect_url)?withReturnUrl(c.connect_url):"";
+        if(c.connected===true){
+          if(c.needs_reconnect&&url){
+            return '<a class="ctool-chip warn connect" data-connect-tool href="'+esc(url)+'" title="Needs reconnect">'+nm+' ⚠ reconnect</a>';
+          }
+          return '<span class="ctool-chip'+(c.needs_reconnect?" warn":"")+'"'+(c.needs_reconnect?' title="Needs reconnect"':'')+'>'+nm+(c.needs_reconnect?" ⚠":"")+'</span>';
+        }
+        // Not connected → actionable only when Cedric returned a team-scope
+        // connect_url for it (slack itself has none, so it renders nothing).
+        return url?('<a class="ctool-chip connect add" data-connect-tool href="'+esc(url)+'">+ '+nm+'</a>'):'';
       }).join("");
+      // Mark a pending-connect window so the catalog re-fetches when the user
+      // returns from the connect round-trip (same behavior as "Manage tools").
+      $$("#conns #ctool-chips [data-connect-tool]").forEach(function(a){
+        a.addEventListener("click",function(){
+          try{ sessionStorage.setItem("laura_pending_connect", String(Date.now())); }catch(e){}
+        });
+      });
     }
   }
   function resolveSlackManageUrl(force){
