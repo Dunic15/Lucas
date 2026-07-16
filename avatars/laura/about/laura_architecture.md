@@ -2,7 +2,7 @@
 
 **Owner:** Product/engineering
 **Applies to:** Current Laura backend and live meeting workflow
-**Last reviewed:** 2026-07-08
+**Last reviewed:** 2026-07-16
 
 ## What Laura is
 
@@ -80,12 +80,21 @@ and English. The Recall region is EU: `RECALL_API_BASE=https://eu-central-1.reca
   question, Italian answer.
 - **Dismissal:** "Laura, you can leave" makes her say goodbye and leave the
   meeting, which also stops billing.
+- **Calendar sight:** when the meeting owner's org has Google connected, she
+  joins knowing their upcoming calendar (a bounded snapshot taken at session
+  start) and can answer "when is my next meeting?" or "do I have a meeting
+  with Marco?" via her `upcoming_meetings` tool — no live network call.
+- **Echo immunity:** she never answers her own voice coming back through a
+  participant's open mic or a second transcription source — near-verbatim
+  echoes and re-worded re-transcriptions are both recognized and dropped.
 
 ## Owned boundaries
 
 Answer quality is owned by:
 
 - `avatars/laura/knowledge/*` (real process docs; `about/*` covers Laura herself)
+- per-org private indexes (an org's own ingested docs — Drive/uploads — live in
+  a separate per-tenant index merged at retrieval; orgs never see each other's)
 - `backend/app/rag.py`
 - `backend/scripts/ingest.py`
 - the grounding and prompt logic in `backend/app/brain.py`
