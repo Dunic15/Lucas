@@ -248,14 +248,18 @@ class Settings(BaseSettings):
     autopilot_nudge_hours: float = 24.0
 
     # Native Google executor (docs/product/NATIVE-INTEGRATIONS-PLAN.md, "Now"
-    # slice): Laura executes its OWN approved calendar/gmail actions on the
-    # user's Google account, instead of brokering through Cedric. OFF by default
-    # — with it off, behavior is byte-identical (Cedric path unchanged) and the
-    # zero-key demo never touches Google. Turning it on additionally needs the
-    # Google client id/secret and a completed /oauth/google/connect (which now
-    # asks for the calendar.events + gmail.send write scopes and persists the
-    # refresh token per org). See backend/app/executor.py + google_client.py.
-    native_executor: bool = False
+    # slice): every avatar executes its OWN approved calendar/gmail actions on
+    # the org's Google account — natively, INDEPENDENT of Slack/Cedric. ON by
+    # default (2026-07-16, owner decision: booking + email must work natively
+    # in all agents, separate from Slack). Still fully gated: an action runs
+    # only after a human approves it AND the acting avatar's per-avatar `google`
+    # toggle is on; needs the Google client id/secret and a completed
+    # /oauth/google/connect (calendar.events + gmail.send write scopes). Every
+    # vendor call soft-fails to a "failed" receipt, so the zero-key demo (no
+    # Google configured) degrades gracefully rather than breaking. Set
+    # NATIVE_EXECUTOR=false to fall back to the Cedric-brokered path.
+    # See backend/app/executor.py + google_client.py.
+    native_executor: bool = True
     # Key for encrypting the per-org Google refresh token at rest (store.py
     # org_oauth, Fernet). Empty ⇒ falls back to session_secret, so tokens are
     # never stored in plaintext even without extra config; with neither set it
