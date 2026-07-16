@@ -166,7 +166,8 @@ def test_poll_new_invites_carries_recipient_addresses(monkeypatch):
     assert mid == "m1" and url == "https://meet.google.com/abc-defg-hij"
     assert received_at == 1783674000.0  # seconds, for the boot-seeding cutoff
     assert "laura.ai.122222+cedric@gmail.com" in addrs
-    # From (the sender) must NOT be treated as a recipient
+    # From (the sender) must NOT be treated as a recipient — and, per the
+    # security note in gmail_watcher, is never used for org attribution.
     assert "duccio@example.com" not in addrs
     # …and the resolver turns it into the avatar id
     assert avatars.from_invite_email(addrs, [BASE]) == "cedric"

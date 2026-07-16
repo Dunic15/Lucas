@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Repo root = two levels up from this file (backend/app/config.py -> repo root).
@@ -601,6 +602,23 @@ class Settings(BaseSettings):
     # stays byte-identical while every persisted row still carries a non-null
     # org_id (the "start right so we never re-architect" invariant, §0).
     demo_org_id: str = "00000000-0000-0000-0000-0000000000de"
+    # ── tenancy policy ────────────────────────────────────────────────────
+    # Personal-first (owner decision 2026-07-13, re-confirmed 2026-07-16):
+    # every login provisions ONE personal durable org — including logins on a
+    # VERIFIED corporate domain. Set true to restore domain→shared-org routing
+    # (the parked "teams" behavior). Honored by BOTH resolvers: the SQLite
+    # org_id_for_email mirror and the Postgres laura_private.ensure_user
+    # (synced at boot via control_plane.sync_policy_flags — a SQL function
+    # cannot read a process env var). Env: LAURA_SHARED_DOMAIN_ORGS (the field
+    # is not laura_-named, so an explicit alias binds the documented var; the
+    # bare SHARED_DOMAIN_ORGS is accepted too).
+    shared_domain_orgs: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "LAURA_SHARED_DOMAIN_ORGS", "SHARED_DOMAIN_ORGS"
+        ),
+    )
+
     # ── usage metering / the free entitlement (backend/app/entitlements.py) ──
     # Only active when laura_database_url is set (the durable control plane);
     # the key-free demo has NO metering and NO enforcement. Seconds of included

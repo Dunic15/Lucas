@@ -140,6 +140,41 @@ def runtime_role_status() -> Optional[dict]:
     return _assert_runtime_role(engine) if engine is not None else None
 
 
+def sync_policy_flags() -> bool:
+    """Write the process's tenancy policy into the durable control plane.
+
+    laura_private.ensure_user reads its domain-routing gate from the one-row
+    policy_settings table (a SQL function can't read a process env var), so
+    boot pushes LAURA_SHARED_DOMAIN_ORGS down once via the SECURITY DEFINER
+    setter (migration 0008). Best-effort: on failure the row keeps its LAST
+    value and the failure is logged (never raised — boot must not hang on it).
+    The migration seeds the row FALSE, so a never-synced deployment is
+    personal-first; but note that once an operator has enabled shared-domain
+    routing, a later boot that fails to sync will NOT roll it back — the row
+    stays at its prior value until a sync succeeds. Returns True on write."""
+    if not enabled():
+        return False
+    from sqlalchemy import text
+
+    try:
+        engine = _get_engine()
+        if engine is None:
+            return False
+        with engine.begin() as conn:
+            conn.execute(
+                text("SELECT laura_private.set_shared_domain_orgs(:v)"),
+                {"v": bool(settings.shared_domain_orgs)},
+            )
+        return True
+    except Exception as exc:  # noqa: BLE001 — policy sync must never block boot
+        print(
+            f"[control_plane] policy sync failed ({type(exc).__name__}); "
+            "durable tenancy policy keeps its previous value",
+            flush=True,
+        )
+        return False
+
+
 def reset_engine() -> None:
     """Dispose the cached engine (tests switching databases)."""
     global _engine, _engine_url

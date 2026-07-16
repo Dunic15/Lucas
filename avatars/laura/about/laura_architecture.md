@@ -87,6 +87,11 @@ and English. The Recall region is EU: `RECALL_API_BASE=https://eu-central-1.reca
 - **Echo immunity:** she never answers her own voice coming back through a
   participant's open mic or a second transcription source — near-verbatim
   echoes and re-worded re-transcriptions are both recognized and dropped.
+- **Personal workspaces:** every user who signs in gets their OWN workspace
+  (their meetings, artifacts, connections, free minutes) — colleagues on the
+  same company domain are NOT grouped together. Meetings she is invited to
+  are attributed to the inviting person's workspace: their meter runs, their
+  tools act. Team/shared workspaces are a planned later feature.
 
 ## Owned boundaries
 

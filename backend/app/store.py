@@ -1135,7 +1135,11 @@ def org_id_for_email(email: str) -> str:
     Don't diagnose prod org resolution from this function alone."""
     normalized = (email or "").strip().lower()
     _, _, domain = normalized.partition("@")
-    if domain:
+    # PERSONAL-FIRST (owner decision): domain→shared-org routing only runs
+    # when explicitly enabled. Default off ⇒ every login — verified corporate
+    # domain included — resolves to its own personal org. The org_domains
+    # rows stay in place (the parked "teams" feature flips this back on).
+    if domain and settings.shared_domain_orgs:
         with _LOCK, _connect() as conn:
             row = conn.execute(
                 "SELECT org_id FROM org_domains "
@@ -2077,23 +2081,25 @@ def clear_user_oauth(user_id: str, *, provider: str = "google") -> bool:
 def org_for_email(email: str) -> str | None:
     """The org that owns an email address, or None when unknown.
 
-    The org whose CONNECTED Google account (org_oauth.email) matches wins —
-    that org demonstrably controls the inbox — else the org of a registered
-    user with that email. Callers use this to attribute an inbound meeting
-    (calendar/email invite) to its owner instead of the Demo org, so the
-    minutes meter — and any actions — land on the right tenant."""
+    PERSONAL-FIRST: the org of a REGISTERED USER with that email wins — after
+    the personal-orgs cutover that is the person's own durable org, so the
+    minutes meter — and any actions — land on the owner, never on a shared
+    legacy org. The org-level Google connection (org_oauth.email) is the
+    fallback for addresses that never logged in but were connected by an org
+    (legacy/shared inboxes). Callers use this to attribute an inbound meeting
+    (calendar/email invite) to its owner instead of the Demo org."""
     addr = (email or "").strip().lower()
     if not addr:
         return None
     with _LOCK, _connect() as conn:
         row = conn.execute(
-            """SELECT org_id FROM org_oauth WHERE email=?
-                   ORDER BY updated_at DESC LIMIT 1""",
+            "SELECT org_id FROM users WHERE email=? LIMIT 1",
             (addr,),
         ).fetchone()
         if row is None:
             row = conn.execute(
-                "SELECT org_id FROM users WHERE email=? LIMIT 1",
+                """SELECT org_id FROM org_oauth WHERE email=?
+                       ORDER BY updated_at DESC LIMIT 1""",
                 (addr,),
             ).fetchone()
     org = str(row["org_id"]).strip() if row and row["org_id"] else ""

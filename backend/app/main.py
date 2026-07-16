@@ -137,6 +137,10 @@ async def _lifespan(app: FastAPI):
     # Key-free demo: enabled() is false, so no engine or network connection.
     if control_plane.enabled():
         await run_in_threadpool(control_plane.runtime_role_status)
+        # Tenancy policy: push LAURA_SHARED_DOMAIN_ORGS into the durable
+        # resolver (ensure_user's domain-routing gate). Best-effort — the
+        # migration-seeded default is personal-first, the safe direction.
+        await run_in_threadpool(control_plane.sync_policy_flags)
 
     _prebuild_indexes()
 
@@ -614,6 +618,13 @@ async def _gmail_watch_loop() -> None:
                         )
                         or settings.default_avatar_id
                     )
+                    # Org attribution: the gmail path lands on the DEMO org (no
+                    # org_id passed). The sender headers (Reply-To/From) are
+                    # unauthenticated and this watcher reads one shared inbox,
+                    # so trusting them to pick a tenant would let a forged
+                    # header bill/arm someone else's org — see
+                    # _org_for_calendar_event. Personal attribution here waits
+                    # on a per-user mailbox (like #247 did for the calendar).
                     res = await _start_avatar_session(url, aid)
                     store.mark_scheduled(url)
                     _gmail_state["joined"].append(
@@ -4337,16 +4348,20 @@ def _org_for_calendar_event(event: dict) -> str:
     """Attribute a calendar-summoned meeting to the org that owns it.
 
     ORGANIZER-ONLY on purpose: the organizer's address resolves through
-    store.org_for_email — the org whose connected Google account or registered
-    user it is. That org's meter runs and its tools act, not the Demo org's.
-    Attendees never attribute: an external prospect's meeting that merely
-    INVITES a registered user must not bill (or arm the tools of) that
-    guest's org — cross-tenant mis-attribution is strictly worse than the
-    Demo fallback. Falls back to the Demo org (the pre-fix behavior) when the
-    organizer is missing/unknown/an avatar inbox — or when the control plane
-    is on and the match is not a durable tenant: a personal u_<hash> org
-    would fail the usage-gate uuid cast and kill the join outright.
-    """
+    store.org_for_email — since the personal-orgs cutover that is the
+    organizer's own durable org. That org's meter runs and its tools act,
+    not the Demo org's. Attendees never attribute: an external prospect's
+    meeting that merely INVITES a registered user must not bill (or arm the
+    tools of) that guest's org — cross-tenant mis-attribution is strictly
+    worse than the Demo fallback.
+
+    The organizer is TRUSTWORTHY here because it comes from Recall's sync of a
+    connected Google Calendar (Google stamps the event creator) — unlike a raw
+    mail header. The gmail-invite path deliberately does NOT attribute from the
+    sender: Reply-To/From are unauthenticated (no SPF/DKIM on Reply-To) and the
+    watcher reads one shared inbox, so a forged header could bill/arm a
+    victim's org. That path stays on the Demo org until a per-user mailbox
+    trust anchor exists (see docs/infra/ORG-ID-NAMESPACE-PERSONAL.md)."""
     def _base(addr: str) -> tuple[str, str]:
         base, _tag, domain = avatars.email_parts(addr)
         return base, domain
