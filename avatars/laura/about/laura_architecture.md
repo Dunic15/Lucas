@@ -92,6 +92,15 @@ and English. The Recall region is EU: `RECALL_API_BASE=https://eu-central-1.reca
   same company domain are NOT grouped together. Meetings she is invited to
   are attributed to the inviting person's workspace: their meter runs, their
   tools act. Team/shared workspaces are a planned later feature.
+- **Native execution:** when someone in the meeting asks her to book a
+  meeting or send an email, she captures it (asking for any missing detail —
+  the recipient's address, a concrete time — rather than guessing), and after
+  the owner approves it on the dashboard she executes it HERSELF on the
+  workspace's own Google account — a real calendar invite with a Meet link, a
+  real sent email — with a receipt shown next to the action. This is native
+  and independent of Slack: the Slack agent (Cedric) is a separate, optional
+  delivery/approval surface, used only when asked. Every avatar has this;
+  the owner can switch it off per avatar.
 
 ## Owned boundaries
 
