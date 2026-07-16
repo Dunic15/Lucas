@@ -79,19 +79,58 @@ _EXPIRY_MARGIN_S = 120.0  # re-mint this long before Google's stated expiry
 _DEFAULT_TTL_S = 3300.0  # expires_in missing → assume just under Google's 1h
 
 
+# Principals whose calendarList is confirmed 403 even after a fresh mint —
+# the grant genuinely lacks calendar.readonly (a pre-scope-change connection
+# that never reconnected) or a Workspace admin blocks the app. Without this,
+# EVERY read for such a principal would re-pay the fan-out's extra token mint +
+# calendarList GET forever (dashboard loads AND the session-start calendar
+# brief, ~every 3 min per active org). We remember the block briefly and go
+# straight to primary-only; a reconnect (which drops the token cache) clears
+# it, so a user who grants the scope re-checks on their very next read.
+_CALLIST_BLOCK: dict[str, float] = {}
+_CALLIST_BLOCK_TTL = 300.0
+
+
 def _reset_token_cache() -> None:
     """Test seam — process-global state, cleared per test (see conftest)."""
     with _TOKEN_LOCK:
         _TOKEN_CACHE.clear()
+        _CALLIST_BLOCK.clear()
 
 
 def _drop_cached_token(org_id: str) -> None:
     with _TOKEN_LOCK:
         _TOKEN_CACHE.pop(org_id, None)
+        # A reconnect drops the token here; also forget any calendarList block
+        # so the newly-granted scope is re-checked on the next read, not after
+        # the TTL. Harmless when called from the 401 path (just re-checks once).
+        _CALLIST_BLOCK.pop(org_id, None)
+
+
+def _calendarlist_blocked(principal: str) -> bool:
+    with _TOKEN_LOCK:
+        exp = _CALLIST_BLOCK.get(principal)
+        if exp is None:
+            return False
+        if exp <= time.time():
+            _CALLIST_BLOCK.pop(principal, None)
+            return False
+        return True
+
+
+def _note_calendarlist_result(principal: str, ok: bool) -> None:
+    """Remember a surviving 403 (skip the fan-out for a bit) or clear the block
+    when calendarList works again."""
+    with _TOKEN_LOCK:
+        if ok:
+            _CALLIST_BLOCK.pop(principal, None)
+        else:
+            _CALLIST_BLOCK[principal] = time.time() + _CALLIST_BLOCK_TTL
 
 
 def _access_token(
-    principal: str, oauth: dict | None = None, *, on_rotate=None
+    principal: str, oauth: dict | None = None, *, on_rotate=None,
+    force_refresh: bool = False,
 ) -> tuple[str, str]:
     """(access_token, "") for a principal, or ("", error) when unavailable.
 
@@ -102,14 +141,22 @@ def _access_token(
     (e.g. ``"user:<user_id>"``), so one person's calendar token never shares a
     cache slot with a colleague's. Refresh-token rotation is persisted back to
     org_oauth for the org path, or via ``on_rotate(new_rt)`` for a supplied
-    (per-user) token — never discarded (that would strand a revoked credential)."""
+    (per-user) token — never discarded (that would strand a revoked credential).
+
+    ``force_refresh`` bypasses the cache and re-mints from the CURRENT stored
+    refresh token. A reconnect that only ADDS a scope leaves the old, still
+    time-valid access token in the cache (old scopes) — so a scope-gated call
+    (calendarList needs calendar.readonly) keeps 403ing for up to an hour, on
+    every instance whose cache holds it. The 403 self-heal in
+    list_calendar_events sets this to re-mint with the new grant immediately."""
     if not settings.google_calendar_client_id or not settings.google_calendar_client_secret:
         return "", "Google OAuth client is not configured"
     now = time.time()
-    with _TOKEN_LOCK:
-        cached = _TOKEN_CACHE.get(principal)
-        if cached and cached[1] > now:
-            return cached[0], ""
+    if not force_refresh:
+        with _TOKEN_LOCK:
+            cached = _TOKEN_CACHE.get(principal)
+            if cached and cached[1] > now:
+                return cached[0], ""
     resolved_from_org = oauth is None
     if resolved_from_org:
         oauth = store.get_org_oauth(principal)
@@ -157,6 +204,10 @@ def _access_token(
             )
         elif on_rotate is not None:
             on_rotate(new_rt)
+        # Keep the in-memory dict current: a second mint in the SAME request
+        # (the calendarList-403 force_refresh) must redeem the ROTATED token,
+        # not the one Google just retired.
+        oauth["refresh_token"] = new_rt
     return tok, ""
 
 
@@ -303,33 +354,66 @@ def list_calendar_events(
     # Which calendars feed the view: the ones the user has SELECTED in their
     # own Google UI (plus primary). Strictly an enhancement — any failure here
     # degrades to the pre-existing primary-only read, never to an error.
+    # Skip the whole fan-out (and its re-mint retry) for a principal we've just
+    # confirmed can't list calendars — avoids doubling Google traffic on every
+    # read for a connection that never granted calendar.readonly.
     cal_ids = ["primary"]
-    try:
-        listing = httpx.get(
-            _CAL_CALENDARS,
-            params={"maxResults": 50, "fields": "items(id,selected,primary)"},
-            headers=headers,
-            timeout=min(_TIMEOUT, 8.0),
-        )
-        if listing.status_code >= 300:
-            # Diagnostic (status only): 403 here = the token lacks
-            # calendar.readonly (pre-scope-change connection) — reconnect fixes.
-            print(f"[calendar] calendarList HTTP {listing.status_code}", flush=True)
-        if listing.status_code < 300:
-            cals = listing.json().get("items", [])
-            sel = [
-                c
-                for c in (cals if isinstance(cals, list) else [])
-                if isinstance(c, dict)
-                and c.get("id")
-                and (c.get("selected") or c.get("primary"))
-            ]
-            sel.sort(key=lambda c: 0 if c.get("primary") else 1)  # primary first
-            picked = [str(c["id"]) for c in sel][:_MAX_CALENDARS]
-            if picked:
-                cal_ids = picked
-    except Exception:  # noqa: BLE001 — calendarList is best-effort by design
-        pass
+    if not _calendarlist_blocked(key):
+        try:
+            listing = httpx.get(
+                _CAL_CALENDARS,
+                params={"maxResults": 50, "fields": "items(id,selected,primary)"},
+                headers=headers,
+                timeout=min(_TIMEOUT, 8.0),
+            )
+            if listing.status_code == 403:
+                # 403 = the token lacks calendar.readonly. Almost always a stale
+                # CACHED access token from BEFORE a reconnect that added the
+                # scope (the new refresh token is stored, but this still-valid
+                # token carries the old scopes). Re-mint ONCE from the current
+                # refresh token and retry — upgrades the scope immediately
+                # instead of waiting out the cache TTL, and self-heals on every
+                # instance (not just the one that handled the OAuth callback).
+                # If it 403s again the grant genuinely lacks the scope.
+                _drop_cached_token(key)
+                fresh, ferr = _access_token(
+                    key, oauth, on_rotate=on_rotate, force_refresh=True
+                )
+                if not ferr and fresh and fresh != token:
+                    token = fresh
+                    headers = {"Authorization": f"Bearer {token}"}
+                    listing = httpx.get(
+                        _CAL_CALENDARS,
+                        params={
+                            "maxResults": 50,
+                            "fields": "items(id,selected,primary)",
+                        },
+                        headers=headers,
+                        timeout=min(_TIMEOUT, 8.0),
+                    )
+            if listing.status_code >= 300:
+                # A 403 that survives the re-mint means the grant itself lacks
+                # calendar.readonly (or an admin blocks the app) — remember it
+                # briefly so we don't re-pay the fan-out on every read; a
+                # reconnect clears the block. Diagnostic is status-only.
+                print(f"[calendar] calendarList HTTP {listing.status_code}", flush=True)
+                _note_calendarlist_result(key, ok=False)
+            else:
+                _note_calendarlist_result(key, ok=True)
+                cals = listing.json().get("items", [])
+                sel = [
+                    c
+                    for c in (cals if isinstance(cals, list) else [])
+                    if isinstance(c, dict)
+                    and c.get("id")
+                    and (c.get("selected") or c.get("primary"))
+                ]
+                sel.sort(key=lambda c: 0 if c.get("primary") else 1)  # primary first
+                picked = [str(c["id"]) for c in sel][:_MAX_CALENDARS]
+                if picked:
+                    cal_ids = picked
+        except Exception:  # noqa: BLE001 — calendarList is best-effort by design
+            pass
 
     merged: list[dict] = []
     seen: set[str] = set()

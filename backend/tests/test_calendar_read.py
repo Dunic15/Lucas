@@ -125,7 +125,7 @@ def _resp(json_data, status=200):
 def test_list_events_merges_selected_calendars(monkeypatch):
     monkeypatch.setattr(
         google_client, "_access_token",
-        lambda key, oauth=None, on_rotate=None: ("tok", ""),
+        lambda key, oauth=None, on_rotate=None, force_refresh=False: ("tok", ""),
     )
 
     def fake_get(url, params=None, headers=None, timeout=None):
@@ -163,7 +163,7 @@ def test_list_events_merges_selected_calendars(monkeypatch):
 def test_list_events_falls_back_to_primary_when_calendarlist_fails(monkeypatch):
     monkeypatch.setattr(
         google_client, "_access_token",
-        lambda key, oauth=None, on_rotate=None: ("tok", ""),
+        lambda key, oauth=None, on_rotate=None, force_refresh=False: ("tok", ""),
     )
     calls = []
 
@@ -183,7 +183,7 @@ def test_list_events_falls_back_to_primary_when_calendarlist_fails(monkeypatch):
 def test_list_events_error_only_when_nothing_readable(monkeypatch):
     monkeypatch.setattr(
         google_client, "_access_token",
-        lambda key, oauth=None, on_rotate=None: ("tok", ""),
+        lambda key, oauth=None, on_rotate=None, force_refresh=False: ("tok", ""),
     )
 
     def fake_get(url, params=None, headers=None, timeout=None):
@@ -194,3 +194,199 @@ def test_list_events_error_only_when_nothing_readable(monkeypatch):
     monkeypatch.setattr(google_client.httpx, "get", fake_get)
     out = google_client.list_calendar_events("org-z")
     assert out["ok"] is False and "403" in out["error"]
+
+
+# ── stale-token self-heal after a scope-adding reconnect (the "reconnected
+#    but still don't see them" bug) ────────────────────────────────────────
+
+def test_calendarlist_403_remints_and_reveals_all_calendars(monkeypatch):
+    """A reconnect that ADDS calendar.readonly leaves the OLD access token in
+    the cache (old scopes) → calendarList 403 → primary-only. The fan-out must
+    re-mint ONCE from the new refresh token and retry, revealing the shared
+    calendar's events (e.g. a 'Weekly Planning' the user couldn't see)."""
+    google_client._reset_token_cache()
+    tokens = iter(["stale-old-scope", "fresh-new-scope"])
+    minted = []
+
+    def fake_token(key, oauth=None, on_rotate=None, force_refresh=False):
+        t = next(tokens)
+        minted.append((t, force_refresh))
+        return t, ""
+
+    monkeypatch.setattr(google_client, "_access_token", fake_token)
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        bearer = (headers or {}).get("Authorization", "")
+        if "users/me/calendarList" in url:
+            # the stale token 403s; only the re-minted (fresh) token succeeds
+            if "fresh-new-scope" not in bearer:
+                return _resp({}, status=403)
+            return _resp({"items": [
+                {"id": "primary", "primary": True, "selected": True},
+                {"id": "sff@group.calendar.google.com", "selected": True},
+            ]})
+        if "sff%40group.calendar.google.com" in url:
+            return _resp({"items": [
+                {"id": "wp", "iCalUID": "uid-wp", "summary": "Weekly Planning",
+                 "start": {"dateTime": "2026-07-20T08:45:00Z"}},
+            ]})
+        return _resp({"items": [
+            {"id": "p1", "iCalUID": "uid-p", "summary": "Primary standup",
+             "start": {"dateTime": "2026-07-20T09:30:00Z"}},
+        ]})
+
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+    out = google_client.list_calendar_events("org-stale")
+    assert out["ok"] is True
+    titles = [e["summary"] for e in out["events"]]
+    assert "Weekly Planning" in titles  # the shared-calendar event now shows
+    # exactly one re-mint, and it was the force_refresh one
+    assert minted == [("stale-old-scope", False), ("fresh-new-scope", True)]
+
+
+def test_calendarlist_403_no_retry_loop_when_grant_truly_lacks_scope(monkeypatch):
+    """If the re-mint returns the SAME token (the grant genuinely lacks the
+    scope — user never granted it), do NOT loop: re-mint at most once, then
+    fall back to primary-only. Guards Google's token endpoint from hammering."""
+    google_client._reset_token_cache()
+    monkeypatch.setattr(
+        google_client, "_access_token",
+        lambda key, oauth=None, on_rotate=None, force_refresh=False: ("same-tok", ""),
+    )
+    calls = {"calendarList": 0, "primary": 0}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if "users/me/calendarList" in url:
+            calls["calendarList"] += 1
+            return _resp({}, status=403)
+        calls["primary"] += 1
+        return _resp({"items": [
+            {"id": "p1", "iCalUID": "uid-p", "summary": "Only primary",
+             "start": {"dateTime": "2026-07-20T09:30:00Z"}},
+        ]})
+
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+    out = google_client.list_calendar_events("org-noscope")
+    assert out["ok"] is True
+    assert [e["summary"] for e in out["events"]] == ["Only primary"]
+    assert calls["calendarList"] == 1  # tried once, no retry (same token)
+    assert calls["primary"] == 1       # degraded to primary-only
+
+
+def test_force_refresh_bypasses_cache(monkeypatch):
+    """A cached, still-valid token is normally reused; force_refresh must skip
+    it and re-mint (what the reconnect + 403 paths rely on)."""
+    import time as _t
+    google_client._reset_token_cache()
+    monkeypatch.setattr(google_client.settings, "google_calendar_client_id", "cid")
+    monkeypatch.setattr(google_client.settings, "google_calendar_client_secret", "csec")
+    with google_client._TOKEN_LOCK:
+        google_client._TOKEN_CACHE["p1"] = ("cached-tok", _t.time() + 9999)
+
+    # normal read reuses the cache (no HTTP)
+    tok, err = google_client._access_token("p1", {"refresh_token": "rt"})
+    assert (tok, err) == ("cached-tok", "")
+
+    def fake_post(url, data=None, timeout=None):
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"access_token": "reminted", "expires_in": 3600},
+        )
+
+    monkeypatch.setattr(google_client.httpx, "post", fake_post)
+    tok2, err2 = google_client._access_token(
+        "p1", {"refresh_token": "rt"}, force_refresh=True
+    )
+    assert (tok2, err2) == ("reminted", "")
+
+
+def test_force_refresh_persists_rotated_refresh_token(monkeypatch):
+    """Rotation must survive the 403 self-heal: a force_refresh mint that
+    returns a NEW refresh token persists it (org path -> set_org_oauth) and
+    updates the in-memory dict so a later use redeems the rotated token."""
+    google_client._reset_token_cache()
+    monkeypatch.setattr(google_client.settings, "google_calendar_client_id", "cid")
+    monkeypatch.setattr(google_client.settings, "google_calendar_client_secret", "csec")
+
+    saved = {}
+    monkeypatch.setattr(
+        google_client.store, "get_org_oauth",
+        lambda p, provider="google": {"refresh_token": "rt-old", "email": "o@x", "scopes": "s"},
+    )
+    monkeypatch.setattr(
+        google_client.store, "set_org_oauth",
+        lambda org, rt, provider="google", email="", scopes="": saved.update(org=org, rt=rt) or True,
+    )
+
+    def fake_post(url, data=None, timeout=None):
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"access_token": "acc", "expires_in": 3600,
+                          "refresh_token": "rt-new"},
+        )
+
+    monkeypatch.setattr(google_client.httpx, "post", fake_post)
+    tok, err = google_client._access_token("org-rot", None, force_refresh=True)
+    assert (tok, err) == ("acc", "")
+    assert saved == {"org": "org-rot", "rt": "rt-new"}  # rotation persisted
+
+
+def test_per_user_principal_self_heals_on_403(monkeypatch):
+    """The bug is on the per-user dashboard view (principal 'user:<uid>').
+    Drive the self-heal through that exact key + a supplied oauth dict."""
+    google_client._reset_token_cache()
+    tokens = iter(["stale", "fresh"])
+    monkeypatch.setattr(
+        google_client, "_access_token",
+        lambda key, oauth=None, on_rotate=None, force_refresh=False: (next(tokens), ""),
+    )
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        bearer = (headers or {}).get("Authorization", "")
+        if "users/me/calendarList" in url:
+            if "fresh" not in bearer:
+                return _resp({}, status=403)
+            return _resp({"items": [
+                {"id": "primary", "primary": True, "selected": True},
+                {"id": "team@g", "selected": True},
+            ]})
+        if "team%40g" in url:
+            return _resp({"items": [{"id": "t", "iCalUID": "u-t", "summary": "Team event",
+                                     "start": {"dateTime": "2026-07-20T08:00:00Z"}}]})
+        return _resp({"items": []})
+
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+    out = google_client.list_calendar_events(
+        "org-x", oauth={"refresh_token": "rt"}, principal="user:abc"
+    )
+    assert out["ok"] is True
+    assert "Team event" in [e["summary"] for e in out["events"]]
+
+
+def test_surviving_403_is_negative_cached_then_reconnect_clears(monkeypatch):
+    """A grant that truly lacks the scope must not re-pay the fan-out on every
+    read: the first surviving 403 blocks calendarList for the TTL; a reconnect
+    (_drop_cached_token) clears the block so the next read re-checks."""
+    google_client._reset_token_cache()
+    monkeypatch.setattr(
+        google_client, "_access_token",
+        lambda key, oauth=None, on_rotate=None, force_refresh=False: ("same", ""),
+    )
+    hits = {"calendarList": 0}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if "users/me/calendarList" in url:
+            hits["calendarList"] += 1
+            return _resp({}, status=403)
+        return _resp({"items": [{"id": "p", "iCalUID": "u-p", "summary": "Primary",
+                                 "start": {"dateTime": "2026-07-20T08:00:00Z"}}]})
+
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+
+    google_client.list_calendar_events("org-block")   # 1st: tries + blocks
+    google_client.list_calendar_events("org-block")   # 2nd: skipped by block
+    assert hits["calendarList"] == 1                  # not re-paid
+
+    google_client._drop_cached_token("org-block")     # a reconnect
+    google_client.list_calendar_events("org-block")   # re-checks
+    assert hits["calendarList"] == 2
