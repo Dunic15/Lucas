@@ -113,3 +113,84 @@ def test_tool_registered_for_brain_and_session():
         if t.get("type") == "function"
     }
     assert "upcoming_meetings" in names  # the brain can actually see it
+
+
+# ── all-calendars fan-out: selected calendars merge into one upcoming view ──
+
+
+def _resp(json_data, status=200):
+    return SimpleNamespace(status_code=status, json=lambda: json_data)
+
+
+def test_list_events_merges_selected_calendars(monkeypatch):
+    monkeypatch.setattr(
+        google_client, "_access_token",
+        lambda key, oauth=None, on_rotate=None: ("tok", ""),
+    )
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if "users/me/calendarList" in url:
+            return _resp({"items": [
+                {"id": "duccio@example.com", "primary": True, "selected": True},
+                {"id": "team@group.calendar.google.com", "selected": True},
+                {"id": "ignored@cal", "selected": False},
+            ]})
+        if "duccio%40example.com" in url:
+            return _resp({"items": [
+                {"id": "a1", "iCalUID": "uid-a", "summary": "Later",
+                 "start": {"dateTime": "2026-07-21T10:00:00Z"}},
+                {"id": "dup1", "iCalUID": "uid-shared", "summary": "Shared copy",
+                 "start": {"dateTime": "2026-07-22T10:00:00Z"}},
+            ]})
+        if "team%40group.calendar.google.com" in url:
+            return _resp({"items": [
+                {"id": "b1", "iCalUID": "uid-b", "summary": "Sooner",
+                 "start": {"dateTime": "2026-07-20T09:00:00Z"}},
+                {"id": "dup2", "iCalUID": "uid-shared", "summary": "Shared copy",
+                 "start": {"dateTime": "2026-07-22T10:00:00Z"}},
+            ]})
+        raise AssertionError(f"unexpected URL {url}")
+
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+    out = google_client.list_calendar_events("org-x")
+    assert out["ok"] is True
+    titles = [e["summary"] for e in out["events"]]
+    assert titles[0] == "Sooner"  # merged + sorted across calendars
+    assert titles.count("Shared copy") == 1  # deduped on iCalUID
+    assert "ignored" not in str(out["events"])  # unselected calendar untouched
+
+
+def test_list_events_falls_back_to_primary_when_calendarlist_fails(monkeypatch):
+    monkeypatch.setattr(
+        google_client, "_access_token",
+        lambda key, oauth=None, on_rotate=None: ("tok", ""),
+    )
+    calls = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls.append(url)
+        if "users/me/calendarList" in url:
+            return _resp({}, status=500)
+        assert "calendars/primary/events" in url
+        return _resp({"items": _items()})
+
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+    out = google_client.list_calendar_events("org-y")
+    assert out["ok"] is True and len(out["events"]) == 2
+    assert sum("calendars/primary/events" in u for u in calls) == 1
+
+
+def test_list_events_error_only_when_nothing_readable(monkeypatch):
+    monkeypatch.setattr(
+        google_client, "_access_token",
+        lambda key, oauth=None, on_rotate=None: ("tok", ""),
+    )
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if "users/me/calendarList" in url:
+            return _resp({"items": [{"id": "x@cal", "selected": True, "primary": True}]})
+        return _resp({}, status=403)
+
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+    out = google_client.list_calendar_events("org-z")
+    assert out["ok"] is False and "403" in out["error"]

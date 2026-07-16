@@ -972,8 +972,10 @@ def answer_with_tools(
         text, used = llm.complete_with_tools(
             system,
             user,
-            tools.TOOL_SPECS,
-            tools.dispatch_for(session),
+            # LIVE meeting path: native tools + Cedric read+fast tools only
+            # (the latency contract); Cedric calls run on the ~2s budget.
+            tools.specs_for(session, live=True),
+            tools.dispatch_for(session, live=True),
             model=settings.brain_model_fast,
         )
     except Exception as e:  # noqa: BLE001 — Groq tool endpoint 429s/errors have no fallback
