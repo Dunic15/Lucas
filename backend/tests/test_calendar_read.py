@@ -140,6 +140,7 @@ def test_list_events_merges_all_accessible_calendars(monkeypatch):
                 {"id": "hidden@cal", "summary": "Customer calls",
                  "selected": False, "backgroundColor": "#d50000"},
             ]})
+        assert params["showHiddenInvitations"] == "true"
         if "duccio%40example.com" in url:
             return _resp({"items": [
                 {"id": "a1", "iCalUID": "uid-a", "summary": "Later",
@@ -172,8 +173,47 @@ def test_list_events_merges_all_accessible_calendars(monkeypatch):
     assert titles.count("Shared copy") == 1  # deduped on iCalUID
     hidden = next(e for e in out["events"] if e["id"] == "meet-hidden")
     assert hidden["_laura_calendar"] == {
-        "name": "Customer calls", "color": "#d50000", "primary": False
+        "id": "hidden@cal", "name": "Customer calls",
+        "color": "#d50000", "primary": False,
     }
+
+
+def test_add_calendar_event_attendee_preserves_guests(monkeypatch):
+    monkeypatch.setattr(
+        google_client, "_access_token",
+        lambda key, oauth=None, on_rotate=None, force_refresh=False: ("tok", ""),
+    )
+    patched = {}
+
+    def fake_get(url, headers=None, timeout=None):
+        assert "team%40group.calendar.google.com/events/event-1" in url
+        return _resp({
+            "id": "event-1", "htmlLink": "https://calendar.google/event",
+            "attendees": [
+                {"email": "owner@example.com", "organizer": True,
+                 "responseStatus": "accepted"},
+                {"email": "guest@example.com", "responseStatus": "tentative"},
+            ],
+        })
+
+    def fake_patch(url, params=None, headers=None, json=None, timeout=None):
+        patched.update({"url": url, "params": params, "json": json})
+        return _resp({"id": "event-1", "htmlLink": "https://calendar.google/event"})
+
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+    monkeypatch.setattr(google_client.httpx, "patch", fake_patch)
+    out = google_client.add_calendar_event_attendee(
+        "org-x", "team@group.calendar.google.com", "event-1",
+        "laura+petra@example.com",
+    )
+
+    assert out["ok"] is True and out["idempotent"] is False
+    assert patched["params"] == {"sendUpdates": "all"}
+    attendees = patched["json"]["attendees"]
+    assert [a["email"] for a in attendees] == [
+        "owner@example.com", "guest@example.com", "laura+petra@example.com"
+    ]
+    assert "organizer" not in attendees[0]  # read-only field not echoed to patch
 
 
 def test_list_events_has_no_calendar_count_cap_and_paginates(monkeypatch):

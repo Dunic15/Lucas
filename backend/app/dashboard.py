@@ -13,6 +13,8 @@ router so main.py stays a 2-line include, like org_api.py.
 """
 from __future__ import annotations
 
+import base64
+import json
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1200,6 +1202,36 @@ def _native_event_url(ev: dict) -> str:
     return ""
 
 
+def _calendar_event_ref(user_id: str, calendar_id: str, event_id: str) -> str:
+    """Opaque, signed browser reference to one event on the caller's calendar."""
+    raw = json.dumps(
+        {"u": user_id, "c": calendar_id, "e": event_id},
+        separators=(",", ":"), sort_keys=True,
+    ).encode()
+    payload = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return f"{payload}.{auth._sign(payload, 'calendar-event')}"
+
+
+def _read_calendar_event_ref(value: str) -> tuple[str, str, str] | None:
+    """Return (user_id, calendar_id, event_id) for a valid signed reference."""
+    try:
+        payload, signature = str(value or "").rsplit(".", 1)
+        if not auth._verify(payload, signature, "calendar-event"):
+            return None
+        raw = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        data = json.loads(raw.decode())
+        uid = str(data.get("u") or "")
+        calendar_id = str(data.get("c") or "")
+        event_id = str(data.get("e") or "")
+        if not uid or not calendar_id or not event_id:
+            return None
+        if len(calendar_id) > 1024 or len(event_id) > 1024:
+            return None
+        return uid, calendar_id, event_id
+    except Exception:  # noqa: BLE001 — hostile browser input
+        return None
+
+
 def _iso_plus_minutes(start_iso: str, minutes: int) -> str:
     """``start_iso`` + ``minutes`` as an ISO8601 string, or "" when start can't be
     parsed. Preserves the original offset (a "Z" is normalised to +00:00)."""
@@ -1330,6 +1362,13 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
             url = _native_event_url(ev)
             end = ev.get("end") or {}
             cal_meta = ev.get("_laura_calendar") or {}
+            event_ref = ""
+            if user is not None and url and cal_meta.get("id") and ev.get("id"):
+                event_ref = _calendar_event_ref(
+                    str(user.get("user_id") or ""),
+                    str(cal_meta.get("id") or ""),
+                    str(ev.get("id") or ""),
+                )
             invited = avatars.from_invite_email(
                 [str((a or {}).get("email") or "") for a in (ev.get("attendees") or [])],
                 invite_bases,
@@ -1352,6 +1391,9 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
                     # and display color leave this distillation boundary.
                     "calendar_name": str(cal_meta.get("name") or ""),
                     "calendar_color": str(cal_meta.get("color") or ""),
+                    # Signed/opaque: lets the owner add an avatar to this real
+                    # Google event without exposing the calendar id/email.
+                    "event_ref": event_ref,
                     "auto_join": bool(going_avatar),
                     # WHO is being sent (empty when none) — powers the
                     # "🎭 <name>" badge on the calendar block.
@@ -1611,6 +1653,94 @@ async def create_calendar_event_endpoint(request: Request) -> JSONResponse:
             # show/confirm it; the avatar joins THIS Meet via its invite alias.
             "meet_url": res.get("meet_url", ""),
             "avatar_added": bool(avatar_email),
+        },
+        headers=_NO_STORE,
+    )
+
+
+@router.post("/dashboard/calendar/event/avatar")
+async def add_avatar_to_calendar_event(request: Request) -> JSONResponse:
+    """Invite one Laura avatar into an existing event on the caller's Google.
+
+    This patches the real Google event's attendee list with the avatar invite
+    alias. Google sends the invite and the existing Recall calendar watcher
+    schedules the avatar for the event.
+    """
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": "invalid JSON body"}, status_code=400)
+    body = body or {}
+    ref = _read_calendar_event_ref(str(body.get("event_ref") or ""))
+    if not ref or ref[0] != str(user["user_id"]):
+        return JSONResponse({"ok": False, "error": "invalid_event_ref"}, status_code=400)
+    _, calendar_id, event_id = ref
+    avatar_id = str(body.get("avatar_id") or "").strip()
+    if avatar_id not in set(avatars.list_ids()):
+        return JSONResponse({"ok": False, "error": "unknown avatar_id"}, status_code=400)
+    avatar_email = _avatar_email(avatar_id)
+    if not avatar_email:
+        return JSONResponse({"ok": False, "error": "avatar invite email unavailable"})
+
+    native_org = str(user.get("org_id") or "") or settings.demo_org_id
+    uid = str(user["user_id"])
+    try:
+        oauth = await run_in_threadpool(store.get_user_oauth, uid)
+        principal = f"user:{uid}"
+        on_rotate = None
+        if oauth and not _is_avatar_inbox(oauth):
+            def on_rotate(new_rt: str, _uid: str = uid, _o: dict = oauth) -> None:
+                store.set_user_oauth(
+                    _uid, new_rt,
+                    email=str(_o.get("email") or ""),
+                    scopes=str(_o.get("scopes") or ""),
+                )
+        else:
+            org_oauth = await run_in_threadpool(store.get_org_oauth, native_org)
+            org_email = str((org_oauth or {}).get("email") or "").strip().lower()
+            if (
+                org_oauth
+                and not _is_avatar_inbox(org_oauth)
+                and org_email
+                and org_email == str(user.get("email") or "").strip().lower()
+            ):
+                oauth = org_oauth
+                principal = ""
+            else:
+                oauth = None
+    except Exception:  # noqa: BLE001
+        oauth = None
+    if not oauth:
+        return JSONResponse({"ok": False, "error": "connect_google"})
+
+    from . import google_client
+    res = await run_in_threadpool(
+        google_client.add_calendar_event_attendee,
+        native_org,
+        calendar_id,
+        event_id,
+        avatar_email,
+        oauth=(oauth if principal else None),
+        principal=principal,
+        on_rotate=on_rotate,
+    )
+    if not res.get("ok"):
+        return JSONResponse(
+            {"ok": False, "error": res.get("error") or "calendar_update_failed"}
+        )
+    return JSONResponse(
+        {
+            "ok": True,
+            "event_id": res.get("event_id", event_id),
+            "avatar_id": avatar_id,
+            "idempotent": bool(res.get("idempotent")),
         },
         headers=_NO_STORE,
     )
