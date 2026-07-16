@@ -36,14 +36,37 @@ knowledge pack — but the integration is avatar-agnostic: any avatar with the
 
 ## Setup
 
+**Option A — one-click OAuth (the "Connect Asana" button, recommended).**
+One-time platform setup, then every owner connects with two clicks:
+
+1. Create the OAuth app (any Asana account, ~5 min):
+   [app.asana.com/0/my-apps](https://app.asana.com/0/my-apps) → *Create new
+   app* → add the redirect URL `{PUBLIC_BASE_URL}/oauth/asana/callback` →
+   enable full/default scope → copy the client id + secret.
+2. Set on the deployment:
+   ```
+   ASANA_CLIENT_ID=<from the app>
+   ASANA_CLIENT_SECRET=<from the app>
+   ```
+3. The Connections card now shows **Connect Asana**: clicking it sends the
+   owner to Asana's own sign-in/consent screen and back — connected. The
+   grant (a refresh token) is stored encrypted per-org
+   (provider="asana-oauth") and minted into short-lived access tokens
+   (cached ~1h) on use; a single-use signed state + HttpOnly cookie bind the
+   round-trip to the browser that started it (same CSRF machinery as the
+   Google flow).
+
+**Option B — Personal Access Token (no OAuth app needed).**
+
 1. **Get a token**: Asana → your avatar (top right) → Settings → Apps →
    *Developer apps* → **Create personal access token**. Copy it once.
 2. **Connect** (any one of these):
-   - **Dashboard (recommended)**: Connections view → **Asana** card → paste
-     the token → Connect. The backend verifies it live against Asana before
+   - **Dashboard**: Connections view → **Asana** card → paste the token →
+     Connect (the card shows the paste field whenever the OAuth app env is
+     not configured). The backend verifies it live against Asana before
      storing it (encrypted per-org, same vault as the Google refresh token);
      a bad token is a clean error, and the token is never echoed back to the
-     browser. Disconnect from the same card.
+     browser. Disconnect from the same card (clears OAuth grant AND PAT).
    - Single-tenant env vars on the deployment:
      ```
      ASANA_TOKEN=<the PAT>
@@ -53,6 +76,8 @@ knowledge pack — but the integration is avatar-agnostic: any avatar with the
      ```python
      store.set_org_oauth(org_id, pat, provider="asana")
      ```
+
+Credential precedence at call time: OAuth grant → pasted PAT → env token.
 3. **Enable writes**: the write path rides the native executor —
    `NATIVE_EXECUTOR=true` (already required for calendar/email execution).
 4. **Optional**: `ASANA_AUTO_EXECUTE=true` for approval-free task pushing.

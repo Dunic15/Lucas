@@ -32,7 +32,16 @@ from . import store
 from .config import settings
 
 _API = "https://app.asana.com/api/1.0"
+_OAUTH_TOKEN_URL = "https://app.asana.com/-/oauth_token"
 _TIMEOUT = 20.0
+
+# OAuth access-token cache (the "Connect Asana" button path): Asana OAuth
+# access tokens live ~1h; mint once per org per hour instead of per call.
+# Same contract as google_client's cache — in-process only, never logged.
+_oauth_lock = threading.Lock()
+_OAUTH_CACHE: dict[str, tuple[str, float]] = {}  # org_id -> (token, expires_at)
+_OAUTH_EXPIRY_MARGIN_S = 120.0
+_OAUTH_DEFAULT_TTL_S = 3300.0
 
 # Workspace-brief cache: the snapshot is fetched at session start (join) and
 # would otherwise refetch on every join of a busy org. Same shape as
@@ -47,17 +56,129 @@ _BRIEF_MAX_TASKS_PER_PROJECT = 6
 _BRIEF_MAX_CHARS = 2400
 
 
+def oauth_available() -> bool:
+    """True when the Asana OAuth app is configured (the one-click connect)."""
+    return bool(settings.asana_client_id and settings.asana_client_secret)
+
+
 def _token(org_id: str) -> tuple[str, str]:
-    """(pat, "") for the org, or ("", error). Per-org encrypted row first,
-    ASANA_TOKEN env fallback — same precedence story as the Google client."""
+    """(bearer_token, "") for the org, or ("", error).
+
+    Precedence: the OAuth grant from the dashboard's "Connect Asana" button
+    (provider="asana-oauth" — a refresh token minted into short-lived access
+    tokens, cached) → the pasted PAT (provider="asana") → the ASANA_TOKEN env
+    fallback. An expired/unmintable OAuth grant falls through rather than
+    masking a working PAT."""
+    org = (org_id or "").strip()
     try:
-        row = store.get_org_oauth((org_id or "").strip(), provider="asana")
+        oauth_row = store.get_org_oauth(org, provider="asana-oauth")
     except Exception:  # noqa: BLE001 — a store hiccup reads as not connected
+        oauth_row = None
+    if oauth_row and oauth_row.get("refresh_token"):
+        tok, _err = _oauth_access_token(org, oauth_row)
+        if tok:
+            return tok, ""
+    try:
+        row = store.get_org_oauth(org, provider="asana")
+    except Exception:  # noqa: BLE001
         row = None
     pat = (row or {}).get("refresh_token", "") or settings.asana_token.strip()
     if not pat:
         return "", "Asana is not connected for this org"
     return pat, ""
+
+
+def _oauth_access_token(org_id: str, row: dict) -> tuple[str, str]:
+    """Mint (or serve cached) a short-lived access token from the org's OAuth
+    refresh token. ("", error) on any failure — the caller falls through."""
+    now = time.time()
+    with _oauth_lock:
+        cached = _OAUTH_CACHE.get(org_id)
+        if cached and cached[1] > now:
+            return cached[0], ""
+    if not oauth_available():
+        return "", "Asana OAuth app is not configured"
+    try:
+        resp = httpx.post(
+            _OAUTH_TOKEN_URL,
+            data={
+                "grant_type": "refresh_token",
+                "client_id": settings.asana_client_id,
+                "client_secret": settings.asana_client_secret,
+                "refresh_token": row["refresh_token"],
+            },
+            timeout=_TIMEOUT,
+        )
+    except Exception as e:  # noqa: BLE001
+        return "", f"asana token request failed ({type(e).__name__})"
+    if resp.status_code >= 300:
+        return "", f"asana token refresh rejected (HTTP {resp.status_code})"
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        return "", "asana token endpoint returned no JSON"
+    tok = str(data.get("access_token") or "")
+    if not tok:
+        return "", "no access token returned"
+    try:
+        ttl = float(data.get("expires_in") or 0)
+    except (TypeError, ValueError):
+        ttl = 0.0
+    if ttl <= 0:
+        ttl = _OAUTH_DEFAULT_TTL_S
+    with _oauth_lock:
+        _OAUTH_CACHE[org_id] = (tok, now + max(60.0, ttl - _OAUTH_EXPIRY_MARGIN_S))
+    # Persist a rotated refresh token (never discard — that strands the grant).
+    new_rt = str(data.get("refresh_token") or "").strip()
+    if new_rt and new_rt != row["refresh_token"]:
+        try:
+            store.set_org_oauth(
+                org_id, new_rt, provider="asana-oauth",
+                email=str(row.get("email") or ""),
+                scopes=str(row.get("scopes") or ""),
+            )
+        except Exception:  # noqa: BLE001 — best-effort; the old rt may still work
+            pass
+    return tok, ""
+
+
+def exchange_code(code: str, redirect_uri: str) -> dict:
+    """Authorization-code exchange for the OAuth callback: {"ok",
+    "refresh_token", "access_token", "email", "name"} or {"ok": False,
+    "error"}. Never raises, never logs tokens."""
+    code = (code or "").strip()
+    if not code:
+        return {"ok": False, "error": "code is required"}
+    if not oauth_available():
+        return {"ok": False, "error": "Asana OAuth app is not configured"}
+    try:
+        resp = httpx.post(
+            _OAUTH_TOKEN_URL,
+            data={
+                "grant_type": "authorization_code",
+                "client_id": settings.asana_client_id,
+                "client_secret": settings.asana_client_secret,
+                "redirect_uri": redirect_uri,
+                "code": code,
+            },
+            timeout=_TIMEOUT,
+        )
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"asana token request failed ({type(e).__name__})"}
+    if resp.status_code >= 300:
+        return {"ok": False, "error": f"asana code exchange failed (HTTP {resp.status_code})"}
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "error": "asana token endpoint returned no JSON"}
+    user = data.get("data") or {}
+    return {
+        "ok": True,
+        "access_token": str(data.get("access_token") or ""),
+        "refresh_token": str(data.get("refresh_token") or ""),
+        "email": str(user.get("email") or "")[:120],
+        "name": str(user.get("name") or "")[:120],
+    }
 
 
 def connected(org_id: str) -> bool:
@@ -276,9 +397,13 @@ def _build_brief(org_id: str) -> str:
 
 
 def _reset_brief_cache() -> None:
-    """Test seam — process-global state, cleared per test (see conftest)."""
+    """Test seam — process-global state (the workspace-brief cache AND the
+    OAuth access-token cache), cleared per test (see conftest) and on every
+    connect/disconnect so a new grant never serves the old org's view."""
     with _brief_lock:
         _brief_cache.clear()
+    with _oauth_lock:
+        _OAUTH_CACHE.clear()
 
 
 # ─────────────────────────── writes ───────────────────────────

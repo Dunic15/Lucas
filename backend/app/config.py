@@ -277,6 +277,12 @@ class Settings(BaseSettings):
     # same provenance channel). OFF by default — approval-gated is the safe
     # default; this is the one-toggle "make it automatic" switch.
     asana_auto_execute: bool = False
+    # OAuth app for the dashboard's one-click "Connect Asana" button: create an
+    # app at https://app.asana.com/0/my-apps with redirect URL
+    # {PUBLIC_BASE_URL}/oauth/asana/callback and paste its credentials here.
+    # Unset ⇒ the Connections card falls back to the paste-a-PAT flow.
+    asana_client_id: str = ""
+    asana_client_secret: str = ""
 
     # Proactive intervention (the differentiator): flag ONE missing step as the
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.

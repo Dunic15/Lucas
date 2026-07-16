@@ -333,6 +333,104 @@ def test_connect_asana_bad_token_stores_nothing(monkeypatch, tmp_path):
     assert r2.status_code == 400  # missing token is a clean client error
 
 
+# ── OAuth: the one-click "Connect Asana" button ──
+
+def _oauth_app(monkeypatch):
+    monkeypatch.setattr(settings, "asana_client_id", "cid-asana")
+    monkeypatch.setattr(settings, "asana_client_secret", "csec-asana")
+    monkeypatch.setattr(settings, "public_base_url", "https://laura.example")
+
+
+def test_oauth_connect_redirects_to_asana_with_state(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    _oauth_app(monkeypatch)
+    r = client.get("/oauth/asana/connect", follow_redirects=False)
+    assert r.status_code in (302, 307)
+    loc = r.headers["location"]
+    assert loc.startswith("https://app.asana.com/-/oauth_authorize")
+    assert "client_id=cid-asana" in loc and "state=" in loc
+    assert "redirect_uri=https%3A%2F%2Flaura.example%2Foauth%2Fasana%2Fcallback" in loc
+    assert "laura_asana_oauth_state" in r.headers.get("set-cookie", "")
+
+
+def test_oauth_connect_400_without_app(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    r = client.get("/oauth/asana/connect", follow_redirects=False)
+    assert r.status_code == 400  # no ASANA_CLIENT_ID → clear config error
+
+
+def test_oauth_callback_stores_grant_and_lands_connected(monkeypatch, tmp_path):
+    import app.main as main_module
+    from app import auth
+
+    client = _client(monkeypatch, tmp_path)
+    _oauth_app(monkeypatch)
+    monkeypatch.setattr(
+        asana_client, "exchange_code",
+        lambda code, uri: {"ok": True, "access_token": "at-1",
+                           "refresh_token": "rt-oauth", "email": "pm@acme.com",
+                           "name": "PM"},
+    )
+    monkeypatch.setattr(
+        asana_client, "verify_token",
+        lambda tok: {"ok": True, "email": "pm@acme.com",
+                     "workspace": "Acme HQ", "workspace_gid": "ws-9"},
+    )
+    nonce, signed = auth.issue_oauth_state(main_module.ASANA_STATE_PURPOSE)
+    client.cookies.set(main_module.ASANA_STATE_COOKIE, nonce)
+
+    r = client.get(
+        f"/oauth/asana/callback?code=c-1&state={signed}", follow_redirects=False
+    )
+    assert r.status_code == 302
+    assert r.headers["location"] == "/dashboard?asana=connected"
+    row = store.get_org_oauth(settings.demo_org_id, provider="asana-oauth")
+    assert row["refresh_token"] == "rt-oauth" and row["scopes"] == "ws-9"
+
+
+def test_oauth_callback_bad_state_stores_nothing(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    _oauth_app(monkeypatch)
+    r = client.get(
+        "/oauth/asana/callback?code=c-1&state=forged.sig", follow_redirects=False
+    )
+    assert r.status_code == 302
+    assert r.headers["location"] == "/dashboard?asana=error"
+    assert store.get_org_oauth(settings.demo_org_id, provider="asana-oauth") is None
+
+
+def test_token_precedence_oauth_grant_over_pat(monkeypatch, tmp_path):
+    _fresh_store(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "session_secret", "sek")
+    _oauth_app(monkeypatch)
+    store.set_org_oauth("org-a", "pat-1", provider="asana")
+    store.set_org_oauth("org-a", "rt-oauth", provider="asana-oauth")
+    posts = {"n": 0}
+
+    def fake_post(url, *, data=None, timeout=None):
+        posts["n"] += 1
+        assert data["grant_type"] == "refresh_token"
+        return _Resp(200, {"access_token": "at-oauth", "expires_in": 3600})
+
+    monkeypatch.setattr(asana_client.httpx, "post", fake_post)
+    assert asana_client._token("org-a") == ("at-oauth", "")  # grant wins
+    assert asana_client._token("org-a") == ("at-oauth", "")  # cached
+    assert posts["n"] == 1
+
+
+def test_broken_oauth_grant_falls_through_to_pat(monkeypatch, tmp_path):
+    _fresh_store(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "session_secret", "sek")
+    _oauth_app(monkeypatch)
+    store.set_org_oauth("org-a", "pat-1", provider="asana")
+    store.set_org_oauth("org-a", "rt-dead", provider="asana-oauth")
+    monkeypatch.setattr(
+        asana_client.httpx, "post",
+        lambda url, *, data=None, timeout=None: _Resp(400, {}),
+    )
+    assert asana_client._token("org-a") == ("pat-1", "")  # revoked grant ≠ outage
+
+
 def test_verify_token_reads_user_and_workspace(monkeypatch, tmp_path):
     _fresh_store(monkeypatch, tmp_path)
 

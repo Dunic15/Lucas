@@ -1909,6 +1909,97 @@ async def google_oauth_disconnect(request: Request) -> JSONResponse:
     )
 
 
+# ── Asana OAuth: the dashboard's one-click "Connect Asana" (docs/ASANA.md) ──
+# Same CSRF machinery as the Google flow above: single-use signed state in the
+# provider redirect, nonce in an HttpOnly cookie, both must match at the
+# callback. Requires the Asana OAuth app env (ASANA_CLIENT_ID/SECRET); without
+# it the Connections card falls back to the paste-a-PAT flow.
+ASANA_STATE_COOKIE = "laura_asana_oauth_state"
+ASANA_STATE_PURPOSE = "asana_state"
+
+
+def _asana_redirect_uri() -> str:
+    return f"{settings.public_base_url.rstrip('/')}/oauth/asana/callback"
+
+
+@app.get("/oauth/asana/connect")
+def asana_oauth_connect(request: Request):
+    """Start Asana OAuth: bounce the owner to Asana's consent screen."""
+    if not settings.asana_client_id:
+        return JSONResponse({"error": "ASANA_CLIENT_ID is not set."}, status_code=400)
+    if err := _oauth_login_required(request):
+        return err
+    nonce, signed_state = auth.issue_oauth_state(ASANA_STATE_PURPOSE)
+    params = {
+        "client_id": settings.asana_client_id,
+        "redirect_uri": _asana_redirect_uri(),
+        "response_type": "code",
+        "state": signed_state,
+        # "default" = the app's configured permissions — the catch-all scope
+        # Asana documents for full-access apps.
+        "scope": "default",
+    }
+    resp = RedirectResponse("https://app.asana.com/-/oauth_authorize?" + urlencode(params))
+    resp.set_cookie(
+        ASANA_STATE_COOKIE,
+        nonce,
+        max_age=auth.STATE_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=settings.public_base_url.startswith("https"),
+        path="/oauth",
+    )
+    return resp
+
+
+@app.get("/oauth/asana/callback")
+async def asana_oauth_callback(
+    request: Request, code: str = "", state: str = "", error: str = ""
+):
+    """Finish Asana OAuth: verify state, exchange the code, store the grant
+    (encrypted per-org, provider="asana-oauth"), land back on Connections.
+    Every failure lands with ?asana=error — the dashboard toasts it; no
+    half-connected state is ever stored."""
+    def _land(result: str):
+        resp = RedirectResponse(f"/dashboard?asana={result}", status_code=302)
+        resp.delete_cookie(ASANA_STATE_COOKIE, path="/oauth")
+        return resp
+
+    if error or not code:
+        return _land("error")
+    if err := _oauth_login_required(request):
+        return err
+    cookie_nonce = request.cookies.get(ASANA_STATE_COOKIE, "")
+    if not auth.check_oauth_state(state, cookie_nonce, ASANA_STATE_PURPOSE):
+        return _land("error")
+
+    exchanged = await run_in_threadpool(
+        asana_client.exchange_code, code, _asana_redirect_uri()
+    )
+    if not exchanged.get("ok") or not exchanged.get("refresh_token"):
+        return _land("error")
+    # Who/what did we just connect? Best-effort — the grant works regardless.
+    info = await run_in_threadpool(
+        asana_client.verify_token, exchanged.get("access_token", "")
+    )
+    user = auth.current_user(request)
+    org = user["org_id"] if user else settings.demo_org_id
+    try:
+        stored = await run_in_threadpool(
+            lambda: store.set_org_oauth(
+                org, exchanged["refresh_token"], provider="asana-oauth",
+                email=str(info.get("email") or exchanged.get("email") or ""),
+                scopes=str(info.get("workspace_gid") or ""),
+            )
+        )
+    except RuntimeError:
+        return _land("error")  # no encryption key — fails closed
+    if not stored:
+        return _land("error")
+    asana_client._reset_brief_cache()  # new grant → fresh workspace view
+    return _land("connected")
+
+
 # ── Granola: pull a real finished transcript (post-meeting only) ──
 @app.get("/granola/notes")
 def granola_notes(limit: int = 20) -> JSONResponse:

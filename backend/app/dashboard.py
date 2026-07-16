@@ -625,9 +625,13 @@ def dashboard_summary(request: Request) -> JSONResponse:
     # per-avatar `google` capability toggle reads — computed once above as
     # `google_connected`.)
     connections["google_native"] = google_connected
-    # NATIVE Asana — the org's PAT (Connections card) or the env fallback.
-    # Same bool contract; the same signal the per-avatar `asana` toggle reads.
+    # NATIVE Asana — the org's OAuth grant or PAT (Connections card) or the
+    # env fallback. Same bool contract; the same signal the per-avatar `asana`
+    # toggle reads. asana_oauth = the one-click connect button is available
+    # (the Asana OAuth app env is configured); without it the card falls back
+    # to the paste-a-PAT flow.
     connections["asana"] = asana_connected
+    connections["asana_oauth"] = asana_client.oauth_available()
 
     callback_deliveries = outbox.delivery_rows(
         caller_org or settings.demo_org_id
@@ -772,9 +776,10 @@ async def connect_asana(request: Request) -> JSONResponse:
 
 @router.post("/dashboard/connections/asana/disconnect")
 async def disconnect_asana(request: Request) -> JSONResponse:
-    """Remove the org's stored Asana token — the native disconnect, mirroring
-    Google's. Note: if the deployment sets the ASANA_TOKEN env fallback, the
-    platform-level connection remains (the response says so honestly)."""
+    """Remove the org's stored Asana credentials — BOTH the OAuth grant (the
+    one-click connect) and a pasted PAT, mirroring Google's disconnect. Note:
+    if the deployment sets the ASANA_TOKEN env fallback, the platform-level
+    connection remains (the response says so honestly)."""
     user = auth.current_user(request)
     if user is None:
         if err := auth.gate(request):
@@ -782,12 +787,15 @@ async def disconnect_asana(request: Request) -> JSONResponse:
         return JSONResponse({"error": "login required"}, status_code=401)
     if not auth._same_origin(request):
         return JSONResponse({"error": "forbidden"}, status_code=403)
-    removed = await run_in_threadpool(
+    removed_oauth = await run_in_threadpool(
+        lambda: store.clear_org_oauth(user["org_id"], provider="asana-oauth")
+    )
+    removed_pat = await run_in_threadpool(
         lambda: store.clear_org_oauth(user["org_id"], provider="asana")
     )
     asana_client._reset_brief_cache()
     return JSONResponse(
-        {"ok": True, "removed": bool(removed),
+        {"ok": True, "removed": bool(removed_oauth or removed_pat),
          "still_connected_via_env": bool(settings.asana_token.strip())},
         headers=_NO_STORE,
     )
