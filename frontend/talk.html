@@ -256,8 +256,32 @@
     // ?cam_ty= (look-at height).
     const camParam = (k, d) => { const v = parseFloat(params.get(k)); return Number.isNaN(v) ? d : v; };
     const CAM_Z = camParam("cam_z", 2.0);
-    const CAM_Y = camParam("cam_y", 1.675);
-    const CAM_TY = camParam("cam_ty", 1.705);
+    let CAM_Y = camParam("cam_y", 1.675);
+    let CAM_TY = camParam("cam_ty", 1.705);
+    // Per-avatar auto-framing: the constants above were tuned on laura.glb,
+    // whose EYE LINE measures worldY≈1.726 — so they encode "camera at
+    // eyes−0.051, look-at at eyes−0.021". A shorter rig (petra.glb: eyes at
+    // ≈1.597, 13cm lower) framed with laura's constants ends up with her face
+    // at the BOTTOM of the shot. Measure this rig's eye bones once the
+    // armature exists and re-derive both heights with the same tuned offsets:
+    // laura reproduces 1.675/1.705 exactly, every other avatar centers
+    // automatically. Explicit ?cam_y=/?cam_ty= URL params still win.
+    let eyeLineDone = params.has("cam_y") || params.has("cam_ty");
+    const measureEyeLine = () => {
+      if (eyeLineDone || !head.armature) return;
+      let sum = 0, n = 0;
+      head.armature.traverse((o) => {
+        if (/^(left|right)eye$/i.test(o.name)) {
+          const p = new o.position.constructor();
+          o.getWorldPosition(p); sum += p.y; n++;
+        }
+      });
+      eyeLineDone = true; // measure once; rigs without eye bones keep the tuned defaults
+      if (!n) return;
+      const eyes = sum / n;
+      CAM_Y = eyes - 0.051;
+      CAM_TY = eyes - 0.021;
+    };
     const frameCamera = () => {
       try {
         // Kill TalkingHead's own camera GLIDE at the source: after setView its
@@ -292,6 +316,7 @@
       // Where TalkingHead left the camera since our last assert. During its
       // intro zoom-in this is still far from our close-up; once it settles it
       // sits at (our) CAM_Z because nothing else moves it.
+      measureEyeLine(); // no-op after the first successful measurement
       const beforeZ = head.camera?.position?.z;
       frameCamera();
       // Reveal only once TalkingHead has STOPPED pulling the camera off our
