@@ -45,17 +45,60 @@ def _embed_hash(texts: list[str]) -> list[list[float]]:
     return [_hash_embed_one(t) for t in texts]
 
 
+# Set once when the local model could not be acquired (e.g. a HuggingFace
+# outage at boot — observed 2026-07-16: startup hung on 504s until App
+# Runner's health check killed the deploy). Boot must NEVER depend on a
+# third-party CDN: we degrade to hash for this process and self-heal on the
+# next boot (see provider_signature — the index stamps force a rebuild).
+_local_failed = False
+
+
 def _embed_local(texts: list[str]) -> list[list[float]]:
-    global _fastembed_model
+    global _fastembed_model, _local_failed
+    if _local_failed:
+        return _embed_hash(texts)
     if _fastembed_model is None:
         try:
             from fastembed import TextEmbedding
         except ImportError as e:
+            # A missing dependency is a CONFIG error — fail loudly, don't mask.
             raise RuntimeError(
                 "EMBEDDING_PROVIDER=local needs fastembed: pip install fastembed"
             ) from e
-        _fastembed_model = TextEmbedding()
+        try:
+            _fastembed_model = TextEmbedding()
+        except Exception as e:  # noqa: BLE001 — model download/load failed
+            _local_failed = True
+            print(
+                f"[embeddings] local model unavailable ({type(e).__name__}) — "
+                "hash fallback for this process; indexes rebuild automatically "
+                "on the next boot with the model",
+                flush=True,
+            )
+            return _embed_hash(texts)
     return [v.tolist() for v in _fastembed_model.embed(texts)]
+
+
+def provider_signature() -> str:
+    """The provider whose vectors embed() ACTUALLY produces right now —
+    "hash" when local fell back. Index files stamp THIS (not the configured
+    provider), so an index written during an outage mismatches on the next
+    healthy boot and rebuilds with real vectors; query and index vectors can
+    never silently disagree."""
+    provider = settings.embedding_provider.lower()
+    if provider == "local" and _local_failed:
+        return "hash"
+    return provider
+
+
+def warmup() -> None:
+    """Resolve local-model availability NOW (bounded by fastembed's own retry
+    budget, ~3min worst case) so boot decides hash-vs-local BEFORE any index
+    signature is read — and the live meeting path never pays the download."""
+    try:
+        embed(["warmup"])
+    except Exception:  # noqa: BLE001 — a warmup must never block boot
+        pass
 
 
 def _embed_voyage(texts: list[str], input_type: str) -> list[list[float]]:

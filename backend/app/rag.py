@@ -21,7 +21,7 @@ import numpy as np
 
 from .avatars import Avatar
 from .config import settings
-from .embeddings import embed
+from .embeddings import embed, provider_signature
 
 
 INDEX_VERSION = 3
@@ -256,7 +256,9 @@ def _write_index(index_path: Path, chunks: list[Chunk], source_paths: list[Path]
     index_path.write_text(
         json.dumps(
             {
-                "provider": settings.embedding_provider,
+                # The EFFECTIVE provider (hash when local fell back at boot) —
+                # guarantees index/query vector agreement across restarts.
+                "provider": provider_signature(),
                 "model": settings.embedding_model,
                 "version": INDEX_VERSION,
                 "sources": _sources_signature(source_paths),
@@ -297,7 +299,7 @@ def _index_is_current(index_path: Path, source_paths: list[Path]) -> bool:
     except (json.JSONDecodeError, OSError):
         return False
     return (
-        raw.get("provider") == settings.embedding_provider
+        raw.get("provider") == provider_signature()
         and raw.get("model") == settings.embedding_model
         and raw.get("version") == INDEX_VERSION
         and raw.get("sources") == _sources_signature(source_paths)
@@ -557,7 +559,7 @@ def _load_org(avatar: Avatar, org_id: str) -> dict | None:
         # An index from another embedder/format would rank garbage — treat it
         # as absent; the next ingest rewrites it with the current signature.
         if (
-            raw.get("provider") != settings.embedding_provider
+            raw.get("provider") != provider_signature()
             or raw.get("model") != settings.embedding_model
             or raw.get("version") != INDEX_VERSION
         ):

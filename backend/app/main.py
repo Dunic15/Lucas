@@ -285,6 +285,14 @@ def _prebuild_indexes() -> None:
 
     Free & instant with the default hash embedder; skipped if already current.
     """
+    # Resolve the local embedder's availability FIRST (fail-soft: a HuggingFace
+    # outage degrades to hash instead of hanging boot until the App Runner
+    # health check kills the deploy — root cause of the 2026-07-16 rollback).
+    # Must precede any ensure_index: the index signature reads the EFFECTIVE
+    # provider, which is only known after this attempt.
+    from . import embeddings
+
+    embeddings.warmup()
     for aid in avatars.list_ids():
         try:
             avatar = avatars.load(aid)
