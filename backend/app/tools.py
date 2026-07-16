@@ -430,12 +430,56 @@ _SESSION_TOOLS = {
 }
 
 
-def dispatch(name: str, args: dict, session=None) -> str:
+def specs_for(session, *, live: bool = True) -> list[dict]:
+    """The function-calling specs offered to the model for THIS session: the
+    native TOOL_SPECS plus any Cedric tools discovered at join (the MCP bridge).
+    On the LIVE meeting path only read-only + fast Cedric tools are offered —
+    the latency contract (Handshake v3). When the bridge is off or nothing was
+    discovered, this is exactly TOOL_SPECS."""
+    specs = list(TOOL_SPECS)
+    reg = getattr(session, "tool_registry", None) if session else None
+    mcp_tools = reg.get("cedric_mcp") if isinstance(reg, dict) else None
+    if mcp_tools:
+        from . import cedric_mcp
+
+        specs += cedric_mcp.to_function_specs(mcp_tools, live=live)
+    return specs
+
+
+def _dispatch_cedric(name: str, args: dict, session, *, live: bool) -> str:
+    """Route a prefixed Cedric tool call through the MCP bridge. An approval-
+    gated write is CAPTURED onto the session (approve queue) and reported as
+    queued — never executed here, never claimed done."""
+    from . import cedric_mcp
+
+    org_id = str(getattr(session, "org_id", "") or "") if session else ""
+    if not org_id:
+        return "error: no org is attached to this session, so I can't use that tool"
+    bare = name[len(cedric_mcp.TOOL_PREFIX):]
+    # The avatar acts autonomously on the live read path → actor='avatar', no
+    # human user_ref (PII: never an email); ref ties it to this meeting for audit.
+    meta = {"actor": "avatar", "source": "meeting" if live else "dashboard"}
+    bot_id = str(getattr(session, "bot_id", "") or "") if session else ""
+    if bot_id:
+        meta["ref"] = bot_id
+    res = cedric_mcp.call_tool(org_id, bare, args or {}, meta=meta, live=live)
+    if res.get("approval_required") and session is not None:
+        try:
+            queue_action(action=res.get("summary") or bare, session=session)
+        except Exception:  # noqa: BLE001 — the spoken "queued" is enough; capture is best-effort
+            pass
+    return cedric_mcp.result_to_model_text(res)
+
+
+def dispatch(name: str, args: dict, session=None, *, live: bool = True) -> str:
     """Run a tool by name with keyword args; always returns a string for the model.
 
     `session` (optional) is the live store.Session — threaded only into the
-    tools listed in _SESSION_TOOLS so they can capture onto it.
+    tools listed in _SESSION_TOOLS so they can capture onto it. A ``cedric__``-
+    prefixed name is a Cedric tool and routes through the MCP bridge.
     """
+    if name.startswith("cedric__"):
+        return _dispatch_cedric(name, args or {}, session, live=live)
     fn = _DISPATCH.get(name)
     if fn is None:
         return f"error: unknown tool '{name}'"
@@ -447,12 +491,13 @@ def dispatch(name: str, args: dict, session=None) -> str:
         return f"error: bad arguments for '{name}' ({e})"
 
 
-def dispatch_for(session):
+def dispatch_for(session, *, live: bool = True):
     """`dispatch` bound to a live session — the same (name, args) callable the
-    LLM tool loop expects, but session-aware tools capture onto the session.
-    dispatch_for(None) behaves exactly like plain dispatch."""
+    LLM tool loop expects, but session-aware tools capture onto the session and
+    Cedric tools route through the MCP bridge. dispatch_for(None) behaves exactly
+    like plain dispatch. ``live`` selects the latency budget for Cedric calls."""
 
     def _dispatch(name: str, args: dict) -> str:
-        return dispatch(name, args, session=session)
+        return dispatch(name, args, session=session, live=live)
 
     return _dispatch
