@@ -67,6 +67,32 @@ def _event_start_ts(item: dict) -> float:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.timestamp()
 
+
+def _event_dedupe_key(item: dict) -> str:
+    """Identify the same occurrence across calendars without collapsing a series.
+
+    Google expands recurring events when singleEvents=true, but every occurrence
+    keeps the series iCalUID. Pairing it with originalStartTime preserves Tuesday,
+    Wednesday, etc. while still deduping an invited/shared-calendar copy of the
+    same occurrence. For non-recurring events, start is the occurrence identity.
+    """
+    uid = str(item.get("iCalUID") or "")
+    if not uid:
+        return str(item.get("id") or "")
+    occurrence = item.get("originalStartTime") or item.get("start") or {}
+    raw = str(occurrence.get("dateTime") or occurrence.get("date") or "")
+    if not raw:
+        return uid
+    # Equivalent copies can express the same instant with different UTC offsets.
+    if "T" in raw:
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if dt.tzinfo is not None:
+                raw = dt.astimezone(timezone.utc).isoformat()
+        except ValueError:
+            pass
+    return f"{uid}|{raw}"
+
 # ── per-principal access-token cache ──
 # One Google token round-trip per principal per ~hour instead of one per API
 # call. A principal is an org_id (native executor / demo) or "user:<user_id>"
@@ -720,9 +746,9 @@ def list_calendar_events(
             for it in items:
                 if not isinstance(it, dict):
                     continue
-                # The same meeting shows up on several calendars (invited copy +
-                # a shared calendar) — iCalUID is stable across those copies.
-                dk = str(it.get("iCalUID") or it.get("id") or "")
+                # Deduplicate the same occurrence across calendars. Recurring
+                # instances share iCalUID, so the occurrence time is essential.
+                dk = _event_dedupe_key(it)
                 if dk in seen:
                     continue
                 if dk:

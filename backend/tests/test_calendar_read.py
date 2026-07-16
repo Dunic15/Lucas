@@ -178,6 +178,61 @@ def test_list_events_merges_all_accessible_calendars(monkeypatch):
     }
 
 
+
+def test_recurring_instances_survive_cross_calendar_dedupe(monkeypatch):
+    """Expanded occurrences share iCalUID; each date must remain visible."""
+    monkeypatch.setattr(
+        google_client, "_access_token",
+        lambda key, oauth=None, on_rotate=None, force_refresh=False: ("tok", ""),
+    )
+
+    tue = {
+        "id": "series-tue-primary",
+        "iCalUID": "daily-standup@google.com",
+        "recurringEventId": "series",
+        "originalStartTime": {"dateTime": "2026-07-21T08:45:00+02:00"},
+        "summary": "Daily Standup",
+        "start": {"dateTime": "2026-07-21T08:45:00+02:00"},
+    }
+    wed = {
+        "id": "series-wed-primary",
+        "iCalUID": "daily-standup@google.com",
+        "recurringEventId": "series",
+        "originalStartTime": {"dateTime": "2026-07-22T08:45:00+02:00"},
+        "summary": "Daily Standup",
+        "start": {"dateTime": "2026-07-22T08:45:00+02:00"},
+    }
+    tue_copy = {
+        **tue,
+        "id": "series-tue-shared-copy",
+        # Same instant expressed as UTC: still the same Tuesday occurrence.
+        "originalStartTime": {"dateTime": "2026-07-21T06:45:00Z"},
+    }
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if "users/me/calendarList" in url:
+            return _resp({"items": [
+                {"id": "primary", "primary": True, "selected": True},
+                {"id": "shared@cal", "selected": True},
+            ]})
+        if "calendars/primary/events" in url:
+            return _resp({"items": [tue, wed]})
+        if "shared%40cal" in url:
+            return _resp({"items": [tue_copy]})
+        raise AssertionError(f"unexpected URL {url}")
+
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+    out = google_client.list_calendar_events(
+        "org-recurring",
+        time_min="2026-07-21T00:00:00+00:00",
+        time_max="2026-07-23T00:00:00+00:00",
+    )
+
+    assert out["ok"] is True
+    assert [e["id"] for e in out["events"]] == [
+        "series-tue-primary", "series-wed-primary"
+    ]
+
 def test_add_calendar_event_attendee_preserves_guests(monkeypatch):
     monkeypatch.setattr(
         google_client, "_access_token",
