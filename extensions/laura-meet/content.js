@@ -51,9 +51,9 @@ function ensureControl() {
 }
 
 async function refreshStatus() {
-  const meetingUrl = normalizeMeetUrl(location.href);
+  const meetingUrl = normalizeMeetingUrl(location.href);
   if (!meetingUrl) {
-    state = { botId: "", busy: false, status: "Open a Meet call first" };
+    state = { botId: "", busy: false, status: "Open a meeting (or its join link) first" };
     render();
     return;
   }
@@ -71,9 +71,9 @@ async function refreshStatus() {
 async function onButtonClick() {
   if (state.busy) return;
 
-  const meetingUrl = normalizeMeetUrl(location.href);
+  const meetingUrl = normalizeMeetingUrl(location.href);
   if (!meetingUrl) {
-    state = { ...state, status: "Open a Meet call first" };
+    state = { ...state, status: "Open a meeting (or its join link) first" };
     render();
     return;
   }
@@ -95,7 +95,7 @@ async function startLaura(meetingUrl) {
     state = {
       botId: response.botId || "",
       busy: false,
-      status: "Sent. Admit Laura if Google Meet asks."
+      status: "Sent. Admit Laura if the meeting asks."
     };
   } catch (error) {
     state = { ...state, busy: false, status: error.message || "Could not send Laura" };
@@ -149,14 +149,38 @@ function sendMessage(message) {
   });
 }
 
-function normalizeMeetUrl(raw) {
+function normalizeMeetingUrl(raw) {
   try {
     const url = new URL(raw);
-    if (url.hostname !== "meet.google.com") return "";
-    if (!/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(url.pathname)) return "";
-    url.search = "";
-    url.hash = "";
-    return url.toString();
+
+    // Google Meet: /xxx-xxxx-xxx — query/hash are tracking noise, drop them.
+    if (url.hostname === "meet.google.com") {
+      if (!/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(url.pathname)) return "";
+      url.search = "";
+      url.hash = "";
+      return url.toString();
+    }
+
+    // Zoom (any subdomain): join links /j/<id> and web-client /wc/<id>[/join].
+    // Rebuild as a canonical join URL, keeping ?pwd= — it is the passcode.
+    if (url.hostname === "zoom.us" || url.hostname.endsWith(".zoom.us")) {
+      const match = url.pathname.match(/^\/(?:j|s|w|wc)\/(\d{8,13})/);
+      if (!match) return "";
+      const pwd = url.searchParams.get("pwd");
+      return `https://${url.hostname}/j/${match[1]}${pwd ? `?pwd=${pwd}` : ""}`;
+    }
+
+    // Teams: /l/meetup-join/<thread>/… and /meet/<id>?p=… deep links. Keep the
+    // URL whole — the encoded thread + query context are needed to join. The
+    // in-app URL after joining doesn't carry the link; the button only works
+    // on the join page.
+    if (url.hostname === "teams.microsoft.com" || url.hostname === "teams.live.com") {
+      if (!/^\/(?:l\/meetup-join|meet)\//.test(url.pathname)) return "";
+      url.hash = "";
+      return url.toString();
+    }
+
+    return "";
   } catch (_error) {
     return "";
   }
