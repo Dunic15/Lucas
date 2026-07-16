@@ -294,6 +294,13 @@
   .wkrange{font-family:var(--mono);color:var(--faint);font-size:.72rem;letter-spacing:.03em;margin-top:5px;}
   .wk-head-r{display:flex;align-items:center;gap:10px;min-width:0;}
   .wk-cal{font-size:.76rem;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px;}
+  .cal-sources{display:flex;align-items:center;gap:7px;overflow-x:auto;padding:0 1px 12px;margin-top:-5px;scrollbar-width:thin;}
+  .cal-count{font-size:.7rem;font-weight:700;color:var(--dim);white-space:nowrap;}
+  .cal-source{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;padding:3px 8px;border:1px solid var(--line-soft);border-radius:999px;font-size:.66rem;color:var(--dim);background:var(--panel);}
+  .cal-source::before{content:"";width:7px;height:7px;border-radius:2px;background:var(--source-color,var(--g2));}
+  .cal-band{display:flex;align-items:center;gap:8px;margin:16px 2px 7px;font-size:.72rem;font-weight:700;color:var(--dim);}
+  .cal-band:first-of-type{margin-top:2px;}
+  .cal-band::after{content:"";height:1px;flex:1;background:var(--line-soft);}
   .wkgrid{display:grid;grid-template-columns:1fr;gap:10px;}
   .wkgrid .wkday.empty{display:none;}
   .wkday{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line-soft);border-radius:14px;overflow:hidden;}
@@ -336,8 +343,8 @@
      gridline pitch is driven by --hour-px (set from JS HOUR_PX on .calgrid), so
      labels, hour lines and events all share one vertical pitch. ── */
   .cal{border:1px solid var(--line-soft);border-radius:14px;overflow:hidden;background:var(--panel);}
-  .calscroll{overflow-y:auto;overflow-x:hidden;max-height:68vh;scrollbar-gutter:stable;}
-  .calgrid{display:grid;grid-template-columns:54px repeat(7,minmax(0,1fr));}
+  .calscroll{overflow:auto;max-height:68vh;scrollbar-gutter:stable;}
+  .calgrid{display:grid;grid-template-columns:58px repeat(7,minmax(126px,1fr));min-width:940px;}
   .cal-corner{position:sticky;top:0;z-index:3;background:var(--panel);border-bottom:1px solid var(--line-soft);}
   .cal-dh{position:sticky;top:0;z-index:3;display:flex;flex-direction:column;gap:2px;align-items:center;justify-content:center;
     padding:8px 4px;background:var(--panel);border-bottom:1px solid var(--line-soft);border-left:1px solid var(--line-soft);}
@@ -370,12 +377,14 @@
   .cal-ev .ev-title{font-size:.79rem;font-weight:650;line-height:1.25;color:var(--text);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word;}
   .cal-ev .ev-cal{font-size:.56rem;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .cal-ev .ev-send{font-size:.58rem;font-weight:700;color:var(--live);letter-spacing:.02em;}
-  /* short blocks (30-min slots) show the title only */
+  /* Compact meetings keep the time as the first readable line. Very short
+     meetings use one line (time + title) instead of hiding the time entirely. */
   .cal-ev.compact .ev-title{display:block;-webkit-line-clamp:1;white-space:nowrap;text-overflow:ellipsis;}
   .cal-ev.compact .ev-cal,.cal-ev.compact .ev-send,.cal-ev.compact .avbadge{display:none;}
-  .cal-ev.short{justify-content:center;}
-  .cal-ev.short .ev-time,.cal-ev.short .ev-cal,.cal-ev.short .ev-send,.cal-ev.short .ev-nolink{display:none;}
-  .cal-ev.short.going .avbadge{display:none;}
+  .cal-ev.short{justify-content:flex-start;flex-direction:row;align-items:center;gap:4px;padding-top:3px;padding-bottom:3px;}
+  .cal-ev.short .ev-time{display:block;font-size:.58rem;}
+  .cal-ev.short .ev-title{display:block;min-width:0;white-space:nowrap;text-overflow:ellipsis;-webkit-line-clamp:1;}
+  .cal-ev.short .ev-cal,.cal-ev.short .ev-send,.cal-ev.short .ev-nolink,.cal-ev.short .avbadge{display:none;}
   .cal-ev .ev-nolink{font-size:.56rem;color:var(--faint);}
   .cal-ev .avbadge{align-self:flex-start;font-size:.58rem;padding:1px 6px;}
   .cal-now{position:absolute;left:0;right:0;height:0;border-top:2px solid var(--accent);z-index:2;pointer-events:none;}
@@ -1148,37 +1157,36 @@
     // back to compact day-grouped sections. HOUR_PX is the single source of truth
     // for the vertical pitch: it positions labels/events AND is fed to the CSS
     // gridlines via the --hour-px custom property on .calgrid (so they can't drift).
-    var HOUR_PX=68;
+    var HOUR_PX=76;
+    var RANGE_DAYS=14;
     var MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
     var MON3=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     var DAYN=["SUN","MON","TUE","WED","THU","FRI","SAT"];
     function pad2(n){ return ("0"+n).slice(-2); }
-    // Calendar header — full month + year, the 7-day range, calendar account,
-    // an optional "+ New meeting" action (showNew) and the ↻ reload.
-    // Monday 00:00 (local) of the week `offset` weeks from the current one.
-    // offset 0 = this week; +1 = next week; -1 = last week. The calendar view
-    // is anchored here, so ◀/▶ just change the offset and re-fetch.
-    function calWeekStart(offset){
+    // Default view is a rolling 14-day window starting today. Navigation moves
+    // by 14 days, so the landing view never wastes columns on elapsed weekdays.
+    function calRangeStart(offset){
       var d=new Date(); d.setHours(0,0,0,0);
-      var dow=(d.getDay()+6)%7;            // getDay: Sun=0 → make Mon=0..Sun=6
-      d.setDate(d.getDate()-dow+(offset||0)*7);
+      d.setDate(d.getDate()+(offset||0)*RANGE_DAYS);
       return d;
     }
     function wkHead(cal,showNew,anchor){
-      var t0=anchor?new Date(anchor.getTime()):calWeekStart(0);
+      var t0=anchor?new Date(anchor.getTime()):calRangeStart(0);
       t0.setHours(0,0,0,0);
-      var t1=new Date(t0.getTime()+6*86400000);
-      var month=MONTHS[t0.getMonth()]+" "+t0.getFullYear();
+      var t1=new Date(t0.getTime()+(RANGE_DAYS-1)*86400000);
+      var month=MONTHS[t0.getMonth()]+
+        (t0.getMonth()===t1.getMonth()?"":" – "+MONTHS[t1.getMonth()])+
+        " "+t1.getFullYear();
       var range=MON3[t0.getMonth()]+" "+t0.getDate()+" – "+
-        (t0.getMonth()===t1.getMonth()?"":MON3[t1.getMonth()]+" ")+t1.getDate();
-      var off=window._calWeek||0;
+        MON3[t1.getMonth()]+" "+t1.getDate()+" · next 14 days";
+      var off=window._calRange||0;
       return '<div class="wkbar">'+
         '<div style="display:flex;align-items:center;gap:10px;min-width:0">'+
-          '<button class="btn wk-prev" aria-label="Previous week" style="padding:4px 11px;font-size:1.05rem;line-height:1">‹</button>'+
+          '<button class="btn wk-prev" aria-label="Previous 14 days" style="padding:4px 11px;font-size:1.05rem;line-height:1">‹</button>'+
           '<div style="min-width:0"><div class="wk-month">'+esc(month)+'</div>'+
           '<div class="wkrange">'+esc(range)+'</div></div>'+
-          '<button class="btn wk-next" aria-label="Next week" style="padding:4px 11px;font-size:1.05rem;line-height:1">›</button>'+
-          (off!==0?'<button class="btn wk-today" aria-label="Back to this week" style="padding:5px 11px;font-size:.72rem">Today</button>':'')+
+          '<button class="btn wk-next" aria-label="Next 14 days" style="padding:4px 11px;font-size:1.05rem;line-height:1">›</button>'+
+          (off!==0?'<button class="btn wk-today" aria-label="Back to today" style="padding:5px 11px;font-size:.72rem">Today</button>':'')+
         '</div>'+
         '<div class="wk-head-r"><span class="wk-cal">📅 '+esc(cal.email||"Calendar connected")+'</span>'+
         (showNew?'<button class="btn primary" id="wk-new" style="padding:6px 12px;font-size:.78rem" aria-label="Schedule a new meeting">+ New meeting</button>':'')+
@@ -1187,9 +1195,9 @@
     function wireWeekNav(box){
       var pv=box.querySelector(".wk-prev"), nx=box.querySelector(".wk-next"),
           td=box.querySelector(".wk-today");
-      if(pv) pv.addEventListener("click",function(){ window._calWeek=(window._calWeek||0)-1; loadUpcoming(true); });
-      if(nx) nx.addEventListener("click",function(){ window._calWeek=(window._calWeek||0)+1; loadUpcoming(true); });
-      if(td) td.addEventListener("click",function(){ window._calWeek=0; loadUpcoming(true); });
+      if(pv) pv.addEventListener("click",function(){ window._calRange=(window._calRange||0)-1; loadUpcoming(true); });
+      if(nx) nx.addEventListener("click",function(){ window._calRange=(window._calRange||0)+1; loadUpcoming(true); });
+      if(td) td.addEventListener("click",function(){ window._calRange=0; loadUpcoming(true); });
     }
     // Resolve a friendly avatar name from its id (for the "🎭 name" badge).
     function avName(id){
@@ -1222,6 +1230,26 @@
       if(cal) bits.push(cal);
       if(m&&m.platform&&m.platform!=="—") bits.push(m.platform);
       return bits.join(" · ");
+    }
+    function calendarLegend(meetings){
+      var seen={}, sources=[];
+      (meetings||[]).forEach(function(m){
+        var name=String(m.calendar_name||"").trim();
+        if(!name||seen[name]) return;
+        seen[name]=1;
+        sources.push({name:name,color:eventColor(m)});
+      });
+      var chips=sources.map(function(s){
+        var style=s.color?' style="--source-color:'+s.color+'"':'';
+        return '<span class="cal-source"'+style+'>'+esc(s.name)+'</span>';
+      }).join("");
+      return '<div class="cal-sources"><span class="cal-count">All calendars · '+
+        (meetings||[]).length+' events</span>'+chips+'</div>';
+    }
+    function bandLabel(days){
+      var a=days[0].date,b=days[days.length-1].date;
+      return DAYN[a.getDay()]+' '+a.getDate()+' '+MON3[a.getMonth()]+' – '+
+        DAYN[b.getDay()]+' '+b.getDate()+' '+MON3[b.getMonth()];
     }
     // Interval-graph column assignment (Google-calendar style): a maximal set of
     // mutually-overlapping events splits the width side-by-side; a gap resets the
@@ -1335,7 +1363,7 @@
       var meta=eventMeta(m,ev);
       // Title wins, followed by time and source calendar when the duration has
       // enough vertical room. The same metadata is repeated in the popover.
-      var t='<span class="ev-title">'+esc(m.title||"Meeting")+'</span><span class="ev-time">'+esc(timeLabel(ev))+'</span>'+
+      var t='<span class="ev-time">'+esc(timeLabel(ev))+'</span><span class="ev-title">'+esc(m.title||"Meeting")+'</span>'+
         ((!short&&geo.height>=54&&cal)?'<span class="ev-cal">'+esc(cal)+'</span>':'');
       var data=' data-url="'+esc(url)+'" data-title="'+esc(m.title||"")+'" data-time="'+esc(timeLabel(ev))+'" data-calendar="'+esc(cal)+'" data-event-ref="'+esc(m.event_ref||"")+'"';
       if(going) return '<div class="cal-ev going'+cls+'" style="'+style+'"'+data+' data-going="1" role="button" tabindex="0" title="'+esc(meta+' — '+avName(m.auto_join_avatar)+' is going')+'">'+t+'<span class="avbadge">🎭 '+esc(avName(m.auto_join_avatar))+'</span></div>';
@@ -1554,14 +1582,14 @@
       var box=document.getElementById("upcoming-panel"); if(!box) return;
       if(window._upcomingLoaded && !force) return;
       window._upcomingLoaded=true;
-      // The visible week: anchored at calWeekStart(offset); ◀/▶ change the
-      // offset. The backend returns exactly that Mon–Sun window (?start&days).
-      var weekStart=calWeekStart(window._calWeek||0);
-      fetch("/dashboard/upcoming?start="+encodeURIComponent(weekStart.toISOString())+"&days=7",{headers:headers()})
+      // The visible range starts today by default and spans the next 14 days.
+      // Each response is bounded, but the backend paginates it to exhaustion.
+      var rangeStart=calRangeStart(window._calRange||0);
+      fetch("/dashboard/upcoming?start="+encodeURIComponent(rangeStart.toISOString())+"&days="+RANGE_DAYS,{headers:headers()})
         .then(function(r){ return r.json(); })
         .then(function(j){
-          // A faster later click may have moved the week — drop this stale response.
-          if(weekStart.getTime()!==calWeekStart(window._calWeek||0).getTime()) return;
+          // A faster later click may have moved the range — drop this stale response.
+          if(rangeStart.getTime()!==calRangeStart(window._calRange||0).getTime()) return;
           var cal=j.calendar||{};
           // Empty state — no calendar connected. Point to the Google connect
           // (same flow as the Connections view); fall back to Connections when
@@ -1569,7 +1597,7 @@
           if(!cal.connected){
             box.innerHTML='<div style="text-align:center;padding:44px 20px">'+
               '<div style="font-size:1.7rem;margin-bottom:8px">📅</div>'+
-              '<h2 style="margin:0 0 6px">Connect Google to see your week</h2>'+
+              '<h2 style="margin:0 0 6px">Connect Google to see your next 14 days</h2>'+
               '<div class="ph" style="max-width:48ch;margin:0 auto 18px">Connect your Google Calendar: this week\'s meetings appear here and you can send an avatar with one click.</div>'+
               (cal.connect_url
                 ? '<a class="btn primary" style="text-decoration:none" href="'+esc(cal.connect_url)+'">Connect Google</a>'
@@ -1582,7 +1610,7 @@
           // Connected but the calendar read failed (native token present, read
           // errored) — soft "connected, retry" state, not a hard error.
           if(cal.error){
-            box.innerHTML=wkHead(cal,false,weekStart)+'<div class="ph" style="padding:26px;text-align:center">Calendar connected but temporarily unavailable. <button class="btn" id="wk-retry" style="margin-left:8px;padding:6px 12px;font-size:.78rem">↻ Retry</button></div>';
+            box.innerHTML=wkHead(cal,false,rangeStart)+'<div class="ph" style="padding:26px;text-align:center">Calendar connected but temporarily unavailable. <button class="btn" id="wk-retry" style="margin-left:8px;padding:6px 12px;font-size:.78rem">↻ Retry</button></div>';
             var rb=document.getElementById("wk-retry");
             if(rb) rb.addEventListener("click",function(){ loadUpcoming(true); });
             wireWeekNav(box);
@@ -1605,13 +1633,11 @@
             parsed.push(ev);
             (buckets[dayKey(ev.s)]=buckets[dayKey(ev.s)]||[]).push(ev);
           });
-          // The grid is anchored at the SELECTED week (calWeekStart(offset)) —
-          // ◀/▶ move it, "Today" returns to this week. Always a Mon–Sun window,
-          // so the header range and the backend fetch stay in lock-step.
-          var anchor=new Date(weekStart.getTime()); anchor.setHours(0,0,0,0);
-          var weekNote='';
+          // Build every day in the selected rolling 14-day range.
+          var anchor=new Date(rangeStart.getTime()); anchor.setHours(0,0,0,0);
+          var rangeNote='';
           var days=[];
-          for(var i=0;i<7;i++){
+          for(var i=0;i<RANGE_DAYS;i++){
             var day=new Date(anchor.getTime()+i*86400000);
             days.push({date:day,today:dayKey(day)===dayKey(today),evs:(buckets[dayKey(day)]||[]).slice()});
           }
@@ -1627,13 +1653,15 @@
           // above the grid when the week is empty. Mobile keeps its day-sections
           // fallback and shows a short hint on an empty week.
           if(desktop){
-            box.innerHTML=wkHead(cal,true,anchor)+weekNote+
-              (anyMeeting?"":'<div class="cnote" style="margin:-4px 0 10px;text-align:center">No meetings this week — click a slot to add one.</div>')+
-              renderHourGrid(days,multi,avOpts,av0);
+            var first=days.slice(0,7), second=days.slice(7,14);
+            box.innerHTML=wkHead(cal,true,anchor)+calendarLegend(meetings)+rangeNote+
+              (anyMeeting?"":'<div class="cnote" style="margin:-4px 0 10px;text-align:center">No meetings in the next 14 days — click a slot to add one.</div>')+
+              '<div class="cal-band">'+esc(bandLabel(first))+'</div>'+renderHourGrid(first,multi,avOpts,av0)+
+              '<div class="cal-band">'+esc(bandLabel(second))+'</div>'+renderHourGrid(second,multi,avOpts,av0);
           } else if(anyMeeting){
-            box.innerHTML=wkHead(cal,true,anchor)+weekNote+renderSections(days,multi,avOpts,av0);
+            box.innerHTML=wkHead(cal,true,anchor)+calendarLegend(meetings)+rangeNote+renderSections(days,multi,avOpts,av0);
           } else {
-            box.innerHTML=wkHead(cal,true,anchor)+'<div class="ph" style="padding:34px;text-align:center">No meetings this week.<br>'+
+            box.innerHTML=wkHead(cal,true,anchor)+calendarLegend(meetings)+'<div class="ph" style="padding:34px;text-align:center">No meetings in the next 14 days.<br>'+
               '<span class="cnote">Tap “+ New meeting” to schedule one — or your Google Calendar meetings appear here automatically.</span></div>';
           }
           var rl=document.getElementById("upcoming-reload");
