@@ -519,11 +519,20 @@ def build_org_index(avatar: Avatar, org_id: str, doc_paths: list[Path]) -> int:
     if not chunks:
         path.unlink(missing_ok=True)
         _ORG_CACHE.pop((org, avatar.id), None)
+        _ORG_MISS.pop((org, avatar.id), None)
         return 0
     path.parent.mkdir(parents=True, exist_ok=True)
     _write_index(path, chunks, paths)
     _ORG_CACHE.pop((org, avatar.id), None)  # invalidate
+    _ORG_MISS.pop((org, avatar.id), None)  # a fresh ingest is instantly live
     return len(chunks)
+
+
+# (org_id, avatar.id) -> epoch of a recent miss. retrieve() runs every live
+# turn; without this, an org that never ingested anything pays a (cheap but
+# pointless) disk stat per turn. A fresh ingest invalidates via build_org_index.
+_ORG_MISS: dict[tuple[str, str], float] = {}
+_ORG_MISS_TTL = 60.0
 
 
 def _load_org(avatar: Avatar, org_id: str) -> dict | None:
@@ -532,8 +541,14 @@ def _load_org(avatar: Avatar, org_id: str) -> dict | None:
         return None
     key = (org, avatar.id)
     if key not in _ORG_CACHE:
+        import time as _time
+
+        missed = _ORG_MISS.get(key)
+        if missed and _time.time() - missed < _ORG_MISS_TTL:
+            return None
         path = org_index_path(avatar, org)
         if not path.exists():
+            _ORG_MISS[key] = _time.time()
             return None
         try:
             raw = json.loads(path.read_text())

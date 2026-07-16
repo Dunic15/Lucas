@@ -2025,45 +2025,52 @@ async def _start_avatar_session(
         session.integration = {**integration, "org_id": org_id}
     session.anam_conversation_id = conversation_id
     store.register_conversation(conversation_id, bot["id"], org_id=org_id)
-    # Cross-meeting memory: what previous sessions of this meeting link left
-    # open, scoped to THIS org. One sqlite read at start; "" when no history.
-    session.memory_brief = await run_in_threadpool(
-        ledger.carryover_brief, meeting_url, org_id=org_id
-    )
-    # Drive connector: the avatar's shared folder (avatar.yaml drive_folder_id)
-    # becomes part of the same brief channel. Fetched HERE — session start,
-    # off the live path, cached in drive_client — and best-effort: any failure
-    # returns "" and the join proceeds without it.
-    if avatar.drive_folder_id:
-        folder = await run_in_threadpool(
-            drive_client.folder_brief, avatar.drive_folder_id
+    # Session-start briefs — five independent, best-effort reads gathered
+    # CONCURRENTLY (they were serial; each is threadpool + cached + "" on any
+    # failure, and none is on the live path, but bot dispatch shouldn't pay
+    # their straight-line sum):
+    #   carryover  — what previous sessions of this meeting link left open
+    #   drive      — the avatar's shared folder (avatar.yaml drive_folder_id)
+    #   asana      — workspace snapshot, when connected + avatar-enabled
+    #   registry   — org-scoped tool context (feeds list_capabilities /
+    #                search_tools with zero network in-meeting)
+    #   calendar   — the owner org's upcoming meetings (feeds the
+    #                upcoming_meetings brain tool, zero network in-meeting)
+    async def _quiet(coro):
+        try:
+            return await coro
+        except Exception:  # noqa: BLE001 — best-effort: the join never fails on a brief
+            return None
+
+    def _asana_brief_sync() -> str:
+        # Gate + fetch in one threadpool hop (both are sync); TTL-cached in
+        # asana_client, best-effort exactly like the Drive brief.
+        if not _avatar_asana_enabled(org_id, avatar.id):
+            return ""
+        return asana_client.workspace_brief(org_id) or ""
+
+    carryover, folder, asana_snapshot, reg, cal_brief = await asyncio.gather(
+        _quiet(run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org_id)),
+        _quiet(
+            run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id)
         )
-        if folder:
-            session.memory_brief = (
-                f"[Shared Drive folder — current team docs]\n{folder}\n\n"
-                + (session.memory_brief or "")
-            )
-    # Asana connector: for an avatar allowed to use the org's Asana (connected
-    # + per-avatar toggle, see _avatar_asana_enabled), a compact workspace
-    # snapshot — projects, open/overdue tasks, owners — rides the same brief
-    # channel. Fetched HERE: session start, off the live path, TTL-cached in
-    # asana_client, and best-effort exactly like the Drive brief above.
-    if await run_in_threadpool(_avatar_asana_enabled, org_id, avatar.id):
-        snapshot = await run_in_threadpool(asana_client.workspace_brief, org_id)
-        if snapshot:
-            session.memory_brief = (
-                f"[Asana workspace — live snapshot]\n{snapshot}\n\n"
-                + (session.memory_brief or "")
-            )
-    # Tool context on join: the org-scoped registry (native tools + connected
-    # Slack-agent tools + knowledge sources) is assembled ONCE here — same
-    # contract as the Drive brief above: threadpool, best-effort, off the live
-    # path — and its compact brief rides the same memory_brief channel so the
-    # brain knows what it can actually do (and never promises a tool that
-    # isn't connected). The snapshot also feeds the list_capabilities /
-    # search_tools brain tools with zero network in-meeting. Carried as a
-    # plain session attribute (not persisted; rebuilt on the next join).
-    reg = await run_in_threadpool(tool_registry.assemble, org_id, avatar)
+        if avatar.drive_folder_id
+        else _quiet(asyncio.sleep(0)),
+        _quiet(run_in_threadpool(_asana_brief_sync)),
+        _quiet(run_in_threadpool(tool_registry.assemble, org_id, avatar)),
+        _quiet(run_in_threadpool(google_client.calendar_brief, org_id)),
+    )
+    session.memory_brief = carryover or ""
+    if folder:
+        session.memory_brief = (
+            f"[Shared Drive folder — current team docs]\n{folder}\n\n"
+            + (session.memory_brief or "")
+        )
+    if asana_snapshot:
+        session.memory_brief = (
+            f"[Asana workspace — live snapshot]\n{asana_snapshot}\n\n"
+            + (session.memory_brief or "")
+        )
     if reg:
         session.tool_registry = reg
         tools_brief = tool_registry.brief(reg)
@@ -2071,11 +2078,6 @@ async def _start_avatar_session(
             session.memory_brief = (
                 tools_brief + "\n\n" + (session.memory_brief or "")
             )
-    # Calendar sight: the owner org's upcoming meetings ride the same brief
-    # channel — same contract again (threadpool, best-effort, cached in
-    # google_client, "" when no Google is connected). The snapshot also feeds
-    # the upcoming_meetings brain tool with zero network in-meeting.
-    cal_brief = await run_in_threadpool(google_client.calendar_brief, org_id)
     if cal_brief:
         session.calendar_brief = cal_brief
         session.memory_brief = (
@@ -3981,18 +3983,33 @@ def _is_echo(session: store.Session, text: str) -> bool:
     # A Gemini-ears turn is ANOTHER model's transcription of her voice: the
     # wording/segmentation drifts from what she spoke, and one aggregated turn
     # can span several spoken lines — the substring test above misses both.
-    # Token coverage catches it: when nearly every word of a substantial turn
-    # appears in what she spoke inside the same window, it is her own voice
-    # coming back, not a human coincidentally quoting her.
+    # Token coverage catches it, but ONLY while an ears mode could actually be
+    # feeding turns (off = Recall-only, where this branch is pure
+    # false-positive risk against humans paraphrasing her). Two conditions
+    # keep a human's confirmation/paraphrase alive: near-total coverage AND a
+    # contiguous 4-word run she literally spoke — reordered paraphrases fail
+    # the run test; a human's framing words ("so…", "…correct?") cut coverage.
+    if settings.gemini_ears_mode.strip().lower() == "off":
+        return False
     words = norm.split()
     if len(words) >= 5 and recent:
         vocab: set[str] = set()
         for spoken in recent:
             vocab.update(spoken.split())
         covered = sum(1 for w in words if w in vocab)
-        if covered >= 0.85 * len(words):
+        if covered >= 0.85 * len(words) and _has_contiguous_run(words, recent):
             return True
     return False
+
+
+def _has_contiguous_run(words: list[str], spoken_lines: list[str], n: int = 4) -> bool:
+    """True when any contiguous n-word window of the turn appears verbatim
+    inside one line she spoke — the signature of a re-transcription, which
+    preserves word runs even when overall wording drifts."""
+    if len(words) < n:
+        return False
+    grams = {" ".join(words[i : i + n]) for i in range(len(words) - n + 1)}
+    return any(g in spoken for spoken in spoken_lines for g in grams)
 
 
 # Partials made ONLY of filler/backchannel tokens ("yeah yeah", "uh uh ok",
@@ -4193,37 +4210,33 @@ def _calendar_event_organizer_email(event: dict) -> str:
 def _org_for_calendar_event(event: dict) -> str:
     """Attribute a calendar-summoned meeting to the org that owns it.
 
-    The organizer's address (then any attendee's) resolves through
+    ORGANIZER-ONLY on purpose: the organizer's address resolves through
     store.org_for_email — the org whose connected Google account or registered
     user it is. That org's meter runs and its tools act, not the Demo org's.
-    Falls back to the Demo org (the pre-fix behavior) when nothing matches —
-    or when the control plane is on and the match is not a durable tenant: a
-    personal u_<hash> org would fail the usage-gate uuid cast and kill the
-    join outright, which is strictly worse than demo attribution.
+    Attendees never attribute: an external prospect's meeting that merely
+    INVITES a registered user must not bill (or arm the tools of) that
+    guest's org — cross-tenant mis-attribution is strictly worse than the
+    Demo fallback. Falls back to the Demo org (the pre-fix behavior) when the
+    organizer is missing/unknown/an avatar inbox — or when the control plane
+    is on and the match is not a durable tenant: a personal u_<hash> org
+    would fail the usage-gate uuid cast and kill the join outright.
     """
     def _base(addr: str) -> tuple[str, str]:
         base, _tag, domain = avatars.email_parts(addr)
         return base, domain
 
+    organizer = _calendar_event_organizer_email(event).strip().lower()
+    if not organizer:
+        return settings.demo_org_id
     avatar_inboxes = {_base(t) for t in _calendar_target_emails()}
-    candidates: list[str] = []
-    organizer = _calendar_event_organizer_email(event)
-    if organizer:
-        candidates.append(organizer)
-    candidates.extend(sorted(_extract_invite_emails(event)))
-    seen: set[str] = set()
-    for addr in candidates:
-        a = addr.strip().lower()
-        if not a or a in seen or _base(a) in avatar_inboxes:
-            continue
-        seen.add(a)
-        org = store.org_for_email(a)
-        if not org:
-            continue
-        if control_plane.enabled() and not control_plane.is_durable_org(org):
-            continue
-        return org
-    return settings.demo_org_id
+    if _base(organizer) in avatar_inboxes:
+        return settings.demo_org_id
+    org = store.org_for_email(organizer)
+    if not org:
+        return settings.demo_org_id
+    if control_plane.enabled() and not control_plane.is_durable_org(org):
+        return settings.demo_org_id
+    return org
 
 
 @app.post("/webhooks/recall-calendar")

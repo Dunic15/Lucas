@@ -1,11 +1,13 @@
 """Calendar auto-join must meter the org that OWNS the meeting, not demo_org.
 
 The dispatch path is a webhook with no authenticated principal, so ownership
-is resolved from the event itself: organizer first, then attendees, matched
-against the org's connected Google account (org_oauth.email) or a registered
-user (users.email). Unresolvable events keep the pre-fix Demo-org behavior,
-and a personal u_<hash> match falls back too (it would fail the usage-gate
-uuid cast and kill the join — strictly worse than demo attribution).
+is resolved from the event itself — ORGANIZER ONLY, matched against the org's
+connected Google account (org_oauth.email) or a registered user (users.email).
+Attendees never attribute: an external meeting that merely invites a
+registered user must not bill that guest's org (cross-tenant risk). Events
+with a missing/unknown/avatar-alias organizer keep the pre-fix Demo-org
+behavior, and a personal u_<hash> match falls back too (it would fail the
+usage-gate uuid cast and kill the join — strictly worse than demo).
 """
 from __future__ import annotations
 
@@ -63,14 +65,14 @@ def test_unresolvable_event_falls_back_to_demo(monkeypatch):
     assert _org_for_calendar_event(_event()) == settings.demo_org_id
 
 
-def test_avatar_own_inbox_never_attributes(monkeypatch):
-    """The avatar's invite alias (incl. plus-tags) must not resolve ownership —
-    only the humans on the event do."""
+def test_avatar_alias_organizer_never_attributes(monkeypatch):
+    """An avatar-alias organizer (incl. plus-tags) resolves nothing — and
+    attendees are NOT consulted as a fallback."""
     calls = []
 
     def _spy(addr):
         calls.append(addr)
-        return None
+        return ACME_ORG
 
     monkeypatch.setattr(store, "org_for_email", _spy)
     monkeypatch.setattr(
@@ -81,8 +83,23 @@ def test_avatar_own_inbox_never_attributes(monkeypatch):
         organizer="laura.ai.122222+cedric@gmail.com",
         attendees=("laura.ai.122222@gmail.com", "human@acme.com"),
     )
-    _org_for_calendar_event(ev)
-    assert calls == ["human@acme.com"]
+    assert _org_for_calendar_event(ev) == settings.demo_org_id
+    assert calls == []  # nobody was even looked up
+
+
+def test_registered_guest_never_attributes_someone_elses_meeting(monkeypatch):
+    """The cross-tenant case: an EXTERNAL prospect's meeting invites a
+    registered user of org X as a guest. Org X must NOT be billed or have its
+    tools armed — unknown organizer means Demo fallback, full stop."""
+    def _resolve(addr):
+        return ACME_ORG if addr == "guest@acme.com" else None
+
+    monkeypatch.setattr(store, "org_for_email", _resolve)
+    ev = _event(
+        organizer="prospect@external-corp.io",
+        attendees=("prospect@external-corp.io", "guest@acme.com"),
+    )
+    assert _org_for_calendar_event(ev) == settings.demo_org_id
 
 
 def test_personal_org_match_falls_back_when_control_plane_on(monkeypatch):

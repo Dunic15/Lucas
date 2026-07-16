@@ -11,7 +11,17 @@ from __future__ import annotations
 import time
 from types import SimpleNamespace
 
+import pytest
+
+from app.config import settings
 from app.main import _is_echo, _norm_line
+
+
+@pytest.fixture(autouse=True)
+def _ears_on(monkeypatch):
+    """The token-coverage branch only arms when an ears mode is active —
+    with mode off (prod today) it must stay pure Recall-substring behavior."""
+    monkeypatch.setattr(settings, "gemini_ears_mode", "on")
 
 
 def _session(*spoken_lines: str) -> SimpleNamespace:
@@ -74,3 +84,24 @@ def test_expired_window_not_echo():
         _recent_lines={_norm_line(SPOKEN_1): time.time() - 120.0}
     )
     assert _is_echo(s, SPOKEN_1) is False
+
+
+def test_coverage_branch_disarmed_when_ears_off(monkeypatch):
+    """Prod today runs GEMINI_EARS_MODE=off: the coverage branch must not run
+    at all — only the original verbatim-substring gate applies."""
+    monkeypatch.setattr(settings, "gemini_ears_mode", "off")
+    s = _session(SPOKEN_1, SPOKEN_2)
+    reworded = (
+        "our pricing starts at ninety nine euros per month, "
+        "for the solo plan that includes three hundred avatar minutes"
+    )
+    assert _is_echo(s, reworded) is False  # coverage branch off
+    assert _is_echo(s, "pricing starts at ninety nine euros") is True  # substring intact
+
+
+def test_reordered_paraphrase_not_suppressed():
+    """A human RE-ASSEMBLING her vocabulary in new order (high coverage, no
+    contiguous run) is a real turn — the n-gram requirement keeps it alive."""
+    s = _session(SPOKEN_1)
+    reordered = "per month the solo plan pricing euros at ninety costs nine"
+    assert _is_echo(s, reordered) is False
