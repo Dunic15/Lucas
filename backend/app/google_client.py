@@ -17,6 +17,7 @@ Contract for every entry point:
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 import uuid
@@ -40,12 +41,9 @@ _GMAIL_SEND = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 _TIMEOUT = 30.0
 # The upcoming-events read fans out over every accessible calendar in the
 # connected Google account, not just primary or calendars currently checked in
-# Google's sidebar. This is a dashboard/week-view read; the compact in-meeting
-# brief still trims the merged result after the fan-out. The cap protects an
-# unusually large account from unbounded Google round-trips while covering the
-# normal case (and fixes the old first-8-selected-calendars truncation).
-_MAX_CALENDARS = 32
-_LIST_DEADLINE_S = 30.0
+# Google's sidebar. calendarList is fully paginated and event reads use a small
+# worker pool so a complete account does not become a long serial request.
+_CALENDAR_READ_WORKERS = 8
 
 
 def _cal_events_url(cal_id: str) -> str:
@@ -362,27 +360,34 @@ def list_calendar_events(
     # Google account (primary first, then calendars visible in Google's sidebar,
     # then the rest). "selected" is only a UI checkbox — filtering on it silently
     # omitted valid meetings, including Meet events on subscribed/team calendars.
-    # calendarList allows 250 rows in one page; we then apply a defensive cap.
-    # Any failure still degrades to primary-only, never to an error.
+    # calendarList is paginated to exhaustion: no arbitrary account-size cap.
+    # Any failure on the first page still degrades to primary-only; a later-page
+    # failure keeps the calendars already discovered.
     cal_ids = ["primary"]
     cal_meta: dict[str, dict[str, str | bool]] = {
         "primary": {"name": "Primary calendar", "color": "", "primary": True}
     }
     if not _calendarlist_blocked(key):
         try:
-            listing = httpx.get(
-                _CAL_CALENDARS,
-                params={
+            def _calendar_page(page_token: str = ""):
+                params = {
                     "maxResults": 250,
                     "showDeleted": "false",
                     "fields": (
-                        "items(id,summary,selected,primary,backgroundColor,"
-                        "deleted,accessRole)"
+                        "nextPageToken,items(id,summary,selected,primary,"
+                        "backgroundColor,deleted,accessRole)"
                     ),
-                },
-                headers=headers,
-                timeout=min(_TIMEOUT, 8.0),
-            )
+                }
+                if page_token:
+                    params["pageToken"] = page_token
+                return httpx.get(
+                    _CAL_CALENDARS,
+                    params=params,
+                    headers=headers,
+                    timeout=min(_TIMEOUT, 8.0),
+                )
+
+            listing = _calendar_page()
             if listing.status_code == 403:
                 # 403 = the token lacks calendar.readonly. Almost always a stale
                 # CACHED access token from BEFORE a reconnect that added the
@@ -394,30 +399,37 @@ def list_calendar_events(
                 if not ferr and fresh and fresh != token:
                     token = fresh
                     headers = {"Authorization": f"Bearer {token}"}
-                    listing = httpx.get(
-                        _CAL_CALENDARS,
-                        params={
-                            "maxResults": 250,
-                            "showDeleted": "false",
-                            "fields": (
-                                "items(id,summary,selected,primary,"
-                                "backgroundColor,deleted,accessRole)"
-                            ),
-                        },
-                        headers=headers,
-                        timeout=min(_TIMEOUT, 8.0),
-                    )
+                    listing = _calendar_page()
             if listing.status_code >= 300:
                 print(f"[calendar] calendarList HTTP {listing.status_code}", flush=True)
                 _note_calendarlist_result(key, ok=False)
             else:
                 _note_calendarlist_result(key, ok=True)
-                raw_cals = listing.json().get("items", [])
+                raw_cals: list[dict] = []
+                while True:
+                    payload = listing.json()
+                    page_items = payload.get("items", [])
+                    if isinstance(page_items, list):
+                        raw_cals.extend(
+                            cal for cal in page_items if isinstance(cal, dict)
+                        )
+                    page_token = str(payload.get("nextPageToken") or "")
+                    if not page_token:
+                        break
+                    listing = _calendar_page(page_token)
+                    if listing.status_code >= 300:
+                        # Keep already-discovered pages. The diagnostic contains
+                        # no account, calendar, token, or event content.
+                        print(
+                            f"[calendar] calendarList page HTTP {listing.status_code}",
+                            flush=True,
+                        )
+                        break
+
                 cals = [
                     cal
-                    for cal in (raw_cals if isinstance(raw_cals, list) else [])
-                    if isinstance(cal, dict)
-                    and cal.get("id")
+                    for cal in raw_cals
+                    if cal.get("id")
                     and not cal.get("deleted")
                     and str(cal.get("accessRole") or "") != "none"
                 ]
@@ -429,9 +441,8 @@ def list_calendar_events(
                         0 if cal.get("selected") else 1,
                     )
                 )
-                picked = cals[:_MAX_CALENDARS]
-                if picked:
-                    cal_ids = [str(cal["id"]) for cal in picked]
+                if cals:
+                    cal_ids = [str(cal["id"]) for cal in cals]
                     cal_meta = {
                         str(cal["id"]): {
                             "name": str(
@@ -441,7 +452,7 @@ def list_calendar_events(
                             "color": str(cal.get("backgroundColor") or ""),
                             "primary": bool(cal.get("primary")),
                         }
-                        for cal in picked
+                        for cal in cals
                     }
         except Exception:  # noqa: BLE001 — calendarList is best-effort by design
             pass
@@ -449,59 +460,63 @@ def list_calendar_events(
     merged: list[dict] = []
     seen: set[str] = set()
     first_error = ""
-    deadline = time.monotonic() + _LIST_DEADLINE_S
-    for cid in cal_ids:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break  # budget spent — return what we have, off-path callers retry
+
+    def _read_calendar(cid: str) -> tuple[str, list[dict], str]:
         _params = {
             "timeMin": time_min or datetime.now(timezone.utc).isoformat(),
             "singleEvents": "true",
             "orderBy": "startTime",
             "maxResults": n,
         }
-        if time_max:  # bound the window (week navigation) — else open-ended
+        if time_max:
             _params["timeMax"] = time_max
         try:
             resp = httpx.get(
                 _cal_events_url(cid),
                 params=_params,
                 headers=headers,
-                timeout=min(_TIMEOUT, max(2.0, remaining)),
+                timeout=min(_TIMEOUT, 8.0),
             )
         except Exception as e:  # noqa: BLE001
-            first_error = first_error or f"calendar list failed ({type(e).__name__})"
-            continue
+            return cid, [], f"calendar list failed ({type(e).__name__})"
         if resp.status_code == 401:
             _drop_cached_token(key)  # revoked early — next attempt re-mints
         if resp.status_code >= 300:
-            # Diagnostic: a 403 here on a Workspace domain usually = admin/API
-            # access restriction on the (unverified) app; 401 = token/scope.
             print(f"[calendar] list HTTP {resp.status_code}", flush=True)
-            first_error = first_error or f"calendar list failed (HTTP {resp.status_code})"
-            continue
+            return cid, [], f"calendar list failed (HTTP {resp.status_code})"
         try:
             items = resp.json().get("items", [])
         except Exception:  # noqa: BLE001
-            first_error = first_error or "calendar list returned no JSON"
-            continue
-        for it in items if isinstance(items, list) else []:
-            if not isinstance(it, dict):
+            return cid, [], "calendar list returned no JSON"
+        return cid, (items if isinstance(items, list) else []), ""
+
+    # Fetch every calendar, but never serially hammer Google. pool.map preserves
+    # calendar priority, which also makes iCalUID dedupe deterministic.
+    workers = min(_CALENDAR_READ_WORKERS, max(1, len(cal_ids)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = pool.map(_read_calendar, cal_ids)
+        for cid, items, read_error in results:
+            if read_error:
+                first_error = first_error or read_error
                 continue
-            # The same meeting shows up on several calendars (invited copy +
-            # a shared calendar) — iCalUID is stable across those copies.
-            dk = str(it.get("iCalUID") or it.get("id") or "")
-            if dk in seen:
-                continue
-            if dk:
-                seen.add(dk)
-            decorated = dict(it)
-            # Internal display metadata: dashboard.py distils this into a
-            # calendar label/color; the raw calendar id is never exposed.
-            decorated["_laura_calendar"] = cal_meta.get(
-                cid, {"name": "Calendar", "color": "", "primary": cid == "primary"}
-            )
-            merged.append(decorated)
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                # The same meeting shows up on several calendars (invited copy +
+                # a shared calendar) — iCalUID is stable across those copies.
+                dk = str(it.get("iCalUID") or it.get("id") or "")
+                if dk in seen:
+                    continue
+                if dk:
+                    seen.add(dk)
+                decorated = dict(it)
+                # Internal display metadata: dashboard.py distils this into a
+                # calendar label/color; the raw calendar id is never exposed.
+                decorated["_laura_calendar"] = cal_meta.get(
+                    cid, {"name": "Calendar", "color": "", "primary": cid == "primary"}
+                )
+                merged.append(decorated)
+
     if not merged and first_error:
         return {"ok": False, "error": first_error}
     merged.sort(key=_event_start_ts)
