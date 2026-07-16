@@ -5631,6 +5631,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 min_chars=45,  # coalesce tiny fragments so the TTS voice flows
                 meta=_answer_meta,
                 mission=mission,
+                org_id=session.org_id,  # org's private docs join retrieval
             )
         ):
             # Interrupted (barge-in) or superseded by a newer turn while this
