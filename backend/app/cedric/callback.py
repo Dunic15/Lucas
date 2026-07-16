@@ -26,6 +26,7 @@ import hashlib
 import hmac
 import json
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -172,6 +173,47 @@ def _post(
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def events_url() -> str:
+    """{cedric_base}/api/laura/events — the durable per-org events door from
+    the agreed action-lifecycle contract (handshake operation: action-events).
+    Derived from CEDRIC_ORGS_URL the same way install_state derives the base;
+    "" when the orchestrator isn't configured (feature silently off)."""
+    orgs = settings.cedric_orgs_url.strip()
+    if not orgs:
+        return ""
+    return orgs.rstrip("/").rsplit("/api/laura/orgs", 1)[0] + "/api/laura/events"
+
+
+def send_action_event(org_id: str, event: str, fields: dict) -> bool:
+    """handshake operation: action-events (A->B). One envelope for approval
+    prompts and status pushes: {event, org_id, action_id, correlation_id,
+    ...fields, event_id, at}. Signed with the per-org HMAC stack (_post fails
+    closed for unprovisioned orgs, so an org without a Cedric link is a clean
+    no-op). ECHO SUPPRESSION (contract): events that RE-REPORT a B-authored
+    status MUST carry the ORIGINATING event_id in ``fields`` — B treats its
+    own event_id as already-rendered; A-authored events get a fresh id here.
+    Single attempt (callers needing durability enqueue via the outbox);
+    responses are {ok:true} only per contract — nothing is read back."""
+    url = events_url()
+    org = (org_id or "").strip()
+    if not url or not org:
+        return False
+    payload = {
+        "event": str(event or ""),
+        "org_id": org,
+        **(fields or {}),
+        "at": _now_iso(),
+    }
+    payload.setdefault("event_id", uuid.uuid4().hex)
+    payload.setdefault("correlation_id", str(payload.get("action_id") or ""))
+    try:
+        resp = _post(url, payload)
+        return 200 <= resp.status_code < 300
+    except Exception as e:  # noqa: BLE001 — events must never break their caller
+        print(f"[cedric-callback] action event '{event}' delivery failed: {e}", flush=True)
+        return False
 
 
 def send_status(

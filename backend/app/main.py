@@ -277,6 +277,37 @@ def _google_redirect_uri() -> str:
     )
 
 
+def _stamp_action_routing(actions: list) -> list:
+    """Routing-role stamps (agreed action-lifecycle contract
+    hsk_con_cnw4567mqj3p49dyn3dg): every canonical action carries an
+    IMMUTABLE execution_route decided here (native iff our executor will run
+    its typed spec; else cedric), a correlation_id (defaults to action_id —
+    the cross-log join), an execution_policy, and — when no owner was
+    resolved — the visible triage payload (unresolved_roles +
+    unassigned_reason) instead of a silent blank. Stamps are setdefault-only:
+    a route persisted earlier is never re-evaluated (contract re-route bounds)."""
+    out: list = []
+    for a in actions or []:
+        if not isinstance(a, dict):
+            out.append(a)
+            continue
+        a = dict(a)
+        if not a.get("execution_route"):
+            a["execution_route"] = (
+                "native"
+                if executor.enabled() and executor.from_typed(a.get("typed"))
+                else "cedric"
+            )
+        a.setdefault("correlation_id", str(a.get("action_id") or ""))
+        a.setdefault("execution_policy", "approval_required")
+        owner = str(a.get("owner") or "").strip()
+        if not owner or owner.upper() == "UNASSIGNED":
+            a.setdefault("unresolved_roles", ["owner"])
+            a.setdefault("unassigned_reason", "no_owner_rule_match")
+        out.append(a)
+    return out
+
+
 def _avatar_asana_enabled(org_id: str, avatar_id: str) -> bool:
     """Whether this avatar may use the org's Asana: the org is connected
     (per-org token or ASANA_TOKEN) AND the per-avatar `asana` capability
@@ -2858,6 +2889,12 @@ async def _finalize_session_locked(
                 f"({type(e).__name__})",
                 flush=True,
             )
+
+    # Routing-role stamps — UNCONDITIONAL (executor on or off): finalize is
+    # the contract's first decision point, and the route persisted here is
+    # what the approve door executes by.
+    artifact["actions"] = _stamp_action_routing(artifact.get("actions") or [])
+    artifact["checklist"] = artifact["actions"]
 
     # The transcript is the raw material of the artifact — persist it so the
     # product output is complete (transcript + summary + checklist + email).

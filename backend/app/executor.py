@@ -140,6 +140,22 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
             print(
                 f"[executor] status write skipped ({type(e).__name__})", flush=True
             )
+        # handshake operation action-events: mirror the NATIVE-route terminal
+        # status to the orchestrator so Slack cards + dashboard stay in sync
+        # (contract: native-route surfacing — a silent native outcome is a
+        # violation on either route). A-authored → fresh event_id is minted in
+        # send_action_event; best-effort, orgs without a Cedric link no-op.
+        try:
+            from .cedric import callback as cedric_callback
+
+            cedric_callback.send_action_event(org, "action.status", {
+                "action_id": aid,
+                "status": "done" if result.get("ok") else "failed",
+                "detail": detail[:300],
+                "receipt_url": receipt if result.get("ok") else "",
+            })
+        except Exception:  # noqa: BLE001 — mirroring must never break execution
+            pass
     return result
 
 

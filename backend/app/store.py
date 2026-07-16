@@ -461,6 +461,27 @@ def _init_db() -> None:
                 PRIMARY KEY (org_id, domain)
             );
 
+            -- Canonical approval record (agreed action-lifecycle contract,
+            -- handshake operation approve-action): ONE decision per action,
+            -- all channels (dashboard/Slack relay) converge here. Replays are
+            -- answered from this row; a conflicting decision is a 409. Never
+            -- transcript content — decisions + distilled refs only.
+            CREATE TABLE IF NOT EXISTS action_approvals (
+                org_id TEXT NOT NULL,
+                action_id TEXT NOT NULL,
+                decision TEXT NOT NULL,                -- approve|reject|respond
+                selected_slot_id TEXT NOT NULL DEFAULT '',
+                idempotency_key TEXT NOT NULL DEFAULT '',
+                decided_via TEXT NOT NULL DEFAULT '',  -- dashboard|slack
+                laura_user_id TEXT NOT NULL DEFAULT '',
+                previous_status TEXT NOT NULL DEFAULT '',
+                new_status TEXT NOT NULL DEFAULT '',
+                execution_job_id TEXT,
+                blocked_on TEXT NOT NULL DEFAULT '',   -- JSON array of action_ids
+                decided_at REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (org_id, action_id)
+            );
+
             -- The GRANT org↔agent (a shared avatar folder becomes callable for
             -- an org). PK(org_id, avatar_id) — one grant per pair.
             CREATE TABLE IF NOT EXISTS org_agents (
@@ -2223,6 +2244,77 @@ def capability_enabled(avatar_id: str, capability: str, *, connected: bool) -> b
     switch, defaulting to the org-level ``connected`` state when never toggled.
     This is the "default ON when connected, else off" rule in one place."""
     return get_avatar_capabilities(avatar_id).get(capability, connected)
+
+
+# ── canonical approval records (handshake operation: approve-action) ──
+
+def record_action_approval(
+    org_id: str, action_id: str, *, decision: str, selected_slot_id: str = "",
+    idempotency_key: str = "", decided_via: str = "", laura_user_id: str = "",
+    previous_status: str = "", new_status: str = "",
+    execution_job_id: str | None = None, blocked_on: str = "",
+) -> bool:
+    """Persist the ONE canonical decision for an action. First write wins —
+    the approve door answers replays/conflicts from the stored row, so this
+    deliberately refuses to overwrite (INSERT OR IGNORE + rowcount)."""
+    org = (org_id or "").strip()
+    aid = (action_id or "").strip()
+    if not org or not aid or not decision:
+        return False
+    with _LOCK, _connect() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO action_approvals "
+            "(org_id, action_id, decision, selected_slot_id, idempotency_key, "
+            " decided_via, laura_user_id, previous_status, new_status, "
+            " execution_job_id, blocked_on, decided_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (org, aid, decision, selected_slot_id, idempotency_key, decided_via,
+             laura_user_id, previous_status, new_status, execution_job_id,
+             blocked_on, time.time()),
+        )
+    return cur.rowcount > 0
+
+
+def get_action_approval(org_id: str, action_id: str) -> dict | None:
+    """The recorded canonical decision for (org, action), or None."""
+    org = (org_id or "").strip()
+    aid = (action_id or "").strip()
+    if not org or not aid:
+        return None
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM action_approvals WHERE org_id=? AND action_id=?",
+            (org, aid),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_action_approval_job(org_id: str, action_id: str, execution_job_id: str) -> None:
+    """Stamp the execution job once a blocked/deferred approval finally runs."""
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            "UPDATE action_approvals SET execution_job_id=?, blocked_on='' "
+            "WHERE org_id=? AND action_id=?",
+            (execution_job_id, (org_id or "").strip(), (action_id or "").strip()),
+        )
+
+
+def is_org_member(user_id: str, org_id: str) -> bool:
+    """Active membership check for the approve door's approver rule. A
+    personal org (org_id == user_id) needs no membership row."""
+    uid = (user_id or "").strip()
+    org = (org_id or "").strip()
+    if not uid or not org:
+        return False
+    if uid == org:
+        return True
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM memberships WHERE user_id=? AND org_id=? "
+            "AND status='active'",
+            (uid, org),
+        ).fetchone()
+    return row is not None
 
 
 def all_avatar_capabilities() -> dict[str, dict[str, bool]]:
