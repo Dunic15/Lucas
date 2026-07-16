@@ -76,6 +76,17 @@ class Avatar:
     # transcript-evidence filter still applies, so a hint can never fabricate an
     # action the transcript doesn't support. [] = no hints = unchanged.
     tasks: list[dict] = None  # type: ignore[assignment]
+    # Avatar-specific NATIVE tools this avatar is purpose-built for, declared in
+    # avatar.yaml (e.g. Petra -> ["asana"]). These default ON for THIS avatar
+    # only — every other avatar defaults them OFF even when the org has
+    # connected them (a per-avatar dashboard toggle can still override). Google
+    # Calendar + Gmail are NOT listed here: they are BASELINE for every avatar.
+    # [] = only the baseline tools.
+    native_tools: list[str] = None  # type: ignore[assignment]
+
+    def uses_native_tool(self, name: str) -> bool:
+        """Whether this avatar is purpose-built for a gated native tool."""
+        return str(name).strip().lower() in (self.native_tools or [])
 
     @property
     def page(self) -> str:
@@ -234,6 +245,9 @@ def load(avatar_id: str) -> Avatar:
         ).strip(),
         mission=(raw.get("mission") or "").strip(),
         tasks=_normalize_tasks(raw.get("tasks")),
+        native_tools=[
+            str(t).strip().lower() for t in (raw.get("native_tools") or []) if str(t).strip()
+        ],
         dir=folder,
         knowledge_packs=[str(k) for k in (raw.get("knowledge_packs") or [])],
     )

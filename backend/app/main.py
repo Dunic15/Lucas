@@ -279,14 +279,17 @@ def _google_redirect_uri() -> str:
 
 def _avatar_asana_enabled(org_id: str, avatar_id: str) -> bool:
     """Whether this avatar may use the org's Asana: the org is connected
-    (per-org token or ASANA_TOKEN) AND the per-avatar `asana` capability
-    toggle is not explicitly off (default ON when connected — the same rule
-    as the google toggle). Sync (may hit sqlite) — call via threadpool.
-    Best-effort: eligibility must never break a join or a finalize."""
+    (per-org token or ASANA_TOKEN) AND this avatar is purpose-built for Asana
+    (declares it in avatar.yaml — Petra does, other avatars don't) AND the
+    per-avatar `asana` toggle is not explicitly off. So Asana defaults ON for
+    PETRA ONLY, not every avatar whose org happens to have connected it; a
+    dashboard toggle can still override per avatar. Sync (sqlite/yaml, both
+    cached) — call via threadpool. Best-effort: never breaks a join/finalize."""
     try:
         if not asana_client.connected(org_id):
             return False
-        return store.capability_enabled(avatar_id, "asana", connected=True)
+        declares = avatars.load(avatar_id).uses_native_tool("asana")
+        return store.capability_enabled(avatar_id, "asana", connected=declares)
     except Exception:  # noqa: BLE001
         return False
 

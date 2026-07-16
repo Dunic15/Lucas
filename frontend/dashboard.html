@@ -367,7 +367,7 @@
   .cal-ev.allday{border-left-color:var(--g3);}
   .cal-ev .ev-time{font-family:var(--mono);font-size:.6rem;color:var(--faint);letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .cal-ev.going .ev-time{color:var(--live);}
-  .cal-ev .ev-title{font-size:.72rem;font-weight:600;line-height:1.18;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .cal-ev .ev-title{font-size:.73rem;font-weight:600;line-height:1.2;color:var(--text);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word;}
   .cal-ev .ev-send{font-size:.58rem;font-weight:700;color:var(--live);letter-spacing:.02em;}
   /* short blocks (30-min slots) show the title only */
   .cal-ev.short{justify-content:center;}
@@ -1152,17 +1152,41 @@
     function pad2(n){ return ("0"+n).slice(-2); }
     // Calendar header — full month + year, the 7-day range, calendar account,
     // an optional "+ New meeting" action (showNew) and the ↻ reload.
-    function wkHead(cal,showNew){
-      var t0=new Date(); t0.setHours(0,0,0,0);
+    // Monday 00:00 (local) of the week `offset` weeks from the current one.
+    // offset 0 = this week; +1 = next week; -1 = last week. The calendar view
+    // is anchored here, so ◀/▶ just change the offset and re-fetch.
+    function calWeekStart(offset){
+      var d=new Date(); d.setHours(0,0,0,0);
+      var dow=(d.getDay()+6)%7;            // getDay: Sun=0 → make Mon=0..Sun=6
+      d.setDate(d.getDate()-dow+(offset||0)*7);
+      return d;
+    }
+    function wkHead(cal,showNew,anchor){
+      var t0=anchor?new Date(anchor.getTime()):calWeekStart(0);
+      t0.setHours(0,0,0,0);
       var t1=new Date(t0.getTime()+6*86400000);
       var month=MONTHS[t0.getMonth()]+" "+t0.getFullYear();
       var range=MON3[t0.getMonth()]+" "+t0.getDate()+" – "+
         (t0.getMonth()===t1.getMonth()?"":MON3[t1.getMonth()]+" ")+t1.getDate();
-      return '<div class="wkbar"><div><div class="wk-month">'+esc(month)+'</div>'+
-        '<div class="wkrange">'+esc(range)+'</div></div>'+
+      var off=window._calWeek||0;
+      return '<div class="wkbar">'+
+        '<div style="display:flex;align-items:center;gap:10px;min-width:0">'+
+          '<button class="btn wk-prev" aria-label="Previous week" style="padding:4px 11px;font-size:1.05rem;line-height:1">‹</button>'+
+          '<div style="min-width:0"><div class="wk-month">'+esc(month)+'</div>'+
+          '<div class="wkrange">'+esc(range)+'</div></div>'+
+          '<button class="btn wk-next" aria-label="Next week" style="padding:4px 11px;font-size:1.05rem;line-height:1">›</button>'+
+          (off!==0?'<button class="btn wk-today" aria-label="Back to this week" style="padding:5px 11px;font-size:.72rem">Today</button>':'')+
+        '</div>'+
         '<div class="wk-head-r"><span class="wk-cal">📅 '+esc(cal.email||"Calendar connected")+'</span>'+
         (showNew?'<button class="btn primary" id="wk-new" style="padding:6px 12px;font-size:.78rem" aria-label="Schedule a new meeting">+ New meeting</button>':'')+
         '<button class="btn" id="upcoming-reload" style="padding:6px 12px;font-size:.78rem" aria-label="Reload calendar">↻</button></div></div>';
+    }
+    function wireWeekNav(box){
+      var pv=box.querySelector(".wk-prev"), nx=box.querySelector(".wk-next"),
+          td=box.querySelector(".wk-today");
+      if(pv) pv.addEventListener("click",function(){ window._calWeek=(window._calWeek||0)-1; loadUpcoming(true); });
+      if(nx) nx.addEventListener("click",function(){ window._calWeek=(window._calWeek||0)+1; loadUpcoming(true); });
+      if(td) td.addEventListener("click",function(){ window._calWeek=0; loadUpcoming(true); });
     }
     // Resolve a friendly avatar name from its id (for the "🎭 name" badge).
     function avName(id){
@@ -1486,9 +1510,14 @@
       var box=document.getElementById("upcoming-panel"); if(!box) return;
       if(window._upcomingLoaded && !force) return;
       window._upcomingLoaded=true;
-      fetch("/dashboard/upcoming",{headers:headers()})
+      // The visible week: anchored at calWeekStart(offset); ◀/▶ change the
+      // offset. The backend returns exactly that Mon–Sun window (?start&days).
+      var weekStart=calWeekStart(window._calWeek||0);
+      fetch("/dashboard/upcoming?start="+encodeURIComponent(weekStart.toISOString())+"&days=7",{headers:headers()})
         .then(function(r){ return r.json(); })
         .then(function(j){
+          // A faster later click may have moved the week — drop this stale response.
+          if(weekStart.getTime()!==calWeekStart(window._calWeek||0).getTime()) return;
           var cal=j.calendar||{};
           // Empty state — no calendar connected. Point to the Google connect
           // (same flow as the Connections view); fall back to Connections when
@@ -1509,9 +1538,10 @@
           // Connected but the calendar read failed (native token present, read
           // errored) — soft "connected, retry" state, not a hard error.
           if(cal.error){
-            box.innerHTML=wkHead(cal)+'<div class="ph" style="padding:26px;text-align:center">Calendar connected but temporarily unavailable. <button class="btn" id="wk-retry" style="margin-left:8px;padding:6px 12px;font-size:.78rem">↻ Retry</button></div>';
+            box.innerHTML=wkHead(cal,false,weekStart)+'<div class="ph" style="padding:26px;text-align:center">Calendar connected but temporarily unavailable. <button class="btn" id="wk-retry" style="margin-left:8px;padding:6px 12px;font-size:.78rem">↻ Retry</button></div>';
             var rb=document.getElementById("wk-retry");
             if(rb) rb.addEventListener("click",function(){ loadUpcoming(true); });
+            wireWeekNav(box);
             return;
           }
           // ── Build the week: bucket meetings by local start date, skipping any
@@ -1531,22 +1561,11 @@
             parsed.push(ev);
             (buckets[dayKey(ev.s)]=buckets[dayKey(ev.s)]||[]).push(ev);
           });
-          // The grid shows a 7-day window and has no week navigation. Anchor it at
-          // today; BUT if there ARE upcoming meetings and NONE fall in the next 7
-          // days, start the window on the earliest one so the user's meetings are
-          // always visible. Fixes "connected + events fetched (items>0) but the grid
-          // shows nothing" when the next meeting is more than a week out.
-          var anchor=new Date(today.getTime());
-          var inNext7=parsed.some(function(ev){ var dk=Math.floor((ev.s-today)/86400000); return dk>=0&&dk<7; });
-          if(!inNext7&&parsed.length){
-            var earliest=parsed.reduce(function(a,b){ return b.s<a.s?b:a; }).s;
-            var e0=new Date(earliest); e0.setHours(0,0,0,0);
-            if(e0>today) anchor=e0;
-          }
-          var anchoredFuture=dayKey(anchor)!==dayKey(today);
-          var weekNote=anchoredFuture
-            ? '<div class="cnote" style="margin:-4px 0 10px;text-align:center">📅 Showing your next meetings — week of '+anchor.toLocaleDateString()+'</div>'
-            : '';
+          // The grid is anchored at the SELECTED week (calWeekStart(offset)) —
+          // ◀/▶ move it, "Today" returns to this week. Always a Mon–Sun window,
+          // so the header range and the backend fetch stay in lock-step.
+          var anchor=new Date(weekStart.getTime()); anchor.setHours(0,0,0,0);
+          var weekNote='';
           var days=[];
           for(var i=0;i<7;i++){
             var day=new Date(anchor.getTime()+i*86400000);
@@ -1564,13 +1583,13 @@
           // above the grid when the week is empty. Mobile keeps its day-sections
           // fallback and shows a short hint on an empty week.
           if(desktop){
-            box.innerHTML=wkHead(cal,true)+weekNote+
+            box.innerHTML=wkHead(cal,true,anchor)+weekNote+
               (anyMeeting?"":'<div class="cnote" style="margin:-4px 0 10px;text-align:center">No meetings this week — click a slot to add one.</div>')+
               renderHourGrid(days,multi,avOpts,av0);
           } else if(anyMeeting){
-            box.innerHTML=wkHead(cal,true)+weekNote+renderSections(days,multi,avOpts,av0);
+            box.innerHTML=wkHead(cal,true,anchor)+weekNote+renderSections(days,multi,avOpts,av0);
           } else {
-            box.innerHTML=wkHead(cal,true)+'<div class="ph" style="padding:34px;text-align:center">No meetings this week.<br>'+
+            box.innerHTML=wkHead(cal,true,anchor)+'<div class="ph" style="padding:34px;text-align:center">No meetings this week.<br>'+
               '<span class="cnote">Tap “+ New meeting” to schedule one — or your Google Calendar meetings appear here automatically.</span></div>';
           }
           var rl=document.getElementById("upcoming-reload");
@@ -1578,6 +1597,7 @@
           wireSend(box);                        // mobile inline Send controls
           wirePopover(box,multi,avOpts,av0);    // desktop event-block popover
           wireCreate(box,nativeCal,avOpts,av0); // "+ New meeting" + empty-slot click
+          wireWeekNav(box);                     // ◀/▶/Today week navigation
           // Re-render once if the viewport crosses the desktop/mobile breakpoint
           // (the hour grid is desktop-only; sections are the mobile fallback).
           if(window.matchMedia && !window._wkMq){

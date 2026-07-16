@@ -72,20 +72,31 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
             "kind": "native", "write": True, "approval": "approve", "connected": google_on,
         })
 
-        # Native Asana (per-org PAT or ASANA_TOKEN → the native executor).
+        # Native Asana — Petra-only: the org is connected AND this avatar is
+        # purpose-built for Asana (avatar.native_tools, e.g. Petra) AND the
+        # per-avatar toggle isn't off. Other avatars never see it in their tool
+        # brief even when the org has connected Asana. Google Calendar/Gmail
+        # above stay baseline for every avatar.
         asana_on = False
         try:
             from . import asana_client
 
-            asana_on = asana_client.connected(org_id)
+            if asana_client.connected(org_id):
+                declares = bool(
+                    getattr(avatar, "uses_native_tool", lambda _n: False)("asana")
+                )
+                asana_on = store.capability_enabled(
+                    getattr(avatar, "id", ""), "asana", connected=declares
+                )
         except Exception:  # noqa: BLE001 — absence of a token is not an error
             asana_on = False
-        reg["native"].append({
-            "name": "asana_tasks",
-            "does": "create and update tasks in the team's Asana workspace",
-            "kind": "native", "write": True, "approval": "approve",
-            "connected": asana_on,
-        })
+        if asana_on:
+            reg["native"].append({
+                "name": "asana_tasks",
+                "does": "create and update tasks in the team's Asana workspace",
+                "kind": "native", "write": True, "approval": "approve",
+                "connected": asana_on,
+            })
 
         # Cedric connectors — only when this org has a connected Slack agent.
         cedric_reg: dict = {"connected": [], "available": [], "not_linked": False}

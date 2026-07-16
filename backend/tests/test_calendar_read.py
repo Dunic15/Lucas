@@ -390,3 +390,80 @@ def test_surviving_403_is_negative_cached_then_reconnect_clears(monkeypatch):
     google_client._drop_cached_token("org-block")     # a reconnect
     google_client.list_calendar_events("org-block")   # re-checks
     assert hits["calendarList"] == 2
+
+
+def test_time_window_is_passed_to_events_list(monkeypatch):
+    """Week navigation: an explicit time_min/time_max bounds the events.list
+    query (timeMin=start, timeMax=end) instead of the open-ended 'from now'."""
+    google_client._reset_token_cache()
+    monkeypatch.setattr(
+        google_client, "_access_token",
+        lambda key, oauth=None, on_rotate=None, force_refresh=False: ("tok", ""),
+    )
+    seen = {}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if "users/me/calendarList" in url:
+            return _resp({"items": [{"id": "primary", "primary": True, "selected": True}]})
+        seen.update(params or {})
+        return _resp({"items": []})
+
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+    google_client.list_calendar_events(
+        "org-w",
+        time_min="2026-07-20T00:00:00+00:00",
+        time_max="2026-07-27T00:00:00+00:00",
+    )
+    assert seen.get("timeMin") == "2026-07-20T00:00:00+00:00"
+    assert seen.get("timeMax") == "2026-07-27T00:00:00+00:00"
+
+
+def test_no_time_max_stays_open_ended(monkeypatch):
+    google_client._reset_token_cache()
+    monkeypatch.setattr(
+        google_client, "_access_token",
+        lambda key, oauth=None, on_rotate=None, force_refresh=False: ("tok", ""),
+    )
+    seen = {}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if "users/me/calendarList" in url:
+            return _resp({"items": [{"id": "primary", "primary": True, "selected": True}]})
+        seen.update(params or {})
+        return _resp({"items": []})
+
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+    google_client.list_calendar_events("org-o")
+    assert "timeMax" not in seen  # open-ended default (today's behavior)
+    assert seen.get("timeMin")    # still bounded below by now
+
+
+def test_windowed_read_allows_more_than_50_events(monkeypatch):
+    """A busy program week can hold >50 events across calendars — a BOUNDED
+    (time_max) read must not cap at 50, or later daily standups get truncated
+    ('I don't see all my standups'). Open-ended reads stay capped at 50."""
+    google_client._reset_token_cache()
+    monkeypatch.setattr(
+        google_client, "_access_token",
+        lambda key, oauth=None, on_rotate=None, force_refresh=False: ("tok", ""),
+    )
+    seen = {}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if "users/me/calendarList" in url:
+            return _resp({"items": [{"id": "primary", "primary": True, "selected": True}]})
+        seen.update(params or {})
+        return _resp({"items": []})
+
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+    # windowed: honours a high maxResults (bounded by the week)
+    google_client.list_calendar_events(
+        "org-w", max_results=150,
+        time_min="2026-07-20T00:00:00+00:00",
+        time_max="2026-07-27T00:00:00+00:00",
+    )
+    assert seen.get("maxResults") == 150
+    # open-ended: still capped at 50 (no timeMax bound to protect it)
+    seen.clear()
+    google_client.list_calendar_events("org-o", max_results=150)
+    assert seen.get("maxResults") == 50

@@ -520,7 +520,14 @@ def dashboard_summary(request: Request) -> JSONResponse:
                         "connected": slack_connected,
                     },
                     "asana": {
-                        "on": all_caps.get(aid, {}).get("asana", asana_connected),
+                        # Petra-only default: Asana defaults ON only for the
+                        # avatar built for it (avatar.native_tools). Every other
+                        # avatar defaults OFF even when the org connected Asana;
+                        # the owner can still toggle it on per avatar.
+                        "on": all_caps.get(aid, {}).get(
+                            "asana",
+                            asana_connected and a.uses_native_tool("asana"),
+                        ),
                         "connected": asana_connected,
                     },
                 },
@@ -1235,6 +1242,28 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
     # Keyed by the org_id string; no ::uuid cast (org_id split-brain safe).
     native_org = (user["org_id"] if user else machine_org) or settings.demo_org_id
 
+    # Optional week window (calendar navigation): ?start=<ISO>&days=<n>. When
+    # given, the fan-out is bounded to [start, start+days) and PAST events in
+    # that window are kept (the grid shows the whole selected week, not just
+    # "from now"). Absent → today's open-ended "upcoming" read, unchanged.
+    _q = request.query_params
+    _win_min, _win_max, _keep_past = "", "", False
+    _start = str(_q.get("start") or "").strip()
+    if _start:
+        try:
+            _sdt = datetime.fromisoformat(_start.replace("Z", "+00:00"))
+            if _sdt.tzinfo is None:
+                _sdt = _sdt.replace(tzinfo=timezone.utc)
+            try:
+                _days = max(1, min(int(_q.get("days") or 7), 31))
+            except (TypeError, ValueError):
+                _days = 7
+            _win_min = _sdt.isoformat()
+            _win_max = (_sdt + timedelta(days=_days)).isoformat()
+            _keep_past = True
+        except (TypeError, ValueError):
+            _win_min = _win_max = ""
+
     def _load_native(
         org_id: str, oauth: dict, *, principal: str = "", on_rotate=None
     ) -> dict:
@@ -1247,9 +1276,10 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
         # (unchanged, including org refresh-token rotation-persist). org_id is
         # still the ORG for the booked-session mapping below either way.
         res = google_client.list_calendar_events(
-            org_id, max_results=25,
+            org_id, max_results=(150 if _win_min else 25),
             oauth=(oauth if principal else None),
             principal=principal, on_rotate=on_rotate,
+            time_min=_win_min, time_max=_win_max,
         )
         if not res.get("ok"):
             # The org HAS a native token but the read failed — surface a soft
@@ -1293,7 +1323,9 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
                 continue
             if start.tzinfo is None:  # all-day 'date' has no offset
                 start = start.replace(tzinfo=timezone.utc)
-            if start < now - timedelta(minutes=90):
+            # An explicit week window shows the WHOLE week (past days included);
+            # the default "upcoming" view still drops already-finished events.
+            if not _keep_past and start < now - timedelta(minutes=90):
                 continue
             url = _native_event_url(ev)
             end = ev.get("end") or {}
@@ -1323,7 +1355,10 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
         rows.sort(key=lambda r: r["start_time"])
         return {
             "calendar": {"connected": True, "source": "google", "email": cal_email},
-            "meetings": rows[:20],
+            # A week window can legitimately hold many more than the default
+            # view's 20 (a dense program week: standups + sessions + planning
+            # across several calendars) — keep them all so the grid is complete.
+            "meetings": rows[: (200 if _win_min else 20)],
         }
 
     def _load_recall() -> dict:

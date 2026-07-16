@@ -13,6 +13,13 @@ id: petra
 name: Petra
 role: AI Project Manager
 
+# Avatar-specific native tools: Petra is the PM avatar, so SHE owns Asana —
+# it defaults ON only for her (every other avatar defaults Asana OFF even when
+# the org has connected it). Google Calendar + Gmail are baseline for all
+# avatars and are NOT listed here.
+native_tools:
+  - asana
+
 # One-line, user-facing summary for the dashboard card (NOT the spoken persona).
 description: Project manager that knows your Asana workspace — tracks the meeting, flags what's overdue, and files the action items as tasks.
 
