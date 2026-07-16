@@ -314,16 +314,101 @@ def _meet_url(data: dict) -> str:
     return ""
 
 
+def add_calendar_event_attendee(
+    org_id: str, calendar_id: str, event_id: str, attendee_email: str, *,
+    oauth: dict | None = None, principal: str = "", on_rotate=None,
+) -> dict:
+    """Add one attendee to an existing Google event without losing its guests.
+
+    The dashboard passes a signed event reference which resolves to the calendar
+    and event ids, plus the caller's own OAuth principal. Google remains the
+    authorization boundary: a user who cannot edit the event gets a soft 403
+    result, never a cross-account write.
+    """
+    calendar_id = str(calendar_id or "").strip()
+    event_id = str(event_id or "").strip()
+    attendee_email = str(attendee_email or "").strip().lower()
+    if not calendar_id or not event_id or not attendee_email:
+        return {"ok": False, "error": "calendar, event and attendee are required"}
+
+    key = principal or org_id
+    token, err = _access_token(key, oauth, on_rotate=on_rotate)
+    if err:
+        return {"ok": False, "error": err}
+    headers = {"Authorization": f"Bearer {token}"}
+    event_url = f"{_cal_events_url(calendar_id)}/{quote(event_id, safe='')}"
+    try:
+        current = httpx.get(event_url, headers=headers, timeout=_TIMEOUT)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"calendar event read failed ({type(e).__name__})"}
+    if current.status_code == 401:
+        _drop_cached_token(key)
+    if current.status_code >= 300:
+        return {
+            "ok": False,
+            "error": f"calendar event read failed (HTTP {current.status_code})",
+        }
+
+    current_data = current.json()
+    raw_attendees = current_data.get("attendees", [])
+    allowed = {
+        "email", "displayName", "optional", "responseStatus",
+        "comment", "additionalGuests", "resource",
+    }
+    attendees: list[dict] = []
+    present: set[str] = set()
+    for raw in raw_attendees if isinstance(raw_attendees, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        email = str(raw.get("email") or "").strip()
+        if not email:
+            continue
+        present.add(email.lower())
+        attendees.append({k: v for k, v in raw.items() if k in allowed})
+    if attendee_email in present:
+        return {
+            "ok": True,
+            "event_id": event_id,
+            "event_url": str(current_data.get("htmlLink") or ""),
+            "idempotent": True,
+        }
+    attendees.append({"email": attendee_email})
+    try:
+        patched = httpx.patch(
+            event_url,
+            params={"sendUpdates": "all"},
+            headers=headers,
+            json={"attendees": attendees},
+            timeout=_TIMEOUT,
+        )
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"calendar event update failed ({type(e).__name__})"}
+    if patched.status_code == 401:
+        _drop_cached_token(key)
+    if patched.status_code >= 300:
+        return {
+            "ok": False,
+            "error": f"calendar event update failed (HTTP {patched.status_code})",
+        }
+    data = patched.json()
+    return {
+        "ok": True,
+        "event_id": str(data.get("id") or event_id),
+        "event_url": str(data.get("htmlLink") or ""),
+        "idempotent": False,
+    }
+
+
 def list_calendar_events(
     org_id: str, *, max_results: int = 20,
     oauth: dict | None = None, principal: str = "", on_rotate=None,
     time_min: str = "", time_max: str = "",
 ) -> dict:
-    """List UPCOMING events across the account's SELECTED calendars (read-only).
+    """List UPCOMING events across every accessible account calendar (read-only).
 
     Mirrors ``create_calendar_event`` / ``send_gmail``: mint a short-lived access
-    token, list the user's calendarList (selected + primary, capped, fail-soft
-    to primary-only), then GET each calendar's events with ``timeMin=now``,
+    token, fully paginate the user's accessible calendarList (fail-soft to
+    primary-only), then GET each calendar's events with ``timeMin=now``,
     ``singleEvents=true``, ``orderBy=startTime`` and a small ``maxResults``;
     results are deduped on iCalUID (invited copy vs shared calendar) and merged
     in start order. The ``calendar.events.readonly`` scope is granted at connect.
@@ -365,7 +450,9 @@ def list_calendar_events(
     # failure keeps the calendars already discovered.
     cal_ids = ["primary"]
     cal_meta: dict[str, dict[str, str | bool]] = {
-        "primary": {"name": "Primary calendar", "color": "", "primary": True}
+        "primary": {
+            "id": "primary", "name": "Primary calendar", "color": "", "primary": True
+        }
     }
     if not _calendarlist_blocked(key):
         try:
@@ -445,6 +532,7 @@ def list_calendar_events(
                     cal_ids = [str(cal["id"]) for cal in cals]
                     cal_meta = {
                         str(cal["id"]): {
+                            "id": str(cal["id"]),
                             "name": str(
                                 cal.get("summary")
                                 or ("Primary calendar" if cal.get("primary") else "Calendar")
@@ -465,6 +553,10 @@ def list_calendar_events(
         _params = {
             "timeMin": time_min or datetime.now(timezone.utc).isoformat(),
             "singleEvents": "true",
+            # Google omits invitations hidden by the account's invitation
+            # settings unless this is explicit. The Calendar UI can still show
+            # them, so a replica must request them too.
+            "showHiddenInvitations": "true",
             "orderBy": "startTime",
             "maxResults": n,
         }
@@ -513,7 +605,10 @@ def list_calendar_events(
                 # Internal display metadata: dashboard.py distils this into a
                 # calendar label/color; the raw calendar id is never exposed.
                 decorated["_laura_calendar"] = cal_meta.get(
-                    cid, {"name": "Calendar", "color": "", "primary": cid == "primary"}
+                    cid, {
+                        "id": cid, "name": "Calendar", "color": "",
+                        "primary": cid == "primary",
+                    }
                 )
                 merged.append(decorated)
 
