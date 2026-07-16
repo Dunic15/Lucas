@@ -50,6 +50,12 @@ sqlalchemy>=2.0
 alembic>=1.13
 psycopg[binary]>=3.1
 
+# Pure-python IANA timezone database so zoneinfo.ZoneInfo(...) resolves on the
+# slim base image (python:*-slim ships no system tzdb) — the find-a-time
+# scheduler does all slot math in the organizer's real zone; without this the
+# first non-UTC user would crash in prod only.
+tzdata>=2024.1
+
 # Hosted subscription Checkout + Customer Portal + signed webhooks. Billing is
 # inert unless BILLING_ENABLED and the complete production readiness gate pass.
 stripe>=14,<16
