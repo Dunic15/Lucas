@@ -37,6 +37,8 @@ _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _CAL_INSERT = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 _CAL_LIST = _CAL_INSERT
 _CAL_CALENDARS = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
+_FREEBUSY = "https://www.googleapis.com/calendar/v3/freeBusy"
+_CAL_SETTINGS_TZ = "https://www.googleapis.com/calendar/v3/users/me/settings/timezone"
 _GMAIL_SEND = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 _TIMEOUT = 30.0
 # The upcoming-events read fans out over every accessible calendar in the
@@ -293,6 +295,106 @@ def create_calendar_event(
         # (for any reason) no conference was provisioned — callers guard null.
         "meet_url": _meet_url(data),
     }
+
+
+def freebusy(
+    principal: str, calendar_ids: list[str], window_start: str, window_end: str, *,
+    oauth: dict | None = None, on_rotate=None, timezone: str = "UTC",
+) -> dict:
+    """Query Google's freeBusy for several calendars in ONE call — the read half
+    of the find-a-time scheduler. OFF the live hot path (finalize / dashboard).
+
+    Returns ``{ok, timezone, calendars: {id: {status, busy}}}`` where status is
+    ``readable`` (with busy=[{start,end}] RFC3339), ``no_permission`` (Google
+    returned an error for the calendar — usually a missing free/busy grant), or
+    ``no_account`` (Google didn't return the calendar at all). NEVER raises: a
+    token/network failure returns ``{ok:False, error, calendars:{}}`` so the
+    caller degrades to "couldn't check" rather than treating a calendar as free.
+    Reads via the SAME token seam as create_calendar_event — the ORG token by
+    default (the calendar the event will actually be booked on)."""
+    ids = [c for c in (calendar_ids or []) if c]
+    if not ids:
+        return {"ok": True, "timezone": timezone, "calendars": {}}
+    key = principal
+    token, err = _access_token(key, oauth, on_rotate=on_rotate)
+    if err:
+        return {"ok": False, "error": err, "calendars": {}}
+
+    def _post(tok: str):
+        return httpx.post(
+            _FREEBUSY,
+            headers={"Authorization": f"Bearer {tok}"},
+            json={
+                "timeMin": window_start, "timeMax": window_end,
+                "timeZone": timezone, "items": [{"id": c} for c in ids],
+            },
+            timeout=_TIMEOUT,
+        )
+
+    try:
+        resp = _post(token)
+        if resp.status_code == 401:
+            _drop_cached_token(key)  # revoked early — re-mint on retry
+        if resp.status_code == 403:
+            # Stale cached token from before a scope-adding reconnect — re-mint
+            # once from the current refresh token (same self-heal as the
+            # calendarList read). freeBusy rides calendar.readonly.
+            _drop_cached_token(key)
+            fresh, ferr = _access_token(
+                key, oauth, on_rotate=on_rotate, force_refresh=True
+            )
+            if not ferr and fresh and fresh != token:
+                resp = _post(fresh)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"freebusy request failed ({type(e).__name__})",
+                "calendars": {}}
+    if resp.status_code >= 300:
+        print(f"[calendar] freeBusy HTTP {resp.status_code}", flush=True)
+        return {"ok": False, "error": f"freebusy HTTP {resp.status_code}",
+                "calendars": {}}
+
+    cals = (resp.json() or {}).get("calendars") or {}
+    out: dict[str, dict] = {}
+    for cid in ids:
+        entry = cals.get(cid)
+        if entry is None:
+            # Google didn't return the calendar — no such account we can see.
+            out[cid] = {"status": "no_account", "busy": []}
+        elif entry.get("errors"):
+            # A returned error (commonly reason 'notFound') = free/busy not
+            # visible to this token. Never treat as free.
+            out[cid] = {"status": "no_permission", "busy": []}
+        else:
+            busy = [
+                {"start": str(b.get("start") or ""), "end": str(b.get("end") or "")}
+                for b in (entry.get("busy") or []) if isinstance(b, dict)
+            ]
+            out[cid] = {"status": "readable", "busy": busy}
+    return {"ok": True, "timezone": timezone, "calendars": out}
+
+
+def resolve_timezone(
+    principal: str, *, oauth: dict | None = None, on_rotate=None,
+) -> str:
+    """The organizer calendar's IANA timezone (users/me/settings/timezone), or
+    "" when it can't be read. Off the hot path; never raises. The scheduler
+    falls back to UTC on "" — but resolving the real zone is what keeps
+    "9-18 working hours" from meaning 4am for a non-UTC user."""
+    token, err = _access_token(principal, oauth, on_rotate=on_rotate)
+    if err:
+        return ""
+    try:
+        resp = httpx.get(
+            _CAL_SETTINGS_TZ, headers={"Authorization": f"Bearer {token}"},
+            timeout=min(_TIMEOUT, 8.0),
+        )
+        if resp.status_code == 401:
+            _drop_cached_token(principal)
+        if resp.status_code >= 300:
+            return ""
+        return str((resp.json() or {}).get("value") or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _meet_url(data: dict) -> str:

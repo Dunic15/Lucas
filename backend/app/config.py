@@ -260,6 +260,15 @@ class Settings(BaseSettings):
     # NATIVE_EXECUTOR=false to fall back to the Cedric-brokered path.
     # See backend/app/executor.py + google_client.py.
     native_executor: bool = True
+    # Find-a-time scheduler (backend/app/scheduler.py). With this ON, a finalized
+    # meeting's VAGUE scheduling ask ("book 45 min with Ananth next week") gets a
+    # free/busy lookup + ranked candidate slots attached as a CalendarProposal, so
+    # the approve doors can offer times instead of dropping the action. Gates the
+    # PRODUCER only — off the live meeting hot path (runs at finalize / explicit
+    # dashboard request). Default OFF: with it off nothing attaches a proposal, so
+    # every downstream approve door is byte-identical to today. Needs
+    # native_executor ON to actually create the event after a slot is picked.
+    scheduler_find_time: bool = False
     # Key for encrypting the per-org Google refresh token at rest (store.py
     # org_oauth, Fernet). Empty ⇒ falls back to session_secret, so tokens are
     # never stored in plaintext even without extra config; with neither set it
