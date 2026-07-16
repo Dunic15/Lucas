@@ -1756,7 +1756,12 @@
       // a safe fallback so the link is never dead (#197 class).
       (slackConnected
         ?'<div class="ctools"><div class="ctool-chips" id="ctool-chips"></div>'+
-          '<a class="btn" data-slack-manage target="_blank" rel="noopener" style="text-decoration:none" href="https://www.meet-cedric.com">Manage tools ↗</a>'+
+          // Starts DISABLED (no href): a bare meet-cedric.com link lands on
+          // Cedric's account picker / login wall — often the WRONG account on a
+          // shared browser. applySlackTools enables it only once a real
+          // manage_url (org-scoped) resolves; until then the loop's entry
+          // points are the connect chips above + "Add to Slack".
+          '<a class="btn" data-slack-manage target="_blank" rel="noopener" aria-disabled="true" style="text-decoration:none;opacity:.55;pointer-events:none">Manage tools ↗</a>'+
           '<div class="cnote">Connect a tool above, or manage them on Cedric.</div></div>'
         :'')+
       '</div>'+
@@ -1877,8 +1882,16 @@
       var mgr="";
       if(typeof j.manage_url==="string"&&j.manage_url){ mgr=j.manage_url; }
       else { (j.connectors||[]).some(function(c){ if(c&&typeof c.manage_url==="string"&&c.manage_url){ mgr=c.manage_url; return true; } return false; }); }
-      if(mgr){ a.setAttribute("href",withReturnUrl(mgr)); a.textContent="Manage tools ↗"; }
-      else { a.setAttribute("href","https://www.meet-cedric.com"); a.textContent="Manage in Cedric ↗"; }
+      if(mgr){
+        a.setAttribute("href",withReturnUrl(mgr)); a.textContent="Manage tools ↗";
+        a.removeAttribute("aria-disabled"); a.style.opacity=""; a.style.pointerEvents="";
+      } else {
+        // No org-scoped manage_url -> keep the button DISABLED. Never fall back
+        // to bare meet-cedric.com: on a shared browser it opens whatever Cedric
+        // session is lying around (the wrong account) or a login wall.
+        a.removeAttribute("href"); a.textContent="Manage unavailable — use Add to Slack";
+        a.setAttribute("aria-disabled","true"); a.style.opacity=".55"; a.style.pointerEvents="none";
+      }
     }
     var box=document.querySelector("#conns #ctool-chips");
     if(box){

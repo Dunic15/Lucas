@@ -163,6 +163,19 @@ def test_dashboard_renders_teamscope_connect_urls_not_only_the_grid():
     assert 'location.origin+"/dashboard"' in dashboard
 
 
+def test_dashboard_never_links_bare_cedric_root():
+    """The Manage-tools button must never fall back to a bare meet-cedric.com
+    href: with no org-scoped manage_url, that link lands on Cedric's account
+    picker / login wall — on a shared browser it opens the WRONG account (the
+    'opens Ben's Cedric' class). It starts disabled and is enabled only once a
+    real manage_url resolves."""
+    dashboard = (Path(__file__).resolve().parents[2] / "frontend/dashboard.html").read_text()
+    assert 'href="https://www.meet-cedric.com"' not in dashboard
+    # the disabled-until-resolved state exists
+    assert 'aria-disabled="true"' in dashboard
+    assert "Manage unavailable" in dashboard
+
+
 def test_legacy_local_disconnect_is_removed(client):
     """The legacy DELETE route is gone entirely: the dashboard button posts to
     /dashboard/connections/brain/disconnect (remote-revoke-first). A stray
