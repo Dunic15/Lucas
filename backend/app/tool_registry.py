@@ -121,6 +121,22 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
                         cedric_reg["available"].append(name)
         reg["cedric"] = cedric_reg
 
+        # Callable Cedric tools via the MCP bridge (Handshake contract v3) — the
+        # display-only connector list above says WHAT exists; these are the tools
+        # Laura can actually INVOKE (cedric_mcp.call_tool). Gated + best-effort +
+        # off the hot path (session start). Empty unless CEDRIC_MCP_ENABLED and
+        # Cedric returns a catalog, so join is byte-identical when the flag is off.
+        reg["cedric_mcp"] = []
+        try:
+            from . import cedric_mcp
+
+            if cedric_mcp.enabled():
+                mcp_tools = cedric_mcp.list_tools(org_id)
+                if mcp_tools:
+                    reg["cedric_mcp"] = mcp_tools
+        except Exception:  # noqa: BLE001 — never block a join over the bridge
+            pass
+
         # Knowledge sources (what it can READ — RAG + the Drive brief).
         reg["knowledge"] = {
             "docs": True,  # every avatar has an indexed knowledge folder

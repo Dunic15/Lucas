@@ -658,6 +658,18 @@ class Settings(BaseSettings):
     # the moment Cedric ships the route.
     cedric_orgs_url: str = ""
     cedric_orgs_token: str = ""
+    # Programmatic tool bridge (Handshake contract v3, 2026-07-16): consume
+    # Cedric's connected tools as an MCP server (POST /api/laura/mcp). OFF by
+    # default — flip to true ONLY once Cedric confirms their endpoint is live.
+    # When off, nothing calls Cedric's MCP surface and session-start/live paths
+    # are byte-identical to today.
+    cedric_mcp_enabled: bool = False
+    # Hard client-side budget for a LIVE-meeting tool call (the contract pins
+    # read+fast tools only on the hot path; this enforces it defensively).
+    cedric_mcp_live_timeout_s: float = 2.0
+    # Timeout for OFF-path tool calls (dashboard / post-meeting); the contract
+    # allows worst-case ~60s tools, so the client waits up to this.
+    cedric_mcp_offpath_timeout_s: float = 90.0
     # Bearer presented on those callbacks (the orchestrator's cheap first-line
     # check before HMAC verification).
     laura_webhook_token: str = ""
