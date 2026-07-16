@@ -222,6 +222,12 @@ FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 REPO_ROOT_DIR = Path(__file__).resolve().parents[2]
 GOOGLE_CALENDAR_SCOPES = (
     "https://www.googleapis.com/auth/calendar.events.readonly",
+    # calendarList (which calendars the user displays) needs calendar.readonly —
+    # calendar.events[.readonly] alone 403s users/me/calendarList, silently
+    # degrading the all-calendars upcoming view to primary-only (calendars=1
+    # in the [calendar] diagnostic). Existing connections must reconnect once
+    # to grant it; until then the fan-out keeps its primary-only fallback.
+    "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/userinfo.email",
     # Read Laura's inbox so "Add people" invites (which email her a Meet link,
     # with no calendar event) can auto-join the meeting. See gmail_watcher.py.
