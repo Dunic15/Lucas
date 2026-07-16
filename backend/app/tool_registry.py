@@ -39,6 +39,8 @@ _BUILTINS = [
      "write": False, "approval": "auto"},
     {"name": "lookup_record", "does": "look up demo account records",
      "kind": "native", "write": False, "approval": "auto"},
+    {"name": "upcoming_meetings", "does": "the owner's upcoming calendar (read)",
+     "kind": "native", "write": False, "approval": "auto"},
 ]
 
 

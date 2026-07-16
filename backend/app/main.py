@@ -60,6 +60,7 @@ from . import (
     end_of_turn,
     executor,
     gemini_ears,
+    google_client,
     granola_client,
     actions,
     gmail_watcher,
@@ -2070,6 +2071,17 @@ async def _start_avatar_session(
             session.memory_brief = (
                 tools_brief + "\n\n" + (session.memory_brief or "")
             )
+    # Calendar sight: the owner org's upcoming meetings ride the same brief
+    # channel — same contract again (threadpool, best-effort, cached in
+    # google_client, "" when no Google is connected). The snapshot also feeds
+    # the upcoming_meetings brain tool with zero network in-meeting.
+    cal_brief = await run_in_threadpool(google_client.calendar_brief, org_id)
+    if cal_brief:
+        session.calendar_brief = cal_brief
+        session.memory_brief = (
+            f"[Owner's calendar — upcoming meetings]\n{cal_brief}\n\n"
+            + (session.memory_brief or "")
+        )
     if settings.autopilot_brief and session.memory_brief:
         # Autopilot: mail/Slack "what's still open from last time" to the
         # owner as the bot joins. Fire-and-forget — never delays the join.

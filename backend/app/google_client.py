@@ -262,6 +262,81 @@ def list_calendar_events(org_id: str, *, max_results: int = 20) -> dict:
     return {"ok": True, "events": items if isinstance(items, list) else []}
 
 
+# ── calendar brief: the avatar's read-side calendar sight ────────────────────
+# Same discipline as drive_client.folder_brief: assembled at session start off
+# the live path, best-effort ("" on any failure), bounded (it rides the live
+# prompt every turn), cached per org for a few minutes, event content never
+# logged (counts only — list_calendar_events already follows this).
+
+_BRIEF_TTL = 180.0
+_BRIEF_MAX_EVENTS = 8
+_BRIEF_MAX_CHARS = 900
+_brief_cache: dict[str, tuple[float, str]] = {}
+
+
+def _event_line(item: dict) -> str:
+    """One compact line: '- Mon 21 Jul 14:00–14:30 — Weekly Planning (with A, B)'."""
+    start = item.get("start") or {}
+    end = item.get("end") or {}
+    title = str(item.get("summary") or "(no title)").strip()
+    when = ""
+    raw_start = str(start.get("dateTime") or "")
+    if raw_start:
+        try:
+            dt = datetime.fromisoformat(raw_start.replace("Z", "+00:00"))
+            when = dt.strftime("%a %d %b %H:%M")
+            raw_end = str(end.get("dateTime") or "")
+            if raw_end:
+                try:
+                    when += "–" + datetime.fromisoformat(
+                        raw_end.replace("Z", "+00:00")
+                    ).strftime("%H:%M")
+                except ValueError:
+                    pass
+        except ValueError:
+            when = raw_start
+    elif start.get("date"):
+        when = f"{start['date']} (all day)"
+    guests = [
+        str(a.get("displayName") or a.get("email") or "").split("@")[0]
+        for a in (item.get("attendees") or [])
+        if isinstance(a, dict) and not a.get("self") and not a.get("resource")
+    ]
+    guests = [g for g in guests if g]
+    extra = ""
+    if guests:
+        shown = ", ".join(guests[:3])
+        more = f" +{len(guests) - 3}" if len(guests) > 3 else ""
+        extra = f" (with {shown}{more})"
+    return f"- {when} — {title}{extra}" if when or title else ""
+
+
+def calendar_brief(org_id: str) -> str:
+    """Markdown brief of the org's upcoming primary calendar; "" when the org
+    has no Google connected or on any failure — the join proceeds without it."""
+    org = (org_id or "").strip()
+    if not org:
+        return ""
+    now = time.time()
+    cached = _brief_cache.get(org)
+    if cached and now - cached[0] < _BRIEF_TTL:
+        return cached[1]
+    res = list_calendar_events(org, max_results=_BRIEF_MAX_EVENTS)
+    brief = ""
+    if res.get("ok"):
+        lines = [
+            line
+            for item in (res.get("events") or [])[:_BRIEF_MAX_EVENTS]
+            if isinstance(item, dict) and (line := _event_line(item))
+        ]
+        text = "\n".join(lines)
+        if len(text) > _BRIEF_MAX_CHARS:
+            text = text[:_BRIEF_MAX_CHARS].rsplit("\n", 1)[0]
+        brief = text
+    _brief_cache[org] = (now, brief)
+    return brief
+
+
 def _rfc822_id(value: Any) -> str:
     """Normalize a Message-ID to its angle-bracketed RFC 822 form ('' if empty)."""
     mid = str(value or "").strip()
