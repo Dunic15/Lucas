@@ -317,6 +317,7 @@ def _meet_url(data: dict) -> str:
 def list_calendar_events(
     org_id: str, *, max_results: int = 20,
     oauth: dict | None = None, principal: str = "", on_rotate=None,
+    time_min: str = "", time_max: str = "",
 ) -> dict:
     """List UPCOMING events across the account's SELECTED calendars (read-only).
 
@@ -348,7 +349,11 @@ def list_calendar_events(
         n = int(max_results or 20)
     except (TypeError, ValueError):
         n = 20
-    n = max(1, min(n, 50))
+    # A BOUNDED window (week navigation, time_max set) can safely pull more —
+    # a busy shared "program" week can hold well over 50 events across several
+    # calendars, and truncating there is exactly the "I don't see all my
+    # standups" bug. Open-ended "from now" reads stay capped at 50.
+    n = max(1, min(n, 200 if time_max else 50))
     headers = {"Authorization": f"Bearer {token}"}
 
     # Which calendars feed the view: the ones the user has SELECTED in their
@@ -423,15 +428,18 @@ def list_calendar_events(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break  # budget spent — return what we have, off-path callers retry
+        _params = {
+            "timeMin": time_min or datetime.now(timezone.utc).isoformat(),
+            "singleEvents": "true",
+            "orderBy": "startTime",
+            "maxResults": n,
+        }
+        if time_max:  # bound the window (week navigation) — else open-ended
+            _params["timeMax"] = time_max
         try:
             resp = httpx.get(
                 _cal_events_url(cid),
-                params={
-                    "timeMin": datetime.now(timezone.utc).isoformat(),
-                    "singleEvents": "true",
-                    "orderBy": "startTime",
-                    "maxResults": n,
-                },
+                params=_params,
                 headers=headers,
                 timeout=min(_TIMEOUT, max(2.0, remaining)),
             )

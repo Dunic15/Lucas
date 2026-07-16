@@ -237,9 +237,11 @@ def _unmet_dependencies(org: str, action: dict) -> list[str]:
     return [d for d in deps if (statuses.get(d) or {}).get("status") != "done"]
 
 
-def _execute_route(org: str, action_id: str, action: dict) -> tuple[str | None, str]:
+def _execute_route(
+    org: str, action_id: str, action: dict, acting_avatar: str = ""
+) -> tuple[str | None, str, bool]:
     """Run the approved action per its persisted execution_route [B2].
-    Returns (execution_job_id | None, new_status)."""
+    Returns (execution_job_id | None, new_status, capability_blocked)."""
     route = str(action.get("execution_route") or "").strip() or (
         # Legacy actions (pre routing-fields) derive the route the same way
         # finalize now stamps it: native iff the executor can run the typed spec.
@@ -249,15 +251,21 @@ def _execute_route(org: str, action_id: str, action: dict) -> tuple[str | None, 
         # tenancy-v4 dispatch-action is the sanctioned path once THAT contract
         # is accepted; until then the approval stands recorded and the
         # orchestrator's own loop picks the action up from action.requested.
-        return None, "approved"
+        return None, "approved", False
     exec_action = executor.from_typed(action.get("typed"))
     if exec_action is None or not executor.handles(exec_action):
-        return None, "approved"
+        return None, "approved", False
+    # CAPABILITY GATE (same rule as the dashboard door, from #255): the acting
+    # avatar's family toggle can veto native execution; a blocked action stays
+    # `approved` — byte-identical to the executor being off.
+    caps = store.get_avatar_capabilities(acting_avatar)
+    if caps.get(executor.capability_family(exec_action.get("type"))) is False:
+        return None, "approved", True
     job_id = uuid.uuid4().hex
     # execute_approved writes its own done/failed receipt into the same
     # provenance channel the dashboard reads [contract: native-route surfacing].
     result = executor.execute_approved(org, action_id, exec_action)
-    return job_id, ("done" if result.get("ok") else "failed")
+    return job_id, ("done" if result.get("ok") else "failed"), False
 
 
 @router.post("/actions/{action_id}/approve")
@@ -283,11 +291,14 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
     except Exception:  # noqa: BLE001
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     body = body if isinstance(body, dict) else {}
-    decision = str(body.get("decision") or "").strip().lower()
+    # Absent decision defaults to approve (#255's lenient relay compatibility);
+    # an EXPLICIT unknown value is still a client error.
+    decision = str(body.get("decision") or "approve").strip().lower()
     if decision not in ("approve", "reject", "respond"):
         return JSONResponse(
             {"error": "decision must be approve|reject|respond"}, status_code=400
         )
+    extra_detail = str(body.get("detail") or "").strip()[:200]
     idem = str(body.get("idempotency_key") or "").strip()
     slot = str(body.get("selected_slot_id") or "").strip()
     laura_user = str(body.get("laura_user_id") or "").strip()
@@ -296,7 +307,7 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
     found = await run_in_threadpool(_org_action, org, action_id)
     if found is None:
         return JSONResponse({"error": "unknown action for this org"}, status_code=404)
-    action, _avatar = found
+    action, acting_avatar = found
 
     # Approver rule: approver_user_ids present -> only those; absent -> any
     # member of the org (the dashboard-door rule).
@@ -321,9 +332,12 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
         if same:
             return JSONResponse({
                 "ok": True, "action_id": action_id, "idempotent_replay": True,
+                "approved": recorded["decision"] == "approve",
                 "previous_status": recorded["previous_status"],
                 "new_status": recorded["new_status"],
                 "execution_job_id": recorded["execution_job_id"],
+                "executed": recorded["new_status"] in ("done", "failed")
+                and bool(recorded["execution_job_id"]),
             })
         return JSONResponse({
             "error": "decision_conflict", "action_id": action_id,
@@ -374,10 +388,11 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
         action = {**action, "typed": {**typed, "args": args}}
 
     # ── the canonical transition ──
+    capability_blocked = False
     if decision == "reject":
         await run_in_threadpool(
             ledger.set_action_status, action_id, "rejected",
-            f"rejected via {via}", org_id=org,
+            extra_detail or f"rejected via {via}", org_id=org,
         )
         new_status, job_id, blocked = "rejected", None, []
     elif decision == "respond":
@@ -389,15 +404,16 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
     else:  # approve
         await run_in_threadpool(
             ledger.set_action_status, action_id, "approved",
-            f"approved via {via}" + (f" by {laura_user}" if laura_user else ""),
+            extra_detail
+            or f"approved via {via}" + (f" by {laura_user}" if laura_user else ""),
             org_id=org,
         )
         blocked = await run_in_threadpool(_unmet_dependencies, org, action)
         if blocked:
             new_status, job_id = "approved", None  # [M8] executes when deps land
         else:
-            job_id, new_status = await run_in_threadpool(
-                _execute_route, org, action_id, action
+            job_id, new_status, capability_blocked = await run_in_threadpool(
+                _execute_route, org, action_id, action, acting_avatar
             )
 
     await run_in_threadpool(
@@ -410,8 +426,12 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
     )
     resp: dict = {
         "ok": True, "action_id": action_id, "idempotent_replay": False,
+        "approved": decision == "approve",
         "previous_status": prev, "new_status": new_status,
         "execution_job_id": job_id,
+        # #255-relay compatibility extras (additive to the contract shape).
+        "executed": new_status in ("done", "failed") and job_id is not None,
+        "capability_blocked": capability_blocked,
     }
     if blocked:
         resp["blocked_on"] = blocked
