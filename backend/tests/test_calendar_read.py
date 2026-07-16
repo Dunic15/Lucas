@@ -259,6 +259,57 @@ def test_list_events_has_no_calendar_count_cap_and_paginates(monkeypatch):
     assert [e["summary"] for e in out["events"]] == ["Calendar forty"]
 
 
+
+def test_windowed_events_list_paginates_without_truncating(monkeypatch):
+    """A 14-day view consumes every events.list page and keeps all results.
+
+    Google may return nextPageToken even after a partial page; stopping after
+    one response or slicing the merged result hid events later in the window.
+    """
+    monkeypatch.setattr(
+        google_client, "_access_token",
+        lambda key, oauth=None, on_rotate=None, force_refresh=False: ("tok", ""),
+    )
+    page_tokens = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        params = params or {}
+        if "users/me/calendarList" in url:
+            return _resp({"items": [
+                {"id": "primary", "primary": True, "selected": True}
+            ]})
+        token = str(params.get("pageToken") or "")
+        page_tokens.append(token)
+        start = 150 if token == "events-2" else 0
+        count = 60 if token == "events-2" else 150
+        payload = {
+            "items": [
+                {
+                    "id": f"event-{i}",
+                    "iCalUID": f"uid-{i}",
+                    "summary": f"Event {i}",
+                    "start": {"dateTime": "2026-07-20T09:00:00Z"},
+                }
+                for i in range(start, start + count)
+            ]
+        }
+        if not token:
+            payload["nextPageToken"] = "events-2"
+        return _resp(payload)
+
+    monkeypatch.setattr(google_client.httpx, "get", fake_get)
+    out = google_client.list_calendar_events(
+        "org-two-weeks",
+        max_results=150,
+        time_min="2026-07-16T00:00:00+00:00",
+        time_max="2026-07-30T00:00:00+00:00",
+    )
+
+    assert out["ok"] is True
+    assert page_tokens == ["", "events-2"]
+    assert len(out["events"]) == 210
+    assert out["events"][-1]["id"] == "event-209"
+
 def test_list_events_falls_back_to_primary_when_calendarlist_fails(monkeypatch):
     monkeypatch.setattr(
         google_client, "_access_token",

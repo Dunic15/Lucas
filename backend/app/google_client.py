@@ -510,8 +510,8 @@ def list_calendar_events(
 
     Mirrors ``create_calendar_event`` / ``send_gmail``: mint a short-lived access
     token, fully paginate the user's accessible calendarList (fail-soft to
-    primary-only), then GET each calendar's events with ``timeMin=now``,
-    ``singleEvents=true``, ``orderBy=startTime`` and a small ``maxResults``;
+    primary-only), then fully paginate each calendar's events for bounded views
+    with ``timeMin``, ``singleEvents=true`` and ``orderBy=startTime``;
     results are deduped on iCalUID (invited copy vs shared calendar) and merged
     in start order. The ``calendar.events.readonly`` scope is granted at connect.
 
@@ -652,7 +652,11 @@ def list_calendar_events(
     first_error = ""
 
     def _read_calendar(cid: str) -> tuple[str, list[dict], str]:
-        _params = {
+        # A selected window is a complete calendar view, not a preview: consume
+        # every events.list page. Google may return a short or even empty page
+        # while still supplying nextPageToken. Open-ended reads remain bounded
+        # to n because they feed the compact meeting brief too.
+        base_params = {
             "timeMin": time_min or datetime.now(timezone.utc).isoformat(),
             "singleEvents": "true",
             # Google omits invitations hidden by the account's invitation
@@ -663,26 +667,46 @@ def list_calendar_events(
             "maxResults": n,
         }
         if time_max:
-            _params["timeMax"] = time_max
-        try:
-            resp = httpx.get(
-                _cal_events_url(cid),
-                params=_params,
-                headers=headers,
-                timeout=min(_TIMEOUT, 8.0),
-            )
-        except Exception as e:  # noqa: BLE001
-            return cid, [], f"calendar list failed ({type(e).__name__})"
-        if resp.status_code == 401:
-            _drop_cached_token(key)  # revoked early — next attempt re-mints
-        if resp.status_code >= 300:
-            print(f"[calendar] list HTTP {resp.status_code}", flush=True)
-            return cid, [], f"calendar list failed (HTTP {resp.status_code})"
-        try:
-            items = resp.json().get("items", [])
-        except Exception:  # noqa: BLE001
-            return cid, [], "calendar list returned no JSON"
-        return cid, (items if isinstance(items, list) else []), ""
+            base_params["timeMax"] = time_max
+        items: list[dict] = []
+        page_token = ""
+        while True:
+            params = dict(base_params)
+            if page_token:
+                params["pageToken"] = page_token
+            try:
+                resp = httpx.get(
+                    _cal_events_url(cid),
+                    params=params,
+                    headers=headers,
+                    timeout=min(_TIMEOUT, 8.0),
+                )
+            except Exception as e:  # noqa: BLE001
+                if items:
+                    break
+                return cid, [], f"calendar list failed ({type(e).__name__})"
+            if resp.status_code == 401:
+                _drop_cached_token(key)  # revoked early — next attempt re-mints
+            if resp.status_code >= 300:
+                print(f"[calendar] list HTTP {resp.status_code}", flush=True)
+                if items:
+                    break
+                return cid, [], f"calendar list failed (HTTP {resp.status_code})"
+            try:
+                payload = resp.json()
+            except Exception:  # noqa: BLE001
+                if items:
+                    break
+                return cid, [], "calendar list returned no JSON"
+            page_items = payload.get("items", [])
+            if isinstance(page_items, list):
+                items.extend(page_items)
+            page_token = str(payload.get("nextPageToken") or "")
+            if not page_token:
+                break
+            if not time_max and len(items) >= n:
+                break
+        return cid, (items if time_max else items[:n]), ""
 
     # Fetch every calendar, but never serially hammer Google. pool.map preserves
     # calendar priority, which also makes iCalUID dedupe deterministic.
@@ -717,7 +741,10 @@ def list_calendar_events(
     if not merged and first_error:
         return {"ok": False, "error": first_error}
     merged.sort(key=_event_start_ts)
-    merged = merged[:n]
+    # A bounded calendar window is exhaustive; only the open-ended brief/list is
+    # intentionally capped. Truncating a two-week view here hides later events.
+    if not time_max:
+        merged = merged[:n]
     # Diagnostic: items=0 on a connected org = right token but no events in the
     # window (wrong account/calendar), vs a non-200 above = an API/auth failure.
     print(
