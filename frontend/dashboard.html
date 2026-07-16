@@ -365,12 +365,14 @@
   .cal-ev.going{background:var(--live-soft);border-color:rgba(126,182,255,.4);border-left-color:var(--live);}
   .cal-ev.nolink{opacity:.7;}
   .cal-ev.allday{border-left-color:var(--g3);}
-  .cal-ev .ev-time{font-family:var(--mono);font-size:.62rem;color:var(--faint);letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .cal-ev .ev-time{display:block;flex:0 0 auto;min-height:11px;font-family:var(--mono);font-size:.64rem;font-weight:600;line-height:1.2;color:var(--dim);letter-spacing:.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .cal-ev.going .ev-time{color:var(--live);}
   .cal-ev .ev-title{font-size:.79rem;font-weight:650;line-height:1.25;color:var(--text);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word;}
   .cal-ev .ev-cal{font-size:.56rem;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .cal-ev .ev-send{font-size:.58rem;font-weight:700;color:var(--live);letter-spacing:.02em;}
   /* short blocks (30-min slots) show the title only */
+  .cal-ev.compact .ev-title{display:block;-webkit-line-clamp:1;white-space:nowrap;text-overflow:ellipsis;}
+  .cal-ev.compact .ev-cal,.cal-ev.compact .ev-send,.cal-ev.compact .avbadge{display:none;}
   .cal-ev.short{justify-content:center;}
   .cal-ev.short .ev-time,.cal-ev.short .ev-cal,.cal-ev.short .ev-send,.cal-ev.short .ev-nolink{display:none;}
   .cal-ev.short.going .avbadge{display:none;}
@@ -1261,6 +1263,25 @@
         })
         .catch(function(e){ toast("Send failed: "+e.message,true); btn.disabled=false; btn.textContent=orig; });
     }
+    function inviteAvatar(eventRef,title,avatar,btn){
+      if(!eventRef){ toast("This Google event cannot be updated yet.",true); return; }
+      var orig=btn.textContent; btn.disabled=true; btn.textContent="Adding…";
+      fetch("/dashboard/calendar/event/avatar",{
+        method:"POST",headers:headers(),
+        body:JSON.stringify({event_ref:eventRef,avatar_id:avatar})
+      }).then(function(r){ return r.json().catch(function(){return {};}); })
+        .then(function(j){
+          if(!j.ok) throw new Error(j.error||"calendar update failed");
+          toast((avName(avatar)||"Avatar")+" added to the Google event.");
+          btn.textContent="Added ✓"; closePop();
+          setTimeout(function(){ loadUpcoming(true); },900);
+        })
+        .catch(function(e){
+          var msg=String(e.message||e);
+          if(msg.indexOf("HTTP 403")>=0) msg="Google does not allow you to edit this event. Ask the organizer, or open it in Google Calendar.";
+          toast("Add avatar failed: "+msg,true); btn.disabled=false; btn.textContent=orig;
+        });
+    }
     // ── Desktop hour grid ──
     function renderHourGrid(days,multi,avOpts,av0){
       // Day window: default 07:00–21:00, widened to include any out-of-hours
@@ -1307,15 +1328,16 @@
       var m=ev.m, url=m.meeting_url||"", going=!!m.auto_join;
       // With the roomier 68px/hour scale a 30-minute meeting is readable. Only
       // genuinely tiny (<~25-minute) blocks collapse to title-only.
-      var short=geo.height<30, color=eventColor(m), cal=String(m.calendar_name||"").trim();
-      var cls=(short?" short":"");
+      var short=geo.height<30, compact=!short&&geo.height<60;
+      var color=eventColor(m), cal=String(m.calendar_name||"").trim();
+      var cls=(short?" short":(compact?" compact":""));
       var style='top:'+geo.top.toFixed(1)+'px;height:'+geo.height.toFixed(1)+'px;left:'+geo.left.toFixed(3)+'%;width:calc('+geo.width.toFixed(3)+'% - 3px);right:auto'+(color?';--event-color:'+color:'');
       var meta=eventMeta(m,ev);
       // Title wins, followed by time and source calendar when the duration has
       // enough vertical room. The same metadata is repeated in the popover.
       var t='<span class="ev-title">'+esc(m.title||"Meeting")+'</span><span class="ev-time">'+esc(timeLabel(ev))+'</span>'+
         ((!short&&geo.height>=54&&cal)?'<span class="ev-cal">'+esc(cal)+'</span>':'');
-      var data=' data-url="'+esc(url)+'" data-title="'+esc(m.title||"")+'" data-time="'+esc(timeLabel(ev))+'" data-calendar="'+esc(cal)+'"';
+      var data=' data-url="'+esc(url)+'" data-title="'+esc(m.title||"")+'" data-time="'+esc(timeLabel(ev))+'" data-calendar="'+esc(cal)+'" data-event-ref="'+esc(m.event_ref||"")+'"';
       if(going) return '<div class="cal-ev going'+cls+'" style="'+style+'"'+data+' data-going="1" role="button" tabindex="0" title="'+esc(meta+' — '+avName(m.auto_join_avatar)+' is going')+'">'+t+'<span class="avbadge">🎭 '+esc(avName(m.auto_join_avatar))+'</span></div>';
       if(url) return '<div class="cal-ev avail'+cls+'" style="'+style+'"'+data+' role="button" tabindex="0" title="'+esc(meta+' — open options')+'">'+t+'<span class="ev-send">Open ▾</span></div>';
       return '<div class="cal-ev nolink'+cls+'" style="'+style+'" title="'+esc(meta+' — no meeting link')+'">'+t+'<span class="ev-nolink">No link</span></div>';
@@ -1344,7 +1366,7 @@
     }
     function sectionCard(ev,multi,avOpts,av0){
       var m=ev.m, url=m.meeting_url||"", going=!!m.auto_join, badge="", state;
-      var color=eventColor(m), cal=String(m.calendar_name||"").trim();
+      var eventRef=m.event_ref||"", color=eventColor(m), cal=String(m.calendar_name||"").trim();
       var plat=(m.platform&&m.platform!=="—")?'<span class="platc">'+esc(m.platform)+'</span>':"";
       var calChip=cal?'<span class="platc">'+esc(cal)+'</span>':"";
       if(going){
@@ -1353,8 +1375,8 @@
       } else if(url){
         state=multi
           ? '<div class="wksend"><select class="wk-av" aria-label="Choose avatar">'+avOpts+'</select>'+
-              '<button class="btn primary wk-send" data-send="'+esc(url)+'" data-title="'+esc(m.title||"")+'">Send</button></div>'
-          : '<div class="wksend solo"><button class="btn primary wk-send" data-send="'+esc(url)+'" data-title="'+esc(m.title||"")+'" data-av="'+esc(av0.id)+'">Send '+esc(av0.name)+'</button></div>';
+              '<button class="btn primary wk-send" data-send="'+esc(url)+'" data-event-ref="'+esc(eventRef)+'" data-title="'+esc(m.title||"")+'">'+(eventRef?"Add":"Send")+'</button></div>'
+          : '<div class="wksend solo"><button class="btn primary wk-send" data-send="'+esc(url)+'" data-event-ref="'+esc(eventRef)+'" data-title="'+esc(m.title||"")+'" data-av="'+esc(av0.id)+'">'+(eventRef?"Add ":"Send ")+esc(av0.name)+'</button></div>';
       } else {
         state='<span class="stchip" style="opacity:.6">No link</span>';
       }
@@ -1366,11 +1388,12 @@
     function wireSend(box){
       box.querySelectorAll(".wk-send").forEach(function(btn){
         btn.addEventListener("click",function(){
-          var u=btn.getAttribute("data-send")||"", title=btn.getAttribute("data-title")||"";
+          var u=btn.getAttribute("data-send")||"", ref=btn.getAttribute("data-event-ref")||"", title=btn.getAttribute("data-title")||"";
           var sel=btn.parentNode&&btn.parentNode.querySelector(".wk-av");
           var avatar=(sel&&sel.value)||btn.getAttribute("data-av")||(document.getElementById("dsp-avatar")||{}).value||
             ((DATA&&DATA.avatars&&DATA.avatars[0])?DATA.avatars[0].id:"laura");
-          dispatchMeeting(u,title,avatar,btn);
+          if(ref) inviteAvatar(ref,title,avatar,btn);
+          else dispatchMeeting(u,title,avatar,btn);
         });
       });
     }
@@ -1391,6 +1414,7 @@
       closePop(); closeCreate();
       var url=el.getAttribute("data-url")||"", title=el.getAttribute("data-title")||"", going=el.getAttribute("data-going")==="1";
       var tm=el.getAttribute("data-time")||"", cal=el.getAttribute("data-calendar")||"";
+      var eventRef=el.getAttribute("data-event-ref")||"";
       var p=document.createElement("div"); p.className="wkpop"; p.id="wkpop";
       var inner='<div class="wkpop-t">'+esc(title||"Meeting")+'</div>';
       if(tm||cal) inner+='<div class="wkpop-sub">'+esc([tm,cal].filter(Boolean).join(" · "))+'</div>';
@@ -1398,9 +1422,9 @@
         inner+='<div class="wkpop-sub">An avatar is already going to this meeting.</div>';
         if(url) inner+='<div class="wkpop-row"><a class="btn" style="text-decoration:none;flex:1;text-align:center" href="'+esc(url)+'" target="_blank" rel="noopener">Open link ↗</a></div>';
       } else if(url){
-        inner+='<div class="wkpop-sub">Send an avatar to join this meeting.</div>'+
+        inner+='<div class="wkpop-sub">'+(eventRef?"Add an avatar to the real Google event. It will join automatically at meeting time.":"Send an avatar to join this meeting.")+'</div>'+
           '<div class="wkpop-row">'+(multi?'<select class="wkpop-av" aria-label="Choose avatar">'+avOpts+'</select>':'')+
-          '<button class="btn primary wkpop-send">Send'+(multi?'':' '+esc(av0.name))+'</button></div>'+
+          '<button class="btn primary wkpop-send">'+(eventRef?"Add to event":("Send"+(multi?"":(" "+esc(av0.name)))))+'</button></div>'+
           '<div class="wkpop-row"><a class="btn" style="text-decoration:none;flex:1;text-align:center" href="'+esc(url)+'" target="_blank" rel="noopener">Open meeting ↗</a></div>';
       } else {
         inner+='<div class="wkpop-sub">This meeting has no join link yet.</div>';
@@ -1414,7 +1438,8 @@
       var sendBtn=p.querySelector(".wkpop-send");
       if(sendBtn) sendBtn.addEventListener("click",function(){
         var sel=p.querySelector(".wkpop-av"); var avatar=(sel&&sel.value)||av0.id||"laura";
-        dispatchMeeting(url,title,avatar,sendBtn,"Sent ✓");
+        if(eventRef) inviteAvatar(eventRef,title,avatar,sendBtn);
+        else dispatchMeeting(url,title,avatar,sendBtn,"Sent ✓");
       });
       var outside=function(e){ if(!p.contains(e.target)&&!(e.target.closest&&e.target.closest(".cal-ev"))) closePop(); };
       var esc2=function(e){ if(e.key==="Escape") closePop(); };
