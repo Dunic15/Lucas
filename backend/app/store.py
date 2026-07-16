@@ -967,7 +967,12 @@ def save_artifact(bot_id: str, artifact: dict, *, org_id: str | None = None) -> 
     # Lazy import avoids the control_plane -> store constants import cycle.
     from . import control_plane
 
-    durable_enabled = durable_artifacts_enabled()
+    # A session-shaped personal org (u_<hash>) has no durable archive and would
+    # crash the org_id uuid cast (same degrade as list_artifacts) — SQLite
+    # remains its complete persistence path, so save errors stay fatal for it.
+    durable_enabled = durable_artifacts_enabled() and control_plane.is_durable_org(
+        str(row_org)
+    )
     if durable_enabled:
         control_plane.save_artifact(
             row_org,
@@ -1013,7 +1018,11 @@ def get_artifact(bot_id: str, org_id: str | None = None) -> dict | None:
     if org_id is not None:
         from . import control_plane
 
-        if durable_artifacts_enabled():
+        # Personal (u_<hash>) orgs degrade to the SQLite warm cache below —
+        # the durable lookup's uuid cast would 500 (same rule as list_artifacts).
+        if durable_artifacts_enabled() and control_plane.is_durable_org(
+            str(org_id)
+        ):
             return control_plane.get_artifact(org_id, bot_id)
     artifact = _artifacts.get(bot_id)
     if artifact is not None and org_id is not None:
