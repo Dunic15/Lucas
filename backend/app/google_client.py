@@ -17,6 +17,8 @@ Contract for every entry point:
 from __future__ import annotations
 
 import base64
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
@@ -35,11 +37,37 @@ _CAL_LIST = _CAL_INSERT
 _GMAIL_SEND = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 _TIMEOUT = 30.0
 
+# ── per-org access-token cache ──
+# One Google token round-trip per org per ~hour instead of one per API call.
+# Values live only in this process and are never persisted or logged; entries
+# expire shortly before Google's stated expiry, and a 401 from an API call
+# drops the entry so revocation heals on the next attempt, not in an hour.
+_TOKEN_LOCK = threading.Lock()
+_TOKEN_CACHE: dict[str, tuple[str, float]] = {}  # org_id -> (token, expires_at)
+_EXPIRY_MARGIN_S = 120.0  # re-mint this long before Google's stated expiry
+_DEFAULT_TTL_S = 3300.0  # expires_in missing → assume just under Google's 1h
+
+
+def _reset_token_cache() -> None:
+    """Test seam — process-global state, cleared per test (see conftest)."""
+    with _TOKEN_LOCK:
+        _TOKEN_CACHE.clear()
+
+
+def _drop_cached_token(org_id: str) -> None:
+    with _TOKEN_LOCK:
+        _TOKEN_CACHE.pop(org_id, None)
+
 
 def _access_token(org_id: str) -> tuple[str, str]:
     """(access_token, "") for the org, or ("", error) when unavailable."""
     if not settings.google_calendar_client_id or not settings.google_calendar_client_secret:
         return "", "Google OAuth client is not configured"
+    now = time.time()
+    with _TOKEN_LOCK:
+        cached = _TOKEN_CACHE.get(org_id)
+        if cached and cached[1] > now:
+            return cached[0], ""
     oauth = store.get_org_oauth(org_id)
     if not oauth or not oauth.get("refresh_token"):
         return "", "Google is not connected for this org"
@@ -58,8 +86,30 @@ def _access_token(org_id: str) -> tuple[str, str]:
         return "", f"token request failed ({type(e).__name__})"
     if resp.status_code >= 300:
         return "", f"token refresh rejected (HTTP {resp.status_code})"
-    tok = resp.json().get("access_token", "")
-    return (tok, "") if tok else ("", "no access token returned")
+    data = resp.json()
+    tok = data.get("access_token", "")
+    if not tok:
+        return "", "no access token returned"
+    try:
+        ttl = float(data.get("expires_in") or 0)
+    except (TypeError, ValueError):
+        ttl = 0.0
+    if ttl <= 0:
+        ttl = _DEFAULT_TTL_S
+    with _TOKEN_LOCK:
+        _TOKEN_CACHE[org_id] = (tok, now + max(60.0, ttl - _EXPIRY_MARGIN_S))
+    # Refresh-token rotation: providers may return a NEW refresh token with
+    # the access token (Google does under rotation policies). Discarding it
+    # strands the org on a revoked credential — persist it like connect does,
+    # keeping the row's email/scopes.
+    new_rt = str(data.get("refresh_token") or "").strip()
+    if new_rt and new_rt != oauth["refresh_token"]:
+        store.set_org_oauth(
+            org_id, new_rt,
+            email=str(oauth.get("email") or ""),
+            scopes=str(oauth.get("scopes") or ""),
+        )
+    return tok, ""
 
 
 def _emails(value: Any) -> list[str]:
@@ -121,6 +171,8 @@ def create_calendar_event(org_id: str, event: dict) -> dict:
         )
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"calendar request failed ({type(e).__name__})"}
+    if resp.status_code == 401:
+        _drop_cached_token(org_id)  # revoked early — next attempt re-mints
     if resp.status_code >= 300:
         return {"ok": False, "error": f"calendar insert failed (HTTP {resp.status_code})"}
     data = resp.json()
@@ -192,6 +244,8 @@ def list_calendar_events(org_id: str, *, max_results: int = 20) -> dict:
         )
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"calendar list failed ({type(e).__name__})"}
+    if resp.status_code == 401:
+        _drop_cached_token(org_id)  # revoked early — next attempt re-mints
     if resp.status_code >= 300:
         # Diagnostic: a 403 here on a Workspace domain usually = admin/API access
         # restriction on the (unverified) app; 401 = token/scope. No PII logged.
@@ -275,6 +329,8 @@ def send_gmail(org_id: str, message: dict) -> dict:
         )
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"gmail request failed ({type(e).__name__})"}
+    if resp.status_code == 401:
+        _drop_cached_token(org_id)  # revoked early — next attempt re-mints
     if resp.status_code >= 300:
         return {"ok": False, "error": f"gmail send failed (HTTP {resp.status_code})"}
     data = resp.json()

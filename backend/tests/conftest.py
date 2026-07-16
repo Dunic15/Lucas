@@ -59,6 +59,9 @@ def _clear_registries() -> None:
     store = sys.modules.get("app.store")
     if store is not None:
         store._sessions.clear()
+    google_client = sys.modules.get("app.google_client")
+    if google_client is not None:
+        google_client._reset_token_cache()
 
 
 @pytest.fixture(autouse=True)
