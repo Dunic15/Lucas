@@ -87,6 +87,7 @@ def interpret_constraints(
     tz = now_local.tzinfo
     day0 = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
     single_day = False
+    has_anchor = True  # a concrete date anchor was named (today/next week/…)
     start, end = now_local, now_local + timedelta(days=7)  # default: next 7 days
 
     if "today" in t:
@@ -102,12 +103,13 @@ def interpret_constraints(
         start = now_local
         end = day0 + timedelta(days=(7 - day0.weekday()))  # upcoming Monday
     else:
+        has_anchor = False
         for name, wd in _WEEKDAYS.items():
             if re.search(rf"\b{name}\b", t):
                 ahead = (wd - day0.weekday()) % 7
                 ahead = ahead or 7  # "on monday" = next monday, not today
                 start = day0 + timedelta(days=ahead)
-                end, single_day = start + timedelta(days=1), True
+                end, single_day, has_anchor = start + timedelta(days=1), True, True
                 break
 
     preferred_tod = next((k for k in _TOD if k in t), None)
@@ -119,6 +121,7 @@ def interpret_constraints(
         "working_hours": (9, 18),
         "preferred_tod": preferred_tod,
         "single_day": single_day,
+        "has_anchor": has_anchor,
         "timezone": str(getattr(tz, "key", "") or "UTC"),
     }
 
@@ -250,7 +253,7 @@ def build_calendar_proposal(
         "search_window_end": c["search_window_end"].strftime(_LOCAL_FMT),
         "duration_minutes": c["duration_minutes"],
         "working_hours": list(c["working_hours"]),
-        "availability_scope": "all_attendees",
+        "availability_scope": "all_attendees" if attendees else "organizer_only",
         "unavailable_attendees": [
             s["attendee_email"] for s in availability_sources
             if s["status"] != "readable"
@@ -286,11 +289,21 @@ def enrich_actions(
             out.append(a)
             continue
         # Resolve attendees: emails named in the ask UNION the meeting roster —
-        # never invented. No attendee we can point at => leave it untyped.
+        # never invented. A name-only ask ("with Ananth") resolves to nobody;
+        # that's fine — we still propose the organizer's own free times.
         named = [e for e in _EMAIL_RE.findall(item)]
         who = list(dict.fromkeys([*named, *roster]))
         who = [e for e in who if e and e != organizer_email]
-        if not who:
+        # Concreteness gate: only propose when the ask carries SOME signal — an
+        # attendee, an explicit duration, or a date anchor ("next week"). A bare
+        # "we should sync sometime" has none, so it stays untyped (today's
+        # behaviour) rather than dumping arbitrary free slots.
+        try:
+            _zone = ZoneInfo(timezone or "UTC")
+        except Exception:  # noqa: BLE001
+            _zone = ZoneInfo("UTC")
+        c0 = interpret_constraints(item, datetime.now(_zone))
+        if not (who or c0["duration_explicit"] or c0["has_anchor"]):
             out.append(a)
             continue
         try:
