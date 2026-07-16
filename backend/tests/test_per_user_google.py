@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main_module  # noqa: E402
-from app import ledger, store  # noqa: E402
+from app import auth, ledger, store  # noqa: E402
 from app.config import settings  # noqa: E402
 
 AVATAR_EMAIL = "laura.ai.122222@gmail.com"
@@ -242,7 +242,7 @@ def test_upcoming_prefers_native_google_calendar(client, monkeypatch):
     }
     monkeypatch.setattr(
         google_client, "list_calendar_events",
-        lambda org, max_results=25: {"ok": True, "events": [ev]},
+        lambda org, max_results=25, **kw: {"ok": True, "events": [ev]},
     )
 
     j = client.get("/dashboard/upcoming").json()
@@ -279,7 +279,7 @@ def test_upcoming_native_parses_conference_entry_point(client, monkeypatch):
     ]
     monkeypatch.setattr(
         google_client, "list_calendar_events",
-        lambda org, max_results=25: {"ok": True, "events": events},
+        lambda org, max_results=25, **kw: {"ok": True, "events": events},
     )
 
     rows = {m["id"]: m for m in client.get("/dashboard/upcoming").json()["meetings"]}
@@ -297,3 +297,100 @@ def test_upcoming_falls_back_to_recall_without_native_token(client, monkeypatch)
     j = client.get("/dashboard/upcoming").json()
     assert j["calendar"]["connected"] is False
     assert j["calendar"].get("source") != "google"
+
+
+# ── shared-org cross-tenant isolation (the Duccio/Ananth leak) ──
+
+def _login(client, email: str) -> dict:
+    user = store.upsert_user(email)
+    client.cookies.set(auth.COOKIE_NAME, auth.make_cookie(user["user_id"]))
+    return user
+
+
+def test_upcoming_never_leaks_a_colleagues_calendar(client, monkeypatch):
+    """Two members of the SAME shared org (a verified corporate domain maps both
+    onto one org_id) must each see ONLY their own calendar. Reproduces the real
+    leak: one person connected Google and a co-worker saw THEIR calendar.
+
+    Duccio (alice@sffstudio.com) connects — dual-write: user_oauth[duccio] +
+    org_oauth[org_sff], both his Google email. Ananth (bob@sffstudio.com) logs in
+    to the SAME org and must NOT see Duccio's calendar; Duccio still sees his."""
+    duccio = store.upsert_user("alice@sffstudio.com")
+    ananth = store.upsert_user("bob@sffstudio.com")
+    assert duccio["org_id"] == ananth["org_id"] == "org_sff"  # shared org
+    assert duccio["user_id"] != ananth["user_id"]
+
+    # Duccio connects Google (mirrors the /oauth/google/callback dual-write).
+    store.set_user_oauth(duccio["user_id"], "rt-duccio", email="duccio@sffstudio.com")
+    store.set_org_oauth("org_sff", "rt-duccio", email="duccio@sffstudio.com")
+
+    from app import google_client
+    ev = {
+        "id": "e1", "summary": "Duccio 1:1", "status": "confirmed",
+        "start": {"dateTime": _future_iso()}, "end": {"dateTime": _future_iso(3)},
+        "hangoutLink": "https://meet.google.com/pri-vate-cal",
+    }
+    seen_principals: list = []
+
+    def _fake_list(org, max_results=25, *, oauth=None, principal="", on_rotate=None):
+        seen_principals.append(principal)
+        return {"ok": True, "events": [ev]}
+
+    monkeypatch.setattr(google_client, "list_calendar_events", _fake_list)
+
+    # Ananth (colleague, no calendar of his own) must NOT see Duccio's — and the
+    # calendar fetch must never even be reached with a foreign token.
+    _login(client, "bob@sffstudio.com")
+    j = client.get("/dashboard/upcoming").json()
+    assert j["calendar"]["connected"] is False
+    assert j["calendar"].get("connect_url") == "/oauth/google/connect"
+    assert j["meetings"] == []
+    assert seen_principals == []  # no calendar read happened for the colleague
+
+    # Duccio sees his OWN calendar, fetched with his per-user principal.
+    _login(client, "alice@sffstudio.com")
+    j = client.get("/dashboard/upcoming").json()
+    assert j["calendar"]["source"] == "google"
+    assert j["calendar"]["email"] == "duccio@sffstudio.com"
+    assert j["meetings"][0]["title"] == "Duccio 1:1"
+    assert seen_principals == [f"user:{duccio['user_id']}"]
+
+
+def test_create_event_never_writes_to_a_colleagues_calendar(client, monkeypatch):
+    """Write-side of the same leak: a shared-org colleague scheduling from the
+    dashboard must NOT create the event on the connector's calendar."""
+    duccio = store.upsert_user("alice@sffstudio.com")
+    store.upsert_user("bob@sffstudio.com")
+    store.set_user_oauth(duccio["user_id"], "rt-duccio", email="duccio@sffstudio.com")
+    store.set_org_oauth("org_sff", "rt-duccio", email="duccio@sffstudio.com")
+
+    from app import google_client
+    created: list = []
+    monkeypatch.setattr(
+        google_client, "create_calendar_event",
+        lambda org, event, **kw: created.append((org, event, kw)) or {"ok": True},
+    )
+
+    _login(client, "bob@sffstudio.com")
+    r = client.post("/dashboard/calendar/event",
+                    json={"title": "sneaky", "start": _future_iso()})
+    assert r.json().get("error") == "connect_google"
+    assert created == []  # nothing created on Duccio's calendar
+
+
+def test_disconnect_clears_the_per_user_token_too(client):
+    """Disconnect must revoke the credential the dashboard actually reads —
+    the PER-USER row — not just the org row (else the button silently no-ops
+    and the calendar stays readable after 'disconnecting')."""
+    user = _login(client, "alice@sffstudio.com")
+    store.set_user_oauth(user["user_id"], "rt-x", email="duccio@sffstudio.com")
+    store.set_org_oauth(user["org_id"], "rt-x", email="duccio@sffstudio.com")
+
+    r = client.post("/oauth/google/disconnect")
+    assert r.status_code == 200
+    assert r.json()["cleared"] is True
+    assert store.get_user_oauth(user["user_id"]) is None
+    assert store.get_org_oauth(user["org_id"]) is None
+    # And the dashboard agrees: back to the "connect your Google" state.
+    j = client.get("/dashboard/upcoming").json()
+    assert j["calendar"]["connected"] is False

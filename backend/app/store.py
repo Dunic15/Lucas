@@ -632,6 +632,24 @@ def _init_db() -> None:
                 updated_at REAL NOT NULL,
                 PRIMARY KEY (org_id, provider)
             );
+            -- Per-USER OAuth refresh token for the personal-calendar VIEW
+            -- (/dashboard/upcoming). org_oauth above is keyed by ORG, so in a
+            -- SHARED org (a verified corporate domain maps every colleague to one
+            -- org_id) a single Google token would be read back by every member —
+            -- one person's calendar leaking to the whole domain. This table keys
+            -- the token to the connecting HUMAN so each member sees only their own
+            -- calendar. Same encryption + shape as org_oauth. Created fresh here
+            -- on every boot (CREATE IF NOT EXISTS) so a litestream-restored store
+            -- gains the table without a data migration.
+            CREATE TABLE IF NOT EXISTS user_oauth (
+                user_id TEXT NOT NULL,
+                provider TEXT NOT NULL,      -- 'google'
+                refresh_token_enc TEXT NOT NULL DEFAULT '',
+                email TEXT NOT NULL DEFAULT '',
+                scopes TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (user_id, provider)
+            );
             """
         )
         # Migration for stores created before the Cedric integration column.
@@ -1980,6 +1998,81 @@ def clear_org_oauth(org_id: str, *, provider: str = "google") -> bool:
         )
     return cur.rowcount > 0
 
+
+# ── per-USER OAuth (personal-calendar view) ────────────────────────────────
+# Same encrypt-at-rest contract as the org_oauth trio above, but keyed by the
+# connecting human's user_id so a shared-org colleague never reads it. Used by
+# the /dashboard/upcoming VIEW; the native executor keeps using org_oauth.
+
+def set_user_oauth(
+    user_id: str, refresh_token: str, *, provider: str = "google",
+    email: str = "", scopes: str = "",
+) -> bool:
+    """Persist (upsert) a USER's Google refresh token, encrypted. Empty user or
+    token is a no-op (False)."""
+    from . import crypto
+
+    uid = (user_id or "").strip()
+    rt = (refresh_token or "").strip()
+    if not uid or not rt:
+        return False
+    enc = crypto.encrypt(rt, _oauth_enc_secret())
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            """INSERT INTO user_oauth
+                   (user_id, provider, refresh_token_enc, email, scopes, updated_at)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(user_id, provider) DO UPDATE SET
+                 refresh_token_enc=excluded.refresh_token_enc,
+                 email=excluded.email, scopes=excluded.scopes,
+                 updated_at=excluded.updated_at""",
+            (uid, provider, enc, (email or "").strip().lower(),
+             (scopes or "").strip(), time.time()),
+        )
+    return True
+
+
+def get_user_oauth(user_id: str, *, provider: str = "google") -> dict | None:
+    """A user's stored OAuth: {refresh_token, email, scopes, updated_at} with the
+    token DECRYPTED, or None when there is no usable row (missing or a token that
+    can't be decrypted — reads as 'reconnect', same as get_org_oauth)."""
+    from . import crypto
+
+    uid = (user_id or "").strip()
+    if not uid:
+        return None
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            """SELECT refresh_token_enc, email, scopes, updated_at
+                   FROM user_oauth WHERE user_id=? AND provider=?""",
+            (uid, provider),
+        ).fetchone()
+    if not row or not row["refresh_token_enc"]:
+        return None
+    try:
+        rt = crypto.decrypt(row["refresh_token_enc"], _oauth_enc_secret())
+    except Exception:
+        return None
+    return {
+        "refresh_token": rt,
+        "email": row["email"] or "",
+        "scopes": row["scopes"] or "",
+        "updated_at": row["updated_at"],
+    }
+
+
+def clear_user_oauth(user_id: str, *, provider: str = "google") -> bool:
+    """Delete a user's stored personal-calendar OAuth. Returns True when a row was
+    removed, False for an empty user or a no-op."""
+    uid = (user_id or "").strip()
+    if not uid:
+        return False
+    with _LOCK, _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM user_oauth WHERE user_id=? AND provider=?",
+            (uid, provider),
+        )
+    return cur.rowcount > 0
 
 def org_for_email(email: str) -> str | None:
     """The org that owns an email address, or None when unknown.

@@ -1127,11 +1127,22 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
     # Keyed by the org_id string; no ::uuid cast (org_id split-brain safe).
     native_org = (user["org_id"] if user else machine_org) or settings.demo_org_id
 
-    def _load_native(org_id: str, oauth: dict) -> dict:
+    def _load_native(
+        org_id: str, oauth: dict, *, principal: str = "", on_rotate=None
+    ) -> dict:
         from . import google_client
 
         cal_email = str(oauth.get("email") or "")
-        res = google_client.list_calendar_events(org_id, max_results=25)
+        # principal set → a per-USER token (a shared-org member's OWN calendar):
+        # pass the resolved oauth so the fetch uses their token + cache slot.
+        # principal "" → org/demo path: google_client resolves by org internally
+        # (unchanged, including org refresh-token rotation-persist). org_id is
+        # still the ORG for the booked-session mapping below either way.
+        res = google_client.list_calendar_events(
+            org_id, max_results=25,
+            oauth=(oauth if principal else None),
+            principal=principal, on_rotate=on_rotate,
+        )
         if not res.get("ok"):
             # The org HAS a native token but the read failed — surface a soft
             # "connected but unavailable" state. Do NOT silently fall through to
@@ -1264,20 +1275,41 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
         }
 
     def _load() -> dict:
-        # Prefer the caller's OWN Google Calendar when they've connected native
-        # Google; otherwise fall back to the avatar's Recall Calendar V2 inbox.
-        oauth = store.get_org_oauth(native_org)
-        # A logged-in user whose only native token is the AVATAR's shared inbox is
-        # NOT looking at their own calendar — treat it as unconnected so we prompt
-        # them to connect THEIR OWN Google instead of showing a foreign (Laura)
-        # email. The key-free demo path (user is None) keeps its existing behaviour.
-        if oauth and user is not None and _is_avatar_inbox(oauth):
-            oauth = None
-        if oauth:
-            return _load_native(native_org, oauth)
-        # Logged-in but no personal Google → an empty "connect your Google" state,
-        # never the avatar's shared Recall inbox (which shows the avatar's email).
+        # LOGGED-IN user: read THEIR OWN calendar token (user_oauth), scoped to
+        # the human — never the org's shared token. A verified corporate domain
+        # maps every colleague onto ONE org_id, so an org-keyed read would show
+        # one person's calendar to the whole domain (cross-tenant leak). See
+        # store.user_oauth + the /oauth/google/callback dual-write.
         if user is not None:
+            uid = user["user_id"]
+            u_oauth = store.get_user_oauth(uid)
+            if u_oauth and not _is_avatar_inbox(u_oauth):
+                def _rot(new_rt: str, _uid: str = uid, _o: dict = u_oauth) -> None:
+                    store.set_user_oauth(
+                        _uid, new_rt,
+                        email=str(_o.get("email") or ""),
+                        scopes=str(_o.get("scopes") or ""),
+                    )
+                return _load_native(
+                    native_org, u_oauth, principal=f"user:{uid}", on_rotate=_rot
+                )
+            # BRIDGE for users who connected BEFORE per-user storage (only an
+            # org-level row exists): serve it ONLY when its email is the logged-in
+            # user's OWN — so the original connector keeps working with no
+            # reconnect, while every colleague (email mismatch) is blocked. This
+            # is the immediate cross-tenant-leak stopgap; once they reconnect,
+            # the per-user row above takes over.
+            o_oauth = store.get_org_oauth(native_org)
+            _o_email = str((o_oauth or {}).get("email") or "").strip().lower()
+            if (
+                o_oauth
+                and not _is_avatar_inbox(o_oauth)
+                and _o_email
+                and _o_email == str(user.get("email") or "").strip().lower()
+            ):
+                return _load_native(native_org, o_oauth)
+            # Logged-in but no personal Google of their own → an empty "connect
+            # your Google" state, never the avatar's shared Recall inbox.
             return {
                 "calendar": {
                     "connected": False,
@@ -1286,7 +1318,11 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
                 },
                 "meetings": [],
             }
-        # Demo / machine caller (no logged-in user): the avatar's Recall inbox.
+        # Demo / machine caller (no logged-in user): the org's native token, else
+        # the avatar's Recall Calendar V2 inbox. Unchanged.
+        oauth = store.get_org_oauth(native_org)
+        if oauth:
+            return _load_native(native_org, oauth)
         return _load_recall()
 
     try:
@@ -1359,13 +1395,43 @@ async def create_calendar_event_endpoint(request: Request) -> JSONResponse:
         avatar_email = _avatar_email(avatar_id)
         if avatar_email and avatar_email.lower() not in {a.lower() for a in attendees}:
             attendees.append(avatar_email)
-    # Write to the caller's OWN org native Google (mirrors dashboard_upcoming's
-    # native_org). No native token → the UI links to Connect Google. A logged-in
-    # user whose only token is the avatar's shared inbox is treated as unconnected
-    # (never schedule on the avatar's own calendar); the demo path is untouched.
+    # Schedule on the caller's OWN calendar — the per-USER token (user_oauth),
+    # NEVER the org's shared token: in a shared org (verified domain → one
+    # org_id) an org-keyed write would create events on whichever colleague
+    # connected first. Mirrors dashboard_upcoming's _load(): user_oauth wins;
+    # else a pre-per-user org row ONLY when its email is this user's own
+    # (bridge); else prompt to connect. Avatar-inbox tokens are never scheduled
+    # on (never write to the avatar's own calendar).
     native_org = (user["org_id"] if user else "") or settings.demo_org_id
-    _oauth = await run_in_threadpool(store.get_org_oauth, native_org)
-    if _oauth and user is not None and _is_avatar_inbox(_oauth):
+    uid = user["user_id"]
+    # Wrapped so a store hiccup degrades to the same soft "connect_google" the
+    # docstring promises (never a 500) — mirrors dashboard_upcoming's _load()
+    # try/except. on_rotate runs later inside google_client and is best-effort.
+    try:
+        _oauth = await run_in_threadpool(store.get_user_oauth, uid)
+        _principal = f"user:{uid}"
+        _on_rotate = None
+        if _oauth and not _is_avatar_inbox(_oauth):
+            def _on_rotate(new_rt: str, _uid: str = uid, _o: dict = _oauth) -> None:
+                store.set_user_oauth(
+                    _uid, new_rt,
+                    email=str(_o.get("email") or ""),
+                    scopes=str(_o.get("scopes") or ""),
+                )
+        else:
+            _org_oauth = await run_in_threadpool(store.get_org_oauth, native_org)
+            _oe = str((_org_oauth or {}).get("email") or "").strip().lower()
+            if (
+                _org_oauth
+                and not _is_avatar_inbox(_org_oauth)
+                and _oe
+                and _oe == str(user.get("email") or "").strip().lower()
+            ):
+                _oauth = _org_oauth
+                _principal = ""  # org path: create_calendar_event resolves by org
+            else:
+                _oauth = None
+    except Exception:  # noqa: BLE001 — soft-fail, never a 500
         _oauth = None
     if not _oauth:
         return JSONResponse({"ok": False, "error": "connect_google"})
@@ -1376,7 +1442,12 @@ async def create_calendar_event_endpoint(request: Request) -> JSONResponse:
     if tz:
         event["timezone"] = tz
     res = await run_in_threadpool(
-        google_client.create_calendar_event, native_org, event
+        google_client.create_calendar_event,
+        native_org,
+        event,
+        oauth=(_oauth if _principal else None),
+        principal=_principal,
+        on_rotate=_on_rotate,
     )
     if not res.get("ok"):
         return JSONResponse(

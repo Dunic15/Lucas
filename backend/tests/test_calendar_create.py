@@ -52,7 +52,7 @@ def _login(client: TestClient, email: str = "owner@x.com") -> dict:
 
 
 def _mock_create(monkeypatch, sink: list, result: dict | None = None):
-    def fake_create(org_id, event):
+    def fake_create(org_id, event, **kw):
         sink.append((org_id, event))
         return result or {"ok": True, "event_id": "evt_1",
                           "event_url": "https://calendar.google.com/e/evt_1",
@@ -85,7 +85,7 @@ def test_create_event_requires_login(client):
 
 def test_create_event_owner_creates(client, monkeypatch):
     user = _login(client)
-    store.set_org_oauth(user["org_id"], "rt-user", email="me@example.com")
+    store.set_user_oauth(user["user_id"], "rt-user", email="me@example.com")
     calls: list = []
     _mock_create(monkeypatch, calls)
 
@@ -117,7 +117,7 @@ def test_create_event_provisions_google_meet(client, monkeypatch):
     .createRequest + conferenceDataVersion=1) and the endpoint returns the
     resulting hangoutLink as meet_url."""
     user = _login(client)
-    store.set_org_oauth(user["org_id"], "rt-user", email="me@example.com")
+    store.set_user_oauth(user["user_id"], "rt-user", email="me@example.com")
     monkeypatch.setattr(settings, "google_calendar_client_id", "cid")
     monkeypatch.setattr(settings, "google_calendar_client_secret", "csec")
 
@@ -158,7 +158,7 @@ def test_create_event_provisions_google_meet(client, monkeypatch):
 
 def test_create_event_adds_avatar_invite(client, monkeypatch):
     user = _login(client)
-    store.set_org_oauth(user["org_id"], "rt-user", email="me@example.com")
+    store.set_user_oauth(user["user_id"], "rt-user", email="me@example.com")
     calls: list = []
     _mock_create(monkeypatch, calls)
 
@@ -175,7 +175,7 @@ def test_create_event_adds_avatar_invite(client, monkeypatch):
 
 def test_create_event_default_avatar_uses_bare_alias(client, monkeypatch):
     user = _login(client)
-    store.set_org_oauth(user["org_id"], "rt-user", email="me@example.com")
+    store.set_user_oauth(user["user_id"], "rt-user", email="me@example.com")
     calls: list = []
     _mock_create(monkeypatch, calls)
 
@@ -187,7 +187,7 @@ def test_create_event_default_avatar_uses_bare_alias(client, monkeypatch):
 
 def test_create_event_unknown_avatar_soft_fails(client, monkeypatch):
     user = _login(client)
-    store.set_org_oauth(user["org_id"], "rt-user", email="me@example.com")
+    store.set_user_oauth(user["user_id"], "rt-user", email="me@example.com")
     calls: list = []
     _mock_create(monkeypatch, calls)
     r = client.post("/dashboard/calendar/event",
@@ -213,14 +213,14 @@ def test_create_event_without_google_returns_connect(client, monkeypatch):
 
 def test_create_event_missing_title_soft_fails(client, monkeypatch):
     user = _login(client)
-    store.set_org_oauth(user["org_id"], "rt-user", email="me@example.com")
+    store.set_user_oauth(user["user_id"], "rt-user", email="me@example.com")
     r = client.post("/dashboard/calendar/event", json={"start": _future_iso()})
     assert r.status_code == 200 and r.json()["ok"] is False
 
 
 def test_create_event_google_error_soft_fails(client, monkeypatch):
     user = _login(client)
-    store.set_org_oauth(user["org_id"], "rt-user", email="me@example.com")
+    store.set_user_oauth(user["user_id"], "rt-user", email="me@example.com")
     calls: list = []
     _mock_create(monkeypatch, calls,
                  result={"ok": False, "error": "calendar insert failed (HTTP 500)"})
@@ -235,7 +235,7 @@ def test_create_event_google_error_soft_fails(client, monkeypatch):
 
 def test_upcoming_badges_avatar_from_invite_alias(client, monkeypatch):
     user = _login(client)
-    store.set_org_oauth(user["org_id"], "rt-user", email="me@example.com")
+    store.set_user_oauth(user["user_id"], "rt-user", email="me@example.com")
     ev = {
         "id": "e1", "summary": "Demo w/ Acme", "status": "confirmed",
         "start": {"dateTime": _future_iso()}, "end": {"dateTime": _future_iso(3)},
@@ -246,7 +246,7 @@ def test_upcoming_badges_avatar_from_invite_alias(client, monkeypatch):
     }
     monkeypatch.setattr(
         google_client, "list_calendar_events",
-        lambda org, max_results=25: {"ok": True, "events": [ev]},
+        lambda org, max_results=25, **kw: {"ok": True, "events": [ev]},
     )
     m = client.get("/dashboard/upcoming").json()["meetings"][0]
     assert m["auto_join"] is True
