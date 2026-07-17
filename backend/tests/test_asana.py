@@ -160,7 +160,7 @@ def test_execute_approved_asana_writes_done_receipt(monkeypatch, tmp_path):
     statuses: list[tuple] = []
     monkeypatch.setattr(
         executor.ledger, "set_action_status",
-        lambda aid, status, detail="", *, org_id="": statuses.append(
+        lambda aid, status, detail="", *, org_id="", receipt=None: statuses.append(
             (aid, status, detail, org_id)
         ),
     )

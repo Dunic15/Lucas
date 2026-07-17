@@ -259,7 +259,7 @@ def test_executor_dispatch_and_provenance(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "native_executor", True)
     statuses: list[tuple] = []
 
-    def fake_status(action_id, status, detail="", *, org_id=""):
+    def fake_status(action_id, status, detail="", *, org_id="", receipt=None):
         statuses.append((action_id, status, detail, org_id))
         return True
 

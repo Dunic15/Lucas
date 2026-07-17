@@ -1744,6 +1744,30 @@
       fetch("/dashboard/actions/"+encodeURIComponent(aid)+"/approve",{method:"POST",headers:headers()})
         .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); })
         .then(function(res){
+          // needs_details: the typed spec is missing required fields — collect
+          // them right here (schema-validated server-side) and retry once.
+          if(res.status===422 && res.j.error==="needs_details"){
+            var schema=res.j.params_schema||[], missing=res.j.missing_params||[], args={}, aborted=false;
+            missing.forEach(function(name){
+              if(aborted) return;
+              var f=schema.find(function(x){return x.name===name;})||{};
+              var hint=f.description?(" ("+f.description+")"):"";
+              var v=window.prompt("This action needs \""+name+"\""+hint+(f.type==="array"?" — comma-separated":"")+":");
+              if(v===null||!v.trim()){ aborted=true; return; }
+              args[name]=f.type==="array"? v.split(",").map(function(s){return s.trim();}).filter(Boolean) : v.trim();
+            });
+            if(aborted){ btn.disabled=false; btn.innerHTML=old; toast("Approval needs those details to run.",true); return; }
+            return fetch("/dashboard/actions/"+encodeURIComponent(aid)+"/params",{method:"POST",headers:headers(),body:JSON.stringify({args:args})})
+              .then(function(r2){ return r2.json().catch(function(){return {};}).then(function(j2){ return {ok:r2.ok,j:j2}; }); })
+              .then(function(p){
+                if(!p.ok) throw new Error(p.j.error||"could not save details");
+                if((p.j.missing_params||[]).length) throw new Error("still missing: "+p.j.missing_params.join(", "));
+                btn.disabled=false; btn.innerHTML=old;
+                toast("Details saved — approving…");
+                approveAction(btn);
+              })
+              .catch(function(e){ btn.disabled=false; btn.innerHTML=old; toast("Could not save details: "+e.message,true); });
+          }
           if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
           var j=res.j, st=j.status||null;
           // Flag OFF (or nothing ran): captured + marked approved, but not

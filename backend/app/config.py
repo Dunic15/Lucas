@@ -260,6 +260,13 @@ class Settings(BaseSettings):
     # NATIVE_EXECUTOR=false to fall back to the Cedric-brokered path.
     # See backend/app/executor.py + google_client.py.
     native_executor: bool = True
+    # Canonical Action plane (M0): approve doors answer immediately with an
+    # observable 'executing' status and the native vendor call settles
+    # done/failed from a worker thread. Default OFF — with it off the doors
+    # execute synchronously in-request and the response carries the final
+    # status, byte-identical to today. The execution CLAIM (double-approval →
+    # exactly one external write) is active regardless of this flag.
+    action_dispatch_async: bool = False
     # Find-a-time scheduler (backend/app/scheduler.py). With this ON, a finalized
     # meeting's VAGUE scheduling ask ("book 45 min with Ananth next week") gets a
     # free/busy lookup + ranked candidate slots attached as a CalendarProposal, so

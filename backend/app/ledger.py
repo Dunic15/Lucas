@@ -26,6 +26,7 @@ import uuid
 from typing import Any, Optional
 
 from . import store
+from .action_plane import ACTION_STATUSES
 from .config import settings
 from .meeting_state import humanize_step
 
@@ -451,20 +452,28 @@ def resolve_by_action_id(
         raise
 
 
-# Execution states the orchestrator may report — the brain's lifecycle for an
-# action it received (proposal card up → human decision → tool run outcome).
-EXECUTION_STATUSES = ("proposed", "approved", "rejected", "done", "failed")
+# Execution states a surface may report — the canonical Action lifecycle
+# (action_plane.ACTION_STATUSES): capture → needs_details/proposed → decision
+# → executing → done/failed/rejected. needs_details and executing are the M0
+# additions (UNIFIED-ACTION-CONTROL-PLANE.md).
+EXECUTION_STATUSES = ACTION_STATUSES
 
 
 # Terminal execution statuses close the ledger item with the matching resolve
 # outcome — one weld point so the provenance channel (/status, what Cedric's
 # own loop reports) and the closure channel (/resolve) can never disagree.
-# 'proposed'/'approved' are in-flight and must NOT close anything.
+# 'needs_details'/'proposed'/'approved'/'executing' are in-flight and must
+# NOT close anything.
 _TERMINAL_STATUS_OUTCOME = {"done": "done", "rejected": "rejected", "failed": "failed"}
+
+# Statuses an execution claim may be taken from — everything pre-decision plus
+# 'approved' (the door records the decision first, then claims).
+_CLAIMABLE_STATUSES = ("", "needs_details", "proposed", "approved")
 
 
 def set_action_status(
-    action_id: str, status: str, detail: str = "", *, org_id: str = DEMO_ORG_ID
+    action_id: str, status: str, detail: str = "", *, org_id: str = DEMO_ORG_ID,
+    receipt: Optional[dict] = None,
 ) -> bool:
     """Record the orchestrator-reported execution state of an action (upsert,
     latest wins). Terminal statuses (done/rejected/failed) also close the
@@ -473,9 +482,11 @@ def set_action_status(
     Cedric's status loop reported 'rejected' but the ledger row stayed open
     forever). Unknown status or empty id is a no-op (False). ``detail`` is a
     distilled one-liner (card link, error class); it is capped, and it is
-    never transcript content by contract. ``org_id`` scopes the terminal
-    ledger close (PR D: a per-org caller closes ITS row, not the Demo org's);
-    the default keeps every existing caller byte-identical."""
+    never transcript content by contract. ``receipt`` (optional) is the
+    structured receipt persisted on the durable canonical Action (PG only;
+    the SQLite chip keeps rendering from ``detail``). ``org_id`` scopes the
+    terminal ledger close (PR D: a per-org caller closes ITS row, not the
+    Demo org's); the default keeps every existing caller byte-identical."""
     aid = (action_id or "").strip()
     st = (status or "").strip().lower()
     if not aid or st not in EXECUTION_STATUSES:
@@ -486,7 +497,7 @@ def set_action_status(
     if durable_status:
         from . import outbox_pg
 
-        if not outbox_pg.set_action_status(org_id, aid, st, detail):
+        if not outbox_pg.set_action_status(org_id, aid, st, detail, receipt):
             return False
     try:
         with store._LOCK, store._connect() as conn:
@@ -532,6 +543,176 @@ def set_action_status(
                 aid, "", outcome, (detail or "").strip()[:300], org_id=org_id
             )
     return True
+
+
+def _durable_actions(org_id: str) -> bool:
+    """Whether the durable Postgres action row is authoritative for this org."""
+    from . import control_plane
+
+    return control_plane.enabled() and control_plane.is_durable_org(org_id)
+
+
+def claim_action_execution(
+    action_id: str, *, org_id: str = DEMO_ORG_ID, idempotency_key: str = "",
+    via: str = "",
+) -> bool:
+    """Atomically claim the right to execute one approved action.
+
+    THE double-approval-single-execution guarantee (canonical Action Control
+    Plane, M0): every executor call sits behind this compare-and-set to
+    'executing', so two surfaces (dashboard + Slack relay) approving the same
+    action concurrently produce exactly one external write. Durable orgs CAS
+    on the Postgres row (cross-instance); everything else falls back to the
+    per-process SQLite action_status CAS — exactly as safe as today's
+    behaviour, never less. A durable org whose action was never indexed (no
+    queued_actions row) also falls back rather than blocking execution."""
+    aid = (action_id or "").strip()
+    if not aid:
+        return False
+    detail = f"executing via {via}" if via else "executing"
+    if _durable_actions(org_id):
+        from . import outbox_pg
+
+        claim = outbox_pg.claim_action_execution(
+            org_id, aid, idempotency_key=idempotency_key, detail=detail
+        )
+        if claim == "claimed":
+            return True
+        if claim == "lost":
+            return False
+        # 'missing' — no durable row; fall through to the local guard.
+    with store._LOCK, store._connect() as conn:
+        row = conn.execute(
+            "SELECT status FROM action_status WHERE org_id=? AND action_id=?",
+            (org_id, aid),
+        ).fetchone()
+        current = row["status"] if row else ""
+        if current == "executing" or current in _TERMINAL_STATUS_OUTCOME:
+            return False
+        conn.execute(
+            """INSERT INTO action_status
+                   (org_id, action_id, status, detail, updated_at)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(org_id, action_id) DO UPDATE SET
+                 status=excluded.status, detail=excluded.detail,
+                 updated_at=excluded.updated_at""",
+            (org_id, aid, "executing", detail[:300], time.time()),
+        )
+    return True
+
+
+def record_action_decision(
+    action_id: str, *, org_id: str = DEMO_ORG_ID, decision: str,
+    selected_slot_id: str = "", idempotency_key: str = "",
+    decided_via: str = "", laura_user_id: str = "", previous_status: str = "",
+    new_status: str = "", execution_job_id: str | None = None,
+    blocked_on: str = "",
+) -> bool:
+    """Record THE canonical decision for (org, action) — first write wins.
+
+    Durable orgs write the Postgres action_decisions row so two App Runner
+    instances converge; everyone else keeps the SQLite action_approvals row
+    (store.record_action_approval), byte-identical to the pre-M0 path."""
+    fields = dict(
+        decision=decision, selected_slot_id=selected_slot_id,
+        idempotency_key=idempotency_key, decided_via=decided_via,
+        laura_user_id=laura_user_id, previous_status=previous_status,
+        new_status=new_status, execution_job_id=execution_job_id,
+        blocked_on=blocked_on,
+    )
+    if _durable_actions(org_id):
+        from . import outbox_pg
+
+        return outbox_pg.record_action_decision(org_id, action_id, fields)
+    return store.record_action_approval(org_id, action_id, **fields)
+
+
+def get_action_decision(
+    action_id: str, *, org_id: str = DEMO_ORG_ID
+) -> Optional[dict]:
+    """The recorded canonical decision for (org, action), or None."""
+    if _durable_actions(org_id):
+        from . import outbox_pg
+
+        found = outbox_pg.get_action_decision(org_id, action_id)
+        if found is not None:
+            return found
+        # Decisions recorded before the durable table existed (or while the
+        # control plane was off) live in the local SQLite row — still honour
+        # them so an upgrade never re-executes an already-decided action.
+    return store.get_action_approval(org_id, action_id)
+
+
+def set_action_decision_result(
+    action_id: str, *, org_id: str = DEMO_ORG_ID, new_status: str,
+    execution_job_id: str | None,
+) -> None:
+    """Settle the execution outcome onto the recorded decision row."""
+    if _durable_actions(org_id):
+        from . import outbox_pg
+
+        outbox_pg.set_action_decision_result(
+            org_id, action_id, new_status, execution_job_id
+        )
+        return
+    store.set_action_approval_result(
+        org_id, action_id, new_status=new_status,
+        execution_job_id=execution_job_id,
+    )
+
+
+def get_durable_action(
+    action_id: str, *, org_id: str = DEMO_ORG_ID
+) -> Optional[dict]:
+    """The durable canonical Action row (Postgres), or None when the control
+    plane is off / the org is session-shaped / the action was never indexed."""
+    if _durable_actions(org_id):
+        from . import outbox_pg
+
+        return outbox_pg.get_action(org_id, action_id)
+    return None
+
+
+def update_action_params(
+    action_id: str, args: dict, *, org_id: str = DEMO_ORG_ID,
+    artifact_typed: Any = None,
+) -> Optional[dict]:
+    """Merge validated edited args into the effective typed spec and persist
+    them (durable row when one exists, the key-free override table otherwise).
+    Returns the merged typed dict, or None when there is nothing editable."""
+    aid = (action_id or "").strip()
+    if not aid or not isinstance(args, dict) or not args:
+        return None
+    if _durable_actions(org_id):
+        from . import outbox_pg
+
+        typed = outbox_pg.update_action_params(org_id, aid, args)
+        if typed is not None:
+            return typed
+        # No editable durable row (never indexed) — fall through to the
+        # override path so the feature still works for these actions.
+    base = effective_typed(aid, artifact_typed, org_id=org_id)
+    if not isinstance(base, dict) or not base.get("type"):
+        return None
+    merged = {**base, "args": {**(base.get("args") or {}), **args}}
+    store.set_action_typed_override(org_id, aid, merged)
+    return merged
+
+
+def effective_typed(
+    action_id: str, artifact_typed: Any, *, org_id: str = DEMO_ORG_ID
+) -> Optional[dict]:
+    """The typed spec the approve doors execute: durable edited params win,
+    then the key-free override table, then the artifact's original spec. The
+    saved artifact is never the loser to a CLIENT body — edits arrive only
+    through the params door, which validates against the schema first."""
+    durable = get_durable_action(action_id, org_id=org_id)
+    if durable is not None and isinstance(durable.get("typed_json"), dict):
+        return durable["typed_json"]
+    override = store.get_action_typed_override(org_id, action_id)
+    if override is not None:
+        return override
+    return artifact_typed if isinstance(artifact_typed, dict) else None
 
 
 def action_org(action_id: str) -> Optional[str]:
