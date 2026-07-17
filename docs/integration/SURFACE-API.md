@@ -89,6 +89,32 @@ The bot's name tile is the avatar's `name` from its `avatar.yaml` (wake words
 too — surface them to end users via `GET /avatars` so nobody calls the wrong
 name in the meeting).
 
+## Browser operator (B0, flag-gated)
+
+With `BROWSER_OPERATOR_ENABLED=true` (+ control plane), Laura serves a
+browser-session surface under the same machine gate as `/org/*` (bearer +
+org resolution; client-supplied `org_id` mismatch = 403) and a strict
+cookie/same-origin dashboard twin at `/dashboard/browser/*`. Flag off ⇒ every
+route 404s and the demo is byte-identical. Full contracts + fixtures:
+`frontend/fixtures/browser_states.json`,
+`docs/product/BROWSER-B0-EVALUATION.md`.
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /org/browser/sessions` | Create a session `{avatar_key?, meeting_ref?}` → `{session}` (Laura uuid only — provider ids are never exposed) |
+| `GET /org/browser/sessions/{id}` | Session state (`creating/ready/presenting/closing/closed/failed/expired/revoked`) |
+| `POST /org/browser/sessions/{id}/commands` | `{verb: observe\|navigate\|click\|type\|scroll, command_id?, url?, element_id?, text?, verify?, expected?}` — idempotent on `command_id`; read-only verbs execute, guarded writes are rejected (B0) or become canonical actions (`BROWSER_ALLOW_WRITES`); `verify+expected` runs post-op visual verification. Returns the stable command-result contract (accepted/command_sequence/page_version/classification/observation/action_id/failure_category/replanning_permitted/verification) |
+| `GET /org/browser/sessions/{id}/observation` | Stable `BrowserObservation` (session_id/command_sequence/page_version/url/title/viewport/screenshot_ref/dom_summary/visible_text/elements/truncated/timestamp) |
+| `POST /org/browser/sessions/{id}/metadata` | Set bounded, NON-authoritative demo-run metadata (demo_definition_id/version, demo_run_id, current_checkpoint) — never drives state |
+| `POST /org/browser/sessions/{id}/present` | Mint a one-shot opaque presentation token (short TTL, revocable, sha256-stored) |
+| `POST /org/browser/present/exchange` | `{presentation_token}` → current READ-ONLY viewer payload (server-side; denies replay/expiry/revoked/cross-org) |
+| `POST /org/browser/sessions/{id}/close` | Idempotent close (provider released, tokens revoked) |
+| `POST /org/browser/sessions/{id}/revoke` | Idempotent security stop |
+
+Guarded browser steps approve through the EXISTING action doors
+(`/org/actions/{id}/approve`, `/dashboard/actions/{id}/approve`) — there is
+no browser-specific approval surface.
+
 ## Outbound webhooks (Laura → orchestrator)
 
 POSTed to the session's `callback_url`, signed as above, `external_ref` echoed.

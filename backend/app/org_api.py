@@ -256,6 +256,26 @@ def _execute_route(
         # is accepted; until then the approval stands recorded and the
         # orchestrator's own loop picks the action up from action.requested.
         return None, "approved", False
+    if route == "browser":
+        # Guarded browser step (B0): claim exactly-once, then re-check
+        # ownership/state/avatar allowance and settle a receipt through the
+        # browser operator — the SAME claim + provenance path, no second
+        # execution system.
+        from . import browser
+
+        if not browser.enabled():
+            return None, "approved", False
+        if not ledger.claim_action_execution(
+            action_id, org_id=org, idempotency_key=idempotency_key, via=via
+        ):
+            latest = (ledger.action_statuses([action_id], org_id=org)
+                      .get(action_id) or {})
+            return None, str(latest.get("status") or "approved"), False
+        from .browser import operator as browser_operator
+
+        result = browser_operator.execute_approved_step(org, action_id, action)
+        return (uuid.uuid4().hex,
+                "done" if result.get("ok") else "failed", False)
     exec_action = executor.from_typed(action.get("typed"))
     if exec_action is None or not executor.handles(exec_action):
         return None, "approved", False

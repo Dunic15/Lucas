@@ -118,6 +118,26 @@ from .decision import (
 )
 from .rag import ensure_about_index, ensure_index, warm as warm_index
 
+def _browser_expire_tick() -> None:
+    """Close+expire browser sessions past TTL for every org that has due ones
+    (the server-side meter-safety guard, independent of Laura's own close).
+    Sync; called via run_in_threadpool from the worker loop. Never raises."""
+    try:
+        from .browser import dal as browser_dal
+        from .browser import provider as browser_provider
+
+        for org_id in browser_dal.orgs_with_due_sessions():
+            for row in browser_dal.expire_due(org_id):
+                try:
+                    browser_provider.get_provider(
+                        row["provider"]).close(row["provider_ref"])
+                except Exception:  # noqa: BLE001 — provider release best-effort
+                    pass
+    except Exception as exc:  # noqa: BLE001 — never break the worker loop
+        print(f"[browser] expire tick failed: {type(exc).__name__}",
+              flush=True)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Startup/shutdown for the app (replaces the deprecated @app.on_event hooks).
@@ -223,6 +243,12 @@ async def _lifespan(app: FastAPI):
                         from .datafoundation import sync as df_sync
 
                         await run_in_threadpool(df_sync.process_due)
+                    # Browser B0: expire sessions past TTL server-side even if
+                    # nothing else closes them (the third meter-safety guard).
+                    from . import browser
+
+                    if browser.enabled():
+                        await run_in_threadpool(_browser_expire_tick)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # never log content, filenames, or org text
@@ -272,6 +298,9 @@ app.include_router(org_avatars_api.router)  # /org/avatars + Avatar Studio twin 
 from .datafoundation import router as df_router  # noqa: E402
 
 app.include_router(df_router.router)  # /org/data + dashboard twin (DF0-DF1)
+from .browser import router as browser_router  # noqa: E402
+
+app.include_router(browser_router.router)  # /org/browser + dashboard twin (B0)
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).

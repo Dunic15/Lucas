@@ -1,0 +1,181 @@
+{
+  "$comment": "Browser operator B0 — deterministic fixtures for every browser-panel state. The Control Center V2 design branch renders from these EXACT schemas; browser logic stays in the backend. Session objects mirror GET /dashboard/browser/sessions/{id} ('session' key). Observation objects mirror the 'observation' key of a command/observation response. Viewer objects mirror POST /dashboard/browser/present/exchange ('viewer' key). No provider identifiers, no provider URLs, no tokens beyond the one-shot mint example.",
+  "states": {
+    "unavailable": {
+      "http_status": 404,
+      "body": {"error": "browser_operator_disabled"},
+      "render_hint": "Feature flag off — hide the browser panel entirely."
+    },
+    "creating": {
+      "http_status": 200,
+      "body": {
+        "session": {
+          "id": "6f9d2c1e-0000-4000-8000-000000000001",
+          "state": "creating",
+          "avatar_key": "laura",
+          "avatar_version": 3,
+          "provider": "fake",
+          "meeting_ref": "bot-demo-1",
+          "last_command_seq": 0,
+          "action_ref": "",
+          "created_at": 1789459200,
+          "expires_at": 1789461000
+        }
+      },
+      "render_hint": "Spinner + 'Opening browser…'; no commands enabled."
+    },
+    "ready": {
+      "http_status": 200,
+      "body": {
+        "session": {
+          "id": "6f9d2c1e-0000-4000-8000-000000000001",
+          "state": "ready",
+          "avatar_key": "laura",
+          "avatar_version": 3,
+          "provider": "fake",
+          "meeting_ref": "bot-demo-1",
+          "last_command_seq": 2,
+          "action_ref": "",
+          "created_at": 1789459200,
+          "expires_at": 1789461000
+        },
+        "observation": {
+          "url": "https://demo.laura.test/home",
+          "title": "Laura Demo — Home",
+          "dom_summary": "Welcome to the Laura product demo. Explore features below.",
+          "elements": [
+            {"id": "nav-pricing", "role": "link", "name": "Pricing", "kind": "link", "sensitive": false},
+            {"id": "search", "role": "textbox", "name": "Search", "kind": "text_input", "sensitive": false}
+          ],
+          "screenshot_ref": "fake-shot:https://demo.laura.test/home",
+          "truncated": false
+        }
+      },
+      "render_hint": "Show observation panel + Present button."
+    },
+    "presenting": {
+      "http_status": 200,
+      "body": {
+        "session": {
+          "id": "6f9d2c1e-0000-4000-8000-000000000001",
+          "state": "presenting",
+          "avatar_key": "laura",
+          "avatar_version": 3,
+          "provider": "fake",
+          "meeting_ref": "bot-demo-1",
+          "last_command_seq": 5,
+          "action_ref": "",
+          "created_at": 1789459200,
+          "expires_at": 1789461000
+        },
+        "present_response": {
+          "ok": true,
+          "state": "presenting",
+          "presentation_token": "lbt_EXAMPLE-ONE-SHOT-VALUE-NEVER-STORED",
+          "expires_at": 1789459320
+        },
+        "viewer": {
+          "kind": "fake_readonly",
+          "url": "https://demo.laura.test/pricing",
+          "title": "Laura Demo — Pricing",
+          "rendered_text": "Team plan: 20 EUR per seat per month. Enterprise: contact us.",
+          "read_only": true
+        }
+      },
+      "render_hint": "Read-only live view iframe/panel; token exchanged server-side, never persisted client-side beyond the tab."
+    },
+    "awaiting_approval": {
+      "http_status": 200,
+      "body": {
+        "command_response": {
+          "ok": false,
+          "reason": "approval_required",
+          "class": "guarded",
+          "action_id": "act_9f8e7d6c5b4a",
+          "proposed": {"action": "purchase", "target": "Buy Team plan", "text": ""},
+          "seq": 6
+        }
+      },
+      "render_hint": "Render the existing action-approval card (canonical Actions UI) with the 'proposed' projection; approval flows through /dashboard/actions/{id}/approve — NOT a browser-specific approve."
+    },
+    "failed": {
+      "http_status": 200,
+      "body": {
+        "session": {
+          "id": "6f9d2c1e-0000-4000-8000-000000000001",
+          "state": "failed",
+          "avatar_key": "laura",
+          "avatar_version": 3,
+          "provider": "fake",
+          "meeting_ref": "bot-demo-1",
+          "last_command_seq": 7,
+          "action_ref": "",
+          "created_at": 1789459200,
+          "expires_at": 1789461000
+        },
+        "command_response": {"ok": false, "reason": "provider_error", "state": "failed", "seq": 7}
+      },
+      "render_hint": "Terminal error banner + 'Start a new session'."
+    },
+    "expired": {
+      "http_status": 200,
+      "body": {
+        "session": {
+          "id": "6f9d2c1e-0000-4000-8000-000000000001",
+          "state": "expired",
+          "avatar_key": "laura",
+          "avatar_version": 3,
+          "provider": "fake",
+          "meeting_ref": "bot-demo-1",
+          "last_command_seq": 7,
+          "action_ref": "",
+          "created_at": 1789459200,
+          "expires_at": 1789460000
+        }
+      },
+      "render_hint": "'Session expired' notice; commands disabled; tokens already revoked server-side."
+    },
+    "closed": {
+      "http_status": 200,
+      "body": {
+        "session": {
+          "id": "6f9d2c1e-0000-4000-8000-000000000001",
+          "state": "closed",
+          "avatar_key": "laura",
+          "avatar_version": 3,
+          "provider": "fake",
+          "meeting_ref": "bot-demo-1",
+          "last_command_seq": 9,
+          "action_ref": "",
+          "created_at": 1789459200,
+          "expires_at": 1789461000
+        },
+        "close_response": {"ok": true, "state": "closed"}
+      },
+      "render_hint": "Neutral 'Browser closed' summary; idempotent close — repeating the call returns {ok:true, state:'closed', idempotent:true}."
+    },
+    "revoked": {
+      "http_status": 200,
+      "body": {
+        "session": {
+          "id": "6f9d2c1e-0000-4000-8000-000000000001",
+          "state": "revoked",
+          "avatar_key": "laura",
+          "avatar_version": 3,
+          "provider": "fake",
+          "meeting_ref": "bot-demo-1",
+          "last_command_seq": 9,
+          "action_ref": "",
+          "created_at": 1789459200,
+          "expires_at": 1789461000
+        }
+      },
+      "render_hint": "Security-stop banner (distinct from closed); tokens dead."
+    },
+    "token_denied": {
+      "http_status": 403,
+      "body": {"ok": false, "reason": "expired"},
+      "render_hint": "Viewer exchange denied — reasons: malformed | not_found | revoked | expired | session_not_live. Show 'view ended'."
+    }
+  }
+}

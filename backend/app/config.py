@@ -294,6 +294,29 @@ class Settings(BaseSettings):
     # 60s cache TTL.
     org_avatar_overlays_enabled: bool = False
 
+    # ── Browser operator (Sable B0 — watchable browser demos) ──
+    # A Laura avatar opens and operates a remote browser behind a read-only
+    # live view. OFF (default) ⇒ every route 404s, no session is created, the
+    # meeting and demo are byte-identical. Needs the control plane. B0 uses a
+    # deterministic FAKE provider; the real Browserbase adapter is a SEPARATE
+    # flag (browser_real_provider_enabled) and stays off without keys.
+    browser_operator_enabled: bool = False
+    browser_provider: str = "browserbase"
+    browser_real_provider_enabled: bool = False
+    browser_operator_url: str = ""
+    browser_operator_token: str = ""
+    browser_operator_callback_secret: str = ""
+    browser_default_timeout_seconds: int = 1800
+    browser_max_steps: int = 30
+    browser_presentation_token_ttl_seconds: int = 120
+    # B0 posture is READ-ONLY: guarded write commands are REJECTED. Turning
+    # this on routes them to the canonical Action plane (route='browser') for
+    # approval instead — still never executed inline.
+    browser_allow_writes: bool = False
+    # Real-provider credentials (env/secret only — never in git/db/logs):
+    browserbase_api_key: str = ""
+    browserbase_project_id: str = ""
+
     # ── Data Foundation (DF0-DF1 — accepted contract v5) ──
     # Normalized company data over connectors: SourceEnvelopes, fail-closed
     # mirrored ACLs, lineage, the ContextResolver. OFF (default) ⇒ tables

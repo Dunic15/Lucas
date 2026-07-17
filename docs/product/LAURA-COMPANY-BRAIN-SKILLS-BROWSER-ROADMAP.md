@@ -384,6 +384,55 @@ consequential click is a canonical M0 Action, route `browser`).
 Full spec, slices B0–B5, API contract, state machines, config and security:
 [`LAURA-SABLE-BROWSER-OPERATOR-IMPLEMENTATION.md`](LAURA-SABLE-BROWSER-OPERATOR-IMPLEMENTATION.md).
 
+### B0 — IMPLEMENTED (branch `claude/browser-b0`, stacked on DF0-DF1)
+
+The presentation/operator spike, broadened from the spec's pixel-only B0 to a
+full contracts-and-boundaries proof on a deterministic fake provider (report:
+[`BROWSER-B0-EVALUATION.md`](BROWSER-B0-EVALUATION.md)):
+
+- **Migration `0013_browser_sessions`**: `browser_sessions` (org + principal +
+  avatar/overlay-version + meeting ref + provider + state machine + TTL +
+  command seq, FORCE RLS), `browser_commands` (idempotency claims),
+  `browser_presentation_tokens` (sha256-only, revocable), and the
+  `due_browser_orgs` reconcile definer.
+- **`backend/app/browser/`**: `provider.py` (the ONE `BrowserOperator`
+  boundary), `fake_provider.py` (deterministic pages/history/failures/viewer,
+  zero network), `browserbase_provider.py` (smallest real adapter,
+  `ProviderUnconfigured` without flag+keys), `policy.py` (deterministic
+  auto/guarded/blocked classifier + observation sanitizer + secret redaction),
+  `tokens.py`, `dal.py`, `operator.py` (state machine + ownership +
+  exactly-once commands + ACP write-routing), `router.py` (`/org/browser/*`
+  + strict `/dashboard/browser/*` twin).
+- **ACP integration**: guarded writes mint `queued_actions` rows with
+  `execution_route='browser'`; BOTH approve doors execute them behind the
+  existing claim with execution-time ownership/state/tool re-checks. B0
+  default posture is read-only (`BROWSER_ALLOW_WRITES=false` ⇒ writes
+  rejected, proven in tests).
+- **Presentation**: opaque short-lived `lbt_*` tokens exchanged server-side
+  for a read-only viewer; `talk.html` `browser_view`/`browser_view_hide`
+  control messages (avatar shrinks to corner tile, CSS-only, flag-off
+  byte-identical).
+- **Deployment order**: `alembic upgrade head` (0013) →
+  `BROWSER_OPERATOR_ENABLED=true` (fake provider demos work immediately) →
+  B1 for the real provider (`BROWSER_REAL_PROVIDER_ENABLED` + keys).
+  Rollback = flag off; migration additive-only.
+- **Demo-handoff contracts** (frozen for a one-company demo integration):
+  `browser/contracts.py` (`BrowserObservation`, `command_result`,
+  `verify_expectation`, `clean_metadata`) + `browser/planner.py`
+  (`VisualPlanner` + deterministic `ScriptedPlanner`). `page_version` bumps on
+  page change; commands accept `verify=true`+`expected` so the OPERATOR (never
+  the planner) decides success by re-observing; sessions carry bounded,
+  non-authoritative demo-run metadata. Fixtures:
+  `frontend/fixtures/browser_{states,handoff,presentation_events}.json`.
+  Real-provider smoke procedure in
+  [`BROWSER-B0-EVALUATION.md`](BROWSER-B0-EVALUATION.md).
+- **Tests**: 38 (9 key-free + 8 contracts + 21 embedded-PG blockers, incl.
+  5 adversarial-finding regressions).
+- **Deferred to B1+**: real Playwright/Browserbase driving + screenshot
+  perception, the real multimodal planner, live-view latency/embeddability
+  measurements, meeting-lifecycle autostart, takeover, profiles, allowlists,
+  token-exchange rate limiting.
+
 **What exists to build on (summary).** `execution_route='browser'` is already
 admitted by the 0009 CHECK; the additive control-message channel into
 `talk.html` is shipped (`_send_avatar_control` + `handleBackendMessage`);
