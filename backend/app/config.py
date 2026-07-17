@@ -260,6 +260,13 @@ class Settings(BaseSettings):
     # NATIVE_EXECUTOR=false to fall back to the Cedric-brokered path.
     # See backend/app/executor.py + google_client.py.
     native_executor: bool = True
+    # Canonical Action plane (M0): approve doors answer immediately with an
+    # observable 'executing' status and the native vendor call settles
+    # done/failed from a worker thread. Default OFF — with it off the doors
+    # execute synchronously in-request and the response carries the final
+    # status, byte-identical to today. The execution CLAIM (double-approval →
+    # exactly one external write) is active regardless of this flag.
+    action_dispatch_async: bool = False
     # Find-a-time scheduler (backend/app/scheduler.py). With this ON, a finalized
     # meeting's VAGUE scheduling ask ("book 45 min with Ananth next week") gets a
     # free/busy lookup + ranked candidate slots attached as a CalendarProposal, so
@@ -276,6 +283,29 @@ class Settings(BaseSettings):
     # a random value held in SSM SecureString (KMS at rest) so it rotates
     # independently of the session cookie key.
     google_token_enc_key: str = ""
+
+    # ── Company Brain (durable org knowledge — M1) ──
+    # Master switch for the durable knowledge plane: org-owned sources,
+    # ingestion jobs, and the /org/knowledge API. OFF (default) means no new
+    # tables are touched, no worker runs, and retrieval is byte-identical to
+    # the per-avatar base packs — the key-free demo never notices it exists.
+    # Needs LAURA_DATABASE_URL (the ingest jobs and chunks live on the RLS
+    # control plane).
+    company_brain_enabled: bool = False
+    # Raw uploaded files: S3-compatible object storage when a bucket is set
+    # (IAM role in production — never keys in git); empty ⇒ a local directory
+    # next to the SQLite store, which keeps the whole feature key-free in dev.
+    knowledge_bucket: str = ""
+    knowledge_s3_endpoint: str = ""
+    knowledge_aws_region: str = "eu-central-1"
+    # Ingestion guardrails: refuse oversized uploads outright and cap how much
+    # extracted text one document may contribute (memory + prompt hygiene).
+    knowledge_max_file_bytes: int = 10_000_000
+    knowledge_max_extracted_chars: int = 400_000
+    # OpenAI key for EMBEDDING_PROVIDER=openai (text-embedding-3-small at a
+    # fixed 512 dims — the recommended durable Company Brain embedder). The
+    # key is NEVER exposed to any browser page.
+    openai_api_key: str = ""
 
     # ── Asana (project system of record — see docs/ASANA.md) ──
     # Personal Access Token for the workspace, single-tenant fallback: a per-org

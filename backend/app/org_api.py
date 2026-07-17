@@ -21,7 +21,7 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
-from . import cedric, executor, ledger, store
+from . import action_plane, cedric, executor, ledger, store
 from .config import settings
 
 router = APIRouter(prefix="/org", tags=["org-memory"])
@@ -174,7 +174,10 @@ async def org_action_status(action_id: str, request: Request) -> JSONResponse:
         body = await request.json()
     except Exception:  # noqa: BLE001 — malformed JSON is a client error
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-    status = str((body or {}).get("status") or "").strip().lower()
+    # Boundary normalization (canonical Action plane): peers historically say
+    # 'executed' for a completed run — canonical vocabulary says 'done'. The
+    # alias map is inbound-only; Laura never emits the alias.
+    status = action_plane.normalize_status(str((body or {}).get("status") or ""))
     detail = str((body or {}).get("detail") or "")
     # Validate the status VALUE here so a genuinely bad state is still a 400 —
     # distinct from "valid state, but this org has no durable action row yet".
@@ -238,7 +241,8 @@ def _unmet_dependencies(org: str, action: dict) -> list[str]:
 
 
 def _execute_route(
-    org: str, action_id: str, action: dict, acting_avatar: str = ""
+    org: str, action_id: str, action: dict, acting_avatar: str = "",
+    *, idempotency_key: str = "", via: str = "",
 ) -> tuple[str | None, str, bool]:
     """Run the approved action per its persisted execution_route [B2].
     Returns (execution_job_id | None, new_status, capability_blocked)."""
@@ -261,7 +265,36 @@ def _execute_route(
     caps = store.get_avatar_capabilities(acting_avatar)
     if caps.get(executor.capability_family(exec_action.get("type"))) is False:
         return None, "approved", True
+    # EXECUTION CLAIM (canonical Action plane, M0): the atomic CAS to
+    # 'executing' is the only license to call a vendor. Losing the claim means
+    # another surface/instance is executing (or already finished) this exact
+    # action — report its status instead of writing twice.
+    if not ledger.claim_action_execution(
+        action_id, org_id=org, idempotency_key=idempotency_key, via=via
+    ):
+        latest = (ledger.action_statuses([action_id], org_id=org)
+                  .get(action_id) or {})
+        return None, str(latest.get("status") or "approved"), False
     job_id = uuid.uuid4().hex
+    if settings.action_dispatch_async:
+        # Observable async dispatch: the door answers 'executing' immediately;
+        # the executor settles done/failed through the same provenance channel
+        # (and mirrors it to Cedric) from a worker thread.
+        import threading
+
+        def _dispatch() -> None:
+            try:
+                result = executor.execute_approved(org, action_id, exec_action)
+                ledger.set_action_decision_result(
+                    action_id, org_id=org,
+                    new_status="done" if result.get("ok") else "failed",
+                    execution_job_id=job_id,
+                )
+            except Exception:  # noqa: BLE001 — executor soft-returns; belt+braces
+                pass
+
+        threading.Thread(target=_dispatch, daemon=True).start()
+        return job_id, "executing", False
     # execute_approved writes its own done/failed receipt into the same
     # provenance channel the dashboard reads [contract: native-route surfacing].
     result = executor.execute_approved(org, action_id, exec_action)
@@ -308,6 +341,14 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
     if found is None:
         return JSONResponse({"error": "unknown action for this org"}, status_code=404)
     action, acting_avatar = found
+    # Edited params win over the artifact's original spec (canonical Action
+    # plane): the params door validated them against the schema, never a
+    # client body on THIS door.
+    effective = await run_in_threadpool(
+        lambda: ledger.effective_typed(action_id, action.get("typed"), org_id=org)
+    )
+    if effective is not None:
+        action = {**action, "typed": effective}
 
     # Approver rule: approver_user_ids present -> only those; absent -> any
     # member of the org (the dashboard-door rule).
@@ -319,12 +360,10 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
         if not member:
             return JSONResponse({"error": "approver_not_in_org"}, status_code=403)
 
-    # [M1] decision-based convergence: answer replays/conflicts from the ONE
-    # recorded decision, never from the idempotency key alone.
-    recorded = await run_in_threadpool(store.get_action_approval, org, action_id)
-    if recorded is not None:
-        # Same decision (and same slot where applicable) — regardless of
-        # idempotency_key — replays the recorded result [M1 case a+b].
+    def _replay_response(recorded: dict) -> JSONResponse:
+        """[M1] answer replays/conflicts from the ONE recorded decision, never
+        from the idempotency key alone. Same decision (and same slot where
+        applicable) replays the recorded result; anything else is a 409."""
         same = (
             recorded["decision"] == decision
             and (recorded["selected_slot_id"] or "") == slot
@@ -345,6 +384,12 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
             "decided_via": recorded["decided_via"],
             "decided_at": recorded["decided_at"],
         }, status_code=409)
+
+    recorded = await run_in_threadpool(
+        lambda: ledger.get_action_decision(action_id, org_id=org)
+    )
+    if recorded is not None:
+        return _replay_response(recorded)
 
     prev = ((await run_in_threadpool(
         ledger.action_statuses, [action_id], org_id=org
@@ -387,6 +432,57 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
         args["start"], args["end"] = chosen.get("start"), chosen.get("end")
         action = {**action, "typed": {**typed, "args": args}}
 
+    # needs_details gate (AFTER slot materialization — a proposal's start/end
+    # legitimately arrive from the chosen slot): a typed spec still missing
+    # REQUIRED parameters must not be approved into a broken vendor call or a
+    # silent no-op — surface the exact fields so either surface can collect
+    # them through the params door.
+    typed_now = action.get("typed") if isinstance(action.get("typed"), dict) else None
+    missing = action_plane.missing_params(typed_now)
+    if decision == "approve" and typed_now and missing:
+        await run_in_threadpool(
+            ledger.set_action_status, action_id, "needs_details",
+            "missing: " + ", ".join(missing), org_id=org,
+        )
+        return JSONResponse({
+            "error": "needs_details", "action_id": action_id,
+            "missing_params": missing,
+            "params_schema": action_plane.params_schema(typed_now),
+        }, status_code=422)
+
+    # Dependencies are read-only — resolve them BEFORE recording so the
+    # decision row carries the real blocked_on list from the start.
+    blocked = (
+        await run_in_threadpool(_unmet_dependencies, org, action)
+        if decision == "approve" else []
+    )
+
+    # ── record THE decision first (two-phase canonical approve) ──
+    # First write wins across instances and surfaces; the loser answers from
+    # the winner's row exactly like a replay. Execution happens only behind
+    # the recorded decision + the execution claim in _execute_route.
+    prelim = {"approve": "approved", "reject": "rejected", "respond": "done"}[decision]
+    recorded_now = await run_in_threadpool(
+        lambda: ledger.record_action_decision(
+            action_id, org_id=org, decision=decision, selected_slot_id=slot,
+            idempotency_key=idem, decided_via=via, laura_user_id=laura_user,
+            previous_status=prev, new_status=prelim,
+            execution_job_id=None, blocked_on=json.dumps(blocked),
+        )
+    )
+    if not recorded_now:
+        recorded = await run_in_threadpool(
+            lambda: ledger.get_action_decision(action_id, org_id=org)
+        )
+        if recorded is not None:
+            return _replay_response(recorded)
+        # Recording failed without a visible winner (storage hiccup): refuse
+        # rather than execute outside the canonical record.
+        return JSONResponse(
+            {"error": "decision_not_recorded", "action_id": action_id},
+            status_code=503,
+        )
+
     # ── the canonical transition ──
     capability_blocked = False
     if decision == "reject":
@@ -394,13 +490,13 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
             ledger.set_action_status, action_id, "rejected",
             extra_detail or f"rejected via {via}", org_id=org,
         )
-        new_status, job_id, blocked = "rejected", None, []
+        new_status, job_id = "rejected", None
     elif decision == "respond":
         detail = ("response: " + str(body.get("response_text") or "").strip())[:300]
         await run_in_threadpool(
             ledger.set_action_status, action_id, "done", detail, org_id=org
         )
-        new_status, job_id, blocked = "done", None, []
+        new_status, job_id = "done", None
     else:  # approve
         await run_in_threadpool(
             ledger.set_action_status, action_id, "approved",
@@ -408,20 +504,23 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
             or f"approved via {via}" + (f" by {laura_user}" if laura_user else ""),
             org_id=org,
         )
-        blocked = await run_in_threadpool(_unmet_dependencies, org, action)
         if blocked:
             new_status, job_id = "approved", None  # [M8] executes when deps land
         else:
             job_id, new_status, capability_blocked = await run_in_threadpool(
-                _execute_route, org, action_id, action, acting_avatar
+                lambda: _execute_route(
+                    org, action_id, action, acting_avatar,
+                    idempotency_key=action_plane.execution_idempotency_key(
+                        action_id, slot
+                    ),
+                    via=via or "org-door",
+                )
             )
 
     await run_in_threadpool(
-        lambda: store.record_action_approval(
-            org, action_id, decision=decision, selected_slot_id=slot,
-            idempotency_key=idem, decided_via=via, laura_user_id=laura_user,
-            previous_status=prev, new_status=new_status,
-            execution_job_id=job_id, blocked_on=json.dumps(blocked),
+        lambda: ledger.set_action_decision_result(
+            action_id, org_id=org, new_status=new_status,
+            execution_job_id=job_id,
         )
     )
     resp: dict = {
@@ -436,3 +535,180 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
     if blocked:
         resp["blocked_on"] = blocked
     return JSONResponse(resp)
+
+
+# ─────────── canonical Action reads + edits (control plane, M0) ───────────
+# One canonical Action object per (org, action_id): the durable queued_actions
+# row (status/receipt/logs/typed edits) merged with the saved artifact's
+# richer fields (proposal, dependencies, approvers). Distilled data only —
+# briefs and typed args, never transcript content.
+
+
+def _canonical_action_view(org: str, action_id: str) -> dict | None:
+    """Assemble the canonical Action for one org, or None when invisible."""
+    found = _org_action(org, action_id)
+    durable = ledger.get_durable_action(action_id, org_id=org)
+    if found is None and durable is None:
+        return None
+    action, acting_avatar = found if found is not None else ({}, "")
+    typed = ledger.effective_typed(action_id, action.get("typed"), org_id=org)
+    schema = action_plane.params_schema(typed)
+    missing = action_plane.missing_params(typed)
+    srow = (ledger.action_statuses([action_id], org_id=org)
+            .get(action_id) or {})
+    status = str(
+        (durable or {}).get("execution_status") or srow.get("status") or ""
+    )
+    if not status:
+        status = "needs_details" if (typed and missing) else "proposed"
+    receipt = (durable or {}).get("receipt_json")
+    logs = (durable or {}).get("logs_json")
+    return {
+        "action_id": action_id,
+        "org_id": org,
+        "origin_avatar": str(
+            (durable or {}).get("origin_avatar") or acting_avatar
+        ),
+        "source": {"bot_id": str((durable or {}).get("bot_id") or "")},
+        "action": str(
+            (durable or {}).get("action") or action.get("item") or ""
+        ),
+        "owner": str(action.get("owner") or (durable or {}).get("owner") or ""),
+        "due": str(action.get("deadline") or (durable or {}).get("due") or ""),
+        "tool": str((typed or {}).get("type") or ""),
+        "route": str(
+            (durable or {}).get("execution_route")
+            or action.get("execution_route") or ""
+        ),
+        "params": dict((typed or {}).get("args") or {}),
+        "params_schema": schema,
+        "missing_params": missing,
+        "risk": str((durable or {}).get("risk") or action_plane.risk_for(typed)),
+        "permission": {
+            "policy": str(action.get("execution_policy") or "approval_required"),
+            "approver_user_ids": [
+                str(x) for x in (action.get("approver_user_ids") or [])
+            ],
+        },
+        "status": status,
+        "detail": str(
+            (durable or {}).get("execution_detail") or srow.get("detail") or ""
+        ),
+        "receipt": receipt if isinstance(receipt, dict) else {},
+        "logs": logs if isinstance(logs, list) else [],
+        "idempotency_key": str((durable or {}).get("idempotency_key") or ""),
+        "decision": ledger.get_action_decision(action_id, org_id=org),
+        "correlation_id": str(action.get("correlation_id") or action_id),
+        "proposal": action.get("proposal"),
+        "dependencies": [str(x) for x in (action.get("dependencies") or [])],
+        "updated_at": srow.get("updated_at")
+        or (durable or {}).get("execution_updated_at"),
+    }
+
+
+@router.get("/actions/{action_id}")
+async def org_action_get(action_id: str, request: Request) -> JSONResponse:
+    """The canonical Action object for one stable action_id (agreed contract:
+    one action, every surface — Slack cards and the dashboard render THIS)."""
+    err, org = await _machine_gate(request)
+    if err:
+        return err
+    aid = (action_id or "").strip()
+    if not aid:
+        return JSONResponse({"error": "action_id is required"}, status_code=400)
+    view = await run_in_threadpool(_canonical_action_view, org, aid)
+    if view is None:
+        return JSONResponse(
+            {"error": "unknown action for this org"}, status_code=404
+        )
+    return JSONResponse({"action": view})
+
+
+def apply_param_edits(org: str, action_id: str, args: dict) -> tuple[int, dict]:
+    """Fill or edit an action's typed parameters (the needs_details loop).
+
+    Shared by the machine door below and the dashboard door — the ONLY seam
+    through which a typed spec may change, so the approve doors can keep
+    trusting stored specs over client bodies. Sync (threadpool caller).
+    Returns (http_status, payload)."""
+    aid = (action_id or "").strip()
+    if not isinstance(args, dict) or not args:
+        return 400, {"error": "args object is required"}
+    found = _org_action(org, aid)
+    if found is None:
+        return 404, {"error": "unknown action for this org"}
+    action, _avatar = found
+    typed = ledger.effective_typed(aid, action.get("typed"), org_id=org)
+    if not isinstance(typed, dict) or not typed.get("type"):
+        return 409, {"error": "untyped_action", "action_id": aid}
+    schema = action_plane.params_schema(typed)
+    if not schema:
+        return 409, {"error": "unknown_action_type", "action_id": aid}
+    cleaned, errors = action_plane.validate_param_edits(schema, args)
+    if errors:
+        return 422, {"error": "invalid_params", "details": errors[:10]}
+
+    decision = ledger.get_action_decision(aid, org_id=org)
+    if decision is not None:
+        return 409, {"error": "already_decided", "decision": decision["decision"]}
+    current = (ledger.action_statuses([aid], org_id=org)
+               .get(aid) or {}).get("status") or ""
+    if current in _TERMINAL or current == "executing":
+        return 409, {"error": "not_editable", "status": current}
+
+    merged = ledger.update_action_params(
+        aid, cleaned, org_id=org, artifact_typed=action.get("typed")
+    )
+    if merged is None:
+        return 409, {"error": "not_editable", "action_id": aid}
+    missing = action_plane.missing_params(merged)
+    new_status = "needs_details" if missing else "proposed"
+    if current in ("", "needs_details"):
+        ledger.set_action_status(
+            aid, new_status,
+            ("missing: " + ", ".join(missing)) if missing else "params complete",
+            org_id=org,
+        )
+    else:
+        new_status = current
+
+    # action.updated (agreed events envelope): both surfaces re-render the
+    # card from the same canonical fields. Best-effort single attempt, the
+    # same discipline as the executor's action.status mirror.
+    try:
+        from .cedric import callback as cedric_callback
+
+        cedric_callback.send_action_event(org, "action.updated", {
+            "action_id": aid,
+            "status": new_status,
+            "params": {k: merged.get("args", {}).get(k) for k in cleaned},
+            "missing_params": missing,
+        })
+    except Exception:  # noqa: BLE001 — the edit is committed; events are best-effort
+        pass
+
+    return 200, {
+        "ok": True,
+        "action_id": aid,
+        "params": dict(merged.get("args") or {}),
+        "missing_params": missing,
+        "status": new_status,
+    }
+
+
+@router.post("/actions/{action_id}/params")
+async def org_action_params(action_id: str, request: Request) -> JSONResponse:
+    """Machine door for apply_param_edits — body {"args": {field: value}}."""
+    err, org = await _machine_gate(request)
+    if err:
+        return err
+    aid = (action_id or "").strip()
+    if not aid:
+        return JSONResponse({"error": "action_id is required"}, status_code=400)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    args = (body or {}).get("args") if isinstance(body, dict) else None
+    code, payload = await run_in_threadpool(apply_param_edits, org, aid, args)
+    return JSONResponse(payload, status_code=code)
