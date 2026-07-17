@@ -59,10 +59,22 @@ def _wake_word_inherits_global(monkeypatch):
     ``_keyfree_settings`` keeps off. The shipped-yaml state itself is covered
     by test_wake_word_per_avatar.py, which overrides this fixture."""
     real_load = avatars.load
+    # Memoize per avatar so repeated loads return the SAME instance — the
+    # normalized copy must still honour avatars.load's identity contract
+    # (avatars.load(x) is avatars.load(x)), which the org-avatar-overlay
+    # resolution tests assert. Re-derive only when the underlying cached
+    # instance changes (an mtime refresh).
+    _memo: dict[str, tuple[avatars.Avatar, avatars.Avatar]] = {}
 
     def load(avatar_id: str) -> avatars.Avatar:
         # Copy, never mutate: real_load returns a shared cached instance.
-        return dataclasses.replace(real_load(avatar_id), require_wake_word=None)
+        base = real_load(avatar_id)
+        cached = _memo.get(avatar_id)
+        if cached is None or cached[0] is not base:
+            replaced = dataclasses.replace(base, require_wake_word=None)
+            _memo[avatar_id] = (base, replaced)
+            return replaced
+        return cached[1]
 
     monkeypatch.setattr(avatars, "load", load)
 

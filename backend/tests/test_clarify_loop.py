@@ -67,6 +67,22 @@ def approved(monkeypatch):
         main_module.cedric, "voice_approve",
         lambda session, item: calls.append(dict(item)) or True,
     )
+    # voice_approve is fired fire-and-forget:
+    #   asyncio.create_task(run_in_threadpool(cedric.voice_approve, ...)).
+    # The created task can outlive the request, so asserting `approved` right
+    # after the webhook returns races it (order-/timing-dependent, flaky under
+    # load). Run run_in_threadpool's target EAGERLY at call time — the capture
+    # then happens synchronously (before create_task defers) while awaited
+    # results are preserved. Scoped to these clarify tests only.
+    def _eager_threadpool(fn, *a, **k):
+        result = fn(*a, **k)
+
+        async def _done():
+            return result
+
+        return _done()
+
+    monkeypatch.setattr(main_module, "run_in_threadpool", _eager_threadpool)
     return calls
 
 
