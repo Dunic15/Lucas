@@ -179,7 +179,7 @@ def answer_question(
 # produce a useful partial answer or a brief "I don't have that" response.
 ANSWER_STREAM_SYSTEM = """{persona}
 
-You are Laura, a warm, sharp AI assistant participating in a live spoken \
+You are {name}, a warm, sharp AI assistant participating in a live spoken \
 conversation. You are a capable general assistant FIRST — think ChatGPT or \
 Claude in a meeting: direct, concrete, genuinely useful — and a company/fund \
 expert only when the question touches the provided documents. Default to 1-2 \
@@ -729,7 +729,12 @@ def answer_question_stream(
     # which the transcript alone can't see. One short line — latency-neutral.
     roster_block = _roster_block(avatar, roster, state)
     asker = (speaker or "").strip() or "Someone"
-    system = ANSWER_STREAM_SYSTEM.format(persona=avatar.persona_prompt) + _mission_directive(mission)
+    # {name} parameterizes the previously hardcoded "You are Laura" — for the
+    # avatar actually speaking (byte-identical when that avatar IS Laura), and
+    # for org display-name overlays (M2) which land here via avatar.name.
+    system = ANSWER_STREAM_SYSTEM.format(
+        persona=avatar.persona_prompt, name=avatar.name
+    ) + _mission_directive(mission)
     user = (
         f"{context_block}"
         f"{state_block}"

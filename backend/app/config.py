@@ -284,6 +284,16 @@ class Settings(BaseSettings):
     # independently of the session cookie key.
     google_token_enc_key: str = ""
 
+    # ── Org avatar overlays (Avatar Studio — M2) ──
+    # Per-org personalization of the repo avatars: display identity, tone,
+    # greeting, voice/face, narrowed tools, Company Brain context scope —
+    # published as immutable versions, resolved server-side. OFF (default) ⇒
+    # every runtime path is byte-identical to the canonical avatar.yaml
+    # behavior. Needs LAURA_DATABASE_URL (overlays live on the RLS control
+    # plane); publishes converge on other instances within the resolver's
+    # 60s cache TTL.
+    org_avatar_overlays_enabled: bool = False
+
     # ── Company Brain (durable org knowledge — M1) ──
     # Master switch for the durable knowledge plane: org-owned sources,
     # ingestion jobs, and the /org/knowledge API. OFF (default) means no new

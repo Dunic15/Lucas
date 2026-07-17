@@ -290,6 +290,9 @@ async def dashboard_knowledge(tail: str, request: Request) -> JSONResponse:
             return JSONResponse({"error": "invalid JSON body"}, status_code=400)
 
     def run() -> tuple[int, dict]:
+        # Every branch checks the METHOD explicitly: a mutating route must
+        # never fire on GET (GET is exempt from the same-origin check, so a
+        # method-lenient mutating branch would be a CSRF-shaped hole).
         if parts == ["sources"] and request.method == "POST":
             return _create_source(org, body)
         if parts == ["sources"] and request.method == "GET":
@@ -300,15 +303,19 @@ async def dashboard_knowledge(tail: str, request: Request) -> JSONResponse:
         if len(parts) == 3 and parts[0] == "sources" and parts[2] == "documents":
             if request.method == "POST":
                 return _upload_document(org, parts[1], body)
-            return 200, {"documents": dal.list_documents(org, parts[1])}
-        if len(parts) == 3 and parts[0] == "sources" and parts[2] == "sync":
+            if request.method == "GET":
+                return 200, {"documents": dal.list_documents(org, parts[1])}
+            return 405, {"error": "method not allowed"}
+        if (len(parts) == 3 and parts[0] == "sources" and parts[2] == "sync"
+                and request.method == "POST"):
             source = dal.get_source(org, parts[1])
             if source is None:
                 return 404, {"error": "unknown source"}
             kind = "sync_drive" if source["kind"] == "drive" else "rebuild_index"
             dal.enqueue_job(org, parts[1], kind)
             return 200, {"ok": True, "queued": kind}
-        if len(parts) == 3 and parts[0] == "sources" and parts[2] == "assign":
+        if (len(parts) == 3 and parts[0] == "sources" and parts[2] == "assign"
+                and request.method == "POST"):
             avatar_id = str(body.get("avatar_id") or "").strip()
             if not avatar_id:
                 return 400, {"error": "avatar_id is required"}
@@ -319,7 +326,7 @@ async def dashboard_knowledge(tail: str, request: Request) -> JSONResponse:
             return 200, {"ok": bool(dal.unassign(org, parts[1], parts[3]))}
         if parts == ["search"] and request.method == "POST":
             return _test_search(org, body)
-        if parts == ["jobs"]:
+        if parts == ["jobs"] and request.method == "GET":
             return 200, {"jobs": dal.job_rows(org)}
         return 404, {"error": "unknown knowledge route"}
 

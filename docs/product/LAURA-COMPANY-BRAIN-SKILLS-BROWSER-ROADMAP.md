@@ -168,11 +168,44 @@ plus per-instance sidecar markers, converged by every instance's worker loop
 
 ---
 
-## M2 — Org-personalised avatars
+## M2 — Org-personalised avatars (IMPLEMENTED — branch claude/m2-org-avatars)
 
 **Goal.** One repo avatar, many org identities: an org can rename the avatar,
 adjust its persona, pick its voice/body, bind its Company Brain collections and
 flip its capability toggles — without anyone touching `avatars/<id>/` in git.
+
+**What shipped.** Migration `0011_org_avatars` (`org_avatars`,
+`org_avatar_versions` — one editable draft, immutable published history,
+optimistic `version_token`, FOR-UPDATE single-winner publish —
+`org_avatar_assignments` (`org_default` | `user` scopes),
+`org_avatar_audit` INSERT-only by grant). The allowlisted overlay vocabulary
+lives in `backend/app/avatar_overlay.py` (typed, bounded, unknown fields
+rejected, `enabled_tools` may only narrow the canonical ceiling =
+{google, slack} ∪ `native_tools`); `backend/app/avatar_resolver.py` is the ONE
+resolver every runtime path uses — dispatch resolves once and stashes on the
+session (frozen for the meeting, the mission model), hot-path readers use the
+zero-I/O `for_session`, doors re-check `family_allowed` at execution time,
+and with `ORG_AVATAR_OVERLAYS_ENABLED=false` (default) `resolve()` returns
+the exact `avatars.load` cached instance. Selection precedence: explicit
+request > user assignment > org default > `DEFAULT_AVATAR_ID`. The context
+scope (`{knowledge_source_ids, include_org_default, labels, purpose}`) rides
+the resolved avatar into `rag.retrieve`, masking the org index per source id
+BEFORE ranking — an empty restricted scope means "no org sources", never
+"all"; this object is the seam the future Company Data Foundation's
+ContextResolver replaces. Surfaces: `/org/avatars/*` +
+`/dashboard/avatar-studio/*` (strict per-branch method checks; admin gate =
+personal-org owner, durable role owner|admin via `member_role(member_uid)`,
+or the org machine bearer) and the dashboard **Studio** tab (editor, preview
+with warnings, publish/history/rollback, org-default assignment).
+Parameterized the previously hardcoded "You are Laura" in
+`ANSWER_STREAM_SYSTEM` (`{name}`). Known limitations: calendar-autojoin
+sessions keep the canonical page URL (face/body) because org attribution
+happens after the URL build; overlay convergence on other instances is the
+resolver's 60 s TTL; the pre-existing GLOBAL `avatar_capabilities` /
+`avatar_brain_mode` tables (cross-org authority) remain the flag-off legacy
+path — org-scoped narrowing now exists via overlays, and migrating those
+global toggles is deferred work. Enabling in prod requires the about-doc
+update (`avatars/laura/about/`) in the same change, per CLAUDE.md.
 
 **What exists to build on.**
 

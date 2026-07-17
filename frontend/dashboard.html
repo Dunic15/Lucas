@@ -568,6 +568,7 @@
       <button type="button" data-view="usage"><span class="ic">◇</span> Usage &amp; billing</button>
       <button type="button" data-view="connections"><span class="ic">⇄</span> Connections</button>
       <button type="button" data-view="brain"><span class="ic">◎</span> Brain</button>
+      <button type="button" data-view="studio"><span class="ic">✎</span> Studio</button>
       <button type="button" data-view="settings"><span class="ic">⚙</span> Settings</button>
     </nav>
     <div>
@@ -728,6 +729,11 @@
       <div id="brain-body"><div class="empty" style="padding:14px">Loading…</div></div>
     </section>
 
+    <section class="view" id="view-studio" hidden>
+      <div class="head"><div><h1>Avatar Studio</h1><div class="sub">Personalize your avatars for your organization — identity, tone, voice, tools, knowledge. Published versions are immutable; the repo avatars are never changed.</div></div></div>
+      <div id="studio-body"><div class="empty" style="padding:14px">Loading…</div></div>
+    </section>
+
     <section class="view" id="view-settings" hidden>
       <div class="head"><div><h1>Settings</h1><div class="sub">Local preferences for this browser</div></div></div>
       <div class="settings">
@@ -858,7 +864,7 @@
 
   var DATA=null, filterMt="all";
 
-  var VIEWS=["overview","avatars","meetings","usage","connections","brain","settings"];
+  var VIEWS=["overview","avatars","meetings","usage","connections","brain","studio","settings"];
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
     document.querySelectorAll("#nav button").forEach(function(a){var current=a.getAttribute("data-view")===name;a.classList.toggle("on",current);if(current)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current");});
@@ -866,6 +872,7 @@
     // (instead of resetting to Overview). replaceState = no new history entry, no jump.
     try{ window.history.replaceState({},"",window.location.pathname+"#"+name); }catch(e){}
     if(name==="brain") loadBrain();
+    if(name==="studio") loadStudio();
     window.scrollTo(0,0); }
   $$("#nav button").forEach(function(a){a.addEventListener("click",function(e){e.preventDefault();go(a.getAttribute("data-view"));});});
   document.addEventListener("click",function(e){var t=e.target.closest("[data-goto]");if(t){go(t.getAttribute("data-goto"));}});
@@ -2213,7 +2220,11 @@
       if(res.status===404){ box.innerHTML='<div class="empty" style="padding:14px">The Company Brain isn’t enabled on this deployment yet (COMPANY_BRAIN_ENABLED + the control-plane database).</div>'; return; }
       if(!res.ok){ box.innerHTML='<div class="empty" style="padding:14px">Could not load sources.</div>'; window._brainLoaded=false; return; }
       var srcs=res.j.sources||[];
-      var avOpts=Object.keys(avById||{}).map(function(id){return '<option value="'+esc(id)+'">'+esc(avName(id))+'</option>';}).join("")||'<option value="laura">Laura</option>';
+      // Module-level DATA, not renderAll's locals (avById/avName are scoped
+      // inside renderAll — reading them here was a strict-mode ReferenceError
+      // that stuck the tab on "Loading…").
+      var avList=(DATA&&DATA.avatars)||[];
+      var avOpts=avList.map(function(a){return '<option value="'+esc(a.id)+'">'+esc(a.name||a.id)+'</option>';}).join("")||'<option value="laura">Laura</option>';
       var rows=srcs.map(function(s){
         var avs=(s.avatars||[]).map(esc).join(", ")||"—";
         return '<div class="fset" data-src="'+esc(s.id)+'" style="margin-bottom:10px">'+
@@ -2281,6 +2292,140 @@
           out.innerHTML=hits.length? hits.slice(0,6).map(function(h){
             return '<div class="d"><span class="ic">§</span><span>'+esc((h.text||"").slice(0,240))+'… <span style="color:var(--faint)">['+esc(h.source||"")+(h.section?(" — "+esc(h.section)):"")+']</span></span></div>';
           }).join("") : '<div class="empty" style="padding:6px">No grounded matches.</div>';
+        });
+      });
+    });
+  }
+
+  // ── Avatar Studio (M2): org-personalized avatar overlays ──
+  // Separate lazy view (the 15s summary tick never touches it). All writes
+  // are admin-gated server-side; drafts carry an optimistic version token.
+  function sFetch(path,opts){ opts=opts||{}; opts.headers=headers();
+    return fetch("/dashboard/avatar-studio/"+path,opts)
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); }); }
+  function loadStudio(force){
+    if(window._studioLoaded && !force) return;
+    window._studioLoaded=true;
+    var box=$("#studio-body"); if(!box) return;
+    sFetch("avatars").then(function(res){
+      if(res.status===404){ box.innerHTML='<div class="empty" style="padding:14px">Avatar Studio isn’t enabled on this deployment (ORG_AVATAR_OVERLAYS_ENABLED + the control-plane database).</div>'; return; }
+      if(!res.ok){ box.innerHTML='<div class="empty" style="padding:14px">Could not load avatars.</div>'; window._studioLoaded=false; return; }
+      var avs=res.j.avatars||[];
+      box.innerHTML=avs.map(function(a){
+        return '<div class="fset" style="margin-bottom:10px"><div class="frow">'+
+          '<div><div class="t">'+esc(a.canonical_name)+' <span style="color:var(--faint);font-size:.8em">('+esc(a.avatar_key)+')</span></div>'+
+          '<div class="h">'+(a.published_version?('published v'+a.published_version):'no customization published')+
+          (a.has_draft?' · unsaved draft':'')+' · '+(a.assignments|0)+' assignment(s)'+(a.enabled?'':' · DISABLED')+'</div></div>'+
+          '<div style="display:flex;gap:6px"><button class="btn" data-scust="'+esc(a.avatar_key)+'">Customize</button>'+
+          '<button class="btn" data-sdefault="'+esc(a.avatar_key)+'">Make org default</button></div></div>'+
+          '<div id="sed-'+esc(a.avatar_key)+'"></div></div>';
+      }).join("")||'<div class="empty" style="padding:10px">No avatars visible for this organization.</div>';
+      box.querySelectorAll("[data-sdefault]").forEach(function(b){ b.addEventListener("click",function(){
+        sFetch("assignments",{method:"POST",body:JSON.stringify({avatar_key:b.getAttribute("data-sdefault"),scope_kind:"org_default"})})
+          .then(function(r){ toast(r.ok?"Org default set.":("Failed: "+(r.j.error||r.status)),!r.ok); if(r.ok) loadStudio(true); });
+      });});
+      box.querySelectorAll("[data-scust]").forEach(function(b){ b.addEventListener("click",function(){ openStudioEditor(b.getAttribute("data-scust")); });});
+    });
+  }
+  function openStudioEditor(key){
+    var host=$("#sed-"+key); if(!host) return;
+    host.innerHTML='<div class="empty" style="padding:8px">Loading editor…</div>';
+    Promise.all([sFetch("avatars/"+key),sFetch("avatars/"+key+"/capabilities")]).then(function(rs){
+      var d=rs[0], c=rs[1];
+      if(!d.ok||!c.ok){ host.innerHTML='<div class="empty">Could not load.</div>'; return; }
+      var ov=(d.j.draft&&d.j.draft.overlay_json)||d.j.published_overlay||{};
+      var token=(d.j.draft&&d.j.draft.version_token)||"";
+      var caps=c.j, scope=ov.context_scope||{include_org_default:true,knowledge_source_ids:[]};
+      function fld(label,id,val,ph,rows){ return '<div class="frow"><div style="flex:1"><div class="h">'+esc(label)+'</div>'+
+        (rows?('<textarea data-sf="'+id+'" rows="'+rows+'" style="width:100%">'+esc(val||"")+'</textarea>')
+             :('<input type="text" data-sf="'+id+'" value="'+esc(val||"")+'" placeholder="'+esc(ph||"")+'" style="width:100%" />'))+'</div></div>'; }
+      host.innerHTML=
+        fld("Display name","display_name",ov.display_name,d.j.resolved.canonical_name)+
+        fld("Role / title","role",ov.role,"")+
+        fld("Greeting (spoken when joining)","greeting",ov.greeting,"",2)+
+        fld("Mission","mission",ov.mission,"",2)+
+        fld("Tone & style","tone",ov.tone,"",2)+
+        fld("Behavioral instructions","instructions",ov.instructions,"",3)+
+        fld("Brand vocabulary (comma-separated)","vocabulary",(ov.vocabulary||[]).join(", "),"")+
+        '<div class="frow"><div><div class="h">Voice</div><select data-sf="voice_id"><option value="">(canonical)</option>'+
+          (caps.voices||[]).map(function(v){return '<option value="'+esc(v.id)+'"'+(ov.voice_id===v.id?' selected':'')+'>'+esc(v.label)+'</option>';}).join("")+'</select></div>'+
+        '<div><div class="h">Face</div><select data-sf="face"><option value="">(canonical)</option>'+
+          (caps.faces||[]).map(function(f){return '<option'+(ov.face===f?' selected':'')+'>'+esc(f)+'</option>';}).join("")+'</select></div>'+
+        '<div><div class="h">Body</div><select data-sf="talk_body"><option value="">(canonical)</option>'+
+          (caps.bodies||[]).map(function(f){return '<option'+(ov.talk_body===f?' selected':'')+'>'+esc(f)+'</option>';}).join("")+'</select></div></div>'+
+        '<div class="frow"><div style="flex:1"><div class="h">Enabled tools (unchecked = removed for this org; canonical ceiling: '+esc((caps.capability_ceiling||[]).join(", "))+')</div>'+
+          (caps.capability_ceiling||[]).map(function(t){ var on=!ov.enabled_tools||ov.enabled_tools.indexOf(t)>=0;
+            return '<label style="margin-right:12px"><input type="checkbox" data-stool="'+esc(t)+'"'+(on?' checked':'')+'/> '+esc(t)+(caps.connected&&caps.connected[t]===false?' <span style="color:var(--faint)">(not connected)</span>':'')+'</label>';}).join("")+'</div></div>'+
+        '<div class="frow"><div style="flex:1"><div class="h">Knowledge scope</div>'+
+          '<label><input type="checkbox" data-sf-scope-default'+(scope.include_org_default!==false?' checked':'')+'/> include all of this organization’s Brain sources</label>'+
+          ((caps.brain_sources||[]).length?('<div style="margin-top:4px">'+caps.brain_sources.map(function(s){
+            var on=(scope.knowledge_source_ids||[]).indexOf(s.id)>=0;
+            return '<label style="display:block"><input type="checkbox" data-ssrc="'+esc(s.id)+'"'+(on?' checked':'')+'/> '+esc(s.name)+' <span style="color:var(--faint)">('+(s.documents|0)+' docs)</span></label>';}).join("")+'</div>'):'<div class="h" style="color:var(--faint)">No Brain sources yet — add them in the Brain tab.</div>')+'</div></div>'+
+        '<div class="frow"><div style="display:flex;gap:6px;flex-wrap:wrap">'+
+          '<button class="btn" data-ssave="'+esc(key)+'">Save draft</button>'+
+          '<button class="btn" data-spreview="'+esc(key)+'">Preview</button>'+
+          '<button class="btn" data-spublish="'+esc(key)+'">Publish</button>'+
+          '<button class="btn" data-shistory="'+esc(key)+'">History</button></div></div>'+
+        '<div id="sprev-'+esc(key)+'"></div>';
+      function collect(){
+        var body={};
+        host.querySelectorAll("[data-sf]").forEach(function(el){
+          var k=el.getAttribute("data-sf"), v=(el.value||"").trim();
+          if(k==="vocabulary"){ if(v) body[k]=v.split(",").map(function(s){return s.trim();}).filter(Boolean); return; }
+          if(v) body[k]=v;
+        });
+        var tools=[]; host.querySelectorAll("[data-stool]").forEach(function(el){ if(el.checked) tools.push(el.getAttribute("data-stool")); });
+        if(tools.length<(caps.capability_ceiling||[]).length) body.enabled_tools=tools;
+        var incl=host.querySelector("[data-sf-scope-default]").checked;
+        var ids=[]; host.querySelectorAll("[data-ssrc]").forEach(function(el){ if(el.checked) ids.push(el.getAttribute("data-ssrc")); });
+        if(!incl||ids.length) body.context_scope={include_org_default:incl,knowledge_source_ids:ids};
+        return body;
+      }
+      function saveDraft(then){
+        sFetch("avatars/"+key+"/draft",{method:"PUT",body:JSON.stringify({overlay:collect(),expected_token:token})})
+          .then(function(r){
+            if(!r.ok){ toast("Save failed: "+((r.j.details&&r.j.details.join("; "))||r.j.error||r.status),true); return; }
+            token=(r.j.draft&&r.j.draft.version_token)||token;
+            toast("Draft saved."); if(then) then();
+          });
+      }
+      host.querySelector("[data-ssave]").addEventListener("click",function(){ saveDraft(); });
+      host.querySelector("[data-spreview]").addEventListener("click",function(){
+        sFetch("avatars/"+key+"/preview",{method:"POST",body:JSON.stringify({overlay:collect()})}).then(function(r){
+          var out=$("#sprev-"+key);
+          if(!r.ok){ out.innerHTML='<div class="empty">Preview failed: '+esc((r.j.details&&r.j.details.join("; "))||r.j.error||"")+'</div>'; return; }
+          var p=r.j.preview;
+          out.innerHTML='<div class="fset" style="margin-top:8px"><div class="frow"><div style="flex:1">'+
+            '<div class="t">Preview'+(p.applied?"":" (nothing customized)")+'</div>'+
+            '<div class="h">Name: '+esc(p.name)+' · Role: '+esc(p.role)+' · Voice: '+esc(p.voice_id||"default")+' · Face: '+esc(p.face)+'</div>'+
+            (p.greeting?'<div class="h">Greeting: “'+esc(p.greeting)+'”</div>':'')+
+            '<div class="h">Effective tools: '+esc((p.effective_tools||[]).join(", ")||"none")+'</div>'+
+            '<div class="h">Knowledge: '+(p.context_scope? (p.context_scope.include_org_default?'all org sources':'restricted to '+((p.context_scope.knowledge_source_ids||[]).length)+' source(s)') : 'all org sources')+'</div>'+
+            (p.prompt_addition?'<div class="h" style="white-space:pre-wrap;margin-top:4px">'+esc(p.prompt_addition.trim())+'</div>':'')+
+            ((p.warnings||[]).length?'<div class="h" style="color:#c66;margin-top:4px">'+p.warnings.map(esc).join("<br/>")+'</div>':'')+
+            '</div></div></div>';
+        });
+      });
+      host.querySelector("[data-spublish]").addEventListener("click",function(){
+        saveDraft(function(){
+          sFetch("avatars/"+key+"/publish",{method:"POST",body:JSON.stringify({expected_token:token})}).then(function(r){
+            if(!r.ok){ toast("Publish failed: "+((r.j.details&&r.j.details.join("; "))||r.j.error||r.status),true); return; }
+            toast("Published v"+r.j.published_version+" — live within a minute."); loadStudio(true);
+          });
+        });
+      });
+      host.querySelector("[data-shistory]").addEventListener("click",function(){
+        sFetch("avatars/"+key+"/versions").then(function(r){
+          var out=$("#sprev-"+key); if(!r.ok){ out.innerHTML='<div class="empty">Could not load history.</div>'; return; }
+          out.innerHTML='<div class="fset" style="margin-top:8px">'+(r.j.versions||[]).map(function(v){
+            return '<div class="frow"><div><div class="t">v'+v.version+' <span style="color:var(--faint);font-size:.8em">'+esc(v.status)+'</span></div>'+
+              '<div class="h">'+esc(v.change_note||"")+' · '+esc(v.created_by||"")+'</div></div>'+
+              (v.status==="published"||v.status==="archived"?'<button class="btn" data-srb="'+v.version+'">Republish</button>':'')+'</div>';
+          }).join("")+'</div>';
+          out.querySelectorAll("[data-srb]").forEach(function(b){ b.addEventListener("click",function(){
+            sFetch("avatars/"+key+"/rollback",{method:"POST",body:JSON.stringify({version:parseInt(b.getAttribute("data-srb"),10)})})
+              .then(function(r2){ toast(r2.ok?("Republished as v"+r2.j.published_version+"."):("Rollback failed: "+(r2.j.error||r2.status)),!r2.ok); if(r2.ok) loadStudio(true); });
+          });});
         });
       });
     });

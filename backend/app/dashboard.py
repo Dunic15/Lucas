@@ -2118,10 +2118,19 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         # on when the org connected that integration, and the clients
         # soft-fail anyway when it hasn't). A blocked action stays
         # `approved`, byte-identical to the executor being off.
+        from . import avatar_resolver
+
+        family = executor.capability_family(exec_action.get("type"))
         caps = await run_in_threadpool(
             store.get_avatar_capabilities, acting_avatar
         )
-        if caps.get(executor.capability_family(exec_action.get("type"))) is False:
+        blocked_by_toggle = caps.get(family) is False
+        # M2 overlay narrowing, re-resolved at EXECUTION time (org-scoped; an
+        # overlay can only remove a capability — flag off ⇒ always allowed).
+        blocked_by_overlay = not blocked_by_toggle and not await run_in_threadpool(
+            avatar_resolver.family_allowed, org, acting_avatar, family
+        )
+        if blocked_by_toggle or blocked_by_overlay:
             capability_blocked = True
         else:
             # EXECUTION CLAIM (canonical Action plane): the atomic CAS to

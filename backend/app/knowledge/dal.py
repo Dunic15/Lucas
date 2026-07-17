@@ -495,14 +495,17 @@ def assigned_avatars(org_id: str) -> list[str]:
 
 def chunks_for_avatar(org_id: str, avatar_id: str) -> list[dict[str, Any]]:
     """Every published chunk this avatar may retrieve (assignment-gated,
-    active sources only) — the input to the index rebuild bridge."""
+    active sources only) — the input to the index rebuild bridge. Carries the
+    chunk's ``sid`` (source id) so a resolved avatar's context scope can
+    filter retrieval per source (M2 seam)."""
     engine = _engine()
     with engine.begin() as conn:
         _set_org(conn, org_id)
         rows = conn.execute(
             text(
                 """
-                SELECT c.text, c.source_name AS source, c.section
+                SELECT c.text, c.source_name AS source, c.section,
+                       c.source_id::text AS sid
                 FROM knowledge_chunks c
                 JOIN knowledge_sources s
                   ON s.org_id=c.org_id AND s.id=c.source_id

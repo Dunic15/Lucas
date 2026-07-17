@@ -261,9 +261,16 @@ def _execute_route(
         return None, "approved", False
     # CAPABILITY GATE (same rule as the dashboard door, from #255): the acting
     # avatar's family toggle can veto native execution; a blocked action stays
-    # `approved` — byte-identical to the executor being off.
+    # `approved` — byte-identical to the executor being off. The M2 overlay
+    # check is the org-scoped narrowing re-resolved at EXECUTION time (an
+    # overlay can remove a capability, never grant one; flag off ⇒ allowed).
+    family = executor.capability_family(exec_action.get("type"))
     caps = store.get_avatar_capabilities(acting_avatar)
-    if caps.get(executor.capability_family(exec_action.get("type"))) is False:
+    if caps.get(family) is False:
+        return None, "approved", True
+    from . import avatar_resolver
+
+    if not avatar_resolver.family_allowed(org, acting_avatar, family):
         return None, "approved", True
     # EXECUTION CLAIM (canonical Action plane, M0): the atomic CAS to
     # 'executing' is the only license to call a vendor. Losing the claim means

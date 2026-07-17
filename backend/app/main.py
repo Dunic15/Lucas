@@ -44,6 +44,7 @@ from fastapi.responses import (
 from pydantic import BaseModel
 
 from . import (
+    avatar_resolver,
     avatars,
     store,
     recall_client,
@@ -257,6 +258,9 @@ app.include_router(dashboard.router)  # /dashboard — owner control view
 from .knowledge import router as knowledge_router  # noqa: E402
 
 app.include_router(knowledge_router.router)  # /org/knowledge + dashboard twin (M1)
+from . import org_avatars_api  # noqa: E402
+
+app.include_router(org_avatars_api.router)  # /org/avatars + Avatar Studio twin (M2)
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).
@@ -2139,6 +2143,7 @@ async def _start_avatar_session(
     join_at: Optional[str] = None,
     integration: Optional[dict] = None,
     org_id: str = settings.demo_org_id,
+    principal_id: str = "",
 ) -> dict:
     """Send a Recall bot (rendering the avatar page as its camera) into a meeting.
 
@@ -2148,13 +2153,27 @@ async def _start_avatar_session(
     org_id is the owning tenant when a logged-in user dispatched (auth.py);
     the Demo org for service starts (Cedric, calendar auto-join, Gmail watcher).
     """
-    requested = (avatar_id or settings.default_avatar_id).strip()
+    # Avatar SELECTION precedence (M2, resolver-owned): explicit request >
+    # user assignment > org default assignment > settings.default_avatar_id.
+    # With overlays off this reduces to exactly the old one-liner.
+    requested = await run_in_threadpool(
+        lambda: avatar_resolver.resolve_avatar_key(
+            org_id, requested=avatar_id, principal_id=principal_id
+        )
+    )
+    requested = (requested or settings.default_avatar_id).strip()
     if avatars.is_internal(requested):
         # Internal personas are not dispatchable for ANY entry point (manual
         # start, calendar auto-join, Gmail watcher) — same error an unknown
         # folder raises, so callers treat it as a nonexistent avatar.
         raise FileNotFoundError(f"No avatar '{requested}'")
-    avatar = avatars.load(requested)  # raises if unknown
+    # ONE canonical resolution per session (M2): the org's published overlay
+    # applied over the immutable repo avatar — persona/voice/face/tools all
+    # flow from this object. Flag off / no overlay ⇒ the exact avatars.load
+    # cached instance (byte-identical behavior).
+    avatar = await run_in_threadpool(
+        avatar_resolver.resolve_for_dispatch, org_id, requested
+    )  # raises if unknown
     conversation_id = uuid.uuid4().hex
     # avatar.page: per-avatar face tier (3D "talk" vs photoreal), falling back
     # to the global AVATAR_PAGE — the dashboard's "choose your avatar" knob.
@@ -2204,6 +2223,13 @@ async def _start_avatar_session(
         bot_id=bot["id"], meeting_url=meeting_url, avatar_id=avatar.id,
         org_id=org_id,
     )
+    # Stash the resolved avatar for the live path (frozen for the session,
+    # exactly like mission): hot-path readers use avatar_resolver.for_session
+    # — the stash or the canonical mtime-cached load, never database I/O.
+    # Only an APPLIED overlay is stashed, so flag-off sessions keep the
+    # canonical load()'s mid-meeting avatar.yaml refresh behavior.
+    if getattr(avatar, "overlay_version", 0):
+        session.resolved_avatar = avatar
     if usage_bot_id and not await _assign_usage_bot_id(
         org_id, usage_bot_id, bot["id"]
     ):
@@ -2477,6 +2503,7 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
             result = await _start_avatar_session(
                 req.meeting_url, req.avatar_id, req.join_at, integration,
                 org_id=caller_org,
+                principal_id=str(user["user_id"]) if user else "",
             )
         except recall_client.AvatarBusyError:
             return JSONResponse(
@@ -2808,7 +2835,7 @@ async def _finalize_session_locked(
         # durable queue existed.
         queued_actions = list(getattr(session, "queued_actions", None) or [])
     if analysis_transcript_text.strip():
-        avatar = avatars.load(session.avatar_id)
+        avatar = avatar_resolver.for_session(session)
         analysis_state = session.meeting_state
         if analysis_state is None:
             analysis_state = meeting_state.build_from_utterances(
@@ -3012,7 +3039,7 @@ async def _finalize_session_locked(
         # holding up the finalize response (meter is already stopped above).
         # Best-effort like the ledger — never blocks the cleanup below.
         try:
-            name = avatars.load(session.avatar_id).name
+            name = avatar_resolver.for_session_offpath(session).name
             asyncio.create_task(run_in_threadpool(autopilot.maybe_deliver, name, artifact))
         except Exception:
             pass
@@ -3659,7 +3686,7 @@ def _avatar_voice(session: "store.Session") -> str:
     mtime-cached (hot-path safe); any failure falls back to the global voice
     ("" keeps the shared prewarm cache key)."""
     try:
-        return avatars.load(session.avatar_id).elevenlabs_voice_id or ""
+        return avatar_resolver.for_session(session).elevenlabs_voice_id or ""
     except Exception:  # noqa: BLE001
         return ""
 
@@ -3912,7 +3939,7 @@ async def _make_avatar_speak(
     # nudges, action-capture confirmations); transcript capture + MeetingState
     # tracking + finalize delivery are separate paths and keep working.
     try:
-        if avatars.load(session.avatar_id).silent:
+        if avatar_resolver.for_session(session).silent:
             return False
     except Exception:  # noqa: BLE001 — never let a config read mute the guard logic
         pass
@@ -4205,14 +4232,22 @@ async def _self_introduce_after_delay(session: store.Session) -> None:
     if store.get(session.bot_id) is None:
         return
     try:
-        avatar = avatars.load(session.avatar_id)
+        avatar = avatar_resolver.for_session(session)
     except Exception:  # noqa: BLE001 — never let a config read crash a bg task
         return
     # Language follows the room if anything was heard, else defaults to English.
     heard = session.recent_transcript(3) if session.transcript else ""
-    line = _line_for(heard, _SELF_INTRO_LINES, _SELF_INTRO_LINES_IT).format(
-        name=avatar.name
-    )
+    # An org overlay may provide the greeting verbatim (M2). Spoken as-is —
+    # bounded + sanitized at overlay-write time; like every self-intro line it
+    # is dynamic and therefore never TTS-prewarmed (one lazy synth, off-path).
+    greeting = ""
+    if getattr(avatar, "overlay_version", 0):
+        greeting = str(
+            getattr(avatar, "resolver_provenance", {}).get("greeting") or ""
+        )
+    line = greeting or _line_for(
+        heard, _SELF_INTRO_LINES, _SELF_INTRO_LINES_IT
+    ).format(name=avatar.name)
     # Normal speak path: _make_avatar_speak honours the silent-notetaker gate,
     # the repetition guard, and ws/HTTP delivery. force=True so the intro is
     # never dropped by the repeat guard.
@@ -4592,6 +4627,19 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id,
                 org_id=dispatch_org,
             )
+            # M2 overlay stash (behavioral personalization for the live path).
+            # The page URL above was built BEFORE org attribution, so autojoin
+            # keeps the canonical face/body — a documented limitation; name,
+            # persona, greeting, voice and tool narrowing still apply.
+            try:
+                resolved = await run_in_threadpool(
+                    avatar_resolver.resolve_for_dispatch,
+                    dispatch_org, avatar.id,
+                )
+                if getattr(resolved, "overlay_version", 0):
+                    s.resolved_avatar = resolved
+            except Exception:  # noqa: BLE001 — overlays must never break autojoin
+                pass
             if usage_bot_id and not await _assign_usage_bot_id(
                 dispatch_org, usage_bot_id, bot["id"]
             ):
@@ -4992,7 +5040,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         speaker_kind = identity["kind"]
         if not text:
             return JSONResponse({"ok": True})
-        avatar = avatars.load(session.avatar_id)
+        avatar = avatar_resolver.for_session(session)
         if _should_barge_in(
             session,
             avatar.name,
@@ -5086,7 +5134,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 metadata=p,
             )
             label = identity["name"]
-            avatar = avatars.load(session.avatar_id)
+            avatar = avatar_resolver.for_session(session)
             if identity["kind"] != "agent":
                 # ── footing: greet a late joiner by name ──
                 # Only when the meeting is genuinely underway (start-of-call
@@ -5251,7 +5299,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         participant_id=speaker_id,
         speaker_kind=speaker_kind,
     )
-    avatar = avatars.load(session.avatar_id)
+    avatar = avatar_resolver.for_session(session)
     if _is_own_speech(avatar.name, speaker, speaker_kind):
         return JSONResponse({"ok": True, "spoke": False, "reason": "own speech"})
 

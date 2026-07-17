@@ -47,7 +47,8 @@ def _mock_dispatch(monkeypatch, captured: dict) -> None:
     short-circuit the real Recall bot creation + reconcile."""
 
     async def fake_start(meeting_url, avatar_id="", join_at=None,
-                         integration=None, org_id=settings.demo_org_id):
+                         integration=None, org_id=settings.demo_org_id,
+                         principal_id=""):
         captured["integration"] = integration
         return {"bot_id": "b1", "conversation_id": "c1"}
 
