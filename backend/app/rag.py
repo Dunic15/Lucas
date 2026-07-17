@@ -509,6 +509,39 @@ def org_index_path(avatar: Avatar, org_id: str) -> Path:
     return base / f"{_org_slug(org_id)}__{avatar.id}.index.json"
 
 
+def build_org_index_from_chunks(
+    avatar: Avatar, org_id: str, chunk_dicts: list[dict]
+) -> int:
+    """(Re)build one org's private index for one avatar from PRE-CHUNKED
+    content — the Company Brain bridge. The durable truth lives in Postgres
+    (knowledge_chunks); this writes the same in-memory index format the live
+    path ranks, embedding with the CURRENT provider so index and query
+    vectors can never disagree. Empty chunk list removes the index."""
+    org = (org_id or "").strip()
+    if not org:
+        raise ValueError("org_id is required for a per-org index")
+    path = org_index_path(avatar, org)
+    chunks = [
+        Chunk(
+            text=str(c.get("text") or ""),
+            source=str(c.get("source") or ""),
+            section=str(c.get("section") or ""),
+        )
+        for c in chunk_dicts
+        if str(c.get("text") or "").strip()
+    ]
+    if not chunks:
+        path.unlink(missing_ok=True)
+        _ORG_CACHE.pop((org, avatar.id), None)
+        _ORG_MISS.pop((org, avatar.id), None)
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_index(path, chunks, [])
+    _ORG_CACHE.pop((org, avatar.id), None)  # invalidate
+    _ORG_MISS.pop((org, avatar.id), None)  # a fresh ingest is instantly live
+    return len(chunks)
+
+
 def build_org_index(avatar: Avatar, org_id: str, doc_paths: list[Path]) -> int:
     """(Re)build one org's private index for one avatar from ITS documents.
     Empty doc list removes the index (an org disconnecting its sources)."""

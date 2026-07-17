@@ -567,6 +567,7 @@
       <button type="button" data-view="meetings"><span class="ic">▤</span> Meetings</button>
       <button type="button" data-view="usage"><span class="ic">◇</span> Usage &amp; billing</button>
       <button type="button" data-view="connections"><span class="ic">⇄</span> Connections</button>
+      <button type="button" data-view="brain"><span class="ic">◎</span> Brain</button>
       <button type="button" data-view="settings"><span class="ic">⚙</span> Settings</button>
     </nav>
     <div>
@@ -722,6 +723,11 @@
     </section>
 
     <!-- SETTINGS -->
+    <section class="view" id="view-brain" hidden>
+      <div class="head"><div><h1>Company Brain</h1><div class="sub">Your organization's own documents — uploaded once, cited by your avatars in every meeting</div></div></div>
+      <div id="brain-body"><div class="empty" style="padding:14px">Loading…</div></div>
+    </section>
+
     <section class="view" id="view-settings" hidden>
       <div class="head"><div><h1>Settings</h1><div class="sub">Local preferences for this browser</div></div></div>
       <div class="settings">
@@ -852,13 +858,14 @@
 
   var DATA=null, filterMt="all";
 
-  var VIEWS=["overview","avatars","meetings","usage","connections","settings"];
+  var VIEWS=["overview","avatars","meetings","usage","connections","brain","settings"];
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
     document.querySelectorAll("#nav button").forEach(function(a){var current=a.getAttribute("data-view")===name;a.classList.toggle("on",current);if(current)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current");});
     // Persist the current view in the URL hash so a plain page refresh restores it
     // (instead of resetting to Overview). replaceState = no new history entry, no jump.
     try{ window.history.replaceState({},"",window.location.pathname+"#"+name); }catch(e){}
+    if(name==="brain") loadBrain();
     window.scrollTo(0,0); }
   $$("#nav button").forEach(function(a){a.addEventListener("click",function(e){e.preventDefault();go(a.getAttribute("data-view"));});});
   document.addEventListener("click",function(e){var t=e.target.closest("[data-goto]");if(t){go(t.getAttribute("data-goto"));}});
@@ -2190,6 +2197,94 @@
     if(el && (el.tagName==="INPUT"||el.tagName==="SELECT")) return;
     load();
   }, 15000);
+
+  // ── Company Brain (M1): sources, upload, assignments, test retrieval ──
+  // Lazy-loaded on first open (loadUpcoming's guard pattern) so the 15s
+  // summary refresh never refetches it; every fetch uses headers() and the
+  // server scopes everything to the caller's org.
+  function bFetch(path,opts){ opts=opts||{}; opts.headers=headers();
+    return fetch("/dashboard/knowledge/"+path,opts)
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); }); }
+  function loadBrain(force){
+    if(window._brainLoaded && !force) return;
+    window._brainLoaded=true;
+    var box=$("#brain-body"); if(!box) return;
+    bFetch("sources").then(function(res){
+      if(res.status===404){ box.innerHTML='<div class="empty" style="padding:14px">The Company Brain isn’t enabled on this deployment yet (COMPANY_BRAIN_ENABLED + the control-plane database).</div>'; return; }
+      if(!res.ok){ box.innerHTML='<div class="empty" style="padding:14px">Could not load sources.</div>'; window._brainLoaded=false; return; }
+      var srcs=res.j.sources||[];
+      var avOpts=Object.keys(avById||{}).map(function(id){return '<option value="'+esc(id)+'">'+esc(avName(id))+'</option>';}).join("")||'<option value="laura">Laura</option>';
+      var rows=srcs.map(function(s){
+        var avs=(s.avatars||[]).map(esc).join(", ")||"—";
+        return '<div class="fset" data-src="'+esc(s.id)+'" style="margin-bottom:10px">'+
+          '<div class="frow"><div><div class="t">'+esc(s.name)+' <span style="color:var(--faint);font-size:.8em">('+esc(s.kind)+')</span></div>'+
+          '<div class="h">'+(s.published_documents|0)+' published · '+(s.pending_documents|0)+' pending · '+(s.failed_documents|0)+' failed · avatars: '+avs+'</div></div>'+
+          '<div style="display:flex;gap:6px;flex-wrap:wrap">'+
+          '<button class="btn" data-bassign="'+esc(s.id)+'">Assign avatar</button>'+
+          '<button class="btn" data-bsync="'+esc(s.id)+'">Sync</button>'+
+          '<button class="btn" data-bdel="'+esc(s.id)+'">Delete</button></div></div>'+
+          '<div class="frow"><div style="flex:1"><div class="h">Add a document (markdown/plain text)</div>'+
+          '<input type="text" data-bfn="'+esc(s.id)+'" placeholder="filename.md" style="margin:4px 0;width:100%" />'+
+          '<textarea data-btxt="'+esc(s.id)+'" rows="3" placeholder="Paste the document text…" style="width:100%"></textarea></div>'+
+          '<button class="btn" data-bup="'+esc(s.id)+'">Upload</button></div>'+
+          '</div>';
+      }).join("");
+      box.innerHTML=
+        '<div class="fset" style="margin-bottom:12px"><div class="frow">'+
+        '<div><div class="t">New source</div><div class="h">A named bundle of documents (uploads first; Drive folders need a Google reconnect with Drive scope)</div></div>'+
+        '<div style="display:flex;gap:6px"><input type="text" id="bsrc-name" placeholder="e.g. Sales playbook" />'+
+        '<button class="btn" id="bsrc-create">Create</button></div></div></div>'+
+        (rows||'<div class="empty" style="padding:10px">No sources yet — create one and paste your first SOP.</div>')+
+        '<div class="fset" style="margin-top:12px"><div class="frow"><div style="flex:1">'+
+        '<div class="t">Test retrieval</div><div class="h">Ask as an avatar would — results cite source and section</div>'+
+        '<div style="display:flex;gap:6px;margin-top:6px"><select id="bq-av">'+avOpts+'</select>'+
+        '<input type="text" id="bq" placeholder="e.g. how long do refunds take?" style="flex:1" />'+
+        '<button class="btn" id="bq-go">Search</button></div>'+
+        '<div id="bq-out" style="margin-top:8px"></div></div></div></div>';
+      $("#bsrc-create").addEventListener("click",function(){
+        var name=($("#bsrc-name").value||"").trim(); if(!name){toast("Give the source a name.",true);return;}
+        bFetch("sources",{method:"POST",body:JSON.stringify({name:name,kind:"upload"})}).then(function(r){
+          if(!r.ok){toast("Could not create: "+(r.j.error||r.status),true);return;}
+          toast("Source created."); loadBrain(true); });
+      });
+      box.querySelectorAll("[data-bup]").forEach(function(b){ b.addEventListener("click",function(){
+        var id=b.getAttribute("data-bup");
+        var fn=(box.querySelector('[data-bfn="'+id+'"]').value||"").trim();
+        var tx=(box.querySelector('[data-btxt="'+id+'"]').value||"").trim();
+        if(!fn||!tx){toast("Filename and text are both needed.",true);return;}
+        bFetch("sources/"+id+"/documents",{method:"POST",body:JSON.stringify({filename:fn,text:tx})}).then(function(r){
+          if(!r.ok){toast("Upload failed: "+(r.j.error||r.status),true);return;}
+          toast("Uploaded — indexing in the background."); setTimeout(function(){loadBrain(true);},1500); });
+      });});
+      box.querySelectorAll("[data-bassign]").forEach(function(b){ b.addEventListener("click",function(){
+        var id=b.getAttribute("data-bassign");
+        var av=window.prompt("Assign which avatar? (e.g. laura)","laura"); if(!av) return;
+        bFetch("sources/"+id+"/assign",{method:"POST",body:JSON.stringify({avatar_id:av.trim()})}).then(function(r){
+          if(!r.ok){toast("Could not assign: "+(r.j.error||r.status),true);return;}
+          toast("Assigned — index rebuilding."); setTimeout(function(){loadBrain(true);},1200); });
+      });});
+      box.querySelectorAll("[data-bsync]").forEach(function(b){ b.addEventListener("click",function(){
+        bFetch("sources/"+b.getAttribute("data-bsync")+"/sync",{method:"POST",body:"{}"}).then(function(r){
+          toast(r.ok?"Sync queued.":("Sync failed: "+(r.j.error||r.status)),!r.ok); });
+      });});
+      box.querySelectorAll("[data-bdel]").forEach(function(b){ b.addEventListener("click",function(){
+        if(!window.confirm("Delete this source? Its documents stop being retrievable.")) return;
+        bFetch("sources/"+b.getAttribute("data-bdel"),{method:"DELETE"}).then(function(r){
+          if(!r.ok){toast("Delete failed: "+(r.j.error||r.status),true);return;}
+          toast("Source deleted."); loadBrain(true); });
+      });});
+      $("#bq-go").addEventListener("click",function(){
+        var q=($("#bq").value||"").trim(); if(!q) return;
+        bFetch("search",{method:"POST",body:JSON.stringify({q:q,avatar_id:$("#bq-av").value})}).then(function(r){
+          var out=$("#bq-out"); if(!r.ok){out.innerHTML='<div class="empty">Search failed.</div>';return;}
+          var hits=(r.j.semantic||[]).concat(r.j.keyword||[]);
+          out.innerHTML=hits.length? hits.slice(0,6).map(function(h){
+            return '<div class="d"><span class="ic">§</span><span>'+esc((h.text||"").slice(0,240))+'… <span style="color:var(--faint)">['+esc(h.source||"")+(h.section?(" — "+esc(h.section)):"")+']</span></span></div>';
+          }).join("") : '<div class="empty" style="padding:6px">No grounded matches.</div>';
+        });
+      });
+    });
+  }
 })();
 </script>
 </body>

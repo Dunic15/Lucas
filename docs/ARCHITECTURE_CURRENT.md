@@ -154,3 +154,29 @@ rebuilds fresh on each deploy**.
 | TTS router | `backend/app/tts.py` |
 | Sessions/artifacts store | `backend/app/store.py` |
 | Vendor clients | `backend/app/recall_client.py`, `anam_client.py` |
+
+## Addendum — canonical Action Control Plane + Company Brain (2026-07-17)
+
+Two durable subsystems landed after the 2026-07-07 alignment pass (full specs
+in [`product/UNIFIED-ACTION-CONTROL-PLANE.md`](product/UNIFIED-ACTION-CONTROL-PLANE.md)
+and [`product/LAURA-COMPANY-BRAIN-SKILLS-BROWSER-ROADMAP.md`](product/LAURA-COMPANY-BRAIN-SKILLS-BROWSER-ROADMAP.md)):
+
+| Concern | File |
+|---|---|
+| Canonical action vocabulary (schemas, risk, status aliases, param validation) | `backend/app/action_plane.py` |
+| Durable action rows, execution claim, decision record | `backend/app/outbox_pg.py` (+ migration `0009_canonical_actions`) |
+| Status weld point, claim/decision facades | `backend/app/ledger.py` |
+| Approve/params/canonical-GET doors | `backend/app/org_api.py`, `backend/app/dashboard.py` |
+| Company Brain: sources/documents/chunks/jobs DAL | `backend/app/knowledge/dal.py` (+ migration `0010_company_brain`) |
+| Ingestion worker + index bridge (PG → per-org index files) | `backend/app/knowledge/ingest.py` |
+| Raw file storage (S3 / local) | `backend/app/knowledge/storage.py` |
+| Knowledge HTTP surface (`/org/knowledge/*` + dashboard twin) | `backend/app/knowledge/router.py` |
+
+Load-bearing rules: every consequential write is one canonical action —
+captured live, typed at finalize, `needs_details` when required params are
+missing, approved behind a first-write-wins decision record plus an atomic
+`approved → executing` claim (exactly one external write, any surface, any
+instance). Org knowledge is durable in Postgres (FORCE RLS); the per-org
+index files the live path ranks are derived data, rebuilt from Postgres at
+ingest and boot. Both features are flag-gated (`NATIVE_EXECUTOR` pre-existing;
+`COMPANY_BRAIN_ENABLED` default off) and the key-free demo is unchanged.

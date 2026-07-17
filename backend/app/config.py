@@ -284,6 +284,29 @@ class Settings(BaseSettings):
     # independently of the session cookie key.
     google_token_enc_key: str = ""
 
+    # ── Company Brain (durable org knowledge — M1) ──
+    # Master switch for the durable knowledge plane: org-owned sources,
+    # ingestion jobs, and the /org/knowledge API. OFF (default) means no new
+    # tables are touched, no worker runs, and retrieval is byte-identical to
+    # the per-avatar base packs — the key-free demo never notices it exists.
+    # Needs LAURA_DATABASE_URL (the ingest jobs and chunks live on the RLS
+    # control plane).
+    company_brain_enabled: bool = False
+    # Raw uploaded files: S3-compatible object storage when a bucket is set
+    # (IAM role in production — never keys in git); empty ⇒ a local directory
+    # next to the SQLite store, which keeps the whole feature key-free in dev.
+    knowledge_bucket: str = ""
+    knowledge_s3_endpoint: str = ""
+    knowledge_aws_region: str = "eu-central-1"
+    # Ingestion guardrails: refuse oversized uploads outright and cap how much
+    # extracted text one document may contribute (memory + prompt hygiene).
+    knowledge_max_file_bytes: int = 10_000_000
+    knowledge_max_extracted_chars: int = 400_000
+    # OpenAI key for EMBEDDING_PROVIDER=openai (text-embedding-3-small at a
+    # fixed 512 dims — the recommended durable Company Brain embedder). The
+    # key is NEVER exposed to any browser page.
+    openai_api_key: str = ""
+
     # ── Asana (project system of record — see docs/ASANA.md) ──
     # Personal Access Token for the workspace, single-tenant fallback: a per-org
     # token stored via store.set_org_oauth(org, pat, provider="asana") wins.

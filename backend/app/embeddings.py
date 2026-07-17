@@ -8,6 +8,9 @@ Pick the provider with EMBEDDING_PROVIDER in .env:
   local             — real semantic embeddings via `fastembed` (small local
                       ONNX model, free, no API key). `pip install fastembed`.
   voyage            — Voyage AI API (best quality). Needs VOYAGE_API_KEY.
+  openai            — OpenAI embeddings (text-embedding-3-small at a fixed
+                      512 dimensions — the durable Company Brain default).
+                      Needs OPENAI_API_KEY.
 
 All providers expose the same `embed()` so the rest of the code never changes.
 """
@@ -122,6 +125,35 @@ def _embed_voyage(texts: list[str], input_type: str) -> list[list[float]]:
     return [d["embedding"] for d in data]
 
 
+# Fixed dimension for the OpenAI provider: text-embedding-3-* support native
+# dimension truncation server-side. 512 matches the hash provider's size and
+# keeps index files/PG rows compact; persist-and-reject lives in the index
+# signature (provider_signature + model), never silently mixed.
+_OPENAI_DIM = 512
+
+
+def _embed_openai(texts: list[str]) -> list[list[float]]:
+    if not settings.openai_api_key:
+        raise RuntimeError("EMBEDDING_PROVIDER=openai needs OPENAI_API_KEY.")
+    import httpx
+
+    model = settings.embedding_model
+    if not model.startswith("text-embedding-"):
+        # embedding_model defaults to a Voyage name; the OpenAI provider needs
+        # an OpenAI one — default rather than erroring on the shared field.
+        model = "text-embedding-3-small"
+    resp = httpx.post(
+        "https://api.openai.com/v1/embeddings",
+        headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+        json={"input": texts, "model": model, "dimensions": _OPENAI_DIM},
+        timeout=60.0,
+    )
+    resp.raise_for_status()
+    data = resp.json()["data"]
+    data.sort(key=lambda d: d["index"])  # preserve input order
+    return [d["embedding"] for d in data]
+
+
 def embed(texts: list[str], *, input_type: str = "document") -> list[list[float]]:
     """Return one embedding vector per input text.
 
@@ -138,4 +170,6 @@ def embed(texts: list[str], *, input_type: str = "document") -> list[list[float]
         return _embed_local(texts)
     if provider == "voyage":
         return _embed_voyage(texts, input_type)
+    if provider == "openai":
+        return _embed_openai(texts)
     raise RuntimeError(f"Unknown EMBEDDING_PROVIDER '{provider}'.")
