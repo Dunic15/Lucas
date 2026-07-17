@@ -88,10 +88,13 @@ write, replay answered from the recorded decision; concurrency test green;
 key-free demo byte-identical (SQLite `action_approvals` fallback).
 
 **Carried risks / explicitly deferred** (from the M0 doc): Cedric's Slack Edit
-modal; a DB-enforced idempotency column on Cedric's side; re-dispatch of
-dependency-blocked approvals; the reconciliation worker for stale `executing`
-leases (lands with M3's verify steps — never blind-retry, the external write
-may have happened).
+modal; re-dispatch of dependency-blocked approvals. Landed since: Cedric-side
+DB-enforced idempotency (`laura_exec_claims`, Cedric PR #41) and the
+stale-`executing` reconciler (`backend/app/action_reconcile.py`, hardening
+slice — calendar claims read-verified, unverifiable types settle
+`execution_unknown` after a grace period; the gate before
+`ACTION_DISPATCH_ASYNC` may be enabled). M3's `verify` steps remain the
+richer per-skill reconciliation.
 
 ---
 
@@ -156,6 +159,12 @@ drift is handled by rebuilding indexes with the current provider, but a
 provider switch triggers a full re-embed — the sync-jobs worker must absorb
 that without blocking boot (boot never waits on a model, existing rule). The
 DELETE-grant deviation on `knowledge_chunks` must stay exactly that narrow.
+Multi-instance staleness (instances do not share a disk, so a rebuild on one
+instance left the others serving stale files until reboot) is CLOSED by the
+hardening slice: a monotonic epoch (max rebuild-job id, `dal.knowledge_epoch`)
+plus per-instance sidecar markers, converged by every instance's worker loop
+(`ingest.refresh_local_indexes`, ≤60 s bound) — the gate before
+`COMPANY_BRAIN_ENABLED` goes to production.
 
 ---
 
@@ -223,9 +232,10 @@ survive deploys: runs are durable rows, not in-memory tasks.
   scheduler (`scheduler.py`, #261/#264) and `autopilot.py` are single-purpose
   precursors; `avatars/laura/process_templates/` shows the declarative-template
   direction.
-- **The M0 doc explicitly parks the stale-`executing` reconciler here**: skills
-  add `verify` steps (read back what the write should have produced), which is
-  the only safe reconciliation for `execution_unknown` outcomes.
+- **A first stale-`executing` reconciler shipped with the hardening slice**
+  (`action_reconcile.py`: calendar read-verify + grace settle). Skills still
+  add `verify` steps (read back what the write should have produced) as the
+  general, per-skill-defined reconciliation for `execution_unknown` outcomes.
 
 **New tables/modules.**
 

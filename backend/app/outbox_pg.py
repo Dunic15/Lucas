@@ -854,6 +854,45 @@ def claim_action_execution(
     return "lost" if exists is not None else "missing"
 
 
+def stale_executing(org_id: str) -> list[dict[str, Any]]:
+    """One org's actions whose execution claim outlived its lease — the
+    process died mid-vendor-call (or an async dispatch thread was lost).
+    Read-only; the reconciler decides what each row becomes."""
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        rows = conn.execute(
+            text(
+                """
+                SELECT action_id, typed_json, execution_detail,
+                       extract(
+                         epoch from clock_timestamp() - execution_lease_until
+                       ) AS expired_for
+                FROM queued_actions
+                WHERE org_id=:org_id AND execution_status='executing'
+                  AND execution_lease_until IS NOT NULL
+                  AND execution_lease_until <= clock_timestamp()
+                ORDER BY execution_lease_until
+                LIMIT 20
+                """
+            ),
+            {"org_id": org_id},
+        ).mappings().all()
+    out = []
+    for row in rows:
+        item = dict(row)
+        typed = item.get("typed_json")
+        if isinstance(typed, str):
+            try:
+                typed = json.loads(typed)
+            except ValueError:
+                typed = None
+        item["typed_json"] = typed if isinstance(typed, dict) else None
+        item["expired_for"] = float(item["expired_for"] or 0)
+        out.append(item)
+    return out
+
+
 def record_action_decision(
     org_id: str, action_id: str, fields: dict[str, Any]
 ) -> bool:

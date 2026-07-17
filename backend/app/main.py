@@ -208,6 +208,12 @@ async def _lifespan(app: FastAPI):
             while not _shutting_down:
                 try:
                     await run_in_threadpool(knowledge_ingest.process_due)
+                    # Multi-instance convergence: instances don't share a
+                    # disk, so EVERY instance periodically re-derives its own
+                    # index files from the durable epoch (throttled inside).
+                    await run_in_threadpool(
+                        knowledge_ingest.refresh_local_indexes
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # never log content, filenames, or org text

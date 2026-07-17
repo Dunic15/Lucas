@@ -109,6 +109,11 @@ The claim is active regardless of the flag.
 - **Deferred execution of dependency-blocked approvals** — the [M8] gate
   records `blocked_on` but nothing re-dispatches when dependencies land
   (pre-existing; `ledger.set_action_decision_result` is the hook to use).
-- **Reconciliation worker for stale `executing` leases** — the lease makes
-  crashes observable; an automated read-and-verify reconciler is M3 territory
-  (skills `verify` steps). Never blind-retry.
+- ~~Reconciliation for stale `executing` leases~~ — SHIPPED in the hardening
+  slice: `backend/app/action_reconcile.py`, triggered lazily (throttled) from
+  the dashboard summary and the canonical GET. Calendar claims are verified
+  by reading the calendar (found → `done` with a real receipt; absent →
+  `failed` "not created"); unverifiable types settle `failed` with an
+  explicit `execution_unknown` receipt after a grace period. Never a blind
+  retry. This is the gate that had to land before `ACTION_DISPATCH_ASYNC`
+  may be enabled.
