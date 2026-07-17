@@ -106,9 +106,26 @@ The claim is active regardless of the flag.
 - **Enforced idempotency column on Cedric's DB** — Cedric today dedupes via
   `seen_events` + `bot_id` uniqueness + application-level `action_id` checks;
   a DB-unique execution key on `meet_proposals` is Cedric-side work.
-- **Deferred execution of dependency-blocked approvals** — the [M8] gate
-  records `blocked_on` but nothing re-dispatches when dependencies land
-  (pre-existing; `ledger.set_action_decision_result` is the hook to use).
+- ~~Deferred execution of dependency-blocked approvals~~ — SHIPPED:
+  `backend/app/action_deps.py`. An action reaching terminal `done` releases the
+  approvals parked on it; each release runs behind the same
+  `claim_action_execution` CAS as the door, so a release racing an approve
+  produces one external write. Chains (A→B→C) settle in one bounded sweep — a
+  re-entrancy guard turns the nested `set_action_status` into a no-op and the
+  outer loop re-scans. Only `done` releases: a `failed`/`rejected` dependency
+  leaves dependents parked. Cedric-routed and capability-blocked releases unpark
+  but execute nothing, and say so on the provenance channel rather than implying
+  a run.
+  **The hook is `ledger.set_action_status`, NOT `set_action_decision_result` as
+  this doc previously suggested** — the latter is only ever called from the
+  approve door, so it never sees a dependency Cedric executed itself and
+  reported via `POST /org/actions/{id}/status`; hanging the release there would
+  have stranded every dependent of Cedric-completed work.
+  Why it mattered before any producer exists: the [M8] gate was live, Cedric's
+  relay contract v3 (`hsk_con_ycbd1shbdbh4p5p5cgg2`) hard-stops on `blocked_on`
+  because ordering is Laura's to enforce, and nothing released — so the first
+  producer to stamp `dependencies` would have made approvals vanish silently
+  (approved, never run, no error).
 - ~~Reconciliation for stale `executing` leases~~ — SHIPPED in the hardening
   slice: `backend/app/action_reconcile.py`, triggered lazily (throttled) from
   the dashboard summary and the canonical GET. Calendar claims are verified

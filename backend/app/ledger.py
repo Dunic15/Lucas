@@ -542,6 +542,20 @@ def set_action_status(
             resolve_by_action_id(
                 aid, "", outcome, (detail or "").strip()[:300], org_id=org_id
             )
+    if st == "done":
+        # [M8] release: this action completing may unblock approvals parked on
+        # it. THE weld point — every completion path lands here (native executor
+        # receipt, 'respond', the stale-executing reconciler's settle, and
+        # Cedric's /status report for work IT executed), which is why the
+        # release hangs off the status write and not off
+        # set_action_decision_result (that one never sees Cedric's completions).
+        # Only `done` releases: a failed/rejected dependency leaves dependents
+        # parked, which is the honest outcome.
+        from . import action_deps
+
+        # Best-effort by construction: release_dependents swallows its own
+        # errors, and the status write above is already committed regardless.
+        action_deps.release_dependents(org_id, aid)
     return True
 
 
@@ -641,6 +655,16 @@ def get_action_decision(
         # control plane was off) live in the local SQLite row — still honour
         # them so an upgrade never re-executes an already-decided action.
     return store.get_action_approval(org_id, action_id)
+
+
+def list_blocked_decisions(org_id: str = DEMO_ORG_ID) -> list[dict]:
+    """Approve-decisions in this org still parked behind unmet dependencies
+    ([M8]) — the work-list action_deps sweeps when a dependency lands."""
+    if _durable_actions(org_id):
+        from . import outbox_pg
+
+        return outbox_pg.list_blocked_action_decisions(org_id)
+    return store.list_blocked_action_approvals(org_id)
 
 
 def set_action_decision_result(
