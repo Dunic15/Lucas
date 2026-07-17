@@ -23,6 +23,7 @@ wins; teardown restores everything in reverse order.
 """
 from __future__ import annotations
 
+import dataclasses
 import sys
 from pathlib import Path
 
@@ -30,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
-from app import llm
+from app import avatars, llm
 from app.config import Settings, settings
 
 
@@ -47,6 +48,23 @@ def _keyfree_settings(monkeypatch):
     """Pin every setting to its code default for the duration of each test."""
     for name, field in Settings.model_fields.items():
         monkeypatch.setattr(settings, name, field.default)
+
+
+@pytest.fixture(autouse=True)
+def _wake_word_inherits_global(monkeypatch):
+    """The shipped avatar yamls set ``require_wake_word: true``. Most of the
+    behavior suite predates that and exercises machinery (nudges, greetings,
+    hand-raise, proactive interventions) only reachable with wake mode off —
+    so loaded avatars are pinned back to "inherit the global default", which
+    ``_keyfree_settings`` keeps off. The shipped-yaml state itself is covered
+    by test_wake_word_per_avatar.py, which overrides this fixture."""
+    real_load = avatars.load
+
+    def load(avatar_id: str) -> avatars.Avatar:
+        # Copy, never mutate: real_load returns a shared cached instance.
+        return dataclasses.replace(real_load(avatar_id), require_wake_word=None)
+
+    monkeypatch.setattr(avatars, "load", load)
 
 
 def _clear_registries() -> None:

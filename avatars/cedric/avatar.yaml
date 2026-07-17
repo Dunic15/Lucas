@@ -85,6 +85,12 @@ elevenlabs_voice_id: "cjVigY5qzO86Huf0OWal"
 # avatar id). "M" picks TalkingHead's masculine pose/gesture set on /talk.
 talk_body: M
 
+# Wake-word mode (owner request 2026-07-17): speak ONLY when addressed by
+# name — no unprompted answers, greetings, nudges, interjections, or the
+# closing intervention. The one-time self-introduction on join stays (it's
+# how the room learns the name), and follow-ups to her own answers stay.
+require_wake_word: true
+
 # When-to-speak tuning. Leave blank to use the global .env defaults.
 # (min_confidence is legacy — dead on the live path; SKIP gate rules.)
 min_confidence:

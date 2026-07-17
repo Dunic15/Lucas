@@ -3716,13 +3716,33 @@ def _line_for(heard: str, en: list, it: list) -> str:
     return random.choice(it if sounds_italian(heard) else en)
 
 
-def _should_backchannel(session: store.Session, text: str) -> bool:
+def _wake_required(avatar: avatars.Avatar) -> bool:
+    """Whether THIS avatar speaks only when addressed by name — the per-avatar
+    require_wake_word (avatar.yaml), inheriting the global REQUIRE_WAKE_WORD
+    when unset. When true, every unprompted speech path is silenced: answers,
+    backchannels, joiner greetings, quiet nudges, confident interjections, and
+    the proactive closing intervention. What still speaks: being called by
+    name, follow-ups right after the avatar's own answer (a reply to her is
+    not an interruption), and the one-time floor-gated self-introduction —
+    in wake-word mode that intro is the only way a room learns the name."""
+    return (
+        avatar.require_wake_word
+        if avatar.require_wake_word is not None
+        else settings.require_wake_word
+    )
+
+
+def _should_backchannel(
+    session: store.Session, text: str, avatar: "avatars.Avatar | None" = None
+) -> bool:
     """A human is deep into a long utterance and she's been silent a while —
     one tiny cue ("Mm-hm.") reads as listening. Deliberately rare: long
     partials only, one per gap window, never while (or right after) she talks,
     so it stays a nod and never becomes chatter."""
     if not settings.backchannel_enabled:
         return False
+    if avatar is not None and _wake_required(avatar):
+        return False  # wake-word mode: never make an unprompted sound
     if len(text.split()) < settings.backchannel_min_words:
         return False
     now = time.time()
@@ -5101,7 +5121,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             not called
             and not acked
             and not _in_opening_grace(session)
-            and _should_backchannel(session, text)
+            and _should_backchannel(session, text, avatar)
         ):
             session.last_backchannel_at = time.time()
             bc = _line_for(text, _BACKCHANNEL_LINES, _BACKCHANNEL_LINES_IT)
@@ -5143,6 +5163,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 if (
                     event == "participant_events.join"
                     and settings.greet_joiners
+                    and not _wake_required(avatar)  # wake-word mode: no unprompted greeting
                     and is_new
                     and len(session.human_transcript()) >= 4
                     and not _in_opening_grace(session)  # not while the room settles
@@ -5360,6 +5381,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # ── proactive intervention (fires once, as the meeting wraps up) ──
     if (
         settings.proactive_enabled
+        and not _wake_required(avatar)  # wake-word mode: even the closing flag stays silent
         and not called  # a direct ask owns its turn — never add proactive latency
         and not session.proactive_done
         and not _in_opening_grace(session)  # never activated → stays a silent guest
@@ -5675,6 +5697,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # proactive intervention (critical process gaps win the wrap-up slot).
     if (
         settings.quiet_nudge_enabled
+        and not _wake_required(avatar)  # wake-word mode: no unprompted nudges
         and not called
         and not session.quiet_nudge_done
         and not _in_opening_grace(session)  # never activated → stays a silent guest
@@ -5702,8 +5725,17 @@ async def recall_webhook(request: Request) -> JSONResponse:
             await _make_avatar_speak(session, nudge, force=True)
             return JSONResponse({"ok": True, "spoke": True, "quiet_nudge": True})
 
-    if settings.require_wake_word and not called:
-        return JSONResponse({"ok": True, "spoke": False, "reason": "not called"})
+    if _wake_required(avatar) and not called:
+        # Per-avatar wake-word mode (falls back to the global flag): she was
+        # not addressed by name — stay silent, UNLESS this is a follow-up
+        # right after her own answer (handled below: a reply to her turn).
+        followup_ok = (
+            settings.followup_window_seconds > 0
+            and (time.time() - session.last_spoke_at) < settings.followup_window_seconds
+            and text.rstrip().endswith("?")
+        )
+        if not followup_ok:
+            return JSONResponse({"ok": True, "spoke": False, "reason": "not called"})
     question = question or text  # no wake word → treat the whole utterance as the ask
     # ── multi-party turn-taking ──
     # A line aimed at ANOTHER participant by name ("Marco, can you take
@@ -6102,7 +6134,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 window=settings.cross_talk_window,
             )
             if should_interject(
-                enabled=settings.hand_raise_interject_when_confident,
+                enabled=settings.hand_raise_interject_when_confident
+                and not _wake_required(avatar),  # wake-word mode: never interject
                 confidence=_top_score,
                 min_confidence=settings.hand_raise_interject_min_confidence,
                 floor_open=(not _dyad) and interjection_floor_open(

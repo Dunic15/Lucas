@@ -48,6 +48,12 @@ persona_prompt: >
 anam_avatar_id: ""
 elevenlabs_voice_id: "21m00Tcm4TlvDq8ikWAM"
 
+# Wake-word mode (owner request 2026-07-17): speak ONLY when addressed by
+# name — no unprompted answers, greetings, nudges, interjections, or the
+# closing intervention. The one-time self-introduction on join stays (it's
+# how the room learns the name), and follow-ups to her own answers stay.
+require_wake_word: true
+
 # When-to-speak tuning. Leave blank to use the global .env defaults.
 # Petra runs a LONGER cooldown than the global 8s: a PM avatar that
 # interjects often reads as micromanagement — she waits out the room.

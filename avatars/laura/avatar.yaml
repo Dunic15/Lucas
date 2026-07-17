@@ -36,6 +36,12 @@ persona_prompt: >
 anam_avatar_id: ""          # e.g. "abc123..."     (overrides ANAM_AVATAR_ID)
 elevenlabs_voice_id: ""     # e.g. "EXAVITQu4..."  (overrides ELEVENLABS_VOICE_ID)
 
+# Wake-word mode (owner request 2026-07-17): speak ONLY when addressed by
+# name — no unprompted answers, greetings, nudges, interjections, or the
+# closing intervention. The one-time self-introduction on join stays (it's
+# how the room learns the name), and follow-ups to her own answers stay.
+require_wake_word: true
+
 # When-to-speak tuning. Leave blank to use the global .env defaults.
 min_confidence:             # 0.0–1.0 — higher = more cautious about speaking
 speak_cooldown_seconds:     # seconds of silence to keep after speaking

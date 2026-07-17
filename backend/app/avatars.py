@@ -49,6 +49,15 @@ class Avatar:
     # call (no greeting, answers, interventions, or nudges). For "just take
     # notes and hand off to Slack" rather than a talking participant.
     silent: bool = False
+    # Per-avatar wake-word requirement (None = inherit REQUIRE_WAKE_WORD).
+    # True = the avatar speaks ONLY when addressed by name: no unprompted
+    # answers, backchannels, joiner greetings, quiet nudges, interjections,
+    # or closing interventions. The one-time self-introduction on join is
+    # deliberately KEPT (floor-gated, at a silence) — in wake-word mode it is
+    # the only way a room learns how to call the avatar in. Follow-ups right
+    # after the avatar's own answer also remain (a reply to her is not an
+    # interruption). Sits between full conversational (False) and silent.
+    require_wake_word: bool | None = None
     # Which face this avatar wears in meetings — the product's two tiers:
     #   "talk"      -> free 3D model (TalkingHead, renders in the bot browser)
     #   "photoreal" -> Ultra-HD photoreal face (Ditto on the GPU box)
@@ -231,6 +240,13 @@ def load(avatar_id: str) -> Avatar:
         ),
         drive_folder_id=str(_coalesce(raw.get("drive_folder_id"), "")).strip(),
         silent=bool(raw.get("silent", False)),
+        # None/blank inherits the global REQUIRE_WAKE_WORD; an explicit yaml
+        # true/false pins this avatar regardless of the deployment default.
+        require_wake_word=(
+            None
+            if raw.get("require_wake_word") in (None, "")
+            else bool(raw.get("require_wake_word"))
+        ),
         # face tier: only the known page names pass; anything else falls back
         # to "" (= global default) rather than producing a 404 camera URL.
         face=(lambda f: f if f in ("talk", "photoreal", "avatar") else "")(
