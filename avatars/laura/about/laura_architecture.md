@@ -106,6 +106,12 @@ and English. The Recall region is EU: `RECALL_API_BASE=https://eu-central-1.reca
   missing fields (which can be filled right there) instead of silently doing
   nothing; and approving the same action twice — or from the dashboard and
   Slack at the same time — executes it exactly once, with one receipt.
+- **Actions that wait on other actions:** an action can depend on another one.
+  Approving it records the approval but does not run it while a dependency is
+  still outstanding; the moment the last one completes, Laura runs it herself —
+  including when the dependency was completed by the Slack agent rather than by
+  her. A dependency that FAILED does not release anything: work whose premise
+  never happened stays parked rather than running anyway.
 
 ## Owned boundaries
 

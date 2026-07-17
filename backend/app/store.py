@@ -2311,6 +2311,38 @@ def set_action_approval_job(org_id: str, action_id: str, execution_job_id: str) 
         )
 
 
+def list_blocked_action_approvals(org_id: str) -> list[dict]:
+    """Every approve-decision in this org still parked behind unmet
+    dependencies ([M8]) — the work-list for the deferred release.
+
+    Scoped to one org and to rows that ARE blocked, so the release sweep needs
+    no cross-tenant discovery: `blocked_on` is cleared the moment the approval
+    really runs, which keeps this list naturally tiny."""
+    org = (org_id or "").strip()
+    if not org:
+        return []
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            "SELECT action_id, blocked_on FROM action_approvals "
+            "WHERE org_id=? AND decision='approve' AND blocked_on NOT IN ('', '[]')",
+            (org,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_action_approval_blocked_on(
+    org_id: str, action_id: str, blocked_on: str
+) -> None:
+    """Re-park a dependency-blocked approval on a SHRUNKEN dependency list (or
+    clear it with '[]'). The decision itself is never touched — only what the
+    approval is still waiting for."""
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            "UPDATE action_approvals SET blocked_on=? WHERE org_id=? AND action_id=?",
+            (blocked_on or "", (org_id or "").strip(), (action_id or "").strip()),
+        )
+
+
 def set_action_approval_result(
     org_id: str, action_id: str, *, new_status: str = "",
     execution_job_id: str | None = None,
