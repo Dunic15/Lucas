@@ -55,6 +55,7 @@ history: [`CEDRIC-AVATAR-PLAN.md`](CEDRIC-AVATAR-PLAN.md) (superseded).
 | `GET /org/actions` | Open action items across meetings, grouped by meeting key |
 | `GET /org/search?q=…` | Ask across every meeting — ledger items + meeting snippets mentioning the query ("what did we decide about pricing?") |
 | `POST /org/actions/{id}/resolve` | Close an item from the outside (e.g. ticked in Slack). `{id}` is EITHER the numeric ledger row id OR the stable string `action_id` an action carries on `action.requested` / `actions[]` — use the `action_id` to ack an action you executed. `200 {resolved:true}`, `404` unknown/already-resolved (resolves only after the meeting finalized). |
+| `POST /org/chat` | Post into the org's **dashboard chat channel** (the in-dashboard approval surface). Body is exactly one of `{"message": {"text", "sender_label"?}}` or `{"action_card": {"action_id", "item", "owner"?, "due"?, "note"?}}`. An action card renders with inline Approve & run / Reject in the dashboard — the decision still lands on the canonical approve door, this endpoint only carries the conversation. `200 {ok:true, id}`, `400` bad shape. Distilled content only. |
 
 ### `POST /sessions/start`
 
@@ -98,6 +99,7 @@ POSTed to the session's `callback_url`, signed as above, `external_ref` echoed.
 | `session.status` | best-effort, single attempt | `{event, bot_id, external_ref, status: "joining"\|"live"\|"failed", detail, at}` (`detail` always present, may be `""`; `failed` fires only for a fatal join) |
 | `action.requested` | best-effort, single attempt | `{event, bot_id, external_ref, action_id, action, owner, due, at}` — fired the moment someone asks the avatar to DO something mid-meeting, so the approval card is ready before the call ends. **`action_id`** is a stable id: the SAME action appears in the later `session.ended` `actions[]` carrying the same `action_id`, so **dedupe your live card against the final action on `action_id`, not on text** (the wording can still be extended after this event fired). The artifact's `actions[]` stays the authoritative list (live captures are flagged `requested_live: true`). |
 | `session.ended` | retried 3× (5s / 25s / 2m), then poll fallback | `{event, bot_id, external_ref, ended_at, artifact}` |
+| `chat.message` | best-effort, single attempt (conversational — the human resends) | `{event, org_id, message_id, text, sender, event_id, at}` — a dashboard user wrote to the orchestrator in the **dashboard chat channel**. POSTed to the per-org events door (`…/api/laura/events`), signed like every event. Reply (and propose actions) via `POST /org/chat`; approvals for cards you post there converge on the canonical approve door like every other surface. |
 
 ### The artifact (wire shape, additive)
 

@@ -436,3 +436,72 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
     if blocked:
         resp["blocked_on"] = blocked
     return JSONResponse(resp)
+
+
+@router.post("/chat")
+async def org_chat_post(request: Request) -> JSONResponse:
+    """Cedric posts into the org's dashboard chat channel (the in-dashboard
+    approval surface that replaces Slack as the place decisions happen).
+
+    Body — exactly one of:
+      {"message": {"text": "...", "sender_label"?: "Cedric"}}
+      {"action_card": {"action_id": "...", "item": "...", "owner"?, "due"?,
+                       "note"?: "<=300 chars lead-in shown above the card>"}}
+
+    An action_card renders in the dashboard chat with inline Approve & run /
+    Reject — those controls hit the EXISTING canonical doors, so the decision
+    still converges on action_approvals; this endpoint only carries the
+    conversation. Distilled content only (never transcript text)."""
+    err, org = await _machine_gate(request)
+    if err:
+        return err
+    try:
+        body = json.loads(await request.body() or b"{}")
+    except ValueError:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+
+    message = body.get("message")
+    card = body.get("action_card")
+    if bool(message) == bool(card):
+        return JSONResponse(
+            {"error": "send exactly one of message | action_card"}, status_code=400
+        )
+    if message:
+        if not isinstance(message, dict) or not str(message.get("text") or "").strip():
+            return JSONResponse({"error": "message.text is required"}, status_code=400)
+        row = await run_in_threadpool(
+            lambda: store.add_chat_message(
+                org, "cedric",
+                body=str(message.get("text") or ""),
+                sender_label=str(message.get("sender_label") or "Cedric")[:120],
+            )
+        )
+    else:
+        if not isinstance(card, dict):
+            return JSONResponse({"error": "action_card must be an object"}, status_code=400)
+        action_id = str(card.get("action_id") or "").strip()
+        item = str(card.get("item") or "").strip()
+        if not action_id or not item:
+            return JSONResponse(
+                {"error": "action_card.action_id and .item are required"},
+                status_code=400,
+            )
+        row = await run_in_threadpool(
+            lambda: store.add_chat_message(
+                org, "cedric",
+                body=str(card.get("note") or "")[:300],
+                sender_label="Cedric",
+                kind="action_card",
+                action_id=action_id,
+                payload={
+                    "item": item[:300],
+                    "owner": str(card.get("owner") or "")[:100],
+                    "due": str(card.get("due") or "")[:100],
+                },
+            )
+        )
+    if row is None:
+        return JSONResponse({"error": "message rejected"}, status_code=400)
+    return JSONResponse({"ok": True, "id": row["id"]})
