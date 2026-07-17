@@ -1,0 +1,64 @@
+# SYNTHETIC DEMO WORKFLOW — Northstar / Acme Robotics. Fictional.
+# This is the ONE guarded MVP operation. It is reversible and idempotent.
+id: followup-task-creation
+name: Follow-up task creation
+purpose: >
+  Create a single follow-up task for Acme Robotics to chase the WMS sandbox
+  credentials. The canonical guarded, reversible, idempotent write of the demo.
+
+inputs:
+  customer_id: acme-robotics
+  title: Follow up with Acme Robotics on Data Integration blocker
+  idempotency_key: acme-robotics:followup:data-integration-blocker
+
+required_company_knowledge:
+  - approval-policy
+  - security-policy
+  - acme-onboarding-plan
+
+allowed_read_operations:
+  - POST /api/acme/tasks/preview   # PURE READ — returns the exact task, no write
+  - GET /tasks
+
+guarded_operations:
+  - id: create_followup_task
+    product_endpoint: POST /api/acme/tasks
+    idempotency_key: acme-robotics:followup:data-integration-blocker
+    reversible_by: POST /admin/reset
+    properties:
+      - preview_before_write: true
+      - stable_idempotency_key: true
+      - no_write_before_approval: true
+      - repeated_approved_execution_creates_exactly_one: true
+      - rejection_creates_zero: true
+      - visible_confirmation_after_create: true
+
+blocked_operations:
+  - Any write other than this follow-up task.
+  - Writing before approval.
+  - Using a timestamp-derived (non-stable) idempotency key.
+
+checkpoints:
+  - id: preview
+    expect: Preview shows the exact task; the Tasks page is unchanged (no write).
+  - id: approval-gate
+    expect: No task exists until approval.
+  - id: execute
+    expect: On approval, exactly one task is created and visibly confirmed.
+  - id: idempotent-replay
+    expect: A second approved execution returns exists and creates no duplicate.
+
+expected_receipts:
+  - operation: create_followup_task
+    on_create: { status: created, task_id: task-0003, idempotency_key: acme-robotics:followup:data-integration-blocker, created_at: "2026-07-20T09:00:00Z" }
+    on_replay: { status: exists, task_id: task-0003, idempotency_key: acme-robotics:followup:data-integration-blocker }
+
+completion_criteria:
+  - Exactly one Acme follow-up task exists after one-or-more approved executions.
+  - Zero tasks exist if approval is rejected.
+  - Reset restores the initial state (task absent).
+
+failure_behavior:
+  - If the create endpoint is called before approval, that is a policy violation, not a workflow step.
+  - If preview mutates state, fail (preview must be a pure read).
+  - If a second execution creates a duplicate, fail (idempotency broken).
