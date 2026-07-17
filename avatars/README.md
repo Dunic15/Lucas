@@ -57,6 +57,40 @@ or unknown tag → `DEFAULT_AVATAR_ID`.
 | `min_confidence` | no | Speak threshold 0–1. Blank → global `MIN_CONFIDENCE`. |
 | `speak_cooldown_seconds` | no | Quiet time after speaking. Blank → global default. |
 
+## The 3D face (`frontend/<id>.glb`)
+
+Check any new model BEFORE a meeting — a face that loads fine in a viewer can
+still be broken in a call, and the symptom (head frozen pitched down, dead
+lipsync) only shows up live:
+
+```bash
+python3 backend/scripts/check_avatar_model.py frontend/<id>.glb   # 0 = usable
+```
+
+What a usable model needs:
+
+- **All 15 Oculus visemes** (`viseme_sil/PP/FF/TH/DD/kk/CH/SS/nn/RR/aa/E/I/O/U`)
+  — this is what moves the mouth. Note the vowels are `I`/`O`/`U`.
+- **`eyesLookUp` + `eyesLookDown` aggregates**, OR a rig whose head node is named
+  `AvatarHead` (talk.html patches that case). Per-eye `eyeLook*` morphs *without*
+  the aggregates and *without* `AvatarHead` makes TalkingHead's `animate()` throw
+  every frame — blink, pose and lipsync all die.
+- **~25–50k triangles.** `cedric.glb` is 48.7k, `laura.glb` 31.2k; `petra.glb` is
+  13.3k (TalkingHead's stock `brunette.glb`) and visibly reads low-poly next to
+  them. Poly count is the *look*; visemes are the *behaviour* — don't trade the
+  second for the first.
+- **~12–14 MB.** The bot browser downloads this on the meeting path.
+
+Sources: Ready Player Me is **dead** (`models.readyplayer.me` = NXDOMAIN), so RPM
+models can never be re-exported — what's vendored is all there is. Avaturn and
+MetaPerson need a logged-in creator account (Avaturn exports via their Discord
+bot). TalkingHead's repo samples are the free fallback, but only `avaturn.glb`
+(=`laura.glb`) and `avatarsdk.glb` (=`cedric.glb`) are both high-poly and
+well-rigged; `mpfb.glb` is high-poly but fails the eye-aggregate check above.
+
+Identity rule: a missing asset is surfaced as unavailable, **never** borrowed from
+another avatar — two avatars must never share a face.
+
 ## Knowledge docs
 
 Plain markdown. Headings become retrieval sections and are cited back to the
