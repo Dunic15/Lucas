@@ -202,20 +202,67 @@ def exchange_token(org_id: str, token_value: str) -> dict:
     return {"ok": True, "viewer": _safe_viewer(viewer)}
 
 
+_VIEWER_ALLOWED_KEYS = ("kind", "url", "title", "rendered_text", "read_only")
+
+
 def _safe_viewer(viewer: dict) -> dict:
-    out = {}
-    for key, value in (viewer or {}).items():
-        if key in ("provider_ref", "connect_url"):
-            continue  # never expose provider internals
-        out[key] = policy.redact(value) if isinstance(value, str) else value
-    out["read_only"] = True
+    """Strict ALLOWLIST (not denylist): only these keys leave, each redacted
+    and bounded. A B1 real viewer might add a live-view URL or screenshot
+    field — a denylist would fail open on those, so we allowlist. Never any
+    provider_ref/connect_url/image bytes/data: URI."""
+    src = viewer or {}
+    out: dict = {"read_only": True}
+    for key in _VIEWER_ALLOWED_KEYS:
+        if key == "read_only" or key not in src:
+            continue
+        value = src[key]
+        if isinstance(value, (bytes, bytearray)):
+            continue  # never emit raw bytes
+        if isinstance(value, str):
+            if value[:11].lower().startswith("data:image"):
+                continue  # never emit an inline image
+            value = policy.redact(value)[:4000]
+        out[key] = value
     return out
 
 
 # ── commands ────────────────────────────────────────────────────────────────
 
 _RECOVERABLE_FAILURES = ("execution_unknown", "provider_unconfigured",
-                         "write_rejected_read_only", "verification_failed")
+                         "write_rejected_read_only", "verification_failed",
+                         "stale_observation", "low_confidence",
+                         "coordinate_out_of_viewport", "planner_error")
+
+
+def perceive(org_id: str, session_id: str, *,
+             principal: str = "") -> Optional[tuple]:
+    """Read-only PERCEPTION for the coordinator's planner: returns
+    ``(byte_free_observation, screenshot_bytes)`` or None. Does the same
+    ownership/state checks as a command but NEVER executes or mutates. The
+    screenshot bytes are TRANSIENT — the caller feeds them to the planner and
+    drops them; they are never persisted, logged, returned to a client, or put
+    in a receipt (the returned observation is byte-free)."""
+    row = dal.get_session_internal(org_id, session_id)
+    if row is None or not _owns(row, principal):
+        return None
+    if row["state"] not in _COMMANDABLE:
+        return None
+    if not _browser_allowed(org_id, row["avatar_key"]):
+        return None
+    provider = get_provider(row["provider"])
+    try:
+        raw = provider.observe(row["provider_ref"])
+    except Exception:  # noqa: BLE001
+        return None
+    screenshot = bytes(getattr(raw, "screenshot_bytes", b"") or b"")
+    sanitized = policy.sanitize_observation(raw)
+    pv, _ = dal.sync_page_version(
+        org_id, session_id, _observation_fingerprint(sanitized))
+    obs = contracts.build_observation(
+        session_id=session_id, command_sequence=int(row["last_command_seq"]),
+        page_version=pv, sanitized=sanitized, timestamp=_now(),
+        org_id=org_id, principal=row.get("principal", ""))
+    return obs, screenshot
 
 
 def issue_command(
@@ -223,6 +270,8 @@ def issue_command(
     command_id: str = "", element_id: str = "", url: str = "",
     text: str = "", direction: str = "down",
     verify: bool = False, expected: dict | None = None,
+    coordinates: list | tuple | None = None, confidence: float | None = None,
+    observed_page_version: int | None = None,
 ) -> dict:
     """Execute one read-only command or route a WRITE to the approval plane,
     returning the stable CommandResult contract (contracts.command_result).
@@ -279,9 +328,22 @@ def issue_command(
     try:
         # Always observe the live page first, so classification and receipts
         # reflect real DOM (spec §8: plan -> DOM verification -> classify).
+        # The RawObservation may carry transient screenshot BYTES; sanitize
+        # drops them at once (only a ref + digest survive) — bytes never reach
+        # _dispatch, the DB, a receipt, or the client.
         current = policy.sanitize_observation(provider.observe(ref))
-        result = _dispatch(org_id, row, provider, ref, verb, element_id,
-                           url, text, direction, current)
+        # Stale-screen basis is the STORED page_version (a read — no
+        # pre-dispatch write, so flag-off page_version stays B0-identical): a
+        # proposal grounded on an older page_version than the live session is
+        # refused. Only the post-dispatch sync mutates page_version.
+        gate, element_id = _grounding_gate(
+            current, verb, element_id, coordinates, confidence,
+            observed_page_version, int(row["page_version"]))
+        if gate is not None:
+            result = gate
+        else:
+            result = _dispatch(org_id, row, provider, ref, verb, element_id,
+                               url, text, direction, current)
     except ProviderTimeout:
         # The action MAY have landed — honest unknown, never blind-retry.
         result = {"ok": False, "reason": "execution_unknown",
@@ -303,7 +365,7 @@ def issue_command(
         observation = contracts.build_observation(
             session_id=session_id, command_sequence=seq,
             page_version=page_version, sanitized=observation,
-            timestamp=_now())
+            timestamp=_now(), org_id=org_id, principal=row.get("principal", ""))
         result["observation"] = observation
 
     # Visual verification (the operator decides success, never the planner).
@@ -381,8 +443,92 @@ def _observation_fingerprint(observation: dict) -> str:
     return hashlib.sha256(basis.encode()).hexdigest()
 
 
+def _grounding_gate(current, verb, element_id, coordinates, confidence,
+                    observed_page_version, current_page_version):
+    """B1 pre-dispatch grounding checks (returns (rejection|None, element_id)).
+
+    - STALE SCREEN: a proposal grounded on an older page_version than the live
+      page is refused (recoverable → replan). Never act on a stale screenshot.
+    - COORDINATE grounding: a coordinate is resolved to an element via
+      hit-test; unresolved ⇒ blocked (never a blind (x,y) click); below the
+      confidence threshold or out of viewport ⇒ refused. The resolved element
+      then runs the SAME classify() as any element action (no bypass).
+    """
+    seq_hint = 0
+    if observed_page_version is not None and \
+            int(observed_page_version) < int(current_page_version):
+        return ({"ok": False, "reason": "stale_observation",
+                 "note": "page changed since the proposal was grounded"},
+                element_id)
+    if coordinates is not None and verb in ("click", "type"):
+        vp = current.get("viewport") or {"width": 1280, "height": 720}
+        try:
+            x, y = int(coordinates[0]), int(coordinates[1])
+        except (TypeError, ValueError, IndexError):
+            return ({"ok": False, "reason": "coordinate_unresolved"},
+                    element_id)
+        if not (0 <= x <= int(vp.get("width", 0))
+                and 0 <= y <= int(vp.get("height", 0))):
+            return ({"ok": False, "reason": "coordinate_out_of_viewport"},
+                    element_id)
+        threshold = float(_config().browser_coordinate_confidence_threshold)
+        # A coordinate action REQUIRES an explicit confidence at/above the
+        # floor — a missing confidence is refused, never silently allowed.
+        if confidence is None or float(confidence) < threshold:
+            return ({"ok": False, "reason": "low_confidence"}, element_id)
+        resolved = policy.resolve_coordinate(current, x, y)
+        if not resolved:
+            # No element under the coordinate — mirror 'element not in live DOM'.
+            return ({"ok": False, "reason": "coordinate_unresolved"},
+                    element_id)
+        element_id = resolved  # execute the resolved element via normal classify
+    _ = seq_hint
+    return (None, element_id)
+
+
+def _navigation_off_allowlist(target_url: str) -> bool:
+    """When the visual planner (model path) is on, the SERVER domain allowlist
+    gates ALL navigation — an explicit `navigate` AND a link `click` that would
+    leave the allowlisted host. Page content can never widen it. Off when the
+    visual planner is off, so B0 direct-navigate + fail:// URLs are unaffected."""
+    if not _config().browser_visual_planner_enabled:
+        return False
+    if not target_url:
+        return False
+    allowed = policy.allowed_domain_set(_config().browser_allowed_domains)
+    return not policy.check_navigation_target(target_url, allowed)["ok"]
+
+
 def _dispatch(org_id, row, provider, ref, verb, element_id, url, text,
               direction, current) -> dict:
+    # NAVIGATION allowlist (server-authoritative) — gate BEFORE any provider
+    # call, for both an explicit navigate and a link click that would navigate.
+    if verb == "navigate" and _navigation_off_allowlist(url):
+        return {"ok": False, "reason": "domain_blocked",
+                "policy": "navigate target not in server allowlist"}
+    if verb == "click":
+        el = policy._element(current, element_id) or {}
+        href = str(el.get("href") or "")
+        # Only gate a click that would NAVIGATE the browser to a new http(s)
+        # page. mailto:/tel:/javascript:/#fragment anchors are element
+        # interactions, not cross-domain navigations, and must not be
+        # domain-blocked (they'd otherwise fail closed on legitimate clicks).
+        if href.lower().startswith(("http://", "https://")) \
+                and _navigation_off_allowlist(href):
+            return {"ok": False, "reason": "domain_blocked",
+                    "policy": "link target not in server allowlist"}
+
+    # New B1 browser verbs that don't classify against an element are read-only
+    # (auto): wait/inspect/go_back. They execute via feature-detected provider
+    # methods, falling back to observe when a provider doesn't implement them.
+    if verb in ("wait", "inspect", "go_back"):
+        method = {"go_back": "go_back", "wait": "wait",
+                  "inspect": "inspect"}[verb]
+        fn = getattr(provider, method, None)
+        raw = fn(ref) if callable(fn) else provider.observe(ref)
+        return {"ok": True, "class": "auto",
+                "observation": policy.sanitize_observation(raw)}
+
     classification = policy.classify(
         verb, current, element_id=element_id, text=text
     )
@@ -557,13 +703,28 @@ def execute_approved_step(org_id: str, action_id: str, action: dict) -> dict:
             receipt={"kind": "browser", "route": "browser",
                      "session_id": session_id, "stale_page_binding": True})
         return {"ok": False, "reason": "stale_page_binding"}
-    # B0: the guarded action is settled done WITHOUT performing a real
-    # external write (fake provider, read-only stance) — the plane, the
-    # re-checks, and the receipt are what B0 proves. B1 wires the real write.
+    # B0/B1: the guarded action is settled done WITHOUT performing a real
+    # external write (fake provider, read-only stance; BROWSER_ALLOW_WRITES
+    # default false) — the plane, the re-checks, and the receipt are what is
+    # proven here. B1 attaches POST-ACTION VISUAL VERIFICATION to the receipt:
+    # the operator re-observes and records the deterministic verdict (the
+    # planner never declares its own success). The receipt carries only the
+    # verdict + a screenshot DIGEST — never image bytes or full DOM.
+    expected = permission.get("expected_result") if isinstance(
+        permission.get("expected_result"), dict) else {}
+    post = policy.sanitize_observation(provider.observe(row["provider_ref"]))
+    post_obs = contracts.build_observation(
+        session_id=session_id, command_sequence=int(row["last_command_seq"]),
+        page_version=int(row["page_version"]), sanitized=post, timestamp=_now(),
+        org_id=org_id, principal=row.get("principal", ""))
+    verification = contracts.verify_expectation(expected, post_obs) \
+        if expected else contracts.INCONCLUSIVE
     ledger.set_action_status(
-        action_id, "done", "browser step approved (B0 read-only stance)",
+        action_id, "done", "browser step approved (read-only stance)",
         org_id=org_id,
         receipt={"kind": "browser", "route": "browser",
-                 "session_id": session_id, "b0_no_write": True},
+                 "session_id": session_id, "b0_no_write": True,
+                 "verification": verification,
+                 "screenshot_digest": post_obs.get("screenshot_digest", "")},
     )
-    return {"ok": True, "receipt": "browser_b0"}
+    return {"ok": True, "receipt": "browser_b1", "verification": verification}

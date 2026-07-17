@@ -317,6 +317,31 @@ class Settings(BaseSettings):
     browserbase_api_key: str = ""
     browserbase_project_id: str = ""
 
+    # ── Browser B1 "Visual Eyes" (screenshot-driven perception) ──
+    # A multimodal planner reads a screenshot + sanitized structure and proposes
+    # ONE typed operation; the deterministic B0 policy stays authoritative. OFF
+    # by default — with it off, B1 is inert and B0 behaviour is byte-identical.
+    browser_visual_planner_enabled: bool = False
+    browser_planner_provider: str = "openai"          # provider-neutral adapter
+    browser_planner_model: str = "gpt-5-computer-use"  # env-overridable
+    browser_planner_timeout_seconds: int = 20
+    browser_planner_max_retries: int = 2
+    # Bounded screenshot handling (bytes NEVER logged/persisted/put in receipts).
+    browser_screenshot_max_bytes: int = 1_500_000     # ~1.5 MB cap pre-model
+    browser_screenshot_max_dimension: int = 1280       # downscale longest side
+    # Coordinate grounding: refuse a coordinate action below this confidence.
+    browser_coordinate_confidence_threshold: float = 0.6
+    # Server-controlled navigation allowlist (comma-separated hostnames). Page
+    # content can NEVER expand this; empty ⇒ only allowed-links-from-observation
+    # and server demo definitions resolve. Applies when the visual planner is on.
+    browser_allowed_domains: str = "demo.laura.test"
+    # Perception-coordinator budgets (the loop is NEVER unbounded):
+    browser_coord_max_steps: int = 12
+    browser_coord_max_consecutive_failures: int = 3
+    browser_coord_max_replans: int = 4
+    browser_coord_max_duration_seconds: int = 120
+    browser_coord_max_model_calls: int = 16
+
     # ── Data Foundation (DF0-DF1 — accepted contract v5) ──
     # Normalized company data over connectors: SourceEnvelopes, fail-closed
     # mirrored ACLs, lineage, the ContextResolver. OFF (default) ⇒ tables

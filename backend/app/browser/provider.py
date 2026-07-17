@@ -38,13 +38,28 @@ class ProviderSession:
 @dataclass
 class RawObservation:
     """A provider's raw page read. The operator sanitizes this into the
-    bounded, secret-free observation contract before it leaves the boundary."""
+    bounded, secret-free observation contract before it leaves the boundary.
+
+    B1 additions (all defaulted, so B0's FakeProvider construction stays valid):
+    - ``viewport``: real {width,height} the screenshot/coords are relative to.
+    - ``accessibility_summary``: an a11y-tree distillation distinct from the
+      structural ``dom_summary``.
+    - ``screenshot_bytes``: the raw image, held TRANSIENTLY for the model call
+      + verification ONLY. It is NEVER logged, never persisted, never returned
+      to a client, and never placed in a receipt — the operator strips it at
+      the boundary and keeps only ``screenshot_ref`` + a digest. Bounded by the
+      provider before it is ever set.
+    """
     url: str
     title: str
     dom_summary: str
     elements: list[dict] = field(default_factory=list)
     screenshot_ref: str = ""
     truncated: bool = False
+    viewport: dict = field(default_factory=lambda: {"width": 1280,
+                                                    "height": 720})
+    accessibility_summary: str = ""
+    screenshot_bytes: bytes = b""  # transient; stripped at the operator boundary
 
 
 class BrowserProvider(Protocol):

@@ -88,6 +88,9 @@ def _op_command(org: str, principal: str, session_id: str,
                 body: dict) -> tuple[int, dict]:
     verb = str((body or {}).get("verb") or "").strip()
     expected = (body or {}).get("expected")
+    coords = (body or {}).get("coordinates")
+    conf = (body or {}).get("confidence")
+    opv = (body or {}).get("observed_page_version")
     result = operator.issue_command(
         org, session_id, verb=verb, principal=principal,
         command_id=str((body or {}).get("command_id") or ""),
@@ -97,6 +100,9 @@ def _op_command(org: str, principal: str, session_id: str,
         direction=str((body or {}).get("direction") or "down"),
         verify=bool((body or {}).get("verify")),
         expected=expected if isinstance(expected, dict) else None,
+        coordinates=coords if isinstance(coords, (list, tuple)) else None,
+        confidence=float(conf) if isinstance(conf, (int, float)) else None,
+        observed_page_version=int(opv) if isinstance(opv, int) else None,
     )
     if result.get("reason") == "not_found":
         return 404, result
@@ -142,6 +148,23 @@ def _op_close(org: str, principal: str, session_id: str) -> tuple[int, dict]:
 def _op_revoke(org: str, principal: str, session_id: str) -> tuple[int, dict]:
     result = operator.revoke_session(org, session_id, principal=principal)
     return (403 if result.get("reason") == "not_owner" else 200), result
+
+
+def _op_run(org: str, principal: str, session_id: str,
+            body: dict) -> tuple[int, dict]:
+    """Run the bounded B1 perception coordinator toward a goal. Returns the
+    transcript (outcome + bounded per-step summaries). 404 when the visual
+    planner is off (inert)."""
+    from . import coordinator
+
+    goal = str((body or {}).get("goal") or "").strip()
+    if not goal:
+        return 400, {"error": "goal is required"}
+    result = coordinator.run(org, session_id, goal, principal=principal)
+    if result.get("outcome") == "disabled":
+        return 404, {"error": "visual_planner_disabled",
+                     "reason": result.get("reason")}
+    return 200, result
 
 
 # ── machine surface: /org/browser/* ─────────────────────────────────────────
@@ -195,6 +218,14 @@ async def org_browser_observe(sid: str, request: Request) -> JSONResponse:
 async def org_browser_metadata(sid: str, request: Request) -> JSONResponse:
     return await _machine(
         request, lambda org, body: _op_set_metadata(org, "", sid, body),
+        needs_body=True,
+    )
+
+
+@router.post("/org/browser/sessions/{sid}/run")
+async def org_browser_run(sid: str, request: Request) -> JSONResponse:
+    return await _machine(
+        request, lambda org, body: _op_run(org, "", sid, body),
         needs_body=True,
     )
 
@@ -265,6 +296,9 @@ async def dashboard_browser(tail: str, request: Request) -> JSONResponse:
         if (len(parts) == 3 and parts[0] == "sessions"
                 and parts[2] == "present" and method == "POST"):
             return _op_present(org, principal, parts[1])
+        if (len(parts) == 3 and parts[0] == "sessions"
+                and parts[2] == "run" and method == "POST"):
+            return _op_run(org, principal, parts[1], body)
         if parts == ["present", "exchange"] and method == "POST":
             return _op_exchange(org, body)
         if (len(parts) == 3 and parts[0] == "sessions"
