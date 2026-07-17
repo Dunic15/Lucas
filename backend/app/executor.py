@@ -132,7 +132,10 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
         try:
             if result.get("ok"):
                 detail = " · ".join(p for p in ("native", what, receipt) if p)[:300]
-                ledger.set_action_status(aid, "done", detail, org_id=org)
+                ledger.set_action_status(
+                    aid, "done", detail, org_id=org,
+                    receipt={"kind": what, "ref": receipt, "route": "native"},
+                )
             else:
                 detail = f"native · {result.get('error', 'failed')}"[:300]
                 ledger.set_action_status(aid, "failed", detail, org_id=org)

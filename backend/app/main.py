@@ -64,6 +64,7 @@ from . import (
     granola_client,
     actions,
     gmail_watcher,
+    knowledge,
     llm,
     autopilot,
     gpu_runtime,
@@ -187,6 +188,43 @@ async def _lifespan(app: FastAPI):
     # Delivery ownership is the committed row, not this in-memory task.
     outbox_task = asyncio.create_task(_outbox_loop())
 
+    if knowledge.enabled():
+        # Company Brain ingest worker (M1): claims durable knowledge_sync_jobs
+        # with SKIP LOCKED + leases — same ownership model as the outbox. On
+        # boot it re-enqueues one index rebuild per org with published chunks,
+        # so the in-memory per-org index files regenerate from Postgres after
+        # a deploy wiped the disk. Never on the live transcript path.
+        async def _knowledge_loop() -> None:
+            from .knowledge import dal as knowledge_dal
+            from .knowledge import ingest as knowledge_ingest
+
+            try:
+                await run_in_threadpool(knowledge_dal.enqueue_boot_rebuilds)
+            except Exception as exc:  # noqa: BLE001 — boot rebuild is best-effort
+                print(
+                    f"[knowledge] boot rebuild enqueue failed: {type(exc).__name__}",
+                    flush=True,
+                )
+            while not _shutting_down:
+                try:
+                    await run_in_threadpool(knowledge_ingest.process_due)
+                    # Multi-instance convergence: instances don't share a
+                    # disk, so EVERY instance periodically re-derives its own
+                    # index files from the durable epoch (throttled inside).
+                    await run_in_threadpool(
+                        knowledge_ingest.refresh_local_indexes
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # never log content, filenames, or org text
+                    print(
+                        f"[knowledge] worker iteration failed: {type(exc).__name__}",
+                        flush=True,
+                    )
+                await asyncio.sleep(5)
+
+        asyncio.create_task(_knowledge_loop())
+
     if settings.elevenlabs_api_key:
         # Pre-synthesize the fixed conversational furniture so the FIRST
         # ack/backchannel/goodbye of a meeting comes from cache, not a
@@ -216,6 +254,9 @@ app.include_router(org_api.router)  # /org/* — org-memory seam for surfaces (#
 app.include_router(auth.router)  # /auth/* — dashboard login (Google Sign-In)
 app.include_router(billing.router)  # /billing/* + signed /webhooks/stripe
 app.include_router(dashboard.router)  # /dashboard — owner control view
+from .knowledge import router as knowledge_router  # noqa: E402
+
+app.include_router(knowledge_router.router)  # /org/knowledge + dashboard twin (M1)
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).

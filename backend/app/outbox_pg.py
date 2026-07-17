@@ -12,14 +12,24 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
-from . import control_plane
+from . import action_plane, control_plane
 from .config import settings
 
 
-_EXECUTION_STATUSES = ("proposed", "approved", "rejected", "done", "failed")
-_TERMINAL_EXECUTION_STATUSES = ("rejected", "done", "failed")
-_EXECUTION_RANK = {"": -1, "proposed": 0, "approved": 1}
-_EXECUTION_RANK.update({state: 2 for state in _TERMINAL_EXECUTION_STATUSES})
+_EXECUTION_STATUSES = action_plane.ACTION_STATUSES
+_TERMINAL_EXECUTION_STATUSES = action_plane.TERMINAL_STATUSES
+# Monotonic repaint guard for at-least-once, possibly out-of-order webhook
+# delivery. needs_details and proposed share a rank on purpose: finalize may
+# flag an already-proposed card as incomplete, and an edit moves it back —
+# both directions are legitimate until a decision lands.
+_EXECUTION_RANK = {"": -1, "needs_details": 0, "proposed": 0, "approved": 1,
+                   "executing": 2}
+_EXECUTION_RANK.update({state: 3 for state in _TERMINAL_EXECUTION_STATUSES})
+
+# Execution claims outlive the slowest vendor call (Google/Asana clients use
+# ~30s HTTP timeouts); a lease that expires with the row still 'executing'
+# means the process died mid-call — reconciled, never blindly retried.
+_EXECUTION_LEASE_SECONDS = 180
 
 
 class ActionCaptureClosed(RuntimeError):
@@ -66,10 +76,13 @@ _INDEX_ACTION_SQL = text(
     """
     INSERT INTO queued_actions (
       org_id, bot_id, action_id, action, owner, due,
-      created_at, updated_at
+      typed_json, params_schema_json, risk, execution_route, origin_avatar,
+      execution_status, created_at, updated_at
     ) VALUES (
       :org_id, :bot_id, :action_id, :action, :owner, :due,
-      clock_timestamp(), clock_timestamp()
+      CAST(:typed_json AS jsonb), CAST(:params_schema_json AS jsonb),
+      :risk, :execution_route, :origin_avatar,
+      :execution_status, clock_timestamp(), clock_timestamp()
     )
     ON CONFLICT (org_id, action_id) DO UPDATE SET
       action=CASE WHEN excluded.action <> ''
@@ -78,6 +91,28 @@ _INDEX_ACTION_SQL = text(
                  THEN excluded.owner ELSE queued_actions.owner END,
       due=CASE WHEN excluded.due <> ''
                THEN excluded.due ELSE queued_actions.due END,
+      -- canonical fields fill blanks only (a live-capture row gains its typed
+      -- spec at finalize; an already-stamped row is never re-evaluated —
+      -- contract re-route bounds)
+      typed_json=COALESCE(queued_actions.typed_json, excluded.typed_json),
+      params_schema_json=CASE
+        WHEN queued_actions.params_schema_json = '[]'::jsonb
+        THEN excluded.params_schema_json
+        ELSE queued_actions.params_schema_json END,
+      risk=CASE WHEN queued_actions.risk = ''
+                THEN excluded.risk ELSE queued_actions.risk END,
+      execution_route=CASE
+        WHEN queued_actions.execution_route = ''
+        THEN excluded.execution_route
+        ELSE queued_actions.execution_route END,
+      origin_avatar=CASE
+        WHEN queued_actions.origin_avatar = ''
+        THEN excluded.origin_avatar
+        ELSE queued_actions.origin_avatar END,
+      execution_status=CASE
+        WHEN queued_actions.execution_status = ''
+        THEN excluded.execution_status
+        ELSE queued_actions.execution_status END,
       updated_at=clock_timestamp()
     """
 )
@@ -87,7 +122,16 @@ def _norm_action_text(value: Any) -> str:
     return " ".join(str(value or "").split()).lower()
 
 
-def _indexed_action_params(org_id: str, bot_id: str, action: dict) -> dict[str, Any]:
+def _indexed_action_params(
+    org_id: str, bot_id: str, action: dict, origin_avatar: str = ""
+) -> dict[str, Any]:
+    typed = action.get("typed") if isinstance(action.get("typed"), dict) else None
+    # needs_details is stamped only when a typed spec EXISTS but lacks required
+    # parameters (the 'approved but nothing executed' silent no-op). Untyped
+    # free-text actions keep '' and the Cedric card path, exactly as today.
+    status = ""
+    if typed and action_plane.missing_params(typed):
+        status = "needs_details"
     return {
         "org_id": org_id,
         "bot_id": bot_id,
@@ -95,6 +139,15 @@ def _indexed_action_params(org_id: str, bot_id: str, action: dict) -> dict[str, 
         "action": str(action.get("item") or action.get("action") or "")[:300],
         "owner": str(action.get("owner") or "")[:100],
         "due": str(action.get("deadline") or action.get("due") or "")[:100],
+        "typed_json": json.dumps(typed, separators=(",", ":"), sort_keys=True)
+        if typed else None,
+        "params_schema_json": json.dumps(
+            action_plane.params_schema(typed), separators=(",", ":")
+        ),
+        "risk": action_plane.risk_for(typed),
+        "execution_route": str(action.get("execution_route") or "")[:16],
+        "origin_avatar": str(origin_avatar or "")[:64],
+        "execution_status": status,
     }
 
 
@@ -132,9 +185,12 @@ def _index_session_ended_actions(
     payload = row["payload_json"]
     if isinstance(payload, str):
         payload = json.loads(payload)
-    for action in _artifact_actions((payload or {}).get("artifact")):
+    artifact = (payload or {}).get("artifact") or {}
+    origin_avatar = str(artifact.get("avatar_id") or "")
+    for action in _artifact_actions(artifact):
         conn.execute(
-            _INDEX_ACTION_SQL, _indexed_action_params(org_id, bot_id, action)
+            _INDEX_ACTION_SQL,
+            _indexed_action_params(org_id, bot_id, action, origin_avatar),
         )
 
 
@@ -157,6 +213,7 @@ def index_session_ended_actions(
     actions = _artifact_actions(artifact)
     if not actions:
         return
+    origin_avatar = str((artifact or {}).get("avatar_id") or "")
     engine = _engine()
     with engine.begin() as conn:
         _set_org(conn, org_id)
@@ -183,7 +240,8 @@ def index_session_ended_actions(
             if action_id not in known_ids and norm and norm in known_texts:
                 continue
             conn.execute(
-                _INDEX_ACTION_SQL, _indexed_action_params(org_id, bot_id, action)
+                _INDEX_ACTION_SQL,
+                _indexed_action_params(org_id, bot_id, action, origin_avatar),
             )
             known_ids.add(action_id)
             if norm:
@@ -632,10 +690,36 @@ def queued_actions(org_id: str, bot_id: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def _log_entry(event: str, detail: str = "") -> str:
+    """One bounded canonical-log entry (distilled one-liners only, never
+    transcript content — same discipline as execution_detail)."""
+    return json.dumps(
+        {"event": str(event or "")[:40], "detail": str(detail or "")[:200]},
+        separators=(",", ":"),
+    )
+
+
+# Bounded jsonb append: at the cap the oldest entry (index 0) drops first, so
+# the log can never grow without bound on a retried/edited action.
+_APPEND_LOG_SQL = (
+    "logs_json=CASE WHEN jsonb_array_length(logs_json) >= 50 "
+    "THEN (logs_json - 0) || CAST(:log_entry AS jsonb) "
+    "ELSE logs_json || CAST(:log_entry AS jsonb) END"
+)
+
+
 def set_action_status(
-    org_id: str, action_id: str, status: str, detail: str = ""
+    org_id: str,
+    action_id: str,
+    status: str,
+    detail: str = "",
+    receipt: Optional[dict] = None,
 ) -> bool:
-    """Persist one org's monotonic execution state on its durable action."""
+    """Persist one org's monotonic execution state on its durable action.
+
+    ``receipt`` (optional, terminal statuses) is the structured receipt the
+    canonical Action carries — {"kind": ..., "ref": url/id} — alongside the
+    human detail string the dashboard chips already render."""
     aid = str(action_id or "").strip()
     state = str(status or "").strip().lower()
     if not aid or state not in _EXECUTION_STATUSES:
@@ -665,14 +749,24 @@ def set_action_status(
             return True
         conn.execute(
             text(
-                """
+                f"""
                 UPDATE queued_actions
                 SET execution_status=:status,
                     execution_detail=:detail,
                     execution_updated_at=clock_timestamp(),
+                    receipt_json=CASE
+                      WHEN CAST(:receipt_json AS jsonb) IS NOT NULL
+                      THEN CAST(:receipt_json AS jsonb)
+                      ELSE receipt_json
+                    END,
+                    {_APPEND_LOG_SQL},
                     resolved_at=CASE
                       WHEN :terminal THEN clock_timestamp()
                       ELSE resolved_at
+                    END,
+                    execution_lease_until=CASE
+                      WHEN :terminal THEN NULL
+                      ELSE execution_lease_until
                     END,
                     updated_at=clock_timestamp()
                 WHERE org_id=:org_id AND action_id=:action_id
@@ -683,10 +777,388 @@ def set_action_status(
                 "action_id": aid,
                 "status": state,
                 "detail": str(detail or "").strip()[:300],
+                "receipt_json": json.dumps(
+                    receipt, separators=(",", ":"), sort_keys=True
+                )
+                if isinstance(receipt, dict) and receipt
+                else None,
+                "log_entry": _log_entry(f"status:{state}", detail),
                 "terminal": state in _TERMINAL_EXECUTION_STATUSES,
             },
         )
     return True
+
+
+def claim_action_execution(
+    org_id: str,
+    action_id: str,
+    *,
+    idempotency_key: str = "",
+    detail: str = "",
+    lease_seconds: int = _EXECUTION_LEASE_SECONDS,
+) -> str:
+    """Atomically claim the right to execute one approved action.
+
+    The compare-and-set to ``executing`` is what makes double-approval
+    single-execution TRUE across App Runner instances and surfaces (the
+    per-instance SQLite decision record cannot serialize two instances).
+    Returns 'claimed' (this caller executes), 'lost' (someone else holds or
+    finished the claim — do NOT execute), or 'missing' (no durable row for
+    this org/action — the caller falls back to its local guard, exactly
+    today's semantics for never-indexed native actions)."""
+    aid = str(action_id or "").strip()
+    if not aid:
+        return "missing"
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                f"""
+                UPDATE queued_actions
+                SET execution_status='executing',
+                    execution_detail=:detail,
+                    execution_updated_at=clock_timestamp(),
+                    execution_lease_until=clock_timestamp()
+                      + (:lease_seconds * interval '1 second'),
+                    idempotency_key=CASE
+                      WHEN idempotency_key='' THEN :idempotency_key
+                      ELSE idempotency_key
+                    END,
+                    {_APPEND_LOG_SQL},
+                    updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND action_id=:action_id
+                  AND execution_status IN
+                      ('', 'needs_details', 'proposed', 'approved')
+                RETURNING action_id
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": aid,
+                "detail": str(detail or "").strip()[:300],
+                "idempotency_key": str(idempotency_key or "").strip()[:128],
+                "lease_seconds": max(30, min(int(lease_seconds), 3600)),
+                "log_entry": _log_entry("claim", detail),
+            },
+        ).first()
+        if row is not None:
+            return "claimed"
+        exists = conn.execute(
+            text(
+                "SELECT 1 FROM queued_actions "
+                "WHERE org_id=:org_id AND action_id=:action_id"
+            ),
+            {"org_id": org_id, "action_id": aid},
+        ).first()
+    return "lost" if exists is not None else "missing"
+
+
+def stale_executing(org_id: str) -> list[dict[str, Any]]:
+    """One org's actions whose execution claim outlived its lease — the
+    process died mid-vendor-call (or an async dispatch thread was lost).
+    Read-only; the reconciler decides what each row becomes."""
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        rows = conn.execute(
+            text(
+                """
+                SELECT action_id, typed_json, execution_detail,
+                       extract(
+                         epoch from clock_timestamp() - execution_lease_until
+                       ) AS expired_for
+                FROM queued_actions
+                WHERE org_id=:org_id AND execution_status='executing'
+                  AND execution_lease_until IS NOT NULL
+                  AND execution_lease_until <= clock_timestamp()
+                ORDER BY execution_lease_until
+                LIMIT 20
+                """
+            ),
+            {"org_id": org_id},
+        ).mappings().all()
+    out = []
+    for row in rows:
+        item = dict(row)
+        typed = item.get("typed_json")
+        if isinstance(typed, str):
+            try:
+                typed = json.loads(typed)
+            except ValueError:
+                typed = None
+        item["typed_json"] = typed if isinstance(typed, dict) else None
+        item["expired_for"] = float(item["expired_for"] or 0)
+        out.append(item)
+    return out
+
+
+def record_action_decision(
+    org_id: str, action_id: str, fields: dict[str, Any]
+) -> bool:
+    """Durably record THE canonical decision for (org, action). First write
+    wins via the primary key — the cross-instance twin of the SQLite
+    action_approvals INSERT OR IGNORE. Returns False when a decision row
+    already exists (read it back with get_action_decision)."""
+    aid = str(action_id or "").strip()
+    decision = str(fields.get("decision") or "").strip()
+    if not aid or decision not in ("approve", "reject", "respond"):
+        return False
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                """
+                INSERT INTO action_decisions (
+                  org_id, action_id, decision, selected_slot_id,
+                  idempotency_key, decided_via, laura_user_id,
+                  previous_status, new_status, execution_job_id, blocked_on,
+                  decided_at
+                ) VALUES (
+                  :org_id, :action_id, :decision, :selected_slot_id,
+                  :idempotency_key, :decided_via, :laura_user_id,
+                  :previous_status, :new_status, :execution_job_id,
+                  :blocked_on, clock_timestamp()
+                )
+                ON CONFLICT (org_id, action_id) DO NOTHING
+                RETURNING action_id
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": aid,
+                "decision": decision,
+                "selected_slot_id": str(fields.get("selected_slot_id") or "")[:64],
+                "idempotency_key": str(fields.get("idempotency_key") or "")[:128],
+                "decided_via": str(fields.get("decided_via") or "")[:32],
+                "laura_user_id": str(fields.get("laura_user_id") or "")[:64],
+                "previous_status": str(fields.get("previous_status") or "")[:24],
+                "new_status": str(fields.get("new_status") or "")[:24],
+                "execution_job_id": fields.get("execution_job_id"),
+                "blocked_on": str(fields.get("blocked_on") or ""),
+            },
+        ).first()
+    return row is not None
+
+
+def get_action_decision(org_id: str, action_id: str) -> Optional[dict[str, Any]]:
+    """The recorded canonical decision for (org, action), or None."""
+    aid = str(action_id or "").strip()
+    if not aid:
+        return None
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                """
+                SELECT decision, selected_slot_id, idempotency_key,
+                       decided_via, laura_user_id, previous_status,
+                       new_status, execution_job_id, blocked_on,
+                       extract(epoch from decided_at) AS decided_at
+                FROM action_decisions
+                WHERE org_id=:org_id AND action_id=:action_id
+                """
+            ),
+            {"org_id": org_id, "action_id": aid},
+        ).mappings().first()
+    return dict(row) if row is not None else None
+
+
+def list_blocked_action_decisions(org_id: str) -> list[dict[str, Any]]:
+    """Approve-decisions in this org still parked behind unmet dependencies
+    ([M8]) — the durable twin of store.list_blocked_action_approvals. Tenant
+    isolation is the same RLS GUC every read here sets; `blocked_on` empties
+    when the approval runs, so the scan stays small."""
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        rows = conn.execute(
+            text(
+                """
+                SELECT action_id, blocked_on
+                FROM action_decisions
+                WHERE org_id=:org_id AND decision='approve'
+                  AND COALESCE(blocked_on, '') NOT IN ('', '[]')
+                """
+            ),
+            {"org_id": org_id},
+        ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def set_action_decision_blocked_on(
+    org_id: str, action_id: str, blocked_on: str
+) -> None:
+    """Re-park a dependency-blocked decision on a SHRUNKEN dependency list (or
+    clear it with '[]') — the durable twin of
+    store.set_action_approval_blocked_on."""
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        conn.execute(
+            text(
+                """
+                UPDATE action_decisions SET blocked_on=:blocked_on
+                WHERE org_id=:org_id AND action_id=:action_id
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": str(action_id or "").strip(),
+                "blocked_on": blocked_on or "",
+            },
+        )
+
+
+def set_action_decision_result(
+    org_id: str, action_id: str, new_status: str, execution_job_id: str | None
+) -> None:
+    """Stamp the execution outcome onto the recorded decision (the decision
+    itself is immutable; only the result fields settle after dispatch)."""
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        conn.execute(
+            text(
+                """
+                UPDATE action_decisions
+                SET new_status=:new_status,
+                    execution_job_id=COALESCE(
+                      :execution_job_id, execution_job_id
+                    )
+                WHERE org_id=:org_id AND action_id=:action_id
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": str(action_id or "").strip(),
+                "new_status": str(new_status or "")[:24],
+                "execution_job_id": execution_job_id,
+            },
+        )
+
+
+def get_action(org_id: str, action_id: str) -> Optional[dict[str, Any]]:
+    """The full durable canonical Action row for (org, action), or None."""
+    aid = str(action_id or "").strip()
+    if not aid:
+        return None
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                """
+                SELECT action_id, bot_id, action, owner, due,
+                       typed_json, params_schema_json, risk, execution_route,
+                       origin_avatar, connected_account_json, permission_json,
+                       receipt_json, logs_json, idempotency_key,
+                       execution_status, execution_detail,
+                       COALESCE(
+                         extract(epoch from execution_updated_at), 0
+                       ) AS execution_updated_at,
+                       COALESCE(
+                         extract(epoch from execution_lease_until), 0
+                       ) AS execution_lease_until,
+                       extract(epoch from created_at) AS created_at,
+                       extract(epoch from updated_at) AS updated_at
+                FROM queued_actions
+                WHERE org_id=:org_id AND action_id=:action_id
+                """
+            ),
+            {"org_id": org_id, "action_id": aid},
+        ).mappings().first()
+    if row is None:
+        return None
+    out = dict(row)
+    for key in ("typed_json", "params_schema_json", "connected_account_json",
+                "permission_json", "receipt_json", "logs_json"):
+        value = out.get(key)
+        if isinstance(value, str):
+            try:
+                out[key] = json.loads(value)
+            except ValueError:
+                out[key] = None
+    return out
+
+
+def update_action_params(
+    org_id: str, action_id: str, args: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    """Merge edited safe parameters into the durable typed spec.
+
+    Read-modify-write under FOR UPDATE; refused (None) for terminal or
+    currently-executing actions — an edit can never change what a held claim
+    is about to run. When the merged spec has no missing required fields the
+    status moves needs_details→proposed; both transitions append to the
+    canonical log. Returns the updated typed dict."""
+    aid = str(action_id or "").strip()
+    if not aid or not isinstance(args, dict):
+        return None
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                """
+                SELECT typed_json, execution_status
+                FROM queued_actions
+                WHERE org_id=:org_id AND action_id=:action_id
+                FOR UPDATE
+                """
+            ),
+            {"org_id": org_id, "action_id": aid},
+        ).mappings().first()
+        if row is None:
+            return None
+        status = str(row["execution_status"] or "")
+        if status in _TERMINAL_EXECUTION_STATUSES or status == "executing":
+            return None
+        typed = row["typed_json"]
+        if isinstance(typed, str):
+            typed = json.loads(typed)
+        if not isinstance(typed, dict) or not typed.get("type"):
+            return None
+        merged_args = dict(typed.get("args") or {})
+        merged_args.update(args)
+        typed = {**typed, "args": merged_args}
+        still_missing = action_plane.missing_params(typed)
+        new_status = status
+        if status in ("", "needs_details"):
+            new_status = "needs_details" if still_missing else "proposed"
+        conn.execute(
+            text(
+                f"""
+                UPDATE queued_actions
+                SET typed_json=CAST(:typed_json AS jsonb),
+                    params_schema_json=CAST(:params_schema_json AS jsonb),
+                    risk=CASE WHEN risk='' THEN :risk ELSE risk END,
+                    execution_status=:new_status,
+                    {_APPEND_LOG_SQL},
+                    updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND action_id=:action_id
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": aid,
+                "typed_json": json.dumps(
+                    typed, separators=(",", ":"), sort_keys=True
+                ),
+                "params_schema_json": json.dumps(
+                    action_plane.params_schema(typed), separators=(",", ":")
+                ),
+                "risk": action_plane.risk_for(typed),
+                "new_status": new_status,
+                "log_entry": _log_entry(
+                    "params_edited",
+                    "fields: " + ", ".join(sorted(str(k) for k in args)),
+                ),
+            },
+        )
+    return typed
 
 
 def resolve_action(

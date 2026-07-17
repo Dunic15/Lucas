@@ -503,6 +503,18 @@ def _init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_chat_messages_org
                 ON chat_messages(org_id, id);
 
+            -- Edited typed params for a captured action (canonical Action
+            -- plane, key-free mode). The artifact stays immutable; this
+            -- overlay is what the approve doors execute. Durable orgs use
+            -- queued_actions.typed_json in Postgres instead.
+            CREATE TABLE IF NOT EXISTS action_typed_overrides (
+                org_id TEXT NOT NULL,
+                action_id TEXT NOT NULL,
+                typed_json TEXT NOT NULL,
+                updated_at REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (org_id, action_id)
+            );
+
             -- The GRANT org↔agent (a shared avatar folder becomes callable for
             -- an org). PK(org_id, avatar_id) — one grant per pair.
             CREATE TABLE IF NOT EXISTS org_agents (
@@ -2393,6 +2405,101 @@ def list_chat_messages(org_id: str, after_id: int = 0, limit: int = 200) -> list
             }
         )
     return out
+
+
+def list_blocked_action_approvals(org_id: str) -> list[dict]:
+    """Every approve-decision in this org still parked behind unmet
+    dependencies ([M8]) — the work-list for the deferred release.
+
+    Scoped to one org and to rows that ARE blocked, so the release sweep needs
+    no cross-tenant discovery: `blocked_on` is cleared the moment the approval
+    really runs, which keeps this list naturally tiny."""
+    org = (org_id or "").strip()
+    if not org:
+        return []
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            "SELECT action_id, blocked_on FROM action_approvals "
+            "WHERE org_id=? AND decision='approve' AND blocked_on NOT IN ('', '[]')",
+            (org,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_action_approval_blocked_on(
+    org_id: str, action_id: str, blocked_on: str
+) -> None:
+    """Re-park a dependency-blocked approval on a SHRUNKEN dependency list (or
+    clear it with '[]'). The decision itself is never touched — only what the
+    approval is still waiting for."""
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            "UPDATE action_approvals SET blocked_on=? WHERE org_id=? AND action_id=?",
+            (blocked_on or "", (org_id or "").strip(), (action_id or "").strip()),
+        )
+
+
+def set_action_approval_result(
+    org_id: str, action_id: str, *, new_status: str = "",
+    execution_job_id: str | None = None,
+) -> None:
+    """Settle the execution outcome onto the recorded decision row (two-phase
+    canonical approve: the decision is recorded BEFORE dispatch, the outcome
+    fields land here after). The decision itself is never overwritten, and a
+    dependency-blocked approve keeps its blocked_on list until it really runs."""
+    sets, args = [], []
+    if new_status:
+        sets.append("new_status=?")
+        args.append(new_status)
+    if execution_job_id:
+        sets.append("execution_job_id=?")
+        args.append(execution_job_id)
+        sets.append("blocked_on=''")
+    if not sets:
+        return
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            f"UPDATE action_approvals SET {', '.join(sets)} "
+            "WHERE org_id=? AND action_id=?",
+            (*args, (org_id or "").strip(), (action_id or "").strip()),
+        )
+
+
+# ── typed-spec overrides (canonical Action param edits, key-free mode) ──
+# Durable orgs persist edited params on queued_actions.typed_json (Postgres);
+# the key-free/demo path keeps the SAME feature via this small overlay table
+# so the artifact itself stays an immutable historical record.
+
+def set_action_typed_override(org_id: str, action_id: str, typed: dict) -> None:
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            """INSERT INTO action_typed_overrides
+                   (org_id, action_id, typed_json, updated_at)
+               VALUES (?,?,?,?)
+               ON CONFLICT(org_id, action_id) DO UPDATE SET
+                 typed_json=excluded.typed_json, updated_at=excluded.updated_at""",
+            (
+                (org_id or "").strip(), (action_id or "").strip(),
+                json.dumps(typed, separators=(",", ":"), sort_keys=True),
+                time.time(),
+            ),
+        )
+
+
+def get_action_typed_override(org_id: str, action_id: str) -> dict | None:
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT typed_json FROM action_typed_overrides "
+            "WHERE org_id=? AND action_id=?",
+            ((org_id or "").strip(), (action_id or "").strip()),
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        typed = json.loads(row["typed_json"])
+    except ValueError:
+        return None
+    return typed if isinstance(typed, dict) else None
 
 
 def is_org_member(user_id: str, org_id: str) -> bool:

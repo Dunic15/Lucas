@@ -2,7 +2,7 @@
 
 **Owner:** Product/engineering
 **Applies to:** Current Laura backend and live meeting workflow
-**Last reviewed:** 2026-07-16
+**Last reviewed:** 2026-07-17
 
 ## What Laura is
 
@@ -101,14 +101,28 @@ and English. The Recall region is EU: `RECALL_API_BASE=https://eu-central-1.reca
   and independent of Slack: the Slack agent (Cedric) is a separate, optional
   delivery/approval surface, used only when asked. Every avatar has this;
   the owner can switch it off per avatar.
+- **One action, every surface:** each captured action is a single canonical
+  record. If its details are incomplete, approving it asks for the exact
+  missing fields (which can be filled right there) instead of silently doing
+  nothing; and approving the same action twice — or from the dashboard and
+  Slack at the same time — executes it exactly once, with one receipt.
+- **Actions that wait on other actions:** an action can depend on another one.
+  Approving it records the approval but does not run it while a dependency is
+  still outstanding; the moment the last one completes, Laura runs it herself —
+  including when the dependency was completed by the Slack agent rather than by
+  her. A dependency that FAILED does not release anything: work whose premise
+  never happened stays parked rather than running anyway.
 
 ## Owned boundaries
 
 Answer quality is owned by:
 
 - `avatars/laura/knowledge/*` (real process docs; `about/*` covers Laura herself)
-- per-org private indexes (an org's own ingested docs — Drive/uploads — live in
-  a separate per-tenant index merged at retrieval; orgs never see each other's)
+- the Company Brain (when enabled): an organization's own documents, uploaded
+  in the dashboard's Brain tab or synced from a Drive folder, stored durably
+  per tenant and merged into retrieval with citations — each org's knowledge
+  is isolated from every other org's, and it survives redeploys because the
+  in-memory index is rebuilt from the durable store
 - `backend/app/rag.py`
 - `backend/scripts/ingest.py`
 - the grounding and prompt logic in `backend/app/brain.py`

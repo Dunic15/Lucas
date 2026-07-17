@@ -586,6 +586,7 @@
       <button type="button" data-view="chat"><span class="ic">◧</span> Cedric</button>
       <button type="button" data-view="usage"><span class="ic">◇</span> Usage &amp; billing</button>
       <button type="button" data-view="connections"><span class="ic">⇄</span> Connections</button>
+      <button type="button" data-view="brain"><span class="ic">◎</span> Brain</button>
       <button type="button" data-view="settings"><span class="ic">⚙</span> Settings</button>
     </nav>
     <div>
@@ -760,6 +761,11 @@
     </section>
 
     <!-- SETTINGS -->
+    <section class="view" id="view-brain" hidden>
+      <div class="head"><div><h1>Company Brain</h1><div class="sub">Your organization's own documents — uploaded once, cited by your avatars in every meeting</div></div></div>
+      <div id="brain-body"><div class="empty" style="padding:14px">Loading…</div></div>
+    </section>
+
     <section class="view" id="view-settings" hidden>
       <div class="head"><div><h1>Settings</h1><div class="sub">Local preferences for this browser</div></div></div>
       <div class="settings">
@@ -890,13 +896,14 @@
 
   var DATA=null, filterMt="all";
 
-  var VIEWS=["overview","avatars","meetings","chat","usage","connections","settings"];
+  var VIEWS=["overview","avatars","meetings","chat","usage","connections","brain","settings"];
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
     document.querySelectorAll("#nav button").forEach(function(a){var current=a.getAttribute("data-view")===name;a.classList.toggle("on",current);if(current)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current");});
     // Persist the current view in the URL hash so a plain page refresh restores it
     // (instead of resetting to Overview). replaceState = no new history entry, no jump.
     try{ window.history.replaceState({},"",window.location.pathname+"#"+name); }catch(e){}
+    if(name==="brain") loadBrain();
     window.scrollTo(0,0); }
   $$("#nav button").forEach(function(a){a.addEventListener("click",function(e){e.preventDefault();go(a.getAttribute("data-view"));});});
   document.addEventListener("click",function(e){var t=e.target.closest("[data-goto]");if(t){go(t.getAttribute("data-goto"));}});
@@ -1750,9 +1757,13 @@
     // (POST /dashboard/actions/{id}/approve); with the executor flag OFF the
     // endpoint marks it approved and runs nothing (handled in approveAction).
     function apprBtn(a){
-      if(!a.typed||!a.action_id) return "";
+      if(!a.action_id) return "";
       if(a.execution&&(a.execution.status==="done"||a.execution.status==="rejected")) return "";  // terminal → pill shows
-      return '<button class="btn-appr" data-approve="'+esc(a.action_id)+'">Approve &amp; run</button>';
+      // Typed actions run NATIVELY on approve ("Approve & run"); everything
+      // else — untyped items, UNASSIGNED triage, non-native types — routes to
+      // Cedric for execution through its connectors on approve.
+      return '<button class="btn-appr" data-approve="'+esc(a.action_id)+'">'+
+        (a.typed?"Approve &amp; run":"Approve → Cedric")+'</button>';
     }
     // Per-row "Reject" — approve's mirror (POST /dashboard/actions/{id}/reject).
     // Marks the action rejected (terminal) in the same provenance channel;
@@ -1782,13 +1793,44 @@
       fetch("/dashboard/actions/"+encodeURIComponent(aid)+"/approve",{method:"POST",headers:headers()})
         .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); })
         .then(function(res){
+          // needs_details: the typed spec is missing required fields — collect
+          // them right here (schema-validated server-side) and retry once.
+          if(res.status===422 && res.j.error==="needs_details"){
+            var schema=res.j.params_schema||[], missing=res.j.missing_params||[], args={}, aborted=false;
+            missing.forEach(function(name){
+              if(aborted) return;
+              var f=schema.find(function(x){return x.name===name;})||{};
+              var hint=f.description?(" ("+f.description+")"):"";
+              var v=window.prompt("This action needs \""+name+"\""+hint+(f.type==="array"?" — comma-separated":"")+":");
+              if(v===null||!v.trim()){ aborted=true; return; }
+              args[name]=f.type==="array"? v.split(",").map(function(s){return s.trim();}).filter(Boolean) : v.trim();
+            });
+            if(aborted){ btn.disabled=false; btn.innerHTML=old; toast("Approval needs those details to run.",true); return; }
+            return fetch("/dashboard/actions/"+encodeURIComponent(aid)+"/params",{method:"POST",headers:headers(),body:JSON.stringify({args:args})})
+              .then(function(r2){ return r2.json().catch(function(){return {};}).then(function(j2){ return {ok:r2.ok,j:j2}; }); })
+              .then(function(p){
+                if(!p.ok) throw new Error(p.j.error||"could not save details");
+                if((p.j.missing_params||[]).length) throw new Error("still missing: "+p.j.missing_params.join(", "));
+                btn.disabled=false; btn.innerHTML=old;
+                toast("Details saved — approving…");
+                approveAction(btn);
+              })
+              .catch(function(e){ btn.disabled=false; btn.innerHTML=old; toast("Could not save details: "+e.message,true); });
+          }
           if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
           var j=res.j, st=j.status||null;
-          // Flag OFF (or nothing ran): captured + marked approved, but not
-          // executed — say so plainly rather than surfacing it as an error.
+          // Routed to Cedric: approved here, executing over there — the row's
+          // chip flips to done/failed when Cedric reports back on the status door.
+          if(!j.executed&&j.dispatched){
+            btn.outerHTML='<span class="exec approved" title="Approved — Cedric is executing this through its connectors; the receipt lands here when it reports back.">approved · with Cedric</span>';
+            toast("Approved — routed to Cedric for execution.");
+            return;
+          }
+          // Flag OFF (or nothing ran, no Cedric link): captured + marked
+          // approved, but not executed — say so plainly, not as an error.
           if(!j.executed){
-            btn.outerHTML='<span class="exec approved" title="Marked approved. Turn on the native executor to run it automatically.">captured · execution off</span>';
-            toast("Action approved — captured (native execution is off).");
+            btn.outerHTML='<span class="exec approved" title="Marked approved. Connect Cedric (Slack agent) or turn on the native executor to run it automatically.">approved · awaiting executor</span>';
+            toast("Action approved — captured (no executor ran it).");
             return;
           }
           // Executed: render the SAME receipt the row uses (Done ↗ / failed pill).
@@ -2192,6 +2234,94 @@
     if(el && (el.tagName==="INPUT"||el.tagName==="SELECT")) return;
     load();
   }, 15000);
+
+  // ── Company Brain (M1): sources, upload, assignments, test retrieval ──
+  // Lazy-loaded on first open (loadUpcoming's guard pattern) so the 15s
+  // summary refresh never refetches it; every fetch uses headers() and the
+  // server scopes everything to the caller's org.
+  function bFetch(path,opts){ opts=opts||{}; opts.headers=headers();
+    return fetch("/dashboard/knowledge/"+path,opts)
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); }); }
+  function loadBrain(force){
+    if(window._brainLoaded && !force) return;
+    window._brainLoaded=true;
+    var box=$("#brain-body"); if(!box) return;
+    bFetch("sources").then(function(res){
+      if(res.status===404){ box.innerHTML='<div class="empty" style="padding:14px">The Company Brain isn’t enabled on this deployment yet (COMPANY_BRAIN_ENABLED + the control-plane database).</div>'; return; }
+      if(!res.ok){ box.innerHTML='<div class="empty" style="padding:14px">Could not load sources.</div>'; window._brainLoaded=false; return; }
+      var srcs=res.j.sources||[];
+      var avOpts=Object.keys(avById||{}).map(function(id){return '<option value="'+esc(id)+'">'+esc(avName(id))+'</option>';}).join("")||'<option value="laura">Laura</option>';
+      var rows=srcs.map(function(s){
+        var avs=(s.avatars||[]).map(esc).join(", ")||"—";
+        return '<div class="fset" data-src="'+esc(s.id)+'" style="margin-bottom:10px">'+
+          '<div class="frow"><div><div class="t">'+esc(s.name)+' <span style="color:var(--faint);font-size:.8em">('+esc(s.kind)+')</span></div>'+
+          '<div class="h">'+(s.published_documents|0)+' published · '+(s.pending_documents|0)+' pending · '+(s.failed_documents|0)+' failed · avatars: '+avs+'</div></div>'+
+          '<div style="display:flex;gap:6px;flex-wrap:wrap">'+
+          '<button class="btn" data-bassign="'+esc(s.id)+'">Assign avatar</button>'+
+          '<button class="btn" data-bsync="'+esc(s.id)+'">Sync</button>'+
+          '<button class="btn" data-bdel="'+esc(s.id)+'">Delete</button></div></div>'+
+          '<div class="frow"><div style="flex:1"><div class="h">Add a document (markdown/plain text)</div>'+
+          '<input type="text" data-bfn="'+esc(s.id)+'" placeholder="filename.md" style="margin:4px 0;width:100%" />'+
+          '<textarea data-btxt="'+esc(s.id)+'" rows="3" placeholder="Paste the document text…" style="width:100%"></textarea></div>'+
+          '<button class="btn" data-bup="'+esc(s.id)+'">Upload</button></div>'+
+          '</div>';
+      }).join("");
+      box.innerHTML=
+        '<div class="fset" style="margin-bottom:12px"><div class="frow">'+
+        '<div><div class="t">New source</div><div class="h">A named bundle of documents (uploads first; Drive folders need a Google reconnect with Drive scope)</div></div>'+
+        '<div style="display:flex;gap:6px"><input type="text" id="bsrc-name" placeholder="e.g. Sales playbook" />'+
+        '<button class="btn" id="bsrc-create">Create</button></div></div></div>'+
+        (rows||'<div class="empty" style="padding:10px">No sources yet — create one and paste your first SOP.</div>')+
+        '<div class="fset" style="margin-top:12px"><div class="frow"><div style="flex:1">'+
+        '<div class="t">Test retrieval</div><div class="h">Ask as an avatar would — results cite source and section</div>'+
+        '<div style="display:flex;gap:6px;margin-top:6px"><select id="bq-av">'+avOpts+'</select>'+
+        '<input type="text" id="bq" placeholder="e.g. how long do refunds take?" style="flex:1" />'+
+        '<button class="btn" id="bq-go">Search</button></div>'+
+        '<div id="bq-out" style="margin-top:8px"></div></div></div></div>';
+      $("#bsrc-create").addEventListener("click",function(){
+        var name=($("#bsrc-name").value||"").trim(); if(!name){toast("Give the source a name.",true);return;}
+        bFetch("sources",{method:"POST",body:JSON.stringify({name:name,kind:"upload"})}).then(function(r){
+          if(!r.ok){toast("Could not create: "+(r.j.error||r.status),true);return;}
+          toast("Source created."); loadBrain(true); });
+      });
+      box.querySelectorAll("[data-bup]").forEach(function(b){ b.addEventListener("click",function(){
+        var id=b.getAttribute("data-bup");
+        var fn=(box.querySelector('[data-bfn="'+id+'"]').value||"").trim();
+        var tx=(box.querySelector('[data-btxt="'+id+'"]').value||"").trim();
+        if(!fn||!tx){toast("Filename and text are both needed.",true);return;}
+        bFetch("sources/"+id+"/documents",{method:"POST",body:JSON.stringify({filename:fn,text:tx})}).then(function(r){
+          if(!r.ok){toast("Upload failed: "+(r.j.error||r.status),true);return;}
+          toast("Uploaded — indexing in the background."); setTimeout(function(){loadBrain(true);},1500); });
+      });});
+      box.querySelectorAll("[data-bassign]").forEach(function(b){ b.addEventListener("click",function(){
+        var id=b.getAttribute("data-bassign");
+        var av=window.prompt("Assign which avatar? (e.g. laura)","laura"); if(!av) return;
+        bFetch("sources/"+id+"/assign",{method:"POST",body:JSON.stringify({avatar_id:av.trim()})}).then(function(r){
+          if(!r.ok){toast("Could not assign: "+(r.j.error||r.status),true);return;}
+          toast("Assigned — index rebuilding."); setTimeout(function(){loadBrain(true);},1200); });
+      });});
+      box.querySelectorAll("[data-bsync]").forEach(function(b){ b.addEventListener("click",function(){
+        bFetch("sources/"+b.getAttribute("data-bsync")+"/sync",{method:"POST",body:"{}"}).then(function(r){
+          toast(r.ok?"Sync queued.":("Sync failed: "+(r.j.error||r.status)),!r.ok); });
+      });});
+      box.querySelectorAll("[data-bdel]").forEach(function(b){ b.addEventListener("click",function(){
+        if(!window.confirm("Delete this source? Its documents stop being retrievable.")) return;
+        bFetch("sources/"+b.getAttribute("data-bdel"),{method:"DELETE"}).then(function(r){
+          if(!r.ok){toast("Delete failed: "+(r.j.error||r.status),true);return;}
+          toast("Source deleted."); loadBrain(true); });
+      });});
+      $("#bq-go").addEventListener("click",function(){
+        var q=($("#bq").value||"").trim(); if(!q) return;
+        bFetch("search",{method:"POST",body:JSON.stringify({q:q,avatar_id:$("#bq-av").value})}).then(function(r){
+          var out=$("#bq-out"); if(!r.ok){out.innerHTML='<div class="empty">Search failed.</div>';return;}
+          var hits=(r.j.semantic||[]).concat(r.j.keyword||[]);
+          out.innerHTML=hits.length? hits.slice(0,6).map(function(h){
+            return '<div class="d"><span class="ic">§</span><span>'+esc((h.text||"").slice(0,240))+'… <span style="color:var(--faint)">['+esc(h.source||"")+(h.section?(" — "+esc(h.section)):"")+']</span></span></div>';
+          }).join("") : '<div class="empty" style="padding:6px">No grounded matches.</div>';
+        });
+      });
+    });
+  }
 })();
 
 // ── Chat view: the Cedric channel. Cedric posts text + action cards over

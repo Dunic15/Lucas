@@ -185,6 +185,78 @@ def test_slot_selection_rules(client, monkeypatch):
     assert seen[0]["start"].startswith("2099-01-01T10:00")
 
 
+# ── route=cedric: approval dispatches to the orchestrator [B2] ──
+
+def test_org_door_approve_dispatches_cedric_route(client, monkeypatch):
+    from app.cedric import callback
+
+    org = settings.demo_org_id
+    _seed(org, "a1", execution_route="cedric")
+    sent: list = []
+    monkeypatch.setattr(
+        callback, "dispatch_action",
+        lambda o, a, approved_by="": sent.append((o, a.get("action_id"))) or {"ok": True},
+    )
+    r = _approve(client, "a1")
+    b = r.json()
+    assert b["new_status"] == "approved" and b["execution_job_id"] is None
+    assert sent == [(org, "a1")]  # handed to Cedric, exactly once
+    r2 = _approve(client, "a1")  # replay never re-dispatches
+    assert r2.json()["idempotent_replay"] is True
+    assert len(sent) == 1
+
+
+def test_dispatch_action_payload_shape(monkeypatch):
+    from app.cedric import callback
+
+    monkeypatch.setattr(settings, "cedric_orgs_url",
+                        "https://ced.example/api/laura/orgs")
+    captured: list = []
+
+    class _R:
+        status_code = 202
+
+    def fake_post(url, payload, *, idempotency_key=""):
+        captured.append((url, payload, idempotency_key))
+        return _R()
+
+    monkeypatch.setattr(callback, "_post", fake_post)
+    monkeypatch.setattr(callback, "_team_id_for", lambda org: "T123")
+    out = callback.dispatch_action(
+        "org-a",
+        {"action_id": "a9", "item": "Read three Slack channels", "owner": "JT",
+         "correlation_id": "a9"},
+        approved_by="user-1",
+    )
+    assert out["ok"] is True
+    url, payload, idem = captured[0]
+    assert url == "https://ced.example/api/laura/actions"
+    assert idem == "a9" and payload["org_id"] == "org-a"
+    act = payload["action"]
+    assert act["approval_mode"] == "pre_approved"
+    assert act["execution_route"] == "cedric"
+    assert act["tenant"] == {"org_id": "org-a", "team_id": "T123"}
+    assert act["type"] == "task.freeform"  # untyped → distilled item rides args
+    assert act["args"]["item"] == "Read three Slack channels"
+    assert act["approved_by"] == "user-1"
+
+
+def test_dispatch_action_endpoint_missing_is_soft(monkeypatch):
+    from app.cedric import callback
+
+    monkeypatch.setattr(settings, "cedric_orgs_url",
+                        "https://ced.example/api/laura/orgs")
+
+    class _R:
+        status_code = 404
+
+    monkeypatch.setattr(callback, "_post", lambda *a, **k: _R())
+    out = callback.dispatch_action("org-a", {"action_id": "a1"})
+    assert out == {"ok": False, "reason": "dispatch_endpoint_missing"}
+    monkeypatch.setattr(settings, "cedric_orgs_url", "")
+    assert callback.dispatch_action("org-a", {"action_id": "a1"})["reason"] == "not_configured"
+
+
 # ── finalize routing stamps (contract Action fields) ──
 
 def test_stamp_action_routing(monkeypatch):
