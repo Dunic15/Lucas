@@ -486,6 +486,54 @@ async def _refresh_context(session: Any, integration: dict) -> None:
         session.integration = integration
 
 
+def voice_approve(session: Any, item: dict) -> bool:
+    """Voice consent: an ADDRESSED mid-meeting ask ("Petra, create a task…")
+    IS the approval. Records the ONE canonical decision (decided_via='voice' —
+    same convergence rules as dashboard/Slack/chat: first write wins, replays
+    refused) and fires ``action.approved`` on the per-org events door so
+    Cedric executes NOW instead of parking a card until after the call.
+
+    Only the deterministic addressed-capture path calls this (main.py):
+    actions the summarizer merely INFERS at finalize never come here — they
+    keep the human click. Best-effort and off the live path (the spoken
+    confirmation has already been said); a delivery miss leaves the action
+    'approved' and visible on the dashboard, where Retry semantics apply."""
+    aid = str((item or {}).get("action_id") or "").strip()
+    if not aid:
+        return False
+    from .. import ledger, store  # lazy: keeps the module graph flat
+
+    org = str(
+        (session.integration or {}).get("org_id")
+        or getattr(session, "org_id", "")
+        or settings.demo_org_id
+    )
+    recorded = store.record_action_approval(
+        org, aid, decision="approve", decided_via="voice",
+        previous_status="requested", new_status="approved",
+    )
+    if not recorded:
+        # A canonical decision already exists (replay, or another surface got
+        # there first — first write wins). Never double-fire the execute
+        # signal on top of someone else's decision.
+        return False
+    ledger.set_action_status(
+        aid, "approved", "voice-approved in the meeting", org_id=org
+    )
+    return callback.send_action_event(
+        org,
+        "action.approved",
+        {
+            "action_id": aid,
+            "bot_id": str(getattr(session, "bot_id", "") or ""),
+            "decided_via": "voice",
+            "action": str((item or {}).get("action") or "")[:300],
+            "owner": str((item or {}).get("owner") or "")[:100],
+            "due": str((item or {}).get("due") or "")[:100],
+        },
+    )
+
+
 class ContextPush(BaseModel):
     """Body of POST /sessions/{bot_id}/context — a LIVE push (Cedric → Laura)."""
 

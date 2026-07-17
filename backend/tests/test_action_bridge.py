@@ -415,8 +415,10 @@ def test_live_route_async_ask_captures_and_confirms(
     assert "cedric" not in session.queued_actions[0]["action"].lower()
 
     # The spoken reply is the fixed confirmation (instant, TTS-prewarmed pool).
-    queue_pool = main_module._QUEUE_LINES + main_module._QUEUE_LINES_IT
-    assert spoken and spoken[-1] in queue_pool
+    # Voice consent is the default (2026-07-17): the addressed ask is approved
+    # on the spot, so the confirmation comes from the voice pool.
+    voice_pool = main_module._VOICE_LINES + main_module._VOICE_LINES_IT
+    assert spoken and spoken[-1] in voice_pool
 
     # Orchestrated session → action.requested fired exactly once, ref echoed.
     assert len(fired) == 1

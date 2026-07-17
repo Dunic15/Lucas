@@ -54,5 +54,6 @@ from .integration import (  # noqa: F401
     request_integration_urls_allowed,
     resolve_machine_org,
     resolve_mission,
+    voice_approve,
     wire_artifact,
 )

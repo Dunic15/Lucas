@@ -3618,13 +3618,27 @@ _STREAM_RECOVERY_LINES_IT = [
 # follow-up after the call, never execution. Fixed lines so they're TTS-
 # prewarmed — the confirmation must land as fast as an ack.
 _QUEUE_LINES = [
-    "Got it — I'll queue that for approval in Slack right after the call.",
-    "Noted — I'll line that up for approval in Slack once we wrap.",
-    "On it — it goes to Slack for approval right after this meeting.",
+    "Got it — I'll queue that for approval right after the call.",
+    "Noted — I'll line that up for approval once we wrap.",
+    "On it — it goes out for approval right after this meeting.",
 ]
 _QUEUE_LINES_IT = [
-    "Ricevuto — lo metto in coda su Slack per l'approvazione appena finiamo.",
-    "Segnato — parte su Slack per l'approvazione subito dopo la call.",
+    "Ricevuto — lo metto in coda per l'approvazione appena finiamo.",
+    "Segnato — parte per l'approvazione subito dopo la call.",
+]
+
+# Voice-consent confirmations (settings.voice_consent_writes): the addressed
+# ask was auto-approved and handed to Cedric to RUN now. Honesty rule intact —
+# she says it's approved and underway, never that it's already done (the
+# receipt lands on the dashboard when Cedric reports back).
+_VOICE_LINES = [
+    "On it — approved, and Cedric's running it now.",
+    "Got it — that's approved and on its way through Cedric right now.",
+    "Done — I've approved it and handed it to Cedric to run.",
+]
+_VOICE_LINES_IT = [
+    "Subito — approvato, Cedric lo sta eseguendo ora.",
+    "Ricevuto — approvato e già in lavorazione con Cedric.",
 ]
 
 # Listening cues spoken WHILE a human is mid-monologue (backchanneling, the
@@ -5801,7 +5815,16 @@ async def recall_webhook(request: Request) -> JSONResponse:
         )
         if session.speech_generation != turn_gen:  # barge-in since the final landed
             return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
-        line = _line_for(question, _QUEUE_LINES, _QUEUE_LINES_IT)
+        if settings.voice_consent_writes:
+            # CEDRIC voice consent: the addressed ask IS the approval — record
+            # it on the canonical channel and tell Cedric to run it NOW, off
+            # the live path. The spoken line says approved-and-running.
+            asyncio.create_task(
+                run_in_threadpool(cedric.voice_approve, session, item)
+            )
+            line = _line_for(question, _VOICE_LINES, _VOICE_LINES_IT)
+        else:
+            line = _line_for(question, _QUEUE_LINES, _QUEUE_LINES_IT)
         session.last_ack_at = time.time()  # the confirmation doubles as the ack
         spoke = await _make_avatar_speak(
             session,
