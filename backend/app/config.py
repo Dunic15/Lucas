@@ -638,6 +638,12 @@ class Settings(BaseSettings):
     # avatar time a brand-new free org gets (the "15 free minutes"). Used as the
     # default included_seconds when the billing row is created.
     free_trial_seconds: int = 900
+    # Comped access: comma-separated emails whose org gets FULL access with
+    # billing waived — their billing row is set to plan='comp' (effectively
+    # unlimited allowance) at every login. Seeded per owner request
+    # (2026-07-17: jt@sff.vc — full lauravatar access, no billing); the
+    # BILLING_COMP_EMAILS env var overrides/extends the list.
+    billing_comp_emails: str = "jt@sff.vc"
     # Included seconds for the paid solo plan (PR C's checkout flips
     # billing_accounts to plan='solo' with this allowance — 300 min/month).
     solo_included_seconds: int = 18000

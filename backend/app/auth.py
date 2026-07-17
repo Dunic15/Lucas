@@ -337,6 +337,17 @@ async def google_callback(request: Request) -> RedirectResponse:
         # keys the user on it, so an email change never forks the identity.
         google_sub=str(claims.get("sub") or ""),
     )
+    # Comped access (BILLING_COMP_EMAILS): waive metering for this user's org
+    # at every login — idempotent, and re-granting here means the comp follows
+    # the user through org re-resolutions (the #251 class) automatically.
+    # Best-effort: a billing hiccup must never break a login.
+    from . import entitlements  # lazy: auth loads before the control plane
+
+    if entitlements.is_comp_email(claims["email"]):
+        try:
+            await run_in_threadpool(entitlements.grant_comp, user["org_id"])
+        except Exception:  # noqa: BLE001
+            pass
     background = None
     if settings.cedric_orgs_url.strip():
         # Run after the redirect is sent, but attach it to the response instead
