@@ -22,6 +22,7 @@ from __future__ import annotations
 import ast
 import json
 import operator
+import re
 import uuid
 from datetime import date, datetime
 
@@ -126,6 +127,51 @@ def lookup_record(record_id: str = "", query: str = "") -> str:
 # post-meeting artifact's actions[] at finalize (main._finalize_session) and,
 # for orchestrated sessions, announced immediately via the action.requested
 # webhook (fired OFF the live path by cedric.notify_action_requested).
+# ── clarify-before-create: which details an addressed create-ask still lacks ──
+# Deterministic and zero-latency (the gate runs on the live path). Conservative
+# on purpose: a false "present" just skips one clarifying question; a false
+# "missing" costs one harmless question. The avatar asks ONCE for whatever is
+# missing; the asker's reply extends the same durable capture.
+_DETAIL_OWNER = re.compile(
+    r"\b(assign(?:ed)?(?:\s+\w+)?\s+to\s+\w+|owner\s+is\s+\w+|owned\s+by\s+\w+"
+    r"|for\s+(?:me|him|her|\w+)\s+to\s+(?:do|own|handle|take)"
+    r"|\w+\s+(?:will|should)\s+(?:own|do|handle|take)"
+    r"|assign\s+(?:it\s+)?to\s+me|my\s+task)",
+    re.IGNORECASE,
+)
+_DETAIL_DUE = re.compile(
+    r"\b(due|deadline|by\s+\w|before\s+\w"
+    r"|today|tomorrow|tonight"
+    r"|monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+    r"|next\s+week|end\s+of\s+(?:day|week|month))\b",
+    re.IGNORECASE,
+)
+_DETAIL_PROJECT = re.compile(r"\b(project|board|backlog)\b", re.IGNORECASE)
+_DETAIL_SKIP = re.compile(
+    r"\b(no\s*one|nobody|anyone|any\s*body|skip|doesn'?t\s+matter|whatever"
+    r"|just\s+(?:create|do|make)\s+it|no\s+project|none|nothing)\b",
+    re.IGNORECASE,
+)
+
+
+def missing_action_details(text: str) -> list[str]:
+    """The details a well-filed task still needs, in ask order."""
+    t = " ".join((text or "").split())
+    missing: list[str] = []
+    if not _DETAIL_OWNER.search(t):
+        missing.append("owner")
+    if not _DETAIL_PROJECT.search(t):
+        missing.append("project")
+    if not _DETAIL_DUE.search(t):
+        missing.append("due")
+    return missing
+
+
+def is_detail_skip(text: str) -> bool:
+    """The asker declined to add details ("no one, just create it")."""
+    return bool(_DETAIL_SKIP.search(text or ""))
+
+
 def capture_action_once(
     session,
     action: str,

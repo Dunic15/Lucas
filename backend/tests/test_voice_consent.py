@@ -140,6 +140,7 @@ def test_voice_approve_needs_action_id(client, monkeypatch):
 def test_addressed_ask_voice_approves_and_says_so(
     client, recall_stubbed, spoken, monkeypatch
 ):
+    monkeypatch.setattr(settings, "clarify_before_create", False)
     approved: list[dict] = []
     monkeypatch.setattr(
         main_module.cedric, "voice_approve",
@@ -158,6 +159,7 @@ def test_addressed_ask_voice_approves_and_says_so(
 
 
 def test_flag_off_keeps_the_queue_flow(client, recall_stubbed, spoken, monkeypatch):
+    monkeypatch.setattr(settings, "clarify_before_create", False)
     monkeypatch.setattr(settings, "voice_consent_writes", False)
     monkeypatch.setattr(
         main_module.cedric, "voice_approve",

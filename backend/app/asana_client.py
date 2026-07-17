@@ -427,6 +427,14 @@ def create_task(org_id: str, task: dict) -> dict:
         body["notes"] = str(task["notes"])[:4000]
     if task.get("assignee"):
         body["assignee"] = str(task["assignee"]).strip()
+    else:
+        # No assignee in the spec → default to the CONNECTED account ("me" =
+        # the token's user). A task with no assignee and no project appears in
+        # NO Asana view (not My Tasks, not any project) — a real but invisible
+        # orphan (live finding 2026-07-17: voice-created task nobody could
+        # find). Defaulting to the connection owner puts every created task in
+        # someone's My Tasks; the meeting flow can still assign someone else.
+        body["assignee"] = "me"
     if task.get("due_on"):
         body["due_on"] = str(task["due_on"]).strip()[:10]
     project_gid, perr = _resolve_project(org_id, str(task.get("project") or ""))
