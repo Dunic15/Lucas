@@ -732,11 +732,20 @@ class Settings(BaseSettings):
     cedric_orgs_url: str = ""
     cedric_orgs_token: str = ""
     # Programmatic tool bridge (Handshake contract v3, 2026-07-16): consume
-    # Cedric's connected tools as an MCP server (POST /api/laura/mcp). OFF by
-    # default — flip to true ONLY once Cedric confirms their endpoint is live.
-    # When off, nothing calls Cedric's MCP surface and session-start/live paths
-    # are byte-identical to today.
-    cedric_mcp_enabled: bool = False
+    # Cedric's connected tools as an MCP server (POST /api/laura/mcp). ON by
+    # default (product decision 2026-07-17: Cedric is THE connection — avatars
+    # reach Asana and every other tool through his bridge). Degrades safely
+    # when his endpoint isn't live yet: the session-start catalog fetch is
+    # best-effort, and with no discovered tools the live path is byte-identical
+    # to the bridge being off. Set false to hard-disable.
+    cedric_mcp_enabled: bool = True
+    # Voice consent (product decision 2026-07-17): an action captured because
+    # someone ADDRESSED the avatar by name mid-meeting ("Petra, create a task
+    # for X") is auto-approved on the canonical channel (decided_via='voice')
+    # and action.approved fires to Cedric immediately — the spoken, addressed
+    # ask IS the approval. Actions merely inferred at finalize still queue for
+    # a human click. false = every action waits for a click (old behaviour).
+    voice_consent_writes: bool = True
     # Hard client-side budget for a LIVE-meeting tool call (the contract pins
     # read+fast tools only on the hot path; this enforces it defensively).
     cedric_mcp_live_timeout_s: float = 2.0
@@ -748,6 +757,11 @@ class Settings(BaseSettings):
     laura_webhook_token: str = ""
     # Bearer presented when fetching a session's context_url at join time.
     laura_context_token: str = ""
+    # LIVE context feed: re-pull the session's context_url whenever the last
+    # pull is older than this many seconds (transcript-driven, off the live
+    # path) — the brief stays current for the WHOLE meeting instead of being a
+    # join-time snapshot. 0 = the old one-shot join-time pull only.
+    context_refresh_seconds: float = 120.0
     # Per-attempt timeout for callback/context HTTP calls.
     callback_timeout_seconds: float = 10.0
     # Model A default routing: a DEFAULT callback_url for sessions that don't

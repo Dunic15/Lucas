@@ -2271,7 +2271,16 @@ async def _start_avatar_session(
             return ""
         return asana_client.workspace_brief(org_id) or ""
 
-    carryover, folder, asana_snapshot, reg, cal_brief = await asyncio.gather(
+    def _asana_live_sync() -> bool:
+        # Whether the LIVE asana_* read tools are offered this session
+        # (tools.specs_for): connected org + Asana-enabled avatar. Computed
+        # once here — specs_for runs on the live path and must never touch
+        # the DB.
+        return _avatar_asana_enabled(org_id, avatar.id) and asana_client.connected(
+            org_id
+        )
+
+    carryover, folder, asana_snapshot, reg, cal_brief, asana_live = await asyncio.gather(
         _quiet(run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org_id)),
         _quiet(
             run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id)
@@ -2281,7 +2290,9 @@ async def _start_avatar_session(
         _quiet(run_in_threadpool(_asana_brief_sync)),
         _quiet(run_in_threadpool(tool_registry.assemble, org_id, avatar)),
         _quiet(run_in_threadpool(google_client.calendar_brief, org_id)),
+        _quiet(run_in_threadpool(_asana_live_sync)),
     )
+    session.asana_live = bool(asana_live)
     session.memory_brief = carryover or ""
     if folder:
         session.memory_brief = (
@@ -2289,9 +2300,17 @@ async def _start_avatar_session(
             + (session.memory_brief or "")
         )
     if asana_snapshot:
+        # Honest label: this is the state at meeting START. When the live
+        # asana_* tools are on, say so — that's what makes her READ current
+        # state instead of quoting a stale snapshot.
+        _asana_note = (
+            " — use asana_projects / asana_tasks / asana_search for the CURRENT state"
+            if asana_live
+            else ""
+        )
         session.memory_brief = (
-            f"[Asana workspace — live snapshot]\n{asana_snapshot}\n\n"
-            + (session.memory_brief or "")
+            f"[Asana workspace — snapshot from meeting start{_asana_note}]\n"
+            f"{asana_snapshot}\n\n" + (session.memory_brief or "")
         )
     if reg:
         session.tool_registry = reg
@@ -3058,6 +3077,20 @@ async def _finalize_session_locked(
     return artifact
 
 
+# CEDRIC: live context push — the orchestrator POSTs a fresh brief the moment
+# something changes (real-time counterpart of the periodic context pull);
+# inject_brief re-reads per turn, so the next answer speaks from it.
+@app.post("/sessions/{bot_id}/context")
+async def push_context(
+    bot_id: str, req: cedric.ContextPush, request: Request
+) -> JSONResponse:
+    caller_org = await run_in_threadpool(cedric.resolve_machine_org, request)
+    if caller_org is None:
+        if err := cedric.auth_error(request):  # CEDRIC
+            return err
+    return cedric.apply_context_push(store.get(bot_id), req, caller_org)
+
+
 @app.post("/sessions/{bot_id}/end")
 async def end_session(bot_id: str, request: Request) -> JSONResponse:
     # Cookie (dashboard) or bearer (machine). auth.gate blocks an anonymous
@@ -3626,13 +3659,27 @@ _STREAM_RECOVERY_LINES_IT = [
 # follow-up after the call, never execution. Fixed lines so they're TTS-
 # prewarmed — the confirmation must land as fast as an ack.
 _QUEUE_LINES = [
-    "Got it — I'll queue that for approval in Slack right after the call.",
-    "Noted — I'll line that up for approval in Slack once we wrap.",
-    "On it — it goes to Slack for approval right after this meeting.",
+    "Got it — I'll queue that for approval right after the call.",
+    "Noted — I'll line that up for approval once we wrap.",
+    "On it — it goes out for approval right after this meeting.",
 ]
 _QUEUE_LINES_IT = [
-    "Ricevuto — lo metto in coda su Slack per l'approvazione appena finiamo.",
-    "Segnato — parte su Slack per l'approvazione subito dopo la call.",
+    "Ricevuto — lo metto in coda per l'approvazione appena finiamo.",
+    "Segnato — parte per l'approvazione subito dopo la call.",
+]
+
+# Voice-consent confirmations (settings.voice_consent_writes): the addressed
+# ask was auto-approved and handed to Cedric to RUN now. Honesty rule intact —
+# she says it's approved and underway, never that it's already done (the
+# receipt lands on the dashboard when Cedric reports back).
+_VOICE_LINES = [
+    "On it — approved, and Cedric's running it now.",
+    "Got it — that's approved and on its way through Cedric right now.",
+    "Done — I've approved it and handed it to Cedric to run.",
+]
+_VOICE_LINES_IT = [
+    "Subito — approvato, Cedric lo sta eseguendo ora.",
+    "Ricevuto — approvato e già in lavorazione con Cedric.",
 ]
 
 # Listening cues spoken WHILE a human is mid-monologue (backchanneling, the
@@ -5809,7 +5856,16 @@ async def recall_webhook(request: Request) -> JSONResponse:
         )
         if session.speech_generation != turn_gen:  # barge-in since the final landed
             return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
-        line = _line_for(question, _QUEUE_LINES, _QUEUE_LINES_IT)
+        if settings.voice_consent_writes:
+            # CEDRIC voice consent: the addressed ask IS the approval — record
+            # it on the canonical channel and tell Cedric to run it NOW, off
+            # the live path. The spoken line says approved-and-running.
+            asyncio.create_task(
+                run_in_threadpool(cedric.voice_approve, session, item)
+            )
+            line = _line_for(question, _VOICE_LINES, _VOICE_LINES_IT)
+        else:
+            line = _line_for(question, _QUEUE_LINES, _QUEUE_LINES_IT)
         session.last_ack_at = time.time()  # the confirmation doubles as the ack
         spoke = await _make_avatar_speak(
             session,

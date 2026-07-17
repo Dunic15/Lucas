@@ -2251,6 +2251,103 @@ async def reject_action(action_id: str, request: Request) -> JSONResponse:
     )
 
 
+# ── chat channel (org ↔ Cedric — approvals happen HERE, not in Slack) ──
+
+
+@router.get("/dashboard/chat")
+async def dashboard_chat_list(request: Request, after: int = 0) -> JSONResponse:
+    """The org's chat with Cedric: messages after ``after`` (poll cursor) plus
+    the LIVE state of every referenced action card — a card always renders the
+    current truth (Approve & run / Reject before a decision, the receipt pill
+    after), no matter when it was posted. Decisions never live in chat rows;
+    they converge on the canonical approval channel like every other surface."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    org = user["org_id"]
+    messages = await run_in_threadpool(store.list_chat_messages, org, after)
+    card_ids = sorted(
+        {m["action_id"] for m in messages if m["kind"] == "action_card" and m["action_id"]}
+    )
+    actions: dict[str, dict] = {}
+    if card_ids:
+        statuses = await run_in_threadpool(
+            ledger.action_statuses, card_ids, org_id=org
+        )
+        for aid in card_ids:
+            found = await run_in_threadpool(_find_org_action, org, aid)
+            ex = statuses.get(aid)
+            actions[aid] = {
+                "known": found is not None,
+                "typed": bool(
+                    found
+                    and isinstance(found[0].get("typed"), dict)
+                    and found[0]["typed"].get("type")
+                ),
+                "execution": (
+                    {"status": ex["status"], "detail": ex["detail"][:160]} if ex else None
+                ),
+            }
+    from .cedric import callback as cedric_callback  # local: avoids import cycles
+
+    return JSONResponse(
+        {
+            "messages": messages,
+            "actions": actions,
+            # Whether a Cedric events door is configured at all — the UI says
+            # "connect the brain" instead of pretending messages go somewhere.
+            "relay_configured": bool(cedric_callback.events_url()),
+        },
+        headers=_NO_STORE,
+    )
+
+
+@router.post("/dashboard/chat")
+async def dashboard_chat_post(request: Request) -> JSONResponse:
+    """Send a chat message to Cedric from the dashboard.
+
+    Stores the row, then relays it over the per-org signed events door as a
+    ``chat.message`` event — single attempt, conversational semantics (the
+    response carries ``delivered`` so the UI can say honestly when Cedric
+    didn't get it; the human just sends again). Never the raw transcript —
+    this is the user's own typed text, capped like every chat row."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = json.loads(await request.body() or b"{}")
+    except ValueError:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    text = str((body or {}).get("text") or "").strip()
+    if not text:
+        return JSONResponse({"error": "text is required"}, status_code=400)
+    org = user["org_id"]
+    label = str(user.get("name") or user.get("email") or "you")[:120]
+    row = await run_in_threadpool(
+        lambda: store.add_chat_message(org, "user", body=text, sender_label=label)
+    )
+    if row is None:
+        return JSONResponse({"error": "message rejected"}, status_code=400)
+    from .cedric import callback as cedric_callback  # local: avoids import cycles
+
+    delivered = await run_in_threadpool(
+        cedric_callback.send_action_event,
+        org,
+        "chat.message",
+        {"message_id": row["id"], "text": row["body"], "sender": label},
+    )
+    return JSONResponse(
+        {"ok": True, "id": row["id"], "delivered": bool(delivered)},
+        headers=_NO_STORE,
+    )
+
+
 @router.post("/dashboard/actions/{action_id}/params")
 async def dashboard_action_params(action_id: str, request: Request) -> JSONResponse:
     """Human door for the needs_details loop: fill/edit an action's typed

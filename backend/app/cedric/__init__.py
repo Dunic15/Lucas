@@ -37,7 +37,9 @@ from .callback import fetch_org_connectors, provision_org, revoke_org  # noqa: F
 from .integration import (  # noqa: F401
     ARTIFACT_VERSION,
     MAX_BRIEF_BYTES,
+    ContextPush,
     MeetingContext,
+    apply_context_push,
     auth_error,
     brief_too_large,
     build_integration,
@@ -52,5 +54,6 @@ from .integration import (  # noqa: F401
     request_integration_urls_allowed,
     resolve_machine_org,
     resolve_mission,
+    voice_approve,
     wire_artifact,
 )

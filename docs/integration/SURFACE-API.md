@@ -48,6 +48,7 @@ history: [`CEDRIC-AVATAR-PLAN.md`](CEDRIC-AVATAR-PLAN.md) (superseded).
 | `POST /sessions/start` | Book/schedule an avatar into a meeting |
 | `POST /sessions/{bot_id}/end` | Finalize now → returns the distilled artifact |
 | `POST /sessions/{bot_id}/cancel` | Drop a booking/live bot, no artifact |
+| `POST /sessions/{bot_id}/context` | **Live context push** — replace the session's brief mid-meeting the moment something changes. Body `{"context": {"meeting"?, "brief_markdown"?, "mission"?}}` (same shape as `start`); each push REPLACES the brief (re-summarize upstream, byte cap applies) and the avatar's next answer speaks from it. Also resets the periodic pull window. Per-org bearers only reach their own org's sessions (foreign = 404). `200 {ok, brief_bytes}`, `400` oversize/empty. |
 | `GET /sessions/{bot_id}/artifact` | Poll: `{status:"in_progress"}` → `{status:"done", …}` (404 unknown) |
 | `GET /avatars` | List installed avatars: `{id, name, role, wake_words}` |
 | `GET /ledger?meeting_url=…` | Cross-meeting items + carryover brief for one link |
@@ -55,6 +56,7 @@ history: [`CEDRIC-AVATAR-PLAN.md`](CEDRIC-AVATAR-PLAN.md) (superseded).
 | `GET /org/actions` | Open action items across meetings, grouped by meeting key |
 | `GET /org/search?q=…` | Ask across every meeting — ledger items + meeting snippets mentioning the query ("what did we decide about pricing?") |
 | `POST /org/actions/{id}/resolve` | Close an item from the outside (e.g. ticked in Slack). `{id}` is EITHER the numeric ledger row id OR the stable string `action_id` an action carries on `action.requested` / `actions[]` — use the `action_id` to ack an action you executed. `200 {resolved:true}`, `404` unknown/already-resolved (resolves only after the meeting finalized). |
+| `POST /org/chat` | Post into the org's **dashboard chat channel** (the in-dashboard approval surface). Body is exactly one of `{"message": {"text", "sender_label"?}}` or `{"action_card": {"action_id", "item", "owner"?, "due"?, "note"?}}`. An action card renders with inline Approve & run / Reject in the dashboard — the decision still lands on the canonical approve door, this endpoint only carries the conversation. `200 {ok:true, id}`, `400` bad shape. Distilled content only. |
 
 ### `POST /sessions/start`
 
@@ -98,6 +100,8 @@ POSTed to the session's `callback_url`, signed as above, `external_ref` echoed.
 | `session.status` | best-effort, single attempt | `{event, bot_id, external_ref, status: "joining"\|"live"\|"failed", detail, at}` (`detail` always present, may be `""`; `failed` fires only for a fatal join) |
 | `action.requested` | best-effort, single attempt | `{event, bot_id, external_ref, action_id, action, owner, due, at}` — fired the moment someone asks the avatar to DO something mid-meeting, so the approval card is ready before the call ends. **`action_id`** is a stable id: the SAME action appears in the later `session.ended` `actions[]` carrying the same `action_id`, so **dedupe your live card against the final action on `action_id`, not on text** (the wording can still be extended after this event fired). The artifact's `actions[]` stays the authoritative list (live captures are flagged `requested_live: true`). |
 | `session.ended` | retried 3× (5s / 25s / 2m), then poll fallback | `{event, bot_id, external_ref, ended_at, artifact}` |
+| `chat.message` | best-effort, single attempt (conversational — the human resends) | `{event, org_id, message_id, text, sender, event_id, at}` — a dashboard user wrote to the orchestrator in the **dashboard chat channel**. POSTed to the per-org events door (`…/api/laura/events`), signed like every event. Reply (and propose actions) via `POST /org/chat`; approvals for cards you post there converge on the canonical approve door like every other surface. |
+| `action.approved` | best-effort, single attempt (the action stays `approved` + retryable on the dashboard if missed) | `{event, org_id, action_id, bot_id, decided_via, action, owner, due, event_id, at}` — a human decision landed on Laura's side and the orchestrator should EXECUTE now. `decided_via: "voice"` = **voice consent**: someone addressed the avatar by name mid-meeting ("Petra, create a task for X") and that spoken, addressed ask was recorded as the canonical approval (first write wins; a pre-existing decision suppresses this event). Fires the moment the ask is captured — execute, then report back via `POST /org/actions/{action_id}/status` so the receipt reaches the dashboard. |
 
 ### The artifact (wire shape, additive)
 
@@ -119,11 +123,18 @@ participation[]?}`
 - New fields will be added; existing ones never change meaning
   (`artifact_version` bumps only on breaking change, which we avoid).
 
-## Context refresh (optional pull)
+## Context refresh (live pull + push)
 
-With `context_url` set, Laura GETs it once when the bot reaches the call and
-swaps in the returned `{context: {meeting, brief_markdown}}` — a fresh brief
-for bookings made days earlier. Any error → the booking-time brief stays.
+With `context_url` set, Laura GETs it when the bot reaches the call **and
+keeps re-pulling for the whole meeting**: while transcripts are arriving, the
+brief is re-fetched whenever the last pull is older than
+`CONTEXT_REFRESH_SECONDS` (default 120; `0` restores the old one-shot
+join-time pull). A quiet meeting stops pulling. Serve current content on
+`context_url` and the avatar's grounding stays live with zero orchestrator
+changes. For real-time updates, push instead: `POST
+/sessions/{bot_id}/context` (above) — a push also resets the pull window, so
+pushing orchestrators aren't double-polled. Any pull error → the last good
+brief stays.
 
 ## Standalone (no orchestrator connected)
 
