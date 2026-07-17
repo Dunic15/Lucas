@@ -1,0 +1,61 @@
+# SYNTHETIC DEMO WORKFLOW — Northstar / Acme Robotics. Fictional.
+id: customer-onboarding-review
+name: Customer onboarding review
+purpose: >
+  Understand where a customer's onboarding stands, name the current blocker, and
+  leave with one owned next action. This is the top-level demo workflow.
+
+inputs:
+  customer_id: acme-robotics
+  meeting_goal: Confirm the blocker and agree one follow-up action.
+
+required_company_knowledge:
+  - northstar-company-overview
+  - customer-onboarding-process
+  - acme-robotics-account-brief
+  - acme-onboarding-plan
+  - meeting-preparation-notes
+
+allowed_read_operations:
+  - GET /customers/acme-robotics
+  - GET /customers/acme-robotics/onboarding
+  - GET /customers/acme-robotics/onboarding/{stage}
+  - GET /customers/acme-robotics/implementation
+
+guarded_operations:
+  - create_followup_task   # see workflows/followup_task_creation.yaml
+
+blocked_operations:
+  - Any write other than the single guarded follow-up task.
+  - Using or requesting production credentials.
+  - Enabling external data sharing.
+
+checkpoints:
+  - id: understand-company
+    expect: Laura explains what Northstar is and the five onboarding stages.
+  - id: read-acme-status
+    expect: Laura states Acme is at Data Integration and blocked.
+  - id: locate-blocked-stage
+    expect: >
+      Laura opens the blocked stage from the onboarding pipeline diagram (the
+      visual-only fixture) and lands on the Data Integration stage page.
+  - id: propose-followup
+    expect: Laura proposes the guarded follow-up task and previews it.
+  - id: await-approval
+    expect: No write occurs before approval.
+  - id: verify-result
+    expect: After approval, the follow-up task is visible on the Tasks page.
+
+expected_receipts:
+  - operation: create_followup_task
+    shape: { status: created|exists, task_id: string, idempotency_key: string, created_at: string }
+
+completion_criteria:
+  - The blocker is stated and grounded in the knowledge pack.
+  - Exactly one follow-up task exists for Acme after approval.
+  - Go-live readiness and blocker are explained from documents, not guessed.
+
+failure_behavior:
+  - If approval is rejected, create zero tasks and end cleanly.
+  - If a read operation fails, report it and stop; never fall back to a write.
+  - If the follow-up task already exists, report exists (idempotent), do not duplicate.

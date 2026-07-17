@@ -1,0 +1,235 @@
+{
+  "company_id": "northstar",
+  "knowledge_pack_version": "1.0.0",
+  "note": "All documents are synthetic. No real SFF, customer, employee or credential data.",
+  "sources": [
+    {
+      "id": "northstar-company-overview",
+      "file": "knowledge/northstar_company_overview.md",
+      "title": "Northstar \u2014 Company Overview",
+      "kind": "company",
+      "headings": [
+        "What Northstar is",
+        "How Northstar sells and delivers",
+        "The customer lifecycle",
+        "Who does what",
+        "Operating principles"
+      ],
+      "primary_citation": "What Northstar is"
+    },
+    {
+      "id": "northstar-product-guide",
+      "file": "knowledge/northstar_product_guide.md",
+      "title": "Northstar Platform \u2014 Product Guide",
+      "kind": "product",
+      "headings": [
+        "What the platform does",
+        "Onboarding pipeline stages",
+        "Guarded actions",
+        "Follow-up tasks",
+        "What the platform stores"
+      ],
+      "primary_citation": "Onboarding pipeline stages"
+    },
+    {
+      "id": "customer-onboarding-process",
+      "file": "knowledge/customer_onboarding_process.md",
+      "title": "Customer Onboarding Process",
+      "kind": "process",
+      "headings": [
+        "The five onboarding stages",
+        "Stage: Kickoff",
+        "Stage: Data Integration",
+        "Stage: Configuration",
+        "Stage: UAT",
+        "Stage: Go-Live",
+        "Onboarding checklist",
+        "When a stage is blocked"
+      ],
+      "primary_citation": "The five onboarding stages"
+    },
+    {
+      "id": "implementation-playbook",
+      "file": "knowledge/implementation_playbook.md",
+      "title": "Implementation Playbook",
+      "kind": "process",
+      "headings": [
+        "Purpose",
+        "Data Integration: provisioning credentials",
+        "Configuration: field mapping and workflows",
+        "UAT",
+        "Go-Live readiness",
+        "Reversibility"
+      ],
+      "primary_citation": "Data Integration: provisioning credentials"
+    },
+    {
+      "id": "escalation-policy",
+      "file": "knowledge/escalation_policy.md",
+      "title": "Escalation Policy",
+      "kind": "policy",
+      "headings": [
+        "Blocker severity and timers",
+        "The standard remedy",
+        "Worked example",
+        "What not to do"
+      ],
+      "primary_citation": "Blocker severity and timers"
+    },
+    {
+      "id": "security-policy",
+      "file": "knowledge/security_policy.md",
+      "title": "Security Policy",
+      "kind": "policy",
+      "headings": [
+        "Data handling",
+        "Two-person approval",
+        "Credentials",
+        "Audit",
+        "External sharing"
+      ],
+      "primary_citation": "Two-person approval"
+    },
+    {
+      "id": "approval-policy",
+      "file": "knowledge/approval_policy.md",
+      "title": "Approval Policy",
+      "kind": "policy",
+      "headings": [
+        "What needs approval",
+        "The approval window",
+        "The procedure",
+        "Follow-up task creation",
+        "Idempotency"
+      ],
+      "primary_citation": "Follow-up task creation"
+    },
+    {
+      "id": "customer-success-responsibilities",
+      "file": "knowledge/customer_success_responsibilities.md",
+      "title": "Customer Success Responsibilities",
+      "kind": "policy",
+      "headings": [
+        "Customer Success Manager (CSM)",
+        "Implementation Engineer",
+        "Support",
+        "RACI, in one line",
+        "Escalation contacts",
+        "For Acme Robotics"
+      ],
+      "primary_citation": "Customer Success Manager (CSM)"
+    },
+    {
+      "id": "acme-robotics-account-brief",
+      "file": "knowledge/acme_robotics_account_brief.md",
+      "title": "Acme Robotics \u2014 Account Brief",
+      "kind": "customer",
+      "headings": [
+        "Account facts",
+        "Current status",
+        "Why it matters",
+        "What good looks like next",
+        "Systems in scope"
+      ],
+      "primary_citation": "Current status"
+    },
+    {
+      "id": "acme-onboarding-plan",
+      "file": "knowledge/acme_onboarding_plan.md",
+      "title": "Acme Robotics \u2014 Onboarding Plan",
+      "kind": "customer",
+      "headings": [
+        "Plan summary",
+        "Stage status",
+        "Checklist status",
+        "Blocker: WMS sandbox credentials",
+        "Next action",
+        "Go-live readiness"
+      ],
+      "primary_citation": "Blocker: WMS sandbox credentials"
+    },
+    {
+      "id": "meeting-preparation-notes",
+      "file": "knowledge/meeting_preparation_notes.md",
+      "title": "Meeting Preparation Notes \u2014 Acme Robotics Onboarding Review",
+      "kind": "meeting",
+      "headings": [
+        "Meeting purpose",
+        "Attendees (fictional)",
+        "What Laura should be ready to explain",
+        "The one decision to reach",
+        "Talking points that must be grounded",
+        "Out of scope for this meeting"
+      ],
+      "primary_citation": "The one decision to reach"
+    },
+    {
+      "id": "faq-troubleshooting",
+      "file": "knowledge/faq_troubleshooting.md",
+      "title": "FAQ and Troubleshooting",
+      "kind": "reference",
+      "headings": [
+        "Why is an onboarding stuck?",
+        "What is the difference between the escalation timer and the approval window?",
+        "Does creating a follow-up task change customer data?",
+        "Can I use production credentials to unblock Data Integration?",
+        "Who owns the Acme blocker?",
+        "What is \"go-live readiness\"?"
+      ],
+      "primary_citation": "What is the difference between the escalation timer and the approval window?"
+    }
+  ],
+  "near_duplicate_groups": [
+    {
+      "id": "approval-vs-escalation-timers",
+      "why": "Similar 'time window' facts that must not be conflated during retrieval.",
+      "members": [
+        "escalation-policy",
+        "approval-policy",
+        "faq-troubleshooting"
+      ],
+      "distinguisher": "escalation timer = 4 business hours (P1); approval window = 1 business day"
+    },
+    {
+      "id": "two-person-approval",
+      "why": "'Approval' appears as a security CONTROL and as a procedural POLICY.",
+      "members": [
+        "security-policy",
+        "approval-policy"
+      ],
+      "distinguisher": "security-policy states the requirement; approval-policy states the procedure"
+    },
+    {
+      "id": "five-onboarding-stages",
+      "why": "The five stages are listed in three docs; one is canonical, two summarise.",
+      "members": [
+        "northstar-company-overview",
+        "northstar-product-guide",
+        "customer-onboarding-process"
+      ],
+      "distinguisher": "customer-onboarding-process is canonical; the others summarise"
+    },
+    {
+      "id": "data-integration-stall",
+      "why": "'Data Integration is the common stall point' is repeated across docs.",
+      "members": [
+        "northstar-product-guide",
+        "customer-onboarding-process",
+        "implementation-playbook",
+        "faq-troubleshooting"
+      ],
+      "distinguisher": "same fact, four phrasings \u2014 retrieval must ground, not double-count"
+    },
+    {
+      "id": "acme-go-live-date",
+      "why": "The 2026-08-15 go-live date recurs; must stay consistent.",
+      "members": [
+        "acme-robotics-account-brief",
+        "acme-onboarding-plan",
+        "escalation-policy",
+        "meeting-preparation-notes"
+      ],
+      "distinguisher": "identical date across docs (consistency check)"
+    }
+  ]
+}

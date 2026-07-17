@@ -1,0 +1,42 @@
+# SYNTHETIC DEMO WORKFLOW — Northstar / Acme Robotics. Fictional.
+id: implementation-status-review
+name: Implementation-status review
+purpose: >
+  Report the technical implementation state for a customer — milestone status
+  and go-live readiness — grounded in the implementation documents.
+
+inputs:
+  customer_id: acme-robotics
+
+required_company_knowledge:
+  - implementation-playbook
+  - acme-onboarding-plan
+  - acme-robotics-account-brief
+
+allowed_read_operations:
+  - GET /customers/acme-robotics/implementation
+  - GET /customers/acme-robotics/onboarding/{stage}
+
+guarded_operations: []          # read-only review; no writes
+
+blocked_operations:
+  - Any write.
+  - Using or requesting production credentials.
+
+checkpoints:
+  - id: read-milestones
+    expect: Laura lists the implementation milestones and their status.
+  - id: state-readiness
+    expect: Laura states go-live readiness is 1 of 5 and why.
+  - id: name-long-pole
+    expect: Laura identifies Data Integration as the blocking milestone.
+
+expected_receipts: []           # no write, no receipt
+
+completion_criteria:
+  - Milestone status and readiness are reported from documents/product, not guessed.
+  - No write occurs.
+
+failure_behavior:
+  - If the implementation page fails to load, report it and stop.
+  - Never propose a write from this read-only workflow.
