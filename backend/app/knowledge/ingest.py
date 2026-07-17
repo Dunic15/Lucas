@@ -217,6 +217,92 @@ def sync_drive(org_id: str, source_id: str) -> int:
     return ingested
 
 
+# ── multi-instance index convergence ────────────────────────────────────────
+# App Runner instances do NOT share a disk: the instance that claims a
+# rebuild job refreshes ITS index files only. Every instance therefore runs a
+# periodic epoch check (dal.knowledge_epoch — monotonic, derived from the
+# never-deleted rebuild job ids) against a local sidecar marker, and rebuilds
+# its OWN files from Postgres when behind. Convergence bound = the refresh
+# interval below; nothing here ever runs on the live transcript path.
+
+_REFRESH_INTERVAL_SECONDS = 60.0
+_last_refresh = 0.0
+
+
+def _epoch_marker_path(org_id: str):
+    from .. import store
+
+    return (store.STORE_PATH.parent / "org_indexes"
+            / f"{rag._org_slug(org_id)}.epoch")
+
+
+def _local_epoch(org_id: str) -> int:
+    try:
+        return int(_epoch_marker_path(org_id).read_text().strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def _local_index_org_ids() -> set[str]:
+    """Org ids with index/marker files on THIS instance's disk — they must be
+    swept even when the org no longer appears in the durable chunk listing
+    (its last source was deleted). Slugs are byte-identical to org ids for
+    every real id shape (uuid / u_<hash>)."""
+    from .. import store
+
+    base = store.STORE_PATH.parent / "org_indexes"
+    found: set[str] = set()
+    try:
+        for p in base.glob("*.index.json"):
+            if "__" in p.name:
+                found.add(p.name.split("__", 1)[0])
+        for p in base.glob("*.epoch"):
+            found.add(p.name[: -len(".epoch")])
+    except OSError:
+        pass
+    return found
+
+
+def sync_local_indexes(org_id: str, *, force: bool = False) -> bool:
+    """Bring THIS instance's index files for one org up to the durable epoch.
+    Returns True when a rebuild ran. The epoch is read BEFORE rebuilding, so
+    a concurrent bump simply makes the next pass rebuild again — staleness
+    can race shorter, never longer."""
+    epoch = dal.knowledge_epoch(org_id)
+    if not force and _local_epoch(org_id) >= epoch:
+        return False
+    rebuild_indexes(org_id)
+    marker = _epoch_marker_path(org_id)
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(epoch))
+    except OSError:
+        pass  # a lost marker only causes one extra rebuild
+    return True
+
+
+def refresh_local_indexes(max_orgs: int = 50) -> int:
+    """Periodic every-instance pass (worker loop): converge local index files
+    for every org that has durable chunks OR local files. Internally
+    throttled; errors are per-org and never abort the sweep."""
+    global _last_refresh
+    import time as _time
+
+    now = _time.time()
+    if now - _last_refresh < _REFRESH_INTERVAL_SECONDS:
+        return 0
+    _last_refresh = now
+    refreshed = 0
+    targets = set(dal.index_orgs()) | _local_index_org_ids()
+    for org_id in sorted(targets)[: max(1, int(max_orgs))]:
+        try:
+            if sync_local_indexes(org_id):
+                refreshed += 1
+        except Exception:  # noqa: BLE001 — one org's failure must not stop the rest
+            continue
+    return refreshed
+
+
 def process_due(max_orgs: int = 5, jobs_per_org: int = 4) -> int:
     """One worker tick: claim and run due jobs. Returns jobs handled."""
     handled = 0
@@ -230,7 +316,7 @@ def process_due(max_orgs: int = 5, jobs_per_org: int = 4) -> int:
                         org_id, job["source_id"], "rebuild_index"
                     )
                 elif job["kind"] == "rebuild_index":
-                    rebuild_indexes(org_id)
+                    sync_local_indexes(org_id, force=True)
                 elif job["kind"] == "sync_drive":
                     sync_drive(org_id, job["source_id"])
             except Exception as e:  # noqa: BLE001 — distilled reason only
