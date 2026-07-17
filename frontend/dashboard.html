@@ -574,10 +574,6 @@
       <div id="side-roster"><div class="empty" style="padding:8px;font-size:.78rem">Loading…</div></div>
     </div>
     <div style="margin-top:auto;display:flex;flex-direction:column;gap:14px">
-      <div>
-        <div class="lbl">Connections</div>
-        <div id="side-conns"></div>
-      </div>
       <div class="userchip" id="userchip" hidden></div>
     </div>
   </aside>
@@ -1004,9 +1000,9 @@
       return '<div class="rost" data-goto="avatars">'+avatarBadge(a.id,a.name)+
         '<span class="nm">'+esc(a.name)+'</span><span class="sdot'+(a.live_now?" live":"")+'"></span></div>';}).join("")
       || '<div class="empty" style="padding:8px;font-size:.78rem">No avatars installed</div>';
-    var connNames={calendar:"Google Calendar",gmail:"Gmail watch",drive:"Google Drive",slack:"Slack agent",voice:"Voice (ElevenLabs)",meetings:"Meetings (Recall)"};
-    $("#side-conns").innerHTML = '<div class="rost" data-goto="connections"><span class="sdot'+(brainConnected?" ok":"")+'"></span>'+
-      '<span class="nm" style="font-size:.82rem;color:'+(brainConnected?"inherit":"var(--faint)")+'">'+connNames.slack+'</span></div>';
+    // (Sidebar "Connections / Slack agent" chip removed — the Connections view
+    // is the single home for connection state; the chip over the account was
+    // redundant and confusing next to the login identity.)
 
     var liveN=d.live.length;
     $("#ov-sub").textContent = d.avatars.length+" avatar"+(d.avatars.length===1?"":"s")+" · "+
@@ -1074,8 +1070,12 @@
       // explanatory copy is ERASED: the old "connect once in Connections…" note
       // and the per-model description lines are gone; only the controls remain.
       // ALL #220/#221 wiring (endpoints + data attributes) is unchanged.
+      // Asana is Petra's domain (capability gating: google=all, asana=Petra,
+      // slack=Cedric) — the Asana toggle renders ONLY on Petra's card, so
+      // Cedric/Laura can't be toggled onto a tool they shouldn't drive.
       var capHtml='<div class="caps"><div class="sm-h">Capabilities</div><div class="cap-list">'+
-          capRow(a,"slack","Slack agent",LOGO_SLACK)+capRow(a,"google","Google",LOGO_GOOGLE)+capRow(a,"asana","Asana",LOGO_ASANA)+'</div>'+
+          capRow(a,"slack","Slack agent",LOGO_SLACK)+capRow(a,"google","Google",LOGO_GOOGLE)+
+          (a.id==="petra"?capRow(a,"asana","Asana",LOGO_ASANA):"")+'</div>'+
           '<div class="modelpick sm"><div class="sm-h">AI model</div><div class="mp-row">'+
             '<button class="mp-opt'+(a.brain==="gemini"?" on":"")+'" data-brain-set="gemini" data-brain-av="'+esc(a.id)+'">Gemini</button>'+
             '<button class="mp-opt'+(a.brain==="cerebras"?" on":"")+'" data-brain-set="cerebras" data-brain-av="'+esc(a.id)+'">Cerebras</button></div>'+
