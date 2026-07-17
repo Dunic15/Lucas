@@ -132,6 +132,23 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
                         cedric_reg["available"].append(name)
         reg["cedric"] = cedric_reg
 
+        # THE PER-AVATAR SLACK TOGGLE IS ENFORCED HERE, at snapshot time (off
+        # the hot path): everything Cedric-flavored — the connector brief AND
+        # the callable MCP tools — runs via the Slack agent, so an avatar whose
+        # `slack` capability the owner explicitly toggled OFF gets none of it.
+        # The avatar's brief says so (see brief()), so when someone asks it to
+        # use Slack/a Cedric tool it answers honestly that the toggle is off
+        # instead of pretending or silently failing. Same "explicit False
+        # blocks" rule as the approve doors; an untouched avatar is unchanged.
+        slack_blocked = False
+        try:
+            aid = str(getattr(avatar, "id", "") or "")
+            if aid and store.get_avatar_capabilities(aid).get("slack") is False:
+                slack_blocked = True
+        except Exception:  # noqa: BLE001 — never block a join over the toggle
+            slack_blocked = False
+        reg["slack_blocked"] = slack_blocked
+
         # Callable Cedric tools via the MCP bridge (Handshake contract v3) — the
         # display-only connector list above says WHAT exists; these are the tools
         # Laura can actually INVOKE (cedric_mcp.call_tool). Gated + best-effort +
@@ -141,7 +158,7 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
         try:
             from . import cedric_mcp
 
-            if cedric_mcp.enabled():
+            if cedric_mcp.enabled() and not slack_blocked:
                 mcp_tools = cedric_mcp.list_tools(org_id)
                 if mcp_tools:
                     reg["cedric_mcp"] = mcp_tools
@@ -182,14 +199,23 @@ def brief(reg: dict | None) -> str:
            if asana_on else "")
         + "calculator; date math."
     )
-    if connected:
+    if reg.get("slack_blocked"):
+        # The owner toggled Slack OFF for this avatar: no Slack-agent tools are
+        # offered, and the avatar must say so plainly when asked.
         lines.append(
-            "Via the Slack agent after owner approval: " + ", ".join(connected) + "."
+            "Slack agent: DISABLED for you — the owner toggled it off. If "
+            "asked to use Slack or any Slack-agent tool, say you can't because "
+            "it isn't toggled on for you; never pretend or work around it."
         )
-    if available:
-        lines.append(
-            "NOT connected (never promise these): " + ", ".join(available) + "."
-        )
+    else:
+        if connected:
+            lines.append(
+                "Via the Slack agent after owner approval: " + ", ".join(connected) + "."
+            )
+        if available:
+            lines.append(
+                "NOT connected (never promise these): " + ", ".join(available) + "."
+            )
     know = reg.get("knowledge") or {}
     lines.append(
         "You can read: your indexed process docs"
@@ -225,15 +251,31 @@ def search(reg: dict | None, query: str) -> str:
                    else "instant")
             )
     ced = reg.get("cedric") or {}
+    blocked = bool(reg.get("slack_blocked"))
     for t in ced.get("connected") or []:
         if q in str(t.get("name", "")).lower():
-            hits.append(
-                f"{t['name']} — via the Slack agent (connected); runs after owner approval"
-                + ("; needs reconnect" if t.get("needs_reconnect") else "")
-            )
+            if blocked:
+                hits.append(
+                    f"{t['name']} — via the Slack agent, but Slack is toggled "
+                    "OFF for you by the owner; say you can't use it"
+                )
+            else:
+                hits.append(
+                    f"{t['name']} — via the Slack agent (connected); runs after owner approval"
+                    + ("; needs reconnect" if t.get("needs_reconnect") else "")
+                )
     for n in ced.get("available") or []:
         if q in str(n).lower():
-            hits.append(f"{n} — via the Slack agent but NOT connected; do not promise it")
+            hits.append(
+                f"{n} — via the Slack agent but "
+                + ("Slack is toggled OFF for you; say you can't use it"
+                   if blocked else "NOT connected; do not promise it")
+            )
+    if not hits and blocked and "slack" in q:
+        hits.append(
+            "Slack agent — toggled OFF for you by the owner; if asked, say you "
+            "can't use Slack because it isn't toggled on"
+        )
     if not hits:
         return (
             f"no tool matches '{query}'. If asked to do this, capture it with "
