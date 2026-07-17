@@ -2230,7 +2230,16 @@ async def _start_avatar_session(
             return ""
         return asana_client.workspace_brief(org_id) or ""
 
-    carryover, folder, asana_snapshot, reg, cal_brief = await asyncio.gather(
+    def _asana_live_sync() -> bool:
+        # Whether the LIVE asana_* read tools are offered this session
+        # (tools.specs_for): connected org + Asana-enabled avatar. Computed
+        # once here — specs_for runs on the live path and must never touch
+        # the DB.
+        return _avatar_asana_enabled(org_id, avatar.id) and asana_client.connected(
+            org_id
+        )
+
+    carryover, folder, asana_snapshot, reg, cal_brief, asana_live = await asyncio.gather(
         _quiet(run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org_id)),
         _quiet(
             run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id)
@@ -2240,7 +2249,9 @@ async def _start_avatar_session(
         _quiet(run_in_threadpool(_asana_brief_sync)),
         _quiet(run_in_threadpool(tool_registry.assemble, org_id, avatar)),
         _quiet(run_in_threadpool(google_client.calendar_brief, org_id)),
+        _quiet(run_in_threadpool(_asana_live_sync)),
     )
+    session.asana_live = bool(asana_live)
     session.memory_brief = carryover or ""
     if folder:
         session.memory_brief = (
@@ -2248,9 +2259,17 @@ async def _start_avatar_session(
             + (session.memory_brief or "")
         )
     if asana_snapshot:
+        # Honest label: this is the state at meeting START. When the live
+        # asana_* tools are on, say so — that's what makes her READ current
+        # state instead of quoting a stale snapshot.
+        _asana_note = (
+            " — use asana_projects / asana_tasks / asana_search for the CURRENT state"
+            if asana_live
+            else ""
+        )
         session.memory_brief = (
-            f"[Asana workspace — live snapshot]\n{asana_snapshot}\n\n"
-            + (session.memory_brief or "")
+            f"[Asana workspace — snapshot from meeting start{_asana_note}]\n"
+            f"{asana_snapshot}\n\n" + (session.memory_brief or "")
         )
     if reg:
         session.tool_registry = reg
@@ -3015,6 +3034,20 @@ async def _finalize_session_locked(
             flush=True,
         )
     return artifact
+
+
+# CEDRIC: live context push — the orchestrator POSTs a fresh brief the moment
+# something changes (real-time counterpart of the periodic context pull);
+# inject_brief re-reads per turn, so the next answer speaks from it.
+@app.post("/sessions/{bot_id}/context")
+async def push_context(
+    bot_id: str, req: cedric.ContextPush, request: Request
+) -> JSONResponse:
+    caller_org = await run_in_threadpool(cedric.resolve_machine_org, request)
+    if caller_org is None:
+        if err := cedric.auth_error(request):  # CEDRIC
+            return err
+    return cedric.apply_context_push(store.get(bot_id), req, caller_org)
 
 
 @app.post("/sessions/{bot_id}/end")

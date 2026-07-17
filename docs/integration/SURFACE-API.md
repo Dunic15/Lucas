@@ -48,6 +48,7 @@ history: [`CEDRIC-AVATAR-PLAN.md`](CEDRIC-AVATAR-PLAN.md) (superseded).
 | `POST /sessions/start` | Book/schedule an avatar into a meeting |
 | `POST /sessions/{bot_id}/end` | Finalize now → returns the distilled artifact |
 | `POST /sessions/{bot_id}/cancel` | Drop a booking/live bot, no artifact |
+| `POST /sessions/{bot_id}/context` | **Live context push** — replace the session's brief mid-meeting the moment something changes. Body `{"context": {"meeting"?, "brief_markdown"?, "mission"?}}` (same shape as `start`); each push REPLACES the brief (re-summarize upstream, byte cap applies) and the avatar's next answer speaks from it. Also resets the periodic pull window. Per-org bearers only reach their own org's sessions (foreign = 404). `200 {ok, brief_bytes}`, `400` oversize/empty. |
 | `GET /sessions/{bot_id}/artifact` | Poll: `{status:"in_progress"}` → `{status:"done", …}` (404 unknown) |
 | `GET /avatars` | List installed avatars: `{id, name, role, wake_words}` |
 | `GET /ledger?meeting_url=…` | Cross-meeting items + carryover brief for one link |
@@ -121,11 +122,18 @@ participation[]?}`
 - New fields will be added; existing ones never change meaning
   (`artifact_version` bumps only on breaking change, which we avoid).
 
-## Context refresh (optional pull)
+## Context refresh (live pull + push)
 
-With `context_url` set, Laura GETs it once when the bot reaches the call and
-swaps in the returned `{context: {meeting, brief_markdown}}` — a fresh brief
-for bookings made days earlier. Any error → the booking-time brief stays.
+With `context_url` set, Laura GETs it when the bot reaches the call **and
+keeps re-pulling for the whole meeting**: while transcripts are arriving, the
+brief is re-fetched whenever the last pull is older than
+`CONTEXT_REFRESH_SECONDS` (default 120; `0` restores the old one-shot
+join-time pull). A quiet meeting stops pulling. Serve current content on
+`context_url` and the avatar's grounding stays live with zero orchestrator
+changes. For real-time updates, push instead: `POST
+/sessions/{bot_id}/context` (above) — a push also resets the pull window, so
+pushing orchestrators aren't double-polled. Any pull error → the last good
+brief stays.
 
 ## Standalone (no orchestrator connected)
 

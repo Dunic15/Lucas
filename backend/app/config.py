@@ -712,6 +712,11 @@ class Settings(BaseSettings):
     laura_webhook_token: str = ""
     # Bearer presented when fetching a session's context_url at join time.
     laura_context_token: str = ""
+    # LIVE context feed: re-pull the session's context_url whenever the last
+    # pull is older than this many seconds (transcript-driven, off the live
+    # path) — the brief stays current for the WHOLE meeting instead of being a
+    # join-time snapshot. 0 = the old one-shot join-time pull only.
+    context_refresh_seconds: float = 120.0
     # Per-attempt timeout for callback/context HTTP calls.
     callback_timeout_seconds: float = 10.0
     # Model A default routing: a DEFAULT callback_url for sessions that don't

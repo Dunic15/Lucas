@@ -15,6 +15,7 @@ import asyncio
 import hmac
 import ipaddress
 import json
+import time
 from typing import Any, Optional
 from urllib.parse import urlsplit
 
@@ -409,31 +410,45 @@ async def handle_webhook_status(session: Any, bot_id: str, status_code: str) -> 
 
 
 def maybe_refresh_context(session: Any) -> bool:
-    """One-shot pre-meeting context pull (Cedric -> Laura), shared by BOTH
-    triggers:
+    """LIVE context pull (Cedric -> Laura), shared by BOTH triggers:
 
       - ``handle_webhook_status`` when a Recall status maps to "live" — the
         original trigger, which production (2026-07-10) shows often never
         fires: the realtime webhook delivers no bot-status events at all
         (every finalize that day was source=reconcile), so the avatar sat in
         meetings without Cedric's brief; and
-      - the FIRST transcript webhook of the session (``main.py``, partial or
-        final) — the fallback: a transcript is proof the bot is in the call.
+      - EVERY transcript webhook of the session (``main.py``, partial or
+        final) — a transcript is proof the bot is in the call, and repeated
+        transcripts make the pull PERIODIC: while people are talking, the
+        brief is re-pulled whenever the last pull is older than
+        CONTEXT_REFRESH_SECONDS, so the avatar speaks from the current state
+        of Asana/Slack for the whole meeting instead of a join-time snapshot.
+        (0 restores the old one-shot behaviour. A quiet meeting stops
+        pulling — no transcript, no refresh, no load.)
 
-    Fire-and-forget and OFF the live path: this function only does dict
-    checks; the GET runs in the threadpool inside a task. ``context_refreshed``
-    is flipped (and persisted) BEFORE the task launches so the refresh runs
-    once per session — and since there is no await between check and flip,
-    racing partial/final webhooks on the same event loop cannot double-launch.
-    Returns True when a refresh task was launched."""
+    Fire-and-forget and OFF the live path: this function only does dict/clock
+    checks; the GET runs in the threadpool inside a task. The timestamp is
+    stamped (and persisted) BEFORE the task launches — and since there is no
+    await between check and stamp, racing partial/final webhooks on the same
+    event loop cannot double-launch. Returns True when a refresh launched."""
     if session is None or not session.integration:
         return False  # not an orchestrated session
     integration = session.integration
-    if not integration.get("context_url") or integration.get("context_refreshed"):
+    if not integration.get("context_url"):
         return False
+    last = float(integration.get("context_refreshed_at") or 0.0)
+    if integration.get("context_refreshed") and not last:
+        # Legacy one-shot flag from a pre-upgrade session (mid-meeting deploy):
+        # treat the join-time pull as "just now" so periodic takes over cleanly.
+        last = time.time()
+    if last:
+        interval = settings.context_refresh_seconds
+        if interval <= 0 or time.time() - last < interval:
+            return False
     integration = dict(integration)
     integration["context_refreshed"] = True
-    session.integration = integration  # persist first: refresh runs once
+    integration["context_refreshed_at"] = time.time()
+    session.integration = integration  # persist first: one launch per window
     asyncio.create_task(_refresh_context(session, integration))
     return True
 
@@ -469,6 +484,56 @@ async def _refresh_context(session: Any, integration: dict) -> None:
         if isinstance(fresh.get("meeting"), dict):
             integration["meeting"] = fresh["meeting"]
         session.integration = integration
+
+
+class ContextPush(BaseModel):
+    """Body of POST /sessions/{bot_id}/context — a LIVE push (Cedric → Laura)."""
+
+    context: MeetingContext
+
+
+def apply_context_push(
+    session: Any, req: ContextPush, caller_org: Optional[str]
+) -> JSONResponse:
+    """Real-time counterpart of the periodic context pull: the orchestrator
+    PUSHES a fresh brief the moment something material changes (a task closed,
+    a decision landed in Slack) instead of waiting for the next pull window.
+
+    Same payload shape as ``StartRequest.context`` / ``fetch_context``. Each
+    push REPLACES the stored brief (re-summarize upstream — never an append
+    log; the byte cap stays authoritative), and ``inject_brief`` re-reads the
+    stored brief every turn, so the avatar's next answer already speaks from
+    the pushed state. A push also resets the pull window — pushing
+    orchestrators aren't double-polled.
+
+    Scope: a PER-ORG machine bearer may only push into its own org's sessions;
+    the global bearer / key-free demo keeps legacy scope. Unknown-or-foreign
+    sessions answer the same 404 (existence never leaks across tenants)."""
+    if session is None:
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
+    session_org = str(
+        (session.integration or {}).get("org_id")
+        or getattr(session, "org_id", "")
+        or ""
+    )
+    if caller_org and caller_org != settings.demo_org_id and session_org != caller_org:
+        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
+    brief = req.context.brief_markdown or ""
+    if err := brief_too_large(brief):
+        return err
+    if not brief and not req.context.meeting and not req.context.mission:
+        return JSONResponse({"error": "empty context push"}, status_code=400)
+    integration = dict(session.integration or {})
+    if brief:
+        integration["brief"] = brief
+    if req.context.meeting:
+        integration["meeting"] = req.context.meeting
+    if req.context.mission:
+        integration["mission"] = req.context.mission
+    integration["context_refreshed"] = True
+    integration["context_refreshed_at"] = time.time()
+    session.integration = integration  # assignment persists (store.Session)
+    return JSONResponse({"ok": True, "brief_bytes": len(brief.encode())})
 
 
 def inject_brief(session: Any, memory: str) -> str:
