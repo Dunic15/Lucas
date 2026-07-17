@@ -1,0 +1,203 @@
+{
+  "company_id": "northstar",
+  "demo_version": "1.0.0",
+  "starting_url": "http://127.0.0.1:8971/",
+  "allowed_domains": [
+    "127.0.0.1:8971",
+    "localhost:8971"
+  ],
+  "selected_avatar": "laura",
+  "meeting_goal": "Review Acme Robotics onboarding, confirm the blocker, and create one guarded follow-up task after approval.",
+  "max_steps": 24,
+  "max_duration_seconds": 420,
+  "reset": {
+    "http": "POST http://127.0.0.1:8971/admin/reset",
+    "command": "python -m demos.northstar.product.reset",
+    "restores": "Follow-up task absent; two seed tasks; go-live readiness 1/5."
+  },
+  "health_check": "GET http://127.0.0.1:8971/healthz",
+  "knowledge_source_mapping": [
+    {
+      "purpose": "Explain Northstar + stages",
+      "sources": [
+        "northstar-company-overview",
+        "customer-onboarding-process"
+      ]
+    },
+    {
+      "purpose": "Explain Acme status + blocker",
+      "sources": [
+        "acme-robotics-account-brief",
+        "acme-onboarding-plan"
+      ]
+    },
+    {
+      "purpose": "Classify blocker severity/timer",
+      "sources": [
+        "escalation-policy",
+        "faq-troubleshooting"
+      ]
+    },
+    {
+      "purpose": "Justify the guarded write",
+      "sources": [
+        "approval-policy",
+        "security-policy"
+      ]
+    }
+  ],
+  "expected_citations": [
+    {
+      "source_id": "customer-onboarding-process",
+      "heading": "The five onboarding stages"
+    },
+    {
+      "source_id": "acme-robotics-account-brief",
+      "heading": "Current status"
+    },
+    {
+      "source_id": "acme-onboarding-plan",
+      "heading": "Blocker: WMS sandbox credentials"
+    },
+    {
+      "source_id": "escalation-policy",
+      "heading": "Blocker severity and timers"
+    },
+    {
+      "source_id": "approval-policy",
+      "heading": "Follow-up task creation"
+    }
+  ],
+  "allowed_operations": [
+    {
+      "method": "GET",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/customers"
+    },
+    {
+      "method": "GET",
+      "path": "/customers/acme-robotics"
+    },
+    {
+      "method": "GET",
+      "path": "/customers/acme-robotics/onboarding"
+    },
+    {
+      "method": "GET",
+      "path": "/customers/acme-robotics/onboarding/{stage}"
+    },
+    {
+      "method": "GET",
+      "path": "/customers/acme-robotics/implementation"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks"
+    },
+    {
+      "method": "GET",
+      "path": "/security"
+    },
+    {
+      "method": "POST",
+      "path": "/api/acme/tasks/preview",
+      "note": "pure read, no write"
+    }
+  ],
+  "guarded_operations": [
+    {
+      "id": "create_followup_task",
+      "method": "POST",
+      "path": "/api/acme/tasks",
+      "idempotency_key": "acme-robotics:followup:data-integration-blocker",
+      "reversible_by": "POST /admin/reset"
+    }
+  ],
+  "blocked_operations": [
+    "Any write other than create_followup_task.",
+    "Calling POST /api/acme/tasks before approval.",
+    "Using or requesting production credentials.",
+    "Enabling external data sharing.",
+    "Navigating outside allowed_domains."
+  ],
+  "visual_only_fixture": {
+    "page": "/customers/acme-robotics",
+    "diagram_testid": "onboarding-diagram",
+    "node_testid": "stage-node",
+    "shared_accessible_label": "Onboarding stage",
+    "target_stage_id": "stage-integration",
+    "target_opens": "/customers/acme-robotics/onboarding/integration",
+    "why_visual_only": "All five nodes share the accessible label 'Onboarding stage' and carry no stage-name text; the blocked stage is knowable only from fill colour (amber) and position (second). Text/AX selection is ambiguous across all five."
+  },
+  "ordered_checkpoints": [
+    {
+      "id": "understand-northstar",
+      "expect_visible": "Home shows Northstar + demo version 1.0.0",
+      "url": "/"
+    },
+    {
+      "id": "read-acme-status",
+      "expect_visible": "Acme health 'at risk' and blocker banner present",
+      "url": "/customers/acme-robotics",
+      "testid": "acme-blocker"
+    },
+    {
+      "id": "locate-blocked-stage-visually",
+      "expect_visible": "Amber node opens the Data Integration stage",
+      "url": "/customers/acme-robotics/onboarding/integration",
+      "testid": "stage-blocker"
+    },
+    {
+      "id": "preview-followup",
+      "expect_visible": "Preview shows the exact task; Tasks table unchanged",
+      "url": "/tasks",
+      "testid": "preview-output"
+    },
+    {
+      "id": "reject-path",
+      "expect_visible": "On rejection, zero follow-up tasks exist",
+      "url": "/tasks"
+    },
+    {
+      "id": "approve-and-create",
+      "expect_visible": "After approval, task-0003 created with confirmation",
+      "url": "/tasks?created=1",
+      "testid": "task-confirmation"
+    },
+    {
+      "id": "verify-visible-result",
+      "expect_visible": "Tasks page shows the follow-up task row task-0003",
+      "url": "/tasks",
+      "testid": "task-task-0003"
+    },
+    {
+      "id": "idempotent-replay",
+      "expect_visible": "A second approved execution creates no duplicate",
+      "url": "/tasks"
+    }
+  ],
+  "expected_canonical_action": {
+    "action": "create_followup_task",
+    "product_endpoint": "POST /api/acme/tasks",
+    "idempotency_key": "acme-robotics:followup:data-integration-blocker",
+    "title": "Follow up with Acme Robotics on Data Integration blocker"
+  },
+  "expected_receipt": {
+    "status": "created",
+    "task_id": "task-0003",
+    "idempotency_key": "acme-robotics:followup:data-integration-blocker",
+    "created_at": "2026-07-20T09:00:00Z"
+  },
+  "success_criteria": [
+    "Laura grounds the blocker and severity in the cited documents.",
+    "Laura selects the blocked stage from the visual diagram (not from text alone).",
+    "No write occurs before approval; rejection creates zero tasks.",
+    "One approval creates exactly one task (task-0003) with a visible confirmation.",
+    "A second approved execution creates no duplicate (idempotent).",
+    "Reset restores the initial state."
+  ],
+  "note": "Synthetic demo. No real SFF, customer, employee or credential data."
+}

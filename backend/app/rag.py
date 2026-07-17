@@ -479,11 +479,53 @@ def retrieve(
     never retrieve org B's documents."""
     base = _rank(_load(avatar), query, k)
     org_store = _load_org(avatar, org_id) if org_id else None
+    # M2 context scope: a resolved avatar may carry a per-source restriction
+    # (avatar_resolver.ResolvedAvatar.context_scope). Applied BEFORE ranking,
+    # so out-of-scope chunks never reach the model. Plain avatars have no
+    # attribute → behavior byte-identical.
+    scope = getattr(avatar, "context_scope", None)
+    if org_store is not None and isinstance(scope, dict):
+        org_store = _scoped_org_store(org_store, scope)
     if org_store is None:
         return base
     merged = _rank(org_store, query, k) + base
     merged.sort(key=lambda r: -r.score)
     return merged[:k]
+
+
+def _scoped_org_store(store: dict, scope: dict) -> dict | None:
+    """The org store narrowed to a context scope's allowed sources.
+
+    ``include_org_default: true`` means the whole org store (no restriction).
+    A RESTRICTED scope with no resolvable sources returns None — an empty
+    restriction must never silently widen to \"all sources\". An index file
+    written before per-chunk source ids existed also returns None (fail
+    closed); the publish path enqueues the rebuild that adds them."""
+    if scope.get("include_org_default", True):
+        return store
+    allowed = {
+        str(x).strip().lower()
+        for x in (scope.get("knowledge_source_ids") or [])
+        if str(x).strip()
+    }
+    if not allowed:
+        return None
+    sids = store.get("sids")
+    chunks = store.get("chunks") or []
+    if not isinstance(sids, list) or len(sids) != len(chunks):
+        return None
+    keep = [i for i, sid in enumerate(sids)
+            if str(sid).strip().lower() in allowed]
+    if not keep:
+        return None
+    if len(keep) == len(chunks):
+        return store
+    return {
+        **store,
+        "chunks": [chunks[i] for i in keep],
+        "matrix": store["matrix"][keep],
+        "sids": [sids[i] for i in keep],
+    }
 
 
 # ─────────────── per-org indexes: an org's OWN ingested docs ────────────────
@@ -521,14 +563,14 @@ def build_org_index_from_chunks(
     if not org:
         raise ValueError("org_id is required for a per-org index")
     path = org_index_path(avatar, org)
+    usable = [c for c in chunk_dicts if str(c.get("text") or "").strip()]
     chunks = [
         Chunk(
             text=str(c.get("text") or ""),
             source=str(c.get("source") or ""),
             section=str(c.get("section") or ""),
         )
-        for c in chunk_dicts
-        if str(c.get("text") or "").strip()
+        for c in usable
     ]
     if not chunks:
         path.unlink(missing_ok=True)
@@ -536,7 +578,24 @@ def build_org_index_from_chunks(
         _ORG_MISS.pop((org, avatar.id), None)
         return 0
     path.parent.mkdir(parents=True, exist_ok=True)
-    _write_index(path, chunks, [])
+    # Same format _write_index produces, plus the additive per-chunk "sids"
+    # array (parallel to chunks/vectors) so a context scope can filter per
+    # source. Additive: pre-scope readers ignore it; _index_is_current and
+    # INDEX_VERSION are untouched.
+    vectors = embed([c.text for c in chunks], input_type="document")
+    path.write_text(
+        json.dumps(
+            {
+                "provider": provider_signature(),
+                "model": settings.embedding_model,
+                "version": INDEX_VERSION,
+                "sources": [],
+                "chunks": [asdict(c) for c in chunks],
+                "vectors": vectors,
+                "sids": [str(c.get("sid") or "") for c in usable],
+            }
+        )
+    )
     _ORG_CACHE.pop((org, avatar.id), None)  # invalidate
     _ORG_MISS.pop((org, avatar.id), None)  # a fresh ingest is instantly live
     return len(chunks)

@@ -42,6 +42,15 @@
       linear-gradient(180deg, #f5f3ef 0%, #ece9e5 42%, #dfdfdf 75%, #d2d7dd 100%);
   }
   #stage.live { opacity: 1; }
+  /* Browser B0 presentation: the browser fills the frame, the avatar shrinks
+     to a legible corner tile (Recall's 720p ceiling — spec §3 gate). z above
+     the browser iframe so the avatar stays visible while she narrates. */
+  body.browser-presenting #stage {
+    position: fixed; inset: auto 2.5% 2.5% auto;
+    width: 26%; height: 26%; z-index: 50;
+    border-radius: 14px; overflow: hidden;
+    box-shadow: 0 8px 30px rgba(0,0,0,.45);
+  }
   /* Soft vignette pulls the eye to her face, like a real webcam lens —
      kept very light so the office stays bright. */
   #stage::after {
@@ -686,8 +695,44 @@
         try { head.playGesture("handup", 600, false, 900); } catch (_) {}
       } else if (msg.type === "lower_hand") {
         try { head.stopGesture(900); } catch (_) {}
+      } else if (msg.type === "browser_view") {
+        // Browser operator B0 presentation: show a read-only live-view iframe
+        // overlay and shrink the avatar to a corner tile. Additive control
+        // message on the same at-most-once queue (never a second consumer of
+        // the speak channel); pages that don't know the type ignore it.
+        // TalkingHead keeps rendering; CSS-only. The URL is a viewer surface
+        // handed back by the server-side presentation-token exchange — never
+        // a permanent provider URL.
+        showBrowserView(msg.url);
+      } else if (msg.type === "browser_view_hide") {
+        hideBrowserView();
       }
     };
+
+    // B0 presentation overlay (CSS-only; created lazily so flag-off pages are
+    // byte-identical — no DOM, no listeners until a browser_view arrives).
+    function showBrowserView(url){
+      if(!url) return;
+      var wrap = document.getElementById("browser-view");
+      if(!wrap){
+        wrap = document.createElement("div");
+        wrap.id = "browser-view";
+        wrap.style.cssText = "position:fixed;inset:0;z-index:40;background:#000";
+        var f = document.createElement("iframe");
+        f.id = "browser-view-frame";
+        f.setAttribute("sandbox", "allow-scripts allow-same-origin");
+        f.style.cssText = "width:100%;height:100%;border:0";
+        wrap.appendChild(f);
+        document.body.appendChild(wrap);
+      }
+      document.getElementById("browser-view-frame").src = url;
+      document.body.classList.add("browser-presenting"); // shrinks avatar tile
+    }
+    function hideBrowserView(){
+      var wrap = document.getElementById("browser-view");
+      if(wrap) wrap.remove();
+      document.body.classList.remove("browser-presenting");
+    }
 
     // Path 1: SSE push — App Runner 403s WebSocket upgrades at the edge but
     // streams SSE fine, so speak messages arrive within ~100ms instead of

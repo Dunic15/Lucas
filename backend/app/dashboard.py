@@ -1981,6 +1981,18 @@ def _find_org_action(caller_org: str, action_id: str) -> tuple[dict, str] | None
         for a in art.get("actions") or []:
             if isinstance(a, dict) and str(a.get("action_id") or "") == aid:
                 return a, str(art.get("avatar_id") or "")
+    # Browser guarded steps (B0) are minted directly into the DURABLE
+    # queued_actions index (route='browser'), not into a meeting artifact —
+    # the durable row is their trusted source (same org-scoping via RLS).
+    from . import browser
+
+    if browser.enabled():
+        from .browser import dal as browser_dal
+
+        durable = browser_dal.durable_browser_action(
+            caller_org or settings.demo_org_id, aid)
+        if durable is not None:
+            return durable, str(durable.get("origin_avatar") or "")
     return None
 
 
@@ -2110,6 +2122,43 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     executed = False
     capability_blocked = False
     new_status = "approved"
+    # Browser guarded step (B0): route='browser' actions execute through the
+    # browser operator behind the SAME exactly-once claim, from this surface
+    # too, so a dashboard approve and an org-door approve converge on one
+    # execution and one receipt.
+    route = str(action.get("execution_route") or "")
+    if route == "browser":
+        from . import browser
+
+        if browser.enabled() and await run_in_threadpool(
+            lambda: ledger.claim_action_execution(
+                aid, org_id=org,
+                idempotency_key=action_plane.execution_idempotency_key(aid),
+                via="dashboard",
+            )
+        ):
+            from .browser import operator as browser_operator
+
+            result = await run_in_threadpool(
+                browser_operator.execute_approved_step, org, aid, action
+            )
+            executed = True
+            new_status = "done" if result.get("ok") else "failed"
+        await run_in_threadpool(
+            lambda: ledger.set_action_decision_result(
+                aid, org_id=org, new_status=new_status,
+                execution_job_id=uuid.uuid4().hex if executed else None,
+            )
+        )
+        latest = await run_in_threadpool(ledger.action_statuses, [aid],
+                                         org_id=org)
+        return JSONResponse(
+            {"ok": True, "action_id": aid, "approved": True,
+             "executed": executed, "capability_blocked": False,
+             "typed": bool(typed), "execution_mode": settings.execution_mode,
+             "status": latest.get(aid)},
+            headers=_NO_STORE,
+        )
     if exec_action is not None and executor.handles(exec_action):
         # CAPABILITY GATE: the native executor runs an action ONLY when the
         # acting avatar's toggle for that action's FAMILY (google for
@@ -2118,10 +2167,19 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         # on when the org connected that integration, and the clients
         # soft-fail anyway when it hasn't). A blocked action stays
         # `approved`, byte-identical to the executor being off.
+        from . import avatar_resolver
+
+        family = executor.capability_family(exec_action.get("type"))
         caps = await run_in_threadpool(
             store.get_avatar_capabilities, acting_avatar
         )
-        if caps.get(executor.capability_family(exec_action.get("type"))) is False:
+        blocked_by_toggle = caps.get(family) is False
+        # M2 overlay narrowing, re-resolved at EXECUTION time (org-scoped; an
+        # overlay can only remove a capability — flag off ⇒ always allowed).
+        blocked_by_overlay = not blocked_by_toggle and not await run_in_threadpool(
+            avatar_resolver.family_allowed, org, acting_avatar, family
+        )
+        if blocked_by_toggle or blocked_by_overlay:
             capability_blocked = True
         else:
             # EXECUTION CLAIM (canonical Action plane): the atomic CAS to

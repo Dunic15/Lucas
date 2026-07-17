@@ -261,14 +261,41 @@ def _execute_route(
 
         cedric_callback.dispatch_action(org, action)
         return None, "approved", False
+    if route == "browser":
+        # Guarded browser step (B0): claim exactly-once, then re-check
+        # ownership/state/avatar allowance and settle a receipt through the
+        # browser operator — the SAME claim + provenance path, no second
+        # execution system.
+        from . import browser
+
+        if not browser.enabled():
+            return None, "approved", False
+        if not ledger.claim_action_execution(
+            action_id, org_id=org, idempotency_key=idempotency_key, via=via
+        ):
+            latest = (ledger.action_statuses([action_id], org_id=org)
+                      .get(action_id) or {})
+            return None, str(latest.get("status") or "approved"), False
+        from .browser import operator as browser_operator
+
+        result = browser_operator.execute_approved_step(org, action_id, action)
+        return (uuid.uuid4().hex,
+                "done" if result.get("ok") else "failed", False)
     exec_action = executor.from_typed(action.get("typed"))
     if exec_action is None or not executor.handles(exec_action):
         return None, "approved", False
     # CAPABILITY GATE (same rule as the dashboard door, from #255): the acting
     # avatar's family toggle can veto native execution; a blocked action stays
-    # `approved` — byte-identical to the executor being off.
+    # `approved` — byte-identical to the executor being off. The M2 overlay
+    # check is the org-scoped narrowing re-resolved at EXECUTION time (an
+    # overlay can remove a capability, never grant one; flag off ⇒ allowed).
+    family = executor.capability_family(exec_action.get("type"))
     caps = store.get_avatar_capabilities(acting_avatar)
-    if caps.get(executor.capability_family(exec_action.get("type"))) is False:
+    if caps.get(family) is False:
+        return None, "approved", True
+    from . import avatar_resolver
+
+    if not avatar_resolver.family_allowed(org, acting_avatar, family):
         return None, "approved", True
     # EXECUTION CLAIM (canonical Action plane, M0): the atomic CAS to
     # 'executing' is the only license to call a vendor. Losing the claim means

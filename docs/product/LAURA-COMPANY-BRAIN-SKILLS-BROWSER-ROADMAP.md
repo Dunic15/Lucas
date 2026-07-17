@@ -168,11 +168,44 @@ plus per-instance sidecar markers, converged by every instance's worker loop
 
 ---
 
-## M2 — Org-personalised avatars
+## M2 — Org-personalised avatars (IMPLEMENTED — branch claude/m2-org-avatars)
 
 **Goal.** One repo avatar, many org identities: an org can rename the avatar,
 adjust its persona, pick its voice/body, bind its Company Brain collections and
 flip its capability toggles — without anyone touching `avatars/<id>/` in git.
+
+**What shipped.** Migration `0011_org_avatars` (`org_avatars`,
+`org_avatar_versions` — one editable draft, immutable published history,
+optimistic `version_token`, FOR-UPDATE single-winner publish —
+`org_avatar_assignments` (`org_default` | `user` scopes),
+`org_avatar_audit` INSERT-only by grant). The allowlisted overlay vocabulary
+lives in `backend/app/avatar_overlay.py` (typed, bounded, unknown fields
+rejected, `enabled_tools` may only narrow the canonical ceiling =
+{google, slack} ∪ `native_tools`); `backend/app/avatar_resolver.py` is the ONE
+resolver every runtime path uses — dispatch resolves once and stashes on the
+session (frozen for the meeting, the mission model), hot-path readers use the
+zero-I/O `for_session`, doors re-check `family_allowed` at execution time,
+and with `ORG_AVATAR_OVERLAYS_ENABLED=false` (default) `resolve()` returns
+the exact `avatars.load` cached instance. Selection precedence: explicit
+request > user assignment > org default > `DEFAULT_AVATAR_ID`. The context
+scope (`{knowledge_source_ids, include_org_default, labels, purpose}`) rides
+the resolved avatar into `rag.retrieve`, masking the org index per source id
+BEFORE ranking — an empty restricted scope means "no org sources", never
+"all"; this object is the seam the future Company Data Foundation's
+ContextResolver replaces. Surfaces: `/org/avatars/*` +
+`/dashboard/avatar-studio/*` (strict per-branch method checks; admin gate =
+personal-org owner, durable role owner|admin via `member_role(member_uid)`,
+or the org machine bearer) and the dashboard **Studio** tab (editor, preview
+with warnings, publish/history/rollback, org-default assignment).
+Parameterized the previously hardcoded "You are Laura" in
+`ANSWER_STREAM_SYSTEM` (`{name}`). Known limitations: calendar-autojoin
+sessions keep the canonical page URL (face/body) because org attribution
+happens after the URL build; overlay convergence on other instances is the
+resolver's 60 s TTL; the pre-existing GLOBAL `avatar_capabilities` /
+`avatar_brain_mode` tables (cross-org authority) remain the flag-off legacy
+path — org-scoped narrowing now exists via overlays, and migrating those
+global toggles is deferred work. Enabling in prod requires the about-doc
+update (`avatars/laura/about/`) in the same change, per CLAUDE.md.
 
 **What exists to build on.**
 
@@ -209,6 +242,55 @@ bounded *addendum* that can never override the contract/PII/honesty rules
 latency, so cap like the tool-registry brief (≤700 chars,
 `tool_registry.py`). Laura's self-knowledge rule still applies to the *base*
 avatar (`avatars/laura/about/` + re-ingest).
+
+---
+
+## DF0–DF1 — Company Data Foundation (IMPLEMENTED — branch claude/df0-df1-data-foundation)
+
+**Contract.** Accepted Handshake contract v5 (`hsk_con_nqrcynzgg746jrhkq647`)
+plus six binding acceptance clarifications — the governing text is recorded in
+the session and mirrored in the PR description. Laura is the sole owner of the
+Data Foundation and the ContextResolver; Cedric is not in the DF path.
+
+**What shipped.** Migration `0012_data_foundation`: `df_connectors` (status
+incl. `needs_reconnect`/`acl_incomplete`; `trusted_email_issuer` gate),
+`df_source_records` (stable identity + head state, `acl_mode` DEFAULT
+`unknown` = fail-closed) / `df_source_record_versions` (immutable, deferrable
+composite circular head FK), `df_connector_cursors` (COMMITTED cursor,
+advanced only inside the accepted-batch transaction), `df_sync_runs`
+(`parked`/`dead_letter` after the retry ladder), `df_quarantine` (**no runtime
+DELETE grant** — open rows structurally undeletable; backpressure parks
+ingestion at 1000 open rows) + `df_purge_audit` (two-phase payload cleanup),
+`df_identities` / `df_principal_bindings` (audited; automatic binding only
+for verified emails from `trusted_email_issuer` connectors) /
+`df_identity_edges` / typed `df_acl_entries` (surrogate PK + partial
+uniques). Purges happen ONLY through `laura_private.purge_quarantine` /
+`purge_record_versions` — SECURITY DEFINER, org verified against the
+transaction context, cutoff clamped server-side by `orgs.retention_days`.
+`backend/app/datafoundation/`: envelope validation (fail-closed `acl_mode`),
+DAL (advisory-locked single-winner upserts; body-checksum dedupe never
+suppresses metadata/ACL/deletion changes; tombstone/resurrection lineage),
+connectors (`upload` wrapping the M1 publish flow + backfill; **network-free
+fake Drive** speaking the real Changes-page-token protocol — watermark
+incrementals are forbidden; other kinds explicitly deferred), sync worker,
+ContextResolver (six-way intersection incl. connector eligibility; degraded
+responses preserve the EXACT M2 mask and never widen; inaccessible-record
+counts only behind the admin debug route), `/org/data/*` + strict
+`/dashboard/data/*` twin (org/principal from authenticated context only —
+client `org_id` is a 403 on mismatch). The live per-org index contains
+org_default content BY CONSTRUCTION (`chunks_for_avatar` exclusion, fail
+closed).
+
+**Deployment order (binding).** `alembic upgrade head` (0012) →
+`DATA_FOUNDATION_ENABLED=true` → upload backfill (`POST
+/dashboard/data/backfill`) → per-org Drive opt-in. Rollback = flag off; the
+migration is additive-only and `downgrade` raises.
+
+**Deferred from DF.** Real Drive HTTP client (credential-gated; the fake
+speaks the identical protocol), slack/notion/crm connectors (kind rows legal,
+sync parks `not_implemented`), materialized container tree (Studio feedback
+loop), cross-org retention scheduling (per-org endpoint + worker piggyback
+today).
 
 ---
 
@@ -301,6 +383,55 @@ consequential click is a canonical M0 Action, route `browser`).
 
 Full spec, slices B0–B5, API contract, state machines, config and security:
 [`LAURA-SABLE-BROWSER-OPERATOR-IMPLEMENTATION.md`](LAURA-SABLE-BROWSER-OPERATOR-IMPLEMENTATION.md).
+
+### B0 — IMPLEMENTED (branch `claude/browser-b0`, stacked on DF0-DF1)
+
+The presentation/operator spike, broadened from the spec's pixel-only B0 to a
+full contracts-and-boundaries proof on a deterministic fake provider (report:
+[`BROWSER-B0-EVALUATION.md`](BROWSER-B0-EVALUATION.md)):
+
+- **Migration `0013_browser_sessions`**: `browser_sessions` (org + principal +
+  avatar/overlay-version + meeting ref + provider + state machine + TTL +
+  command seq, FORCE RLS), `browser_commands` (idempotency claims),
+  `browser_presentation_tokens` (sha256-only, revocable), and the
+  `due_browser_orgs` reconcile definer.
+- **`backend/app/browser/`**: `provider.py` (the ONE `BrowserOperator`
+  boundary), `fake_provider.py` (deterministic pages/history/failures/viewer,
+  zero network), `browserbase_provider.py` (smallest real adapter,
+  `ProviderUnconfigured` without flag+keys), `policy.py` (deterministic
+  auto/guarded/blocked classifier + observation sanitizer + secret redaction),
+  `tokens.py`, `dal.py`, `operator.py` (state machine + ownership +
+  exactly-once commands + ACP write-routing), `router.py` (`/org/browser/*`
+  + strict `/dashboard/browser/*` twin).
+- **ACP integration**: guarded writes mint `queued_actions` rows with
+  `execution_route='browser'`; BOTH approve doors execute them behind the
+  existing claim with execution-time ownership/state/tool re-checks. B0
+  default posture is read-only (`BROWSER_ALLOW_WRITES=false` ⇒ writes
+  rejected, proven in tests).
+- **Presentation**: opaque short-lived `lbt_*` tokens exchanged server-side
+  for a read-only viewer; `talk.html` `browser_view`/`browser_view_hide`
+  control messages (avatar shrinks to corner tile, CSS-only, flag-off
+  byte-identical).
+- **Deployment order**: `alembic upgrade head` (0013) →
+  `BROWSER_OPERATOR_ENABLED=true` (fake provider demos work immediately) →
+  B1 for the real provider (`BROWSER_REAL_PROVIDER_ENABLED` + keys).
+  Rollback = flag off; migration additive-only.
+- **Demo-handoff contracts** (frozen for a one-company demo integration):
+  `browser/contracts.py` (`BrowserObservation`, `command_result`,
+  `verify_expectation`, `clean_metadata`) + `browser/planner.py`
+  (`VisualPlanner` + deterministic `ScriptedPlanner`). `page_version` bumps on
+  page change; commands accept `verify=true`+`expected` so the OPERATOR (never
+  the planner) decides success by re-observing; sessions carry bounded,
+  non-authoritative demo-run metadata. Fixtures:
+  `frontend/fixtures/browser_{states,handoff,presentation_events}.json`.
+  Real-provider smoke procedure in
+  [`BROWSER-B0-EVALUATION.md`](BROWSER-B0-EVALUATION.md).
+- **Tests**: 38 (9 key-free + 8 contracts + 21 embedded-PG blockers, incl.
+  5 adversarial-finding regressions).
+- **Deferred to B1+**: real Playwright/Browserbase driving + screenshot
+  perception, the real multimodal planner, live-view latency/embeddability
+  measurements, meeting-lifecycle autostart, takeover, profiles, allowlists,
+  token-exchange rate limiting.
 
 **What exists to build on (summary).** `execution_route='browser'` is already
 admitted by the 0009 CHECK; the additive control-message channel into

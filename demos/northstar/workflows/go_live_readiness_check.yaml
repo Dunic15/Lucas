@@ -1,0 +1,43 @@
+# SYNTHETIC DEMO WORKFLOW — Northstar / Acme Robotics. Fictional.
+id: go-live-readiness-check
+name: Go-live readiness check
+purpose: >
+  State whether a customer is ready for production cutover, using the 5-point
+  readiness score, and refuse to green-light below 5 of 5.
+
+inputs:
+  customer_id: acme-robotics
+
+required_company_knowledge:
+  - implementation-playbook      # defines the 5-point readiness score
+  - acme-onboarding-plan
+  - customer-onboarding-process
+
+allowed_read_operations:
+  - GET /customers/acme-robotics/implementation
+  - GET /customers/acme-robotics/onboarding
+
+guarded_operations: []          # read-only assessment
+
+blocked_operations:
+  - Any write.
+  - Green-lighting go-live below 5 of 5 readiness.
+
+checkpoints:
+  - id: read-score
+    expect: Laura reads go-live readiness as 1 of 5.
+  - id: enumerate-gaps
+    expect: Laura lists the unmet readiness items (sandbox, mapping, config, UAT, runbook).
+  - id: verdict
+    expect: Laura states Acme is NOT ready for go-live and why.
+
+expected_receipts: []
+
+completion_criteria:
+  - Readiness score and verdict are grounded in documents/product.
+  - No write occurs.
+  - The verdict is "not ready" while readiness < 5 of 5.
+
+failure_behavior:
+  - If Laura green-lights go-live below 5 of 5, fail the checkpoint.
+  - If the implementation page fails to load, report and stop.

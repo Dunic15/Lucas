@@ -284,6 +284,87 @@ class Settings(BaseSettings):
     # independently of the session cookie key.
     google_token_enc_key: str = ""
 
+    # ── Org avatar overlays (Avatar Studio — M2) ──
+    # Per-org personalization of the repo avatars: display identity, tone,
+    # greeting, voice/face, narrowed tools, Company Brain context scope —
+    # published as immutable versions, resolved server-side. OFF (default) ⇒
+    # every runtime path is byte-identical to the canonical avatar.yaml
+    # behavior. Needs LAURA_DATABASE_URL (overlays live on the RLS control
+    # plane); publishes converge on other instances within the resolver's
+    # 60s cache TTL.
+    org_avatar_overlays_enabled: bool = False
+
+    # ── Browser operator (Sable B0 — watchable browser demos) ──
+    # A Laura avatar opens and operates a remote browser behind a read-only
+    # live view. OFF (default) ⇒ every route 404s, no session is created, the
+    # meeting and demo are byte-identical. Needs the control plane. B0 uses a
+    # deterministic FAKE provider; the real Browserbase adapter is a SEPARATE
+    # flag (browser_real_provider_enabled) and stays off without keys.
+    browser_operator_enabled: bool = False
+    browser_provider: str = "browserbase"
+    browser_real_provider_enabled: bool = False
+    browser_operator_url: str = ""
+    browser_operator_token: str = ""
+    browser_operator_callback_secret: str = ""
+    browser_default_timeout_seconds: int = 1800
+    browser_max_steps: int = 30
+    browser_presentation_token_ttl_seconds: int = 120
+    # B0 posture is READ-ONLY: guarded write commands are REJECTED. Turning
+    # this on routes them to the canonical Action plane (route='browser') for
+    # approval instead — still never executed inline.
+    browser_allow_writes: bool = False
+    # Real-provider credentials (env/secret only — never in git/db/logs):
+    browserbase_api_key: str = ""
+    browserbase_project_id: str = ""
+
+    # ── Browser B1 "Visual Eyes" (screenshot-driven perception) ──
+    # A multimodal planner reads a screenshot + sanitized structure and proposes
+    # ONE typed operation; the deterministic B0 policy stays authoritative. OFF
+    # by default — with it off, B1 is inert and B0 behaviour is byte-identical.
+    browser_visual_planner_enabled: bool = False
+    browser_planner_provider: str = "openai"          # provider-neutral adapter
+    browser_planner_model: str = "gpt-5-computer-use"  # env-overridable
+    browser_planner_timeout_seconds: int = 20
+    browser_planner_max_retries: int = 2
+    # Bounded screenshot handling (bytes NEVER logged/persisted/put in receipts).
+    browser_screenshot_max_bytes: int = 1_500_000     # ~1.5 MB cap pre-model
+    browser_screenshot_max_dimension: int = 1280       # downscale longest side
+    # Coordinate grounding: refuse a coordinate action below this confidence.
+    browser_coordinate_confidence_threshold: float = 0.6
+    # Server-controlled navigation allowlist (comma-separated hostnames). Page
+    # content can NEVER expand this; empty ⇒ only allowed-links-from-observation
+    # and server demo definitions resolve. Applies when the visual planner is on.
+    browser_allowed_domains: str = "demo.laura.test"
+    # Perception-coordinator budgets (the loop is NEVER unbounded):
+    browser_coord_max_steps: int = 12
+    browser_coord_max_consecutive_failures: int = 3
+    browser_coord_max_replans: int = 4
+    browser_coord_max_duration_seconds: int = 120
+    browser_coord_max_model_calls: int = 16
+
+    # ── Northstar MVP demo (final integration) ──
+    # The one-company demo that wires Browser B1 + ContextResolver + the
+    # Northstar synthetic product into the meeting flow. OFF (default) ⇒ the
+    # demo router 404s, the northstar browser provider is never selected, and
+    # nothing here runs — production behaviour is unchanged. Needs the browser
+    # operator + control plane on. See docs/product/NORTHSTAR-MVP.md.
+    northstar_demo_enabled: bool = False
+    # The ONE controlled synthetic write (create_followup_task). Arbitrary
+    # browser writes stay disabled (BROWSER_ALLOW_WRITES=false); this dedicated
+    # flag enables ONLY the Northstar follow-up task to be minted as a canonical
+    # action and executed on approval.
+    northstar_demo_write_enabled: bool = False
+
+    # ── Data Foundation (DF0-DF1 — accepted contract v5) ──
+    # Normalized company data over connectors: SourceEnvelopes, fail-closed
+    # mirrored ACLs, lineage, the ContextResolver. OFF (default) ⇒ tables
+    # inert, zero runtime references, M2 retrieval byte-identical. Needs the
+    # control plane; body-bearing envelopes additionally use the Company
+    # Brain pipeline as a library (quarantining when that flag is off).
+    # Rollout: alembic 0012 -> this flag -> upload backfill -> Drive opt-in.
+    # Rollback = flag off (migration additive-only).
+    data_foundation_enabled: bool = False
+
     # ── Company Brain (durable org knowledge — M1) ──
     # Master switch for the durable knowledge plane: org-owned sources,
     # ingestion jobs, and the /org/knowledge API. OFF (default) means no new

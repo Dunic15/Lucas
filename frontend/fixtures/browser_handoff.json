@@ -1,0 +1,75 @@
+{
+  "$comment": "Browser B0 DEMO-HANDOFF fixtures for the final integrator + Control Center V2 design branch. Every payload is a real response shape from the B0 operator (deterministic fake provider). Command results conform to contracts.command_result; observations to contracts.build_observation. No provider identifiers, no provider URLs, no raw tokens beyond the one-shot present mint. Browser logic stays in the backend; these render the panel.",
+
+  "scenarios": {
+    "successful_three_step_navigation": {
+      "description": "Home → Pricing → Contact, each a verified read-only step.",
+      "steps": [
+        {
+          "request": {"verb": "navigate", "url": "https://demo.laura.test/pricing", "verify": true, "expected": {"url_contains": "pricing", "text_contains": "Team plan"}},
+          "result": {"accepted": true, "command_sequence": 1, "page_version": 1, "classification": "auto", "observation_ref": "fake-shot:https://demo.laura.test/pricing", "action_id": "", "failure_category": "", "replanning_permitted": true, "verification": "verified", "ok": true, "observation": {"session_id": "sess-1", "command_sequence": 1, "page_version": 1, "url": "https://demo.laura.test/pricing", "title": "Laura Demo — Pricing", "viewport": {"width": 1280, "height": 720}, "screenshot_ref": "fake-shot:https://demo.laura.test/pricing", "dom_summary": "Team plan: 20 EUR per seat per month. Enterprise: contact us.", "visible_text": "Team plan: 20 EUR per seat per month. Enterprise: contact us.", "elements": [{"id": "buy-team", "role": "button", "name": "Buy Team plan", "kind": "purchase", "sensitive": false}, {"id": "contact", "role": "link", "name": "Contact sales", "kind": "link", "sensitive": false}], "truncated": false, "timestamp": 1789459200.0}}
+        },
+        {
+          "request": {"verb": "click", "element_id": "contact", "verify": true, "expected": {"url_contains": "contact"}},
+          "result": {"accepted": true, "command_sequence": 2, "page_version": 2, "classification": "auto", "action_id": "", "failure_category": "", "replanning_permitted": true, "verification": "verified", "ok": true}
+        },
+        {
+          "request": {"verb": "scroll", "direction": "down"},
+          "result": {"accepted": true, "command_sequence": 3, "page_version": 2, "classification": "auto", "failure_category": "", "replanning_permitted": true, "verification": "", "ok": true}
+        }
+      ]
+    },
+
+    "visually_grounded_target": {
+      "description": "Planner proposes a click only after the element is grounded in the current observation; a stale page yields a replan (observe) instead of a blind action.",
+      "planner_proposal_grounded": {"operation": "click", "target": "buy-team", "arguments": {}, "reason": "purchase the team plan", "confidence": 0.9, "expected_result": {"url_contains": "checkout"}, "observed_page_version": 2, "consequential": true},
+      "planner_proposal_stale_replan": {"operation": "observe", "target": "", "arguments": {}, "reason": "stale page: replanning", "confidence": 0.3, "expected_result": {}, "observed_page_version": 3, "consequential": false}
+    },
+
+    "guarded_write_requiring_approval": {
+      "description": "A purchase click with BROWSER_ALLOW_WRITES=true becomes a canonical action; result carries action_id and does NOT execute inline.",
+      "request": {"verb": "click", "element_id": "buy-team"},
+      "result": {"accepted": false, "command_sequence": 4, "page_version": 2, "classification": "guarded", "observation_ref": "", "action_id": "act_9f8e7d6c5b4a", "failure_category": "", "replanning_permitted": false, "verification": "", "ok": false, "reason": "approval_required", "proposed": {"action": "purchase", "target": "Buy Team plan", "text": ""}},
+      "note": "Approve through /dashboard/actions/{action_id}/approve — NOT a browser-specific door."
+    },
+
+    "guarded_write_rejected_read_only": {
+      "description": "Same purchase click with the default read-only posture (BROWSER_ALLOW_WRITES=false) is rejected outright — no action minted.",
+      "request": {"verb": "click", "element_id": "buy-team"},
+      "result": {"accepted": false, "command_sequence": 4, "page_version": 2, "classification": "guarded", "action_id": "", "failure_category": "write_rejected_read_only", "replanning_permitted": true, "verification": "", "ok": false, "reason": "write_rejected_read_only", "proposed": {"action": "purchase", "target": "Buy Team plan", "text": ""}}
+    },
+
+    "rejected_approval": {
+      "description": "Owner rejects the guarded action at the canonical card.",
+      "approve_request": {"decision": "reject"},
+      "approve_response": {"ok": true, "action_id": "act_9f8e7d6c5b4a", "approved": false, "new_status": "rejected"}
+    },
+
+    "approved_exactly_once_execution": {
+      "description": "First approve executes behind the M0 claim + receipt; a repeat approve is an idempotent replay, never a second execution.",
+      "first_approve": {"decision": "approve"},
+      "first_response": {"ok": true, "action_id": "act_9f8e7d6c5b4a", "approved": true, "executed": true, "new_status": "done"},
+      "replay_response": {"ok": true, "action_id": "act_9f8e7d6c5b4a", "idempotent_replay": true, "new_status": "done"}
+    },
+
+    "stale_page_replan": {
+      "description": "A command whose target vanished (page changed under the plan) returns a recoverable result; replanning_permitted=true and the fresh observation carries the new page_version.",
+      "request": {"verb": "click", "element_id": "buy-team"},
+      "result": {"accepted": false, "command_sequence": 5, "page_version": 3, "classification": "", "action_id": "", "failure_category": "blocked", "replanning_permitted": false, "verification": "", "ok": false, "reason": "blocked", "policy": "element not in live DOM"},
+      "planner_next": {"operation": "observe", "reason": "stale page: replanning", "confidence": 0.3, "observed_page_version": 3, "consequential": false}
+    },
+
+    "provider_failure": {
+      "description": "Provider/browser error fails the session (terminal). Timeout is distinct: execution_unknown, session stays live.",
+      "provider_error_result": {"accepted": false, "command_sequence": 6, "page_version": 3, "classification": "", "action_id": "", "failure_category": "provider_error", "replanning_permitted": false, "verification": "", "ok": false, "reason": "provider_error", "state": "failed"},
+      "provider_timeout_result": {"accepted": false, "command_sequence": 6, "page_version": 3, "classification": "", "action_id": "", "failure_category": "execution_unknown", "replanning_permitted": true, "verification": "", "ok": false, "reason": "execution_unknown", "note": "provider timeout; verify by observing"}
+    },
+
+    "visual_verification": {
+      "description": "The operator (never the planner) decides success by re-observing after the operation.",
+      "verified": {"accepted": true, "command_sequence": 7, "page_version": 4, "classification": "auto", "failure_category": "", "replanning_permitted": true, "verification": "verified", "ok": true},
+      "not_verified": {"accepted": false, "command_sequence": 7, "page_version": 4, "classification": "auto", "failure_category": "verification_failed", "replanning_permitted": true, "verification": "not_verified", "ok": false, "reason": "verification_failed"},
+      "inconclusive": {"accepted": true, "command_sequence": 7, "page_version": 4, "classification": "auto", "failure_category": "", "replanning_permitted": true, "verification": "inconclusive", "ok": true}
+    }
+  }
+}

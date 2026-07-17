@@ -495,14 +495,18 @@ def assigned_avatars(org_id: str) -> list[str]:
 
 def chunks_for_avatar(org_id: str, avatar_id: str) -> list[dict[str, Any]]:
     """Every published chunk this avatar may retrieve (assignment-gated,
-    active sources only) — the input to the index rebuild bridge."""
+    active sources only) — the input to the index rebuild bridge. Carries the
+    chunk's ``sid`` (source id) so a resolved avatar's context scope can
+    filter retrieval per source (M2 seam)."""
     engine = _engine()
     with engine.begin() as conn:
         _set_org(conn, org_id)
         rows = conn.execute(
             text(
                 """
-                SELECT c.text, c.source_name AS source, c.section
+                SELECT c.text, c.source_name AS source, c.section,
+                       c.source_id::text AS sid,
+                       c.document_id::text AS did
                 FROM knowledge_chunks c
                 JOIN knowledge_sources s
                   ON s.org_id=c.org_id AND s.id=c.source_id
@@ -517,7 +521,25 @@ def chunks_for_avatar(org_id: str, avatar_id: str) -> list[dict[str, Any]]:
             ),
             {"org_id": org_id, "avatar_id": avatar_id},
         ).mappings().all()
-    return [dict(r) for r in rows]
+    out = [dict(r) for r in rows]
+    # Data Foundation live-index rule (contract v5, structural): documents
+    # whose DF head is tombstoned, non-org_default, or owned by an ineligible
+    # connector never enter the per-org index — mirrored/unknown content is
+    # absent from anything a meeting can speak, BY CONSTRUCTION.
+    from .. import datafoundation
+
+    if datafoundation.enabled():
+        from ..datafoundation import dal as df_dal
+
+        try:
+            restricted = df_dal.restricted_document_ids(org_id)
+        except Exception:  # noqa: BLE001 — fail CLOSED, never widen
+            return []
+        if restricted:
+            out = [r for r in out if r.get("did") not in restricted]
+    for r in out:
+        r.pop("did", None)
+    return out
 
 
 def keyword_search(
@@ -560,10 +582,25 @@ def keyword_search(
             {"org_id": org_id, "q": query, "avatar_id": avatar_id,
              "limit": max(1, min(int(limit), 25))},
         ).mappings().all()
-    return [
+    out = [
         {**dict(r), "rank": float(r["rank"]), "text": str(r["text"])[:800]}
         for r in rows
     ]
+    # Same DF live-index restriction the retrieval index applies (adversarial
+    # finding): keyword search is a read path too — a mirrored/unknown DF
+    # body must never surface here either. Fail closed on any DF error.
+    from .. import datafoundation
+
+    if datafoundation.enabled():
+        from ..datafoundation import dal as df_dal
+
+        try:
+            restricted = df_dal.restricted_document_ids(org_id)
+        except Exception:  # noqa: BLE001 — never widen on a DF failure
+            return []
+        if restricted:
+            out = [r for r in out if str(r.get("document_id")) not in restricted]
+    return out
 
 
 # ── ingest jobs (claim/lease — the callback_outbox worker pattern) ─────────

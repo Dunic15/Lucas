@@ -1,0 +1,20 @@
+{
+  "$comment": "Browser B0 PRESENTATION EVENTS — the stable lifecycle-event vocabulary the Control Center V2 design branch renders (avatar-facing narration/animation cues). These are UI EVENTS derived from backend session state + command results; they are NOT backend state-machine states (the DB state machine is creating/ready/presenting/closing/closed/failed/expired/revoked). Each event maps to observable backend signals so the panel can animate without owning browser logic.",
+
+  "events": {
+    "starting":            {"derived_from": "session.state == 'creating'", "payload": {"session_id": "sess-1", "event": "starting"}},
+    "ready":               {"derived_from": "session.state == 'ready'", "payload": {"session_id": "sess-1", "event": "ready", "page_version": 0}},
+    "observing":           {"derived_from": "command result for verb 'observe' (classification 'auto')", "payload": {"session_id": "sess-1", "event": "observing", "command_sequence": 1, "page_version": 1}},
+    "planning":            {"derived_from": "a VisualPlanner proposal was produced (planner.propose returned a proposal)", "payload": {"session_id": "sess-1", "event": "planning", "proposal": {"operation": "navigate", "reason": "go to pricing", "confidence": 0.9, "consequential": false}}},
+    "navigating":          {"derived_from": "command result for verb 'navigate'/'click'/'scroll' with accepted=true", "payload": {"session_id": "sess-1", "event": "navigating", "command_sequence": 2, "page_version": 2, "url": "https://demo.laura.test/pricing"}},
+    "explaining":          {"derived_from": "operator/host narration cue (a speak line rides the existing queue — NOT owned here)", "payload": {"session_id": "sess-1", "event": "explaining", "text": "Here's the team pricing."}},
+    "paused":              {"derived_from": "host paused planning/execution (B1 pause; B0 exposes the event shape only)", "payload": {"session_id": "sess-1", "event": "paused"}},
+    "waiting_for_approval":{"derived_from": "command result reason == 'approval_required' (action_id present)", "payload": {"session_id": "sess-1", "event": "waiting_for_approval", "action_id": "act_9f8e7d6c5b4a", "proposed": {"action": "purchase", "target": "Buy Team plan"}}},
+    "human_takeover":      {"derived_from": "human-takeover event (B5; B0 exposes the event shape only)", "payload": {"session_id": "sess-1", "event": "human_takeover"}},
+    "verifying":           {"derived_from": "a command was issued with verify=true, before the verdict resolves", "payload": {"session_id": "sess-1", "event": "verifying", "command_sequence": 3, "expected": {"url_contains": "pricing"}}},
+    "completed":           {"derived_from": "command result verification == 'verified' OR planner proposal operation == 'done'", "payload": {"session_id": "sess-1", "event": "completed", "command_sequence": 3, "verification": "verified"}},
+    "failed":              {"derived_from": "session.state == 'failed' OR command failure_category in {provider_error, verification_failed}", "payload": {"session_id": "sess-1", "event": "failed", "failure_category": "provider_error"}},
+    "expired":             {"derived_from": "session.state == 'expired' (TTL reached)", "payload": {"session_id": "sess-1", "event": "expired"}},
+    "closed":              {"derived_from": "session.state == 'closed' (or 'revoked')", "payload": {"session_id": "sess-1", "event": "closed"}}
+  }
+}

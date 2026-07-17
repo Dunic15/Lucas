@@ -1,0 +1,48 @@
+# SYNTHETIC DEMO WORKFLOW — Northstar / Acme Robotics. Fictional.
+id: blocker-escalation
+name: Blocker escalation
+purpose: >
+  Classify a blocker's severity and state the correct escalation timer, grounded
+  in the Escalation Policy — without conflating it with the approval window.
+
+inputs:
+  customer_id: acme-robotics
+  blocker: WMS sandbox API credentials not provisioned.
+
+required_company_knowledge:
+  - escalation-policy
+  - acme-onboarding-plan
+  - faq-troubleshooting        # disambiguates escalation timer vs approval window
+
+allowed_read_operations:
+  - GET /customers/acme-robotics
+  - GET /customers/acme-robotics/onboarding/{stage}
+
+guarded_operations:
+  - create_followup_task        # the standard remedy for a chased-input blocker
+
+blocked_operations:
+  - Any write other than the guarded follow-up task.
+  - Working around a blocker with production credentials.
+
+checkpoints:
+  - id: classify-severity
+    expect: Laura classifies the Acme blocker as P1 (go-live at risk).
+  - id: state-timer
+    expect: >
+      Laura states the escalation timer (P1 -> CSM within 4 business hours) and
+      does NOT confuse it with the 1-business-day approval window.
+  - id: propose-remedy
+    expect: Laura proposes the follow-up task as the standard remedy.
+
+expected_receipts:
+  - operation: create_followup_task
+    shape: { status: created|exists, task_id: string, idempotency_key: string, created_at: string }
+
+completion_criteria:
+  - Severity and timer are correct and grounded, distinct from the approval window.
+  - At most one follow-up task exists after approval.
+
+failure_behavior:
+  - If Laura cites the approval window (1 business day) as the escalation timer, fail the checkpoint.
+  - On rejected approval, create zero tasks.

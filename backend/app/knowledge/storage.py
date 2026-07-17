@@ -61,6 +61,26 @@ def put_bytes(org_id: str, document_id: str, filename: str, data: bytes) -> str:
     return f"file:{rel.as_posix()}"
 
 
+def delete_ref(storage_ref: str) -> None:
+    """Delete one stored object (two-phase purge cleanup). Raises on a
+    failed remote delete so the caller can retry; a missing object is
+    success (idempotent)."""
+    ref = (storage_ref or "").strip()
+    if ref.startswith("s3://"):
+        rest = ref[len("s3://"):]
+        bucket, _, key = rest.partition("/")
+        if bucket and key:
+            _s3_client().delete_object(Bucket=bucket, Key=key)
+        return
+    if ref.startswith("file:"):
+        path = _local_root() / ref[len("file:"):]
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+
+
 def get_bytes(storage_ref: str) -> Optional[bytes]:
     """The stored bytes for a ref, or None when unavailable."""
     ref = (storage_ref or "").strip()
