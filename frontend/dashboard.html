@@ -105,7 +105,7 @@
   .userchip button{flex:0 0 auto;white-space:nowrap;border:0;background:transparent;color:var(--faint);font-size:.72rem;padding:4px;}
   .userchip button:hover{color:var(--text);}
 
-  .main{padding:clamp(16px,2.6vw,30px);max-width:1140px;width:100%;}
+  .main{padding:clamp(16px,2.6vw,30px);max-width:1140px;width:100%;min-width:0;}
   .head{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:16px;}
   .head h1{font-weight:600;font-size:1.7rem;letter-spacing:-.045em;margin:0;}
   .head .sub{color:var(--faint);font-size:.85rem;margin-top:3px;}
@@ -539,14 +539,169 @@
   .toast.err .dt{background:var(--warn);}
   .foot{margin-top:20px;font-family:var(--mono);font-size:.64rem;letter-spacing:.06em;color:var(--faint);line-height:1.7;}
 
+  /* ── Avatars: game-like chooser (stage left, roster right; stacks on mobile) ── */
+  .avpage{display:grid;grid-template-columns:1.5fr 1fr;gap:16px;align-items:stretch;margin-bottom:16px;}
+  .avpage>*{min-width:0;}
+  @media (max-width:900px){ .avpage{grid-template-columns:1fr;} }
+  .stage{position:relative;border-radius:18px;border:1px solid var(--line-soft);overflow:hidden;
+    min-height:440px;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:var(--glass);
+    background:
+      radial-gradient(60% 55% at 30% 18%, rgba(77,124,254,.16), transparent 65%),
+      radial-gradient(50% 45% at 78% 30%, rgba(255,180,154,.12), transparent 70%),
+      linear-gradient(180deg, rgba(255,255,255,.03), rgba(0,0,0,.14));}
+  html[data-theme="light"] .stage{background:
+      radial-gradient(60% 55% at 30% 18%, rgba(77,124,254,.10), transparent 65%),
+      radial-gradient(50% 45% at 78% 30%, rgba(255,180,154,.12), transparent 70%),
+      linear-gradient(180deg, #FFFFFF, #EEF1F6);}
+  @media (max-width:900px){ .stage{min-height:340px;} }
+  /* Pedestal: a soft lit ellipse the avatar "stands" on. */
+  .stage .pedestal{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);
+    width:min(62%,320px);height:30px;border-radius:50%;pointer-events:none;
+    background:radial-gradient(ellipse at center, rgba(126,182,255,.30), rgba(126,182,255,.08) 55%, transparent 75%);}
+  /* Ambient drift on the stage light — slow, dark-theme only, reduced-motion safe. */
+  .stage .stagelight{position:absolute;inset:0;pointer-events:none;opacity:.5;
+    background:radial-gradient(42% 40% at 50% 8%, rgba(126,182,255,.14), transparent 70%);
+    animation:stagelight 14s ease-in-out infinite;}
+  @keyframes stagelight{0%,100%{transform:translateX(-14px);}50%{transform:translateX(14px);}}
+  /* The AvatarPreview mount: whatever the adapter renders fills this box.
+     mode="2d" today; a same-origin 3D iframe attaches to the SAME seam later. */
+  .stage .preview{position:absolute;inset:0;display:grid;place-items:center;}
+  .stage .preview img{max-height:82%;max-width:74%;object-fit:cover;border-radius:16px;
+    border:1px solid var(--line);box-shadow:0 26px 60px -28px rgba(0,0,0,.75);z-index:1;}
+  .stage .preview iframe{position:absolute;inset:0;width:100%;height:100%;border:0;z-index:1;}
+  .stage .preview .bigfallback{width:150px;height:150px;border-radius:50%;display:grid;place-items:center;
+    color:#fff;font-size:3.2rem;font-weight:650;letter-spacing:-.04em;box-shadow:0 24px 60px -24px rgba(0,0,0,.7);}
+  .stage .skel{position:absolute;inset:0;display:grid;place-items:center;color:var(--faint);
+    font-family:var(--mono);font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;animation:blink 1.4s ease-in-out infinite;}
+  .stage .stagemeta{position:absolute;left:18px;bottom:16px;z-index:2;max-width:70%;}
+  .stage .stagemeta .snm{font-size:1.45rem;font-weight:650;letter-spacing:-.04em;line-height:1.1;
+    text-shadow:0 1px 10px rgba(0,0,0,.4);display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+  html[data-theme="light"] .stage .stagemeta .snm{text-shadow:none;}
+  .stage .stagemeta .sro{font-size:.82rem;color:var(--dim);margin-top:2px;}
+  .stage .stagemeta .savail{margin-top:7px;display:flex;gap:6px;flex-wrap:wrap;}
+  /* Roster: vertical cards on desktop; horizontal scroll strip on mobile. */
+  .avsel{display:flex;flex-direction:column;gap:8px;max-width:100%;}
+  @media (max-width:900px){ .avsel{flex-direction:row;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin;} }
+  .aitem{display:flex;align-items:center;gap:11px;padding:11px 12px;border:1px solid var(--line-soft);
+    border-radius:14px;background:var(--panel);cursor:pointer;text-align:left;font:inherit;color:inherit;
+    position:relative;transition:border-color .16s,background .16s;width:100%;}
+  @media (max-width:900px){ .aitem{min-width:190px;width:auto;flex:0 0 auto;} }
+  .aitem:hover{border-color:rgba(126,182,255,.4);}
+  .aitem .av{width:36px;height:36px;font-size:1rem;}
+  .aitem .ainm{font-weight:600;font-size:.9rem;letter-spacing:-.02em;}
+  .aitem .airo{font-size:.72rem;color:var(--faint);margin-top:1px;}
+  .aitem.on{background:var(--panel-2);border-color:rgba(126,182,255,.45);}
+  .aitem.on::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:2.5px;border-radius:3px;background:var(--grad);}
+  .avinfo details{border-top:1px solid var(--line-soft);padding:10px 0 2px;}
+  .avinfo details summary{cursor:pointer;font-weight:600;font-size:.88rem;color:var(--dim);list-style:none;display:flex;align-items:center;gap:8px;}
+  .avinfo details summary::before{content:"›";transition:transform .16s;display:inline-block;color:var(--faint);}
+  .avinfo details[open] summary::before{transform:rotate(90deg);}
+  .avinfo details summary:hover{color:var(--text);}
+  .avinfo .dsec{padding:10px 2px 6px;font-size:.86rem;color:var(--dim);line-height:1.55;}
+
+  /* ── Action Center ── */
+  .navbadge{margin-left:auto;font-family:var(--mono);font-size:.62rem;font-weight:700;min-width:18px;height:18px;
+    padding:0 5px;border-radius:999px;background:var(--warn-soft);color:var(--warn);display:inline-grid;place-items:center;}
+  .acbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
+  .aclist{display:flex;flex-direction:column;gap:10px;}
+  .ac-card{border:1px solid var(--line-soft);border-radius:14px;background:var(--panel);backdrop-filter:var(--glass);
+    padding:13px 15px;box-shadow:var(--shadow-sm);}
+  .ac-top{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;}
+  .ac-what{flex:1;min-width:220px;}
+  .ac-item{font-size:.92rem;font-weight:600;letter-spacing:-.01em;line-height:1.4;}
+  .ac-meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:5px;font-size:.76rem;color:var(--faint);}
+  .ac-meta .av{width:18px;height:18px;font-size:.58rem;}
+  .ac-todo{font-size:.8rem;color:var(--dim);margin-top:7px;}
+  .ac-ctl{display:flex;align-items:center;gap:7px;flex-wrap:wrap;flex:0 0 auto;}
+  .ac-ctl .btn{padding:7px 13px;font-size:.78rem;}
+  /* Plain-language state chips. Color NEVER carries the meaning alone — the
+     label text is always present. */
+  .st{font-family:var(--mono);font-size:.6rem;letter-spacing:.05em;text-transform:uppercase;
+    padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--faint);white-space:nowrap;flex:0 0 auto;}
+  .st.attn{color:var(--warn);border-color:rgba(232,178,74,.45);background:var(--warn-soft);}
+  .st.ready{color:var(--live);border-color:rgba(126,182,255,.45);background:var(--live-soft);}
+  .st.run{color:var(--g1);border-color:rgba(77,124,254,.5);background:rgba(77,124,254,.1);}
+  .st.ok{color:var(--ok);border-color:rgba(79,192,138,.45);background:var(--ok-soft);}
+  .st.bad{color:var(--accent);border-color:rgba(245,72,77,.45);background:var(--accent-soft);}
+  .ac-details{margin-top:11px;border-top:1px solid var(--line-soft);padding-top:11px;}
+  .ac-details[hidden]{display:none;}
+  .ac-kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:.8rem;}
+  .ac-kv dt{color:var(--faint);white-space:nowrap;}
+  .ac-kv dd{margin:0;color:var(--dim);word-break:break-word;}
+  .ac-kv dd.mono{font-family:var(--mono);font-size:.74rem;}
+  .ac-logs{margin-top:9px;font-family:var(--mono);font-size:.7rem;color:var(--faint);line-height:1.6;max-height:140px;overflow:auto;}
+  .ac-open{border:0;background:transparent;color:var(--faint);font-size:.76rem;cursor:pointer;padding:4px 2px;margin-top:6px;}
+  .ac-open:hover{color:var(--text);}
+
+  /* ── Inline missing-details form (modal, replaces window.prompt chains) ── */
+  .scrim{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.55);display:grid;place-items:center;padding:16px;}
+  html[data-theme="light"] .scrim{background:rgba(20,24,32,.35);}
+  .modal{background:var(--raised);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);
+    width:min(460px,100%);max-height:88vh;overflow:auto;padding:18px;}
+  .modal h2{margin:0 0 4px;font-size:1.1rem;letter-spacing:-.02em;}
+  .modal .mh{color:var(--faint);font-size:.8rem;margin-bottom:14px;}
+  .mfield{margin-bottom:12px;}
+  .mfield label{display:block;font-size:.84rem;font-weight:600;margin-bottom:4px;}
+  .mfield label .req{color:var(--warn);margin-left:4px;font-size:.72rem;}
+  .mfield .fh{font-size:.74rem;color:var(--faint);margin-bottom:5px;}
+  .mfield input,.mfield textarea{width:100%;box-sizing:border-box;padding:9px 11px;border-radius:10px;
+    border:1px solid var(--line);background:var(--panel-2);color:var(--text);font:inherit;font-size:.87rem;}
+  .mfield input:focus,.mfield textarea:focus{outline:none;border-color:rgba(126,182,255,.55);}
+  .mfield .ferr{color:var(--accent);font-size:.74rem;margin-top:4px;}
+  .mfield.invalid input,.mfield.invalid textarea{border-color:rgba(245,72,77,.55);}
+  .macts{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;flex-wrap:wrap;}
+
+  /* ── Overview: needs-attention + setup checklist ── */
+  .attnrow{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line-soft);flex-wrap:wrap;}
+  .attnrow:last-of-type{border-bottom:0;}
+  .attnrow .t{flex:1;min-width:200px;font-size:.87rem;}
+  .attnrow .who{font-size:.74rem;color:var(--faint);white-space:nowrap;}
+  .checklist{display:flex;flex-direction:column;gap:2px;}
+  .ckitem{display:flex;align-items:center;gap:10px;padding:7px 4px;border:0;background:transparent;font:inherit;
+    color:var(--dim);cursor:pointer;text-align:left;border-radius:9px;font-size:.86rem;}
+  .ckitem:hover{background:var(--panel);color:var(--text);}
+  .ckitem .ck{width:18px;height:18px;border-radius:50%;border:1px solid var(--line);display:grid;place-items:center;
+    font-size:.62rem;flex:0 0 auto;color:transparent;}
+  .ckitem.done{color:var(--faint);text-decoration:line-through;}
+  .ckitem.done .ck{background:var(--ok-soft);border-color:rgba(79,192,138,.5);color:var(--ok);}
+
+  /* ── Brain (simplified journey) ── */
+  .brsteps{display:flex;gap:8px 18px;flex-wrap:wrap;margin-bottom:16px;font-size:.82rem;color:var(--dim);}
+  .brsteps b{color:var(--text);font-weight:600;}
+  .brsteps .n{font-family:var(--mono);color:transparent;background:var(--grad);-webkit-background-clip:text;background-clip:text;font-weight:700;margin-right:5px;}
+  .brcard{border:1px solid var(--line-soft);border-radius:14px;background:var(--panel);padding:13px 15px;margin-bottom:10px;backdrop-filter:var(--glass);}
+  .brcard .brtop{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .brcard .brnm{font-weight:600;font-size:.95rem;flex:1;min-width:160px;}
+  .brcard .brnm small{color:var(--faint);font-weight:500;font-size:.76rem;margin-left:6px;}
+  .brcard .brmeta{font-size:.76rem;color:var(--faint);margin-top:4px;}
+  .brcard .brnext{margin-top:9px;display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:.8rem;color:var(--dim);}
+
+  /* ── Browser demonstration (fixture-driven presentation shell) ── */
+  .bd-grid{display:grid;grid-template-columns:1.4fr 1fr;gap:14px;align-items:stretch;}
+  @media (max-width:860px){ .bd-grid{grid-template-columns:1fr;} }
+  .bd-view{position:relative;border:1px solid var(--line-soft);border-radius:14px;min-height:210px;overflow:hidden;
+    background:linear-gradient(160deg,rgba(77,124,254,.10),rgba(0,0,0,.25));display:grid;place-items:center;}
+  html[data-theme="light"] .bd-view{background:linear-gradient(160deg,rgba(77,124,254,.08),#EEF1F6);}
+  .bd-view .bd-ph{color:var(--faint);font-size:.82rem;text-align:center;padding:20px;max-width:38ch;line-height:1.5;}
+  .bd-view .bd-ro{position:absolute;top:10px;right:10px;}
+  .bd-title{font-weight:600;font-size:.95rem;letter-spacing:-.01em;}
+  .bd-meta{display:flex;flex-wrap:wrap;gap:7px;align-items:center;font-size:.76rem;color:var(--faint);margin-top:6px;}
+  .bd-meta .av{width:18px;height:18px;font-size:.58rem;}
+  .bd-activity{font-size:.88rem;color:var(--dim);margin-top:12px;}
+  .bd-checkpoint{font-size:.78rem;color:var(--faint);margin-top:4px;}
+  .bd-ctl{display:flex;gap:7px;flex-wrap:wrap;margin-top:13px;}
+  .bd-ctl .btn{padding:7px 13px;font-size:.78rem;}
+
   @keyframes ring{0%{transform:scale(1);opacity:.9;}70%{opacity:0;}100%{transform:scale(1.8);opacity:0;}}
   @keyframes blink{0%,100%{opacity:1;}50%{opacity:.3;}}
   @keyframes drift1{0%,100%{transform:translate(0,0);}50%{transform:translate(-60px,40px);}}
   @keyframes drift2{0%,100%{transform:translate(0,0);}50%{transform:translate(50px,-30px);}}
   @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms !important;}}
   @media (max-width:860px){
-    .side{position:sticky;top:0;z-index:20;padding:12px 14px;gap:10px;background:var(--bg);}
-    .side .nav{flex-direction:row;overflow-x:auto;padding-bottom:3px;scrollbar-width:none;}
+    /* min-width:0 releases the grid track from the nav row's intrinsic
+       min-content width — without it the whole page scrolls horizontally. */
+    .side{position:sticky;top:0;z-index:20;padding:12px 14px;gap:10px;background:var(--bg);min-width:0;}
+    .side .nav{flex-direction:row;overflow-x:auto;padding-bottom:3px;scrollbar-width:none;min-width:0;max-width:100%;}
     .side .nav::-webkit-scrollbar{display:none;}
     .side .nav button{white-space:nowrap;}
     .side>div:not(.brand):not(:last-child){display:none;}
@@ -564,11 +719,10 @@
     <nav class="nav" id="nav">
       <button type="button" data-view="overview" class="on" aria-current="page"><span class="ic">▦</span> Overview</button>
       <button type="button" data-view="avatars"><span class="ic">◐</span> Avatars</button>
-      <button type="button" data-view="meetings"><span class="ic">▤</span> Meetings</button>
-      <button type="button" data-view="usage"><span class="ic">◇</span> Usage &amp; billing</button>
-      <button type="button" data-view="connections"><span class="ic">⇄</span> Connections</button>
       <button type="button" data-view="brain"><span class="ic">◎</span> Brain</button>
-      <button type="button" data-view="studio"><span class="ic">✎</span> Studio</button>
+      <button type="button" data-view="meetings"><span class="ic">▤</span> Meetings</button>
+      <button type="button" data-view="actions"><span class="ic">✓</span> Action Center<span class="navbadge" id="nav-actions-badge" hidden aria-label="actions needing attention"></span></button>
+      <button type="button" data-view="connections"><span class="ic">⇄</span> Connections</button>
       <button type="button" data-view="settings"><span class="ic">⚙</span> Settings</button>
     </nav>
     <div>
@@ -632,6 +786,12 @@
         <div class="note">The host may need to admit it from the waiting room. Sessions bill per minute — end them from the live bar above.</div>
       </div>
 
+      <!-- Compact "Needs your attention" — rendered ONLY when pending actions
+           exist (max 3 rows + a View-all link into the Action Center). -->
+      <div id="ov-attn"></div>
+      <!-- Optional setup checklist — rendered only while the org is incomplete. -->
+      <div id="ov-checklist"></div>
+
       <div class="grid2">
         <div class="panel">
           <h2>Activity</h2><div class="ph">Meetings per week · last 8 weeks</div>
@@ -645,10 +805,25 @@
       <div class="foot">AVATARS ACT AUTONOMOUSLY — SEE MEETINGS FOR THE RECORD OF WHAT THEY DID. TRANSCRIPTS NEVER LEAVE THE STORE.</div>
     </section>
 
-    <!-- AVATARS -->
+    <!-- AVATARS — game-like chooser: 3D-ready stage (2D portrait today) +
+         roster selector + identity/controls. The stage box is owned by the
+         AvatarPreview adapter so the same-origin 3D iframe can attach later
+         without touching this page's structure. -->
     <section class="view" id="view-avatars" hidden>
-      <div class="head"><div><h1>Avatars</h1><div class="sub">Your AI colleagues — who they are, what they know, what they can do</div></div></div>
-      <div id="av-grid"></div>
+      <div class="head"><div><h1>Avatars</h1><div class="sub">Your AI colleagues — pick one, see who they are, send them to a meeting</div></div></div>
+      <div class="avpage">
+        <div class="stage" id="av-stage">
+          <div class="stagelight" aria-hidden="true"></div>
+          <div class="pedestal" aria-hidden="true"></div>
+          <div class="preview" id="av-preview"></div>
+          <div class="stagemeta" id="av-stagemeta"></div>
+        </div>
+        <div>
+          <div class="lbl" id="av-roster-label">Choose an avatar</div>
+          <div class="avsel" id="av-roster" role="listbox" aria-labelledby="av-roster-label"></div>
+        </div>
+      </div>
+      <div id="av-detail"></div>
       <div class="foot">LAURA AND CEDRIC SHARE ONE ACCOUNT BALANCE. CHOOSE PER MEETING.</div>
     </section>
 
@@ -656,6 +831,11 @@
     <section class="view" id="view-meetings" hidden>
       <div class="head"><div><h1>Meetings</h1><div class="sub">What your avatars did — and what's coming up</div></div>
         <div class="seg" id="seg-when"><button class="on" data-w="past">Past</button><button data-w="upcoming">Upcoming</button></div></div>
+      <!-- Browser demonstration (active-meeting experience): a fixture-driven,
+           read-only presentation shell — rendered only when a demonstration
+           exists. Behind the BrowserDemoSource adapter; Browser B0 owns the
+           real contract. -->
+      <div id="browser-demo"></div>
       <div id="mt-past">
         <div class="tbl-wrap">
           <div class="scroll"><table class="tbl"><thead><tr>
@@ -673,9 +853,31 @@
       </div>
     </section>
 
-    <!-- USAGE & BILLING -->
+    <!-- ACTION CENTER — one place to review what the avatars want to do.
+         The list aggregates the action summaries already present in
+         /dashboard/summary; expanding a card lazily fetches the canonical
+         record from GET /dashboard/actions/{id}. Approval/rejection reuse the
+         exact same doors the meeting rows use — nothing is duplicated. -->
+    <section class="view" id="view-actions" hidden>
+      <div class="head"><div><h1>Action Center</h1><div class="sub">Review and follow what your avatars need to do</div></div></div>
+      <div class="acbar">
+        <div class="tabs" id="ac-tabs" role="tablist">
+          <button class="on" data-ab="attn" role="tab" aria-selected="true">Needs attention</button>
+          <button data-ab="progress" role="tab" aria-selected="false">In progress</button>
+          <button data-ab="done" role="tab" aria-selected="false">Completed</button>
+        </div>
+        <div class="filters" style="width:auto">
+          <select id="ac-avatar" aria-label="Filter by avatar"><option value="all">All avatars</option></select>
+          <select id="ac-when" aria-label="Filter by date"><option value="all">Any time</option><option value="1">Last 24h</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select>
+        </div>
+      </div>
+      <div class="aclist" id="ac-list"></div>
+    </section>
+
+    <!-- PLAN & BILLING (opened from Settings — no top-level nav entry) -->
     <section class="view" id="view-usage" hidden>
-      <div class="head"><div><h1>Usage &amp; billing</h1></div></div>
+      <div class="head"><div><h1>Plan &amp; billing</h1><div class="sub">Minutes, plan and invoices — shared across your avatars</div></div>
+        <button class="btn" data-goto="settings">← Back to Settings</button></div>
       <div class="usage-hero">
         <div class="ubig"><div class="k">Minutes remaining</div><div class="v tnum" id="u-remaining">—</div></div>
         <div class="ubig"><div class="k">Minutes used this period</div><div class="v tnum" id="u-used">—</div><div class="s" id="u-period">Shared across Laura and Cedric</div></div>
@@ -723,23 +925,34 @@
       <div class="foot">EACH TOOL NEEDS ITS OWN AUTHORIZATION. CONNECTED NEVER MEANS UNRESTRICTED ACCESS.</div>
     </section>
 
-    <!-- SETTINGS -->
+    <!-- BRAIN -->
     <section class="view" id="view-brain" hidden>
-      <div class="head"><div><h1>Company Brain</h1><div class="sub">Your organization's own documents — uploaded once, cited by your avatars in every meeting</div></div></div>
+      <div class="head"><div><h1>Brain</h1><div class="sub">Your company's knowledge — add it once, and your avatars answer from it with citations</div></div></div>
       <div id="brain-body"><div class="empty" style="padding:14px">Loading…</div></div>
     </section>
 
+    <!-- AVATAR STUDIO (opened from an avatar's Personalize button — no
+         top-level nav entry) -->
     <section class="view" id="view-studio" hidden>
-      <div class="head"><div><h1>Avatar Studio</h1><div class="sub">Personalize your avatars for your organization — identity, tone, voice, tools, knowledge. Published versions are immutable; the repo avatars are never changed.</div></div></div>
+      <div class="head"><div><h1>Avatar Studio</h1><div class="sub">Personalize your avatars for your organization — identity, tone, voice, tools, knowledge. Published versions are immutable; the repo avatars are never changed.</div></div>
+        <button class="btn" data-goto="avatars">← Back to Avatars</button></div>
       <div id="studio-body"><div class="empty" style="padding:14px">Loading…</div></div>
     </section>
 
     <section class="view" id="view-settings" hidden>
-      <div class="head"><div><h1>Settings</h1><div class="sub">Local preferences for this browser</div></div></div>
+      <div class="head"><div><h1>Settings</h1><div class="sub">Appearance, account, plan and security</div></div></div>
       <div class="settings">
         <div class="fset">
           <div class="frow"><div><div class="t">Theme</div><div class="h">Dashboard appearance</div></div>
             <div class="seg" id="seg-theme"><button class="on" data-t="">Dark</button><button data-t="light">Light</button></div></div>
+        </div>
+        <div class="fset" id="set-account" hidden>
+          <div class="frow"><div><div class="t">Account</div><div class="h" id="set-account-line"></div></div>
+            <button class="btn" id="set-signout">Sign out</button></div>
+        </div>
+        <div class="fset">
+          <div class="frow"><div><div class="t">Plan &amp; billing</div><div class="h" id="set-billing-line">Minutes remaining, plan, upgrades and invoices</div></div>
+            <button class="btn" data-goto="usage">Open billing</button></div>
         </div>
         <div class="fset" id="api-token-settings">
           <div class="frow"><div><div class="t">API token</div><div class="h">Sent as Bearer on session and dashboard calls (stored in this browser only)</div></div>
@@ -864,15 +1077,25 @@
 
   var DATA=null, filterMt="all";
 
-  var VIEWS=["overview","avatars","meetings","usage","connections","brain","studio","settings"];
+  // Visible top-level navigation is EXACTLY: Overview, Avatars, Brain,
+  // Meetings, Action Center, Connections, Settings. "usage" (Plan & billing,
+  // reached from Settings) and "studio" (Avatar Studio, reached from an
+  // avatar's Personalize button) keep their views + routes but have no nav
+  // entry — they highlight their nav owner instead.
+  var VIEWS=["overview","avatars","brain","meetings","actions","connections","settings","usage","studio"];
+  var NAV_OWNER={usage:"settings",studio:"avatars"};
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
-    document.querySelectorAll("#nav button").forEach(function(a){var current=a.getAttribute("data-view")===name;a.classList.toggle("on",current);if(current)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current");});
+    var navName=NAV_OWNER[name]||name;
+    document.querySelectorAll("#nav button").forEach(function(a){var current=a.getAttribute("data-view")===navName;a.classList.toggle("on",current);if(current)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current");});
     // Persist the current view in the URL hash so a plain page refresh restores it
     // (instead of resetting to Overview). replaceState = no new history entry, no jump.
     try{ window.history.replaceState({},"",window.location.pathname+"#"+name); }catch(e){}
     if(name==="brain") loadBrain();
     if(name==="studio") loadStudio();
+    if(name==="actions") renderActions();
+    // The avatar stage renders only once the view is opened (never preload).
+    if(name==="avatars" && DATA) renderAvatars(DATA);
     window.scrollTo(0,0); }
   $$("#nav button").forEach(function(a){a.addEventListener("click",function(e){e.preventDefault();go(a.getAttribute("data-view"));});});
   document.addEventListener("click",function(e){var t=e.target.closest("[data-goto]");if(t){go(t.getAttribute("data-goto"));}});
@@ -959,6 +1182,9 @@
     $("#billing-manage").hidden=plan!=="solo"||!canManage;
     $("#plan-solo").classList.toggle("featured",plan!=="solo"&&eligible);
     $("#plan-free").classList.toggle("featured",plan==="free");
+    // Settings → Plan & billing one-liner (the full view opens from there).
+    var sbl=$("#set-billing-line");
+    if(sbl) sbl.textContent=minuteLabel(remaining)+" remaining · "+$("#u-plan").textContent+" plan";
   }
   function openBilling(path,button,bodyObj){
     button.disabled=true;
@@ -1008,7 +1234,11 @@
         '<span class="who"><span class="n">'+esc(d.user.name||"Signed in")+'</span><span class="e">'+esc(d.user.email||"")+'</span></span>'+
         '<button id="logout" title="Sign out">Sign out</button>';
       $("#logout").addEventListener("click",function(){ fetch("/auth/logout",{method:"POST"}).finally(function(){ location.href="/login"; }); });
-    } else { uc.hidden=true; }
+      // Settings → Account: the same identity + the same sign-out.
+      $("#set-account").hidden=false;
+      $("#set-account-line").textContent=(d.user.name?d.user.name+" · ":"")+(d.user.email||"");
+      $("#set-signout").onclick=function(){ fetch("/auth/logout",{method:"POST"}).finally(function(){ location.href="/login"; }); };
+    } else { uc.hidden=true; $("#set-account").hidden=true; }
 
     $("#side-roster").innerHTML = d.avatars.map(function(a){
       return '<div class="rost" data-goto="avatars">'+avatarBadge(a.id,a.name)+
@@ -1047,118 +1277,12 @@
         '<div class="stat"><div class="n tnum">'+a.meetings_total+'</div><div class="l">meetings</div></div></div>';}).join("")
       || '<div class="empty">No avatars installed</div>';
 
-    // One capability row: an interactive switch when the ORG has the
-    // integration connected, else a greyed "Connect in Connections" link. The
-    // switch reflects `on` (this avatar's stored flag, default = connected).
-    function capRow(a,key,label,icon){
-      var ct=(a.capabilities_toggle||{})[key]||{on:false,connected:false};
-      // JUST the capability label + control. The per-toggle status line
-      // ("On — … may use …" / "Off for …" / "Not connected") is REMOVED: it was
-      // noise (and once wrongly named "Cedric"). The switch itself shows on/off.
-      var ctl;
-      if(ct.connected){
-        ctl='<label class="switch"><input type="checkbox"'+(ct.on?' checked':'')+
-          ' data-cap-av="'+esc(a.id)+'" data-cap="'+esc(key)+'"'+
-          ' aria-label="'+esc(label)+' for '+esc(a.name)+'"><span class="track"><span class="knob"></span></span></label>';
-      } else {
-        ctl='<button class="cap-connect" data-goto-conn="1" title="Connect '+esc(label)+' in the Connections view">Connect in Connections</button>';
-      }
-      return '<div class="cap-row'+(ct.connected?'':' off')+'">'+
-        '<div class="cap-info"><span class="cap-ic">'+icon+'</span>'+
-        '<div style="min-width:0"><div class="cap-nm">'+esc(label)+'</div></div></div>'+
-        '<div class="cap-ctl">'+ctl+'</div></div>';
-    }
-    // Avatar card — TWO columns. LEFT: identity/status, description, alias email
-    // (+Copy), "Send to a meeting"/"Talk to". RIGHT: a compact Capabilities panel
-    // — the per-avatar Slack-agent + Google toggles (#221) and the AI-model
-    // switch (#220) at the bottom. The old standalone "Cedric orchestrator" block
-    // is GONE from the card: the org-level Slack/Cedric connect+disconnect lives
-    // in the Connections view, so on the card "Slack agent" is just the toggle.
-    $("#av-grid").innerHTML = d.avatars.map(function(a){
-      // RIGHT column: compact Capabilities panel. capRow renders an interactive
-      // switch when the org has the integration connected, else a small "Connect
-      // in Connections" link — same #221 wiring, unchanged. "Slack agent" unifies
-      // what used to be the "Slack" row + the separate orchestrator block.
-      // RIGHT column: JUST the interactive controls — the Slack-agent + Google
-      // toggles (#221) and the AI-model Gemini/Cerebras buttons (#220). The
-      // explanatory copy is ERASED: the old "connect once in Connections…" note
-      // and the per-model description lines are gone; only the controls remain.
-      // ALL #220/#221 wiring (endpoints + data attributes) is unchanged.
-      // Asana is Petra's domain (capability gating: google=all, asana=Petra,
-      // slack=Cedric) — the Asana toggle renders ONLY on Petra's card, so
-      // Cedric/Laura can't be toggled onto a tool they shouldn't drive.
-      var capHtml='<div class="caps"><div class="sm-h">Capabilities</div><div class="cap-list">'+
-          capRow(a,"slack","Slack agent",LOGO_SLACK)+capRow(a,"google","Google",LOGO_GOOGLE)+
-          (a.id==="petra"?capRow(a,"asana","Asana",LOGO_ASANA):"")+'</div>'+
-          '<div class="modelpick sm"><div class="sm-h">AI model</div><div class="mp-row">'+
-            '<button class="mp-opt'+(a.brain==="gemini"?" on":"")+'" data-brain-set="gemini" data-brain-av="'+esc(a.id)+'">Gemini</button>'+
-            '<button class="mp-opt'+(a.brain==="cerebras"?" on":"")+'" data-brain-set="cerebras" data-brain-av="'+esc(a.id)+'">Cerebras</button></div>'+
-          '</div>'+
-        '</div>';
-      return '<div class="avd"><div class="avd-cols">'+
-          '<div class="avd-left">'+
-          '<div class="idn">'+avatarBadge(a.id,a.name)+
-          '<div style="min-width:0"><div class="nm">'+esc(a.name)+' <span class="pill '+(a.live_now?"live":"idle")+'">'+(a.live_now?"in call":"idle")+'</span></div>'+
-          '<div class="ro">'+esc(a.role)+' · '+a.meetings_total+' meeting'+(a.meetings_total===1?"":"s")+(a.last_meeting_at?' · last '+fmtWhen(a.last_meeting_at):'')+'</div></div></div>'+
-          (a.persona?'<div class="persona">'+esc(a.persona)+(a.persona.length>=220?"…":"")+'</div>':'')+
-          (a.email?'<div class="alias"><div class="al-row"><span class="al-ic">✉</span>'+
-            '<span class="al-addr">'+esc(a.email)+'</span><button class="btn conn-btn" data-copy="'+esc(a.email)+'">Copy</button></div>'+
-            '<div class="al-hint">Add this address to any calendar invite — '+esc(a.name)+' joins the meeting.</div></div>':'')+
-          '<div class="acts"><button class="btn primary" data-dispatch="'+esc(a.id)+'">Send to a meeting</button>'+
-          (a.id==="laura"
-            ? '<span class="btn" title="Ultra HD photorealistic avatar — in the works, not live yet" style="opacity:.55;cursor:default">🎬 Ultra HD realistic avatar · coming soon</span>'
-            : '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a>')+
-          '</div>'+
-          '</div>'+
-          '<aside class="avd-right">'+capHtml+'</aside>'+
-        '</div></div>';}).join("") || '<div class="empty">No avatars installed</div>';
-    $$("#av-grid [data-dispatch]").forEach(function(b){ b.addEventListener("click",function(e){
-      e.stopPropagation(); go("overview"); $("#dsp-avatar").value=b.getAttribute("data-dispatch"); $("#dsp-url").focus(); }); });
-    $$("#av-grid [data-copy]").forEach(function(b){ b.addEventListener("click",function(e){
-      e.stopPropagation(); var v=b.getAttribute("data-copy");
-      if(navigator.clipboard) navigator.clipboard.writeText(v);
-      toast("Copied "+v+" — invite it to a meeting to summon this avatar."); }); });
-    // AI model per avatar: Gemini (relay) vs Cerebras (normal). Applies next meeting.
-    $$("#av-grid [data-brain-set]").forEach(function(b){ b.addEventListener("click",function(e){
-      e.stopPropagation();
-      var av=b.getAttribute("data-brain-av"), br=b.getAttribute("data-brain-set");
-      fetch("/avatars/"+encodeURIComponent(av)+"/brain-mode",{method:"POST",
-        headers:{"content-type":"application/json"},body:JSON.stringify({brain:br})})
-      .then(function(r){return r.json();})
-      .then(function(j){
-        if(j&&j.ok){
-          var row=b.parentNode;
-          row.querySelectorAll(".mp-opt").forEach(function(o){
-            o.classList.toggle("on", o.getAttribute("data-brain-set")===br); });
-          toast(av+" → "+(br==="gemini"?"Gemini":"Cerebras")+" (from the next meeting)");
-        } else { toast((j&&j.error)||"Could not change the model"); }
-      }).catch(function(){ toast("Network error"); });
-    }); });
-    // Per-avatar capability switch (Slack/Google). Optimistic: the native
-    // checkbox flips instantly; on failure we revert and toast. Posts to the
-    // owner-only endpoint; effective at the next execute/deliver.
-    $$("#av-grid [data-cap]").forEach(function(cb){ cb.addEventListener("change",function(e){
-      e.stopPropagation();
-      var av=cb.getAttribute("data-cap-av"), cap=cb.getAttribute("data-cap"), on=cb.checked;
-      cb.disabled=true;
-      fetch("/dashboard/avatar/"+encodeURIComponent(av)+"/capability",{method:"POST",
-        headers:headers(),body:JSON.stringify({capability:cap,enabled:on})})
-      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,j:j};}); })
-      .then(function(res){
-        cb.disabled=false;
-        if(res.ok&&res.j&&res.j.ok){
-          // The switch itself is the on/off indicator now — no status line to update.
-          toast(cap.charAt(0).toUpperCase()+cap.slice(1)+(on?" enabled":" disabled")+" for "+av);
-        } else { cb.checked=!on; toast((res.j&&res.j.error)||"Could not change capability",true); }
-      }).catch(function(){ cb.disabled=false; cb.checked=!on; toast("Network error",true); });
-    }); });
-    // "Connect in Connections" — the connect action lives in the Connections
-    // view, never on the card.
-    $$("#av-grid [data-goto-conn]").forEach(function(b){ b.addEventListener("click",function(e){
-      e.stopPropagation(); go("connections"); }); });
-    // (The org-level Cedric brain connect/disconnect + its connector catalog now
-    // live ONLY in the Connections view — see #conns further below. The card no
-    // longer duplicates them; on the card Slack is just the per-avatar toggle.)
+    // Avatars page: the game-like chooser (stage + roster + identity). It
+    // renders only while the view is open — nothing (not even the 2D
+    // portrait) loads before the user opens Avatars. All the old card
+    // controls kept their #220/#221 wiring: see renderAvatars /
+    // avatarDetailHTML / wireAvatarControls at module scope.
+    if(!$("#view-avatars").hidden) renderAvatars(d);
 
     // upcoming meetings — the connected calendar's queue (auto-join inbox).
     // Prefetched once per page (window-scoped guard: renderAll reruns on every
@@ -1701,103 +1825,9 @@
 
     // meetings tables — clean filterable columns; click a row for AI summary + actions
     function platformsIn(){ var s={}; (d.meetings||[]).forEach(function(m){ if(m.platform&&m.platform!=="—") s[m.platform]=1; }); return Object.keys(s); }
-    // Execution receipt chip. When the native executor ran the action, the
-    // provenance detail carries the real Calendar event link / Gmail message id
-    // (from executor.execute_approved) — render a clickable "Done ↗". Otherwise
-    // the plain status pill (proposed/approved/failed) with the detail on hover.
-    // Owner label OR — when the action couldn't be routed — a visible
-    // "Unassigned" triage chip (with the gap reason on hover) instead of the
-    // easily-skipped faint text it used to render.
-    function ownerChip(a){
-      if(a.unassigned){
-        var why=a.gap?("Needs "+esc(a.gap)+" — assign to route it"):"Needs an owner — assign to route it";
-        return ' <span class="ow unassigned" title="'+why+'">⚠ Unassigned</span>';
-      }
-      return a.owner?' <span class="ow">· '+esc(a.owner)+'</span>':'';
-    }
-    function execChip(a){ if(!a.execution) return "";
-      var s=a.execution.status||"", det=a.execution.detail||"";
-      var url=(det.match(/https?:\/\/[^\s"'<>]+/)||[])[0];
-      if(s==="done"&&url) return '<a class="exec done" href="'+esc(url)+'" target="_blank" rel="noopener" title="'+esc(det)+'">Done ↗</a>';
-      return '<span class="exec '+esc(s)+'" title="'+esc(det)+'">'+esc(s)+'</span>';
-    }
-    // Per-row "Approve & run" — only for a native-typed action (calendar/email
-    // spec) that hasn't already been run. Posts to the human-authed approve door
-    // (POST /dashboard/actions/{id}/approve); with the executor flag OFF the
-    // endpoint marks it approved and runs nothing (handled in approveAction).
-    function apprBtn(a){
-      if(!a.typed||!a.action_id) return "";
-      if(a.execution&&(a.execution.status==="done"||a.execution.status==="rejected")) return "";  // terminal → pill shows
-      return '<button class="btn-appr" data-approve="'+esc(a.action_id)+'">Approve &amp; run</button>';
-    }
-    // Per-row "Reject" — approve's mirror (POST /dashboard/actions/{id}/reject).
-    // Marks the action rejected (terminal) in the same provenance channel;
-    // nothing executes, and the approve door refuses it afterwards.
-    function rejBtn(a){
-      if(!a.typed||!a.action_id) return "";
-      if(a.execution&&(a.execution.status==="done"||a.execution.status==="rejected")) return "";
-      return '<button class="btn-rej" data-reject="'+esc(a.action_id)+'">Reject</button>';
-    }
-    function rejectAction(btn){
-      var aid=btn.getAttribute("data-reject"); if(!aid) return;
-      var old=btn.innerHTML; btn.disabled=true; btn.textContent="Rejecting…";
-      fetch("/dashboard/actions/"+encodeURIComponent(aid)+"/reject",{method:"POST",headers:headers()})
-        .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); })
-        .then(function(res){
-          if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
-          var appr=btn.parentElement&&btn.parentElement.querySelector("button[data-approve]");
-          if(appr) appr.remove();
-          btn.outerHTML='<span class="exec rejected" title="Rejected — it will not run.">rejected</span>';
-          toast("Action rejected — it will not run.");
-        })
-        .catch(function(e){ btn.disabled=false; btn.innerHTML=old; toast("Could not reject: "+e.message,true); });
-    }
-    function approveAction(btn){
-      var aid=btn.getAttribute("data-approve"); if(!aid) return;
-      var old=btn.innerHTML; btn.disabled=true; btn.textContent="Approving…";
-      fetch("/dashboard/actions/"+encodeURIComponent(aid)+"/approve",{method:"POST",headers:headers()})
-        .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); })
-        .then(function(res){
-          // needs_details: the typed spec is missing required fields — collect
-          // them right here (schema-validated server-side) and retry once.
-          if(res.status===422 && res.j.error==="needs_details"){
-            var schema=res.j.params_schema||[], missing=res.j.missing_params||[], args={}, aborted=false;
-            missing.forEach(function(name){
-              if(aborted) return;
-              var f=schema.find(function(x){return x.name===name;})||{};
-              var hint=f.description?(" ("+f.description+")"):"";
-              var v=window.prompt("This action needs \""+name+"\""+hint+(f.type==="array"?" — comma-separated":"")+":");
-              if(v===null||!v.trim()){ aborted=true; return; }
-              args[name]=f.type==="array"? v.split(",").map(function(s){return s.trim();}).filter(Boolean) : v.trim();
-            });
-            if(aborted){ btn.disabled=false; btn.innerHTML=old; toast("Approval needs those details to run.",true); return; }
-            return fetch("/dashboard/actions/"+encodeURIComponent(aid)+"/params",{method:"POST",headers:headers(),body:JSON.stringify({args:args})})
-              .then(function(r2){ return r2.json().catch(function(){return {};}).then(function(j2){ return {ok:r2.ok,j:j2}; }); })
-              .then(function(p){
-                if(!p.ok) throw new Error(p.j.error||"could not save details");
-                if((p.j.missing_params||[]).length) throw new Error("still missing: "+p.j.missing_params.join(", "));
-                btn.disabled=false; btn.innerHTML=old;
-                toast("Details saved — approving…");
-                approveAction(btn);
-              })
-              .catch(function(e){ btn.disabled=false; btn.innerHTML=old; toast("Could not save details: "+e.message,true); });
-          }
-          if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
-          var j=res.j, st=j.status||null;
-          // Flag OFF (or nothing ran): captured + marked approved, but not
-          // executed — say so plainly rather than surfacing it as an error.
-          if(!j.executed){
-            btn.outerHTML='<span class="exec approved" title="Marked approved. Turn on the native executor to run it automatically.">captured · execution off</span>';
-            toast("Action approved — captured (native execution is off).");
-            return;
-          }
-          // Executed: render the SAME receipt the row uses (Done ↗ / failed pill).
-          var failed=st&&st.status==="failed";
-          btn.outerHTML=execChip({execution:st})||'<span class="exec done">done</span>';
-          toast(failed?("Approved, but it couldn't run: "+((st&&st.detail)||"see receipt")):"Approved & run — receipt attached.",failed);
-        })
-        .catch(function(e){ btn.disabled=false; btn.innerHTML=old; toast("Could not approve: "+e.message,true); });
-    }
+    // The action chip renderers (ownerChip / execChip / apprBtn / rejBtn) and
+    // the approve/reject doors now live at MODULE scope, shared with the
+    // Action Center — one execution path for every surface (see above).
     function rowHTML(m,i){ var nm=avName(m.avatar_id);
       return '<tr class="row" data-i="'+i+'"><td><div class="cell-av">'+
         (m.avatar_id&&avById[m.avatar_id]?avatarBadge(m.avatar_id,nm):'<span class="av" style="background:var(--faint)">'+esc(nm[0]||"?")+'</span>')+'<span>'+esc(nm)+'</span></div></td>'+
@@ -1982,6 +2012,12 @@
     $$("#conns [data-slack-manage]").forEach(function(a){a.addEventListener("click",function(){
       try{ sessionStorage.setItem("laura_pending_connect", String(Date.now())); }catch(e){} }); });
     if(slackConnected) resolveSlackManageUrl();
+    // Overview extras + Action Center surfaces (all fed from this same summary).
+    renderAttention(d);
+    renderChecklist(d);
+    updateActionsBadge();
+    if(!$("#view-actions").hidden) renderActions();
+    renderBrowserDemo();
     wireAvatarImages();
   }
 
@@ -2094,6 +2130,710 @@
       .catch(function(){ /* keep the fallback href/label + empty chips — never crash */ });
   }
 
+  // ═════════ Shared action helpers (Meetings rows + Action Center) ═════════
+  // ONE set of chip renderers and ONE approve/reject path for every surface
+  // that shows an action — the meeting detail rows and the Action Center reuse
+  // these, so execution behavior is never duplicated.
+  function avInfo(id){ return ((DATA&&DATA.avatars)||[]).find(function(x){return x.id===id;})||null; }
+  function avNameOf(id){ var a=avInfo(id); return a?a.name:(id?(id.charAt(0).toUpperCase()+id.slice(1)):"—"); }
+
+  // Owner label OR — when the action couldn't be routed — a visible
+  // "Unassigned" triage chip (with the gap reason on hover).
+  function ownerChip(a){
+    if(a.unassigned){
+      var why=a.gap?("Needs "+esc(a.gap)+" — assign to route it"):"Needs an owner — assign to route it";
+      return ' <span class="ow unassigned" title="'+why+'">⚠ Unassigned</span>';
+    }
+    return a.owner?' <span class="ow">· '+esc(a.owner)+'</span>':'';
+  }
+  function execChip(a){ if(!a.execution) return "";
+    var s=a.execution.status||"", det=a.execution.detail||"";
+    var url=(det.match(/https?:\/\/[^\s"'<>]+/)||[])[0];
+    if(s==="done"&&url) return '<a class="exec done" href="'+esc(url)+'" target="_blank" rel="noopener" title="'+esc(det)+'">Done ↗</a>';
+    return '<span class="exec '+esc(s)+'" title="'+esc(det)+'">'+esc(s)+'</span>';
+  }
+  // Per-row "Approve & run" — only for a native-typed action (calendar/email
+  // spec) that hasn't already been run. Posts to the human-authed approve door
+  // (POST /dashboard/actions/{id}/approve).
+  function apprBtn(a){
+    if(!a.typed||!a.action_id) return "";
+    if(a.execution&&(a.execution.status==="done"||a.execution.status==="rejected")) return "";  // terminal → pill shows
+    return '<button class="btn-appr" data-approve="'+esc(a.action_id)+'">Approve &amp; run</button>';
+  }
+  function rejBtn(a){
+    if(!a.typed||!a.action_id) return "";
+    if(a.execution&&(a.execution.status==="done"||a.execution.status==="rejected")) return "";
+    return '<button class="btn-rej" data-reject="'+esc(a.action_id)+'">Reject</button>';
+  }
+
+  // Plain-language state labels — canonical values stay internal, the UI never
+  // shows the raw vocabulary. Color NEVER carries the meaning alone.
+  var STATE_LABEL={needs_details:"Needs information",proposed:"Ready for approval",
+    approved:"Approved",executing:"Running",done:"Completed",failed:"Couldn’t complete",
+    rejected:"Rejected",execution_unknown:"Check connected account"};
+  var STATE_CLASS={needs_details:"attn",proposed:"ready",approved:"run",executing:"run",
+    done:"ok",failed:"bad",rejected:"bad",execution_unknown:"attn"};
+  function stateOf(a){
+    var s=(a.execution&&a.execution.status)||"";
+    if(!s&&a.typed) s="proposed";
+    return s;
+  }
+  function stateChipHTML(s){
+    if(!s) return '<span class="st">Captured</span>';
+    return '<span class="st '+esc(STATE_CLASS[s]||"")+'">'+esc(STATE_LABEL[s]||s)+'</span>';
+  }
+  function bucketOf(a){ var s=stateOf(a);
+    if(s==="done"||s==="failed"||s==="rejected") return "done";
+    if(s==="approved"||s==="executing") return "progress";
+    return "attn"; }
+
+  // Every action across every meeting in the already-loaded summary — the
+  // Action Center's initial list source (the canonical record is fetched
+  // lazily per action on expand; no second action-list API is invented).
+  function actionIndex(){
+    var out=[];
+    ((DATA&&DATA.meetings)||[]).forEach(function(m){
+      (m.actions||[]).forEach(function(a){ out.push({a:a,m:m}); });
+    });
+    return out;
+  }
+  function attnActions(){
+    return actionIndex().filter(function(x){
+      return bucketOf(x.a)==="attn" && x.a.typed && x.a.action_id; });
+  }
+  function updateActionsBadge(){
+    var b=$("#nav-actions-badge"); if(!b) return;
+    var n=attnActions().length;
+    b.hidden=!n; b.textContent=n>99?"99+":String(n);
+  }
+  // After an approve/reject lands, patch the cached summary in place so every
+  // surface (badge, Overview attention, Action Center) repaints consistently
+  // without a full reload that would collapse whatever the user has open.
+  function patchActionState(aid,st){
+    ((DATA&&DATA.meetings)||[]).forEach(function(m){ (m.actions||[]).forEach(function(a){
+      if(a.action_id===aid){ a.execution={status:(st&&st.status)||"approved",detail:(st&&st.detail)||""}; } }); });
+    updateActionsBadge();
+    if(DATA) renderAttention(DATA);
+    var v=$("#view-actions"); if(v&&!v.hidden) renderActions();
+  }
+
+  function rejectAction(btn){
+    var aid=btn.getAttribute("data-reject"); if(!aid) return;
+    var old=btn.innerHTML; btn.disabled=true; btn.textContent="Rejecting…";
+    fetch("/dashboard/actions/"+encodeURIComponent(aid)+"/reject",{method:"POST",headers:headers()})
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); })
+      .then(function(res){
+        if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
+        var appr=btn.parentElement&&btn.parentElement.querySelector("button[data-approve]");
+        if(appr) appr.remove();
+        var det=btn.parentElement&&btn.parentElement.querySelector("button[data-acdetailsbtn]");
+        if(det) det.remove();
+        btn.outerHTML='<span class="exec rejected" title="Rejected — it will not run.">rejected</span>';
+        toast("Action rejected — it will not run.");
+        patchActionState(aid,res.j.status||{status:"rejected"});
+      })
+      .catch(function(e){ btn.disabled=false; btn.innerHTML=old; toast("Could not reject: "+e.message,true); });
+  }
+  function approveAction(btn,aidArg){
+    var aid=aidArg||(btn&&btn.getAttribute("data-approve")); if(!aid) return;
+    var old=btn?btn.innerHTML:""; if(btn){ btn.disabled=true; btn.textContent="Approving…"; }
+    fetch("/dashboard/actions/"+encodeURIComponent(aid)+"/approve",{method:"POST",headers:headers()})
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); })
+      .then(function(res){
+        // needs_details: the typed spec is missing required fields — collect
+        // them in the accessible inline form (schema comes from the server;
+        // the backend stays authoritative) and retry once saved.
+        if(res.status===422 && res.j.error==="needs_details"){
+          if(btn){ btn.disabled=false; btn.innerHTML=old; }
+          openParamsForm({
+            actionId:aid,
+            schema:res.j.params_schema||[],
+            missing:res.j.missing_params||[],
+            approveAfter:true,
+            onApproved:function(){ approveAction(btn,aid); }
+          });
+          return;
+        }
+        if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
+        var j=res.j, st=j.status||null;
+        // Flag OFF (or nothing ran): captured + marked approved, but not
+        // executed — say so plainly rather than surfacing it as an error.
+        if(!j.executed){
+          if(btn) btn.outerHTML='<span class="exec approved" title="Marked approved. Turn on the native executor to run it automatically.">captured · execution off</span>';
+          toast("Action approved — captured (native execution is off).");
+          patchActionState(aid,st||{status:"approved"});
+          return;
+        }
+        // Executed: render the SAME receipt the row uses (Done ↗ / failed pill).
+        var failed=st&&st.status==="failed";
+        if(btn) btn.outerHTML=execChip({execution:st})||'<span class="exec done">done</span>';
+        toast(failed?("Approved, but it couldn't run: "+((st&&st.detail)||"see receipt")):"Approved & run — receipt attached.",failed);
+        patchActionState(aid,st||{status:"done"});
+      })
+      .catch(function(e){ if(btn){ btn.disabled=false; btn.innerHTML=old; } toast("Could not approve: "+e.message,true); });
+  }
+
+  // ── Inline missing-details form (replaces the window.prompt chain) ──
+  // Generated from the server-provided params_schema; POSTs to the existing
+  // params door. Validation, permissions and approval eligibility stay
+  // server-side — this form only renders the schema and the server's errors.
+  function closeParamsForm(){
+    var s=document.getElementById("params-scrim");
+    if(s){ if(s._esc) document.removeEventListener("keydown",s._esc,true); s.remove(); }
+  }
+  function openParamsForm(opts){
+    closeParamsForm();
+    var schema=opts.schema||[], missing=(opts.missing||[]).slice(), params=opts.params||{};
+    var s=document.createElement("div"); s.className="scrim"; s.id="params-scrim";
+    var fields=schema.map(function(f,i){
+      var name=String(f.name||""), required=!!f.required, type=String(f.type||"string");
+      var raw=params[name];
+      var val=raw==null?"":(type==="array"&&Array.isArray(raw)?raw.join(", "):String(raw));
+      var long=(type==="string"&&["body","notes","description","text"].indexOf(name)>=0);
+      return '<div class="mfield" data-mf="'+esc(name)+'">'+
+        '<label for="mf-'+i+'">'+esc(name.replace(/_/g," "))+(required?'<span class="req">required</span>':'')+'</label>'+
+        ((f.description||type==="array")?'<div class="fh">'+esc(f.description||"")+(type==="array"?(f.description?" — ":"")+"comma-separated":"")+'</div>':'')+
+        (long?'<textarea id="mf-'+i+'" rows="3" data-mfin="'+esc(name)+'" data-mtype="'+esc(type)+'">'+esc(val)+'</textarea>'
+             :'<input id="mf-'+i+'" type="text" value="'+esc(val)+'" data-mfin="'+esc(name)+'" data-mtype="'+esc(type)+'" />')+
+        '<div class="ferr" data-mferr="'+esc(name)+'" hidden></div></div>';
+    }).join("");
+    s.innerHTML='<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mdl-t">'+
+      '<h2 id="mdl-t">Add details</h2>'+
+      '<div class="mh">This action needs a few details before it can run. Nothing happens until you save.</div>'+
+      fields+
+      '<div class="macts"><button class="btn" data-mcancel>Cancel</button>'+
+      '<button class="btn" data-msave>Save details</button>'+
+      (opts.approveAfter?'<button class="btn primary" data-msaveappr>Save and approve</button>':'')+
+      '</div></div>';
+    document.body.appendChild(s);
+    var first=s.querySelector('[data-mfin="'+(missing[0]||"")+'"]')||s.querySelector("[data-mfin]");
+    if(first) setTimeout(function(){ first.focus(); },0);
+    function collect(){
+      var args={};
+      s.querySelectorAll("[data-mfin]").forEach(function(el){
+        var name=el.getAttribute("data-mfin"), type=el.getAttribute("data-mtype"), v=(el.value||"").trim();
+        if(!v) return;
+        if(type==="array") args[name]=v.split(",").map(function(x){return x.trim();}).filter(Boolean);
+        else if(type==="boolean") args[name]=/^(true|yes|1)$/i.test(v);
+        else args[name]=v;
+      });
+      return args;
+    }
+    function showErrors(list){
+      s.querySelectorAll(".mfield").forEach(function(el){ el.classList.remove("invalid"); });
+      s.querySelectorAll("[data-mferr]").forEach(function(el){ el.hidden=true; el.textContent=""; });
+      var unmatched=[];
+      (list||[]).forEach(function(e){
+        var msg=String(e);
+        var name=msg.split(" ")[0].replace(/['"]/g,"");
+        var box=s.querySelector('[data-mferr="'+name+'"]'), fld=s.querySelector('.mfield[data-mf="'+name+'"]');
+        if(box){ box.hidden=false; box.textContent=/^\S+$/.test(msg)?"This field is required.":msg; }
+        else unmatched.push(msg);
+        if(fld) fld.classList.add("invalid");
+      });
+      if(unmatched.length) toast(unmatched.join(" · "),true);
+    }
+    function save(thenApprove){
+      var args=collect();
+      if(!Object.keys(args).length){ showErrors(missing.length?missing:["Fill in at least one field."]); return; }
+      var sb=s.querySelector(thenApprove?"[data-msaveappr]":"[data-msave]");
+      if(sb) sb.disabled=true;
+      fetch("/dashboard/actions/"+encodeURIComponent(opts.actionId)+"/params",
+            {method:"POST",headers:headers(),body:JSON.stringify({args:args})})
+        .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,j:j}; }); })
+        .then(function(res){
+          if(sb) sb.disabled=false;
+          if(!res.ok){ showErrors((res.j&&res.j.details)||[(res.j&&res.j.error)||"Could not save details"]); return; }
+          var still=res.j.missing_params||[];
+          if(still.length && thenApprove){ missing=still; showErrors(still); return; }
+          closeParamsForm();
+          toast(still.length?("Saved — still missing: "+still.join(", ")):"Details saved.");
+          if(thenApprove && opts.onApproved) opts.onApproved();
+        })
+        .catch(function(){ if(sb) sb.disabled=false; toast("Network error saving details.",true); });
+    }
+    s.querySelector("[data-mcancel]").addEventListener("click",closeParamsForm);
+    s.querySelector("[data-msave]").addEventListener("click",function(){ save(false); });
+    var sa=s.querySelector("[data-msaveappr]"); if(sa) sa.addEventListener("click",function(){ save(true); });
+    var esc2=function(e){ if(e.key==="Escape") closeParamsForm(); };
+    s._esc=esc2; document.addEventListener("keydown",esc2,true);
+    s.addEventListener("mousedown",function(e){ if(e.target===s) closeParamsForm(); });
+  }
+
+  // ═════════ Action Center ═════════
+  var acBucket="attn";
+  function acTodoText(a){
+    var s=stateOf(a);
+    if(s==="needs_details") return "Add the missing details, then approve.";
+    if(s==="proposed") return (a.typed&&a.action_id)?"Review and approve — nothing runs without you.":"Captured from the meeting — tracked here for the record.";
+    if(s==="approved") return "Approved — waiting to run.";
+    if(s==="executing") return "Running now.";
+    if(s==="done") return "Completed — the receipt links to what was created.";
+    if(s==="failed") return "It couldn’t complete — open details for the receipt.";
+    if(s==="rejected") return "Rejected — it will not run.";
+    return "Captured from the meeting — tracked here for the record.";
+  }
+  function renderActions(){
+    var box=$("#ac-list"); if(!box) return;
+    if(!DATA){ box.innerHTML='<div class="empty">Loading…</div>'; return; }
+    var fa=$("#ac-avatar"), fw=$("#ac-when");
+    var prevA=fa.value||"all", prevW=fw.value||"all";
+    fa.innerHTML='<option value="all">All avatars</option>'+(DATA.avatars||[]).map(function(a){return '<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>';}).join("");
+    fa.value=prevA; if(!fa.value) fa.value="all"; fw.value=prevW;
+    var counts={attn:0,progress:0,done:0};
+    actionIndex().forEach(function(x){ counts[bucketOf(x.a)]++; });
+    $$("#ac-tabs button").forEach(function(b){
+      var k=b.getAttribute("data-ab");
+      var base=k==="attn"?"Needs attention":(k==="progress"?"In progress":"Completed");
+      b.textContent=base+(counts[k]?" ("+counts[k]+")":"");
+      b.classList.toggle("on",k===acBucket);
+      b.setAttribute("aria-selected",k===acBucket?"true":"false");
+    });
+    var now=Date.now()/1000;
+    var rows=actionIndex().filter(function(x){
+      if(bucketOf(x.a)!==acBucket) return false;
+      if(fa.value!=="all"&&x.m.avatar_id!==fa.value) return false;
+      if(fw.value!=="all"&&(now-(x.m.saved_at||0))>parseInt(fw.value,10)*86400) return false;
+      return true;
+    });
+    if(!rows.length){
+      var msg=acBucket==="attn"?"Nothing needs your attention right now. Actions your avatars capture in meetings appear here for approval."
+        :acBucket==="progress"?"Nothing is running right now. Approved actions appear here while they execute."
+        :"No completed actions yet. Once an action runs (or is rejected), its receipt lands here.";
+      box.innerHTML='<div class="empty">'+msg+'<br/><a data-goto="overview" style="cursor:pointer;text-decoration:underline">Send an avatar to a meeting</a></div>';
+      return;
+    }
+    box.innerHTML=rows.map(function(x){
+      var a=x.a,m=x.m,s=stateOf(a);
+      var ctl="";
+      if(a.typed&&a.action_id&&bucketOf(a)==="attn"){
+        ctl='<button class="btn primary" data-approve="'+esc(a.action_id)+'">Approve</button>'+
+            '<button class="btn" data-acdetailsbtn="'+esc(a.action_id)+'">Add details</button>'+
+            '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Reject</button>';
+      } else if(s==="done"&&a.execution){
+        var recUrl=((a.execution.detail||"").match(/https?:\/\/[^\s"'<>]+/)||[])[0]||"";
+        if(recUrl) ctl='<a class="btn" style="text-decoration:none" href="'+esc(recUrl)+'" target="_blank" rel="noopener">Open receipt ↗</a>';
+      }
+      return '<article class="ac-card">'+
+        '<div class="ac-top">'+stateChipHTML(s)+
+        '<div class="ac-what"><div class="ac-item">'+esc(a.item)+ownerChip(a)+'</div>'+
+        '<div class="ac-meta">'+avatarBadge(m.avatar_id,avNameOf(m.avatar_id))+'<span>'+esc(avNameOf(m.avatar_id))+'</span>'+
+        '<span aria-hidden="true">·</span><span>'+esc(m.platform)+' meeting</span>'+
+        '<span aria-hidden="true">·</span><span>'+fmtWhen(m.saved_at)+'</span></div>'+
+        '<div class="ac-todo">'+esc(acTodoText(a))+'</div></div>'+
+        '<div class="ac-ctl">'+ctl+'</div></div>'+
+        (a.action_id?('<button class="ac-open" data-acx="'+esc(a.action_id)+'" aria-expanded="false">View details ▾</button>'+
+        '<div class="ac-details" data-acd="'+esc(a.action_id)+'" hidden></div>'):'')+
+        '</article>';
+    }).join("");
+    wireAvatarImages();
+    $$("#ac-list [data-approve]").forEach(function(b){ b.addEventListener("click",function(){ approveAction(b); }); });
+    $$("#ac-list [data-reject]").forEach(function(b){ b.addEventListener("click",function(){ rejectAction(b); }); });
+    $$("#ac-list [data-acdetailsbtn]").forEach(function(b){ b.addEventListener("click",function(){ openDetailsFor(b.getAttribute("data-acdetailsbtn"),b); }); });
+    $$("#ac-list [data-acx]").forEach(function(b){ b.addEventListener("click",function(){ toggleActionDetails(b); }); });
+  }
+  // "Add details" without going through a failed approve: fetch the canonical
+  // record (schema + current params) and open the same inline form.
+  function openDetailsFor(aid,btn){
+    btn.disabled=true;
+    fetch("/dashboard/actions/"+encodeURIComponent(aid),{headers:headers()})
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,j:j}; }); })
+      .then(function(res){
+        btn.disabled=false;
+        var act=res.ok&&res.j&&res.j.action;
+        if(!act){ toast("Could not load this action.",true); return; }
+        if(!(act.params_schema||[]).length){ toast("This action has no editable details.",true); return; }
+        openParamsForm({actionId:aid,schema:act.params_schema,missing:act.missing_params||[],
+          params:act.params||{},approveAfter:true,
+          onApproved:function(){ approveAction(null,aid); }});
+      })
+      .catch(function(){ btn.disabled=false; toast("Network error.",true); });
+  }
+  function toggleActionDetails(btn){
+    var aid=btn.getAttribute("data-acx");
+    var box=document.querySelector('.ac-details[data-acd="'+aid+'"]'); if(!box) return;
+    var open=box.hidden;
+    box.hidden=!open;
+    btn.setAttribute("aria-expanded",open?"true":"false");
+    btn.textContent=open?"Hide details ▴":"View details ▾";
+    if(open&&!box.getAttribute("data-loaded")){
+      box.innerHTML='<div class="empty" style="padding:8px;text-align:left">Loading…</div>';
+      fetch("/dashboard/actions/"+encodeURIComponent(aid),{headers:headers()})
+        .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,j:j}; }); })
+        .then(function(res){
+          if(!res.ok||!res.j.action){ box.innerHTML='<div class="empty" style="padding:8px;text-align:left">Could not load details.</div>'; return; }
+          box.setAttribute("data-loaded","1");
+          box.innerHTML=actionDetailHTML(res.j.action);
+        })
+        .catch(function(){ box.innerHTML='<div class="empty" style="padding:8px;text-align:left">Could not load details.</div>'; });
+    }
+  }
+  function actionDetailHTML(act){
+    var kv=[];
+    function row(k,v,mono){ if(v==null||v==="") return; kv.push('<dt>'+esc(k)+'</dt><dd'+(mono?' class="mono"':'')+'>'+v+'</dd>'); }
+    var params=act.params||{};
+    var paramsTxt=Object.keys(params).map(function(k){
+      var v=params[k]; return esc(k.replace(/_/g," "))+": "+esc(Array.isArray(v)?v.join(", "):String(v)); }).join("<br/>");
+    row("What it will do",esc(act.action||""));
+    if(act.origin_avatar) row("Requested by",esc(avNameOf(act.origin_avatar)));
+    var srcBot=act.source&&act.source.bot_id;
+    if(srcBot){
+      var srcM=((DATA&&DATA.meetings)||[]).filter(function(m){return m.bot_id===srcBot;})[0];
+      row("From meeting",srcM?esc(srcM.platform+" meeting · "+fmtWhen(srcM.saved_at)):'<span style="font-family:var(--mono);font-size:.72rem">'+esc(String(srcBot))+'</span>');
+    }
+    if(act.tool) row("Tool",'<span class="mono" style="font-family:var(--mono);font-size:.74rem">'+esc(act.tool)+'</span>');
+    row("Parameters",paramsTxt);
+    if((act.missing_params||[]).length) row("Still missing",esc(act.missing_params.join(", ")));
+    if(act.risk) row("Risk",esc(act.risk));
+    if(act.route) row("Runs through",esc(act.route==="native"?"Laura — your own connected account"
+      :act.route==="cedric"?"Cedric — the Slack agent"
+      :act.route==="browser"?"Browser demonstration — a guarded browser session; the live view sits in the meeting's Browser demonstration panel"
+      :act.route));
+    if((act.dependencies||[]).length) row("Depends on",esc(act.dependencies.join(", ")));
+    var dec=act.decision;
+    if(dec&&dec.decision) row("Decision",esc((dec.decision==="approve"?"Approved":"Rejected")+(dec.decided_via?(" via "+dec.decided_via):"")));
+    var rec=act.receipt||{};
+    if(rec.ref) row("Receipt",'<span style="font-family:var(--mono);font-size:.74rem">'+esc(String(rec.ref))+'</span>');
+    row("Status",esc(STATE_LABEL[act.status]||act.status||""));
+    if(act.detail) row("Detail",esc(act.detail));
+    if(typeof act.updated_at==="number") row("Updated",esc(fmtWhen(act.updated_at)));
+    row("Action ID",'<span style="font-family:var(--mono);font-size:.72rem">'+esc(act.action_id||"")+'</span>');
+    var logs=(act.logs||[]).slice(-8).map(function(l){
+      return esc(typeof l==="string"?l:JSON.stringify(l)); }).join("<br/>");
+    return '<dl class="ac-kv">'+kv.join("")+'</dl>'+
+      (logs?'<div class="sm-h" style="margin-top:9px">Log</div><div class="ac-logs">'+logs+'</div>':'');
+  }
+
+  // ═════════ Browser demonstration (presentation shell ONLY) ═════════
+  // The future one-company browser demo, rendered inside the Meetings
+  // experience. This is a PRESENTATION shell: no planning, no policies, no
+  // workflows, no execution, no browser APIs — Browser B0 owns all of those.
+  // BrowserDemoSource is the narrow adapter and the ONLY seam: today it
+  // serves deterministic fixtures (dev preview: ?browser_demo_fixture=<state>);
+  // when Browser B0's final contract lands, only this adapter is
+  // reimplemented. Fixtures carry ONLY safe human fields — never provider
+  // ids, planner reasoning, screenshots outside the authorized live view,
+  // credentials, DOM payloads or model/provider configuration.
+  var BROWSER_DEMO_STATES=["unavailable","starting","ready","observing","navigating",
+    "explaining","paused","waiting_approval","human_takeover","verifying",
+    "completed","failed","expired","closed"];
+  var BD_ACTIVITY={starting:"Getting the demo ready",ready:"Ready to begin",
+    observing:"Looking at the page",navigating:"Finding the next step",
+    explaining:"Explaining this screen",paused:"Paused",
+    waiting_approval:"Waiting for your approval",human_takeover:"You have control",
+    verifying:"Confirming the result",completed:"Demo complete",
+    failed:"The demo couldn’t continue",expired:"The demo session expired",
+    closed:"Demo closed"};
+  var BD_CHIP={starting:"ready",ready:"ready",observing:"run",navigating:"run",
+    explaining:"run",paused:"",waiting_approval:"attn",human_takeover:"attn",
+    verifying:"run",completed:"ok",failed:"bad",expired:"bad",closed:""};
+  var BrowserDemoSource=(function(){
+    function fixture(){
+      var state=window._bdOverride||query.get("browser_demo_fixture")||"";
+      if(BROWSER_DEMO_STATES.indexOf(state)<0||state==="unavailable") return null;
+      var av=(DATA&&DATA.avatars&&DATA.avatars[0])||{id:"laura",name:"Laura"};
+      return {
+        state:state,
+        avatar_id:av.id,
+        page_title:"Acme CRM — Customer accounts",
+        checkpoint:"Step 2 of 5 · Open the customer account",
+        started_at:(window._bdStartedAt=window._bdStartedAt||Date.now()/1000-240),
+        action_id:""   // set by the real contract when an approval is pending
+      };
+    }
+    return {current:fixture};
+  })();
+  function bdElapsed(startedAt){
+    var s=Math.max(0,Math.round(Date.now()/1000-(startedAt||0)));
+    return Math.floor(s/60)+":"+("0"+(s%60)).slice(-2);
+  }
+  function renderBrowserDemo(){
+    var box=$("#browser-demo"); if(!box) return;
+    var demo=BrowserDemoSource.current();
+    if(!demo){ box.innerHTML=""; return; }
+    var st=demo.state, terminal=["completed","failed","expired","closed"].indexOf(st)>=0;
+    var ctl="";
+    if(!terminal){
+      if(st==="paused"||st==="human_takeover") ctl+='<button class="btn" data-bd="resume">Resume</button>';
+      else ctl+='<button class="btn" data-bd="pause">Pause</button>';
+      if(st==="waiting_approval") ctl+='<button class="btn primary" data-bd="action">Open related action</button>';
+      if(st!=="human_takeover") ctl+='<button class="btn" data-bd="takeover">Take control</button>';
+      ctl+='<button class="btn danger" data-bd="stop">Stop</button>';
+    }
+    var viewMsg=st==="starting"?"The live view appears here once the demo starts."
+      :terminal?(BD_ACTIVITY[st]||"Demo ended.")
+      :"Live view — read-only. You watch exactly what the avatar sees; nothing here can be clicked.";
+    box.innerHTML='<div class="panel" style="margin-bottom:20px"><h2>Browser demonstration</h2>'+
+      '<div class="ph">'+esc(avNameOf(demo.avatar_id))+' is demonstrating inside a controlled browser session.</div>'+
+      '<div class="bd-grid"><div class="bd-view">'+
+        '<span class="bd-ro st'+(BD_CHIP[st]?" "+esc(BD_CHIP[st]):"")+'">'+esc(BD_ACTIVITY[st]||st)+'</span>'+
+        '<div class="bd-ph">'+esc(viewMsg)+'</div></div>'+
+      '<div>'+
+        '<div class="bd-title">'+esc(demo.page_title||"—")+'</div>'+
+        '<div class="bd-meta">'+avatarBadge(demo.avatar_id,avNameOf(demo.avatar_id))+
+          '<span>'+esc(avNameOf(demo.avatar_id))+'</span><span aria-hidden="true">·</span>'+
+          '<span class="tnum" style="font-family:var(--mono)">'+esc(bdElapsed(demo.started_at))+' elapsed</span></div>'+
+        '<div class="bd-activity">'+esc(BD_ACTIVITY[st]||"")+'</div>'+
+        (demo.checkpoint?'<div class="bd-checkpoint">'+esc(demo.checkpoint)+'</div>':'')+
+        '<div class="bd-ctl">'+ctl+'</div>'+
+      '</div></div></div>';
+    wireAvatarImages();
+    $$("#browser-demo [data-bd]").forEach(function(b){ b.addEventListener("click",function(){
+      var k=b.getAttribute("data-bd");
+      // Fixture-local transitions only — deterministic, no network, no APIs.
+      if(k==="pause") window._bdOverride="paused";
+      else if(k==="resume") window._bdOverride="observing";
+      else if(k==="takeover") window._bdOverride="human_takeover";
+      else if(k==="stop") window._bdOverride="closed";
+      else if(k==="action"){ acBucket="attn"; go("actions"); return; }
+      renderBrowserDemo();
+    }); });
+  }
+
+  // ═════════ Overview: needs-attention + setup checklist ═════════
+  function renderAttention(d){
+    var box=$("#ov-attn"); if(!box) return;
+    var all=attnActions(), rows=all.slice(0,3);
+    if(!rows.length){ box.innerHTML=""; return; }
+    box.innerHTML='<div class="panel" style="margin-bottom:20px"><h2>Needs your attention</h2>'+
+      '<div class="ph">Actions your avatars proposed — nothing runs without your approval.</div>'+
+      rows.map(function(x){
+        return '<div class="attnrow">'+stateChipHTML(stateOf(x.a))+
+          '<span class="t">'+esc(x.a.item)+'</span>'+
+          '<span class="who">'+esc(avNameOf(x.m.avatar_id))+' · '+fmtWhen(x.m.saved_at)+'</span>'+
+          '<button class="btn" data-acgo="1" style="padding:6px 12px;font-size:.76rem">Review</button></div>';
+      }).join("")+
+      '<div style="margin-top:9px"><a data-goto="actions" style="cursor:pointer;font-size:.8rem;color:var(--live)">View all actions →</a></div></div>';
+    $$("#ov-attn [data-acgo]").forEach(function(b){ b.addEventListener("click",function(){ acBucket="attn"; go("actions"); }); });
+  }
+  function renderChecklist(d){
+    var box=$("#ov-checklist"); if(!box) return;
+    var conn=d.connections||{};
+    var anyTool=!!(conn.google_native||conn.asana||(d.org_connections||[]).some(function(x){return x&&x.status==="connected";}));
+    var items=[
+      {label:"Choose an avatar",done:(d.avatars||[]).length>0,go:"avatars"},
+      {label:"Connect a tool",done:anyTool,go:"connections"},
+      {k:"brain",label:"Add company knowledge",done:window._brainSourceCount>0,go:"brain"},
+      {label:"Send an avatar to a meeting",done:(d.meetings||[]).length>0,go:"overview"},
+      {label:"Review your first action",done:actionIndex().some(function(x){var s=stateOf(x.a);return s&&s!=="proposed"&&s!=="needs_details";}),go:"actions"}
+    ];
+    // One-shot Brain probe so the knowledge step can tick (404 → step hidden).
+    if(window._brainSourceCount==null && !window._brainCountTried){
+      window._brainCountTried=true;
+      bFetch("sources").then(function(res){
+        window._brainSourceCount=res.ok?((res.j.sources||[]).length):-1;
+        if(DATA) renderChecklist(DATA);
+      });
+    }
+    var visible=items.filter(function(it){ return !(it.k==="brain"&&window._brainSourceCount===-1); });
+    if(visible.every(function(it){return it.done;})){ box.innerHTML=""; return; }
+    box.innerHTML='<div class="panel" style="margin-bottom:20px"><h2>Get set up</h2>'+
+      '<div class="ph">A few steps and your avatars are fully at work.</div><div class="checklist">'+
+      visible.map(function(it){
+        return '<button type="button" class="ckitem'+(it.done?" done":"")+'" data-goto="'+esc(it.go)+'"'+
+          (it.done?' aria-label="'+esc(it.label)+' — done"':'')+'>'+
+          '<span class="ck" aria-hidden="true">✓</span>'+esc(it.label)+'</button>';
+      }).join("")+'</div></div>';
+  }
+
+  // ═════════ AvatarPreview adapter ═════════
+  // ONE seam owns what renders inside the Avatars stage. Today: the avatar's
+  // own 2D portrait (the same identity-safe /laura-reference.jpg endpoint the
+  // thumbnails use) with a loading skeleton and the letter/gradient fallback.
+  // When the same-origin 3D preview lands (/talk?preview=1 — talk.html is
+  // owned by Browser B0 in this pass), ONLY this adapter changes: it attaches
+  // the iframe to the same mount and keeps the 2D chain as fallback. Nothing
+  // else on the page needs to know. Never borrow another avatar's model/face.
+  var AvatarPreview=(function(){
+    var mountEl=null,currentId=null;
+    function mount(el){ mountEl=el; }
+    function dispose(){ currentId=null; if(mountEl) mountEl.innerHTML=""; }
+    function show(av){
+      if(!mountEl||!av) return;
+      if(currentId===av.id) return;   // stable across 15s summary refreshes
+      currentId=av.id;
+      var letter=esc((av.name||av.id||"?")[0].toUpperCase());
+      mountEl.innerHTML='<div class="skel">Loading '+esc(av.name||av.id)+'…</div>';
+      var img=new Image();
+      img.alt=esc(av.name||av.id)+" portrait"; img.decoding="async";
+      img.addEventListener("load",function(){
+        if(currentId!==av.id) return;  // selection moved on — drop it
+        mountEl.innerHTML=""; mountEl.appendChild(img);
+      });
+      img.addEventListener("error",function(){
+        if(currentId!==av.id) return;
+        mountEl.innerHTML='<div class="bigfallback" style="background:'+grad(av.id)+'">'+letter+'</div>';
+      });
+      img.src="/laura-reference.jpg?avatar_id="+encodeURIComponent(av.id);
+    }
+    return {mount:mount,show:show,dispose:dispose,current:function(){return currentId;}};
+  })();
+
+  // ═════════ Avatars page (stage + roster + identity/controls) ═════════
+  // One capability row: an interactive switch when the ORG has the integration
+  // connected, else a greyed "Connect in Connections" link (#221 wiring).
+  function capRowHTML(a,key,label,icon){
+    var ct=(a.capabilities_toggle||{})[key]||{on:false,connected:false};
+    var ctl;
+    if(ct.connected){
+      ctl='<label class="switch"><input type="checkbox"'+(ct.on?' checked':'')+
+        ' data-cap-av="'+esc(a.id)+'" data-cap="'+esc(key)+'"'+
+        ' aria-label="'+esc(label)+' for '+esc(a.name)+'"><span class="track"><span class="knob"></span></span></label>';
+    } else {
+      ctl='<button class="cap-connect" data-goto-conn="1" title="Connect '+esc(label)+' in the Connections view">Connect in Connections</button>';
+    }
+    return '<div class="cap-row'+(ct.connected?'':' off')+'">'+
+      '<div class="cap-info"><span class="cap-ic">'+icon+'</span>'+
+      '<div style="min-width:0"><div class="cap-nm">'+esc(label)+'</div></div></div>'+
+      '<div class="cap-ctl">'+ctl+'</div></div>';
+  }
+  function stageMetaHTML(av){
+    var ready3d=!!(av.renderer&&av.renderer.talk&&av.renderer.talk.ready);
+    return '<div class="snm">'+esc(av.name)+
+      (av.live_now?' <span class="pill live">in a meeting now</span>':' <span class="pill idle">available</span>')+'</div>'+
+      '<div class="sro">'+esc(av.role)+'</div>'+
+      '<div class="savail">'+(ready3d?'<span class="stchip">3D model ready</span>':'')+
+      (av.silent?'<span class="pill silent">silent notetaker</span>':'')+'</div>';
+  }
+  function avatarDetailHTML(a){
+    // Same content and control wiring as the old avatar card (#220/#221
+    // endpoints + data attributes unchanged), reorganized into plain sections.
+    var capHtml='<div class="caps"><div class="sm-h">Capabilities</div><div class="cap-list">'+
+        capRowHTML(a,"slack","Slack agent",LOGO_SLACK)+capRowHTML(a,"google","Google",LOGO_GOOGLE)+
+        (a.id==="petra"?capRowHTML(a,"asana","Asana",LOGO_ASANA):"")+'</div>'+
+        '<div class="modelpick sm"><div class="sm-h">AI model</div><div class="mp-row">'+
+          '<button class="mp-opt'+(a.brain==="gemini"?" on":"")+'" data-brain-set="gemini" data-brain-av="'+esc(a.id)+'">Gemini</button>'+
+          '<button class="mp-opt'+(a.brain==="cerebras"?" on":"")+'" data-brain-set="cerebras" data-brain-av="'+esc(a.id)+'">Cerebras</button></div>'+
+        '</div></div>';
+    var topics=(a.knowledge_topics||[]).map(function(t){return '<span class="chip">'+esc(t)+'</span>';}).join("");
+    var tmpls=(a.process_templates||[]).map(function(t){return '<span class="chip tmpl">'+esc(t)+'</span>';}).join("");
+    var caps=(a.capabilities||[]).map(function(c){return '<div class="c"><span class="ic">✓</span><span>'+esc(c)+'</span></div>';}).join("");
+    var rend=a.renderer||{};
+    return '<div class="avd"><div class="avd-cols">'+
+        '<div class="avd-left">'+
+        '<div class="idn">'+avatarBadge(a.id,a.name)+
+        '<div style="min-width:0"><div class="nm">'+esc(a.name)+' <span class="pill '+(a.live_now?"live":"idle")+'">'+(a.live_now?"in call":"idle")+'</span></div>'+
+        '<div class="ro">'+esc(a.role)+' · '+a.meetings_total+' meeting'+(a.meetings_total===1?"":"s")+(a.last_meeting_at?' · last '+fmtWhen(a.last_meeting_at):'')+'</div></div></div>'+
+        (a.persona?'<div class="persona">'+esc(a.persona)+(a.persona.length>=220?"…":"")+'</div>':'')+
+        (a.email?'<div class="alias"><div class="al-row"><span class="al-ic">✉</span>'+
+          '<span class="al-addr">'+esc(a.email)+'</span><button class="btn conn-btn" data-copy="'+esc(a.email)+'">Copy</button></div>'+
+          '<div class="al-hint">Add this address to any calendar invite — '+esc(a.name)+' joins the meeting.</div></div>':'')+
+        '<div class="acts"><button class="btn primary" data-dispatch="'+esc(a.id)+'">Use for next meeting</button>'+
+        '<button class="btn" data-personalize="'+esc(a.id)+'">Personalize</button>'+
+        (a.id==="laura"
+          ? '<span class="btn" title="Ultra HD photorealistic avatar — in the works, not live yet" style="opacity:.55;cursor:default">🎬 Ultra HD realistic avatar · coming soon</span>'
+          : '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a>')+
+        '</div>'+
+        '</div>'+
+        '<aside class="avd-right">'+capHtml+'</aside>'+
+      '</div>'+
+      '<div class="avinfo" style="margin-top:14px">'+
+      '<details data-avsec="who"><summary>Who they are</summary><div class="dsec">'+
+        (a.persona?esc(a.persona):("The "+esc(a.role)+" on your roster."))+'</div></details>'+
+      '<details data-avsec="know"><summary>What they know</summary><div class="dsec">'+
+        (a.knowledge_docs?(a.knowledge_docs+' knowledge document'+(a.knowledge_docs===1?'':'s')+' indexed.'):'No knowledge documents yet — add company knowledge in Brain.')+
+        (topics?'<div class="chips" style="margin-top:8px">'+topics+'</div>':'')+
+        '<div style="margin-top:8px"><a data-goto="brain" style="cursor:pointer;color:var(--live)">Manage in Brain →</a></div></div></details>'+
+      '<details data-avsec="do"><summary>What they can do</summary><div class="dsec"><div class="cap">'+
+        (caps||'<div class="c"><span class="ic">✓</span><span>Joins meetings, answers grounded questions, and drafts the follow-up.</span></div>')+'</div>'+
+        (tmpls?'<div class="chips" style="margin-top:8px">'+tmpls+'</div>':'')+'</div></details>'+
+      '<details data-avsec="voice"><summary>Voice and appearance</summary><div class="dsec">'+
+        'Voice: <span style="font-family:var(--mono);font-size:.78rem">'+esc(a.voice_id||"default")+'</span><br/>'+
+        'Face: '+esc(rend.preferred||"talk")+(rend.ready?' — ready':(rend.fallback?' — falls back to '+esc(rend.fallback):''))+'</div></details>'+
+      '<details data-avsec="used"><summary>Used by</summary><div class="dsec">'+
+        a.meetings_total+' meeting'+(a.meetings_total===1?"":"s")+' · '+(a.minutes_total||0)+' minutes'+
+        (a.last_meeting_at?' · last '+fmtWhen(a.last_meeting_at):'')+'</div></details>'+
+      '<details data-avsec="versions"><summary>Version history</summary><div class="dsec">'+
+        'Published customizations are immutable versions — review and roll back in the Studio. '+
+        '<a data-personalize="'+esc(a.id)+'" style="cursor:pointer;color:var(--live)">Open Avatar Studio →</a></div></details>'+
+      '</div></div>';
+  }
+  function renderAvatars(d){
+    var stage=$("#av-stage"); if(!stage) return;
+    if(!stage.getAttribute("data-mounted")){ AvatarPreview.mount($("#av-preview")); stage.setAttribute("data-mounted","1"); }
+    var avs=(d.avatars||[]);
+    if(!avs.length){
+      $("#av-roster").innerHTML='<div class="empty" style="padding:10px">No avatars yet — they appear here once your workspace has them.</div>';
+      $("#av-stagemeta").innerHTML=""; $("#av-detail").innerHTML=""; AvatarPreview.dispose();
+      return;
+    }
+    if(!window._selAvatar||!avs.some(function(a){return a.id===window._selAvatar;})) window._selAvatar=avs[0].id;
+    var sel=avs.filter(function(a){return a.id===window._selAvatar;})[0];
+    // Preserve which info sections are open across the 15s summary re-render.
+    var openSecs=$$("#av-detail details[open]").map(function(x){return x.getAttribute("data-avsec");});
+    $("#av-roster").innerHTML=avs.map(function(a){
+      return '<button type="button" class="aitem'+(a.id===sel.id?" on":"")+'" role="option" aria-selected="'+(a.id===sel.id?"true":"false")+'" data-sel="'+esc(a.id)+'">'+
+        avatarBadge(a.id,a.name)+'<div style="min-width:0"><div class="ainm">'+esc(a.name)+'</div><div class="airo">'+esc(a.role)+'</div></div>'+
+        '<span class="sdot'+(a.live_now?" live":"")+'" style="margin-left:auto"></span></button>';
+    }).join("");
+    $$("#av-roster [data-sel]").forEach(function(b){ b.addEventListener("click",function(){
+      window._selAvatar=b.getAttribute("data-sel"); renderAvatars(DATA); }); });
+    AvatarPreview.show(sel);
+    $("#av-stagemeta").innerHTML=stageMetaHTML(sel);
+    $("#av-detail").innerHTML=avatarDetailHTML(sel);
+    if(openSecs.length){
+      $$("#av-detail details").forEach(function(x){ if(openSecs.indexOf(x.getAttribute("data-avsec"))>=0) x.setAttribute("open",""); });
+    } else if(!window._avDetailInit){
+      window._avDetailInit=true;
+      var whoSec=document.querySelector('#av-detail details[data-avsec="who"]');
+      if(whoSec) whoSec.setAttribute("open","");
+    }
+    wireAvatarImages();
+    wireAvatarControls();
+  }
+  function wireAvatarControls(){
+    $$("#av-detail [data-dispatch]").forEach(function(b){ b.addEventListener("click",function(e){
+      e.stopPropagation(); go("overview"); $("#dsp-avatar").value=b.getAttribute("data-dispatch"); $("#dsp-url").focus(); }); });
+    $$("#av-detail [data-copy]").forEach(function(b){ b.addEventListener("click",function(e){
+      e.stopPropagation(); var v=b.getAttribute("data-copy");
+      if(navigator.clipboard) navigator.clipboard.writeText(v);
+      toast("Copied "+v+" — invite it to a meeting to summon this avatar."); }); });
+    // AI model per avatar: Gemini (relay) vs Cerebras (normal). Applies next meeting.
+    $$("#av-detail [data-brain-set]").forEach(function(b){ b.addEventListener("click",function(e){
+      e.stopPropagation();
+      var av=b.getAttribute("data-brain-av"), br=b.getAttribute("data-brain-set");
+      fetch("/avatars/"+encodeURIComponent(av)+"/brain-mode",{method:"POST",
+        headers:{"content-type":"application/json"},body:JSON.stringify({brain:br})})
+      .then(function(r){return r.json();})
+      .then(function(j){
+        if(j&&j.ok){
+          var row=b.parentNode;
+          row.querySelectorAll(".mp-opt").forEach(function(o){
+            o.classList.toggle("on", o.getAttribute("data-brain-set")===br); });
+          toast(av+" → "+(br==="gemini"?"Gemini":"Cerebras")+" (from the next meeting)");
+        } else { toast((j&&j.error)||"Could not change the model"); }
+      }).catch(function(){ toast("Network error"); });
+    }); });
+    // Per-avatar capability switch (Slack/Google/Asana). Optimistic; reverts on failure.
+    $$("#av-detail [data-cap]").forEach(function(cb){ cb.addEventListener("change",function(e){
+      e.stopPropagation();
+      var av=cb.getAttribute("data-cap-av"), cap=cb.getAttribute("data-cap"), on=cb.checked;
+      cb.disabled=true;
+      fetch("/dashboard/avatar/"+encodeURIComponent(av)+"/capability",{method:"POST",
+        headers:headers(),body:JSON.stringify({capability:cap,enabled:on})})
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,j:j};}); })
+      .then(function(res){
+        cb.disabled=false;
+        if(res.ok&&res.j&&res.j.ok){
+          toast(cap.charAt(0).toUpperCase()+cap.slice(1)+(on?" enabled":" disabled")+" for "+av);
+        } else { cb.checked=!on; toast((res.j&&res.j.error)||"Could not change capability",true); }
+      }).catch(function(){ cb.disabled=false; cb.checked=!on; toast("Network error",true); });
+    }); });
+    $$("#av-detail [data-goto-conn]").forEach(function(b){ b.addEventListener("click",function(e){
+      e.stopPropagation(); go("connections"); }); });
+    // Personalize → the existing Avatar Studio, preselected on this avatar.
+    $$("#av-detail [data-personalize]").forEach(function(b){ b.addEventListener("click",function(e){
+      e.stopPropagation(); openStudio(b.getAttribute("data-personalize")); }); });
+  }
+  function openStudio(key){
+    window._studioPreselect=key;
+    go("studio");
+    if(window._studioLoaded){
+      var k=window._studioPreselect; window._studioPreselect=null;
+      openStudioEditor(k);
+    }
+  }
+
   function renderChart(weekly){
     var svg=$("#chart"),W=560,H=170,padL=26,padB=20,padT=12,padR=6;
     var max=Math.max.apply(null,weekly.concat([1])), plotH=H-padB-padT, plotW=W-padL-padR;
@@ -2183,6 +2923,13 @@
     $("#mt-past").hidden = (w!=="past"); $("#mt-upcoming").hidden = (w!=="upcoming");
     if(w==="upcoming" && window._loadUpcoming) window._loadUpcoming(false); }); });
 
+  // Action Center: primary filter tabs + secondary avatar/date filters
+  // (static elements, wire once — the list itself re-renders).
+  $$("#ac-tabs button").forEach(function(b){ b.addEventListener("click",function(){
+    acBucket=b.getAttribute("data-ab")||"attn"; renderActions(); }); });
+  $("#ac-avatar").addEventListener("change",renderActions);
+  $("#ac-when").addEventListener("change",renderActions);
+
   $("#refresh").addEventListener("click",load);
   // Returning from a connector OAuth (Pipedream opens a new tab / redirects back):
   // refresh brain link + connectors so a freshly connected/disconnected tool shows
@@ -2200,8 +2947,12 @@
     if(document.hidden) return;
     if(!$("#authgate").hidden) return;
     if(document.querySelector("tr.detail:not([hidden])")) return;
+    // Never refresh under the user's feet: an open details form (modal) or an
+    // expanded Action Center card would be wiped by the re-render.
+    if(document.getElementById("params-scrim")) return;
+    if(document.querySelector(".ac-details:not([hidden])")) return;
     var el=document.activeElement;
-    if(el && (el.tagName==="INPUT"||el.tagName==="SELECT")) return;
+    if(el && (el.tagName==="INPUT"||el.tagName==="SELECT"||el.tagName==="TEXTAREA")) return;
     load();
   }, 15000);
 
@@ -2212,52 +2963,152 @@
   function bFetch(path,opts){ opts=opts||{}; opts.headers=headers();
     return fetch("/dashboard/knowledge/"+path,opts)
       .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); }); }
+  // Plain-language readiness for a Brain source. Canonical states stay
+  // internal — the UI translates: active→Ready, pending→Syncing,
+  // needs_reconnect→Reconnect required, acl_incomplete→Access needs attention,
+  // paused→Paused, revoked→Disconnected.
+  function brainChip(s){
+    var st=String(s.status||"active");
+    if(st==="needs_reconnect") return '<span class="st attn">Reconnect required</span>';
+    if(st==="acl_incomplete") return '<span class="st attn">Access needs attention</span>';
+    if(st==="paused") return '<span class="st">Paused</span>';
+    if(st==="revoked") return '<span class="st bad">Disconnected</span>';
+    if((s.pending_documents|0)>0) return '<span class="st ready">Syncing</span>';
+    if((s.failed_documents|0)>0) return '<span class="st attn">Needs attention</span>';
+    return '<span class="st ok">Ready</span>';
+  }
+  // ONE clear next action per source card, by state.
+  function brainNext(s){
+    var st=String(s.status||"active");
+    if(st==="needs_reconnect"||st==="acl_incomplete")
+      return {label:"Reconnect it from the Connections page.",act:"connections"};
+    if(st==="revoked") return {label:"This source was disconnected — reconnect or delete it.",act:"connections"};
+    if(st==="paused") return {label:"Paused — its documents stay available but nothing new syncs.",act:""};
+    if((s.published_documents|0)===0&&(s.pending_documents|0)===0)
+      return {label:"Add your first document — open Manage.",act:"docs"};
+    if((s.pending_documents|0)>0) return {label:"Indexing — ready in a moment.",act:""};
+    if((s.failed_documents|0)>0) return {label:"Some documents failed to index.",act:"sync"};
+    if(!(s.avatars||[]).length) return {label:"Choose which avatars can use it:",act:"assign"};
+    return {label:"Ready — test an answer below.",act:""};
+  }
+  // Advanced diagnostics ride the Data Foundation dashboard twin (GET-only
+  // here; admin writes stay on their own doors). Best-effort: disabled → say
+  // so, errors → hidden. Ordinary Brain UI never shows these internals.
+  function dFetch(path){
+    return fetch("/dashboard/data/"+path,{headers:headers()})
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); });
+  }
+  function loadBrainAdvanced(){
+    var out=$("#br-adv"); if(!out||out.getAttribute("data-loaded")) return;
+    out.setAttribute("data-loaded","1");
+    Promise.all([dFetch("connectors"),dFetch("runs"),dFetch("freshness")]).then(function(rs){
+      var conns=rs[0], runs=rs[1], fresh=rs[2];
+      if(!conns.ok&&!runs.ok){ out.innerHTML="Data Foundation isn’t enabled on this deployment."; return; }
+      var html="";
+      var cl=(conns.ok&&conns.j.connectors)||[];
+      if(cl.length){
+        html+='<div class="sm-h">Connected sources</div>'+cl.map(function(c){
+          return '<div style="margin:2px 0">'+esc(c.name||c.kind||"connector")+' — <span style="font-family:var(--mono);font-size:.72rem">'+esc(c.status||"")+'</span></div>';
+        }).join("");
+      }
+      var rl=((runs.ok&&runs.j.runs)||[]).slice(0,5);
+      if(rl.length){
+        html+='<div class="sm-h" style="margin-top:8px">Recent sync runs</div>'+rl.map(function(r){
+          return '<div style="margin:2px 0;font-family:var(--mono);font-size:.72rem">'+esc(String(r.kind||"run"))+' · '+esc(String(r.status||""))+(r.finished_at?(' · '+esc(new Date(r.finished_at*1000).toLocaleString())):'')+'</div>';
+        }).join("");
+      }
+      if(fresh.ok&&fresh.j.freshness&&Object.keys(fresh.j.freshness).length){
+        html+='<div class="sm-h" style="margin-top:8px">Freshness</div><div style="font-family:var(--mono);font-size:.72rem;word-break:break-word">'+esc(JSON.stringify(fresh.j.freshness))+'</div>';
+      }
+      out.innerHTML=html||"No diagnostics to show yet.";
+    }).catch(function(){ out.innerHTML="Diagnostics unavailable right now."; });
+  }
   function loadBrain(force){
     if(window._brainLoaded && !force) return;
     window._brainLoaded=true;
     var box=$("#brain-body"); if(!box) return;
     bFetch("sources").then(function(res){
-      if(res.status===404){ box.innerHTML='<div class="empty" style="padding:14px">The Company Brain isn’t enabled on this deployment yet (COMPANY_BRAIN_ENABLED + the control-plane database).</div>'; return; }
-      if(!res.ok){ box.innerHTML='<div class="empty" style="padding:14px">Could not load sources.</div>'; window._brainLoaded=false; return; }
+      if(res.status===404){ box.innerHTML='<div class="empty" style="padding:14px">The company Brain isn’t enabled on this deployment yet. Your avatars still answer from their built-in knowledge — ask your administrator to enable the Brain to add your own.</div>'; return; }
+      if(!res.ok){ box.innerHTML='<div class="empty" style="padding:14px">Could not load your knowledge sources. <button class="btn" id="br-retry" style="margin-left:8px;padding:6px 12px;font-size:.78rem">Try again</button></div>'; window._brainLoaded=false;
+        var rb=$("#br-retry"); if(rb) rb.addEventListener("click",function(){ loadBrain(true); });
+        return; }
       var srcs=res.j.sources||[];
+      window._brainSourceCount=srcs.length;
       // Module-level DATA, not renderAll's locals (avById/avName are scoped
       // inside renderAll — reading them here was a strict-mode ReferenceError
       // that stuck the tab on "Loading…").
       var avList=(DATA&&DATA.avatars)||[];
       var avOpts=avList.map(function(a){return '<option value="'+esc(a.id)+'">'+esc(a.name||a.id)+'</option>';}).join("")||'<option value="laura">Laura</option>';
-      var rows=srcs.map(function(s){
-        var avs=(s.avatars||[]).map(esc).join(", ")||"—";
-        return '<div class="fset" data-src="'+esc(s.id)+'" style="margin-bottom:10px">'+
-          '<div class="frow"><div><div class="t">'+esc(s.name)+' <span style="color:var(--faint);font-size:.8em">('+esc(s.kind)+')</span></div>'+
-          '<div class="h">'+(s.published_documents|0)+' published · '+(s.pending_documents|0)+' pending · '+(s.failed_documents|0)+' failed · avatars: '+avs+'</div></div>'+
-          '<div style="display:flex;gap:6px;flex-wrap:wrap">'+
-          '<button class="btn" data-bassign="'+esc(s.id)+'">Assign avatar</button>'+
-          '<button class="btn" data-bsync="'+esc(s.id)+'">Sync</button>'+
-          '<button class="btn" data-bdel="'+esc(s.id)+'">Delete</button></div></div>'+
-          '<div class="frow"><div style="flex:1"><div class="h">Add a document (markdown/plain text)</div>'+
-          '<input type="text" data-bfn="'+esc(s.id)+'" placeholder="filename.md" style="margin:4px 0;width:100%" />'+
-          '<textarea data-btxt="'+esc(s.id)+'" rows="3" placeholder="Paste the document text…" style="width:100%"></textarea></div>'+
-          '<button class="btn" data-bup="'+esc(s.id)+'">Upload</button></div>'+
-          '</div>';
+      var steps='<div class="brsteps">'+
+        '<span><span class="n">1</span><b>Add knowledge</b></span>'+
+        '<span><span class="n">2</span>Wait until it’s <b>Ready</b></span>'+
+        '<span><span class="n">3</span><b>Choose avatars</b> that can use it</span>'+
+        '<span><span class="n">4</span><b>Test an answer</b> and check its citations</span></div>';
+      var top='<div class="panel" style="margin-bottom:14px"><h2>Add knowledge</h2>'+
+        '<div class="ph">A source is a named bundle of documents — a playbook, a policy folder, a product FAQ.</div>'+
+        '<div class="dispatch"><input type="text" id="bsrc-name" placeholder="Name a new source — e.g. Sales playbook" aria-label="New source name" />'+
+        '<button class="btn primary" id="bsrc-create">Add documents</button>'+
+        '<button class="btn" data-goto="connections" title="Drive folders sync through your Google connection">Connect a source</button>'+
+        '<button class="btn" id="br-searchjump">Search company knowledge</button></div></div>';
+      var cards=srcs.map(function(s){
+        var next=brainNext(s);
+        var avs=(s.avatars||[]).map(function(x){return esc(avNameOf(x));}).join(", ");
+        var created=s.created_at?new Date(s.created_at*1000).toLocaleDateString():"";
+        var kind=s.kind==="drive"?"Google Drive":"Uploads";
+        return '<div class="brcard" data-src="'+esc(s.id)+'">'+
+          '<div class="brtop">'+brainChip(s)+'<div class="brnm">'+esc(s.name)+'<small>'+esc(kind)+'</small></div>'+
+          '<button class="btn" style="padding:6px 12px;font-size:.76rem" data-bmanage="'+esc(s.id)+'" aria-expanded="false">Manage</button></div>'+
+          '<div class="brmeta">'+(s.published_documents|0)+' document'+((s.published_documents|0)===1?'':'s')+' ready'+
+          ((s.pending_documents|0)?' · '+(s.pending_documents|0)+' syncing':'')+
+          ((s.failed_documents|0)?' · '+(s.failed_documents|0)+' failed':'')+
+          ' · used by '+(avs||"no avatars yet")+(created?' · added '+esc(created):'')+'</div>'+
+          '<div class="brnext"><span>'+esc(next.label)+'</span>'+
+          (next.act==="assign"
+            ?'<select data-bav="'+esc(s.id)+'" aria-label="Choose avatar">'+avOpts+'</select><button class="btn" style="padding:6px 12px;font-size:.76rem" data-bassign="'+esc(s.id)+'">Allow avatar</button>'
+            :next.act==="sync"
+            ?'<button class="btn" style="padding:6px 12px;font-size:.76rem" data-bsync="'+esc(s.id)+'">Sync again</button>'
+            :next.act==="connections"
+            ?'<button class="btn" style="padding:6px 12px;font-size:.76rem" data-goto="connections">Open Connections</button>'
+            :'')+'</div>'+
+          '<div data-bpanel="'+esc(s.id)+'" hidden style="margin-top:10px;border-top:1px solid var(--line-soft);padding-top:10px">'+
+            '<div style="font-size:.78rem;color:var(--faint);margin-bottom:5px">Add a document (markdown or plain text)</div>'+
+            '<input type="text" data-bfn="'+esc(s.id)+'" placeholder="filename.md" aria-label="Filename" style="margin:4px 0;width:100%;box-sizing:border-box;padding:9px 11px;border-radius:10px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font:inherit" />'+
+            '<textarea data-btxt="'+esc(s.id)+'" rows="3" placeholder="Paste the document text…" aria-label="Document text" style="width:100%;box-sizing:border-box;padding:9px 11px;border-radius:10px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font:inherit"></textarea>'+
+            '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px;align-items:center">'+
+            '<button class="btn primary" data-bup="'+esc(s.id)+'">Upload</button>'+
+            '<select data-bav2="'+esc(s.id)+'" aria-label="Choose avatar">'+avOpts+'</select>'+
+            '<button class="btn" data-bassign2="'+esc(s.id)+'">Allow avatar</button>'+
+            '<button class="btn" data-bsync="'+esc(s.id)+'">Sync</button>'+
+            '<button class="btn danger" data-bdel="'+esc(s.id)+'">Delete source</button></div>'+
+          '</div></div>';
       }).join("");
-      box.innerHTML=
-        '<div class="fset" style="margin-bottom:12px"><div class="frow">'+
-        '<div><div class="t">New source</div><div class="h">A named bundle of documents (uploads first; Drive folders need a Google reconnect with Drive scope)</div></div>'+
-        '<div style="display:flex;gap:6px"><input type="text" id="bsrc-name" placeholder="e.g. Sales playbook" />'+
-        '<button class="btn" id="bsrc-create">Create</button></div></div></div>'+
-        (rows||'<div class="empty" style="padding:10px">No sources yet — create one and paste your first SOP.</div>')+
-        '<div class="fset" style="margin-top:12px"><div class="frow"><div style="flex:1">'+
-        '<div class="t">Test retrieval</div><div class="h">Ask as an avatar would — results cite source and section</div>'+
-        '<div style="display:flex;gap:6px;margin-top:6px"><select id="bq-av">'+avOpts+'</select>'+
-        '<input type="text" id="bq" placeholder="e.g. how long do refunds take?" style="flex:1" />'+
-        '<button class="btn" id="bq-go">Search</button></div>'+
-        '<div id="bq-out" style="margin-top:8px"></div></div></div></div>';
+      var search='<div class="panel" style="margin-top:14px" id="br-search"><h2>Test an answer</h2>'+
+        '<div class="ph">Ask as an avatar would — answers cite the source and section they came from.</div>'+
+        '<div class="dispatch"><select id="bq-av" aria-label="Ask as avatar">'+avOpts+'</select>'+
+        '<input type="text" id="bq" placeholder="e.g. how long do refunds take?" aria-label="Test question" />'+
+        '<button class="btn primary" id="bq-go">Search</button></div>'+
+        '<div id="bq-out" style="margin-top:10px"></div></div>';
+      var adv='<details class="fset" style="margin-top:14px;padding:12px 16px" id="br-advwrap">'+
+        '<summary style="cursor:pointer;font-weight:600;font-size:.88rem;color:var(--dim)">Advanced diagnostics</summary>'+
+        '<div id="br-adv" style="padding:10px 0 4px;font-size:.82rem;color:var(--dim)">Loading…</div></details>';
+      box.innerHTML=steps+top+
+        (cards||'<div class="empty">No knowledge yet. Name a source above and add your first document — your avatars will start citing it in meetings.</div>')+
+        search+adv;
       $("#bsrc-create").addEventListener("click",function(){
-        var name=($("#bsrc-name").value||"").trim(); if(!name){toast("Give the source a name.",true);return;}
+        var name=($("#bsrc-name").value||"").trim(); if(!name){toast("Give the source a name first.",true);return;}
         bFetch("sources",{method:"POST",body:JSON.stringify({name:name,kind:"upload"})}).then(function(r){
           if(!r.ok){toast("Could not create: "+(r.j.error||r.status),true);return;}
-          toast("Source created."); loadBrain(true); });
+          toast("Source created — now add its first document."); loadBrain(true); });
       });
+      $("#br-searchjump").addEventListener("click",function(){
+        var sp=$("#br-search"); if(sp){ sp.scrollIntoView({behavior:"smooth",block:"start"}); var q=$("#bq"); if(q) q.focus(); }
+      });
+      var advWrap=$("#br-advwrap");
+      if(advWrap) advWrap.addEventListener("toggle",function(){ if(advWrap.open) loadBrainAdvanced(); });
+      box.querySelectorAll("[data-bmanage]").forEach(function(b){ b.addEventListener("click",function(){
+        var p=box.querySelector('[data-bpanel="'+b.getAttribute("data-bmanage")+'"]'); if(!p) return;
+        p.hidden=!p.hidden; b.setAttribute("aria-expanded",p.hidden?"false":"true");
+        b.textContent=p.hidden?"Manage":"Close"; });});
       box.querySelectorAll("[data-bup]").forEach(function(b){ b.addEventListener("click",function(){
         var id=b.getAttribute("data-bup");
         var fn=(box.querySelector('[data-bfn="'+id+'"]').value||"").trim();
@@ -2267,13 +3118,17 @@
           if(!r.ok){toast("Upload failed: "+(r.j.error||r.status),true);return;}
           toast("Uploaded — indexing in the background."); setTimeout(function(){loadBrain(true);},1500); });
       });});
-      box.querySelectorAll("[data-bassign]").forEach(function(b){ b.addEventListener("click",function(){
-        var id=b.getAttribute("data-bassign");
-        var av=window.prompt("Assign which avatar? (e.g. laura)","laura"); if(!av) return;
-        bFetch("sources/"+id+"/assign",{method:"POST",body:JSON.stringify({avatar_id:av.trim()})}).then(function(r){
+      function assignFrom(b,attr,selAttr){
+        var id=b.getAttribute(attr);
+        var sel=box.querySelector('['+selAttr+'="'+id+'"]');
+        var av=(sel&&sel.value)||"";
+        if(!av){toast("Pick an avatar first.",true);return;}
+        bFetch("sources/"+id+"/assign",{method:"POST",body:JSON.stringify({avatar_id:av})}).then(function(r){
           if(!r.ok){toast("Could not assign: "+(r.j.error||r.status),true);return;}
           toast("Assigned — index rebuilding."); setTimeout(function(){loadBrain(true);},1200); });
-      });});
+      }
+      box.querySelectorAll("[data-bassign]").forEach(function(b){ b.addEventListener("click",function(){ assignFrom(b,"data-bassign","data-bav"); });});
+      box.querySelectorAll("[data-bassign2]").forEach(function(b){ b.addEventListener("click",function(){ assignFrom(b,"data-bassign2","data-bav2"); });});
       box.querySelectorAll("[data-bsync]").forEach(function(b){ b.addEventListener("click",function(){
         bFetch("sources/"+b.getAttribute("data-bsync")+"/sync",{method:"POST",body:"{}"}).then(function(r){
           toast(r.ok?"Sync queued.":("Sync failed: "+(r.j.error||r.status)),!r.ok); });
@@ -2291,7 +3146,7 @@
           var hits=(r.j.semantic||[]).concat(r.j.keyword||[]);
           out.innerHTML=hits.length? hits.slice(0,6).map(function(h){
             return '<div class="d"><span class="ic">§</span><span>'+esc((h.text||"").slice(0,240))+'… <span style="color:var(--faint)">['+esc(h.source||"")+(h.section?(" — "+esc(h.section)):"")+']</span></span></div>';
-          }).join("") : '<div class="empty" style="padding:6px">No grounded matches.</div>';
+          }).join("") : '<div class="empty" style="padding:6px">No grounded matches — add or assign a source above, then try again.</div>';
         });
       });
     });
@@ -2325,6 +3180,12 @@
           .then(function(r){ toast(r.ok?"Org default set.":("Failed: "+(r.j.error||r.status)),!r.ok); if(r.ok) loadStudio(true); });
       });});
       box.querySelectorAll("[data-scust]").forEach(function(b){ b.addEventListener("click",function(){ openStudioEditor(b.getAttribute("data-scust")); });});
+      // "Personalize" on the Avatars page lands here with the avatar
+      // preselected — open its editor straight away.
+      if(window._studioPreselect){
+        var pk=window._studioPreselect; window._studioPreselect=null;
+        openStudioEditor(pk);
+      }
     });
   }
   function openStudioEditor(key){
