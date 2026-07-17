@@ -252,9 +252,14 @@ def _execute_route(
         "native" if executor.enabled() and executor.from_typed(action.get("typed")) else "cedric"
     )
     if route == "cedric":
-        # tenancy-v4 dispatch-action is the sanctioned path once THAT contract
-        # is accepted; until then the approval stands recorded and the
-        # orchestrator's own loop picks the action up from action.requested.
+        # handshake B2: hand the approved action to Cedric for execution
+        # through its connectors (dispatch-action, pre_approved). Terminal
+        # status comes BACK through the /status door when Cedric executes;
+        # until then the canonical state is approved. Soft: a missing B-side
+        # receiver leaves the action approved for the legacy pickup loop.
+        from .cedric import callback as cedric_callback
+
+        cedric_callback.dispatch_action(org, action)
         return None, "approved", False
     if route == "browser":
         # Guarded browser step (B0): claim exactly-once, then re-check
@@ -564,6 +569,73 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
     return JSONResponse(resp)
 
 
+@router.post("/chat")
+async def org_chat_post(request: Request) -> JSONResponse:
+    """Cedric posts into the org's dashboard chat channel (the in-dashboard
+    approval surface that replaces Slack as the place decisions happen).
+
+    Body — exactly one of:
+      {"message": {"text": "...", "sender_label"?: "Cedric"}}
+      {"action_card": {"action_id": "...", "item": "...", "owner"?, "due"?,
+                       "note"?: "<=300 chars lead-in shown above the card>"}}
+
+    An action_card renders in the dashboard chat with inline Approve & run /
+    Reject — those controls hit the EXISTING canonical doors, so the decision
+    still converges on action_approvals; this endpoint only carries the
+    conversation. Distilled content only (never transcript text)."""
+    err, org = await _machine_gate(request)
+    if err:
+        return err
+    try:
+        body = json.loads(await request.body() or b"{}")
+    except ValueError:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+
+    message = body.get("message")
+    card = body.get("action_card")
+    if bool(message) == bool(card):
+        return JSONResponse(
+            {"error": "send exactly one of message | action_card"}, status_code=400
+        )
+    if message:
+        if not isinstance(message, dict) or not str(message.get("text") or "").strip():
+            return JSONResponse({"error": "message.text is required"}, status_code=400)
+        row = await run_in_threadpool(
+            lambda: store.add_chat_message(
+                org, "cedric",
+                body=str(message.get("text") or ""),
+                sender_label=str(message.get("sender_label") or "Cedric")[:120],
+            )
+        )
+    else:
+        if not isinstance(card, dict):
+            return JSONResponse({"error": "action_card must be an object"}, status_code=400)
+        action_id = str(card.get("action_id") or "").strip()
+        item = str(card.get("item") or "").strip()
+        if not action_id or not item:
+            return JSONResponse(
+                {"error": "action_card.action_id and .item are required"},
+                status_code=400,
+            )
+        row = await run_in_threadpool(
+            lambda: store.add_chat_message(
+                org, "cedric",
+                body=str(card.get("note") or "")[:300],
+                sender_label="Cedric",
+                kind="action_card",
+                action_id=action_id,
+                payload={
+                    "item": item[:300],
+                    "owner": str(card.get("owner") or "")[:100],
+                    "due": str(card.get("due") or "")[:100],
+                },
+            )
+        )
+    if row is None:
+        return JSONResponse({"error": "message rejected"}, status_code=400)
+    return JSONResponse({"ok": True, "id": row["id"]})
 # ─────────── canonical Action reads + edits (control plane, M0) ───────────
 # One canonical Action object per (org, action_id): the durable queued_actions
 # row (status/receipt/logs/typed edits) merged with the saved artifact's

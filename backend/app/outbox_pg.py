@@ -966,6 +966,52 @@ def get_action_decision(org_id: str, action_id: str) -> Optional[dict[str, Any]]
     return dict(row) if row is not None else None
 
 
+def list_blocked_action_decisions(org_id: str) -> list[dict[str, Any]]:
+    """Approve-decisions in this org still parked behind unmet dependencies
+    ([M8]) — the durable twin of store.list_blocked_action_approvals. Tenant
+    isolation is the same RLS GUC every read here sets; `blocked_on` empties
+    when the approval runs, so the scan stays small."""
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        rows = conn.execute(
+            text(
+                """
+                SELECT action_id, blocked_on
+                FROM action_decisions
+                WHERE org_id=:org_id AND decision='approve'
+                  AND COALESCE(blocked_on, '') NOT IN ('', '[]')
+                """
+            ),
+            {"org_id": org_id},
+        ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def set_action_decision_blocked_on(
+    org_id: str, action_id: str, blocked_on: str
+) -> None:
+    """Re-park a dependency-blocked decision on a SHRUNKEN dependency list (or
+    clear it with '[]') — the durable twin of
+    store.set_action_approval_blocked_on."""
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        conn.execute(
+            text(
+                """
+                UPDATE action_decisions SET blocked_on=:blocked_on
+                WHERE org_id=:org_id AND action_id=:action_id
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": str(action_id or "").strip(),
+                "blocked_on": blocked_on or "",
+            },
+        )
+
+
 def set_action_decision_result(
     org_id: str, action_id: str, new_status: str, execution_job_id: str | None
 ) -> None:

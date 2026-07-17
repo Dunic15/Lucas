@@ -175,6 +175,89 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def dispatch_url() -> str:
+    """{cedric_base}/api/laura/actions — the dispatch-action door from the
+    tenancy contract (referenced as the route=cedric execution path by the
+    AGREED action-lifecycle contract, clause B2). "" when unconfigured."""
+    orgs = settings.cedric_orgs_url.strip()
+    if not orgs:
+        return ""
+    return orgs.rstrip("/").rsplit("/api/laura/orgs", 1)[0] + "/api/laura/actions"
+
+
+def _team_id_for(org_id: str) -> str:
+    """The Slack workspace this org's Cedric brain is linked to (tenant pin)."""
+    from .. import store  # lazy: keep the module graph cycle-free
+
+    try:
+        rows = store.connections_for_org(org_id)
+        brain = next(
+            (r for r in rows
+             if r.get("provider") == "cedric-brain" and r.get("status") == "connected"),
+            None,
+        )
+        return str((brain.get("config") or {}).get("team_id") or "") if brain else ""
+    except Exception:  # noqa: BLE001 — an unlinked org just dispatches without it
+        return ""
+
+
+def dispatch_action(org_id: str, action: dict, approved_by: str = "") -> dict:
+    """handshake operation: dispatch-action (A->B) — hand an APPROVED action to
+    Cedric for execution through its connectors.
+
+    Called by both approval doors (dashboard + /org approve) for
+    execution_route=cedric actions the moment a human approves. The payload is
+    the tenancy-contract Action projection: pre_approved (Cedric must NOT
+    re-ask), idempotency_key = action_id (exactly-once on B), signed with the
+    per-org HMAC stack (_post fails closed for unlinked orgs). Soft contract:
+    2xx -> accepted; 404/405 -> B hasn't built the receiver yet
+    (dispatch_endpoint_missing — the action stays approved and Cedric's
+    legacy action.requested loop remains the pickup path); 422 ->
+    unsupported type on B. Never raises."""
+    url = dispatch_url()
+    org = (org_id or "").strip()
+    aid = str((action or {}).get("action_id") or "").strip()
+    if not url or not org or not aid:
+        return {"ok": False, "reason": "not_configured"}
+    typed = action.get("typed") if isinstance(action.get("typed"), dict) else {}
+    atype = str(typed.get("type") or "").strip() or "task.freeform"
+    args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
+    if atype == "task.freeform":
+        # Untyped item: ship the distilled fields so Cedric's agent can act on
+        # them (never transcript content). B may 422 until freeform lands in
+        # the contract — reported honestly, not retried.
+        args = {
+            "item": str(action.get("item") or "")[:300],
+            "owner": str(action.get("owner") or "")[:80],
+        }
+    payload = {
+        "org_id": org,  # top-level: _post signs with THIS org's secret
+        "action": {
+            "action_id": aid,
+            "tenant": {"org_id": org, "team_id": _team_id_for(org)},
+            "type": atype,
+            "args": args,
+            "execution_route": "cedric",
+            "approval_mode": "pre_approved",
+            "approved_by": str(approved_by or ""),
+            "idempotency_key": aid,
+            "correlation_id": str(action.get("correlation_id") or aid),
+        },
+    }
+    try:
+        resp = _post(url, payload, idempotency_key=aid)
+    except Exception as e:  # noqa: BLE001 — dispatch must never break an approval
+        print(f"[cedric-callback] dispatch failed for {aid!r}: {type(e).__name__}", flush=True)
+        return {"ok": False, "reason": f"dispatch_error_{type(e).__name__}"}
+    if 200 <= resp.status_code < 300:
+        return {"ok": True, "accepted": True}
+    if resp.status_code in (404, 405):
+        return {"ok": False, "reason": "dispatch_endpoint_missing"}
+    if resp.status_code == 422:
+        return {"ok": False, "reason": "unsupported_type"}
+    return {"ok": False, "reason": f"http_{resp.status_code}"}
+
+
 def events_url() -> str:
     """{cedric_base}/api/laura/events — the durable per-org events door from
     the agreed action-lifecycle contract (handshake operation: action-events).

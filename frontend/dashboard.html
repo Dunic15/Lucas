@@ -708,6 +708,24 @@
     .side>div:last-child{margin-top:0 !important;}
     .side>div:last-child>div:first-child{display:none;}
   }
+  /* ── chat view (the Cedric channel — approvals happen here, not Slack) ── */
+  .chat-wrap{display:flex;flex-direction:column;height:calc(100vh - 230px);min-height:400px;}
+  .chat-log{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:4px 2px 12px;}
+  .msg{max-width:74%;padding:9px 13px;border-radius:14px;font-size:.82rem;line-height:1.5;
+    white-space:pre-wrap;word-break:break-word;border:1px solid var(--line-soft);}
+  .msg.user{align-self:flex-end;background:var(--accent-soft);border-color:rgba(126,182,255,.35);}
+  .msg.cedric{align-self:flex-start;background:var(--panel);}
+  .msg .mwho{font-family:var(--mono);font-size:.55rem;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--faint);margin-bottom:4px;}
+  .chat-card{margin-top:8px;border:1px solid var(--line);border-radius:11px;padding:9px 12px;
+    background:rgba(126,182,255,.06);}
+  .chat-card .ci{font-size:.8rem;}
+  .chat-card .cm{color:var(--faint);font-size:.7rem;margin-top:3px;}
+  .chat-card .cc{margin-top:8px;display:flex;gap:8px;align-items:center;}
+  .chat-composer{display:flex;gap:9px;padding-top:11px;border-top:1px solid var(--line-soft);}
+  .chat-composer input{flex:1;background:var(--bg);border:1px solid var(--line);border-radius:11px;
+    color:inherit;font:inherit;font-size:.84rem;padding:10px 13px;outline:none;}
+  .chat-composer input:focus{border-color:rgba(126,182,255,.5);}
 </style>
 </head>
 <body>
@@ -719,6 +737,7 @@
     <nav class="nav" id="nav">
       <button type="button" data-view="overview" class="on" aria-current="page"><span class="ic">▦</span> Overview</button>
       <button type="button" data-view="avatars"><span class="ic">◐</span> Avatars</button>
+      <button type="button" data-view="chat"><span class="ic">◧</span> Cedric</button>
       <button type="button" data-view="brain"><span class="ic">◎</span> Brain</button>
       <button type="button" data-view="meetings"><span class="ic">▤</span> Meetings</button>
       <button type="button" data-view="actions"><span class="ic">✓</span> Action Center<span class="navbadge" id="nav-actions-badge" hidden aria-label="actions needing attention"></span></button>
@@ -874,7 +893,26 @@
       <div class="aclist" id="ac-list"></div>
     </section>
 
-    <!-- PLAN & BILLING (opened from Settings — no top-level nav entry) -->
+    <!-- CHAT (Cedric channel — proposed actions approved inline) -->
+    <section class="view" id="view-chat" hidden>
+      <div class="head"><div><h1>Cedric</h1>
+        <div class="sub">Talk to Cedric directly — no Slack needed. Ask him to connect tools ("connect Asana"), check on work, or approve his proposed actions right in the thread</div></div></div>
+      <div class="panel chat-wrap">
+        <div class="cnote" id="chat-banner" hidden style="padding:9px 13px;margin-bottom:10px">
+          Cedric isn't connected on this deployment — messages are saved, but nobody answers.
+          <a data-goto="connections" style="cursor:pointer">Connect the brain</a>.
+        </div>
+        <div class="chat-log" id="chat-log" aria-live="polite">
+          <div class="ph" id="chat-empty" style="padding:24px;text-align:center">Loading…</div>
+        </div>
+        <form class="chat-composer" id="chat-form">
+          <input id="chat-input" type="text" placeholder="Message Cedric…" autocomplete="off" maxlength="4000" />
+          <button type="submit" class="btn">Send</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- PLAN & BILLING (usage reachable from Settings + a Cedric nav entry) -->
     <section class="view" id="view-usage" hidden>
       <div class="head"><div><h1>Plan &amp; billing</h1><div class="sub">Minutes, plan and invoices — shared across your avatars</div></div>
         <button class="btn" data-goto="settings">← Back to Settings</button></div>
@@ -1051,7 +1089,7 @@
   // its job — stop the eager catalog re-fetching in THIS tab.
   if(connResult){ try{ sessionStorage.removeItem("laura_pending_connect"); }catch(e){} }
   if(oauthResult==="connected"){
-    toast("Brain linked — meeting actions will flow to your Slack.",false);
+    toast("Cedric connected — his tools and meeting actions now flow through here.",false);
   } else if(oauthResult==="pending"){
     toast("Slack is installed, but the secure brain link is still pending. Retry Connect if it does not finish.",true);
   } else if(oauthResult==="error"){
@@ -1077,12 +1115,12 @@
 
   var DATA=null, filterMt="all";
 
-  // Visible top-level navigation is EXACTLY: Overview, Avatars, Brain,
+  // Visible top-level navigation: Overview, Avatars, Cedric (chat), Brain,
   // Meetings, Action Center, Connections, Settings. "usage" (Plan & billing,
   // reached from Settings) and "studio" (Avatar Studio, reached from an
   // avatar's Personalize button) keep their views + routes but have no nav
   // entry — they highlight their nav owner instead.
-  var VIEWS=["overview","avatars","brain","meetings","actions","connections","settings","usage","studio"];
+  var VIEWS=["overview","avatars","chat","brain","meetings","actions","connections","settings","usage","studio"];
   var NAV_OWNER={usage:"settings",studio:"avatars"};
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
@@ -1827,7 +1865,8 @@
     function platformsIn(){ var s={}; (d.meetings||[]).forEach(function(m){ if(m.platform&&m.platform!=="—") s[m.platform]=1; }); return Object.keys(s); }
     // The action chip renderers (ownerChip / execChip / apprBtn / rejBtn) and
     // the approve/reject doors now live at MODULE scope, shared with the
-    // Action Center — one execution path for every surface (see above).
+    // Action Center — one execution path for every surface (see above). The
+    // module-scope approveAction folds in the "Approve → Cedric" dispatch path.
     function rowHTML(m,i){ var nm=avName(m.avatar_id);
       return '<tr class="row" data-i="'+i+'"><td><div class="cell-av">'+
         (m.avatar_id&&avById[m.avatar_id]?avatarBadge(m.avatar_id,nm):'<span class="av" style="background:var(--faint)">'+esc(nm[0]||"?")+'</span>')+'<span>'+esc(nm)+'</span></div></td>'+
@@ -1913,12 +1952,12 @@
       // chips (each links its OWN connect_url — see applySlackTools); "Manage
       // tools" is a secondary link to the hosted grid for advanced management.
       // Connect + Disconnect (org-level) are preserved here.
-      '<div class="conn"><div class="nm">'+LOGO_SLACK+' Slack agent <span class="stchip" style="margin-left:6px">add-on</span></div>'+
-      '<div class="ds">Slack agent and meeting assistant — runs the actions from your meetings (email, calendar, messages) and checks with you before doing them.</div>'+
+      '<div class="conn"><div class="nm">'+LOGO_SLACK+' Cedric <span class="stchip" style="margin-left:6px">agent</span></div>'+
+      '<div class="ds">Cedric is the agent that holds ALL the connections — connect him once (you log in as Cedric) and every tool he\'s linked (Slack, Asana, Notion, …) becomes available to your avatars in meetings. He runs approved actions and reports receipts back here. Talk to him directly in the Cedric tab.</div>'+
       '<div class="foot"><span class="cstat'+(slackConnected?" on":"")+'"><b></b>'+(slackConnected?"Connected":"Not connected")+'</span>'+
       (slackConnected
         ?'<button class="btn" data-slack-off>Disconnect</button>'
-        :'<button class="btn primary" data-slack-on>Add to Slack</button>')+
+        :'<button class="btn primary" data-slack-on>Connect Cedric</button>')+
       '</div>'+
       // When connected: the team-scope connector chips (direct connect_url actions,
       // filled by applySlackTools) PLUS a secondary "Manage tools" link to Cedric's
@@ -1937,24 +1976,12 @@
           '<div class="cnote">Connect a tool above, or manage them on Cedric.</div></div>'
         :'')+
       '</div>'+
-      // ── Asana (native) — the project system of record (docs/ASANA.md) ──
-      // Preferred: one-click OAuth (Connect Asana → sign in on asana.com →
-      // back here connected), available when the deployment has the Asana
-      // OAuth app configured. Fallback: paste a Personal Access Token; the
-      // backend verifies it LIVE against Asana before storing it encrypted
-      // per-org. Tokens never render back into the page either way.
-      '<div class="conn"><div class="nm">'+LOGO_ASANA+' Asana <span class="stchip" style="margin-left:6px">native</span></div>'+
-      '<div class="ds">Project system of record — avatars read the workspace when they join (projects, open &amp; overdue tasks) and file approved action items as tasks.'+
-      (asanaOAuth?'':' Token: Asana → Settings → Apps → Developer apps.')+'</div>'+
-      '<div class="foot"><span class="cstat'+(asanaConnected?" on":"")+'"><b></b>'+(asanaConnected?"Connected":"Not connected")+'</span>'+
-      (asanaConnected
-        ?'<button class="btn" data-asana-off>Disconnect</button>'
-        :(asanaOAuth
-          ?'<a class="btn primary" style="text-decoration:none" href="/oauth/asana/connect">Connect Asana</a>'
-          :'<input type="password" id="asana-pat" placeholder="Personal Access Token" autocomplete="off" '+
-            'style="flex:1;min-width:120px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
-            '<button class="btn primary" data-asana-on>Connect</button>'))+
-      '</div></div>';
+      // ── Asana: Cedric-mediated by product decision (2026-07-17) — the
+      // native connect card is intentionally NOT rendered. Cedric holds the
+      // Asana credential; avatars reach Asana live through Cedric's tool
+      // bridge. (The native backend path still exists for deployments that
+      // wire it directly — only this UI entry point is removed.)
+      '';
     // Asana (native) connect — verify + store the pasted PAT server-side.
     $$("#conns [data-asana-on]").forEach(function(btn){btn.addEventListener("click",function(){
       var input=$("#asana-pat"), token=(input&&input.value||"").trim();
@@ -2256,8 +2283,16 @@
         }
         if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
         var j=res.j, st=j.status||null;
-        // Flag OFF (or nothing ran): captured + marked approved, but not
-        // executed — say so plainly rather than surfacing it as an error.
+        // Routed to Cedric: approved here, executing over there — the chip
+        // flips to done/failed when Cedric reports back on the status door.
+        if(!j.executed&&j.dispatched){
+          if(btn) btn.outerHTML='<span class="exec approved" title="Approved — Cedric is executing this through its connectors; the receipt lands here when it reports back.">approved · with Cedric</span>';
+          toast("Approved — routed to Cedric for execution.");
+          patchActionState(aid,st||{status:"approved"});
+          return;
+        }
+        // Flag OFF (or nothing ran, no Cedric link): captured + marked
+        // approved, but not executed — say so plainly rather than as an error.
         if(!j.executed){
           if(btn) btn.outerHTML='<span class="exec approved" title="Marked approved. Turn on the native executor to run it automatically.">captured · execution off</span>';
           toast("Action approved — captured (native execution is off).");
@@ -3368,6 +3403,116 @@
       });
     });
   }
+})();
+
+// ── Chat view: the Cedric channel. Cedric posts text + action cards over
+// POST /org/chat; the human approves/rejects INLINE — those buttons hit the
+// SAME canonical dashboard doors as the meetings table, so every decision
+// still converges on the one approval record. Sending relays chat.message
+// to Cedric over the signed per-org events door. ──
+(function(){
+  var log=$("#chat-log"), after=0, acts={}, loaded=false, inflight=false;
+
+  function receipt(ex){
+    if(!ex) return "";
+    var det=ex.detail||"", url=(det.match(/https?:\/\/[^\s"'<>]+/)||[])[0];
+    if(ex.status==="done"&&url)
+      return '<a class="exec done" href="'+esc(url)+'" target="_blank" rel="noopener" title="'+esc(det)+'">Done ↗</a>';
+    return '<span class="exec '+esc(ex.status)+'" title="'+esc(det)+'">'+esc(ex.status)+'</span>';
+  }
+  function cardControls(aid){
+    var a=acts[aid]||{};
+    if(a.execution&&["done","rejected","failed","approved"].indexOf(a.execution.status)>=0)
+      return receipt(a.execution);
+    if(a.known===false)
+      return '<span class="exec" title="This action is not in any meeting this org can see.">unknown action</span>';
+    return '<button class="btn-appr" data-chat-approve="'+esc(aid)+'">Approve &amp; run</button>'+
+           '<button class="btn-rej" data-chat-reject="'+esc(aid)+'">Reject</button>';
+  }
+  function msgHTML(m){
+    var who=m.sender==="user"?"user":"cedric";
+    var label=m.sender==="user"?"":('<div class="mwho">'+esc(m.sender_label||"Cedric")+'</div>');
+    if(m.kind==="action_card"){
+      var p=m.payload||{};
+      return '<div class="msg cedric">'+label+(m.body?esc(m.body):'Proposed action — approve to run it:')+
+        '<div class="chat-card"><div class="ci">'+esc(p.item||"")+'</div>'+
+        ((p.owner||p.due)?'<div class="cm">'+esc(p.owner||"unassigned")+(p.due?" · due "+esc(p.due):"")+'</div>':'')+
+        '<div class="cc" data-card="'+esc(m.action_id)+'">'+cardControls(m.action_id)+'</div></div></div>';
+    }
+    return '<div class="msg '+who+'">'+label+esc(m.body)+'</div>';
+  }
+  function load(){
+    if(inflight) return; inflight=true;
+    fetch("/dashboard/chat?after="+after,{headers:headers()})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        inflight=false;
+        if(d.error){ return; }
+        Object.keys(d.actions||{}).forEach(function(k){ acts[k]=d.actions[k]; });
+        $("#chat-banner").hidden=(d.relay_configured!==false);
+        var msgs=d.messages||[];
+        var empty=$("#chat-empty");
+        if(!loaded){ loaded=true;
+          if(empty&&!msgs.length){ empty.textContent="No messages yet — say hi to Cedric."; }
+        }
+        if(msgs.length){
+          if(empty) empty.remove();
+          msgs.forEach(function(m){ after=Math.max(after,m.id); });
+          log.insertAdjacentHTML("beforeend", msgs.map(msgHTML).join(""));
+          log.scrollTop=log.scrollHeight;
+        }
+      })
+      .catch(function(){ inflight=false; });
+  }
+  // Inline decide — same doors as the meetings table, chat just renders them.
+  log.addEventListener("click",function(e){
+    var b=e.target.closest("[data-chat-approve],[data-chat-reject]");
+    if(!b) return;
+    var rej=b.hasAttribute("data-chat-reject");
+    var aid=b.getAttribute(rej?"data-chat-reject":"data-chat-approve");
+    var wrap=b.closest(".cc");
+    b.disabled=true; b.textContent=rej?"Rejecting…":"Approving…";
+    fetch("/dashboard/actions/"+encodeURIComponent(aid)+(rej?"/reject":"/approve"),
+          {method:"POST",headers:headers()})
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,j:j}; }); })
+      .then(function(res){
+        if(!res.ok) throw new Error(res.j.error||"failed");
+        var j=res.j, html;
+        if(rej) html='<span class="exec rejected" title="Rejected — it will not run.">rejected</span>';
+        else if(j.executed&&j.status) html=receipt({status:j.status.status,detail:j.status.detail||""});
+        else html='<span class="exec approved" title="Approved — Cedric picks it up from here.">approved</span>';
+        wrap.innerHTML=html;
+        toast(rej?"Action rejected — it will not run.":"Approved.");
+      })
+      .catch(function(e2){
+        b.disabled=false; b.textContent=rej?"Reject":"Approve & run";
+        toast("Could not "+(rej?"reject":"approve")+": "+e2.message,true);
+      });
+  });
+  $("#chat-form").addEventListener("submit",function(e){
+    e.preventDefault();
+    var inp=$("#chat-input"), text=inp.value.trim();
+    if(!text) return;
+    inp.value="";
+    fetch("/dashboard/chat",{method:"POST",headers:headers(),body:JSON.stringify({text:text})})
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,j:j}; }); })
+      .then(function(res){
+        if(!res.ok) throw new Error(res.j.error||"failed");
+        load();  // pulls the stored row (+ anything Cedric said meanwhile)
+        if(res.j.delivered===false&&$("#chat-banner").hidden)
+          toast("Saved — but Cedric didn't receive it. Check the brain connection.",true);
+      })
+      .catch(function(e2){ toast("Could not send: "+e2.message,true); inp.value=text; });
+  });
+  // Poll while the chat view is actually on screen (plus one eager first load).
+  setInterval(function(){
+    if(document.hidden) return;
+    var v=$("#view-chat");
+    if(!v||v.hidden) return;
+    if(!$("#authgate").hidden) return;
+    load();
+  },4000);
+  load();
 })();
 </script>
 </body>

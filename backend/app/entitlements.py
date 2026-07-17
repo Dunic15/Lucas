@@ -155,12 +155,63 @@ def _used_seconds(conn, org_id: str, *, exclude_bot_id: str | None = None) -> fl
     return float(closed or 0) + float(active or 0)
 
 
+# Comped orgs (plan='comp'): effectively unlimited — ~31 years of seconds.
+# A sentinel this large keeps every "remaining > 0" gate trivially true
+# without a special case at each call site.
+_COMP_ALLOWANCE = 10**9
+
+
+def is_comp_email(email: str) -> bool:
+    """True when this email is on the comped list (BILLING_COMP_EMAILS):
+    full access, billing waived. Matched case-insensitively, exact only."""
+    listed = {
+        e.strip().lower()
+        for e in settings.billing_comp_emails.split(",")
+        if e.strip()
+    }
+    return bool(email) and email.strip().lower() in listed
+
+
+def grant_comp(org_id: str) -> bool:
+    """Waive billing for an org: upsert its billing row to plan='comp' with
+    the unlimited allowance. Called at login for comped emails — best-effort
+    and idempotent; a clean no-op (False) when the control plane is off (no
+    metering means nothing to waive). Never raises: a billing hiccup must
+    never break a login."""
+    if not enabled():
+        return False
+    org = (org_id or "").strip()
+    if not org:
+        return False
+    from sqlalchemy import text
+    from sqlalchemy.exc import SQLAlchemyError
+
+    try:
+        with _engine().begin() as conn:
+            control_plane._set_org(conn, org)
+            conn.execute(
+                text(
+                    "INSERT INTO billing_accounts (org_id, plan, included_seconds) "
+                    "VALUES (:o, 'comp', :s) "
+                    "ON CONFLICT (org_id) DO UPDATE SET "
+                    "plan = 'comp', included_seconds = :s"
+                ),
+                {"o": org, "s": _COMP_ALLOWANCE},
+            )
+        return True
+    except SQLAlchemyError:
+        return False
+
+
 def _effective_allowance(row) -> int:
     """Paid access is valid only through its verified Stripe period end."""
     if row is None:
         return _included_default()
     included = int(row[0])
     plan = str(row[1] or "free")
+    if plan == "comp":
+        # Comped (BILLING_COMP_EMAILS): billing waived, allowance unlimited.
+        return max(included, _COMP_ALLOWANCE)
     if plan != "solo":
         return included
     status = str(row[2] or "none")

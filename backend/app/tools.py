@@ -413,6 +413,110 @@ def upcoming_meetings(session=None) -> str:
     )
 
 
+# ── live Asana reads (the workspace brief is a START-OF-MEETING snapshot;
+# these read the CURRENT state on demand). Session-aware: the org comes off
+# the live session, and specs_for offers them only when that org has Asana
+# connected AND the avatar is Asana-enabled (flag set at session start). Reads
+# only — writes stay behind queue_action → approval, like everything else. ──
+def _session_org(session) -> str:
+    return str(getattr(session, "org_id", "") or "") if session else ""
+
+
+def _asana_result(res: dict) -> str:
+    if not isinstance(res, dict):
+        return "error: Asana returned nothing"
+    if not res.get("ok"):
+        return f"error: {res.get('error') or 'Asana is unavailable right now'}"
+    return json.dumps(res)
+
+
+def asana_projects(session=None) -> str:
+    """LIVE list of the org's Asana projects, right now."""
+    org = _session_org(session)
+    if not org:
+        return "error: no org is attached to this session"
+    from . import asana_client
+
+    return _asana_result(asana_client.list_projects(org))
+
+
+def asana_tasks(project: str = "", session=None) -> str:
+    """LIVE open tasks in one project (name or gid), right now."""
+    org = _session_org(session)
+    if not org:
+        return "error: no org is attached to this session"
+    if not (project or "").strip():
+        return "error: 'project' is required (a project name from asana_projects)"
+    from . import asana_client
+
+    return _asana_result(asana_client.project_tasks(org, project.strip()))
+
+
+def asana_search(query: str = "", session=None) -> str:
+    """LIVE workspace-wide task search by name, right now."""
+    org = _session_org(session)
+    if not org:
+        return "error: no org is attached to this session"
+    if not (query or "").strip():
+        return "error: 'query' is required (words from the task name)"
+    from . import asana_client
+
+    return _asana_result(asana_client.find_tasks(org, query.strip()))
+
+
+ASANA_TOOL_SPECS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "asana_projects",
+            "description": (
+                "Read the CURRENT list of Asana projects (live — not the "
+                "meeting-start snapshot). Use before asana_tasks when you "
+                "need the exact project name."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "asana_tasks",
+            "description": (
+                "Read the CURRENT open tasks of ONE Asana project (live), "
+                "with owners and due dates. Use for 'what's open/overdue in "
+                "X right now' — the workspace brief in your context is only "
+                "a snapshot from when the meeting started."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": "Project name (or gid)."}
+                },
+                "required": ["project"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "asana_search",
+            "description": (
+                "Search Asana tasks by name across the whole workspace, LIVE. "
+                "Use when someone asks about a specific task and you need its "
+                "current owner/due/state."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Words from the task name."}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+]
+
+
 _DISPATCH = {
     "calculator": calculator,
     "date_math": date_math,
@@ -421,12 +525,16 @@ _DISPATCH = {
     "list_capabilities": list_capabilities,
     "search_tools": search_tools,
     "upcoming_meetings": upcoming_meetings,
+    "asana_projects": asana_projects,
+    "asana_tasks": asana_tasks,
+    "asana_search": asana_search,
 }
 
 # Tools that receive the live session (to capture onto it). Everything else
 # keeps its plain signature — the session seam is strictly additive.
 _SESSION_TOOLS = {
     "queue_action", "list_capabilities", "search_tools", "upcoming_meetings",
+    "asana_projects", "asana_tasks", "asana_search",
 }
 
 
@@ -437,6 +545,10 @@ def specs_for(session, *, live: bool = True) -> list[dict]:
     the latency contract (Handshake v3). When the bridge is off or nothing was
     discovered, this is exactly TOOL_SPECS."""
     specs = list(TOOL_SPECS)
+    # Live Asana reads: offered only when session start established that this
+    # org has Asana connected and the avatar may use it (session.asana_live).
+    if session is not None and getattr(session, "asana_live", False):
+        specs += ASANA_TOOL_SPECS
     reg = getattr(session, "tool_registry", None) if session else None
     mcp_tools = reg.get("cedric_mcp") if isinstance(reg, dict) else None
     if mcp_tools:

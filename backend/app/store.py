@@ -482,6 +482,27 @@ def _init_db() -> None:
                 PRIMARY KEY (org_id, action_id)
             );
 
+            -- Dashboard chat channel (org ↔ Cedric, replacing Slack as the
+            -- approval surface). One row per message; `kind` separates plain
+            -- text from action cards (which reference action_id and render
+            -- approve/reject inline — the DECISION still lives only in
+            -- action_approvals above; chat never stores decisions). Distilled
+            -- content only, never transcript text.
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                org_id TEXT NOT NULL,
+                sender TEXT NOT NULL,                  -- user|cedric|system
+                sender_label TEXT NOT NULL DEFAULT '', -- display name
+                kind TEXT NOT NULL DEFAULT 'text',     -- text|action_card
+                body TEXT NOT NULL DEFAULT '',
+                action_id TEXT NOT NULL DEFAULT '',    -- set on action cards
+                payload_json TEXT NOT NULL DEFAULT '', -- card fields: item/owner/due
+                created_at REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_org
+                ON chat_messages(org_id, id);
+
             -- Edited typed params for a captured action (canonical Action
             -- plane, key-free mode). The artifact stays immutable; this
             -- overlay is what the approve doors execute. Durable orgs use
@@ -2308,6 +2329,113 @@ def set_action_approval_job(org_id: str, action_id: str, execution_job_id: str) 
             "UPDATE action_approvals SET execution_job_id=?, blocked_on='' "
             "WHERE org_id=? AND action_id=?",
             (execution_job_id, (org_id or "").strip(), (action_id or "").strip()),
+        )
+
+
+# ── dashboard chat channel (org ↔ Cedric, the in-dashboard approval surface) ──
+
+_CHAT_SENDERS = {"user", "cedric", "system"}
+_CHAT_BODY_MAX = 8000  # distilled content only; a runaway body never bloats the page
+
+
+def add_chat_message(
+    org_id: str,
+    sender: str,
+    *,
+    body: str = "",
+    sender_label: str = "",
+    kind: str = "text",
+    action_id: str = "",
+    payload: dict | None = None,
+) -> dict | None:
+    """Append one message to the org's channel. Returns the stored row (with
+    id) or None on bad input. Decisions NEVER live here — an action card only
+    references its action_id; the canonical decision is action_approvals."""
+    org = (org_id or "").strip()
+    text = (body or "").strip()[:_CHAT_BODY_MAX]
+    if not org or sender not in _CHAT_SENDERS:
+        return None
+    if not text and kind == "text":
+        return None
+    now = time.time()
+    with _LOCK, _connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO chat_messages (org_id, sender, sender_label, kind, "
+            "body, action_id, payload_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                org, sender, (sender_label or "")[:120], (kind or "text")[:32],
+                text, (action_id or "")[:64],
+                json.dumps(payload, separators=(",", ":")) if payload else "",
+                now,
+            ),
+        )
+        mid = int(cur.lastrowid)
+    return {
+        "id": mid, "sender": sender, "sender_label": (sender_label or "")[:120],
+        "kind": (kind or "text")[:32], "body": text,
+        "action_id": (action_id or "")[:64], "payload": payload or {},
+        "created_at": now,
+    }
+
+
+def list_chat_messages(org_id: str, after_id: int = 0, limit: int = 200) -> list[dict]:
+    """Messages after `after_id`, oldest-first (the chat poll cursor)."""
+    org = (org_id or "").strip()
+    if not org:
+        return []
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM chat_messages WHERE org_id = ? AND id > ? "
+            "ORDER BY id LIMIT ?",
+            (org, int(after_id or 0), max(1, min(int(limit or 200), 500))),
+        ).fetchall()
+    out = []
+    for r in rows:
+        try:
+            payload = json.loads(r["payload_json"]) if r["payload_json"] else {}
+        except ValueError:
+            payload = {}
+        out.append(
+            {
+                "id": r["id"], "sender": r["sender"],
+                "sender_label": r["sender_label"], "kind": r["kind"],
+                "body": r["body"], "action_id": r["action_id"],
+                "payload": payload, "created_at": r["created_at"],
+            }
+        )
+    return out
+
+
+def list_blocked_action_approvals(org_id: str) -> list[dict]:
+    """Every approve-decision in this org still parked behind unmet
+    dependencies ([M8]) — the work-list for the deferred release.
+
+    Scoped to one org and to rows that ARE blocked, so the release sweep needs
+    no cross-tenant discovery: `blocked_on` is cleared the moment the approval
+    really runs, which keeps this list naturally tiny."""
+    org = (org_id or "").strip()
+    if not org:
+        return []
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            "SELECT action_id, blocked_on FROM action_approvals "
+            "WHERE org_id=? AND decision='approve' AND blocked_on NOT IN ('', '[]')",
+            (org,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_action_approval_blocked_on(
+    org_id: str, action_id: str, blocked_on: str
+) -> None:
+    """Re-park a dependency-blocked approval on a SHRUNKEN dependency list (or
+    clear it with '[]'). The decision itself is never touched — only what the
+    approval is still waiting for."""
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            "UPDATE action_approvals SET blocked_on=? WHERE org_id=? AND action_id=?",
+            (blocked_on or "", (org_id or "").strip(), (action_id or "").strip()),
         )
 
 
