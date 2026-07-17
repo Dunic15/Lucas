@@ -3682,6 +3682,32 @@ _VOICE_LINES_IT = [
     "Ricevuto — approvato e già in lavorazione con Cedric.",
 ]
 
+# Clarify-before-create (settings.clarify_before_create): the addressed ask is
+# missing what a well-filed task needs, so the avatar asks ONCE — assembled
+# from per-field slots, spoken via the normal TTS cache — and holds the
+# approval until the asker replies (or the window lapses).
+_CLARIFY_SLOTS = {
+    "owner": "who should own it",
+    "project": "which project it goes in",
+    "due": "when it's due",
+}
+_CLARIFY_SLOTS_IT = {
+    "owner": "chi la prende in carico",
+    "project": "in quale progetto va",
+    "due": "per quando serve",
+}
+_CLARIFY_WINDOW_S = 45.0  # after this, resolve quietly with what we have
+
+
+def _clarify_line(heard: str, missing: list[str]) -> str:
+    if sounds_italian(heard):
+        slots = [_CLARIFY_SLOTS_IT[m] for m in missing if m in _CLARIFY_SLOTS_IT]
+        joined = slots[0] if len(slots) == 1 else ", ".join(slots[:-1]) + " e " + slots[-1]
+        return f"Certo — prima di crearla: {joined}?"
+    slots = [_CLARIFY_SLOTS[m] for m in missing if m in _CLARIFY_SLOTS]
+    joined = slots[0] if len(slots) == 1 else ", ".join(slots[:-1]) + ", and " + slots[-1]
+    return f"Sure — before I create it: {joined}?"
+
 # Listening cues spoken WHILE a human is mid-monologue (backchanneling, the
 # thing that makes a listener feel present). Two syllables max — anything
 # longer becomes an interruption instead of a nod.
@@ -5428,6 +5454,102 @@ async def recall_webhook(request: Request) -> JSONResponse:
         session.hand_last_ignored = True
         await _lower_hand(session)
 
+    # ── clarify-before-create: the asker answers the avatar's question ──
+    # A capture that was missing details parked here (session.pending_clarify)
+    # while the avatar asked. The SAME speaker's next line resolves it: detail
+    # text extends the durable capture, a skip proceeds as-is; either way the
+    # approval (voice consent) fires only NOW. A lapsed window resolves
+    # quietly and lets the current line flow through the normal pipeline.
+    clarify = getattr(session, "pending_clarify", None)
+    if clarify is not None:
+        c_item, c_speaker, c_ts, c_missing, c_event_key, c_fingerprint = clarify
+        if (capture_event_key and capture_event_key == c_event_key) or (
+            not capture_event_key
+            and capture_fingerprint
+            and capture_fingerprint == c_fingerprint
+        ):
+            # Recall retry of the original ask — already captured + asked.
+            return JSONResponse(
+                {"ok": True, "spoke": False, "action_capture": True, "duplicate": True}
+            )
+        expired = time.time() - c_ts > _CLARIFY_WINDOW_S
+        answered = (not called) and speaker_id == c_speaker and not expired
+        if answered and time.time() - c_ts < 4.0 and is_capture_continuation(text):
+            # A late ASR fragment of the ORIGINAL ask, not an answer: extend
+            # and re-check what is still missing before (re)asking anything.
+            try:
+                c_item, c_extended = await run_in_threadpool(
+                    tools.extend_action_once,
+                    session,
+                    c_item,
+                    text,
+                    source_event_key=capture_event_key,
+                    source_fingerprint=capture_fingerprint,
+                )
+            except outbox.ActionCaptureClosed:
+                session.pending_clarify = None
+                return JSONResponse(
+                    {"ok": True, "spoke": False, "capture_rejected": "meeting_finalizing"}
+                )
+            still_missing = tools.missing_action_details(c_item.get("action") or "")
+            if still_missing:
+                session.pending_clarify = (
+                    c_item, c_speaker, c_ts, still_missing, c_event_key, c_fingerprint,
+                )
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "spoke": False,
+                        "capture_extended": True,
+                        # A replayed older fragment dedupes durably — report it
+                        # honestly so retries are visibly no-ops.
+                        "duplicate": not c_extended,
+                    }
+                )
+            answered = True  # the fragment completed the ask — resolve below
+            text_is_details = False
+        else:
+            text_is_details = answered and not tools.is_detail_skip(text)
+        if answered or expired:
+            session.pending_clarify = None
+            if text_is_details:
+                try:
+                    c_item, _ = await run_in_threadpool(
+                        tools.extend_action_once,
+                        session,
+                        c_item,
+                        text,
+                        source_event_key=capture_event_key,
+                        source_fingerprint=capture_fingerprint,
+                    )
+                except outbox.ActionCaptureClosed:
+                    return JSONResponse(
+                        {"ok": True, "spoke": False, "capture_rejected": "meeting_finalizing"}
+                    )
+            if settings.voice_consent_writes:
+                asyncio.create_task(
+                    run_in_threadpool(cedric.voice_approve, session, c_item)
+                )
+            if answered:
+                clar_gen = store.bump_speech_generation(session)
+                line = (
+                    _line_for(text, _VOICE_LINES, _VOICE_LINES_IT)
+                    if settings.voice_consent_writes
+                    else _line_for(text, _QUEUE_LINES, _QUEUE_LINES_IT)
+                )
+                session.last_ack_at = time.time()
+                spoke = await _make_avatar_speak(
+                    session,
+                    line,
+                    force=True,
+                    generation=clar_gen,
+                    audio=tts.cached_payload(line, _avatar_voice(session)),
+                )
+                return JSONResponse(
+                    {"ok": True, "spoke": bool(spoke), "action_capture": True, "clarified": True}
+                )
+            # expired: resolved silently; the current line continues below.
+
     # ── action-capture continuation ──
     # A same-speaker follow-up right after a captured action (and NOT a new
     # wake) extends the captured item's text, so the artifact/ledger get the
@@ -5888,6 +6010,42 @@ async def recall_webhook(request: Request) -> JSONResponse:
         )
         if session.speech_generation != turn_gen:  # barge-in since the final landed
             return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
+        # A NEW addressed ask while an older clarify was still pending:
+        # resolve the old capture as-is first (approve quietly with what it
+        # has) so it is never lost, then handle this one on its own merits.
+        stale = getattr(session, "pending_clarify", None)
+        if stale is not None:
+            session.pending_clarify = None
+            if settings.voice_consent_writes:
+                asyncio.create_task(
+                    run_in_threadpool(cedric.voice_approve, session, stale[0])
+                )
+        missing = tools.missing_action_details(item.get("action") or "")
+        if settings.clarify_before_create and missing:
+            # The ask lacks what a well-filed task needs — Petra ASKS instead
+            # of filing an orphan. The approval is held until the asker's
+            # reply resolves it (clarify block above), or the window lapses.
+            session.pending_clarify = (
+                item, speaker_id, time.time(), missing,
+                capture_event_key, capture_fingerprint,
+            )
+            line = _clarify_line(question, missing)
+            session.last_ack_at = time.time()
+            spoke = await _make_avatar_speak(
+                session,
+                line,
+                force=True,
+                generation=turn_gen,
+                audio=tts.cached_payload(line, _avatar_voice(session)),
+            )
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": bool(spoke),
+                    "action_capture": True,
+                    "clarifying": missing,
+                }
+            )
         if settings.voice_consent_writes:
             # CEDRIC voice consent: the addressed ask IS the approval — record
             # it on the canonical channel and tell Cedric to run it NOW, off
