@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 import app.main as main_module
 from app import ledger, store, tools
 from app.cedric import callback as cedric_callback
+from app.config import settings
 
 
 @pytest.fixture
@@ -391,6 +392,7 @@ def _post_final(client, bot_id: str, speaker: str, text: str) -> dict:
 def test_live_route_async_ask_captures_and_confirms(
     client, recall_stubbed, spoken, monkeypatch
 ):
+    monkeypatch.setattr(settings, "clarify_before_create", False)  # legacy window mechanics
     fired: list[tuple] = []
 
     # Capture on the SYNCHRONOUS seam (cedric.notify_action_requested, called
@@ -430,6 +432,7 @@ def test_live_route_async_ask_captures_and_confirms(
 def test_live_route_capture_continuation_extends_item(
     client, recall_stubbed, spoken, monkeypatch
 ):
+    monkeypatch.setattr(settings, "clarify_before_create", False)  # legacy window mechanics
     monkeypatch.setattr(cedric_callback, "send_action_requested", lambda *a: True)
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
 
@@ -453,6 +456,7 @@ def test_live_route_capture_continuation_extends_item(
 def test_replayed_older_continuation_does_not_refresh_window(
     client, recall_stubbed, spoken, monkeypatch
 ):
+    monkeypatch.setattr(settings, "clarify_before_create", False)  # legacy window mechanics
     """A late replay of continuation A after B must not roll the source key
     backward or create a fresh four-second window for unrelated speech."""
     monkeypatch.setattr(
@@ -488,6 +492,7 @@ def test_replayed_older_continuation_does_not_refresh_window(
 def test_live_route_capture_window_rejects_closing_followup(
     client, recall_stubbed, spoken, monkeypatch
 ):
+    monkeypatch.setattr(settings, "clarify_before_create", False)  # legacy window mechanics
     """Live repro 2026-07-10: action captured, then 3s later the SAME speaker
     says the wrap-up line — inside the 4s continuation window. That is a NEW
     sentence, not an ASR split of the ask, and must NOT be glued onto the
@@ -521,6 +526,7 @@ def test_live_route_capture_window_rejects_closing_followup(
 def test_live_route_capture_window_rejects_acknowledgement_followup(
     client, recall_stubbed, spoken, monkeypatch
 ):
+    monkeypatch.setattr(settings, "clarify_before_create", False)  # legacy window mechanics
     """A same-speaker acknowledgement opener ("ok great, thanks") inside the
     window is a new thought even when it doesn't sound like a meeting close —
     the opener alone must keep it off the card."""

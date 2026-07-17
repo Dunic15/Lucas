@@ -746,6 +746,12 @@ class Settings(BaseSettings):
     # ask IS the approval. Actions merely inferred at finalize still queue for
     # a human click. false = every action waits for a click (old behaviour).
     voice_consent_writes: bool = True
+    # Clarify before create (owner ask 2026-07-17): when an addressed create-
+    # ask is missing the details a well-filed task needs (owner / project /
+    # due), the avatar asks ONE clarifying question and holds the approval
+    # until the asker replies (or the window lapses) — no more tasks born
+    # ownerless and invisible. false = capture-and-confirm immediately.
+    clarify_before_create: bool = True
     # Hard client-side budget for a LIVE-meeting tool call (the contract pins
     # read+fast tools only on the hot path; this enforces it defensively).
     cedric_mcp_live_timeout_s: float = 2.0
