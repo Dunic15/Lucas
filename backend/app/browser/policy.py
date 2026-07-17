@@ -201,14 +201,21 @@ def check_navigation_target(url: str, allowed_domains: set[str], *,
     can NEVER widen the allowlist — an on-page link is an ADDITIONAL constraint,
     never an alternative. Returns {ok, reason}."""
     url = str(url or "")
-    scheme = (urlparse(url).scheme or "").lower() if url else ""
+    parsed = urlparse(url) if url else None
+    scheme = (parsed.scheme or "").lower() if parsed else ""
     if scheme not in ("http", "https"):
         return {"ok": False, "reason": "scheme_not_allowed"}
-    host = _host(url)
+    host = (parsed.hostname or "").lower()
     if not host:
         return {"ok": False, "reason": "no_host"}
-    # host must match an allowed domain (exact or a subdomain of it).
-    allowed = any(host == d or host.endswith("." + d) for d in allowed_domains)
+    # An allowlist entry may be a bare host ("demo.laura.test") or host:port
+    # ("127.0.0.1:8971"). Match the URL's host AND its host:port form (a bare
+    # host also matches a subdomain). Page content can never widen the list.
+    netloc = (parsed.netloc or "").lower()
+    candidates = {host, netloc}
+    allowed = any(
+        c == d or (not d.count(":") and c.endswith("." + d))
+        for c in candidates for d in allowed_domains)
     if not allowed:
         return {"ok": False, "reason": "domain_blocked"}
     if observation_links is not None and url not in observation_links:

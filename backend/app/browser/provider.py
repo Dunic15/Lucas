@@ -108,6 +108,13 @@ def get_provider(name: str) -> BrowserProvider:
         from .browserbase_provider import BrowserbaseProvider
 
         return BrowserbaseProvider()
+    if key == "northstar":
+        # The MVP demo's deterministic in-process provider. Imported lazily so
+        # the browser package never depends on demo code; it is only reachable
+        # when the Northstar demo flag selected this provider for a session.
+        from ..demo_mvp.northstar_provider import NorthstarProvider
+
+        return NorthstarProvider()
     raise ProviderUnconfigured(f"unknown browser provider {name!r}")
 
 

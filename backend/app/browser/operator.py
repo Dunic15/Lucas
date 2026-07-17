@@ -571,36 +571,68 @@ def _route_write_to_action(org_id, row, verb, element_id, text, current,
     # any fresh observation (url+title+element-ids), so execute_approved_step
     # can re-verify it. The target element id is bound too.
     fingerprint = _observation_fingerprint(current)
-    if not _config().browser_allow_writes:
+
+    # The Northstar MVP enables exactly ONE controlled synthetic write behind a
+    # dedicated flag — the follow-up task — WITHOUT enabling arbitrary browser
+    # writes. Every other guarded write stays rejected when BROWSER_ALLOW_WRITES
+    # is off. The demo write still becomes a canonical action and still requires
+    # approval; only the mint gate is opened for this one control.
+    demo_extra, demo_typed = _demo_write_hook(org_id, row, element_id)
+    if not _config().browser_allow_writes and demo_extra is None:
         return {"ok": False, "reason": "write_rejected_read_only",
                 "class": "guarded",
                 "proposed": projection,
                 "policy": classification["reason"]}
     action_id = _mint_browser_action(org_id, row, projection, fingerprint,
-                                     element_id)
+                                     element_id, extra_permission=demo_extra,
+                                     typed_override=demo_typed)
     return {"ok": False, "reason": "approval_required", "class": "guarded",
             "action_id": action_id, "proposed": projection}
 
 
+def _demo_write_hook(org_id, row, element_id):
+    """(extra_permission, typed_override) for the Northstar follow-up control,
+    or (None, None) when the demo write is off, the SESSION is not a Northstar
+    demo session, or the element isn't the follow-up. Inert unless
+    NORTHSTAR_DEMO_WRITE_ENABLED — the browser package imports the demo lazily
+    and only on this narrow path. Scoping to provider='northstar' means the
+    BROWSER_ALLOW_WRITES=false mint gate can never open on any other session,
+    even one that happens to expose a 'create-followup' element."""
+    from .. import demo_mvp
+
+    if not demo_mvp.write_enabled():
+        return None, None
+    if str(row.get("provider") or "") != "northstar":
+        return None, None
+    from ..demo_mvp import execute as demo_execute
+
+    if not demo_execute.is_followup_element(element_id):
+        return None, None
+    return (demo_execute.followup_permission_extras(row),
+            demo_execute.followup_typed(row))
+
+
 def _mint_browser_action(org_id, row, projection, fingerprint,
-                         element_id="") -> str:
+                         element_id="", *, extra_permission=None,
+                         typed_override=None) -> str:
     """Create a canonical queued action, route='browser', carrying the safe
     param projection and the approval binding — reusing the M0 plane."""
     from .. import ledger
 
     action_id = ledger.new_action_id()
-    typed = {"type": f"browser.{projection['action']}",
-             "args": {"target": projection["target"],
-                      "text": projection.get("text", "")}}
+    typed = typed_override or {
+        "type": f"browser.{projection['action']}",
+        "args": {"target": projection["target"],
+                 "text": projection.get("text", "")}}
     ledger.set_action_status(action_id, "proposed",
                              f"browser: {projection['action']}", org_id=org_id)
     _index_browser_action(org_id, row, action_id, typed, fingerprint,
-                          element_id)
+                          element_id, extra_permission=extra_permission)
     return action_id
 
 
 def _index_browser_action(org_id, row, action_id, typed, fingerprint,
-                          element_id="") -> None:
+                          element_id="", *, extra_permission=None) -> None:
     """Index the browser action into queued_actions with route='browser',
     the binding in permission_json, and this session as the source — so the
     existing approve door + claim + receipt operate on it unchanged."""
@@ -639,7 +671,8 @@ def _index_browser_action(org_id, row, action_id, typed, fingerprint,
                  {"policy": "approval_required",
                   "browser_session_id": row["id"],
                   "binding_fingerprint": fingerprint,
-                  "binding_element_id": element_id},
+                  "binding_element_id": element_id,
+                  **(extra_permission or {})},
                  separators=(",", ":"))},
         )
 
@@ -703,6 +736,16 @@ def execute_approved_step(org_id: str, action_id: str, action: dict) -> dict:
             receipt={"kind": "browser", "route": "browser",
                      "session_id": session_id, "stale_page_binding": True})
         return {"ok": False, "reason": "stale_page_binding"}
+    # NORTHSTAR MVP: the ONE controlled synthetic write. When the action was
+    # minted as the Northstar follow-up AND the demo write flag is on, perform
+    # the product write here (behind the SAME claim + binding re-verification),
+    # re-observe, and fold the product receipt into the canonical receipt. Every
+    # OTHER browser action keeps the read-only b0_no_write stance below.
+    demo_write = _maybe_execute_demo_write(org_id, action_id, permission, row,
+                                           provider, session_id)
+    if demo_write is not None:
+        return demo_write
+
     # B0/B1: the guarded action is settled done WITHOUT performing a real
     # external write (fake provider, read-only stance; BROWSER_ALLOW_WRITES
     # default false) — the plane, the re-checks, and the receipt are what is
@@ -728,3 +771,49 @@ def execute_approved_step(org_id: str, action_id: str, action: dict) -> dict:
                  "screenshot_digest": post_obs.get("screenshot_digest", "")},
     )
     return {"ok": True, "receipt": "browser_b1", "verification": verification}
+
+
+def _maybe_execute_demo_write(org_id, action_id, permission, row, provider,
+                              session_id):
+    """Perform the Northstar follow-up product write, or None when this is not
+    a demo-write action. Adds an allowed-domain re-check, runs the product
+    create (idempotent), re-observes via the provider, verifies the visible
+    result, and settles the canonical action with the safe product receipt."""
+    from .. import ledger
+
+    if not permission.get("northstar_followup"):
+        return None
+    from .. import demo_mvp
+
+    if not demo_mvp.write_enabled():
+        # The action was minted under the demo flag but the write flag is now
+        # off — refuse rather than fall through to a silent no-op write.
+        ledger.set_action_status(action_id, "failed",
+                                 "northstar demo write disabled", org_id=org_id)
+        return {"ok": False, "reason": "demo_write_disabled"}
+    # ALLOWED-DOMAIN re-check at execution time: the session must still be on an
+    # allowlisted Northstar page.
+    from ..demo_mvp import manifest as demo_manifest
+    from . import policy as _policy
+
+    allowed = _policy.allowed_domain_set(demo_manifest.allowed_domains())
+    try:
+        cur = _policy.sanitize_observation(provider.observe(row["provider_ref"]))
+    except Exception:  # noqa: BLE001
+        cur = {"url": ""}
+    if not _policy.check_navigation_target(cur.get("url", ""), allowed)["ok"]:
+        ledger.set_action_status(action_id, "failed",
+                                 "browser off allowed domain", org_id=org_id)
+        return {"ok": False, "reason": "domain_blocked"}
+
+    from ..demo_mvp import execute as demo_execute
+
+    result = demo_execute.execute_followup(org_id, action_id, permission, row)
+    ledger.set_action_status(
+        action_id, "done", "northstar follow-up task created", org_id=org_id,
+        receipt={"kind": "browser", "route": "browser",
+                 "session_id": session_id,
+                 "verification": result.get("verification"),
+                 "product": result.get("receipt")})
+    return {"ok": True, "receipt": "northstar",
+            "verification": result.get("verification")}

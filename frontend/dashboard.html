@@ -2527,22 +2527,68 @@
   var BD_CHIP={starting:"ready",ready:"ready",observing:"run",navigating:"run",
     explaining:"run",paused:"",waiting_approval:"attn",human_takeover:"attn",
     verifying:"run",completed:"ok",failed:"bad",expired:"bad",closed:""};
+  // The adapter is the ONLY browser seam. Two modes:
+  //  * fixture mode (?browser_demo_fixture=<state> or window._bdOverride) —
+  //    explicit developer/test preview; deterministic, no network.
+  //  * real mode — reads canonical session + guarded-action state from the
+  //    backend demo status endpoint (GET /dashboard/demo/northstar/sessions/
+  //    {id}), which returns ONLY safe public fields. No browser/planning/policy
+  //    logic lives here; provider ids/urls, screenshots, planner reasoning and
+  //    raw page structure are never fetched or shown.
+  // Controls the backend does NOT implement (pause/resume/take control) are
+  // disabled honestly with a tooltip — never simulated.
+  var BROWSER_DEMO_UNSUPPORTED={pause:1,resume:1,takeover:1};
   var BrowserDemoSource=(function(){
     function fixture(){
       var state=window._bdOverride||query.get("browser_demo_fixture")||"";
       if(BROWSER_DEMO_STATES.indexOf(state)<0||state==="unavailable") return null;
       var av=(DATA&&DATA.avatars&&DATA.avatars[0])||{id:"laura",name:"Laura"};
       return {
-        state:state,
-        avatar_id:av.id,
-        page_title:"Acme CRM — Customer accounts",
-        checkpoint:"Step 2 of 5 · Open the customer account",
+        mode:"fixture", state:state, avatar_id:av.id,
+        page_title:"Northstar — Acme Robotics",
+        checkpoint:"Fixture preview · "+state,
         started_at:(window._bdStartedAt=window._bdStartedAt||Date.now()/1000-240),
-        action_id:""   // set by the real contract when an approval is pending
+        action_id:""
       };
     }
-    return {current:fixture};
+    // Real mode: map the backend session status to a presentation state. The
+    // status endpoint returns {session:{id,state,avatar_key,...},
+    // presentation_event, pending_action_id}. We surface ONLY those.
+    function fromStatus(s){
+      if(!s||!s.session) return null;
+      var ev=s.presentation_event||"ready";
+      if(BROWSER_DEMO_STATES.indexOf(ev)<0) ev="ready";
+      return {
+        mode:"real", state:ev, avatar_id:s.session.avatar_key||"laura",
+        page_title:"Northstar demonstration",
+        checkpoint:(s.session.meeting_ref?("Meeting "+s.session.meeting_ref):""),
+        started_at:s.session.created_at||(Date.now()/1000),
+        action_id:s.pending_action_id||""
+      };
+    }
+    function current(){
+      // Fixture mode wins when explicitly requested (dev/test).
+      var fx=fixture(); if(fx) return fx;
+      return window._bdStatus?fromStatus(window._bdStatus):null;
+    }
+    // Refresh real status for a known session id (set when a demo starts).
+    function refresh(){
+      var sid=window._bdSessionId; if(!sid) return Promise.resolve(null);
+      return bFetchDemo("sessions/"+encodeURIComponent(sid)).then(function(r){
+        window._bdStatus=r&&r.ok?r.j:null; return window._bdStatus;
+      });
+    }
+    return {current:current, refresh:refresh, fromStatus:fromStatus};
   })();
+  // Narrow fetch to the demo dashboard twin (cookie + same-origin; 404 when
+  // the demo flag is off — the panel then simply stays empty).
+  function bFetchDemo(path){
+    return fetch("/dashboard/demo/northstar/"+path,{credentials:"same-origin",
+      headers:{"Accept":"application/json"}})
+      .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};},
+        function(){return {ok:r.ok,j:{}};});})
+      .catch(function(){return {ok:false,j:{}};});
+  }
   function bdElapsed(startedAt){
     var s=Math.max(0,Math.round(Date.now()/1000-(startedAt||0)));
     return Math.floor(s/60)+":"+("0"+(s%60)).slice(-2);
@@ -2552,13 +2598,24 @@
     var demo=BrowserDemoSource.current();
     if(!demo){ box.innerHTML=""; return; }
     var st=demo.state, terminal=["completed","failed","expired","closed"].indexOf(st)>=0;
+    var real=demo.mode==="real";
+    // Controls the BACKEND does not implement are shown disabled with an honest
+    // tooltip in real mode (never simulated). In fixture mode they drive local
+    // preview transitions only.
+    function unsupported(k){ return real && BROWSER_DEMO_UNSUPPORTED[k]; }
+    function ctlBtn(k,label,cls){
+      var dis=unsupported(k);
+      return '<button class="btn'+(cls?" "+cls:"")+'" data-bd="'+k+'"'+
+        (dis?' disabled title="Not available yet — the browser backend does not support this control"':'')+
+        '>'+esc(label)+'</button>';
+    }
     var ctl="";
     if(!terminal){
-      if(st==="paused"||st==="human_takeover") ctl+='<button class="btn" data-bd="resume">Resume</button>';
-      else ctl+='<button class="btn" data-bd="pause">Pause</button>';
+      if(st==="paused"||st==="human_takeover") ctl+=ctlBtn("resume","Resume");
+      else ctl+=ctlBtn("pause","Pause");
       if(st==="waiting_approval") ctl+='<button class="btn primary" data-bd="action">Open related action</button>';
-      if(st!=="human_takeover") ctl+='<button class="btn" data-bd="takeover">Take control</button>';
-      ctl+='<button class="btn danger" data-bd="stop">Stop</button>';
+      if(st!=="human_takeover") ctl+=ctlBtn("takeover","Take control");
+      ctl+=ctlBtn("stop","Stop","danger");
     }
     var viewMsg=st==="starting"?"The live view appears here once the demo starts."
       :terminal?(BD_ACTIVITY[st]||"Demo ended.")
@@ -2579,13 +2636,33 @@
       '</div></div></div>';
     wireAvatarImages();
     $$("#browser-demo [data-bd]").forEach(function(b){ b.addEventListener("click",function(){
+      if(b.disabled) return;
       var k=b.getAttribute("data-bd");
+      if(k==="action"){
+        // Jump to the exact pending canonical action (never a browser-owned
+        // approval — the Action Center owns the decision).
+        if(demo.action_id) window._acFocusId=demo.action_id;
+        acBucket="attn"; go("actions"); return;
+      }
+      if(demo.mode==="real"){
+        // Real mode: Stop closes the canonical session; unsupported controls
+        // are already disabled. Everything else is a status refresh.
+        if(k==="stop" && window._bdSessionId){
+          fetch("/dashboard/browser/sessions/"+encodeURIComponent(window._bdSessionId)+"/close",
+            {method:"POST",credentials:"same-origin",
+             headers:{"Content-Type":"application/json"},body:"{}"})
+            .then(function(){ return BrowserDemoSource.refresh(); })
+            .then(renderBrowserDemo);
+          return;
+        }
+        BrowserDemoSource.refresh().then(renderBrowserDemo);
+        return;
+      }
       // Fixture-local transitions only — deterministic, no network, no APIs.
       if(k==="pause") window._bdOverride="paused";
       else if(k==="resume") window._bdOverride="observing";
       else if(k==="takeover") window._bdOverride="human_takeover";
       else if(k==="stop") window._bdOverride="closed";
-      else if(k==="action"){ acBucket="attn"; go("actions"); return; }
       renderBrowserDemo();
     }); });
   }

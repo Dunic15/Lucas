@@ -342,6 +342,19 @@ class Settings(BaseSettings):
     browser_coord_max_duration_seconds: int = 120
     browser_coord_max_model_calls: int = 16
 
+    # ── Northstar MVP demo (final integration) ──
+    # The one-company demo that wires Browser B1 + ContextResolver + the
+    # Northstar synthetic product into the meeting flow. OFF (default) ⇒ the
+    # demo router 404s, the northstar browser provider is never selected, and
+    # nothing here runs — production behaviour is unchanged. Needs the browser
+    # operator + control plane on. See docs/product/NORTHSTAR-MVP.md.
+    northstar_demo_enabled: bool = False
+    # The ONE controlled synthetic write (create_followup_task). Arbitrary
+    # browser writes stay disabled (BROWSER_ALLOW_WRITES=false); this dedicated
+    # flag enables ONLY the Northstar follow-up task to be minted as a canonical
+    # action and executed on approval.
+    northstar_demo_write_enabled: bool = False
+
     # ── Data Foundation (DF0-DF1 — accepted contract v5) ──
     # Normalized company data over connectors: SourceEnvelopes, fail-closed
     # mirrored ACLs, lineage, the ContextResolver. OFF (default) ⇒ tables

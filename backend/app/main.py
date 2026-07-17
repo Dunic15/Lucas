@@ -301,6 +301,9 @@ app.include_router(df_router.router)  # /org/data + dashboard twin (DF0-DF1)
 from .browser import router as browser_router  # noqa: E402
 
 app.include_router(browser_router.router)  # /org/browser + dashboard twin (B0)
+from .demo_mvp import router as demo_router  # noqa: E402
+
+app.include_router(demo_router.router)  # /org/demo + dashboard twin (Northstar MVP)
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).
