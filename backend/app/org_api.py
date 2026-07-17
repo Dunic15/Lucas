@@ -252,9 +252,14 @@ def _execute_route(
         "native" if executor.enabled() and executor.from_typed(action.get("typed")) else "cedric"
     )
     if route == "cedric":
-        # tenancy-v4 dispatch-action is the sanctioned path once THAT contract
-        # is accepted; until then the approval stands recorded and the
-        # orchestrator's own loop picks the action up from action.requested.
+        # handshake B2: hand the approved action to Cedric for execution
+        # through its connectors (dispatch-action, pre_approved). Terminal
+        # status comes BACK through the /status door when Cedric executes;
+        # until then the canonical state is approved. Soft: a missing B-side
+        # receiver leaves the action approved for the legacy pickup loop.
+        from .cedric import callback as cedric_callback
+
+        cedric_callback.dispatch_action(org, action)
         return None, "approved", False
     exec_action = executor.from_typed(action.get("typed"))
     if exec_action is None or not executor.handles(exec_action):

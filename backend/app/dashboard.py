@@ -2142,6 +2142,28 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
                 )
                 executed = True
                 new_status = "done" if result.get("ok") else "failed"
+    # ── route=cedric: hand the approved action to the orchestrator ──
+    # handshake B2 (agreed action-lifecycle contract): anything the native
+    # executor did NOT run — untyped items, non-native types, and
+    # capability-blocked actions (the one sanctioned native→cedric re-route)
+    # — is dispatched to Cedric pre_approved, to execute through its
+    # connectors. Terminal status flows back via /org/actions/{id}/status.
+    # Soft: a missing B-side receiver leaves the action approved and Cedric's
+    # legacy action.requested loop remains the pickup path.
+    dispatched = False
+    if not executed:
+        from .cedric import callback as cedric_callback  # lazy, cycle-free
+
+        dispatch = await run_in_threadpool(
+            cedric_callback.dispatch_action, org, action,
+            str(user.get("user_id") or ""),
+        )
+        dispatched = bool(dispatch.get("ok"))
+        if dispatched:
+            await run_in_threadpool(
+                ledger.set_action_status, aid, "approved",
+                "approved via dashboard · routed to Cedric", org_id=org,
+            )
     await run_in_threadpool(
         lambda: ledger.set_action_decision_result(
             aid, org_id=org, new_status=new_status,
@@ -2158,6 +2180,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             "action_id": aid,
             "approved": True,
             "executed": executed,
+            "dispatched": dispatched,
             "capability_blocked": capability_blocked,
             "typed": bool(typed),
             "execution_mode": settings.execution_mode,

@@ -1719,9 +1719,13 @@
     // (POST /dashboard/actions/{id}/approve); with the executor flag OFF the
     // endpoint marks it approved and runs nothing (handled in approveAction).
     function apprBtn(a){
-      if(!a.typed||!a.action_id) return "";
+      if(!a.action_id) return "";
       if(a.execution&&(a.execution.status==="done"||a.execution.status==="rejected")) return "";  // terminal → pill shows
-      return '<button class="btn-appr" data-approve="'+esc(a.action_id)+'">Approve &amp; run</button>';
+      // Typed actions run NATIVELY on approve ("Approve & run"); everything
+      // else — untyped items, UNASSIGNED triage, non-native types — routes to
+      // Cedric for execution through its connectors on approve.
+      return '<button class="btn-appr" data-approve="'+esc(a.action_id)+'">'+
+        (a.typed?"Approve &amp; run":"Approve → Cedric")+'</button>';
     }
     // Per-row "Reject" — approve's mirror (POST /dashboard/actions/{id}/reject).
     // Marks the action rejected (terminal) in the same provenance channel;
@@ -1777,11 +1781,18 @@
           }
           if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
           var j=res.j, st=j.status||null;
-          // Flag OFF (or nothing ran): captured + marked approved, but not
-          // executed — say so plainly rather than surfacing it as an error.
+          // Routed to Cedric: approved here, executing over there — the row's
+          // chip flips to done/failed when Cedric reports back on the status door.
+          if(!j.executed&&j.dispatched){
+            btn.outerHTML='<span class="exec approved" title="Approved — Cedric is executing this through its connectors; the receipt lands here when it reports back.">approved · with Cedric</span>';
+            toast("Approved — routed to Cedric for execution.");
+            return;
+          }
+          // Flag OFF (or nothing ran, no Cedric link): captured + marked
+          // approved, but not executed — say so plainly, not as an error.
           if(!j.executed){
-            btn.outerHTML='<span class="exec approved" title="Marked approved. Turn on the native executor to run it automatically.">captured · execution off</span>';
-            toast("Action approved — captured (native execution is off).");
+            btn.outerHTML='<span class="exec approved" title="Marked approved. Connect Cedric (Slack agent) or turn on the native executor to run it automatically.">approved · awaiting executor</span>';
+            toast("Action approved — captured (no executor ran it).");
             return;
           }
           // Executed: render the SAME receipt the row uses (Done ↗ / failed pill).
