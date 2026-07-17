@@ -131,6 +131,14 @@ class Settings(BaseSettings):
     recall_transcription_provider: str = "recallai"
     deepgram_model: str = "nova-3"
     deepgram_language: str = "multi"
+    # Deepgram endpointing (ms of silence before a FINAL is emitted). Recall
+    # forwards deepgram_streaming config fields to Deepgram, so this reaches the
+    # streaming API's `endpointing` param. 0 = don't send (Deepgram default).
+    # Lower = finals land sooner after the speaker stops = Laura reacts sooner;
+    # too low risks finals splitting mid-sentence on brief intra-sentence pauses
+    # (the brain then answers half a question). This delay stacks with the
+    # deference wait, which starts only after the final arrives.
+    deepgram_endpointing_ms: int = 0
     recall_transcription_mode: str = "prioritize_low_latency"
     recall_transcription_language_code: str = "en"
     elevenlabs_transcription_model: str = "scribe_v2_realtime"
