@@ -105,6 +105,27 @@ def ingest_document(org_id: str, document_id: str) -> None:
     )
     if result.get("error"):
         raise RuntimeError(str(result["error"]))
+    # Data Foundation upload connector (contract v5): every publish ALSO
+    # upserts the normalized SourceEnvelope (acl_mode=org_default, explicit).
+    # Same-flow so an ingest retry is idempotent by checksum; failures raise
+    # and the job retries the whole document.
+    from .. import datafoundation
+
+    if datafoundation.enabled():
+        from ..datafoundation import connectors as df_connectors
+        from ..datafoundation import dal as df_dal
+
+        connector = df_dal.ensure_connector(
+            org_id, "upload", "Company Brain uploads"
+        )
+        source = dal.get_source(org_id, doc["source_id"]) or {}
+        env = df_connectors.envelope_for_document(
+            org_id, {"id": doc["source_id"], **source},
+            {**doc, "latest_version": result.get("version", 1)},
+        )
+        if env is not None:
+            df_dal.commit_batch(org_id, connector["id"], [env],
+                                new_cursor=None)
 
 
 def _avatars_with_index_files(org_id: str) -> set[str]:

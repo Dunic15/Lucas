@@ -215,6 +215,14 @@ async def _lifespan(app: FastAPI):
                     await run_in_threadpool(
                         knowledge_ingest.refresh_local_indexes
                     )
+                    # Data Foundation sync runs ride the same tick when the
+                    # flag is on (claim/lease — safe on every instance).
+                    from . import datafoundation
+
+                    if datafoundation.enabled():
+                        from .datafoundation import sync as df_sync
+
+                        await run_in_threadpool(df_sync.process_due)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # never log content, filenames, or org text
@@ -261,6 +269,9 @@ app.include_router(knowledge_router.router)  # /org/knowledge + dashboard twin (
 from . import org_avatars_api  # noqa: E402
 
 app.include_router(org_avatars_api.router)  # /org/avatars + Avatar Studio twin (M2)
+from .datafoundation import router as df_router  # noqa: E402
+
+app.include_router(df_router.router)  # /org/data + dashboard twin (DF0-DF1)
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).

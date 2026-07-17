@@ -294,6 +294,16 @@ class Settings(BaseSettings):
     # 60s cache TTL.
     org_avatar_overlays_enabled: bool = False
 
+    # ── Data Foundation (DF0-DF1 — accepted contract v5) ──
+    # Normalized company data over connectors: SourceEnvelopes, fail-closed
+    # mirrored ACLs, lineage, the ContextResolver. OFF (default) ⇒ tables
+    # inert, zero runtime references, M2 retrieval byte-identical. Needs the
+    # control plane; body-bearing envelopes additionally use the Company
+    # Brain pipeline as a library (quarantining when that flag is off).
+    # Rollout: alembic 0012 -> this flag -> upload backfill -> Drive opt-in.
+    # Rollback = flag off (migration additive-only).
+    data_foundation_enabled: bool = False
+
     # ── Company Brain (durable org knowledge — M1) ──
     # Master switch for the durable knowledge plane: org-owned sources,
     # ingestion jobs, and the /org/knowledge API. OFF (default) means no new

@@ -245,6 +245,55 @@ avatar (`avatars/laura/about/` + re-ingest).
 
 ---
 
+## DF0–DF1 — Company Data Foundation (IMPLEMENTED — branch claude/df0-df1-data-foundation)
+
+**Contract.** Accepted Handshake contract v5 (`hsk_con_nqrcynzgg746jrhkq647`)
+plus six binding acceptance clarifications — the governing text is recorded in
+the session and mirrored in the PR description. Laura is the sole owner of the
+Data Foundation and the ContextResolver; Cedric is not in the DF path.
+
+**What shipped.** Migration `0012_data_foundation`: `df_connectors` (status
+incl. `needs_reconnect`/`acl_incomplete`; `trusted_email_issuer` gate),
+`df_source_records` (stable identity + head state, `acl_mode` DEFAULT
+`unknown` = fail-closed) / `df_source_record_versions` (immutable, deferrable
+composite circular head FK), `df_connector_cursors` (COMMITTED cursor,
+advanced only inside the accepted-batch transaction), `df_sync_runs`
+(`parked`/`dead_letter` after the retry ladder), `df_quarantine` (**no runtime
+DELETE grant** — open rows structurally undeletable; backpressure parks
+ingestion at 1000 open rows) + `df_purge_audit` (two-phase payload cleanup),
+`df_identities` / `df_principal_bindings` (audited; automatic binding only
+for verified emails from `trusted_email_issuer` connectors) /
+`df_identity_edges` / typed `df_acl_entries` (surrogate PK + partial
+uniques). Purges happen ONLY through `laura_private.purge_quarantine` /
+`purge_record_versions` — SECURITY DEFINER, org verified against the
+transaction context, cutoff clamped server-side by `orgs.retention_days`.
+`backend/app/datafoundation/`: envelope validation (fail-closed `acl_mode`),
+DAL (advisory-locked single-winner upserts; body-checksum dedupe never
+suppresses metadata/ACL/deletion changes; tombstone/resurrection lineage),
+connectors (`upload` wrapping the M1 publish flow + backfill; **network-free
+fake Drive** speaking the real Changes-page-token protocol — watermark
+incrementals are forbidden; other kinds explicitly deferred), sync worker,
+ContextResolver (six-way intersection incl. connector eligibility; degraded
+responses preserve the EXACT M2 mask and never widen; inaccessible-record
+counts only behind the admin debug route), `/org/data/*` + strict
+`/dashboard/data/*` twin (org/principal from authenticated context only —
+client `org_id` is a 403 on mismatch). The live per-org index contains
+org_default content BY CONSTRUCTION (`chunks_for_avatar` exclusion, fail
+closed).
+
+**Deployment order (binding).** `alembic upgrade head` (0012) →
+`DATA_FOUNDATION_ENABLED=true` → upload backfill (`POST
+/dashboard/data/backfill`) → per-org Drive opt-in. Rollback = flag off; the
+migration is additive-only and `downgrade` raises.
+
+**Deferred from DF.** Real Drive HTTP client (credential-gated; the fake
+speaks the identical protocol), slack/notion/crm connectors (kind rows legal,
+sync parks `not_implemented`), materialized container tree (Studio feedback
+loop), cross-org retention scheduling (per-org endpoint + worker piggyback
+today).
+
+---
+
 ## M3 — Skill Definition v1 + runtime
 
 **Goal.** A declarative, versioned Skill: trigger + typed inputs + a linear
