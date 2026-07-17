@@ -546,6 +546,11 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
 
 def _canonical_action_view(org: str, action_id: str) -> dict | None:
     """Assemble the canonical Action for one org, or None when invisible."""
+    from . import action_reconcile
+
+    # Throttled stale-executing settle first, so the view never shows a claim
+    # held by a process that died mid-call (async-dispatch safety).
+    action_reconcile.maybe_reconcile(org)
     found = _org_action(org, action_id)
     durable = ledger.get_durable_action(action_id, org_id=org)
     if found is None and durable is None:

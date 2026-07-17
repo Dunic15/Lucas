@@ -610,6 +610,26 @@ def due_orgs(limit: int = 20) -> list[str]:
     return [str(r[0]) for r in rows]
 
 
+def knowledge_epoch(org_id: str) -> int:
+    """Monotonic retrievability epoch for one org: the max id of its
+    rebuild_index jobs. Every operation that changes what an avatar may
+    retrieve (ingest publish, assign/unassign, source delete) enqueues one,
+    job rows are never deleted, and bigint identities only grow — so a local
+    index file stamped with an older epoch is provably stale, no matter which
+    App Runner instance wrote it."""
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                "SELECT COALESCE(MAX(id), 0) FROM knowledge_sync_jobs "
+                "WHERE org_id=:org_id AND kind='rebuild_index'"
+            ),
+            {"org_id": org_id},
+        ).first()
+    return int(row[0] if row else 0)
+
+
 def index_orgs(limit: int = 200) -> list[str]:
     engine = _engine()
     with engine.connect() as conn:
