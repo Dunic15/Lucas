@@ -62,6 +62,9 @@ def spoken(monkeypatch):
 
 @pytest.fixture
 def approved(monkeypatch):
+    # These tests exercise the voice-consent flavour of the clarify loop;
+    # the code default is approval-first (voice_consent_writes False).
+    monkeypatch.setattr(settings, "voice_consent_writes", True)
     calls: list[dict] = []
     monkeypatch.setattr(
         main_module.cedric, "voice_approve",
@@ -180,6 +183,26 @@ def test_new_ask_resolves_stale_pending(client, recall_stubbed, spoken, approved
     assert len(approved) == 2
     texts = " | ".join(a["action"] for a in approved).lower()
     assert "first thing" in texts and "email marco" in texts
+
+
+def test_default_resolution_queues_for_approval(
+    client, recall_stubbed, spoken, monkeypatch
+):
+    """Code default (approval-first, 2026-07-18): the clarify answer resolves
+    the capture into the approval QUEUE — no voice approval fires, and the
+    spoken ack points at the dashboard, not at Cedric running it."""
+    monkeypatch.setattr(
+        main_module.cedric, "voice_approve",
+        lambda *a: pytest.fail("default must not voice-approve"),
+    )
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    _say(client, bot_id, "Cedric, please create a task called help ducho")
+    session = store.get(bot_id)
+    _age_clarify(session)
+    body = _say(client, bot_id, "Dana should take it, due Monday")
+    assert body.get("clarified") is True
+    assert spoken[-1] in main_module._QUEUE_LINES + main_module._QUEUE_LINES_IT
+    assert len(session.queued_actions) == 1  # captured, waiting for the click
 
 
 def test_flag_off_keeps_immediate_confirmation(

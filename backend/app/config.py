@@ -820,13 +820,15 @@ class Settings(BaseSettings):
     # best-effort, and with no discovered tools the live path is byte-identical
     # to the bridge being off. Set false to hard-disable.
     cedric_mcp_enabled: bool = True
-    # Voice consent (product decision 2026-07-17): an action captured because
-    # someone ADDRESSED the avatar by name mid-meeting ("Petra, create a task
-    # for X") is auto-approved on the canonical channel (decided_via='voice')
-    # and action.approved fires to Cedric immediately — the spoken, addressed
-    # ask IS the approval. Actions merely inferred at finalize still queue for
-    # a human click. false = every action waits for a click (old behaviour).
-    voice_consent_writes: bool = True
+    # Voice consent: when TRUE, an action captured because someone ADDRESSED
+    # the avatar by name mid-meeting ("Petra, create a task for X") is
+    # auto-approved on the canonical channel (decided_via='voice') and
+    # action.approved fires to Cedric immediately — the spoken, addressed
+    # ask IS the approval (product decision 2026-07-17). Default FALSE
+    # (owner ask 2026-07-18, approval-first): every action — addressed or
+    # inferred — waits for an explicit approval (dashboard/Slack/chat)
+    # before anything executes. VOICE_CONSENT_WRITES=true opts back in.
+    voice_consent_writes: bool = False
     # Clarify before create (owner ask 2026-07-17): when an addressed create-
     # ask is missing the details a well-filed task needs (owner / project /
     # due), the avatar asks ONE clarifying question and holds the approval

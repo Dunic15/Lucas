@@ -3729,13 +3729,13 @@ _STREAM_RECOVERY_LINES_IT = [
 # follow-up after the call, never execution. Fixed lines so they're TTS-
 # prewarmed — the confirmation must land as fast as an ack.
 _QUEUE_LINES = [
-    "Got it — I'll queue that for approval right after the call.",
-    "Noted — I'll line that up for approval once we wrap.",
-    "On it — it goes out for approval right after this meeting.",
+    "Got it — it'll be on the dashboard for your approval right after the call.",
+    "Noted — I'll line it up on the dashboard for approval once we wrap.",
+    "On it — it goes to the dashboard for your approval right after this meeting.",
 ]
 _QUEUE_LINES_IT = [
-    "Ricevuto — lo metto in coda per l'approvazione appena finiamo.",
-    "Segnato — parte per l'approvazione subito dopo la call.",
+    "Ricevuto — lo trovi in dashboard per l'approvazione appena finiamo.",
+    "Segnato — va in dashboard per l'approvazione subito dopo la call.",
 ]
 
 # Voice-consent confirmations (settings.voice_consent_writes): the addressed

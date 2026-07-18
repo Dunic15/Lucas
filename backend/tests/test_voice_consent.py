@@ -141,6 +141,7 @@ def test_addressed_ask_voice_approves_and_says_so(
     client, recall_stubbed, spoken, monkeypatch
 ):
     monkeypatch.setattr(settings, "clarify_before_create", False)
+    monkeypatch.setattr(settings, "voice_consent_writes", True)  # opt-in flavour
     approved: list[dict] = []
     monkeypatch.setattr(
         main_module.cedric, "voice_approve",
@@ -156,6 +157,15 @@ def test_addressed_ask_voice_approves_and_says_so(
     assert "create a task" in approved[0]["action"].lower()
     voice_pool = main_module._VOICE_LINES + main_module._VOICE_LINES_IT
     assert spoken and spoken[-1] in voice_pool
+
+
+def test_voice_consent_default_is_off():
+    """The approval-first contract (owner ask 2026-07-18): by default nothing
+    executes on a spoken ask alone — every action waits for an explicit
+    approval. Voice consent is the env opt-in, never the default."""
+    from app.config import Settings
+
+    assert Settings.model_fields["voice_consent_writes"].default is False
 
 
 def test_flag_off_keeps_the_queue_flow(client, recall_stubbed, spoken, monkeypatch):

@@ -393,6 +393,7 @@ def test_live_route_async_ask_captures_and_confirms(
     client, recall_stubbed, spoken, monkeypatch
 ):
     monkeypatch.setattr(settings, "clarify_before_create", False)  # legacy window mechanics
+    monkeypatch.setattr(settings, "voice_consent_writes", True)  # opt-in flavour
     fired: list[tuple] = []
 
     # Capture on the SYNCHRONOUS seam (cedric.notify_action_requested, called
@@ -417,8 +418,8 @@ def test_live_route_async_ask_captures_and_confirms(
     assert "cedric" not in session.queued_actions[0]["action"].lower()
 
     # The spoken reply is the fixed confirmation (instant, TTS-prewarmed pool).
-    # Voice consent is the default (2026-07-17): the addressed ask is approved
-    # on the spot, so the confirmation comes from the voice pool.
+    # Voice consent is opted in above, so the addressed ask is approved on
+    # the spot and the confirmation comes from the voice pool.
     voice_pool = main_module._VOICE_LINES + main_module._VOICE_LINES_IT
     assert spoken and spoken[-1] in voice_pool
 
