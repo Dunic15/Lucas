@@ -4,7 +4,9 @@ Three seams, all key-free (sqlite in tmp_path, Cedric faked at the callback
 layer):
   1. POST /org/chat        — Cedric posts text / action cards (machine gate,
                              org-scoped like every /org door).
-  2. GET/POST /dashboard/chat — the human side: login + same-origin required;
+  2. GET/POST /dashboard/chat — the human side: same four-worlds gate as
+                             /dashboard/summary (cookie user / per-org bearer /
+                             global bearer / key-free demo) + same-origin POST;
                              GET enriches referenced action cards with live
                              typed/execution state; POST stores then relays
                              chat.message over the signed events door.
@@ -126,9 +128,26 @@ def test_org_chat_requires_auth_when_token_set(client, monkeypatch):
 
 
 # ──────────────────── human side: /dashboard/chat ────────────────────
-def test_dashboard_chat_requires_login(client):
+def test_dashboard_chat_requires_login_when_auth_enabled(client, monkeypatch):
+    """A login-gated deployment still gates chat for anonymous browsers."""
+    monkeypatch.setattr(settings, "google_calendar_client_id", "cid")
+    monkeypatch.setattr(settings, "google_calendar_client_secret", "sec")
     assert client.get("/dashboard/chat").status_code == 401
     assert client.post("/dashboard/chat", json={"text": "hi"}).status_code == 401
+
+
+def test_dashboard_chat_keyfree_maps_to_demo_org(client, monkeypatch):
+    """Key-free world: chat serves the demo org like every other dashboard
+    surface (a blanket 401 here left the whole tab dead on 'Loading…' —
+    live repro 2026-07-19). Same four-worlds gate as /dashboard/summary."""
+    monkeypatch.setattr(cedric_callback, "send_action_event", lambda *a: False)
+    listing = client.get("/dashboard/chat")
+    assert listing.status_code == 200
+    assert listing.json()["messages"] == []
+    resp = client.post("/dashboard/chat", json={"text": "hi Cedric"})
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    row = store.list_chat_messages(settings.demo_org_id)[-1]
+    assert row["body"] == "hi Cedric" and row["sender"] == "user"
 
 
 def test_dashboard_chat_send_stores_and_relays(client, monkeypatch):

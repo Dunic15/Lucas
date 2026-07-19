@@ -3403,13 +3403,15 @@
       });
     });
   }
-})();
 
 // ── Chat view: the Cedric channel. Cedric posts text + action cards over
 // POST /org/chat; the human approves/rejects INLINE — those buttons hit the
 // SAME canonical dashboard doors as the meetings table, so every decision
 // still converges on the one approval record. Sending relays chat.message
-// to Cedric over the signed per-org events door. ──
+// to Cedric over the signed per-org events door.
+// NOTE: this block must stay INSIDE the main IIFE — it uses its private
+// helpers ($, esc, toast, headers); outside it dies on a ReferenceError
+// and the whole chat view goes dead (live repro 2026-07-19). ──
 (function(){
   var log=$("#chat-log"), after=0, acts={}, loaded=false, inflight=false;
 
@@ -3447,7 +3449,7 @@
       .then(function(r){ return r.json(); })
       .then(function(d){
         inflight=false;
-        if(d.error){ return; }
+        if(d.error){ var e0=$("#chat-empty"); if(e0&&!loaded) e0.textContent="Chat unavailable: "+d.error; return; }
         Object.keys(d.actions||{}).forEach(function(k){ acts[k]=d.actions[k]; });
         $("#chat-banner").hidden=(d.relay_configured!==false);
         var msgs=d.messages||[];
@@ -3462,7 +3464,7 @@
           log.scrollTop=log.scrollHeight;
         }
       })
-      .catch(function(){ inflight=false; });
+      .catch(function(){ inflight=false; var e1=$("#chat-empty"); if(e1&&!loaded) e1.textContent="Chat unreachable — retrying…"; });
   }
   // Inline decide — same doors as the meetings table, chat just renders them.
   log.addEventListener("click",function(e){
@@ -3513,6 +3515,7 @@
     load();
   },4000);
   load();
+})();
 })();
 </script>
 </body>

@@ -2312,6 +2312,25 @@ async def reject_action(action_id: str, request: Request) -> JSONResponse:
 # ── chat channel (org ↔ Cedric — approvals happen HERE, not in Slack) ──
 
 
+def _chat_caller_org(request: Request):
+    """Resolve the chat caller to (org, user|None) across the same four worlds
+    as /dashboard/summary: cookie user, per-org machine bearer, global bearer,
+    key-free demo. Returns (JSONResponse, None) when the caller must log in.
+    Chat rows are per-org, so the unscoped worlds map to the demo org — the
+    same tenant their meetings and actions already land in."""
+    from . import cedric  # local import, same reason as auth.gate's
+
+    user = auth.current_user(request)
+    if user is not None:
+        return user["org_id"], user
+    machine_org = cedric.resolve_machine_org(request)
+    if machine_org is None:
+        if err := auth.gate(request):
+            return err, None
+        return settings.demo_org_id, None  # key-free demo / global bearer
+    return machine_org, None
+
+
 @router.get("/dashboard/chat")
 async def dashboard_chat_list(request: Request, after: int = 0) -> JSONResponse:
     """The org's chat with Cedric: messages after ``after`` (poll cursor) plus
@@ -2319,12 +2338,9 @@ async def dashboard_chat_list(request: Request, after: int = 0) -> JSONResponse:
     current truth (Approve & run / Reject before a decision, the receipt pill
     after), no matter when it was posted. Decisions never live in chat rows;
     they converge on the canonical approval channel like every other surface."""
-    user = auth.current_user(request)
-    if user is None:
-        if err := auth.gate(request):
-            return err
-        return JSONResponse({"error": "login required"}, status_code=401)
-    org = user["org_id"]
+    org, _user = _chat_caller_org(request)
+    if isinstance(org, JSONResponse):
+        return org
     messages = await run_in_threadpool(store.list_chat_messages, org, after)
     card_ids = sorted(
         {m["action_id"] for m in messages if m["kind"] == "action_card" and m["action_id"]}
@@ -2371,11 +2387,9 @@ async def dashboard_chat_post(request: Request) -> JSONResponse:
     response carries ``delivered`` so the UI can say honestly when Cedric
     didn't get it; the human just sends again). Never the raw transcript —
     this is the user's own typed text, capped like every chat row."""
-    user = auth.current_user(request)
-    if user is None:
-        if err := auth.gate(request):
-            return err
-        return JSONResponse({"error": "login required"}, status_code=401)
+    org, user = _chat_caller_org(request)
+    if isinstance(org, JSONResponse):
+        return org
     if not auth._same_origin(request):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     try:
@@ -2385,8 +2399,9 @@ async def dashboard_chat_post(request: Request) -> JSONResponse:
     text = str((body or {}).get("text") or "").strip()
     if not text:
         return JSONResponse({"error": "text is required"}, status_code=400)
-    org = user["org_id"]
-    label = str(user.get("name") or user.get("email") or "you")[:120]
+    label = str(
+        (user.get("name") or user.get("email") if user else "") or "you"
+    )[:120]
     row = await run_in_threadpool(
         lambda: store.add_chat_message(org, "user", body=text, sender_label=label)
     )
