@@ -48,7 +48,7 @@ def create_source(
                   :provider, :model, 512
                 )
                 RETURNING id::text, name, kind, status, drive_folder_id,
-                          extract(epoch from created_at) AS created_at
+                          extract(epoch from created_at)::float8 AS created_at
                 """
             ),
             {
@@ -72,7 +72,7 @@ def list_sources(org_id: str) -> list[dict[str, Any]]:
                 """
                 SELECT s.id::text, s.name, s.kind, s.status, s.drive_folder_id,
                        s.embedding_provider, s.embedding_model,
-                       extract(epoch from s.created_at) AS created_at,
+                       extract(epoch from s.created_at)::float8 AS created_at,
                        COUNT(d.id) FILTER (
                          WHERE d.status = 'published'
                        ) AS published_documents,
@@ -274,7 +274,7 @@ def list_documents(org_id: str, source_id: str) -> list[dict[str, Any]]:
             text(
                 """
                 SELECT d.id::text, d.filename, d.mime, d.size_bytes, d.status,
-                       d.error, extract(epoch from d.updated_at) AS updated_at,
+                       d.error, extract(epoch from d.updated_at)::float8 AS updated_at,
                        COALESCE(MAX(v.version), 0) AS latest_version
                 FROM knowledge_documents d
                 LEFT JOIN knowledge_document_versions v
@@ -773,7 +773,7 @@ def job_rows(org_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
                 """
                 SELECT j.id, j.source_id::text, j.document_id::text, j.kind,
                        j.status, j.attempts, j.last_error,
-                       extract(epoch from j.updated_at) AS updated_at
+                       extract(epoch from j.updated_at)::float8 AS updated_at
                 FROM knowledge_sync_jobs j
                 WHERE j.org_id=:org_id
                 ORDER BY j.created_at DESC, j.id DESC
