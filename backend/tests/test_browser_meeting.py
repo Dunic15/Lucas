@@ -187,3 +187,22 @@ def test_walkthrough_cancel_stops_immediately(monkeypatch):
 
 def test_walkthrough_cancelled_closing_is_silent():
     assert browser_meeting._CLOSING["cancelled"] == ""
+
+
+# ── scripted recipes (reliable how-to) ──────────────────────────────────────
+
+def test_recipe_exists_for_asana_tasks():
+    from app.browser import recipes
+    for task in ("create_task", "create_project", "tour"):
+        steps = recipes.recipe_for("asana", task)
+        assert steps and all("op" in s and "say" in s for s in steps), task
+    assert recipes.recipe_for("asana", "nope") is None
+    assert recipes.recipe_for("mystery", "create_task") is None
+
+
+def test_recipe_selector_alternates():
+    from app.browser import recipes
+    alts = recipes.selector_alternates("text=A || [aria-label='B'] || c")
+    assert alts == ["text=A", "[aria-label='B']", "c"]
+    assert recipes.selector_alternates("") == []
+

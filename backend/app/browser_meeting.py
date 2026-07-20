@@ -128,6 +128,24 @@ def run_walkthrough(org_id: str, session_id: str, *, site_label: str,
     ``on_narrate(line: str)`` is called once per action, BEFORE it happens, so
     the voice leads the on-screen click. The line is built from the operation
     only — never from page content."""
+    from .browser import operator, recipes
+
+    # 1) SCRIPTED recipe (reliable) when one exists for this task.
+    if recipes.recipe_for(site_label, task_key):
+        try:
+            result = operator.run_recipe(
+                org_id, session_id, site_label=site_label, task_key=task_key,
+                on_narrate=on_narrate, cancel=cancel, principal="meeting")
+            outcome = str(result.get("outcome") or "error")
+            closing = "" if outcome == "cancelled" else (
+                "That's the flow — I'll leave the actual change to you."
+                if outcome == "finished" else "")
+            return {"ok": outcome == "finished", "outcome": outcome,
+                    "closing": closing}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "outcome": type(exc).__name__, "closing": ""}
+
+    # 2) Fallback: the visual-planner walkthrough (open-ended, less reliable).
     goal = (_TASK_GOALS.get(site_label, {}) or {}).get(task_key, "")
     if not goal:
         return {"ok": False, "outcome": "unknown_task", "closing": ""}

@@ -116,7 +116,7 @@ _MISSING_PAGE = {
 
 
 class _State:
-    __slots__ = ("url", "history", "gone", "typed", "profile")
+    __slots__ = ("url", "history", "gone", "typed", "profile", "pointed")
 
     def __init__(self):
         self.url = _HOME
@@ -124,6 +124,7 @@ class _State:
         self.gone = False
         self.typed: dict[str, str] = {}
         self.profile = ""
+        self.pointed: list[str] = []
 
 
 class FakeProvider:
@@ -227,6 +228,18 @@ class FakeProvider:
                 state.url = el["href"]
                 state.history.append(el["href"])
                 break
+        return self._observe_state(state)
+
+    def point(self, provider_ref: str, selector: str) -> bool:
+        """Deterministic fake: records the point and always 'finds' the
+        control (recipes are validated against the real app, not the fake)."""
+        state = self._get(provider_ref)
+        state.pointed.append(selector)
+        return True
+
+    def reveal(self, provider_ref: str, selector: str) -> RawObservation:
+        state = self._get(provider_ref)
+        state.pointed.append(f"reveal:{selector}")
         return self._observe_state(state)
 
     def type_text(self, provider_ref: str, element_id: str,
