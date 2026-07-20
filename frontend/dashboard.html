@@ -3211,7 +3211,7 @@
         '.brdoc-meta{font-size:.78rem;color:var(--faint);margin-left:auto}'+
         '.brdoc-del{border:none;background:none;color:var(--faint);cursor:pointer;font-size:1rem;padding:3px 7px;border-radius:7px;line-height:1}'+
         '.brdoc-del:hover{color:#fff;background:var(--warn)}'+
-        '.brkg{margin-top:20px;padding:15px 16px;border:1px solid var(--line-soft);border-radius:14px;background:var(--panel-2)}'+
+        '.brkg{margin:16px 0;padding:15px 16px;border:1px solid var(--line-soft);border-left:3px solid var(--accent);border-radius:14px;background:var(--panel-2)}'+
         '.brkg-h{display:flex;align-items:center;gap:9px;font-size:.9rem;font-weight:600;color:var(--text)}'+
         '.brkg-chip{font-size:.72rem;font-weight:600;padding:2px 9px;border-radius:999px;border:1px solid var(--line);color:var(--faint)}'+
         '.brkg-chip.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}'+
@@ -3245,13 +3245,13 @@
             '<button class="btn" id="brconnect" title="Google Drive sync — coming soon">Connect Google Drive</button>'+
             '<span class="brstat">'+docReady+' ready'+(docPend?' · '+docPend+' indexing':'')+' for '+esc(avName)+'</span>'+
           '</div>'+
+          kgCard+
           '<div class="brpaste-box" id="brpaste-box" hidden>'+
             '<input type="text" id="brpaste-fn" placeholder="Title — e.g. Refund policy" aria-label="Title" />'+
             '<textarea id="brpaste-txt" rows="4" placeholder="Paste the text…" aria-label="Text"></textarea>'+
             '<button class="btn primary" id="brpaste-go">Add to '+esc(avName)+'</button>'+
           '</div>'+
           '<div class="brdocs">'+docList+'</div>'+
-          kgCard+
         '</div>';
 
       box.querySelectorAll("[data-brav]").forEach(function(b){ b.addEventListener("click",function(){ window._brainAvatar=b.getAttribute("data-brav"); loadBrain(true); }); });
