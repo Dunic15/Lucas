@@ -85,6 +85,22 @@ def _construct():
     graphiti-core imports are lazy so a deployment without the optional
     dependency (or with the feature off) pays nothing. Validated end-to-end
     against a real Neo4j Aura instance before shipping (see docs/GRAPHITI.md)."""
+    import os
+    import sys
+
+    from .config import REPO_ROOT
+
+    # graphiti-core is installed into a SIDECAR dir by the App Runner build,
+    # deliberately NOT via requirements.txt: adding it to the flat
+    # `pip install --target .` main install broke the App Runner boot (health
+    # check failed → rollback; incident 2026-07-20). Its deps are pure-Python
+    # but their presence in the boot-critical install crashed startup. Putting
+    # them in their own dir and adding it to sys.path ONLY here (lazy, feature-
+    # on) keeps the boot install byte-identical to the known-good one.
+    _libs = str(REPO_ROOT / "_graphiti_libs")
+    if os.path.isdir(_libs) and _libs not in sys.path:
+        sys.path.append(_libs)
+
     from graphiti_core import Graphiti  # type: ignore
     from graphiti_core.cross_encoder.client import CrossEncoderClient  # type: ignore
     from graphiti_core.embedder.client import EmbedderClient  # type: ignore
