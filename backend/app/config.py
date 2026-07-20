@@ -829,6 +829,13 @@ class Settings(BaseSettings):
     # inferred — waits for an explicit approval (dashboard/Slack/chat)
     # before anything executes. VOICE_CONSENT_WRITES=true opts back in.
     voice_consent_writes: bool = False
+    # Built-in Cedric for the dashboard chat (owner ask 2026-07-20): when NO
+    # per-org events door is configured (no external Cedric runtime), the
+    # brain provider answers chat messages AS Cedric — grounded in org state
+    # (actions, connections, meeting notes), never executing anything. With
+    # a relay configured the external Cedric owns replies and this is inert.
+    # false = messages only store (the old "nobody answers" banner returns).
+    cedric_chat_native_reply: bool = True
     # Clarify before create (owner ask 2026-07-17): when an addressed create-
     # ask is missing the details a well-filed task needs (owner / project /
     # due), the avatar asks ONE clarifying question and holds the approval

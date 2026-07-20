@@ -39,6 +39,10 @@ def client(tmp_path, monkeypatch):
     importlib.reload(store)
     importlib.reload(ledger)
     monkeypatch.setattr(settings, "native_executor", False)
+    # This file tests the RELAY flows; the built-in responder (its own file:
+    # test_cedric_chat_native.py) would otherwise leave orphaned create_task
+    # replies that land in a LATER test's store (org-isolation flake).
+    monkeypatch.setattr(settings, "cedric_chat_native_reply", False)
     return TestClient(main_module.app)
 
 

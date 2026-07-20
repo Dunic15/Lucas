@@ -3461,6 +3461,8 @@
           if(empty) empty.remove();
           msgs.forEach(function(m){ after=Math.max(after,m.id); });
           log.insertAdjacentHTML("beforeend", msgs.map(msgHTML).join(""));
+          var t=$("#chat-typing");
+          if(t){ if(msgs.some(function(m){return m.sender==="cedric";})) t.remove(); else log.appendChild(t); }
           log.scrollTop=log.scrollHeight;
         }
       })
@@ -3501,7 +3503,14 @@
       .then(function(res){
         if(!res.ok) throw new Error(res.j.error||"failed");
         load();  // pulls the stored row (+ anything Cedric said meanwhile)
-        if(res.j.delivered===false&&$("#chat-banner").hidden)
+        if(res.j.native_reply){
+          // Built-in Cedric is composing off-request; the poll renders it.
+          if(!$("#chat-typing")){
+            log.insertAdjacentHTML("beforeend",'<div class="msg cedric" id="chat-typing" style="opacity:.6">Cedric is typing…</div>');
+            log.scrollTop=log.scrollHeight;
+            setTimeout(function(){var t=$("#chat-typing"); if(t) t.remove();},30000);
+          }
+        } else if(res.j.delivered===false&&$("#chat-banner").hidden)
           toast("Saved — but Cedric didn't receive it. Check the brain connection.",true);
       })
       .catch(function(e2){ toast("Could not send: "+e2.message,true); inp.value=text; });

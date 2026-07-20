@@ -13,6 +13,7 @@ router so main.py stays a 2-line include, like org_api.py.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import time
@@ -2370,9 +2371,14 @@ async def dashboard_chat_list(request: Request, after: int = 0) -> JSONResponse:
         {
             "messages": messages,
             "actions": actions,
-            # Whether a Cedric events door is configured at all — the UI says
-            # "connect the brain" instead of pretending messages go somewhere.
-            "relay_configured": bool(cedric_callback.events_url()),
+            # The UI's meaning of this key is "somebody answers here": true
+            # when an external Cedric events door is configured OR the
+            # built-in responder is on. Only when both are off does the
+            # banner say "messages are saved, but nobody answers".
+            "relay_configured": bool(cedric_callback.events_url())
+            or settings.cedric_chat_native_reply,
+            "native_chat": settings.cedric_chat_native_reply
+            and not cedric_callback.events_url(),
         },
         headers=_NO_STORE,
     )
@@ -2415,8 +2421,25 @@ async def dashboard_chat_post(request: Request) -> JSONResponse:
         "chat.message",
         {"message_id": row["id"], "text": row["body"], "sender": label},
     )
+    # No external Cedric runtime on this deployment -> the built-in responder
+    # answers (off the request path; the 4s poll renders it). A configured
+    # relay owns replies even when one delivery fails — never two Cedrics.
+    native = bool(
+        settings.cedric_chat_native_reply and not cedric_callback.events_url()
+    )
+    if native:
+        from .cedric import chat_responder  # local: avoids import cycles
+
+        asyncio.create_task(
+            run_in_threadpool(chat_responder.respond_and_store, org, row["body"])
+        )
     return JSONResponse(
-        {"ok": True, "id": row["id"], "delivered": bool(delivered)},
+        {
+            "ok": True,
+            "id": row["id"],
+            "delivered": bool(delivered),
+            "native_reply": native,
+        },
         headers=_NO_STORE,
     )
 
