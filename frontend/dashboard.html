@@ -3169,128 +3169,145 @@
     window._brainLoaded=true;
     var box=$("#brain-body"); if(!box) return;
     bFetch("sources").then(function(res){
-      if(res.status===404){ box.innerHTML='<div class="empty" style="padding:14px">The company Brain isn’t enabled on this deployment yet. Your avatars still answer from their built-in knowledge — ask your administrator to enable the Brain to add your own.</div>'; return; }
-      if(!res.ok){ box.innerHTML='<div class="empty" style="padding:14px">Could not load your knowledge sources. <button class="btn" id="br-retry" style="margin-left:8px;padding:6px 12px;font-size:.78rem">Try again</button></div>'; window._brainLoaded=false;
-        var rb=$("#br-retry"); if(rb) rb.addEventListener("click",function(){ loadBrain(true); });
-        return; }
+      if(res.status===404){ box.innerHTML='<div class="empty" style="padding:14px">The company Brain isn’t enabled on this deployment yet. Your avatars still answer from their built-in knowledge — ask your administrator to enable the Brain.</div>'; return; }
+      if(!res.ok){ box.innerHTML='<div class="empty" style="padding:14px">Could not load knowledge. <button class="btn" id="br-retry" style="margin-left:8px;padding:6px 12px">Try again</button></div>';
+        window._brainLoaded=false; var rb=$("#br-retry"); if(rb) rb.addEventListener("click",function(){ loadBrain(true); }); return; }
       var srcs=res.j.sources||[];
-      window._brainSourceCount=srcs.length;
-      // Module-level DATA, not renderAll's locals (avById/avName are scoped
-      // inside renderAll — reading them here was a strict-mode ReferenceError
-      // that stuck the tab on "Loading…").
-      var avList=(DATA&&DATA.avatars)||[];
-      var avOpts=avList.map(function(a){return '<option value="'+esc(a.id)+'">'+esc(a.name||a.id)+'</option>';}).join("")||'<option value="laura">Laura</option>';
-      var steps='<div class="brsteps">'+
-        '<span><span class="n">1</span><b>Add knowledge</b></span>'+
-        '<span><span class="n">2</span>Wait until it’s <b>Ready</b></span>'+
-        '<span><span class="n">3</span><b>Choose avatars</b> that can use it</span>'+
-        '<span><span class="n">4</span><b>Test an answer</b> and check its citations</span></div>';
-      var top='<div class="panel" style="margin-bottom:14px"><h2>Add knowledge</h2>'+
-        '<div class="ph">A source is a named bundle of documents — a playbook, a policy folder, a product FAQ.</div>'+
-        '<div class="dispatch"><input type="text" id="bsrc-name" placeholder="Name a new source — e.g. Sales playbook" aria-label="New source name" />'+
-        '<button class="btn primary" id="bsrc-create">Add documents</button>'+
-        '<button class="btn" data-goto="connections" title="Drive folders sync through your Google connection">Connect a source</button>'+
-        '<button class="btn" id="br-searchjump">Search company knowledge</button></div></div>';
-      var cards=srcs.map(function(s){
-        var next=brainNext(s);
-        var avs=(s.avatars||[]).map(function(x){return esc(avNameOf(x));}).join(", ");
-        var created=s.created_at?new Date(s.created_at*1000).toLocaleDateString():"";
-        var kind=s.kind==="drive"?"Google Drive":"Uploads";
-        return '<div class="brcard" data-src="'+esc(s.id)+'">'+
-          '<div class="brtop">'+brainChip(s)+'<div class="brnm">'+esc(s.name)+'<small>'+esc(kind)+'</small></div>'+
-          '<button class="btn" style="padding:6px 12px;font-size:.76rem" data-bmanage="'+esc(s.id)+'" aria-expanded="false">Manage</button></div>'+
-          '<div class="brmeta">'+(s.published_documents|0)+' document'+((s.published_documents|0)===1?'':'s')+' ready'+
-          ((s.pending_documents|0)?' · '+(s.pending_documents|0)+' syncing':'')+
-          ((s.failed_documents|0)?' · '+(s.failed_documents|0)+' failed':'')+
-          ' · used by '+(avs||"no avatars yet")+(created?' · added '+esc(created):'')+'</div>'+
-          '<div class="brnext"><span>'+esc(next.label)+'</span>'+
-          (next.act==="assign"
-            ?'<select data-bav="'+esc(s.id)+'" aria-label="Choose avatar">'+avOpts+'</select><button class="btn" style="padding:6px 12px;font-size:.76rem" data-bassign="'+esc(s.id)+'">Allow avatar</button>'
-            :next.act==="sync"
-            ?'<button class="btn" style="padding:6px 12px;font-size:.76rem" data-bsync="'+esc(s.id)+'">Sync again</button>'
-            :next.act==="connections"
-            ?'<button class="btn" style="padding:6px 12px;font-size:.76rem" data-goto="connections">Open Connections</button>'
-            :'')+'</div>'+
-          '<div data-bpanel="'+esc(s.id)+'" hidden style="margin-top:10px;border-top:1px solid var(--line-soft);padding-top:10px">'+
-            '<div style="font-size:.78rem;color:var(--faint);margin-bottom:5px">Add a document (markdown or plain text)</div>'+
-            '<input type="text" data-bfn="'+esc(s.id)+'" placeholder="filename.md" aria-label="Filename" style="margin:4px 0;width:100%;box-sizing:border-box;padding:9px 11px;border-radius:10px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font:inherit" />'+
-            '<textarea data-btxt="'+esc(s.id)+'" rows="3" placeholder="Paste the document text…" aria-label="Document text" style="width:100%;box-sizing:border-box;padding:9px 11px;border-radius:10px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font:inherit"></textarea>'+
-            '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px;align-items:center">'+
-            '<button class="btn primary" data-bup="'+esc(s.id)+'">Upload</button>'+
-            '<select data-bav2="'+esc(s.id)+'" aria-label="Choose avatar">'+avOpts+'</select>'+
-            '<button class="btn" data-bassign2="'+esc(s.id)+'">Allow avatar</button>'+
-            '<button class="btn" data-bsync="'+esc(s.id)+'">Sync</button>'+
-            '<button class="btn danger" data-bdel="'+esc(s.id)+'">Delete source</button></div>'+
-          '</div></div>';
-      }).join("");
-      var search='<div class="panel" style="margin-top:14px" id="br-search"><h2>Test an answer</h2>'+
-        '<div class="ph">Ask as an avatar would — answers cite the source and section they came from.</div>'+
-        '<div class="dispatch"><select id="bq-av" aria-label="Ask as avatar">'+avOpts+'</select>'+
-        '<input type="text" id="bq" placeholder="e.g. how long do refunds take?" aria-label="Test question" />'+
-        '<button class="btn primary" id="bq-go">Search</button></div>'+
-        '<div id="bq-out" style="margin-top:10px"></div></div>';
-      var adv='<details class="fset" style="margin-top:14px;padding:12px 16px" id="br-advwrap">'+
-        '<summary style="cursor:pointer;font-weight:600;font-size:.88rem;color:var(--dim)">Advanced diagnostics</summary>'+
-        '<div id="br-adv" style="padding:10px 0 4px;font-size:.82rem;color:var(--dim)">Loading…</div></details>';
-      box.innerHTML=steps+top+
-        (cards||'<div class="empty">No knowledge yet. Name a source above and add your first document — your avatars will start citing it in meetings.</div>')+
-        search+adv;
-      $("#bsrc-create").addEventListener("click",function(){
-        var name=($("#bsrc-name").value||"").trim(); if(!name){toast("Give the source a name first.",true);return;}
-        bFetch("sources",{method:"POST",body:JSON.stringify({name:name,kind:"upload"})}).then(function(r){
-          if(!r.ok){toast("Could not create: "+(r.j.error||r.status),true);return;}
-          toast("Source created — now add its first document."); loadBrain(true); });
-      });
-      $("#br-searchjump").addEventListener("click",function(){
-        var sp=$("#br-search"); if(sp){ sp.scrollIntoView({behavior:"smooth",block:"start"}); var q=$("#bq"); if(q) q.focus(); }
-      });
-      var advWrap=$("#br-advwrap");
-      if(advWrap) advWrap.addEventListener("toggle",function(){ if(advWrap.open) loadBrainAdvanced(); });
-      box.querySelectorAll("[data-bmanage]").forEach(function(b){ b.addEventListener("click",function(){
-        var p=box.querySelector('[data-bpanel="'+b.getAttribute("data-bmanage")+'"]'); if(!p) return;
-        p.hidden=!p.hidden; b.setAttribute("aria-expanded",p.hidden?"false":"true");
-        b.textContent=p.hidden?"Manage":"Close"; });});
-      box.querySelectorAll("[data-bup]").forEach(function(b){ b.addEventListener("click",function(){
-        var id=b.getAttribute("data-bup");
-        var fn=(box.querySelector('[data-bfn="'+id+'"]').value||"").trim();
-        var tx=(box.querySelector('[data-btxt="'+id+'"]').value||"").trim();
-        if(!fn||!tx){toast("Filename and text are both needed.",true);return;}
-        bFetch("sources/"+id+"/documents",{method:"POST",body:JSON.stringify({filename:fn,text:tx})}).then(function(r){
-          if(!r.ok){toast("Upload failed: "+(r.j.error||r.status),true);return;}
-          toast("Uploaded — indexing in the background."); setTimeout(function(){loadBrain(true);},1500); });
-      });});
-      function assignFrom(b,attr,selAttr){
-        var id=b.getAttribute(attr);
-        var sel=box.querySelector('['+selAttr+'="'+id+'"]');
-        var av=(sel&&sel.value)||"";
-        if(!av){toast("Pick an avatar first.",true);return;}
-        bFetch("sources/"+id+"/assign",{method:"POST",body:JSON.stringify({avatar_id:av})}).then(function(r){
-          if(!r.ok){toast("Could not assign: "+(r.j.error||r.status),true);return;}
-          toast("Assigned — index rebuilding."); setTimeout(function(){loadBrain(true);},1200); });
+      var avList=(DATA&&DATA.avatars)||[]; if(!avList.length) avList=[{id:"laura",name:"Laura"}];
+      var sel=window._brainAvatar||avList[0].id;
+      if(!avList.some(function(a){return a.id===sel;})) sel=avList[0].id;
+      window._brainAvatar=sel;
+      var avName=avNameOf(sel);
+      var pills=avList.map(function(a){ return '<button class="brpill'+(a.id===sel?' on':'')+'" data-brav="'+esc(a.id)+'">'+esc(a.name||a.id)+'</button>'; }).join("");
+      var mine=srcs.filter(function(s){ return (s.avatars||[]).indexOf(sel)>=0; });
+      var docReady=mine.reduce(function(n,s){ return n+(s.published_documents|0); },0);
+      var docPend=mine.reduce(function(n,s){ return n+(s.pending_documents|0); },0);
+      var docList=mine.length? mine.map(function(s){
+          return '<div class="brdoc"><span class="brdoc-nm">'+esc(s.name)+'</span>'+
+            '<span class="brdoc-meta">'+(s.published_documents|0)+' ready'+((s.pending_documents|0)?' · '+(s.pending_documents|0)+' indexing':'')+((s.failed_documents|0)?' · '+(s.failed_documents|0)+' failed':'')+'</span>'+
+            '<button class="brdoc-del" data-brdel="'+esc(s.id)+'" title="Remove this knowledge">✕</button></div>';
+        }).join("") : '<div class="empty" style="padding:12px 2px">Nothing yet — drop a file above and '+esc(avName)+' will start citing it in meetings.</div>';
+      var css='<style>'+
+        '.brwrap{max-width:720px}'+
+        '.brq{font-size:.82rem;color:var(--dim);margin:0 0 8px}'+
+        '.brpills{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}'+
+        '.brpill{padding:7px 15px;border-radius:999px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font:inherit;font-size:.85rem;cursor:pointer;transition:all .12s}'+
+        '.brpill:hover{border-color:var(--dim)}'+
+        '.brpill.on{border-color:var(--accent);background:var(--accent);color:#fff}'+
+        '.brdrop{border:2px dashed var(--line);border-radius:16px;padding:36px 20px;text-align:center;cursor:pointer;background:var(--panel-2);transition:border-color .15s,background .15s}'+
+        '.brdrop:hover,.brdrop:focus{border-color:var(--dim);outline:none}'+
+        '.brdrop.over{border-color:var(--accent);background:var(--accent-soft)}'+
+        '.brdrop-ic{font-size:1.7rem;opacity:.45;line-height:1}'+
+        '.brdrop-t{margin-top:10px;font-size:1.02rem;color:var(--text)}'+
+        '.brdrop-s{margin-top:5px;font-size:.82rem;color:var(--faint)}'+
+        '.brlink{color:var(--accent);text-decoration:underline}'+
+        '.brrow2{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:12px}'+
+        '.brstat{font-size:.8rem;color:var(--faint);margin-left:auto}'+
+        '.brpaste-box{margin-top:12px;display:flex;flex-direction:column;gap:8px}'+
+        '.brpaste-box input,.brpaste-box textarea{padding:10px 12px;border-radius:11px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font:inherit;box-sizing:border-box;width:100%}'+
+        '.brdocs{margin-top:18px;display:flex;flex-direction:column;gap:8px}'+
+        '.brdoc{display:flex;align-items:center;gap:10px;padding:11px 14px;border:1px solid var(--line-soft);border-radius:12px;background:var(--panel-2)}'+
+        '.brdoc-nm{font-size:.88rem;color:var(--text);font-weight:600}'+
+        '.brdoc-meta{font-size:.78rem;color:var(--faint);margin-left:auto}'+
+        '.brdoc-del{border:none;background:none;color:var(--faint);cursor:pointer;font-size:1rem;padding:3px 7px;border-radius:7px;line-height:1}'+
+        '.brdoc-del:hover{color:#fff;background:var(--warn)}'+
+        '</style>';
+      box.innerHTML=css+
+        '<div class="brwrap">'+
+          '<div class="brq">Add knowledge for which avatar?</div>'+
+          '<div class="brpills">'+pills+'</div>'+
+          '<div class="brdrop" id="brdrop" tabindex="0" role="button" aria-label="Add documents for '+esc(avName)+'">'+
+            '<div class="brdrop-ic">⬆</div>'+
+            '<div class="brdrop-t">Drop documents here for <b>'+esc(avName)+'</b></div>'+
+            '<div class="brdrop-s">or <span class="brlink">click to browse</span> · PDF, Markdown, text, CSV</div>'+
+            '<input type="file" id="brfile" multiple hidden accept=".pdf,.md,.markdown,.txt,.csv,.json,.htm,.html,.log,text/*,application/pdf" />'+
+          '</div>'+
+          '<div class="brrow2">'+
+            '<button class="btn" id="brpaste">Paste text instead</button>'+
+            '<button class="btn" id="brconnect" title="Google Drive sync — coming soon">Connect Google Drive</button>'+
+            '<span class="brstat">'+docReady+' ready'+(docPend?' · '+docPend+' indexing':'')+' for '+esc(avName)+'</span>'+
+          '</div>'+
+          '<div class="brpaste-box" id="brpaste-box" hidden>'+
+            '<input type="text" id="brpaste-fn" placeholder="Title — e.g. Refund policy" aria-label="Title" />'+
+            '<textarea id="brpaste-txt" rows="4" placeholder="Paste the text…" aria-label="Text"></textarea>'+
+            '<button class="btn primary" id="brpaste-go">Add to '+esc(avName)+'</button>'+
+          '</div>'+
+          '<div class="brdocs">'+docList+'</div>'+
+        '</div>';
+
+      box.querySelectorAll("[data-brav]").forEach(function(b){ b.addEventListener("click",function(){ window._brainAvatar=b.getAttribute("data-brav"); loadBrain(true); }); });
+      var drop=$("#brdrop"), file=$("#brfile");
+      if(drop&&file){
+        drop.addEventListener("click",function(e){ if(e.target!==file) file.click(); });
+        drop.addEventListener("keydown",function(e){ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); file.click(); } });
+        file.addEventListener("change",function(){ _brainUpload(sel,file.files); });
+        ["dragenter","dragover"].forEach(function(ev){ drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.add("over"); }); });
+        ["dragleave","dragend"].forEach(function(ev){ drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.remove("over"); }); });
+        drop.addEventListener("drop",function(e){ e.preventDefault(); drop.classList.remove("over"); _brainUpload(sel,(e.dataTransfer||{}).files); });
       }
-      box.querySelectorAll("[data-bassign]").forEach(function(b){ b.addEventListener("click",function(){ assignFrom(b,"data-bassign","data-bav"); });});
-      box.querySelectorAll("[data-bassign2]").forEach(function(b){ b.addEventListener("click",function(){ assignFrom(b,"data-bassign2","data-bav2"); });});
-      box.querySelectorAll("[data-bsync]").forEach(function(b){ b.addEventListener("click",function(){
-        bFetch("sources/"+b.getAttribute("data-bsync")+"/sync",{method:"POST",body:"{}"}).then(function(r){
-          toast(r.ok?"Sync queued.":("Sync failed: "+(r.j.error||r.status)),!r.ok); });
-      });});
-      box.querySelectorAll("[data-bdel]").forEach(function(b){ b.addEventListener("click",function(){
-        if(!window.confirm("Delete this source? Its documents stop being retrievable.")) return;
-        bFetch("sources/"+b.getAttribute("data-bdel"),{method:"DELETE"}).then(function(r){
-          if(!r.ok){toast("Delete failed: "+(r.j.error||r.status),true);return;}
-          toast("Source deleted."); loadBrain(true); });
-      });});
-      $("#bq-go").addEventListener("click",function(){
-        var q=($("#bq").value||"").trim(); if(!q) return;
-        bFetch("search",{method:"POST",body:JSON.stringify({q:q,avatar_id:$("#bq-av").value})}).then(function(r){
-          var out=$("#bq-out"); if(!r.ok){out.innerHTML='<div class="empty">Search failed.</div>';return;}
-          var hits=(r.j.semantic||[]).concat(r.j.keyword||[]);
-          out.innerHTML=hits.length? hits.slice(0,6).map(function(h){
-            return '<div class="d"><span class="ic">§</span><span>'+esc((h.text||"").slice(0,240))+'… <span style="color:var(--faint)">['+esc(h.source||"")+(h.section?(" — "+esc(h.section)):"")+']</span></span></div>';
-          }).join("") : '<div class="empty" style="padding:6px">No grounded matches — add or assign a source above, then try again.</div>';
-        });
+      $("#brpaste").addEventListener("click",function(){ var pb=$("#brpaste-box"); if(pb){ pb.hidden=!pb.hidden; if(!pb.hidden) $("#brpaste-fn").focus(); } });
+      $("#brpaste-go").addEventListener("click",function(){
+        var fn=($("#brpaste-fn").value||"").trim(), tx=($("#brpaste-txt").value||"").trim();
+        if(!fn||!tx){ toast("Add a title and some text.",true); return; }
+        if(!/\.[a-z0-9]+$/i.test(fn)) fn=fn+".md";
+        _brainUploadPayloads(sel,[{filename:fn,text:tx,mime:"text/markdown"}]);
+      });
+      $("#brconnect").addEventListener("click",function(){ toast("Google Drive sync is coming soon — for now, drop the files here.",false); });
+      box.querySelectorAll("[data-brdel]").forEach(function(b){ b.addEventListener("click",function(){
+        if(!window.confirm("Remove this knowledge? "+avName+" stops citing it.")) return;
+        bFetch("sources/"+b.getAttribute("data-brdel"),{method:"DELETE"}).then(function(r){
+          if(!r.ok){ toast("Could not remove: "+(r.j.error||r.status),true); return; }
+          toast("Removed."); loadBrain(true); });
+      }); });
+    });
+  }
+
+  // Ensure the per-avatar upload bundle exists (reuse an assigned upload
+  // source, else the "<Avatar> — documents" one, else create + assign it).
+  // Hides the "source" concept: the user just picks an avatar and drops files.
+  function _brainEnsureSource(avatarId){
+    var want=avNameOf(avatarId)+" — documents";
+    return bFetch("sources").then(function(r){
+      var srcs=(r.ok&&r.j.sources)||[];
+      var found=srcs.filter(function(s){ return s.kind!=="drive" && (s.avatars||[]).indexOf(avatarId)>=0; })[0]
+             || srcs.filter(function(s){ return s.name===want; })[0];
+      if(found) return found.id;
+      return bFetch("sources",{method:"POST",body:JSON.stringify({name:want,kind:"upload"})}).then(function(cr){
+        if(!cr.ok||!cr.j.source) throw new Error(cr.j.error||"could not create");
+        var id=cr.j.source.id;
+        return bFetch("sources/"+id+"/assign",{method:"POST",body:JSON.stringify({avatar_id:avatarId})}).then(function(){ return id; });
       });
     });
+  }
+  function _brainReadFile(f){
+    return new Promise(function(resolve,reject){
+      var isText=/\.(txt|md|markdown|csv|json|html?|log)$/i.test(f.name)||/^text\//.test(f.type||"");
+      var r=new FileReader();
+      r.onerror=function(){ reject(new Error("read failed")); };
+      r.onload=function(){
+        if(isText){ resolve({filename:f.name,text:String(r.result||""),mime:f.type||"text/plain"}); }
+        else { var s=String(r.result||""), c=s.indexOf(","); resolve({filename:f.name,content_base64:c>=0?s.slice(c+1):s,mime:f.type||"application/octet-stream"}); }
+      };
+      if(isText) r.readAsText(f); else r.readAsDataURL(f);
+    });
+  }
+  function _brainUpload(avatarId,fileList){
+    var files=fileList?Array.prototype.slice.call(fileList):[]; if(!files.length) return;
+    toast("Reading "+files.length+" file"+(files.length===1?"":"s")+"…");
+    Promise.all(files.map(_brainReadFile)).then(function(payloads){ _brainUploadPayloads(avatarId,payloads); })
+      .catch(function(e){ toast("Couldn’t read a file: "+e.message,true); });
+  }
+  function _brainUploadPayloads(avatarId,payloads){
+    if(!payloads||!payloads.length) return;
+    _brainEnsureSource(avatarId).then(function(sid){
+      var ok=0,fail=0,chain=Promise.resolve();
+      payloads.forEach(function(pl){ chain=chain.then(function(){
+        return bFetch("sources/"+sid+"/documents",{method:"POST",body:JSON.stringify(pl)}).then(function(r){ if(r.ok) ok++; else fail++; }); }); });
+      return chain.then(function(){
+        toast(ok+" added"+(fail?" · "+fail+" failed":"")+" — indexing in the background.",!!fail&&!ok);
+        setTimeout(function(){ loadBrain(true); },1500);
+      });
+    }).catch(function(e){ toast("Couldn’t add: "+e.message,true); });
   }
 
 })();
