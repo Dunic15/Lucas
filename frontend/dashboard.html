@@ -943,13 +943,6 @@
       <div id="brain-body"><div class="empty" style="padding:14px">Loading…</div></div>
     </section>
 
-    <!-- AVATAR STUDIO (opened from an avatar's Personalize button — no
-         top-level nav entry) -->
-    <section class="view" id="view-studio" hidden>
-      <div class="head"><div><h1>Avatar Studio</h1><div class="sub">Personalize your avatars for your organization — identity, tone, voice, tools, knowledge. Published versions are immutable; the repo avatars are never changed.</div></div>
-        <button class="btn" data-goto="avatars">← Back to Avatars</button></div>
-      <div id="studio-body"><div class="empty" style="padding:14px">Loading…</div></div>
-    </section>
 
     <section class="view" id="view-settings" hidden>
       <div class="head"><div><h1>Settings</h1><div class="sub">Appearance, account, plan and security</div></div></div>
@@ -1011,17 +1004,25 @@
              "linear-gradient(135deg,#8b5cf6,#c4b5fd)","linear-gradient(135deg,#1F9D63,#4FC08A)"];
   var gradOf={};
   function grad(id){ if(!(id in gradOf)) gradOf[id]=GRADS[Object.keys(gradOf).length%GRADS.length]; return gradOf[id]; }
+  // Avatars whose portrait already 404'd once (e.g. petra has no reference
+  // photo): remembered for the session so the 15s re-render loop stops
+  // re-requesting a URL the server told us doesn't exist (console-spam +
+  // wasted requests before 2026-07-20).
+  var _noPortrait={};
   function avatarBadge(id,name,size){
     var safeId=encodeURIComponent(id||"laura"), letter=esc((name||id||"?")[0].toUpperCase());
-    return '<span class="av avatar-photo'+(size==="mini"?" mini":"")+'" style="background:'+grad(id)+'">'+
-      '<span class="fallback" aria-hidden="true">'+letter+'</span><img src="/laura-reference.jpg?avatar_id='+safeId+
-      '" alt="" aria-hidden="true" loading="lazy" decoding="async" /></span>';
+    var known404=_noPortrait[id||"laura"];
+    return '<span class="av avatar-photo'+(size==="mini"?" mini":"")+(known404?" broken":"")+'" style="background:'+grad(id)+'">'+
+      '<span class="fallback" aria-hidden="true">'+letter+'</span>'+
+      (known404?'':'<img src="/laura-reference.jpg?avatar_id='+safeId+
+      '" alt="" aria-hidden="true" loading="lazy" decoding="async" data-avid="'+esc(id||"laura")+'" />')+'</span>';
   }
   function wireAvatarImages(){
     $$(".avatar-photo img").forEach(function(img){
       if(img.getAttribute("data-wired")==="1") return;
       img.setAttribute("data-wired","1");
-      var fail=function(){img.parentNode.classList.add("broken");};
+      var fail=function(){img.parentNode.classList.add("broken");
+        var avid=img.getAttribute("data-avid"); if(avid) _noPortrait[avid]=1;};
       img.addEventListener("error",fail);
       if(img.complete&&!img.naturalWidth) fail();
     });
@@ -1083,7 +1084,7 @@
       ?"Solo is activating — your allowance updates after Stripe confirms payment."
       :"Checkout was cancelled; your current plan is unchanged.",billingResult!=="success");
   }
-  if(oauthResult||billingResult||connResult||googleResult){
+  if(oauthResult||billingResult||connResult||googleResult||asanaResult){
     window.history.replaceState({},"",window.location.pathname);
   }
 
@@ -1091,11 +1092,10 @@
 
   // Visible top-level navigation: Overview, Avatars, Brain,
   // Meetings, Action Center, Connections, Settings. "usage" (Plan & billing,
-  // reached from Settings) and "studio" (Avatar Studio, reached from an
-  // avatar's Personalize button) keep their views + routes but have no nav
-  // entry — they highlight their nav owner instead.
-  var VIEWS=["overview","avatars","brain","meetings","actions","connections","settings","usage","studio"];
-  var NAV_OWNER={usage:"settings",studio:"avatars"};
+  // reached from Settings) keeps its view + route but has no nav entry — it
+  // highlights its nav owner instead.
+  var VIEWS=["overview","avatars","brain","meetings","actions","connections","settings","usage"];
+  var NAV_OWNER={usage:"settings"};
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
     var navName=NAV_OWNER[name]||name;
@@ -1104,7 +1104,6 @@
     // (instead of resetting to Overview). replaceState = no new history entry, no jump.
     try{ window.history.replaceState({},"",window.location.pathname+"#"+name); }catch(e){}
     if(name==="brain") loadBrain();
-    if(name==="studio") loadStudio();
     if(name==="actions") renderActions();
     // The avatar stage renders only once the view is opened (never preload).
     if(name==="avatars" && DATA) renderAvatars(DATA);
@@ -1981,7 +1980,7 @@
         ?'<button class="btn" data-asana-off>Disconnect</button>'
         :(asanaOAuth
           ?'<a class="btn primary" style="text-decoration:none" href="/oauth/asana/connect">Connect Asana</a>'
-          :'<input type="password" id="asana-pat" placeholder="Personal Access Token" autocomplete="off" '+
+          :'<input type="password" id="asana-pat" placeholder="Asana token" aria-label="Asana Personal Access Token" autocomplete="off" '+
             'style="flex:1;min-width:120px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
             '<button class="btn primary" data-asana-on>Connect</button>'))+
       '</div></div>';
@@ -2298,7 +2297,7 @@
         // Show WHAT happened (the server's one-line reason) instead of a
         // misleading "captured" — the row goes to "failed" so it's visible.
         if(!j.executed){
-          var why=j.execution_error||"The action couldn't be executed.";
+          var why=j.execution_error||(j.status&&j.status.detail)||"The action couldn't be executed.";
           if(btn) btn.outerHTML='<span class="exec failed" title="'+esc(why)+'">Couldn’t run ↗</span>';
           toast("Approved, but it couldn't run: "+why,true);
           patchActionState(aid,st||{status:"failed",detail:why});
@@ -2784,23 +2783,33 @@
       var letter=esc((av.name||av.id||"?")[0].toUpperCase());
       mountEl.innerHTML='<div class="skel">Loading '+esc(av.name||av.id)+'…</div>';
       var ready3d=!!(av.renderer&&av.renderer.talk&&av.renderer.talk.ready);
-      if(ready3d){
+      // The 3D idle animation can't see the parent page's reduced-motion
+      // preference across the iframe boundary — honor it here by serving the
+      // static portrait instead.
+      var reduceMotion=window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if(ready3d && !reduceMotion){
         var f=document.createElement("iframe");
         f.src="/talk?preview=1&avatar_id="+encodeURIComponent(av.id);
         f.title=(av.name||av.id)+" 3D preview";
         f.setAttribute("aria-label",(av.name||av.id)+" 3D preview");
-        f.style.cssText="width:100%;height:100%;border:0;display:block";
-        // Swap the skeleton out on load — talk.html then fades the avatar in
-        // itself once its close-up camera settles (its own reveal logic).
+        // Hidden (not display:none — that would stall loading in some
+        // browsers) UNDER the skeleton until the document loads; the skeleton
+        // keeps showing meanwhile, then talk.html fades the avatar in itself
+        // once its close-up camera settles (its own reveal logic).
+        f.style.cssText="width:100%;height:100%;border:0;display:block;visibility:hidden";
         f.addEventListener("load",function(){
           if(currentId!==av.id) return;
-          f.style.opacity="1";
+          f.style.visibility="visible";
+          var sk=mountEl.querySelector(".skel"); if(sk) sk.remove();
         });
+        // Only true network-level failures fire error on an iframe (an HTTP
+        // error page or an in-document crash still fires load) — talk.html's
+        // own "face unavailable" notice covers those; this covers the rest.
         f.addEventListener("error",function(){
           if(currentId!==av.id) return;
           show2d(av,letter);
         });
-        mountEl.innerHTML=""; mountEl.appendChild(f);
+        mountEl.appendChild(f);   // skeleton stays until load fires
         return;
       }
       show2d(av,letter);
@@ -2858,7 +2867,6 @@
           '<span class="al-addr">'+esc(a.email)+'</span><button class="btn conn-btn" data-copy="'+esc(a.email)+'">Copy</button></div>'+
           '<div class="al-hint">Add this address to any calendar invite — '+esc(a.name)+' joins the meeting.</div></div>':'')+
         '<div class="acts"><button class="btn primary" data-dispatch="'+esc(a.id)+'">Use for next meeting</button>'+
-        '<button class="btn" data-personalize="'+esc(a.id)+'">Personalize</button>'+
         (a.id==="laura"
           ? '<span class="btn" title="Ultra HD photorealistic avatar — in the works, not live yet" style="opacity:.55;cursor:default">🎬 Ultra HD realistic avatar · coming soon</span>'
           : '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a>')+
@@ -2882,9 +2890,6 @@
       '<details data-avsec="used"><summary>Used by</summary><div class="dsec">'+
         a.meetings_total+' meeting'+(a.meetings_total===1?"":"s")+' · '+(a.minutes_total||0)+' minutes'+
         (a.last_meeting_at?' · last '+fmtWhen(a.last_meeting_at):'')+'</div></details>'+
-      '<details data-avsec="versions"><summary>Version history</summary><div class="dsec">'+
-        'Published customizations are immutable versions — review and roll back in the Studio. '+
-        '<a data-personalize="'+esc(a.id)+'" style="cursor:pointer;color:var(--live)">Open Avatar Studio →</a></div></details>'+
       '</div></div>';
   }
   function renderAvatars(d){
@@ -2960,17 +2965,6 @@
     }); });
     $$("#av-detail [data-goto-conn]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); go("connections"); }); });
-    // Personalize → the existing Avatar Studio, preselected on this avatar.
-    $$("#av-detail [data-personalize]").forEach(function(b){ b.addEventListener("click",function(e){
-      e.stopPropagation(); openStudio(b.getAttribute("data-personalize")); }); });
-  }
-  function openStudio(key){
-    window._studioPreselect=key;
-    go("studio");
-    if(window._studioLoaded){
-      var k=window._studioPreselect; window._studioPreselect=null;
-      openStudioEditor(k);
-    }
   }
 
   function renderChart(weekly){
@@ -3076,6 +3070,14 @@
   var _lastReturnLoad=0;
   function refreshOnReturn(){
     if(!$("#authgate").hidden) return;
+    // Same never-under-their-feet guards as the 15s poll below: refocusing the
+    // tab mid-task (e.g. alt-tabbing to Asana to copy a PAT, then back) used to
+    // rebuild #conns and silently wipe the half-typed input (repro 2026-07-20).
+    if(document.querySelector("tr.detail:not([hidden])")) return;
+    if(document.getElementById("params-scrim")) return;
+    if(document.querySelector(".ac-details:not([hidden])")) return;
+    var el=document.activeElement;
+    if(el && (el.tagName==="INPUT"||el.tagName==="SELECT"||el.tagName==="TEXTAREA")) return;
     var now=Date.now(); if(now-_lastReturnLoad<1500) return; _lastReturnLoad=now;
     load();
   }
@@ -3286,146 +3288,6 @@
           out.innerHTML=hits.length? hits.slice(0,6).map(function(h){
             return '<div class="d"><span class="ic">§</span><span>'+esc((h.text||"").slice(0,240))+'… <span style="color:var(--faint)">['+esc(h.source||"")+(h.section?(" — "+esc(h.section)):"")+']</span></span></div>';
           }).join("") : '<div class="empty" style="padding:6px">No grounded matches — add or assign a source above, then try again.</div>';
-        });
-      });
-    });
-  }
-
-  // ── Avatar Studio (M2): org-personalized avatar overlays ──
-  // Separate lazy view (the 15s summary tick never touches it). All writes
-  // are admin-gated server-side; drafts carry an optimistic version token.
-  function sFetch(path,opts){ opts=opts||{}; opts.headers=headers();
-    return fetch("/dashboard/avatar-studio/"+path,opts)
-      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); }); }
-  function loadStudio(force){
-    if(window._studioLoaded && !force) return;
-    window._studioLoaded=true;
-    var box=$("#studio-body"); if(!box) return;
-    sFetch("avatars").then(function(res){
-      if(res.status===404){ box.innerHTML='<div class="empty" style="padding:14px">Avatar Studio isn’t enabled on this deployment (ORG_AVATAR_OVERLAYS_ENABLED + the control-plane database).</div>'; return; }
-      if(!res.ok){ box.innerHTML='<div class="empty" style="padding:14px">Could not load avatars.</div>'; window._studioLoaded=false; return; }
-      var avs=res.j.avatars||[];
-      box.innerHTML=avs.map(function(a){
-        return '<div class="fset" style="margin-bottom:10px"><div class="frow">'+
-          '<div><div class="t">'+esc(a.canonical_name)+' <span style="color:var(--faint);font-size:.8em">('+esc(a.avatar_key)+')</span></div>'+
-          '<div class="h">'+(a.published_version?('published v'+a.published_version):'no customization published')+
-          (a.has_draft?' · unsaved draft':'')+' · '+(a.assignments|0)+' assignment(s)'+(a.enabled?'':' · DISABLED')+'</div></div>'+
-          '<div style="display:flex;gap:6px"><button class="btn" data-scust="'+esc(a.avatar_key)+'">Customize</button>'+
-          '<button class="btn" data-sdefault="'+esc(a.avatar_key)+'">Make org default</button></div></div>'+
-          '<div id="sed-'+esc(a.avatar_key)+'"></div></div>';
-      }).join("")||'<div class="empty" style="padding:10px">No avatars visible for this organization.</div>';
-      box.querySelectorAll("[data-sdefault]").forEach(function(b){ b.addEventListener("click",function(){
-        sFetch("assignments",{method:"POST",body:JSON.stringify({avatar_key:b.getAttribute("data-sdefault"),scope_kind:"org_default"})})
-          .then(function(r){ toast(r.ok?"Org default set.":("Failed: "+(r.j.error||r.status)),!r.ok); if(r.ok) loadStudio(true); });
-      });});
-      box.querySelectorAll("[data-scust]").forEach(function(b){ b.addEventListener("click",function(){ openStudioEditor(b.getAttribute("data-scust")); });});
-      // "Personalize" on the Avatars page lands here with the avatar
-      // preselected — open its editor straight away.
-      if(window._studioPreselect){
-        var pk=window._studioPreselect; window._studioPreselect=null;
-        openStudioEditor(pk);
-      }
-    });
-  }
-  function openStudioEditor(key){
-    var host=$("#sed-"+key); if(!host) return;
-    host.innerHTML='<div class="empty" style="padding:8px">Loading editor…</div>';
-    Promise.all([sFetch("avatars/"+key),sFetch("avatars/"+key+"/capabilities")]).then(function(rs){
-      var d=rs[0], c=rs[1];
-      if(!d.ok||!c.ok){ host.innerHTML='<div class="empty">Could not load.</div>'; return; }
-      var ov=(d.j.draft&&d.j.draft.overlay_json)||d.j.published_overlay||{};
-      var token=(d.j.draft&&d.j.draft.version_token)||"";
-      var caps=c.j, scope=ov.context_scope||{include_org_default:true,knowledge_source_ids:[]};
-      function fld(label,id,val,ph,rows){ return '<div class="frow"><div style="flex:1"><div class="h">'+esc(label)+'</div>'+
-        (rows?('<textarea data-sf="'+id+'" rows="'+rows+'" style="width:100%">'+esc(val||"")+'</textarea>')
-             :('<input type="text" data-sf="'+id+'" value="'+esc(val||"")+'" placeholder="'+esc(ph||"")+'" style="width:100%" />'))+'</div></div>'; }
-      host.innerHTML=
-        fld("Display name","display_name",ov.display_name,d.j.resolved.canonical_name)+
-        fld("Role / title","role",ov.role,"")+
-        fld("Greeting (spoken when joining)","greeting",ov.greeting,"",2)+
-        fld("Mission","mission",ov.mission,"",2)+
-        fld("Tone & style","tone",ov.tone,"",2)+
-        fld("Behavioral instructions","instructions",ov.instructions,"",3)+
-        fld("Brand vocabulary (comma-separated)","vocabulary",(ov.vocabulary||[]).join(", "),"")+
-        '<div class="frow"><div><div class="h">Voice</div><select data-sf="voice_id"><option value="">(canonical)</option>'+
-          (caps.voices||[]).map(function(v){return '<option value="'+esc(v.id)+'"'+(ov.voice_id===v.id?' selected':'')+'>'+esc(v.label)+'</option>';}).join("")+'</select></div>'+
-        '<div><div class="h">Face</div><select data-sf="face"><option value="">(canonical)</option>'+
-          (caps.faces||[]).map(function(f){return '<option'+(ov.face===f?' selected':'')+'>'+esc(f)+'</option>';}).join("")+'</select></div>'+
-        '<div><div class="h">Body</div><select data-sf="talk_body"><option value="">(canonical)</option>'+
-          (caps.bodies||[]).map(function(f){return '<option'+(ov.talk_body===f?' selected':'')+'>'+esc(f)+'</option>';}).join("")+'</select></div></div>'+
-        '<div class="frow"><div style="flex:1"><div class="h">Enabled tools (unchecked = removed for this org; canonical ceiling: '+esc((caps.capability_ceiling||[]).join(", "))+')</div>'+
-          (caps.capability_ceiling||[]).map(function(t){ var on=!ov.enabled_tools||ov.enabled_tools.indexOf(t)>=0;
-            return '<label style="margin-right:12px"><input type="checkbox" data-stool="'+esc(t)+'"'+(on?' checked':'')+'/> '+esc(t)+(caps.connected&&caps.connected[t]===false?' <span style="color:var(--faint)">(not connected)</span>':'')+'</label>';}).join("")+'</div></div>'+
-        '<div class="frow"><div style="flex:1"><div class="h">Knowledge scope</div>'+
-          '<label><input type="checkbox" data-sf-scope-default'+(scope.include_org_default!==false?' checked':'')+'/> include all of this organization’s Brain sources</label>'+
-          ((caps.brain_sources||[]).length?('<div style="margin-top:4px">'+caps.brain_sources.map(function(s){
-            var on=(scope.knowledge_source_ids||[]).indexOf(s.id)>=0;
-            return '<label style="display:block"><input type="checkbox" data-ssrc="'+esc(s.id)+'"'+(on?' checked':'')+'/> '+esc(s.name)+' <span style="color:var(--faint)">('+(s.documents|0)+' docs)</span></label>';}).join("")+'</div>'):'<div class="h" style="color:var(--faint)">No Brain sources yet — add them in the Brain tab.</div>')+'</div></div>'+
-        '<div class="frow"><div style="display:flex;gap:6px;flex-wrap:wrap">'+
-          '<button class="btn" data-ssave="'+esc(key)+'">Save draft</button>'+
-          '<button class="btn" data-spreview="'+esc(key)+'">Preview</button>'+
-          '<button class="btn" data-spublish="'+esc(key)+'">Publish</button>'+
-          '<button class="btn" data-shistory="'+esc(key)+'">History</button></div></div>'+
-        '<div id="sprev-'+esc(key)+'"></div>';
-      function collect(){
-        var body={};
-        host.querySelectorAll("[data-sf]").forEach(function(el){
-          var k=el.getAttribute("data-sf"), v=(el.value||"").trim();
-          if(k==="vocabulary"){ if(v) body[k]=v.split(",").map(function(s){return s.trim();}).filter(Boolean); return; }
-          if(v) body[k]=v;
-        });
-        var tools=[]; host.querySelectorAll("[data-stool]").forEach(function(el){ if(el.checked) tools.push(el.getAttribute("data-stool")); });
-        if(tools.length<(caps.capability_ceiling||[]).length) body.enabled_tools=tools;
-        var incl=host.querySelector("[data-sf-scope-default]").checked;
-        var ids=[]; host.querySelectorAll("[data-ssrc]").forEach(function(el){ if(el.checked) ids.push(el.getAttribute("data-ssrc")); });
-        if(!incl||ids.length) body.context_scope={include_org_default:incl,knowledge_source_ids:ids};
-        return body;
-      }
-      function saveDraft(then){
-        sFetch("avatars/"+key+"/draft",{method:"PUT",body:JSON.stringify({overlay:collect(),expected_token:token})})
-          .then(function(r){
-            if(!r.ok){ toast("Save failed: "+((r.j.details&&r.j.details.join("; "))||r.j.error||r.status),true); return; }
-            token=(r.j.draft&&r.j.draft.version_token)||token;
-            toast("Draft saved."); if(then) then();
-          });
-      }
-      host.querySelector("[data-ssave]").addEventListener("click",function(){ saveDraft(); });
-      host.querySelector("[data-spreview]").addEventListener("click",function(){
-        sFetch("avatars/"+key+"/preview",{method:"POST",body:JSON.stringify({overlay:collect()})}).then(function(r){
-          var out=$("#sprev-"+key);
-          if(!r.ok){ out.innerHTML='<div class="empty">Preview failed: '+esc((r.j.details&&r.j.details.join("; "))||r.j.error||"")+'</div>'; return; }
-          var p=r.j.preview;
-          out.innerHTML='<div class="fset" style="margin-top:8px"><div class="frow"><div style="flex:1">'+
-            '<div class="t">Preview'+(p.applied?"":" (nothing customized)")+'</div>'+
-            '<div class="h">Name: '+esc(p.name)+' · Role: '+esc(p.role)+' · Voice: '+esc(p.voice_id||"default")+' · Face: '+esc(p.face)+'</div>'+
-            (p.greeting?'<div class="h">Greeting: “'+esc(p.greeting)+'”</div>':'')+
-            '<div class="h">Effective tools: '+esc((p.effective_tools||[]).join(", ")||"none")+'</div>'+
-            '<div class="h">Knowledge: '+(p.context_scope? (p.context_scope.include_org_default?'all org sources':'restricted to '+((p.context_scope.knowledge_source_ids||[]).length)+' source(s)') : 'all org sources')+'</div>'+
-            (p.prompt_addition?'<div class="h" style="white-space:pre-wrap;margin-top:4px">'+esc(p.prompt_addition.trim())+'</div>':'')+
-            ((p.warnings||[]).length?'<div class="h" style="color:#c66;margin-top:4px">'+p.warnings.map(esc).join("<br/>")+'</div>':'')+
-            '</div></div></div>';
-        });
-      });
-      host.querySelector("[data-spublish]").addEventListener("click",function(){
-        saveDraft(function(){
-          sFetch("avatars/"+key+"/publish",{method:"POST",body:JSON.stringify({expected_token:token})}).then(function(r){
-            if(!r.ok){ toast("Publish failed: "+((r.j.details&&r.j.details.join("; "))||r.j.error||r.status),true); return; }
-            toast("Published v"+r.j.published_version+" — live within a minute."); loadStudio(true);
-          });
-        });
-      });
-      host.querySelector("[data-shistory]").addEventListener("click",function(){
-        sFetch("avatars/"+key+"/versions").then(function(r){
-          var out=$("#sprev-"+key); if(!r.ok){ out.innerHTML='<div class="empty">Could not load history.</div>'; return; }
-          out.innerHTML='<div class="fset" style="margin-top:8px">'+(r.j.versions||[]).map(function(v){
-            return '<div class="frow"><div><div class="t">v'+v.version+' <span style="color:var(--faint);font-size:.8em">'+esc(v.status)+'</span></div>'+
-              '<div class="h">'+esc(v.change_note||"")+' · '+esc(v.created_by||"")+'</div></div>'+
-              (v.status==="published"||v.status==="archived"?'<button class="btn" data-srb="'+v.version+'">Republish</button>':'')+'</div>';
-          }).join("")+'</div>';
-          out.querySelectorAll("[data-srb]").forEach(function(b){ b.addEventListener("click",function(){
-            sFetch("avatars/"+key+"/rollback",{method:"POST",body:JSON.stringify({version:parseInt(b.getAttribute("data-srb"),10)})})
-              .then(function(r2){ toast(r2.ok?("Republished as v"+r2.j.published_version+"."):("Rollback failed: "+(r2.j.error||r2.status)),!r2.ok); if(r2.ok) loadStudio(true); });
-          });});
         });
       });
     });

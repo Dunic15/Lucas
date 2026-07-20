@@ -59,3 +59,6 @@ tzdata>=2024.1
 # Hosted subscription Checkout + Customer Portal + signed webhooks. Billing is
 # inert unless BILLING_ENABLED and the complete production readiness gate pass.
 stripe>=14,<16
+
+# Browser operator (B1 real provider): CDP client for Browserbase sessions.
+playwright>=1.40
