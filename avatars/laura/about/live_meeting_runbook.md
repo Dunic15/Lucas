@@ -2,7 +2,7 @@
 
 **Owner:** Laura operations
 **Applies to:** Sending Laura into Google Meet, Zoom, or Microsoft Teams
-**Last reviewed:** 2026-07-03
+**Last reviewed:** 2026-07-20
 
 ## Starting a live session
 
@@ -90,6 +90,24 @@ in a meeting, wait for old instances to drain, then test one fresh meeting.
 Always end live sessions when testing is complete. Use `/sessions/{id}/end` with
 the bot/session id from `/sessions/start`. This stops the Recall bot and avoids
 unnecessary per-minute billing.
+
+## Browser tasks (Sable operator)
+
+Laura's supervised web browsing runs through the browser operator, not
+through the meeting pipeline. Tasks are driven from the dashboard (mission
+input + Approve button) or the org API: a goal opens a bounded Browserbase
+session, Claude plans one step at a time from real screenshots, a
+deterministic policy re-checks every step, and consequential operations
+stop at an approval door. Defaults: read-only (`BROWSER_ALLOW_WRITES`
+off), navigation limited to `BROWSER_ALLOWED_DOMAINS`, hard caps on steps,
+duration, and model calls. Every session is recorded and replayable in the
+Browserbase dashboard.
+
+Operationally: browser sessions are separate from meeting sessions — they
+do not touch the Recall per-minute meter, and they close themselves at the
+task boundary. Speech in a meeting does not yet trigger a browse directly,
+and the meeting-tile live view from the Sable design is not wired yet;
+today the flow is capture → typed action → approve → execute.
 
 ## Common questions
 

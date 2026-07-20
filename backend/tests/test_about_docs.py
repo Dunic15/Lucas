@@ -36,6 +36,8 @@ def test_about_intent_detection():
         "could you search the web?",
         "puoi navigare sul web?",
         "sai cercare su internet?",
+        "what does your web browsing cost?",
+        "how does your browser work?",
     ]
     no = [
         "what are we missing before go-live?",

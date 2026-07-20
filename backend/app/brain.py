@@ -312,7 +312,7 @@ _ABOUT_INTENT = re.compile(
     r"\b(how (do|does) (you|laura) work|what (can|do) you (do|know)\b|"
     r"who (are|built|made|created) you\b|what are you\b|"
     r"are you (an? )?(ai|bot|robot|human|real)\b|"
-    r"(your|laura'?s) (architecture|brain|stack|pipeline|tech stack)\b|"
+    r"(your|laura'?s) (architecture|brain|stack|pipeline|tech stack|web brows\w+|brows\w+)\b|"
     r"how (were|are) you (built|made|designed|trained)\b|"
     r"(you|laura) (built|made|powered|based) (on|with|by)\b|"
     r"what (model|llm|models)\b.{0,24}\b(you|use|using|run)|"
