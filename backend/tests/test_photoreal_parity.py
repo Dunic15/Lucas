@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import avatars, main  # noqa: E402
+from app.api import pages  # noqa: E402  (page routes extracted from main)
 
 ROOT = Path(__file__).resolve().parents[2]
 PHOTO = (ROOT / "frontend" / "photoreal.html").read_text()
@@ -66,7 +67,7 @@ def test_talk_never_borrows_lauras_model_for_another_avatar():
 
 
 def test_specific_missing_portrait_is_explicitly_unavailable():
-    response = main.photoreal_reference("definitely-not-an-avatar")
+    response = pages.photoreal_reference("definitely-not-an-avatar")
     assert response.status_code == 404
     assert b"face_unavailable" in response.body
 
