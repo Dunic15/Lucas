@@ -3262,6 +3262,27 @@
       out.innerHTML=html||"No diagnostics to show yet.";
     }).catch(function(){ out.innerHTML="Diagnostics unavailable right now."; });
   }
+  // Auto-refresh the ready/indexing counts while anything is still indexing.
+  // The ingest worker publishes a doc a few seconds after upload (server tick
+  // ~5s), but loadBrain only ran ONCE ~1.5s post-upload and never again — so a
+  // doc that finished looked stuck at "indexing" forever. Re-poll on a short
+  // interval until nothing is pending, bounded so a genuinely stuck/failed doc
+  // stops polling (its real state is then shown truthfully, not hammered).
+  var _BRAIN_POLL_MS=3000, _BRAIN_POLL_BUDGET_MS=120000;
+  function _brainNow(){ return (window.performance&&performance.now)?performance.now():Date.now(); }
+  function _brainSchedulePoll(anyPending){
+    if(window._brainPollTimer){ clearTimeout(window._brainPollTimer); window._brainPollTimer=null; }
+    if(!anyPending){ window._brainPollStart=0; return; }
+    var now=_brainNow();
+    if(!window._brainPollStart) window._brainPollStart=now;
+    if(now-window._brainPollStart>_BRAIN_POLL_BUDGET_MS) return;   // give up; show the real state
+    window._brainPollTimer=setTimeout(function(){
+      var box=$("#brain-body"); if(!box) return;                  // tab torn down
+      var el=document.activeElement;                              // don't nuke a half-typed paste
+      if(el&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&box.contains(el)){ _brainSchedulePoll(true); return; }
+      loadBrain(true);
+    },_BRAIN_POLL_MS);
+  }
   function loadBrain(force){
     if(window._brainLoaded && !force) return;
     window._brainLoaded=true;
@@ -3412,6 +3433,8 @@
           if(!r.ok){ toast("Could not remove: "+(r.j.error||r.status),true); return; }
           toast("Removed."); loadBrain(true); });
       }); });
+      // Keep refreshing while any source still has a doc indexing.
+      _brainSchedulePoll(srcs.some(function(s){ return (s.pending_documents|0)>0; }));
     });
   }
 
@@ -3581,6 +3604,7 @@
         return bFetch("sources/"+sid+"/documents",{method:"POST",body:JSON.stringify(pl)}).then(function(r){ if(r.ok) ok++; else fail++; }); }); });
       return chain.then(function(){
         toast(ok+" added"+(fail?" · "+fail+" failed":"")+" — indexing in the background.",!!fail&&!ok);
+        window._brainPollStart=0;   // restart the poll budget for this fresh upload
         setTimeout(function(){ loadBrain(true); },1500);
       });
     }).catch(function(e){ toast("Couldn’t add: "+e.message,true); });
