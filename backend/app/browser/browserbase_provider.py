@@ -42,6 +42,36 @@ from .provider import (
 
 _CDP_TIMEOUT_MS = 30_000
 _CURSOR_GLIDE_MS = 650  # let the pointer visibly travel before the click lands
+_HIGHLIGHT_DWELL_MS = 2600  # hold the highlight long enough to be seen on a
+#                             laggy 720p meeting tile (the cursor alone is too
+#                             small/fast to register there)
+
+# A BIG, bright box drawn around the target element (full rect, not a point),
+# with a glow + a dim backdrop over the rest so the eye is pulled to it — the
+# small arrow is invisible on Recall's compressed camera, this is not. Held,
+# then faded. Read-only overlay; touches no cookie/storage/network channel.
+_HIGHLIGHT_JS = r"""
+(r) => {
+  document.querySelectorAll('.__laura_hl,.__laura_dim').forEach(e => e.remove());
+  const dim = document.createElement('div');
+  dim.className = '__laura_dim';
+  dim.style.cssText = 'position:fixed;inset:0;z-index:2147483646;pointer-events:none;'
+    + 'background:rgba(0,0,0,.28);transition:opacity .25s;opacity:1;';
+  document.body.appendChild(dim);
+  const box = document.createElement('div');
+  box.className = '__laura_hl';
+  box.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;'
+    + 'border:4px solid #ff3b30;border-radius:10px;background:rgba(255,59,48,.10);'
+    + 'box-shadow:0 0 0 3px rgba(255,255,255,.9),0 0 26px 8px rgba(255,59,48,.75);'
+    + 'left:' + (r.x - 7) + 'px;top:' + (r.y - 7) + 'px;'
+    + 'width:' + (r.w + 14) + 'px;height:' + (r.h + 14) + 'px;'
+    + 'transition:opacity .25s;opacity:1;';
+  document.body.appendChild(box);
+  setTimeout(() => { box.style.opacity = '0'; dim.style.opacity = '0';
+    setTimeout(() => { box.remove(); dim.remove(); }, 300); }, 2300);
+  return true;
+}
+"""
 
 # A cosmetic pointer overlay so a viewer watching the live view can FOLLOW the
 # avatar: a red arrow that glides (CSS transition) to the target element's
@@ -333,9 +363,12 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
             box = loc.bounding_box()
             if not box:
                 return False
+            # Big held highlight box (visible on the tile) + the arrow.
+            page.evaluate(_HIGHLIGHT_JS, {"x": box["x"], "y": box["y"],
+                                          "w": box["width"], "h": box["height"]})
             page.evaluate(_CURSOR_XY_JS, {"x": box["x"] + box["width"] / 2,
                                           "y": box["y"] + box["height"] / 2})
-            page.wait_for_timeout(_CURSOR_GLIDE_MS + 300)  # let the point land
+            page.wait_for_timeout(_HIGHLIGHT_DWELL_MS)  # hold so it's seen
             return True
         except Exception:  # noqa: BLE001 — a missing control is skipped, not fatal
             return False
@@ -351,11 +384,13 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
             loc.scroll_into_view_if_needed(timeout=8_000)
             box = loc.bounding_box()
             if box:
+                page.evaluate(_HIGHLIGHT_JS, {"x": box["x"], "y": box["y"],
+                                              "w": box["width"], "h": box["height"]})
                 page.evaluate(_CURSOR_XY_JS, {"x": box["x"] + box["width"] / 2,
                                               "y": box["y"] + box["height"] / 2})
-                page.wait_for_timeout(_CURSOR_GLIDE_MS)
+                page.wait_for_timeout(1_400)  # show where before clicking
             loc.click(timeout=_CDP_TIMEOUT_MS)
-            page.wait_for_timeout(1_200)  # let the form/menu render
+            page.wait_for_timeout(1_600)  # let the form/menu render + settle
         except Exception as exc:  # noqa: BLE001
             raise ProviderError("reveal failed") from exc
         return self._observe_page(page)

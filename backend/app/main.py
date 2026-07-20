@@ -2751,6 +2751,16 @@ def _same_action(a: str, b: str) -> bool:
     return ta <= tb or tb <= ta
 
 
+def _is_live_browse_item(text: str) -> bool:
+    """A captured/extracted item that is really a LIVE browser-tour request
+    ('show me the Asana dashboard', 'fammi un tour di Asana') — the avatar
+    does it in the meeting, so it must not land in the post-meeting to-dos."""
+    try:
+        return detect_browse_intent(text or "")[0]
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _merge_action_items(queued: list, extracted: list) -> list:
     """Artifact actions[] = live-captured queue_action items first, then the
     summarizer's extraction, deduped on normalized item text. A live capture
@@ -2769,6 +2779,8 @@ def _merge_action_items(queued: list, extracted: list) -> list:
     seen: set[str] = set()
     for q in queued or []:
         text = (q.get("action") or "").strip()
+        if _is_live_browse_item(text):
+            continue  # live browser tour, not a to-do
         key = _norm_action_text(text)
         if not key or key in seen:
             continue
@@ -2787,6 +2799,8 @@ def _merge_action_items(queued: list, extracted: list) -> list:
     live_items = list(merged)  # everything so far is a live capture
     extras: list[dict] = []  # summarizer actions that survived the overlap dedup
     for a in extracted or []:
+        if _is_live_browse_item((a.get("item") or a.get("action") or "")):
+            continue  # summarizer picked up a live browse ask — drop it
         text = a.get("item", "") if isinstance(a, dict) else str(a)
         key = _norm_action_text(text)
         if key in seen:
@@ -6325,7 +6339,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # BEFORE the generic ack: this confirmation IS the reply for the turn.
     # Only when addressed by name: an unaddressed "someone should send X" is
     # the summarizer's job at finalize.
-    if called and wants_action_capture(question) and not wants_web_search(question):
+    if (called and wants_action_capture(question)
+            and not wants_web_search(question)
+            # A 'show me Asana / give me a tour' ask is a LIVE thing the
+            # avatar does now (browser walkthrough) — never a post-meeting
+            # to-do. Keep it off the capture seam.
+            and not detect_browse_intent(question)[0]):
         # detect_wake already stripped the wake word: `question` is the ask
         # itself ("please schedule a follow-up with Marco on Friday").
         # One bounded tenant transaction, off the shared event loop. No
