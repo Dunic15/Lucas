@@ -62,6 +62,7 @@ from . import (
     executor,
     gemini_ears,
     google_client,
+    graphiti_client,
     granola_client,
     actions,
     gmail_watcher,
@@ -2381,6 +2382,15 @@ async def _start_avatar_session(
             f"[Asana workspace — snapshot from meeting start{_asana_note}]\n"
             f"{asana_snapshot}\n\n" + (session.memory_brief or "")
         )
+        # Feed the same snapshot into the org's knowledge graph (graphiti,
+        # optional/off by default). Off the hot path, best-effort; a strong
+        # ref keeps the fire-and-forget task from being GC'd mid-run.
+        if graphiti_client.enabled():
+            _kg_task = asyncio.create_task(
+                graphiti_client.ingest(org_id, asana_snapshot)
+            )
+            _graphiti_tasks.add(_kg_task)
+            _kg_task.add_done_callback(_graphiti_tasks.discard)
     if reg:
         session.tool_registry = reg
         tools_brief = tool_registry.brief(reg)
@@ -4282,6 +4292,10 @@ def _in_opening_grace(session: store.Session) -> bool:
 # held by the loop and can be GC'd mid-sleep, silently killing the feature (same
 # pattern as _summary_tasks above).
 _self_intro_tasks: set = set()
+
+# Strong refs to in-flight graphiti ingest tasks (fired off the join path), so a
+# bare create_task isn't GC'd before it finishes writing the episode.
+_graphiti_tasks: set = set()
 
 # Recheck cadence while waiting for the floor to open before the self-intro.
 _SELF_INTRO_RECHECK_SECONDS = 2.0
@@ -6238,6 +6252,19 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # score), read back after the stream ends to gate the interjection escape —
     # no second model call. Only consulted on the hand-raise path below.
     _answer_meta: dict = {}
+    # Knowledge-graph recall (graphiti, optional/off by default): when the PM
+    # avatar is addressed, hybrid-search the org's temporal graph for THIS
+    # question and fold the facts into her grounding ahead of the flat snapshot.
+    # Gated on the join-cached asana_live flag (never a live DB read) and
+    # timeout-bounded inside recall() — a slow/failed graph falls straight back
+    # to the snapshot, so this never delays the spoken reply.
+    if graphiti_client.enabled() and getattr(session, "asana_live", False):
+        _kg = await graphiti_client.recall(session.org_id, question or text)
+        if _kg:
+            memory = (
+                "[Knowledge graph — facts relevant to this question]\n"
+                + _kg + "\n\n" + (memory or "")
+            )
     # Talk-over guard baseline (interject_recheck_floor_at_speak): snapshot the
     # transcript length and the turn-start clock BEFORE generation, so the
     # interjection floor check below can tell whether a human took the floor while

@@ -95,6 +95,9 @@ def _clear_registries() -> None:
     asana_client = sys.modules.get("app.asana_client")
     if asana_client is not None:
         asana_client._reset_brief_cache()
+    graphiti_client = sys.modules.get("app.graphiti_client")
+    if graphiti_client is not None:
+        graphiti_client.reset_for_tests()
 
 
 @pytest.fixture(autouse=True)

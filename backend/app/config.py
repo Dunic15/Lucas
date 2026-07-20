@@ -409,6 +409,23 @@ class Settings(BaseSettings):
     asana_client_id: str = ""
     asana_client_secret: str = ""
 
+    # ── Knowledge-graph grounding (graphiti, OPTIONAL) ────────────────────
+    # A temporal knowledge graph (Neo4j or FalkorDB) that grounds the PM avatar
+    # in EVOLVING workspace state — who owns what, due when, who's overloaded —
+    # so she can reason about capacity instead of quoting a flat snapshot. OFF
+    # by default and byte-identical to today when unset; going live needs
+    # graphiti-core installed + a graph DB provisioned + an LLM/embedder for
+    # extraction (docs/GRAPHITI.md). Multi-tenant, partitioned by org.
+    graphiti_enabled: bool = False
+    graphiti_backend: str = "neo4j"  # neo4j | falkordb (driver seam in _get_client)
+    graphiti_uri: str = ""           # e.g. neo4j+s://<id>.databases.neo4j.io
+    graphiti_user: str = "neo4j"
+    graphiti_password: str = ""
+    # recall() is the ONLY graph call on the live answer path — strictly
+    # timeout-bounded so a slow graph never delays the spoken reply.
+    graphiti_recall_timeout_s: float = 1.5
+    graphiti_recall_results: int = 8
+
     # Proactive intervention (the differentiator): flag ONE missing step as the
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.
     proactive_enabled: bool = True
