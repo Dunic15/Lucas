@@ -432,6 +432,21 @@ class Settings(BaseSettings):
     jira_client_id: str = ""
     jira_client_secret: str = ""
 
+    # ── Pipedream Connect (OPTIONAL, alternative connections surface) ─────────
+    # An EXPERIMENTAL test tab that brokers account connections + pre-built
+    # actions through Pipedream Connect instead of each vendor's own OAuth.
+    # INERT unless project_id + client_id + client_secret are all set
+    # (pipedream_client.enabled()), so the key-free demo and prod are untouched.
+    # Server-side auth is client-credentials (client_id/secret → 1h token);
+    # the connect flow is the hosted Connect Link (redirect, no SDK). The end
+    # user is the Laura org_id (Pipedream external_user_id), so connections are
+    # per-org, matching the native model.
+    pipedream_project_id: str = ""
+    pipedream_client_id: str = ""
+    pipedream_client_secret: str = ""
+    pipedream_environment: str = "development"   # development | production
+    pipedream_api_base: str = "https://api.pipedream.com/v1"
+
     # ── Knowledge-graph grounding (graphiti, OPTIONAL) ────────────────────
     # RESTORED 2026-07-20: a merge dropped these fields while dashboard.py still
     # reads settings.graphiti_enabled/_configured (Brain-view card) and
@@ -443,6 +458,11 @@ class Settings(BaseSettings):
     graphiti_uri: str = ""            # e.g. neo4j+s://<id>.databases.neo4j.io
     graphiti_user: str = "neo4j"
     graphiti_password: str = ""
+    # Extraction runs on Laura's own stack — NO OpenAI, NO new key: Anthropic
+    # for the LLM (the existing anthropic_api_key) + Laura's local fastembed for
+    # embeddings + a local cosine reranker (see graphiti_client._construct).
+    graphiti_llm_model: str = "claude-sonnet-5"        # entity/edge extraction
+    graphiti_llm_small_model: str = "claude-haiku-4-5"  # cheap dedup/summarize
     # recall() is the ONLY graph call on the live answer path — timeout-bounded
     # (no ack cover in wake-word mode, so keep it tight). Init never on the hot
     # path (warmed at join).

@@ -62,3 +62,10 @@ stripe>=14,<16
 
 # Browser operator (B1 real provider): CDP client for Browserbase sessions.
 playwright>=1.40
+
+# Graphiti temporal knowledge graph (GRAPHITI_ENABLED=true + a Neo4j URI).
+# The [anthropic] extra pulls Anthropic's SDK so extraction runs on Laura's
+# existing ANTHROPIC_API_KEY (no OpenAI); embeddings + reranking use Laura's
+# local fastembed (no new key). Lazy-imported in graphiti_client.py — inert and
+# import-free when the feature is off, so the demo/tests pay nothing.
+graphiti-core[anthropic]>=0.3

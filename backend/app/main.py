@@ -310,6 +310,9 @@ app.include_router(browser_router.router)  # /org/browser + dashboard twin (B0)
 from .demo_mvp import router as demo_router  # noqa: E402
 
 app.include_router(demo_router.router)  # /org/demo + dashboard twin (Northstar MVP)
+from . import pipedream_api  # noqa: E402
+
+app.include_router(pipedream_api.router)  # /dashboard/pipedream (alt connections, flag-gated)
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).
@@ -2751,6 +2754,37 @@ def _same_action(a: str, b: str) -> bool:
     return ta <= tb or tb <= ta
 
 
+# The post-meeting summarizer rephrases a live how-to/tour ask into a
+# THIRD-person to-do — "Show Duccio how to create a task", "Give Duccio a tour
+# of the Asana dashboard", "Show Duccio step-by-step what to click". Those miss
+# detect_browse_intent (first-person-anchored: "show me how to…"), so without
+# this they land in the to-dos AND get executed as real Asana tasks. Catch the
+# demonstrative rephrasing too: a teaching/showing verb near a how-to/tour
+# marker. These are performed LIVE on the avatar's tile, never a to-do.
+_DEMO_BROWSE_RE = re.compile(
+    r"\b(show|walk|give|guide|demonstrate|teach|mostra|fai|dai)\b"
+    r".{0,45}?"
+    r"\b(how to|what to click|step[\s-]?by[\s-]?step|a tour|the tour|un tour|"
+    r"passo[\s-]?passo|come (si )?(crea|creare|fa|fare|usa|usare|invit|aggiung))\b",
+    re.IGNORECASE | re.DOTALL)
+
+
+def _is_live_browse_item(text: str) -> bool:
+    """A captured/extracted item that is really a LIVE browser-tour request
+    ('show me the Asana dashboard', 'fammi un tour di Asana') — the avatar
+    does it in the meeting, so it must not land in the post-meeting to-dos.
+    Matches both the first-person live ask (detect_browse_intent) and the
+    summarizer's third-person 'Show <name> how to…' / 'Give <name> a tour…'
+    rephrasing, which would otherwise slip through as a to-do."""
+    t = text or ""
+    try:
+        if detect_browse_intent(t)[0]:
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return bool(_DEMO_BROWSE_RE.search(t))
+
+
 def _merge_action_items(queued: list, extracted: list) -> list:
     """Artifact actions[] = live-captured queue_action items first, then the
     summarizer's extraction, deduped on normalized item text. A live capture
@@ -2769,6 +2803,8 @@ def _merge_action_items(queued: list, extracted: list) -> list:
     seen: set[str] = set()
     for q in queued or []:
         text = (q.get("action") or "").strip()
+        if _is_live_browse_item(text):
+            continue  # live browser tour, not a to-do
         key = _norm_action_text(text)
         if not key or key in seen:
             continue
@@ -2787,6 +2823,8 @@ def _merge_action_items(queued: list, extracted: list) -> list:
     live_items = list(merged)  # everything so far is a live capture
     extras: list[dict] = []  # summarizer actions that survived the overlap dedup
     for a in extracted or []:
+        if _is_live_browse_item((a.get("item") or a.get("action") or "")):
+            continue  # summarizer picked up a live browse ask — drop it
         text = a.get("item", "") if isinstance(a, dict) else str(a)
         key = _norm_action_text(text)
         if key in seen:
@@ -6083,11 +6121,62 @@ async def recall_webhook(request: Request) -> JSONResponse:
             def _browse_cancelled() -> bool:
                 return session.speech_generation != browse_gen
 
+            # Self-service connect: no saved login for this site → put a sign-in
+            # link in the meeting chat (the tile is one-way video, so the human
+            # signs in from their OWN browser), then remember it. Everything off
+            # the speak path; a failure never touches the meeting.
+            if not browser_meeting.has_identity(session.org_id, browse_site):
+                async def _connect_flow() -> None:
+                    res = await run_in_threadpool(
+                        browser_meeting.begin_connect, session.org_id,
+                        browse_site, session.bot_id)
+                    if not res.get("ok"):
+                        await _make_avatar_speak(
+                            session,
+                            f"I couldn't start the {spoken_name} sign-in just "
+                            "now.", force=True, generation=browse_gen)
+                        return
+                    await run_in_threadpool(
+                        recall_client.send_chat_message, session.bot_id,
+                        f"Sign in to {spoken_name} here so I can show it to "
+                        f"you — it's private, I only keep the session, never "
+                        f"your password: {res['login_url']}")
+                    await _make_avatar_speak(
+                        session,
+                        f"I don't have your {spoken_name} login yet. I've put a "
+                        "sign-in link in the meeting chat — open it, log in, and "
+                        "I'll remember it for next time.", force=True,
+                        generation=browse_gen)
+                    for _ in range(60):  # poll ~6 minutes
+                        await asyncio.sleep(6)
+                        state = await run_in_threadpool(
+                            browser_meeting.poll_connect, session.bot_id)
+                        if state == "logged_in":
+                            await run_in_threadpool(
+                                browser_meeting.finish_connect, session.bot_id)
+                            await _make_avatar_speak(
+                                session,
+                                f"Great — I'm connected to {spoken_name} now. "
+                                "Ask me again and I'll show you.", force=True)
+                            return
+                        if state in ("gone", "none"):
+                            return
+                    await run_in_threadpool(
+                        browser_meeting.cancel_connect, session.bot_id)
+
+                asyncio.create_task(_connect_flow())
+                return JSONResponse(
+                    {"ok": True, "spoke": False, "browse_connect": True})
+
             async def _open_browser() -> None:
                 result = await run_in_threadpool(
                     browser_meeting.open_for_meeting, session.org_id,
                     avatar_key=avatar.id, site_label=browse_site,
                     meeting_ref=session.bot_id)
+                print(f"[browse-open] site={browse_site} ok={result.get('ok')} "
+                      f"reason={result.get('reason')} "
+                      f"logged_in={result.get('logged_in')} "
+                      f"task={browse_task!r}", flush=True)
                 if not result.get("ok"):
                     await _make_avatar_speak(
                         session, f"I couldn't open {spoken_name} just now.",
@@ -6113,23 +6202,37 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 # event loop; fire-and-forget so it never blocks a step. Every
                 # line carries browse_gen, so a stop silences it server-side.
                 if browse_task:
+                    # Re-anchor the barge-in guard to NOW. Opening the browser
+                    # takes a couple seconds, and ANY turn in that window — most
+                    # often the human re-asking because nothing had visibly
+                    # happened yet — bumps the speech generation (every turn does,
+                    # see turn_gen above). The walkthrough would read that as "a
+                    # human took the floor" and cancel at step 0 (outcome=cancelled
+                    # steps=0). Bumping here makes the walkthrough own the floor
+                    # from its first step; a genuine barge-in mid-walkthrough still
+                    # advances past walk_gen and stops it.
+                    walk_gen = store.bump_speech_generation(session)
+
+                    def _walk_cancelled() -> bool:
+                        return session.speech_generation != walk_gen
+
                     def _narrate(narration_line: str) -> None:
                         try:
                             asyncio.run_coroutine_threadsafe(
                                 _make_avatar_speak(
                                     session, narration_line, force=True,
-                                    generation=browse_gen), loop)
+                                    generation=walk_gen), loop)
                         except Exception:  # noqa: BLE001
                             pass
                     walk = await run_in_threadpool(
                         browser_meeting.run_walkthrough, session.org_id,
                         result["session_id"], site_label=browse_site,
                         task_key=browse_task, on_narrate=_narrate,
-                        cancel=_browse_cancelled)
-                    if walk.get("closing") and not _browse_cancelled():
+                        cancel=_walk_cancelled)
+                    if walk.get("closing") and not _walk_cancelled():
                         await _make_avatar_speak(
                             session, walk["closing"], force=True,
-                            generation=browse_gen)
+                            generation=walk_gen)
 
             asyncio.create_task(_open_browser())
             return JSONResponse(
@@ -6278,7 +6381,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # BEFORE the generic ack: this confirmation IS the reply for the turn.
     # Only when addressed by name: an unaddressed "someone should send X" is
     # the summarizer's job at finalize.
-    if called and wants_action_capture(question) and not wants_web_search(question):
+    if (called and wants_action_capture(question)
+            and not wants_web_search(question)
+            # A 'show me Asana / give me a tour' ask is a LIVE thing the
+            # avatar does now (browser walkthrough) — never a post-meeting
+            # to-do. Keep it off the capture seam.
+            and not detect_browse_intent(question)[0]):
         # detect_wake already stripped the wake word: `question` is the ask
         # itself ("please schedule a follow-up with Marco on Friday").
         # One bounded tenant transaction, off the shared event loop. No

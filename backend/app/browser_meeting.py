@@ -137,12 +137,16 @@ def run_walkthrough(org_id: str, session_id: str, *, site_label: str,
                 org_id, session_id, site_label=site_label, task_key=task_key,
                 on_narrate=on_narrate, cancel=cancel, principal="meeting")
             outcome = str(result.get("outcome") or "error")
+            print(f"[walk] {site_label}/{task_key} path=recipe "
+                  f"outcome={outcome} steps={result.get('steps')}", flush=True)
             closing = "" if outcome == "cancelled" else (
                 "That's the flow — I'll leave the actual change to you."
                 if outcome == "finished" else "")
             return {"ok": outcome == "finished", "outcome": outcome,
                     "closing": closing}
         except Exception as exc:  # noqa: BLE001
+            print(f"[walk] {site_label}/{task_key} path=recipe "
+                  f"exc={type(exc).__name__}", flush=True)
             return {"ok": False, "outcome": type(exc).__name__, "closing": ""}
 
     # 2) Fallback: the visual-planner walkthrough (open-ended, less reliable).
@@ -168,6 +172,104 @@ def run_walkthrough(org_id: str, session_id: str, *, site_label: str,
                 "closing": _CLOSING.get(outcome, "")}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "outcome": type(exc).__name__, "closing": ""}
+
+
+# Per-site login page + the URL marker that means "still on the login screen"
+# (gone once signed in). For Asana the app and login share the host, so the
+# marker is the login PATH, not the host.
+_LOGIN = {
+    "asana": {"url": "https://app.asana.com/", "marker": "/-/login"},
+}
+
+# Pending self-service connects, keyed by meeting_ref (bot_id): the login
+# session a human is signing into from the chat link. Bounded: one per meeting.
+_PENDING: dict[str, dict] = {}
+
+
+def has_identity(org_id: str, site_label: str) -> bool:
+    """True when the org already has a saved browser login for the site."""
+    try:
+        from .browser import dal
+
+        return dal.identity_internal(org_id, site_label) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def begin_connect(org_id: str, site_label: str, meeting_ref: str) -> dict:
+    """Start a self-service login: mint a context + a keep-alive login session,
+    open the site's login page, and return an INTERACTIVE URL the human opens
+    in their OWN browser (posted to the meeting chat) to sign in. Sync
+    (threadpool). Never raises."""
+    login = _LOGIN.get(site_label)
+    spoken = site_spoken_name(site_label)
+    if login is None:
+        return {"ok": False, "reason": "no_login_flow", "spoken": spoken}
+    try:
+        from .browser.provider import default_provider_name, get_provider
+
+        provider = get_provider(default_provider_name())
+        context_ref = provider.create_context()
+        made = provider.create_login_session(context_ref, login["url"])
+        _PENDING[meeting_ref] = {
+            "org_id": org_id, "site_label": site_label,
+            "context_ref": context_ref, "provider_ref": made["provider_ref"],
+            "marker": login["marker"]}
+        return {"ok": True, "login_url": made["login_view_url"], "spoken": spoken}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "reason": type(exc).__name__, "spoken": spoken}
+
+
+def poll_connect(meeting_ref: str) -> str:
+    """'logged_in' | 'waiting' | 'gone' | 'none' for a pending connect."""
+    p = _PENDING.get(meeting_ref)
+    if p is None:
+        return "none"
+    try:
+        from .browser.provider import default_provider_name, get_provider
+
+        return get_provider(default_provider_name()).login_state(
+            p["provider_ref"], p["marker"])
+    except Exception:  # noqa: BLE001
+        return "gone"
+
+
+def finish_connect(meeting_ref: str) -> dict:
+    """Persist a completed login: record the identity + release the session so
+    the cookie jar saves to the context. Sync (threadpool). Never raises."""
+    p = _PENDING.pop(meeting_ref, None)
+    if p is None:
+        return {"ok": False, "reason": "no_pending", "spoken": ""}
+    spoken = site_spoken_name(p["site_label"])
+    try:
+        from .browser import dal
+        from .browser.provider import default_provider_name, get_provider
+
+        provider = get_provider(default_provider_name())
+        # If a prior identity exists (rare race), don't duplicate the label.
+        if dal.identity_internal(p["org_id"], p["site_label"]) is None:
+            dal.create_identity(p["org_id"], label=p["site_label"],
+                                provider=default_provider_name(),
+                                context_ref=p["context_ref"])
+        provider.release_login_session(p["provider_ref"])
+        return {"ok": True, "spoken": spoken}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "reason": type(exc).__name__, "spoken": spoken}
+
+
+def cancel_connect(meeting_ref: str) -> None:
+    """Abandon a pending connect (timeout / meeting end) — release the session,
+    do NOT save an identity (login never completed)."""
+    p = _PENDING.pop(meeting_ref, None)
+    if p is None:
+        return
+    try:
+        from .browser.provider import default_provider_name, get_provider
+
+        get_provider(default_provider_name()).release_login_session(
+            p["provider_ref"])
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def trigger_enabled() -> bool:
@@ -198,7 +300,32 @@ def open_for_meeting(org_id: str, *, avatar_key: str, site_label: str,
         ident = dal.identity_internal(org_id, site_label)
         logged_in = ident is not None
         target = app_url if logged_in else public_url
-        # Close any prior view for this meeting first (one tile at a time).
+        # Reuse the view already open for THIS meeting instead of spinning up a
+        # second provider session. A meeting shows one tile at a time, and a
+        # second concurrent provider session can trip the provider's session cap
+        # and fail (reason=ProviderError) — exactly what happens when a human
+        # asks for a second thing ("...now create a task") while the tour view is
+        # still open. Same meeting → same browser: re-navigate + re-present.
+        active = _ACTIVE.get(meeting_ref)
+        if active is not None:
+            _prev_org, prev_sid = active
+            prev = dal.get_session_internal(_prev_org, prev_sid)
+            if prev is not None and prev["state"] in ("ready", "presenting"):
+                try:
+                    operator.issue_command(_prev_org, prev_sid, verb="navigate",
+                                           url=target, principal="meeting")
+                    minted = operator.present(_prev_org, prev_sid,
+                                              principal="meeting")
+                    viewer = (operator.exchange_token(
+                        _prev_org, minted["presentation_token"])
+                        if minted.get("ok") else {})
+                    url = ((viewer or {}).get("viewer") or {}).get("url", "")
+                    if url:
+                        return {"ok": True, "url": url, "spoken": spoken,
+                                "logged_in": logged_in, "session_id": prev_sid}
+                except Exception:  # noqa: BLE001 — fall through to a fresh open
+                    pass
+        # No reusable view → close any stale one and open fresh.
         _close_existing(org_id, meeting_ref)
 
         session = operator.create_session(

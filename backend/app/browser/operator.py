@@ -323,14 +323,24 @@ def run_recipe(org_id: str, session_id: str, *, site_label: str, task_key: str,
 
     steps = recipes.recipe_for(site_label, task_key)
     if not steps:
+        print(f"[recipe-guard] {site_label}/{task_key} bail=no_recipe", flush=True)
         return {"ok": False, "outcome": "no_recipe", "steps": 0}
     row = dal.get_session_internal(org_id, session_id)
     if row is None or not _owns(row, principal):
+        print(f"[recipe-guard] {site_label}/{task_key} bail=not_owner "
+              f"row={'none' if row is None else row.get('principal')!r} "
+              f"principal={principal!r}", flush=True)
         return {"ok": False, "outcome": "not_owner", "steps": 0}
     if row["state"] not in _COMMANDABLE:
+        print(f"[recipe-guard] {site_label}/{task_key} bail=not_live "
+              f"state={row['state']!r}", flush=True)
         return {"ok": False, "outcome": f"not_live:{row['state']}", "steps": 0}
     if not _browser_allowed(org_id, row["avatar_key"]):
+        print(f"[recipe-guard] {site_label}/{task_key} bail=not_allowed "
+              f"avatar={row['avatar_key']!r}", flush=True)
         return {"ok": False, "outcome": "not_allowed", "steps": 0}
+    print(f"[recipe-start] {site_label}/{task_key} steps={len(steps)} "
+          f"state={row['state']!r}", flush=True)
 
     provider = get_provider(row["provider"])
     ref = row["provider_ref"]
@@ -348,6 +358,7 @@ def run_recipe(org_id: str, session_id: str, *, site_label: str, task_key: str,
                     on_narrate(say)
                 except Exception:  # noqa: BLE001 — narration never breaks the run
                     pass
+            landed = None  # True/False for point/reveal; None for navigate/say
             try:
                 if op == "navigate":
                     url = str(step.get("url") or "")
@@ -356,12 +367,19 @@ def run_recipe(org_id: str, session_id: str, *, site_label: str, task_key: str,
                         provider.navigate(ref, url)
                         _wait(provider, ref, 2.5)
                 elif op == "point":
-                    _try_selectors(provider.point, provider, ref, step.get("sel"))
+                    landed = _try_selectors(provider.point, provider, ref,
+                                            step.get("sel"))
                 elif op == "reveal":
-                    _try_selectors(_reveal_ok, provider, ref, step.get("sel"))
+                    landed = _try_selectors(_reveal_ok, provider, ref,
+                                            step.get("sel"))
                 # op == "say": narration only, already spoken above.
             except Exception:  # noqa: BLE001 — a fragile step is skipped, not fatal
                 pass
+            # PII-safe step telemetry: op + whether the control was found (never
+            # the utterance or page content) — so a silent-skip is diagnosable.
+            if op in ("point", "reveal"):
+                print(f"[recipe] {site_label}/{task_key} step={done} op={op} "
+                      f"found={landed}", flush=True)
             done += 1
         return {"ok": True, "outcome": "finished", "steps": done}
     except Exception as exc:  # noqa: BLE001

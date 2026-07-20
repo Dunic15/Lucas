@@ -52,17 +52,39 @@ def test_yaml_none_inherits_global(monkeypatch):
 
 
 def test_backchannel_suppressed_in_wake_word_mode(monkeypatch):
+    """In a GROUP, a wake-word avatar makes no unprompted backchannel. (The
+    1:1 relaxation — a single human present drops the wake requirement, Duccio
+    2026-07-20 — is asserted separately below, so this uses a 2-human roster.)"""
     monkeypatch.setattr(settings, "backchannel_enabled", True)
     monkeypatch.setattr(settings, "backchannel_min_words", 3)
     session = store.Session(bot_id="b1", meeting_url="m", avatar_id="petra")
+    session.participants = {
+        "1": {"name": "Ada", "here": True, "kind": "human"},
+        "2": {"name": "Ben", "here": True, "kind": "human"},
+    }
     session.last_backchannel_at = 0.0
     session.last_spoke_at = 0.0
     session.speaking_until = 0.0
     long_text = "we should really think about the rollout plan for next quarter"
     petra = avatars.load("petra")  # require_wake_word: true
     assert main_module._should_backchannel(session, long_text, petra) is False
-    # Without the avatar (legacy call) the old behavior is preserved.
-    assert main_module._should_backchannel(session, long_text) in (True, False)
+
+
+def test_wake_required_relaxes_one_on_one(monkeypatch):
+    """Duccio's 1:1 relaxation: a wake-word avatar drops the wake requirement
+    when a single human is present (the ask is unambiguously for her), but
+    keeps it in a group."""
+    petra = avatars.load("petra")  # require_wake_word: true
+    solo = store.Session(bot_id="s", meeting_url="m", avatar_id="petra")
+    solo.participants = {"1": {"name": "Ada", "here": True, "kind": "human"}}
+    group = store.Session(bot_id="g", meeting_url="m", avatar_id="petra")
+    group.participants = {
+        "1": {"name": "Ada", "here": True, "kind": "human"},
+        "2": {"name": "Ben", "here": True, "kind": "human"},
+    }
+    assert main_module._wake_required(petra, solo) is False   # 1:1 → relaxed
+    assert main_module._wake_required(petra, group) is True   # group → required
+    assert main_module._wake_required(petra) is True          # no session → base
 
 
 class _FakeTask:
