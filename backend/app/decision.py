@@ -840,17 +840,24 @@ _BROWSE_SURFACE = (
 )
 
 _BROWSE_TASKS = {
+    # Ordered MOST-SPECIFIC first (first match wins): "add a subtask" must beat
+    # the generic "task", "create a project" must not be read as a task, etc.
     "asana": {
-        "create_task": r"(creat\w*|add\w*|new|nuov\w*|aggiung\w*|crea\w*)"
-                       r".{0,16}\btask",
-        "change_assignee": r"(assign\w*|assegn\w*|owner|responsabile|"
-                           r"re-?assign)",
-        "set_due_date": r"(due date|deadline|scadenz\w*|data di scadenza|"
-                        r"\bdue\b)",
-        "create_project": r"((creat\w*|new|nuov\w*|crea\w*|start).{0,16}"
-                          r"(project|progett))",
-        "add_section": r"(section|sezion\w*|column|colonn\w*)",
-        "add_comment": r"(comment\w*|note|nota)",
+        "add_subtask": r"(sub-?task|sotto-?attivit)",
+        "create_project": r"(project|progett)",
+        "add_section": r"(section|sezion|column|colonn)",
+        "add_comment": r"(comment|\bnota\b|\bnote\b)",
+        "assign_task": r"(assign\w*|assegn\w*|assignee|\bowner\b|responsabil)",
+        "set_due_date": r"(due date|deadline|scadenz|data di scadenza|\bdue\b)",
+        "complete_task": r"(complet\w*|mark\w*\s+done|contrassegn|"
+                         r"segn\w*\s+complet|close (the |a )?task|finit)",
+        "my_tasks": r"(my tasks|le mie attivit|my to-?do|i miei (task|impegni))",
+        "invite_member": r"(invit\w*|add (a )?(member|teammate|colleag|person)|"
+                         r"aggiung\w*\s+(un )?colleg|add someone)",
+        "create_portfolio": r"(portfolio|portafogli)",
+        "search": r"(search|\bfind\b|\bcerca\b|\btrova\b|ricerc)",
+        "create_task": r"(creat\w*|add\w*|new|nuov\w*|aggiung\w*|crea\w*|"
+                       r"make)\s.{0,16}\b(task|attivit)",
     },
 }
 
@@ -879,12 +886,14 @@ def detect_browse_intent(utterance: str) -> tuple[bool, str, str]:
     # 1) Explicit known site.
     for label, site_rx in _BROWSE_SITES.items():
         if re.search(site_rx, t):
-            task = _match_task(label, t)
+            # A task key is only assigned for a HOW-TO ask; a plain "show me my
+            # projects" is a display, not a "create a project" walkthrough.
+            task = _match_task(label, t) if howto else ""
             return True, label, (task or ("tour" if howto else ""))
 
     # 2) Strong browser/web surface word → the default site.
     if re.search(_BROWSE_SURFACE, t):
-        task = _match_task(_DEFAULT_SITE, t)
+        task = _match_task(_DEFAULT_SITE, t) if howto else ""
         return True, _DEFAULT_SITE, (task or ("tour" if howto else ""))
 
     # 3) A how-to ANCHORED by a recognized task (no site/surface needed) →
