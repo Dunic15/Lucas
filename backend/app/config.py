@@ -322,8 +322,8 @@ class Settings(BaseSettings):
     # ONE typed operation; the deterministic B0 policy stays authoritative. OFF
     # by default — with it off, B1 is inert and B0 behaviour is byte-identical.
     browser_visual_planner_enabled: bool = False
-    browser_planner_provider: str = "openai"          # provider-neutral adapter
-    browser_planner_model: str = "gpt-5-computer-use"  # env-overridable
+    browser_planner_provider: str = "openai"          # "openai" | "anthropic"
+    browser_planner_model: str = ""                    # blank = provider default
     browser_planner_timeout_seconds: int = 20
     browser_planner_max_retries: int = 2
     # Bounded screenshot handling (bytes NEVER logged/persisted/put in receipts).

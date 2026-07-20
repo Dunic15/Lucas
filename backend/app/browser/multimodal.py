@@ -22,6 +22,8 @@ Security posture (design review):
 
 The repository spec (LAURA-SABLE) selects the OpenAI Responses computer-use
 tool; the adapter targets that by default but is provider-neutral via config.
+``BROWSER_PLANNER_PROVIDER=anthropic`` switches to the Anthropic Messages API
+(vision), reusing the ANTHROPIC_API_KEY already provisioned for the brain.
 """
 from __future__ import annotations
 
@@ -32,6 +34,13 @@ from . import contracts
 
 class PlannerUnconfigured(RuntimeError):
     """The visual planner is off or has no model key (flag-gated)."""
+
+
+# Per-provider default models, used when BROWSER_PLANNER_MODEL is blank.
+_DEFAULT_MODELS = {
+    "openai": "gpt-5-computer-use",
+    "anthropic": "claude-opus-4-8",
+}
 
 
 class PlannerError(RuntimeError):
@@ -82,7 +91,11 @@ class MultimodalPlanner:
         if not cfg.browser_visual_planner_enabled:
             raise PlannerUnconfigured("browser_visual_planner_enabled is off")
         self._provider = (cfg.browser_planner_provider or "openai").lower()
-        self._model = cfg.browser_planner_model
+        self._model = (cfg.browser_planner_model
+                       or _DEFAULT_MODELS.get(self._provider, ""))
+        if not self._model:
+            raise PlannerUnconfigured(
+                f"no model for planner provider {self._provider!r}")
         self._timeout = int(cfg.browser_planner_timeout_seconds)
         self._max_retries = int(cfg.browser_planner_max_retries)
         self._api_key = self._resolve_key()
@@ -96,6 +109,11 @@ class MultimodalPlanner:
 
         if self._provider == "openai":
             return os.environ.get("OPENAI_API_KEY", "")
+        if self._provider == "anthropic":
+            # Reuse the brain's key: the one already provisioned in prod SSM.
+            return (_cfg().anthropic_api_key
+                    or os.environ.get("ANTHROPIC_API_KEY", "")
+                    or os.environ.get("BROWSER_PLANNER_API_KEY", ""))
         return os.environ.get("BROWSER_PLANNER_API_KEY", "")
 
     def propose(self, observation: dict, goal: str, *,
@@ -152,23 +170,21 @@ class MultimodalPlanner:
         return None
 
     def _invoke(self, observation, goal, image, allowed) -> tuple[dict, dict]:
-        """The actual provider call. B1 targets the OpenAI Responses API
-        computer-use tool with strict JSON output. Isolated so no provider
-        object escapes this method. Real behaviour is UNPROVEN until the
+        """The actual provider call, dispatched by config. Isolated so no
+        provider object escapes. Real behaviour is UNPROVEN until the
         credential-gated smoke runs (see BROWSER-B1-VISUAL-EYES.md)."""
-        if self._provider != "openai":
-            raise PlannerError(f"unsupported planner provider {self._provider!r}")
-        import base64
+        if self._provider == "openai":
+            return self._invoke_openai(observation, goal, image, allowed)
+        if self._provider == "anthropic":
+            return self._invoke_anthropic(observation, goal, image, allowed)
+        raise PlannerError(f"unsupported planner provider {self._provider!r}")
+
+    def _prompt_parts(self, observation, goal, allowed) -> tuple[str, str]:
+        """The provider-neutral (system, user) prompt pair. A bounded
+        structural summary of the page (NO raw HTML, NO secrets — the
+        observation is already sanitized/redacted upstream)."""
         import json as _json
 
-        try:
-            import httpx  # available in the runtime
-        except Exception as exc:  # noqa: BLE001
-            raise PlannerError("http client unavailable") from exc
-
-        b64 = base64.b64encode(image).decode()
-        # A bounded structural summary of the page (NO raw HTML, NO secrets —
-        # the observation is already sanitized/redacted upstream).
         structure = {
             "url": observation.get("url"),
             "title": observation.get("title"),
@@ -194,6 +210,20 @@ class MultimodalPlanner:
                             observation.get("observation_id"),
                             "observed_page_version":
                             observation.get("page_version")})
+        return system, user
+
+    def _invoke_openai(self, observation, goal, image, allowed):
+        """OpenAI Responses API computer-use with strict JSON output."""
+        import base64
+        import json as _json
+
+        try:
+            import httpx  # available in the runtime
+        except Exception as exc:  # noqa: BLE001
+            raise PlannerError("http client unavailable") from exc
+
+        b64 = base64.b64encode(image).decode()
+        system, user = self._prompt_parts(observation, goal, allowed)
         payload = {
             "model": self._model,
             "input": [
@@ -201,7 +231,7 @@ class MultimodalPlanner:
                 {"role": "user", "content": [
                     {"type": "input_text", "text": user},
                     {"type": "input_image",
-                     "image_url": f"data:image/png;base64,{b64}"},
+                     "image_url": f"data:{_media_type(image)};base64,{b64}"},
                 ]},
             ],
             "max_output_tokens": 400,
@@ -227,6 +257,77 @@ class MultimodalPlanner:
             return _json.loads(text), usage
         except (ValueError, TypeError) as exc:
             raise PlannerError("model returned non-json") from exc
+
+    def _invoke_anthropic(self, observation, goal, image, allowed):
+        """Anthropic Messages API with vision — same strict-JSON contract as
+        the OpenAI branch, keyed by the ANTHROPIC_API_KEY already provisioned
+        for the post-meeting brain. Same posture: no key, payload, or provider
+        object ever escapes this method."""
+        import base64
+        import json as _json
+
+        try:
+            import anthropic
+        except Exception as exc:  # noqa: BLE001
+            raise PlannerError("anthropic sdk unavailable") from exc
+
+        system, user = self._prompt_parts(observation, goal, allowed)
+        try:
+            client = anthropic.Anthropic(api_key=self._api_key,
+                                         timeout=float(self._timeout),
+                                         max_retries=0)
+            resp = client.messages.create(
+                model=self._model,
+                max_tokens=400,
+                system=system,
+                messages=[{"role": "user", "content": [
+                    {"type": "image", "source": {
+                        "type": "base64",
+                        "media_type": _media_type(image),
+                        "data": base64.b64encode(image).decode()}},
+                    {"type": "text", "text": user},
+                ]}],
+            )
+        except Exception as exc:  # noqa: BLE001 — classify; never leak payload
+            if isinstance(exc, (anthropic.APIConnectionError,
+                                anthropic.RateLimitError,
+                                anthropic.InternalServerError)):
+                raise _TransportError() from exc
+            if isinstance(exc, anthropic.APIStatusError):
+                # Client error (bad key/model) — NON-retryable, fail closed.
+                # The body may echo the request; do NOT surface it.
+                raise PlannerError(f"model http {exc.status_code}") from exc
+            raise PlannerError(type(exc).__name__) from exc
+        if resp.stop_reason == "refusal":
+            raise PlannerError("model refused")  # fail closed, no default action
+        text = "".join(b.text for b in (resp.content or [])
+                       if getattr(b, "type", "") == "text")
+        u = getattr(resp, "usage", None)
+        usage = {"input_tokens": getattr(u, "input_tokens", 0) or 0,
+                 "output_tokens": getattr(u, "output_tokens", 0) or 0}
+        try:
+            return _json.loads(_strip_fences(text)), usage
+        except (ValueError, TypeError) as exc:
+            raise PlannerError("model returned non-json") from exc
+
+
+def _media_type(image: bytes) -> str:
+    """bound_screenshot may re-encode PNG captures as JPEG — sniff the actual
+    bytes so the declared media type never lies to the API."""
+    if image[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    return "image/png"
+
+
+def _strip_fences(text: str) -> str:
+    """Unwrap a ```json … ``` fenced block if the model added one; the JSON
+    parse + schema validation downstream stay the real gate."""
+    t = (text or "").strip()
+    if t.startswith("```"):
+        t = t.split("\n", 1)[1] if "\n" in t else ""
+        if t.rstrip().endswith("```"):
+            t = t.rstrip()[:-3]
+    return t.strip()
 
 
 class _TransportError(RuntimeError):
