@@ -25,6 +25,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import main, ledger, store  # noqa: E402
+from app.meeting import lifecycle  # noqa: E402  (lifecycle hoisted from main)
 from app.config import settings  # noqa: E402
 
 
@@ -72,7 +73,7 @@ def fresh_store(tmp_path, monkeypatch):
 def _stub_offline(monkeypatch, delivered=None):
     monkeypatch.setattr(main.anam_client, "end_conversation", lambda c: None)
     monkeypatch.setattr(
-        main, "post_meeting",
+        lifecycle, "post_meeting",
         lambda avatar, transcript, **kw: {"summary": "s", "actions": [], "checklist": []},
     )
     monkeypatch.setattr(main.ledger, "record_meeting", lambda *a, **k: None)

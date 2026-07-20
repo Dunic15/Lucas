@@ -47,7 +47,7 @@ def test_enrich_vague_no_signal_stays_untyped(monkeypatch):
 
 def test_finalize_wire_present_and_flag_gated():
     """The finalize wire exists and is gated on settings.scheduler_find_time."""
-    main_src = (Path(__file__).resolve().parents[1] / "app/main.py").read_text()
+    main_src = (Path(__file__).resolve().parents[1] / "app/meeting/lifecycle.py").read_text()
     assert "if settings.scheduler_find_time:" in main_src
     assert "scheduler.enrich_actions(" in main_src
     # default OFF so prod finalize is byte-identical until flipped
