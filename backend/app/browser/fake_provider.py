@@ -116,13 +116,14 @@ _MISSING_PAGE = {
 
 
 class _State:
-    __slots__ = ("url", "history", "gone", "typed")
+    __slots__ = ("url", "history", "gone", "typed", "profile")
 
     def __init__(self):
         self.url = _HOME
         self.history: list[str] = [_HOME]
         self.gone = False
         self.typed: dict[str, str] = {}
+        self.profile = ""
 
 
 class FakeProvider:
@@ -142,8 +143,15 @@ class FakeProvider:
         with FakeProvider._lock:
             FakeProvider._counter += 1
             ref = f"fake-prov-{FakeProvider._counter}"
-            FakeProvider._sessions[ref] = _State()
+            state = _State()
+            state.profile = profile  # recorded for tests; fake has no cookies
+            FakeProvider._sessions[ref] = state
         return ProviderSession(provider_ref=ref, viewer_ref=f"{ref}-viewer")
+
+    def create_context(self) -> str:
+        with FakeProvider._lock:
+            FakeProvider._counter += 1
+            return f"fake-ctx-{FakeProvider._counter}"
 
     _VIEWPORT = {"width": 1280, "height": 720}
 

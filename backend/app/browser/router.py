@@ -44,11 +44,13 @@ def _op_create(org: str, principal: str, body: dict) -> tuple[int, dict]:
                      or _default_avatar()).strip()
     meeting_ref = str((body or {}).get("meeting_ref") or "").strip()
     metadata = (body or {}).get("metadata")
+    identity_label = str((body or {}).get("identity_label") or "").strip()
     try:
         view = operator.create_session(
             org, principal=principal, avatar_key=avatar_key,
             meeting_ref=meeting_ref,
             metadata=metadata if isinstance(metadata, dict) else None,
+            identity_label=identity_label,
         )
     except ProviderUnconfigured as exc:
         return 503, {"error": "browser_operator_unconfigured",
@@ -56,6 +58,34 @@ def _op_create(org: str, principal: str, body: dict) -> tuple[int, dict]:
     except operator.OwnershipError as exc:
         return 403, {"error": str(exc)[:120]}
     return 200, {"ok": True, "session": view}
+
+
+def _op_identity_connect(org: str, principal: str,
+                         body: dict) -> tuple[int, dict]:
+    label = str((body or {}).get("label") or "").strip()
+    avatar_key = str((body or {}).get("avatar_key")
+                     or _default_avatar()).strip()
+    try:
+        result = operator.connect_identity(
+            org, label=label, principal=principal, avatar_key=avatar_key)
+    except ProviderUnconfigured as exc:
+        return 503, {"error": "browser_operator_unconfigured",
+                     "detail": str(exc)[:160]}
+    except operator.OwnershipError as exc:
+        return 403, {"error": str(exc)[:120]}
+    if not result.get("ok"):
+        return 400, result
+    return 200, result
+
+
+def _op_identity_list(org: str, principal: str) -> tuple[int, dict]:
+    return 200, {"identities": operator.list_identities(org)}
+
+
+def _op_identity_revoke(org: str, principal: str,
+                        identity_id: str) -> tuple[int, dict]:
+    result = operator.revoke_identity(org, identity_id)
+    return (200 if result.get("ok") else 404), result
 
 
 def _op_set_metadata(org: str, principal: str, session_id: str,
@@ -194,6 +224,26 @@ async def org_browser_create(request: Request) -> JSONResponse:
     return await _machine(
         request, lambda org, body: _op_create(org, "", body), needs_body=True,
     )
+
+
+@router.post("/org/browser/identities")
+async def org_browser_identity_connect(request: Request) -> JSONResponse:
+    return await _machine(
+        request, lambda org, body: _op_identity_connect(org, "", body),
+        needs_body=True,
+    )
+
+
+@router.get("/org/browser/identities")
+async def org_browser_identity_list(request: Request) -> JSONResponse:
+    return await _machine(request, lambda org: _op_identity_list(org, ""))
+
+
+@router.post("/org/browser/identities/{iid}/revoke")
+async def org_browser_identity_revoke(iid: str,
+                                      request: Request) -> JSONResponse:
+    return await _machine(
+        request, lambda org: _op_identity_revoke(org, "", iid))
 
 
 @router.get("/org/browser/sessions/{sid}")
