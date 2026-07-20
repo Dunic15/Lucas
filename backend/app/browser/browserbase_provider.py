@@ -42,6 +42,36 @@ from .provider import (
 
 _CDP_TIMEOUT_MS = 30_000
 _CURSOR_GLIDE_MS = 650  # let the pointer visibly travel before the click lands
+_HIGHLIGHT_DWELL_MS = 2600  # hold the highlight long enough to be seen on a
+#                             laggy 720p meeting tile (the cursor alone is too
+#                             small/fast to register there)
+
+# A BIG, bright box drawn around the target element (full rect, not a point),
+# with a glow + a dim backdrop over the rest so the eye is pulled to it — the
+# small arrow is invisible on Recall's compressed camera, this is not. Held,
+# then faded. Read-only overlay; touches no cookie/storage/network channel.
+_HIGHLIGHT_JS = r"""
+(r) => {
+  document.querySelectorAll('.__laura_hl,.__laura_dim').forEach(e => e.remove());
+  const dim = document.createElement('div');
+  dim.className = '__laura_dim';
+  dim.style.cssText = 'position:fixed;inset:0;z-index:2147483646;pointer-events:none;'
+    + 'background:rgba(0,0,0,.28);transition:opacity .25s;opacity:1;';
+  document.body.appendChild(dim);
+  const box = document.createElement('div');
+  box.className = '__laura_hl';
+  box.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;'
+    + 'border:4px solid #ff3b30;border-radius:10px;background:rgba(255,59,48,.10);'
+    + 'box-shadow:0 0 0 3px rgba(255,255,255,.9),0 0 26px 8px rgba(255,59,48,.75);'
+    + 'left:' + (r.x - 7) + 'px;top:' + (r.y - 7) + 'px;'
+    + 'width:' + (r.w + 14) + 'px;height:' + (r.h + 14) + 'px;'
+    + 'transition:opacity .25s;opacity:1;';
+  document.body.appendChild(box);
+  setTimeout(() => { box.style.opacity = '0'; dim.style.opacity = '0';
+    setTimeout(() => { box.remove(); dim.remove(); }, 300); }, 2300);
+  return true;
+}
+"""
 
 # A cosmetic pointer overlay so a viewer watching the live view can FOLLOW the
 # avatar: a red arrow that glides (CSS transition) to the target element's
@@ -333,9 +363,12 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
             box = loc.bounding_box()
             if not box:
                 return False
+            # Big held highlight box (visible on the tile) + the arrow.
+            page.evaluate(_HIGHLIGHT_JS, {"x": box["x"], "y": box["y"],
+                                          "w": box["width"], "h": box["height"]})
             page.evaluate(_CURSOR_XY_JS, {"x": box["x"] + box["width"] / 2,
                                           "y": box["y"] + box["height"] / 2})
-            page.wait_for_timeout(_CURSOR_GLIDE_MS + 300)  # let the point land
+            page.wait_for_timeout(_HIGHLIGHT_DWELL_MS)  # hold so it's seen
             return True
         except Exception:  # noqa: BLE001 — a missing control is skipped, not fatal
             return False
@@ -351,11 +384,13 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
             loc.scroll_into_view_if_needed(timeout=8_000)
             box = loc.bounding_box()
             if box:
+                page.evaluate(_HIGHLIGHT_JS, {"x": box["x"], "y": box["y"],
+                                              "w": box["width"], "h": box["height"]})
                 page.evaluate(_CURSOR_XY_JS, {"x": box["x"] + box["width"] / 2,
                                               "y": box["y"] + box["height"] / 2})
-                page.wait_for_timeout(_CURSOR_GLIDE_MS)
+                page.wait_for_timeout(1_400)  # show where before clicking
             loc.click(timeout=_CDP_TIMEOUT_MS)
-            page.wait_for_timeout(1_200)  # let the form/menu render
+            page.wait_for_timeout(1_600)  # let the form/menu render + settle
         except Exception as exc:  # noqa: BLE001
             raise ProviderError("reveal failed") from exc
         return self._observe_page(page)
@@ -402,6 +437,99 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
     def inspect(self, provider_ref: str, target: str = "") -> RawObservation:
         _require_config()
         return self._observe_page(self._page(provider_ref))
+
+    def create_login_session(self, context_ref: str, login_url: str) -> dict:
+        """Mint a KEEP-ALIVE session on ``context_ref``, open ``login_url``, and
+        return an INTERACTIVE live-view URL a human can sign into from their own
+        browser. Keep-alive so it survives while they log in (the meeting tile
+        is one-way video — they can't type there). The cookie jar persists to
+        the context when the session is later released. Returns
+        {provider_ref, login_view_url}; raises on failure."""
+        _require_config()
+        try:
+            import httpx
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderUnconfigured("http client unavailable") from exc
+        H = {"X-BB-API-Key": settings.browserbase_api_key,
+             "Content-Type": "application/json"}
+        try:
+            r = httpx.post(
+                "https://api.browserbase.com/v1/sessions", headers=H,
+                json={"projectId": settings.browserbase_project_id,
+                      "timeout": 900, "keepAlive": True,
+                      "browserSettings": {
+                          "context": {"id": context_ref, "persist": True},
+                          "viewport": {"width": 1280, "height": 720}}},
+                timeout=30)
+            if r.status_code >= 400:
+                raise ProviderError(f"login session http {r.status_code}")
+            data = r.json()
+            sid, connect = str(data.get("id") or ""), str(data.get("connectUrl") or "")
+            if not sid or not connect:
+                raise ProviderError("login session missing id/connectUrl")
+            # Navigate to the login page, then disconnect — keepAlive holds it.
+            page = self._connect(connect)
+            try:
+                page.goto(login_url, timeout=_CDP_TIMEOUT_MS,
+                          wait_until="domcontentloaded")
+            finally:
+                try:
+                    pw = getattr(page, "_laura_pw", None)
+                    page.context.browser.close()
+                    if pw:
+                        pw.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+            dbg = httpx.get(
+                f"https://api.browserbase.com/v1/sessions/{sid}/debug",
+                headers={"X-BB-API-Key": settings.browserbase_api_key},
+                timeout=15)
+            url = str((dbg.json() or {}).get("debuggerFullscreenUrl") or "")
+            if not url:
+                raise ProviderError("login view url missing")
+            return {"provider_ref": sid, "login_view_url": url}
+        except ProviderError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never surface the payload
+            raise ProviderError("login session failed") from exc
+
+    def login_state(self, provider_ref: str, login_host: str) -> str:
+        """Poll a keep-alive login session: 'logged_in' once the page has left
+        the login host, else 'waiting' (or 'gone' if the session ended)."""
+        _require_config()
+        try:
+            import httpx
+            from playwright.sync_api import sync_playwright
+        except Exception:  # noqa: BLE001
+            return "waiting"
+        try:
+            pw = sync_playwright().start()
+            br = pw.chromium.connect_over_cdp(
+                f"wss://connect.browserbase.com?apiKey={settings.browserbase_api_key}"
+                f"&sessionId={provider_ref}", timeout=20_000)
+            try:
+                page = br.contexts[0].pages[0]
+                url = page.url or ""
+            finally:
+                br.close(); pw.stop()
+            return "logged_in" if login_host and login_host not in url else "waiting"
+        except Exception:  # noqa: BLE001 — session ended / not reachable
+            return "gone"
+
+    def release_login_session(self, provider_ref: str) -> None:
+        """End a keep-alive login session so its context (cookie jar) persists."""
+        _require_config()
+        try:
+            import httpx
+
+            httpx.post(
+                f"https://api.browserbase.com/v1/sessions/{provider_ref}",
+                headers={"X-BB-API-Key": settings.browserbase_api_key,
+                         "Content-Type": "application/json"},
+                json={"projectId": settings.browserbase_project_id,
+                      "status": "REQUEST_RELEASE"}, timeout=15)
+        except Exception:  # noqa: BLE001 — best-effort; TTL is the backstop
+            pass
 
     def create_context(self) -> str:
         """Mint a provider-side persistent Context (saved browser profile).

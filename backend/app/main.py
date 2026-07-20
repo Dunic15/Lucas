@@ -2751,6 +2751,16 @@ def _same_action(a: str, b: str) -> bool:
     return ta <= tb or tb <= ta
 
 
+def _is_live_browse_item(text: str) -> bool:
+    """A captured/extracted item that is really a LIVE browser-tour request
+    ('show me the Asana dashboard', 'fammi un tour di Asana') — the avatar
+    does it in the meeting, so it must not land in the post-meeting to-dos."""
+    try:
+        return detect_browse_intent(text or "")[0]
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _merge_action_items(queued: list, extracted: list) -> list:
     """Artifact actions[] = live-captured queue_action items first, then the
     summarizer's extraction, deduped on normalized item text. A live capture
@@ -2769,6 +2779,8 @@ def _merge_action_items(queued: list, extracted: list) -> list:
     seen: set[str] = set()
     for q in queued or []:
         text = (q.get("action") or "").strip()
+        if _is_live_browse_item(text):
+            continue  # live browser tour, not a to-do
         key = _norm_action_text(text)
         if not key or key in seen:
             continue
@@ -2787,6 +2799,8 @@ def _merge_action_items(queued: list, extracted: list) -> list:
     live_items = list(merged)  # everything so far is a live capture
     extras: list[dict] = []  # summarizer actions that survived the overlap dedup
     for a in extracted or []:
+        if _is_live_browse_item((a.get("item") or a.get("action") or "")):
+            continue  # summarizer picked up a live browse ask — drop it
         text = a.get("item", "") if isinstance(a, dict) else str(a)
         key = _norm_action_text(text)
         if key in seen:
@@ -6083,6 +6097,53 @@ async def recall_webhook(request: Request) -> JSONResponse:
             def _browse_cancelled() -> bool:
                 return session.speech_generation != browse_gen
 
+            # Self-service connect: no saved login for this site → put a sign-in
+            # link in the meeting chat (the tile is one-way video, so the human
+            # signs in from their OWN browser), then remember it. Everything off
+            # the speak path; a failure never touches the meeting.
+            if not browser_meeting.has_identity(session.org_id, browse_site):
+                async def _connect_flow() -> None:
+                    res = await run_in_threadpool(
+                        browser_meeting.begin_connect, session.org_id,
+                        browse_site, session.bot_id)
+                    if not res.get("ok"):
+                        await _make_avatar_speak(
+                            session,
+                            f"I couldn't start the {spoken_name} sign-in just "
+                            "now.", force=True, generation=browse_gen)
+                        return
+                    await run_in_threadpool(
+                        recall_client.send_chat_message, session.bot_id,
+                        f"Sign in to {spoken_name} here so I can show it to "
+                        f"you — it's private, I only keep the session, never "
+                        f"your password: {res['login_url']}")
+                    await _make_avatar_speak(
+                        session,
+                        f"I don't have your {spoken_name} login yet. I've put a "
+                        "sign-in link in the meeting chat — open it, log in, and "
+                        "I'll remember it for next time.", force=True,
+                        generation=browse_gen)
+                    for _ in range(60):  # poll ~6 minutes
+                        await asyncio.sleep(6)
+                        state = await run_in_threadpool(
+                            browser_meeting.poll_connect, session.bot_id)
+                        if state == "logged_in":
+                            await run_in_threadpool(
+                                browser_meeting.finish_connect, session.bot_id)
+                            await _make_avatar_speak(
+                                session,
+                                f"Great — I'm connected to {spoken_name} now. "
+                                "Ask me again and I'll show you.", force=True)
+                            return
+                        if state in ("gone", "none"):
+                            return
+                    await run_in_threadpool(
+                        browser_meeting.cancel_connect, session.bot_id)
+
+                asyncio.create_task(_connect_flow())
+                return JSONResponse(
+                    {"ok": True, "spoke": False, "browse_connect": True})
+
             async def _open_browser() -> None:
                 result = await run_in_threadpool(
                     browser_meeting.open_for_meeting, session.org_id,
@@ -6278,7 +6339,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # BEFORE the generic ack: this confirmation IS the reply for the turn.
     # Only when addressed by name: an unaddressed "someone should send X" is
     # the summarizer's job at finalize.
-    if called and wants_action_capture(question) and not wants_web_search(question):
+    if (called and wants_action_capture(question)
+            and not wants_web_search(question)
+            # A 'show me Asana / give me a tour' ask is a LIVE thing the
+            # avatar does now (browser walkthrough) — never a post-meeting
+            # to-do. Keep it off the capture seam.
+            and not detect_browse_intent(question)[0]):
         # detect_wake already stripped the wake word: `question` is the ask
         # itself ("please schedule a follow-up with Marco on Friday").
         # One bounded tenant transaction, off the shared event loop. No
