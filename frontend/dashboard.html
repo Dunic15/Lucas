@@ -1937,7 +1937,22 @@
     var slackConnected=brainConnected; // cedric-brain connected row (the Slack add-on)
     var asanaConnected=!!(d.connections&&d.connections.asana);
     var asanaOAuth=!!(d.connections&&d.connections.asana_oauth);
+    // Execution readiness — whether an APPROVED action actually runs, and on
+    // what. native_executor is the master switch (env NATIVE_EXECUTOR); off =
+    // approvals route to Cedric. The two connection chips are the accounts
+    // native runs on. Reads fields already in /dashboard/summary.
+    var nativeOn=!!(d.settings&&d.settings.native_executor);
     $("#conns").innerHTML =
+      '<div class="conn" style="border-left:3px solid '+(nativeOn?"var(--live)":"#c9971c")+'">'+
+      '<div class="nm">⚙ Execution <span class="stchip" style="margin-left:6px">'+(nativeOn?"native":"via Cedric")+'</span></div>'+
+      '<div class="ds">'+(nativeOn
+        ?"Native is on — when you approve an action, Laura runs it on your connected account below and posts a receipt on the row."
+        :"Native is off — approved actions are handed to Cedric. To have Laura run them directly on your own Google/Asana, ask your admin to enable native execution (NATIVE_EXECUTOR).")+'</div>'+
+      '<div class="foot" style="gap:14px;flex-wrap:wrap">'+
+        '<span class="cstat'+(nativeOn?" on":"")+'"><b></b>Native execution '+(nativeOn?"on":"off")+'</span>'+
+        '<span class="cstat'+(googleNative?" on":"")+'"><b></b>Google '+(googleNative?"connected":"not connected")+'</span>'+
+        '<span class="cstat'+(asanaConnected?" on":"")+'"><b></b>Asana '+(asanaConnected?"connected":"not connected")+'</span>'+
+      '</div></div>'+
       // ── Google (native) — the avatars' own Google, independent of Cedric ──
       '<div class="conn"><div class="nm">'+LOGO_GOOGLE+' Google <span class="stchip" style="margin-left:6px">native</span></div>'+
       '<div class="ds">Native — avatars schedule &amp; email on your Google directly. No add-on. Grants Calendar + Gmail on your own account.</div>'+
