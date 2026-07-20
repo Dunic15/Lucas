@@ -67,13 +67,16 @@ def _patch_runtime() -> None:
     ):
         route = str((action or {}).get("execution_route") or "").strip()
         # Historical direct approvals may still carry execution_route=cedric.
-        # Supported typed actions are migrated into Laura's native runtime.
-        # Dependency-release rows retain their existing compatibility behavior.
-        if route != "browser" and via != "dependency-release":
-            native = executor.from_typed((action or {}).get("typed"))
-            if native is not None and executor.handles(native):
+        # Supported typed actions are migrated into their per-family plane:
+        # Pipedream-owned families (Asana + long tail, when the executor is on)
+        # → 'pipedream'; the Google block + Slack → 'native'. A route already
+        # stamped 'pipedream' (or 'browser') is left untouched. Dependency-release
+        # rows retain their existing compatibility behavior.
+        if route not in ("browser", "pipedream") and via != "dependency-release":
+            resolved = executor.route_for_typed((action or {}).get("typed"))
+            if resolved != "cedric":
                 action = dict(action or {})
-                action["execution_route"] = "native"
+                action["execution_route"] = resolved
         return original_execute_route(
             org,
             action_id,

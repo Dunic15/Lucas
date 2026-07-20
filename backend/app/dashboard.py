@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 
 from . import (
     action_plane, asana_client, auth, avatars, executor, gemini_ears, jira_client,
-    ledger, outbox, pipedream_client, store,
+    ledger, outbox, pipedream_client, pipedream_executor, store,
 )
 from .config import settings
 
@@ -2311,7 +2311,38 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
              "status": latest.get(aid)},
             headers=_NO_STORE,
         )
-    if exec_action is not None and executor.handles(exec_action):
+    if route == "pipedream" and pipedream_executor.handles(exec_action):
+        # Pipedream Connect-Proxy execution (Asana + long tail), selected by the
+        # persisted route. Same capability gate + exactly-once claim + provenance
+        # receipt as the native branch below — only the vendor call differs.
+        from . import avatar_resolver
+
+        family = executor.capability_family(exec_action.get("type"))
+        caps = await run_in_threadpool(
+            store.get_avatar_capabilities, acting_avatar
+        )
+        blocked_by_toggle = caps.get(family) is False
+        blocked_by_overlay = not blocked_by_toggle and not await run_in_threadpool(
+            avatar_resolver.family_allowed, org, acting_avatar, family
+        )
+        if blocked_by_toggle or blocked_by_overlay:
+            capability_blocked = True
+        else:
+            claimed = await run_in_threadpool(
+                lambda: ledger.claim_action_execution(
+                    aid, org_id=org,
+                    idempotency_key=action_plane.execution_idempotency_key(aid),
+                    via="dashboard",
+                )
+            )
+            if claimed:
+                # execute_approved writes its own done/failed receipt.
+                result = await run_in_threadpool(
+                    pipedream_executor.execute_approved, org, aid, exec_action
+                )
+                executed = True
+                new_status = "done" if result.get("ok") else "failed"
+    elif route != "pipedream" and exec_action is not None and executor.handles(exec_action):
         # CAPABILITY GATE: the native executor runs an action ONLY when the
         # acting avatar's toggle for that action's FAMILY (google for
         # calendar/gmail, asana for tasks) is on. Read raw and skip on an

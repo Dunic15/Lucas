@@ -390,11 +390,7 @@ def _stamp_action_routing(actions: list) -> list:
             continue
         a = dict(a)
         if not a.get("execution_route"):
-            a["execution_route"] = (
-                "native"
-                if executor.enabled() and executor.from_typed(a.get("typed"))
-                else "cedric"
-            )
+            a["execution_route"] = executor.route_for_typed(a.get("typed"))
         a.setdefault("correlation_id", str(a.get("action_id") or ""))
         a.setdefault("execution_policy", "approval_required")
         owner = str(a.get("owner") or "").strip()
