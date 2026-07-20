@@ -325,7 +325,9 @@ from . import pipedream_api  # noqa: E402
 
 app.include_router(pipedream_api.router)
 from .api import pages  # noqa: E402
-app.include_router(pages.router)  # static pages + avatar assets  # /dashboard/pipedream (alt connections, flag-gated)
+app.include_router(pages.router)  # static pages + avatar assets
+from .api import granola  # noqa: E402
+app.include_router(granola.router)  # /granola/*  # /dashboard/pipedream (alt connections, flag-gated)
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).
@@ -1848,21 +1850,8 @@ async def jira_oauth_callback(
 
 
 # ── Granola: pull a real finished transcript (post-meeting only) ──
-@app.get("/granola/notes")
-def granola_notes(limit: int = 20) -> JSONResponse:
-    """List recent Granola notes to pick from (needs GRANOLA_API_KEY)."""
-    if not settings.granola_api_key:
-        return JSONResponse({"error": "GRANOLA_API_KEY not set"}, status_code=400)
-    return JSONResponse({"notes": granola_client.list_notes(limit)})
 
 
-@app.get("/granola/transcript")
-def granola_transcript(note_id: str) -> JSONResponse:
-    """Fetch one Granola note's transcript as 'Speaker: text' lines."""
-    if not settings.granola_api_key:
-        return JSONResponse({"error": "GRANOLA_API_KEY not set"}, status_code=400)
-    return JSONResponse({"note_id": note_id,
-                         "transcript": granola_client.get_transcript(note_id)})
 
 
 # ──────────────────────── session lifecycle ────────────────────────
