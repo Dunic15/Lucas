@@ -60,6 +60,23 @@ def enabled() -> bool:
     return bool(settings.native_executor)
 
 
+def route_for_typed(typed: dict | None) -> str:
+    """Per-family execution route for one typed action (immutable once stamped).
+
+    Pipedream owns Asana + the long tail when its Connect-Proxy executor is on;
+    the whole Google block (calendar/gmail) and Slack stay on Laura's native
+    executor; anything Laura can't map natively goes to Cedric. With
+    PIPEDREAM_EXECUTOR off, ``pipedream_executor.handles`` is False so Asana
+    stamps 'native' — behaviour is byte-identical to before."""
+    from . import pipedream_executor  # lazy: keep module load order decoupled
+
+    if from_typed(typed) is None:
+        return "cedric"
+    if pipedream_executor.handles({"type": str((typed or {}).get("type") or "")}):
+        return "pipedream"
+    return "native" if enabled() else "cedric"
+
+
 def handles(action: dict | None) -> bool:
     """True when this approved action can execute inside Laura."""
     return enabled() and native_runtime.supports((action or {}).get("type"))

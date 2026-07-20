@@ -21,7 +21,7 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
-from . import action_plane, cedric, executor, ledger, store
+from . import action_plane, cedric, executor, ledger, pipedream_executor, store
 from .config import settings
 
 router = APIRouter(prefix="/org", tags=["org-memory"])
@@ -247,9 +247,10 @@ def _execute_route(
     """Run the approved action per its persisted execution_route [B2].
     Returns (execution_job_id | None, new_status, capability_blocked)."""
     route = str(action.get("execution_route") or "").strip() or (
-        # Legacy actions (pre routing-fields) derive the route the same way
-        # finalize now stamps it: native iff the executor can run the typed spec.
-        "native" if executor.enabled() and executor.from_typed(action.get("typed")) else "cedric"
+        # Legacy actions (pre routing-fields) derive the route the same per-family
+        # way finalize now stamps it (Pipedream for Asana + long tail when on,
+        # else native for Google/Slack, else Cedric).
+        executor.route_for_typed(action.get("typed"))
     )
     if route == "cedric":
         # handshake B2: hand the approved action to Cedric for execution
@@ -281,6 +282,49 @@ def _execute_route(
         result = browser_operator.execute_approved_step(org, action_id, action)
         return (uuid.uuid4().hex,
                 "done" if result.get("ok") else "failed", False)
+    if route == "pipedream":
+        # Pipedream Connect-Proxy execution (Asana + long tail). Same capability
+        # gate + exactly-once claim + provenance channel as the native route —
+        # only the vendor call differs. Always returns; never falls through to
+        # native (which could double-run the same action type).
+        exec_action = executor.from_typed(action.get("typed"))
+        if exec_action is None or not pipedream_executor.handles(exec_action):
+            return None, "approved", False
+        family = executor.capability_family(exec_action.get("type"))
+        caps = store.get_avatar_capabilities(acting_avatar)
+        if caps.get(family) is False:
+            return None, "approved", True
+        from . import avatar_resolver
+
+        if not avatar_resolver.family_allowed(org, acting_avatar, family):
+            return None, "approved", True
+        if not ledger.claim_action_execution(
+            action_id, org_id=org, idempotency_key=idempotency_key, via=via
+        ):
+            latest = (ledger.action_statuses([action_id], org_id=org)
+                      .get(action_id) or {})
+            return None, str(latest.get("status") or "approved"), False
+        job_id = uuid.uuid4().hex
+        if settings.action_dispatch_async:
+            import threading
+
+            def _dispatch_pd() -> None:
+                try:
+                    result = pipedream_executor.execute_approved(
+                        org, action_id, exec_action
+                    )
+                    ledger.set_action_decision_result(
+                        action_id, org_id=org,
+                        new_status="done" if result.get("ok") else "failed",
+                        execution_job_id=job_id,
+                    )
+                except Exception:  # noqa: BLE001 — executor soft-returns
+                    pass
+
+            threading.Thread(target=_dispatch_pd, daemon=True).start()
+            return job_id, "executing", False
+        result = pipedream_executor.execute_approved(org, action_id, exec_action)
+        return job_id, ("done" if result.get("ok") else "failed"), False
     exec_action = executor.from_typed(action.get("typed"))
     if exec_action is None or not executor.handles(exec_action):
         return None, "approved", False

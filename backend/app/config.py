@@ -446,6 +446,11 @@ class Settings(BaseSettings):
     pipedream_client_secret: str = ""
     pipedream_environment: str = "development"   # development | production
     pipedream_api_base: str = "https://api.pipedream.com/v1"
+    # Route Pipedream-owned families (Asana + the long tail) through the Connect
+    # Proxy executor instead of Laura's native adapter. Default OFF: with it off
+    # the routing stamps 'native' and prod behaviour is byte-identical. Google
+    # (calendar/gmail/drive) always stays native; Slack always stays on Cedric.
+    pipedream_executor: bool = False
 
     # ── Knowledge-graph grounding (graphiti, OPTIONAL) ────────────────────
     # RESTORED 2026-07-20: a merge dropped these fields while dashboard.py still
