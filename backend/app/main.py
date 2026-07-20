@@ -331,7 +331,9 @@ app.include_router(granola.router)  # /granola/*
 from .api import oauth  # noqa: E402
 app.include_router(oauth.router)  # /oauth/{google,asana,jira}/*
 from .api import avatars_api  # noqa: E402
-app.include_router(avatars_api.router)  # /avatars*  # /dashboard/pipedream (alt connections, flag-gated)
+app.include_router(avatars_api.router)  # /avatars*
+from .api import meetings  # noqa: E402
+app.include_router(meetings.router)  # /ledger, /meetings*  # /dashboard/pipedream (alt connections, flag-gated)
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).
@@ -1835,26 +1837,6 @@ def vendors_view(request: Request) -> JSONResponse:
     )
 
 
-@app.get("/ledger")
-def ledger_view(meeting_url: str, request: Request) -> JSONResponse:
-    """Cross-meeting memory for a meeting link: every ledger item plus the
-    carryover brief the avatar gets injected at the next session."""
-    # Machine/service seam: a PER-ORG bearer reads ITS org's memory; the
-    # global bearer (and the key-free open demo) keeps the Demo org, exactly
-    # as today. Sync handler → FastAPI already runs this off the event loop.
-    machine_org = cedric.resolve_machine_org(request)
-    if machine_org is None:
-        if err := cedric.auth_error(request):  # CEDRIC
-            return err
-    org = machine_org or settings.demo_org_id
-    key = ledger.meeting_key(meeting_url)
-    return JSONResponse(
-        {
-            "meeting_key": key,
-            "brief": ledger.carryover_brief(meeting_url, org_id=org),
-            "items": ledger.items(key, org_id=org),
-        }
-    )
 
 
 @app.get("/sessions/{bot_id}/artifact")
@@ -1934,58 +1916,8 @@ async def redeliver_artifact(bot_id: str, request: Request) -> JSONResponse:
     return JSONResponse({"status": "retrying", "bot_id": bot_id}, status_code=202)
 
 
-@app.get("/meetings")
-def meetings_page() -> FileResponse:
-    """Archive UI: every finished meeting's artifact, transcript included."""
-    return FileResponse(FRONTEND_DIR / "meetings.html")
 
 
-@app.get("/meetings/list")
-def meetings_list(request: Request) -> JSONResponse:
-    """All saved artifacts, newest first, for the /meetings page. Transcripts
-    are PII: gated to a logged-in owner (their own org) or the machine bearer —
-    never served to the anonymous internet — and never logged. Same guard as
-    /dashboard/summary; the HTML shell (/meetings) stays open like /dashboard."""
-    user = auth.current_user(request)
-    machine_org = None
-    if user is None:
-        machine_org = cedric.resolve_machine_org(request)
-        if machine_org is None:
-            if err := auth.gate(request):
-                return err
-    artifact_scope = None
-    if store.durable_artifacts_enabled():
-        artifact_scope = (
-            machine_org
-            or (str(user["org_id"]) if user is not None else None)
-        )
-        # A deployment-level service bearer is never permission to enumerate
-        # every tenant. In production it retains only the Demo workspace.
-        if artifact_scope is None:
-            artifact_scope = settings.demo_org_id
-    # Key-free SQLite intentionally keeps its historical global read followed
-    # by the legacy/unowned visibility filter below.
-    artifacts = store.list_artifacts(artifact_scope)
-    if machine_org is not None:
-        artifacts = [
-            a
-            for a in artifacts
-            if str((a.get("artifact") or {}).get("org_id") or "") == machine_org
-        ]
-    elif user is not None:
-        # Cookie login: scope to the caller's org. Unowned/legacy artifacts
-        # (empty org_id) stay visible, mirroring the /sessions/*/redeliver
-        # rule; DEMO-org artifacts do not — self-serve product decision
-        # (2026-07-13): the anonymous showroom's transcripts never appear in a
-        # real signup's archive.
-        org = str(user["org_id"])
-        artifacts = [
-            a
-            for a in artifacts
-            if (art_org := str((a.get("artifact") or {}).get("org_id") or ""))
-            in ("", org)
-        ]
-    return JSONResponse({"meetings": artifacts})
 
 
 # ───────────────────────── avatar page + ws ─────────────────────────
