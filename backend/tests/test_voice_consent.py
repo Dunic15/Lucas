@@ -147,6 +147,21 @@ def test_addressed_ask_voice_approves_and_says_so(
         main_module.cedric, "voice_approve",
         lambda session, item: approved.append(dict(item)) or True,
     )
+    # voice_approve is fired fire-and-forget:
+    #   asyncio.create_task(run_in_threadpool(cedric.voice_approve, ...)).
+    # That task can outlive the request, so asserting `approved` right after the
+    # webhook returns races it (flaky — passes alone, fails under load/ordering).
+    # Run run_in_threadpool's target EAGERLY so the capture is synchronous.
+    # Same deterministic fix as #282's test_clarify_loop `approved` fixture.
+    def _eager_threadpool(fn, *a, **k):
+        result = fn(*a, **k)
+
+        async def _done():
+            return result
+
+        return _done()
+
+    monkeypatch.setattr(main_module, "run_in_threadpool", _eager_threadpool)
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
     body = client.post(
         "/webhooks/recall",
