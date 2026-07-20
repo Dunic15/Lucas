@@ -810,37 +810,103 @@ def plausible_leave_followup(text: str) -> bool:
 
 
 # ── in-meeting "show it in the browser" intent (Sable B3) ───────────────────
-# Coarse, allowlisted, and addressed-gated at the call site. Returns the SITE
-# LABEL only (never the utterance) so the meeting→browser bridge builds a
-# bounded server-side goal — transcript text never reaches the operator.
+# Robust + allowlisted + addressed-gated at the call site. Returns only a SITE
+# LABEL and a canonical TASK KEY (never the utterance), so the walkthrough goal
+# is built server-side (transcripts stay PII).
+
+_DEFAULT_SITE = "asana"
 
 _BROWSE_VERB = (
-    r"(open|show|pull up|bring up|bring me|display|go to|navigate to|"
-    r"take me to|let'?s see|can you show|apri|mostra|mostrami|fammi vedere|"
-    r"portami|vai su|aprimi)"
+    r"(open|show|pull up|pull it up|bring up|bring me|display|go (to|into|on)|"
+    r"navigate to|take me to|let'?s see|can you (show|open|pull)|could you "
+    r"(show|open)|let me see|apri|aprimi|mostra|mostrami|fammi vedere|"
+    r"portami|vai (su|dentro)|puoi (mostrar|aprir))"
 )
-# Sites we can present = browser-identity labels with a known start URL.
+# How-to lead-ins (EN + IT) — also count as an intent verb.
+_HOWTO_LEAD = (
+    r"(how (do (i|you)|to|can i|i)|walk me through|show me how|teach me|"
+    r"guide me|give me a tour|step by step|come (si|faccio|posso)|"
+    r"mi mostri come|fammi vedere come|insegnami|fammi un tour)"
+)
+# ASR often mangles "Asana" (a sauna / azana / osana / asauna). Match loosely.
 _BROWSE_SITES = {
-    "asana": r"asana",
+    "asana": r"(\basana\b|\bosana\b|\bazana\b|a[sz][sz]?auna|\ba ?sauna\b)",
 }
-_BROWSE_SURFACE = r"(browser|screen|tab|window|schermo|browser)"
+# STRONG browser/web surface words only (a generic "the page"/"the tab" would
+# false-fire on "go to the next page", so those are deliberately excluded).
+_BROWSE_SURFACE = (
+    r"(\bbrowser\b|on ?screen|on the screen|the web\b|\bonline\b|"
+    r"web ?page|web ?site|\bschermo\b|sullo schermo|sito web)"
+)
+
+_BROWSE_TASKS = {
+    "asana": {
+        "create_task": r"(creat\w*|add\w*|new|nuov\w*|aggiung\w*|crea\w*)"
+                       r".{0,16}\btask",
+        "change_assignee": r"(assign\w*|assegn\w*|owner|responsabile|"
+                           r"re-?assign)",
+        "set_due_date": r"(due date|deadline|scadenz\w*|data di scadenza|"
+                        r"\bdue\b)",
+        "create_project": r"((creat\w*|new|nuov\w*|crea\w*|start).{0,16}"
+                          r"(project|progett))",
+        "add_section": r"(section|sezion\w*|column|colonn\w*)",
+        "add_comment": r"(comment\w*|note|nota)",
+    },
+}
 
 
-def detect_browse_intent(utterance: str) -> tuple[bool, str]:
-    """(matched, site_label). Matches an addressed ask to open a KNOWN site,
-    e.g. "open Asana and show me my projects", "mostrami Asana", "pull up
-    Asana on the screen". Returns the site label for the bridge; the caller
-    gates on the avatar actually being addressed."""
+def _match_task(site_label: str, text: str) -> str:
+    for key, rx in _BROWSE_TASKS.get(site_label, {}).items():
+        if re.search(rx, text):
+            return key
+    return ""
+
+
+def detect_browse_intent(utterance: str) -> tuple[bool, str, str]:
+    """(matched, site_label, task_key). Addressed-gated at the call site.
+
+    Fires on: verb/how-to + a known site ("open Asana"), OR verb + a strong
+    browser/web surface word ("show me on the browser"), OR a how-to anchored
+    by a recognized task ("walk me through creating a task"). A how-to yields
+    the canonical task_key (or "tour"); plain show yields "". Only the label +
+    key ever leave — never the utterance."""
     t = (utterance or "").lower()
+    howto = bool(re.search(_HOWTO_LEAD, t))
+    has_verb = bool(re.search(_BROWSE_VERB, t)) or howto
+    if not has_verb:
+        return False, "", ""
+
+    # 1) Explicit known site.
     for label, site_rx in _BROWSE_SITES.items():
-        # verb ... site   (within a short window), either order for the surface
-        if re.search(_BROWSE_VERB + r"\b.{0,40}\b" + site_rx, t):
-            return True, label
-        # "show me my asana", "asana ... on the screen/browser"
-        if re.search(site_rx + r"\b.{0,30}\b" + _BROWSE_SURFACE, t) and \
-                re.search(_BROWSE_VERB, t):
-            return True, label
-    return False, ""
+        if re.search(site_rx, t):
+            task = _match_task(label, t)
+            return True, label, (task or ("tour" if howto else ""))
+
+    # 2) Strong browser/web surface word → the default site.
+    if re.search(_BROWSE_SURFACE, t):
+        task = _match_task(_DEFAULT_SITE, t)
+        return True, _DEFAULT_SITE, (task or ("tour" if howto else ""))
+
+    # 3) A how-to ANCHORED by a recognized task (no site/surface needed) →
+    #    the default site. The task anchor keeps "how do I get to the airport"
+    #    from firing.
+    if howto:
+        task = _match_task(_DEFAULT_SITE, t)
+        if task:
+            return True, _DEFAULT_SITE, task
+
+    return False, "", ""
+
+
+def browse_signal(utterance: str) -> tuple[bool, bool]:
+    """PII-safe telemetry: (has_verb_or_howto, has_site_or_surface) booleans
+    only — never returns or logs the utterance. Lets the meeting path record
+    WHY an intent matched or not without touching transcript content."""
+    t = (utterance or "").lower()
+    has_verb = bool(re.search(_BROWSE_VERB, t)) or bool(re.search(_HOWTO_LEAD, t))
+    has_site = any(re.search(rx, t) for rx in _BROWSE_SITES.values()) or \
+        bool(re.search(_BROWSE_SURFACE, t))
+    return has_verb, has_site
 
 
 _BROWSE_DISMISS = re.compile(

@@ -33,6 +33,7 @@ _CONTROL_OPS = ("finish", "request_human_help", "done")
 def run(
     org_id: str, session_id: str, goal: str, *, principal: str = "",
     planner: Any = None, clock: Optional[Callable[[], float]] = None,
+    on_step: Optional[Callable[[int, str, dict], None]] = None,
 ) -> dict:
     """Run the bounded perception loop toward ``goal``. Returns a transcript:
     {outcome, steps[], action_id?, replans, model_calls, reason}.
@@ -124,6 +125,17 @@ def run(
             continue
         proposal = verdict["proposal"]
         op = proposal["operation"]
+
+        # Live narration hook: fires BEFORE the action so the avatar's voice
+        # leads the on-screen click. Best-effort — a narration fault must never
+        # break the loop (and never blocks: the callback dispatches async). The
+        # callback receives operation + proposal; callers build a BOUNDED phrase
+        # from the operation only (never page content) to keep speech leak-free.
+        if on_step is not None and op not in _CONTROL_OPS:
+            try:
+                on_step(step_index, op, proposal)
+            except Exception:  # noqa: BLE001 — narration never breaks the run
+                pass
 
         # CONTROL ops handled locally — never dispatched.
         if op in _CONTROL_OPS:
