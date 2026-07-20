@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 
 from . import (
     action_plane, asana_client, auth, avatars, executor, gemini_ears, jira_client,
-    ledger, outbox, store,
+    ledger, outbox, pipedream_client, store,
 )
 from .config import settings
 
@@ -701,6 +701,11 @@ def dashboard_summary(request: Request) -> JSONResponse:
                 "graphiti_configured": bool(
                     settings.graphiti_enabled and settings.graphiti_uri.strip()
                 ),
+                # Pipedream alternative-connections tab — surfaced only so the
+                # frontend can HIDE its nav tab when unconfigured, keeping the
+                # key-free demo and un-configured prod byte-identical (the tab
+                # is inert either way; this just avoids showing a dead surface).
+                "pipedream_configured": pipedream_client.enabled(),
             },
             "auth_enabled": auth.enabled(),
             "user": (
