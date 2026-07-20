@@ -395,6 +395,11 @@ class Settings(BaseSettings):
     # extracted text one document may contribute (memory + prompt hygiene).
     knowledge_max_file_bytes: int = 10_000_000
     knowledge_max_extracted_chars: int = 400_000
+    # Continuous Drive sync: after a connected "drive" source finishes a sync it
+    # self-schedules its next refresh this many seconds later, so the folder
+    # stays up to date instead of being a one-time snapshot. Re-syncs are
+    # checksum-idempotent (unchanged files are skipped). 0 ⇒ single sync only.
+    knowledge_drive_resync_seconds: float = 900.0
     # OpenAI key for EMBEDDING_PROVIDER=openai (text-embedding-3-small at a
     # fixed 512 dims — the recommended durable Company Brain embedder). The
     # key is NEVER exposed to any browser page.

@@ -349,6 +349,21 @@ def process_due(max_orgs: int = 5, jobs_per_org: int = 4) -> int:
                         )
                     except Exception:  # noqa: BLE001
                         pass
+            # Continuous Drive sync: after a drive folder syncs OK, schedule its
+            # next refresh deferred by the interval — the folder stays current
+            # instead of a one-time snapshot. Self-perpetuating and durable (a
+            # DB-backed job that survives restarts). 0 ⇒ single sync only. A
+            # failed sync doesn't reschedule here — the job's own retry handles
+            # transient errors, and a permanently-dead source stops cleanly.
+            if (ok and job["kind"] == "sync_drive"
+                    and settings.knowledge_drive_resync_seconds > 0):
+                try:
+                    dal.enqueue_job(
+                        org_id, job["source_id"], "sync_drive",
+                        delay_seconds=settings.knowledge_drive_resync_seconds,
+                    )
+                except Exception:  # noqa: BLE001 — never break the worker tick
+                    pass
             dal.finish_job(
                 org_id, job["id"], job["lease_token"], ok=ok, error=error,
                 attempts=int(job["attempts"]),

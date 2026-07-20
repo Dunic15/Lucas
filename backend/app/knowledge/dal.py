@@ -610,8 +610,11 @@ _JOB_RETRY_SECONDS = (5.0, 30.0, 120.0, 600.0)
 
 
 def _enqueue_job_conn(
-    conn, org_id: str, source_id: str, kind: str, document_id: str | None = None
+    conn, org_id: str, source_id: str, kind: str,
+    document_id: str | None = None, delay_seconds: float = 0.0,
 ) -> None:
+    # delay_seconds > 0 defers the job (next_attempt_at in the future) — used by
+    # continuous Drive re-sync to schedule the next refresh. 0 ⇒ due now.
     conn.execute(
         text(
             """
@@ -619,22 +622,26 @@ def _enqueue_job_conn(
               org_id, source_id, document_id, kind, next_attempt_at
             ) VALUES (
               :org_id, CAST(:source_id AS uuid),
-              CAST(:document_id AS uuid), :kind, clock_timestamp()
+              CAST(:document_id AS uuid), :kind,
+              clock_timestamp() + make_interval(secs => :delay)
             )
             """
         ),
         {"org_id": org_id, "source_id": source_id,
-         "document_id": document_id, "kind": kind},
+         "document_id": document_id, "kind": kind,
+         "delay": max(0.0, float(delay_seconds))},
     )
 
 
 def enqueue_job(
-    org_id: str, source_id: str, kind: str, document_id: str | None = None
+    org_id: str, source_id: str, kind: str, document_id: str | None = None,
+    delay_seconds: float = 0.0,
 ) -> None:
     engine = _engine()
     with engine.begin() as conn:
         _set_org(conn, org_id)
-        _enqueue_job_conn(conn, org_id, source_id, kind, document_id)
+        _enqueue_job_conn(conn, org_id, source_id, kind, document_id,
+                          delay_seconds=delay_seconds)
 
 
 def due_orgs(limit: int = 20) -> list[str]:
