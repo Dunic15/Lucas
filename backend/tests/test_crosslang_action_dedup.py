@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 
 import app.main as main_module
+from app.meeting import lifecycle as _lifecycle  # noqa: E402  (lifecycle hoisted from main)
 from app import avatars, ledger, store, tools
 from app.brain import engine as brain
 from app.config import settings
@@ -237,8 +238,8 @@ def test_finalize_it_live_vs_en_summarizer_yields_one_action(
         net_calls.append((list(live), list(extracted)))
         return [(0, 0)]  # the stubbed model confirms the cross-language match
 
-    monkeypatch.setattr(main_module, "post_meeting", fake_post_meeting)
-    monkeypatch.setattr(main_module, "semantic_action_duplicates", fake_net)
+    monkeypatch.setattr(_lifecycle, "post_meeting", fake_post_meeting)
+    monkeypatch.setattr(_lifecycle, "semantic_action_duplicates", fake_net)
 
     resp = client.post("/sessions/bot_x/end")
     assert resp.status_code == 200

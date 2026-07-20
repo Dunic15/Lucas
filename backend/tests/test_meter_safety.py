@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import main, ledger, recall_client, store  # noqa: E402
+from app.meeting import lifecycle as _lifecycle  # noqa: E402  (lifecycle hoisted from main)
 from app.config import settings  # noqa: E402
 
 
@@ -319,7 +320,7 @@ def test_leave_call_ok_on_200(monkeypatch):
 def _stub_finalize_offline(monkeypatch, delivered: list):
     monkeypatch.setattr(main.anam_client, "end_conversation", lambda c: None)
     monkeypatch.setattr(
-        main, "post_meeting",
+        _lifecycle, "post_meeting",
         lambda avatar, transcript, **kw: {"summary": "s", "actions": [], "checklist": []},
     )
     monkeypatch.setattr(main.ledger, "record_meeting", lambda *a, **k: None)

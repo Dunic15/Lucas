@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import main, store  # noqa: E402
+from app.meeting import lifecycle as _lifecycle  # noqa: E402  (lifecycle hoisted from main)
 from app.config import settings  # noqa: E402
 from app.decision import detect_leave_command, detect_wake  # noqa: E402
 
@@ -212,7 +213,7 @@ def _stub_vendors(monkeypatch, tmp_path, calls: dict) -> None:
         lambda bid: calls.__setitem__("leave", calls["leave"] + 1),
     )
     monkeypatch.setattr(
-        main, "post_meeting",
+        _lifecycle, "post_meeting",
         lambda avatar, transcript, **kw: {"summary": "s", "actions": [], "checklist": []},
     )
     monkeypatch.setattr(main.ledger, "record_meeting", lambda *a, **k: None)
