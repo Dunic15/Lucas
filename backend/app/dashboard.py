@@ -687,6 +687,15 @@ def dashboard_summary(request: Request) -> JSONResponse:
             "settings": {
                 "execution_mode": settings.execution_mode,  # native | cedric
                 "native_executor": bool(settings.native_executor),
+                # Knowledge-graph grounding (graphiti) — surfaced in the Brain
+                # view as a live knowledge source. "configured" = the flag is on
+                # AND a graph DB URI is set (going live also needs graphiti-core
+                # installed; docs/GRAPHITI.md). Read-only status, like the
+                # native-executor flag — enabling is a deployment env change.
+                "graphiti_enabled": bool(settings.graphiti_enabled),
+                "graphiti_configured": bool(
+                    settings.graphiti_enabled and settings.graphiti_uri.strip()
+                ),
             },
             "auth_enabled": auth.enabled(),
             "user": (

@@ -3211,7 +3211,25 @@
         '.brdoc-meta{font-size:.78rem;color:var(--faint);margin-left:auto}'+
         '.brdoc-del{border:none;background:none;color:var(--faint);cursor:pointer;font-size:1rem;padding:3px 7px;border-radius:7px;line-height:1}'+
         '.brdoc-del:hover{color:#fff;background:var(--warn)}'+
+        '.brkg{margin-top:20px;padding:15px 16px;border:1px solid var(--line-soft);border-radius:14px;background:var(--panel-2)}'+
+        '.brkg-h{display:flex;align-items:center;gap:9px;font-size:.9rem;font-weight:600;color:var(--text)}'+
+        '.brkg-chip{font-size:.72rem;font-weight:600;padding:2px 9px;border-radius:999px;border:1px solid var(--line);color:var(--faint)}'+
+        '.brkg-chip.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}'+
+        '.brkg-d{margin-top:7px;font-size:.82rem;color:var(--dim);line-height:1.45}'+
+        '.brkg-d a{color:var(--accent)}'+
         '</style>';
+      // Knowledge graph (graphiti) — a LIVE knowledge source alongside the
+      // uploaded docs: a temporal graph of the workspace so the PM avatar can
+      // reason about who owns what / who's overloaded, not just quote docs.
+      // Status only (enabling is a deployment env change, like the native
+      // executor); reads the flag surfaced in /dashboard/summary.settings.
+      var kgOn=!!(DATA&&DATA.settings&&DATA.settings.graphiti_configured);
+      var kgCard='<div class="brkg">'+
+        '<div class="brkg-h">🕸 Knowledge graph <span class="brkg-chip'+(kgOn?" on":"")+'">'+(kgOn?"Active":"Off")+'</span></div>'+
+        '<div class="brkg-d">'+(kgOn
+          ?'A live temporal knowledge graph of your workspace (Graphiti) — Petra grounds answers about who owns what, what’s due and who’s overloaded in it, not just the uploaded docs. It updates from your Asana as meetings happen.'
+          :'Off. When enabled, a temporal knowledge graph (Graphiti) lets Petra reason about your workspace — who owns what, capacity, dependencies — beyond the documents above. Enabling is a deployment step (a graph database + env); see docs/GRAPHITI.md.')+'</div>'+
+        '</div>';
       box.innerHTML=css+
         '<div class="brwrap">'+
           '<div class="brq">Add knowledge for which avatar?</div>'+
@@ -3233,6 +3251,7 @@
             '<button class="btn primary" id="brpaste-go">Add to '+esc(avName)+'</button>'+
           '</div>'+
           '<div class="brdocs">'+docList+'</div>'+
+          kgCard+
         '</div>';
 
       box.querySelectorAll("[data-brav]").forEach(function(b){ b.addEventListener("click",function(){ window._brainAvatar=b.getAttribute("data-brav"); loadBrain(true); }); });

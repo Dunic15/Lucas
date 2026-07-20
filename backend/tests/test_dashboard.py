@@ -93,6 +93,25 @@ def test_summary_shape_and_attribution(client):
     assert all(isinstance(v, bool) for v in data["connections"].values())
 
 
+def test_summary_settings_carries_graphiti_status(client, monkeypatch):
+    """The Brain view reads graphiti status from summary.settings to show the
+    knowledge-graph card. Configured = flag on AND a graph DB URI set."""
+    from app.config import settings
+
+    s = client.get("/dashboard/summary").json()["settings"]
+    assert s["graphiti_enabled"] is False and s["graphiti_configured"] is False
+
+    monkeypatch.setattr(settings, "graphiti_enabled", True)
+    monkeypatch.setattr(settings, "graphiti_uri", "neo4j+s://x.databases.neo4j.io")
+    s = client.get("/dashboard/summary").json()["settings"]
+    assert s["graphiti_enabled"] is True and s["graphiti_configured"] is True
+
+    # Flag on but no graph DB → enabled, not configured (card shows "Off").
+    monkeypatch.setattr(settings, "graphiti_uri", "")
+    s = client.get("/dashboard/summary").json()["settings"]
+    assert s["graphiti_enabled"] is True and s["graphiti_configured"] is False
+
+
 def test_stats_include_roi_framing(client):
     """The stats block surfaces OUTCOMES (actions executed, follow-ups
     automated, follow-up hours saved), not just note-taking — all derived from
