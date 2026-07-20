@@ -656,3 +656,38 @@ def test_identity_rls_isolation(cp):
     assert operator.create_session(
         org_a, principal="u", avatar_key="laura",
         identity_label="asana")["id"]
+
+
+# ── meeting → browser bridge (Sable B2/B3, 0014 identity) ───────────────────
+
+def test_meeting_open_uses_saved_login_and_closes(cp, monkeypatch):
+    from app import browser_meeting
+    monkeypatch.setattr(settings, "browser_allowed_domains",
+                        "app.asana.com,asana.com,help.asana.com")
+    org = _org(cp, "meet-browse")
+    assert operator.connect_identity(org, label="asana")["ok"]
+    ctx = dal.identity_internal(org, "asana")["context_ref"]
+
+    r = browser_meeting.open_for_meeting(
+        org, avatar_key="petra", site_label="asana", meeting_ref="bot-mb")
+    assert r["ok"], r
+    assert r["url"] and r["logged_in"] is True
+    # The presented session attached the saved-login context.
+    internal = dal.get_session_internal(org, r["session_id"])
+    assert FakeProvider._sessions[internal["provider_ref"]].profile == ctx
+    assert browser_meeting.has_active("bot-mb")
+
+    assert browser_meeting.close_for_meeting("bot-mb") is True
+    assert browser_meeting.has_active("bot-mb") is False
+
+
+def test_meeting_open_without_login_falls_back_public(cp, monkeypatch):
+    from app import browser_meeting
+    monkeypatch.setattr(settings, "browser_allowed_domains",
+                        "app.asana.com,asana.com,help.asana.com")
+    org = _org(cp, "meet-nologin")
+    r = browser_meeting.open_for_meeting(
+        org, avatar_key="petra", site_label="asana", meeting_ref="bot-nl")
+    assert r["ok"], r
+    assert r["logged_in"] is False  # no identity → public help center
+    browser_meeting.close_for_meeting("bot-nl")

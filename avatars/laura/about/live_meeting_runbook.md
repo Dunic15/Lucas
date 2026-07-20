@@ -113,9 +113,14 @@ future access without touching the site password.
 
 Operationally: browser sessions are separate from meeting sessions — they
 do not touch the Recall per-minute meter, and they close themselves at the
-task boundary. Speech in a meeting does not yet trigger a browse directly,
-and the meeting-tile live view from the Sable design is not wired yet;
-today the flow is capture → typed action → approve → execute.
+task boundary. An addressed "open <site> and show me…" can now open a live
+browser view on the avatar's meeting tile (Sable B2/B3): the intent is
+detected off the speak path, a bounded server-built goal (never the
+transcript) drives the operator, and the read-only live-view URL is pushed
+to talk.html as an additive `browser_view` control message. It is gated by
+`BROWSER_MEETING_TRIGGER_ENABLED` (off by default) and needs a saved login
+for the site; "close the browser" hides it. Consequential clicks still
+stop at the approval door.
 
 ## Common questions
 
