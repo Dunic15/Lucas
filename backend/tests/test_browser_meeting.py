@@ -156,3 +156,27 @@ def test_no_false_fire_on_ordinary_navigation():
               "show me the numbers", "open the door"]:
         ok, _, _ = decision.detect_browse_intent(u)
         assert not ok, u
+
+
+def test_walkthrough_cancel_stops_immediately(monkeypatch):
+    # A cancel() that returns True must stop the coordinator before any
+    # narration/action — the barge-in contract for walkthroughs.
+    from app import browser
+    from app.browser import coordinator
+    calls = []
+    monkeypatch.setattr(browser, "enabled", lambda: True)
+    monkeypatch.setattr(settings, "browser_visual_planner_enabled", True)
+
+    class _Planner:  # would propose forever if not cancelled
+        def propose(self, *a, **k):
+            calls.append("propose")
+            return {"operation": "read"}
+
+    r = coordinator.run("org", "sess", "goal", planner=_Planner(),
+                        cancel=lambda: True)
+    assert r["outcome"] == "cancelled"
+    assert calls == []  # cancelled before any model call
+
+
+def test_walkthrough_cancelled_closing_is_silent():
+    assert browser_meeting._CLOSING["cancelled"] == ""

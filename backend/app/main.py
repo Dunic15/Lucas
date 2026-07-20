@@ -63,9 +63,7 @@ from . import (
     executor,
     gemini_ears,
     google_client,
-    graphiti_client,
     granola_client,
-    jira_client,
     actions,
     gmail_watcher,
     knowledge,
@@ -2355,28 +2353,17 @@ async def _start_avatar_session(
             org_id
         )
 
-    def _jira_brief_sync() -> str:
-        # Jira open-issues snapshot for the PM avatar's grounding, mirroring the
-        # Asana brief. Org-level gate (connected); TTL-cached in jira_client;
-        # best-effort — the join never fails on a brief.
-        if not jira_client.connected(org_id):
-            return ""
-        return jira_client.workspace_brief(org_id) or ""
-
-    carryover, folder, asana_snapshot, reg, cal_brief, asana_live, jira_snapshot = (
-        await asyncio.gather(
-            _quiet(run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org_id)),
-            _quiet(
-                run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id)
-            )
-            if avatar.drive_folder_id
-            else _quiet(asyncio.sleep(0)),
-            _quiet(run_in_threadpool(_asana_brief_sync)),
-            _quiet(run_in_threadpool(tool_registry.assemble, org_id, avatar)),
-            _quiet(run_in_threadpool(google_client.calendar_brief, org_id)),
-            _quiet(run_in_threadpool(_asana_live_sync)),
-            _quiet(run_in_threadpool(_jira_brief_sync)),
+    carryover, folder, asana_snapshot, reg, cal_brief, asana_live = await asyncio.gather(
+        _quiet(run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org_id)),
+        _quiet(
+            run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id)
         )
+        if avatar.drive_folder_id
+        else _quiet(asyncio.sleep(0)),
+        _quiet(run_in_threadpool(_asana_brief_sync)),
+        _quiet(run_in_threadpool(tool_registry.assemble, org_id, avatar)),
+        _quiet(run_in_threadpool(google_client.calendar_brief, org_id)),
+        _quiet(run_in_threadpool(_asana_live_sync)),
     )
     session.asana_live = bool(asana_live)
     session.memory_brief = carryover or ""
@@ -2398,20 +2385,6 @@ async def _start_avatar_session(
             f"[Asana workspace — snapshot from meeting start{_asana_note}]\n"
             f"{asana_snapshot}\n\n" + (session.memory_brief or "")
         )
-    if jira_snapshot:
-        session.memory_brief = (
-            "[Jira — open issues snapshot from meeting start]\n"
-            f"{jira_snapshot}\n\n" + (session.memory_brief or "")
-        )
-    # Feed the workspace snapshot(s) into the org's knowledge graph (graphiti,
-    # optional/off by default) so later questions can hybrid-search it. Off the
-    # hot path, best-effort; a strong ref keeps the task from being GC'd. (This
-    # wiring was dropped by a merge — restored 2026-07-20.)
-    _kg_src = "\n\n".join(s for s in (asana_snapshot, jira_snapshot) if s)
-    if _kg_src and graphiti_client.enabled():
-        _kg_task = asyncio.create_task(graphiti_client.ingest(org_id, _kg_src))
-        _graphiti_tasks.add(_kg_task)
-        _kg_task.add_done_callback(_graphiti_tasks.discard)
     if reg:
         session.tool_registry = reg
         tools_brief = tool_registry.brief(reg)
@@ -4314,10 +4287,6 @@ def _in_opening_grace(session: store.Session) -> bool:
 # pattern as _summary_tasks above).
 _self_intro_tasks: set = set()
 
-# Strong refs to in-flight graphiti ingest tasks (fired off the join path), so a
-# bare create_task isn't GC'd before it finishes writing the episode.
-_graphiti_tasks: set = set()
-
 # Recheck cadence while waiting for the floor to open before the self-intro.
 _SELF_INTRO_RECHECK_SECONDS = 2.0
 
@@ -5250,10 +5219,6 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if (
             settings.ack_enabled
             and called
-            # Wake-word mode: stay SILENT until the actual answer — never speak
-            # a "Sure —" ack over the user while they're still finishing (owner
-            # ask 2026-07-20). (Re-applied after a merge dropped it.)
-            and not _wake_required(avatar)
             # Ack discipline: partials are noisy half-words, so the ack (an
             # audible "Sure —") needs the EXACT name — a fuzzy match on a
             # partial fragment must never make her speak. And wait until a
@@ -5978,6 +5943,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if browse_ok:
             spoken_name = browser_meeting.site_spoken_name(browse_site)
             loop = asyncio.get_running_loop()
+            # Anchor every browse speak to THIS turn's generation: a barge-in
+            # or "stop" bumps the generation, which (a) drops queued/late
+            # narration in _make_avatar_speak and (b) cancels the walkthrough
+            # loop itself — she never talks over a human who took the floor.
+            browse_gen = store.bump_speech_generation(session)
+
+            def _browse_cancelled() -> bool:
+                return session.speech_generation != browse_gen
 
             async def _open_browser() -> None:
                 result = await run_in_threadpool(
@@ -5986,8 +5959,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     meeting_ref=session.bot_id)
                 if not result.get("ok"):
                     await _make_avatar_speak(
-                        session,
-                        f"I couldn't open {spoken_name} just now.", force=True)
+                        session, f"I couldn't open {spoken_name} just now.",
+                        force=True, generation=browse_gen)
                     return
                 # Show the live view on the tile, then the opening line.
                 await _send_avatar_control(
@@ -5996,31 +5969,36 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     await _make_avatar_speak(
                         session,
                         f"I don't have a saved {spoken_name} login yet, so "
-                        f"here's the {spoken_name} help center.", force=True)
+                        f"here's the {spoken_name} help center.",
+                        force=True, generation=browse_gen)
                     return
                 await _make_avatar_speak(
                     session,
                     (f"Sure — here's how you'd do that in {spoken_name}."
                      if browse_task else f"Opening {spoken_name} for you."),
-                    force=True)
+                    force=True, generation=browse_gen)
                 # Guided how-to: drive the visual planner, narrating each step.
                 # narrate() bridges the threadpool coordinator back onto the
-                # event loop; fire-and-forget so it never blocks a step.
+                # event loop; fire-and-forget so it never blocks a step. Every
+                # line carries browse_gen, so a stop silences it server-side.
                 if browse_task:
                     def _narrate(narration_line: str) -> None:
                         try:
                             asyncio.run_coroutine_threadsafe(
                                 _make_avatar_speak(
-                                    session, narration_line, force=True), loop)
+                                    session, narration_line, force=True,
+                                    generation=browse_gen), loop)
                         except Exception:  # noqa: BLE001
                             pass
                     walk = await run_in_threadpool(
                         browser_meeting.run_walkthrough, session.org_id,
                         result["session_id"], site_label=browse_site,
-                        task_key=browse_task, on_narrate=_narrate)
-                    if walk.get("closing"):
+                        task_key=browse_task, on_narrate=_narrate,
+                        cancel=_browse_cancelled)
+                    if walk.get("closing") and not _browse_cancelled():
                         await _make_avatar_speak(
-                            session, walk["closing"], force=True)
+                            session, walk["closing"], force=True,
+                            generation=browse_gen)
 
             asyncio.create_task(_open_browser())
             return JSONResponse(
@@ -6292,10 +6270,6 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if (
         settings.ack_enabled
         and called
-        # Wake-word mode stays silent until the real answer — no instant ack
-        # (owner ask 2026-07-20; re-applied after a merge dropped it). The final
-        # only lands after the speaker's pause, so the answer already waits.
-        and not _wake_required(avatar)
         and not wants_web_search(question)
         and time.time() - session.last_ack_at > 6.0
     ):
@@ -6356,20 +6330,6 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # score), read back after the stream ends to gate the interjection escape —
     # no second model call. Only consulted on the hand-raise path below.
     _answer_meta: dict = {}
-    # Knowledge-graph recall (graphiti, optional/off by default): when the PM
-    # avatar is addressed, hybrid-search the org's temporal graph for THIS
-    # question and fold the facts into her grounding ahead of the flat snapshot.
-    # Gated on the join-cached asana_live flag (never a live DB read); recall()
-    # is timeout-bounded and NEVER inits on the hot path (council fix), so a
-    # slow/failed graph falls straight back to the snapshot. (Restored after a
-    # merge dropped this wiring — 2026-07-20.)
-    if graphiti_client.enabled() and getattr(session, "asana_live", False):
-        _kg = await graphiti_client.recall(session.org_id, question or text)
-        if _kg:
-            memory = (
-                "[Knowledge graph — facts relevant to this question]\n"
-                + _kg + "\n\n" + (memory or "")
-            )
     # Talk-over guard baseline (interject_recheck_floor_at_speak): snapshot the
     # transcript length and the turn-start clock BEFORE generation, so the
     # interjection floor check below can tell whether a human took the floor while

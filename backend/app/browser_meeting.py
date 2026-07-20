@@ -78,6 +78,7 @@ _STEP_LINES = {
 _STEP_DEFAULT = ["Next step.", "And here."]
 
 _CLOSING = {
+    "cancelled": "",
     "finished": "That's the flow — that's how you'd do it.",
     "awaiting_approval": "That's the point where you'd confirm it — I'll leave "
                          "the actual change to you.",
@@ -98,7 +99,7 @@ def _narration_for(operation: str, index: int) -> str:
 
 
 def run_walkthrough(org_id: str, session_id: str, *, site_label: str,
-                    task_key: str, on_narrate) -> dict:
+                    task_key: str, on_narrate, cancel=None) -> dict:
     """Drive the visual planner through a read-only how-to on an ALREADY-open,
     presented session, narrating each step via ``on_narrate`` (a thread-safe
     callback the caller supplies). Returns {ok, outcome, closing}. Sync
@@ -120,7 +121,8 @@ def run_walkthrough(org_id: str, session_id: str, *, site_label: str,
                 pass
 
         result = coordinator.run(org_id, session_id, goal,
-                                 principal="meeting", on_step=_on_step)
+                                 principal="meeting", on_step=_on_step,
+                                 cancel=cancel)
         outcome = str(result.get("outcome") or "error")
         return {"ok": outcome in ("finished", "awaiting_approval",
                                   "write_rejected_read_only"),
