@@ -287,3 +287,24 @@ def test_rls_isolates_knowledge_tables(cp, pg):
             (org_a,),
         )
         assert denied.rowcount == 0
+
+
+def test_source_and_job_rows_are_json_serializable(cp):
+    """Postgres returns extract(epoch ...) as Decimal; the dashboard Brain tab
+    500'd on json.dumps the moment an org had one source (prod 2026-07-20).
+    The dal must hand back JSON-safe rows."""
+    import json
+
+    org = _org(cp, "brain-json")
+    src = dal.create_source(org, "Handbook", "upload")
+    _upload(org, src["id"], "handbook.md", "# Hours\n\nWe open at NINE.")
+
+    sources = dal.list_sources(org)
+    assert sources, "expected the created source back"
+    json.dumps({"sources": sources})  # raised TypeError before the fix
+    assert isinstance(sources[0]["created_at"], float)
+
+    docs = dal.list_documents(org, src["id"])
+    json.dumps({"documents": docs})
+
+    json.dumps({"jobs": dal.job_rows(org)})
