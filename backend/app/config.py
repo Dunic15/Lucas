@@ -463,6 +463,11 @@ class Settings(BaseSettings):
     # embeddings + a local cosine reranker (see graphiti_client._construct).
     graphiti_llm_model: str = "claude-sonnet-5"        # entity/edge extraction
     graphiti_llm_small_model: str = "claude-haiku-4-5"  # cheap dedup/summarize
+    # Local fastembed output dimension (BAAI/bge-small = 384). Exported to
+    # graphiti-core as EMBEDDING_DIM so its internal zero-vector fallback matches
+    # our stored vectors (else a text-only search mixes a 1024-dim default with
+    # 384-dim data). Change only if you swap the fastembed model.
+    graphiti_embedding_dim: int = 384
     # recall() is the ONLY graph call on the live answer path — timeout-bounded
     # (no ack cover in wake-word mode, so keep it tight). Init never on the hot
     # path (warmed at join).

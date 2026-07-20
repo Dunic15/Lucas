@@ -3509,6 +3509,78 @@ def vendors_view(request: Request) -> JSONResponse:
     )
 
 
+@app.get("/health/graphiti")
+async def graphiti_health(request: Request, run: int = 0) -> JSONResponse:
+    """Knowledge-graph (Graphiti) status, and — with ?run=1 — a LIVE ingest→recall
+    smoke test against the configured Neo4j using the Anthropic extraction LLM +
+    Laura's local embedder. Auth-gated (statuses reveal what's configured). The
+    live round-trip writes to a dedicated ``__smoke__`` group, so it never
+    touches a real org's graph.
+
+    First-activation check: after wiring GRAPHITI_* on a deploy, GET this with
+    ``?run=1`` — ``live.ok:true`` means ingest wrote and recall read facts back
+    from THIS deploy's graph DB."""
+    if err := cedric.auth_error(request):  # CEDRIC
+        return err
+    info: dict = {
+        "enabled": graphiti_client.enabled(),
+        "configured": bool(settings.graphiti_enabled and settings.graphiti_uri.strip()),
+        "uri_set": bool(settings.graphiti_uri.strip()),
+        "backend": settings.graphiti_backend,
+        "llm_model": settings.graphiti_llm_model,
+        "small_model": settings.graphiti_llm_small_model,
+        "embedding_dim": settings.graphiti_embedding_dim,
+        "anthropic_key_set": bool(settings.anthropic_api_key.strip()),
+    }
+    try:
+        import graphiti_core  # type: ignore
+        info["graphiti_core"] = getattr(graphiti_core, "__version__", "installed")
+    except Exception as e:  # noqa: BLE001
+        info["graphiti_core"] = f"MISSING ({type(e).__name__})"
+    if not run:
+        return JSONResponse(info)
+    if not graphiti_client.enabled():
+        info["live"] = {"ok": False, "stage": "disabled",
+                        "hint": "set GRAPHITI_ENABLED + GRAPHITI_URI/USER/PASSWORD"}
+        return JSONResponse(info, status_code=503)
+
+    import time
+    org = "__smoke__"
+    sample = (
+        "Smoke check: issue ENG-999 'Wire the payments webhook' is assigned to "
+        "Dana Lin and is blocked by ENG-1000. It is in the current sprint, "
+        "Sprint 42, which ends on Friday."
+    )
+    t0 = time.monotonic()
+    ready = await graphiti_client.ensure_ready()
+    t_connect = round(time.monotonic() - t0, 2)
+    if not ready:
+        info["live"] = {"ok": False, "stage": "connect", "connect_s": t_connect,
+                        "hint": "init failed — check server logs for '[graphiti] "
+                                "disabled' (creds/URI/graphiti-core)"}
+        return JSONResponse(info, status_code=503)
+    t1 = time.monotonic()
+    ingest_ok = await graphiti_client.ingest(
+        org, sample, name="smoke", source_description="smoke")
+    t_ingest = round(time.monotonic() - t1, 2)
+    t2 = time.monotonic()
+    facts = await graphiti_client.recall(
+        org, "who is ENG-999 assigned to and what is blocking it",
+        timeout_s=20.0, num_results=8)
+    t_recall = round(time.monotonic() - t2, 2)
+    lines = [ln for ln in facts.splitlines() if ln.strip()]
+    info["live"] = {
+        "ok": bool(ingest_ok and lines),
+        "connect_s": t_connect,
+        "ingest_ok": ingest_ok,
+        "ingest_s": t_ingest,
+        "recall_s": t_recall,
+        "recall_count": len(lines),
+        "recall_facts": lines,
+    }
+    return JSONResponse(info)
+
+
 @app.get("/ledger")
 def ledger_view(meeting_url: str, request: Request) -> JSONResponse:
     """Cross-meeting memory for a meeting link: every ledger item plus the

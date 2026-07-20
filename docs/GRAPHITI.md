@@ -29,15 +29,21 @@ Graphiti is a library — it needs three things you supply:
    - **Neo4j** (default here) — e.g. a free/managed [Neo4j Aura](https://neo4j.com/cloud/aura/) instance. Set the `neo4j+s://…` URI + user + password.
    - **FalkorDB** — lighter/embeddable. Needs the driver seam (below).
    - **Zep** — the *managed* Graphiti (no DB to run yourself); the same engine hosted.
-2. **`graphiti-core` installed** on the backend: `pip install graphiti-core`
-   (deliberately NOT in `requirements.txt`, so the default image stays lean and
-   the key-free demo is unaffected — install it on the deployment that turns
-   this on).
-3. **An LLM + embedder for extraction.** Graphiti's default is OpenAI, so the
-   simplest path sets `OPENAI_API_KEY` in the environment. To route extraction
-   through Anthropic instead (which Laura already uses), configure Graphiti's
-   `llm_client`/`embedder` at the constructor — that's the documented follow-up,
-   wired in the same `_get_client()` seam.
+2. **`graphiti-core` installed** on the backend — it's in `requirements.txt` as
+   `graphiti-core[anthropic]`, but lazy-imported, so the image only pays for it
+   when the feature is on; the key-free demo/tests are unaffected.
+3. **No extra LLM/embedder key.** Extraction runs on **Laura's own stack** — no
+   OpenAI, no new vendor key (`graphiti_client._construct`):
+   - **LLM** = Anthropic, reusing the existing `ANTHROPIC_API_KEY`
+     (`GRAPHITI_LLM_MODEL` = Sonnet for extraction, `GRAPHITI_LLM_SMALL_MODEL` =
+     Haiku for cheap dedup/summarize).
+   - **Embeddings** = Laura's local `fastembed` model (same one the RAG uses,
+     384-dim — pinned into graphiti-core as `EMBEDDING_DIM`).
+   - **Reranker** = a local cosine reranker over those same embeddings (search
+     uses RRF, so it's rarely invoked — but it's key-free either way).
+
+   So the ONLY thing a deployment provisions beyond what Laura already has is the
+   **graph DB** (Neo4j creds).
 
 ## Turn it on
 
@@ -48,10 +54,13 @@ GRAPHITI_ENABLED=true
 GRAPHITI_URI=neo4j+s://<id>.databases.neo4j.io
 GRAPHITI_USER=neo4j
 GRAPHITI_PASSWORD=<password>
+# ANTHROPIC_API_KEY is already set for the brain — extraction reuses it.
 # optional tuning:
 GRAPHITI_RECALL_TIMEOUT_S=1.5     # live-path budget for the graph query
 GRAPHITI_RECALL_RESULTS=8         # max facts folded into a single answer
-# plus the extraction LLM, e.g. OPENAI_API_KEY=...
+GRAPHITI_LLM_MODEL=claude-sonnet-5        # extraction quality
+GRAPHITI_LLM_SMALL_MODEL=claude-haiku-4-5 # cheap dedup/summarize
+GRAPHITI_EMBEDDING_DIM=384                 # match your fastembed model
 ```
 
 Recall is gated on Petra being Asana-enabled with a connected workspace (the
@@ -60,18 +69,23 @@ search. If `graphiti-core` isn't installed or the DB is unreachable, the first
 call logs `[graphiti] disabled — init failed (…)` and the feature stays off for
 the process (sticky — a dead DB isn't retried every turn).
 
-## ⚠ Untested live
+## Verify a deploy (smoke test)
 
-The graphiti-core calls in `graphiti_client.py` follow its documented API but
-were **unit-tested against a mock, not a live graph DB** (the dev/CI env is
-key-free with no graph database). Before relying on it, smoke-test end to end
-once against your real instance:
+The wiring is validated against a real Neo4j Aura, but **verify YOUR deploy's
+graph DB** once after setting the env above — no live meeting needed:
 
-1. Install `graphiti-core`, set the env above, point at a scratch graph DB.
-2. `await graphiti_client.ingest("test-org", "Dana owns the rollout, due Friday.")`
-3. `await graphiti_client.recall("test-org", "what does Dana own?")` → expect a
-   fact line back. Adjust the `add_episode` / `search` kwargs in
-   `graphiti_client.py` if a graphiti-core version differs.
+```
+curl -sS -H "Authorization: Bearer $LAURA_API_TOKEN" \
+  "$PUBLIC_BASE_URL/health/graphiti?run=1" | jq
+```
+
+- Without `?run=1` it's a cheap status check (flags: `enabled`, `configured`,
+  `graphiti_core` version, `anthropic_key_set`, `embedding_dim`).
+- With `?run=1` it runs a **real ingest→recall** against a dedicated `__smoke__`
+  group (never touches a real org's graph) and returns
+  `live.ok:true` with the recalled fact lines when the round-trip works.
+  `live.ok:false` carries a `stage`/`hint` (disabled / connect / creds) and a
+  503 — and the server logs `[graphiti] …` with the failure class.
 
 ## Seams to know
 
