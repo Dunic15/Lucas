@@ -563,12 +563,20 @@
     background:radial-gradient(42% 40% at 50% 8%, rgba(126,182,255,.14), transparent 70%);
     animation:stagelight 14s ease-in-out infinite;}
   @keyframes stagelight{0%,100%{transform:translateX(-14px);}50%{transform:translateX(14px);}}
-  /* The AvatarPreview mount: whatever the adapter renders fills this box.
-     mode="2d" today; a same-origin 3D iframe attaches to the SAME seam later. */
+  /* The AvatarPreview mount: whatever the adapter renders fills this box —
+     the same-origin 3D iframe (/talk?preview=1) or the 2D portrait fallback. */
   .stage .preview{position:absolute;inset:0;display:grid;place-items:center;}
   .stage .preview img{max-height:82%;max-width:74%;object-fit:cover;border-radius:16px;
     border:1px solid var(--line);box-shadow:0 26px 60px -28px rgba(0,0,0,.75);z-index:1;}
   .stage .preview iframe{position:absolute;inset:0;width:100%;height:100%;border:0;z-index:1;}
+  /* Legibility scrim under the stagemeta caption — only over the live 3D
+     iframe (its office backdrop is bright); the 2D portrait keeps the old
+     look, and light theme's dark caption text needs no scrim. */
+  .stage .preview:has(iframe)::after{content:"";position:absolute;left:0;right:0;bottom:0;height:36%;
+    /* z-index:1 matches the iframe's — as the mount's last child the scrim
+       then paints above it (equal z, later tree order), below stagemeta (z2). */
+    pointer-events:none;background:linear-gradient(180deg,transparent,rgba(8,12,18,.60));z-index:1;}
+  html[data-theme="light"] .stage .preview:has(iframe)::after{content:none;}
   .stage .preview .bigfallback{width:150px;height:150px;border-radius:50%;display:grid;place-items:center;
     color:#fff;font-size:3.2rem;font-weight:650;letter-spacing:-.04em;box-shadow:0 24px 60px -24px rgba(0,0,0,.7);}
   .stage .skel{position:absolute;inset:0;display:grid;place-items:center;color:var(--faint);
@@ -708,24 +716,6 @@
     .side>div:last-child{margin-top:0 !important;}
     .side>div:last-child>div:first-child{display:none;}
   }
-  /* ── chat view (the Cedric channel — approvals happen here, not Slack) ── */
-  .chat-wrap{display:flex;flex-direction:column;height:calc(100vh - 230px);min-height:400px;}
-  .chat-log{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:4px 2px 12px;}
-  .msg{max-width:74%;padding:9px 13px;border-radius:14px;font-size:.82rem;line-height:1.5;
-    white-space:pre-wrap;word-break:break-word;border:1px solid var(--line-soft);}
-  .msg.user{align-self:flex-end;background:var(--accent-soft);border-color:rgba(126,182,255,.35);}
-  .msg.cedric{align-self:flex-start;background:var(--panel);}
-  .msg .mwho{font-family:var(--mono);font-size:.55rem;letter-spacing:.06em;text-transform:uppercase;
-    color:var(--faint);margin-bottom:4px;}
-  .chat-card{margin-top:8px;border:1px solid var(--line);border-radius:11px;padding:9px 12px;
-    background:rgba(126,182,255,.06);}
-  .chat-card .ci{font-size:.8rem;}
-  .chat-card .cm{color:var(--faint);font-size:.7rem;margin-top:3px;}
-  .chat-card .cc{margin-top:8px;display:flex;gap:8px;align-items:center;}
-  .chat-composer{display:flex;gap:9px;padding-top:11px;border-top:1px solid var(--line-soft);}
-  .chat-composer input{flex:1;background:var(--bg);border:1px solid var(--line);border-radius:11px;
-    color:inherit;font:inherit;font-size:.84rem;padding:10px 13px;outline:none;}
-  .chat-composer input:focus{border-color:rgba(126,182,255,.5);}
 </style>
 </head>
 <body>
@@ -737,7 +727,6 @@
     <nav class="nav" id="nav">
       <button type="button" data-view="overview" class="on" aria-current="page"><span class="ic">▦</span> Overview</button>
       <button type="button" data-view="avatars"><span class="ic">◐</span> Avatars</button>
-      <button type="button" data-view="chat"><span class="ic">◧</span> Cedric</button>
       <button type="button" data-view="brain"><span class="ic">◎</span> Brain</button>
       <button type="button" data-view="meetings"><span class="ic">▤</span> Meetings</button>
       <button type="button" data-view="actions"><span class="ic">✓</span> Action Center<span class="navbadge" id="nav-actions-badge" hidden aria-label="actions needing attention"></span></button>
@@ -824,7 +813,7 @@
       <div class="foot">AVATARS ACT AUTONOMOUSLY — SEE MEETINGS FOR THE RECORD OF WHAT THEY DID. TRANSCRIPTS NEVER LEAVE THE STORE.</div>
     </section>
 
-    <!-- AVATARS — game-like chooser: 3D-ready stage (2D portrait today) +
+    <!-- AVATARS — game-like chooser: live 3D stage (2D portrait fallback) +
          roster selector + identity/controls. The stage box is owned by the
          AvatarPreview adapter so the same-origin 3D iframe can attach later
          without touching this page's structure. -->
@@ -893,26 +882,11 @@
       <div class="aclist" id="ac-list"></div>
     </section>
 
-    <!-- CHAT (Cedric channel — proposed actions approved inline) -->
-    <section class="view" id="view-chat" hidden>
-      <div class="head"><div><h1>Cedric</h1>
-        <div class="sub">Talk to Cedric directly — no Slack needed. Ask him to connect tools ("connect Asana"), check on work, or approve his proposed actions right in the thread</div></div></div>
-      <div class="panel chat-wrap">
-        <div class="cnote" id="chat-banner" hidden style="padding:9px 13px;margin-bottom:10px">
-          Cedric isn't connected on this deployment — messages are saved, but nobody answers.
-          <a data-goto="connections" style="cursor:pointer">Connect the brain</a>.
-        </div>
-        <div class="chat-log" id="chat-log" aria-live="polite">
-          <div class="ph" id="chat-empty" style="padding:24px;text-align:center">Loading…</div>
-        </div>
-        <form class="chat-composer" id="chat-form">
-          <input id="chat-input" type="text" placeholder="Message Cedric…" autocomplete="off" maxlength="4000" />
-          <button type="submit" class="btn">Send</button>
-        </form>
-      </div>
-    </section>
+    <!-- Cedric chat page removed (owner request 2026-07-20): approvals live in
+         the Action Center; every decision still converges on the same canonical
+         approval record. The /dashboard/chat backend stays for other surfaces. -->
 
-    <!-- PLAN & BILLING (usage reachable from Settings + a Cedric nav entry) -->
+    <!-- PLAN & BILLING (usage reachable from Settings) -->
     <section class="view" id="view-usage" hidden>
       <div class="head"><div><h1>Plan &amp; billing</h1><div class="sub">Minutes, plan and invoices — shared across your avatars</div></div>
         <button class="btn" data-goto="settings">← Back to Settings</button></div>
@@ -1089,7 +1063,7 @@
   // its job — stop the eager catalog re-fetching in THIS tab.
   if(connResult){ try{ sessionStorage.removeItem("laura_pending_connect"); }catch(e){} }
   if(oauthResult==="connected"){
-    toast("Cedric connected — his tools and meeting actions now flow through here.",false);
+    toast("Slack agent connected — its tools and meeting actions now flow through here.",false);
   } else if(oauthResult==="pending"){
     toast("Slack is installed, but the secure brain link is still pending. Retry Connect if it does not finish.",true);
   } else if(oauthResult==="error"){
@@ -1115,12 +1089,12 @@
 
   var DATA=null, filterMt="all";
 
-  // Visible top-level navigation: Overview, Avatars, Cedric (chat), Brain,
+  // Visible top-level navigation: Overview, Avatars, Brain,
   // Meetings, Action Center, Connections, Settings. "usage" (Plan & billing,
   // reached from Settings) and "studio" (Avatar Studio, reached from an
   // avatar's Personalize button) keep their views + routes but have no nav
   // entry — they highlight their nav owner instead.
-  var VIEWS=["overview","avatars","chat","brain","meetings","actions","connections","settings","usage","studio"];
+  var VIEWS=["overview","avatars","brain","meetings","actions","connections","settings","usage","studio"];
   var NAV_OWNER={usage:"settings",studio:"avatars"};
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
@@ -1952,12 +1926,12 @@
       // chips (each links its OWN connect_url — see applySlackTools); "Manage
       // tools" is a secondary link to the hosted grid for advanced management.
       // Connect + Disconnect (org-level) are preserved here.
-      '<div class="conn"><div class="nm">'+LOGO_SLACK+' Cedric <span class="stchip" style="margin-left:6px">agent</span></div>'+
-      '<div class="ds">Cedric is the agent that holds ALL the connections — connect him once (you log in as Cedric) and every tool he\'s linked (Slack, Asana, Notion, …) becomes available to your avatars in meetings. He runs approved actions and reports receipts back here. Talk to him directly in the Cedric tab.</div>'+
+      '<div class="conn"><div class="nm">'+LOGO_SLACK+' Slack agent <span class="stchip" style="margin-left:6px">add-on</span></div>'+
+      '<div class="ds">Slack agent and meeting assistant — runs the actions from your meetings (email, calendar, messages) and checks with you before doing them. One connection also unlocks its tool catalog (Notion, HubSpot, …) below.</div>'+
       '<div class="foot"><span class="cstat'+(slackConnected?" on":"")+'"><b></b>'+(slackConnected?"Connected":"Not connected")+'</span>'+
       (slackConnected
         ?'<button class="btn" data-slack-off>Disconnect</button>'
-        :'<button class="btn primary" data-slack-on>Connect Cedric</button>')+
+        :'<button class="btn primary" data-slack-on>Add to Slack</button>')+
       '</div>'+
       // When connected: the team-scope connector chips (direct connect_url actions,
       // filled by applySlackTools) PLUS a secondary "Manage tools" link to Cedric's
@@ -1973,15 +1947,29 @@
           // manage_url (org-scoped) resolves; until then the loop's entry
           // points are the connect chips above + "Add to Slack".
           '<a class="btn" data-slack-manage target="_blank" rel="noopener" aria-disabled="true" style="text-decoration:none;opacity:.55;pointer-events:none">Manage tools ↗</a>'+
-          '<div class="cnote">Connect a tool above, or manage them on Cedric.</div></div>'
+          '<div class="cnote">Connect a tool above, or manage them on the hosted connector page.</div></div>'
         :'')+
       '</div>'+
-      // ── Asana: Cedric-mediated by product decision (2026-07-17) — the
-      // native connect card is intentionally NOT rendered. Cedric holds the
-      // Asana credential; avatars reach Asana live through Cedric's tool
-      // bridge. (The native backend path still exists for deployments that
-      // wire it directly — only this UI entry point is removed.)
-      '';
+      // ── Asana (native) — the project system of record (docs/ASANA.md).
+      // Restored 2026-07-20 (owner request; reverses the 2026-07-17
+      // Cedric-mediated decision). Preferred: one-click OAuth (Connect Asana →
+      // sign in on asana.com → back here connected), available when the
+      // deployment has the Asana OAuth app configured. Fallback: paste a
+      // Personal Access Token; the backend verifies it LIVE against Asana
+      // before storing it encrypted per-org. Tokens never render back into
+      // the page either way.
+      '<div class="conn"><div class="nm">'+LOGO_ASANA+' Asana <span class="stchip" style="margin-left:6px">native</span></div>'+
+      '<div class="ds">Project system of record — avatars read the workspace when they join (projects, open &amp; overdue tasks) and file approved action items as tasks.'+
+      (asanaOAuth?'':' Token: Asana → Settings → Apps → Developer apps.')+'</div>'+
+      '<div class="foot"><span class="cstat'+(asanaConnected?" on":"")+'"><b></b>'+(asanaConnected?"Connected":"Not connected")+'</span>'+
+      (asanaConnected
+        ?'<button class="btn" data-asana-off>Disconnect</button>'
+        :(asanaOAuth
+          ?'<a class="btn primary" style="text-decoration:none" href="/oauth/asana/connect">Connect Asana</a>'
+          :'<input type="password" id="asana-pat" placeholder="Personal Access Token" autocomplete="off" '+
+            'style="flex:1;min-width:120px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
+            '<button class="btn primary" data-asana-on>Connect</button>'))+
+      '</div></div>';
     // Asana (native) connect — verify + store the pasted PAT server-side.
     $$("#conns [data-asana-on]").forEach(function(btn){btn.addEventListener("click",function(){
       var input=$("#asana-pat"), token=(input&&input.value||"").trim();
@@ -2751,23 +2739,17 @@
   }
 
   // ═════════ AvatarPreview adapter ═════════
-  // ONE seam owns what renders inside the Avatars stage. Today: the avatar's
-  // own 2D portrait (the same identity-safe /laura-reference.jpg endpoint the
-  // thumbnails use) with a loading skeleton and the letter/gradient fallback.
-  // When the same-origin 3D preview lands (/talk?preview=1 — talk.html is
-  // owned by Browser B0 in this pass), ONLY this adapter changes: it attaches
-  // the iframe to the same mount and keeps the 2D chain as fallback. Nothing
-  // else on the page needs to know. Never borrow another avatar's model/face.
+  // ONE seam owns what renders inside the Avatars stage. When the avatar's own
+  // 3D model is on disk (renderer.talk.ready — never borrow another avatar's
+  // model/face), a same-origin /talk?preview=1 iframe renders the LIVE 3D idle
+  // animation (blinks, gaze, sway — TalkingHead, browser-side only, nothing
+  // billable). Otherwise: the identity-safe 2D portrait chain the thumbnails
+  // use (/laura-reference.jpg → letter/gradient fallback).
   var AvatarPreview=(function(){
     var mountEl=null,currentId=null;
     function mount(el){ mountEl=el; }
     function dispose(){ currentId=null; if(mountEl) mountEl.innerHTML=""; }
-    function show(av){
-      if(!mountEl||!av) return;
-      if(currentId===av.id) return;   // stable across 15s summary refreshes
-      currentId=av.id;
-      var letter=esc((av.name||av.id||"?")[0].toUpperCase());
-      mountEl.innerHTML='<div class="skel">Loading '+esc(av.name||av.id)+'…</div>';
+    function show2d(av,letter){
       var img=new Image();
       img.alt=esc(av.name||av.id)+" portrait"; img.decoding="async";
       img.addEventListener("load",function(){
@@ -2779,6 +2761,34 @@
         mountEl.innerHTML='<div class="bigfallback" style="background:'+grad(av.id)+'">'+letter+'</div>';
       });
       img.src="/laura-reference.jpg?avatar_id="+encodeURIComponent(av.id);
+    }
+    function show(av){
+      if(!mountEl||!av) return;
+      if(currentId===av.id) return;   // stable across 15s summary refreshes
+      currentId=av.id;
+      var letter=esc((av.name||av.id||"?")[0].toUpperCase());
+      mountEl.innerHTML='<div class="skel">Loading '+esc(av.name||av.id)+'…</div>';
+      var ready3d=!!(av.renderer&&av.renderer.talk&&av.renderer.talk.ready);
+      if(ready3d){
+        var f=document.createElement("iframe");
+        f.src="/talk?preview=1&avatar_id="+encodeURIComponent(av.id);
+        f.title=(av.name||av.id)+" 3D preview";
+        f.setAttribute("aria-label",(av.name||av.id)+" 3D preview");
+        f.style.cssText="width:100%;height:100%;border:0;display:block";
+        // Swap the skeleton out on load — talk.html then fades the avatar in
+        // itself once its close-up camera settles (its own reveal logic).
+        f.addEventListener("load",function(){
+          if(currentId!==av.id) return;
+          f.style.opacity="1";
+        });
+        f.addEventListener("error",function(){
+          if(currentId!==av.id) return;
+          show2d(av,letter);
+        });
+        mountEl.innerHTML=""; mountEl.appendChild(f);
+        return;
+      }
+      show2d(av,letter);
     }
     return {mount:mount,show:show,dispose:dispose,current:function(){return currentId;}};
   })();
@@ -3406,129 +3416,6 @@
     });
   }
 
-// ── Chat view: the Cedric channel. Cedric posts text + action cards over
-// POST /org/chat; the human approves/rejects INLINE — those buttons hit the
-// SAME canonical dashboard doors as the meetings table, so every decision
-// still converges on the one approval record. Sending relays chat.message
-// to Cedric over the signed per-org events door.
-// NOTE: this block must stay INSIDE the main IIFE — it uses its private
-// helpers ($, esc, toast, headers); outside it dies on a ReferenceError
-// and the whole chat view goes dead (live repro 2026-07-19). ──
-(function(){
-  var log=$("#chat-log"), after=0, acts={}, loaded=false, inflight=false;
-
-  function receipt(ex){
-    if(!ex) return "";
-    var det=ex.detail||"", url=(det.match(/https?:\/\/[^\s"'<>]+/)||[])[0];
-    if(ex.status==="done"&&url)
-      return '<a class="exec done" href="'+esc(url)+'" target="_blank" rel="noopener" title="'+esc(det)+'">Done ↗</a>';
-    return '<span class="exec '+esc(ex.status)+'" title="'+esc(det)+'">'+esc(ex.status)+'</span>';
-  }
-  function cardControls(aid){
-    var a=acts[aid]||{};
-    if(a.execution&&["done","rejected","failed","approved"].indexOf(a.execution.status)>=0)
-      return receipt(a.execution);
-    if(a.known===false)
-      return '<span class="exec" title="This action is not in any meeting this org can see.">unknown action</span>';
-    return '<button class="btn-appr" data-chat-approve="'+esc(aid)+'">Approve &amp; run</button>'+
-           '<button class="btn-rej" data-chat-reject="'+esc(aid)+'">Reject</button>';
-  }
-  function msgHTML(m){
-    var who=m.sender==="user"?"user":"cedric";
-    var label=m.sender==="user"?"":('<div class="mwho">'+esc(m.sender_label||"Cedric")+'</div>');
-    if(m.kind==="action_card"){
-      var p=m.payload||{};
-      return '<div class="msg cedric">'+label+(m.body?esc(m.body):'Proposed action — approve to run it:')+
-        '<div class="chat-card"><div class="ci">'+esc(p.item||"")+'</div>'+
-        ((p.owner||p.due)?'<div class="cm">'+esc(p.owner||"unassigned")+(p.due?" · due "+esc(p.due):"")+'</div>':'')+
-        '<div class="cc" data-card="'+esc(m.action_id)+'">'+cardControls(m.action_id)+'</div></div></div>';
-    }
-    return '<div class="msg '+who+'">'+label+esc(m.body)+'</div>';
-  }
-  function load(){
-    if(inflight) return; inflight=true;
-    fetch("/dashboard/chat?after="+after,{headers:headers()})
-      .then(function(r){ return r.json(); })
-      .then(function(d){
-        inflight=false;
-        if(d.error){ var e0=$("#chat-empty"); if(e0&&!loaded) e0.textContent="Chat unavailable: "+d.error; return; }
-        Object.keys(d.actions||{}).forEach(function(k){ acts[k]=d.actions[k]; });
-        $("#chat-banner").hidden=(d.relay_configured!==false);
-        var msgs=d.messages||[];
-        var empty=$("#chat-empty");
-        if(!loaded){ loaded=true;
-          if(empty&&!msgs.length){ empty.textContent="No messages yet — say hi to Cedric."; }
-        }
-        if(msgs.length){
-          if(empty) empty.remove();
-          msgs.forEach(function(m){ after=Math.max(after,m.id); });
-          log.insertAdjacentHTML("beforeend", msgs.map(msgHTML).join(""));
-          var t=$("#chat-typing");
-          if(t){ if(msgs.some(function(m){return m.sender==="cedric";})) t.remove(); else log.appendChild(t); }
-          log.scrollTop=log.scrollHeight;
-        }
-      })
-      .catch(function(){ inflight=false; var e1=$("#chat-empty"); if(e1&&!loaded) e1.textContent="Chat unreachable — retrying…"; });
-  }
-  // Inline decide — same doors as the meetings table, chat just renders them.
-  log.addEventListener("click",function(e){
-    var b=e.target.closest("[data-chat-approve],[data-chat-reject]");
-    if(!b) return;
-    var rej=b.hasAttribute("data-chat-reject");
-    var aid=b.getAttribute(rej?"data-chat-reject":"data-chat-approve");
-    var wrap=b.closest(".cc");
-    b.disabled=true; b.textContent=rej?"Rejecting…":"Approving…";
-    fetch("/dashboard/actions/"+encodeURIComponent(aid)+(rej?"/reject":"/approve"),
-          {method:"POST",headers:headers()})
-      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,j:j}; }); })
-      .then(function(res){
-        if(!res.ok) throw new Error(res.j.error||"failed");
-        var j=res.j, html, failed=false;
-        if(rej) html='<span class="exec rejected" title="Rejected — it will not run.">rejected</span>';
-        else if(j.executed&&j.status) html=receipt({status:j.status.status,detail:j.status.detail||""});
-        else if(j.dispatched) html='<span class="exec approved" title="Approved — Cedric is running this through its connectors.">approved · with Cedric</span>';
-        else { failed=true; var why=j.execution_error||"The action couldn't be executed.";
-          html='<span class="exec failed" title="'+esc(why)+'">Couldn’t run</span>'; }
-        wrap.innerHTML=html;
-        toast(rej?"Action rejected — it will not run.":(failed?("Approved, but it couldn't run: "+(j.execution_error||"see the row")):"Approved."),failed);
-      })
-      .catch(function(e2){
-        b.disabled=false; b.textContent=rej?"Reject":"Approve & run";
-        toast("Could not "+(rej?"reject":"approve")+": "+e2.message,true);
-      });
-  });
-  $("#chat-form").addEventListener("submit",function(e){
-    e.preventDefault();
-    var inp=$("#chat-input"), text=inp.value.trim();
-    if(!text) return;
-    inp.value="";
-    fetch("/dashboard/chat",{method:"POST",headers:headers(),body:JSON.stringify({text:text})})
-      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,j:j}; }); })
-      .then(function(res){
-        if(!res.ok) throw new Error(res.j.error||"failed");
-        load();  // pulls the stored row (+ anything Cedric said meanwhile)
-        if(res.j.native_reply){
-          // Built-in Cedric is composing off-request; the poll renders it.
-          if(!$("#chat-typing")){
-            log.insertAdjacentHTML("beforeend",'<div class="msg cedric" id="chat-typing" style="opacity:.6">Cedric is typing…</div>');
-            log.scrollTop=log.scrollHeight;
-            setTimeout(function(){var t=$("#chat-typing"); if(t) t.remove();},30000);
-          }
-        } else if(res.j.delivered===false&&$("#chat-banner").hidden)
-          toast("Saved — but Cedric didn't receive it. Check the brain connection.",true);
-      })
-      .catch(function(e2){ toast("Could not send: "+e2.message,true); inp.value=text; });
-  });
-  // Poll while the chat view is actually on screen (plus one eager first load).
-  setInterval(function(){
-    if(document.hidden) return;
-    var v=$("#view-chat");
-    if(!v||v.hidden) return;
-    if(!$("#authgate").hidden) return;
-    load();
-  },4000);
-  load();
-})();
 })();
 </script>
 </body>

@@ -60,6 +60,11 @@
   /* MEETING MODE (?conversation_id= present): she must look like just another
      participant — no buttons, no status text, nothing but her. */
   body.meeting #hud, body.meeting #status { display: none; }
+  /* PREVIEW MODE (?preview=1): the dashboard's Avatars stage embeds this page
+     as a same-origin iframe for a live 3D idle preview — same chrome-less look
+     as meeting mode, but with NO conversation_id there is no SSE/poll/speaking
+     heartbeat and nothing billable: just the model rendering. */
+  body.preview #hud, body.preview #status { display: none; }
   #hud {
     position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
     display: flex; gap: 8px; align-items: center; z-index: 10;
@@ -109,6 +114,12 @@
   import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 
   const params = new URLSearchParams(location.search);
+
+  // Dashboard stage preview (?preview=1): hide the HUD/status chrome so only
+  // the avatar shows. Everything network-side stays untouched — with no
+  // conversation_id this page never opens SSE/polling or reports speaking
+  // state, so an embedded preview costs nothing and starts no session.
+  if (params.get("preview") === "1") document.body.classList.add("preview");
 
   // HD photorealistic models (samples from the TalkingHead repo), vendored
   // into OUR repo and served same-origin: Ready Player Me's CDN shutdown
