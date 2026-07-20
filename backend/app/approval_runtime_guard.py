@@ -1,17 +1,16 @@
-"""Compatibility guard for Laura-owned approval execution.
+"""Compatibility guards for Laura-owned execution and meeting etiquette.
 
-The product still uses Cedric as the Slack conversation and status surface, but
-approved writes must execute inside Laura.  Two older approval handlers retain a
-Cedric dispatch branch for backwards compatibility.  This module fences that
-branch at request time without changing the working Slack OAuth, inbound relay,
-or status-projection paths.
+Cedric remains the Slack conversation/status surface, but approved writes execute
+inside Laura. The guards below fence the two legacy Cedric execution seams while
+leaving Slack OAuth, inbound requests, and status projection unchanged.
 
-It also normalizes historical ``execution_route=cedric`` rows to Laura native
-execution when their typed action now has a registered adapter.  Browser actions
-remain on their separately hardened operator route.
+The module also preserves the shipped wake-word contract: a partial transcript
+may establish that the avatar was addressed, but it must not trigger the audible
+acknowledgement while the human is still speaking.
 """
 from __future__ import annotations
 
+import json
 from contextvars import ContextVar
 from typing import Callable
 
@@ -19,6 +18,9 @@ from fastapi import FastAPI, Request
 
 _APPROVAL_REQUEST: ContextVar[bool] = ContextVar(
     "laura_native_approval_request", default=False
+)
+_PARTIAL_TRANSCRIPT_REQUEST: ContextVar[bool] = ContextVar(
+    "laura_partial_transcript_request", default=False
 )
 _PATCHED = False
 
@@ -36,7 +38,7 @@ def _is_approval_path(request: Request) -> bool:
 
 
 def _patch_runtime() -> None:
-    """Patch the two legacy seams once, preserving every non-approval Cedric use."""
+    """Patch legacy seams once, preserving all non-execution Cedric behavior."""
     global _PATCHED
     if _PATCHED:
         return
@@ -47,9 +49,6 @@ def _patch_runtime() -> None:
     original_dispatch = cedric_callback.dispatch_action
 
     def _approval_safe_dispatch(*args, **kwargs):
-        # Outside Laura's canonical approval requests this is byte-identical to
-        # the existing callback client.  Inside them Cedric remains a surface,
-        # never a fallback executor.
         if _APPROVAL_REQUEST.get():
             return {"ok": False, "reason": "laura_native_only"}
         return original_dispatch(*args, **kwargs)
@@ -76,9 +75,9 @@ def _patch_runtime() -> None:
             native = executor.from_typed((action or {}).get("typed"))
             if native is not None and executor.handles(native):
                 # Historical rows may still say cedric even though Laura now has
-                # the adapter.  Feed a copy through the existing native route so
-                # capability checks, exactly-once claims and receipts stay
-                # canonical and no persisted artifact is silently rewritten.
+                # the adapter. Feed a copy through the canonical native route so
+                # capability checks, exactly-once claims and receipts stay owned
+                # by Laura without rewriting the stored artifact in place.
                 action = dict(action or {})
                 action["execution_route"] = "native"
         return original_execute_route(
@@ -92,9 +91,34 @@ def _patch_runtime() -> None:
 
     org_api._execute_route = _laura_execute_route
 
-    # The dashboard already turns a refused fallback into a truthful failed
-    # receipt.  Give the new reason accurate product wording rather than the
-    # generic legacy Cedric error.
+    # main.py has imported detect_wake before security.install(app) invokes this
+    # module, even though the rest of main is still being defined. The exact
+    # fuzzy=False check is used only for the partial-transcript audible ack. Keep
+    # the first/default wake detection intact so "Petra stop" still interrupts.
+    try:
+        from . import main as main_module
+
+        original_detect_wake = main_module.detect_wake
+
+        def _partial_safe_detect_wake(
+            avatar, text, present_names=None, *, fuzzy=True
+        ):
+            result = original_detect_wake(
+                avatar, text, present_names, fuzzy=fuzzy
+            )
+            if (
+                _PARTIAL_TRANSCRIPT_REQUEST.get()
+                and fuzzy is False
+                and result[0]
+                and main_module._wake_required(avatar)
+            ):
+                return False, result[1]
+            return result
+
+        main_module.detect_wake = _partial_safe_detect_wake
+    except Exception:  # pragma: no cover - app startup provides this seam
+        pass
+
     try:
         from . import dashboard
 
@@ -108,18 +132,43 @@ def _patch_runtime() -> None:
     _PATCHED = True
 
 
+async def _request_flags(request: Request) -> tuple[bool, bool]:
+    """Return (approval, partial_transcript) and replay any consumed body."""
+    approval = _is_approval_path(request)
+    partial = False
+    if request.method == "POST" and request.url.path.rstrip("/") == "/webhooks/recall":
+        body = await request.body()
+        try:
+            payload = json.loads(body.decode("utf-8")) if body else {}
+            event = str((payload or {}).get("event") or "")
+            partial = event in {"transcript.partial_data", "transcript.partial"}
+        except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+            partial = False
+
+        sent = False
+
+        async def _receive():
+            nonlocal sent
+            if sent:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        request._receive = _receive  # Starlette body replay for the route below
+    return approval, partial
+
+
 def install(app: FastAPI) -> None:
-    """Install the approval context and patch the legacy routing seams."""
+    """Install request-local execution and partial-transcript guards."""
     _patch_runtime()
 
     @app.middleware("http")
-    async def _laura_native_approval_context(
-        request: Request, call_next: Callable
-    ):
-        if not _is_approval_path(request):
-            return await call_next(request)
-        token = _APPROVAL_REQUEST.set(True)
+    async def _laura_runtime_context(request: Request, call_next: Callable):
+        approval, partial = await _request_flags(request)
+        approval_token = _APPROVAL_REQUEST.set(approval)
+        partial_token = _PARTIAL_TRANSCRIPT_REQUEST.set(partial)
         try:
             return await call_next(request)
         finally:
-            _APPROVAL_REQUEST.reset(token)
+            _PARTIAL_TRANSCRIPT_REQUEST.reset(partial_token)
+            _APPROVAL_REQUEST.reset(approval_token)
