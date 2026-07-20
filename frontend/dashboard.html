@@ -945,7 +945,7 @@
     <section class="view" id="view-pipedream" hidden>
       <div class="head"><div><h1>Pipedream <span class="stchip" style="margin-left:6px">experimental</span></h1>
         <div class="sub">An alternative way to connect your tools — brokered through Pipedream Connect, with pre-built actions. Side-by-side test surface; the native Connections tab is unaffected.</div></div></div>
-      <div class="conns" id="pdconns"><div class="empty" style="padding:14px">Loading…</div></div>
+      <div id="pdconns"><div class="empty" style="padding:14px">Loading…</div></div>
       <div class="foot">EXPERIMENTAL · CONNECTIONS MADE HERE ARE HELD BY PIPEDREAM, SCOPED TO YOUR ORG.</div>
     </section>
 
@@ -3398,11 +3398,11 @@
           html+='<div class="cnote" style="padding:9px 13px;margin-bottom:10px;border-color:rgba(245,72,77,.4)">Couldn’t reach Pipedream just now, so connection status may be out of date. You can still start a connect flow below.</div>';
         }
         if(connectedApps.length){
-          html+='<div class="sub" style="margin:4px 0 8px;font-weight:600">Your connected tools</div><div id="pd-connected">'+
+          html+='<div class="sub" style="margin:4px 0 8px;font-weight:600">Your connected tools</div><div class="conns" id="pd-connected">'+
             connectedApps.map(function(a){ return _pdCard({slug:a.app,name:_pdName(a.app)}); }).join('')+'</div>';
         }
         html+='<div class="sub" id="pd-grid-label" style="margin:16px 0 8px;font-weight:600">Popular apps</div>'+
-          '<div id="pd-grid"></div>';
+          '<div class="conns" id="pd-grid"></div>';
         // Advanced: run a pre-built action against a connected account (the
         // "pre-configured actions" surface). Free-form so any action slug can
         // be tested without hardcoding per-app IDs.
