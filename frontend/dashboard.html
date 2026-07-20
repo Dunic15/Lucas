@@ -731,6 +731,7 @@
       <button type="button" data-view="meetings"><span class="ic">▤</span> Meetings</button>
       <button type="button" data-view="actions"><span class="ic">✓</span> Action Center<span class="navbadge" id="nav-actions-badge" hidden aria-label="actions needing attention"></span></button>
       <button type="button" data-view="connections"><span class="ic">⇄</span> Connections</button>
+      <button type="button" data-view="pipedream" id="nav-pipedream" hidden><span class="ic">⚡</span> Pipedream <span class="stchip" style="margin-left:5px">beta</span></button>
       <button type="button" data-view="settings"><span class="ic">⚙</span> Settings</button>
     </nav>
     <div>
@@ -937,6 +938,17 @@
       <div class="foot">EACH TOOL NEEDS ITS OWN AUTHORIZATION. CONNECTED NEVER MEANS UNRESTRICTED ACCESS.</div>
     </section>
 
+    <!-- PIPEDREAM (alternative connections surface — experimental test tab).
+         Same per-org model as Connections, but every account is brokered
+         through Pipedream Connect (managed OAuth + pre-built actions) rather
+         than each vendor's own flow. Populated by loadPipedream(). -->
+    <section class="view" id="view-pipedream" hidden>
+      <div class="head"><div><h1>Pipedream <span class="stchip" style="margin-left:6px">experimental</span></h1>
+        <div class="sub">An alternative way to connect your tools — brokered through Pipedream Connect, with pre-built actions. Side-by-side test surface; the native Connections tab is unaffected.</div></div></div>
+      <div class="conns" id="pdconns"><div class="empty" style="padding:14px">Loading…</div></div>
+      <div class="foot">EXPERIMENTAL · CONNECTIONS MADE HERE ARE HELD BY PIPEDREAM, SCOPED TO YOUR ORG.</div>
+    </section>
+
     <!-- BRAIN -->
     <section class="view" id="view-brain" hidden>
       <div class="head"><div><h1>Brain</h1><div class="sub">Your company's knowledge — add it once, and your avatars answer from it with citations</div></div></div>
@@ -1077,6 +1089,13 @@
   } else if(jiraResult){
     toast("Jira could not be connected. Nothing was stored — try Connect again.",true);
   }
+  // Returned from a Pipedream Connect flow (?pd=connected|error&app=<slug>).
+  var pdResult=query.get("pd");
+  if(pdResult==="connected"){
+    toast((query.get("app")||"The tool")+" connected through Pipedream.",false);
+  } else if(pdResult){
+    toast("That Pipedream connection didn't finish. Nothing was stored — try Connect again.",true);
+  }
   if(connResult==="ok"){
     toast("Tool connected — Cedric can use it now.",false);
   } else if(connResult==="norefresh"){
@@ -1122,7 +1141,7 @@
   // Meetings, Action Center, Connections, Settings. "usage" (Plan & billing,
   // reached from Settings) keeps its view + route but has no nav entry — it
   // highlights its nav owner instead.
-  var VIEWS=["overview","avatars","brain","meetings","actions","connections","settings","usage"];
+  var VIEWS=["overview","avatars","brain","meetings","actions","connections","pipedream","settings","usage"];
   var NAV_OWNER={usage:"settings"};
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
@@ -1132,6 +1151,7 @@
     // (instead of resetting to Overview). replaceState = no new history entry, no jump.
     try{ window.history.replaceState({},"",window.location.pathname+"#"+name); }catch(e){}
     if(name==="brain") loadBrain();
+    if(name==="pipedream") loadPipedream();
     if(name==="actions") renderActions();
     // The avatar stage renders only once the view is opened (never preload).
     if(name==="avatars" && DATA) renderAvatars(DATA);
@@ -1148,7 +1168,8 @@
   // Otherwise, restore the view from the URL hash so a plain refresh keeps you
   // where you were (Connections stays Connections) instead of resetting to Overview.
   var _hashView=(window.location.hash||"").replace(/^#/,"");
-  if(oauthResult||googleResult||connResult||asanaResult||jiraResult){ go("connections"); }
+  if(pdResult){ go("pipedream"); }
+  else if(oauthResult||googleResult||connResult||asanaResult||jiraResult){ go("connections"); }
   else if(VIEWS.indexOf(_hashView)>=0){ go(_hashView); }
   // After a norefresh return, Cedric's callback already burned its own retries —
   // a couple of delayed catalog re-fetches usually catch the Pipedream lag so
@@ -1261,6 +1282,12 @@
 
   function renderAll(d){
     $("#api-token-settings").hidden=!!d.user;
+    // Pipedream is an experimental, opt-in surface: reveal its nav tab ONLY
+    // when the deployment has it configured, so the key-free demo and every
+    // un-configured deployment render byte-identically to before (the tab
+    // otherwise 404s to a dead "not enabled" screen).
+    var pdNav=$("#nav-pipedream");
+    if(pdNav) pdNav.hidden=!(d.settings&&d.settings.pipedream_configured);
     var avById={}; d.avatars.forEach(function(a){avById[a.id]=a;});
     function avName(id){ return (avById[id]||{}).name || (id?id:"—"); }
     var brainConnected=(d.org_connections||[]).some(function(x){return x.avatar_id==="cedric"&&x.provider==="cedric-brain"&&x.status==="connected";});
@@ -3262,6 +3289,75 @@
       out.innerHTML=html||"No diagnostics to show yet.";
     }).catch(function(){ out.innerHTML="Diagnostics unavailable right now."; });
   }
+  // ═════════ Pipedream tab (alternative connections, experimental) ═════════
+  // Self-contained like loadBrain: fetches /dashboard/pipedream/accounts and
+  // renders a card per app. Connect is a plain GET navigation (cookie auth) to
+  // /dashboard/pipedream/connect?app=<slug>, which 302s to Pipedream's hosted
+  // Connect Link and returns here with ?pd=connected. 404 ⇒ feature not
+  // enabled on this deployment.
+  var _pdInflight=false;
+  function loadPipedream(){
+    var box=$("#pdconns"); if(!box || _pdInflight) return;
+    _pdInflight=true;
+    fetch("/dashboard/pipedream/accounts",{headers:headers(),cache:"no-store"})
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {status:r.status,ok:r.ok,j:j}; }); })
+      .then(function(res){
+        _pdInflight=false;
+        if(res.status===404){
+          box.innerHTML='<div class="empty" style="padding:14px">Pipedream isn’t enabled on this deployment yet. An administrator needs to set the Pipedream project ID and OAuth client credentials (PIPEDREAM_PROJECT_ID / PIPEDREAM_CLIENT_ID / PIPEDREAM_CLIENT_SECRET).</div>';
+          return;
+        }
+        if(!res.ok){
+          box.innerHTML='<div class="empty" style="padding:14px">Could not load Pipedream connections. <button class="btn" id="pd-retry" style="margin-left:8px;padding:6px 12px;font-size:.78rem">Try again</button></div>';
+          var rb=$("#pd-retry"); if(rb) rb.addEventListener("click",function(){ loadPipedream(); });
+          return;
+        }
+        var apps=(res.j&&res.j.apps)||[];
+        var env=(res.j&&res.j.environment)||"development";
+        var degraded=res.j&&res.j.degraded;
+        var html='';
+        html+='<div class="cnote" style="padding:9px 13px;margin-bottom:10px">Environment: <b>'+esc(env)+'</b>. Connecting here authorizes the tool on Pipedream and scopes it to your organization — the native Connections tab is separate and unaffected.</div>';
+        if(degraded){
+          html+='<div class="cnote" style="padding:9px 13px;margin-bottom:10px;border-color:rgba(245,72,77,.4)">Couldn’t reach Pipedream just now, so connection status may be out of date. You can still start a connect flow below.</div>';
+        }
+        apps.forEach(function(a){
+          var slug=esc(a.slug), nm=esc(a.name||a.slug), on=!!a.connected;
+          var acctName=a.account&&a.account.name?(' · '+esc(a.account.name)):'';
+          html+='<div class="conn"><div class="nm">'+nm+' <span class="stchip" style="margin-left:6px">via Pipedream</span></div>'+
+            '<div class="ds">Connect '+nm+' through Pipedream Connect — managed OAuth plus pre-built actions.</div>'+
+            '<div class="foot"><span class="cstat'+(on?" on":"")+'"><b></b>'+(on?("Connected"+acctName):"Not connected")+'</span>'+
+            '<a class="btn'+(on?"":" primary")+'" style="text-decoration:none" href="/dashboard/pipedream/connect?app='+slug+'">'+(on?"Reconnect":"Connect")+'</a>'+
+            '</div></div>';
+        });
+        // Advanced: run a pre-built action against a connected account (the
+        // "pre-configured actions" surface). Free-form so any action slug can
+        // be tested without hardcoding per-app IDs.
+        html+='<details style="margin-top:14px"><summary style="cursor:pointer;font-size:.82rem;color:var(--dim)">Run a pre-built action (advanced test)</summary>'+
+          '<div class="cnote" style="padding:11px 13px;margin-top:9px">'+
+          '<div style="font-size:.78rem;color:var(--faint);margin-bottom:8px">Action id (e.g. <code>slack-send-message</code>) and its configured props as JSON, including the connected account under its app key with its authProvisionId.</div>'+
+          '<input id="pd-action-id" type="text" placeholder="action id" autocomplete="off" style="width:100%;box-sizing:border-box;background:transparent;border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:inherit;font:inherit;font-size:.8rem;margin-bottom:7px"/>'+
+          '<textarea id="pd-action-props" rows="4" placeholder=\'{"slack":{"authProvisionId":"apn_..."},"channel":"C123","text":"hi"}\' style="width:100%;box-sizing:border-box;background:transparent;border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:inherit;font:inherit;font-size:.78rem;font-family:var(--mono)"></textarea>'+
+          '<div style="margin-top:8px"><button class="btn" id="pd-run">Run action</button></div>'+
+          '<pre id="pd-run-out" style="margin-top:9px;max-height:220px;overflow:auto;font-size:.72rem;white-space:pre-wrap;word-break:break-word"></pre>'+
+          '</div></details>';
+        box.innerHTML=html;
+        var runBtn=$("#pd-run");
+        if(runBtn) runBtn.addEventListener("click",function(){
+          var out=$("#pd-run-out"); var aid=($("#pd-action-id").value||"").trim();
+          var propsRaw=($("#pd-action-props").value||"").trim();
+          if(!aid){ out.textContent="Enter an action id."; return; }
+          var props; try{ props=propsRaw?JSON.parse(propsRaw):{}; }catch(e){ out.textContent="Props must be valid JSON."; return; }
+          runBtn.disabled=true; out.textContent="Running…";
+          fetch("/dashboard/pipedream/run",{method:"POST",headers:headers(),body:JSON.stringify({action_id:aid,configured_props:props})})
+            .then(function(r){ return r.json().catch(function(){return {};}); })
+            .then(function(j){ out.textContent=JSON.stringify(j,null,2); })
+            .catch(function(){ out.textContent="Request failed."; })
+            .then(function(){ runBtn.disabled=false; });
+        });
+      })
+      .catch(function(){ _pdInflight=false; box.innerHTML='<div class="empty" style="padding:14px">Could not load Pipedream connections. <button class="btn" id="pd-retry2" style="margin-left:8px;padding:6px 12px;font-size:.78rem">Try again</button></div>'; var rb=$("#pd-retry2"); if(rb) rb.addEventListener("click",function(){ loadPipedream(); }); });
+  }
+
   function loadBrain(force){
     if(window._brainLoaded && !force) return;
     window._brainLoaded=true;
