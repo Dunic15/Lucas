@@ -312,6 +312,96 @@ def perceive(org_id: str, session_id: str, *,
     return obs, screenshot
 
 
+def run_recipe(org_id: str, session_id: str, *, site_label: str, task_key: str,
+               on_narrate, cancel=None, principal: str = "") -> dict:
+    """Run a SCRIPTED, read-only how-to recipe (recipes.py) on an open session:
+    navigate (domain-allowlisted) / point / reveal / say, narrating each step
+    via ``on_narrate`` (thread-safe callback). Deterministic and reliable where
+    the planner stalls. Read-only — never types or submits. Returns
+    {ok, outcome, steps, closing_ok}. Sync (threadpool). Never raises."""
+    from . import recipes
+
+    steps = recipes.recipe_for(site_label, task_key)
+    if not steps:
+        return {"ok": False, "outcome": "no_recipe", "steps": 0}
+    row = dal.get_session_internal(org_id, session_id)
+    if row is None or not _owns(row, principal):
+        return {"ok": False, "outcome": "not_owner", "steps": 0}
+    if row["state"] not in _COMMANDABLE:
+        return {"ok": False, "outcome": f"not_live:{row['state']}", "steps": 0}
+    if not _browser_allowed(org_id, row["avatar_key"]):
+        return {"ok": False, "outcome": "not_allowed", "steps": 0}
+
+    provider = get_provider(row["provider"])
+    ref = row["provider_ref"]
+    allowed = policy.allowed_domain_set(_config().browser_allowed_domains)
+    done = 0
+    try:
+        for step in steps:
+            if cancel is not None and cancel():
+                return {"ok": True, "outcome": "cancelled", "steps": done}
+            op = step.get("op")
+            say = step.get("say") or ""
+            # Voice leads the on-screen action.
+            if say:
+                try:
+                    on_narrate(say)
+                except Exception:  # noqa: BLE001 — narration never breaks the run
+                    pass
+            try:
+                if op == "navigate":
+                    url = str(step.get("url") or "")
+                    nav = policy.check_navigation_target(url, allowed)
+                    if nav.get("ok"):
+                        provider.navigate(ref, url)
+                        _wait(provider, ref, 2.5)
+                elif op == "point":
+                    _try_selectors(provider.point, provider, ref, step.get("sel"))
+                elif op == "reveal":
+                    _try_selectors(_reveal_ok, provider, ref, step.get("sel"))
+                # op == "say": narration only, already spoken above.
+            except Exception:  # noqa: BLE001 — a fragile step is skipped, not fatal
+                pass
+            done += 1
+        return {"ok": True, "outcome": "finished", "steps": done}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "outcome": type(exc).__name__, "steps": done}
+
+
+def _wait(provider, ref, seconds: float) -> None:
+    try:
+        provider.wait(ref, seconds)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _reveal_ok(provider, ref, selector: str) -> bool:
+    """reveal() returns an observation, not a bool — adapt it for _try_selectors
+    (True when the click didn't raise)."""
+    try:
+        provider.reveal(ref, selector)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _try_selectors(fn, provider, ref, sel) -> bool:
+    """Try each ' || '-separated selector alternate until one succeeds."""
+    from . import recipes
+
+    for alt in recipes.selector_alternates(str(sel or "")):
+        try:
+            if fn is _reveal_ok:
+                ok = _reveal_ok(provider, ref, alt)
+            else:
+                ok = fn(ref, alt)
+            if ok:
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
+
+
 def issue_command(
     org_id: str, session_id: str, *, verb: str, principal: str = "",
     command_id: str = "", element_id: str = "", url: str = "",

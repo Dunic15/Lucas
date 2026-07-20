@@ -81,6 +81,38 @@ _CURSOR_JS = r"""
 }
 """
 
+# Same cursor overlay, addressed by explicit viewport COORDINATES (used by the
+# recipe point/reveal, which resolve the element with Playwright first). The
+# ring pulses so the point is obvious even against a busy app UI.
+_CURSOR_XY_JS = r"""
+(p) => {
+  let c = document.getElementById('__laura_cursor');
+  if (!c) {
+    c = document.createElement('div');
+    c.id = '__laura_cursor';
+    c.style.cssText = 'position:fixed;z-index:2147483647;width:24px;height:24px;'
+      + 'margin:-3px 0 0 -3px;pointer-events:none;left:50%;top:50%;'
+      + 'transition:left .55s cubic-bezier(.4,0,.2,1),top .55s cubic-bezier(.4,0,.2,1);'
+      + 'filter:drop-shadow(0 1px 2px rgba(0,0,0,.5));background:no-repeat center/contain;'
+      + "background-image:url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='24' height='24'><path d='M4 2l16 8-7 2-2 7z' fill='%23ff3b30' stroke='white' stroke-width='1.3'/></svg>\")";
+    document.body.appendChild(c);
+    const s = document.createElement('style');
+    s.textContent = '@keyframes __laura_pulse{0%{transform:scale(.4);opacity:.8}100%{transform:scale(2);opacity:0}}';
+    document.head.appendChild(s);
+  }
+  c.style.left = p.x + 'px';
+  c.style.top = p.y + 'px';
+  const ring = document.createElement('div');
+  ring.style.cssText = 'position:fixed;z-index:2147483646;width:30px;height:30px;'
+    + 'margin:-15px 0 0 -15px;border:3px solid #ff3b30;border-radius:50%;'
+    + 'pointer-events:none;left:' + p.x + 'px;top:' + p.y + 'px;'
+    + 'animation:__laura_pulse .7s ease-out .5s forwards';
+  document.body.appendChild(ring);
+  setTimeout(() => ring.remove(), 1400);
+  return true;
+}
+"""
+
 # Playwright JS run in the page to extract a SAFE observation. It reads only
 # the accessibility-relevant DOM (visible text + interactive elements + their
 # viewport bounding boxes) and DELIBERATELY touches no cookie/storage/header
@@ -288,6 +320,45 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
                 page.wait_for_timeout(_CURSOR_GLIDE_MS)  # let the glide land
         except Exception:  # noqa: BLE001 — cosmetic only
             pass
+
+    def point(self, provider_ref: str, selector: str) -> bool:
+        """Glide the visible cursor to a control addressed by a REAL selector
+        (CSS / Playwright text=) and pulse — no click. For scripted recipes
+        that show WHERE a control is. Read-only; returns False if not found."""
+        _require_config()
+        page = self._page(provider_ref)
+        try:
+            loc = page.locator(selector).first
+            loc.scroll_into_view_if_needed(timeout=8_000)
+            box = loc.bounding_box()
+            if not box:
+                return False
+            page.evaluate(_CURSOR_XY_JS, {"x": box["x"] + box["width"] / 2,
+                                          "y": box["y"] + box["height"] / 2})
+            page.wait_for_timeout(_CURSOR_GLIDE_MS + 300)  # let the point land
+            return True
+        except Exception:  # noqa: BLE001 — a missing control is skipped, not fatal
+            return False
+
+    def reveal(self, provider_ref: str, selector: str) -> RawObservation:
+        """Click a control that only OPENS a form/menu (never submits) — the
+        read-safe half of a how-to. Points first so the cursor leads the click.
+        The domain never changes (recipes only open in-app UI)."""
+        _require_config()
+        page = self._page(provider_ref)
+        try:
+            loc = page.locator(selector).first
+            loc.scroll_into_view_if_needed(timeout=8_000)
+            box = loc.bounding_box()
+            if box:
+                page.evaluate(_CURSOR_XY_JS, {"x": box["x"] + box["width"] / 2,
+                                              "y": box["y"] + box["height"] / 2})
+                page.wait_for_timeout(_CURSOR_GLIDE_MS)
+            loc.click(timeout=_CDP_TIMEOUT_MS)
+            page.wait_for_timeout(1_200)  # let the form/menu render
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderError("reveal failed") from exc
+        return self._observe_page(page)
 
     def type_text(self, provider_ref: str, element_id: str,
                   text: str) -> RawObservation:

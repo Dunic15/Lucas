@@ -691,3 +691,38 @@ def test_meeting_open_without_login_falls_back_public(cp, monkeypatch):
     assert r["ok"], r
     assert r["logged_in"] is False  # no identity → public help center
     browser_meeting.close_for_meeting("bot-nl")
+
+def test_walkthrough_prefers_recipe_over_planner(cp, monkeypatch):
+    # With a recipe present, run_walkthrough runs it (deterministic) and narrates
+    # every step — no planner, no keys needed.
+    from app import browser_meeting
+    monkeypatch.setattr(settings, "browser_allowed_domains",
+                        "app.asana.com,asana.com")
+    org = _org(cp, "recipe")
+    assert operator.connect_identity(org, label="asana")["ok"]
+    opened = browser_meeting.open_for_meeting(
+        org, avatar_key="petra", site_label="asana", meeting_ref="rc")
+    assert opened["ok"]
+    spoken = []
+    walk = browser_meeting.run_walkthrough(
+        org, opened["session_id"], site_label="asana", task_key="create_task",
+        on_narrate=spoken.append)
+    assert walk["ok"] and walk["outcome"] == "finished", walk
+    # Every recipe step narrated something meaningful (not "next step").
+    assert len(spoken) >= 5
+    assert any("task" in s.lower() for s in spoken)
+    browser_meeting.close_for_meeting("rc")
+
+def test_recipe_cancel_stops(cp, monkeypatch):
+    from app import browser_meeting
+    monkeypatch.setattr(settings, "browser_allowed_domains", "app.asana.com")
+    org = _org(cp, "recipe-cancel")
+    assert operator.connect_identity(org, label="asana")["ok"]
+    opened = browser_meeting.open_for_meeting(
+        org, avatar_key="petra", site_label="asana", meeting_ref="rcx")
+    spoken = []
+    walk = browser_meeting.run_walkthrough(
+        org, opened["session_id"], site_label="asana", task_key="create_task",
+        on_narrate=spoken.append, cancel=lambda: True)  # cancel immediately
+    assert walk["outcome"] == "cancelled"
+    browser_meeting.close_for_meeting("rcx")
