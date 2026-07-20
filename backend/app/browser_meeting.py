@@ -300,7 +300,32 @@ def open_for_meeting(org_id: str, *, avatar_key: str, site_label: str,
         ident = dal.identity_internal(org_id, site_label)
         logged_in = ident is not None
         target = app_url if logged_in else public_url
-        # Close any prior view for this meeting first (one tile at a time).
+        # Reuse the view already open for THIS meeting instead of spinning up a
+        # second provider session. A meeting shows one tile at a time, and a
+        # second concurrent provider session can trip the provider's session cap
+        # and fail (reason=ProviderError) — exactly what happens when a human
+        # asks for a second thing ("...now create a task") while the tour view is
+        # still open. Same meeting → same browser: re-navigate + re-present.
+        active = _ACTIVE.get(meeting_ref)
+        if active is not None:
+            _prev_org, prev_sid = active
+            prev = dal.get_session_internal(_prev_org, prev_sid)
+            if prev is not None and prev["state"] in ("ready", "presenting"):
+                try:
+                    operator.issue_command(_prev_org, prev_sid, verb="navigate",
+                                           url=target, principal="meeting")
+                    minted = operator.present(_prev_org, prev_sid,
+                                              principal="meeting")
+                    viewer = (operator.exchange_token(
+                        _prev_org, minted["presentation_token"])
+                        if minted.get("ok") else {})
+                    url = ((viewer or {}).get("viewer") or {}).get("url", "")
+                    if url:
+                        return {"ok": True, "url": url, "spoken": spoken,
+                                "logged_in": logged_in, "session_id": prev_sid}
+                except Exception:  # noqa: BLE001 — fall through to a fresh open
+                    pass
+        # No reusable view → close any stale one and open fresh.
         _close_existing(org_id, meeting_ref)
 
         session = operator.create_session(

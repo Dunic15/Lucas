@@ -2754,14 +2754,35 @@ def _same_action(a: str, b: str) -> bool:
     return ta <= tb or tb <= ta
 
 
+# The post-meeting summarizer rephrases a live how-to/tour ask into a
+# THIRD-person to-do — "Show Duccio how to create a task", "Give Duccio a tour
+# of the Asana dashboard", "Show Duccio step-by-step what to click". Those miss
+# detect_browse_intent (first-person-anchored: "show me how to…"), so without
+# this they land in the to-dos AND get executed as real Asana tasks. Catch the
+# demonstrative rephrasing too: a teaching/showing verb near a how-to/tour
+# marker. These are performed LIVE on the avatar's tile, never a to-do.
+_DEMO_BROWSE_RE = re.compile(
+    r"\b(show|walk|give|guide|demonstrate|teach|mostra|fai|dai)\b"
+    r".{0,45}?"
+    r"\b(how to|what to click|step[\s-]?by[\s-]?step|a tour|the tour|un tour|"
+    r"passo[\s-]?passo|come (si )?(crea|creare|fa|fare|usa|usare|invit|aggiung))\b",
+    re.IGNORECASE | re.DOTALL)
+
+
 def _is_live_browse_item(text: str) -> bool:
     """A captured/extracted item that is really a LIVE browser-tour request
     ('show me the Asana dashboard', 'fammi un tour di Asana') — the avatar
-    does it in the meeting, so it must not land in the post-meeting to-dos."""
+    does it in the meeting, so it must not land in the post-meeting to-dos.
+    Matches both the first-person live ask (detect_browse_intent) and the
+    summarizer's third-person 'Show <name> how to…' / 'Give <name> a tour…'
+    rephrasing, which would otherwise slip through as a to-do."""
+    t = text or ""
     try:
-        return detect_browse_intent(text or "")[0]
+        if detect_browse_intent(t)[0]:
+            return True
     except Exception:  # noqa: BLE001
-        return False
+        pass
+    return bool(_DEMO_BROWSE_RE.search(t))
 
 
 def _merge_action_items(queued: list, extracted: list) -> list:
@@ -6181,23 +6202,37 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 # event loop; fire-and-forget so it never blocks a step. Every
                 # line carries browse_gen, so a stop silences it server-side.
                 if browse_task:
+                    # Re-anchor the barge-in guard to NOW. Opening the browser
+                    # takes a couple seconds, and ANY turn in that window — most
+                    # often the human re-asking because nothing had visibly
+                    # happened yet — bumps the speech generation (every turn does,
+                    # see turn_gen above). The walkthrough would read that as "a
+                    # human took the floor" and cancel at step 0 (outcome=cancelled
+                    # steps=0). Bumping here makes the walkthrough own the floor
+                    # from its first step; a genuine barge-in mid-walkthrough still
+                    # advances past walk_gen and stops it.
+                    walk_gen = store.bump_speech_generation(session)
+
+                    def _walk_cancelled() -> bool:
+                        return session.speech_generation != walk_gen
+
                     def _narrate(narration_line: str) -> None:
                         try:
                             asyncio.run_coroutine_threadsafe(
                                 _make_avatar_speak(
                                     session, narration_line, force=True,
-                                    generation=browse_gen), loop)
+                                    generation=walk_gen), loop)
                         except Exception:  # noqa: BLE001
                             pass
                     walk = await run_in_threadpool(
                         browser_meeting.run_walkthrough, session.org_id,
                         result["session_id"], site_label=browse_site,
                         task_key=browse_task, on_narrate=_narrate,
-                        cancel=_browse_cancelled)
-                    if walk.get("closing") and not _browse_cancelled():
+                        cancel=_walk_cancelled)
+                    if walk.get("closing") and not _walk_cancelled():
                         await _make_avatar_speak(
                             session, walk["closing"], force=True,
-                            generation=browse_gen)
+                            generation=walk_gen)
 
             asyncio.create_task(_open_browser())
             return JSONResponse(
