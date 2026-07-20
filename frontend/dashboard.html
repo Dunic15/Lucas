@@ -1014,6 +1014,13 @@
   var LOGO_JIRA='<svg class="clogo" width="14" height="14" viewBox="0 0 32 32" aria-hidden="true" focusable="false">'+
     '<path fill="#2684FF" opacity=".55" d="M24.5 3.5L13 15l-3 3 11.5 11.5 2.5-2.5L15.5 18 27 6.5z"/>'+
     '<path fill="#2684FF" d="M18.5 3.5L7 15l-3 3 11.5 11.5 2.5-2.5L9.5 18 21 6.5z"/></svg>';
+  var LOGO_DRIVE='<svg class="clogo" width="15" height="15" viewBox="0 0 87.3 78" aria-hidden="true" focusable="false">'+
+    '<path fill="#0066da" d="M6.6 66.85l3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8H0c0 1.55.4 3.1 1.2 4.5z"/>'+
+    '<path fill="#00ac47" d="M43.65 25L29.9 1.2c-1.35.8-2.5 1.9-3.3 3.3L1.2 48.5C.4 49.9 0 51.45 0 53h27.5z"/>'+
+    '<path fill="#ea4335" d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5H59.8l5.85 11.5z"/>'+
+    '<path fill="#00832d" d="M43.65 25L57.4 1.2C56.05.4 54.5 0 52.9 0H34.4c-1.6 0-3.15.45-4.5 1.2z"/>'+
+    '<path fill="#2684fc" d="M59.8 53H27.5L13.75 76.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z"/>'+
+    '<path fill="#ffba00" d="M73.4 26.5L60.75 4.5c-.8-1.4-1.95-2.5-3.3-3.3L43.65 25 59.8 53h27.45c0-1.55-.4-3.1-1.2-4.5z"/></svg>';
 
   var GRADS=["linear-gradient(135deg,#F5484D,#FFB49A)","linear-gradient(135deg,#4D7CFE,#7EB6FF)",
              "linear-gradient(135deg,#8b5cf6,#c4b5fd)","linear-gradient(135deg,#1F9D63,#4FC08A)"];
@@ -2034,6 +2041,16 @@
       // ── Gmail (native) — same Google sign-in as Calendar ──
       '<div class="conn"><div class="nm">'+LOGO_GMAIL+' Gmail <span class="stchip" style="margin-left:6px">native</span></div>'+
       '<div class="ds">Send recap and follow-up emails on your own Gmail. Uses your Google sign-in (shared with Calendar).</div>'+
+      '<div class="foot"><span class="cstat'+(googleNative?" on":"")+'"><b></b>'+(googleNative?"Connected":"Not connected")+'</span>'+
+      (googleNative
+        ?'<button class="btn" data-google-off>Disconnect</button>'
+        :'<a class="btn primary" style="text-decoration:none" href="/oauth/google/connect">Connect</a>')+
+      '</div></div>'+
+      // ── Google Drive (native) — same Google sign-in as Gmail/Calendar; the
+      //    /oauth/google/connect grant includes drive.readonly. Reuses
+      //    data-google-off. Folder→avatar wiring lives in the Brain tab. ──
+      '<div class="conn"><div class="nm">'+LOGO_DRIVE+' Google Drive <span class="stchip" style="margin-left:6px">native</span></div>'+
+      '<div class="ds">Avatars read shared Drive folders and cite your team’s docs in meetings — pick a folder for an avatar in the Brain tab. Uses your Google sign-in (shared with Gmail &amp; Calendar); if you connected before Drive was enabled, reconnect once to grant it.</div>'+
       '<div class="foot"><span class="cstat'+(googleNative?" on":"")+'"><b></b>'+(googleNative?"Connected":"Not connected")+'</span>'+
       (googleNative
         ?'<button class="btn" data-google-off>Disconnect</button>'
@@ -3270,6 +3287,7 @@
         }).join("") : '<div class="empty" style="padding:12px 2px">Nothing yet — drop a file above and '+esc(avName)+' will start citing it in meetings.</div>';
       var css='<style>'+
         '.brwrap{max-width:none}'+
+        '.brdrive-hint{font-size:.8rem;color:var(--dim);line-height:1.45}'+
         '.brq{font-size:.82rem;color:var(--dim);margin:0 0 8px}'+
         '.brpills{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}'+
         '.brpill{padding:7px 15px;border-radius:999px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font:inherit;font-size:.85rem;cursor:pointer;transition:all .12s}'+
@@ -3323,7 +3341,7 @@
           '</div>'+
           '<div class="brrow2">'+
             '<button class="btn" id="brpaste">Paste text instead</button>'+
-            '<button class="btn" id="brconnect" title="Google Drive sync — coming soon">Connect Google Drive</button>'+
+            '<button class="btn" id="brconnect" title="Sync a Google Drive folder into '+esc(avName)+'’s knowledge">Connect Google Drive</button>'+
             '<span class="brstat">'+docReady+' ready'+(docPend?' · '+docPend+' indexing':'')+' for '+esc(avName)+'</span>'+
           '</div>'+
           kgCard+
@@ -3331,6 +3349,11 @@
             '<input type="text" id="brpaste-fn" placeholder="Title — e.g. Refund policy" aria-label="Title" />'+
             '<textarea id="brpaste-txt" rows="4" placeholder="Paste the text…" aria-label="Text"></textarea>'+
             '<button class="btn primary" id="brpaste-go">Add to '+esc(avName)+'</button>'+
+          '</div>'+
+          '<div class="brpaste-box" id="brdrive-box" hidden>'+
+            '<div class="brdrive-hint">Paste a Google Drive <b>folder</b> link — '+esc(avName)+' reads up to 25 files from it and cites them in meetings. Needs Google connected with Drive access (Connections tab); files sync in the background.</div>'+
+            '<input type="text" id="brdrive-url" placeholder="https://drive.google.com/drive/folders/…" aria-label="Google Drive folder link" />'+
+            '<button class="btn primary" id="brdrive-go">Connect &amp; sync to '+esc(avName)+'</button>'+
           '</div>'+
           '<div class="brdocs">'+docList+'</div>'+
         '</div>';
@@ -3352,7 +3375,8 @@
         if(!/\.[a-z0-9]+$/i.test(fn)) fn=fn+".md";
         _brainUploadPayloads(sel,[{filename:fn,text:tx,mime:"text/markdown"}]);
       });
-      $("#brconnect").addEventListener("click",function(){ toast("Google Drive sync is coming soon — for now, drop the files here.",false); });
+      $("#brconnect").addEventListener("click",function(){ var db=$("#brdrive-box"); if(db){ db.hidden=!db.hidden; if(!db.hidden) $("#brdrive-url").focus(); } });
+      $("#brdrive-go").addEventListener("click",function(){ _brainConnectDrive(sel,$("#brdrive-url").value); });
       box.querySelectorAll("[data-brdel]").forEach(function(b){ b.addEventListener("click",function(){
         if(!window.confirm("Remove this knowledge? "+avName+" stops citing it.")) return;
         bFetch("sources/"+b.getAttribute("data-brdel"),{method:"DELETE"}).then(function(r){
@@ -3360,6 +3384,42 @@
           toast("Removed."); loadBrain(true); });
       }); });
     });
+  }
+
+  // Pull a Drive folder ID out of a pasted link (…/folders/<id>, ?id=<id>) or
+  // accept a raw id. Empty string = couldn't find one.
+  function _brainDriveFolderId(link){
+    var s=String(link||"").trim();
+    var m=s.match(/\/folders\/([A-Za-z0-9_-]+)/)||s.match(/[?&]id=([A-Za-z0-9_-]+)/);
+    if(m) return m[1];
+    return /^[A-Za-z0-9_-]{12,}$/.test(s)?s:"";
+  }
+  // Connect a Google Drive folder AS a knowledge source for one avatar: create
+  // a kind:"drive" source (reuse if the same folder is already connected here),
+  // assign it to the avatar, then trigger the background sync_drive job. The
+  // synced files land in the avatar's doc list and get cited like uploads.
+  function _brainConnectDrive(avatarId,link){
+    var fid=_brainDriveFolderId(link);
+    if(!fid){ toast("Paste a Google Drive folder link (or its ID).",true); return; }
+    var nm=avNameOf(avatarId)+" — Google Drive";
+    toast("Connecting Drive folder…");
+    return bFetch("sources").then(function(r){
+      var srcs=(r.ok&&r.j.sources)||[];
+      var exist=srcs.filter(function(s){ return s.kind==="drive" && s.drive_folder_id===fid && (s.avatars||[]).indexOf(avatarId)>=0; })[0];
+      var ensure=exist?Promise.resolve(exist.id):
+        bFetch("sources",{method:"POST",body:JSON.stringify({name:nm,kind:"drive",drive_folder_id:fid})}).then(function(cr){
+          if(!cr.ok||!cr.j.source) throw new Error((cr.j&&cr.j.error)||"could not connect");
+          var id=cr.j.source.id;
+          return bFetch("sources/"+id+"/assign",{method:"POST",body:JSON.stringify({avatar_id:avatarId})}).then(function(){ return id; });
+        });
+      return ensure.then(function(id){
+        return bFetch("sources/"+id+"/sync",{method:"POST"}).then(function(sr){
+          if(!sr.ok) throw new Error((sr.j&&sr.j.error)||"sync failed");
+          toast(avNameOf(avatarId)+"’s Drive folder connected — syncing now. Docs appear as they index.");
+          loadBrain(true);
+        });
+      });
+    }).catch(function(e){ toast("Drive connect failed: "+((e&&e.message)||e),true); });
   }
 
   // Ensure the per-avatar upload bundle exists (reuse an assigned upload
