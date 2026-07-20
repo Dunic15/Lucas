@@ -28,8 +28,23 @@ def test_browse_intent_positive_en_and_it():
         "vai su asana",
     ]
     for u in yes:
-        ok, site = decision.detect_browse_intent(u)
-        assert ok and site == "asana", u
+        ok, site, task = decision.detect_browse_intent(u)
+        assert ok and site == "asana" and task == "", u  # plain show
+
+
+def test_browse_intent_walkthrough_tasks():
+    cases = {
+        "show me how to change an assignee in asana": "change_assignee",
+        "walk me through creating a task in asana": "create_task",
+        "come si crea un progetto su asana": "create_project",
+        "how do I set a due date in asana": "set_due_date",
+        "show me how to add a section in asana": "add_section",
+        "teach me how to comment on a task in asana": "add_comment",
+        "show me how to use asana": "tour",
+    }
+    for u, expect in cases.items():
+        ok, site, task = decision.detect_browse_intent(u)
+        assert ok and site == "asana" and task == expect, (u, task)
 
 
 def test_browse_intent_negative():
@@ -43,7 +58,7 @@ def test_browse_intent_negative():
         "what can you do in asana?",
     ]
     for u in no:
-        ok, _ = decision.detect_browse_intent(u)
+        ok, _, _ = decision.detect_browse_intent(u)
         assert not ok, u
 
 
@@ -88,3 +103,56 @@ def test_close_for_meeting_noop_when_none():
 def test_site_spoken_name():
     assert browser_meeting.site_spoken_name("asana") == "Asana"
     assert browser_meeting.site_spoken_name("mystery") == "mystery"
+
+
+
+def test_run_walkthrough_unknown_task_fails_closed():
+    calls = []
+    r = browser_meeting.run_walkthrough(
+        "org", "sess", site_label="asana", task_key="nope",
+        on_narrate=calls.append)
+    assert r["ok"] is False and r["outcome"] == "unknown_task"
+    assert calls == []  # nothing spoken on a bad task
+
+
+def test_run_walkthrough_swallows_errors(monkeypatch):
+    # No control plane → coordinator import/run fails; must not raise.
+    monkeypatch.setattr(settings, "laura_database_url", "")
+    r = browser_meeting.run_walkthrough(
+        "org", "sess", site_label="asana", task_key="create_task",
+        on_narrate=lambda _l: None)
+    assert r["ok"] is False
+
+
+def test_narration_is_operation_only_no_page_content():
+    # Every narration line is a fixed template keyed by operation — never any
+    # page/observation text (leak-free by construction).
+    for op in ("navigate", "click", "type", "scroll", "read", "mystery"):
+        for i in range(3):
+            line = browser_meeting._narration_for(op, i)
+            assert isinstance(line, str) and line and len(line) < 80
+
+
+
+def test_browse_intent_asr_variants_and_surface():
+    # ASR mangles "Asana"; strong surface words fall back to the default site.
+    for u in ["can you open a sauna for me", "pull up azana",
+              "Petra show me on the browser", "open it on screen"]:
+        ok, site, _ = decision.detect_browse_intent(u)
+        assert ok and site == "asana", u
+
+
+def test_browse_signal_is_pii_safe_booleans():
+    hv, hs = decision.browse_signal("open Asana and show me my projects")
+    assert hv is True and hs is True
+    hv, hs = decision.browse_signal("open the door")
+    assert hv is True and hs is False
+    hv, hs = decision.browse_signal("that looks great")
+    assert hv is False and hs is False
+
+
+def test_no_false_fire_on_ordinary_navigation():
+    for u in ["go to the next page", "how do I get to the airport",
+              "show me the numbers", "open the door"]:
+        ok, _, _ = decision.detect_browse_intent(u)
+        assert not ok, u

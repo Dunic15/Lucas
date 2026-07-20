@@ -110,6 +110,7 @@ from .decision import (
     detect_invite,
     detect_browse_intent,
     detect_browse_dismiss,
+    browse_signal,
     detect_leave_command,
     detect_leave_command_explicit,
     detect_stop_command,
@@ -5966,30 +5967,64 @@ async def recall_webhook(request: Request) -> JSONResponse:
                         session, {"type": "browser_view_hide"})
             asyncio.create_task(_hide_browser())
             return JSONResponse({"ok": True, "spoke": False, "browse_hide": True})
-        browse_ok, browse_site = detect_browse_intent(question)
+        browse_ok, browse_site, browse_task = detect_browse_intent(question)
+        # PII-safe telemetry: booleans + labels only, NEVER the utterance —
+        # so a non-firing trigger is diagnosable (verb vs site) without logging
+        # transcript content.
+        _bv, _bs = browse_signal(question)
+        print(f"[browse] called=True matched={browse_ok} verb={_bv} "
+              f"site_or_surface={_bs} site={browse_site!r} task={browse_task!r}",
+              flush=True)
         if browse_ok:
             spoken_name = browser_meeting.site_spoken_name(browse_site)
+            loop = asyncio.get_running_loop()
 
             async def _open_browser() -> None:
                 result = await run_in_threadpool(
                     browser_meeting.open_for_meeting, session.org_id,
                     avatar_key=avatar.id, site_label=browse_site,
                     meeting_ref=session.bot_id)
-                if result.get("ok"):
-                    await _send_avatar_control(
-                        session, {"type": "browser_view", "url": result["url"]})
-                    line = (f"Opening {spoken_name} for you."
-                            if result.get("logged_in")
-                            else f"I don't have a saved {spoken_name} login yet, "
-                                 f"so here's the {spoken_name} help center.")
-                    await _make_avatar_speak(session, line, force=True)
-                else:
+                if not result.get("ok"):
                     await _make_avatar_speak(
                         session,
                         f"I couldn't open {spoken_name} just now.", force=True)
+                    return
+                # Show the live view on the tile, then the opening line.
+                await _send_avatar_control(
+                    session, {"type": "browser_view", "url": result["url"]})
+                if not result.get("logged_in"):
+                    await _make_avatar_speak(
+                        session,
+                        f"I don't have a saved {spoken_name} login yet, so "
+                        f"here's the {spoken_name} help center.", force=True)
+                    return
+                await _make_avatar_speak(
+                    session,
+                    (f"Sure — here's how you'd do that in {spoken_name}."
+                     if browse_task else f"Opening {spoken_name} for you."),
+                    force=True)
+                # Guided how-to: drive the visual planner, narrating each step.
+                # narrate() bridges the threadpool coordinator back onto the
+                # event loop; fire-and-forget so it never blocks a step.
+                if browse_task:
+                    def _narrate(narration_line: str) -> None:
+                        try:
+                            asyncio.run_coroutine_threadsafe(
+                                _make_avatar_speak(
+                                    session, narration_line, force=True), loop)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    walk = await run_in_threadpool(
+                        browser_meeting.run_walkthrough, session.org_id,
+                        result["session_id"], site_label=browse_site,
+                        task_key=browse_task, on_narrate=_narrate)
+                    if walk.get("closing"):
+                        await _make_avatar_speak(
+                            session, walk["closing"], force=True)
 
             asyncio.create_task(_open_browser())
-            return JSONResponse({"ok": True, "spoke": False, "browse": True})
+            return JSONResponse(
+                {"ok": True, "spoke": False, "browse": True, "task": browse_task})
 
     # ── footing: quiet-participant nudge (fires once, at wrap-up) ──
     # She knows who is in the room (roster) and who has spoken (transcript).
