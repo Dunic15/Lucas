@@ -1,9 +1,9 @@
 name: Petra Live Test
 
 on:
-  push:
+  pull_request:
     branches:
-      - ops/petra-live-test-20260720
+      - main
     paths:
       - .github/workflows/petra-live-test.yml
 
