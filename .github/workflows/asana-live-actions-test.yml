@@ -1,0 +1,99 @@
+name: Asana Live Actions Test
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  live-asana-actions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ASANA_TOKEN: ${{ secrets.ASANA_TOKEN }}
+      ASANA_WORKSPACE_GID: ${{ secrets.ASANA_WORKSPACE_GID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+
+      - name: Exercise Laura Asana create, update, and comment adapters
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          if not os.environ.get("ASANA_TOKEN", "").strip():
+              print(json.dumps({"ok": False, "error": "ASANA_TOKEN secret is not configured"}))
+              raise SystemExit(2)
+
+          from backend.app import asana_client
+
+          org_id = "github-live-asana-test"
+          task_gid = ""
+
+          def report(step, result):
+              safe = {
+                  "step": step,
+                  "ok": bool(result.get("ok")),
+                  "error": str(result.get("error") or ""),
+                  "task_gid": str(result.get("task_gid") or ""),
+                  "task_url": str(result.get("task_url") or ""),
+                  "name": str(result.get("name") or ""),
+              }
+              print(json.dumps(safe, ensure_ascii=False))
+              if not safe["ok"]:
+                  raise RuntimeError(f"{step} failed: {safe['error']}")
+
+          try:
+              created = asana_client.create_task(
+                  org_id,
+                  {
+                      "name": "Laura live connector test 2026-07-20",
+                      "notes": "Temporary end-to-end connector verification from the Laura GitHub project. This task will be completed automatically.",
+                      "assignee": "me",
+                  },
+              )
+              report("create", created)
+              task_gid = str(created.get("task_gid") or "")
+              if not task_gid:
+                  raise RuntimeError("create returned no task gid")
+
+              updated = asana_client.update_task(
+                  org_id,
+                  {
+                      "task": task_gid,
+                      "name": "Laura live connector test — updated",
+                      "due_on": "2026-07-21",
+                  },
+              )
+              report("update", updated)
+
+              commented = asana_client.add_comment(
+                  org_id,
+                  {
+                      "task": task_gid,
+                      "text": "Laura live test comment: create, update, and comment actions reached Asana successfully.",
+                  },
+              )
+              report("comment", commented)
+
+              completed = asana_client.update_task(
+                  org_id,
+                  {"task": task_gid, "completed": True},
+              )
+              report("cleanup_complete", completed)
+          except Exception:
+              if task_gid:
+                  cleanup = asana_client.update_task(org_id, {"task": task_gid, "completed": True})
+                  print(json.dumps({"step": "failure_cleanup", "ok": bool(cleanup.get("ok")), "error": str(cleanup.get("error") or "")}))
+              raise
+          PY
