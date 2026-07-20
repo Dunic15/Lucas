@@ -16,6 +16,8 @@ from typing import Callable
 
 from fastapi import FastAPI, Request
 
+from .config import settings
+
 _APPROVAL_REQUEST: ContextVar[bool] = ContextVar(
     "laura_native_approval_request", default=False
 )
@@ -50,7 +52,11 @@ def _patch_runtime() -> None:
 
     def _approval_safe_dispatch(*args, **kwargs):
         if _APPROVAL_REQUEST.get():
-            return {"ok": False, "reason": "laura_native_only"}
+            # Preserve the historical flag-off response for compatibility, but
+            # do not call Cedric. With Laura's runtime enabled, unsupported work
+            # reports the explicit native-only reason instead.
+            reason = "laura_native_only" if settings.native_executor else "not_configured"
+            return {"ok": False, "reason": reason}
         return original_dispatch(*args, **kwargs)
 
     _approval_safe_dispatch.__name__ = getattr(
@@ -71,13 +77,13 @@ def _patch_runtime() -> None:
         via: str = "",
     ):
         route = str((action or {}).get("execution_route") or "").strip()
-        if route != "browser":
+        # Direct dashboard/Slack approvals migrate historical typed Cedric rows
+        # to Laura. The established dependency-release compatibility contract is
+        # intentionally left unchanged: such legacy rows unpark but wait rather
+        # than executing through a route their original approval did not claim.
+        if route != "browser" and via != "dependency-release":
             native = executor.from_typed((action or {}).get("typed"))
             if native is not None and executor.handles(native):
-                # Historical rows may still say cedric even though Laura now has
-                # the adapter. Feed a copy through the canonical native route so
-                # capability checks, exactly-once claims and receipts stay owned
-                # by Laura without rewriting the stored artifact in place.
                 action = dict(action or {})
                 action["execution_route"] = "native"
         return original_execute_route(
