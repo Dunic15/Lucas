@@ -6083,6 +6083,53 @@ async def recall_webhook(request: Request) -> JSONResponse:
             def _browse_cancelled() -> bool:
                 return session.speech_generation != browse_gen
 
+            # Self-service connect: no saved login for this site → put a sign-in
+            # link in the meeting chat (the tile is one-way video, so the human
+            # signs in from their OWN browser), then remember it. Everything off
+            # the speak path; a failure never touches the meeting.
+            if not browser_meeting.has_identity(session.org_id, browse_site):
+                async def _connect_flow() -> None:
+                    res = await run_in_threadpool(
+                        browser_meeting.begin_connect, session.org_id,
+                        browse_site, session.bot_id)
+                    if not res.get("ok"):
+                        await _make_avatar_speak(
+                            session,
+                            f"I couldn't start the {spoken_name} sign-in just "
+                            "now.", force=True, generation=browse_gen)
+                        return
+                    await run_in_threadpool(
+                        recall_client.send_chat_message, session.bot_id,
+                        f"Sign in to {spoken_name} here so I can show it to "
+                        f"you — it's private, I only keep the session, never "
+                        f"your password: {res['login_url']}")
+                    await _make_avatar_speak(
+                        session,
+                        f"I don't have your {spoken_name} login yet. I've put a "
+                        "sign-in link in the meeting chat — open it, log in, and "
+                        "I'll remember it for next time.", force=True,
+                        generation=browse_gen)
+                    for _ in range(60):  # poll ~6 minutes
+                        await asyncio.sleep(6)
+                        state = await run_in_threadpool(
+                            browser_meeting.poll_connect, session.bot_id)
+                        if state == "logged_in":
+                            await run_in_threadpool(
+                                browser_meeting.finish_connect, session.bot_id)
+                            await _make_avatar_speak(
+                                session,
+                                f"Great — I'm connected to {spoken_name} now. "
+                                "Ask me again and I'll show you.", force=True)
+                            return
+                        if state in ("gone", "none"):
+                            return
+                    await run_in_threadpool(
+                        browser_meeting.cancel_connect, session.bot_id)
+
+                asyncio.create_task(_connect_flow())
+                return JSONResponse(
+                    {"ok": True, "spoke": False, "browse_connect": True})
+
             async def _open_browser() -> None:
                 result = await run_in_threadpool(
                     browser_meeting.open_for_meeting, session.org_id,

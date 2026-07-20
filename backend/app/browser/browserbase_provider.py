@@ -403,6 +403,99 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
         _require_config()
         return self._observe_page(self._page(provider_ref))
 
+    def create_login_session(self, context_ref: str, login_url: str) -> dict:
+        """Mint a KEEP-ALIVE session on ``context_ref``, open ``login_url``, and
+        return an INTERACTIVE live-view URL a human can sign into from their own
+        browser. Keep-alive so it survives while they log in (the meeting tile
+        is one-way video — they can't type there). The cookie jar persists to
+        the context when the session is later released. Returns
+        {provider_ref, login_view_url}; raises on failure."""
+        _require_config()
+        try:
+            import httpx
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderUnconfigured("http client unavailable") from exc
+        H = {"X-BB-API-Key": settings.browserbase_api_key,
+             "Content-Type": "application/json"}
+        try:
+            r = httpx.post(
+                "https://api.browserbase.com/v1/sessions", headers=H,
+                json={"projectId": settings.browserbase_project_id,
+                      "timeout": 900, "keepAlive": True,
+                      "browserSettings": {
+                          "context": {"id": context_ref, "persist": True},
+                          "viewport": {"width": 1280, "height": 720}}},
+                timeout=30)
+            if r.status_code >= 400:
+                raise ProviderError(f"login session http {r.status_code}")
+            data = r.json()
+            sid, connect = str(data.get("id") or ""), str(data.get("connectUrl") or "")
+            if not sid or not connect:
+                raise ProviderError("login session missing id/connectUrl")
+            # Navigate to the login page, then disconnect — keepAlive holds it.
+            page = self._connect(connect)
+            try:
+                page.goto(login_url, timeout=_CDP_TIMEOUT_MS,
+                          wait_until="domcontentloaded")
+            finally:
+                try:
+                    pw = getattr(page, "_laura_pw", None)
+                    page.context.browser.close()
+                    if pw:
+                        pw.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+            dbg = httpx.get(
+                f"https://api.browserbase.com/v1/sessions/{sid}/debug",
+                headers={"X-BB-API-Key": settings.browserbase_api_key},
+                timeout=15)
+            url = str((dbg.json() or {}).get("debuggerFullscreenUrl") or "")
+            if not url:
+                raise ProviderError("login view url missing")
+            return {"provider_ref": sid, "login_view_url": url}
+        except ProviderError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never surface the payload
+            raise ProviderError("login session failed") from exc
+
+    def login_state(self, provider_ref: str, login_host: str) -> str:
+        """Poll a keep-alive login session: 'logged_in' once the page has left
+        the login host, else 'waiting' (or 'gone' if the session ended)."""
+        _require_config()
+        try:
+            import httpx
+            from playwright.sync_api import sync_playwright
+        except Exception:  # noqa: BLE001
+            return "waiting"
+        try:
+            pw = sync_playwright().start()
+            br = pw.chromium.connect_over_cdp(
+                f"wss://connect.browserbase.com?apiKey={settings.browserbase_api_key}"
+                f"&sessionId={provider_ref}", timeout=20_000)
+            try:
+                page = br.contexts[0].pages[0]
+                url = page.url or ""
+            finally:
+                br.close(); pw.stop()
+            return "logged_in" if login_host and login_host not in url else "waiting"
+        except Exception:  # noqa: BLE001 — session ended / not reachable
+            return "gone"
+
+    def release_login_session(self, provider_ref: str) -> None:
+        """End a keep-alive login session so its context (cookie jar) persists."""
+        _require_config()
+        try:
+            import httpx
+
+            httpx.post(
+                f"https://api.browserbase.com/v1/sessions/{provider_ref}",
+                headers={"X-BB-API-Key": settings.browserbase_api_key,
+                         "Content-Type": "application/json"},
+                json={"projectId": settings.browserbase_project_id,
+                      "status": "REQUEST_RELEASE"}, timeout=15)
+        except Exception:  # noqa: BLE001 — best-effort; TTL is the backstop
+            pass
+
     def create_context(self) -> str:
         """Mint a provider-side persistent Context (saved browser profile).
         Returns the context id — stored server-side as an identity's

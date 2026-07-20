@@ -149,6 +149,23 @@ class FakeProvider:
             FakeProvider._sessions[ref] = state
         return ProviderSession(provider_ref=ref, viewer_ref=f"{ref}-viewer")
 
+    def create_login_session(self, context_ref: str, login_url: str) -> dict:
+        with FakeProvider._lock:
+            FakeProvider._counter += 1
+            ref = f"fake-login-{FakeProvider._counter}"
+            st = _State(); st.profile = context_ref; st.url = login_url
+            FakeProvider._sessions[ref] = st
+        return {"provider_ref": ref, "login_view_url": f"https://live.fake/{ref}"}
+
+    def login_state(self, provider_ref: str, login_host: str) -> str:
+        st = FakeProvider._sessions.get(provider_ref)
+        if st is None:
+            return "gone"
+        return "logged_in" if login_host and login_host not in (st.url or "") else "waiting"
+
+    def release_login_session(self, provider_ref: str) -> None:
+        FakeProvider._sessions.pop(provider_ref, None)
+
     def create_context(self) -> str:
         with FakeProvider._lock:
             FakeProvider._counter += 1
