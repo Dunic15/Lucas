@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import main, ledger, recall_client, store  # noqa: E402
+from app.api import sessions as _sessions  # noqa: E402  (sessions extracted from main)
 from app.meeting import lifecycle as _lifecycle  # noqa: E402  (lifecycle hoisted from main)
 from app.config import settings  # noqa: E402
 
@@ -224,7 +225,7 @@ def start_env(fresh_store, monkeypatch):
     monkeypatch.setattr(main.ledger, "carryover_brief", lambda url, **kw: "")
     monkeypatch.setattr(main.drive_client, "folder_brief", lambda fid: "")
     # Keep the fire-and-forget reconcile out of tests (no background 4s task).
-    monkeypatch.setattr(main, "_schedule_start_reconcile", lambda *a, **k: None)
+    monkeypatch.setattr(_sessions, "_schedule_start_reconcile", lambda *a, **k: None)
     return created
 
 
@@ -256,9 +257,9 @@ def test_start_different_urls_both_dispatch(start_env, monkeypatch):
 
 
 def test_start_lock_keyed_by_meeting_key(fresh_store):
-    a = main._start_lock_for(_MEET_URL)
-    b = main._start_lock_for(_MEET_URL + "/")  # trailing slash → same meeting_key
-    c = main._start_lock_for(_ZOOM_URL)
+    a = _sessions._start_lock_for(_MEET_URL)
+    b = _sessions._start_lock_for(_MEET_URL + "/")  # trailing slash → same meeting_key
+    c = _sessions._start_lock_for(_ZOOM_URL)
     assert a is b            # same meeting → shared lock (serialized)
     assert a is not c        # different meeting → distinct lock (parallel)
 
