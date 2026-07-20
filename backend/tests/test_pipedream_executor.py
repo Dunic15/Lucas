@@ -302,3 +302,69 @@ def test_org_door_dispatches_asana_to_pipedream(monkeypatch):
         "org", "act1", action, "laura", idempotency_key="k", via="test")
     assert status == "done" and blocked is False
     assert pd["n"] == 1 and native["n"] == 0
+
+
+# ── app_connected probe (availability gate) ─────────────────────────────────
+
+def test_app_connected_off_is_false(monkeypatch):
+    monkeypatch.setattr(settings, "pipedream_executor", False)
+    pipedream_executor._reset_conn_cache()
+    assert pipedream_executor.app_connected("org", "asana") is False
+
+
+def test_app_connected_true_and_cached(monkeypatch):
+    _enable_pd(monkeypatch)
+    pipedream_executor._reset_conn_cache()
+    calls = {"n": 0}
+
+    def fake_list(org, app=""):
+        calls["n"] += 1
+        return [{"id": "apn_1", "app": "asana", "healthy": True}]
+
+    monkeypatch.setattr(pipedream_client, "list_accounts", fake_list)
+    assert pipedream_executor.app_connected("orgX", "asana") is True
+    assert pipedream_executor.app_connected("orgX", "asana") is True  # cached
+    assert calls["n"] == 1  # one probe, then served from cache
+
+
+def test_app_connected_false_when_no_account(monkeypatch):
+    _enable_pd(monkeypatch)
+    pipedream_executor._reset_conn_cache()
+    monkeypatch.setattr(pipedream_client, "list_accounts", lambda org, app="": [])
+    assert pipedream_executor.app_connected("orgX", "asana") is False
+
+
+def test_app_connected_transient_error_not_cached(monkeypatch):
+    _enable_pd(monkeypatch)
+    pipedream_executor._reset_conn_cache()
+
+    def boom(org, app=""):
+        raise pipedream_client.PipedreamError("down")
+
+    monkeypatch.setattr(pipedream_client, "list_accounts", boom)
+    assert pipedream_executor.app_connected("orgX", "asana") is False
+    # recovers — a transient failure is not stuck as a cached False
+    monkeypatch.setattr(pipedream_client, "list_accounts",
+                        lambda org, app="": [{"id": "apn_9"}])
+    assert pipedream_executor.app_connected("orgX", "asana") is True
+
+
+def test_avatar_asana_enabled_counts_pipedream_when_native_gone(monkeypatch):
+    from app import asana_client, avatars, store as store_mod
+
+    # Native Asana disconnected; Pipedream Asana connected.
+    monkeypatch.setattr(asana_client, "connected", lambda org: False)
+    monkeypatch.setattr(pipedream_executor, "app_connected",
+                        lambda org, app: app == "asana")
+
+    class _Av:
+        def uses_native_tool(self, t):
+            return t == "asana"
+
+    monkeypatch.setattr(avatars, "load", lambda aid: _Av())
+    monkeypatch.setattr(store_mod, "capability_enabled",
+                        lambda aid, fam, connected=False: True)
+    assert main_module._avatar_asana_enabled("orgX", "petra") is True
+    # Neither native nor Pipedream connected → not available.
+    monkeypatch.setattr(pipedream_executor, "app_connected", lambda org, app: False)
+    assert main_module._avatar_asana_enabled("orgX", "petra") is False

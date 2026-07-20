@@ -410,7 +410,14 @@ def _avatar_asana_enabled(org_id: str, avatar_id: str) -> bool:
     dashboard toggle can still override per avatar. Sync (sqlite/yaml, both
     cached) — call via threadpool. Best-effort: never breaks a join/finalize."""
     try:
-        if not asana_client.connected(org_id):
+        # "Connected" now counts a Pipedream-brokered Asana account too, so the
+        # native connection can be dropped once actions run through Pipedream.
+        # Native check first (a fast local read); the Pipedream probe (cached,
+        # best-effort) only runs when native is absent.
+        from . import pipedream_executor  # lazy: avoid load-order coupling
+
+        if not (asana_client.connected(org_id)
+                or pipedream_executor.app_connected(org_id, "asana")):
             return False
         declares = avatars.load(avatar_id).uses_native_tool("asana")
         return store.capability_enabled(avatar_id, "asana", connected=declares)

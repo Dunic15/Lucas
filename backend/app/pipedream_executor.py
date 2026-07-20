@@ -21,6 +21,8 @@ moved off the native Asana adapter.
 """
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any, Callable
 
 from . import ledger, pipedream_client
@@ -137,6 +139,46 @@ def enabled() -> bool:
 
 def action_types() -> frozenset[str]:
     return frozenset(_MAPPER)
+
+
+# ── connection probe (for the availability gates) ───────────────────────────
+# Cached best-effort: lets a Pipedream-only connection count as "connected" so
+# the native connection can be dropped without silencing the avatar's tool.
+_CONN_TTL_S = 120.0
+_conn_cache: dict[tuple[str, str], tuple[bool, float]] = {}
+_conn_lock = threading.Lock()
+
+
+def app_connected(org_id: str, app_slug: str) -> bool:
+    """Best-effort: does this org have a connected account for ``app_slug`` in
+    Pipedream? Cached ~2 min. False when the executor is off or Pipedream is
+    unreachable (a transient failure is not cached, so it retries next time)."""
+    if not enabled():
+        return False
+    org = str(org_id or "").strip()
+    app = str(app_slug or "").strip().lower()
+    if not (org and app):
+        return False
+    key = (org, app)
+    now = time.monotonic()
+    with _conn_lock:
+        hit = _conn_cache.get(key)
+        if hit and hit[1] > now:
+            return hit[0]
+    try:
+        accounts = pipedream_client.list_accounts(org, app=app)
+        ok = any(a.get("id") for a in accounts)
+    except pipedream_client.PipedreamError:
+        return False  # transient — don't cache, retry next call
+    with _conn_lock:
+        _conn_cache[key] = (ok, now + _CONN_TTL_S)
+    return ok
+
+
+def _reset_conn_cache() -> None:
+    """Test seam."""
+    with _conn_lock:
+        _conn_cache.clear()
 
 
 def _type_of(action: dict | None) -> str:
