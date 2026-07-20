@@ -1,21 +1,21 @@
 """Laura-native Action Runtime.
 
-This is the internal execution plane for approved actions.  It is deliberately
-not Cedric and it never delegates execution to an external orchestrator.  Slack
+This is the internal execution plane for approved actions. It is deliberately
+not Cedric and it never delegates execution to an external orchestrator. Slack
 and the dashboard are approval/control surfaces; this module owns adapter
 selection and the real vendor call inside Laura.
 
 Every adapter follows the same contract:
 
 * receives an org id plus distilled, typed arguments (never transcript text);
-* reports whether its connection is available for that org;
+* reports whether its connection appears available for the meeting catalog;
 * executes exactly one approved write when called behind the canonical ledger
   execution claim; and
-* returns a normalized result that the executor can persist as a receipt.
+* returns a normalized result that the executor persists as a receipt.
 
-Adding a tool is one registration, not another approval system.  The built-in
+Adding a tool is one registration, not another approval system. The built-in
 adapters cover the connections Laura owns today: Google Calendar, Gmail, Asana,
-and Slack webhook delivery.  Browser execution remains on its separately
+and Slack webhook delivery. Browser execution remains on its separately
 hardened route because it has additional ownership and visual-verification
 checks.
 """
@@ -45,11 +45,7 @@ _ADAPTERS: dict[str, Adapter] = {}
 
 
 def register(adapter: Adapter) -> None:
-    """Register one native adapter.
-
-    Registration is intentionally deterministic: duplicate action types are a
-    programming error rather than last-import-wins behavior.
-    """
+    """Register one native adapter; duplicate types are programming errors."""
     key = str(adapter.action_type or "").strip()
     if not key:
         raise ValueError("adapter action_type is required")
@@ -108,8 +104,10 @@ def catalog(org_id: str) -> list[dict]:
 def execute(org_id: str, action: dict) -> dict:
     """Execute one approved action through its registered native adapter.
 
-    The canonical approval door and ledger claim live outside this module.  This
-    function never raises; callers always receive a truthful normalized result.
+    Connection probes inform the meeting catalog but are intentionally not an
+    execution gate: OAuth state can change after the meeting starts, and the
+    concrete client is the final authority. Each built-in client already returns
+    a truthful soft failure when disconnected. This function never raises.
     """
     org = str(org_id or "").strip()
     action_type = str((action or {}).get("type") or "").strip()
@@ -121,19 +119,6 @@ def execute(org_id: str, action: dict) -> dict:
             "ok": False,
             "error": f"Laura has no native adapter for {action_type!r}",
             "kind": action_type,
-        }
-    try:
-        if not adapter.connected(org):
-            return {
-                "ok": False,
-                "error": f"{adapter.label} is not connected",
-                "kind": adapter.label,
-            }
-    except Exception as exc:  # noqa: BLE001
-        return {
-            "ok": False,
-            "error": f"connection check failed ({type(exc).__name__})",
-            "kind": adapter.label,
         }
 
     args = action.get("args") if isinstance(action.get("args"), dict) else {}
@@ -225,12 +210,22 @@ def _slack_post(_org_id: str, args: dict) -> dict:
         "ok": ok,
         "kind": "slack message",
         "ref": "slack:webhook" if ok else "",
-        "error": "" if ok else str(raw.get("reason") or raw.get("error") or "Slack post failed"),
+        "error": ""
+        if ok
+        else str(raw.get("reason") or raw.get("error") or "Slack post failed"),
         "status_code": raw.get("status_code"),
     }
 
 
-register(Adapter("calendar.create_event", "google", "Google Calendar", _calendar_create, _google_connected))
+register(
+    Adapter(
+        "calendar.create_event",
+        "google",
+        "Google Calendar",
+        _calendar_create,
+        _google_connected,
+    )
+)
 register(Adapter("email.send", "google", "Gmail", _email_send, _google_connected))
 register(Adapter("asana.create_task", "asana", "Asana", _asana_create, _asana_connected))
 register(Adapter("asana.update_task", "asana", "Asana", _asana_update, _asana_connected))
