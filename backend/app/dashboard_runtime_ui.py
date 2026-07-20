@@ -13,7 +13,6 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from fastapi import FastAPI, Request
-from starlette.concurrency import iterate_in_threadpool
 from starlette.responses import Response
 
 _CLOSE_MARKER = "\n})();\n</script>"
@@ -76,7 +75,12 @@ def enhance_dashboard_html(html: str) -> str:
 
 
 def install(app: FastAPI) -> None:
-    """Install the presentation-only dashboard response enhancer."""
+    """Install the Action Center enhancer and Laura-owned approval guard."""
+    # main.py imports the routers before security.install(app), so this can patch
+    # the two legacy approval seams deterministically during app construction.
+    from . import approval_runtime_guard
+
+    approval_runtime_guard.install(app)
 
     @app.middleware("http")
     async def _dashboard_recent_meetings(
