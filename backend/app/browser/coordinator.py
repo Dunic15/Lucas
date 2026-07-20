@@ -34,6 +34,7 @@ def run(
     org_id: str, session_id: str, goal: str, *, principal: str = "",
     planner: Any = None, clock: Optional[Callable[[], float]] = None,
     on_step: Optional[Callable[[int, str, dict], None]] = None,
+    cancel: Optional[Callable[[], bool]] = None,
 ) -> dict:
     """Run the bounded perception loop toward ``goal``. Returns a transcript:
     {outcome, steps[], action_id?, replans, model_calls, reason}.
@@ -73,6 +74,15 @@ def run(
                 "step_count": len(steps)}
 
     for step_index in range(max_steps):
+        # Cancellation (e.g. a meeting barge-in / "stop") checked FIRST every
+        # iteration, so a human interruption halts the walkthrough immediately
+        # — the narration must never talk over someone who took the floor.
+        if cancel is not None:
+            try:
+                if cancel():
+                    return stop("cancelled", "cancelled")
+            except Exception:  # noqa: BLE001 — a cancel-check fault never runs away
+                pass
         # Hard bounds re-checked EVERY iteration — the loop can never run away.
         if now() - started > max_duration:
             return stop("budget_exhausted", "max_duration")
@@ -132,6 +142,14 @@ def run(
         # callback receives operation + proposal; callers build a BOUNDED phrase
         # from the operation only (never page content) to keep speech leak-free.
         if on_step is not None and op not in _CONTROL_OPS:
+            # Re-check cancel right before narrating: a barge-in that landed
+            # during perceive/plan must suppress this line, not speak it.
+            if cancel is not None:
+                try:
+                    if cancel():
+                        return stop("cancelled", "cancelled")
+                except Exception:  # noqa: BLE001
+                    pass
             try:
                 on_step(step_index, op, proposal)
             except Exception:  # noqa: BLE001 — narration never breaks the run
