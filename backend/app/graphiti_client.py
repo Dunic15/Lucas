@@ -78,6 +78,68 @@ def _group_id(org_id: str) -> str:
     return f"org:{(org_id or settings.demo_org_id).strip()}"
 
 
+def _construct():
+    """Build the Graphiti client wired to LAURA'S OWN stack — no OpenAI, no new
+    vendor key: Anthropic for LLM extraction (the existing anthropic_api_key),
+    Laura's local fastembed for embeddings, and a local cosine reranker. All
+    graphiti-core imports are lazy so a deployment without the optional
+    dependency (or with the feature off) pays nothing. Validated end-to-end
+    against a real Neo4j Aura instance before shipping (see docs/GRAPHITI.md)."""
+    from graphiti_core import Graphiti  # type: ignore
+    from graphiti_core.cross_encoder.client import CrossEncoderClient  # type: ignore
+    from graphiti_core.embedder.client import EmbedderClient  # type: ignore
+    from graphiti_core.llm_client.anthropic_client import AnthropicClient  # type: ignore
+    from graphiti_core.llm_client.config import LLMConfig  # type: ignore
+
+    from . import embeddings
+
+    class _LocalEmbedder(EmbedderClient):
+        """graphiti-core embedder backed by Laura's local fastembed model, so
+        the graph shares the RAG embedding space and needs no embeddings API."""
+        async def create(self, input_data):
+            text = input_data if isinstance(input_data, str) else (
+                next(iter(input_data), "") if input_data else "")
+            return embeddings._embed_local([str(text)])[0]
+
+        async def create_batch(self, input_data_list):
+            return embeddings._embed_local([str(t) for t in input_data_list])
+
+    class _LocalReranker(CrossEncoderClient):
+        """Key-free reranker: cosine similarity over the same local embeddings
+        (avoids graphiti-core's default OpenAI reranker / a heavy BGE model)."""
+        async def rank(self, query, passages):
+            passages = list(passages or [])
+            if not passages:
+                return []
+            import numpy as np
+
+            vecs = embeddings._embed_local([query] + passages)
+            q = np.asarray(vecs[0], dtype=float)
+            qn = float(np.linalg.norm(q)) + 1e-9
+            scored = []
+            for passage, v in zip(passages, vecs[1:]):
+                vv = np.asarray(v, dtype=float)
+                scored.append(
+                    (passage, float(q.dot(vv) / (qn * (float(np.linalg.norm(vv)) + 1e-9))))
+                )
+            return sorted(scored, key=lambda x: x[1], reverse=True)
+
+    llm = AnthropicClient(LLMConfig(
+        api_key=settings.anthropic_api_key,
+        model=settings.graphiti_llm_model,
+        small_model=settings.graphiti_llm_small_model,
+    ))
+    # Neo4j default driver; FalkorDB/Zep swap it HERE (documented seam).
+    return Graphiti(
+        settings.graphiti_uri.strip(),
+        settings.graphiti_user.strip() or "neo4j",
+        settings.graphiti_password,
+        llm_client=llm,
+        embedder=_LocalEmbedder(),
+        cross_encoder=_LocalReranker(),
+    )
+
+
 async def _get_client():
     """The process Graphiti singleton, connected + indexed once. Returns None
     when the feature is off or the dependency/DB is unavailable (sticky, so a
@@ -91,17 +153,7 @@ async def _get_client():
         if _init_done:
             return _client
         try:
-            # Lazy import: graphiti-core is an OPTIONAL dependency. Absent ⇒
-            # the feature disables cleanly instead of failing the app import.
-            from graphiti_core import Graphiti  # type: ignore
-
-            # Neo4j default constructor. FalkorDB/Zep swap the driver HERE (a
-            # single, documented seam) — see docs/GRAPHITI.md.
-            client = Graphiti(
-                settings.graphiti_uri.strip(),
-                settings.graphiti_user.strip() or "neo4j",
-                settings.graphiti_password,
-            )
+            client = _construct()
             await client.build_indices_and_constraints()
             _client = client
         except Exception as e:  # noqa: BLE001 — must never break the app

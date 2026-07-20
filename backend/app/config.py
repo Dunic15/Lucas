@@ -458,6 +458,11 @@ class Settings(BaseSettings):
     graphiti_uri: str = ""            # e.g. neo4j+s://<id>.databases.neo4j.io
     graphiti_user: str = "neo4j"
     graphiti_password: str = ""
+    # Extraction runs on Laura's own stack — NO OpenAI, NO new key: Anthropic
+    # for the LLM (the existing anthropic_api_key) + Laura's local fastembed for
+    # embeddings + a local cosine reranker (see graphiti_client._construct).
+    graphiti_llm_model: str = "claude-sonnet-5"        # entity/edge extraction
+    graphiti_llm_small_model: str = "claude-haiku-4-5"  # cheap dedup/summarize
     # recall() is the ONLY graph call on the live answer path — timeout-bounded
     # (no ack cover in wake-word mode, so keep it tight). Init never on the hot
     # path (warmed at join).
