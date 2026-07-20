@@ -63,7 +63,9 @@ from . import (
     executor,
     gemini_ears,
     google_client,
+    graphiti_client,
     granola_client,
+    jira_client,
     actions,
     gmail_watcher,
     knowledge,
@@ -2352,17 +2354,28 @@ async def _start_avatar_session(
             org_id
         )
 
-    carryover, folder, asana_snapshot, reg, cal_brief, asana_live = await asyncio.gather(
-        _quiet(run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org_id)),
-        _quiet(
-            run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id)
+    def _jira_brief_sync() -> str:
+        # Jira open-issues snapshot for the PM avatar's grounding, mirroring the
+        # Asana brief. Org-level gate (connected); TTL-cached in jira_client;
+        # best-effort — the join never fails on a brief.
+        if not jira_client.connected(org_id):
+            return ""
+        return jira_client.workspace_brief(org_id) or ""
+
+    carryover, folder, asana_snapshot, reg, cal_brief, asana_live, jira_snapshot = (
+        await asyncio.gather(
+            _quiet(run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org_id)),
+            _quiet(
+                run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id)
+            )
+            if avatar.drive_folder_id
+            else _quiet(asyncio.sleep(0)),
+            _quiet(run_in_threadpool(_asana_brief_sync)),
+            _quiet(run_in_threadpool(tool_registry.assemble, org_id, avatar)),
+            _quiet(run_in_threadpool(google_client.calendar_brief, org_id)),
+            _quiet(run_in_threadpool(_asana_live_sync)),
+            _quiet(run_in_threadpool(_jira_brief_sync)),
         )
-        if avatar.drive_folder_id
-        else _quiet(asyncio.sleep(0)),
-        _quiet(run_in_threadpool(_asana_brief_sync)),
-        _quiet(run_in_threadpool(tool_registry.assemble, org_id, avatar)),
-        _quiet(run_in_threadpool(google_client.calendar_brief, org_id)),
-        _quiet(run_in_threadpool(_asana_live_sync)),
     )
     session.asana_live = bool(asana_live)
     session.memory_brief = carryover or ""
@@ -2384,6 +2397,20 @@ async def _start_avatar_session(
             f"[Asana workspace — snapshot from meeting start{_asana_note}]\n"
             f"{asana_snapshot}\n\n" + (session.memory_brief or "")
         )
+    if jira_snapshot:
+        session.memory_brief = (
+            "[Jira — open issues snapshot from meeting start]\n"
+            f"{jira_snapshot}\n\n" + (session.memory_brief or "")
+        )
+    # Feed the workspace snapshot(s) into the org's knowledge graph (graphiti,
+    # optional/off by default) so later questions can hybrid-search it. Off the
+    # hot path, best-effort; a strong ref keeps the task from being GC'd. (This
+    # wiring was dropped by a merge — restored 2026-07-20.)
+    _kg_src = "\n\n".join(s for s in (asana_snapshot, jira_snapshot) if s)
+    if _kg_src and graphiti_client.enabled():
+        _kg_task = asyncio.create_task(graphiti_client.ingest(org_id, _kg_src))
+        _graphiti_tasks.add(_kg_task)
+        _kg_task.add_done_callback(_graphiti_tasks.discard)
     if reg:
         session.tool_registry = reg
         tools_brief = tool_registry.brief(reg)
@@ -4286,6 +4313,10 @@ def _in_opening_grace(session: store.Session) -> bool:
 # pattern as _summary_tasks above).
 _self_intro_tasks: set = set()
 
+# Strong refs to in-flight graphiti ingest tasks (fired off the join path), so a
+# bare create_task isn't GC'd before it finishes writing the episode.
+_graphiti_tasks: set = set()
+
 # Recheck cadence while waiting for the floor to open before the self-intro.
 _SELF_INTRO_RECHECK_SECONDS = 2.0
 
@@ -5218,6 +5249,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if (
             settings.ack_enabled
             and called
+            # Wake-word mode: stay SILENT until the actual answer — never speak
+            # a "Sure —" ack over the user while they're still finishing (owner
+            # ask 2026-07-20). (Re-applied after a merge dropped it.)
+            and not _wake_required(avatar)
             # Ack discipline: partials are noisy half-words, so the ack (an
             # audible "Sure —") needs the EXACT name — a fuzzy match on a
             # partial fragment must never make her speak. And wait until a
@@ -6222,6 +6257,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if (
         settings.ack_enabled
         and called
+        # Wake-word mode stays silent until the real answer — no instant ack
+        # (owner ask 2026-07-20; re-applied after a merge dropped it). The final
+        # only lands after the speaker's pause, so the answer already waits.
+        and not _wake_required(avatar)
         and not wants_web_search(question)
         and time.time() - session.last_ack_at > 6.0
     ):
@@ -6282,6 +6321,20 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # score), read back after the stream ends to gate the interjection escape —
     # no second model call. Only consulted on the hand-raise path below.
     _answer_meta: dict = {}
+    # Knowledge-graph recall (graphiti, optional/off by default): when the PM
+    # avatar is addressed, hybrid-search the org's temporal graph for THIS
+    # question and fold the facts into her grounding ahead of the flat snapshot.
+    # Gated on the join-cached asana_live flag (never a live DB read); recall()
+    # is timeout-bounded and NEVER inits on the hot path (council fix), so a
+    # slow/failed graph falls straight back to the snapshot. (Restored after a
+    # merge dropped this wiring — 2026-07-20.)
+    if graphiti_client.enabled() and getattr(session, "asana_live", False):
+        _kg = await graphiti_client.recall(session.org_id, question or text)
+        if _kg:
+            memory = (
+                "[Knowledge graph — facts relevant to this question]\n"
+                + _kg + "\n\n" + (memory or "")
+            )
     # Talk-over guard baseline (interject_recheck_floor_at_speak): snapshot the
     # transcript length and the turn-start clock BEFORE generation, so the
     # interjection floor check below can tell whether a human took the floor while

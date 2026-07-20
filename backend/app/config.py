@@ -413,6 +413,37 @@ class Settings(BaseSettings):
     asana_client_id: str = ""
     asana_client_secret: str = ""
 
+    # ── Jira Cloud (read; self-serve, NO deploy credentials) ──────────────
+    # Connected per-org from the dashboard by pasting a Jira site URL + account
+    # email + API token (Basic auth). These env vars are only the single-tenant
+    # fallback. JIRA_CLIENT_ID/SECRET are for a FUTURE Atlassian OAuth redirect
+    # (jira_client.oauth_available) — the token path needs none of them.
+    jira_site: str = ""       # e.g. https://acme.atlassian.net
+    jira_email: str = ""
+    jira_api_token: str = ""
+    jira_client_id: str = ""
+    jira_client_secret: str = ""
+
+    # ── Knowledge-graph grounding (graphiti, OPTIONAL) ────────────────────
+    # RESTORED 2026-07-20: a merge dropped these fields while dashboard.py still
+    # reads settings.graphiti_enabled/_configured (Brain-view card) and
+    # graphiti_client.enabled() reads the URI — so /dashboard/summary crashed
+    # for every logged-in user. Off by default; a temporal knowledge graph
+    # (Neo4j/FalkorDB) that grounds the PM avatar. See docs/GRAPHITI.md.
+    graphiti_enabled: bool = False
+    graphiti_backend: str = "neo4j"   # neo4j | falkordb (driver seam in _get_client)
+    graphiti_uri: str = ""            # e.g. neo4j+s://<id>.databases.neo4j.io
+    graphiti_user: str = "neo4j"
+    graphiti_password: str = ""
+    # recall() is the ONLY graph call on the live answer path — timeout-bounded
+    # (no ack cover in wake-word mode, so keep it tight). Init never on the hot
+    # path (warmed at join).
+    graphiti_recall_timeout_s: float = 1.0
+    graphiti_recall_results: int = 8
+    # Cap for a single off-path ingest write, so a hung graph DB can't hold the
+    # process-wide write lock and freeze every org's ingestion.
+    graphiti_ingest_timeout_s: float = 20.0
+
     # Proactive intervention (the differentiator): flag ONE missing step as the
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.
     proactive_enabled: bool = True

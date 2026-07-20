@@ -91,6 +91,10 @@ def test_summary_shape_and_attribution(client):
 
     # Connections are booleans only — never secrets.
     assert all(isinstance(v, bool) for v in data["connections"].values())
+    # Every connectable tool the Connections tab renders is a bool flag here,
+    # including the self-serve Jira connector.
+    assert data["connections"]["jira"] is False
+    assert data["connections"]["jira_oauth"] is False
 
 
 def test_summary_settings_carries_graphiti_status(client, monkeypatch):

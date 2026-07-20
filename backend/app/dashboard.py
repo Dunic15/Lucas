@@ -26,8 +26,8 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from . import (
-    action_plane, asana_client, auth, avatars, executor, gemini_ears, ledger,
-    outbox, store,
+    action_plane, asana_client, auth, avatars, executor, gemini_ears, jira_client,
+    ledger, outbox, store,
 )
 from .config import settings
 
@@ -660,6 +660,11 @@ def dashboard_summary(request: Request) -> JSONResponse:
     # to the paste-a-PAT flow.
     connections["asana"] = asana_connected
     connections["asana_oauth"] = asana_client.oauth_available()
+    # Jira — the org's stored token (Connections card) or the JIRA_* env
+    # fallback. jira_oauth = a future Atlassian OAuth redirect is configured;
+    # until then the card uses the self-serve site+email+token flow.
+    connections["jira"] = jira_client.connected(_native_google_org)
+    connections["jira_oauth"] = jira_client.oauth_available()
 
     callback_deliveries = outbox.delivery_rows(
         caller_org or settings.demo_org_id
@@ -834,6 +839,82 @@ async def disconnect_asana(request: Request) -> JSONResponse:
     return JSONResponse(
         {"ok": True, "removed": bool(removed_oauth or removed_pat),
          "still_connected_via_env": bool(settings.asana_token.strip())},
+        headers=_NO_STORE,
+    )
+
+
+@router.post("/dashboard/connections/jira")
+async def connect_jira(request: Request) -> JSONResponse:
+    """Connect the org's Jira Cloud, self-serve — no deploy credentials.
+
+    Body: {site, email, token}. The credentials are verified LIVE against Jira
+    (GET /myself) before anything is stored — a bad token is a clean 400, never
+    a half-connected state. On success they're persisted encrypted per-org
+    (org_oauth, provider="jira"; the row carries the account email + site URL
+    for the card). The token is never echoed, logged, or shipped to the browser
+    again. Owner-authed like the other dashboard mutations (login + same-origin)."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    site = str((body or {}).get("site") or "").strip()
+    email = str((body or {}).get("email") or "").strip()
+    token = str((body or {}).get("token") or "").strip()
+
+    info = await run_in_threadpool(jira_client.verify_token, site, email, token)
+    if not info.get("ok"):
+        return JSONResponse(
+            {"error": f"Jira rejected the credentials — {info.get('error', 'unknown')}"},
+            status_code=400,
+        )
+    try:
+        stored = await run_in_threadpool(
+            lambda: store.set_org_oauth(
+                user["org_id"], token, provider="jira",
+                email=info.get("email", ""), scopes=info.get("site", ""),
+            )
+        )
+    except RuntimeError:
+        return JSONResponse(
+            {"error": "token storage is not configured (set SESSION_SECRET "
+                      "or GOOGLE_TOKEN_ENC_KEY)"},
+            status_code=500,
+        )
+    if not stored:
+        return JSONResponse({"error": "could not store the token"}, status_code=500)
+    jira_client._reset_brief_cache()
+    return JSONResponse(
+        {"ok": True, "connected": True,
+         "email": info.get("email", ""), "site": info.get("site", "")},
+        headers=_NO_STORE,
+    )
+
+
+@router.post("/dashboard/connections/jira/disconnect")
+async def disconnect_jira(request: Request) -> JSONResponse:
+    """Remove the org's stored Jira credentials. If the deployment sets the
+    JIRA_* env fallback, the platform-level connection remains (said honestly)."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    removed = await run_in_threadpool(
+        lambda: store.clear_org_oauth(user["org_id"], provider="jira")
+    )
+    jira_client._reset_brief_cache()
+    return JSONResponse(
+        {"ok": True, "removed": bool(removed),
+         "still_connected_via_env": bool(settings.jira_site.strip())},
         headers=_NO_STORE,
     )
 

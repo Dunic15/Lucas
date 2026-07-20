@@ -1925,6 +1925,7 @@
     var slackConnected=brainConnected; // cedric-brain connected row (the Slack add-on)
     var asanaConnected=!!(d.connections&&d.connections.asana);
     var asanaOAuth=!!(d.connections&&d.connections.asana_oauth);
+    var jiraConnected=!!(d.connections&&d.connections.jira);
     // Execution readiness — whether an APPROVED action actually runs, and on
     // what. native_executor is the master switch (env NATIVE_EXECUTOR); off =
     // approvals route to Cedric. The two connection chips are the accounts
@@ -1995,14 +1996,21 @@
             'style="flex:1;min-width:120px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
             '<button class="btn primary" data-asana-on>Connect</button>'))+
       '</div></div>'+
-      // ── Jira (native PM connector) — sits with Asana as a PM tool. No backend
-      //    yet; the Connect action is an honest "coming soon" (data-jira-soon),
-      //    never a fake connect. ──
+      // ── Jira (native PM connector) — real self-serve connect via a Jira Cloud
+      //    API token (site + email + token, verified LIVE server-side, stored
+      //    encrypted per-org). No deploy credentials needed. ──
       '<div class="conn"><div class="nm">'+LOGO_JIRA+' Jira <span class="stchip" style="margin-left:6px">native</span></div>'+
-      '<div class="ds">File and update issues straight from your meetings — natively on your own Jira project.</div>'+
-      '<div class="foot"><span class="cstat"><b></b>Not connected</span>'+
-      '<button class="btn primary" data-jira-soon>Connect Jira</button>'+
-      '</div></div>'+
+      '<div class="ds">Avatars read your open issues when they join (owners, due dates). Connect with your Jira site + email + an API token (Jira → Account settings → Security → API tokens).</div>'+
+      (jiraConnected
+        ? '<div class="foot"><span class="cstat on"><b></b>Connected</span>'+
+          '<button class="btn" data-jira-off>Disconnect</button></div>'
+        : '<div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">'+
+            '<input type="text" id="jira-site" placeholder="https://yourco.atlassian.net" aria-label="Jira site URL" autocomplete="off" style="background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
+            '<input type="text" id="jira-email" placeholder="you@company.com" aria-label="Jira account email" autocomplete="off" style="background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
+            '<input type="password" id="jira-token" placeholder="Jira API token" aria-label="Jira API token" autocomplete="off" style="background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
+            '<button class="btn primary" data-jira-on style="align-self:flex-start">Connect Jira</button>'+
+          '</div>')+
+      '</div>'+
       // ── Google Calendar (native) — shares ONE Google sign-in with Gmail
       //    (/oauth/google/connect grants both); googleNative drives both cards. ──
       '<div class="conn"><div class="nm">'+LOGO_CALENDAR+' Google Calendar <span class="stchip" style="margin-left:6px">native</span></div>'+
@@ -2058,8 +2066,29 @@
     // Jira (native PM connector) — not wired to a backend yet; honest placeholder
     // (no fake connect). When the native Jira client lands, swap this for the
     // real connect flow.
-    $$("#conns [data-jira-soon]").forEach(function(btn){btn.addEventListener("click",function(){
-      toast("Jira is coming soon — it'll connect natively once wired up."); }); });
+    // Jira (native) connect — verify + store the site+email+token server-side.
+    $$("#conns [data-jira-on]").forEach(function(btn){btn.addEventListener("click",function(){
+      var site=($("#jira-site")&&$("#jira-site").value||"").trim();
+      var email=($("#jira-email")&&$("#jira-email").value||"").trim();
+      var token=($("#jira-token")&&$("#jira-token").value||"").trim();
+      if(!site||!email||!token){ toast("Enter your Jira site, email and API token.",true); return; }
+      btn.disabled=true; var prev=btn.textContent; btn.textContent="Connecting…";
+      fetch("/dashboard/connections/jira",{method:"POST",headers:headers(),body:JSON.stringify({site:site,email:email,token:token})})
+        .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,j:j}; }); })
+        .then(function(res){
+          if(!res.ok||!res.j.ok){ throw new Error(res.j.error||"Couldn't connect Jira. Check the site, email and token."); }
+          toast("Jira connected"+(res.j.site?" — "+res.j.site:"")+".");
+          load(); })
+        .catch(function(err){ toast(err.message||"Couldn't connect Jira. Try again.",true);
+          btn.disabled=false; btn.textContent=prev; });
+    }); });
+    $$("#conns [data-jira-off]").forEach(function(btn){btn.addEventListener("click",function(){
+      btn.disabled=true; var prev=btn.textContent; btn.textContent="Disconnecting…";
+      fetch("/dashboard/connections/jira/disconnect",{method:"POST",headers:headers()})
+        .then(function(r){ return r.json().catch(function(){return {};}); })
+        .then(function(){ toast("Jira disconnected."); load(); })
+        .catch(function(){ toast("Couldn't disconnect Jira. Try again.",true); btn.disabled=false; btn.textContent=prev; });
+    }); });
     // Slack (add-on) connect — the existing Cedric Slack-install flow (fixed URL).
     $$("#conns [data-slack-on]").forEach(function(btn){btn.addEventListener("click",function(){
       window.location.assign("/dashboard/connections/brain/slack/start?avatar_id=cedric&channel="); }); });

@@ -98,6 +98,9 @@ def _clear_registries() -> None:
     graphiti_client = sys.modules.get("app.graphiti_client")
     if graphiti_client is not None:
         graphiti_client.reset_for_tests()
+    jira_client = sys.modules.get("app.jira_client")
+    if jira_client is not None:
+        jira_client._reset_brief_cache()
 
 
 @pytest.fixture(autouse=True)
