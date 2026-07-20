@@ -26,29 +26,36 @@ and verified against a green baseline (**1310 passed / 1 xfailed**).*
 `*` `workflow` = the old `actions.py`; `engine` = the old `brain.py` (both renamed
 to avoid a module-vs-package name clash — see Gotchas).
 
-### main.py decomposition (in progress — 4 route groups extracted)
+### main.py decomposition — COMPLETE (main.py 6346 → 3978, −37%)
+Executed from an ultracode-generated, grep-verified playbook (`api/*` routers).
+Every step verified: **1310 passed / 1 xfailed**.
 | Commit | Slice | main.py |
 |---|---|---|
-| `ef276e6` | `api/pages.py` — 10 static/file-serving routes | 6346 → 6226 |
-| `8643328` | `api/granola.py` — /granola/* (clean) | 6226 → 6213 |
-| `14101f6` | `api/oauth.py` — /oauth/* + `api/deps.py` (first entangled: hoist-then-extract) | 6213 → 5780 |
-| `ffb197f` | `api/avatars_api.py` — /avatars* (clean) | 5779 → 5730 |
+| `ef276e6` | `api/pages.py` — static/file-serving routes | 6346 → 6226 |
+| `8643328` | `api/granola.py` — /granola/* | 6226 → 6213 |
+| `14101f6` | `api/oauth.py` — /oauth/* + `api/deps.py` (first hoist-then-extract) | 6213 → 5780 |
+| `ffb197f` | `api/avatars_api.py` — /avatars* | 5779 → 5730 |
+| `de197fe` | `control_plane`→persistence/, `dashboard`→api/ (git-mv+shim) | — |
+| `396b1a0` | `api/meetings.py` — /ledger, /meetings*, /avatar | 5729 → 5658 |
+| `6475c64` | **`meeting/lifecycle.py`** — hoist the finalize/dispatch core (24 syms) | 5658 → 4699 |
+| `0af2663` | `api/health.py` — /health, /recall/status, /gmail/status … | 4699 → 4597 |
+| `0a5c68c` | `api/console.py` — /, /demo/*, /live/* | 4597 → 4435 |
+| `f11d8bc` | `api/sessions.py` — /sessions/* (Path A via `import app.main as _main`) | 4434 → 3978 |
 
-`api/deps.py` now holds the shared email helpers (`EMAIL_RE`, `_split_emails`,
-`_calendar_target_emails`) — the landing spot for future hoisted shared helpers.
+`api/deps.py` holds the cross-cutting helpers (`EMAIL_RE`, `_split_emails`,
+`_calendar_target_emails`, `_line_for`, `_gmail_state`). `meeting/lifecycle.py`
+holds the shared meeting-lifecycle core; `main.py` re-imports the names its
+stayers call (identity preserved for monkeypatch).
 
-**Boundary reached — the meeting-lifecycle core.** The *remaining* route groups
-(`demo`/`live` console, `health` via `_gmail_state`, and `sessions`) are all
-coupled to big shared main-local helpers — chiefly **`_finalize_session`** and
-**`_start_avatar_session`** (used by /sessions/*, the demo console, AND the
-recall webhooks) plus module state (`_gmail_state`, `effective_provider`,
-`_line_for`). Extracting them means first **hoisting those meeting-lifecycle
-helpers to a shared module** — a major refactor sitting right next to the
-live-meeting contract (`ws/{conversation_id}`, `/webhooks/recall*`). That is a
-deliberate, higher-risk effort, not a quick slice.
+**The live-meeting CONTRACT stays in `main.py` — by design.** The ultracode
+analysis' verdict (LEAVE it): the ws/webhook/realtime handlers are inseparable
+from the lifecycle+lines core, would break ~30 test files, and touch CLAUDE.md's
+hard rule for no deploy benefit on an archived fork. `main.py` is now app
+assembly + `include_router`s + the live-meeting contract.
 
-Result: `backend/app/` now has `integrations/ actions/ meeting/ core/ brain/
-persistence/ api/` alongside the pre-existing `knowledge/ cedric/`.
+Final `backend/app/` layout: `api/ core/ actions/ meeting/ brain/ integrations/
+persistence/ runtime/` + pre-existing `knowledge/ cedric/`; still-flat: `main.py`
+(assembly + contract), `org_api.py` (already a router), `avatars.py`.
 
 ---
 
