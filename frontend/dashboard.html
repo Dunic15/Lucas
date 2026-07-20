@@ -2042,7 +2042,10 @@
       //    the paste-a-token fallback (works with no deploy credentials). ──
       '<div class="conn"><div class="nm">'+LOGO_JIRA+' Jira <span class="stchip" style="margin-left:6px">native</span></div>'+
       '<div class="ds">Avatars read your open issues when they join (owners, due dates).'+
-      (jiraOAuth||jiraConnected?'':' Connect with your Jira site + email + an API token (Jira → Account settings → Security → API tokens).')+'</div>'+
+      (jiraConnected?''
+        :(jiraOAuth
+          ? ' You’ll sign in with an Atlassian account that has a Jira site — <a href="https://www.atlassian.com/software/jira/free" target="_blank" rel="noopener">don’t have one? create a free Jira site</a> first, or the login shows “access denied”.'
+          : ' Connect with your Jira site + email + an API token (Jira → Account settings → Security → API tokens).'))+'</div>'+
       (jiraConnected
         ? '<div class="foot"><span class="cstat on"><b></b>Connected</span>'+
           '<button class="btn" data-jira-off>Disconnect</button></div>'

@@ -170,6 +170,104 @@ def run_walkthrough(org_id: str, session_id: str, *, site_label: str,
         return {"ok": False, "outcome": type(exc).__name__, "closing": ""}
 
 
+# Per-site login page + the URL marker that means "still on the login screen"
+# (gone once signed in). For Asana the app and login share the host, so the
+# marker is the login PATH, not the host.
+_LOGIN = {
+    "asana": {"url": "https://app.asana.com/", "marker": "/-/login"},
+}
+
+# Pending self-service connects, keyed by meeting_ref (bot_id): the login
+# session a human is signing into from the chat link. Bounded: one per meeting.
+_PENDING: dict[str, dict] = {}
+
+
+def has_identity(org_id: str, site_label: str) -> bool:
+    """True when the org already has a saved browser login for the site."""
+    try:
+        from .browser import dal
+
+        return dal.identity_internal(org_id, site_label) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def begin_connect(org_id: str, site_label: str, meeting_ref: str) -> dict:
+    """Start a self-service login: mint a context + a keep-alive login session,
+    open the site's login page, and return an INTERACTIVE URL the human opens
+    in their OWN browser (posted to the meeting chat) to sign in. Sync
+    (threadpool). Never raises."""
+    login = _LOGIN.get(site_label)
+    spoken = site_spoken_name(site_label)
+    if login is None:
+        return {"ok": False, "reason": "no_login_flow", "spoken": spoken}
+    try:
+        from .browser.provider import default_provider_name, get_provider
+
+        provider = get_provider(default_provider_name())
+        context_ref = provider.create_context()
+        made = provider.create_login_session(context_ref, login["url"])
+        _PENDING[meeting_ref] = {
+            "org_id": org_id, "site_label": site_label,
+            "context_ref": context_ref, "provider_ref": made["provider_ref"],
+            "marker": login["marker"]}
+        return {"ok": True, "login_url": made["login_view_url"], "spoken": spoken}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "reason": type(exc).__name__, "spoken": spoken}
+
+
+def poll_connect(meeting_ref: str) -> str:
+    """'logged_in' | 'waiting' | 'gone' | 'none' for a pending connect."""
+    p = _PENDING.get(meeting_ref)
+    if p is None:
+        return "none"
+    try:
+        from .browser.provider import default_provider_name, get_provider
+
+        return get_provider(default_provider_name()).login_state(
+            p["provider_ref"], p["marker"])
+    except Exception:  # noqa: BLE001
+        return "gone"
+
+
+def finish_connect(meeting_ref: str) -> dict:
+    """Persist a completed login: record the identity + release the session so
+    the cookie jar saves to the context. Sync (threadpool). Never raises."""
+    p = _PENDING.pop(meeting_ref, None)
+    if p is None:
+        return {"ok": False, "reason": "no_pending", "spoken": ""}
+    spoken = site_spoken_name(p["site_label"])
+    try:
+        from .browser import dal
+        from .browser.provider import default_provider_name, get_provider
+
+        provider = get_provider(default_provider_name())
+        # If a prior identity exists (rare race), don't duplicate the label.
+        if dal.identity_internal(p["org_id"], p["site_label"]) is None:
+            dal.create_identity(p["org_id"], label=p["site_label"],
+                                provider=default_provider_name(),
+                                context_ref=p["context_ref"])
+        provider.release_login_session(p["provider_ref"])
+        return {"ok": True, "spoken": spoken}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "reason": type(exc).__name__, "spoken": spoken}
+
+
+def cancel_connect(meeting_ref: str) -> None:
+    """Abandon a pending connect (timeout / meeting end) — release the session,
+    do NOT save an identity (login never completed)."""
+    p = _PENDING.pop(meeting_ref, None)
+    if p is None:
+        return
+    try:
+        from .browser.provider import default_provider_name, get_provider
+
+        get_provider(default_provider_name()).release_login_session(
+            p["provider_ref"])
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def trigger_enabled() -> bool:
     """Both switches: the operator must be on AND the meeting trigger opted in.
     Off by default — with either off this whole module no-ops."""
