@@ -523,3 +523,83 @@ def orgs_with_due_sessions(limit: int = 50) -> list[str]:
             {"limit": max(1, min(int(limit), 200))},
         ).fetchall()
     return [str(r[0]) for r in rows]
+
+
+# ── browser identities (saved logins / provider contexts, 0014) ─────────────
+
+def create_identity(org_id: str, *, label: str, provider: str,
+                    context_ref: str) -> dict[str, Any]:
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                """
+                INSERT INTO browser_identities (
+                  org_id, label, provider, context_ref
+                ) VALUES (:org_id, :label, :provider, :context_ref)
+                RETURNING id::text, label, provider, status,
+                          extract(epoch from created_at)::float8 AS created_at
+                """
+            ),
+            {"org_id": org_id, "label": label, "provider": provider,
+             "context_ref": context_ref},
+        ).mappings().first()
+    return dict(row)
+
+
+def identity_internal(org_id: str, label: str) -> Optional[dict[str, Any]]:
+    """The ACTIVE identity for a label including context_ref — server-side
+    only; context_ref never leaves through any public view."""
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                """
+                SELECT id::text, label, provider, context_ref, status
+                  FROM browser_identities
+                 WHERE org_id = :org_id AND label = :label
+                   AND status = 'active'
+                """
+            ),
+            {"org_id": org_id, "label": label},
+        ).mappings().first()
+    return dict(row) if row else None
+
+
+def list_identities(org_id: str) -> list[dict[str, Any]]:
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        rows = conn.execute(
+            text(
+                """
+                SELECT id::text, label, provider, status,
+                       extract(epoch from created_at)::float8 AS created_at
+                  FROM browser_identities
+                 WHERE org_id = :org_id AND status = 'active'
+                 ORDER BY created_at DESC
+                """
+            ),
+            {"org_id": org_id},
+        ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def revoke_identity(org_id: str, identity_id: str) -> bool:
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        result = conn.execute(
+            text(
+                """
+                UPDATE browser_identities
+                   SET status = 'revoked', updated_at = now()
+                 WHERE org_id = :org_id AND id = CAST(:iid AS uuid)
+                   AND status = 'active'
+                """
+            ),
+            {"org_id": org_id, "iid": identity_id},
+        )
+    return result.rowcount > 0

@@ -58,6 +58,7 @@ def _browser_allowed(org_id: str, avatar_key: str) -> bool:
 def create_session(
     org_id: str, *, principal: str, avatar_key: str,
     meeting_ref: str = "", provider_name: str = "", metadata: dict | None = None,
+    identity_label: str = "",
 ) -> dict[str, Any]:
     """Create + bind a session. Raises ProviderUnconfigured if the chosen
     provider has no config (the caller maps to 503). Tenancy is the caller's
@@ -72,7 +73,15 @@ def create_session(
     resolved = _resolved_avatar(org_id, avatar_key)
     version = int(getattr(resolved, "overlay_version", 0) or 0)
     ttl = int(_config().browser_default_timeout_seconds)
-    prov = provider.create(ttl_seconds=ttl)  # may raise ProviderUnconfigured
+    context_ref = ""
+    if identity_label:
+        ident = dal.identity_internal(org_id, identity_label.strip())
+        if ident is None:
+            raise OwnershipError("unknown browser identity")
+        context_ref = ident["context_ref"]
+    # may raise ProviderUnconfigured; the context handle is used once, never
+    # stored on the session row or returned.
+    prov = provider.create(ttl_seconds=ttl, profile=context_ref)
     row = dal.create_session(
         org_id, principal=principal, avatar_key=avatar_key,
         avatar_version=version, meeting_ref=meeting_ref, provider=name,
@@ -80,6 +89,44 @@ def create_session(
         metadata=contracts.clean_metadata(metadata),
     )
     return dal.public_view(row)
+
+
+def connect_identity(org_id: str, *, label: str, principal: str = "",
+                     avatar_key: str = "laura") -> dict[str, Any]:
+    """Begin a saved-login connection: mint a provider Context, record the
+    identity, open a session ATTACHED to that context, and mint a
+    presentation token. The caller exchanges the token for the live view,
+    the human logs into the target site there (credentials go browser →
+    site, never through Laura), then closes the session — the provider
+    persists the cookie jar on session end."""
+    label = (label or "").strip().lower()
+    if not label or len(label) > 40 or not label.replace("-", "").isalnum():
+        return {"ok": False, "reason": "bad_label"}
+    if dal.identity_internal(org_id, label) is not None:
+        return {"ok": False, "reason": "label_exists"}
+    from .provider import default_provider_name
+
+    name = default_provider_name()
+    provider = get_provider(name)
+    context_ref = provider.create_context()  # may raise ProviderUnconfigured
+    ident = dal.create_identity(org_id, label=label, provider=name,
+                                context_ref=context_ref)
+    view = create_session(org_id, principal=principal, avatar_key=avatar_key,
+                          identity_label=label,
+                          metadata={"purpose": "identity_connect",
+                                    "identity_label": label})
+    minted = present(org_id, view["id"], principal=principal)
+    return {"ok": True, "identity": ident, "session": view,
+            "presentation": minted}
+
+
+def list_identities(org_id: str) -> list[dict]:
+    return dal.list_identities(org_id)
+
+
+def revoke_identity(org_id: str, identity_id: str) -> dict:
+    ok = dal.revoke_identity(org_id, identity_id)
+    return {"ok": ok} if ok else {"ok": False, "reason": "not_found"}
 
 
 def set_metadata(org_id: str, session_id: str, metadata: dict,

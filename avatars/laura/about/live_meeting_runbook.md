@@ -103,6 +103,14 @@ off), navigation limited to `BROWSER_ALLOWED_DOMAINS`, hard caps on steps,
 duration, and model calls. Every session is recorded and replayable in the
 Browserbase dashboard.
 
+Saved logins (browser identities): an org can connect a site once — a
+human logs in through the token-gated live view, credentials go straight
+from their keyboard to the site, and the provider persists the session
+encrypted. Later browse tasks attach that identity by label
+(`identity_label` on session create) and wake up already signed in, still
+read-only and policy-checked. Revoking the identity from the API cuts
+future access without touching the site password.
+
 Operationally: browser sessions are separate from meeting sessions — they
 do not touch the Recall per-minute meter, and they close themselves at the
 task boundary. Speech in a meeting does not yet trigger a browse directly,

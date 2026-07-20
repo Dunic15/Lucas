@@ -137,24 +137,30 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
 
     def create(self, *, ttl_seconds: int, profile: str = "") -> ProviderSession:
         _require_config()
-        session_id, connect_url = self._create_remote_session(ttl_seconds)
+        session_id, connect_url = self._create_remote_session(
+            ttl_seconds, profile)
         page = self._connect(connect_url)  # connect_url used here, never stored
         BrowserbaseProvider._live[session_id] = page
         return ProviderSession(provider_ref=session_id)
 
-    def _create_remote_session(self, ttl_seconds: int) -> tuple[str, str]:
+    def _create_remote_session(self, ttl_seconds: int,
+                               profile: str = "") -> tuple[str, str]:
         try:
             import httpx
         except Exception as exc:  # noqa: BLE001
             raise ProviderUnconfigured("http client unavailable") from exc
+        browser_settings: dict = {"viewport": {"width": 1280, "height": 720}}
+        if profile:
+            # A provider-side persistent Context (saved browser login). The
+            # context id is a secret-adjacent handle: used here, never logged.
+            browser_settings["context"] = {"id": profile, "persist": True}
         try:
             resp = httpx.post(
                 "https://api.browserbase.com/v1/sessions",
                 headers={"X-BB-API-Key": settings.browserbase_api_key,
                          "Content-Type": "application/json"},
                 json={"projectId": settings.browserbase_project_id,
-                      "browserSettings": {"viewport": {"width": 1280,
-                                                       "height": 720}}},
+                      "browserSettings": browser_settings},
                 timeout=30)
         except Exception as exc:  # noqa: BLE001 — never surface the payload
             raise ProviderError("browser session create failed") from exc
@@ -274,13 +280,56 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
         _require_config()
         return self._observe_page(self._page(provider_ref))
 
-    def viewer(self, provider_ref: str) -> dict[str, Any]:
+    def create_context(self) -> str:
+        """Mint a provider-side persistent Context (saved browser profile).
+        Returns the context id — stored server-side as an identity's
+        context_ref, never returned by any API or logged."""
         _require_config()
-        # A short-lived Browserbase live-view URL, minted server-side and
-        # returned ONCE through the token exchange. Never logged/stored. The
-        # strict _safe_viewer allowlist bounds what leaves; the live URL is
-        # minted at B1 smoke time.
-        raise ProviderUnconfigured("browserbase live-view minting runs at smoke")
+        try:
+            import httpx
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderUnconfigured("http client unavailable") from exc
+        try:
+            resp = httpx.post(
+                "https://api.browserbase.com/v1/contexts",
+                headers={"X-BB-API-Key": settings.browserbase_api_key,
+                         "Content-Type": "application/json"},
+                json={"projectId": settings.browserbase_project_id},
+                timeout=30)
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderError("context create failed") from exc
+        if resp.status_code >= 400:
+            raise ProviderError(f"context create http {resp.status_code}")
+        ctx = str((resp.json() or {}).get("id") or "")
+        if not ctx:
+            raise ProviderError("context create missing id")
+        return ctx
+
+    def viewer(self, provider_ref: str) -> dict[str, Any]:
+        """The Browserbase live-view URL for this session, minted
+        server-side and returned ONCE through the presentation-token
+        exchange (_safe_viewer allowlists only kind/url/title). The debug
+        URL dies with the session; it is never logged or stored."""
+        _require_config()
+        try:
+            import httpx
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderUnconfigured("http client unavailable") from exc
+        try:
+            resp = httpx.get(
+                f"https://api.browserbase.com/v1/sessions/{provider_ref}/debug",
+                headers={"X-BB-API-Key": settings.browserbase_api_key},
+                timeout=15)
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderError("viewer mint failed") from exc
+        if resp.status_code >= 400:
+            raise ProviderError(f"viewer mint http {resp.status_code}")
+        data = resp.json() or {}
+        url = str(data.get("debuggerFullscreenUrl")
+                  or data.get("debuggerUrl") or "")
+        if not url:
+            raise ProviderError("viewer mint missing url")
+        return {"kind": "live", "url": url}
 
     def close(self, provider_ref: str) -> None:
         _require_config()

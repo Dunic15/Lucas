@@ -105,7 +105,8 @@ def cp(pg, monkeypatch, tmp_path):
     control_plane.reset_engine()
     with _admin(pg) as conn:
         for table in ("browser_presentation_tokens", "browser_commands",
-                      "browser_sessions", "queued_actions"):
+                      "browser_sessions", "browser_identities",
+                      "queued_actions"):
             conn.execute(f"DELETE FROM {table}")
     yield control_plane
     avatar_resolver._reset_for_tests()
@@ -595,3 +596,63 @@ def test_provider_timeout_is_execution_unknown(cp):
     # The session is NOT auto-failed on a timeout (the action may have landed).
     assert operator.get_session(org, sess["id"])["state"] in (
         "ready", "presenting")
+
+
+# ── browser identities (saved logins, 0014) ─────────────────────────────────
+
+def test_identity_connect_flow_attaches_context(cp):
+    org = _org(cp, "ident-a")
+    result = operator.connect_identity(org, label="asana",
+                                       principal="u_alice")
+    assert result["ok"], result
+    ident = result["identity"]
+    assert ident["label"] == "asana" and ident["status"] == "active"
+    assert "context_ref" not in ident  # handle never leaves
+    # The connect session is real, owned, and attached to the context.
+    sess = result["session"]
+    internal = dal.get_session_internal(org, sess["id"])
+    state = FakeProvider._sessions[internal["provider_ref"]]
+    ctx = dal.identity_internal(org, "asana")["context_ref"]
+    assert state.profile == ctx and ctx.startswith("fake-ctx-")
+    # A presentation token was minted for the human login step.
+    assert result["presentation"]["ok"]
+    assert result["presentation"]["presentation_token"]
+    # Later sessions reuse the saved login by label.
+    later = operator.create_session(org, principal="u_alice",
+                                    avatar_key="laura",
+                                    identity_label="asana")
+    linternal = dal.get_session_internal(org, later["id"])
+    assert FakeProvider._sessions[linternal["provider_ref"]].profile == ctx
+
+
+def test_identity_label_rules_and_revoke(cp):
+    org = _org(cp, "ident-b")
+    assert operator.connect_identity(org, label="asana")["ok"]
+    # Duplicate active label refused.
+    dup = operator.connect_identity(org, label="asana")
+    assert not dup["ok"] and dup["reason"] == "label_exists"
+    # Bad labels refused.
+    assert operator.connect_identity(org, label="")["reason"] == "bad_label"
+    assert operator.connect_identity(
+        org, label="x" * 41)["reason"] == "bad_label"
+    # Revoke frees the label for a fresh connect.
+    iid = operator.list_identities(org)[0]["id"]
+    assert operator.revoke_identity(org, iid)["ok"]
+    assert operator.list_identities(org) == []
+    assert operator.connect_identity(org, label="asana")["ok"]
+    # Sessions can no longer attach a revoked-then-unknown label…
+    with pytest.raises(operator.OwnershipError):
+        operator.create_session(org, principal="u", avatar_key="laura",
+                                identity_label="nope")
+
+
+def test_identity_rls_isolation(cp):
+    org_a = _org(cp, "ident-rls-a")
+    org_b = _org(cp, "ident-rls-b")
+    assert operator.connect_identity(org_a, label="asana")["ok"]
+    assert operator.list_identities(org_b) == []
+    iid = operator.list_identities(org_a)[0]["id"]
+    assert not operator.revoke_identity(org_b, iid)["ok"]
+    assert operator.create_session(
+        org_a, principal="u", avatar_key="laura",
+        identity_label="asana")["id"]

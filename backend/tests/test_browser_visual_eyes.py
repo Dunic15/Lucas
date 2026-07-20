@@ -390,3 +390,65 @@ def test_anthropic_refusal_fails_closed(monkeypatch):
     monkeypatch.setattr(anthropic, "Anthropic", _C)
     with pytest.raises(multimodal.PlannerError):
         p._invoke_anthropic({}, "g", b"png", ("navigate",))
+
+
+# ── browserbase contexts (saved logins) — payload contracts, no network ─────
+
+def _bb_enabled(monkeypatch):
+    monkeypatch.setattr(settings, "browser_real_provider_enabled", True)
+    monkeypatch.setattr(settings, "browserbase_api_key", "k")
+    monkeypatch.setattr(settings, "browserbase_project_id", "p")
+
+
+class _FakeHTTPResponse:
+    def __init__(self, payload, status_code=200):
+        self._payload = payload
+        self.status_code = status_code
+
+    def json(self):
+        return self._payload
+
+
+def test_browserbase_create_threads_context_into_payload(monkeypatch):
+    _bb_enabled(monkeypatch)
+    from app.browser import browserbase_provider as bb
+
+    captured = {}
+
+    import httpx
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured["json"] = kwargs.get("json")
+        return _FakeHTTPResponse({"id": "s1", "connectUrl": "wss://x"})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    prov = bb.BrowserbaseProvider()
+    sid, _ = prov._create_remote_session(60, "ctx-123")
+    assert sid == "s1"
+    assert captured["json"]["browserSettings"]["context"] == {
+        "id": "ctx-123", "persist": True}
+    # Without a profile there is NO context key at all.
+    prov._create_remote_session(60, "")
+    assert "context" not in captured["json"]["browserSettings"]
+
+
+def test_browserbase_create_context_and_viewer(monkeypatch):
+    _bb_enabled(monkeypatch)
+    from app.browser import browserbase_provider as bb
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: _FakeHTTPResponse(
+        {"id": "ctx-9"}))
+    monkeypatch.setattr(httpx, "get", lambda url, **kw: _FakeHTTPResponse(
+        {"debuggerFullscreenUrl": "https://live.example/view"}))
+    prov = bb.BrowserbaseProvider()
+    assert prov.create_context() == "ctx-9"
+    viewer = prov.viewer("sess-1")
+    assert viewer == {"kind": "live", "url": "https://live.example/view"}
+    # The operator's strict allowlist passes exactly these keys through.
+    from app.browser.operator import _safe_viewer
+    safe = _safe_viewer(viewer)
+    assert safe["url"] == "https://live.example/view"
+    assert safe["read_only"] is True
