@@ -904,7 +904,21 @@ def detect_browse_intent(utterance: str) -> tuple[bool, str, str]:
         if task:
             return True, _DEFAULT_SITE, task
 
+    # 4) Verb + an Asana-domain noun ("show me my tasks / the board / my
+    #    projects") → open the default site and display it. Addressed-gated at
+    #    the call site keeps this from firing on unrelated talk.
+    if re.search(_ASANA_CONTEXT, t):
+        return True, _DEFAULT_SITE, ""
+
     return False, "", ""
+
+
+# Asana-domain nouns that (with a verb) mean "show me my Asana", even without
+# the word "Asana" — for a 1:1 with the PM avatar this is unambiguous.
+_ASANA_CONTEXT = (
+    r"\b(my |the |le mie |i miei )?(tasks?|attivit\w*|projects?|progett\w*|"
+    r"board|bacheca|portfolio|portafogli|workspace|spazio di lavoro)\b"
+)
 
 
 def browse_signal(utterance: str) -> tuple[bool, bool]:

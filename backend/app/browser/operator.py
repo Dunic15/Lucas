@@ -348,6 +348,7 @@ def run_recipe(org_id: str, session_id: str, *, site_label: str, task_key: str,
                     on_narrate(say)
                 except Exception:  # noqa: BLE001 — narration never breaks the run
                     pass
+            landed = None  # True/False for point/reveal; None for navigate/say
             try:
                 if op == "navigate":
                     url = str(step.get("url") or "")
@@ -356,12 +357,19 @@ def run_recipe(org_id: str, session_id: str, *, site_label: str, task_key: str,
                         provider.navigate(ref, url)
                         _wait(provider, ref, 2.5)
                 elif op == "point":
-                    _try_selectors(provider.point, provider, ref, step.get("sel"))
+                    landed = _try_selectors(provider.point, provider, ref,
+                                            step.get("sel"))
                 elif op == "reveal":
-                    _try_selectors(_reveal_ok, provider, ref, step.get("sel"))
+                    landed = _try_selectors(_reveal_ok, provider, ref,
+                                            step.get("sel"))
                 # op == "say": narration only, already spoken above.
             except Exception:  # noqa: BLE001 — a fragile step is skipped, not fatal
                 pass
+            # PII-safe step telemetry: op + whether the control was found (never
+            # the utterance or page content) — so a silent-skip is diagnosable.
+            if op in ("point", "reveal"):
+                print(f"[recipe] {site_label}/{task_key} step={done} op={op} "
+                      f"found={landed}", flush=True)
             done += 1
         return {"ok": True, "outcome": "finished", "steps": done}
     except Exception as exc:  # noqa: BLE001
