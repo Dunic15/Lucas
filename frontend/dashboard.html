@@ -1120,8 +1120,11 @@
   // reached from Settings) and "studio" (Avatar Studio, reached from an
   // avatar's Personalize button) keep their views + routes but have no nav
   // entry — they highlight their nav owner instead.
-  var VIEWS=["overview","avatars","chat","brain","meetings","actions","connections","settings","usage","studio"];
-  var NAV_OWNER={usage:"settings",studio:"avatars"};
+  // Avatar Studio ("studio") is intentionally NOT a routable view — the
+  // Personalize entry point is removed, so per-org avatar personalization is
+  // not surfaced in the UI. The backend overlay system stays dormant.
+  var VIEWS=["overview","avatars","chat","brain","meetings","actions","connections","settings","usage"];
+  var NAV_OWNER={usage:"settings"};
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
     var navName=NAV_OWNER[name]||name;
@@ -2833,7 +2836,9 @@
           '<span class="al-addr">'+esc(a.email)+'</span><button class="btn conn-btn" data-copy="'+esc(a.email)+'">Copy</button></div>'+
           '<div class="al-hint">Add this address to any calendar invite — '+esc(a.name)+' joins the meeting.</div></div>':'')+
         '<div class="acts"><button class="btn primary" data-dispatch="'+esc(a.id)+'">Use for next meeting</button>'+
-        '<button class="btn" data-personalize="'+esc(a.id)+'">Personalize</button>'+
+        /* Avatar Studio is hidden from the UI (per-org personalization is
+           optional and not surfaced). The overlay backend stays dormant and
+           default-open, so avatars behave exactly as their repo definition. */
         (a.id==="laura"
           ? '<span class="btn" title="Ultra HD photorealistic avatar — in the works, not live yet" style="opacity:.55;cursor:default">🎬 Ultra HD realistic avatar · coming soon</span>'
           : '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a>')+
