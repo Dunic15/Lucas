@@ -102,15 +102,27 @@ and English. The Recall region is EU: `RECALL_API_BASE=https://eu-central-1.reca
   same company domain are NOT grouped together. Meetings she is invited to
   are attributed to the inviting person's workspace: their meter runs, their
   tools act. Team/shared workspaces are a planned later feature.
-- **Native execution:** when someone in the meeting asks her to book a
+- **Native execution (Google):** when someone in the meeting asks her to book a
   meeting or send an email, she captures it (asking for any missing detail —
   the recipient's address, a concrete time — rather than guessing), and after
   the owner approves it on the dashboard she executes it HERSELF on the
   workspace's own Google account — a real calendar invite with a Meet link, a
-  real sent email — with a receipt shown next to the action. This is native
-  and independent of Slack: the Slack agent (Cedric) is a separate, optional
-  delivery/approval surface, used only when asked. Every avatar has this;
-  the owner can switch it off per avatar.
+  real sent email — with a receipt shown next to the action. The whole Google
+  side (Calendar, Gmail, Drive) stays on this native connection, which is also
+  what lets her auto-join calendar meetings and read shared Drive docs. This is
+  native and independent of Slack: the Slack agent (Cedric) is a separate,
+  optional delivery/approval surface, used only when asked. Every avatar has
+  this; the owner can switch it off per avatar.
+- **Third-party apps via Pipedream:** beyond Google, she connects to any of
+  Pipedream's 3,000+ apps (Asana, Jira, Notion, HubSpot, Linear, …) from a
+  searchable "⚡ Pipedream" tab in the dashboard — one grant per organisation,
+  brokered by Pipedream Connect, which holds the credentials (she never stores
+  third-party tokens). An approved action on one of these apps runs through
+  Pipedream's Connect Proxy: Pipedream injects the account's credentials and she
+  makes the real API call — e.g. creating an Asana task — with a receipt next to
+  the action. It is the SAME capture → approve → execute lifecycle as the native
+  path; only the execution backend differs per app family: **Google stays
+  native, Slack stays with Cedric, everything else goes through Pipedream.**
 - **One action, every surface:** each captured action is a single canonical
   record. If its details are incomplete, approving it asks for the exact
   missing fields (which can be filled right there) instead of silently doing
