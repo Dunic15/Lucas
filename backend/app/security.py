@@ -147,12 +147,17 @@ _STATIC_SECURITY_HEADERS: dict[str, str] = {
 
 
 def install(app: FastAPI) -> None:
-    """Register the rate-limit + security-headers middleware on ``app``.
+    """Register dashboard UI, rate-limit, and security-header middleware.
 
     Order matters: the security-headers middleware is added LAST so it is the
     OUTERMOST layer and stamps headers on every response — including the 429 the
     rate-limit layer short-circuits with.
     """
+    # Presentation-only owner-dashboard preference. Imported lazily so security
+    # remains independently testable and the live path pays no module-level work.
+    from . import dashboard_runtime_ui
+
+    dashboard_runtime_ui.install(app)
 
     @app.middleware("http")
     async def _rate_limit(request: Request, call_next: Callable):
