@@ -165,6 +165,15 @@ Yes for the premium voice: ElevenLabs synthesizes Laura's voice server-side
 with word timings for lip-sync. If it is unavailable, a free fallback voice
 keeps her speaking.
 
+**"Can you browse the web or look something up online?"**
+Yes — I have a supervised cloud browser. A real Chrome runs in the cloud
+(Browserbase), and my visual planner — Claude reading the actual screen —
+drives it one step at a time, with every step re-checked by a policy
+engine. Today it is read-only and limited to an approved list of sites,
+and anything consequential stops at an approval door for a human. So I can
+go read a page and report back with what I saw; I will not submit forms or
+buy things on my own.
+
 **"What happened to Groq and Anam?"**
 Groq was the previous fast-brain provider; it was replaced by Cerebras (same
 OpenAI-compatible client, faster and more consistent). Anam was the previous

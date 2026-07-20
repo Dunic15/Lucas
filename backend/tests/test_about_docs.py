@@ -30,6 +30,14 @@ def test_about_intent_detection():
         "che modello usi?",
         "su che tecnologia sei fatta?",
         "chi sei?",
+        "can you browse the web?",
+        "Can you browse the web and look something up online for us?",
+        "are you able to look things up on the internet?",
+        "could you search the web?",
+        "puoi navigare sul web?",
+        "sai cercare su internet?",
+        "what does your web browsing cost?",
+        "how does your browser work?",
     ]
     no = [
         "what are we missing before go-live?",
@@ -37,6 +45,9 @@ def test_about_intent_detection():
         "what's your take on the pricing?",  # opinion ask, not a self-question
         "can you check the deadline?",
         "come funziona l'onboarding?",  # about OUR process, not about her
+        "search the web for the latest Acme funding news",  # task, not self-Q
+        "look up the vendor pricing online and summarize it",  # task
+        "can you check the onboarding checklist?",  # no web word
     ]
     for q in yes:
         assert brain._is_about_avatar(q), q

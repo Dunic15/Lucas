@@ -1,8 +1,8 @@
 # Provider Cost and Replacement Notes
 
 **Owner:** Product/engineering
-**Applies to:** Decisions about Cerebras, Claude, Recall, ElevenLabs, Deepgram, and open-source alternatives
-**Last reviewed:** 2026-07-08
+**Applies to:** Decisions about Cerebras, Claude, Recall, ElevenLabs, Deepgram, Browserbase, and open-source alternatives
+**Last reviewed:** 2026-07-20
 
 ## Cost structure
 
@@ -14,6 +14,8 @@ The main live meeting cost drivers are:
 - transcription provider usage (Deepgram)
 - ElevenLabs characters (effectively free at current volume: the plan covers
   millions of characters per month and a 30-minute meeting uses a few thousand)
+- Browserbase browser minutes, only while a browse task actually runs
+  (free-tier allowance today; a bounded task is seconds-to-minutes)
 
 A 30-minute meeting costs roughly $0.40-0.80 all-in. There is no per-minute
 face vendor cost: the avatar is an open-source in-browser renderer.
@@ -29,6 +31,17 @@ OpenAI-compatible API), chosen for very low first-token latency. **Claude**
 covers the rest: Haiku for clearly complex questions and as the automatic
 fallback if Cerebras fails, Claude with native web search for fresh-information
 questions, and Sonnet for the post-meeting artifact.
+
+**Browserbase** is the supervised cloud-browser vendor behind the Sable
+browser operator: one real Chrome session per browse task, created and
+closed by the backend, always bounded and recorded. The visual planner that
+reads the screen is **Claude** (`claude-opus-4-8`) on the existing Anthropic
+account — a browse step costs roughly 1,600–1,800 input tokens plus ~200
+output, i.e. well under a cent. The free Browserbase tier allows 3
+concurrent sessions and no residential proxies, so bot-protected sites are
+out of scope until a paid tier. The provider sits behind the
+`BrowserProvider` seam, so any CDP-capable vendor could replace it without
+touching the operator, policy engine, or planner.
 
 The **face** is the open-source TalkingHead WebGL avatar (the `/talk` page) —
 free, no vendor. Anam (the previous paid face vendor) is kept only as a
@@ -69,6 +82,12 @@ The providers are pluggable by configuration, so swaps are cheap to test.
 **"How much does a meeting cost?"**
 Roughly $0.40-0.80 for 30 minutes, dominated by the Recall bot. The brain
 tokens and voice characters are minor at current volume.
+
+**"What does browsing cost?"**
+Almost nothing at current volume: Browserbase session minutes on the free
+tier plus a fraction of a cent of Claude vision tokens per step. The
+expensive part of a browse task is human attention at the approval door,
+which is by design.
 
 **"Can we rebuild Recall ourselves?"**
 Technically possible, but not recommended for the current stage. Recreating
