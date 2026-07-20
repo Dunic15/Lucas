@@ -3230,6 +3230,7 @@
         }).join("") : '<div class="empty" style="padding:12px 2px">Nothing yet — drop a file above and '+esc(avName)+' will start citing it in meetings.</div>';
       var css='<style>'+
         '.brwrap{max-width:none}'+
+        '.brdrive-hint{font-size:.8rem;color:var(--dim);line-height:1.45}'+
         '.brq{font-size:.82rem;color:var(--dim);margin:0 0 8px}'+
         '.brpills{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}'+
         '.brpill{padding:7px 15px;border-radius:999px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font:inherit;font-size:.85rem;cursor:pointer;transition:all .12s}'+
@@ -3283,7 +3284,7 @@
           '</div>'+
           '<div class="brrow2">'+
             '<button class="btn" id="brpaste">Paste text instead</button>'+
-            '<button class="btn" id="brconnect" title="Google Drive sync — coming soon">Connect Google Drive</button>'+
+            '<button class="btn" id="brconnect" title="Sync a Google Drive folder into '+esc(avName)+'’s knowledge">Connect Google Drive</button>'+
             '<span class="brstat">'+docReady+' ready'+(docPend?' · '+docPend+' indexing':'')+' for '+esc(avName)+'</span>'+
           '</div>'+
           kgCard+
@@ -3291,6 +3292,11 @@
             '<input type="text" id="brpaste-fn" placeholder="Title — e.g. Refund policy" aria-label="Title" />'+
             '<textarea id="brpaste-txt" rows="4" placeholder="Paste the text…" aria-label="Text"></textarea>'+
             '<button class="btn primary" id="brpaste-go">Add to '+esc(avName)+'</button>'+
+          '</div>'+
+          '<div class="brpaste-box" id="brdrive-box" hidden>'+
+            '<div class="brdrive-hint">Paste a Google Drive <b>folder</b> link — '+esc(avName)+' reads up to 25 files from it and cites them in meetings. Needs Google connected with Drive access (Connections tab); files sync in the background.</div>'+
+            '<input type="text" id="brdrive-url" placeholder="https://drive.google.com/drive/folders/…" aria-label="Google Drive folder link" />'+
+            '<button class="btn primary" id="brdrive-go">Connect &amp; sync to '+esc(avName)+'</button>'+
           '</div>'+
           '<div class="brdocs">'+docList+'</div>'+
         '</div>';
@@ -3312,7 +3318,8 @@
         if(!/\.[a-z0-9]+$/i.test(fn)) fn=fn+".md";
         _brainUploadPayloads(sel,[{filename:fn,text:tx,mime:"text/markdown"}]);
       });
-      $("#brconnect").addEventListener("click",function(){ toast("Google Drive sync is coming soon — for now, drop the files here.",false); });
+      $("#brconnect").addEventListener("click",function(){ var db=$("#brdrive-box"); if(db){ db.hidden=!db.hidden; if(!db.hidden) $("#brdrive-url").focus(); } });
+      $("#brdrive-go").addEventListener("click",function(){ _brainConnectDrive(sel,$("#brdrive-url").value); });
       box.querySelectorAll("[data-brdel]").forEach(function(b){ b.addEventListener("click",function(){
         if(!window.confirm("Remove this knowledge? "+avName+" stops citing it.")) return;
         bFetch("sources/"+b.getAttribute("data-brdel"),{method:"DELETE"}).then(function(r){
@@ -3320,6 +3327,42 @@
           toast("Removed."); loadBrain(true); });
       }); });
     });
+  }
+
+  // Pull a Drive folder ID out of a pasted link (…/folders/<id>, ?id=<id>) or
+  // accept a raw id. Empty string = couldn't find one.
+  function _brainDriveFolderId(link){
+    var s=String(link||"").trim();
+    var m=s.match(/\/folders\/([A-Za-z0-9_-]+)/)||s.match(/[?&]id=([A-Za-z0-9_-]+)/);
+    if(m) return m[1];
+    return /^[A-Za-z0-9_-]{12,}$/.test(s)?s:"";
+  }
+  // Connect a Google Drive folder AS a knowledge source for one avatar: create
+  // a kind:"drive" source (reuse if the same folder is already connected here),
+  // assign it to the avatar, then trigger the background sync_drive job. The
+  // synced files land in the avatar's doc list and get cited like uploads.
+  function _brainConnectDrive(avatarId,link){
+    var fid=_brainDriveFolderId(link);
+    if(!fid){ toast("Paste a Google Drive folder link (or its ID).",true); return; }
+    var nm=avNameOf(avatarId)+" — Google Drive";
+    toast("Connecting Drive folder…");
+    return bFetch("sources").then(function(r){
+      var srcs=(r.ok&&r.j.sources)||[];
+      var exist=srcs.filter(function(s){ return s.kind==="drive" && s.drive_folder_id===fid && (s.avatars||[]).indexOf(avatarId)>=0; })[0];
+      var ensure=exist?Promise.resolve(exist.id):
+        bFetch("sources",{method:"POST",body:JSON.stringify({name:nm,kind:"drive",drive_folder_id:fid})}).then(function(cr){
+          if(!cr.ok||!cr.j.source) throw new Error((cr.j&&cr.j.error)||"could not connect");
+          var id=cr.j.source.id;
+          return bFetch("sources/"+id+"/assign",{method:"POST",body:JSON.stringify({avatar_id:avatarId})}).then(function(){ return id; });
+        });
+      return ensure.then(function(id){
+        return bFetch("sources/"+id+"/sync",{method:"POST"}).then(function(sr){
+          if(!sr.ok) throw new Error((sr.j&&sr.j.error)||"sync failed");
+          toast(avNameOf(avatarId)+"’s Drive folder connected — syncing now. Docs appear as they index.");
+          loadBrain(true);
+        });
+      });
+    }).catch(function(e){ toast("Drive connect failed: "+((e&&e.message)||e),true); });
   }
 
   // Ensure the per-avatar upload bundle exists (reuse an assigned upload
