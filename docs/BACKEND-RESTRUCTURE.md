@@ -26,10 +26,26 @@ and verified against a green baseline (**1310 passed / 1 xfailed**).*
 `*` `workflow` = the old `actions.py`; `engine` = the old `brain.py` (both renamed
 to avoid a module-vs-package name clash — see Gotchas).
 
-### main.py decomposition (started)
-| Commit | Slice |
-|---|---|
-| `ef276e6` | `app/api/pages.py` — 10 static/file-serving routes out of `main.py` (6346 → 6226 lines) |
+### main.py decomposition (in progress — 4 route groups extracted)
+| Commit | Slice | main.py |
+|---|---|---|
+| `ef276e6` | `api/pages.py` — 10 static/file-serving routes | 6346 → 6226 |
+| `8643328` | `api/granola.py` — /granola/* (clean) | 6226 → 6213 |
+| `14101f6` | `api/oauth.py` — /oauth/* + `api/deps.py` (first entangled: hoist-then-extract) | 6213 → 5780 |
+| `ffb197f` | `api/avatars_api.py` — /avatars* (clean) | 5779 → 5730 |
+
+`api/deps.py` now holds the shared email helpers (`EMAIL_RE`, `_split_emails`,
+`_calendar_target_emails`) — the landing spot for future hoisted shared helpers.
+
+**Boundary reached — the meeting-lifecycle core.** The *remaining* route groups
+(`demo`/`live` console, `health` via `_gmail_state`, and `sessions`) are all
+coupled to big shared main-local helpers — chiefly **`_finalize_session`** and
+**`_start_avatar_session`** (used by /sessions/*, the demo console, AND the
+recall webhooks) plus module state (`_gmail_state`, `effective_provider`,
+`_line_for`). Extracting them means first **hoisting those meeting-lifecycle
+helpers to a shared module** — a major refactor sitting right next to the
+live-meeting contract (`ws/{conversation_id}`, `/webhooks/recall*`). That is a
+deliberate, higher-risk effort, not a quick slice.
 
 Result: `backend/app/` now has `integrations/ actions/ meeting/ core/ brain/
 persistence/ api/` alongside the pre-existing `knowledge/ cedric/`.
