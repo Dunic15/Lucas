@@ -10,7 +10,10 @@ and display status, but the vendor call and receipt are owned here inside Laura.
 """
 from __future__ import annotations
 
-from . import ledger, native_runtime
+# Re-export the concrete clients for compatibility with the existing executor
+# tests and any callers that monkeypatch these seams.  The runtime owns routing;
+# these names are not a second execution path.
+from . import asana_client, google_client, ledger, native_runtime
 from .config import settings
 
 CALENDAR_CREATE = "calendar.create_event"
@@ -59,8 +62,9 @@ def _normalized(action: dict | None) -> dict:
             args = action["message"]
         else:
             args = {
-                k: v for k, v in action.items()
-                if k not in {"type", "event", "message", "task"}
+                key: value
+                for key, value in action.items()
+                if key not in {"type", "event", "message", "task"}
             }
     return {"type": atype, "args": dict(args)}
 
@@ -91,7 +95,7 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
         try:
             if result.get("ok"):
                 detail = " · ".join(
-                    p for p in ("Laura native", what, receipt) if p
+                    part for part in ("Laura native", what, receipt) if part
                 )[:300]
                 ledger.set_action_status(
                     aid,
