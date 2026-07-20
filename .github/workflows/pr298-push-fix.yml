@@ -1,0 +1,101 @@
+name: PR298 Final Fix
+
+on:
+  push:
+    branches:
+      - claude/laura-direct-actions-recent-meetings
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: claude/laura-direct-actions-recent-meetings
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Update legacy expectations and remove diagnostics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one anchor in {path}, found {count}")
+              target.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "backend/tests/test_dashboard_approve.py",
+              '''    assert body["dispatch_reason"] == "not_configured"
+    assert "Cedric isn't connected" in body["execution_error"]
+    st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
+    assert st and st["status"] == "failed"
+    assert "Cedric isn't connected" in st["detail"]''',
+              '''    assert body["dispatch_reason"] == "laura_native_only"
+    assert "Laura could not execute" in body["execution_error"]
+    st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
+    assert st and st["status"] == "failed"
+    assert "Laura could not execute" in st["detail"]''',
+          )
+
+          replace_once(
+              "backend/tests/test_action_deps_release.py",
+              '''def test_cedric_routed_release_says_it_awaits_its_own_executor(client, sent):
+    """Laura cannot execute a cedric-routed action. Its deps landing unparks it,
+    but the receipt must not imply Laura ran it — and it must not be re-swept
+    forever."""
+    org = settings.demo_org_id
+    _seed(org, "dep1")
+    _seed(org, "a1", typed=_TYPED, execution_route="cedric", dependencies=["dep1"])
+    _approve(client, "a1")
+
+    ledger.set_action_status("dep1", "done", "", org_id=org)
+
+    assert not sent
+    status = (ledger.action_statuses(["a1"], org_id=org).get("a1") or {})
+    assert status["status"] == "approved"
+    assert "awaiting its own executor" in status["detail"]
+    assert store.get_action_approval(org, "a1")["blocked_on"] in ("", "[]")''',
+              '''def test_historical_cedric_routed_release_migrates_to_laura(client, sent):
+    """A historical typed action may still carry execution_route=cedric. Once
+    its dependencies land, Laura migrates supported types to her native runtime
+    exactly once and owns the canonical receipt."""
+    org = settings.demo_org_id
+    _seed(org, "dep1")
+    _seed(org, "a1", typed=_TYPED, execution_route="cedric", dependencies=["dep1"])
+    _approve(client, "a1")
+
+    ledger.set_action_status("dep1", "done", "", org_id=org)
+
+    assert len(sent) == 1
+    status = (ledger.action_statuses(["a1"], org_id=org).get("a1") or {})
+    assert status["status"] == "done"
+    assert "Laura native" in status["detail"]
+    assert store.get_action_approval(org, "a1")["blocked_on"] in ("", "[]")''',
+          )
+
+          for path in (
+              ".github/pr298-trigger.txt",
+              ".github/workflows/pr298-debug.yml",
+              ".github/workflows/pr298-source.yml",
+              ".github/workflows/pr298-autofix.yml",
+              ".github/workflows/pr298-push-fix.yml",
+          ):
+              Path(path).unlink(missing_ok=True)
+          PY
+
+      - name: Commit the final branch cleanup
+        run: |
+          git config user.name "Laura CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: align native action migration tests"
+          git push origin HEAD:claude/laura-direct-actions-recent-meetings
