@@ -23,7 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-import app.main as main_module  # noqa: E402
+import app.main as main_module
+from app.api import oauth as oauth_mod  # noqa: E402  (oauth extracted)  # noqa: E402
 from app import auth, ledger, store  # noqa: E402
 from app.config import settings  # noqa: E402
 
@@ -178,7 +179,7 @@ def test_callback_rejects_state_not_bound_to_this_browser(client, monkeypatch):
     # An attacker crafts their OWN correctly-signed state (fresh, different nonce)
     # and tries to replay it into the victim's browser.
     _, attacker_state = main_module.auth.issue_oauth_state(
-        main_module.CALENDAR_STATE_PURPOSE
+        oauth_mod.CALENDAR_STATE_PURPOSE
     )
     resp = client.get(
         "/oauth/google/callback",
