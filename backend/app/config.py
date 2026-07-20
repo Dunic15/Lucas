@@ -322,6 +322,10 @@ class Settings(BaseSettings):
     # ONE typed operation; the deterministic B0 policy stays authoritative. OFF
     # by default — with it off, B1 is inert and B0 behaviour is byte-identical.
     browser_visual_planner_enabled: bool = False
+    # Meeting → browser trigger (Sable B2/B3): let an addressed
+    # "open <site> and show it" open a live browser view on the tile.
+    # OFF by default; needs the operator on + a saved login for the site.
+    browser_meeting_trigger_enabled: bool = False
     browser_planner_provider: str = "openai"          # "openai" | "anthropic"
     browser_planner_model: str = ""                    # blank = provider default
     browser_planner_timeout_seconds: int = 20
@@ -408,28 +412,6 @@ class Settings(BaseSettings):
     # Unset ⇒ the Connections card falls back to the paste-a-PAT flow.
     asana_client_id: str = ""
     asana_client_secret: str = ""
-
-    # ── Knowledge-graph grounding (graphiti, OPTIONAL) ────────────────────
-    # A temporal knowledge graph (Neo4j or FalkorDB) that grounds the PM avatar
-    # in EVOLVING workspace state — who owns what, due when, who's overloaded —
-    # so she can reason about capacity instead of quoting a flat snapshot. OFF
-    # by default and byte-identical to today when unset; going live needs
-    # graphiti-core installed + a graph DB provisioned + an LLM/embedder for
-    # extraction (docs/GRAPHITI.md). Multi-tenant, partitioned by org.
-    graphiti_enabled: bool = False
-    graphiti_backend: str = "neo4j"  # neo4j | falkordb (driver seam in _get_client)
-    graphiti_uri: str = ""           # e.g. neo4j+s://<id>.databases.neo4j.io
-    graphiti_user: str = "neo4j"
-    graphiti_password: str = ""
-    # recall() is the ONLY graph call on the live answer path — strictly
-    # timeout-bounded so a slow graph never delays the spoken reply. In
-    # wake-word mode there's no "Sure —" ack covering this pause, so keep it
-    # tight (council 2026-07-20). Init never runs on the hot path (warmed at join).
-    graphiti_recall_timeout_s: float = 1.0
-    graphiti_recall_results: int = 8
-    # Cap for a single off-path ingest write, so a hung graph DB can't hold the
-    # process-wide write lock and freeze every org's ingestion.
-    graphiti_ingest_timeout_s: float = 20.0
 
     # Proactive intervention (the differentiator): flag ONE missing step as the
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.

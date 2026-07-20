@@ -807,3 +807,50 @@ def plausible_leave_followup(text: str) -> bool:
     positive kills the meeting bot — hence the whitelist direction."""
     m = re.search(r"[a-zà-ú]+", (text or "").lower())
     return bool(m) and m.group(0) in _FOLLOWUP_LEADS
+
+
+# ── in-meeting "show it in the browser" intent (Sable B3) ───────────────────
+# Coarse, allowlisted, and addressed-gated at the call site. Returns the SITE
+# LABEL only (never the utterance) so the meeting→browser bridge builds a
+# bounded server-side goal — transcript text never reaches the operator.
+
+_BROWSE_VERB = (
+    r"(open|show|pull up|bring up|bring me|display|go to|navigate to|"
+    r"take me to|let'?s see|can you show|apri|mostra|mostrami|fammi vedere|"
+    r"portami|vai su|aprimi)"
+)
+# Sites we can present = browser-identity labels with a known start URL.
+_BROWSE_SITES = {
+    "asana": r"asana",
+}
+_BROWSE_SURFACE = r"(browser|screen|tab|window|schermo|browser)"
+
+
+def detect_browse_intent(utterance: str) -> tuple[bool, str]:
+    """(matched, site_label). Matches an addressed ask to open a KNOWN site,
+    e.g. "open Asana and show me my projects", "mostrami Asana", "pull up
+    Asana on the screen". Returns the site label for the bridge; the caller
+    gates on the avatar actually being addressed."""
+    t = (utterance or "").lower()
+    for label, site_rx in _BROWSE_SITES.items():
+        # verb ... site   (within a short window), either order for the surface
+        if re.search(_BROWSE_VERB + r"\b.{0,40}\b" + site_rx, t):
+            return True, label
+        # "show me my asana", "asana ... on the screen/browser"
+        if re.search(site_rx + r"\b.{0,30}\b" + _BROWSE_SURFACE, t) and \
+                re.search(_BROWSE_VERB, t):
+            return True, label
+    return False, ""
+
+
+_BROWSE_DISMISS = re.compile(
+    r"\b(close|hide|dismiss|get rid of|take down|stop showing|"
+    r"chiudi|nascondi|togli|via)\b.{0,24}\b"
+    r"(browser|asana|view|window|tab|screen|schermo|vista|finestra)\b",
+    re.IGNORECASE,
+)
+
+
+def detect_browse_dismiss(utterance: str) -> bool:
+    """True for "close the browser / hide Asana / chiudi la vista"."""
+    return bool(_BROWSE_DISMISS.search(utterance or ""))

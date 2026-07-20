@@ -46,6 +46,7 @@ from pydantic import BaseModel
 from . import (
     avatar_resolver,
     avatars,
+    browser_meeting,
     store,
     recall_client,
     anam_client,
@@ -62,7 +63,6 @@ from . import (
     executor,
     gemini_ears,
     google_client,
-    graphiti_client,
     granola_client,
     actions,
     gmail_watcher,
@@ -106,6 +106,8 @@ from .decision import (
     detect_wake,
     detect_closing,
     detect_invite,
+    detect_browse_intent,
+    detect_browse_dismiss,
     detect_leave_command,
     detect_leave_command_explicit,
     detect_stop_command,
@@ -2382,15 +2384,6 @@ async def _start_avatar_session(
             f"[Asana workspace — snapshot from meeting start{_asana_note}]\n"
             f"{asana_snapshot}\n\n" + (session.memory_brief or "")
         )
-        # Feed the same snapshot into the org's knowledge graph (graphiti,
-        # optional/off by default). Off the hot path, best-effort; a strong
-        # ref keeps the fire-and-forget task from being GC'd mid-run.
-        if graphiti_client.enabled():
-            _kg_task = asyncio.create_task(
-                graphiti_client.ingest(org_id, asana_snapshot)
-            )
-            _graphiti_tasks.add(_kg_task)
-            _kg_task.add_done_callback(_graphiti_tasks.discard)
     if reg:
         session.tool_registry = reg
         tools_brief = tool_registry.brief(reg)
@@ -3826,10 +3819,8 @@ def _wake_required(avatar: avatars.Avatar) -> bool:
     """Whether THIS avatar speaks only when addressed by name — the per-avatar
     require_wake_word (avatar.yaml), inheriting the global REQUIRE_WAKE_WORD
     when unset. When true, every unprompted speech path is silenced: answers,
-    backchannels, joiner greetings, quiet nudges, confident interjections, the
-    proactive closing intervention, AND the instant "Sure —" acknowledgment
-    (she stays silent until the actual answer, so she never speaks over a
-    speaker who's still finishing). What still speaks: being called by
+    backchannels, joiner greetings, quiet nudges, confident interjections, and
+    the proactive closing intervention. What still speaks: being called by
     name and follow-ups right after the avatar's own answer (a reply to her
     is not an interruption). Even the one-time self-introduction on join is
     suppressed: a wake-word avatar enters SILENT and only listens/transcribes
@@ -4294,10 +4285,6 @@ def _in_opening_grace(session: store.Session) -> bool:
 # held by the loop and can be GC'd mid-sleep, silently killing the feature (same
 # pattern as _summary_tasks above).
 _self_intro_tasks: set = set()
-
-# Strong refs to in-flight graphiti ingest tasks (fired off the join path), so a
-# bare create_task isn't GC'd before it finishes writing the episode.
-_graphiti_tasks: set = set()
 
 # Recheck cadence while waiting for the floor to open before the self-intro.
 _SELF_INTRO_RECHECK_SECONDS = 2.0
@@ -5231,11 +5218,6 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if (
             settings.ack_enabled
             and called
-            # Wake-word mode: stay SILENT until the actual answer — never speak
-            # an "Sure —" ack over the user while they're still finishing their
-            # sentence (owner ask 2026-07-20: listen fully, speak only after
-            # they finish). She answers once the final lands, after their pause.
-            and not _wake_required(avatar)
             # Ack discipline: partials are noisy half-words, so the ack (an
             # audible "Sure —") needs the EXACT name — a fuzzy match on a
             # partial fragment must never make her speak. And wait until a
@@ -5933,6 +5915,47 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 {"ok": True, "spoke": bool(spoke), "hand_delivered": True}
             )
 
+    # ── in-meeting browser view (Sable B2/B3) ──
+    # Addressed "open Asana and show me…" → open a live browser view on her
+    # tile. Off by default (browser_meeting_trigger_enabled). Everything heavy
+    # runs in a fire-and-forget task off this transcript→speak path; the ack
+    # speak is the only thing on the turn. A browse fault never touches the
+    # meeting (browser_meeting swallows its own errors).
+    if called and browser_meeting.trigger_enabled():
+        if detect_browse_dismiss(question):
+            async def _hide_browser() -> None:
+                closed = await run_in_threadpool(
+                    browser_meeting.close_for_meeting, session.bot_id)
+                if closed:
+                    await _send_avatar_control(
+                        session, {"type": "browser_view_hide"})
+            asyncio.create_task(_hide_browser())
+            return JSONResponse({"ok": True, "spoke": False, "browse_hide": True})
+        browse_ok, browse_site = detect_browse_intent(question)
+        if browse_ok:
+            spoken_name = browser_meeting.site_spoken_name(browse_site)
+
+            async def _open_browser() -> None:
+                result = await run_in_threadpool(
+                    browser_meeting.open_for_meeting, session.org_id,
+                    avatar_key=avatar.id, site_label=browse_site,
+                    meeting_ref=session.bot_id)
+                if result.get("ok"):
+                    await _send_avatar_control(
+                        session, {"type": "browser_view", "url": result["url"]})
+                    line = (f"Opening {spoken_name} for you."
+                            if result.get("logged_in")
+                            else f"I don't have a saved {spoken_name} login yet, "
+                                 f"so here's the {spoken_name} help center.")
+                    await _make_avatar_speak(session, line, force=True)
+                else:
+                    await _make_avatar_speak(
+                        session,
+                        f"I couldn't open {spoken_name} just now.", force=True)
+
+            asyncio.create_task(_open_browser())
+            return JSONResponse({"ok": True, "spoke": False, "browse": True})
+
     # ── footing: quiet-participant nudge (fires once, at wrap-up) ──
     # She knows who is in the room (roster) and who has spoken (transcript).
     # As the meeting wraps up — and she wasn't addressed directly — invite ONE
@@ -6199,10 +6222,6 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if (
         settings.ack_enabled
         and called
-        # Wake-word mode stays silent until the real answer — no instant ack
-        # (owner ask 2026-07-20). The final only lands after the speaker's
-        # pause, so the answer already waits for them to finish.
-        and not _wake_required(avatar)
         and not wants_web_search(question)
         and time.time() - session.last_ack_at > 6.0
     ):
@@ -6263,19 +6282,6 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # score), read back after the stream ends to gate the interjection escape —
     # no second model call. Only consulted on the hand-raise path below.
     _answer_meta: dict = {}
-    # Knowledge-graph recall (graphiti, optional/off by default): when the PM
-    # avatar is addressed, hybrid-search the org's temporal graph for THIS
-    # question and fold the facts into her grounding ahead of the flat snapshot.
-    # Gated on the join-cached asana_live flag (never a live DB read) and
-    # timeout-bounded inside recall() — a slow/failed graph falls straight back
-    # to the snapshot, so this never delays the spoken reply.
-    if graphiti_client.enabled() and getattr(session, "asana_live", False):
-        _kg = await graphiti_client.recall(session.org_id, question or text)
-        if _kg:
-            memory = (
-                "[Knowledge graph — facts relevant to this question]\n"
-                + _kg + "\n\n" + (memory or "")
-            )
     # Talk-over guard baseline (interject_recheck_floor_at_speak): snapshot the
     # transcript length and the turn-start clock BEFORE generation, so the
     # interjection floor check below can tell whether a human took the floor while
