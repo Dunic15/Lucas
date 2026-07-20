@@ -2006,6 +2006,31 @@ def _executor_action(typed: dict | None) -> dict | None:
     return executor.from_typed(typed)
 
 
+# Human-readable reason an approved action did NOT execute — so the row shows
+# WHAT happened (owner ask 2026-07-20) instead of a silent "approved". Keyed on
+# the dispatch_action reason codes (cedric/callback.dispatch_action).
+_DISPATCH_FAILURE_MESSAGE = {
+    "not_configured": "Cedric isn't connected on this deployment, so nothing ran.",
+    "dispatch_endpoint_missing": (
+        "Cedric can't run actions from the dashboard yet — its action receiver "
+        "isn't built. Nothing ran."
+    ),
+    "unsupported_type": "Cedric can't run this type of action yet. Nothing ran.",
+}
+
+
+def _execution_failure_detail(reason: str) -> str:
+    """Map a dispatch reason code to a one-line, user-facing explanation."""
+    reason = (reason or "").strip()
+    if reason in _DISPATCH_FAILURE_MESSAGE:
+        return _DISPATCH_FAILURE_MESSAGE[reason]
+    if reason.startswith("http_"):
+        return f"Cedric rejected the action ({reason[5:]}). Nothing ran."
+    if reason.startswith("dispatch_error_"):
+        return "Couldn't reach Cedric to run the action. Nothing ran."
+    return "The action couldn't be executed. Nothing ran."
+
+
 @router.post("/dashboard/actions/{action_id}/approve")
 async def approve_action(action_id: str, request: Request) -> JSONResponse:
     """Approve one finalized meeting action — the NATIVE approval surface.
@@ -2210,6 +2235,8 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     # Soft: a missing B-side receiver leaves the action approved and Cedric's
     # legacy action.requested loop remains the pickup path.
     dispatched = False
+    execution_error = ""
+    dispatch_reason = ""
     if not executed:
         from .cedric import callback as cedric_callback  # lazy, cycle-free
 
@@ -2218,11 +2245,23 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             str(user.get("user_id") or ""),
         )
         dispatched = bool(dispatch.get("ok"))
+        dispatch_reason = str(dispatch.get("reason") or "")
         if dispatched:
             await run_in_threadpool(
                 ledger.set_action_status, aid, "approved",
                 "approved via dashboard · routed to Cedric", org_id=org,
             )
+        else:
+            # Dead end: nothing ran natively AND Cedric didn't accept it. Record
+            # WHY as a failed receipt (owner ask 2026-07-20) instead of leaving
+            # a silent "approved" the user reads as success. 'failed' keeps the
+            # Approve button (retry once Cedric can run it), unlike 'rejected'.
+            execution_error = _execution_failure_detail(dispatch_reason)
+            await run_in_threadpool(
+                ledger.set_action_status, aid, "failed",
+                execution_error, org_id=org,
+            )
+            new_status = "failed"
     await run_in_threadpool(
         lambda: ledger.set_action_decision_result(
             aid, org_id=org, new_status=new_status,
@@ -2243,6 +2282,10 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             "capability_blocked": capability_blocked,
             "typed": bool(typed),
             "execution_mode": settings.execution_mode,
+            # Populated only on a dead end (nothing ran, Cedric didn't accept):
+            # a one-line reason for the UI + the machine code for logs.
+            "execution_error": execution_error,
+            "dispatch_reason": dispatch_reason,
             "status": latest.get(aid),
         },
         headers=_NO_STORE,

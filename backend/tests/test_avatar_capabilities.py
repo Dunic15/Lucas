@@ -166,9 +166,11 @@ def test_google_action_skipped_when_capability_off(client, monkeypatch):
     body = r.json()
     assert body["executed"] is False and body["capability_blocked"] is True
     assert not calls  # the native executor never ran the Google action
-    # The row stays approved (byte-identical to the executor being off), not done.
+    # Google is off for this avatar, so it re-routes to Cedric; with no Cedric
+    # wired here nothing can run, and the row says so honestly rather than
+    # sitting at a silent "approved".
     st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
-    assert st and st["status"] == "approved"
+    assert st and st["status"] == "failed"
 
 
 def test_google_action_runs_when_capability_not_off(client, monkeypatch):

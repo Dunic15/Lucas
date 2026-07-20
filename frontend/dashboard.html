@@ -2279,12 +2279,14 @@
           patchActionState(aid,st||{status:"approved"});
           return;
         }
-        // Flag OFF (or nothing ran, no Cedric link): captured + marked
-        // approved, but not executed — say so plainly rather than as an error.
+        // Dead end: approved, but nothing ran AND Cedric didn't accept it.
+        // Show WHAT happened (the server's one-line reason) instead of a
+        // misleading "captured" — the row goes to "failed" so it's visible.
         if(!j.executed){
-          if(btn) btn.outerHTML='<span class="exec approved" title="Marked approved. Turn on the native executor to run it automatically.">captured · execution off</span>';
-          toast("Action approved — captured (native execution is off).");
-          patchActionState(aid,st||{status:"approved"});
+          var why=j.execution_error||"The action couldn't be executed.";
+          if(btn) btn.outerHTML='<span class="exec failed" title="'+esc(why)+'">Couldn’t run ↗</span>';
+          toast("Approved, but it couldn't run: "+why,true);
+          patchActionState(aid,st||{status:"failed",detail:why});
           return;
         }
         // Executed: render the SAME receipt the row uses (Done ↗ / failed pill).

@@ -82,9 +82,11 @@ def test_approve_requires_login(client):
     assert r.status_code == 401  # no cookie → login required
 
 
-# ── flag OFF (today's default): approve marks the row, executes nothing ──
+# ── flag OFF, no Cedric: nothing can run, so approve FAILS honestly ──
 
-def test_flag_off_marks_approved_without_executing(client, monkeypatch):
+def test_flag_off_no_cedric_marks_failed_with_reason(client, monkeypatch):
+    """Native off AND no Cedric configured -> the action cannot execute. The
+    row must say so (owner ask 2026-07-20), not sit at a silent 'approved'."""
     user = _login(client)
     _seed_action(user["org_id"], "a1", _EMAIL_TYPED)
     calls: list = []
@@ -94,11 +96,53 @@ def test_flag_off_marks_approved_without_executing(client, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["approved"] is True and body["executed"] is False
-    assert body["execution_mode"] == "cedric"
     assert not calls  # google was never called with the flag off
-    # The ledger recorded "approved" (non-terminal), not "done".
+    # Honest dead end: failed + a reason the user can read, not "approved".
+    assert body["dispatch_reason"] == "not_configured"
+    assert "Cedric isn't connected" in body["execution_error"]
     st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
-    assert st and st["status"] == "approved"
+    assert st and st["status"] == "failed"
+    assert "Cedric isn't connected" in st["detail"]
+
+
+def test_dead_end_dispatch_endpoint_missing_surfaces_reason(client, monkeypatch):
+    """Cedric configured but its action receiver isn't built (404) -> the
+    approve reports exactly that instead of a silent success."""
+    from app.cedric import callback as cedric_callback
+
+    user = _login(client)
+    _seed_action(user["org_id"], "a1", _EMAIL_TYPED)
+    monkeypatch.setattr(
+        cedric_callback, "dispatch_action",
+        lambda org, action, approved_by="": {"ok": False,
+                                              "reason": "dispatch_endpoint_missing"},
+    )
+    r = client.post("/dashboard/actions/a1/approve")
+    body = r.json()
+    assert body["executed"] is False and body["dispatched"] is False
+    assert body["dispatch_reason"] == "dispatch_endpoint_missing"
+    assert "receiver isn't built" in body["execution_error"]
+    st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
+    assert st["status"] == "failed"
+
+
+def test_dispatch_ok_marks_approved_routed_to_cedric(client, monkeypatch):
+    """Cedric accepts the dispatch -> the action is 'approved · with Cedric',
+    NOT failed; the receipt flips to done/failed when Cedric reports back."""
+    from app.cedric import callback as cedric_callback
+
+    user = _login(client)
+    _seed_action(user["org_id"], "a1", _EMAIL_TYPED)
+    monkeypatch.setattr(
+        cedric_callback, "dispatch_action",
+        lambda org, action, approved_by="": {"ok": True, "accepted": True},
+    )
+    r = client.post("/dashboard/actions/a1/approve")
+    body = r.json()
+    assert body["executed"] is False and body["dispatched"] is True
+    assert body["execution_error"] == ""
+    st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
+    assert st["status"] == "approved"
 
 
 # ── flag ON + typed: the executor runs and writes the receipt ──
@@ -123,7 +167,12 @@ def test_flag_on_executes_typed_email_and_writes_receipt(client, monkeypatch):
     assert st["status"] == "done" and "m-123" in st["detail"]
 
 
-def test_flag_on_untyped_action_marks_approved_without_executing(client, monkeypatch):
+def test_flag_on_untyped_action_routes_to_cedric_then_fails_without_receiver(
+    client, monkeypatch
+):
+    """Flag on but the action is untyped -> native can't run it, so it routes
+    to Cedric; with no Cedric here that's an honest dead end (failed), never a
+    native google call."""
     monkeypatch.setattr(settings, "native_executor", True)
     user = _login(client)
     _seed_action(user["org_id"], "a1", typed=None)  # no typed spec
@@ -135,6 +184,8 @@ def test_flag_on_untyped_action_marks_approved_without_executing(client, monkeyp
     body = r.json()
     assert body["executed"] is False and body["typed"] is False
     assert not calls
+    st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
+    assert st["status"] == "failed"  # honest: nothing ran
 
 
 def test_flag_on_soft_failure_records_failed_receipt(client, monkeypatch):
