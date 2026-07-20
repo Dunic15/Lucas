@@ -15,17 +15,20 @@ jobs:
       API_BASE: https://dhfgfe6yw6.eu-central-1.awsapprunner.com
       MEETING_KEY: acv-qedk-wcf
     steps:
-      - name: Check production meeting archive
+      - name: Inspect production meeting archive response
         run: |
           set -euo pipefail
-          curl --silent --show-error --fail-with-body "$API_BASE/meetings" -o meetings.json
-          python - <<'PY'
-          import json
-          data=json.load(open('meetings.json'))
-          key='acv-qedk-wcf'
-          print(json.dumps(data, indent=2)[:20000])
-          text=json.dumps(data)
-          if key not in text:
-              raise SystemExit(f'meeting {key} not present in production archive yet')
-          print(f'FOUND meeting {key}')
-          PY
+          code=$(curl --silent --show-error -D headers.txt -o body.txt -w '%{http_code}' "$API_BASE/meetings")
+          echo "HTTP status: $code"
+          echo '--- headers ---'
+          cat headers.txt
+          echo '--- body preview ---'
+          head -c 12000 body.txt
+          echo
+          echo '--- meeting match ---'
+          if grep -q "$MEETING_KEY" body.txt; then
+            echo "FOUND $MEETING_KEY"
+          else
+            echo "NOT FOUND $MEETING_KEY"
+            exit 1
+          fi
