@@ -139,3 +139,8 @@ def talk_avatar_model(avatar_id: str) -> Response:
         media_type="model/gltf-binary",
         headers={"Cache-Control": "public, max-age=86400"},
     )
+
+
+@router.get("/avatar")
+def avatar_page() -> FileResponse:
+    return FileResponse(FRONTEND_DIR / "avatar.html")
