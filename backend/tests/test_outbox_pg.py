@@ -1007,3 +1007,32 @@ def test_durable_artifacts_are_rls_isolated_and_keep_composite_pk(cp, pg):
             """
         ).fetchone()[0]
     assert pk_columns == ["org_id", "bot_id"]
+
+
+def test_non_transient_failure_marks_failed_without_retry(cp, monkeypatch):
+    """A non-transient delivery failure (e.g. Cedric 401) finishes the attempt
+    with next_attempt_at=NULL. Regression for the prod 2026-07-20 outage: the
+    NULL epoch param was sent untyped and `:next_attempt_at IS NULL` left
+    Postgres unable to infer $1's type (AmbiguousParameter) → the UPDATE
+    aborted, the row stayed 'sending', and the worker retried it forever,
+    raising every iteration. finish_attempt must succeed and stop retrying."""
+    org = _org(cp, "non-transient")
+    outbox_id = _enqueue(org, "bot-401", "action.requested:dead-401")
+
+    def post(url, payload, *, idempotency_key=""):
+        return SimpleNamespace(status_code=401)  # non-transient: no retry
+
+    monkeypatch.setattr(callback, "_post", post)
+    now = _due_after_settle(2)
+    # Must NOT raise OutboxUnavailable, and delivers nothing.
+    assert outbox.process_due(limit=1, now=now, org_id=org) == 0
+    row = outbox.delivery_rows(org)[0]
+    assert row["id"] == outbox_id
+    assert row["status"] == "failed"
+    assert row["attempts"] == 1
+    # No retry scheduled (next_attempt_at NULL surfaces as 0 via COALESCE).
+    assert row["next_attempt_at"] == 0
+    assert "401" in row["last_error"]
+    # A second worker pass never re-claims a terminally-failed row.
+    assert outbox.process_due(limit=1, now=now + 120, org_id=org) == 0
+    assert outbox.delivery_rows(org)[0]["attempts"] == 1
