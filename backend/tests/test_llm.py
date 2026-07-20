@@ -133,7 +133,7 @@ def test_anthropic_logs_on_truncation(monkeypatch, capsys):
 def test_post_provider_split(monkeypatch):
     """BRAIN_PROVIDER_POST routes only the post-meeting path; live keeps
     BRAIN_PROVIDER. Unset -> same provider; anthropic without key -> stub."""
-    from app import brain
+    from app.brain import engine as brain
     from app.config import settings
 
     monkeypatch.setattr(settings, "brain_provider", "groq")
@@ -151,7 +151,8 @@ def test_post_provider_split(monkeypatch):
 
 def test_post_meeting_uses_post_provider(monkeypatch):
     """post_meeting sends its completion through the post provider."""
-    from app import avatars, brain, llm
+    from app import avatars, llm
+    from app.brain import engine as brain
     from app.config import settings
 
     monkeypatch.setattr(settings, "brain_provider", "groq")

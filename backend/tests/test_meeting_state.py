@@ -197,7 +197,7 @@ def test_to_dict_has_issue_schema_keys():
 
 def test_proactive_flag_deterministic_on_critical_gap():
     """Critical gap at wrap-up -> templated line, no model, no retrieval."""
-    from app.brain import proactive_flag
+    from app.brain.engine import proactive_flag
 
     state = _feed(
         MeetingState(),
@@ -234,7 +234,7 @@ def test_laura_sample_meeting_demos_readiness_gaps():
 def test_post_meeting_artifact_has_full_schema(monkeypatch):
     """Stub-mode artifact carries the expanded schema, with missing_steps and
     readiness_score computed deterministically from the process template."""
-    import app.brain as brain
+    import app.brain.engine as brain
 
     # post_meeting() gates on post_provider() (per-path provider split), so pin
     # that too — patching only effective_provider let a real key drive the model.
@@ -377,7 +377,7 @@ def test_readiness_derived_when_no_template(monkeypatch):
     """A generic (non-onboarding) transcript matches no process template, so the
     rigorous step-coverage readiness is undefined. The artifact must STILL carry
     a real, defensible readiness_score (never a dead 0/"—" on the demo tile)."""
-    import app.brain as brain
+    import app.brain.engine as brain
 
     monkeypatch.setattr(brain, "effective_provider", lambda: "stub")
     monkeypatch.setattr(brain, "post_provider", lambda: "stub")
@@ -396,7 +396,7 @@ def test_readiness_derived_when_no_template(monkeypatch):
 
 def test_derived_readiness_weights():
     """_derived_readiness is a deterministic 0-100 from distilled fields only."""
-    import app.brain as brain
+    import app.brain.engine as brain
 
     assert brain._derived_readiness({}) == 0
     assert brain._derived_readiness({"summary": "recap"}) == 25

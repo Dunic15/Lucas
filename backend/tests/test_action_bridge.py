@@ -600,7 +600,7 @@ def test_live_route_search_intent_is_not_captured(
 
 
 def test_wants_action_capture_is_narrow():
-    from app.brain import wants_action_capture
+    from app.brain.engine import wants_action_capture
 
     for phrase in [
         "can you check if the numbers add up?",
@@ -634,7 +634,7 @@ def test_wants_action_capture_bare_imperatives():
     "post…") with no "can you/please" carrier. The capture regex must catch the
     verb leading the (wake-stripped) ask, plus messaging verbs (post/ping/dm/
     message) the old list lacked — without capturing plain statements."""
-    from app.brain import wants_action_capture
+    from app.brain.engine import wants_action_capture
 
     for phrase in [
         "schedule a follow-up with Marco",
@@ -726,7 +726,7 @@ def test_wants_action_capture_italian_bare_imperatives():
     captured live at parity with English — the workflow found they were dropped
     (only periphrastic "puoi mandare…" matched). Anchored, so mid-sentence
     indicatives ("dovremmo mandare…") stay out."""
-    from app.brain import wants_action_capture
+    from app.brain.engine import wants_action_capture
 
     for phrase in [
         "manda una mail a Priya con il riassunto",

@@ -83,7 +83,7 @@ from . import (
     tts,
     vendor_health,
 )
-from .brain import (
+from .brain.engine import (
     SEARCH_ANNOUNCE_LINES,
     answer_question,
     answer_question_stream,
@@ -100,6 +100,17 @@ from .brain import (
     semantic_action_duplicates,
     type_actions,
 )
+from .meeting.lifecycle import (  # noqa: E402  (hoisted lifecycle core; re-import = compat)
+    _BOT_TERMINAL, _BOT_VARIANT_RANK, _LEAVE_GONE_STATUSES,
+    _ACTION_STOP, _DEMO_BROWSE_RE, _finalizing, _graphiti_tasks, _recall_list_headers,
+    _bot_meeting_key, _bot_variant_rank, _bot_status_code, _status_change_epoch,
+    _avatar_asana_enabled, _stamp_action_routing, _norm_action_text, _content_tokens,
+    _same_action, _is_live_browse_item, _merge_action_items, _fold_into_live,
+    _close_usage_for, _assign_usage_bot_id, _abandon_orphan_session,
+    _leave_confirmed_stopped, _bot_reports_terminal, _retry_leave,
+    _start_avatar_session, _finalize_session, _finalize_session_locked,
+)
+from .api.deps import EMAIL_RE, _split_emails, _calendar_target_emails, _gmail_state, _line_for  # noqa: E402
 from .config import settings
 from .decision import (
     addressed_to_other,
@@ -312,7 +323,23 @@ from .demo_mvp import router as demo_router  # noqa: E402
 app.include_router(demo_router.router)  # /org/demo + dashboard twin (Northstar MVP)
 from . import pipedream_api  # noqa: E402
 
-app.include_router(pipedream_api.router)  # /dashboard/pipedream (alt connections, flag-gated)
+app.include_router(pipedream_api.router)
+from .api import pages  # noqa: E402
+app.include_router(pages.router)  # static pages + avatar assets
+from .api import granola  # noqa: E402
+app.include_router(granola.router)  # /granola/*
+from .api import oauth  # noqa: E402
+app.include_router(oauth.router)  # /oauth/{google,asana,jira}/*
+from .api import avatars_api  # noqa: E402
+app.include_router(avatars_api.router)  # /avatars*
+from .api import meetings  # noqa: E402
+app.include_router(meetings.router)  # /ledger, /meetings*
+from .api import health as health_api  # noqa: E402
+app.include_router(health_api.router)  # /health*, /recall/status, /gmail/status, ears
+from .api import console  # noqa: E402
+app.include_router(console.router)  # /, /demo/*, /live/*
+from .api import sessions  # noqa: E402
+app.include_router(sessions.router)  # /sessions/*  # /dashboard/pipedream (alt connections, flag-gated)
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).
@@ -321,31 +348,6 @@ runpod_runtime.configure(lambda: len(store.all_sessions()))
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 REPO_ROOT_DIR = Path(__file__).resolve().parents[2]
-GOOGLE_CALENDAR_SCOPES = (
-    "https://www.googleapis.com/auth/calendar.events.readonly",
-    # calendarList (which calendars the user displays) needs calendar.readonly —
-    # calendar.events[.readonly] alone 403s users/me/calendarList, silently
-    # degrading the all-calendars upcoming view to primary-only (calendars=1
-    # in the [calendar] diagnostic). Existing connections must reconnect once
-    # to grant it; until then the fan-out keeps its primary-only fallback.
-    "https://www.googleapis.com/auth/calendar.readonly",
-    "https://www.googleapis.com/auth/userinfo.email",
-    # Read Laura's inbox so "Add people" invites (which email her a Meet link,
-    # with no calendar event) can auto-join the meeting. See gmail_watcher.py.
-    "https://www.googleapis.com/auth/gmail.readonly",
-    # Read shared Drive folders so an avatar with drive_folder_id walks into
-    # meetings knowing the team's docs. See drive_client.py. Adding a scope
-    # means reconnecting once via /oauth/google/connect.
-    "https://www.googleapis.com/auth/drive.readonly",
-    # WRITE scopes for the native executor (NATIVE-INTEGRATIONS-PLAN.md): create
-    # calendar events and send Gmail on the connected account. The Google consent
-    # screen lists these; a user reconnects once via /oauth/google/connect to
-    # grant them. Harmless to request even with native_executor off (the executor
-    # is what actually uses them, and it stays gated by the flag).
-    "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/gmail.send",
-)
-EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 ATTENDEE_CONTAINER_KEYS = {
     "attendee",
     "attendees",
@@ -360,69 +362,14 @@ ATTENDEE_CONTAINER_KEYS = {
 }
 
 
-def _split_emails(raw: str) -> set[str]:
-    return {e.lower() for e in EMAIL_RE.findall(raw or "")}
 
 
-def _calendar_target_emails() -> set[str]:
-    return _split_emails(settings.calendar_invite_emails)
 
 
-def _google_redirect_uri() -> str:
-    return settings.google_calendar_redirect_uri.strip() or (
-        f"{settings.public_base_url.rstrip('/')}/oauth/google/callback"
-    )
 
 
-def _stamp_action_routing(actions: list) -> list:
-    """Routing-role stamps (agreed action-lifecycle contract
-    hsk_con_cnw4567mqj3p49dyn3dg): every canonical action carries an
-    IMMUTABLE execution_route decided here (native iff our executor will run
-    its typed spec; else cedric), a correlation_id (defaults to action_id —
-    the cross-log join), an execution_policy, and — when no owner was
-    resolved — the visible triage payload (unresolved_roles +
-    unassigned_reason) instead of a silent blank. Stamps are setdefault-only:
-    a route persisted earlier is never re-evaluated (contract re-route bounds)."""
-    out: list = []
-    for a in actions or []:
-        if not isinstance(a, dict):
-            out.append(a)
-            continue
-        a = dict(a)
-        if not a.get("execution_route"):
-            a["execution_route"] = executor.route_for_typed(a.get("typed"))
-        a.setdefault("correlation_id", str(a.get("action_id") or ""))
-        a.setdefault("execution_policy", "approval_required")
-        owner = str(a.get("owner") or "").strip()
-        if not owner or owner.upper() == "UNASSIGNED":
-            a.setdefault("unresolved_roles", ["owner"])
-            a.setdefault("unassigned_reason", "no_owner_rule_match")
-        out.append(a)
-    return out
 
 
-def _avatar_asana_enabled(org_id: str, avatar_id: str) -> bool:
-    """Whether this avatar may use the org's Asana: the org is connected
-    (per-org token or ASANA_TOKEN) AND this avatar is purpose-built for Asana
-    (declares it in avatar.yaml — Petra does, other avatars don't) AND the
-    per-avatar `asana` toggle is not explicitly off. So Asana defaults ON for
-    PETRA ONLY, not every avatar whose org happens to have connected it; a
-    dashboard toggle can still override per avatar. Sync (sqlite/yaml, both
-    cached) — call via threadpool. Best-effort: never breaks a join/finalize."""
-    try:
-        # "Connected" now counts a Pipedream-brokered Asana account too, so the
-        # native connection can be dropped once actions run through Pipedream.
-        # Native check first (a fast local read); the Pipedream probe (cached,
-        # best-effort) only runs when native is absent.
-        from . import pipedream_executor  # lazy: avoid load-order coupling
-
-        if not (asana_client.connected(org_id)
-                or pipedream_executor.app_connected(org_id, "asana")):
-            return False
-        declares = avatars.load(avatar_id).uses_native_tool("asana")
-        return store.capability_enabled(avatar_id, "asana", connected=declares)
-    except Exception:  # noqa: BLE001
-        return False
 
 
 def _prebuild_indexes() -> None:
@@ -456,52 +403,23 @@ def _prebuild_indexes() -> None:
 # Poll Laura's inbox for Google Meet invitation emails (sent by Meet's native
 # "Add people") and send the bot into that meeting. See gmail_watcher.py.
 _gmail_seen_ids: set[str] = set()
-_gmail_state = {"last_poll": 0.0, "last_error": "", "joined": []}
 # Set when the instance is being drained (deploy/rollout). The Gmail watcher stops
 # dispatching bots the moment this flips, so a draining OLD instance never races the
 # NEW instance to put a second bot in the same meeting during a deploy overlap.
 _shutting_down = False
 
 # Spoken the instant she decides to web-search, so the ~4s search isn't dead air.
-_SEARCH_FILLERS = (
-    "Sure, let me look that up — one sec.",
-    "Let me quickly check the web on that — one moment.",
-    "Good one — give me a sec to search that.",
-)
-_SEARCH_FILLERS_IT = (
-    "Certo, lo cerco subito — un attimo.",
-    "Do un'occhiata veloce sul web — un momento.",
-    "Bella domanda — un secondo che cerco.",
-)
 
 # Spoken when a NON-search answer is taking a beat (tool round-trips, slow
 # provider) — an acknowledgment beats dead air on the interactive avatar.
-_ACK_FILLERS = (
-    "Give me a second to think about that.",
-    "One sec — let me work that out.",
-    "Hmm, give me a moment on that one.",
-)
-_ACK_FILLERS_IT = (
-    "Dammi un secondo per pensarci.",
-    "Un attimo — ci ragiono.",
-    "Mmm, dammi un momento su questa.",
-)
 
 # How long a /live/act answer may take before she speaks an acknowledgment
 # filler. Below this, a filler is just noise in front of an instant answer.
-_ACK_FILLER_AFTER_S = 1.2
 
-_BOT_TERMINAL = {"call_ended", "done", "fatal"}
 # bot_ids whose finalize is currently in flight. Recall emits bot.call_ended
 # THEN bot.done (both terminal) as SEPARATE concurrent webhook POSTs, and the
 # reconciliation loop can race them — this in-flight set makes _finalize_session
 # safe to call from all three sources without double-delivering session.ended.
-_finalizing: set[str] = set()
-_BOT_VARIANT_RANK = {
-    "web_gpu": 0,
-    "web_4_core": 1,
-    "web": 3,
-}
 _LIVE_REPAIR_RE = re.compile(
     r"\b(can you hear|do you hear|hear me|are you there|hello|hi laura|"
     r"doesn'?t work|not working|is broken|no response|answer me|"
@@ -510,44 +428,10 @@ _LIVE_REPAIR_RE = re.compile(
 )
 
 
-def _bot_meeting_key(bot: dict) -> str:
-    """Platform-aware meeting_key for a Recall bot record, to compare for
-    EQUALITY against ledger.meeting_key(our_url) — not a Meet-only substring.
-
-    Recall reports the joined meeting either as a full URL string or as a
-    structured object carrying the platform-native meeting_id. ledger.meeting_key
-    extracts exactly that native id from a URL (Meet code / Zoom id / Teams
-    thread), so:
-      - a URL string → normalize it the same way we normalized ours;
-      - an object → its meeting_id IS the native id ledger.meeting_key produces,
-        so compare on it directly (lower-cased).
-    The old Meet-only regex made ``code`` the whole URL for Zoom/Teams while
-    Recall reports an opaque id, so the substring test never matched and both
-    durable guards silently no-op'd — two bots, two meters, uncleaned.
-    """
-    mu = bot.get("meeting_url")
-    if isinstance(mu, dict):
-        return str(mu.get("meeting_id") or "").strip().lower()
-    return ledger.meeting_key(str(mu or ""))
 
 
-def _recall_list_headers() -> dict[str, str]:
-    return {
-        "Authorization": settings.recall_api_key.strip(),
-        "Content-Type": "application/json",
-    }
 
 
-def _bot_variant_rank(bot: dict) -> int:
-    """Lower is better: GPU, then 4-core, then unknown paid variants, then default."""
-    variant = bot.get("variant") or {}
-    if isinstance(variant, dict):
-        values = [str(v) for v in variant.values() if v]
-    else:
-        values = [str(variant)] if variant else []
-    if not values:
-        return _BOT_VARIANT_RANK["web"]
-    return min(_BOT_VARIANT_RANK.get(v, 2) for v in values)
 
 
 def _should_repair_silent_answer(called: bool, text: str) -> bool:
@@ -650,16 +534,8 @@ def _meeting_has_active_bot(meeting_url: str) -> bool:
 # parallel. A WeakValueDictionary drops a lock once no request references it (no
 # unbounded growth), while any concurrent waiter keeps its own strong ref so the
 # same key always resolves to the same lock object.
-_start_locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
 
 
-def _start_lock_for(meeting_url: str) -> asyncio.Lock:
-    key = ledger.meeting_key(meeting_url)
-    lock = _start_locks.get(key)
-    if lock is None:  # create-on-demand; get→create is synchronous (atomic here)
-        lock = asyncio.Lock()
-        _start_locks[key] = lock
-    return lock
 
 
 # Seeding cutoff for the gmail watcher's FIRST poll after boot: mail older
@@ -783,9 +659,6 @@ _reconcile_missing: dict[str, int] = {}
 _RECONCILE_MISSING_LIMIT = 3
 
 
-def _bot_status_code(bot: dict) -> str | None:
-    """Latest Recall status_changes code (done/call_ended/in_call_recording/…)."""
-    return (bot.get("status_changes") or [{}])[-1].get("code")
 
 
 # Recall status codes that mean the bot is IN the meeting and the per-minute
@@ -795,230 +668,24 @@ def _bot_status_code(bot: dict) -> str | None:
 _IN_CALL_CODES = {"in_call_recording", "in_call_not_recording"}
 
 
-def _status_change_epoch(
-    bot: dict, codes: set[str], *, first: bool = True
-) -> float | None:
-    """Epoch of the first (or last) status_changes entry whose code is in
-    ``codes``. Recall stamps every status with its own created_at — the
-    authoritative record of when the meter actually started/stopped, immune
-    to our own polling lag. None when absent or unparsable."""
-    changes = bot.get("status_changes") or []
-    for ch in changes if first else reversed(changes):
-        if ch.get("code") in codes:
-            ts = str(ch.get("created_at") or "")
-            try:
-                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            except ValueError:
-                return None
-            # A timestamp with no offset would otherwise be read as LOCAL time —
-            # off by the host's UTC offset (hours of phantom consumed_seconds).
-            # Recall stamps UTC; treat a naive value as UTC.
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.timestamp()
-    return None
 
 
-async def _close_usage_for(
-    org_id: str, bot_id: str, end_epoch: float | None, reason: str
-) -> None:
-    """Close the durable usage row for a finished bot (PR B). Idempotent —
-    entitlements.close_usage's ``WHERE state != 'closed'`` means the FIRST
-    close wins, so manual end + webhook + reconcile retries can never rewrite
-    consumed_seconds. consumed = end - in_call_at, where ``end`` is Recall's
-    terminal-status timestamp when the caller had one, else now CAPPED at the
-    deadline (our own enforcement lag is never billed to the org). A row that
-    never went in-call closes 0 'never_joined'. Best-effort: a failure leaves
-    the row open for the reconcile restore pass — it must NEVER break
-    finalize. No-op in the key-free demo (control plane disabled)."""
-    if not control_plane.enabled():
-        return
-    try:
-        row = await run_in_threadpool(entitlements.usage_row, org_id, bot_id)
-        if row is None or row.get("state") == "closed":
-            return
-        in_call = row.get("in_call_at")
-        if in_call is None:
-            await run_in_threadpool(
-                entitlements.close_usage, org_id, bot_id, 0, "never_joined"
-            )
-            return
-        end = end_epoch
-        if end is None:
-            end = time.time()
-            if row.get("deadline"):
-                end = min(end, float(row["deadline"]))
-        consumed = max(0, int(round(end - in_call)))
-        await run_in_threadpool(
-            entitlements.close_usage, org_id, bot_id, consumed, reason
-        )
-    except Exception as e:  # noqa: BLE001 — reconcile's restore pass heals it
-        print(
-            f"[usage] close failed for bot={bot_id} ({type(e).__name__}); "
-            f"reconcile will heal",
-            flush=True,
-        )
 
 
-async def _assign_usage_bot_id(
-    org_id: str, provisional_bot_id: str, real_bot_id: str
-) -> bool:
-    """Swap the gate's provisional usage bot_id ('pending:<uuid>') for the real
-    Recall id, RETRYING a few times on a transient DB blip (PR B BLOCKER 1: a
-    single swallowed swap failure left the usage row stranded under the
-    provisional id → the live bot ran untracked → unmetered forever). If every
-    attempt fails, the caller stops the born bot and fails closed. The reconcile
-    self-heal remains a backstop when a leave cannot be verified immediately."""
-    for attempt in range(3):
-        try:
-            changed = await run_in_threadpool(
-                entitlements.assign_bot_id, org_id, provisional_bot_id, real_bot_id
-            )
-            if changed:
-                return True
-            # False is NOT success: retry, then force the caller down the
-            # fail-closed cleanup path instead of running an unmetered bot.
-        except Exception:  # noqa: BLE001 — transient billing-DB blip; retry
-            if attempt == 2:
-                print(
-                    "[usage] provisional bot_id swap failed after retries — "
-                    "reconcile self-heals",
-                    flush=True,
-                )
-                return False
-            await asyncio.sleep(0.2 * (attempt + 1))
-    return False
 
 
-async def _abandon_orphan_session(bot_id: str) -> None:
-    """Drop a local session whose Recall bot no longer exists and that never
-    captured anything — a cancelled or no-show scheduled bot. Stops the Anam
-    conversation if one was opened (best-effort; the Recall bot is already gone,
-    so no Recall meter remains), then removes the session. NO artifact and NO
-    session.ended: the meeting never happened, so the orchestrator must not hear
-    it 'ended' (that would be a phantom completed-meeting signal).
-
-    Runs under the same ``_finalizing`` guard as ``_finalize_session`` so it
-    can't race a concurrent finalize of the same bot: if a real finalize already
-    holds the guard it owns this bot and we no-op; otherwise we hold it across the
-    Anam teardown + remove so no finalize slips past ``store.remove``."""
-    session = store.get(bot_id)
-    if session is None or bot_id in _finalizing:
-        return
-    _finalizing.add(bot_id)
-    try:
-        if session.anam_conversation_id:
-            try:
-                await run_in_threadpool(
-                    anam_client.end_conversation, session.anam_conversation_id
-                )
-            except Exception:
-                pass
-        # PR B: a no-show bot consumed nothing — release its usage row so the
-        # org's one-active-meeting slot frees up (idempotent; never raises).
-        await _close_usage_for(session.org_id, bot_id, None, "never_joined")
-        store.remove(bot_id)
-    finally:
-        _finalizing.discard(bot_id)
 
 
 # Recall statuses that CONFIRM a bot is no longer billing: the bot is genuinely
 # gone. Everything else — 401/403 (rotated/expired key), 429 (rate limit), any
 # 5xx, network/other — leaves the meter-stop UNVERIFIED: the bot may still be
 # live and billing, so the session must be kept and the leave retried.
-_LEAVE_GONE_STATUSES = {404, 410}
 
 
-def _leave_confirmed_stopped(exc: BaseException | None) -> bool:
-    """True iff the Recall meter is CONFIRMED not billing: leave_call succeeded
-    (exc is None) or Recall reports the bot genuinely gone (404/410). Every other
-    error — 401/403/429 auth/rate-limit, 5xx, network/other — is UNVERIFIED, so
-    the caller keeps the session for a retry rather than dropping a still-live,
-    still-billing bot (the fleet-wide meter-leak class this whole change closes)."""
-    if exc is None:
-        return True
-    if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code in _LEAVE_GONE_STATUSES
-    return False
 
 
-async def _bot_reports_terminal(bot_id: str) -> bool:
-    """Best-effort status poll: True iff Recall AFFIRMATIVELY confirms the bot is
-    not billing — its latest status is terminal (done/call_ended/fatal) or Recall
-    no longer knows it (404/410 → gone). Used to DRAIN a leave_pending session
-    whose leave_call keeps being rejected with a non-gone status (e.g. Recall's
-    400 "bot is not in a call" for an already-ended bot): leave_pending IS a
-    persisted field, so a phantom survives a redeploy (SQLite → S3 restore) and
-    would otherwise be retried every reconcile pass FOREVER, inflating
-    active_sessions. Any ambiguity — a still-live/non-terminal status, a non-200
-    that isn't a gone-status, or a poll error — returns False so the caller KEEPS
-    the session (never drop a possibly-live, possibly-billing bot)."""
-    try:
-        r = await run_in_threadpool(
-            lambda: httpx.get(
-                f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/{bot_id}/",
-                headers=_recall_list_headers(),
-                timeout=20.0,
-            )
-        )
-    except Exception:  # noqa: BLE001 — a poll error keeps the session (retry next pass)
-        return False
-    if r.status_code in _LEAVE_GONE_STATUSES:
-        return True  # Recall no longer has the bot → gone → not billing
-    if r.status_code != 200:
-        return False  # auth/rate/5xx — unknown, keep the session
-    try:
-        return _bot_status_code(r.json()) in _BOT_TERMINAL
-    except Exception:  # noqa: BLE001 — unparseable body → treat as unknown
-        return False
 
 
-async def _retry_leave(bot_id: str, session: store.Session) -> bool:
-    """Retry ONLY the Recall meter-stop for a session whose artifact was already
-    built + delivered but whose leave_call could not be confirmed (so it was kept
-    in the store for this retry — see _finalize_session_locked). Drop the session
-    and signal the GPU meter when the meter is CONFIRMED stopped (leave succeeded
-    OR the bot is gone 404/410 — otherwise a legitimate already-ended bot would
-    be retried every pass FOREVER, inflating active_sessions and defeating the
-    pre-deploy gate). NO artifact rebuild, NO re-delivery. Returns False while the
-    stop is still UNVERIFIED so the reconcile loop retries next pass.
-
-    Guarded by ``_finalizing`` so a manual /end and a reconcile tick can't both
-    retry the same bot at once (idempotent regardless — defense in depth)."""
-    if bot_id in _finalizing:
-        return False
-    _finalizing.add(bot_id)
-    try:
-        try:
-            await run_in_threadpool(recall_client.leave_call, bot_id)
-        except Exception as e:  # noqa: BLE001 — classified below
-            if not _leave_confirmed_stopped(e):
-                # The leave itself didn't confirm the stop. But a bot Recall now
-                # reports terminal/gone is not billing — an already-ended bot
-                # rejects the courtesy leave with 400 "not in a call", which is
-                # NOT a gone-status, so without this a restored leave_pending
-                # phantom (leave_pending is persisted → survives redeploy) would
-                # retry forever. Confirm via a status poll before giving up.
-                if not await _bot_reports_terminal(bot_id):
-                    return False  # UNVERIFIED and not terminal — keep, retry next pass
-            # 404/410 leave, OR Recall confirms terminal/gone → not billing → drop.
-        # PR B BLOCKER 2: the meter is NOW confirmed off — close the usage row
-        # here (finalize deferred it on the unverified leave to keep the slot
-        # held). First-close-wins, so a manual /end + a reconcile tick racing
-        # this both resolve to one honest close. consumed = confirmed-stop
-        # moment (now, capped at the deadline); reason carried from finalize.
-        await _close_usage_for(
-            session.org_id,
-            bot_id,
-            getattr(session, "usage_end_epoch", None),
-            getattr(session, "usage_close_reason", "") or "ended",
-        )
-        store.remove(bot_id)
-        gpu_runtime.on_session_ended(len(store.all_sessions()))
-        runpod_runtime.on_session_ended(len(store.all_sessions()))
-        return True
-    finally:
-        _finalizing.discard(bot_id)
 
 
 async def _reconcile_once() -> None:
@@ -1372,400 +1039,72 @@ async def _reconcile_sessions_loop() -> None:
         await _reconcile_once()
 
 
-@app.get("/gmail/status")
-def gmail_status(request: Request) -> JSONResponse:
-    """Health of the Gmail 'Add people' auto-join watcher. Gated: `recent_joins`
-    carries live meeting URLs + bot_ids (joinable links = PII), so only a
-    logged-in owner (or the machine bearer) may read it — never the anonymous
-    internet. Open in the key-free demo (auth disabled)."""
-    if auth.current_user(request) is None:
-        if err := auth.gate(request):
-            return err
-    has_rt = bool(gmail_watcher.refresh_token())
-    last = _gmail_state["last_poll"]
-    return JSONResponse(
-        {
-            "enabled": settings.gmail_watch_enabled,
-            "has_refresh_token": has_rt,
-            "poll_seconds": settings.gmail_poll_seconds,
-            "seconds_since_last_poll": round(time.time() - last, 1) if last else None,
-            "last_error": _gmail_state["last_error"],
-            "recent_joins": _gmail_state["joined"][-5:],
-        }
-    )
 
 
 # ───────────────────────────── health ──────────────────────────────
-@app.get("/health")
-def health() -> dict:
-    return {
-        "status": "ok",
-        "active_sessions": len(store.all_sessions()),
-        "brain_provider": effective_provider(),
-        "brain_model": settings.brain_model,
-        "embedding_provider": settings.embedding_provider,
-        "avatars": avatars.list_ids(),
-    }
 
 
-@app.get("/avatars")
-def list_avatars(request: Request) -> dict:
-    """List installed avatars (one folder each under avatars/). A logged-in
-    user sees only their org's granted avatars; the anonymous/demo caller sees
-    ALL — the key-free demo picker is unchanged."""
-    user = auth.current_user(request)
-    roster = (
-        avatars.list_for_org(user["org_id"]) if user else avatars.list_ids()
-    )
-    out = []
-    for aid in roster:
-        a = avatars.load(aid)
-        # Per-avatar brain choice for the dashboard toggle: the stored choice,
-        # else derived from the effective mode (global default).
-        _explicit = store.get_avatar_brain_mode(aid)
-        _brain = _explicit or (
-            "gemini"
-            if gemini_ears.mode_for_avatar(aid) in ("reply", "on")
-            else "cerebras"
-        )
-        out.append({"id": a.id, "name": a.name, "role": a.role,
-                    "wake_words": a.wake_words,
-                    "brain": _brain, "brain_explicit": _explicit is not None})
-    return {"avatars": out}
 
 
-class BrainModeRequest(BaseModel):
-    brain: str  # "gemini" | "cerebras"
 
 
-@app.post("/avatars/{avatar_id}/brain-mode")
-def set_avatar_brain(
-    avatar_id: str, req: BrainModeRequest, request: Request
-) -> JSONResponse:
-    """Owner sets an avatar's brain from the dashboard: "gemini" (tutto-Gemini
-    via the relay) or "cerebras" (the normal Deepgram + grounded brain). Takes
-    effect on the avatar's NEXT meeting — no redeploy. Not anonymous: a logged-in
-    owner (or the machine bearer) only, so the demo can't flip prod behavior."""
-    if err := auth.gate(request):
-        return err
-    aid = (avatar_id or "").strip()
-    if aid not in set(avatars.list_ids()):
-        return JSONResponse({"error": "unknown avatar_id"}, status_code=404)
-    choice = (req.brain or "").strip().lower()
-    if not store.set_avatar_brain_mode(aid, choice):
-        return JSONResponse(
-            {"error": "brain must be 'gemini' or 'cerebras'"}, status_code=400
-        )
-    return JSONResponse({"ok": True, "avatar_id": aid, "brain": choice})
 
 
 # ─────────────────────────── demo console ──────────────────────────
 # Everything below runs WITHOUT the live-meeting vendors (Recall/Anam/
 # ElevenLabs). It exercises the brain + RAG directly so you can prove the value
 # with zero keys (BRAIN_PROVIDER=stub) or one key (BRAIN_PROVIDER=anthropic).
-@app.get("/")
-def demo_page() -> FileResponse:
-    return FileResponse(FRONTEND_DIR / "demo.html")
 
 
-class AskRequest(BaseModel):
-    question: str
-    avatar_id: str = "laura"
 
 
-@app.post("/demo/ask")
-async def demo_ask(req: AskRequest) -> JSONResponse:
-    """Ask an avatar a question → grounded, cited answer (no meeting needed)."""
-    avatar = avatars.load(req.avatar_id)  # raises if unknown
-    result = await run_in_threadpool(answer_question, avatar, req.question)
-    return JSONResponse(result)
 
 
-@app.post("/live/ask")
-async def live_ask(req: AskRequest) -> StreamingResponse:
-    """Stream a grounded answer as SSE for the DIRECT 'talk to Laura' web avatar.
-
-    In that mode Anam captures the user's mic + does STT/TTS/lip-sync, and calls
-    THIS endpoint as its brain. Reuses the RAG + Groq streaming path — each
-    grounded sentence is emitted as `data: {"content": "..."}` (and `[DONE]` at
-    the end). Stays silent (no content, just [DONE]) when the SKIP gate fires.
-    """
-    avatar = avatars.load(req.avatar_id)
-
-    async def gen():
-        async for sentence in iterate_in_threadpool(
-            answer_question_stream(avatar, req.question, mission=avatar.mission)
-        ):
-            yield f"data: {json.dumps({'content': sentence})}\n\n"
-        yield "data: [DONE]\n\n"
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
-@app.post("/live/act")
-async def live_act(req: AskRequest) -> StreamingResponse:
-    """Grounded answer that can ACT — the model may call tools (calculate, check a
-    deadline, look up a record) before answering. Same SSE shape as /live/ask so
-    the avatar page is unchanged: the final spoken answer is emitted as
-    `data: {"content": "..."}` then `[DONE]`. Which tools ran is surfaced as an SSE
-    comment line (`: tools_used ...`) for transparency — clients ignore it.
-
-    Kept OFF the streaming meeting hot path on purpose: tool use needs a round-trip
-    first, so this is for the direct web avatar / demo.
-    """
-    avatar = avatars.load(req.avatar_id)
-
-    async def gen():
-        # Start the answer immediately, then never leave dead air while it cooks:
-        # a web search gets its filler up front (it's a ~4s+ break by definition);
-        # any other answer that takes more than a beat gets a spoken
-        # acknowledgment so she visibly "took the question" instead of freezing.
-        task = asyncio.ensure_future(
-            run_in_threadpool(answer_with_tools, avatar, req.question)
-        )
-        if wants_web_search(req.question):
-            filler = _line_for(req.question, list(_SEARCH_FILLERS), list(_SEARCH_FILLERS_IT))
-            yield f"data: {json.dumps({'content': filler})}\n\n"
-        else:
-            done, _ = await asyncio.wait({task}, timeout=_ACK_FILLER_AFTER_S)
-            if not done:
-                filler = _line_for(req.question, list(_ACK_FILLERS), list(_ACK_FILLERS_IT))
-                yield f"data: {json.dumps({'content': filler})}\n\n"
-        try:
-            result = await task
-        except Exception as e:  # noqa: BLE001 — a failed lookup must never end in silence
-            print(f"[live/act] answer failed: {e}", flush=True)
-            fail = "Sorry — that one failed on me. Mind asking again?"
-            yield f"data: {json.dumps({'content': fail})}\n\n"
-            yield "data: [DONE]\n\n"
-            return
-        used = result.get("tools_used") or []
-        if used:
-            yield f": tools_used {', '.join(u['tool'] for u in used)}\n\n"
-        answer = (result.get("answer") or "").strip()
-        if answer:
-            yield f"data: {json.dumps({'content': answer})}\n\n"
-        yield "data: [DONE]\n\n"
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
-class PostMeetingRequest(BaseModel):
-    transcript: str
-    avatar_id: str = "laura"
 
 
-@app.post("/demo/post_meeting")
-async def demo_post_meeting(req: PostMeetingRequest) -> JSONResponse:
-    """Turn a meeting transcript into the full post-meeting artifact."""
-    try:
-        avatar = avatars.load(req.avatar_id)
-    except FileNotFoundError:
-        # A bogus avatar_id would otherwise raise an unhandled 500 and the demo
-        # page shows a bare "HTTP 500" — answer a clear 404 with the choices.
-        return JSONResponse(
-            {"error": "unknown avatar_id", "available": avatars.list_ids()},
-            status_code=404,
-        )
-    artifact = await run_in_threadpool(post_meeting, avatar, req.transcript)
-    # Echo the transcript so the demo artifact matches the live one
-    # (_finalize_session does the same); the page shows it in a transcript tab.
-    artifact["transcript"] = req.transcript
-    return JSONResponse(artifact)
 
 
-@app.get("/demo/sample")
-def demo_sample(avatar_id: str = "laura") -> JSONResponse:
-    """A sample transcript to load into the post-meeting demo, if the avatar has one."""
-    try:
-        avatar = avatars.load(avatar_id)
-    except FileNotFoundError:
-        return JSONResponse(
-            {"error": "unknown avatar_id", "available": avatars.list_ids()},
-            status_code=404,
-        )
-    sample = avatar.dir / "sample_meeting.txt"
-    text = sample.read_text() if sample.exists() else ""
-    return JSONResponse({"avatar_id": avatar_id, "transcript": text})
 
 
 # ── live avatar preview (Anam face + Claude brain, NO meeting vendor) ──
 # Lets you SEE the talking avatar answer from the docs without Recall/ngrok.
-@app.get("/live")
-def live_page() -> FileResponse:
-    return FileResponse(FRONTEND_DIR / "live.html")
 
 
-@app.get("/join")
-def join_page() -> FileResponse:
-    return FileResponse(FRONTEND_DIR / "join.html")
 
 
-@app.get("/login")
-def login_page() -> FileResponse:
-    """Dashboard sign-in (Google). With no Google client configured the page
-    offers the open demo-mode dashboard instead — key-free demo preserved."""
-    return FileResponse(FRONTEND_DIR / "login.html")
 
 
-@app.get("/privacy")
-def privacy_page() -> FileResponse:
-    """Public privacy policy — required by the Google OAuth consent screen
-    (and linked from the marketing site). Static, no data, no auth."""
-    return FileResponse(FRONTEND_DIR / "privacy.html")
 
 
-@app.get("/terms")
-def terms_page() -> FileResponse:
-    """Public terms of service — companion to /privacy for the consent
-    screen and checkout. Static, no data, no auth."""
-    return FileResponse(FRONTEND_DIR / "terms.html")
 
 
-@app.get("/talk")
-def talk_page() -> FileResponse:
-    """Open-source avatar page (TalkingHead + our TTS) — the Anam replacement.
-    Recall will render this instead of avatar.html once it's proven out.
-
-    no-store: the page's JS changes often (framing, barge-in, streaming) — without
-    this browsers serve a stale cached copy and users see old behaviour."""
-    return FileResponse(
-        FRONTEND_DIR / "talk.html", headers={"Cache-Control": "no-store"}
-    )
 
 
-@app.get("/photoreal")
-def photoreal_page() -> FileResponse:
-    """Photoreal avatar page (Stage 2): GPU-streamed MuseTalk face. Same speak
-    contract as /talk; flip meetings onto it with AVATAR_PAGE=photoreal once
-    the GPU box is live (see gpu/README.md)."""
-    return FileResponse(FRONTEND_DIR / "photoreal.html")
 
 
-@app.get("/photoreal/config")
-def photoreal_config(avatar_id: str = "") -> JSONResponse:
-    """GPU endpoint plus identity-safe readiness for the requested avatar."""
-    try:
-        avatar = avatars.load(avatar_id or settings.default_avatar_id)
-        renderer = avatar.renderer_readiness
-    except (FileNotFoundError, ValueError):
-        return JSONResponse(
-            {"error": "face_unavailable", "avatar_id": avatar_id},
-            status_code=404,
-            headers={"Cache-Control": "no-store"},
-        )
-    return JSONResponse(
-        {
-            "stream_url": settings.gpu_stream_url,
-            "avatar_id": avatar.id,
-            "face_ready": renderer["photoreal"]["ready"],
-            "fallback": renderer["fallback"],
-        },
-        headers={"Cache-Control": "no-store"},
-    )
 
 
-@app.get("/laura-reference.jpg")
-def photoreal_reference(avatar_id: str = "") -> Response:
-    """Return only the requested avatar's portrait; never another identity."""
-    assets = REPO_ROOT_DIR / "gpu" / "assets"
-    if not avatar_id:
-        # Legacy/manual preview without an identity remains Laura-only.
-        path = assets / "reference.jpg"
-    elif not re.fullmatch(r"[a-z0-9_-]{1,64}", avatar_id.lower()):
-        return JSONResponse({"error": "face_unavailable"}, status_code=404)
-    else:
-        try:
-            avatar = avatars.load(avatar_id.lower())
-            name = avatar.photoreal_reference or f"reference-{avatar.id}.jpg"
-            path = assets / name if Path(name).name == name else assets / "__missing__"
-        except FileNotFoundError:
-            path = assets / "__missing__"
-    if not path.is_file():
-        return JSONResponse(
-            {"error": "face_unavailable", "avatar_id": avatar_id}, status_code=404
-        )
-    return FileResponse(
-        path,
-        media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
 
 
-@app.api_route("/{avatar_id}.glb", methods=["GET", "HEAD"])
-def talk_avatar_model(avatar_id: str) -> Response:
-    """Per-avatar 3D model for /talk (laura.glb, cedric.glb, …), served
-    same-origin on purpose: Ready Player Me's CDN shutdown (Jan 2026) killed our
-    previous third-party model URL, so the models (TalkingHead-repo samples) are
-    vendored into frontend/. /talk HEAD-probes /{avatar_id}.glb and may fall
-    back only to that same avatar's configured renderer; a missing model 404s
-    explicitly and never borrows another identity.
-    HEAD must be explicit — FastAPI's @app.get alone 405s it, which would have
-    silently defeated the probe (curl -I caught this; FileResponse handles HEAD
-    natively). Whitelisted to simple ids resolving to real files — never a
-    path traversal."""
-    if not re.fullmatch(r"[a-z0-9_-]{1,64}", avatar_id):
-        return JSONResponse({"error": "unknown model"}, status_code=404)
-    model_path = FRONTEND_DIR / f"{avatar_id}.glb"
-    if not model_path.is_file():
-        return JSONResponse({"error": "unknown model"}, status_code=404)
-    return FileResponse(
-        model_path,
-        media_type="model/gltf-binary",
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
 
 
 # TTS for the open-source avatar page lives in its own router (tts.py) — a
 # self-contained concern with no coupling to the live meeting path.
 
 
-class LiveTokenRequest(BaseModel):
-    avatar_id: str = "laura"
 
 
-class LiveError(BaseModel):
-    where: str = ""
-    message: str = ""
-    stack: str = ""
 
 
-@app.post("/live/error")
-async def live_error(e: LiveError) -> JSONResponse:
-    """The avatar page reports client-side Anam errors here so we can see them."""
-    print(f"\n[LIVE-ERROR] {e.where}: {e.message}\n{(e.stack or '')[:1500]}\n", flush=True)
-    return JSONResponse({"ok": True})
 
 
-@app.post("/live/token")
-async def live_token(req: LiveTokenRequest, request: Request) -> JSONResponse:
-    """Mint a fresh Anam session token for the browser to stream the avatar.
-    Gated: minting an Anam conversation bills per-minute, so an anonymous caller
-    can't rack up charges — a logged-in owner (or the machine bearer) only. Open
-    in the key-free demo (auth disabled). The current /talk face uses TalkingHead
-    + /tts (not Anam), so this only affects the legacy /live + /avatar pages."""
-    if auth.current_user(request) is None:
-        if err := auth.gate(request):
-            return err
-    avatar = avatars.load(req.avatar_id)
-    try:
-        persona_id = await run_in_threadpool(anam_client.create_persona, avatar)
-        convo = await run_in_threadpool(
-            anam_client.create_conversation, avatar, persona_id
-        )
-    except Exception as e:  # surface a clean message to the page
-        return JSONResponse({"error": str(e)}, status_code=400)
-    return JSONResponse(
-        {"avatar_id": avatar.id, "session_token": convo["conversation_url"]}
-    )
 
 
 # ── Recall diagnostics: non-secret readiness/auth check for live meetings ──
-@app.get("/recall/status")
-def recall_status(check_auth: bool = False) -> JSONResponse:
-    """Report Recall setup state without returning any secret values."""
-    status = recall_client.auth_check() if check_auth else recall_client.readiness()
-    return JSONResponse(status, status_code=200 if status["ready"] else 400)
 
 
 # ── Google Calendar OAuth: connect Laura's calendar to Recall Calendar V2 ──
@@ -1775,299 +1114,16 @@ def recall_status(check_auth: bool = False) -> JSONResponse:
 # domain-separates the signature from the login flow's "state", so neither
 # flow's state can be replayed in the other. This REPLACES the old static
 # settings.calendar_oauth_state as the real CSRF barrier.
-CALENDAR_STATE_COOKIE = "laura_calendar_oauth_state"
-CALENDAR_STATE_PURPOSE = "calendar_state"
 
 
-def _clear_calendar_state(response):
-    """Consume the single-use OAuth-state cookie (mirrors auth.py's callback)."""
-    response.delete_cookie(CALENDAR_STATE_COOKIE, path="/oauth")
-    return response
 
 
-def _oauth_login_required(request: Request):
-    """FIX: when login is enabled, the native-Google connect/callback flow must
-    be owner-authenticated — an anonymous browser must NOT be able to complete
-    OAuth and silently land a Google refresh token on demo_org_id. Returns an
-    error response to send, or None to allow. auth.enabled() is exactly "the
-    Google OAuth client is configured", which is also what this flow needs, so
-    the key-free demo path (no Google → these endpoints already 400) is left
-    unchanged: the gate only bites once real credentials exist."""
-    if auth.current_user(request) is not None:
-        return None
-    if not auth.enabled():
-        return None  # key-free / no-login demo path, unchanged
-    if err := auth.gate(request):
-        return err
-    # A valid machine bearer clears auth.gate with no cookie user; an interactive
-    # OAuth connect still needs a real logged-in owner to key the token to.
-    return JSONResponse({"error": "login required"}, status_code=401)
 
 
-@app.get("/oauth/google/connect")
-def google_oauth_connect(request: Request):
-    """Start Google OAuth for the calendar account that should invite Laura."""
-    if not settings.google_calendar_client_id:
-        return JSONResponse(
-            {"error": "GOOGLE_CALENDAR_CLIENT_ID is not set."}, status_code=400
-        )
-    if err := _oauth_login_required(request):
-        return err
-
-    # Per-session single-use CSRF state (see auth.issue_oauth_state): the nonce
-    # goes in an HttpOnly cookie, the signed token in the `state` param.
-    nonce, signed_state = auth.issue_oauth_state(CALENDAR_STATE_PURPOSE)
-    params = {
-        "client_id": settings.google_calendar_client_id,
-        "redirect_uri": _google_redirect_uri(),
-        "response_type": "code",
-        "scope": " ".join(GOOGLE_CALENDAR_SCOPES),
-        "access_type": "offline",
-        "prompt": "consent",
-        "include_granted_scopes": "true",
-        "state": signed_state,
-    }
-    # Default the calendar to the SAME Google account the user logged in with, so
-    # "log in -> see your own calendar" just works and you can't accidentally
-    # connect a different account's (empty) calendar. login_hint pre-selects it;
-    # the user can still switch to another account on Google's own screen.
-    _cu = auth.current_user(request)
-    if _cu and _cu.get("email"):
-        params["login_hint"] = _cu["email"]
-
-    url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
-    resp = RedirectResponse(url)
-    resp.set_cookie(
-        CALENDAR_STATE_COOKIE,
-        nonce,
-        max_age=auth.STATE_TTL_SECONDS,
-        httponly=True,
-        samesite="lax",
-        secure=settings.public_base_url.startswith("https"),
-        path="/oauth",
-    )
-    return resp
 
 
-@app.get("/oauth/google/callback")
-async def google_oauth_callback(
-    request: Request, code: str = "", state: str = "", error: str = ""
-) -> JSONResponse:
-    """Finish Google OAuth, then create the Recall calendar connection."""
-    if error:
-        return JSONResponse({"error": error}, status_code=400)
-    if not code:
-        return JSONResponse({"error": "Missing Google OAuth code."}, status_code=400)
-    # FIX (auth gate): on a login-enabled deployment this callback must belong to
-    # a logged-in owner, else an anonymous request could complete OAuth and store
-    # a token on demo_org_id. Checked BEFORE the state so an unauth caller never
-    # even reaches the token exchange.
-    if err := _oauth_login_required(request):
-        return err
-    # FIX (CSRF): the returned `state` must match the single-use signed nonce we
-    # set on THIS browser at /oauth/google/connect (cookie + signed param). This
-    # binds the callback to the browser that started the flow — the real barrier
-    # against login-CSRF / refresh-token injection, replacing the old static
-    # settings.calendar_oauth_state gate. Consume the cookie on every exit below.
-    cookie_nonce = request.cookies.get(CALENDAR_STATE_COOKIE, "")
-    if not auth.check_oauth_state(state, cookie_nonce, CALENDAR_STATE_PURPOSE):
-        return _clear_calendar_state(
-            JSONResponse({"error": "Invalid OAuth state."}, status_code=400)
-        )
-    if not settings.google_calendar_client_id:
-        return _clear_calendar_state(JSONResponse(
-            {"error": "GOOGLE_CALENDAR_CLIENT_ID is not set."}, status_code=400
-        ))
-    if not settings.google_calendar_client_secret:
-        return _clear_calendar_state(JSONResponse(
-            {"error": "GOOGLE_CALENDAR_CLIENT_SECRET is not set."}, status_code=400
-        ))
-
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            token_resp = await client.post(
-                "https://oauth2.googleapis.com/token",
-                data={
-                    "code": code,
-                    "client_id": settings.google_calendar_client_id,
-                    "client_secret": settings.google_calendar_client_secret,
-                    "redirect_uri": _google_redirect_uri(),
-                    "grant_type": "authorization_code",
-                },
-            )
-            token_resp.raise_for_status()
-            token = token_resp.json()
-
-            refresh_token = token.get("refresh_token", "")
-            if not refresh_token:
-                return _clear_calendar_state(JSONResponse(
-                    {
-                        "error": (
-                            "Google did not return a refresh_token. Re-open "
-                            "/oauth/google/connect and approve with prompt=consent; "
-                            "if needed, revoke the app in Google settings first."
-                        )
-                    },
-                    status_code=400,
-                ))
-
-            oauth_email = ""
-            access_token = token.get("access_token", "")
-            if access_token:
-                profile_resp = await client.get(
-                    "https://www.googleapis.com/oauth2/v2/userinfo",
-                    headers={"Authorization": f"Bearer {access_token}"},
-                )
-                if 200 <= profile_resp.status_code < 300:
-                    oauth_email = profile_resp.json().get("email", "").lower()
-    except httpx.HTTPStatusError as e:
-        return _clear_calendar_state(JSONResponse(
-            {"error": "Google OAuth token exchange failed.", "status": e.response.status_code},
-            status_code=400,
-        ))
-    except Exception as e:
-        return _clear_calendar_state(JSONResponse({"error": str(e)}, status_code=400))
-
-    # PER-USER Google connect. This callback used to accept ONLY the avatar's own
-    # inbox (CALENDAR_INVITE_EMAILS) and reject everyone else with "Wrong Google
-    # account". Relaxed: ANY authenticated user may connect THEIR OWN Google
-    # (Calendar + Gmail) — the per-org refresh token stored below powers their
-    # native executor AND their own Upcoming calendar. The avatar-only Recall
-    # calendar auto-join step (further down) stays guarded to the avatar account,
-    # so a normal user's connect can never hijack the deployment's auto-join inbox.
-    targets = _calendar_target_emails()
-    # The avatar's own account. With NO invite filter configured this is a
-    # single-tenant deployment where the connecting account IS the auto-join
-    # calendar (preserves the pre-per-user behavior); with a filter set, only a
-    # matching address is the avatar account and anyone else is a normal user.
-    is_avatar_account = (not targets) or (oauth_email in targets)
-
-    # Persist the refresh token per org for the NATIVE executor + Upcoming
-    # (encrypted at rest — store.set_org_oauth). SECURITY: the owning org is
-    # derived ONLY from the connecting browser's signed session cookie
-    # (auth.current_user), NEVER from the OAuth email or any request field — so a
-    # user's token can only ever land on THEIR OWN org, never someone else's. The
-    # per-session signed single-use `state` verified above (cookie-bound nonce)
-    # is the CSRF guard on this flow, and _oauth_login_required above guarantees a
-    # real logged-in owner whenever login is enabled. Falls back to the demo/owner
-    # org ONLY on the key-free/no-login demo path (login disabled) — exactly the
-    # org the dashboard reads it back from (dashboard.py: caller_org or
-    # demo_org_id), so connect + read always agree. Best-effort and independent of
-    # native_executor (the flag gates USE, not consent), so enabling native later
-    # needs no reconnect. Keyed by the org_id STRING — no ::uuid cast — so
-    # u_<hash> session orgs and durable uuid orgs are both safe (never trips the
-    # org_id split-brain).
-    try:
-        _user = auth.current_user(request)
-        _org = (_user or {}).get("org_id") or settings.demo_org_id
-        _scopes = " ".join(GOOGLE_CALENDAR_SCOPES)
-        # Org row — the NATIVE executor (Laura acting on the org's Google account)
-        # and the demo/machine Upcoming view. Unchanged.
-        await run_in_threadpool(
-            store.set_org_oauth,
-            _org,
-            refresh_token,
-            email=oauth_email,
-            scopes=_scopes,
-        )
-        # Per-USER row — the personal-calendar VIEW (/dashboard/upcoming) reads
-        # THIS, so a member of a SHARED org (a verified corporate domain maps
-        # every colleague onto one org_id) sees only their OWN calendar, never a
-        # co-worker's. Keyed on the connecting human from the signed session
-        # cookie (auth.current_user) — never the OAuth email or any request field.
-        _uid = (_user or {}).get("user_id") or ""
-        if _uid:
-            await run_in_threadpool(
-                store.set_user_oauth,
-                _uid,
-                refresh_token,
-                email=oauth_email,
-                scopes=_scopes,
-            )
-        # A reconnect that ADDED a scope (e.g. calendar.readonly for the
-        # all-calendars view) leaves the OLD, still time-valid access token in
-        # google_client's cache — old scopes, so calendarList keeps 403ing for
-        # up to an hour. Drop the cached token for both principals so THIS
-        # instance re-mints with the new grant on the very next read. (Other
-        # instances self-heal via the calendarList-403 re-mint; this makes the
-        # common single-instance case instant.)
-        google_client._drop_cached_token(_org)
-        if _uid:
-            google_client._drop_cached_token(f"user:{_uid}")
-    except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
-        print(f"[oauth] native token persist skipped ({type(e).__name__})", flush=True)
-
-    # Recall calendar auto-join is the AVATAR's capability: it registers the
-    # avatar's own inbox with Recall so any event that invites its address gets a
-    # bot. Only the avatar account (or a single-tenant deployment with no invite
-    # filter) may create it — a normal user connecting their own Google just
-    # keeps the per-org token stored above and SKIPS this step (their Upcoming
-    # comes from their own calendar via google_client.list_calendar_events and
-    # they dispatch the avatar manually). This guard is what lets per-user
-    # connects be safe without touching the existing auto-join behavior.
-    if is_avatar_account:
-        try:
-            # Side-effecting: registers Laura's calendar with Recall for auto-join.
-            # The returned record is no longer surfaced (the callback now redirects
-            # to the dashboard), so we don't bind it.
-            await run_in_threadpool(
-                lambda: recall_client.create_calendar(
-                    oauth_client_id=settings.google_calendar_client_id,
-                    oauth_client_secret=settings.google_calendar_client_secret,
-                    oauth_refresh_token=refresh_token,
-                    oauth_email=oauth_email,
-                    metadata={
-                        "avatar_id": "laura",
-                        "invite_filter": ",".join(sorted(targets)),
-                    },
-                )
-            )
-        except Exception as e:
-            return _clear_calendar_state(JSONResponse(
-                {"error": f"Recall calendar creation failed: {e}"}, status_code=400
-            ))
-
-    # Land back on the dashboard so the "Google (native)" capability toggle
-    # live-refreshes on the next summary load — exactly like the ?brain= Slack
-    # return. This is an OAuth redirect target (the browser follows it), never an
-    # API a program consumes, so the calendar_id JSON is not needed here; the
-    # per-org native refresh token is already persisted above. Consume the
-    # single-use CSRF-state cookie on the way out.
-    return _clear_calendar_state(
-        RedirectResponse("/dashboard?google=connected", status_code=302)
-    )
 
 
-@app.post("/oauth/google/disconnect")
-async def google_oauth_disconnect(request: Request) -> JSONResponse:
-    """Disconnect Laura's NATIVE Google (Calendar + Gmail) for the caller.
-
-    Fully independent of the Cedric/Slack add-on: this clears the per-org
-    native refresh token the executor uses (``store.clear_org_oauth``) AND the
-    caller's own per-user calendar token (``store.clear_user_oauth`` — the row
-    the personal Upcoming view reads first, so disconnect actually revokes
-    what the dashboard uses). A user can drop native Google while keeping
-    Slack — or have neither/both. Owner-authed and same-origin, like the brain
-    disconnect. The Recall calendar auto-join is a separate capability and is
-    intentionally left untouched. Pure SQLite deletes keyed by the id strings —
-    no ``::uuid`` cast, so it never trips the u_hash/uuid split-brain."""
-    user = auth.current_user(request)
-    if user is None:
-        if err := auth.gate(request):
-            return err
-        return JSONResponse({"error": "login required"}, status_code=401)
-    if not auth._same_origin(request):
-        return JSONResponse({"error": "forbidden"}, status_code=403)
-    cleared = await run_in_threadpool(store.clear_org_oauth, user["org_id"])
-    cleared_user = await run_in_threadpool(store.clear_user_oauth, user["user_id"])
-    return JSONResponse(
-        {
-            "ok": True,
-            "provider": "google",
-            "status": "disconnected",
-            "cleared": bool(cleared or cleared_user),
-        }
-    )
 
 
 # ── Asana OAuth: the dashboard's one-click "Connect Asana" (docs/ASANA.md) ──
@@ -2075,652 +1131,45 @@ async def google_oauth_disconnect(request: Request) -> JSONResponse:
 # provider redirect, nonce in an HttpOnly cookie, both must match at the
 # callback. Requires the Asana OAuth app env (ASANA_CLIENT_ID/SECRET); without
 # it the Connections card falls back to the paste-a-PAT flow.
-ASANA_STATE_COOKIE = "laura_asana_oauth_state"
-ASANA_STATE_PURPOSE = "asana_state"
 
 
-def _asana_redirect_uri() -> str:
-    return f"{settings.public_base_url.rstrip('/')}/oauth/asana/callback"
 
 
-@app.get("/oauth/asana/connect")
-def asana_oauth_connect(request: Request):
-    """Start Asana OAuth: bounce the owner to Asana's consent screen."""
-    if not settings.asana_client_id:
-        return JSONResponse({"error": "ASANA_CLIENT_ID is not set."}, status_code=400)
-    if err := _oauth_login_required(request):
-        return err
-    nonce, signed_state = auth.issue_oauth_state(ASANA_STATE_PURPOSE)
-    params = {
-        "client_id": settings.asana_client_id,
-        "redirect_uri": _asana_redirect_uri(),
-        "response_type": "code",
-        "state": signed_state,
-        # "default" = the app's configured permissions — the catch-all scope
-        # Asana documents for full-access apps.
-        "scope": "default",
-    }
-    resp = RedirectResponse("https://app.asana.com/-/oauth_authorize?" + urlencode(params))
-    resp.set_cookie(
-        ASANA_STATE_COOKIE,
-        nonce,
-        max_age=auth.STATE_TTL_SECONDS,
-        httponly=True,
-        samesite="lax",
-        secure=settings.public_base_url.startswith("https"),
-        path="/oauth",
-    )
-    return resp
 
 
-@app.get("/oauth/asana/callback")
-async def asana_oauth_callback(
-    request: Request, code: str = "", state: str = "", error: str = ""
-):
-    """Finish Asana OAuth: verify state, exchange the code, store the grant
-    (encrypted per-org, provider="asana-oauth"), land back on Connections.
-    Every failure lands with ?asana=error — the dashboard toasts it; no
-    half-connected state is ever stored."""
-    def _land(result: str):
-        resp = RedirectResponse(f"/dashboard?asana={result}", status_code=302)
-        resp.delete_cookie(ASANA_STATE_COOKIE, path="/oauth")
-        return resp
-
-    if error or not code:
-        return _land("error")
-    if err := _oauth_login_required(request):
-        return err
-    cookie_nonce = request.cookies.get(ASANA_STATE_COOKIE, "")
-    if not auth.check_oauth_state(state, cookie_nonce, ASANA_STATE_PURPOSE):
-        return _land("error")
-
-    exchanged = await run_in_threadpool(
-        asana_client.exchange_code, code, _asana_redirect_uri()
-    )
-    if not exchanged.get("ok") or not exchanged.get("refresh_token"):
-        return _land("error")
-    # Who/what did we just connect? Best-effort — the grant works regardless.
-    info = await run_in_threadpool(
-        asana_client.verify_token, exchanged.get("access_token", "")
-    )
-    user = auth.current_user(request)
-    org = user["org_id"] if user else settings.demo_org_id
-    try:
-        stored = await run_in_threadpool(
-            lambda: store.set_org_oauth(
-                org, exchanged["refresh_token"], provider="asana-oauth",
-                email=str(info.get("email") or exchanged.get("email") or ""),
-                scopes=str(info.get("workspace_gid") or ""),
-            )
-        )
-    except RuntimeError:
-        return _land("error")  # no encryption key — fails closed
-    if not stored:
-        return _land("error")
-    asana_client._reset_brief_cache()  # new grant → fresh workspace view
-    return _land("connected")
 
 
 # ── Jira (Atlassian 3LO) OAuth: "Connect Jira" → login → connected ──
 # Mirrors the Asana flow. Requires the Atlassian OAuth app env (JIRA_CLIENT_ID/
 # SECRET); without it the Connections card falls back to the paste-a-token flow.
-JIRA_STATE_COOKIE = "laura_jira_oauth_state"
-JIRA_STATE_PURPOSE = "jira_state"
 
 
-def _jira_redirect_uri() -> str:
-    return f"{settings.public_base_url.rstrip('/')}/oauth/jira/callback"
 
 
-@app.get("/oauth/jira/connect")
-def jira_oauth_connect(request: Request):
-    """Start Jira OAuth: bounce the owner to Atlassian's login/consent screen."""
-    if not jira_client.oauth_available():
-        return JSONResponse({"error": "JIRA_CLIENT_ID/SECRET are not set."},
-                            status_code=400)
-    if err := _oauth_login_required(request):
-        return err
-    nonce, signed_state = auth.issue_oauth_state(JIRA_STATE_PURPOSE)
-    params = {
-        "audience": "api.atlassian.com",
-        "client_id": settings.jira_client_id,
-        "scope": jira_client.OAUTH_SCOPES,
-        "redirect_uri": _jira_redirect_uri(),
-        "state": signed_state,
-        "response_type": "code",
-        "prompt": "consent",
-    }
-    resp = RedirectResponse(jira_client._AUTHORIZE_URL + "?" + urlencode(params))
-    resp.set_cookie(
-        JIRA_STATE_COOKIE, nonce, max_age=auth.STATE_TTL_SECONDS,
-        httponly=True, samesite="lax",
-        secure=settings.public_base_url.startswith("https"), path="/oauth",
-    )
-    return resp
 
 
-@app.get("/oauth/jira/callback")
-async def jira_oauth_callback(
-    request: Request, code: str = "", state: str = "", error: str = ""
-):
-    """Finish Jira OAuth: verify state, exchange the code, store the grant
-    (encrypted per-org, provider="jira-oauth"; cloud id in scopes), land back on
-    Connections. Any failure lands with ?jira=error — no half-connected state."""
-    def _land(result: str):
-        resp = RedirectResponse(f"/dashboard?jira={result}", status_code=302)
-        resp.delete_cookie(JIRA_STATE_COOKIE, path="/oauth")
-        return resp
-
-    if error or not code:
-        return _land("error")
-    if err := _oauth_login_required(request):
-        return err
-    cookie_nonce = request.cookies.get(JIRA_STATE_COOKIE, "")
-    if not auth.check_oauth_state(state, cookie_nonce, JIRA_STATE_PURPOSE):
-        return _land("error")
-
-    exchanged = await run_in_threadpool(
-        jira_client.exchange_code, code, _jira_redirect_uri()
-    )
-    if not exchanged.get("ok") or not exchanged.get("refresh_token"):
-        return _land("error")
-    user = auth.current_user(request)
-    org = user["org_id"] if user else settings.demo_org_id
-    try:
-        stored = await run_in_threadpool(
-            lambda: store.set_org_oauth(
-                org, exchanged["refresh_token"], provider="jira-oauth",
-                email=str(exchanged.get("site") or ""),
-                scopes=str(exchanged.get("cloudid") or ""),  # cloud id → reads
-            )
-        )
-    except RuntimeError:
-        return _land("error")  # no encryption key — fails closed
-    if not stored:
-        return _land("error")
-    jira_client._reset_brief_cache()
-    return _land("connected")
 
 
 # ── Granola: pull a real finished transcript (post-meeting only) ──
-@app.get("/granola/notes")
-def granola_notes(limit: int = 20) -> JSONResponse:
-    """List recent Granola notes to pick from (needs GRANOLA_API_KEY)."""
-    if not settings.granola_api_key:
-        return JSONResponse({"error": "GRANOLA_API_KEY not set"}, status_code=400)
-    return JSONResponse({"notes": granola_client.list_notes(limit)})
 
 
-@app.get("/granola/transcript")
-def granola_transcript(note_id: str) -> JSONResponse:
-    """Fetch one Granola note's transcript as 'Speaker: text' lines."""
-    if not settings.granola_api_key:
-        return JSONResponse({"error": "GRANOLA_API_KEY not set"}, status_code=400)
-    return JSONResponse({"note_id": note_id,
-                         "transcript": granola_client.get_transcript(note_id)})
 
 
 # ──────────────────────── session lifecycle ────────────────────────
-class StartRequest(BaseModel):
-    meeting_url: str
-    avatar_id: str = ""  # empty -> settings.default_avatar_id
-    join_at: Optional[str] = None  # ISO 8601; set (>=10 min out) to schedule the bot
-    # CEDRIC: orchestrator integration fields — all optional; models, the auth
-    # gate, and validation live in the `cedric` package (docs/04-api-contract.md).
-    context: Optional[cedric.MeetingContext] = None
-    callback_url: Optional[str] = None   # where session.status/.ended events go
-    context_url: Optional[str] = None    # re-fetched at join time for a fresh brief
-    external_ref: Optional[dict] = None  # opaque, echoed verbatim in callbacks
 
 
-async def _start_avatar_session(
-    meeting_url: str,
-    avatar_id: str = "",
-    join_at: Optional[str] = None,
-    integration: Optional[dict] = None,
-    org_id: str = settings.demo_org_id,
-    principal_id: str = "",
-) -> dict:
-    """Send a Recall bot (rendering the avatar page as its camera) into a meeting.
-
-    Shared by the manual /sessions/start endpoint, the calendar auto-join webhook,
-    and the Gmail watcher. Raises on failure. The avatar page mints its own fresh
-    Anam token at render time and keys its websocket on the conversation_id.
-    org_id is the owning tenant when a logged-in user dispatched (auth.py);
-    the Demo org for service starts (Cedric, calendar auto-join, Gmail watcher).
-    """
-    # Avatar SELECTION precedence (M2, resolver-owned): explicit request >
-    # user assignment > org default assignment > settings.default_avatar_id.
-    # With overlays off this reduces to exactly the old one-liner.
-    requested = await run_in_threadpool(
-        lambda: avatar_resolver.resolve_avatar_key(
-            org_id, requested=avatar_id, principal_id=principal_id
-        )
-    )
-    requested = (requested or settings.default_avatar_id).strip()
-    if avatars.is_internal(requested):
-        # Internal personas are not dispatchable for ANY entry point (manual
-        # start, calendar auto-join, Gmail watcher) — same error an unknown
-        # folder raises, so callers treat it as a nonexistent avatar.
-        raise FileNotFoundError(f"No avatar '{requested}'")
-    # ONE canonical resolution per session (M2): the org's published overlay
-    # applied over the immutable repo avatar — persona/voice/face/tools all
-    # flow from this object. Flag off / no overlay ⇒ the exact avatars.load
-    # cached instance (byte-identical behavior).
-    avatar = await run_in_threadpool(
-        avatar_resolver.resolve_for_dispatch, org_id, requested
-    )  # raises if unknown
-    conversation_id = uuid.uuid4().hex
-    # avatar.page: per-avatar face tier (3D "talk" vs photoreal), falling back
-    # to the global AVATAR_PAGE — the dashboard's "choose your avatar" knob.
-    avatar_url = (
-        f"{settings.public_base_url.rstrip('/')}/{avatar.page.strip('/')}"
-        f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
-        f"&body={avatar.talk_body}&face_fallback={avatar.face_fallback}"
-    )
-    # ── entitlement gate (PR B) — THE single choke point for paid bots ──
-    # Every entry point (manual start, calendar auto-join, Gmail watcher,
-    # Cedric dispatch) funnels through here, so gating BEFORE create_bot is
-    # gating everywhere. Only when the durable control plane is configured;
-    # the key-free demo skips this entirely (byte-identical behaviour). The
-    # usage row is inserted under a PROVISIONAL bot_id (the real id doesn't
-    # exist until Recall answers) and swapped to the real one right after —
-    # both inside the caller's per-meeting lock. open_usage raising
-    # EntitlementsUnavailable (billing DB outage) or UsageDenied propagates
-    # to the caller BEFORE any vendor dispatch: fail closed, never free.
-    usage_bot_id = ""
-    if control_plane.enabled():
-        usage_bot_id = f"pending:{uuid.uuid4().hex}"
-        gate = await run_in_threadpool(
-            entitlements.open_usage, org_id, usage_bot_id, avatar.id
-        )
-        if gate is not None and not gate.get("ok"):
-            raise entitlements.UsageDenied(
-                gate.get("reason") or "usage_limit_reached"
-            )
-    try:
-        bot = await run_in_threadpool(
-            recall_client.create_bot, meeting_url, avatar_url, join_at, avatar.name,
-            avatar.id,
-        )
-    except Exception:
-        # No bot was born — release the pending usage row (consumes 0) so the
-        # org's one-active-meeting slot isn't stranded by a failed dispatch.
-        if usage_bot_id:
-            try:
-                await run_in_threadpool(
-                    entitlements.close_usage, org_id, usage_bot_id, 0, "dispatch_failed"
-                )
-            except Exception:  # noqa: BLE001 — reconcile's restore heals orphans
-                print("[usage] dispatch_failed close deferred to reconcile", flush=True)
-        raise
-    realtime_capability = str(bot.pop("_laura_realtime_capability", "") or "")
-    session = store.create(
-        bot_id=bot["id"], meeting_url=meeting_url, avatar_id=avatar.id,
-        org_id=org_id,
-    )
-    # Stash the resolved avatar for the live path (frozen for the session,
-    # exactly like mission): hot-path readers use avatar_resolver.for_session
-    # — the stash or the canonical mtime-cached load, never database I/O.
-    # Only an APPLIED overlay is stashed, so flag-off sessions keep the
-    # canonical load()'s mid-meeting avatar.yaml refresh behavior.
-    if getattr(avatar, "overlay_version", 0):
-        session.resolved_avatar = avatar
-    if usage_bot_id and not await _assign_usage_bot_id(
-        org_id, usage_bot_id, bot["id"]
-    ):
-        # A born bot without a durable usage binding is never returned to the
-        # customer. The hardened finalize attempts an immediate verified leave;
-        # if Recall is temporarily unreachable the kept local session lets the
-        # reconcile pass repair the provisional row and retry the stop.
-        await _finalize_session(
-            bot["id"], source="usage_binding_failed",
-            usage_reason="usage_binding_failed",
-        )
-        if store.get(bot["id"]) is None:
-            await run_in_threadpool(
-                entitlements.close_usage,
-                org_id, usage_bot_id, 0, "usage_binding_failed",
-            )
-        raise entitlements.EntitlementsUnavailable("usage_bot_binding_failed")
-    if realtime_capability and not store.register_recall_realtime_capability(
-        bot["id"], realtime_capability
-    ):
-        # Never leave a paid bot alive if its inbound realtime channel cannot
-        # be authenticated.
-        try:
-            await run_in_threadpool(recall_client.leave_call, bot["id"])
-        finally:
-            store.remove(bot["id"])
-        raise RuntimeError("could not secure Recall realtime endpoint")
-    # CEDRIC: a summon that didn't carry its own wiring (the Gmail auto-join
-    # watcher passes integration=None) still gets the Model A default routing —
-    # otherwise an email-summoned meeting silently falls to Model B (no context
-    # pull, no session.ended to Cedric). POST /sessions/start always passes its
-    # own build_integration result, so it keeps winning; default_integration()
-    # returns None when no SURFACE_* is set, leaving plain deployments unchanged.
-    if integration is None:
-        integration = cedric.default_integration()
-    if integration:
-        # Tenancy on the wire: every callback event carries the owning org so
-        # the orchestrator can resolve the tenant even when external_ref is
-        # empty (dashboard/email summons) — and the sender can pick a per-org
-        # signing secret. "" for service starts keeps today's behaviour.
-        session.integration = {**integration, "org_id": org_id}
-    session.anam_conversation_id = conversation_id
-    store.register_conversation(conversation_id, bot["id"], org_id=org_id)
-    # Session-start briefs — five independent, best-effort reads gathered
-    # CONCURRENTLY (they were serial; each is threadpool + cached + "" on any
-    # failure, and none is on the live path, but bot dispatch shouldn't pay
-    # their straight-line sum):
-    #   carryover  — what previous sessions of this meeting link left open
-    #   drive      — the avatar's shared folder (avatar.yaml drive_folder_id)
-    #   asana      — workspace snapshot, when connected + avatar-enabled
-    #   registry   — org-scoped tool context (feeds list_capabilities /
-    #                search_tools with zero network in-meeting)
-    #   calendar   — the owner org's upcoming meetings (feeds the
-    #                upcoming_meetings brain tool, zero network in-meeting)
-    async def _quiet(coro):
-        try:
-            return await coro
-        except Exception:  # noqa: BLE001 — best-effort: the join never fails on a brief
-            return None
-
-    def _asana_brief_sync() -> str:
-        # Gate + fetch in one threadpool hop (both are sync); TTL-cached in
-        # asana_client, best-effort exactly like the Drive brief.
-        if not _avatar_asana_enabled(org_id, avatar.id):
-            return ""
-        return asana_client.workspace_brief(org_id) or ""
-
-    def _asana_live_sync() -> bool:
-        # Whether the LIVE asana_* read tools are offered this session
-        # (tools.specs_for): connected org + Asana-enabled avatar. Computed
-        # once here — specs_for runs on the live path and must never touch
-        # the DB.
-        return _avatar_asana_enabled(org_id, avatar.id) and asana_client.connected(
-            org_id
-        )
-
-    def _jira_brief_sync() -> str:
-        # Jira open-issues snapshot for the PM avatar's grounding, mirroring the
-        # Asana brief. Org-level gate (connected); TTL-cached in jira_client.
-        if not jira_client.connected(org_id):
-            return ""
-        return jira_client.workspace_brief(org_id) or ""
-
-    (carryover, folder, asana_snapshot, reg, cal_brief, asana_live,
-     jira_snapshot) = await asyncio.gather(
-        _quiet(run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org_id)),
-        _quiet(
-            run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id)
-        )
-        if avatar.drive_folder_id
-        else _quiet(asyncio.sleep(0)),
-        _quiet(run_in_threadpool(_asana_brief_sync)),
-        _quiet(run_in_threadpool(tool_registry.assemble, org_id, avatar)),
-        _quiet(run_in_threadpool(google_client.calendar_brief, org_id)),
-        _quiet(run_in_threadpool(_asana_live_sync)),
-        _quiet(run_in_threadpool(_jira_brief_sync)),
-    )
-    session.asana_live = bool(asana_live)
-    session.memory_brief = carryover or ""
-    if folder:
-        session.memory_brief = (
-            f"[Shared Drive folder — current team docs]\n{folder}\n\n"
-            + (session.memory_brief or "")
-        )
-    if asana_snapshot:
-        # Honest label: this is the state at meeting START. When the live
-        # asana_* tools are on, say so — that's what makes her READ current
-        # state instead of quoting a stale snapshot.
-        _asana_note = (
-            " — use asana_projects / asana_tasks / asana_search for the CURRENT state"
-            if asana_live
-            else ""
-        )
-        session.memory_brief = (
-            f"[Asana workspace — snapshot from meeting start{_asana_note}]\n"
-            f"{asana_snapshot}\n\n" + (session.memory_brief or "")
-        )
-    if jira_snapshot:
-        session.memory_brief = (
-            "[Jira — open issues snapshot from meeting start]\n"
-            f"{jira_snapshot}\n\n" + (session.memory_brief or "")
-        )
-    # Feed the workspace snapshot(s) into the org's knowledge graph (graphiti,
-    # optional/off by default). Off the hot path, best-effort; strong-ref'd task.
-    # (KEEP — merges keep reverting this wiring.)
-    _kg_src = "\n\n".join(s for s in (asana_snapshot, jira_snapshot) if s)
-    if _kg_src and graphiti_client.enabled():
-        _kg_task = asyncio.create_task(graphiti_client.ingest(org_id, _kg_src))
-        _graphiti_tasks.add(_kg_task)
-        _kg_task.add_done_callback(_graphiti_tasks.discard)
-    if reg:
-        session.tool_registry = reg
-        tools_brief = tool_registry.brief(reg)
-        if tools_brief:
-            session.memory_brief = (
-                tools_brief + "\n\n" + (session.memory_brief or "")
-            )
-    if cal_brief:
-        session.calendar_brief = cal_brief
-        session.memory_brief = (
-            f"[Owner's calendar — upcoming meetings]\n{cal_brief}\n\n"
-            + (session.memory_brief or "")
-        )
-    if settings.autopilot_brief and session.memory_brief:
-        # Autopilot: mail/Slack "what's still open from last time" to the
-        # owner as the bot joins. Fire-and-forget — never delays the join.
-        asyncio.create_task(
-            run_in_threadpool(autopilot.maybe_send_brief, meeting_url, avatar.name)
-        )
-    # Photoreal only: wake the GPU box for this meeting (fire-and-forget; the
-    # page runs on the static-portrait fallback until the stream comes up).
-    gpu_runtime.on_session_started()
-    runpod_runtime.on_session_started(avatar.page)
-    return {
-        "bot_id": bot["id"],
-        "conversation_id": conversation_id,
-        "avatar_page_url": avatar_url,
-        "scheduled_for": join_at,
-    }
 
 
-def _existing_session_clash(meeting_url: str, caller_org: str) -> JSONResponse | None:
-    """The 409 to return when a local-store session is already booked for this
-    exact meeting_url — one live/scheduled booking per URL (rebooking must cancel
-    first, else two bots + two per-minute meters land in one call). None when
-    there is no clash. Another tenant's clashing bot_id is never leaked."""
-    for existing in store.all_sessions():
-        if existing.meeting_url == meeting_url:
-            if existing.org_id != caller_org:
-                return JSONResponse(
-                    {"error": "a session already exists for this meeting_url"},
-                    status_code=409,
-                )
-            return JSONResponse(
-                {
-                    "error": "a session already exists for this meeting_url",
-                    "bot_id": existing.bot_id,
-                },
-                status_code=409,
-            )
-    return None
 
 
-async def _reconcile_after_start(meeting_url: str, bot_id: str) -> None:
-    """Give a racing duplicate bot a moment to register with Recall, then keep
-    the best variant and drop the rest — same as the Gmail auto-join loop, but
-    fire-and-forget so the /sessions/start response returns immediately."""
-    try:
-        await asyncio.sleep(4)
-        await run_in_threadpool(_reconcile_duplicate_bots, meeting_url, bot_id)
-    except Exception:
-        pass
 
 
-def _schedule_start_reconcile(meeting_url: str, bot_id: str) -> None:
-    """Schedule the post-start duplicate-bot reconcile without blocking the
-    response (the Gmail loop can await it inline; a request handler cannot)."""
-    try:
-        asyncio.create_task(_reconcile_after_start(meeting_url, bot_id))
-    except RuntimeError:
-        pass  # no running loop to schedule on (shouldn't happen in the handler)
 
 
-def _org_token_bearer_org(request: Request) -> Optional[str]:
-    """The org owning the request's Bearer, when it is a PER-ORG machine token
-    (org_tokens: durable control plane first, SQLite fallback). None for no/
-    non-org bearers — including the GLOBAL laura_api_token, which keeps its
-    demo-org behavior. Sibling of cedric.resolve_machine_org (PR D), which
-    additionally maps the global bearer to the Demo org — kept separate so PR
-    A's start/end/redeliver semantics stay untouched.
-    A raw secret is compared/hashed, never logged. Called
-    on /sessions/start, /sessions/{id}/end and /sessions/{id}/redeliver —
-    control-plane paths, never the live hot path. SYNC (SQLite + optionally
-    the Postgres control plane): async handlers must call it via
-    run_in_threadpool so it never blocks the shared event loop (single
-    instance — a blocked loop stalls every live meeting)."""
-    provided = request.headers.get("authorization", "")
-    if not provided.startswith("Bearer "):
-        return None
-    raw = provided[len("Bearer "):].strip()
-    if not raw:
-        return None
-    global_token = settings.laura_api_token.strip()
-    if global_token and hmac.compare_digest(raw, global_token):
-        return settings.demo_org_id
-    # Durable revocation is authoritative in production: never resurrect a
-    # token from the ephemeral SQLite cache after Postgres rejects it.
-    if control_plane.enabled():
-        return control_plane.resolve_org_token(raw)
-    return store.resolve_org_token(raw)
 
 
-@app.post("/sessions/start")
-async def start_session(req: StartRequest, request: Request) -> JSONResponse:
-    # A logged-in human (dashboard cookie) or a machine bearer (Cedric). The
-    # shared auth.gate closes the "login enabled + no token" hole: an anonymous
-    # caller can NOT dispatch a per-minute bot on a login-protected deployment.
-    # A valid cookie stamps the session with the user's org for later scoping.
-    # A PER-ORG machine bearer (org_tokens) both authenticates the start and
-    # scopes it to ITS org — the service twin of the cookie principal.
-    user = auth.current_user(request)
-    token_org: Optional[str] = None
-    if user is None:
-        # Threadpooled: the resolver is sync DB I/O (see its docstring).
-        token_org = await run_in_threadpool(_org_token_bearer_org, request)
-        if token_org is None:
-            if err := auth.gate(request):
-                return err
-    # Browser/cookie users choose only meeting + avatar. Integration wiring
-    # is server-owned per org; reject it before any vendor readiness check,
-    # database enumeration or paid bot creation.
-    if user is not None and (
-        req.callback_url or req.context_url or req.external_ref
-    ):
-        return JSONResponse(
-            {"error": "integration wiring is managed by your workspace"},
-            status_code=400,
-        )
-    try:
-        recall_client.assert_ready()
-    except RuntimeError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-
-    brief = req.context.brief_markdown if req.context else ""  # CEDRIC
-    if err := cedric.brief_too_large(brief):  # CEDRIC
-        return err
-    # The owning tenant: the logged-in user's org, else the org-token's org,
-    # else the Demo org for the global-bearer/anon service path (Cedric
-    # bearer, key-free demo). NEVER derived from a request body field or a
-    # meeting participant (MULTI-TENANCY §0/§3.1) — StartRequest deliberately
-    # has no org field; keep it that way.
-    caller_org = user["org_id"] if user else (token_org or settings.demo_org_id)
-    # Internal personas (INTERNAL_AVATAR_IDS) are not dispatchable by ANY
-    # caller — same 404 an unknown avatar id gets (defense-in-depth while the
-    # folder still exists; see config.internal_avatar_ids).
-    if avatars.is_internal(req.avatar_id or settings.default_avatar_id):
-        return JSONResponse({"error": "unknown avatar_id"}, status_code=404)
-    # One live/scheduled booking per meeting URL: rebooking must cancel first
-    # (otherwise two bots — and two per-minute meters — end up in one call).
-    # Fast path: an obvious local-store clash needs no lock or Recall round-trip
-    # (the common re-click of the same link).
-    if clash := _existing_session_clash(req.meeting_url, caller_org):
-        return clash
-
-    if not cedric.request_integration_urls_allowed(req, caller_org):
-        return JSONResponse(
-            {"error": "callback_url/context_url must use the configured Cedric HTTPS origin"},
-            status_code=400,
-        )
-    integration = cedric.build_integration(req, brief)  # CEDRIC
-    if integration is not None:
-        integration = {**integration, "org_id": caller_org}
-    # Serialize the guard→create window PER MEETING so two concurrent starts for
-    # the same link can't both pass the dedup checks and both create a bot.
-    # DIFFERENT meetings hold different locks and still dispatch in parallel.
-    async with _start_lock_for(req.meeting_url):
-        # Re-check under the lock: a racing double-click may have created the
-        # session between the fast-path check above and acquiring the lock.
-        if clash := _existing_session_clash(req.meeting_url, caller_org):
-            return clash
-        # Durable cross-instance guard (Recall = source of truth): a redeploy can
-        # wipe the local store while Recall still holds the live bot, so a
-        # re-click would dispatch a SECOND bot + meter into the same call. The
-        # Gmail/calendar paths already gate on this; wire it here too (now
-        # platform-aware for Zoom/Teams as well as Meet).
-        if await run_in_threadpool(_meeting_has_active_bot, req.meeting_url):
-            return JSONResponse(
-                {"error": "a session already exists for this meeting_url"},
-                status_code=409,
-            )
-        try:
-            result = await _start_avatar_session(
-                req.meeting_url, req.avatar_id, req.join_at, integration,
-                org_id=caller_org,
-                principal_id=str(user["user_id"]) if user else "",
-            )
-        except recall_client.AvatarBusyError:
-            return JSONResponse(
-                {
-                    "error": "avatar_busy",
-                    "detail": "All avatars are busy right now — retry in a minute.",
-                },
-                status_code=503,
-                headers={"Retry-After": "60"},
-            )
-        except entitlements.EntitlementsUnavailable:
-            # Billing DB outage: fail CLOSED before any vendor dispatch —
-            # never hand out unmetered paid minutes because Postgres blinked.
-            return JSONResponse({"error": "billing_unavailable"}, status_code=503)
-        except entitlements.UsageDenied as e:
-            if e.reason == "active_session_exists":
-                # One concurrent meeting per org (DB-enforced partial unique).
-                return JSONResponse(
-                    {"error": "active_session_exists"}, status_code=409
-                )
-            # Free allowance exhausted — the upgrade path (PR C) is the fix.
-            return JSONResponse(
-                {
-                    "error": "usage_limit_reached",
-                    "remaining_seconds": 0,
-                    "checkout_path": "/billing/checkout",
-                },
-                status_code=402,
-            )
-        except Exception as e:
-            return JSONResponse({"error": str(e)}, status_code=400)
-    # Resolve any deploy-overlap duplicate the way the Gmail loop does, without
-    # holding up the response.
-    _schedule_start_reconcile(req.meeting_url, result["bot_id"])
-    return JSONResponse(result)
 
 
-def _norm_action_text(text: str) -> str:
-    """Normalization for action-item dedupe (mirrors ledger._norm's intent)."""
-    return re.sub(r"\W+", " ", (text or "").lower()).strip()
 
 
 # Telemetry-only (never gates behaviour): a loose "leave-ish word" check used to
@@ -2740,21 +1189,10 @@ _LEAVE_HINT = re.compile(
 # to Marco" + deadline="Friday"). Exact-text dedup misses that, so both survive
 # with two action_ids — breaking the #84 dedup contract Cedric relies on.
 # Comparing on content-token subset catches the rephrase.
-_ACTION_STOP = frozenset("a an the to for of in on at by with and or please just".split())
 
 
-def _content_tokens(text: str) -> frozenset:
-    return frozenset(_norm_action_text(text).split()) - _ACTION_STOP
 
 
-def _same_action(a: str, b: str) -> bool:
-    """True when two action lines describe the SAME request — one content-token
-    set is a subset of the other. Requires >=2 shared content tokens so a single
-    shared verb ('send') never over-merges two distinct asks."""
-    ta, tb = _content_tokens(a), _content_tokens(b)
-    if len(ta) < 2 or len(tb) < 2:
-        return False
-    return ta <= tb or tb <= ta
 
 
 # The post-meeting summarizer rephrases a live how-to/tour ask into a
@@ -2764,12 +1202,6 @@ def _same_action(a: str, b: str) -> bool:
 # this they land in the to-dos AND get executed as real Asana tasks. Catch the
 # demonstrative rephrasing too: a teaching/showing verb near a how-to/tour
 # marker. These are performed LIVE on the avatar's tile, never a to-do.
-_DEMO_BROWSE_RE = re.compile(
-    r"\b(show|walk|give|guide|demonstrate|teach|mostra|fai|dai)\b"
-    r".{0,45}?"
-    r"\b(how to|what to click|step[\s-]?by[\s-]?step|a tour|the tour|un tour|"
-    r"passo[\s-]?passo|come (si )?(crea|creare|fa|fare|usa|usare|invit|aggiung))\b",
-    re.IGNORECASE | re.DOTALL)
 
 # Per-meeting walkthrough epoch (keyed by bot_id), DECOUPLED from
 # speech_generation. A running browser walkthrough is cancelled only when this
@@ -2788,903 +1220,42 @@ _BROWSE_EPOCH: dict[str, int] = {}
 _BROWSE_INFLIGHT: dict[str, float] = {}
 
 
-def _is_live_browse_item(text: str) -> bool:
-    """A captured/extracted item that is really a LIVE browser-tour request
-    ('show me the Asana dashboard', 'fammi un tour di Asana') — the avatar
-    does it in the meeting, so it must not land in the post-meeting to-dos.
-    Matches both the first-person live ask (detect_browse_intent) and the
-    summarizer's third-person 'Show <name> how to…' / 'Give <name> a tour…'
-    rephrasing, which would otherwise slip through as a to-do."""
-    t = text or ""
-    try:
-        if detect_browse_intent(t)[0]:
-            return True
-    except Exception:  # noqa: BLE001
-        pass
-    return bool(_DEMO_BROWSE_RE.search(t))
 
 
-def _merge_action_items(queued: list, extracted: list) -> list:
-    """Artifact actions[] = live-captured queue_action items first, then the
-    summarizer's extraction, deduped on normalized item text. A live capture
-    wins a collision — it is the wording the room actually asked for — and
-    ledger.record_meeting dedupes again on insert, so double-merging is safe.
-
-    Every returned action carries a stable ``action_id``: a live capture keeps
-    the id assigned at capture time (the same one already sent on its
-    action.requested webhook), and a summarizer-only action — which never fired
-    a live event — gets a fresh id here. The id is what the orchestrator dedupes
-    and resolves on.
-
-    May make ONE model call (the cross-language net below) — finalize-only;
-    callers on the event loop must run it in a threadpool."""
-    merged: list = []
-    seen: set[str] = set()
-    for q in queued or []:
-        text = (q.get("action") or "").strip()
-        if _is_live_browse_item(text):
-            continue  # live browser tour, not a to-do
-        key = _norm_action_text(text)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        owner = (q.get("owner") or "").strip()
-        merged.append(
-            {
-                "action_id": q.get("action_id") or ledger.new_action_id(),
-                "item": text,
-                "owner": owner or "UNASSIGNED",
-                "deadline": (q.get("due") or "").strip(),
-                "gap_type": "none" if owner else "owner",
-                "requested_live": True,  # additive marker: asked out loud in-meeting
-            }
-        )
-    live_items = list(merged)  # everything so far is a live capture
-    extras: list[dict] = []  # summarizer actions that survived the overlap dedup
-    for a in extracted or []:
-        if _is_live_browse_item((a.get("item") or a.get("action") or "")):
-            continue  # summarizer picked up a live browse ask — drop it
-        text = a.get("item", "") if isinstance(a, dict) else str(a)
-        key = _norm_action_text(text)
-        if key in seen:
-            continue
-        # Semantic dedup against the live captures: the summarizer routinely
-        # re-extracts an action the room already asked live, just rephrased (the
-        # deadline split into its own field). Keep the LIVE entry — its action_id
-        # already went out on action.requested — and fold in the summarizer's
-        # structured owner/deadline where the live capture had none. (#84 dedup.)
-        dup = next((m for m in live_items if _same_action(text, m["item"])), None)
-        if dup is not None:
-            _fold_into_live(dup, a)
-            continue
-        if key:
-            seen.add(key)
-        a = dict(a) if isinstance(a, dict) else {"item": text}
-        a.setdefault("action_id", ledger.new_action_id())
-        merged.append(a)
-        extras.append(a)
-    # Cross-language net: word overlap can't see that the summarizer restated an
-    # Italian live capture in English ("schedula un meeting di prova con Ben…" →
-    # "Schedule a test meeting with Ben…"), and that slip shipped TWO approval
-    # cards → double execution. The prompt-level prevention in brain.post_meeting
-    # stops most of it at the source; this one cheap model call (stub: no-op;
-    # failure: keeps both) catches whatever still got through. Same fold-and-drop
-    # semantics as the overlap path: the live entry — whose action_id already
-    # went out on action.requested — always wins.
-    if live_items and extras:
-        drop: set[int] = set()
-        for xi, li in semantic_action_duplicates(
-            [m["item"] for m in live_items],
-            [(x.get("item") or "") for x in extras],
-        ):
-            if id(extras[xi]) in drop:
-                continue  # model repeated an extracted index: first match wins
-            _fold_into_live(live_items[li], extras[xi])
-            drop.add(id(extras[xi]))
-        if drop:
-            merged = [m for m in merged if id(m) not in drop]
-    return merged
 
 
-def _fold_into_live(live: dict, extracted: object) -> None:
-    """Absorb the summarizer's structured owner/deadline into the winning live
-    capture (which often has neither — the room just spoke the ask)."""
-    if not isinstance(extracted, dict):
-        return
-    if not live.get("deadline") and extracted.get("deadline"):
-        live["deadline"] = extracted["deadline"]
-    ow = (extracted.get("owner") or "").strip()
-    if live.get("owner") in ("", "UNASSIGNED") and ow and ow != "UNASSIGNED":
-        live["owner"], live["gap_type"] = ow, "none"
 
 
-async def _finalize_session(
-    bot_id: str,
-    source: str = "manual",
-    failed_code: str = "",
-    usage_reason: str = "",
-    usage_end_epoch: float | None = None,
-    artifact_org_id: str | None = None,
-    bot_terminal: bool = False,
-) -> dict | None:
-    """End a session once: stop both vendors, build + store the artifact.
-
-    Idempotent AND concurrency-safe — safe to call from the manual endpoint, the
-    terminal-status webhook, and the reconciliation loop, even simultaneously.
-    Returns the stored artifact (or None) if the session is already gone.
-
-    ``source`` (manual/webhook/reconcile) is recorded PII-safely for diagnosing
-    which path finalized a meeting; it never affects behaviour. ``failed_code``
-    ('fatal' when the join fatally failed) fires the Cedric join-failed
-    notification ONCE, inside the guard — so a fatal seen by both the webhook and
-    the poll notifies the orchestrator a single time, not twice.
-
-    ``usage_reason``/``usage_end_epoch`` (PR B) shape the durable usage close:
-    the reason recorded on the row ('limit_reached' for the entitlement stop;
-    natural ends default to 'ended') and Recall's own terminal timestamp when
-    the caller had one. The close itself is idempotent (first close wins), so
-    the same bot finalizing via manual end + webhook + reconcile still writes
-    consumed_seconds exactly once. artifact_org_id is accepted only from an
-    already-authenticated endpoint; it enables an RLS-scoped idempotent read
-    after process replacement without adding a global bot-id lookup.
-
-    ``bot_terminal`` (set by the two callers that KNOW Recall already reports the
-    bot terminal — the reconcile terminal-status poll and the account terminal
-    webhook) means the meter is ALREADY stopped: a bot in done/call_ended/fatal
-    is not in a call and cannot bill. The courtesy leave_call below may then be
-    rejected by Recall (e.g. 400 "bot is not in a call" for an already-ended
-    bot) — which must NOT be treated as an UNVERIFIED stop, or the session is
-    kept as leave_pending and retried forever, inflating active_sessions (the
-    phantom that blocks the pre-deploy gate). Only a leave for a possibly-still-
-    live bot (manual /end, bot_terminal=False) requires a verified stop.
-    """
-    session = store.get(bot_id)
-    if session is None:
-        # Without a trusted org there is deliberately no global Postgres
-        # bot-id lookup. Same-process internal idempotency still hits the warm
-        # cache; authenticated archive endpoints pass their org explicitly.
-        if artifact_org_id is not None:
-            return await run_in_threadpool(
-                store.get_artifact, bot_id, org_id=artifact_org_id
-            )
-        return store.get_artifact(bot_id)
-    # A prior finalize already built + delivered this session's artifact but its
-    # Recall meter-stop (leave_call) was not confirmed, so the session was KEPT
-    # for retry (see _finalize_session_locked). Re-finalizing must NOT rebuild or
-    # re-deliver — just retry the meter-stop and drop the session once confirmed
-    # stopped. _retry_leave self-guards on _finalizing, so a manual /end and a
-    # reconcile tick can't double-retry. Return the already-stored artifact so
-    # /end still answers 200 with the deliverable.
-    if getattr(session, "leave_pending", False):
-        await _retry_leave(bot_id, session)
-        return await run_in_threadpool(
-            store.get_artifact, bot_id, org_id=session.org_id
-        )
-    # Concurrency guard. store.remove(bot_id) — the thing that makes the
-    # `session is None` check above idempotent — only runs at the very END of
-    # the body, past several awaits (the multi-second post_meeting LLM call
-    # included). So two finalizes racing on the same bot (bot.call_ended +
-    # bot.done arrive as concurrent webhook POSTs; the poll loop is a third
-    # racer) would BOTH pass the None check and BOTH fire session.ended to
-    # Cedric. Check-and-add is synchronous — no await between here and the add —
-    # so it is atomic under asyncio's single-threaded loop.
-    if bot_id in _finalizing:
-        return await run_in_threadpool(
-            store.get_artifact, bot_id, org_id=session.org_id
-        )
-    _finalizing.add(bot_id)
-    try:
-        return await _finalize_session_locked(
-            bot_id, session, source, failed_code, usage_reason, usage_end_epoch,
-            bot_terminal,
-        )
-    finally:
-        _finalizing.discard(bot_id)
 
 
-async def _finalize_session_locked(
-    bot_id: str,
-    session: store.Session,
-    source: str,
-    failed_code: str = "",
-    usage_reason: str = "",
-    usage_end_epoch: float | None = None,
-    bot_terminal: bool = False,
-) -> dict | None:
-    """The actual finalize body, run under the ``_finalizing`` in-flight guard."""
-    # Gemini ears: tear down this bot's audio session first (idempotent, sync).
-    gemini_ears.stop_session(bot_id)
-    # Join-failed notification (fatal): fire here, under the guard, so it runs at
-    # most once per bot even when the webhook and the poll both observe the fatal.
-    if failed_code == "fatal":
-        cedric.notify_failed(session, bot_id, failed_code)  # CEDRIC
-    transcript_text = session.transcript_text()
-    # Raw transcript retains agent output for the archive. Intelligence,
-    # decisions and actions use human evidence only.
-    analysis_transcript_text = session.transcript_text(include_agents=False)
-
-    # Stop billing on both vendors. leave_call is the Recall meter-stop and now
-    # RAISES on a persistent failure (retry=True + raise_for_status). The stop is
-    # only CONFIRMED when leave succeeds or Recall reports the bot genuinely gone
-    # (404/410, e.g. a naturally-ended meeting); a 401/403 (rotated key), 429, or
-    # 5xx leaves it UNVERIFIED — the bot may still be live+billing. When
-    # unverified we keep the session below so the reconcile backstop retries the
-    # leave; the artifact is still built + persisted + delivered here so the
-    # deliverable is never lost.
-    leave_verified = True
-    try:
-        await run_in_threadpool(recall_client.leave_call, bot_id)
-    except Exception as e:  # noqa: BLE001 — classified by _leave_confirmed_stopped
-        # A bot Recall ALREADY reports terminal (bot_terminal) is not billing —
-        # leave_call is a courtesy and its rejection (e.g. 400 "not in a call"
-        # for an already-ended bot) must not strand the session as leave_pending
-        # (phantom active_sessions). A possibly-still-live bot still needs a
-        # verified stop (404/410/success) — the fleet meter-leak guard.
-        leave_verified = bot_terminal or _leave_confirmed_stopped(e)
-    if session.anam_conversation_id:
-        try:
-            await run_in_threadpool(
-                anam_client.end_conversation, session.anam_conversation_id
-            )
-        except Exception:
-            pass
-
-    # PR B BLOCKER 2: the usage close is DEFERRED to the verified-stop branch
-    # below — closing here (before the leave is confirmed off) would free the
-    # org's one-meeting slot while the bot may still be live+billing, letting a
-    # 2nd meeting start against a still-running meter. On a VERIFIED stop we
-    # close (first-close-wins); on an UNVERIFIED leave we stash the reason/end
-    # and leave the row OPEN so the slot stays held until _retry_leave confirms
-    # the meter is off and closes it. The resolved reason is computed once here.
-    usage_close_reason = usage_reason or (
-        "failed" if failed_code == "fatal" else "ended"
-    )
-
-    artifact: dict = {
-        "summary": "",
-        "decisions": [],
-        "actions": [],
-        "checklist": [],
-        "missing_steps": [],
-        "readiness_score": 0,
-        "risks": [],
-        "follow_up_email": {},
-    }
-    integration = dict(session.integration) if session.integration else None  # CEDRIC
-    # Live-captured action requests (tools.queue_action) — read once, used twice:
-    # shown to the summarizer as "already captured, do not re-extract" (dedup
-    # prevention at the source, cross-language included) and then merged into
-    # the artifact's actions[] below.
-    queued_actions = await run_in_threadpool(
-        outbox.begin_action_finalize, session.org_id, bot_id
-    )
-    if not queued_actions:
-        # Compatibility for synthetic/key-free sessions captured before the
-        # durable queue existed.
-        queued_actions = list(getattr(session, "queued_actions", None) or [])
-    if analysis_transcript_text.strip():
-        avatar = avatar_resolver.for_session(session)
-        analysis_state = session.meeting_state
-        if analysis_state is None:
-            analysis_state = meeting_state.build_from_utterances(
-                avatar, session.human_transcript()
-            )
-        try:
-            artifact = await run_in_threadpool(
-                lambda: post_meeting(
-                    avatar,
-                    analysis_transcript_text,
-                    context=(integration or {}).get("brief", ""),  # CEDRIC: brief-grounded summary
-                    live_actions=queued_actions,
-                    state=analysis_state,
-                )
-            )
-        except Exception as e:  # noqa: BLE001 — a transient post-model failure must
-            # not 500 /end and lose the whole deliverable. post_meeting passes an
-            # EXPLICIT provider, so llm.complete's 'never go dark' Haiku fallback
-            # (gated on provider is None) does NOT run and a 429/529/timeout
-            # re-raises up to here. Degrade to the deterministic tracker recap so
-            # the artifact still saves + delivers below; the meter-stop already
-            # ran above and the leave-retry path stays intact. (No transcript is
-            # logged — PII: only the exception class name.)
-            print(
-                f"[finalize] bot={bot_id} post_meeting failed "
-                f"({type(e).__name__}); degrading to deterministic recap",
-                flush=True,
-            )
-            try:
-                artifact = await run_in_threadpool(
-                    degraded_post_meeting,
-                    avatar,
-                    analysis_transcript_text,
-                    state=analysis_state,
-                )
-            except Exception as e2:  # noqa: BLE001 — the degraded rebuild ALSO failed.
-                # This is no longer a transient LLM blip: degraded_post_meeting
-                # re-runs build_from_text/_finish_artifact, so a real bug there
-                # would re-raise and 500 /end + lose the artifact — the exact
-                # failure Fix 3 exists to prevent. Save + deliver a bare
-                # deterministic scaffold so _finalize_session_locked can NEVER
-                # throw on the post-meeting build (the full transcript is still
-                # persisted into the artifact below + served by the archive), and
-                # SURFACE the stack so a genuine code bug is diagnosable instead of
-                # silently degrading every meeting forever. PII-safe: a traceback
-                # carries the exception + code frames, never transcript/recap text.
-                print(
-                    f"[finalize] bot={bot_id} degraded recap ALSO failed "
-                    f"({type(e2).__name__}); saving bare scaffold\n"
-                    f"{traceback.format_exc()}",
-                    flush=True,
-                )
-                artifact = {
-                    "summary": (
-                        "Automated recap unavailable — the post-meeting summarizer "
-                        "failed. The full transcript is preserved in the meeting "
-                        "archive."
-                    ),
-                    "decisions": [],
-                    "actions": [],
-                    "checklist": [],
-                    "missing_steps": [],
-                    "readiness_score": 0,
-                    "risks": [],
-                    "follow_up_email": {},
-                }
-
-    # Fold the live captures into the artifact's actions[] ahead of the
-    # summarizer's extraction, deduped on normalized item text. Runs BEFORE
-    # save_artifact and ledger.record_meeting so every consumer — stored
-    # artifact, wire artifact, ledger, autopilot — sees the same merged list.
-    # Plain non-orchestrated sessions benefit too. Always run the merge (even
-    # with no live captures) so EVERY action carries a stable action_id — the
-    # summarizer-only actions get one here too. Threadpool because the merge's
-    # cross-language net may make one model call: finalize is off the live path,
-    # but the event loop (other meetings' live turns) must never wait on it.
-    artifact["actions"] = await run_in_threadpool(
-        _merge_action_items, queued_actions, artifact.get("actions") or []
-    )
-    artifact["checklist"] = artifact["actions"]  # legacy alias, same list
-
-    # Typed-action specs for the native executor (NATIVE-INTEGRATIONS-PLAN.md):
-    # annotate each action with a {type, args} spec where it CLEARLY maps
-    # (calendar.create_event / email.send — plus asana.create_task for an
-    # avatar allowed to use the org's connected Asana) so an APPROVED action
-    # can be run natively. GATED on the flag — with NATIVE_EXECUTOR off this
-    # whole block is skipped, so finalize is byte-identical to today (no extra
-    # model call, no new field). Never invents recipients/times; unmapped
-    # actions stay generic. Best-effort: typing must never break finalize.
-    if executor.enabled():
-        try:
-            allow_asana = await run_in_threadpool(
-                _avatar_asana_enabled, session.org_id, session.avatar_id
-            )
-            summary_brief = artifact.get("summary") or ""
-            artifact["actions"] = await run_in_threadpool(
-                lambda: type_actions(
-                    artifact["actions"], summary_brief, allow_asana=allow_asana
-                )
-            )
-            artifact["checklist"] = artifact["actions"]
-            # Find-a-time (SCHEDULER_FIND_TIME, off by default): a VAGUE
-            # scheduling ask ("book 45 min with Ananth next week") is still
-            # untyped after type_actions (no ISO time), so it would otherwise be
-            # dropped. Attach ranked candidate slots (free/busy on the org's own
-            # calendar + any attendee emails named in the ask) so the approve
-            # doors can offer times. Runs AFTER type_actions so explicit-time
-            # asks (already typed) are skipped. Best-effort + off the hot path;
-            # any failure is caught by the same handler below (never fatal).
-            if settings.scheduler_find_time:
-                from . import scheduler
-
-                _org_oauth = await run_in_threadpool(
-                    store.get_org_oauth, session.org_id
-                )
-                _org_email = str((_org_oauth or {}).get("email") or "")
-                _tz = await run_in_threadpool(
-                    google_client.resolve_timezone, session.org_id
-                ) or "UTC"
-                artifact["actions"] = await run_in_threadpool(
-                    lambda: scheduler.enrich_actions(
-                        artifact["actions"], summary_brief,
-                        principal=session.org_id, organizer_email=_org_email,
-                        timezone=_tz,
-                    )
-                )
-                artifact["checklist"] = artifact["actions"]
-            # Asana auto-push (ASANA_AUTO_EXECUTE, off by default): typed
-            # tasks land on the board NOW instead of waiting for dashboard
-            # approval; receipts (task URLs) go through the same provenance
-            # channel as approved runs. Best-effort — finalize (the meter
-            # stop) is already safe above and must never wait on Asana.
-            if allow_asana and settings.asana_auto_execute:
-                pushed = await run_in_threadpool(
-                    executor.auto_execute_asana,
-                    session.org_id,
-                    artifact["actions"],
-                )
-                if pushed:
-                    print(
-                        f"[finalize] bot={bot_id} asana auto-push: "
-                        f"{pushed} action(s)",
-                        flush=True,
-                    )
-        except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
-            print(
-                f"[finalize] bot={bot_id} typed-action producer skipped "
-                f"({type(e).__name__})",
-                flush=True,
-            )
-
-    # Routing-role stamps — UNCONDITIONAL (executor on or off): finalize is
-    # the contract's first decision point, and the route persisted here is
-    # what the approve door executes by.
-    artifact["actions"] = _stamp_action_routing(artifact.get("actions") or [])
-    artifact["checklist"] = artifact["actions"]
-
-    # The transcript is the raw material of the artifact — persist it so the
-    # product output is complete (transcript + summary + checklist + email).
-    # It lives only in the artifact store (PII: never logged).
-    artifact["transcript"] = transcript_text
-
-    # Attribution metadata: the session row is deleted below (store.remove), so
-    # the artifact is the only place that remembers WHICH avatar ran WHICH
-    # meeting — the dashboard groups meetings per avatar from these fields.
-    # Duration is approximated from first-to-last utterance timestamps (counts
-    # only; no utterance text — the guard hook forbids logging transcript).
-    artifact["avatar_id"] = session.avatar_id
-    artifact["org_id"] = session.org_id
-    artifact["meeting_url"] = session.meeting_url
-    if len(session.transcript) >= 2:
-        artifact["duration_seconds"] = int(
-            session.transcript[-1].ts - session.transcript[0].ts
-        )
-
-    # PRODUCTION DURABILITY ORDER: for orchestrated sessions, commit the
-    # transcript-free session.ended envelope to Postgres BEFORE any local
-    # artifact write, ledger write, or session cleanup. If Postgres is
-    # configured but unavailable, OutboxUnavailable propagates and the local
-    # session remains available for a retry; we never claim completion while
-    # the only customer delivery record could still be lost.
-    orchestrated = cedric.deliver_ended(integration, bot_id, artifact)  # CEDRIC
-
-    await run_in_threadpool(
-        store.save_artifact, bot_id, artifact, org_id=session.org_id
-    )
-    # Cross-meeting memory: fold this meeting's extracted facts into the
-    # ledger. Best-effort — memory must never block the cleanup below
-    # (session removal + GPU meter signal), so a ledger hiccup is swallowed.
-    try:
-        await run_in_threadpool(
-            ledger.record_meeting, session.meeting_url, session.avatar_id, bot_id,
-            artifact, org_id=session.org_id,
-        )
-    except Exception:
-        pass
-    if orchestrated:
-        pass  # orchestrated session: the orchestrator owns delivery, skip autopilot
-    elif settings.autopilot_deliver:
-        # Autopilot: send the drafted follow-up + Slack summary now, without
-        # holding up the finalize response (meter is already stopped above).
-        # Best-effort like the ledger — never blocks the cleanup below.
-        try:
-            name = avatar_resolver.for_session_offpath(session).name
-            asyncio.create_task(run_in_threadpool(autopilot.maybe_deliver, name, artifact))
-        except Exception:
-            pass
-    # PII-safe finalize telemetry: counts + booleans only, NEVER any utterance
-    # text (the guard hook enforces this). Lets the next live test see which
-    # path finalized and whether content actually accumulated — the question
-    # left open by the empty-artifact test run.
-    n_lines = len(session.transcript)
-    had_content = bool(transcript_text.strip())
-    print(
-        f"[finalize] bot={bot_id} source={source} lines={n_lines} "
-        f"orchestrated={orchestrated} content={had_content}",
-        flush=True,
-    )
-    if leave_verified:
-        # Meter CONFIRMED off → NOW close the durable usage row (first close
-        # wins; idempotent across manual end + webhook + reconcile). Best-effort
-        # — a billing hiccup leaves the row for the reconcile restore pass.
-        await _close_usage_for(session.org_id, bot_id, usage_end_epoch, usage_close_reason)
-        store.remove(bot_id)
-        # Photoreal only: last session out turns off the GPU meter (after a grace
-        # window, in case another meeting starts right away).
-        gpu_runtime.on_session_ended(len(store.all_sessions()))
-        runpod_runtime.on_session_ended(len(store.all_sessions()))
-    else:
-        # Meter-stop UNVERIFIED (Recall 5xx / network error): keep the session in
-        # the store so the reconcile backstop retries leave_call — the poll only
-        # revisits sessions still in the store, so removing it now would strand a
-        # still-live bot billing forever. The artifact is already saved and
-        # delivered above; the retry routes through leave_pending so it must NOT
-        # re-deliver. (No transcript is logged — PII.)
-        # PR B BLOCKER 2: DO NOT close the usage row here — the slot stays held
-        # (a 2nd meeting for this org is correctly refused) until _retry_leave
-        # confirms the meter is off. Stash the reason/end so that close is honest.
-        session.leave_pending = True
-        session.usage_close_reason = usage_close_reason
-        session.usage_end_epoch = usage_end_epoch
-        print(
-            f"[finalize] bot={bot_id} leave_call unverified — session kept for "
-            f"reconcile meter-stop retry",
-            flush=True,
-        )
-    return artifact
 
 
 # CEDRIC: live context push — the orchestrator POSTs a fresh brief the moment
 # something changes (real-time counterpart of the periodic context pull);
 # inject_brief re-reads per turn, so the next answer speaks from it.
-@app.post("/sessions/{bot_id}/context")
-async def push_context(
-    bot_id: str, req: cedric.ContextPush, request: Request
-) -> JSONResponse:
-    caller_org = await run_in_threadpool(cedric.resolve_machine_org, request)
-    if caller_org is None:
-        if err := cedric.auth_error(request):  # CEDRIC
-            return err
-    return cedric.apply_context_push(store.get(bot_id), req, caller_org)
 
 
-@app.post("/sessions/{bot_id}/end")
-async def end_session(bot_id: str, request: Request) -> JSONResponse:
-    # Cookie (dashboard) or bearer (machine). auth.gate blocks an anonymous
-    # caller from force-ending a bot (DoS + meter) on a login-protected
-    # deployment. A logged-in user may end their own org's and unowned/service
-    # sessions — never another org's. A PER-ORG machine bearer (org_tokens)
-    # may end ONLY sessions of ITS org — never demo/unowned/another org's —
-    # so a token that can start a session can also stop its meter (PR D
-    # symmetry) without gaining the global bearer's reach.
-    user = auth.current_user(request)
-    token_org: Optional[str] = None
-    if user is None:
-        # Threadpooled: sync DB I/O (see _org_token_bearer_org's docstring).
-        token_org = await run_in_threadpool(_org_token_bearer_org, request)
-        if token_org is None:
-            if err := auth.gate(request):
-                return err
-    else:
-        live = store.get(bot_id)
-        # A logged-in user may end their own org's and legacy unowned ("")
-        # sessions. Demo-org sessions are NOT theirs — self-serve product
-        # decision (2026-07-13): the Demo org is the anonymous showroom, and a
-        # real signup must not be able to kill (or see) another visitor's demo.
-        if live is not None and live.org_id not in ("", user["org_id"]):
-            return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    if token_org is not None:
-        live = store.get(bot_id)
-        if live is not None and live.org_id != token_org:
-            return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    artifact_scope = (
-        token_org
-        or (str(user["org_id"]) if user is not None else None)
-    )
-    artifact = await _finalize_session(
-        bot_id, source="manual", artifact_org_id=artifact_scope
-    )
-    if artifact is None:
-        # _finalize_session returns None only when the session is already gone
-        # AND no artifact was stored — i.e. a genuinely unknown bot, OR a
-        # concurrent terminal-webhook/reconcile finalize still in flight (its
-        # artifact isn't saved until late in the body). Distinguish the two: a
-        # bare 404 for a bot Cedric just had live is a misleading signal, so
-        # answer 202 "finalizing" while another path owns it.
-        if bot_id in _finalizing or store.get(bot_id) is not None:
-            return JSONResponse({"ok": True, "finalizing": bot_id}, status_code=202)
-        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    artifact_org = str(artifact.get("org_id") or "")
-    if user is not None and artifact_org not in ("", str(user["org_id"])):
-        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    if token_org is not None and artifact_org != token_org:
-        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    return JSONResponse(cedric.wire_artifact(artifact))  # CEDRIC: PII stays home
 
 
-@app.post("/sessions/{bot_id}/cancel")
-async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
-    """Cancel a scheduled bot / abort a live one WITHOUT building an artifact.
-
-    Used by the orchestrator when a calendar event moves or is cancelled (it
-    rebooks afterwards). `end` keeps its meaning: finalize + artifact.
-    """
-    # PER-ORG machine bearers are first-class here (PR D): they authenticate
-    # like the global bearer but may cancel ONLY their own org's sessions. The
-    # global bearer keeps its full legacy service scope; key-free stays open.
-    machine_org = await run_in_threadpool(cedric.resolve_machine_org, request)
-    if machine_org is None:
-        if err := cedric.auth_error(request):  # CEDRIC
-            return err
-    session = store.get(bot_id)
-    # Wrong-org answers the IDENTICAL body as not-found: a distinct 403 would
-    # be an existence oracle (a per-org bearer probing whether another org's
-    # bot_id exists). Adversarial review 2026-07-13, should-fix 2.
-    if session is None or (
-        machine_org is not None
-        and session.org_id != machine_org
-    ):
-        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    # Stop the meter: works for live bots; scheduled bots may reject leave_call,
-    # so fall back to deleting the scheduled bot. Track whether the meter is
-    # CONFIRMED off (leave succeeded, bot already gone 404/410, or the scheduled
-    # bot was deleted) — PR B BLOCKER 2 gates the slot-release on that.
-    meter_off = False
-    try:
-        await run_in_threadpool(recall_client.leave_call, bot_id)
-        meter_off = True
-    except Exception as e:  # noqa: BLE001 — classified by _leave_confirmed_stopped
-        if _leave_confirmed_stopped(e):
-            meter_off = True  # 404/410: bot genuinely gone → not billing
-        else:
-            try:
-                await run_in_threadpool(recall_client.delete_bot, bot_id)
-                meter_off = True  # a scheduled bot deleted → never billed
-            except Exception as e2:  # noqa: BLE001 — surface but don't fail cancel
-                print(f"[sessions] cancel: recall cleanup failed: {e2}", flush=True)
-    if session.anam_conversation_id:
-        try:
-            await run_in_threadpool(
-                anam_client.end_conversation, session.anam_conversation_id
-            )
-        except Exception:
-            pass
-    if not meter_off:
-        # Meter-stop UNVERIFIED (Recall 5xx/network on BOTH leave and delete):
-        # the bot may still be live+billing. Keep the session (leave_pending) so
-        # the reconcile backstop retries the leave, and DO NOT close the usage
-        # row / free the slot — a 2nd meeting for this org stays correctly
-        # refused until the meter is confirmed off. _retry_leave closes the row.
-        session.leave_pending = True
-        session.usage_close_reason = "cancelled"
-        session.usage_end_epoch = None
-        print(
-            f"[sessions] cancel: leave unverified — bot={bot_id} kept for "
-            f"reconcile meter-stop retry",
-            flush=True,
-        )
-        return JSONResponse(
-            {"cancelled": False, "leave_pending": bot_id}, status_code=202
-        )
-    # PR B: meter confirmed off → release the usage row (a never-joined
-    # scheduled bot closes 0; a live one closes with its elapsed) so the org
-    # can book its next meeting.
-    await _close_usage_for(session.org_id, bot_id, None, "cancelled")
-    store.remove(bot_id)
-    gpu_runtime.on_session_ended(len(store.all_sessions()))
-    runpod_runtime.on_session_ended(len(store.all_sessions()))
-    return JSONResponse({"cancelled": True, "bot_id": bot_id})
 
 
-class DeliverRequest(BaseModel):
-    to: list[str] = []
-    slack: bool = True
 
 
-@app.post("/sessions/{bot_id}/deliver")
-async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -> JSONResponse:
-    """Actually send the finished meeting's follow-up email + post it to Slack."""
-    # Same machine-auth seam as /cancel: a PER-ORG bearer may deliver ONLY its
-    # own org's artifacts; the global bearer keeps today's full service scope.
-    machine_org = await run_in_threadpool(cedric.resolve_machine_org, request)
-    if machine_org is None:
-        if err := cedric.auth_error(request):  # CEDRIC
-            return err
-    artifact = await run_in_threadpool(
-        store.get_artifact, bot_id, org_id=machine_org
-    )
-    # Wrong-org == not-found, byte-identical (no existence oracle for per-org
-    # bearers). Adversarial review 2026-07-13, should-fix 2.
-    if artifact is None or (
-        machine_org is not None
-        and str(artifact.get("org_id") or "") != machine_org
-    ):
-        return JSONResponse({"error": "no artifact for this bot_id"}, status_code=404)
-
-    # Finalize already ran store.remove(bot_id), so store.get(bot_id) is None here
-    # and the live session no longer carries the avatar identity. The saved
-    # artifact does (avatar_id stamped at finalize) — resolve the follow-up's
-    # name from there first, so a Cedric meeting's Slack header reads "Cedric"
-    # and not the default "Laura". Fall back to the default only when absent
-    # (pre-finalize / legacy artifacts) or on an unknown id.
-    avatar_id = artifact.get("avatar_id") or settings.default_avatar_id
-    try:
-        name = avatars.load(avatar_id).name
-    except Exception:  # noqa: BLE001 — an unknown avatar id must never block delivery
-        name = avatars.load(settings.default_avatar_id).name
-    email = artifact.get("follow_up_email", {}) or {}
-
-    email_res = await run_in_threadpool(
-        actions.send_email, req.to, email.get("subject", ""), email.get("body", "")
-    )
-    slack_res = {"sent": False, "reason": "disabled"}
-    if req.slack:
-        # CAPABILITY GATE: Slack delivery happens ONLY when this avatar's `slack`
-        # toggle is on. Read raw and skip on an explicit OFF — an untouched
-        # avatar keeps today's behaviour (default on when the org connected
-        # Slack via Cedric). avatar_id comes from the saved artifact above.
-        caps = await run_in_threadpool(store.get_avatar_capabilities, avatar_id)
-        if caps.get("slack") is False:
-            slack_res = {"sent": False, "reason": "slack capability off"}
-        else:
-            slack_res = await run_in_threadpool(
-                actions.post_to_slack, actions.artifact_to_slack_text(name, artifact)
-            )
-    return JSONResponse({"email": email_res, "slack": slack_res})
 
 
-@app.get("/health/vendors")
-def vendors_view(request: Request) -> JSONResponse:
-    """On-demand vendor subscription/credit sweep (same checks as the daily
-    Slack watchdog). Auth-gated: statuses reveal which vendors are configured."""
-    if err := cedric.auth_error(request):  # CEDRIC
-        return err
-    results = vendor_health.run_checks()
-    return JSONResponse(
-        {
-            "checked_at": vendor_health.last_run_at,
-            "vendors": results,
-            "alert": vendor_health.slack_text(results) or "tutto ok",
-        }
-    )
 
 
-@app.get("/ledger")
-def ledger_view(meeting_url: str, request: Request) -> JSONResponse:
-    """Cross-meeting memory for a meeting link: every ledger item plus the
-    carryover brief the avatar gets injected at the next session."""
-    # Machine/service seam: a PER-ORG bearer reads ITS org's memory; the
-    # global bearer (and the key-free open demo) keeps the Demo org, exactly
-    # as today. Sync handler → FastAPI already runs this off the event loop.
-    machine_org = cedric.resolve_machine_org(request)
-    if machine_org is None:
-        if err := cedric.auth_error(request):  # CEDRIC
-            return err
-    org = machine_org or settings.demo_org_id
-    key = ledger.meeting_key(meeting_url)
-    return JSONResponse(
-        {
-            "meeting_key": key,
-            "brief": ledger.carryover_brief(meeting_url, org_id=org),
-            "items": ledger.items(key, org_id=org),
-        }
-    )
 
 
-@app.get("/sessions/{bot_id}/artifact")
-def session_artifact(bot_id: str, request: Request) -> JSONResponse:
-    """Retrieve a finished session's artifact (summary + checklist + email)."""
-    # A PER-ORG bearer may read ONLY its own org's sessions/artifacts. Another
-    # org's bot_id — live OR finalized — answers the IDENTICAL not-found body,
-    # so the endpoint is never an existence/progress oracle (adversarial
-    # review 2026-07-13, should-fix 2). The global bearer and the key-free
-    # demo keep today's full service scope.
-    machine_org = cedric.resolve_machine_org(request)
-    if machine_org is None:
-        if err := cedric.auth_error(request):  # CEDRIC
-            return err
-    org_scoped = machine_org is not None
-    live = store.get(bot_id)
-    if live is not None:
-        if org_scoped and live.org_id != machine_org:
-            return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-        return JSONResponse({"status": "in_progress", "bot_id": bot_id})
-    artifact = store.get_artifact(bot_id, org_id=machine_org)
-    if artifact is None or (
-        org_scoped and str(artifact.get("org_id") or "") != machine_org
-    ):
-        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    return JSONResponse({"status": "done", **cedric.wire_artifact(artifact)})  # CEDRIC: PII stays home
 
 
-@app.post("/sessions/{bot_id}/redeliver")
-async def redeliver_artifact(bot_id: str, request: Request) -> JSONResponse:
-    """Retry a finished session's signed ``session.ended`` callback.
-
-    Callback delivery is deliberately best-effort during meeting cleanup, so
-    the stored artifact is the recovery source of truth.  This endpoint gives
-    a logged-in owner (or the machine bearer) a bounded retry without ever
-    sending the transcript across the PII boundary. A PER-ORG bearer may
-    redeliver ONLY its own org's artifacts (never demo/unowned/another org's).
-    """
-    user = auth.current_user(request)
-    token_org: Optional[str] = None
-    if user is None:
-        # Threadpooled: sync DB I/O (see _org_token_bearer_org's docstring).
-        token_org = await run_in_threadpool(_org_token_bearer_org, request)
-        if token_org is None:
-            if err := auth.gate(request):
-                return err
-
-    lookup_org = str(user["org_id"]) if user is not None else token_org
-    artifact = await run_in_threadpool(
-        store.get_artifact, bot_id, org_id=lookup_org
-    )
-    if artifact is None:
-        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    artifact_org = str(artifact.get("org_id") or "")
-    # Own-org + legacy unowned ("") only — demo-org artifacts excluded for
-    # logged-in users (self-serve product decision, 2026-07-13; same rule as
-    # /sessions/{id}/end and dashboard.visible).
-    if user is not None and artifact_org not in ("", user["org_id"]):
-        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-    if token_org is not None and artifact_org != token_org:
-        return JSONResponse({"error": "unknown bot_id"}, status_code=404)
-
-    integration = cedric.default_integration()
-    if not integration or not integration.get("callback_url"):
-        return JSONResponse(
-            {"error": "orchestrator callback is not configured"}, status_code=503
-        )
-    integration = {**integration, "org_id": artifact_org}
-    # send_ended retries up to 4x with BLOCKING time.sleep (5s + 25s + 120s), so
-    # awaiting it inline hangs the request ~150s and 504s at the proxy. Hand it to
-    # the SAME fire-and-forget seam finalize uses (cedric.deliver_ended: distils
-    # via wire_artifact, then schedules the retrying send off the request) and
-    # answer 202 immediately. Delivery semantics are unchanged (still the full
-    # retry chain, still the distilled/no-transcript payload) — only the blocking
-    # of the HTTP request is removed.
-    cedric.deliver_ended(integration, bot_id, artifact)
-    return JSONResponse({"status": "retrying", "bot_id": bot_id}, status_code=202)
 
 
-@app.get("/meetings")
-def meetings_page() -> FileResponse:
-    """Archive UI: every finished meeting's artifact, transcript included."""
-    return FileResponse(FRONTEND_DIR / "meetings.html")
 
 
-@app.get("/meetings/list")
-def meetings_list(request: Request) -> JSONResponse:
-    """All saved artifacts, newest first, for the /meetings page. Transcripts
-    are PII: gated to a logged-in owner (their own org) or the machine bearer —
-    never served to the anonymous internet — and never logged. Same guard as
-    /dashboard/summary; the HTML shell (/meetings) stays open like /dashboard."""
-    user = auth.current_user(request)
-    machine_org = None
-    if user is None:
-        machine_org = cedric.resolve_machine_org(request)
-        if machine_org is None:
-            if err := auth.gate(request):
-                return err
-    artifact_scope = None
-    if store.durable_artifacts_enabled():
-        artifact_scope = (
-            machine_org
-            or (str(user["org_id"]) if user is not None else None)
-        )
-        # A deployment-level service bearer is never permission to enumerate
-        # every tenant. In production it retains only the Demo workspace.
-        if artifact_scope is None:
-            artifact_scope = settings.demo_org_id
-    # Key-free SQLite intentionally keeps its historical global read followed
-    # by the legacy/unowned visibility filter below.
-    artifacts = store.list_artifacts(artifact_scope)
-    if machine_org is not None:
-        artifacts = [
-            a
-            for a in artifacts
-            if str((a.get("artifact") or {}).get("org_id") or "") == machine_org
-        ]
-    elif user is not None:
-        # Cookie login: scope to the caller's org. Unowned/legacy artifacts
-        # (empty org_id) stay visible, mirroring the /sessions/*/redeliver
-        # rule; DEMO-org artifacts do not — self-serve product decision
-        # (2026-07-13): the anonymous showroom's transcripts never appear in a
-        # real signup's archive.
-        org = str(user["org_id"])
-        artifacts = [
-            a
-            for a in artifacts
-            if (art_org := str((a.get("artifact") or {}).get("org_id") or ""))
-            in ("", org)
-        ]
-    return JSONResponse({"meetings": artifacts})
 
 
 # ───────────────────────── avatar page + ws ─────────────────────────
-@app.get("/avatar")
-def avatar_page() -> FileResponse:
-    return FileResponse(FRONTEND_DIR / "avatar.html")
 
 
 @app.websocket("/ws/{conversation_id}")
@@ -3973,9 +1544,6 @@ def _avatar_voice(session: "store.Session") -> str:
         return ""
 
 
-def _line_for(heard: str, en: list, it: list) -> str:
-    """A random line from the pool matching the language of what was heard."""
-    return random.choice(it if sounds_italian(heard) else en)
 
 
 def _wake_required(avatar: avatars.Avatar,
@@ -4461,7 +2029,6 @@ _self_intro_tasks: set = set()
 
 # Strong refs to in-flight graphiti ingest tasks (fired off the join path).
 # KEEP — merges keep reverting this.
-_graphiti_tasks: set = set()
 
 # Recheck cadence while waiting for the floor to open before the self-intro.
 _SELF_INTRO_RECHECK_SECONDS = 2.0
@@ -5220,62 +2787,8 @@ async def recall_audio_ws(websocket: WebSocket, cap_path: str = "") -> None:
     # Recall reconnects on drops; the ears session survives to receive it.
 
 
-@app.get("/gemini-ears/status")
-def gemini_ears_status() -> JSONResponse:
-    """PII-safe ears telemetry: counts and timing only, never content."""
-    return JSONResponse(gemini_ears.status())
 
 
-@app.get("/internal/ears-config/{capability}")
-async def ears_config(capability: str, request: Request) -> JSONResponse:
-    """Per-session config + a fresh Vertex token for the Cloudflare ears relay.
-
-    The relay (which accepts Recall's audio WS that App Runner can't) calls this
-    with the per-bot capability to learn the mode/model/persona and get a token
-    to open the Gemini Live session. Bearer-protected with LAURA_API_TOKEN; the
-    capability itself binds the response to exactly one bot. No transcript/PII
-    here — only config + a short-lived token.
-    """
-    expected = settings.laura_api_token.strip()
-    got = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
-    if not expected or not hmac.compare_digest(got, expected):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-    bot_id = await run_in_threadpool(
-        store.resolve_recall_realtime_capability, capability
-    )
-    if not bot_id:
-        return JSONResponse({"error": "invalid capability"}, status_code=404)
-    session = store.get(bot_id)
-    persona = "Laura"
-    avatar_id = session.avatar_id if session is not None else ""
-    if session is not None:
-        try:
-            persona = avatars.load(avatar_id).name
-        except Exception:  # noqa: BLE001
-            pass
-    # Per-avatar brain choice: this avatar may be on Cerebras (ears off) even if
-    # another is on Gemini. Resolve AFTER the bot so we know which avatar it is.
-    _mode = gemini_ears.mode_for_avatar(avatar_id)
-    if not gemini_ears.mode_enabled(_mode):
-        return JSONResponse({"enabled": False, "reason": "brain not gemini"})
-    try:
-        token = await run_in_threadpool(llm._vertex_token)
-    except Exception as e:  # noqa: BLE001
-        return JSONResponse({"error": f"token: {type(e).__name__}"}, status_code=502)
-    # Prime the light per-bot state so the ring/attribution exist immediately.
-    gemini_ears._ensure_state(bot_id, capability, persona)
-    return JSONResponse(
-        {
-            "enabled": True,
-            "mode": _mode,
-            "bot_id": bot_id,
-            "project": settings.vertex_project,
-            "location": settings.vertex_location or "us-central1",
-            "live_model": settings.vertex_live_model,
-            "persona": persona,
-            "vertex_token": token,
-        }
-    )
 
 
 @app.post("/webhooks/recall")

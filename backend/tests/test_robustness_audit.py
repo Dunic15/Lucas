@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import main, ledger, store  # noqa: E402
+from app.meeting import lifecycle  # noqa: E402  (lifecycle hoisted from main)
 from app.config import settings  # noqa: E402
 
 _MEET_URL = "https://meet.google.com/abc-defg-hij"
@@ -226,7 +227,7 @@ def test_finalize_degrades_when_post_meeting_raises(fresh_store, monkeypatch, ca
     def boom(*a, **k):
         raise RuntimeError("cerebras 529 overloaded")  # transient post-model failure
 
-    monkeypatch.setattr(main, "post_meeting", boom)
+    monkeypatch.setattr(lifecycle, "post_meeting", boom)
 
     secret = "ship the SOC2 report to Globex by Tuesday"
     s = store.create("bot_x", _MEET_URL, "laura")
@@ -270,8 +271,8 @@ def test_finalize_saves_bare_scaffold_when_degraded_recap_also_raises(
     def boom_bug(*a, **k):
         raise ValueError("build_from_text regression")  # a REAL code bug
 
-    monkeypatch.setattr(main, "post_meeting", boom)
-    monkeypatch.setattr(main, "degraded_post_meeting", boom_bug)
+    monkeypatch.setattr(lifecycle, "post_meeting", boom)
+    monkeypatch.setattr(lifecycle, "degraded_post_meeting", boom_bug)
 
     secret = "rotate the prod DB password before Thursday"
     s = store.create("bot_bare", _MEET_URL, "laura")

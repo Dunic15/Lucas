@@ -47,6 +47,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import control_plane, entitlements, ledger, main, store  # noqa: E402
+from app.api import sessions as _sessions  # noqa: E402  (sessions extracted)
+from app.meeting import lifecycle  # noqa: E402  (lifecycle hoisted from main)
 from app.config import settings  # noqa: E402
 
 pytestmark = pytest.mark.pg
@@ -205,7 +207,7 @@ def start_env(fresh_store, monkeypatch):
     monkeypatch.setattr(main.recall_client, "create_bot", fake_create_bot)
     monkeypatch.setattr(main.ledger, "carryover_brief", lambda url, **kw: "")
     monkeypatch.setattr(main.drive_client, "folder_brief", lambda fid: "")
-    monkeypatch.setattr(main, "_schedule_start_reconcile", lambda *a, **k: None)
+    monkeypatch.setattr(_sessions, "_schedule_start_reconcile", lambda *a, **k: None)
     monkeypatch.setattr(main, "_meeting_has_active_bot", lambda url: False)
     return created
 
@@ -214,7 +216,7 @@ def _stub_finalize_vendors(monkeypatch):
     monkeypatch.setattr(main.recall_client, "leave_call", lambda b: None)
     monkeypatch.setattr(main.anam_client, "end_conversation", lambda c: None)
     monkeypatch.setattr(
-        main, "post_meeting",
+        lifecycle, "post_meeting",
         lambda avatar, transcript, **kw: {"summary": "s", "actions": [], "checklist": []},
     )
     monkeypatch.setattr(main.ledger, "record_meeting", lambda *a, **k: None)
@@ -224,7 +226,7 @@ def _stub_finalize_offline(monkeypatch):
     """Finalize's outside deps stubbed, but leave_call left to the test."""
     monkeypatch.setattr(main.anam_client, "end_conversation", lambda c: None)
     monkeypatch.setattr(
-        main, "post_meeting",
+        lifecycle, "post_meeting",
         lambda avatar, transcript, **kw: {"summary": "s", "actions": [], "checklist": []},
     )
     monkeypatch.setattr(main.ledger, "record_meeting", lambda *a, **k: None)

@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import avatars  # noqa: E402
-from app.brain import answer_question  # noqa: E402
+from app.brain.engine import answer_question  # noqa: E402
 
 
 def main() -> None:

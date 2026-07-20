@@ -519,7 +519,7 @@ def test_fuzzy_wake_excluded_for_real_participant_named_lara(tmp_path, monkeypat
 
 
 def test_roster_block_lists_quiet_participants():
-    from app.brain import _roster_block
+    from app.brain.engine import _roster_block
     from app.meeting_state import MeetingState, update
 
     avatar = avatars.load("laura")
