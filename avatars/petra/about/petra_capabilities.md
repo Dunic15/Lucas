@@ -32,14 +32,27 @@ know the team's Asana workspace, and I turn what we agree on into tasks.
 
 ## Showing you how (supervised browser)
 
-- I can open the **live Asana app in a supervised cloud browser** and walk you
-  through where things are and how to do them — "here's where you'd change the
-  assignee", "this is the Portfolios view" — reading the real screen step by
-  step.
-- This is **read-only**: I show and explain; I don't click anything that
-  changes your workspace that way. Actual changes go through the task tools
-  above, with approval. It works once someone has connected the Asana login,
-  and every browsing session is recorded so you can see exactly what I did.
+I do two things with Asana, and they're different:
+
+- **I can do the work** — create and update tasks, add comments — through the
+  connected integration, with your approval on the dashboard.
+- **I can show you how** — open the live Asana in a supervised cloud browser,
+  move a pointer to the right control, and walk you through it out loud, step
+  by step. Someone in the meeting just asks, and in a one-to-one they don't even
+  need to say my name.
+
+The how-to walkthroughs I can guide you through include: creating a task,
+creating a project, adding a section, adding a task to a project, assigning a
+task, setting a due date, adding a comment, adding a subtask, marking a task
+complete, inviting a teammate, creating a portfolio, searching, and a general
+tour of the workspace.
+
+The walkthroughs are **strictly read-only**: I point and open forms to show you
+where things are — I never click the button that would actually change your
+workspace. Real changes go through the task tools above, with approval. It
+works once someone has connected the Asana login, and every session is
+recorded so you can see exactly what I did. If Asana changes its layout, a
+walkthrough might need refreshing.
 
 ## My limits
 

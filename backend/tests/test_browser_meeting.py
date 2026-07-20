@@ -34,7 +34,7 @@ def test_browse_intent_positive_en_and_it():
 
 def test_browse_intent_walkthrough_tasks():
     cases = {
-        "show me how to change an assignee in asana": "change_assignee",
+        "show me how to assign a task in asana": "assign_task",
         "walk me through creating a task in asana": "create_task",
         "come si crea un progetto su asana": "create_project",
         "how do I set a due date in asana": "set_due_date",

@@ -21,10 +21,17 @@ from __future__ import annotations
 
 # {site_label: {task_key: [steps]}}. Each step: op + (url|sel) + say.
 # `sel` may carry alternates separated by " || " — the runner tries each.
+# STRICTLY READ-ONLY: `reveal` only OPENS things that don't persist (the Create
+# form, a task's detail view). Action controls that would CHANGE the workspace
+# (mark complete, save) are `point`-only — shown, never clicked.
+_ASANA_HOME = "https://app.asana.com/"
+# Opening any task's detail view — read-safe (just views it).
+_OPEN_TASK = "[aria-label^='Apri modale'] || [aria-label^='Open task']"
+
 RECIPES: dict[str, dict[str, list[dict]]] = {
     "asana": {
         "create_task": [
-            {"op": "navigate", "url": "https://app.asana.com/",
+            {"op": "navigate", "url": _ASANA_HOME,
              "say": "Let me open your Asana."},
             {"op": "point", "sel": "text=Crea attività || [aria-label='Crea']",
              "say": "To create a task, you start with Create, up here."},
@@ -42,7 +49,7 @@ RECIPES: dict[str, dict[str, list[dict]]] = {
                     "I'll leave the actual creating to you."},
         ],
         "create_project": [
-            {"op": "navigate", "url": "https://app.asana.com/",
+            {"op": "navigate", "url": _ASANA_HOME,
              "say": "Let me open your Asana."},
             {"op": "point",
              "sel": "text=Crea progetto || [aria-label='Nuovo progetto o portfolio'] || [aria-label='Crea']",
@@ -55,15 +62,99 @@ RECIPES: dict[str, dict[str, list[dict]]] = {
                     "timeline — and add your tasks. I'll leave the rest to you."},
         ],
         "tour": [
-            {"op": "navigate", "url": "https://app.asana.com/",
+            {"op": "navigate", "url": _ASANA_HOME,
              "say": "Here's your Asana workspace."},
             {"op": "point", "sel": "[aria-label='Crea']",
              "say": "Create, up here, is where you add tasks and projects."},
             {"op": "point", "sel": "text=Le mie attività || [aria-label='Le mie attività']",
              "say": "My Tasks is your own to-do list across every project."},
+            {"op": "point", "sel": "[aria-label='Cerca'] || [placeholder='Cerca']",
+             "say": "Search up top finds any task or project fast."},
             {"op": "say",
              "say": "Your projects are in the sidebar on the left — open one "
                     "to see its tasks. That's the lay of the land."},
+        ],
+        "my_tasks": [
+            {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
+            {"op": "point", "sel": "text=Le mie attività || [aria-label='Le mie attività']",
+             "say": "My Tasks, here, is your personal to-do list."},
+            {"op": "reveal", "sel": "text=Le mie attività || [aria-label='Le mie attività']",
+             "say": "It pulls together everything assigned to you across every "
+                    "project, and you can sort it by due date or by project."},
+        ],
+        "add_section": [
+            {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
+            {"op": "reveal", "sel": "[aria-label^='Apri progetto'] || text=Monitoraggio dei compiti",
+             "say": "Open a project — sections organise its tasks into groups."},
+            {"op": "point", "sel": "text=Aggiungi sezione || [aria-label='Aggiungi sezione']",
+             "say": "Add section, here, creates a new group — like To do, "
+                    "Doing, Done — and you drag tasks into it."},
+        ],
+        "add_task_in_project": [
+            {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
+            {"op": "reveal", "sel": "[aria-label^='Apri progetto'] || text=Monitoraggio dei compiti",
+             "say": "Inside a project,"},
+            {"op": "point", "sel": "text=Aggiungi attività || [aria-label='Aggiungi attività']",
+             "say": "Add task, here, drops a new task straight into this "
+                    "project — type the name and hit enter."},
+        ],
+        "add_comment": [
+            {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
+            {"op": "reveal", "sel": _OPEN_TASK,
+             "say": "Open any task to see its detail panel."},
+            {"op": "point", "sel": "[aria-label='Commenta'] || [aria-label='Modifica commento'] || text=Commenta",
+             "say": "Down here is where you comment — @-mention someone and "
+                    "they get notified. That's how the discussion stays on the "
+                    "task itself."},
+        ],
+        "add_subtask": [
+            {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
+            {"op": "reveal", "sel": _OPEN_TASK, "say": "Open a task,"},
+            {"op": "point", "sel": "[aria-label='Aggiungi sottoattività']",
+             "say": "and Add subtask, here, breaks it into smaller steps, each "
+                    "with its own assignee and due date."},
+        ],
+        "set_due_date": [
+            {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
+            {"op": "reveal", "sel": _OPEN_TASK, "say": "Open a task,"},
+            {"op": "point", "sel": "[aria-label='Data di scadenza']",
+             "say": "and Due date, here, is where you set when it's due — you "
+                    "can even give it a start-to-end range."},
+        ],
+        "assign_task": [
+            {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
+            {"op": "reveal", "sel": _OPEN_TASK, "say": "Open a task,"},
+            {"op": "point",
+             "sel": "[aria-label='Aggiungi o rimuovi collaboratori da questa attività'] || [aria-label^='Aggiungi o rimuovi collaboratori']",
+             "say": "and the assignee and collaborators go here — pick who owns "
+                    "it and who should follow along."},
+        ],
+        "complete_task": [
+            {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
+            {"op": "reveal", "sel": _OPEN_TASK, "say": "Open a task,"},
+            {"op": "point",
+             "sel": "[aria-label='Contrassegna come completata'] || [aria-label^='Contrassegna come completata']",
+             "say": "and this check — Mark complete — closes it out. I'm just "
+                    "pointing, not clicking, so nothing changes."},
+        ],
+        "invite_member": [
+            {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
+            {"op": "point",
+             "sel": "text=Invita colleghi del team || text=Invita un collega",
+             "say": "Invite, down here, adds a teammate — you type their email "
+                    "and they can see and be assigned tasks."},
+        ],
+        "create_portfolio": [
+            {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
+            {"op": "point", "sel": "text=Portfolio || [aria-label='Portfolio']",
+             "say": "Portfolios, here, group several projects so you can watch "
+                    "their status in one place — good for a program view."},
+        ],
+        "search": [
+            {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
+            {"op": "point", "sel": "[aria-label='Cerca'] || [placeholder='Cerca']",
+             "say": "Search, up top, jumps to any task, project, or person — "
+                    "and you can build saved searches for advanced filters."},
         ],
     },
 }
