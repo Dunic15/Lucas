@@ -181,3 +181,63 @@ def test_connect_jira_bad_creds_store_nothing(monkeypatch, tmp_path):
                           "token": "typo"})
     assert r.status_code == 400 and "rejected" in r.json()["error"]
     assert store.get_org_oauth(user["org_id"], provider="jira") is None
+
+
+# ── OAuth (Atlassian 3LO) redirect flow ──
+def test_exchange_code_resolves_cloudid(monkeypatch):
+    monkeypatch.setattr(settings, "jira_client_id", "cid")
+    monkeypatch.setattr(settings, "jira_client_secret", "sec")
+
+    def fake_post(url, *, json=None, timeout=None):
+        return _Resp(200, {"access_token": "acc", "refresh_token": "ref"})
+
+    def fake_get(url, *, headers=None, timeout=None, params=None):
+        # accessible-resources → the org's Jira site + cloud id
+        return _Resp(200, [{"id": "cloud-123", "url": "https://acme.atlassian.net"}])
+
+    monkeypatch.setattr(jira_client.httpx, "post", fake_post)
+    monkeypatch.setattr(jira_client.httpx, "get", fake_get)
+    out = jira_client.exchange_code("the-code", "https://laura/oauth/jira/callback")
+    assert out["ok"] is True and out["refresh_token"] == "ref"
+    assert out["cloudid"] == "cloud-123" and out["site"] == "https://acme.atlassian.net"
+
+
+def test_oauth_grant_beats_token_and_targets_cloud_api(monkeypatch, tmp_path):
+    _fresh_store(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "session_secret", "sek")
+    monkeypatch.setattr(settings, "jira_client_id", "cid")
+    monkeypatch.setattr(settings, "jira_client_secret", "sec")
+    log: list[tuple] = []
+
+    def fake_post(url, *, json=None, timeout=None):  # refresh_token → access token
+        return _Resp(200, {"access_token": "acc-tok", "expires_in": 3600})
+
+    def fake_get(url, *, headers=None, timeout=None, params=None):
+        log.append((url, (headers or {}).get("Authorization", "")))
+        return _Resp(200, _PROJECTS)
+
+    monkeypatch.setattr(jira_client.httpx, "post", fake_post)
+    monkeypatch.setattr(jira_client.httpx, "get", fake_get)
+    store.set_org_oauth("org-o", "refresh-1", provider="jira-oauth",
+                        email="https://acme.atlassian.net", scopes="cloud-123")
+    jira_client._reset_brief_cache()
+    assert jira_client.connected("org-o") is True
+    jira_client.list_projects("org-o")
+    # Reads target the Atlassian cloud API with a Bearer token, not the site.
+    assert "api.atlassian.com/ex/jira/cloud-123" in log[-1][0]
+    assert log[-1][1] == "Bearer acc-tok"
+
+
+def test_oauth_connect_route_needs_app_config(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    _login(client)
+    monkeypatch.setattr(settings, "jira_client_id", "")
+    monkeypatch.setattr(settings, "jira_client_secret", "")
+    r = client.get("/oauth/jira/connect", follow_redirects=False)
+    assert r.status_code == 400  # no Atlassian app → honest error, no redirect
+
+    monkeypatch.setattr(settings, "jira_client_id", "cid")
+    monkeypatch.setattr(settings, "jira_client_secret", "sec")
+    r2 = client.get("/oauth/jira/connect", follow_redirects=False)
+    assert r2.status_code in (302, 307)
+    assert "auth.atlassian.com/authorize" in r2.headers["location"]

@@ -63,7 +63,9 @@ from . import (
     executor,
     gemini_ears,
     google_client,
+    graphiti_client,
     granola_client,
+    jira_client,
     actions,
     gmail_watcher,
     knowledge,
@@ -2153,6 +2155,87 @@ async def asana_oauth_callback(
     return _land("connected")
 
 
+# ── Jira (Atlassian 3LO) OAuth: "Connect Jira" → login → connected ──
+# Mirrors the Asana flow. Requires the Atlassian OAuth app env (JIRA_CLIENT_ID/
+# SECRET); without it the Connections card falls back to the paste-a-token flow.
+JIRA_STATE_COOKIE = "laura_jira_oauth_state"
+JIRA_STATE_PURPOSE = "jira_state"
+
+
+def _jira_redirect_uri() -> str:
+    return f"{settings.public_base_url.rstrip('/')}/oauth/jira/callback"
+
+
+@app.get("/oauth/jira/connect")
+def jira_oauth_connect(request: Request):
+    """Start Jira OAuth: bounce the owner to Atlassian's login/consent screen."""
+    if not jira_client.oauth_available():
+        return JSONResponse({"error": "JIRA_CLIENT_ID/SECRET are not set."},
+                            status_code=400)
+    if err := _oauth_login_required(request):
+        return err
+    nonce, signed_state = auth.issue_oauth_state(JIRA_STATE_PURPOSE)
+    params = {
+        "audience": "api.atlassian.com",
+        "client_id": settings.jira_client_id,
+        "scope": jira_client.OAUTH_SCOPES,
+        "redirect_uri": _jira_redirect_uri(),
+        "state": signed_state,
+        "response_type": "code",
+        "prompt": "consent",
+    }
+    resp = RedirectResponse(jira_client._AUTHORIZE_URL + "?" + urlencode(params))
+    resp.set_cookie(
+        JIRA_STATE_COOKIE, nonce, max_age=auth.STATE_TTL_SECONDS,
+        httponly=True, samesite="lax",
+        secure=settings.public_base_url.startswith("https"), path="/oauth",
+    )
+    return resp
+
+
+@app.get("/oauth/jira/callback")
+async def jira_oauth_callback(
+    request: Request, code: str = "", state: str = "", error: str = ""
+):
+    """Finish Jira OAuth: verify state, exchange the code, store the grant
+    (encrypted per-org, provider="jira-oauth"; cloud id in scopes), land back on
+    Connections. Any failure lands with ?jira=error — no half-connected state."""
+    def _land(result: str):
+        resp = RedirectResponse(f"/dashboard?jira={result}", status_code=302)
+        resp.delete_cookie(JIRA_STATE_COOKIE, path="/oauth")
+        return resp
+
+    if error or not code:
+        return _land("error")
+    if err := _oauth_login_required(request):
+        return err
+    cookie_nonce = request.cookies.get(JIRA_STATE_COOKIE, "")
+    if not auth.check_oauth_state(state, cookie_nonce, JIRA_STATE_PURPOSE):
+        return _land("error")
+
+    exchanged = await run_in_threadpool(
+        jira_client.exchange_code, code, _jira_redirect_uri()
+    )
+    if not exchanged.get("ok") or not exchanged.get("refresh_token"):
+        return _land("error")
+    user = auth.current_user(request)
+    org = user["org_id"] if user else settings.demo_org_id
+    try:
+        stored = await run_in_threadpool(
+            lambda: store.set_org_oauth(
+                org, exchanged["refresh_token"], provider="jira-oauth",
+                email=str(exchanged.get("site") or ""),
+                scopes=str(exchanged.get("cloudid") or ""),  # cloud id → reads
+            )
+        )
+    except RuntimeError:
+        return _land("error")  # no encryption key — fails closed
+    if not stored:
+        return _land("error")
+    jira_client._reset_brief_cache()
+    return _land("connected")
+
+
 # ── Granola: pull a real finished transcript (post-meeting only) ──
 @app.get("/granola/notes")
 def granola_notes(limit: int = 20) -> JSONResponse:
@@ -2353,7 +2436,15 @@ async def _start_avatar_session(
             org_id
         )
 
-    carryover, folder, asana_snapshot, reg, cal_brief, asana_live = await asyncio.gather(
+    def _jira_brief_sync() -> str:
+        # Jira open-issues snapshot for the PM avatar's grounding, mirroring the
+        # Asana brief. Org-level gate (connected); TTL-cached in jira_client.
+        if not jira_client.connected(org_id):
+            return ""
+        return jira_client.workspace_brief(org_id) or ""
+
+    (carryover, folder, asana_snapshot, reg, cal_brief, asana_live,
+     jira_snapshot) = await asyncio.gather(
         _quiet(run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org_id)),
         _quiet(
             run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id)
@@ -2364,6 +2455,7 @@ async def _start_avatar_session(
         _quiet(run_in_threadpool(tool_registry.assemble, org_id, avatar)),
         _quiet(run_in_threadpool(google_client.calendar_brief, org_id)),
         _quiet(run_in_threadpool(_asana_live_sync)),
+        _quiet(run_in_threadpool(_jira_brief_sync)),
     )
     session.asana_live = bool(asana_live)
     session.memory_brief = carryover or ""
@@ -2385,6 +2477,19 @@ async def _start_avatar_session(
             f"[Asana workspace — snapshot from meeting start{_asana_note}]\n"
             f"{asana_snapshot}\n\n" + (session.memory_brief or "")
         )
+    if jira_snapshot:
+        session.memory_brief = (
+            "[Jira — open issues snapshot from meeting start]\n"
+            f"{jira_snapshot}\n\n" + (session.memory_brief or "")
+        )
+    # Feed the workspace snapshot(s) into the org's knowledge graph (graphiti,
+    # optional/off by default). Off the hot path, best-effort; strong-ref'd task.
+    # (KEEP — merges keep reverting this wiring.)
+    _kg_src = "\n\n".join(s for s in (asana_snapshot, jira_snapshot) if s)
+    if _kg_src and graphiti_client.enabled():
+        _kg_task = asyncio.create_task(graphiti_client.ingest(org_id, _kg_src))
+        _graphiti_tasks.add(_kg_task)
+        _kg_task.add_done_callback(_graphiti_tasks.discard)
     if reg:
         session.tool_registry = reg
         tools_brief = tool_registry.brief(reg)
@@ -4287,6 +4392,10 @@ def _in_opening_grace(session: store.Session) -> bool:
 # pattern as _summary_tasks above).
 _self_intro_tasks: set = set()
 
+# Strong refs to in-flight graphiti ingest tasks (fired off the join path).
+# KEEP — merges keep reverting this.
+_graphiti_tasks: set = set()
+
 # Recheck cadence while waiting for the floor to open before the self-intro.
 _SELF_INTRO_RECHECK_SECONDS = 2.0
 
@@ -5219,6 +5328,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if (
             settings.ack_enabled
             and called
+            # Wake-word mode: stay SILENT until the actual answer — no "Sure —"
+            # ack over a still-talking speaker (owner ask 2026-07-20). KEEP THIS
+            # — a merge has reverted it 3x; the answer already waits for the
+            # final (which lands after the pause), so no ack is needed here.
+            and not _wake_required(avatar)
             # Ack discipline: partials are noisy half-words, so the ack (an
             # audible "Sure —") needs the EXACT name — a fuzzy match on a
             # partial fragment must never make her speak. And wait until a
@@ -6270,6 +6384,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if (
         settings.ack_enabled
         and called
+        # Wake-word mode stays silent until the real answer (owner ask
+        # 2026-07-20; KEEP — reverted 3x by merges). The final lands after the
+        # speaker's pause, so the answer already waits for them to finish.
+        and not _wake_required(avatar)
         and not wants_web_search(question)
         and time.time() - session.last_ack_at > 6.0
     ):
@@ -6330,6 +6448,19 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # score), read back after the stream ends to gate the interjection escape —
     # no second model call. Only consulted on the hand-raise path below.
     _answer_meta: dict = {}
+    # Knowledge-graph recall (graphiti, optional/off by default): when the PM
+    # avatar is addressed, hybrid-search the org's temporal graph for THIS
+    # question and fold the facts into her grounding ahead of the flat snapshot.
+    # Gated on the join-cached asana_live flag (never a live DB read); recall()
+    # is timeout-bounded and never inits on the hot path. (KEEP — reverted by
+    # merges repeatedly.)
+    if graphiti_client.enabled() and getattr(session, "asana_live", False):
+        _kg = await graphiti_client.recall(session.org_id, question or text)
+        if _kg:
+            memory = (
+                "[Knowledge graph — facts relevant to this question]\n"
+                + _kg + "\n\n" + (memory or "")
+            )
     # Talk-over guard baseline (interject_recheck_floor_at_speak): snapshot the
     # transcript length and the turn-start clock BEFORE generation, so the
     # interjection floor check below can tell whether a human took the floor while

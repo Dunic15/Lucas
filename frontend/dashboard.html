@@ -1064,6 +1064,12 @@
   } else if(asanaResult){
     toast("Asana could not be connected. Nothing was stored — try Connect again.",true);
   }
+  var jiraResult=query.get("jira");
+  if(jiraResult==="connected"){
+    toast("Jira connected — Petra now reads your open issues at meeting start.",false);
+  } else if(jiraResult){
+    toast("Jira could not be connected. Nothing was stored — try Connect again.",true);
+  }
   if(connResult==="ok"){
     toast("Tool connected — Cedric can use it now.",false);
   } else if(connResult==="norefresh"){
@@ -1099,7 +1105,7 @@
       ?"Solo is activating — your allowance updates after Stripe confirms payment."
       :"Checkout was cancelled; your current plan is unchanged.",billingResult!=="success");
   }
-  if(oauthResult||billingResult||connResult||googleResult||asanaResult){
+  if(oauthResult||billingResult||connResult||googleResult||asanaResult||jiraResult){
     window.history.replaceState({},"",window.location.pathname);
   }
 
@@ -1135,7 +1141,7 @@
   // Otherwise, restore the view from the URL hash so a plain refresh keeps you
   // where you were (Connections stays Connections) instead of resetting to Overview.
   var _hashView=(window.location.hash||"").replace(/^#/,"");
-  if(oauthResult||googleResult||connResult||asanaResult){ go("connections"); }
+  if(oauthResult||googleResult||connResult||asanaResult||jiraResult){ go("connections"); }
   else if(VIEWS.indexOf(_hashView)>=0){ go(_hashView); }
   // After a norefresh return, Cedric's callback already burned its own retries —
   // a couple of delayed catalog re-fetches usually catch the Pipedream lag so
@@ -1926,6 +1932,7 @@
     var asanaConnected=!!(d.connections&&d.connections.asana);
     var asanaOAuth=!!(d.connections&&d.connections.asana_oauth);
     var jiraConnected=!!(d.connections&&d.connections.jira);
+    var jiraOAuth=!!(d.connections&&d.connections.jira_oauth);
     // Execution readiness — whether an APPROVED action actually runs, and on
     // what. native_executor is the master switch (env NATIVE_EXECUTOR); off =
     // approvals route to Cedric. The two connection chips are the accounts
@@ -1996,20 +2003,24 @@
             'style="flex:1;min-width:120px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
             '<button class="btn primary" data-asana-on>Connect</button>'))+
       '</div></div>'+
-      // ── Jira (native PM connector) — real self-serve connect via a Jira Cloud
-      //    API token (site + email + token, verified LIVE server-side, stored
-      //    encrypted per-org). No deploy credentials needed. ──
+      // ── Jira (native PM connector) — one-click OAuth when the Atlassian app
+      //    is configured (Connect Jira → Atlassian login → connected); otherwise
+      //    the paste-a-token fallback (works with no deploy credentials). ──
       '<div class="conn"><div class="nm">'+LOGO_JIRA+' Jira <span class="stchip" style="margin-left:6px">native</span></div>'+
-      '<div class="ds">Avatars read your open issues when they join (owners, due dates). Connect with your Jira site + email + an API token (Jira → Account settings → Security → API tokens).</div>'+
+      '<div class="ds">Avatars read your open issues when they join (owners, due dates).'+
+      (jiraOAuth||jiraConnected?'':' Connect with your Jira site + email + an API token (Jira → Account settings → Security → API tokens).')+'</div>'+
       (jiraConnected
         ? '<div class="foot"><span class="cstat on"><b></b>Connected</span>'+
           '<button class="btn" data-jira-off>Disconnect</button></div>'
-        : '<div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">'+
-            '<input type="text" id="jira-site" placeholder="https://yourco.atlassian.net" aria-label="Jira site URL" autocomplete="off" style="background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
-            '<input type="text" id="jira-email" placeholder="you@company.com" aria-label="Jira account email" autocomplete="off" style="background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
-            '<input type="password" id="jira-token" placeholder="Jira API token" aria-label="Jira API token" autocomplete="off" style="background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
-            '<button class="btn primary" data-jira-on style="align-self:flex-start">Connect Jira</button>'+
-          '</div>')+
+        : (jiraOAuth
+          ? '<div class="foot"><span class="cstat"><b></b>Not connected</span>'+
+            '<a class="btn primary" style="text-decoration:none" href="/oauth/jira/connect">Connect Jira</a></div>'
+          : '<div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">'+
+              '<input type="text" id="jira-site" placeholder="https://yourco.atlassian.net" aria-label="Jira site URL" autocomplete="off" style="background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
+              '<input type="text" id="jira-email" placeholder="you@company.com" aria-label="Jira account email" autocomplete="off" style="background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
+              '<input type="password" id="jira-token" placeholder="Jira API token" aria-label="Jira API token" autocomplete="off" style="background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
+              '<button class="btn primary" data-jira-on style="align-self:flex-start">Connect Jira</button>'+
+            '</div>'))+
       '</div>'+
       // ── Google Calendar (native) — shares ONE Google sign-in with Gmail
       //    (/oauth/google/connect grants both); googleNative drives both cards. ──
