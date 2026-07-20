@@ -239,3 +239,154 @@ def test_fake_visual_planner_modes_validate_or_reject(mode, page, expect):
     assert verdict["ok"] is expect
     if mode == "low_confidence":
         assert verdict["proposal"]["confidence"] < 0.6
+
+
+# ── anthropic planner branch (key-free: SDK mocked, no network) ─────────────
+
+def _enable_anthropic_planner(monkeypatch, key="k"):
+    monkeypatch.setattr(settings, "browser_visual_planner_enabled", True)
+    monkeypatch.setattr(settings, "browser_planner_provider", "anthropic")
+    monkeypatch.setattr(settings, "browser_planner_model", "")
+    monkeypatch.setattr(settings, "anthropic_api_key", key)
+
+
+def test_anthropic_provider_defaults_model_and_reuses_brain_key(monkeypatch):
+    _enable_anthropic_planner(monkeypatch)
+    p = multimodal.MultimodalPlanner()
+    assert p._provider == "anthropic"
+    assert p._model == "claude-opus-4-8"  # per-provider default
+    assert p._api_key == "k"  # settings.anthropic_api_key, no new secret
+
+
+def test_anthropic_provider_unconfigured_without_any_key(monkeypatch):
+    _enable_anthropic_planner(monkeypatch, key="")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("BROWSER_PLANNER_API_KEY", raising=False)
+    assert multimodal.get_visual_planner() is None
+
+
+def test_unknown_provider_fails_closed(monkeypatch):
+    _enable_anthropic_planner(monkeypatch)
+    monkeypatch.setattr(settings, "browser_planner_provider", "other")
+    monkeypatch.setattr(settings, "browser_planner_model", "m")
+    monkeypatch.setenv("BROWSER_PLANNER_API_KEY", "k")
+    p = multimodal.MultimodalPlanner()
+    with pytest.raises(multimodal.PlannerError):
+        p._invoke({}, "g", b"\x89PNG", ("navigate",))
+
+
+def test_media_type_sniffs_actual_bytes():
+    assert multimodal._media_type(b"\x89PNG\r\n") == "image/png"
+    assert multimodal._media_type(b"\xff\xd8\xff\xe0") == "image/jpeg"
+
+
+def test_strip_fences_unwraps_markdown_json():
+    fenced = "```json\n{\"a\": 1}\n```"
+    assert json.loads(multimodal._strip_fences(fenced)) == {"a": 1}
+    assert multimodal._strip_fences('{"a": 1}') == '{"a": 1}'
+
+
+class _FakeBlock:
+    type = "text"
+
+    def __init__(self, text):
+        self.text = text
+
+
+class _FakeUsage:
+    input_tokens = 11
+    output_tokens = 7
+
+
+class _FakeResponse:
+    stop_reason = "end_turn"
+    usage = _FakeUsage()
+
+    def __init__(self, text):
+        self.content = [_FakeBlock(text)]
+
+
+def test_anthropic_invoke_parses_json_and_reports_usage(monkeypatch):
+    _enable_anthropic_planner(monkeypatch)
+    p = multimodal.MultimodalPlanner()
+    captured = {}
+
+    import anthropic
+
+    class _FakeMessages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return _FakeResponse('```json\n{"operation": "navigate"}\n```')
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            captured["client_kwargs"] = kwargs
+            self.messages = _FakeMessages()
+
+    monkeypatch.setattr(anthropic, "Anthropic", _FakeClient)
+    raw, usage = p._invoke({"url": "https://example.com", "elements": []},
+                           "goal", b"\x89PNG-bytes", ("navigate",))
+    assert raw == {"operation": "navigate"}
+    assert usage == {"input_tokens": 11, "output_tokens": 7}
+    assert captured["model"] == "claude-opus-4-8"
+    # The screenshot went as a base64 image block with a sniffed media type.
+    img = captured["messages"][0]["content"][0]
+    assert img["type"] == "image"
+    assert img["source"]["media_type"] == "image/png"
+    # The key stays inside the client construction, never in the message.
+    assert captured["client_kwargs"]["api_key"] == "k"
+
+
+def test_anthropic_invoke_maps_errors_and_never_leaks(monkeypatch):
+    _enable_anthropic_planner(monkeypatch)
+    p = multimodal.MultimodalPlanner()
+
+    import anthropic
+    import httpx
+
+    def _raising_client(exc):
+        class _M:
+            def create(self, **kwargs):
+                raise exc
+
+        class _C:
+            def __init__(self, **kwargs):
+                self.messages = _M()
+
+        return _C
+
+    # Transport-shaped errors are retryable (mapped to _TransportError).
+    conn_err = anthropic.APIConnectionError(
+        request=httpx.Request("POST", "https://api.anthropic.com"))
+    monkeypatch.setattr(anthropic, "Anthropic", _raising_client(conn_err))
+    with pytest.raises(multimodal._TransportError):
+        p._invoke_anthropic({}, "g", b"png", ("navigate",))
+
+    # Anything else fails closed with the class name only — no payload/body.
+    secret_exc = ValueError("body-with-secret sk-DO-NOT-LEAK")
+    monkeypatch.setattr(anthropic, "Anthropic", _raising_client(secret_exc))
+    with pytest.raises(multimodal.PlannerError) as ei:
+        p._invoke_anthropic({}, "g", b"png", ("navigate",))
+    assert "sk-DO-NOT-LEAK" not in str(ei.value)
+
+
+def test_anthropic_refusal_fails_closed(monkeypatch):
+    _enable_anthropic_planner(monkeypatch)
+    p = multimodal.MultimodalPlanner()
+
+    import anthropic
+
+    class _Refused(_FakeResponse):
+        stop_reason = "refusal"
+
+    class _M:
+        def create(self, **kwargs):
+            return _Refused("")
+
+    class _C:
+        def __init__(self, **kwargs):
+            self.messages = _M()
+
+    monkeypatch.setattr(anthropic, "Anthropic", _C)
+    with pytest.raises(multimodal.PlannerError):
+        p._invoke_anthropic({}, "g", b"png", ("navigate",))

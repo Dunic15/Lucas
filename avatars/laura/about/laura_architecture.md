@@ -2,7 +2,7 @@
 
 **Owner:** Product/engineering
 **Applies to:** Current Laura backend and live meeting workflow
-**Last reviewed:** 2026-07-17
+**Last reviewed:** 2026-07-20
 
 ## What Laura is
 
@@ -42,6 +42,16 @@ female voice), synthesized server-side and shipped inside the speak messages
 with word-level timings for lip-sync; fixed lines (acknowledgments, fillers)
 are pre-synthesized at boot so they play instantly. If ElevenLabs is
 unavailable the page falls back to free edge-tts.
+
+For tasks that need the live web, Laura has a supervised **browser
+operator**: a real Chrome browser in the cloud via **Browserbase**, driven
+one step at a time. Her visual "eyes" are **Claude** (Anthropic) reading a
+bounded screenshot plus a sanitized page structure and proposing exactly one
+action, which a deterministic policy engine re-checks before it runs.
+Navigation is restricted to an allowlist of domains, writes stay behind
+explicit approval doors, and credentials or page secrets never enter the
+model's view. The whole capability sits behind feature flags and is
+read-only by default.
 
 Live transcription uses **Deepgram `nova-3` in multilingual mode** through
 Recall (`RECALL_TRANSCRIPTION_PROVIDER=deepgram`), so meetings can mix Italian
