@@ -30,7 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app import avatars, brain, ledger, store, tools
+from app import avatars, ledger, store, tools
+from app.brain import engine as brain
 from app.config import settings
 
 # The exact production pair.

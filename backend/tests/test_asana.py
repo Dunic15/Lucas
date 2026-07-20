@@ -206,7 +206,7 @@ def test_auto_execute_asana_gated_and_selective(monkeypatch, tmp_path):
 # ── typed-action producer: grounding ──
 
 def test_stub_producer_maps_leftovers_to_asana_only_when_allowed():
-    from app.brain import type_actions
+    from app.brain.engine import type_actions
 
     actions = [
         {"item": "Update the roadmap deck before Friday", "action_id": "x1"},
@@ -221,7 +221,7 @@ def test_stub_producer_maps_leftovers_to_asana_only_when_allowed():
 
 
 def test_sanitize_asana_grounding_rules():
-    from app.brain import _sanitize_typed
+    from app.brain.engine import _sanitize_typed
 
     action = {"item": "Fix the login bug", "owner": "", "deadline": "2026-08-01"}
     spec = _sanitize_typed(

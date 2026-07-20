@@ -21,9 +21,10 @@ import random
 import re
 import time
 
-from . import llm, meeting_state, tools
-from .avatars import Avatar
-from .config import settings
+from . import llm, tools
+from .. import meeting_state
+from ..avatars import Avatar
+from ..config import settings
 from .rag import retrieve, retrieve_about, Retrieved
 
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
