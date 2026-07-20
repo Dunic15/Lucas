@@ -34,6 +34,102 @@ _SITES = {
 _ACTIVE: dict[str, tuple[str, str]] = {}  # meeting_ref -> (org_id, session_id)
 
 
+# Per-site, per-task BOUNDED goal strings (≤300 chars, server-built from the
+# canonical task key — never the utterance). Each is read-only by construction:
+# "point out … do not change anything", so the walkthrough shows WHERE without
+# performing the write (the read-only posture enforces this regardless).
+_TASK_GOALS = {
+    "asana": {
+        "create_task": "Read-only demo: show how to create a task in Asana. "
+                       "Open a project and point out the Add-task control. Do "
+                       "not create anything.",
+        "change_assignee": "Read-only demo: show how to change a task's "
+                           "assignee in Asana. Open a task and point out the "
+                           "Assignee field. Do not change anything.",
+        "set_due_date": "Read-only demo: show how to set a task's due date in "
+                        "Asana. Open a task and point out the Due-date field. "
+                        "Do not change anything.",
+        "create_project": "Read-only demo: show how to start a new project in "
+                          "Asana. Point out the New-project control. Do not "
+                          "create anything.",
+        "add_section": "Read-only demo: show how to add a section to a project "
+                       "in Asana. Open a project and point out where sections "
+                       "are added. Do not change anything.",
+        "add_comment": "Read-only demo: show how to comment on a task in "
+                       "Asana. Open a task and point out the comment box. Do "
+                       "not post anything.",
+        "tour": "Read-only tour of the Asana workspace: show the sidebar, a "
+                "project, and a task. Do not change anything.",
+    },
+}
+
+# Operation → rotating narration lines. Built from the OPERATION ONLY (never
+# page content), so nothing the browser reads is ever spoken aloud.
+_STEP_LINES = {
+    "navigate": ["Let me pull that up.", "Opening that view.",
+                 "Heading there now."],
+    "click": ["I'll open this here.", "Selecting that.",
+              "Let's go in here."],
+    "scroll": ["Scrolling to find it.", "Let me scroll down."],
+    "type": ["This is where you'd type it in.",
+             "Here's the field you'd fill in."],
+    "read": ["Here's what we're looking at.", "Reading this."],
+}
+_STEP_DEFAULT = ["Next step.", "And here."]
+
+_CLOSING = {
+    "finished": "That's the flow — that's how you'd do it.",
+    "awaiting_approval": "That's the point where you'd confirm it — I'll leave "
+                         "the actual change to you.",
+    "write_rejected_read_only": "That's where you'd make the change — I only "
+                                "show the steps, I don't change anything.",
+    "budget_exhausted": "I'll stop there — that's the gist of it.",
+    "stalled": "I'll stop there — that's the main idea.",
+    "expired": "The view timed out, but that's the path.",
+    "blocked": "I can't go further there, but that's the path.",
+    "disabled": "",
+    "error": "",
+}
+
+
+def _narration_for(operation: str, index: int) -> str:
+    lines = _STEP_LINES.get(operation, _STEP_DEFAULT)
+    return lines[index % len(lines)]
+
+
+def run_walkthrough(org_id: str, session_id: str, *, site_label: str,
+                    task_key: str, on_narrate) -> dict:
+    """Drive the visual planner through a read-only how-to on an ALREADY-open,
+    presented session, narrating each step via ``on_narrate`` (a thread-safe
+    callback the caller supplies). Returns {ok, outcome, closing}. Sync
+    (threadpool). Never raises — a walkthrough fault must not touch the meeting.
+
+    ``on_narrate(line: str)`` is called once per action, BEFORE it happens, so
+    the voice leads the on-screen click. The line is built from the operation
+    only — never from page content."""
+    goal = (_TASK_GOALS.get(site_label, {}) or {}).get(task_key, "")
+    if not goal:
+        return {"ok": False, "outcome": "unknown_task", "closing": ""}
+    try:
+        from .browser import coordinator
+
+        def _on_step(index: int, operation: str, _proposal: dict) -> None:
+            try:
+                on_narrate(_narration_for(operation, index))
+            except Exception:  # noqa: BLE001 — narration never breaks the run
+                pass
+
+        result = coordinator.run(org_id, session_id, goal,
+                                 principal="meeting", on_step=_on_step)
+        outcome = str(result.get("outcome") or "error")
+        return {"ok": outcome in ("finished", "awaiting_approval",
+                                  "write_rejected_read_only"),
+                "outcome": outcome,
+                "closing": _CLOSING.get(outcome, "")}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "outcome": type(exc).__name__, "closing": ""}
+
+
 def trigger_enabled() -> bool:
     """Both switches: the operator must be on AND the meeting trigger opted in.
     Off by default — with either off this whole module no-ops."""
