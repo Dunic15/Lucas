@@ -376,8 +376,9 @@ def test_oauth_callback_stores_grant_and_lands_connected(monkeypatch, tmp_path):
         lambda tok: {"ok": True, "email": "pm@acme.com",
                      "workspace": "Acme HQ", "workspace_gid": "ws-9"},
     )
-    nonce, signed = auth.issue_oauth_state(main_module.ASANA_STATE_PURPOSE)
-    client.cookies.set(main_module.ASANA_STATE_COOKIE, nonce)
+    from app.api import oauth as _oauth_api  # oauth consts extracted from main
+    nonce, signed = auth.issue_oauth_state(_oauth_api.ASANA_STATE_PURPOSE)
+    client.cookies.set(_oauth_api.ASANA_STATE_COOKIE, nonce)
 
     r = client.get(
         f"/oauth/asana/callback?code=c-1&state={signed}", follow_redirects=False
