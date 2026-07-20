@@ -1,0 +1,1 @@
+Trigger the one-shot PR298 Autofix workflow. This file is removed before merge.
