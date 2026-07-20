@@ -1,0 +1,138 @@
+name: PR298 Autofix
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply verified fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f"anchor missing in {path}: {old[:80]!r}")
+              if text.count(old) != 1:
+                  raise SystemExit(f"anchor not unique in {path}: {text.count(old)}")
+              p.write_text(text.replace(old, new, 1))
+
+          config = Path("backend/app/config.py")
+          text = config.read_text()
+          if "graphiti_enabled: bool" not in text:
+              anchor = '    asana_client_secret: str = ""\n\n'
+              block = '''    asana_client_secret: str = ""
+
+    # ── Knowledge-graph grounding (Graphiti, optional) ──────────────────
+    # Temporal workspace memory for Petra. OFF by default; enabling requires
+    # graphiti-core plus a provisioned Neo4j/FalkorDB instance. Every episode
+    # and lookup remains partitioned by org_id.
+    graphiti_enabled: bool = False
+    graphiti_backend: str = "neo4j"
+    graphiti_uri: str = ""
+    graphiti_user: str = "neo4j"
+    graphiti_password: str = ""
+    # The live recall path and off-path writes are both strictly bounded.
+    graphiti_recall_timeout_s: float = 1.0
+    graphiti_recall_results: int = 8
+    graphiti_ingest_timeout_s: float = 20.0
+
+'''
+              if anchor not in text:
+                  raise SystemExit("Graphiti config insertion anchor missing")
+              config.write_text(text.replace(anchor, block, 1))
+
+          replace_once(
+              "backend/app/main.py",
+              '''            settings.ack_enabled
+            and called
+            # Ack discipline:''',
+              '''            settings.ack_enabled
+            and called
+            # Wake-word avatars must listen until the speaker finishes. Their
+            # partial transcript may establish addressing, but must never speak
+            # an acknowledgement over the still-talking human.
+            and not _wake_required(avatar)
+            # Ack discipline:''',
+          )
+
+          replace_once(
+              "backend/tests/test_dashboard_approve.py",
+              '''    assert body["dispatch_reason"] == "not_configured"
+    assert "Cedric isn't connected" in body["execution_error"]
+    st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
+    assert st and st["status"] == "failed"
+    assert "Cedric isn't connected" in st["detail"]''',
+              '''    assert body["dispatch_reason"] == "laura_native_only"
+    assert "Laura could not execute" in body["execution_error"]
+    st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
+    assert st and st["status"] == "failed"
+    assert "Laura could not execute" in st["detail"]''',
+          )
+
+          replace_once(
+              "backend/tests/test_action_deps_release.py",
+              '''def test_cedric_routed_release_says_it_awaits_its_own_executor(client, sent):
+    """Laura cannot execute a cedric-routed action. Its deps landing unparks it,
+    but the receipt must not imply Laura ran it — and it must not be re-swept
+    forever."""
+    org = settings.demo_org_id
+    _seed(org, "dep1")
+    _seed(org, "a1", typed=_TYPED, execution_route="cedric", dependencies=["dep1"])
+    _approve(client, "a1")
+
+    ledger.set_action_status("dep1", "done", "", org_id=org)
+
+    assert not sent
+    status = (ledger.action_statuses(["a1"], org_id=org).get("a1") or {})
+    assert status["status"] == "approved"
+    assert "awaiting its own executor" in status["detail"]
+    assert store.get_action_approval(org, "a1")["blocked_on"] in ("", "[]")''',
+              '''def test_historical_cedric_routed_release_migrates_to_laura(client, sent):
+    """A historical typed action may still carry execution_route=cedric. Once
+    its dependencies land, Laura migrates supported types to her native runtime
+    exactly once and owns the canonical receipt."""
+    org = settings.demo_org_id
+    _seed(org, "dep1")
+    _seed(org, "a1", typed=_TYPED, execution_route="cedric", dependencies=["dep1"])
+    _approve(client, "a1")
+
+    ledger.set_action_status("dep1", "done", "", org_id=org)
+
+    assert len(sent) == 1
+    status = (ledger.action_statuses(["a1"], org_id=org).get("a1") or {})
+    assert status["status"] == "done"
+    assert "Laura native" in status["detail"]
+    assert store.get_action_approval(org, "a1")["blocked_on"] in ("", "[]")''',
+          )
+
+          for path in (
+              ".github/workflows/pr298-debug.yml",
+              ".github/workflows/pr298-source.yml",
+              ".github/workflows/pr298-autofix.yml",
+          ):
+              Path(path).unlink(missing_ok=True)
+          PY
+
+      - name: Commit fixes to the PR branch
+        run: |
+          git config user.name "Laura CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: complete native action migration and restore CI"
+          git push origin HEAD:${{ github.head_ref }}
