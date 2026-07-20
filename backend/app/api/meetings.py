@@ -2,8 +2,8 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from app import auth, cedric, ledger, store
-from app.config import settings, REPO_ROOT
+from .. import auth, cedric, ledger, store
+from ..config import settings, REPO_ROOT
 
 router = APIRouter()
 FRONTEND_DIR = REPO_ROOT / "frontend"

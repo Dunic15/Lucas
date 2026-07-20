@@ -3,7 +3,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app import auth, avatars, store, gemini_ears
+from .. import auth, avatars, store, gemini_ears
 
 router = APIRouter()
 

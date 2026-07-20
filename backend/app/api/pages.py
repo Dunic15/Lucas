@@ -6,8 +6,8 @@ from pathlib import Path
 from fastapi import APIRouter
 from fastapi.responses import FileResponse, JSONResponse, Response
 
-from app import avatars
-from app.config import settings, REPO_ROOT
+from .. import avatars
+from ..config import settings, REPO_ROOT
 
 router = APIRouter()
 FRONTEND_DIR = REPO_ROOT / "frontend"

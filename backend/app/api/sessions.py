@@ -1,7 +1,7 @@
 from __future__ import annotations
 """Session lifecycle routes: /sessions/start + /sessions/{bot_id}/*. Extracted
 from main.py (Path A: shared meeting-lifecycle helpers resolve via a
-function-local `import app.main as _main`, preserving monkeypatch identity)."""
+function-local `from .. import main as _main`, preserving monkeypatch identity)."""
 import asyncio, hmac, weakref
 from typing import Optional
 
@@ -10,9 +10,9 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app import (actions, anam_client, auth, avatars, cedric, control_plane,
+from .. import (actions, anam_client, auth, avatars, cedric, control_plane,
                  entitlements, gpu_runtime, ledger, recall_client, runpod_runtime, store)
-from app.core.config import settings
+from ..core.config import settings
 
 router = APIRouter()
 
@@ -67,7 +67,7 @@ async def _reconcile_after_start(meeting_url: str, bot_id: str) -> None:
     """Give a racing duplicate bot a moment to register with Recall, then keep
     the best variant and drop the rest — same as the Gmail auto-join loop, but
     fire-and-forget so the /sessions/start response returns immediately."""
-    import app.main as _main  # Path A: shared lifecycle helpers resolve on main at call time
+    from .. import main as _main  # Path A: shared lifecycle helpers resolve on main at call time
     try:
         await asyncio.sleep(4)
         await run_in_threadpool(_main._reconcile_duplicate_bots, meeting_url, bot_id)
@@ -121,7 +121,7 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     # A valid cookie stamps the session with the user's org for later scoping.
     # A PER-ORG machine bearer (org_tokens) both authenticates the start and
     # scopes it to ITS org — the service twin of the cookie principal.
-    import app.main as _main  # Path A: shared lifecycle helpers resolve on main at call time
+    from .. import main as _main  # Path A: shared lifecycle helpers resolve on main at call time
     user = auth.current_user(request)
     token_org: Optional[str] = None
     if user is None:
@@ -254,7 +254,7 @@ async def end_session(bot_id: str, request: Request) -> JSONResponse:
     # may end ONLY sessions of ITS org — never demo/unowned/another org's —
     # so a token that can start a session can also stop its meter (PR D
     # symmetry) without gaining the global bearer's reach.
-    import app.main as _main  # Path A: shared lifecycle helpers resolve on main at call time
+    from .. import main as _main  # Path A: shared lifecycle helpers resolve on main at call time
     user = auth.current_user(request)
     token_org: Optional[str] = None
     if user is None:
@@ -307,7 +307,7 @@ async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
     Used by the orchestrator when a calendar event moves or is cancelled (it
     rebooks afterwards). `end` keeps its meaning: finalize + artifact.
     """
-    import app.main as _main  # Path A: shared lifecycle helpers resolve on main at call time
+    from .. import main as _main  # Path A: shared lifecycle helpers resolve on main at call time
     # PER-ORG machine bearers are first-class here (PR D): they authenticate
     # like the global bearer but may cancel ONLY their own org's sessions. The
     # global bearer keeps its full legacy service scope; key-free stays open.

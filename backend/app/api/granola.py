@@ -3,8 +3,8 @@ Extracted from main.py."""
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from app import granola_client
-from app.config import settings
+from .. import granola_client
+from ..config import settings
 
 router = APIRouter()
 

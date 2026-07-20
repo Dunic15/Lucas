@@ -10,11 +10,11 @@ from starlette.concurrency import iterate_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from app import anam_client, auth, avatars
-from app.brain.engine import (answer_question, answer_question_stream,
+from .. import anam_client, auth, avatars
+from ..brain.engine import (answer_question, answer_question_stream,
                               answer_with_tools, post_meeting, wants_web_search)
-from app.core.config import REPO_ROOT
-from app.api.deps import _line_for
+from ..core.config import REPO_ROOT
+from .deps import _line_for
 
 router = APIRouter()
 FRONTEND_DIR = REPO_ROOT / "frontend"

@@ -8,10 +8,10 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
-from app import auth, avatars, cedric, gemini_ears, gmail_watcher, llm, recall_client, store, vendor_health
-from app.core.config import settings
-from app.brain.engine import effective_provider
-from app.api.deps import _gmail_state
+from .. import auth, avatars, cedric, gemini_ears, gmail_watcher, llm, recall_client, store, vendor_health
+from ..core.config import settings
+from ..brain.engine import effective_provider
+from .deps import _gmail_state
 
 router = APIRouter()
 

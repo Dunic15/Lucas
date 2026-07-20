@@ -8,8 +8,8 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from app import auth, store, google_client, asana_client, jira_client, recall_client
-from app.config import settings
+from .. import auth, store, google_client, asana_client, jira_client, recall_client
+from ..config import settings
 from .deps import _calendar_target_emails
 
 router = APIRouter()
