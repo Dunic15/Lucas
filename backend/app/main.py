@@ -6036,8 +6036,15 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # runs in a fire-and-forget task off this transcript→speak path; the ack
     # speak is the only thing on the turn. A browse fault never touches the
     # meeting (browser_meeting swallows its own errors).
-    if called and browser_meeting.trigger_enabled():
-        if detect_browse_dismiss(question):
+    # In a 1:1 room (only one human present) a browse request doesn't need her
+    # name — "open Asana and show me" is unambiguously for her, so the
+    # conversation stays fluid. In a group she still needs to be addressed
+    # (mirrors the leave-command 1:1 relaxation). The utterance is `question`
+    # when named, else the whole line.
+    _browse_solo = len(session.roster(avatar.name)) <= 1
+    if (called or _browse_solo) and browser_meeting.trigger_enabled():
+        _ask = question if called else text
+        if detect_browse_dismiss(_ask):
             async def _hide_browser() -> None:
                 closed = await run_in_threadpool(
                     browser_meeting.close_for_meeting, session.bot_id)
@@ -6046,14 +6053,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
                         session, {"type": "browser_view_hide"})
             asyncio.create_task(_hide_browser())
             return JSONResponse({"ok": True, "spoke": False, "browse_hide": True})
-        browse_ok, browse_site, browse_task = detect_browse_intent(question)
+        browse_ok, browse_site, browse_task = detect_browse_intent(_ask)
         # PII-safe telemetry: booleans + labels only, NEVER the utterance —
         # so a non-firing trigger is diagnosable (verb vs site) without logging
         # transcript content.
-        _bv, _bs = browse_signal(question)
-        print(f"[browse] called=True matched={browse_ok} verb={_bv} "
-              f"site_or_surface={_bs} site={browse_site!r} task={browse_task!r}",
-              flush=True)
+        _bv, _bs = browse_signal(_ask)
+        print(f"[browse] called={called} solo={_browse_solo} "
+              f"matched={browse_ok} verb={_bv} site_or_surface={_bs} "
+              f"site={browse_site!r} task={browse_task!r}", flush=True)
         if browse_ok:
             spoken_name = browser_meeting.site_spoken_name(browse_site)
             loop = asyncio.get_running_loop()

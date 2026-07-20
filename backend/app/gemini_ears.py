@@ -273,6 +273,17 @@ class EarsSession:
                 "frasi brevi e naturali, come al telefono. Se non sai una "
                 "cosa, dillo brevemente. Non fare elenchi."
             )
+            # When the supervised browser is on, she CAN open and show
+            # connected tools (e.g. Asana) and web pages live on her tile —
+            # never deny it. The action itself is triggered separately; here we
+            # only stop the reply brain from wrongly saying "I can't".
+            if settings.browser_meeting_trigger_enabled:
+                system += (
+                    " Puoi anche aprire e mostrare dal vivo strumenti connessi "
+                    "come Asana e pagine web sul tuo schermo quando qualcuno te "
+                    "lo chiede, e guidare passo passo: non dire mai che non "
+                    "puoi navigare o mostrare Asana."
+                )
         else:
             # Ears-only: TEXT modality with a 1-token cap — we consume the
             # *turn boundary* and the input transcription, not Gemini's answer.
