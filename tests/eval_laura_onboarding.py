@@ -24,7 +24,8 @@ BACKEND_DIR = REPO_ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app import avatars, brain, meeting_state  # noqa: E402
+from app import avatars, meeting_state  # noqa: E402
+from app.brain import engine as brain  # noqa: E402  # noqa: E402
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 MEETINGS_DIR = FIXTURES_DIR / "meetings"

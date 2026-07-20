@@ -83,7 +83,7 @@ from . import (
     tts,
     vendor_health,
 )
-from .brain import (
+from .brain.engine import (
     SEARCH_ANNOUNCE_LINES,
     answer_question,
     answer_question_stream,

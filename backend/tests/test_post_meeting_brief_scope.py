@@ -7,7 +7,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import avatars, brain, main
+from app import avatars, main
+from app.brain import engine as brain
 from app.config import settings
 
 

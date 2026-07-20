@@ -116,7 +116,7 @@ def build_reply(org: str, text: str) -> str:
     """One Cedric chat reply for ``text``. Stub provider = deterministic
     canned line (key-free demo/suite); real providers get persona + org
     brief + recent turns."""
-    from .. import brain  # lazy: brain resolves keyless configs to the stub
+    from ..brain import engine as brain  # lazy: brain resolves keyless configs to the stub
 
     if brain.effective_provider() == "stub":
         return (
