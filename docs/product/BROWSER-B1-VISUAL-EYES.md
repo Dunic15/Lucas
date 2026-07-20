@@ -31,12 +31,13 @@ screenshot + sanitized page structure
 | **Bounded coordinator (no unbounded loop)** | ✅ proven | step / consecutive-failure / replan / duration (injected clock) / model-call caps + session expiry, all tested |
 | **Guarded approval + exactly-once + receipt** | ✅ proven | inherited from B0's M0 path; post-action **visual verification** now attached to the receipt |
 | **Post-action visual verification** | ✅ proven (deterministic) | operator re-observes and runs `verify_expectation`; the planner never self-certifies |
-| **Real multimodal perception (real model)** | ❌ **UNPROVEN** | `MultimodalPlanner` targets the OpenAI Responses computer-use API but is inert without a key; exercised only by the credential-gated smoke |
-| **Real remote-browser operation (real pixels)** | ❌ **UNPROVEN** | `BrowserbaseProvider` implements the real Playwright/CDP connection + screenshots but is inert without keys; only the smoke exercises it |
+| **Real multimodal perception (real model)** | ✅ **PROVEN 2026-07-20** | credential-gated smoke ran green with `BROWSER_PLANNER_PROVIDER=anthropic` (`claude-opus-4-8`): real screenshot → real model → validated proposal (run record below) |
+| **Real remote-browser operation (real pixels)** | ✅ **PROVEN 2026-07-20** | real Browserbase session over CDP: navigate, observe, real screenshot bytes, clean close (run record below) |
 | **Real approved browser WRITE** | ❌ deferred | `BROWSER_ALLOW_WRITES=false` by default; a real reversible write is attempted only after the real-DOM/page-binding gate passes (a later step) |
 
-**No fake-provider result is ever substituted for the real-pixels gate.** Until
-the smoke below runs green with credentials, the last three rows stay UNPROVEN.
+**No fake-provider result is ever substituted for the real-pixels gate.** The
+smoke ran green with credentials on 2026-07-20 (record below); the WRITE row
+stays deferred.
 
 ## Components (all additive)
 
@@ -106,9 +107,15 @@ BROWSER_VISUAL_PLANNER_ENABLED=true \
 python3 backend/scripts/browser_b1_smoke.py
 ```
 
-**As of this branch the smoke has NOT been run** (no credentials in this
-environment): real multimodal perception and real remote-browser operation are
-**UNPROVEN**.
+**Run record — 2026-07-20 (PROVEN):** provider `browserbase` + planner
+`anthropic` / `claude-opus-4-8` (reusing the prod `ANTHROPIC_API_KEY` — no
+OpenAI key). Target `https://example.com`, demo org. Real screenshot
+15,362 bytes (digest `1054c33efcb0`), coordinator outcome `finished`,
+steps=0, replans=0, model_calls=1, 1,577 in / 174 out tokens, 13.3 s
+end-to-end, session closed cleanly. Caveat, recorded honestly: the target
+page is trivial, so the run proves the full real-pixels loop (screenshot →
+model plan → validation → execution path) in a single step; a multi-step
+navigation run on a richer allowlisted page has not been recorded yet.
 
 ## Deferred (beyond B1)
 
