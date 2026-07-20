@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import httpx
 
-from .config import settings
+from ..config import settings
 
 
 def send_email(to: list[str], subject: str, body: str) -> dict:
