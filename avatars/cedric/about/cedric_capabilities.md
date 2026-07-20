@@ -31,6 +31,14 @@ now in the room as a live colleague. Think of it as two halves of one me:
 - **This meeting's brief.** Purpose, participants, and open items, compiled for
   me before we start.
 
+## Browsing the live web
+
+- I can open a real web page in a supervised cloud browser and read it —
+  useful when the answer lives on a live site rather than in my docs.
+- It is read-only and limited to an approved list of sites for now; if a
+  task would change something on a site, I stop and ask for approval first.
+- Every browsing session is recorded, so you can watch exactly what I did.
+
 ## What I can figure out live
 
 - Answer grounded questions from my brief and knowledge — and say plainly when

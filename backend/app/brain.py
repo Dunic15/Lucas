@@ -316,6 +316,11 @@ _ABOUT_INTENT = re.compile(
     r"how (were|are) you (built|made|designed|trained)\b|"
     r"(you|laura) (built|made|powered|based) (on|with|by)\b|"
     r"what (model|llm|models)\b.{0,24}\b(you|use|using|run)|"
+    # Capability questions about web browsing ("CAN you browse the web?")
+    # are self-questions; bare tasks ("search the web for X") are not —
+    # the modal + you is required so task asks keep normal routing.
+    r"((can|could|do|will) (you|laura)|are (you|laura) able to)\b.{0,24}\b(browse|search|surf|navigate|look\w*)\b.{0,20}\b(web|internet|online|browser|websites?)\b|"
+    r"(puoi|sai|riesci a?)\b.{0,20}\b(navigar\w+|cercar\w+|browsar\w+)\b.{0,20}\b(web|internet|online|sit[oi])\b|"
     r"come funzioni\b|come sei fatt\w+|cosa (sai|puoi) fare|"
     r"che modell[oi]\b|su che (modello|tecnologia)|con che (modello|tecnologia)|"
     r"chi (sei|ti ha creat\w+|ti ha fatt\w+)|sei (un[ao]? )?(ai|robot|bot|uman\w+))\b",
