@@ -726,3 +726,42 @@ def test_recipe_cancel_stops(cp, monkeypatch):
         on_narrate=spoken.append, cancel=lambda: True)  # cancel immediately
     assert walk["outcome"] == "cancelled"
     browser_meeting.close_for_meeting("rcx")
+
+
+def test_self_service_connect_flow(cp):
+    """No saved login → begin_connect mints a login session; once the human
+    leaves the login page, finish_connect persists the identity."""
+    from app import browser_meeting
+    from app.browser.fake_provider import FakeProvider
+    org = _org(cp, "connect")
+    assert browser_meeting.has_identity(org, "asana") is False
+
+    res = browser_meeting.begin_connect(org, "asana", meeting_ref="bot-conn")
+    assert res["ok"] and res["login_url"], res
+    p = browser_meeting._PENDING["bot-conn"]
+
+    # Still on the login page → waiting.
+    FakeProvider._sessions[p["provider_ref"]].url = "https://app.asana.com/-/login"
+    assert browser_meeting.poll_connect("bot-conn") == "waiting"
+    # Human signed in (URL left the login path) → logged_in.
+    FakeProvider._sessions[p["provider_ref"]].url = "https://app.asana.com/0/home"
+    assert browser_meeting.poll_connect("bot-conn") == "logged_in"
+
+    fin = browser_meeting.finish_connect("bot-conn")
+    assert fin["ok"]
+    assert browser_meeting.has_identity(org, "asana") is True
+    assert "bot-conn" not in browser_meeting._PENDING
+    # And a later browse can now use it.
+    later = browser_meeting.open_for_meeting(
+        org, avatar_key="petra", site_label="asana", meeting_ref="after")
+    assert later["ok"] and later["logged_in"] is True
+    browser_meeting.close_for_meeting("after")
+
+
+def test_connect_cancel_leaves_no_identity(cp):
+    from app import browser_meeting
+    org = _org(cp, "connect-x")
+    assert browser_meeting.begin_connect(org, "asana", meeting_ref="bx")["ok"]
+    browser_meeting.cancel_connect("bx")
+    assert "bx" not in browser_meeting._PENDING
+    assert browser_meeting.has_identity(org, "asana") is False
