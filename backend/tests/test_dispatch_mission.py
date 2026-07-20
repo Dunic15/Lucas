@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 
 import app.main as main_module
+from app.api import sessions as _sessions  # noqa: E402  (sessions extracted)
 from app import auth, store
 from app.config import settings
 
@@ -54,7 +55,7 @@ def _mock_dispatch(monkeypatch, captured: dict) -> None:
 
     monkeypatch.setattr(main_module.recall_client, "assert_ready", lambda: None)
     monkeypatch.setattr(main_module, "_meeting_has_active_bot", lambda url: False)
-    monkeypatch.setattr(main_module, "_schedule_start_reconcile",
+    monkeypatch.setattr(_sessions, "_schedule_start_reconcile",
                         lambda *a, **k: None)
     monkeypatch.setattr(main_module, "_start_avatar_session", fake_start)
 
