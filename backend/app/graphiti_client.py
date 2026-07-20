@@ -39,9 +39,27 @@ _client = None
 _init_lock = asyncio.Lock()
 _init_done = False
 _unavailable = False  # sticky: a failed import/connect disables the feature
+_warm_task = None     # strong ref to the in-flight background warm-up
 # add_episode reassigns the shared FalkorDB driver per group_id (getzep/graphiti
 # issue #1331) — serialize writes so concurrent orgs can't cross-contaminate.
 _write_lock = asyncio.Lock()
+
+
+def warm() -> None:
+    """Kick a BACKGROUND graph-DB init if the client isn't ready and none is in
+    flight. This is how the live path avoids ever awaiting init (connect +
+    build_indices — an unbounded network round-trip): recall() calls warm() and
+    skips the graph for the current turn, so a slow/hung DB can never stall the
+    spoken reply. Idempotent; no-op once warm or if the loop isn't running."""
+    global _warm_task
+    if not enabled() or _init_done:
+        return
+    if _warm_task is not None and not _warm_task.done():
+        return
+    try:
+        _warm_task = asyncio.create_task(_get_client())
+    except RuntimeError:  # no running loop — nothing to warm on
+        pass
 
 
 def enabled() -> bool:
@@ -110,14 +128,20 @@ async def ingest(
     try:
         from graphiti_core.nodes import EpisodeType  # type: ignore
 
+        # Bound the write: _write_lock is process-wide (FalkorDB race), so a
+        # hung add_episode against a dead DB must NOT freeze every org's
+        # ingestion — cap it and release the lock (council 2026-07-20).
         async with _write_lock:
-            await client.add_episode(
-                name=name,
-                episode_body=text[:20000],
-                source=EpisodeType.text,
-                source_description=source_description,
-                reference_time=datetime.now(timezone.utc),
-                group_id=_group_id(org_id),
+            await asyncio.wait_for(
+                client.add_episode(
+                    name=name,
+                    episode_body=text[:20000],
+                    source=EpisodeType.text,
+                    source_description=source_description,
+                    reference_time=datetime.now(timezone.utc),
+                    group_id=_group_id(org_id),
+                ),
+                timeout=settings.graphiti_ingest_timeout_s,
             )
         return True
     except Exception as e:  # noqa: BLE001 — ingest never breaks the join
@@ -139,14 +163,24 @@ async def recall(
     num_results: int | None = None,
 ) -> str:
     """Hybrid-search the org's graph for `query`; return a compact fact block
-    (one fact per line) or "" on empty/timeout/failure. Strictly
-    timeout-bounded — the live answer path falls back to the flat snapshot
-    rather than wait on the graph."""
+    (one fact per line) or "" on empty/not-ready/timeout/failure.
+
+    Live-path safe (council 2026-07-20): init (connect + build_indices — an
+    unbounded network round-trip) NEVER runs here. If the client isn't warm
+    yet, kick a background warm-up and return "" for this turn (the caller
+    falls back to the flat snapshot); the next question uses the warmed client.
+    Only the already-connected search() is awaited, and it is strictly
+    timeout-bounded — so a slow/hung graph DB can never stall the spoken reply.
+    """
     query = (query or "").strip()
-    if not query:
+    if not query or not enabled():
         return ""
-    client = await _get_client()
-    if client is None:
+    if not _init_done:
+        # Not connected yet — warm in the background, skip the graph this turn.
+        warm()
+        return ""
+    client = _client
+    if client is None:  # init completed but failed (sticky _unavailable)
         return ""
     budget = timeout_s if timeout_s is not None else settings.graphiti_recall_timeout_s
     limit = num_results if num_results is not None else settings.graphiti_recall_results
@@ -168,7 +202,8 @@ async def recall(
 def reset_for_tests() -> None:
     """Clear the process singleton + sticky flags — mirrors the other clients'
     conftest resets so state can't leak between tests."""
-    global _client, _init_done, _unavailable
+    global _client, _init_done, _unavailable, _warm_task
     _client = None
     _init_done = False
     _unavailable = False
+    _warm_task = None

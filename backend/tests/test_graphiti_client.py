@@ -59,11 +59,10 @@ def fake(monkeypatch):
     monkeypatch.setitem(sys.modules, "graphiti_core.nodes", nodes)
 
     client = _FakeGraphiti()
-
-    async def _fake_get_client():
-        return client if graphiti_client.enabled() else None
-
-    monkeypatch.setattr(graphiti_client, "_get_client", _fake_get_client)
+    # Simulate a client already WARMED off the hot path (init done at join) —
+    # recall() uses _client directly and never inits on the live path.
+    monkeypatch.setattr(graphiti_client, "_client", client)
+    monkeypatch.setattr(graphiti_client, "_init_done", True)
     return client
 
 
@@ -140,3 +139,34 @@ def test_recall_swallows_errors(fake, monkeypatch):
 def test_recall_disabled_is_empty(monkeypatch):
     monkeypatch.setattr(settings, "graphiti_enabled", False)
     assert asyncio.run(graphiti_client.recall("org_a", "q")) == ""
+
+
+def test_recall_never_inits_on_hot_path(monkeypatch):
+    """Council fix: init (connect + build_indices, unbounded) must NOT run on
+    the live path. When the client isn't warm, recall returns "" and kicks a
+    BACKGROUND warm-up instead of awaiting the connect."""
+    monkeypatch.setattr(settings, "graphiti_enabled", True)
+    monkeypatch.setattr(settings, "graphiti_uri", "neo4j://x")
+    # _init_done is False (conftest reset). Stub warm() so no real task spawns
+    # and assert recall neither blocks nor calls the (untimed) _get_client.
+    warmed: list = []
+    monkeypatch.setattr(graphiti_client, "warm", lambda: warmed.append(True))
+
+    async def _boom_get_client():
+        raise AssertionError("recall must never await init on the hot path")
+
+    monkeypatch.setattr(graphiti_client, "_get_client", _boom_get_client)
+    out = asyncio.run(graphiti_client.recall("org_a", "q"))
+    assert out == "" and warmed == [True]
+
+
+def test_ingest_bounds_a_hung_write(fake, monkeypatch):
+    """A hung add_episode is capped by graphiti_ingest_timeout_s so the
+    process-wide write lock is released, not held forever (council fix)."""
+    monkeypatch.setattr(settings, "graphiti_ingest_timeout_s", 0.05)
+
+    async def _hang(**k):
+        await asyncio.sleep(0.5)
+
+    fake.add_episode = _hang  # type: ignore
+    assert asyncio.run(graphiti_client.ingest("org_a", "something")) is False

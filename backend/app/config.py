@@ -422,9 +422,14 @@ class Settings(BaseSettings):
     graphiti_user: str = "neo4j"
     graphiti_password: str = ""
     # recall() is the ONLY graph call on the live answer path — strictly
-    # timeout-bounded so a slow graph never delays the spoken reply.
-    graphiti_recall_timeout_s: float = 1.5
+    # timeout-bounded so a slow graph never delays the spoken reply. In
+    # wake-word mode there's no "Sure —" ack covering this pause, so keep it
+    # tight (council 2026-07-20). Init never runs on the hot path (warmed at join).
+    graphiti_recall_timeout_s: float = 1.0
     graphiti_recall_results: int = 8
+    # Cap for a single off-path ingest write, so a hung graph DB can't hold the
+    # process-wide write lock and freeze every org's ingestion.
+    graphiti_ingest_timeout_s: float = 20.0
 
     # Proactive intervention (the differentiator): flag ONE missing step as the
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.
