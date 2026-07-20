@@ -2779,6 +2779,14 @@ _DEMO_BROWSE_RE = re.compile(
 # step 0. Bounded by live meetings; overwritten per ask.
 _BROWSE_EPOCH: dict[str, int] = {}
 
+# Per-meeting in-flight debounce (bot_id -> monotonic deadline). While a browse
+# is opening (provider cold-start + saved-login load is ~15-20s), re-asks from
+# the human — who can't see anything happening yet — are IGNORED instead of
+# spawning a second open and advancing the epoch, which cancelled the first
+# walkthrough. Auto-expires (backstop) and is cleared the moment the view is on
+# the tile, so a genuine follow-up ("...now create a task") is still honored.
+_BROWSE_INFLIGHT: dict[str, float] = {}
+
 
 def _is_live_browse_item(text: str) -> bool:
     """A captured/extracted item that is really a LIVE browser-tour request
@@ -6126,6 +6134,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
               f"matched={browse_ok} verb={_bv} site_or_surface={_bs} "
               f"site={browse_site!r} task={browse_task!r}", flush=True)
         if browse_ok:
+            # Debounce BEFORE claiming the epoch: if a browse is already opening
+            # for this meeting, the human is almost always re-asking because the
+            # slow (~15-20s) open hasn't shown anything yet. Ignore it so it does
+            # not advance the epoch and cancel the in-flight walkthrough.
+            if _BROWSE_INFLIGHT.get(session.bot_id, 0.0) > time.monotonic():
+                print("[browse] debounced (open in-flight)", flush=True)
+                return JSONResponse(
+                    {"ok": True, "spoke": False, "browse_inflight": True})
             spoken_name = browser_meeting.site_spoken_name(browse_site)
             loop = asyncio.get_running_loop()
             # Anchor every browse speak to THIS turn's generation: a barge-in
@@ -6188,6 +6204,15 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     {"ok": True, "spoke": False, "browse_connect": True})
 
             async def _open_browser() -> None:
+                # Immediate acknowledgement BEFORE the slow (~15-20s) open, so the
+                # human knows it is happening and does not re-ask through the wait
+                # (the re-asks are what cancelled the walkthrough). Un-gated so it
+                # plays regardless of ambient chatter.
+                await _make_avatar_speak(
+                    session,
+                    (f"One moment — opening {spoken_name} to show you."
+                     if browse_task else f"One moment — opening {spoken_name}."),
+                    force=True)
                 result = await run_in_threadpool(
                     browser_meeting.open_for_meeting, session.org_id,
                     avatar_key=avatar.id, site_label=browse_site,
@@ -6197,13 +6222,16 @@ async def recall_webhook(request: Request) -> JSONResponse:
                       f"logged_in={result.get('logged_in')} "
                       f"task={browse_task!r}", flush=True)
                 if not result.get("ok"):
+                    _BROWSE_INFLIGHT.pop(session.bot_id, None)
                     await _make_avatar_speak(
                         session, f"I couldn't open {spoken_name} just now.",
                         force=True, generation=browse_gen)
                     return
-                # Show the live view on the tile, then the opening line.
+                # View is on the tile now — clear the debounce so a genuine
+                # follow-up ("...now create a task") is honored via reuse.
                 await _send_avatar_control(
                     session, {"type": "browser_view", "url": result["url"]})
+                _BROWSE_INFLIGHT.pop(session.bot_id, None)
                 if not result.get("logged_in"):
                     await _make_avatar_speak(
                         session,
@@ -6249,6 +6277,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
                         await _make_avatar_speak(
                             session, walk["closing"], force=True)
 
+            # Mark this meeting's browse as opening (debounce re-asks) with an
+            # auto-expiring deadline as a backstop; _open_browser clears it the
+            # moment the view is on the tile or the open fails.
+            _BROWSE_INFLIGHT[session.bot_id] = time.monotonic() + 40.0
             asyncio.create_task(_open_browser())
             return JSONResponse(
                 {"ok": True, "spoke": False, "browse": True, "task": browse_task})
