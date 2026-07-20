@@ -3826,8 +3826,10 @@ def _wake_required(avatar: avatars.Avatar) -> bool:
     """Whether THIS avatar speaks only when addressed by name — the per-avatar
     require_wake_word (avatar.yaml), inheriting the global REQUIRE_WAKE_WORD
     when unset. When true, every unprompted speech path is silenced: answers,
-    backchannels, joiner greetings, quiet nudges, confident interjections, and
-    the proactive closing intervention. What still speaks: being called by
+    backchannels, joiner greetings, quiet nudges, confident interjections, the
+    proactive closing intervention, AND the instant "Sure —" acknowledgment
+    (she stays silent until the actual answer, so she never speaks over a
+    speaker who's still finishing). What still speaks: being called by
     name and follow-ups right after the avatar's own answer (a reply to her
     is not an interruption). Even the one-time self-introduction on join is
     suppressed: a wake-word avatar enters SILENT and only listens/transcribes
@@ -5229,6 +5231,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if (
             settings.ack_enabled
             and called
+            # Wake-word mode: stay SILENT until the actual answer — never speak
+            # an "Sure —" ack over the user while they're still finishing their
+            # sentence (owner ask 2026-07-20: listen fully, speak only after
+            # they finish). She answers once the final lands, after their pause.
+            and not _wake_required(avatar)
             # Ack discipline: partials are noisy half-words, so the ack (an
             # audible "Sure —") needs the EXACT name — a fuzzy match on a
             # partial fragment must never make her speak. And wait until a
@@ -6192,6 +6199,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if (
         settings.ack_enabled
         and called
+        # Wake-word mode stays silent until the real answer — no instant ack
+        # (owner ask 2026-07-20). The final only lands after the speaker's
+        # pause, so the answer already waits for them to finish.
+        and not _wake_required(avatar)
         and not wants_web_search(question)
         and time.time() - session.last_ack_at > 6.0
     ):

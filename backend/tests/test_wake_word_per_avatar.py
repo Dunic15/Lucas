@@ -114,6 +114,56 @@ def test_self_introduction_runs_when_wake_word_off(monkeypatch):
     assert len(launched) == 1
 
 
+def test_no_ack_on_partial_in_wake_word_mode(monkeypatch, tmp_path):
+    """The core of 'listen fully, speak only after I finish': a partial that
+    addresses a wake-word avatar by name must NOT trigger the instant 'Sure —'
+    ack spoken over the still-talking speaker (owner ask 2026-07-20)."""
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    from app import ledger
+
+    monkeypatch.setenv("LAURA_STORE_PATH", str(tmp_path / "store.sqlite3"))
+    importlib.reload(store)
+    importlib.reload(ledger)
+    monkeypatch.setattr(settings, "ack_enabled", True)
+    monkeypatch.setattr(main_module.recall_client, "assert_ready", lambda: None)
+    monkeypatch.setattr(
+        main_module.recall_client, "create_bot",
+        lambda meeting_url, avatar_page_url, join_at=None, bot_name="Laura",
+        avatar_id="": {"id": "bot_wk"},
+    )
+    monkeypatch.setattr(main_module.recall_client, "leave_call", lambda bot_id: None)
+    monkeypatch.setattr(main_module.recall_client, "delete_bot", lambda bot_id: None)
+    monkeypatch.setattr(main_module.anam_client, "end_conversation", lambda c: None)
+
+    spoken: list = []
+
+    async def fake_speak(session, line, **kwargs):
+        spoken.append(line)
+        return True
+
+    monkeypatch.setattr(main_module, "_make_avatar_speak", fake_speak)
+
+    client = TestClient(main_module.app)
+    bot_id = client.post(
+        "/sessions/start",
+        json={"meeting_url": "https://meet.google.com/wk-ack", "avatar_id": "petra"},
+    ).json()["bot_id"]
+    client.post(
+        "/webhooks/recall",
+        json={
+            "event": "transcript.partial_data",
+            "data": {"bot": {"id": bot_id}, "data": {
+                "words": [{"text": w} for w in
+                          "Petra what is the status of the rollout project".split()],
+                "participant": {"name": "Ben", "id": 1}}},
+        },
+    )
+    assert spoken == []  # wake-word mode: no ack over the speaker
+
+
 def test_answer_gate_blocks_uncalled_but_allows_followup(monkeypatch):
     """The gate logic in isolation: not-called → silent, unless it's a
     question right after the avatar's own answer (follow-up window)."""
