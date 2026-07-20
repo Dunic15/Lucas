@@ -3479,7 +3479,7 @@
         '.brrow2{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:12px}'+
         '.brstat{font-size:.8rem;color:var(--faint);margin-left:auto}'+
         '.brpaste-box{margin-top:12px;display:flex;flex-direction:column;gap:8px}'+
-        '.brpaste-box input,.brpaste-box textarea{padding:10px 12px;border-radius:11px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font:inherit;box-sizing:border-box;width:100%}'+
+        '.brpaste-box input,.brpaste-box textarea,.brpaste-box select{padding:10px 12px;border-radius:11px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font:inherit;box-sizing:border-box;width:100%}'+
         '.brdocs{margin-top:18px;display:flex;flex-direction:column;gap:8px}'+
         '.brdoc{display:flex;align-items:center;gap:10px;padding:11px 14px;border:1px solid var(--line-soft);border-radius:12px;background:var(--panel-2)}'+
         '.brdoc-nm{font-size:.88rem;color:var(--text);font-weight:600}'+
@@ -3538,9 +3538,7 @@
             '<button class="btn primary" id="brpaste-go">Add to '+esc(avName)+'</button>'+
           '</div>'+
           '<div class="brpaste-box" id="brdrive-box" hidden>'+
-            '<div class="brdrive-hint">Paste a Google Drive <b>folder</b> link — '+esc(avName)+' reads up to 25 files from it and cites them in meetings. Needs Google connected with Drive access (Connections tab); files sync in the background.</div>'+
-            '<input type="text" id="brdrive-url" placeholder="https://drive.google.com/drive/folders/…" aria-label="Google Drive folder link" />'+
-            '<button class="btn primary" id="brdrive-go">Connect &amp; sync to '+esc(avName)+'</button>'+
+            '<div id="brdrive-body"><div class="brdrive-hint">Loading your Google Drive…</div></div>'+
           '</div>'+
           '<div class="brdocs">'+docList+'</div>'+
         '</div>';
@@ -3598,8 +3596,7 @@
         if(!/\.[a-z0-9]+$/i.test(fn)) fn=fn+".md";
         _brainUploadPayloads(sel,[{filename:fn,text:tx,mime:"text/markdown"}]);
       });
-      $("#brconnect").addEventListener("click",function(){ var db=$("#brdrive-box"); if(db){ db.hidden=!db.hidden; if(!db.hidden) $("#brdrive-url").focus(); } });
-      $("#brdrive-go").addEventListener("click",function(){ _brainConnectDrive(sel,$("#brdrive-url").value); });
+      $("#brconnect").addEventListener("click",function(){ var db=$("#brdrive-box"); if(db){ db.hidden=!db.hidden; if(!db.hidden) _brainDriveOpen(sel); } });
       box.querySelectorAll("[data-brdel]").forEach(function(b){ b.addEventListener("click",function(){
         if(!window.confirm("Remove this knowledge? "+avName+" stops citing it.")) return;
         bFetch("sources/"+b.getAttribute("data-brdel"),{method:"DELETE"}).then(function(r){
@@ -3608,6 +3605,35 @@
       }); });
       // Keep refreshing while any source still has a doc indexing.
       _brainSchedulePoll(srcs.some(function(s){ return (s.pending_documents|0)>0; }));
+    });
+  }
+
+  // Google Drive PICKER: when Google is connected, list the org's Drive folders
+  // (backend uses the stored token) and let the user pick one — no pasted link.
+  // Falls back to the link input when Google isn't connected / listing fails.
+  function _brainDriveOpen(avatarId){
+    var body=$("#brdrive-body"); if(!body) return;
+    var nm=avNameOf(avatarId);
+    body.innerHTML='<div class="brdrive-hint">Loading your Google Drive…</div>';
+    bFetch("drive/folders").then(function(r){
+      var folders=(r.ok&&r.j.folders)||[];
+      if(r.ok && r.j.connected && folders.length){
+        var opts=folders.map(function(f){ return '<option value="'+esc(f.id)+'">'+esc(f.name)+'</option>'; }).join("");
+        body.innerHTML='<div class="brdrive-hint">Choose a folder from your Google Drive — '+esc(nm)+' reads up to 25 files from it and cites them in meetings.</div>'+
+          '<select id="brdrive-sel" aria-label="Google Drive folder">'+opts+'</select>'+
+          '<button class="btn primary" id="brdrive-go">Connect &amp; sync to '+esc(nm)+'</button>';
+        $("#brdrive-go").addEventListener("click",function(){ _brainConnectDrive(avatarId,$("#brdrive-sel").value); });
+      } else {
+        var connected=(r.ok&&r.j.connected);
+        var reason=(r.ok&&r.j.reason&&!connected)?(' ('+esc(r.j.reason)+')'):'';
+        body.innerHTML='<div class="brdrive-hint">'+(connected
+            ?'No folders found in your Google Drive — '
+            :'Connect Google with Drive access in the <b>Connections</b> tab'+reason+', then reopen this to pick a folder. Or ')+
+          'paste a Google Drive <b>folder</b> link:</div>'+
+          '<input type="text" id="brdrive-url" placeholder="https://drive.google.com/drive/folders/…" aria-label="Google Drive folder link" />'+
+          '<button class="btn primary" id="brdrive-go">Connect &amp; sync to '+esc(nm)+'</button>';
+        $("#brdrive-go").addEventListener("click",function(){ _brainConnectDrive(avatarId,$("#brdrive-url").value); });
+      }
     });
   }
 
