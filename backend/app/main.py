@@ -6152,6 +6152,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     browser_meeting.open_for_meeting, session.org_id,
                     avatar_key=avatar.id, site_label=browse_site,
                     meeting_ref=session.bot_id)
+                print(f"[browse-open] site={browse_site} ok={result.get('ok')} "
+                      f"reason={result.get('reason')} "
+                      f"logged_in={result.get('logged_in')} "
+                      f"task={browse_task!r}", flush=True)
                 if not result.get("ok"):
                     await _make_avatar_speak(
                         session, f"I couldn't open {spoken_name} just now.",

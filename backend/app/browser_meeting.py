@@ -137,12 +137,16 @@ def run_walkthrough(org_id: str, session_id: str, *, site_label: str,
                 org_id, session_id, site_label=site_label, task_key=task_key,
                 on_narrate=on_narrate, cancel=cancel, principal="meeting")
             outcome = str(result.get("outcome") or "error")
+            print(f"[walk] {site_label}/{task_key} path=recipe "
+                  f"outcome={outcome} steps={result.get('steps')}", flush=True)
             closing = "" if outcome == "cancelled" else (
                 "That's the flow — I'll leave the actual change to you."
                 if outcome == "finished" else "")
             return {"ok": outcome == "finished", "outcome": outcome,
                     "closing": closing}
         except Exception as exc:  # noqa: BLE001
+            print(f"[walk] {site_label}/{task_key} path=recipe "
+                  f"exc={type(exc).__name__}", flush=True)
             return {"ok": False, "outcome": type(exc).__name__, "closing": ""}
 
     # 2) Fallback: the visual-planner walkthrough (open-ended, less reliable).
