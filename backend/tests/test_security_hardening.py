@@ -14,6 +14,7 @@ import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import main, security  # noqa: E402
+from app.api import console as _console  # noqa: E402  (console extracted)
 from app.config import settings  # noqa: E402
 
 
@@ -30,7 +31,7 @@ def client(monkeypatch):
 def _stub_answer(monkeypatch):
     """Neuter /demo/ask's brain so the test exercises the LIMITER, not RAG/LLM."""
     monkeypatch.setattr(
-        main, "answer_question", lambda avatar, q: {"answer": "ok", "citations": []}
+        _console, "answer_question", lambda avatar, q: {"answer": "ok", "citations": []}
     )
 
 
@@ -62,7 +63,7 @@ def test_live_ask_streams_through_middleware_and_is_limited(client, monkeypatch)
     confirm the stream still arrives intact (headers layer doesn't buffer/break
     it) AND the limiter still guards it."""
     monkeypatch.setattr(
-        main,
+        _console,
         "answer_question_stream",
         lambda avatar, q, **kwargs: iter(["Hello there.", "Second."]),
     )
