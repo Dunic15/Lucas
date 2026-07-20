@@ -2291,12 +2291,14 @@
           patchActionState(aid,st||{status:"approved"});
           return;
         }
-        // Flag OFF (or nothing ran, no Cedric link): captured + marked
-        // approved, but not executed — say so plainly rather than as an error.
+        // Dead end: approved, but nothing ran AND Cedric didn't accept it.
+        // Show WHAT happened (the server's one-line reason) instead of a
+        // misleading "captured" — the row goes to "failed" so it's visible.
         if(!j.executed){
-          if(btn) btn.outerHTML='<span class="exec approved" title="Marked approved. Turn on the native executor to run it automatically.">captured · execution off</span>';
-          toast("Action approved — captured (native execution is off).");
-          patchActionState(aid,st||{status:"approved"});
+          var why=j.execution_error||"The action couldn't be executed.";
+          if(btn) btn.outerHTML='<span class="exec failed" title="'+esc(why)+'">Couldn’t run ↗</span>';
+          toast("Approved, but it couldn't run: "+why,true);
+          patchActionState(aid,st||{status:"failed",detail:why});
           return;
         }
         // Executed: render the SAME receipt the row uses (Done ↗ / failed pill).
@@ -3481,12 +3483,14 @@
       .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,j:j}; }); })
       .then(function(res){
         if(!res.ok) throw new Error(res.j.error||"failed");
-        var j=res.j, html;
+        var j=res.j, html, failed=false;
         if(rej) html='<span class="exec rejected" title="Rejected — it will not run.">rejected</span>';
         else if(j.executed&&j.status) html=receipt({status:j.status.status,detail:j.status.detail||""});
-        else html='<span class="exec approved" title="Approved — Cedric picks it up from here.">approved</span>';
+        else if(j.dispatched) html='<span class="exec approved" title="Approved — Cedric is running this through its connectors.">approved · with Cedric</span>';
+        else { failed=true; var why=j.execution_error||"The action couldn't be executed.";
+          html='<span class="exec failed" title="'+esc(why)+'">Couldn’t run</span>'; }
         wrap.innerHTML=html;
-        toast(rej?"Action rejected — it will not run.":"Approved.");
+        toast(rej?"Action rejected — it will not run.":(failed?("Approved, but it couldn't run: "+(j.execution_error||"see the row")):"Approved."),failed);
       })
       .catch(function(e2){
         b.disabled=false; b.textContent=rej?"Reject":"Approve & run";
