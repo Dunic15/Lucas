@@ -63,19 +63,30 @@ _TASK_GOALS = {
     },
 }
 
-# Operation → rotating narration lines. Built from the OPERATION ONLY (never
-# page content), so nothing the browser reads is ever spoken aloud.
+# Operation → narration. When the target control has a short label (from the
+# sanitized observation — bounded + redacted upstream), we name it so the
+# narration tracks what the pointer is doing ("Now I'll click Add task"); with
+# no usable label we fall back to a generic line. UI-control labels on the
+# user's own workspace, shown on their own tile, are safe to voice; secrets are
+# redacted and length is capped upstream.
+_STEP_NAMED = {
+    "click": ["Now I'll click {name}.", "Let's open {name}.",
+              "Here — I'll select {name}."],
+    "type": ["This is where you'd fill in {name}.",
+             "You'd type into {name} here."],
+    "navigate": ["Opening {name}.", "Heading to {name}."],
+}
 _STEP_LINES = {
     "navigate": ["Let me pull that up.", "Opening that view.",
                  "Heading there now."],
     "click": ["I'll open this here.", "Selecting that.",
               "Let's go in here."],
-    "scroll": ["Scrolling to find it.", "Let me scroll down."],
+    "scroll": ["Let me scroll down to find it.", "Scrolling down."],
     "type": ["This is where you'd type it in.",
              "Here's the field you'd fill in."],
-    "read": ["Here's what we're looking at.", "Reading this."],
+    "read": ["Let me take a look here.", "Reading this."],
 }
-_STEP_DEFAULT = ["Next step.", "And here."]
+_STEP_DEFAULT = ["Next, this part.", "And over here."]
 
 _CLOSING = {
     "cancelled": "",
@@ -93,8 +104,17 @@ _CLOSING = {
 }
 
 
-def _narration_for(operation: str, index: int) -> str:
-    lines = _STEP_LINES.get(operation, _STEP_DEFAULT)
+def _narration_for(info, index: int) -> str:
+    """Build a step line from the info dict {operation, role, name}. Prefers a
+    named line when a usable control label exists, else a generic line."""
+    if isinstance(info, str):  # back-compat: bare operation
+        info = {"operation": info, "name": ""}
+    op = info.get("operation", "")
+    name = (info.get("name") or "").strip()
+    if name and op in _STEP_NAMED:
+        lines = _STEP_NAMED[op]
+        return lines[index % len(lines)].format(name=name)
+    lines = _STEP_LINES.get(op, _STEP_DEFAULT)
     return lines[index % len(lines)]
 
 
@@ -114,9 +134,9 @@ def run_walkthrough(org_id: str, session_id: str, *, site_label: str,
     try:
         from .browser import coordinator
 
-        def _on_step(index: int, operation: str, _proposal: dict) -> None:
+        def _on_step(index: int, operation: str, info) -> None:
             try:
-                on_narrate(_narration_for(operation, index))
+                on_narrate(_narration_for(info, index))
             except Exception:  # noqa: BLE001 — narration never breaks the run
                 pass
 

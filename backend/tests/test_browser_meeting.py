@@ -124,13 +124,20 @@ def test_run_walkthrough_swallows_errors(monkeypatch):
     assert r["ok"] is False
 
 
-def test_narration_is_operation_only_no_page_content():
-    # Every narration line is a fixed template keyed by operation — never any
-    # page/observation text (leak-free by construction).
+def test_narration_generic_and_named():
+    # Back-compat: a bare operation string yields a generic line.
     for op in ("navigate", "click", "type", "scroll", "read", "mystery"):
         for i in range(3):
             line = browser_meeting._narration_for(op, i)
-            assert isinstance(line, str) and line and len(line) < 80
+            assert isinstance(line, str) and line and len(line) < 90
+            assert "{name}" not in line  # template must be filled/omitted
+    # A named control produces a line that voices the (bounded) label.
+    named = browser_meeting._narration_for(
+        {"operation": "click", "name": "Add task"}, 0)
+    assert "Add task" in named and "{name}" not in named
+    # A named-but-empty falls back to a generic line, no dangling placeholder.
+    empty = browser_meeting._narration_for({"operation": "click", "name": ""}, 1)
+    assert "{name}" not in empty and empty
 
 
 

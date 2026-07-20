@@ -41,6 +41,45 @@ from .provider import (
 )
 
 _CDP_TIMEOUT_MS = 30_000
+_CURSOR_GLIDE_MS = 650  # let the pointer visibly travel before the click lands
+
+# A cosmetic pointer overlay so a viewer watching the live view can FOLLOW the
+# avatar: a red arrow that glides (CSS transition) to the target element's
+# centre, with a brief pulse ring. Injected into the page transiently; it reads
+# nothing and touches no cookie/storage/network channel. Re-created on demand
+# (a navigation drops it). Returns true when the target was found + moved to.
+_CURSOR_JS = r"""
+(sel) => {
+  let c = document.getElementById('__laura_cursor');
+  if (!c) {
+    c = document.createElement('div');
+    c.id = '__laura_cursor';
+    c.style.cssText = 'position:fixed;z-index:2147483647;width:24px;height:24px;'
+      + 'margin:-3px 0 0 -3px;pointer-events:none;left:50%;top:50%;'
+      + 'transition:left .55s cubic-bezier(.4,0,.2,1),top .55s cubic-bezier(.4,0,.2,1);'
+      + 'filter:drop-shadow(0 1px 2px rgba(0,0,0,.5));background:no-repeat center/contain;'
+      + "background-image:url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='24' height='24'><path d='M4 2l16 8-7 2-2 7z' fill='%23ff3b30' stroke='white' stroke-width='1.3'/></svg>\")";
+    document.body.appendChild(c);
+    const s = document.createElement('style');
+    s.textContent = '@keyframes __laura_pulse{0%{transform:scale(.4);opacity:.8}100%{transform:scale(1.8);opacity:0}}';
+    document.head.appendChild(s);
+  }
+  const el = document.querySelector(sel);
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  c.style.left = x + 'px';
+  c.style.top = y + 'px';
+  const ring = document.createElement('div');
+  ring.style.cssText = 'position:fixed;z-index:2147483646;width:28px;height:28px;'
+    + 'margin:-14px 0 0 -14px;border:3px solid #ff3b30;border-radius:50%;'
+    + 'pointer-events:none;left:' + x + 'px;top:' + y + 'px;'
+    + 'animation:__laura_pulse .6s ease-out .5s forwards';
+  document.body.appendChild(ring);
+  setTimeout(() => ring.remove(), 1300);
+  return true;
+}
+"""
 
 # Playwright JS run in the page to extract a SAFE observation. It reads only
 # the accessibility-relevant DOM (visible text + interactive elements + their
@@ -231,11 +270,24 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
     def click(self, provider_ref: str, element_id: str) -> RawObservation:
         _require_config()
         page = self._page(provider_ref)
+        selector = _el_selector(element_id)
         try:
-            page.click(_el_selector(element_id), timeout=_CDP_TIMEOUT_MS)
+            self._show_cursor(page, selector)  # visible pointer glides in first
+            page.click(selector, timeout=_CDP_TIMEOUT_MS)
         except Exception as exc:  # noqa: BLE001
             raise ProviderError("click failed") from exc
         return self._observe_page(page)
+
+    def _show_cursor(self, page, selector: str) -> None:
+        """Render a visible pointer that glides to the target so a viewer
+        watching the live view can FOLLOW what the avatar is doing. Best-effort
+        cosmetic overlay — a failure never blocks the click."""
+        try:
+            moved = page.evaluate(_CURSOR_JS, selector)
+            if moved:
+                page.wait_for_timeout(_CURSOR_GLIDE_MS)  # let the glide land
+        except Exception:  # noqa: BLE001 — cosmetic only
+            pass
 
     def type_text(self, provider_ref: str, element_id: str,
                   text: str) -> RawObservation:

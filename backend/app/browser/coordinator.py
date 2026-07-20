@@ -30,6 +30,24 @@ from .planner import FakeVisualPlanner
 _CONTROL_OPS = ("finish", "request_human_help", "done")
 
 
+def _step_info(operation: str, proposal: dict, observation: dict) -> dict:
+    """A BOUNDED, redacted description of the step for live narration: the
+    operation plus the target control's role + short name resolved from the
+    (already-sanitized) observation. Names are capped and redacted; element
+    `value` is never in the observation, so no field contents leak."""
+    from . import policy
+
+    info = {"operation": operation, "role": "", "name": ""}
+    target = str(proposal.get("target") or "")
+    for el in (observation.get("elements") or []):
+        if str(el.get("id")) == target:
+            info["role"] = str(el.get("role") or "")[:20]
+            name = str(el.get("name") or "").strip()
+            info["name"] = policy.redact(name)[:40] if name else ""
+            break
+    return info
+
+
 def run(
     org_id: str, session_id: str, goal: str, *, principal: str = "",
     planner: Any = None, clock: Optional[Callable[[], float]] = None,
@@ -151,7 +169,7 @@ def run(
                 except Exception:  # noqa: BLE001
                     pass
             try:
-                on_step(step_index, op, proposal)
+                on_step(step_index, op, _step_info(op, proposal, observation))
             except Exception:  # noqa: BLE001 — narration never breaks the run
                 pass
 
