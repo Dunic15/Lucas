@@ -854,6 +854,57 @@ def claim_action_execution(
     return "lost" if exists is not None else "missing"
 
 
+def reopen_failed_action(org_id: str, action_id: str, detail: str = "") -> str:
+    """Explicit owner-driven retry door: CAS 'failed' → 'approved'.
+
+    The monotonic guard in set_action_status is what protects receipts from
+    late/replayed webhook events, so it must never learn to un-fail; this
+    narrow CAS is the only sanctioned exit from 'failed', and only the approve
+    door calls it (the owner clicked Approve again on a failed receipt).
+    done/rejected stay immutable. Returns 'reopened' (caller may re-execute),
+    'lost' (status moved on — do NOT retry), or 'missing' (no durable row;
+    the caller falls back to its local guard)."""
+    aid = str(action_id or "").strip()
+    if not aid:
+        return "missing"
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                f"""
+                UPDATE queued_actions
+                SET execution_status='approved',
+                    execution_detail=:detail,
+                    execution_updated_at=clock_timestamp(),
+                    resolved_at=NULL,
+                    execution_lease_until=NULL,
+                    {_APPEND_LOG_SQL},
+                    updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND action_id=:action_id
+                  AND execution_status='failed'
+                RETURNING action_id
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": aid,
+                "detail": str(detail or "").strip()[:300],
+                "log_entry": _log_entry("reopen", detail),
+            },
+        ).first()
+        if row is not None:
+            return "reopened"
+        exists = conn.execute(
+            text(
+                "SELECT 1 FROM queued_actions "
+                "WHERE org_id=:org_id AND action_id=:action_id"
+            ),
+            {"org_id": org_id, "action_id": aid},
+        ).first()
+    return "lost" if exists is not None else "missing"
+
+
 def stale_executing(org_id: str) -> list[dict[str, Any]]:
     """One org's actions whose execution claim outlived its lease — the
     process died mid-vendor-call (or an async dispatch thread was lost).

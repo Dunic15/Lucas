@@ -221,3 +221,95 @@ def test_unknown_action_is_404(client):
     _login(client)
     r = client.post("/dashboard/actions/does-not-exist/approve")
     assert r.status_code == 404
+
+
+# ── retry: a failed receipt is re-approvable and really re-dispatches ──
+
+def test_reapprove_after_failure_retries_dispatch(client, monkeypatch):
+    """The failed row's Approve button must RETRY (live repro 2026-07-20: the
+    replay branch answered from the first-write-wins decision record and never
+    re-called dispatch_action — the action was permanently stuck at 'failed'
+    while the UI kept offering an Approve that did nothing)."""
+    from app.cedric import callback as cedric_callback
+
+    user = _login(client)
+    _seed_action(user["org_id"], "a1", _EMAIL_TYPED)
+    calls: list = []
+
+    def flaky_dispatch(org, action, approved_by=""):
+        calls.append(org)
+        if len(calls) == 1:  # Cedric offline on the first approve…
+            return {"ok": False, "reason": "not_configured"}
+        return {"ok": True, "accepted": True}  # …reconnected on the retry
+
+    monkeypatch.setattr(cedric_callback, "dispatch_action", flaky_dispatch)
+
+    first = client.post("/dashboard/actions/a1/approve").json()
+    assert first["dispatched"] is False
+    assert ledger.action_statuses(
+        ["a1"], org_id=user["org_id"])["a1"]["status"] == "failed"
+
+    second = client.post("/dashboard/actions/a1/approve").json()
+    assert len(calls) == 2, "re-approve must re-dispatch, not replay"
+    assert not second.get("idempotent_replay")
+    assert second["dispatched"] is True and second["execution_error"] == ""
+    st = ledger.action_statuses(["a1"], org_id=user["org_id"])["a1"]
+    assert st["status"] == "approved"
+
+
+def test_reapprove_after_done_stays_an_idempotent_replay(client, monkeypatch):
+    """Only 'failed' is re-approvable; a done receipt must never re-execute."""
+    user = _login(client)
+    monkeypatch.setattr(settings, "native_executor", True)
+    _seed_action(user["org_id"], "a1", _EMAIL_TYPED)
+    calls: list = []
+    _mock_send(monkeypatch, {"ok": True, "message_id": "m1"}, calls)
+
+    first = client.post("/dashboard/actions/a1/approve").json()
+    assert first["executed"] is True and len(calls) == 1
+    assert ledger.action_statuses(
+        ["a1"], org_id=user["org_id"])["a1"]["status"] == "done"
+
+    second = client.post("/dashboard/actions/a1/approve").json()
+    assert second["idempotent_replay"] is True
+    assert len(calls) == 1, "a done action must never execute twice"
+
+
+def test_reopen_failed_action_is_a_narrow_cas(client):
+    """failed→approved through the explicit door only; done stays immutable,
+    and the general monotonic guard still refuses to un-fail on its own."""
+    user = _login(client)
+    org = user["org_id"]
+    ledger.set_action_status("x1", "failed", "boom", org_id=org)
+    # The general status channel cannot repaint a terminal receipt…
+    ledger.set_action_status("x1", "approved", "late replay", org_id=org)
+    assert ledger.action_statuses(["x1"], org_id=org)["x1"]["status"] == "failed"
+    # …but the explicit reopen CAS can, exactly once per failure.
+    assert ledger.reopen_failed_action("x1", org_id=org) is True
+    assert ledger.action_statuses(["x1"], org_id=org)["x1"]["status"] == "approved"
+    assert ledger.reopen_failed_action("x1", org_id=org) is False
+    ledger.set_action_status("x1", "done", "", org_id=org)
+    assert ledger.reopen_failed_action("x1", org_id=org) is False
+
+
+def test_browser_route_with_operator_off_fails_with_reason(client):
+    """route='browser' + operator disabled: the approve must say WHY as a
+    failed receipt — the same honesty 8e6e15a gave the Cedric route — instead
+    of returning a silent 'approved' nothing will ever run."""
+    user = _login(client)
+    action = {"item": "Submit the portal form", "owner": "Ben",
+              "action_id": "b1", "execution_route": "browser"}
+    store.save_artifact(
+        "bot_b1",
+        {"summary": "Kickoff.", "actions": [action], "checklist": [action],
+         "org_id": user["org_id"], "avatar_id": "laura",
+         "meeting_url": "https://meet.google.com/appr-test",
+         "transcript": "PII must never leak"},
+        org_id=user["org_id"],
+    )
+    body = client.post("/dashboard/actions/b1/approve").json()
+    assert body["executed"] is False
+    assert "browser operator is switched off" in body["execution_error"]
+    st = ledger.action_statuses(["b1"], org_id=user["org_id"])["b1"]
+    assert st["status"] == "failed"
+    assert "browser operator" in st["detail"]

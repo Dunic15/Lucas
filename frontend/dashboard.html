@@ -1004,17 +1004,25 @@
              "linear-gradient(135deg,#8b5cf6,#c4b5fd)","linear-gradient(135deg,#1F9D63,#4FC08A)"];
   var gradOf={};
   function grad(id){ if(!(id in gradOf)) gradOf[id]=GRADS[Object.keys(gradOf).length%GRADS.length]; return gradOf[id]; }
+  // Avatars whose portrait already 404'd once (e.g. petra has no reference
+  // photo): remembered for the session so the 15s re-render loop stops
+  // re-requesting a URL the server told us doesn't exist (console-spam +
+  // wasted requests before 2026-07-20).
+  var _noPortrait={};
   function avatarBadge(id,name,size){
     var safeId=encodeURIComponent(id||"laura"), letter=esc((name||id||"?")[0].toUpperCase());
-    return '<span class="av avatar-photo'+(size==="mini"?" mini":"")+'" style="background:'+grad(id)+'">'+
-      '<span class="fallback" aria-hidden="true">'+letter+'</span><img src="/laura-reference.jpg?avatar_id='+safeId+
-      '" alt="" aria-hidden="true" loading="lazy" decoding="async" /></span>';
+    var known404=_noPortrait[id||"laura"];
+    return '<span class="av avatar-photo'+(size==="mini"?" mini":"")+(known404?" broken":"")+'" style="background:'+grad(id)+'">'+
+      '<span class="fallback" aria-hidden="true">'+letter+'</span>'+
+      (known404?'':'<img src="/laura-reference.jpg?avatar_id='+safeId+
+      '" alt="" aria-hidden="true" loading="lazy" decoding="async" data-avid="'+esc(id||"laura")+'" />')+'</span>';
   }
   function wireAvatarImages(){
     $$(".avatar-photo img").forEach(function(img){
       if(img.getAttribute("data-wired")==="1") return;
       img.setAttribute("data-wired","1");
-      var fail=function(){img.parentNode.classList.add("broken");};
+      var fail=function(){img.parentNode.classList.add("broken");
+        var avid=img.getAttribute("data-avid"); if(avid) _noPortrait[avid]=1;};
       img.addEventListener("error",fail);
       if(img.complete&&!img.naturalWidth) fail();
     });
@@ -1076,7 +1084,7 @@
       ?"Solo is activating — your allowance updates after Stripe confirms payment."
       :"Checkout was cancelled; your current plan is unchanged.",billingResult!=="success");
   }
-  if(oauthResult||billingResult||connResult||googleResult){
+  if(oauthResult||billingResult||connResult||googleResult||asanaResult){
     window.history.replaceState({},"",window.location.pathname);
   }
 
@@ -1972,7 +1980,7 @@
         ?'<button class="btn" data-asana-off>Disconnect</button>'
         :(asanaOAuth
           ?'<a class="btn primary" style="text-decoration:none" href="/oauth/asana/connect">Connect Asana</a>'
-          :'<input type="password" id="asana-pat" placeholder="Personal Access Token" autocomplete="off" '+
+          :'<input type="password" id="asana-pat" placeholder="Asana token" aria-label="Asana Personal Access Token" autocomplete="off" '+
             'style="flex:1;min-width:120px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
             '<button class="btn primary" data-asana-on>Connect</button>'))+
       '</div></div>';
@@ -2289,7 +2297,7 @@
         // Show WHAT happened (the server's one-line reason) instead of a
         // misleading "captured" — the row goes to "failed" so it's visible.
         if(!j.executed){
-          var why=j.execution_error||"The action couldn't be executed.";
+          var why=j.execution_error||(j.status&&j.status.detail)||"The action couldn't be executed.";
           if(btn) btn.outerHTML='<span class="exec failed" title="'+esc(why)+'">Couldn’t run ↗</span>';
           toast("Approved, but it couldn't run: "+why,true);
           patchActionState(aid,st||{status:"failed",detail:why});
@@ -2775,23 +2783,33 @@
       var letter=esc((av.name||av.id||"?")[0].toUpperCase());
       mountEl.innerHTML='<div class="skel">Loading '+esc(av.name||av.id)+'…</div>';
       var ready3d=!!(av.renderer&&av.renderer.talk&&av.renderer.talk.ready);
-      if(ready3d){
+      // The 3D idle animation can't see the parent page's reduced-motion
+      // preference across the iframe boundary — honor it here by serving the
+      // static portrait instead.
+      var reduceMotion=window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if(ready3d && !reduceMotion){
         var f=document.createElement("iframe");
         f.src="/talk?preview=1&avatar_id="+encodeURIComponent(av.id);
         f.title=(av.name||av.id)+" 3D preview";
         f.setAttribute("aria-label",(av.name||av.id)+" 3D preview");
-        f.style.cssText="width:100%;height:100%;border:0;display:block";
-        // Swap the skeleton out on load — talk.html then fades the avatar in
-        // itself once its close-up camera settles (its own reveal logic).
+        // Hidden (not display:none — that would stall loading in some
+        // browsers) UNDER the skeleton until the document loads; the skeleton
+        // keeps showing meanwhile, then talk.html fades the avatar in itself
+        // once its close-up camera settles (its own reveal logic).
+        f.style.cssText="width:100%;height:100%;border:0;display:block;visibility:hidden";
         f.addEventListener("load",function(){
           if(currentId!==av.id) return;
-          f.style.opacity="1";
+          f.style.visibility="visible";
+          var sk=mountEl.querySelector(".skel"); if(sk) sk.remove();
         });
+        // Only true network-level failures fire error on an iframe (an HTTP
+        // error page or an in-document crash still fires load) — talk.html's
+        // own "face unavailable" notice covers those; this covers the rest.
         f.addEventListener("error",function(){
           if(currentId!==av.id) return;
           show2d(av,letter);
         });
-        mountEl.innerHTML=""; mountEl.appendChild(f);
+        mountEl.appendChild(f);   // skeleton stays until load fires
         return;
       }
       show2d(av,letter);
@@ -3052,6 +3070,14 @@
   var _lastReturnLoad=0;
   function refreshOnReturn(){
     if(!$("#authgate").hidden) return;
+    // Same never-under-their-feet guards as the 15s poll below: refocusing the
+    // tab mid-task (e.g. alt-tabbing to Asana to copy a PAT, then back) used to
+    // rebuild #conns and silently wipe the half-typed input (repro 2026-07-20).
+    if(document.querySelector("tr.detail:not([hidden])")) return;
+    if(document.getElementById("params-scrim")) return;
+    if(document.querySelector(".ac-details:not([hidden])")) return;
+    var el=document.activeElement;
+    if(el && (el.tagName==="INPUT"||el.tagName==="SELECT"||el.tagName==="TEXTAREA")) return;
     var now=Date.now(); if(now-_lastReturnLoad<1500) return; _lastReturnLoad=now;
     load();
   }

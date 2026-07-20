@@ -571,18 +571,20 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
 
 @router.post("/chat")
 async def org_chat_post(request: Request) -> JSONResponse:
-    """Cedric posts into the org's dashboard chat channel (the in-dashboard
-    approval surface that replaces Slack as the place decisions happen).
+    """Cedric posts into the org's chat channel. NOTE: the dashboard's chat UI
+    was removed 2026-07-20 (owner request) — no in-repo surface renders these
+    messages today; the channel is retained as the transport for the planned
+    Cedric bridge (docs/CEDRIC-DASHBOARD-BRIDGE.md), and the referenced action
+    itself still surfaces in the Action Center regardless.
 
     Body — exactly one of:
       {"message": {"text": "...", "sender_label"?: "Cedric"}}
       {"action_card": {"action_id": "...", "item": "...", "owner"?, "due"?,
                        "note"?: "<=300 chars lead-in shown above the card>"}}
 
-    An action_card renders in the dashboard chat with inline Approve & run /
-    Reject — those controls hit the EXISTING canonical doors, so the decision
-    still converges on action_approvals; this endpoint only carries the
-    conversation. Distilled content only (never transcript text)."""
+    Decisions converge on the EXISTING canonical doors (action_approvals);
+    this endpoint only carries the conversation. Distilled content only
+    (never transcript text)."""
     err, org = await _machine_gate(request)
     if err:
         return err
