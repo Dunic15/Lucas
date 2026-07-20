@@ -228,3 +228,139 @@ def run_action(
         "configured_props": configured_props or {},
     }
     return _request("POST", "actions/run", json_body=body)
+
+
+# ── low-level authed request (auto-retries once on a 401 token expiry) ───────
+# Safe ONLY for idempotent calls (GET/DELETE): a blind retry must never be used
+# on the proxy write path, where it could double-send a POST.
+def _authed_request(method: str, url: str, *, params: Optional[dict] = None,
+                    json_body: Optional[dict] = None, timeout: float = 30):
+    if not enabled():
+        raise PipedreamUnconfigured("pipedream not configured")
+    import httpx
+
+    try:
+        resp = httpx.request(method, url, headers=_headers(), params=params,
+                             json=json_body, timeout=timeout)
+    except Exception as exc:  # noqa: BLE001
+        raise PipedreamError(f"{method} failed") from exc
+    if resp.status_code == 401:
+        _fetch_access_token()
+        try:
+            resp = httpx.request(method, url, headers=_headers(), params=params,
+                                 json=json_body, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001
+            raise PipedreamError(f"{method} retry failed") from exc
+    return resp
+
+
+def _b64url_nopad(value: str) -> str:
+    """base64url without padding — the Connect Proxy target-URL encoding."""
+    import base64
+    return base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+# ── app catalog search (the generic 3,000+ app grid) ────────────────────────
+
+def search_apps(query: str = "", *, limit: int = 30, after: str = "") -> dict:
+    """One page of Pipedream's app catalog (optionally free-text filtered).
+    Returns {apps:[{slug,name,description,categories,img}], next_cursor, total}.
+    NOTE: /connect/apps is NOT project-scoped."""
+    limit = max(1, min(int(limit or 30), 100))
+    params: dict[str, Any] = {"limit": str(limit)}
+    if query:
+        params["q"] = query
+    if after:
+        params["after"] = after
+    resp = _authed_request("GET", f"{_base()}/connect/apps", params=params)
+    if resp.status_code >= 400:
+        raise PipedreamError(f"list apps http {resp.status_code}")
+    data = resp.json() or {}
+    raw = data.get("data")
+    apps = []
+    if isinstance(raw, list):
+        for a in raw:
+            if not isinstance(a, dict):
+                continue
+            slug = a.get("name_slug")
+            if not slug:
+                continue
+            apps.append({
+                "slug": slug,
+                "name": a.get("name") or slug,
+                "description": a.get("description") or "",
+                "categories": a.get("categories") or [],
+                "img": a.get("img_src") or "",
+            })
+    page = data.get("page_info") or {}
+    # A short page is the last page; a full one may have more.
+    next_cursor = str(page.get("end_cursor") or "") if len(apps) >= limit else ""
+    return {"apps": apps, "next_cursor": next_cursor, "total": page.get("total_count")}
+
+
+# ── Connect Proxy — run any authenticated REST call against a connected app ──
+# Pipedream injects the account's credentials server-side; we send the target
+# app's own API request. This is the generic execution path (mirrors Cedric's
+# proxyGoogleCaller). NO auto-retry: a 401 is surfaced to the caller so a write
+# is never blindly re-sent.
+
+def proxy_request(external_user_id: str, account_id: str, method: str, url: str,
+                  *, json_body: Optional[Any] = None,
+                  headers: Optional[dict] = None, timeout: float = 30) -> dict:
+    """Call ``url`` (the app's own API) through the Connect Proxy on the org's
+    connected account. Returns {status, ok, json, text?}. Never raises on a
+    downstream 4xx/5xx — the caller decides. Raises PipedreamError only on a
+    transport failure or when the feature is unconfigured."""
+    if not enabled():
+        raise PipedreamUnconfigured("pipedream not configured")
+    import json as _json
+
+    import httpx
+
+    proxy_url = _project_url(f"proxy/{_b64url_nopad(url)}")
+    params = {"external_user_id": str(external_user_id), "account_id": str(account_id)}
+    hdrs = {
+        "Authorization": f"Bearer {_access_token()}",
+        "x-pd-environment": environment(),
+    }
+    content = None
+    if json_body is not None:
+        hdrs["x-pd-proxy-Content-Type"] = "application/json"
+        content = _json.dumps(json_body)
+    # App-required headers the proxy forwards downstream (prefix stripped),
+    # e.g. Notion-Version. Carried per-app by the mapper/playbooks.
+    for k, v in (headers or {}).items():
+        hdrs[f"x-pd-proxy-{k}"] = str(v)
+    try:
+        resp = httpx.request(method.upper(), proxy_url, headers=hdrs,
+                             params=params, content=content, timeout=timeout)
+    except Exception as exc:  # noqa: BLE001
+        raise PipedreamError(f"proxy {method} failed") from exc
+    out: dict[str, Any] = {"status": resp.status_code, "ok": resp.status_code < 400}
+    if "application/json" in resp.headers.get("content-type", "").lower():
+        try:
+            out["json"] = resp.json()
+        except Exception:  # noqa: BLE001
+            out["json"] = None
+            out["text"] = resp.text
+    else:
+        out["json"] = None
+        out["text"] = resp.text
+    return out
+
+
+# ── revoke a connected account (idempotent) ─────────────────────────────────
+
+def delete_account(account_id: str) -> bool:
+    """Delete a connected account on Pipedream (revokes the stored grant).
+    Idempotent: an already-gone account (404) counts as success. Best effort."""
+    if not (enabled() and account_id):
+        return False
+    from urllib.parse import quote
+    try:
+        resp = _authed_request(
+            "DELETE", _project_url(f"accounts/{quote(str(account_id), safe='')}"),
+        )
+    except PipedreamError:
+        return False
+    return resp.status_code < 400 or resp.status_code == 404

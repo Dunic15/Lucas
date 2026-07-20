@@ -3320,6 +3320,53 @@
   // Connect Link and returns here with ?pd=connected. 404 ⇒ feature not
   // enabled on this deployment.
   var _pdInflight=false;
+  var _pdConnected={};   // slug -> account (every connected app, from /accounts)
+  function _pdName(s){ return (s||"").split(/[_-]/).map(function(w){return w?w.charAt(0).toUpperCase()+w.slice(1):w;}).join(' '); }
+  function _pdDisc(app,btn){
+    if(btn){ btn.disabled=true; btn.textContent="Disconnecting…"; }
+    fetch("/dashboard/pipedream/disconnect",{method:"POST",headers:headers(),body:JSON.stringify({app:app})})
+      .then(function(r){ return r.json().catch(function(){return {};}); })
+      .then(function(){ loadPipedream(); })
+      .catch(function(){ if(btn){ btn.disabled=false; btn.textContent="Disconnect"; } });
+  }
+  function _pdCard(a){
+    var slug=esc(a.slug), nm=esc(a.name||_pdName(a.slug)), acct=_pdConnected[a.slug], on=!!acct;
+    var acctName=(on&&acct&&acct.name)?(' · '+esc(acct.name)):'';
+    var img=a.img?('<img src="'+esc(a.img)+'" alt="" style="width:18px;height:18px;border-radius:4px;vertical-align:-3px;margin-right:6px"/>'):'';
+    var desc=a.description?esc(a.description):('Connect '+nm+' through Pipedream Connect — managed OAuth.');
+    return '<div class="conn"><div class="nm">'+img+nm+' <span class="stchip" style="margin-left:6px">via Pipedream</span></div>'+
+      '<div class="ds">'+desc+'</div>'+
+      '<div class="foot"><span class="cstat'+(on?" on":"")+'"><b></b>'+(on?("Connected"+acctName):"Not connected")+'</span>'+
+      '<a class="btn'+(on?"":" primary")+'" style="text-decoration:none" href="/dashboard/pipedream/connect?app='+slug+'">'+(on?"Reconnect":"Connect")+'</a>'+
+      (on?('<button class="btn pd-disc" data-app="'+slug+'" style="margin-left:6px">Disconnect</button>'):'')+
+      '</div></div>';
+  }
+  function _pdBind(scope){
+    (scope||document).querySelectorAll('.pd-disc').forEach(function(b){
+      if(b._pdb) return; b._pdb=1;
+      b.addEventListener('click',function(){ _pdDisc(b.getAttribute('data-app'),b); });
+    });
+  }
+  function _pdSearch(q,after,append){
+    var grid=$("#pd-grid"); if(!grid) return;
+    var url="/dashboard/pipedream/apps?q="+encodeURIComponent(q||"")+(after?("&after="+encodeURIComponent(after)):"");
+    if(!append) grid.innerHTML='<div class="empty" style="padding:14px">Searching…</div>';
+    fetch(url,{headers:headers(),cache:"no-store"})
+      .then(function(r){ return r.json().catch(function(){return {};}); })
+      .then(function(j){
+        var apps=(j&&j.apps)||[];
+        var mw=$("#pd-more-wrap"); if(mw) mw.remove();
+        var html=apps.map(_pdCard).join('');
+        if(append) grid.insertAdjacentHTML('beforeend',html);
+        else grid.innerHTML=apps.length?html:'<div class="empty" style="padding:14px">No apps match “'+esc(q||"")+'”.</div>';
+        _pdBind(grid);
+        if(j&&j.next_cursor){
+          grid.insertAdjacentHTML('afterend','<div id="pd-more-wrap" style="margin-top:10px"><button class="btn" id="pd-more">Load more</button></div>');
+          var mb=$("#pd-more"); if(mb) mb.addEventListener('click',function(){ mb.disabled=true; _pdSearch(q,j.next_cursor,true); });
+        }
+      })
+      .catch(function(){ if(!append) grid.innerHTML='<div class="empty" style="padding:14px">Search failed. <button class="btn" id="pd-retry3" style="margin-left:8px;padding:6px 12px;font-size:.78rem">Try again</button></div>'; var rb=$("#pd-retry3"); if(rb) rb.addEventListener("click",function(){ _pdSearch(q,"",false); }); });
+  }
   function loadPipedream(){
     var box=$("#pdconns"); if(!box || _pdInflight) return;
     _pdInflight=true;
@@ -3336,23 +3383,24 @@
           var rb=$("#pd-retry"); if(rb) rb.addEventListener("click",function(){ loadPipedream(); });
           return;
         }
-        var apps=(res.j&&res.j.apps)||[];
+        var featured=(res.j&&res.j.apps)||[];
+        var connectedApps=(res.j&&res.j.connected_apps)||[];
         var env=(res.j&&res.j.environment)||"development";
         var degraded=res.j&&res.j.degraded;
+        _pdConnected={};
+        connectedApps.forEach(function(a){ if(a&&a.app) _pdConnected[a.app]=a; });
         var html='';
-        html+='<div class="cnote" style="padding:9px 13px;margin-bottom:10px">Environment: <b>'+esc(env)+'</b>. Connecting here authorizes the tool on Pipedream and scopes it to your organization — the native Connections tab is separate and unaffected.</div>';
+        html+='<div class="cnote" style="padding:9px 13px;margin-bottom:10px">Environment: <b>'+esc(env)+'</b>. Connecting authorizes the tool on Pipedream, scoped to your organization. Any of Pipedream’s 3,000+ apps can be connected below — the native Connections tab is separate and unaffected.</div>';
         if(degraded){
           html+='<div class="cnote" style="padding:9px 13px;margin-bottom:10px;border-color:rgba(245,72,77,.4)">Couldn’t reach Pipedream just now, so connection status may be out of date. You can still start a connect flow below.</div>';
         }
-        apps.forEach(function(a){
-          var slug=esc(a.slug), nm=esc(a.name||a.slug), on=!!a.connected;
-          var acctName=a.account&&a.account.name?(' · '+esc(a.account.name)):'';
-          html+='<div class="conn"><div class="nm">'+nm+' <span class="stchip" style="margin-left:6px">via Pipedream</span></div>'+
-            '<div class="ds">Connect '+nm+' through Pipedream Connect — managed OAuth plus pre-built actions.</div>'+
-            '<div class="foot"><span class="cstat'+(on?" on":"")+'"><b></b>'+(on?("Connected"+acctName):"Not connected")+'</span>'+
-            '<a class="btn'+(on?"":" primary")+'" style="text-decoration:none" href="/dashboard/pipedream/connect?app='+slug+'">'+(on?"Reconnect":"Connect")+'</a>'+
-            '</div></div>';
-        });
+        if(connectedApps.length){
+          html+='<div class="sub" style="margin:4px 0 8px;font-weight:600">Your connected tools</div><div id="pd-connected">'+
+            connectedApps.map(function(a){ return _pdCard({slug:a.app,name:_pdName(a.app)}); }).join('')+'</div>';
+        }
+        html+='<div class="sub" style="margin:16px 0 8px;font-weight:600">Connect a tool</div>'+
+          '<div style="display:flex;gap:8px;margin-bottom:10px"><input id="pd-search" type="text" placeholder="Search 3,000+ apps (Notion, Stripe, HubSpot…)" autocomplete="off" style="flex:1;box-sizing:border-box;background:transparent;border:1px solid var(--line);border-radius:8px;padding:8px 11px;color:inherit;font:inherit;font-size:.82rem"/><button class="btn" id="pd-search-btn">Search</button></div>'+
+          '<div id="pd-grid"></div>';
         // Advanced: run a pre-built action against a connected account (the
         // "pre-configured actions" surface). Free-form so any action slug can
         // be tested without hardcoding per-app IDs.
@@ -3365,6 +3413,12 @@
           '<pre id="pd-run-out" style="margin-top:9px;max-height:220px;overflow:auto;font-size:.72rem;white-space:pre-wrap;word-break:break-word"></pre>'+
           '</div></details>';
         box.innerHTML=html;
+        _pdBind(box);
+        var grid=$("#pd-grid"); if(grid){ grid.innerHTML=featured.map(_pdCard).join(''); _pdBind(grid); }
+        var sb=$("#pd-search-btn"), si=$("#pd-search");
+        function go(){ _pdSearch((si&&si.value||"").trim(),"",false); }
+        if(sb) sb.addEventListener("click",go);
+        if(si) si.addEventListener("keydown",function(e){ if(e.key==="Enter"){ e.preventDefault(); go(); } });
         var runBtn=$("#pd-run");
         if(runBtn) runBtn.addEventListener("click",function(){
           var out=$("#pd-run-out"); var aid=($("#pd-action-id").value||"").trim();
