@@ -3477,12 +3477,21 @@
       // zone's own click handler (which opens the files dialog).
       if(pickFiles&&file) pickFiles.addEventListener("click",function(e){ e.stopPropagation(); file.click(); });
       if(pickFolder){
-        // Some browsers (older/mobile Safari) can't do directory selection —
-        // drop the button rather than open a picker that silently ignores it.
-        if(!dir||!("webkitdirectory" in dir)) pickFolder.hidden=true;
+        // Prefer the File System Access API — window.showDirectoryPicker() opens
+        // a REAL directory picker (Chrome/Edge). The webkitdirectory <input> was
+        // unreliable in practice: the native macOS dialog sometimes stayed in
+        // file-select mode, so "Choose folder" only let you pick files. Fall back
+        // to the input where the API is missing (Firefox/Safari); if BOTH are
+        // absent (older/mobile), hide the button rather than open a dead dialog.
+        var canModern=(typeof window.showDirectoryPicker==="function");
+        var canInput=!!(dir&&("webkitdirectory" in dir));
+        if(!canModern&&!canInput){ pickFolder.hidden=true; }
         else {
-          pickFolder.addEventListener("click",function(e){ e.stopPropagation(); dir.click(); });
-          dir.addEventListener("change",function(){ _brainUpload(sel,dir.files); });
+          if(canInput){ try{ dir.webkitdirectory=true; }catch(e){} dir.addEventListener("change",function(){ _brainUpload(sel,dir.files); }); }
+          pickFolder.addEventListener("click",function(e){
+            e.stopPropagation();
+            if(canModern) _brainPickDir(sel); else dir.click();
+          });
         }
       }
       if(drop&&file){
@@ -3589,6 +3598,43 @@
   var _BR_MAX_FILES=100;   // uploads are one request each — keep it bounded
   var _BR_MAX_SCAN=500;    // stop WALKING long before we melt a big tree
 
+  /** File System Access API folder pick (Chrome/Edge). showDirectoryPicker()
+   *  is a guaranteed directory chooser — no "file mode" ambiguity — so this is
+   *  the primary path. Recurses the handle into the same {file, path} items the
+   *  rest of the pipeline expects, honouring the dotfile/noise-dir/scan caps.
+   *  Promise-based (no async/await) to match the rest of this script. */
+  function _brainReadDirHandle(handle, prefix, scan){
+    var it=handle.values();   // async iterator: .next() returns a Promise
+    function step(){
+      if(scan.items.length>=_BR_MAX_SCAN){ scan.truncated=true; return Promise.resolve(); }
+      return it.next().then(function(res){
+        if(res.done) return;
+        var entry=res.value, name=entry.name||"";
+        if(/^\./.test(name)) return step();                  // dotfiles + dot-dirs
+        if(entry.kind==="file"){
+          return entry.getFile().then(function(f){ scan.items.push({file:f,path:prefix+name}); return step(); },
+                                      function(){ return step(); });  // skip one unreadable file
+        }
+        if(entry.kind==="directory"){
+          if(_BR_SKIP_DIR.test(name)) return step();         // node_modules, dist, …
+          return _brainReadDirHandle(entry, prefix+name+"/", scan).then(step);
+        }
+        return step();
+      });
+    }
+    return step();
+  }
+  function _brainPickDir(avatarId){
+    window.showDirectoryPicker({id:"cedric-brain",mode:"read"}).then(function(handle){
+      var scan={items:[],truncated:false};
+      return _brainReadDirHandle(handle, (handle.name||"")+"/", scan).then(function(){
+        _brainUploadItems(avatarId, scan.items, scan.truncated);
+      });
+    }).catch(function(e){
+      if(e&&(e.name==="AbortError"||e.name==="NotAllowedError")) return;  // user cancelled
+      toast("Couldn’t read the folder: "+((e&&e.message)||e),true);
+    });
+  }
   /** DataTransferItemList → FileSystemEntry[]. Must be called synchronously
    *  inside the drop handler. Empty when the browser lacks the entry API. */
   function _brainEntries(items){
