@@ -615,6 +615,51 @@ def claim_action_execution(
     return True
 
 
+def reopen_failed_action(
+    action_id: str, *, org_id: str = DEMO_ORG_ID, detail: str = ""
+) -> bool:
+    """CAS a 'failed' receipt back to 'approved' so the approve door can retry
+    it (the owner clicked Approve again on a failed action — live gap
+    2026-07-20: the button promised a retry that never re-dispatched).
+
+    'failed' stays terminal everywhere else on purpose — set_action_status
+    must keep refusing to un-fail so late/replayed Cedric events can't
+    repaint a receipt — which makes this narrow, caller-explicit CAS the one
+    sanctioned exit. done/rejected remain immutable. The matching ledger_items
+    row reopens too, so the retry's real outcome closes it later. Returns True
+    when the caller may re-run the execution/dispatch pipeline."""
+    aid = (action_id or "").strip()
+    if not aid:
+        return False
+    note = (detail or "retrying via dashboard").strip()[:300]
+    from . import control_plane
+
+    pg_reopened = False
+    if control_plane.enabled() and control_plane.is_durable_org(org_id):
+        from . import outbox_pg
+
+        verdict = outbox_pg.reopen_failed_action(org_id, aid, note)
+        if verdict == "lost":
+            return False
+        pg_reopened = verdict == "reopened"
+        # 'missing' — no durable row; the local guard below is authoritative.
+    with store._LOCK, store._connect() as conn:
+        cur = conn.execute(
+            """UPDATE action_status SET status='approved', detail=?, updated_at=?
+               WHERE org_id=? AND action_id=? AND status='failed'""",
+            (note, time.time(), org_id, aid),
+        )
+        flipped = cur.rowcount > 0
+        if flipped or pg_reopened:
+            conn.execute(
+                """UPDATE ledger_items
+                   SET status='open', resolved_at=NULL, resolution_detail=''
+                   WHERE action_id=? AND org_id=? AND status='failed'""",
+                (aid, org_id),
+            )
+    return flipped or pg_reopened
+
+
 def record_action_decision(
     action_id: str, *, org_id: str = DEMO_ORG_ID, decision: str,
     selected_slot_id: str = "", idempotency_key: str = "",

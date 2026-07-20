@@ -2125,16 +2125,30 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         latest = await run_in_threadpool(
             ledger.action_statuses, [aid], org_id=org
         )
-        return JSONResponse(
-            {
-                "ok": True, "action_id": aid, "approved": True,
-                "executed": False, "idempotent_replay": True,
-                "capability_blocked": False, "typed": bool(typed),
-                "execution_mode": settings.execution_mode,
-                "status": latest.get(aid),
-            },
-            headers=_NO_STORE,
+        prior = str((latest.get(aid) or {}).get("status") or "").lower()
+        # A failed receipt is the ONE re-approvable state: the row's Approve
+        # button promises a retry (dead-end comment below), and before this
+        # existed the promise was a lie — the replay path answered from the
+        # decision record without ever re-dispatching (live repro 2026-07-20).
+        # reopen_failed_action is a CAS, so a double-click still retries once;
+        # done/rejected/executing replay as before.
+        retrying = prior == "failed" and await run_in_threadpool(
+            lambda: ledger.reopen_failed_action(
+                aid, org_id=org, detail="retrying · re-approved via dashboard"
+            )
         )
+        if not retrying:
+            return JSONResponse(
+                {
+                    "ok": True, "action_id": aid, "approved": True,
+                    "executed": False, "idempotent_replay": True,
+                    "capability_blocked": False, "typed": bool(typed),
+                    "execution_mode": settings.execution_mode,
+                    "status": latest.get(aid),
+                },
+                headers=_NO_STORE,
+            )
+        # Reopened: fall through to the normal execution/dispatch pipeline.
 
     # Mark approved (non-terminal, monotonic) in the shared provenance channel.
     # Best-effort: a durable-org no-op here (a native action has no Cedric
@@ -2156,7 +2170,23 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     if route == "browser":
         from . import browser
 
-        if browser.enabled() and await run_in_threadpool(
+        browser_error = ""
+        if not browser.enabled():
+            # Same dead-end honesty as the Cedric dispatch below: nothing can
+            # run this step, so say WHY as a failed receipt instead of leaving
+            # a silent "approved" (the exact bug 8e6e15a fixed for the Cedric
+            # route — this route had been left out). failed is re-approvable
+            # via reopen_failed_action once the operator is enabled.
+            browser_error = (
+                "The browser operator is switched off on this deployment, so "
+                "this step can't run. Enable it, then approve again."
+            )
+            await run_in_threadpool(
+                ledger.set_action_status, aid, "failed", browser_error,
+                org_id=org,
+            )
+            new_status = "failed"
+        elif await run_in_threadpool(
             lambda: ledger.claim_action_execution(
                 aid, org_id=org,
                 idempotency_key=action_plane.execution_idempotency_key(aid),
@@ -2182,6 +2212,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             {"ok": True, "action_id": aid, "approved": True,
              "executed": executed, "capability_blocked": False,
              "typed": bool(typed), "execution_mode": settings.execution_mode,
+             "execution_error": browser_error,
              "status": latest.get(aid)},
             headers=_NO_STORE,
         )
@@ -2255,7 +2286,9 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             # Dead end: nothing ran natively AND Cedric didn't accept it. Record
             # WHY as a failed receipt (owner ask 2026-07-20) instead of leaving
             # a silent "approved" the user reads as success. 'failed' keeps the
-            # Approve button (retry once Cedric can run it), unlike 'rejected'.
+            # Approve button, and a re-approve really does retry: the replay
+            # branch above reopens the receipt (ledger.reopen_failed_action)
+            # and re-enters this pipeline.
             execution_error = _execution_failure_detail(dispatch_reason)
             await run_in_threadpool(
                 ledger.set_action_status, aid, "failed",
@@ -2378,10 +2411,11 @@ def _chat_caller_org(request: Request):
 @router.get("/dashboard/chat")
 async def dashboard_chat_list(request: Request, after: int = 0) -> JSONResponse:
     """The org's chat with Cedric: messages after ``after`` (poll cursor) plus
-    the LIVE state of every referenced action card — a card always renders the
-    current truth (Approve & run / Reject before a decision, the receipt pill
-    after), no matter when it was posted. Decisions never live in chat rows;
-    they converge on the canonical approval channel like every other surface."""
+    the LIVE state of every referenced action card. NOTE: the dashboard's chat
+    UI was removed 2026-07-20 (owner request) — nothing in-repo renders this
+    today; the endpoint is retained as the transport for the planned Cedric
+    bridge (docs/CEDRIC-DASHBOARD-BRIDGE.md). Decisions never live in chat
+    rows; they converge on the canonical approval channel (Action Center)."""
     org, _user = _chat_caller_org(request)
     if isinstance(org, JSONResponse):
         return org

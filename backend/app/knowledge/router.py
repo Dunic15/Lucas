@@ -75,9 +75,21 @@ def _upload_document(org: str, source_id: str, body: dict) -> tuple[int, dict]:
         return 400, {"error": "filename is required"}
     text = (body or {}).get("text")
     content_b64 = (body or {}).get("content_base64")
+    # Enforce the cap on the ENCODED payload, before any decode: b64decode
+    # (and .encode()) allocate the full output buffer, so checking len(data)
+    # afterwards would admit an arbitrary-size allocation first — an OOM
+    # hazard in the same process that runs live meetings. 4/3 is base64's
+    # exact expansion; +8 covers padding/newlines slack.
+    max_encoded = settings.knowledge_max_file_bytes * 4 // 3 + 8
     if isinstance(text, str) and text.strip():
+        if len(text) > settings.knowledge_max_file_bytes:
+            return 413, {"error": "file too large",
+                         "max_bytes": settings.knowledge_max_file_bytes}
         data = text.encode()
     elif isinstance(content_b64, str) and content_b64.strip():
+        if len(content_b64) > max_encoded:
+            return 413, {"error": "file too large",
+                         "max_bytes": settings.knowledge_max_file_bytes}
         try:
             data = base64.b64decode(content_b64, validate=True)
         except Exception:  # noqa: BLE001
