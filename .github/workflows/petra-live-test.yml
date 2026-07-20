@@ -13,22 +13,37 @@ jobs:
     timeout-minutes: 5
     env:
       API_BASE: https://dhfgfe6yw6.eu-central-1.awsapprunner.com
-      MEETING_KEY: acv-qedk-wcf
     steps:
-      - name: Inspect production meeting archive response
+      - name: Inspect finalized meeting artifacts safely
         run: |
           set -euo pipefail
-          code=$(curl --silent --show-error -D headers.txt -o body.txt -w '%{http_code}' "$API_BASE/meetings")
+          code=$(curl --silent --show-error -o meetings.json -w '%{http_code}' "$API_BASE/meetings/list")
           echo "HTTP status: $code"
-          echo '--- headers ---'
-          cat headers.txt
-          echo '--- body preview ---'
-          head -c 12000 body.txt
-          echo
-          echo '--- meeting match ---'
-          if grep -q "$MEETING_KEY" body.txt; then
-            echo "FOUND $MEETING_KEY"
-          else
-            echo "NOT FOUND $MEETING_KEY"
-            exit 1
-          fi
+          test "$code" = "200"
+          python - <<'PY'
+          import json, time
+          data=json.load(open('meetings.json'))
+          meetings=data.get('meetings', []) if isinstance(data, dict) else []
+          print('finalized_meeting_count=', len(meetings))
+          now=time.time()
+          for idx, m in enumerate(meetings[:8], 1):
+              a=m.get('artifact') or {}
+              transcript=a.get('transcript') or ''
+              actions=a.get('actions') or a.get('checklist') or []
+              print(json.dumps({
+                  'index': idx,
+                  'bot_id': m.get('bot_id'),
+                  'saved_at': m.get('saved_at'),
+                  'age_seconds': round(now-float(m.get('saved_at') or now), 1),
+                  'summary': a.get('summary'),
+                  'actions': actions,
+                  'decisions': a.get('decisions') or [],
+                  'risks': a.get('risks') or [],
+                  'readiness_score': a.get('readiness_score'),
+                  'transcript_lines': len(transcript.splitlines()) if transcript else 0,
+              }, ensure_ascii=False))
+          recent=[m for m in meetings if now-float(m.get('saved_at') or 0) < 1800]
+          print('finalized_in_last_30m=', len(recent))
+          if not recent:
+              raise SystemExit('No finalized artifact in the last 30 minutes; session may still be live or not started')
+          PY
