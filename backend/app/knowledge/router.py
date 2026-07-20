@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 
 from .. import auth, avatars, rag
 from ..config import settings
-from . import dal, enabled, storage
+from . import dal, enabled, ingest, storage
 
 router = APIRouter(tags=["knowledge"])
 
@@ -340,6 +340,12 @@ async def dashboard_knowledge(tail: str, request: Request) -> JSONResponse:
             return _test_search(org, body)
         if parts == ["jobs"] and request.method == "GET":
             return 200, {"jobs": dal.job_rows(org)}
+        if parts == ["drive", "folders"] and request.method == "GET":
+            # When Google is connected, the dashboard offers a folder PICKER
+            # (no pasted link). Lists the org's Drive folders with its token.
+            folders, reason = ingest.list_folders(org)
+            return 200, {"connected": not reason, "folders": folders,
+                         "reason": reason}
         return 404, {"error": "unknown knowledge route"}
 
     code, payload = await run_in_threadpool(run)

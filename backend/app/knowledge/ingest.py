@@ -164,6 +164,42 @@ def rebuild_indexes(org_id: str) -> int:
     return total
 
 
+def list_folders(org_id: str) -> tuple[list[dict], str]:
+    """List the org's Google Drive folders (id + name) with its OWN OAuth token,
+    so the dashboard can offer a PICKER instead of a pasted folder link when
+    Google is already connected. Returns (folders, "") or ([], reason) — never
+    raises; a missing token/scope is a clean reason, not a 500."""
+    from .. import google_client
+
+    token, err = google_client._access_token(org_id)
+    if not token:
+        return [], (f"google not connected ({err})" if err
+                    else "google not connected")
+    try:
+        resp = httpx.get(
+            _DRIVE_FILES_URL,
+            params={
+                "q": ("mimeType='application/vnd.google-apps.folder' "
+                      "and trashed=false"),
+                "fields": "files(id,name)",
+                "orderBy": "name",
+                "pageSize": 200,
+                "spaces": "drive",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15.0,
+        )
+    except Exception as e:  # noqa: BLE001
+        return [], f"drive list failed ({type(e).__name__})"
+    if resp.status_code == 403:
+        return [], "drive scope missing — reconnect Google including drive.readonly"
+    if resp.status_code != 200:
+        return [], f"drive list HTTP {resp.status_code}"
+    folders = [{"id": f["id"], "name": (f.get("name") or f["id"])[:200]}
+               for f in (resp.json().get("files") or []) if f.get("id")]
+    return folders, ""
+
+
 def sync_drive(org_id: str, source_id: str) -> int:
     """Pull an org's Drive folder with the org's OWN Google token.
 
