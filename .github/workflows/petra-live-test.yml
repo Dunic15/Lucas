@@ -1,0 +1,85 @@
+name: Petra Live Test
+
+on:
+  push:
+    branches:
+      - ops/petra-live-test-20260720
+    paths:
+      - .github/workflows/petra-live-test.yml
+
+permissions:
+  contents: read
+
+jobs:
+  send-petra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      API_BASE: https://dhfgfe6yw6.eu-central-1.awsapprunner.com
+      MEETING_URL: https://meet.google.com/acv-qedk-wcf
+      LAURA_API_TOKEN: ${{ secrets.LAURA_API_TOKEN }}
+    steps:
+      - name: Check installed avatars
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error "$API_BASE/avatars" | tee avatars.json
+          python - <<'PY'
+          import json
+          data = json.load(open('avatars.json'))
+          avatars = data.get('avatars', data) if isinstance(data, dict) else data
+          ids = [str(a.get('id')) for a in avatars if isinstance(a, dict)]
+          print('Installed avatar ids:', ', '.join(ids))
+          if 'petra' not in ids:
+              raise SystemExit('Petra is not installed on production')
+          PY
+
+      - name: Send Petra to the meeting
+        id: start
+        run: |
+          set -euo pipefail
+          auth=()
+          if [ -n "${LAURA_API_TOKEN:-}" ]; then
+            auth=(-H "Authorization: Bearer $LAURA_API_TOKEN")
+          fi
+          code=$(curl --silent --show-error \
+            -o start-response.json \
+            -w '%{http_code}' \
+            -X POST "$API_BASE/sessions/start" \
+            "${auth[@]}" \
+            -H 'Content-Type: application/json' \
+            --data '{"meeting_url":"https://meet.google.com/acv-qedk-wcf","avatar_id":"petra","context":{"meeting":{"title":"Petra live action test"},"brief_markdown":"Join this live test meeting. Listen for a direct action request, propose the structured action, and wait for explicit approval before execution."},"external_ref":{"source":"chatgpt-live-test","date":"2026-07-20"}}')
+          cat start-response.json
+          echo
+          echo "HTTP status: $code"
+          if [ "$code" != "200" ] && [ "$code" != "409" ]; then
+            exit 1
+          fi
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          data=json.load(open('start-response.json'))
+          print('bot_id='+str(data.get('bot_id','')))
+          print('conversation_id='+str(data.get('conversation_id','')))
+          PY
+
+      - name: Poll Laura session state
+        if: steps.start.outputs.bot_id != ''
+        run: |
+          set -euo pipefail
+          auth=()
+          if [ -n "${LAURA_API_TOKEN:-}" ]; then
+            auth=(-H "Authorization: Bearer $LAURA_API_TOKEN")
+          fi
+          bot='${{ steps.start.outputs.bot_id }}'
+          for i in 1 2 3 4 5 6; do
+            echo "Poll $i"
+            curl --silent --show-error --fail-with-body \
+              "${auth[@]}" \
+              "$API_BASE/sessions/$bot/artifact" | tee artifact.json
+            echo
+            python - <<'PY'
+          import json
+          data=json.load(open('artifact.json'))
+          print('session_status=', data.get('status', 'artifact-ready'))
+          PY
+            sleep 15
+          done
