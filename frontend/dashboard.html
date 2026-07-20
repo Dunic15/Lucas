@@ -3349,6 +3349,7 @@
   }
   function _pdSearch(q,after,append){
     var grid=$("#pd-grid"); if(!grid) return;
+    if(!append){ var lab=$("#pd-grid-label"); if(lab) lab.textContent=q?('Results for “'+q+'”'):'Popular apps'; }
     var url="/dashboard/pipedream/apps?q="+encodeURIComponent(q||"")+(after?("&after="+encodeURIComponent(after)):"");
     if(!append) grid.innerHTML='<div class="empty" style="padding:14px">Searching…</div>';
     fetch(url,{headers:headers(),cache:"no-store"})
@@ -3390,7 +3391,9 @@
         _pdConnected={};
         connectedApps.forEach(function(a){ if(a&&a.app) _pdConnected[a.app]=a; });
         var html='';
-        html+='<div class="cnote" style="padding:9px 13px;margin-bottom:10px">Environment: <b>'+esc(env)+'</b>. Connecting authorizes the tool on Pipedream, scoped to your organization. Any of Pipedream’s 3,000+ apps can be connected below — the native Connections tab is separate and unaffected.</div>';
+        html+='<div class="cnote" style="padding:9px 13px;margin-bottom:12px">Connect any of Pipedream’s 3,000+ apps to your organization (environment: <b>'+esc(env)+'</b>). The native Connections tab is separate and unaffected.</div>';
+        // Search is the primary connect action — pinned to the top, above the app cards.
+        html+='<div style="display:flex;gap:8px;margin-bottom:14px"><input id="pd-search" type="text" placeholder="Search apps to connect — Asana, Notion, HubSpot, Stripe…" autocomplete="off" style="flex:1;box-sizing:border-box;background:transparent;border:1px solid var(--line);border-radius:9px;padding:10px 13px;color:inherit;font:inherit;font-size:.86rem"/><button class="btn primary" id="pd-search-btn">Search</button></div>';
         if(degraded){
           html+='<div class="cnote" style="padding:9px 13px;margin-bottom:10px;border-color:rgba(245,72,77,.4)">Couldn’t reach Pipedream just now, so connection status may be out of date. You can still start a connect flow below.</div>';
         }
@@ -3398,8 +3401,7 @@
           html+='<div class="sub" style="margin:4px 0 8px;font-weight:600">Your connected tools</div><div id="pd-connected">'+
             connectedApps.map(function(a){ return _pdCard({slug:a.app,name:_pdName(a.app)}); }).join('')+'</div>';
         }
-        html+='<div class="sub" style="margin:16px 0 8px;font-weight:600">Connect a tool</div>'+
-          '<div style="display:flex;gap:8px;margin-bottom:10px"><input id="pd-search" type="text" placeholder="Search 3,000+ apps (Notion, Stripe, HubSpot…)" autocomplete="off" style="flex:1;box-sizing:border-box;background:transparent;border:1px solid var(--line);border-radius:8px;padding:8px 11px;color:inherit;font:inherit;font-size:.82rem"/><button class="btn" id="pd-search-btn">Search</button></div>'+
+        html+='<div class="sub" id="pd-grid-label" style="margin:16px 0 8px;font-weight:600">Popular apps</div>'+
           '<div id="pd-grid"></div>';
         // Advanced: run a pre-built action against a connected account (the
         // "pre-configured actions" surface). Free-form so any action slug can
