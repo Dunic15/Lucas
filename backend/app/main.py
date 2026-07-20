@@ -2768,6 +2768,14 @@ _DEMO_BROWSE_RE = re.compile(
     r"passo[\s-]?passo|come (si )?(crea|creare|fa|fare|usa|usare|invit|aggiung))\b",
     re.IGNORECASE | re.DOTALL)
 
+# Per-meeting walkthrough epoch (keyed by bot_id), DECOUPLED from
+# speech_generation. A running browser walkthrough is cancelled only when this
+# advances — on a new browse ask or an explicit dismiss — never by the ambient
+# per-utterance generation churn of a 1:1 meeting, which was draining a turn
+# backlog the instant we awaited the walkthrough and cancelling every tour at
+# step 0. Bounded by live meetings; overwritten per ask.
+_BROWSE_EPOCH: dict[str, int] = {}
+
 
 def _is_live_browse_item(text: str) -> bool:
     """A captured/extracted item that is really a LIVE browser-tour request
@@ -6093,6 +6101,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if (called or _browse_solo) and browser_meeting.trigger_enabled():
         _ask = question if called else text
         if detect_browse_dismiss(_ask):
+            # Explicit stop → advance the walkthrough epoch so any running
+            # walkthrough cancels (it is not gated on speech_generation).
+            _BROWSE_EPOCH[session.bot_id] = (
+                _BROWSE_EPOCH.get(session.bot_id, 0) + 1)
+
             async def _hide_browser() -> None:
                 closed = await run_in_threadpool(
                     browser_meeting.close_for_meeting, session.bot_id)
@@ -6117,9 +6130,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # narration in _make_avatar_speak and (b) cancels the walkthrough
             # loop itself — she never talks over a human who took the floor.
             browse_gen = store.bump_speech_generation(session)
-
-            def _browse_cancelled() -> bool:
-                return session.speech_generation != browse_gen
+            # Claim the walkthrough epoch for THIS ask. Advancing it also cancels
+            # any walkthrough still running from a previous ask. Unlike
+            # speech_generation this is NOT bumped by ambient utterances, so the
+            # walkthrough survives a chatty 1:1 and the browser-open backlog.
+            browse_epoch = _BROWSE_EPOCH.get(session.bot_id, 0) + 1
+            _BROWSE_EPOCH[session.bot_id] = browse_epoch
 
             # Self-service connect: no saved login for this site → put a sign-in
             # link in the meeting chat (the tile is one-way video, so the human
@@ -6202,26 +6218,23 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 # event loop; fire-and-forget so it never blocks a step. Every
                 # line carries browse_gen, so a stop silences it server-side.
                 if browse_task:
-                    # Re-anchor the barge-in guard to NOW. Opening the browser
-                    # takes a couple seconds, and ANY turn in that window — most
-                    # often the human re-asking because nothing had visibly
-                    # happened yet — bumps the speech generation (every turn does,
-                    # see turn_gen above). The walkthrough would read that as "a
-                    # human took the floor" and cancel at step 0 (outcome=cancelled
-                    # steps=0). Bumping here makes the walkthrough own the floor
-                    # from its first step; a genuine barge-in mid-walkthrough still
-                    # advances past walk_gen and stops it.
-                    walk_gen = store.bump_speech_generation(session)
-
+                    # Cancel the walkthrough ONLY on a new browse ask or an
+                    # explicit dismiss (the per-meeting epoch) — never on the
+                    # ambient speech-generation churn of a 1:1, which drained a
+                    # turn backlog the instant we awaited and cancelled the recipe
+                    # at step 0. Narration is sent un-gated (generation=None) so it
+                    # plays through that churn; it stops when the epoch advances.
                     def _walk_cancelled() -> bool:
-                        return session.speech_generation != walk_gen
+                        return (_BROWSE_EPOCH.get(session.bot_id, 0)
+                                != browse_epoch)
 
                     def _narrate(narration_line: str) -> None:
+                        if _walk_cancelled():
+                            return
                         try:
                             asyncio.run_coroutine_threadsafe(
                                 _make_avatar_speak(
-                                    session, narration_line, force=True,
-                                    generation=walk_gen), loop)
+                                    session, narration_line, force=True), loop)
                         except Exception:  # noqa: BLE001
                             pass
                     walk = await run_in_threadpool(
@@ -6231,8 +6244,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                         cancel=_walk_cancelled)
                     if walk.get("closing") and not _walk_cancelled():
                         await _make_avatar_speak(
-                            session, walk["closing"], force=True,
-                            generation=walk_gen)
+                            session, walk["closing"], force=True)
 
             asyncio.create_task(_open_browser())
             return JSONResponse(
