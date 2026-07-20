@@ -3303,6 +3303,8 @@
         '.brdrop-t{margin-top:10px;font-size:1.02rem;color:var(--text)}'+
         '.brdrop-s{margin-top:5px;font-size:.82rem;color:var(--faint)}'+
         '.brlink{color:var(--accent);text-decoration:underline}'+
+        '.brpick{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:14px}'+
+        '.brpick .btn{font-size:.9rem}'+
         '.brrow2{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:12px}'+
         '.brstat{font-size:.8rem;color:var(--faint);margin-left:auto}'+
         '.brpaste-box{margin-top:12px;display:flex;flex-direction:column;gap:8px}'+
@@ -3338,10 +3340,15 @@
           '<div class="brpills">'+pills+'</div>'+
           '<div class="brdrop" id="brdrop" tabindex="0" role="button" aria-label="Add documents for '+esc(avName)+'">'+
             '<div class="brdrop-ic">⬆</div>'+
-            '<div class="brdrop-t">Drop documents here for <b>'+esc(avName)+'</b></div>'+
-            '<div class="brdrop-s">or <span class="brlink">click to browse</span> · '+
-              '<span class="brlink" id="brdir-link" role="button" tabindex="0">add a whole folder</span>'+
-              ' · PDF, Markdown, text, CSV</div>'+
+            '<div class="brdrop-t">Drag documents or a folder here for <b>'+esc(avName)+'</b></div>'+
+            '<div class="brdrop-s">PDF, Markdown, text, CSV</div>'+
+            // Two explicit buttons instead of one buried inline link: the folder
+            // picker was easy to miss, so people clicked "browse" (files-only) and
+            // hit a greyed-out Open on folders. Now the choice is unmissable.
+            '<div class="brpick">'+
+              '<button type="button" class="btn" id="brpick-files">📄 Choose files</button>'+
+              '<button type="button" class="btn" id="brpick-folder">📁 Choose folder</button>'+
+            '</div>'+
             '<input type="file" id="brfile" multiple hidden accept=".pdf,.md,.markdown,.txt,.csv,.json,.htm,.html,.log,text/*,application/pdf" />'+
             // Folder mode needs its OWN input: webkitdirectory is a property of
             // the picker, not of the selection, so one input can't offer both.
@@ -3368,15 +3375,19 @@
         '</div>';
 
       box.querySelectorAll("[data-brav]").forEach(function(b){ b.addEventListener("click",function(){ window._brainAvatar=b.getAttribute("data-brav"); loadBrain(true); }); });
-      var drop=$("#brdrop"), file=$("#brfile"), dir=$("#brdir"), dirLink=$("#brdir-link");
-      // Hide the folder affordance where the picker can't do directories
-      // (rather than opening a file dialog that ignores the promise).
-      if(dirLink&&(!dir||!("webkitdirectory" in dir))) dirLink.hidden=true;
-      else if(dirLink&&dir){
-        var openDir=function(e){ e.stopPropagation(); dir.click(); };
-        dirLink.addEventListener("click",openDir);
-        dirLink.addEventListener("keydown",function(e){ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openDir(e); } });
-        dir.addEventListener("change",function(){ _brainUpload(sel,dir.files); });
+      var drop=$("#brdrop"), file=$("#brfile"), dir=$("#brdir");
+      var pickFiles=$("#brpick-files"), pickFolder=$("#brpick-folder");
+      // stopPropagation so the button click doesn't ALSO bubble to the drop
+      // zone's own click handler (which opens the files dialog).
+      if(pickFiles&&file) pickFiles.addEventListener("click",function(e){ e.stopPropagation(); file.click(); });
+      if(pickFolder){
+        // Some browsers (older/mobile Safari) can't do directory selection —
+        // drop the button rather than open a picker that silently ignores it.
+        if(!dir||!("webkitdirectory" in dir)) pickFolder.hidden=true;
+        else {
+          pickFolder.addEventListener("click",function(e){ e.stopPropagation(); dir.click(); });
+          dir.addEventListener("change",function(){ _brainUpload(sel,dir.files); });
+        }
       }
       if(drop&&file){
         drop.addEventListener("click",function(e){ if(e.target!==file) file.click(); });
