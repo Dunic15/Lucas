@@ -3818,9 +3818,10 @@ def _wake_required(avatar: avatars.Avatar) -> bool:
     when unset. When true, every unprompted speech path is silenced: answers,
     backchannels, joiner greetings, quiet nudges, confident interjections, and
     the proactive closing intervention. What still speaks: being called by
-    name, follow-ups right after the avatar's own answer (a reply to her is
-    not an interruption), and the one-time floor-gated self-introduction —
-    in wake-word mode that intro is the only way a room learns the name."""
+    name and follow-ups right after the avatar's own answer (a reply to her
+    is not an interruption). Even the one-time self-introduction on join is
+    suppressed: a wake-word avatar enters SILENT and only listens/transcribes
+    until it's addressed by name (owner ask 2026-07-20)."""
     return (
         avatar.require_wake_word
         if avatar.require_wake_word is not None
@@ -4322,6 +4323,15 @@ def maybe_self_introduce(session: store.Session) -> bool:
     self-intro task was scheduled."""
     if not settings.self_introduce_on_join:
         return False
+    # Wake-word avatars enter SILENT — no self-introduction on join (owner ask
+    # 2026-07-20): they just listen and transcribe until someone says their
+    # name. Mark it done so we stop re-checking on every webhook.
+    try:
+        if _wake_required(avatars.load(session.avatar_id)):
+            session.self_introduced = True
+            return False
+    except Exception:  # noqa: BLE001 — resolution must never break the join path
+        pass
     if session.self_introduced:
         return False
     if _self_intro_already_active(session):

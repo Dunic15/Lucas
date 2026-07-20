@@ -65,6 +65,55 @@ def test_backchannel_suppressed_in_wake_word_mode(monkeypatch):
     assert main_module._should_backchannel(session, long_text) in (True, False)
 
 
+class _FakeTask:
+    def add_done_callback(self, cb):  # matches asyncio.Task's surface
+        pass
+
+
+def _capture_create_task(launched: list):
+    """A create_task stand-in: closes the coroutine (no 'never awaited'
+    warning), records the launch, returns a task-shaped object."""
+
+    def _fake(coro, *a, **k):
+        coro.close()
+        launched.append(True)
+        return _FakeTask()
+
+    return _fake
+
+
+def test_self_introduction_suppressed_in_wake_word_mode(monkeypatch):
+    """A wake-word avatar enters SILENT: maybe_self_introduce schedules nothing
+    and marks the intro done so later webhooks don't re-check (owner ask
+    2026-07-20)."""
+    monkeypatch.setattr(settings, "self_introduce_on_join", True)
+    launched: list = []
+    monkeypatch.setattr(main_module.asyncio, "create_task",
+                        _capture_create_task(launched))
+    session = store.Session(bot_id="b_intro", meeting_url="m", avatar_id="petra")
+    assert main_module.maybe_self_introduce(session) is False
+    assert launched == []  # no self-intro task scheduled
+    assert session.self_introduced is True  # stops re-checking every webhook
+
+
+def test_self_introduction_runs_when_wake_word_off(monkeypatch):
+    """Control: with wake mode off, the join self-introduction still schedules."""
+    import dataclasses
+
+    monkeypatch.setattr(settings, "self_introduce_on_join", True)
+    real = avatars.load("petra")
+    monkeypatch.setattr(
+        avatars, "load",
+        lambda aid: dataclasses.replace(real, require_wake_word=False),
+    )
+    launched: list = []
+    monkeypatch.setattr(main_module.asyncio, "create_task",
+                        _capture_create_task(launched))
+    session = store.Session(bot_id="b_intro2", meeting_url="m", avatar_id="petra")
+    assert main_module.maybe_self_introduce(session) is True
+    assert len(launched) == 1
+
+
 def test_answer_gate_blocks_uncalled_but_allows_followup(monkeypatch):
     """The gate logic in isolation: not-called → silent, unless it's a
     question right after the avatar's own answer (follow-up window)."""
