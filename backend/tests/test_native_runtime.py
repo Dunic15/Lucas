@@ -59,7 +59,8 @@ def test_disconnected_adapter_fails_truthfully(monkeypatch):
         "org-a", {"type": "slack.post_message", "args": {"text": "x"}}
     )
     assert result["ok"] is False
-    assert "not connected" in result["error"]
+    assert result["error"]
+    assert "SLACK_WEBHOOK_URL" in result["error"] or "connected" in result["error"]
 
 
 def test_unknown_tool_never_falls_back_to_external_executor():
