@@ -3336,8 +3336,14 @@
           '<div class="brdrop" id="brdrop" tabindex="0" role="button" aria-label="Add documents for '+esc(avName)+'">'+
             '<div class="brdrop-ic">⬆</div>'+
             '<div class="brdrop-t">Drop documents here for <b>'+esc(avName)+'</b></div>'+
-            '<div class="brdrop-s">or <span class="brlink">click to browse</span> · PDF, Markdown, text, CSV</div>'+
+            '<div class="brdrop-s">or <span class="brlink">click to browse</span> · '+
+              '<span class="brlink" id="brdir-link" role="button" tabindex="0">add a whole folder</span>'+
+              ' · PDF, Markdown, text, CSV</div>'+
             '<input type="file" id="brfile" multiple hidden accept=".pdf,.md,.markdown,.txt,.csv,.json,.htm,.html,.log,text/*,application/pdf" />'+
+            // Folder mode needs its OWN input: webkitdirectory is a property of
+            // the picker, not of the selection, so one input can't offer both.
+            // `accept` is ignored in directory mode — _brainUploadItems filters.
+            '<input type="file" id="brdir" multiple hidden webkitdirectory directory />'+
           '</div>'+
           '<div class="brrow2">'+
             '<button class="btn" id="brpaste">Paste text instead</button>'+
@@ -3359,14 +3365,37 @@
         '</div>';
 
       box.querySelectorAll("[data-brav]").forEach(function(b){ b.addEventListener("click",function(){ window._brainAvatar=b.getAttribute("data-brav"); loadBrain(true); }); });
-      var drop=$("#brdrop"), file=$("#brfile");
+      var drop=$("#brdrop"), file=$("#brfile"), dir=$("#brdir"), dirLink=$("#brdir-link");
+      // Hide the folder affordance where the picker can't do directories
+      // (rather than opening a file dialog that ignores the promise).
+      if(dirLink&&(!dir||!("webkitdirectory" in dir))) dirLink.hidden=true;
+      else if(dirLink&&dir){
+        var openDir=function(e){ e.stopPropagation(); dir.click(); };
+        dirLink.addEventListener("click",openDir);
+        dirLink.addEventListener("keydown",function(e){ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openDir(e); } });
+        dir.addEventListener("change",function(){ _brainUpload(sel,dir.files); });
+      }
       if(drop&&file){
         drop.addEventListener("click",function(e){ if(e.target!==file) file.click(); });
-        drop.addEventListener("keydown",function(e){ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); file.click(); } });
+        drop.addEventListener("keydown",function(e){ if(e.target!==drop) return;
+          if(e.key==="Enter"||e.key===" "){ e.preventDefault(); file.click(); } });
         file.addEventListener("change",function(){ _brainUpload(sel,file.files); });
         ["dragenter","dragover"].forEach(function(ev){ drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.add("over"); }); });
         ["dragleave","dragend"].forEach(function(ev){ drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.remove("over"); }); });
-        drop.addEventListener("drop",function(e){ e.preventDefault(); drop.classList.remove("over"); _brainUpload(sel,(e.dataTransfer||{}).files); });
+        // A dropped FOLDER contributes nothing to dataTransfer.files — only the
+        // entry API sees inside it. webkitGetAsEntry() must run SYNCHRONOUSLY
+        // here: the item list is neutered as soon as the handler yields.
+        drop.addEventListener("drop",function(e){
+          e.preventDefault(); drop.classList.remove("over");
+          var dt=e.dataTransfer||{}, entries=_brainEntries(dt.items);
+          if(!entries.length){ _brainUpload(sel,dt.files); return; }
+          var scan={items:[],truncated:false};
+          entries.reduce(function(chain,en){
+            return chain.then(function(){ return _brainWalk(en,"",scan); });
+          },Promise.resolve()).then(function(){
+            _brainUploadItems(sel,scan.items,scan.truncated);
+          },function(){ _brainUpload(sel,dt.files); });
+        });
       }
       $("#brpaste").addEventListener("click",function(){ var pb=$("#brpaste-box"); if(pb){ pb.hidden=!pb.hidden; if(!pb.hidden) $("#brpaste-fn").focus(); } });
       $("#brpaste-go").addEventListener("click",function(){
@@ -3439,22 +3468,109 @@
       });
     });
   }
-  function _brainReadFile(f){
+  // ── Folder input (browse-a-folder + dropped directories) ──────────────
+  // A folder is just a file list with paths, so everything below funnels into
+  // the same {file, path} shape the single-file picker produces. The path (not
+  // the bare name) becomes the document filename: two "README.md" in different
+  // subfolders stay distinct, and the citation shows where it came from. The
+  // server sanitises it for storage (knowledge/storage.py::_safe_name).
+  var _BR_SUPPORTED=/\.(pdf|md|markdown|txt|csv|json|html?|log)$/i;
+  var _BR_SKIP_DIR=/^(node_modules|__pycache__|\.git|\.svn|venv|dist|build)$/i;
+  var _BR_MAX_FILES=100;   // uploads are one request each — keep it bounded
+  var _BR_MAX_SCAN=500;    // stop WALKING long before we melt a big tree
+
+  /** DataTransferItemList → FileSystemEntry[]. Must be called synchronously
+   *  inside the drop handler. Empty when the browser lacks the entry API. */
+  function _brainEntries(items){
+    var out=[];
+    for(var i=0;i<(items?items.length:0);i++){
+      var it=items[i];
+      if(it.kind && it.kind!=="file") continue;
+      var en=it.webkitGetAsEntry?it.webkitGetAsEntry():null;
+      if(en) out.push(en);
+    }
+    return out;
+  }
+  /** Depth-first walk of one entry into scan.items ({file, path}); sets
+   *  scan.truncated once _BR_MAX_SCAN entries have been collected. */
+  function _brainWalk(entry,prefix,scan){
+    if(!entry) return Promise.resolve();
+    if(scan.items.length>=_BR_MAX_SCAN){ scan.truncated=true; return Promise.resolve(); }
+    if(entry.isFile){
+      return new Promise(function(resolve){
+        entry.file(function(f){ scan.items.push({file:f,path:prefix+(entry.name||f.name)}); resolve(); },
+                   function(){ resolve(); });   // one unreadable file never kills the drop
+      });
+    }
+    if(!entry.isDirectory) return Promise.resolve();
+    if(_BR_SKIP_DIR.test(entry.name||"")||/^\./.test(entry.name||"")) return Promise.resolve();
+    var reader=entry.createReader(), kids=[];
+    return new Promise(function(resolve){
+      // readEntries() returns at most ~100 per call — keep calling until empty.
+      (function next(){
+        reader.readEntries(function(batch){
+          if(!batch||!batch.length) return resolve(kids);
+          kids=kids.concat(Array.prototype.slice.call(batch));
+          if(kids.length>=_BR_MAX_SCAN) return resolve(kids);
+          next();
+        },function(){ resolve(kids); });
+      })();
+    }).then(function(list){
+      var at=prefix+(entry.name||"")+"/";
+      return list.reduce(function(chain,k){
+        return chain.then(function(){ return _brainWalk(k,at,scan); });
+      },Promise.resolve());
+    });
+  }
+  /** The single filter both paths agree on. The directory PICKER hands back
+   *  the whole subtree (it honours neither `accept` nor the walk's dir skip),
+   *  so the exclusions have to be re-applied per path segment here. */
+  function _brainWanted(path){
+    if(!_BR_SUPPORTED.test(path)) return false;
+    var parts=String(path).split("/");
+    for(var i=0;i<parts.length;i++){
+      if(/^\./.test(parts[i])) return false;                            // dotfiles + dot-dirs
+      if(i<parts.length-1 && _BR_SKIP_DIR.test(parts[i])) return false; // noise dirs
+    }
+    return true;
+  }
+  function _brainReadFile(item){
+    var f=item.file||item, name=item.path||f.name;
     return new Promise(function(resolve,reject){
-      var isText=/\.(txt|md|markdown|csv|json|html?|log)$/i.test(f.name)||/^text\//.test(f.type||"");
+      var isText=/\.(txt|md|markdown|csv|json|html?|log)$/i.test(name)||/^text\//.test(f.type||"");
       var r=new FileReader();
       r.onerror=function(){ reject(new Error("read failed")); };
       r.onload=function(){
-        if(isText){ resolve({filename:f.name,text:String(r.result||""),mime:f.type||"text/plain"}); }
-        else { var s=String(r.result||""), c=s.indexOf(","); resolve({filename:f.name,content_base64:c>=0?s.slice(c+1):s,mime:f.type||"application/octet-stream"}); }
+        if(isText){ resolve({filename:name,text:String(r.result||""),mime:f.type||"text/plain"}); }
+        else { var s=String(r.result||""), c=s.indexOf(","); resolve({filename:name,content_base64:c>=0?s.slice(c+1):s,mime:f.type||"application/octet-stream"}); }
       };
       if(isText) r.readAsText(f); else r.readAsDataURL(f);
     });
   }
   function _brainUpload(avatarId,fileList){
-    var files=fileList?Array.prototype.slice.call(fileList):[]; if(!files.length) return;
-    toast("Reading "+files.length+" file"+(files.length===1?"":"s")+"…");
-    Promise.all(files.map(_brainReadFile)).then(function(payloads){ _brainUploadPayloads(avatarId,payloads); })
+    var files=fileList?Array.prototype.slice.call(fileList):[];
+    // webkitRelativePath is set (and only set) by the directory picker.
+    _brainUploadItems(avatarId,files.map(function(f){
+      return {file:f,path:f.webkitRelativePath||f.name};
+    }),false);
+  }
+  /** Filter → cap → read → upload, saying out loud what got dropped. */
+  function _brainUploadItems(avatarId,items,truncated){
+    if(!items||!items.length) return;
+    var seen=items.length;
+    var keep=items.filter(function(it){ return _brainWanted(it.path); });
+    var skipped=seen-keep.length, over=0;
+    if(keep.length>_BR_MAX_FILES){ over=keep.length-_BR_MAX_FILES; keep=keep.slice(0,_BR_MAX_FILES); }
+    if(!keep.length){
+      toast("Nothing to add — none of the "+seen+" file"+(seen===1?"":"s")+" is a PDF, Markdown, text, CSV, JSON, HTML or log file.",true);
+      return;
+    }
+    var notes=[];
+    if(skipped) notes.push(skipped+" unsupported skipped");
+    if(over) notes.push(over+" over the "+_BR_MAX_FILES+"-file limit skipped");
+    if(truncated) notes.push("stopped scanning at "+_BR_MAX_SCAN+" files");
+    toast("Reading "+keep.length+" file"+(keep.length===1?"":"s")+(notes.length?" · "+notes.join(" · "):"")+"…",!!(over||truncated));
+    Promise.all(keep.map(_brainReadFile)).then(function(payloads){ _brainUploadPayloads(avatarId,payloads); })
       .catch(function(e){ toast("Couldn’t read a file: "+e.message,true); });
   }
   function _brainUploadPayloads(avatarId,payloads){
