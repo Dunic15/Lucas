@@ -116,7 +116,33 @@ def test_post_native_reply_when_no_relay(client, eager_threadpool, monkeypatch):
     assert [m["sender"] for m in msgs[-2:]] == ["user", "cedric"]
 
 
-def test_no_native_reply_when_relay_configured(client, eager_threadpool, monkeypatch):
+def test_native_answers_even_with_events_door_configured(
+    client, eager_threadpool, monkeypatch
+):
+    """The prod bug (2026-07-20): CEDRIC_ORGS_URL is set for approvals/linking,
+    so events_url() is truthy — but that must NOT suppress the built-in chat
+    responder (no external Cedric answers chat). With native on, Cedric still
+    replies and nothing is relayed into the void."""
+    monkeypatch.setattr(
+        cedric_callback, "events_url", lambda: "https://c.example/api/laura/events"
+    )
+    relayed: list = []
+    monkeypatch.setattr(
+        cedric_callback, "send_action_event",
+        lambda *a: relayed.append(a) or True,
+    )
+    resp = client.post("/dashboard/chat", json={"text": "what's open?"})
+    assert resp.status_code == 200
+    assert resp.json()["native_reply"] is True
+    assert relayed == []  # native owns it — no relay into a non-answering door
+    senders = [m["sender"] for m in store.list_chat_messages(settings.demo_org_id)]
+    assert senders == ["user", "cedric"]
+
+
+def test_external_owns_reply_when_native_off(client, eager_threadpool, monkeypatch):
+    """Native explicitly OFF = a real external Cedric chat runtime exists, so
+    the message relays to it and the built-in responder stays silent."""
+    monkeypatch.setattr(settings, "cedric_chat_native_reply", False)
     monkeypatch.setattr(
         cedric_callback, "events_url", lambda: "https://c.example/api/laura/events"
     )

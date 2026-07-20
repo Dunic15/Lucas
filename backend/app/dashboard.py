@@ -2372,13 +2372,14 @@ async def dashboard_chat_list(request: Request, after: int = 0) -> JSONResponse:
             "messages": messages,
             "actions": actions,
             # The UI's meaning of this key is "somebody answers here": true
-            # when an external Cedric events door is configured OR the
-            # built-in responder is on. Only when both are off does the
-            # banner say "messages are saved, but nobody answers".
-            "relay_configured": bool(cedric_callback.events_url())
-            or settings.cedric_chat_native_reply,
-            "native_chat": settings.cedric_chat_native_reply
-            and not cedric_callback.events_url(),
+            # when the built-in responder is on OR an external Cedric events
+            # door is configured. Only when both are off does the banner say
+            # "messages are saved, but nobody answers".
+            "relay_configured": settings.cedric_chat_native_reply
+            or bool(cedric_callback.events_url()),
+            # Built-in Cedric owns replies (the default). It answers regardless
+            # of the events door — a door means approvals/linking, not chat.
+            "native_chat": settings.cedric_chat_native_reply,
         },
         headers=_NO_STORE,
     )
@@ -2415,23 +2416,27 @@ async def dashboard_chat_post(request: Request) -> JSONResponse:
         return JSONResponse({"error": "message rejected"}, status_code=400)
     from .cedric import callback as cedric_callback  # local: avoids import cycles
 
-    delivered = await run_in_threadpool(
-        cedric_callback.send_action_event,
-        org,
-        "chat.message",
-        {"message_id": row["id"], "text": row["body"], "sender": label},
-    )
-    # No external Cedric runtime on this deployment -> the built-in responder
-    # answers (off the request path; the 4s poll renders it). A configured
-    # relay owns replies even when one delivery fails — never two Cedrics.
-    native = bool(
-        settings.cedric_chat_native_reply and not cedric_callback.events_url()
-    )
+    # Who answers this chat? The built-in Cedric (native) is the default, and
+    # when on it is the SOLE responder — it answers even when an events door is
+    # configured. A configured CEDRIC_ORGS_URL means action-approvals and
+    # org-linking are wired; it does NOT mean an external Cedric answers CHAT
+    # (that receiver isn't built, so a relayed chat.message goes into a void —
+    # the silence this fixes). Only when native is explicitly OFF does a
+    # deployment claim a real external chat runtime, so we relay to it then.
+    native = bool(settings.cedric_chat_native_reply)
+    delivered = False
     if native:
         from .cedric import chat_responder  # local: avoids import cycles
 
         asyncio.create_task(
             run_in_threadpool(chat_responder.respond_and_store, org, row["body"])
+        )
+    else:
+        delivered = await run_in_threadpool(
+            cedric_callback.send_action_event,
+            org,
+            "chat.message",
+            {"message_id": row["id"], "text": row["body"], "sender": label},
         )
     return JSONResponse(
         {
