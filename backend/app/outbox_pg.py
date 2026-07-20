@@ -1433,12 +1433,16 @@ def finish_attempt(
         """
         params: dict[str, Any] = {}
     else:
+        # CAST the epoch param to double precision so its type is unambiguous.
+        # Without it, a NULL next_attempt_at (a non-transient failure — e.g. a
+        # 401 from Cedric) is sent untyped and its first use `:next_attempt_at
+        # IS NULL` leaves Postgres unable to infer $1's type → AmbiguousParameter
+        # → the UPDATE aborts, the row never leaves 'sending', and the worker
+        # retries it forever, throwing every iteration (prod 2026-07-20).
+        # to_timestamp(NULL) is itself NULL, so the CASE is unnecessary.
         assignments = """
           status='failed', attempts=attempts+1,
-          next_attempt_at=CASE
-            WHEN :next_attempt_at IS NULL THEN NULL
-            ELSE to_timestamp(:next_attempt_at)
-          END,
+          next_attempt_at=to_timestamp(CAST(:next_attempt_at AS double precision)),
           last_error=:last_error,
           lease_token=NULL, lease_until=NULL,
           updated_at=clock_timestamp()
