@@ -274,3 +274,20 @@ def test_create_bot_can_use_deepgram_streaming_transcription(monkeypatch):
     assert provider == {
         "deepgram_streaming": {"model": "nova-3", "language": "multi"}
     }
+
+
+def test_deepgram_endpointing_ms_is_forwarded_when_set(monkeypatch):
+    monkeypatch.setattr(settings, "recall_transcription_provider", "deepgram")
+    monkeypatch.setattr(settings, "deepgram_model", "nova-3")
+    monkeypatch.setattr(settings, "deepgram_language", "multi")
+    monkeypatch.setattr(settings, "deepgram_endpointing_ms", 300)
+
+    provider = recall_client._transcript_provider_config()
+
+    assert provider == {
+        "deepgram_streaming": {
+            "model": "nova-3",
+            "language": "multi",
+            "endpointing": 300,
+        }
+    }

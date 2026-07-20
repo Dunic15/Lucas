@@ -211,6 +211,8 @@ def _transcript_provider_config(provider_override: str | None = None) -> dict:
         language = settings.deepgram_language.strip()
         if language:
             config["language"] = language
+        if settings.deepgram_endpointing_ms > 0:
+            config["endpointing"] = settings.deepgram_endpointing_ms
         return {"deepgram_streaming": config}
 
     if provider in {"recallai", "recallai_streaming"}:
