@@ -999,6 +999,21 @@
     '<path fill="#2EB67D" d="M90.5 45.2c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6 0s12.9 5.8 12.9 12.9v32.3z"/>'+
     '<path fill="#ECB22E" d="M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9-12.9-5.8-12.9-12.9V97h12.9z"/>'+
     '<path fill="#ECB22E" d="M77.6 90.5c-7.1 0-12.9-5.8-12.9-12.9s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H77.6z"/></svg>';
+  var LOGO_GMAIL='<svg class="clogo" width="15" height="15" viewBox="0 0 48 48" aria-hidden="true" focusable="false">'+
+    '<path fill="#4caf50" d="M45 16.2l-5 2.75-5 4.75L35 40h7c1.657 0 3-1.343 3-3V16.2z"/>'+
+    '<path fill="#1e88e5" d="M3 16.2l3.614 1.71L13 23.7V40H6c-1.657 0-3-1.343-3-3V16.2z"/>'+
+    '<polygon fill="#e53935" points="35,11.2 24,19.45 13,11.2 12,17 13,23.7 24,31.95 35,23.7 36,17"/>'+
+    '<path fill="#c62828" d="M3 12.298V16.2l10 7.5V11.2L9.876 8.859C9.132 8.301 8.228 8 7.298 8 4.924 8 3 9.924 3 12.298z"/>'+
+    '<path fill="#fbc02d" d="M45 12.298V16.2l-10 7.5V11.2l3.124-2.341C38.868 8.301 39.772 8 40.702 8 43.076 8 45 9.924 45 12.298z"/></svg>';
+  var LOGO_CALENDAR='<svg class="clogo" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'+
+    '<rect x="3" y="4.5" width="18" height="16.5" rx="2.2" fill="#fff" stroke="#1a73e8" stroke-width="1.6"/>'+
+    '<path fill="#1a73e8" d="M5.2 4.5H18.8A2.2 2.2 0 0 1 21 6.7V9H3V6.7A2.2 2.2 0 0 1 5.2 4.5Z"/>'+
+    '<line x1="7.5" y1="2.7" x2="7.5" y2="6.4" stroke="#1a73e8" stroke-width="1.7" stroke-linecap="round"/>'+
+    '<line x1="16.5" y1="2.7" x2="16.5" y2="6.4" stroke="#1a73e8" stroke-width="1.7" stroke-linecap="round"/>'+
+    '<text x="12" y="18" font-family="Arial,Helvetica,sans-serif" font-size="8.5" font-weight="700" fill="#1a73e8" text-anchor="middle">31</text></svg>';
+  var LOGO_JIRA='<svg class="clogo" width="14" height="14" viewBox="0 0 32 32" aria-hidden="true" focusable="false">'+
+    '<path fill="#2684FF" opacity=".55" d="M24.5 3.5L13 15l-3 3 11.5 11.5 2.5-2.5L15.5 18 27 6.5z"/>'+
+    '<path fill="#2684FF" d="M18.5 3.5L7 15l-3 3 11.5 11.5 2.5-2.5L9.5 18 21 6.5z"/></svg>';
 
   var GRADS=["linear-gradient(135deg,#F5484D,#FFB49A)","linear-gradient(135deg,#4D7CFE,#7EB6FF)",
              "linear-gradient(135deg,#8b5cf6,#c4b5fd)","linear-gradient(135deg,#1F9D63,#4FC08A)"];
@@ -1926,14 +1941,10 @@
         '<span class="cstat'+(googleNative?" on":"")+'"><b></b>Google '+(googleNative?"connected":"not connected")+'</span>'+
         '<span class="cstat'+(asanaConnected?" on":"")+'"><b></b>Asana '+(asanaConnected?"connected":"not connected")+'</span>'+
       '</div></div>'+
-      // ── Google (native) — the avatars' own Google, independent of Cedric ──
-      '<div class="conn"><div class="nm">'+LOGO_GOOGLE+' Google <span class="stchip" style="margin-left:6px">native</span></div>'+
-      '<div class="ds">Native — avatars schedule &amp; email on your Google directly. No add-on. Grants Calendar + Gmail on your own account.</div>'+
-      '<div class="foot"><span class="cstat'+(googleNative?" on":"")+'"><b></b>'+(googleNative?"Connected":"Not connected")+'</span>'+
-      (googleNative
-        ?'<button class="btn" data-google-off>Disconnect</button>'
-        :'<a class="btn primary" style="text-decoration:none" href="/oauth/google/connect">Connect Google</a>')+
-      '</div></div>'+
+      // ── Google is now split into separate Gmail + Google Calendar cards
+      //    (below, near the other native tools); both share ONE Google sign-in
+      //    (/oauth/google/connect grants Calendar + Gmail). The combined
+      //    "Google (native)" card was removed on owner request. ──
       // ── Slack agent (optional add-on), independent of Google ──
       // One connection lets the Slack agent use Slack + a catalog of tools
       // (Notion, HubSpot, …). Those tools render below as team-scope connect
@@ -1983,6 +1994,31 @@
           :'<input type="password" id="asana-pat" placeholder="Asana token" aria-label="Asana Personal Access Token" autocomplete="off" '+
             'style="flex:1;min-width:120px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
             '<button class="btn primary" data-asana-on>Connect</button>'))+
+      '</div></div>'+
+      // ── Jira (native PM connector) — sits with Asana as a PM tool. No backend
+      //    yet; the Connect action is an honest "coming soon" (data-jira-soon),
+      //    never a fake connect. ──
+      '<div class="conn"><div class="nm">'+LOGO_JIRA+' Jira <span class="stchip" style="margin-left:6px">native</span></div>'+
+      '<div class="ds">File and update issues straight from your meetings — natively on your own Jira project.</div>'+
+      '<div class="foot"><span class="cstat"><b></b>Not connected</span>'+
+      '<button class="btn primary" data-jira-soon>Connect Jira</button>'+
+      '</div></div>'+
+      // ── Google Calendar (native) — shares ONE Google sign-in with Gmail
+      //    (/oauth/google/connect grants both); googleNative drives both cards. ──
+      '<div class="conn"><div class="nm">'+LOGO_CALENDAR+' Google Calendar <span class="stchip" style="margin-left:6px">native</span></div>'+
+      '<div class="ds">Read your week and schedule meetings on your own Google Calendar. Uses your Google sign-in (shared with Gmail).</div>'+
+      '<div class="foot"><span class="cstat'+(googleNative?" on":"")+'"><b></b>'+(googleNative?"Connected":"Not connected")+'</span>'+
+      (googleNative
+        ?'<button class="btn" data-google-off>Disconnect</button>'
+        :'<a class="btn primary" style="text-decoration:none" href="/oauth/google/connect">Connect</a>')+
+      '</div></div>'+
+      // ── Gmail (native) — same Google sign-in as Calendar ──
+      '<div class="conn"><div class="nm">'+LOGO_GMAIL+' Gmail <span class="stchip" style="margin-left:6px">native</span></div>'+
+      '<div class="ds">Send recap and follow-up emails on your own Gmail. Uses your Google sign-in (shared with Calendar).</div>'+
+      '<div class="foot"><span class="cstat'+(googleNative?" on":"")+'"><b></b>'+(googleNative?"Connected":"Not connected")+'</span>'+
+      (googleNative
+        ?'<button class="btn" data-google-off>Disconnect</button>'
+        :'<a class="btn primary" style="text-decoration:none" href="/oauth/google/connect">Connect</a>')+
       '</div></div>';
     // Asana (native) connect — verify + store the pasted PAT server-side.
     $$("#conns [data-asana-on]").forEach(function(btn){btn.addEventListener("click",function(){
@@ -2019,6 +2055,11 @@
           toast("Google disconnected."); load(); }); })
         .catch(function(err){ toast(err.message||"Couldn't disconnect Google. Try again.",true);
           btn.disabled=false; btn.textContent=prev; }); }); });
+    // Jira (native PM connector) — not wired to a backend yet; honest placeholder
+    // (no fake connect). When the native Jira client lands, swap this for the
+    // real connect flow.
+    $$("#conns [data-jira-soon]").forEach(function(btn){btn.addEventListener("click",function(){
+      toast("Jira is coming soon — it'll connect natively once wired up."); }); });
     // Slack (add-on) connect — the existing Cedric Slack-install flow (fixed URL).
     $$("#conns [data-slack-on]").forEach(function(btn){btn.addEventListener("click",function(){
       window.location.assign("/dashboard/connections/brain/slack/start?avatar_id=cedric&channel="); }); });
