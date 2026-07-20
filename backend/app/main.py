@@ -3921,7 +3921,8 @@ def _line_for(heard: str, en: list, it: list) -> str:
     return random.choice(it if sounds_italian(heard) else en)
 
 
-def _wake_required(avatar: avatars.Avatar) -> bool:
+def _wake_required(avatar: avatars.Avatar,
+                   session: "store.Session | None" = None) -> bool:
     """Whether THIS avatar speaks only when addressed by name — the per-avatar
     require_wake_word (avatar.yaml), inheriting the global REQUIRE_WAKE_WORD
     when unset. When true, every unprompted speech path is silenced: answers,
@@ -3931,11 +3932,20 @@ def _wake_required(avatar: avatars.Avatar) -> bool:
     is not an interruption). Even the one-time self-introduction on join is
     suppressed: a wake-word avatar enters SILENT and only listens/transcribes
     until it's addressed by name (owner ask 2026-07-20)."""
-    return (
+    base = (
         avatar.require_wake_word
         if avatar.require_wake_word is not None
         else settings.require_wake_word
     )
+    if not base:
+        return False
+    # 1:1 relaxation (owner 2026-07-20): with a single human present, the ask
+    # is unambiguously for her, so no wake word is needed — the conversation
+    # stays fluid. Groups keep name-required (unprompted speech there risks
+    # interrupting). Deference + cooldown still gate every reply.
+    if session is not None and len(session.roster(avatar.name)) <= 1:
+        return False
+    return base
 
 
 def _should_backchannel(
@@ -3947,7 +3957,7 @@ def _should_backchannel(
     so it stays a nod and never becomes chatter."""
     if not settings.backchannel_enabled:
         return False
-    if avatar is not None and _wake_required(avatar):
+    if avatar is not None and _wake_required(avatar, session):
         return False  # wake-word mode: never make an unprompted sound
     if len(text.split()) < settings.backchannel_min_words:
         return False
@@ -6161,7 +6171,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             await _make_avatar_speak(session, nudge, force=True)
             return JSONResponse({"ok": True, "spoke": True, "quiet_nudge": True})
 
-    if _wake_required(avatar) and not called:
+    if _wake_required(avatar, session) and not called:
         # Per-avatar wake-word mode (falls back to the global flag): she was
         # not addressed by name — stay silent, UNLESS this is a follow-up
         # right after her own answer (handled below: a reply to her turn).
