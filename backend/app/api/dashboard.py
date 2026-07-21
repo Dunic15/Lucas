@@ -2966,4 +2966,6 @@ async def dashboard_action_get(action_id: str, request: Request) -> JSONResponse
             {"error": "unknown action for this org"}, status_code=404,
             headers=_NO_STORE,
         )
-    return JSONResponse({"action": view}, headers=_NO_STORE)
+    # _json_safe coerces Decimal (usage/cost fields ride along in the canonical
+    # view) into JSON numbers — a raw Decimal makes json.dumps 500 the row.
+    return JSONResponse(_json_safe({"action": view}), headers=_NO_STORE)

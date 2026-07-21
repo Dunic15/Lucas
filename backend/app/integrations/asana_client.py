@@ -348,10 +348,75 @@ def _task_row(t: Any) -> dict:
     }
 
 
+def _pd_asana_account(org_id: str):
+    """(account_id, pipedream_client_module) for the org's Pipedream-connected
+    Asana, or ("", None). Post-cutover Asana runs through Pipedream, so the
+    board snapshot must read there too (managed OAuth — no raw PAT here)."""
+    try:
+        from .. import pipedream_client, pipedream_executor
+    except Exception:  # noqa: BLE001
+        return "", None
+    if not (pipedream_executor.enabled()
+            and pipedream_executor.app_connected(org_id, "asana")):
+        return "", None
+    try:
+        accts = pipedream_client.list_accounts(org_id, app="asana")
+    except pipedream_client.PipedreamError:
+        return "", None
+    acct = next((a for a in accts if a.get("id")), None)
+    return (str(acct["id"]) if acct else ""), pipedream_client
+
+
+def _pd_get(pc, org_id: str, acct: str, path: str, params: dict | None):
+    from urllib.parse import urlencode
+    url = f"{_API}{path}" + (("?" + urlencode(params)) if params else "")
+    try:
+        r = pc.proxy_request(org_id, acct, "GET", url)
+    except Exception:  # noqa: BLE001
+        return None
+    if not r.get("ok"):
+        return None
+    return (r.get("json") or {}).get("data")
+
+
+def _build_brief_pd(org_id: str, acct: str, pc) -> str:
+    """Same distilled board snapshot as _build_brief, read via the Connect Proxy."""
+    ws_data = _pd_get(pc, org_id, acct, "/workspaces", None) or []
+    ws = str(ws_data[0].get("gid") or "") if ws_data else ""
+    if not ws:
+        return ""
+    projects = _pd_get(pc, org_id, acct, "/projects",
+                       {"workspace": ws, "archived": "false",
+                        "limit": _BRIEF_MAX_PROJECTS}) or []
+    today = time.strftime("%Y-%m-%d")
+    lines: list[str] = [f"(as of {today})"]
+    for p in projects[:_BRIEF_MAX_PROJECTS]:
+        gid = str(p.get("gid") or "")
+        tasks = _pd_get(pc, org_id, acct, "/tasks",
+                        {"project": gid,
+                         "opt_fields": "name,completed,assignee.name,due_on",
+                         "limit": _BRIEF_MAX_TASKS_PER_PROJECT}) or []
+        open_tasks = [t for t in tasks if isinstance(t, dict) and not t.get("completed")]
+        lines.append(f"• {str(p.get('name') or '')} — {len(open_tasks)} open task(s)")
+        for t in open_tasks[:_BRIEF_MAX_TASKS_PER_PROJECT]:
+            bits = [str(t.get("name") or "")]
+            asg = t.get("assignee") or {}
+            if isinstance(asg, dict) and asg.get("name"):
+                bits.append(f"owner: {asg['name']}")
+            if t.get("due_on"):
+                overdue = str(t["due_on"]) < today
+                bits.append(f"due {t['due_on']}" + (" (OVERDUE)" if overdue else ""))
+            lines.append("   - " + " · ".join(bits))
+    if len(lines) <= 1:
+        return ""
+    return "\n".join(lines)[:_BRIEF_MAX_CHARS]
+
+
 def workspace_brief(org_id: str) -> str:
     """Markdown snapshot of the workspace for the meeting brief; "" when Asana
-    is unavailable. Sync (network) — call via run_in_threadpool at session
-    start only. TTL-cached per org so busy days don't hammer the API.
+    is unavailable. Reads through the org's Pipedream-connected Asana when it has
+    one (the cutover path), else the native PAT/OAuth. Sync (network) — call via
+    run_in_threadpool at session start only. TTL-cached per org.
 
     Content is distilled and capped (project names, open task names, owners,
     due dates, an OVERDUE flag) — it rides the live prompt, so it must stay
@@ -363,7 +428,8 @@ def workspace_brief(org_id: str) -> str:
         if cached is not None and now - cached[0] < _BRIEF_TTL_SECONDS:
             return cached[1]
 
-    text = _build_brief(org_id)
+    acct, pc = _pd_asana_account(org_id)
+    text = _build_brief_pd(org_id, acct, pc) if acct else _build_brief(org_id)
     with _brief_lock:
         _brief_cache[key] = (now, text)
     return text
