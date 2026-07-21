@@ -731,7 +731,6 @@
       <button type="button" data-view="meetings"><span class="ic">▤</span> Meetings</button>
       <button type="button" data-view="actions"><span class="ic">✓</span> Action Center<span class="navbadge" id="nav-actions-badge" hidden aria-label="actions needing attention"></span></button>
       <button type="button" data-view="connections"><span class="ic">⇄</span> Connections</button>
-      <button type="button" data-view="pipedream" id="nav-pipedream" hidden><span class="ic">⚡</span> Pipedream <span class="stchip" style="margin-left:5px">beta</span></button>
       <button type="button" data-view="settings"><span class="ic">⚙</span> Settings</button>
     </nav>
     <div>
@@ -932,21 +931,20 @@
     </section>
 
     <!-- CONNECTIONS -->
+    <!-- ONE Connections page (2026-07-21, owner request — less confusion):
+         Google stays native, Slack stays the Cedric add-on, and EVERY other
+         tool connects through Pipedream in the "More tools" section below
+         (search the 3,000+ app catalog). The separate ⚡ Pipedream tab was
+         folded in here; #pd-more/#pdconns stay hidden until the deployment
+         has Pipedream configured, so the key-free demo is unchanged. -->
     <section class="view" id="view-connections" hidden>
       <div class="head"><div><h1>Connections</h1></div></div>
       <div class="conns" id="conns"></div>
+      <div id="pd-more" hidden>
+        <div class="sub" style="margin:20px 0 8px;font-weight:600">More tools <span class="stchip" style="margin-left:6px">via Pipedream</span></div>
+        <div id="pdconns"><div class="empty" style="padding:14px">Loading…</div></div>
+      </div>
       <div class="foot">EACH TOOL NEEDS ITS OWN AUTHORIZATION. CONNECTED NEVER MEANS UNRESTRICTED ACCESS.</div>
-    </section>
-
-    <!-- PIPEDREAM (alternative connections surface — experimental test tab).
-         Same per-org model as Connections, but every account is brokered
-         through Pipedream Connect (managed OAuth + pre-built actions) rather
-         than each vendor's own flow. Populated by loadPipedream(). -->
-    <section class="view" id="view-pipedream" hidden>
-      <div class="head"><div><h1>Pipedream <span class="stchip" style="margin-left:6px">experimental</span></h1>
-        <div class="sub">An alternative way to connect your tools — brokered through Pipedream Connect, with pre-built actions. Side-by-side test surface; the native Connections tab is unaffected.</div></div></div>
-      <div id="pdconns"><div class="empty" style="padding:14px">Loading…</div></div>
-      <div class="foot">EXPERIMENTAL · CONNECTIONS MADE HERE ARE HELD BY PIPEDREAM, SCOPED TO YOUR ORG.</div>
     </section>
 
     <!-- BRAIN -->
@@ -1090,11 +1088,15 @@
     toast("Jira could not be connected. Nothing was stored — try Connect again.",true);
   }
   // Returned from a Pipedream Connect flow (?pd=connected|error&app=<slug>).
+  // Land the user back on the unified Connections page (the hash-restore
+  // below opens it), so the just-connected tool is right there.
   var pdResult=query.get("pd");
   if(pdResult==="connected"){
-    toast((query.get("app")||"The tool")+" connected through Pipedream.",false);
+    toast((query.get("app")||"The tool")+" connected.",false);
+    try{ window.history.replaceState({},"",window.location.pathname+"#connections"); }catch(e){}
   } else if(pdResult){
-    toast("That Pipedream connection didn't finish. Nothing was stored — try Connect again.",true);
+    toast("That connection didn't finish. Nothing was stored — try Connect again.",true);
+    try{ window.history.replaceState({},"",window.location.pathname+"#connections"); }catch(e){}
   }
   if(connResult==="ok"){
     toast("Tool connected — Cedric can use it now.",false);
@@ -1141,7 +1143,7 @@
   // Meetings, Action Center, Connections, Settings. "usage" (Plan & billing,
   // reached from Settings) keeps its view + route but has no nav entry — it
   // highlights its nav owner instead.
-  var VIEWS=["overview","avatars","brain","meetings","actions","connections","pipedream","settings","usage"];
+  var VIEWS=["overview","avatars","brain","meetings","actions","connections","settings","usage"];
   var NAV_OWNER={usage:"settings"};
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
@@ -1151,7 +1153,7 @@
     // (instead of resetting to Overview). replaceState = no new history entry, no jump.
     try{ window.history.replaceState({},"",window.location.pathname+"#"+name); }catch(e){}
     if(name==="brain") loadBrain();
-    if(name==="pipedream") loadPipedream();
+    if(name==="connections") loadPipedream();  // "More tools" section (no-op unless configured)
     if(name==="actions") renderActions();
     // The avatar stage renders only once the view is opened (never preload).
     if(name==="avatars" && DATA) renderAvatars(DATA);
@@ -1286,8 +1288,10 @@
     // when the deployment has it configured, so the key-free demo and every
     // un-configured deployment render byte-identically to before (the tab
     // otherwise 404s to a dead "not enabled" screen).
-    var pdNav=$("#nav-pipedream");
-    if(pdNav) pdNav.hidden=!(d.settings&&d.settings.pipedream_configured);
+    // "More tools (via Pipedream)" section inside Connections: visible only
+    // when the deployment has Pipedream configured — key-free demo unchanged.
+    var pdMore=$("#pd-more");
+    if(pdMore) pdMore.hidden=!(d.settings&&d.settings.pipedream_configured);
     var avById={}; d.avatars.forEach(function(a){avById[a.id]=a;});
     function avName(id){ return (avById[id]||{}).name || (id?id:"—"); }
     var brainConnected=(d.org_connections||[]).some(function(x){return x.avatar_id==="cedric"&&x.provider==="cedric-brain"&&x.status==="connected";});
@@ -1963,10 +1967,10 @@
     // resolveSlackManageUrl, which is likewise null-guarded.
     var googleNative=!!(d.connections&&d.connections.google_native);
     var slackConnected=brainConnected; // cedric-brain connected row (the Slack add-on)
+    // asana = native OR Pipedream-brokered (the summary bool counts both);
+    // shown in the Execution chip. The per-tool connect cards for Asana/Jira
+    // moved into the "More tools (via Pipedream)" section.
     var asanaConnected=!!(d.connections&&d.connections.asana);
-    var asanaOAuth=!!(d.connections&&d.connections.asana_oauth);
-    var jiraConnected=!!(d.connections&&d.connections.jira);
-    var jiraOAuth=!!(d.connections&&d.connections.jira_oauth);
     // Execution readiness — whether an APPROVED action actually runs, and on
     // what. native_executor is the master switch (env NATIVE_EXECUTOR); off =
     // approvals route to Cedric. The two connection chips are the accounts
@@ -2017,48 +2021,11 @@
           '<div class="cnote">Connect a tool above, or manage them on the hosted connector page.</div></div>'
         :'')+
       '</div>'+
-      // ── Asana (native) — the project system of record (docs/ASANA.md).
-      // Restored 2026-07-20 (owner request; reverses the 2026-07-17
-      // Cedric-mediated decision). Preferred: one-click OAuth (Connect Asana →
-      // sign in on asana.com → back here connected), available when the
-      // deployment has the Asana OAuth app configured. Fallback: paste a
-      // Personal Access Token; the backend verifies it LIVE against Asana
-      // before storing it encrypted per-org. Tokens never render back into
-      // the page either way.
-      '<div class="conn"><div class="nm">'+LOGO_ASANA+' Asana <span class="stchip" style="margin-left:6px">native</span></div>'+
-      '<div class="ds">Project system of record — avatars read the workspace when they join (projects, open &amp; overdue tasks) and file approved action items as tasks.'+
-      (asanaOAuth?'':' Token: Asana → Settings → Apps → Developer apps.')+'</div>'+
-      '<div class="foot"><span class="cstat'+(asanaConnected?" on":"")+'"><b></b>'+(asanaConnected?"Connected":"Not connected")+'</span>'+
-      (asanaConnected
-        ?'<button class="btn" data-asana-off>Disconnect</button>'
-        :(asanaOAuth
-          ?'<a class="btn primary" style="text-decoration:none" href="/oauth/asana/connect">Connect Asana</a>'
-          :'<input type="password" id="asana-pat" placeholder="Asana token" aria-label="Asana Personal Access Token" autocomplete="off" '+
-            'style="flex:1;min-width:120px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
-            '<button class="btn primary" data-asana-on>Connect</button>'))+
-      '</div></div>'+
-      // ── Jira (native PM connector) — one-click OAuth when the Atlassian app
-      //    is configured (Connect Jira → Atlassian login → connected); otherwise
-      //    the paste-a-token fallback (works with no deploy credentials). ──
-      '<div class="conn"><div class="nm">'+LOGO_JIRA+' Jira <span class="stchip" style="margin-left:6px">native</span></div>'+
-      '<div class="ds">Avatars read your open issues when they join (owners, due dates).'+
-      (jiraConnected?''
-        :(jiraOAuth
-          ? ' You’ll sign in with an Atlassian account that has a Jira site — <a href="https://www.atlassian.com/software/jira/free" target="_blank" rel="noopener">don’t have one? create a free Jira site</a> first, or the login shows “access denied”.'
-          : ' Connect with your Jira site + email + an API token (Jira → Account settings → Security → API tokens).'))+'</div>'+
-      (jiraConnected
-        ? '<div class="foot"><span class="cstat on"><b></b>Connected</span>'+
-          '<button class="btn" data-jira-off>Disconnect</button></div>'
-        : (jiraOAuth
-          ? '<div class="foot"><span class="cstat"><b></b>Not connected</span>'+
-            '<a class="btn primary" style="text-decoration:none" href="/oauth/jira/connect">Connect Jira</a></div>'
-          : '<div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">'+
-              '<input type="text" id="jira-site" placeholder="https://yourco.atlassian.net" aria-label="Jira site URL" autocomplete="off" style="background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
-              '<input type="text" id="jira-email" placeholder="you@company.com" aria-label="Jira account email" autocomplete="off" style="background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
-              '<input type="password" id="jira-token" placeholder="Jira API token" aria-label="Jira API token" autocomplete="off" style="background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
-              '<button class="btn primary" data-jira-on style="align-self:flex-start">Connect Jira</button>'+
-            '</div>'))+
-      '</div>'+
+      // ── Asana + Jira native cards REMOVED (2026-07-21, unified page):
+      //    they connect through the "More tools (via Pipedream)" section
+      //    below. The native OAuth/PAT endpoints still exist as a fallback
+      //    (flag-off revert path); the execution router sends approved Asana
+      //    actions through Pipedream when PIPEDREAM_EXECUTOR is on. ──
       // ── Google Calendar (native) — shares ONE Google sign-in with Gmail
       //    (/oauth/google/connect grants both); googleNative drives both cards. ──
       '<div class="conn"><div class="nm">'+LOGO_CALENDAR+' Google Calendar <span class="stchip" style="margin-left:6px">native</span></div>'+

@@ -2,7 +2,7 @@
 
 **Owner:** Product/engineering
 **Applies to:** Current Laura backend and live meeting workflow
-**Last reviewed:** 2026-07-20
+**Last reviewed:** 2026-07-21
 
 ## What Laura is
 
@@ -111,6 +111,16 @@ and English. The Recall region is EU: `RECALL_API_BASE=https://eu-central-1.reca
   and independent of Slack: the Slack agent (Cedric) is a separate, optional
   delivery/approval surface, used only when asked. Every avatar has this;
   the owner can switch it off per avatar.
+- **Connections — one page, three lanes:** everything a workspace connects
+  lives on ONE dashboard Connections page. Google (Calendar, Gmail, Drive) is
+  Laura's own native sign-in; Slack rides the Cedric add-on; and every other
+  tool — Asana, Notion, HubSpot, and thousands more — connects under "More
+  tools" through Pipedream Connect (managed OAuth, held by Pipedream, scoped
+  per organization; Laura never stores those tokens). Approved actions on
+  those tools execute through the same Pipedream connection — e.g. an agreed
+  task is filed straight into the team's Asana, with the task link as the
+  receipt — behind the same approve door and exactly-once guarantee as
+  everything else.
 - **One action, every surface:** each captured action is a single canonical
   record. If its details are incomplete, approving it asks for the exact
   missing fields (which can be filled right there) instead of silently doing
