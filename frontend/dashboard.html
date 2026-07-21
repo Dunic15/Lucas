@@ -1986,7 +1986,14 @@
         '<span class="cstat'+(nativeOn?" on":"")+'"><b></b>Native execution '+(nativeOn?"on":"off")+'</span>'+
         '<span class="cstat'+(googleNative?" on":"")+'"><b></b>Google '+(googleNative?"connected":"not connected")+'</span>'+
         '<span class="cstat'+(asanaConnected?" on":"")+'"><b></b>Asana '+(asanaConnected?"connected":"not connected")+'</span>'+
-      '</div></div>'+
+      '</div>'+
+      '<div class="foot" style="margin-top:10px;gap:8px;flex-wrap:wrap;align-items:center">'+
+        '<span style="font-size:.78rem;color:var(--faint)">Send a real test — calendar + email (Google) + a task (Pipedream):</span>'+
+        '<input id="pd-test-email" type="email" value="duccio@sffstudio.com" autocomplete="off" style="flex:1;min-width:180px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
+        '<button class="btn" id="pd-test-run">🧪 Test integrations</button>'+
+      '</div>'+
+      '<pre id="pd-test-out" style="margin-top:8px;font-size:.74rem;white-space:pre-wrap;word-break:break-word;color:var(--dim)"></pre>'+
+      '</div>'+
       // ── Google is now split into separate Gmail + Google Calendar cards
       //    (below, near the other native tools); both share ONE Google sign-in
       //    (/oauth/google/connect grants Calendar + Gmail). The combined
@@ -2053,6 +2060,24 @@
         ?'<button class="btn" data-google-off>Disconnect</button>'
         :'<a class="btn primary" style="text-decoration:none" href="/oauth/google/connect">Connect</a>')+
       '</div></div>';
+    // 🧪 Test integrations — real calendar + email (Google) + task (Pipedream).
+    var _tr=$("#pd-test-run");
+    if(_tr) _tr.addEventListener("click",function(){
+      var out=$("#pd-test-out"); var em=(($("#pd-test-email")||{}).value||"").trim();
+      if(em.indexOf("@")<0){ out.textContent="Enter a target email."; return; }
+      _tr.disabled=true; out.textContent="Running: calendar + email + Asana… (real actions)";
+      fetch("/dashboard/test/integrations",{method:"POST",headers:headers(),body:JSON.stringify({email:em})})
+        .then(function(r){ return r.json().catch(function(){return {};}); })
+        .then(function(j){
+          var R=(j&&j.results)||{};
+          function line(k){ var r=R[k]||{}; var ok=!!r.ok;
+            var ref=r.ref||r.event_url||r.message_id||r.task_url||r.kind||"done";
+            return (ok?"✓ ":"✗ ")+k+": "+(ok?ref:(r.error||r.skipped||"failed")); }
+          out.textContent=[line("calendar"),line("email"),line("asana")].join("\n");
+        })
+        .catch(function(){ out.textContent="Request failed."; })
+        .then(function(){ _tr.disabled=false; });
+    });
     // Asana (native) connect — verify + store the pasted PAT server-side.
     $$("#conns [data-asana-on]").forEach(function(btn){btn.addEventListener("click",function(){
       var input=$("#asana-pat"), token=(input&&input.value||"").trim();
@@ -3322,11 +3347,13 @@
     fetch(url,{headers:headers(),cache:"no-store"})
       .then(function(r){ return r.json().catch(function(){return {};}); })
       .then(function(j){
-        var apps=(j&&j.apps)||[];
+        // Dedup: an already-connected app lives in "Your connected tools" — don't
+        // repeat it in the results grid.
+        var apps=((j&&j.apps)||[]).filter(function(a){ return !_pdConnected[a.slug]; });
         var mw=$("#pd-more-wrap"); if(mw) mw.remove();
         var html=apps.map(_pdCard).join('');
         if(append) grid.insertAdjacentHTML('beforeend',html);
-        else grid.innerHTML=apps.length?html:'<div class="empty" style="padding:14px">No apps match “'+esc(q||"")+'”.</div>';
+        else grid.innerHTML=apps.length?html:'<div class="empty" style="padding:14px">No new apps match “'+esc(q||"")+'”.</div>';
         _pdBind(grid);
         if(j&&j.next_cursor){
           grid.insertAdjacentHTML('afterend','<div id="pd-more-wrap" style="margin-top:10px"><button class="btn" id="pd-more">Load more</button></div>');
@@ -3366,7 +3393,7 @@
         }
         if(connectedApps.length){
           html+='<div class="sub" style="margin:4px 0 8px;font-weight:600">Your connected tools</div><div class="conns" id="pd-connected">'+
-            connectedApps.map(function(a){ return _pdCard({slug:a.app,name:_pdName(a.app)}); }).join('')+'</div>';
+            connectedApps.map(function(a){ return _pdCard({slug:a.app,name:_pdName(a.app),img:a.img}); }).join('')+'</div>';
         }
         html+='<div class="sub" id="pd-grid-label" style="margin:16px 0 8px;font-weight:600">Popular apps</div>'+
           '<div class="conns" id="pd-grid"></div>';
@@ -3383,7 +3410,9 @@
           '</div></details>';
         box.innerHTML=html;
         _pdBind(box);
-        var grid=$("#pd-grid"); if(grid){ grid.innerHTML=featured.map(_pdCard).join(''); _pdBind(grid); }
+        // Featured quick-connect grid — dedup: skip apps already connected
+        // (they're shown under "Your connected tools" above).
+        var grid=$("#pd-grid"); if(grid){ grid.innerHTML=featured.filter(function(a){ return !_pdConnected[a.slug]; }).map(_pdCard).join(''); _pdBind(grid); }
         var sb=$("#pd-search-btn"), si=$("#pd-search");
         function go(){ _pdSearch((si&&si.value||"").trim(),"",false); }
         if(sb) sb.addEventListener("click",go);

@@ -970,6 +970,61 @@ async def retry_callback_delivery(request: Request) -> JSONResponse:
     )
 
 
+@router.post("/dashboard/test/integrations")
+async def test_integrations(request: Request) -> JSONResponse:
+    """Owner-triggered live check of the execution integrations: creates a real
+    calendar event + sends a real email (native Google) and creates a real
+    Asana task (Pipedream) on the CALLER's org, returning each receipt. Login +
+    same-origin gated (only the signed-in owner, for their own org) — the same
+    door as approvals. No ledger action is created; this is a direct smoke."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    org = user["org_id"]
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    email = str((body or {}).get("email") or "").strip()
+    if "@" not in email:
+        return JSONResponse({"error": "a target email is required"}, status_code=400)
+
+    import datetime as _dt
+
+    from .. import google_client, pipedream_executor
+
+    now = _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0)
+    start = (now + _dt.timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+    end = (now + _dt.timedelta(hours=1, minutes=30)).isoformat().replace("+00:00", "Z")
+
+    results: dict = {}
+    results["calendar"] = await run_in_threadpool(
+        google_client.create_calendar_event, org,
+        {"title": "Laura — integration test", "start": start, "end": end,
+         "attendees": [email], "timezone": "UTC",
+         "description": "Automated test event from Laura's integration check."},
+    )
+    results["email"] = await run_in_threadpool(
+        google_client.send_gmail, org,
+        {"to": [email], "subject": "Laura — integration test",
+         "body": "This is a test email from Laura's integration check. "
+                 "If you received it, Gmail sending works."},
+    )
+    results["asana"] = await run_in_threadpool(
+        pipedream_executor.dry_run, org,
+        {"type": "asana.create_task",
+         "task": {"name": "Laura — Pipedream test task",
+                  "notes": "Automated test task from Laura's integration check."}},
+    )
+    ok = all(bool(r.get("ok")) for r in results.values())
+    return JSONResponse({"ok": ok, "org": org, "target": email, "results": results},
+                        headers=_NO_STORE)
+
+
 @router.post("/dashboard/connections/brain")
 async def connect_brain(request: Request) -> JSONResponse:
     """Connect an avatar to the orchestrator (Cedric, the brain): store the

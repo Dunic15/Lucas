@@ -260,6 +260,43 @@ def _b64url_nopad(value: str) -> str:
     return base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii").rstrip("=")
 
 
+# ── app logos (resolved by slug, cached per process) ────────────────────────
+_logo_lock = threading.Lock()
+_logo_cache: dict[str, str] = {}  # slug -> img url ("" = looked up, none found)
+
+
+def logos_for(slugs: list[str]) -> dict[str, str]:
+    """Resolve real catalog logo URLs for a set of app slugs (slug -> img).
+    Cached per process; a miss is cached as "" so it isn't re-fetched. Best
+    effort — a lookup failure just yields no logo for that slug."""
+    out: dict[str, str] = {}
+    missing: list[str] = []
+    with _logo_lock:
+        for s in slugs:
+            s = str(s or "").strip().lower()
+            if not s:
+                continue
+            if s in _logo_cache:
+                if _logo_cache[s]:
+                    out[s] = _logo_cache[s]
+            elif s not in missing:
+                missing.append(s)
+    for s in missing:
+        img = ""
+        try:
+            for app in search_apps(s, limit=8).get("apps", []):
+                if app.get("slug") == s:
+                    img = app.get("img") or ""
+                    break
+        except PipedreamError:
+            img = ""
+        with _logo_lock:
+            _logo_cache[s] = img
+        if img:
+            out[s] = img
+    return out
+
+
 # ── app catalog search (the generic 3,000+ app grid) ────────────────────────
 
 def search_apps(query: str = "", *, limit: int = 30, after: str = "") -> dict:

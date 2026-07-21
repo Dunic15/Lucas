@@ -368,3 +368,65 @@ def test_avatar_asana_enabled_counts_pipedream_when_native_gone(monkeypatch):
     # Neither native nor Pipedream connected → not available.
     monkeypatch.setattr(pipedream_executor, "app_connected", lambda org, app: False)
     assert main_module._avatar_asana_enabled("orgX", "petra") is False
+
+
+# ── dry_run (no-ledger) + /dashboard/test/integrations ──────────────────────
+
+def test_dry_run_happy_no_ledger(monkeypatch):
+    _enable_pd(monkeypatch)
+    monkeypatch.setattr(pipedream_client, "list_accounts",
+                        lambda org, app="": [{"id": "apn_1", "healthy": True}])
+    monkeypatch.setattr(pipedream_client, "proxy_request",
+                        lambda *a, **k: {"ok": True, "status": 200,
+                                         "json": {"data": {"gid": "7", "permalink_url": "https://app.asana.com/0/0/7/f"}}})
+    # dry_run must NOT touch the ledger
+    def boom(*a, **k):
+        raise AssertionError("dry_run wrote to the ledger")
+    monkeypatch.setattr(pipedream_executor.ledger, "set_action_status", boom)
+    out = pipedream_executor.dry_run("orgX", {"type": "asana.create_task", "task": {"name": "x", "project": "1"}})
+    assert out["ok"] is True and out["route"] == "pipedream" and out["ref"].endswith("/7/f")
+
+
+def test_dry_run_no_account(monkeypatch):
+    _enable_pd(monkeypatch)
+    monkeypatch.setattr(pipedream_client, "list_accounts", lambda org, app="": [])
+    out = pipedream_executor.dry_run("orgX", {"type": "asana.create_task", "task": {"name": "x"}})
+    assert out["ok"] is False and "isn't connected" in out["error"]
+
+
+def test_test_integrations_requires_login(client):
+    r = client.post("/dashboard/test/integrations", json={"email": "a@b.com"})
+    assert r.status_code == 401
+
+
+def test_test_integrations_runs_all_three(client, monkeypatch):
+    _enable_pd(monkeypatch)
+    from app import auth as _auth
+    user = store.upsert_user("owner@x.com")
+    client.cookies.set(_auth.COOKIE_NAME, _auth.make_cookie(user["user_id"]))
+    from app import google_client
+    seen = {}
+    monkeypatch.setattr(google_client, "create_calendar_event",
+                        lambda org, ev: (seen.update(cal=ev), {"ok": True, "event_url": "https://cal/1"})[1])
+    monkeypatch.setattr(google_client, "send_gmail",
+                        lambda org, m: (seen.update(mail=m), {"ok": True, "message_id": "m1"})[1])
+    monkeypatch.setattr(pipedream_executor, "dry_run",
+                        lambda org, a: {"ok": True, "kind": "asana task", "ref": "https://app.asana.com/x", "route": "pipedream"})
+    r = client.post("/dashboard/test/integrations", json={"email": "duccio@sffstudio.com"},
+                    headers={"sec-fetch-site": "same-origin"})
+    assert r.status_code == 200
+    b = r.json()
+    assert b["ok"] is True and b["target"] == "duccio@sffstudio.com"
+    assert b["results"]["calendar"]["event_url"] == "https://cal/1"
+    assert b["results"]["asana"]["route"] == "pipedream"
+    assert seen["cal"]["attendees"] == ["duccio@sffstudio.com"]
+
+
+def test_test_integrations_needs_email(client, monkeypatch):
+    _enable_pd(monkeypatch)
+    from app import auth as _auth
+    user = store.upsert_user("owner@x.com")
+    client.cookies.set(_auth.COOKIE_NAME, _auth.make_cookie(user["user_id"]))
+    r = client.post("/dashboard/test/integrations", json={"email": "notanemail"},
+                    headers={"sec-fetch-site": "same-origin"})
+    assert r.status_code == 400
