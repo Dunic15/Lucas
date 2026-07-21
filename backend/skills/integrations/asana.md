@@ -37,6 +37,21 @@ org's connected Pipedream Asana account, behind dashboard approval.
 - API base: https://app.asana.com/api/1.0, request body wrapped in {"data": …},
   opt_fields=gid,name,permalink_url for a useful response.
 
+## ASR repair (live-meeting transcripts)
+
+Task names arrive through speech recognition — repair OBVIOUS mishearings
+using the meeting summary as context, never beyond it: "the key three plan"
+in a meeting about Q3 planning is "the Q3 plan"; "as an a task" is "an Asana
+task". If the summary doesn't disambiguate, keep the words as heard — a
+literal name is recoverable, a wrong guess is not.
+
+## "Assign it to me"
+
+"Me" is the SPEAKER of the ask. Resolve it to that person's email only when
+the attendee list (or the item text) provides one; otherwise omit assignee —
+the card's edit affordance fills it in one click. Never map "me" to the
+owner or the avatar by default.
+
 ## Language
 
 When the room speaks Italian, keep the task NAME in the meeting's language,

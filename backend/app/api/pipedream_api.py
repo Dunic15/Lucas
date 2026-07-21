@@ -218,9 +218,12 @@ async def pipedream_app_actions(request: Request, app: str = "") -> JSONResponse
     try:
         actions = pipedream_client.list_actions(slug, limit=25)
     except pipedream_client.PipedreamError as exc:
-        return JSONResponse({"ok": False, "actions": [], "degraded": type(exc).__name__},
+        return JSONResponse({"ok": False, "actions": [], "degraded": type(exc).__name__,
+                             "plan_gated": pipedream_client.plan_gated()},
                             headers=_NO_STORE)
-    return JSONResponse({"ok": True, "app": slug, "actions": actions}, headers=_NO_STORE)
+    return JSONResponse({"ok": True, "app": slug, "actions": actions,
+                         "plan_gated": pipedream_client.plan_gated()},
+                        headers=_NO_STORE)
 
 
 @router.post("/dashboard/pipedream/disconnect")

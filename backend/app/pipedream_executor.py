@@ -391,6 +391,16 @@ def _execute_generic(org: str, action_id: str, action_type: str,
     try:
         result = pipedream_client.run_action(org, action_key, configured)
     except pipedream_client.PipedreamError as exc:
+        # Plan gate ≠ outage: pre-built actions ("tool calling") sit on a
+        # higher Pipedream tier than Connect accounts + proxy. Say so on the
+        # receipt — the typed Asana/Gmail/Calendar path is unaffected.
+        if "current plan" in str(exc).lower():
+            return _settle(
+                action_id, org, False, action_type, "",
+                f"{app} pre-built actions need Pipedream's tool-calling tier "
+                "(pipedream.com/pricing). Core Asana/Gmail/Calendar actions "
+                "run via the Connect proxy and are unaffected.",
+            )
         return _settle(action_id, org, False, action_type, "",
                        f"{app} action failed ({type(exc).__name__})")
     exports = result.get("exports") if isinstance(result.get("exports"), dict) else {}

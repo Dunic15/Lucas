@@ -2503,6 +2503,38 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     typed = await run_in_threadpool(
         lambda: ledger.effective_typed(aid, action.get("typed"), org_id=org)
     )
+    # Late typing (live 2026-07-21, action e974c47c): an action approved
+    # BEFORE finalize typed it (fast click, or typing raced a deploy) reached
+    # execution with no spec → legacy 'cedric' route → an org without the
+    # Slack agent got a guaranteed "couldn't complete". One bounded
+    # post-provider call re-types it here instead; best-effort — on any
+    # failure the action proceeds exactly as before.
+    if not (isinstance(typed, dict) and typed.get("type")):
+        try:
+            from ..brain import engine as brain
+            from ..meeting.lifecycle import _avatar_asana_enabled
+
+            _allow_asana = bool(
+                acting_avatar
+                and await run_in_threadpool(
+                    _avatar_asana_enabled, org, str(acting_avatar)
+                )
+            )
+            _retyped = await run_in_threadpool(
+                lambda: brain.type_actions(
+                    [{
+                        "item": str(action.get("action") or action.get("item") or ""),
+                        "owner": str(action.get("owner") or ""),
+                        "deadline": str(action.get("deadline") or ""),
+                    }],
+                    allow_asana=_allow_asana,
+                )
+            )
+            _cand = (_retyped or [{}])[0].get("typed")
+            if isinstance(_cand, dict) and _cand.get("type"):
+                typed = _cand
+        except Exception:  # noqa: BLE001 — typing is opportunistic, never a gate
+            pass
 
     # A rejected action is CLOSED. The monotonic status guard would keep the
     # chip 'rejected' anyway, but without this check the executor below would

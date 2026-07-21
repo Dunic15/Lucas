@@ -63,10 +63,13 @@ def test_typing_prompt_includes_asana_skill(monkeypatch):
     )
     assert "Integration guidance (asana)" in captured["system"]
     assert "permalink_url" in captured["system"]
-    # And without allow_asana the skill is NOT loaded.
+    # Without allow_asana the ASANA skill is not loaded; the Google-family
+    # skills (gmail + calendar are baseline for every avatar) always are.
     captured.clear()
     engine._llm_type_actions(
         [(0, {"item": "Marco to send the deck"})], "sum", "anthropic",
         allow_asana=False,
     )
-    assert "Integration guidance" not in captured["system"]
+    assert "Integration guidance (asana)" not in captured["system"]
+    assert "Integration guidance (gmail)" in captured["system"]
+    assert "Integration guidance (google_calendar)" in captured["system"]

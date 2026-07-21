@@ -593,7 +593,16 @@ def extend_action_capture_once(
                 {"org_id": org_id, "action_id": action_id},
             ).first()
             if status is not None:
-                raise RuntimeError("action callback escaped settle fence")
+                # Typed, not a bare RuntimeError: the recall-webhook callers
+                # already treat ActionCaptureClosed as the benign "capture
+                # window closed" no-op. The bare raise 500'd /webhooks/recall
+                # and Recall re-delivered the event in a retry loop, eating
+                # every late ask after finalize (live 2026-07-21, two
+                # meetings in a row). Lazy import: outbox imports this
+                # module, so a top-level back-import would cycle.
+                from .outbox import ActionCaptureClosed
+
+                raise ActionCaptureClosed("settled")
         return {
             "action_id": str(row["action_id"]),
             "action": updated,

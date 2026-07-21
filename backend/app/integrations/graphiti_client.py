@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from datetime import datetime, timezone
 
 from ..config import settings
@@ -82,8 +83,11 @@ def enabled() -> bool:
 
 def _group_id(org_id: str) -> str:
     """Per-tenant graph partition. One org's episodes/search never touch
-    another's."""
-    return f"org:{(org_id or settings.demo_org_id).strip()}"
+    another's. Alphanumeric/_/- ONLY: graphiti-core validates group ids and
+    the old ``org:<uuid>`` colon prefix raised GroupIdValidationError on every
+    recall/ingest (live 2026-07-21 — the graph silently never populated)."""
+    raw = (org_id or settings.demo_org_id).strip()
+    return "org_" + re.sub(r"[^a-zA-Z0-9_-]", "_", raw)
 
 
 def _construct():
