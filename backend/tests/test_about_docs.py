@@ -39,6 +39,14 @@ def test_about_intent_detection():
         "sai cercare su internet?",
         "what does your web browsing cost?",
         "how does your browser work?",
+        # Tool-roster questions (live gap 2026-07-21: "quali tool puoi
+        # usare?" bypassed the about/ playbooks entirely)
+        "what tools can you use?",
+        "which integrations do you have?",
+        "what apps can you access?",
+        "quali tool puoi usare?",
+        "che strumenti hai?",
+        "quali integrazioni puoi usare?",
     ]
     no = [
         "what are we missing before go-live?",
@@ -49,6 +57,8 @@ def test_about_intent_detection():
         "search the web for the latest Acme funding news",  # task, not self-Q
         "look up the vendor pricing online and summarize it",  # task
         "can you check the onboarding checklist?",  # no web word
+        "use the tool to file the ticket",  # task with a tool word, not self-Q
+        "usa il tool per creare il task",  # task (IT), not self-Q
     ]
     for q in yes:
         assert brain._is_about_avatar(q), q

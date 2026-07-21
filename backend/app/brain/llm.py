@@ -385,7 +385,16 @@ def web_search(
                 max_tokens=max_tokens,
                 system=system,
                 messages=messages,
-                tools=[{"type": tool_type, "name": "web_search"}],
+                # allowed_callers=["direct"] is REQUIRED on models without
+                # programmatic tool calling (Haiku): without it the API 400s
+                # ("does not support programmatic tool calling") — seen live
+                # 2026-07-21 as 3× silent search failures + 5-7s answer spikes.
+                # Harmless on Sonnet/Opus, so it's set unconditionally.
+                tools=[{
+                    "type": tool_type,
+                    "name": "web_search",
+                    "allowed_callers": ["direct"],
+                }],
             )
             if msg.stop_reason == "pause_turn":
                 # Server hit its tool-round limit — resend to let it continue.
