@@ -128,7 +128,7 @@ def test_meetings_list_scopes_to_caller_org(client, google_on):
     store.save_artifact("unowned", {"summary": "c", "transcript": "z"})  # empty org_id
     bots = {m["bot_id"] for m in client.get("/meetings/list").json()["meetings"]}
     assert "mine" in bots
-    assert "unowned" in bots       # legacy/unowned stays visible (redeliver rule)
+    assert "unowned" not in bots   # pre-tenancy rows no longer shown to signups
     assert "theirs" not in bots    # another org's transcript never leaks
 
 
@@ -317,7 +317,7 @@ def test_org_scoping_on_meetings(client, google_on):
     data = client.get("/dashboard/summary").json()
     summaries = {m["summary"] for m in data["meetings"]}
     assert "alice meeting" in summaries
-    assert "legacy shared meeting" in summaries  # single-tenant migration mode
+    assert "legacy shared meeting" not in summaries  # pre-tenancy rows hidden
     assert "bob meeting" not in summaries
 
 

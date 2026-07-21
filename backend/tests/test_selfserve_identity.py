@@ -271,9 +271,9 @@ def test_internal_guard_is_config_driven(client, monkeypatch):
 # ── the demo-org sentinel flip (product decision 2026-07-13) ───────────
 
 def test_dashboard_hides_demo_org_rows_from_logged_in_user(client, google_on):
-    """A logged-in user's dashboard shows their org + legacy unowned ('') rows
-    — never the Demo org's (each anonymous visitor's showroom meetings would
-    otherwise appear in every real signup's dashboard)."""
+    """A logged-in user's dashboard shows ONLY their org's rows — never the
+    Demo org's (the anonymous showroom) and never legacy unowned ('') rows
+    (pre-tenancy test meetings would otherwise appear in every signup)."""
     alice = _login(client, "alice@example.com")
     store.save_artifact(
         "b_demo",
@@ -286,7 +286,7 @@ def test_dashboard_hides_demo_org_rows_from_logged_in_user(client, google_on):
     try:
         data = client.get("/dashboard/summary").json()
         summaries = {m["summary"] for m in data["meetings"]}
-        assert summaries == {"my row", "legacy row"}
+        assert summaries == {"my row"}
         assert {s["bot_id"] for s in data["live"]} == set()  # demo live hidden
     finally:
         store.remove("bot_demo_live")

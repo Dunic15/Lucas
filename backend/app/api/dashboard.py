@@ -50,6 +50,18 @@ except Exception:  # noqa: BLE001 — absent (or metadata-less) ⇒ not installe
     _GRAPHITI_CORE_VERSION = ""
 
 
+def _org_visible(caller_org: str | None, row_org: str) -> bool:
+    """Tenancy read filter shared by the summary listing and the action
+    lookup. Unscoped callers (key-free demo) see everything. The Demo org —
+    the anonymous showroom, and the view a global service bearer maps to —
+    keeps the legacy unowned ("") rows. A real signup's org sees ONLY its own
+    rows: pre-tenancy test meetings surfaced on every customer's dashboard
+    until 2026-07-20."""
+    if caller_org is None or row_org == caller_org:
+        return True
+    return caller_org == settings.demo_org_id and row_org == ""
+
+
 def _platform(meeting_url: str) -> str:
     url = (meeting_url or "").lower()
     if "meet.google" in url:
@@ -413,13 +425,10 @@ def dashboard_summary(request: Request) -> JSONResponse:
     # key-free demo), byte-identical to today.
     caller_org = user["org_id"] if user else machine_org
 
-    # Tenancy scoping: a scoped caller sees their own org's rows plus legacy
-    # unowned ("") rows — NOT the Demo org's. Self-serve product decision
-    # (2026-07-13): demo/service rows are the anonymous showroom, and a real
-    # signup's dashboard must contain only their workspace, or every customer
-    # sees every other anonymous demo. Anonymous/demo callers are unchanged.
+    # Tenancy scoping — see _org_visible: a real org sees only its own rows;
+    # the unscoped/demo worlds keep the legacy unowned ("") rows.
     def visible(row_org: str) -> bool:
-        return caller_org is None or row_org in ("", caller_org)
+        return _org_visible(caller_org, row_org)
 
     now = time.time()
     artifact_scope = None
@@ -2349,7 +2358,7 @@ def _find_org_action(caller_org: str, action_id: str) -> tuple[dict, str] | None
     for row in store.list_artifacts(scope):
         art = row.get("artifact") or {}
         row_org = art.get("org_id", "")
-        if caller_org is not None and row_org not in ("", caller_org):
+        if not _org_visible(caller_org, row_org):
             continue
         for a in art.get("actions") or []:
             if isinstance(a, dict) and str(a.get("action_id") or "") == aid:
