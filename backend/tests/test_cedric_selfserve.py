@@ -366,9 +366,9 @@ def test_org_action_status_is_tenant_scoped_before_finalize(client, monkeypatch)
     assert ledger.action_statuses([demo_id], org_id="org_other") == {}
 
 def test_summary_scoped_for_per_org_bearer(client, monkeypatch):
-    """/dashboard/summary's machine path: a per-org bearer sees its org + the
-    legacy unowned rows — never the Demo org's; the global bearer sees only
-    Demo + legacy rows."""
+    """/dashboard/summary's machine path: a per-org bearer sees ONLY its
+    org's rows — never legacy unowned ("") rows nor the Demo org's; the
+    global bearer keeps its unscoped Demo + legacy view."""
     monkeypatch.setattr(settings, "laura_api_token", "sesame")
     raw = store.mint_org_token("org_sff", "svc")
     store.save_artifact("b_sum_own", {"summary": "own row", "org_id": "org_sff"})
@@ -381,7 +381,7 @@ def test_summary_scoped_for_per_org_bearer(client, monkeypatch):
     store.set_connection("org_sff", "cedric", "cedric-brain", "connected", {"team_id": "T1"})
 
     scoped = client.get("/dashboard/summary", headers=_bearer(raw)).json()
-    assert {m["summary"] for m in scoped["meetings"]} == {"own row", "legacy row"}
+    assert {m["summary"] for m in scoped["meetings"]} == {"own row"}
     assert [c["provider"] for c in scoped["org_connections"]] == ["cedric-brain"]
 
     legacy = client.get("/dashboard/summary", headers=_bearer("sesame")).json()

@@ -70,16 +70,17 @@ def meetings_list(request: Request) -> JSONResponse:
             if str((a.get("artifact") or {}).get("org_id") or "") == machine_org
         ]
     elif user is not None:
-        # Cookie login: scope to the caller's org. Unowned/legacy artifacts
-        # (empty org_id) stay visible, mirroring the /sessions/*/redeliver
-        # rule; DEMO-org artifacts do not — self-serve product decision
-        # (2026-07-13): the anonymous showroom's transcripts never appear in a
-        # real signup's archive.
+        # Cookie login: scope to the caller's org ONLY. Unowned/legacy
+        # artifacts (empty org_id, pre-tenancy) used to stay visible here,
+        # which surfaced the team's old test meetings in every real signup's
+        # archive (reported 2026-07-20); they now remain visible only to the
+        # key-free/unscoped worlds. DEMO-org artifacts stay hidden too — the
+        # anonymous showroom's transcripts never appear in a real signup's
+        # archive (2026-07-13).
         org = str(user["org_id"])
         artifacts = [
             a
             for a in artifacts
-            if (art_org := str((a.get("artifact") or {}).get("org_id") or ""))
-            in ("", org)
+            if str((a.get("artifact") or {}).get("org_id") or "") == org
         ]
     return JSONResponse({"meetings": artifacts})
