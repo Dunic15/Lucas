@@ -322,6 +322,12 @@ _ABOUT_INTENT = re.compile(
     # the modal + you is required so task asks keep normal routing.
     r"((can|could|do|will) (you|laura)|are (you|laura) able to)\b.{0,24}\b(browse|search|surf|navigate|look\w*)\b.{0,20}\b(web|internet|online|browser|websites?)\b|"
     r"(puoi|sai|riesci a?)\b.{0,20}\b(navigar\w+|cercar\w+|browsar\w+)\b.{0,20}\b(web|internet|online|sit[oi])\b|"
+    # Tool-roster questions ("what tools can you use?", "quali tool puoi
+    # usare?") are self-questions too — they must hit the about/ playbooks,
+    # not the process docs. The tool-noun AND a you/usage anchor are both
+    # required so task asks ("use the tool to file X") keep normal routing.
+    r"(what|which)\b.{0,16}\b(tools?|integrations?|apps?|connectors?)\b.{0,24}\b(you|have|use|access)\b|"
+    r"(quali|che)\b.{0,16}\b(tools?|strumenti|integrazioni|app)\b.{0,28}\b(puoi|usi|usare|hai)\b|"
     r"come funzioni\b|come sei fatt\w+|cosa (sai|puoi) fare|"
     r"che modell[oi]\b|su che (modello|tecnologia)|con che (modello|tecnologia)|"
     r"chi (sei|ti ha creat\w+|ti ha fatt\w+)|sei (un[ao]? )?(ai|robot|bot|uman\w+))\b",
