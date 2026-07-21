@@ -313,3 +313,119 @@ def test_back_to_back_instructions_capture_separately(client, recall_stubbed, sp
     texts = [str(c.get("action")) for c in caps]
     assert len(caps) == 2, texts
     assert "Also create a task" in texts[1] and "Also create" not in texts[0]
+
+
+# ───────────────── kind-aware clarify (2026-07-21 live repro) ─────────────────
+# "send an email to Duccio" used to get the Asana owner/project/due
+# questionnaire; a Slack message got interrogated too. The slots now follow
+# the ask's kind, and free-form asks never interrogate.
+
+
+def test_email_ask_gets_email_questions(client, recall_stubbed, spoken, approved):
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    body = _say(client, bot_id, "Cedric, can you send an email to Duccio")
+    assert body.get("clarifying") == ["email_body"]
+    assert "what it should say" in spoken[-1]
+    assert "who should own it" not in spoken[-1]
+    assert approved == []
+
+
+def test_email_ask_missing_everything_asks_both(
+    client, recall_stubbed, spoken, approved
+):
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    body = _say(client, bot_id, "Cedric, can you send an email")
+    assert body.get("clarifying") == ["email_to", "email_body"]
+    assert "who it should go to" in spoken[-1]
+
+
+def test_calendar_ask_gets_calendar_questions(
+    client, recall_stubbed, spoken, approved
+):
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    body = _say(
+        client, bot_id, "Cedric, can you create a new meeting between me and Duccio"
+    )
+    assert body.get("clarifying") == ["invite_when"]
+    assert "when it should be" in spoken[-1]
+    assert "which project" not in spoken[-1]
+
+
+def test_freeform_ask_never_interrogates(client, recall_stubbed, spoken, approved):
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    body = _say(client, bot_id, "Cedric, please message Dana on Slack saying hi")
+    assert body.get("action_capture") is True
+    assert "clarifying" not in body
+    assert len(approved) == 1  # confirmed and queued straight away
+
+
+# ───────────── same-intent retry damping (four cards for one email) ─────────────
+
+
+def test_repeated_ask_merges_instead_of_multiplying(
+    client, recall_stubbed, spoken, approved
+):
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    body = _say(client, bot_id, "Cedric, can you send an email to Duccio")
+    assert body.get("clarifying") == ["email_body"]
+    session = store.get(bot_id)
+
+    # Unaddressed retry (louder, ASR-mangled) — a restatement, not an answer.
+    _age_clarify(session)
+    body = _say(client, bot_id, "could you send an email to do choke please")
+    assert body.get("restated") is True
+    assert approved == []
+    assert session.pending_clarify is not None
+
+    # Addressed retry — same damping through the capture gate.
+    _age_clarify(session)
+    body = _say(client, bot_id, "Cedric, please send an email to Duccio")
+    assert body.get("restated") is True
+    assert approved == []
+
+    # The actual answer resolves the ONE pending item.
+    _age_clarify(session)
+    body = _say(client, bot_id, "it should say hello from the meeting")
+    assert body.get("clarified") is True
+    assert len(approved) == 1
+    assert len(session.queued_actions) == 1
+
+
+def test_resolved_capture_retry_merges(client, recall_stubbed, spoken, approved):
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    body = _say(client, bot_id, "Cedric, send an email to Dana saying hi")
+    assert body.get("action_capture") is True and "clarifying" not in body
+    assert len(approved) == 1
+    session = store.get(bot_id)
+
+    body = _say(client, bot_id, "Cedric, can you send an email to Dana")
+    assert body.get("merged") is True
+    assert len(approved) == 1  # no second approval
+    assert len(session.queued_actions) == 1  # still ONE card
+    assert spoken[-1] in main_module._ALREADY_LINES + main_module._ALREADY_LINES_IT
+
+
+def test_different_recipient_is_a_new_action(
+    client, recall_stubbed, spoken, approved
+):
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    _say(client, bot_id, "Cedric, send an email to Dana saying hi")
+    body = _say(client, bot_id, "Cedric, send an email to Marco saying ciao")
+    assert body.get("merged") is None
+    assert len(approved) == 2  # genuinely two emails
+    session = store.get(bot_id)
+    assert len(session.queued_actions) == 2
+
+
+def test_ask_kind_and_same_ask_units():
+    assert tools.ask_kind("send an email to Duccio") == "email"
+    assert tools.ask_kind("create a new meeting between me and Ducho") == "calendar"
+    assert tools.ask_kind("create an Asana task called launch") == "task"
+    assert tools.ask_kind("message Ben on Slack") == "other"
+    # task wins ties: filing a task ABOUT an email is a task
+    assert tools.ask_kind("create a task to email the recap") == "task"
+    a = "Can you send an email to Duccio please. Still talking."
+    assert tools.same_ask(a, "Patrick, can you send an email to please?")
+    assert tools.same_ask(a, "So, , could you send an email to do choke")
+    assert not tools.same_ask(a, "Can you create a new meeting between me and Ducho?")
+    assert not tools.same_ask(a, "send an email to Ben saying hi")

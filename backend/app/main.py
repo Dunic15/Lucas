@@ -1518,14 +1518,31 @@ _CLARIFY_SLOTS = {
     "project": "which project it goes in",
     "due": "when it's due",
     "description": "anything the description should say",
+    "email_to": "who it should go to",
+    "email_body": "what it should say",
+    "invite_with": "who should be on it",
+    "invite_when": "when it should be",
 }
 _CLARIFY_SLOTS_IT = {
     "owner": "chi la prende in carico",
     "project": "in quale progetto va",
     "due": "per quando serve",
     "description": "cosa scrivere nella descrizione",
+    "email_to": "a chi va mandata",
+    "email_body": "cosa deve dire",
+    "invite_with": "chi va invitato",
+    "invite_when": "per quando fissarlo",
 }
 _CLARIFY_WINDOW_S = 45.0  # after this, resolve quietly with what we have
+_SAME_ASK_WINDOW_S = 90.0  # a retry of an ask captured this recently merges
+_ALREADY_LINES = [
+    "Already on the list — I've noted that.",
+    "Got it — that one's already queued.",
+]
+_ALREADY_LINES_IT = [
+    "È già in lista — annotato.",
+    "Ricevuto — quella è già in coda.",
+]
 
 
 def _clarify_line(heard: str, missing: list[str]) -> str:
@@ -3377,7 +3394,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 return JSONResponse(
                     {"ok": True, "spoke": False, "capture_rejected": "meeting_finalizing"}
                 )
-            still_missing = tools.missing_action_details(c_item.get("action") or "")
+            still_missing = tools.missing_action_details(
+                c_item.get("action") or "",
+                kind=tools.ask_kind(c_item.get("action") or ""),
+            )
             if still_missing:
                 session.pending_clarify = (
                     c_item, c_speaker, c_ts, still_missing, c_event_key, c_fingerprint,
@@ -3393,6 +3413,58 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     }
                 )
             answered = True  # the fragment completed the ask — resolve below
+            text_is_details = False
+        elif answered and tools.same_ask(c_item.get("action") or "", text):
+            # The human REPEATED the ask (louder, or an ASR-mangled retry) —
+            # that is not an answer to the clarify question. Extend the one
+            # pending item and hold, instead of resolving + re-capturing a
+            # duplicate card (live repro 2026-07-21: four cards for one email).
+            try:
+                c_item, _ = await run_in_threadpool(
+                    tools.extend_action_once,
+                    session,
+                    c_item,
+                    text,
+                    source_event_key=capture_event_key,
+                    source_fingerprint=capture_fingerprint,
+                )
+            except outbox.ActionCaptureClosed:
+                session.pending_clarify = None
+                return JSONResponse(
+                    {"ok": True, "spoke": False, "capture_rejected": "meeting_finalizing"}
+                )
+            still_missing = tools.missing_action_details(
+                c_item.get("action") or "",
+                kind=tools.ask_kind(c_item.get("action") or ""),
+            )
+            if still_missing:
+                session.pending_clarify = (
+                    c_item, c_speaker, time.time(), still_missing,
+                    c_event_key, c_fingerprint,
+                )
+                spoke = False
+                if still_missing != c_missing:
+                    # The retry filled a slot — ask only for what's left.
+                    restate_gen = store.bump_speech_generation(session)
+                    line = _clarify_line(text, still_missing)
+                    session.last_ack_at = time.time()
+                    spoke = await _make_avatar_speak(
+                        session,
+                        line,
+                        force=True,
+                        generation=restate_gen,
+                        audio=tts.cached_payload(line, _avatar_voice(session)),
+                    )
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "spoke": bool(spoke),
+                        "action_capture": True,
+                        "restated": True,
+                        "clarifying": still_missing,
+                    }
+                )
+            answered = True  # the retry completed the ask — resolve below
             text_is_details = False
         else:
             text_is_details = answered and not tools.is_detail_skip(text)
@@ -3528,7 +3600,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     "duplicate": not extended,
                 }
             )
-        session.last_capture = None
+        # A same-intent RETRY of the captured ask must keep the window alive —
+        # the capture gate below merges it into the existing card instead of
+        # minting another (2026-07-21: four cards for one email). Everything
+        # else still closes the continuation window here.
+        if not tools.same_ask(str(p_item.get("action") or ""), text):
+            session.last_capture = None
 
     # ── voice stop ("Laura, stop / aspetta") ──
     # A stop is a command, never a question: cut the current turn and answer
@@ -4046,6 +4123,109 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # avatar does now (browser walkthrough) — never a post-meeting
             # to-do. Keep it off the capture seam.
             and not detect_browse_intent(question)[0]):
+        # Same-intent retry damping (live repro 2026-07-21: four cards for
+        # one email). A re-ask of the capture she is still CLARIFYING extends
+        # that one item and keeps the clarify pending — reachable here when
+        # the retry was addressed by name (unaddressed retries hit the same
+        # logic in the clarify block above). A re-ask of a capture RESOLVED
+        # in the last _SAME_ASK_WINDOW_S extends the existing card instead of
+        # minting another.
+        pend = getattr(session, "pending_clarify", None)
+        if pend is not None and tools.same_ask(pend[0].get("action") or "", question):
+            try:
+                p_item, _ = await run_in_threadpool(
+                    tools.extend_action_once,
+                    session,
+                    pend[0],
+                    question.strip(),
+                    source_event_key=capture_event_key,
+                    source_fingerprint=capture_fingerprint,
+                )
+            except outbox.ActionCaptureClosed:
+                session.pending_clarify = None
+                return JSONResponse(
+                    {"ok": True, "spoke": False, "capture_rejected": "meeting_finalizing"}
+                )
+            still = tools.missing_action_details(
+                p_item.get("action") or "",
+                kind=tools.ask_kind(p_item.get("action") or ""),
+            )
+            if still:
+                session.pending_clarify = (
+                    p_item, pend[1], time.time(), still, pend[4], pend[5],
+                )
+                spoke = False
+                if still != pend[3]:
+                    line = _clarify_line(question, still)
+                    session.last_ack_at = time.time()
+                    spoke = await _make_avatar_speak(
+                        session,
+                        line,
+                        force=True,
+                        generation=turn_gen,
+                        audio=tts.cached_payload(line, _avatar_voice(session)),
+                    )
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "spoke": bool(spoke),
+                        "action_capture": True,
+                        "restated": True,
+                        "clarifying": still,
+                    }
+                )
+            session.pending_clarify = None
+            if settings.voice_consent_writes:
+                asyncio.create_task(
+                    run_in_threadpool(cedric.voice_approve, session, p_item)
+                )
+            line = _queue_line_for(question, p_item)
+            session.last_ack_at = time.time()
+            spoke = await _make_avatar_speak(
+                session,
+                line,
+                force=True,
+                generation=turn_gen,
+                audio=tts.cached_payload(line, _avatar_voice(session)),
+            )
+            return JSONResponse(
+                {"ok": True, "spoke": bool(spoke), "action_capture": True, "restated": True}
+            )
+        recent = getattr(session, "last_capture", None)
+        if (
+            recent is not None
+            and time.time() - recent[2] < _SAME_ASK_WINDOW_S
+            and tools.same_ask(recent[0].get("action") or "", question)
+        ):
+            try:
+                r_item, _ = await run_in_threadpool(
+                    tools.extend_action_once,
+                    session,
+                    recent[0],
+                    question.strip(),
+                    source_event_key=capture_event_key,
+                    source_fingerprint=capture_fingerprint,
+                )
+            except outbox.ActionCaptureClosed:
+                session.last_capture = None
+                return JSONResponse(
+                    {"ok": True, "spoke": False, "capture_rejected": "meeting_finalizing"}
+                )
+            session.last_capture = (
+                r_item, recent[1], recent[2], recent[3], recent[4],
+            )
+            line = _line_for(question, _ALREADY_LINES, _ALREADY_LINES_IT)
+            session.last_ack_at = time.time()
+            spoke = await _make_avatar_speak(
+                session,
+                line,
+                force=True,
+                generation=turn_gen,
+                audio=tts.cached_payload(line, _avatar_voice(session)),
+            )
+            return JSONResponse(
+                {"ok": True, "spoke": bool(spoke), "action_capture": True, "merged": True}
+            )
         # detect_wake already stripped the wake word: `question` is the ask
         # itself ("please schedule a follow-up with Marco on Friday").
         # One bounded tenant transaction, off the shared event loop. No
@@ -4111,7 +4291,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 asyncio.create_task(
                     run_in_threadpool(cedric.voice_approve, session, stale[0])
                 )
-        missing = tools.missing_action_details(item.get("action") or "")
+        missing = tools.missing_action_details(
+            item.get("action") or "",
+            kind=tools.ask_kind(item.get("action") or ""),
+        )
         if settings.clarify_before_create and missing:
             # The ask lacks what a well-filed task needs — Petra ASKS instead
             # of filing an orphan. The approval is held until the asker's
