@@ -1292,7 +1292,10 @@ def action_statuses(
         str(row["action_id"]): {
             "status": str(row["status"]),
             "detail": str(row["detail"]),
-            "updated_at": float(row["updated_at"]),
+            # Defensive: a row can carry execution_status with a NULL
+            # execution_updated_at (seen in prod 2026-07-21 — one such row made
+            # float(None) 500 the whole dashboard summary). Treat as epoch 0.
+            "updated_at": float(row["updated_at"] or 0.0),
         }
         for row in rows
     }
