@@ -139,6 +139,30 @@ if ! "${LITESTREAM}" restore -config "${LITESTREAM_CONFIG}" \
   log "restore errored — booting anyway (app will start on a fresh DB)"
 fi
 
+# FAIL-OPEN, part 2 (2026-07-21): a restore can SUCCEED yet yield a MALFORMED
+# DB (a wedged replica generation — live repro: 'database disk image is
+# malformed' crashed every new instance, so health checks failed and App Runner
+# rolled back EVERY deploy). Verify the restored file before handing it to the
+# app; a corrupt copy is moved aside (kept on disk for forensics) and the app
+# boots on a fresh DB instead — worst case = older org memory, never a boot
+# that can't pass health checks.
+if [ -f "${LAURA_STORE_PATH}" ]; then
+  if ! "${PYTHON}" - "${LAURA_STORE_PATH}" <<'PY'; then
+import sqlite3, sys
+try:
+    con = sqlite3.connect(sys.argv[1], timeout=10)
+    row = con.execute("PRAGMA integrity_check(1)").fetchone()
+    con.close()
+    sys.exit(0 if row and row[0] == "ok" else 1)
+except Exception:
+    sys.exit(1)
+PY
+    log "restored DB FAILED integrity check — moving it aside, booting fresh"
+    mv -f "${LAURA_STORE_PATH}" "${LAURA_STORE_PATH}.corrupt.$(date +%s)" 2>/dev/null \
+      || rm -f "${LAURA_STORE_PATH}"
+  fi
+fi
+
 # Hand off to Litestream, which supervises uvicorn and ships WAL changes to S3
 # for as long as the server runs. On uvicorn exit it does a final sync.
 log "starting: litestream replicate -exec \"${UVICORN_CMD}\""
