@@ -32,22 +32,26 @@ on the stub engine; real-GPU launch is blocked only on an AWS quota approval.
   - **`/talk`: the low-cost path, live in production.** Open-source in-browser 3D
     avatar (TalkingHead WebGL + vendored `frontend/laura.glb`) + `/tts`
     (ElevenLabs with word timings; free edge-tts fallback). Zero face-vendor cost.
-  - **`/photoreal`: Stage 2.** GPU-streamed MuseTalk face (`gpu/server.py`; a stub
-    engine streams the same protocol with no GPU, for dev/testing). Fallback chain:
+  - **`/photoreal`: Stage 2.** GPU-streamed **Ditto** face (`gpu/server.py`, one
+    `AVATAR_ENGINE` seam: `ditto` (prod) / `musetalk` / `stub`; the stub streams the
+    same protocol with no GPU, for dev/testing). Fallback chain:
     GPU stream → static portrait → `/talk`. **GPU cost controls** are built in: four
     independent auto-stop layers (launch TTL, boot TTL, idle watchdog, meeting-bound
     start/stop from the backend); see `gpu/README.md`.
   - **`/avatar`: legacy Anam (paid per-minute).** No longer the core/default story;
     kept as a working fallback. (Note: the *code* default of `AVATAR_PAGE` is still
     `"avatar"`; production overrides it to `talk`.)
-- **MeetingState = the intelligence layer** (`backend/app/meeting_state.py` +
+- **MeetingState = the intelligence layer** (`backend/app/meeting/meeting_state.py` +
   `avatars/<id>/process_templates/`): a regex-only silent tracker updated on every
   transcript line; required/completed/missing steps, decisions, owners, stage.
   Zero model calls, zero latency added to the live path. Powers ONE deterministic
   closing intervention (when a critical step is missing) and the artifact's
   readiness score.
-- **Brain (pluggable):** `groq` (live default: **llama-3.3-70b-versatile**, ~0.4s
-  first token, no spikes) | `anthropic` | `ollama` | `stub` (offline, free).
+- **Brain (pluggable):** prod live path is **Cerebras `gemma-4-31b`** (~0.17s first
+  token) with a Claude **Haiku** circuit-breaker fallback on 429; post-meeting
+  summaries use Claude **Sonnet** (`BRAIN_PROVIDER_POST=anthropic`). Providers:
+  `cerebras` (prod) | `groq` (OpenAI-compatible swap-in) | `anthropic` | `vertex`
+  (Gemini) | `ollama` | `stub` (offline, free).
 - **Embeddings (pluggable):** `hash` (offline) | `local` (fastembed) | `voyage`.
 - **RAG:** markdown docs per avatar → chunked by heading → cited answers.
 - **Store:** SQLite session state (ephemeral on App Runner: no persistent disk).

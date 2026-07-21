@@ -1,4 +1,4 @@
-# Repository structure — where everything lives
+# Repository structure: where everything lives
 
 The map of the Laura repo, accurate as of the **#329 backend refactor** ("domain
 packages + main.py decomposition, moves-only, contract untouched"). This is the
@@ -13,7 +13,7 @@ packages + main.py decomposition, moves-only, contract untouched"). This is the
 
 ---
 
-## `backend/` — the brain (deployed to App Runner)
+## `backend/`: the brain (deployed to App Runner)
 
 | Path | What it owns |
 |---|---|
@@ -32,7 +32,7 @@ packages + main.py decomposition, moves-only, contract untouched"). This is the
 | `app/runtime/` | `native_runtime.py`, `gpu_runtime.py`, `runpod_runtime.py` (execution + GPU box lifecycle). |
 | `app/datafoundation/` | Data Foundation (DF0-DF1): `dal.py`, `connectors.py`, `resolver.py`, `sync.py`, `router.py` (`/org/data`). |
 | `app/demo_mvp/` | Northstar demo MVP: `northstar_provider.py`, `execute.py`, `ingest.py`, `narration.py`, `router.py` (`/org/demo`). |
-| `app/pipedream_client.py`, `app/pipedream_executor.py` | **Real top-level modules** (not shims): Pipedream Connect — managed-auth connections + the Connect-Proxy execution path (flag-gated, `execution_route=="pipedream"`). |
+| `app/pipedream_client.py`, `app/pipedream_executor.py` | **Real top-level modules** (not shims): Pipedream Connect; managed-auth connections + the Connect-Proxy execution path (flag-gated, `execution_route=="pipedream"`). |
 | `app/browser_meeting.py` | **Real top-level module:** browser-based meeting join path. |
 | `alembic/` | Postgres control-plane migrations, `0001_org_id_spine` → `0014_browser_identities`. `backend/alembic.ini`. |
 | `scripts/` | Dev/ops CLIs: `ask.py`, `simulate.py`, `ingest.py`, `recall_check.py`, `browser_b1_smoke.py`. |
@@ -44,7 +44,7 @@ packages + main.py decomposition, moves-only, contract untouched"). This is the
 WS `/ws/{conversation_id}` · GET `/avatar/stream/{conversation_id}` · GET
 `/avatar/messages/{conversation_id}` · POST `/avatar/speaking/{conversation_id}` ·
 POST `/webhooks/recall` · POST `/webhooks/recall-calendar` · WS
-`/realtime/recall-audio[/{cap_path}]`. Changing these can break running meetings —
+`/realtime/recall-audio[/{cap_path}]`. Changing these can break running meetings -
 see [CODEX.md](../CODEX.md).
 
 ---
@@ -54,12 +54,12 @@ see [CODEX.md](../CODEX.md).
 | Path | What it is | Status |
 |---|---|---|
 | `frontend/` | Face + product pages: `talk/photoreal/avatar/live.html` (renderers), `dashboard.html` (Control Center), `login/join/meetings/demo.html`, `privacy/terms.html`, vendored `<id>.glb` head models, `fixtures/` (browser-operator UI states). | live |
-| `avatars/` | One folder per avatar — `laura`, `cedric`, `petra`, `sff`, `duccio` (internal). `avatar.yaml` + `knowledge/` + `process_templates/` + `about/`. See [avatars/README.md](../avatars/README.md). | live |
+| `avatars/` | One folder per avatar. `laura`, `cedric`, `petra`, `sff`, `duccio` (internal). `avatar.yaml` + `knowledge/` + `process_templates/` + `about/`. See [avatars/README.md](../avatars/README.md). | live |
 | `gpu/` | Photoreal track: `server.py` (one `AVATAR_ENGINE` seam: `stub`/`musetalk`/`ditto`), Ditto adapter + `Dockerfile.ditto` (production), cost-control scripts, `gpu/assets/reference-*.jpg`. | live (Ditto) |
-| `relay/laura-ears/` | Cloudflare Worker "ears" — relays Recall audio → Gemini Live → `/webhooks/recall` (App Runner refuses inbound WS). | live |
+| `relay/laura-ears/` | Cloudflare Worker "ears": relays Recall audio → Gemini Live → `/webhooks/recall` (App Runner refuses inbound WS). | live |
 | `demos/northstar/` | Isolated synthetic company for the end-to-end demo; imported by `app/demo_mvp` when the demo is enabled. | live |
 | `extensions/laura-meet/` | Chrome MV3 "Send Laura" overlay for Meet/Zoom/Teams. | live |
-| `lovable/` | Lovable-generated marketing landing site (separate toolchain; **not** the app in `frontend/`). Commits sync back to Lovable — don't rewrite history. | semi-active |
+| `lovable/` | Lovable-generated marketing landing site (separate toolchain; **not** the app in `frontend/`). Commits sync back to Lovable; don't rewrite history. | semi-active |
 | `etc/litestream.yml` | Continuous S3 replication of the SQLite store. | live (infra) |
 | `scripts/` | Repo-level ops: `start-with-litestream.sh` (prod boot wrapper), `serve.sh`, `validate_rls.py`, `latency_probe.py`. Distinct from `backend/scripts/`. | live |
 | `docs/` | Architecture, product (PRDs/roadmap), infra, GTM, research, fundraise, finance + `docs/archive/` (intentional history). | live |
@@ -72,20 +72,20 @@ see [CODEX.md](../CODEX.md).
 Tracked here so it's honest; fixing these is low-risk cleanup, not behavior change.
 
 - **Docs citing pre-#329 flat paths** (`brain.py`, `meeting_state.py`, `config.py`,
-  `decision.py`) — being migrated to the package paths above. Affected:
+  `decision.py`); being migrated to the package paths above. Affected:
   `ARCHITECTURE_CURRENT.md` "Key files" table, `.claude/CONTEXT.md`, `CODEX.md`.
-- **`ARCHITECTURE_CURRENT.md`** — its "Key files" table predates the package split.
-- **`.claude/CONTEXT.md`** — the brain-provider line still calls Groq/llama the live
+- **`ARCHITECTURE_CURRENT.md`**: its "Key files" table predates the package split.
+- **`.claude/CONTEXT.md`**: the brain-provider line still calls Groq/llama the live
   default; prod actually runs Cerebras `gemma-4-31b` (fixed in the README).
-- **MuseTalk → Ditto** — older prose names MuseTalk; production photoreal is Ditto.
-- **`REPO_HYGIENE.md`** — the previous "current vs stale" inventory (2026-07-14) is
+- **MuseTalk → Ditto**: older prose names MuseTalk; production photoreal is Ditto.
+- **`REPO_HYGIENE.md`**: the previous "current vs stale" inventory (2026-07-14) is
   itself well behind HEAD; **this file supersedes it** as the structure map.
-- **`voice-previews/*.mp3`** — tracked despite the `.gitignore` rule; the chosen
+- **`voice-previews/*.mp3`**: tracked despite the `.gitignore` rule; the chosen
   voice already lives in `ids.json` + `avatars/*/avatar.yaml`. Safe to remove.
-- **`gpu/assets/reference.jpg`** — byte-identical duplicate of `reference-laura.jpg`
+- **`gpu/assets/reference.jpg`**: byte-identical duplicate of `reference-laura.jpg`
   (legacy default placeholder).
-- **`frontend/laura-avatar.jpg`** — appears unused (portrait serving goes through
+- **`frontend/laura-avatar.jpg`**: appears unused (portrait serving goes through
   `gpu/assets` via `/laura-reference.jpg?avatar_id=`).
-- **`docs/assets/lookdev/`** — 22 avatar screenshots; thin to a couple.
-- **`app/<legacy>.py` shims** — intentional back-compat; can be pruned once all
+- **`docs/assets/lookdev/`**: 22 avatar screenshots; thin to a couple.
+- **`app/<legacy>.py` shims**: intentional back-compat; can be pruned once all
   imports move to package paths.
