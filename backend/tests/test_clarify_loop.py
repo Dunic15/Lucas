@@ -283,3 +283,23 @@ def test_group_instruction_still_requires_the_name(client, recall_stubbed, spoke
         "in the launch project, due Friday",
     )
     assert body.get("action_capture") is not True
+
+
+def test_back_to_back_instructions_capture_separately(client, recall_stubbed, spoken):
+    """Round-4 live repro: a second complete ask seconds after the first was
+    glued onto it as a 'continuation' — one monster item, no confirmation for
+    ask #2. A follow-up that itself reads as a new ask must start a NEW capture
+    (and, details missing, the clarify loop)."""
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    r1 = _say(
+        client, bot_id,
+        "Create a task called research kickoff, assigned to Dana, "
+        "in the research project, due Friday",
+    )
+    assert r1.get("action_capture") is True
+    r2 = _say(client, bot_id, "Also create a task to email Duccio the summary")
+    assert r2.get("action_capture") is True or r2.get("clarifying")
+    caps = store.get(bot_id).queued_actions
+    texts = [str(c.get("action")) for c in caps]
+    assert len(caps) == 2, texts
+    assert "Also create a task" in texts[1] and "Also create" not in texts[0]

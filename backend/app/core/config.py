@@ -133,12 +133,15 @@ class Settings(BaseSettings):
     deepgram_language: str = "multi"
     # Deepgram endpointing (ms of silence before a FINAL is emitted). Recall
     # forwards deepgram_streaming config fields to Deepgram, so this reaches the
-    # streaming API's `endpointing` param. 0 = don't send (Deepgram default).
-    # Lower = finals land sooner after the speaker stops = Laura reacts sooner;
-    # too low risks finals splitting mid-sentence on brief intra-sentence pauses
-    # (the brain then answers half a question). This delay stacks with the
-    # deference wait, which starts only after the final arrives.
-    deepgram_endpointing_ms: int = 0
+    # streaming API's `endpointing` param. 0 = don't send (Deepgram default,
+    # ~10ms — hyper-aggressive). Lower = finals land sooner = Laura reacts
+    # sooner; too low splits finals mid-sentence on intra-sentence pauses (the
+    # round-4 live repro 2026-07-21: one instruction arrived as THREE finals —
+    # "…Create a task." / "Called research kickoff assigned to me in the
+    # research" / "project due Friday." — and the capture/clarify machinery had
+    # to reassemble confetti). Default 500ms: sentence-shaped finals for ≤0.5s
+    # extra pre-final wait, which the deference window largely absorbs.
+    deepgram_endpointing_ms: int = 500
     recall_transcription_mode: str = "prioritize_low_latency"
     recall_transcription_language_code: str = "en"
     elevenlabs_transcription_model: str = "scribe_v2_realtime"
