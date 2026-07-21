@@ -1,0 +1,63 @@
+# Build + push the Laura backend image to ECR on every push to main.
+#
+# This is the FAST-DEPLOY half of the App Runner image-mode migration
+# (source-mode rebuilds everything on App Runner: ~7min build + ~3min rollout;
+# image mode pulls this prebuilt image: rollout only, ~2-3min total).
+#
+# Auth: GitHub OIDC → arn:aws:iam::836739852304:role/LauraGithubEcrPush
+# (scoped to repo:Dunic15/Laura, push-only on the laura-backend ECR repo —
+# no long-lived AWS keys in GitHub).
+#
+# Tags: :latest (what the App Runner image service tracks) + :<sha> (rollback).
+# Layer caching via GHA cache — a code-only change rebuilds in ~1-2 min.
+name: build-backend-image
+
+on:
+  push:
+    branches: [main]
+    # Only rebuild when something that ships in the image changed.
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "avatars/**"
+      - "scripts/**"
+      - "etc/**"
+      - "gpu/assets/**"
+      - "requirements.txt"
+      - "Dockerfile"
+      - ".github/workflows/build-backend-image.yml"
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write   # OIDC federation
+  contents: read
+
+concurrency:
+  group: build-backend-image
+  cancel-in-progress: true   # only the newest main commit matters
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::836739852304:role/LauraGithubEcrPush
+          aws-region: eu-central-1
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.ecr.outputs.registry }}/laura-backend:latest
+            ${{ steps.ecr.outputs.registry }}/laura-backend:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
