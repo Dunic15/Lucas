@@ -258,6 +258,50 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
     return _settle(action_id, org, True, action_type, ref, "", kind=kind)
 
 
+def dry_run(org_id: str, action: dict) -> dict:
+    """Run a mapped action through the proxy WITHOUT touching the ledger — for
+    the dashboard "test integrations" tool. Same account-resolution + builder +
+    proxy as execute_approved; returns {ok, kind, ref, route, error?, status?}.
+    Never raises."""
+    if not enabled():
+        return {"ok": False, "error": "pipedream executor is off"}
+    action_type = _type_of(action)
+    spec = _MAPPER.get(action_type)
+    if spec is None:
+        return {"ok": False, "error": f"unhandled action type {action_type!r}"}
+    org = str(org_id or "").strip()
+    if not org:
+        return {"ok": False, "error": "missing org"}
+    app_slug, builder, receipt_fn = spec
+    args = _args_of(action)
+    try:
+        accounts = pipedream_client.list_accounts(org, app=app_slug)
+    except pipedream_client.PipedreamError as exc:
+        return {"ok": False, "error": f"couldn't reach Pipedream ({type(exc).__name__})"}
+    account = next((a for a in accounts if a.get("id") and a.get("healthy", True)), None)
+    if account is None:
+        account = next((a for a in accounts if a.get("id")), None)
+    if account is None:
+        return {"ok": False, "error": f"{app_slug} isn't connected in Pipedream"}
+    account_id = str(account["id"])
+    try:
+        method, url, body, headers = builder(org, account_id, args)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"bad arguments ({type(exc).__name__})"}
+    try:
+        resp = pipedream_client.proxy_request(
+            org, account_id, method, url, json_body=body, headers=headers)
+    except pipedream_client.PipedreamError as exc:
+        return {"ok": False, "error": f"proxy call failed ({type(exc).__name__})"}
+    if not resp.get("ok"):
+        return {"ok": False, "status": resp.get("status"),
+                "error": f"{app_slug} API returned {resp.get('status')}"}
+    kind, ref = receipt_fn(action_type, resp.get("json") or {})
+    return {"ok": True, "kind": kind, "ref": ref, "route": "pipedream"}
+
+
 def _settle(action_id: str, org: str, ok: bool, action_type: str, ref: str,
             error: str, *, kind: str = "") -> dict:
     """Write the canonical done/failed ledger receipt (route='pipedream') and

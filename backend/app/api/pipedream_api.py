@@ -86,15 +86,27 @@ async def pipedream_accounts(request: Request) -> JSONResponse:
                 connected.setdefault(slug, acct)  # first (healthy) wins
     except pipedream_client.PipedreamError as exc:
         degraded = type(exc).__name__
+    # Real catalog logos for the featured + connected slugs (cached best-effort).
+    _slugs = [a["slug"] for a in _CATALOG] + [
+        str(a.get("app") or "") for a in connected.values()
+    ]
+    try:
+        logos = pipedream_client.logos_for(_slugs)
+    except pipedream_client.PipedreamError:
+        logos = {}
     apps = [
         {**a,
+         "img": logos.get(a["slug"], ""),
          "connected": a["slug"] in connected,
          "account": connected.get(a["slug"]) or None}
         for a in _CATALOG
     ]
     # Full connected set (any app, incl. ones connected via the generic grid and
     # not in the featured catalog) so the UI can list + disconnect them all.
-    connected_apps = list(connected.values())
+    connected_apps = [
+        {**a, "img": logos.get(str(a.get("app") or ""), "")}
+        for a in connected.values()
+    ]
     return JSONResponse(
         {"ok": True, "environment": pipedream_client.environment(),
          "apps": apps, "connected_apps": connected_apps, "degraded": degraded},
