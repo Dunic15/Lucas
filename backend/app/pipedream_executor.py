@@ -14,15 +14,22 @@ Gated by ``settings.pipedream_executor`` AND the Pipedream feature flag
 (``pipedream_client.enabled()``); default OFF, so prod behaviour is byte-identical
 until it is flipped on.
 
-Scope (refined 2026-07-20): Pipedream owns Asana + Jira + the long tail. The whole
-Google block (calendar/gmail/drive) stays on Laura's native executor; Slack stays
-on Cedric. So today this plane maps only the Asana action types — the ones being
-moved off the native Asana adapter.
+Scope (refined 2026-07-21): Pipedream owns Asana + the Google block (Gmail +
+Calendar, Drive next) + the long tail; Slack stays on Cedric. Asana + the long
+tail route to Pipedream unconditionally; the Google types ALSO have a native
+adapter, so during the cutover they route to Pipedream only once the org has
+connected that Google app in Pipedream, and fall back to the native token path
+until then (executor.route_for_typed). All request bodies are the deterministic
+mappers below — never model-constructed for a core-app write.
 """
 from __future__ import annotations
 
+import base64
 import threading
 import time
+import uuid
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from typing import Any, Callable
 
 from . import ledger, pipedream_client
@@ -121,12 +128,162 @@ def _asana_receipt(action_type: str, resp_json: dict) -> tuple:
     return kind, url
 
 
+# ── Google request builders (Gmail + Calendar, via the app's own REST API) ──
+# The Pipedream account is connected per Google app (gmail / google_calendar /
+# google_drive) with that app's scopes, so the proxy injects the right OAuth
+# token. Arg shapes are IDENTICAL to the native adapters (google_client), so the
+# brain's typing layer is unchanged — only the execution plane moves.
+_GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
+_CAL_API = "https://www.googleapis.com/calendar/v3"
+_DRIVE_API = "https://www.googleapis.com/drive/v3"
+
+
+def _emails(value: Any) -> list[str]:
+    """Normalize a str / comma-list / list into de-duped email strings."""
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.replace(";", ",").split(",")]
+    elif isinstance(value, (list, tuple)):
+        parts = [str(p).strip() for p in value]
+    else:
+        parts = []
+    out: list[str] = []
+    for p in parts:
+        if p and "@" in p and p not in out:
+            out.append(p)
+    return out
+
+
+def _build_gmail_send(org_id: str, account_id: str, args: dict) -> tuple:
+    to = _emails(args.get("to"))
+    cc = _emails(args.get("cc"))
+    bcc = _emails(args.get("bcc"))
+    subject = str(args.get("subject") or "").strip()
+    text = str(args.get("body") or args.get("text") or "")
+    html = str(args.get("html_body") or args.get("html") or "")
+    if not to:
+        raise ValueError("email needs at least one recipient")
+    if not subject and not text and not html:
+        raise ValueError("email needs a subject or a body")
+    if html:
+        mime: Any = MIMEMultipart("alternative")
+        mime.attach(MIMEText(text or "", "plain", _charset="utf-8"))
+        mime.attach(MIMEText(html, "html", _charset="utf-8"))
+    else:
+        mime = MIMEText(text or "", _charset="utf-8")
+    mime["To"] = ", ".join(to)
+    mime["Subject"] = subject
+    if cc:
+        mime["Cc"] = ", ".join(cc)
+    if bcc:
+        mime["Bcc"] = ", ".join(bcc)
+    raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
+    body: dict[str, Any] = {"raw": raw}
+    thread_id = str(args.get("thread_id") or "").strip()
+    if thread_id:
+        body["threadId"] = thread_id
+    return "POST", f"{_GMAIL_API}/messages/send", body, None
+
+
+def _build_gmail_draft(org_id: str, account_id: str, args: dict) -> tuple:
+    # Same MIME, but wrapped as a draft (nothing is sent).
+    method, url, send_body, _ = _build_gmail_send(org_id, account_id, args)
+    return "POST", f"{_GMAIL_API}/drafts", {"message": send_body}, None
+
+
+def _gmail_receipt(action_type: str, resp_json: dict) -> tuple:
+    if action_type == "gmail.create_draft":
+        mid = str((resp_json.get("message") or {}).get("id") or resp_json.get("id") or "")
+        return "email draft", (f"gmail:draft:{mid}" if mid else "")
+    mid = str(resp_json.get("id") or "")
+    return "email", (f"gmail:{mid}" if mid else "")
+
+
+def _build_calendar_create(org_id: str, account_id: str, args: dict) -> tuple:
+    summary = str(args.get("title") or args.get("summary") or "").strip()
+    start = str(args.get("start") or "").strip()
+    end = str(args.get("end") or "").strip()
+    if not summary or not start or not end:
+        raise ValueError("event needs a title, start and end")
+    tz = str(args.get("timezone") or args.get("time_zone") or "UTC").strip() or "UTC"
+    body: dict[str, Any] = {
+        "summary": summary,
+        "start": {"dateTime": start, "timeZone": tz},
+        "end": {"dateTime": end, "timeZone": tz},
+        # Give the hold a real Meet join link, like the native adapter does.
+        "conferenceData": {
+            "createRequest": {
+                "requestId": uuid.uuid4().hex,
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            }
+        },
+    }
+    if args.get("description"):
+        body["description"] = str(args["description"])[:8000]
+    attendees = _emails(args.get("attendees"))
+    if attendees:
+        body["attendees"] = [{"email": e} for e in attendees]
+    url = (
+        f"{_CAL_API}/calendars/primary/events"
+        "?sendUpdates=all&conferenceDataVersion=1"
+    )
+    return "POST", url, body, None
+
+
+def _build_calendar_update(org_id: str, account_id: str, args: dict) -> tuple:
+    event_id = str(args.get("event_id") or args.get("event") or "").strip()
+    if not event_id:
+        raise ValueError("update needs the event id")
+    body: dict[str, Any] = {}
+    if args.get("title") or args.get("summary"):
+        body["summary"] = str(args.get("title") or args.get("summary")).strip()
+    tz = str(args.get("timezone") or args.get("time_zone") or "UTC").strip() or "UTC"
+    if args.get("start"):
+        body["start"] = {"dateTime": str(args["start"]).strip(), "timeZone": tz}
+    if args.get("end"):
+        body["end"] = {"dateTime": str(args["end"]).strip(), "timeZone": tz}
+    if args.get("description"):
+        body["description"] = str(args["description"])[:8000]
+    if not body:
+        raise ValueError("update carries no changes")
+    url = f"{_CAL_API}/calendars/primary/events/{event_id}?sendUpdates=all"
+    return "PATCH", url, body, None
+
+
+def _calendar_receipt(action_type: str, resp_json: dict) -> tuple:
+    ref = str(resp_json.get("htmlLink") or resp_json.get("id") or "")
+    kind = "calendar event update" if action_type == "calendar.update_event" else "calendar event"
+    return kind, ref
+
+
 # action_type -> (app_slug, builder, receipt_fn)
 _MAPPER: dict[str, tuple[str, Builder, ReceiptFn]] = {
+    # Asana
     "asana.create_task": ("asana", _build_asana_create, _asana_receipt),
     "asana.update_task": ("asana", _build_asana_update, _asana_receipt),
     "asana.add_comment": ("asana", _build_asana_comment, _asana_receipt),
+    # Gmail
+    "email.send": ("gmail", _build_gmail_send, _gmail_receipt),
+    "gmail.create_draft": ("gmail", _build_gmail_draft, _gmail_receipt),
+    # Google Calendar
+    "calendar.create_event": ("google_calendar", _build_calendar_create, _calendar_receipt),
+    "calendar.update_event": ("google_calendar", _build_calendar_update, _calendar_receipt),
 }
+
+# The Google apps that ALSO have a native adapter — during the cutover these
+# route to Pipedream only once the org has actually connected them there, and
+# fall back to the native token path until then (see executor.route_for_typed).
+_GOOGLE_APPS = frozenset({"gmail", "google_calendar", "google_drive"})
+
+
+def app_for_type(action_type: str) -> str:
+    """The Pipedream app slug that owns a mapped action type ('' if unmapped)."""
+    spec = _MAPPER.get(str(action_type or "").strip())
+    return spec[0] if spec else ""
+
+
+def is_google_type(action_type: str) -> bool:
+    """True for a mapped Gmail/Calendar/Drive action (has a native fallback)."""
+    return app_for_type(action_type) in _GOOGLE_APPS
 
 
 # ── public surface (mirrors executor.py) ────────────────────────────────────
