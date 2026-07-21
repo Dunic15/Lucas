@@ -64,8 +64,24 @@ def _build_asana_create(org_id: str, account_id: str, args: dict) -> tuple:
     if not name:
         raise ValueError("task needs a name")
     body: dict[str, Any] = {"name": name[:300]}
-    if args.get("notes"):
-        body["notes"] = str(args["notes"])[:4000]
+    notes = str(args.get("notes") or "")
+    # The Connect-Proxy path is a single request: carry subtasks/dependencies/
+    # attachments in a structured notes tail so the fuller spec is never
+    # silently dropped (the native adapter applies them as real objects).
+    tail: list[str] = []
+    subs = [str(x).strip() for x in (args.get("subtasks") or []) if str(x).strip()]
+    if subs:
+        tail.append("Subtasks: " + "; ".join(subs[:10]))
+    deps = [str(x).strip() for x in (args.get("dependencies") or []) if str(x).strip()]
+    if deps:
+        tail.append("Depends on: " + "; ".join(deps[:10]))
+    atts = [str(x).strip() for x in (args.get("attachments") or []) if str(x).strip()]
+    if atts:
+        tail.append("Attachments: " + " ".join(atts[:10]))
+    if tail:
+        notes = (notes + "\n\n" if notes else "") + "\n".join(tail)
+    if notes:
+        body["notes"] = notes[:4000]
     # Default the assignee to the connection owner ("me") so a task with no
     # project isn't an invisible orphan — same rule as the native adapter.
     body["assignee"] = str(args.get("assignee") or "me").strip()

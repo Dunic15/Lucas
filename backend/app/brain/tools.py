@@ -147,6 +147,11 @@ _DETAIL_DUE = re.compile(
     re.IGNORECASE,
 )
 _DETAIL_PROJECT = re.compile(r"\b(project|board|backlog)\b", re.IGNORECASE)
+_DETAIL_DESCRIPTION = re.compile(
+    r"\b(description|notes?\s+(?:say|are|is)|should\s+say|that\s+says"
+    r"|with\s+the\s+(?:text|body|note)|descrizione)\b",
+    re.IGNORECASE,
+)
 _DETAIL_SKIP = re.compile(
     r"\b(no\s*one|nobody|anyone|any\s*body|skip|doesn'?t\s+matter|whatever"
     r"|just\s+(?:create|do|make)\s+it|no\s+project|none|nothing)\b",
@@ -164,6 +169,8 @@ def missing_action_details(text: str) -> list[str]:
         missing.append("project")
     if not _DETAIL_DUE.search(t):
         missing.append("due")
+    if not _DETAIL_DESCRIPTION.search(t):
+        missing.append("description")
     return missing
 
 

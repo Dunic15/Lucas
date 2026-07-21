@@ -196,5 +196,6 @@ def test_flag_off_keeps_the_queue_flow(client, recall_stubbed, spoken, monkeypat
         json=_transcript(bot_id, "Cedric, please create a task to send the recap to Marco"),
     ).json()
     assert body.get("action_capture") is True
-    queue_pool = main_module._QUEUE_LINES + main_module._QUEUE_LINES_IT
+    queue_pool = (main_module._QUEUE_LINES + main_module._QUEUE_LINES_IT
+                  + main_module._QUEUE_LINES_TASK + main_module._QUEUE_LINES_TASK_IT)
     assert spoken and spoken[-1] in queue_pool
