@@ -196,7 +196,7 @@ def test_ensure_ready_false_when_disabled(monkeypatch):
 
 def test_construct_wires_laura_stack_no_openai(monkeypatch):
     """_construct wires Anthropic (extraction) + a LOCAL fastembed embedder + a
-    LOCAL cosine reranker — no OpenAI, no new key."""
+    LOCAL cosine reranker; no OpenAI, no new key."""
     pytest.importorskip("graphiti_core")
     from app import embeddings
 

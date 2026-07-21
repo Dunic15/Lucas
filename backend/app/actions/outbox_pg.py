@@ -693,7 +693,7 @@ def queued_actions(org_id: str, bot_id: str) -> list[dict[str, Any]]:
 
 def _log_entry(event: str, detail: str = "") -> str:
     """One bounded canonical-log entry (distilled one-liners only, never
-    transcript content — same discipline as execution_detail)."""
+    transcript content; same discipline as execution_detail)."""
     return json.dumps(
         {"event": str(event or "")[:40], "detail": str(detail or "")[:200]},
         separators=(",", ":"),

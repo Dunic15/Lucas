@@ -1,6 +1,6 @@
 """Health + diagnostics: /health, /health/vendors, /recall/status,
 /gmail/status, /gemini-ears/status, /internal/ears-config. Extracted from
-main.py. _gmail_state is the SHARED deps dict — never redefine it."""
+main.py. _gmail_state is the SHARED deps dict; never redefine it."""
 import hmac
 import platform
 import time

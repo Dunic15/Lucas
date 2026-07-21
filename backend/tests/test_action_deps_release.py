@@ -251,7 +251,7 @@ def test_unapproved_action_is_never_released(client, sent):
 
 def test_release_never_breaks_the_status_write(client, monkeypatch):
     """A dependent's execution blowing up must not fail the status write that
-    triggered it — the dependency really did complete."""
+    triggered it; the dependency really did complete."""
     org = settings.demo_org_id
     _seed(org, "dep1")
     _seed(org, "a1", typed=_TYPED, execution_route="native", dependencies=["dep1"])

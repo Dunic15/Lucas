@@ -55,8 +55,8 @@ NOT occupy Laura's seat**. Funding/batch sourced; ⚠ = directional (secondary/a
 | **Karumi** | F25 | undisclosed | **Agentic product demos** inside live video calls (3,000+ by Apr'26) + lead-qual + CRM routing | Scoped to **demos**, not vertical doc-grounded Q&A with live gap-flagging. |
 | **Zocks / Zeplyn / Jump / Powder** | (finance tools) | various | Join the advisor's meeting + write the CRM/notes | **Explicitly SILENT** notetakers ("passive participants… capturing in the background"). |
 | **AviaryAI / Fini** | (finance voice) | various | **Speaking** voice agents | Do **outbound / support** calls, not the advisor's *own client meeting*. |
-| **Tavus** (non-YC-adjacent) | — | $40M Series B (Nov'25; CRV/Sequoia/YC/HubSpot Vent.) | **PALs = "agentic AI humans"**: talk across video/voice/text, take actions (calendar, email) | **Platform-level threat to the form factor**, but not yet a turnkey *vertical* participant that joins the client's meeting grounded in their docs. |
-| **MeetGeek** | — |: | Oct'25 launch: "AI Voice Agents to autonomously participate in virtual meetings" | **Closest behavioral match found** (blog-sourced); horizontal, no vertical grounding/SoR. Watch it. |
+| **Tavus** (non-YC-adjacent) | - | $40M Series B (Nov'25; CRV/Sequoia/YC/HubSpot Vent.) | **PALs = "agentic AI humans"**: talk across video/voice/text, take actions (calendar, email) | **Platform-level threat to the form factor**, but not yet a turnkey *vertical* participant that joins the client's meeting grounded in their docs. |
+| **MeetGeek** | - | - | Oct'25 launch: "AI Voice Agents to autonomously participate in virtual meetings" | **Closest behavioral match found** (blog-sourced); horizontal, no vertical grounding/SoR. Watch it. |
 
 **Read-through:** the form factor is now *validated from three sides* (voice agents that speak,
 avatars that join meetings, tools that write the record); but **no one has fused all three into

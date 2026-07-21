@@ -1,6 +1,6 @@
 #!/bin/bash
 # Stop the GPU meter. Default STOPS the instance (keeps the 120GB volume with
-# the model weights — ~$9.6/mo); pass --terminate to delete everything.
+# the model weights: ~$9.6/mo); pass --terminate to delete everything.
 #
 #   ./stop.sh              # graceful server stop + EC2 stop, confirm stopped
 #   ./stop.sh --terminate  # same but terminate (next launch = full setup again)
@@ -12,7 +12,7 @@ ACTION=stop
 
 read -r IID STATE IP LAUNCHED <<<"$(find_instance)" || true
 if [ -z "${IID:-}" ] || [ "$IID" = "None" ]; then
-  echo "no $TAG_NAME instance in pending/running/stopped state — GPU meter is OFF ✓"
+  echo "no $TAG_NAME instance in pending/running/stopped state. GPU meter is OFF ✓"
   exit 0
 fi
 echo "── $IID is $STATE"
@@ -35,7 +35,7 @@ fi
 
 FINAL=$(aws ec2 describe-instances --instance-ids "$IID" --region "$REGION" \
   --query 'Reservations[0].Instances[0].State.Name' --output text)
-echo "confirmed: $IID is $FINAL — GPU meter OFF ✓"
+echo "confirmed: $IID is $FINAL. GPU meter OFF ✓"
 if [ "$ACTION" = "stop" ]; then
   echo "(volume kept so weights survive: ~\$9.6/mo; use --terminate to delete everything)"
 fi

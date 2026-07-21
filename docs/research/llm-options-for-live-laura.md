@@ -35,7 +35,7 @@ retrieval date. Prices change; re-verify before cost-sensitive decisions.
 | **Anthropic (recommended, now configured)** | `claude-sonnet-5` | $3 / $15 (intro $2/$10 thru 2026-08-31) | Near-Opus quality on structured/agentic output; strong JSON reliability and groundedness; ~18s per artifact is invisible post-meeting. |
 | Anthropic (ceiling) | `claude-opus-4-8` | $5 / $25 | Step up when artifact quality matters more than cost (long multi-topic meetings). |
 | Groq (previous) | `llama-3.3-70b-versatile` | $0.59 / $0.79 | 2.4s and cheap, but noticeably thinner summaries and weaker gap detection. Fine fallback. |
-| OpenAI text | current text flagships exist but exact ids/prices were not verified in this pass. **unverified, do not configure from this doc** | — | No advantage over Sonnet 5 for this JSON-artifact workload that would justify adding a fourth provider. |
+| OpenAI text | current text flagships exist but exact ids/prices were not verified in this pass. **unverified, do not configure from this doc** | - | No advantage over Sonnet 5 for this JSON-artifact workload that would justify adding a fourth provider. |
 
 ## Recommendation (implemented)
 

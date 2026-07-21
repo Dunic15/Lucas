@@ -804,7 +804,7 @@ def plausible_leave_followup(text: str) -> bool:
     leave now" leads with a pronoun → plausible; "Sara you can leave now"
     leads with a name → aimed at Sara (even if the roster doesn't know her),
     so the avatar must stay. A missed dismissal costs a repeat ask; a false
-    positive kills the meeting bot — hence the whitelist direction."""
+    positive kills the meeting bot; hence the whitelist direction."""
     m = re.search(r"[a-zà-ú]+", (text or "").lower())
     return bool(m) and m.group(0) in _FOLLOWUP_LEADS
 
@@ -876,7 +876,7 @@ def detect_browse_intent(utterance: str) -> tuple[bool, str, str]:
     browser/web surface word ("show me on the browser"), OR a how-to anchored
     by a recognized task ("walk me through creating a task"). A how-to yields
     the canonical task_key (or "tour"); plain show yields "". Only the label +
-    key ever leave — never the utterance."""
+    key ever leave; never the utterance."""
     t = (utterance or "").lower()
     howto = bool(re.search(_HOWTO_LEAD, t))
     has_verb = bool(re.search(_BROWSE_VERB, t)) or howto

@@ -99,7 +99,7 @@ scelta nicchia (§2).
 | 7 | **OAuth per-org** (ogni utente il suo Google) + fix attribuzione auto-join (oggi → org di default) | Claude | Chiave `org_oauth` sul durable-org id del ledger; ⚠️ non introdurre un terzo id (split-brain `u_<hash>` vs uuid) |
 | 8 | **Ricevute con provenance**: ogni "Done" con link vero (evento Calendar / thread Gmail) su ledger row + artifact; chiude il "Done" opaco di Cedric | Claude | Seam: `ledger.py` (status `approved`/`executed` + `provenance_url`/`provenance_ref`), `dashboard.py` |
 | 9 | **Dashboard semplificata**: TAGLIA: riga cost-estimate, badge provider/model raw, colonne metadata non-azionabili. TIENI primario: lista meeting + coda approvazioni + status/receipt per-azione | Claude | Il job della dashboard diventa "approva ciò che Laura vuole fare, e vedi cosa ha fatto" |
-| 10 | **Photoreal Ditto. Fase 2**: auto-wake zero-touch + tuning "ottimo 720p" + deploy #193 | Claude (infra) | — |
+| 10 | **Photoreal Ditto. Fase 2**: auto-wake zero-touch + tuning "ottimo 720p" + deploy #193 | Claude (infra) | - |
 | 11 | **Intervention-mode admin** + **host-preview DM** (turn-taking come opzione admin, direttiva Christian) | Claude | live-path: review |
 | 12 | **Demo account "setting perfetto"** (investor/YC). UN ambiente, UNA azione perfetta alla volta | Duccio + Claude | Founder/EA come ponte demo (§2) |
 | 13 | **API-key self-serve** (bring-your-own key in un vault) | **Ben** + Claude | direttiva Christian: l'utente porta solo la key |
@@ -111,8 +111,8 @@ scelta nicchia (§2).
 | 14 | **Scelta nicchia** ← §2 (Sales-whitespace vs Recruiting-validato) + scrape batch YC (Jacopo) → decisione Duccio/Christian/Jacopo | Duccio + Christian + Jacopo | Sblocca il 15 e l'azione (e) del §3 |
 | 15 | **1 avatar tailored** sulla nicchia scelta; le azioni §3 diventano capability: knowledge pack cliente + template `critical_gaps` + connettore CRM/ATS (azione e) | Claude | Parte dopo il 14; è dove si costruisce il moat |
 | 16 | **Connettore CRM/ATS** (azione e §3). HubSpot/Salesforce se Sales, ATS se Recruiting; modello `executor.py` | Claude | niche-dependent |
-| 17 | **Photoreal Ditto. Fase 3**: web call ultra-HD/4K off-meeting (unico posto oltre i 720p) | Claude (infra) | — |
-| 18 | **Email vere per-avatar** (multi-tenancy) | Claude | — |
+| 17 | **Photoreal Ditto. Fase 3**: web call ultra-HD/4K off-meeting (unico posto oltre i 720p) | Claude (infra) | - |
+| 18 | **Email vere per-avatar** (multi-tenancy) | Claude | - |
 | 19 | **GPT Live experiment**: A/B OpenAI Realtime (`gpt-realtime`) vs Gemini Live su voce+turn-taking; metrica: latenza, qualità turn-taking, €/min, se batte lo split Cerebras-brain + ElevenLabs-voce | Claude (dopo Gemini) | parte quando Gemini è a regime |
 
 > **One-login: DEPRIORITIZZATO** (owner: di fatto già così, login Cedric una volta sola).

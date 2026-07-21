@@ -443,7 +443,7 @@ import time as _time  # noqa: E402
 
 def test_followup_question_bypasses_cooldown_and_deference(tmp_path, monkeypatch):
     """She just answered; a nameless follow-up question must be answered
-    immediately — no cooldown block, no deference wait."""
+    immediately; no cooldown block, no deference wait."""
     from app.config import settings
 
     s = _session(tmp_path, monkeypatch, bot_id="followup-bot-1")
@@ -790,7 +790,7 @@ def test_called_line_after_lull_skips_proactive_path(tmp_path, monkeypatch):
 
 def test_unaddressed_lull_still_enters_proactive_path(tmp_path, monkeypatch):
     """The counterpart: an UNADDRESSED lull in the same long meeting still runs
-    the proactive check — the fallback behavior is preserved for room talk."""
+    the proactive check; the fallback behavior is preserved for room talk."""
     from app.config import settings
 
     calls = {"n": 0}

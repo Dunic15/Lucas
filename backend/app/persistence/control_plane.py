@@ -2,7 +2,7 @@
 
 Active **iff** ``settings.laura_database_url`` is non-empty (the Supabase
 Postgres control plane of docs/infra/MULTI-TENANCY.md). When the URL is empty
-— the key-free demo and the whole test suite — every public function here is a
+, the key-free demo and the whole test suite, every public function here is a
 no-op returning ``None``/``False`` and **no engine is ever created**, so the
 SQLite runtime paths are byte-identical to today.
 

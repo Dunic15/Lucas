@@ -223,5 +223,5 @@ def test_legacy_artifact_without_avatar_id(client):
     data = client.get("/dashboard/summary").json()
     m = next(x for x in data["meetings"] if x["bot_id"] == "bot_legacy")
     assert m["avatar_id"] == ""
-    assert m["platform"] == "—"
+    assert m["platform"] == "-"
     assert m["duration_seconds"] == 0

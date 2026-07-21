@@ -6,7 +6,7 @@ autonomous narration loop; documented as such). For each manifest checkpoint
 it retrieves the relevant company material through ContextResolver (the ONE
 retrieval boundary), builds a short cited line using the SELECTED avatar
 overlay, and rides Laura's existing ``_make_avatar_speak`` queue with citations
-— never a second narration queue. Another org's documents can never appear
+, never a second narration queue. Another org's documents can never appear
 (ContextResolver is org+avatar scoped, RLS-isolated).
 """
 from __future__ import annotations

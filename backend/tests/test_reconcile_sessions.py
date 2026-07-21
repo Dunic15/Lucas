@@ -1,6 +1,6 @@
 """Auto-finalize backstop: the reconciliation loop + the terminal-status webhook
 + the concurrency guard that stops a double bot.done/bot.call_ended from firing
-session.ended to Cedric twice. Key-free — Recall/Anam/brain all stubbed."""
+session.ended to Cedric twice. Key-free. Recall/Anam/brain all stubbed."""
 from __future__ import annotations
 
 import asyncio

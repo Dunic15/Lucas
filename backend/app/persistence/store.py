@@ -306,7 +306,7 @@ class Session:
 
         ``avatar_name`` (the running avatar's own name) is forwarded to roster()
         so its "everyone besides the avatar itself" contract stays literally true
-        — the avatar's own name is never in the exclude set that would shield a
+        , the avatar's own name is never in the exclude set that would shield a
         fuzzy corruption of its wake word."""
         return self.roster(avatar_name)
 
@@ -2191,7 +2191,7 @@ _VALID_BRAIN_MODES = {"gemini", "cerebras"}
 
 def set_avatar_brain_mode(avatar_id: str, brain_mode: str) -> bool:
     """Set an avatar's brain: "gemini" (relay) or "cerebras" (normal). Persisted
-    (Litestream-replicated), read on the NEXT meeting — no redeploy."""
+    (Litestream-replicated), read on the NEXT meeting; no redeploy."""
     aid = (avatar_id or "").strip()
     mode = (brain_mode or "").strip().lower()
     if not aid or mode not in _VALID_BRAIN_MODES:
@@ -2522,7 +2522,7 @@ def is_org_member(user_id: str, org_id: str) -> bool:
 
 def all_avatar_capabilities() -> dict[str, dict[str, bool]]:
     """{avatar_id: {capability: bool}} for every avatar with any explicit
-    switch — the bulk read the dashboard summary uses (one query, no N+1)."""
+    switch; the bulk read the dashboard summary uses (one query, no N+1)."""
     with _LOCK, _connect() as conn:
         rows = conn.execute(
             "SELECT avatar_id, capability, enabled FROM avatar_capabilities"

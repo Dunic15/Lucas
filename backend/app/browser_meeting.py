@@ -127,7 +127,7 @@ def run_walkthrough(org_id: str, session_id: str, *, site_label: str,
 
     ``on_narrate(line: str)`` is called once per action, BEFORE it happens, so
     the voice leads the on-screen click. The line is built from the operation
-    only — never from page content."""
+    only; never from page content."""
     from .browser import operator, recipes
 
     # 1) SCRIPTED recipe (reliable) when one exists for this task.
@@ -274,7 +274,7 @@ def cancel_connect(meeting_ref: str) -> None:
 
 def trigger_enabled() -> bool:
     """Both switches: the operator must be on AND the meeting trigger opted in.
-    Off by default — with either off this whole module no-ops."""
+    Off by default; with either off this whole module no-ops."""
     from . import browser
 
     return bool(settings.browser_meeting_trigger_enabled) and browser.enabled()

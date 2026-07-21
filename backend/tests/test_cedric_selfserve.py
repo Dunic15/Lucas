@@ -742,7 +742,7 @@ def test_slack_complete_state_alone_proves_initiation(client, monkeypatch):
 
 def test_slack_complete_state_org_mismatch_hard_fails(client, monkeypatch):
     """A state minted for org A spliced onto org B's complete is refused even
-    when B has a pending row — a mismatched signed state is an attack signal."""
+    when B has a pending row; a mismatched signed state is an attack signal."""
     monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
     monkeypatch.setattr(settings, "cedric_orgs_token", "provisioning-token")
     alice = store.upsert_user("alice-state@example.com")

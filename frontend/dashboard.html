@@ -1272,13 +1272,13 @@
   }
   $("#tok-save").addEventListener("click",function(){ token=$("#tok").value.trim(); localStorage.setItem("LAURA_API_TOKEN",token); load(); });
 
-  function fmtWhen(ts){ if(!ts) return "—"; var d=new Date(ts*1000), now=Date.now(), diff=(now-d.getTime())/1000;
+  function fmtWhen(ts){ if(!ts) return "-"; var d=new Date(ts*1000), now=Date.now(), diff=(now-d.getTime())/1000;
     if(diff<3600) return Math.max(1,Math.round(diff/60))+"m ago";
     if(diff<86400) return Math.round(diff/3600)+"h ago";
     if(diff<7*86400) return Math.round(diff/86400)+"d ago";
     return d.toLocaleDateString(); }
-  function fmtDur(s){ if(!s) return "—"; if(s<90) return s+"s"; return Math.round(s/60)+"m"; }
-  function title(m){ return m.meeting_type ? m.meeting_type.replace(/_/g," ") : (m.platform!=="—" ? m.platform+" meeting" : "Meeting"); }
+  function fmtDur(s){ if(!s) return "-"; if(s<90) return s+"s"; return Math.round(s/60)+"m"; }
+  function title(m){ return m.meeting_type ? m.meeting_type.replace(/_/g," ") : (m.platform!=="-" ? m.platform+" meeting" : "Meeting"); }
 
   function renderAll(d){
     $("#api-token-settings").hidden=!!d.user;
@@ -1289,7 +1289,7 @@
     var pdNav=$("#nav-pipedream");
     if(pdNav) pdNav.hidden=!(d.settings&&d.settings.pipedream_configured);
     var avById={}; d.avatars.forEach(function(a){avById[a.id]=a;});
-    function avName(id){ return (avById[id]||{}).name || (id?id:"—"); }
+    function avName(id){ return (avById[id]||{}).name || (id?id:"-"); }
     var brainConnected=(d.org_connections||[]).some(function(x){return x.avatar_id==="cedric"&&x.provider==="cedric-brain"&&x.status==="connected";});
 
     var uc=$("#userchip");
@@ -1432,7 +1432,7 @@
     function eventMeta(m,ev){
       var bits=[timeLabel(ev)], cal=String((m&&m.calendar_name)||"").trim();
       if(cal) bits.push(cal);
-      if(m&&m.platform&&m.platform!=="—") bits.push(m.platform);
+      if(m&&m.platform&&m.platform!=="-") bits.push(m.platform);
       return bits.join(" · ");
     }
     function calendarLegend(meetings){
@@ -1570,7 +1570,7 @@
       var t='<span class="ev-time">'+esc(timeLabel(ev))+'</span><span class="ev-title">'+esc(m.title||"Meeting")+'</span>'+
         ((!short&&geo.height>=54&&cal)?'<span class="ev-cal">'+esc(cal)+'</span>':'');
       var data=' data-url="'+esc(url)+'" data-title="'+esc(m.title||"")+'" data-time="'+esc(timeLabel(ev))+'" data-calendar="'+esc(cal)+'" data-event-ref="'+esc(m.event_ref||"")+'"';
-      if(going) return '<div class="cal-ev going'+cls+'" style="'+style+'"'+data+' data-going="1" role="button" tabindex="0" title="'+esc(meta+' — '+avName(m.auto_join_avatar)+' is going')+'">'+t+'<span class="avbadge">🎭 '+esc(avName(m.auto_join_avatar))+'</span></div>';
+      if(going) return '<div class="cal-ev going'+cls+'" style="'+style+'"'+data+' data-going="1" role="button" tabindex="0" title="'+esc(meta+' - '+avName(m.auto_join_avatar)+' is going')+'">'+t+'<span class="avbadge">🎭 '+esc(avName(m.auto_join_avatar))+'</span></div>';
       if(url) return '<div class="cal-ev avail'+cls+'" style="'+style+'"'+data+' role="button" tabindex="0" title="'+esc(meta+': open options')+'">'+t+'<span class="ev-send">Open ▾</span></div>';
       return '<div class="cal-ev nolink'+cls+'" style="'+style+'" title="'+esc(meta+': no meeting link')+'">'+t+'<span class="ev-nolink">No link</span></div>';
     }
@@ -1599,7 +1599,7 @@
     function sectionCard(ev,multi,avOpts,av0){
       var m=ev.m, url=m.meeting_url||"", going=!!m.auto_join, badge="", state;
       var eventRef=m.event_ref||"", color=eventColor(m), cal=String(m.calendar_name||"").trim();
-      var plat=(m.platform&&m.platform!=="—")?'<span class="platc">'+esc(m.platform)+'</span>':"";
+      var plat=(m.platform&&m.platform!=="-")?'<span class="platc">'+esc(m.platform)+'</span>':"";
       var calChip=cal?'<span class="platc">'+esc(cal)+'</span>':"";
       if(going){
         badge='<span class="avbadge">🎭 '+esc(avName(m.auto_join_avatar))+'</span>';
@@ -1769,7 +1769,7 @@
         .then(function(j){
           j=j||{};
           if(j.ok){
-            var who=avatar?(" — "+avName(avatar)+" will join"):"";
+            var who=avatar?(" - "+avName(avatar)+" will join"):"";
             toast("Meeting scheduled"+who+".");
             closeCreate();
             loadUpcoming(true);           // re-fetch so the new event appears
@@ -1890,7 +1890,7 @@
     loadUpcoming(false);
 
     // meetings tables; clean filterable columns; click a row for AI summary + actions
-    function platformsIn(){ var s={}; (d.meetings||[]).forEach(function(m){ if(m.platform&&m.platform!=="—") s[m.platform]=1; }); return Object.keys(s); }
+    function platformsIn(){ var s={}; (d.meetings||[]).forEach(function(m){ if(m.platform&&m.platform!=="-") s[m.platform]=1; }); return Object.keys(s); }
     // The action chip renderers (ownerChip / execChip / apprBtn / rejBtn) and
     // the approve/reject doors now live at MODULE scope, shared with the
     // Action Center; one execution path for every surface (see above). The
@@ -1901,7 +1901,7 @@
         '<td><span class="platc">'+esc(m.platform)+'</span></td>'+
         '<td class="when">'+fmtWhen(m.saved_at)+'</td><td class="dur">'+fmtDur(m.duration_seconds)+'</td>'+
         '<td class="r tnum">'+m.actions.length+'</td>'+
-        '<td class="r"><div class="rd"><div class="track"><div class="fill'+(m.readiness_score<70?" low":"")+'" style="width:'+Math.max(0,Math.min(100,m.readiness_score))+'%"></div></div><span class="pc">'+(m.readiness_score||"—")+'</span></div></td></tr>'+
+        '<td class="r"><div class="rd"><div class="track"><div class="fill'+(m.readiness_score<70?" low":"")+'" style="width:'+Math.max(0,Math.min(100,m.readiness_score))+'%"></div></div><span class="pc">'+(m.readiness_score||"-")+'</span></div></td></tr>'+
         '<tr class="detail" data-d="'+i+'" hidden><td colspan="6"><div class="inner">'+
         '<div><div class="sm-h">AI summary</div><div class="summary">'+(m.summary?esc(m.summary):'<span style="color:var(--faint)">No summary captured.</span>')+'</div>'+
         (m.follow_up_subject?'<div class="sm-h" style="margin-top:12px">Follow-up email</div><div class="summary">'+esc(m.follow_up_subject)+'</div>':'')+'</div>'+
@@ -2135,7 +2135,7 @@
         .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,j:j}; }); })
         .then(function(res){
           if(!res.ok||!res.j.ok){ throw new Error(res.j.error||"Couldn't connect Jira. Check the site, email and token."); }
-          toast("Jira connected"+(res.j.site?" — "+res.j.site:"")+".");
+          toast("Jira connected"+(res.j.site?" - "+res.j.site:"")+".");
           load(); })
         .catch(function(err){ toast(err.message||"Couldn't connect Jira. Try again.",true);
           btn.disabled=false; btn.textContent=prev; });
@@ -2292,7 +2292,7 @@
   // that shows an action; the meeting detail rows and the Action Center reuse
   // these, so execution behavior is never duplicated.
   function avInfo(id){ return ((DATA&&DATA.avatars)||[]).find(function(x){return x.id===id;})||null; }
-  function avNameOf(id){ var a=avInfo(id); return a?a.name:(id?(id.charAt(0).toUpperCase()+id.slice(1)):"—"); }
+  function avNameOf(id){ var a=avInfo(id); return a?a.name:(id?(id.charAt(0).toUpperCase()+id.slice(1)):"-"); }
 
   // Owner label OR, when the action couldn't be routed, a visible
   // "Unassigned" triage chip (with the gap reason on hover).
@@ -2459,7 +2459,7 @@
       var long=(type==="string"&&["body","notes","description","text"].indexOf(name)>=0);
       return '<div class="mfield" data-mf="'+esc(name)+'">'+
         '<label for="mf-'+i+'">'+esc(name.replace(/_/g," "))+(required?'<span class="req">required</span>':'')+'</label>'+
-        ((f.description||type==="array")?'<div class="fh">'+esc(f.description||"")+(type==="array"?(f.description?" — ":"")+"comma-separated":"")+'</div>':'')+
+        ((f.description||type==="array")?'<div class="fh">'+esc(f.description||"")+(type==="array"?(f.description?" - ":"")+"comma-separated":"")+'</div>':'')+
         (long?'<textarea id="mf-'+i+'" rows="3" data-mfin="'+esc(name)+'" data-mtype="'+esc(type)+'">'+esc(val)+'</textarea>'
              :'<input id="mf-'+i+'" type="text" value="'+esc(val)+'" data-mfin="'+esc(name)+'" data-mtype="'+esc(type)+'" />')+
         '<div class="ferr" data-mferr="'+esc(name)+'" hidden></div></div>';
@@ -2793,7 +2793,7 @@
         '<span class="bd-ro st'+(BD_CHIP[st]?" "+esc(BD_CHIP[st]):"")+'">'+esc(BD_ACTIVITY[st]||st)+'</span>'+
         '<div class="bd-ph">'+esc(viewMsg)+'</div></div>'+
       '<div>'+
-        '<div class="bd-title">'+esc(demo.page_title||"—")+'</div>'+
+        '<div class="bd-title">'+esc(demo.page_title||"-")+'</div>'+
         '<div class="bd-meta">'+avatarBadge(demo.avatar_id,avNameOf(demo.avatar_id))+
           '<span>'+esc(avNameOf(demo.avatar_id))+'</span><span aria-hidden="true">·</span>'+
           '<span class="tnum" style="font-family:var(--mono)">'+esc(bdElapsed(demo.started_at))+' elapsed</span></div>'+

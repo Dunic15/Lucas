@@ -437,7 +437,7 @@ def test_webhook_split_leave_requires_same_speaker(monkeypatch, tmp_path):
 
 def test_webhook_split_leave_only_on_leave_followup(monkeypatch, tmp_path):
     """Meter safety: addressing the avatar then just talking must not end the
-    meeting — the follow-up itself has to be a leave command."""
+    meeting; the follow-up itself has to be a leave command."""
     bot_id = "leave-split-3"
     calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
 

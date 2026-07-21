@@ -97,7 +97,7 @@ async def org_search(q: str, request: Request, limit: int = 20) -> JSONResponse:
     """Ask across every meeting: 'what did we decide/commit about <q>?'. Returns
     matching ledger items (actions/decisions with owners + status) and matching
     meeting artifacts (a distilled snippet each). The 'employee that remembers'
-    query — distilled data only, same Bearer gate."""
+    query; distilled data only, same Bearer gate."""
     err, org = await _machine_gate(request)
     if err:
         return err
@@ -214,7 +214,7 @@ _TERMINAL = {"done", "rejected", "failed"}
 
 def _global_bearer_used(request: Request) -> bool:
     """True when the caller presented the DEPLOYMENT-global bearer (valid only
-    for the Demo org on this door — contract clause B1)."""
+    for the Demo org on this door; contract clause B1)."""
     token = settings.laura_api_token.strip()
     if not token:
         return False
@@ -759,7 +759,7 @@ def _canonical_action_view(org: str, action_id: str) -> dict | None:
 @router.get("/actions/{action_id}")
 async def org_action_get(action_id: str, request: Request) -> JSONResponse:
     """The canonical Action object for one stable action_id (agreed contract:
-    one action, every surface — Slack cards and the dashboard render THIS)."""
+    one action, every surface: Slack cards and the dashboard render THIS)."""
     err, org = await _machine_gate(request)
     if err:
         return err

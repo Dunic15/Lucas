@@ -22,7 +22,7 @@ from app.config import settings  # noqa: E402
 def client(monkeypatch):
     """A TestClient with a FRESH limiter (the limiter is a process global that
     would otherwise leak counts between tests). Constructed without the lifespan
-    context on purpose — no background loops / index prebuild needed here."""
+    context on purpose; no background loops / index prebuild needed here."""
     security.limiter.reset()
     yield TestClient(main.app)
     security.limiter.reset()
@@ -131,7 +131,7 @@ def test_live_meeting_paths_are_not_in_the_limiter_map():
 
 def test_recall_webhook_never_throttled(client, monkeypatch):
     """Even with a limit of 1 and the limiter ENABLED, hammering the live
-    transcript webhook never returns 429 — latency is the product there."""
+    transcript webhook never returns 429; latency is the product there."""
     monkeypatch.setattr(settings, "rate_limit_enabled", True)
     monkeypatch.setattr(settings, "rate_limit_demo_ask", 1)
     for _ in range(8):
@@ -194,7 +194,7 @@ def test_avatar_routes_not_frame_blocked(client, route):
 def test_no_frame_blocking_anywhere_by_default(client):
     """Belt-and-suspenders: we omit frame-blocking globally, so even the API/
     dashboard-shaped routes carry no X-Frame-Options (the deliberate, zero-risk
-    choice — a broken avatar is far worse than a missing X-Frame-Options)."""
+    choice; a broken avatar is far worse than a missing X-Frame-Options)."""
     for route in ("/health", "/avatars", "/"):
         r = client.get(route)
         assert "x-frame-options" not in {k.lower() for k in r.headers}

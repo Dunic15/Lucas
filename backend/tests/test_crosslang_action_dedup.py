@@ -106,7 +106,7 @@ def test_merge_dedupes_crosslang_summarizer_duplicate(monkeypatch, real_post_pro
 
 def test_merge_stub_mode_stays_keyfree_but_open(monkeypatch):
     """In stub mode (key-free demo) the net is a no-op: the cross-language pair
-    survives as two actions — documented fail-open gap — and NO model is called."""
+    survives as two actions, documented fail-open gap, and NO model is called."""
     monkeypatch.setattr(settings, "brain_provider_post", "stub")
 
     def boom(*a, **k):  # pragma: no cover; must never run

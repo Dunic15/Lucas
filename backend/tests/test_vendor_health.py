@@ -1,5 +1,5 @@
 """Vendor subscription watchdog: thresholds, off-when-unconfigured, Slack text.
-No keys, no network — every HTTP call is stubbed."""
+No keys, no network; every HTTP call is stubbed."""
 from __future__ import annotations
 
 import sys

@@ -88,7 +88,7 @@ def test_expired_window_not_echo():
 
 def test_coverage_branch_disarmed_when_ears_off(monkeypatch):
     """Prod today runs GEMINI_EARS_MODE=off: the coverage branch must not run
-    at all — only the original verbatim-substring gate applies."""
+    at all; only the original verbatim-substring gate applies."""
     monkeypatch.setattr(settings, "gemini_ears_mode", "off")
     s = _session(SPOKEN_1, SPOKEN_2)
     reworded = (
@@ -101,7 +101,7 @@ def test_coverage_branch_disarmed_when_ears_off(monkeypatch):
 
 def test_reordered_paraphrase_not_suppressed():
     """A human RE-ASSEMBLING her vocabulary in new order (high coverage, no
-    contiguous run) is a real turn — the n-gram requirement keeps it alive."""
+    contiguous run) is a real turn; the n-gram requirement keeps it alive."""
     s = _session(SPOKEN_1)
     reordered = "per month the solo plan pricing euros at ninety costs nine"
     assert _is_echo(s, reordered) is False

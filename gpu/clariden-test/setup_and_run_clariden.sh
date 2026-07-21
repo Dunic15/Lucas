@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MuseTalk su Clariden (GH200 / aarch64) — setup + inferenza offline in UN job.
+# MuseTalk su Clariden (GH200 / aarch64); setup + inferenza offline in UN job.
 # Gira DENTRO il container EDF "musetalk" (NGC pytorch, arm64), lanciato da sbatch.
 #
 # Input attesi in $WORK (default: /iopsstor/scratch/cscs/$USER/musetalk):
@@ -10,7 +10,7 @@
 #   1. NIENTE pip install torch (si usa quello dell'immagine NGC arm64).
 #   2. mmcv NON ha wheel arm64 -> si COMPILA da sorgente (la parte lenta/fragile;
 #      sul Grace a 72+ core ~10-25 min con MAX_JOBS alto).
-#   3. ffmpeg via imageio-ffmpeg (binario statico arm64) — niente apt nel container.
+#   3. ffmpeg via imageio-ffmpeg (binario statico arm64): niente apt nel container.
 set -eo pipefail
 export WORK="${WORK:-/iopsstor/scratch/cscs/$USER/musetalk}"
 mkdir -p "$WORK" && cd "$WORK"
@@ -19,14 +19,14 @@ echo "==> [0/6] GPU e input"
 nvidia-smi -L
 python3 -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 for f in laura_face.jpg laura_voice.wav; do
-  [ -f "$WORK/$f" ] || { echo "!! manca $WORK/$f — fai lo scp prima (vedi README)"; exit 1; }
+  [ -f "$WORK/$f" ] || { echo "!! manca $WORK/$f; fai lo scp prima (vedi README)"; exit 1; }
 done
 
 echo "==> [1/6] clone MuseTalk + deps python (SENZA torch)"
 [ -d MuseTalk ] || git clone https://github.com/TMElyralab/MuseTalk
 cd "$WORK/MuseTalk"
 # requirements senza righe torch/tensorflow (pesanti/x86-centric; tensorflow non
-# serve all'inferenza — è nel requirements per il training)
+# serve all'inferenza; è nel requirements per il training)
 grep -viE '^(torch|torchvision|torchaudio|tensorflow|tensorboard)' requirements.txt > /tmp/req.txt
 pip install --no-cache-dir -r /tmp/req.txt
 pip install --no-cache-dir "huggingface_hub[cli]" imageio-ffmpeg

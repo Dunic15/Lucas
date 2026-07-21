@@ -67,7 +67,7 @@ def test_sff_login_resolves_org_and_scopes_agents(fresh_store, monkeypatch):
 
 def test_personal_first_default_ignores_verified_domain(fresh_store):
     """Default (flag off): two colleagues on the verified domain each get their
-    OWN org — the whole point of personal-first."""
+    OWN org; the whole point of personal-first."""
     store = fresh_store
     a = store.upsert_user(email="ceo@sffstudio.com", name="SFF CEO")
     b = store.upsert_user(email="cfo@sffstudio.com", name="SFF CFO")

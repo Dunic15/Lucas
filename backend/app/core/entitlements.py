@@ -564,7 +564,7 @@ def open_usage_rows() -> list[dict[str, Any]]:
 
 def usage_summary(org_id: str) -> Optional[dict]:
     """``{plan, included_seconds, used_seconds, remaining_seconds}`` for the
-    org — PR C's /billing/summary calls this. ``None`` when disabled."""
+    org: PR C's /billing/summary calls this. ``None`` when disabled."""
     if not enabled() or not (org_id or "").strip():
         return None
     # A session-shaped personal identity (u_<hash>) has no durable billing row

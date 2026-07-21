@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MuseTalk — one-shot setup + offline test on a Runpod GPU pod.
+# MuseTalk; one-shot setup + offline test on a Runpod GPU pod.
 #
 # Prereqs: a Runpod pod (RTX 4090 24GB is enough), and the two input files
 # uploaded to /workspace/ :  laura_face.jpg  and  laura_voice.wav
@@ -16,7 +16,7 @@ cd "$WORK"
 
 echo "==> [0/6] check input files are uploaded"
 for f in laura_face.jpg laura_voice.wav; do
-  [ -f "$WORK/$f" ] || { echo "!! MISSING $WORK/$f — upload it to /workspace first"; exit 1; }
+  [ -f "$WORK/$f" ] || { echo "!! MISSING $WORK/$f; upload it to /workspace first"; exit 1; }
 done
 
 echo "==> [1/6] system deps (ffmpeg, git)"
@@ -31,7 +31,7 @@ echo "==> [3/6] clone MuseTalk + python deps"
 cd "$WORK/MuseTalk"
 pip install -r requirements.txt
 
-echo "==> [4/6] mmlab (prebuilt mmcv wheel — avoids the slow/failing source build)"
+echo "==> [4/6] mmlab (prebuilt mmcv wheel; avoids the slow/failing source build)"
 pip install -U openmim
 mim install mmengine
 pip install "mmcv==2.0.1" -f https://download.openmmlab.com/mmcv/dist/cu118/torch2.0/index.html

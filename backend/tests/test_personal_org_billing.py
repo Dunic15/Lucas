@@ -48,7 +48,7 @@ def test_billing_summary_is_free_tier_not_500(durable_on, monkeypatch):
 
 def test_artifact_save_and_get_stay_sqlite_for_personal_org(durable_on, monkeypatch):
     """With durable artifacts on, a personal org's artifact round-trips through
-    SQLite only — the durable path (uuid cast) is never invoked."""
+    SQLite only; the durable path (uuid cast) is never invoked."""
     monkeypatch.setattr(store, "durable_artifacts_enabled", lambda: True)
     monkeypatch.setattr(control_plane, "save_artifact", _explode)
     monkeypatch.setattr(control_plane, "get_artifact", _explode)

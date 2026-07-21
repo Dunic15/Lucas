@@ -84,7 +84,7 @@ def test_free_mail_unaffected_by_flag(monkeypatch, tmp_path):
 
 def test_durable_login_caches_personal_uuid_on_user_row(monkeypatch, tmp_path):
     """With the control plane on, ensure_user's PERSONAL uuid is stored on the
-    SQLite row at login — afterwards the hot path reads SQLite only."""
+    SQLite row at login; afterwards the hot path reads SQLite only."""
     _fresh_store(monkeypatch, tmp_path)
     _seed_verified_domain()
     monkeypatch.setattr(settings, "shared_domain_orgs", False)
@@ -133,7 +133,7 @@ def test_personal_orgs_see_only_their_own_meetings(monkeypatch, tmp_path):
 def test_fresh_personal_org_gets_free_minutes(monkeypatch):
     """Key-free parity: a brand-new personal org sees the 15-minute free tier
     and can start a session. (The durable side seeds billing_accounts 900s in
-    ensure_user's personal bundle — asserted on the migration below.)"""
+    ensure_user's personal bundle; asserted on the migration below.)"""
     data = billing._summary_for_org("44444444-4444-4444-8444-444444444444", None)
     assert data["plan"] == "free"
     assert data["included_seconds"] == settings.free_trial_seconds == 900
@@ -142,7 +142,7 @@ def test_fresh_personal_org_gets_free_minutes(monkeypatch):
 
 def test_personal_org_sees_all_avatars(monkeypatch, tmp_path):
     """No org_agents grants for a fresh personal org → fail-open to every
-    installed avatar (Laura included) — the 'gets Laura' guarantee."""
+    installed avatar (Laura included); the 'gets Laura' guarantee."""
     _fresh_store(monkeypatch, tmp_path)
     ids = avatars.list_for_org("55555555-5555-4555-8555-555555555555")
     assert "laura" in ids
@@ -182,7 +182,7 @@ def test_attribution_lookup_is_sqlite_only(monkeypatch, tmp_path):
 
 def test_org_for_email_prefers_registered_user(monkeypatch, tmp_path):
     """A person's own org beats a legacy org-level Google connection that
-    carries the same address — the meter lands on the owner."""
+    carries the same address; the meter lands on the owner."""
     _fresh_store(monkeypatch, tmp_path)
     monkeypatch.setattr(settings, "google_token_enc_key", "")
     monkeypatch.setattr(settings, "session_secret", "sek")

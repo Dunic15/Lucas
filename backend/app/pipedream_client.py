@@ -187,7 +187,7 @@ def create_connect_token(
 
 def list_accounts(external_user_id: str, *, app: str = "") -> list[dict]:
     """Connected accounts for one org. Credentials are never requested
-    (include_credentials=false) — this is a status read only."""
+    (include_credentials=false); this is a status read only."""
     params: dict[str, Any] = {
         "external_user_id": str(external_user_id),
         "include_credentials": "false",
@@ -221,7 +221,7 @@ def run_action(
     external_user_id: str, action_id: str, configured_props: dict,
 ) -> dict:
     """Execute one Connect action on the org's connected account. Returns the
-    action's {exports, os, ret}. Distilled — never raw credentials."""
+    action's {exports, os, ret}. Distilled; never raw credentials."""
     body = {
         "external_user_id": str(external_user_id),
         "id": str(action_id),

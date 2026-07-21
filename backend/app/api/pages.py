@@ -27,7 +27,7 @@ def join_page() -> FileResponse:
 @router.get("/login")
 def login_page() -> FileResponse:
     """Dashboard sign-in (Google). With no Google client configured the page
-    offers the open demo-mode dashboard instead — key-free demo preserved."""
+    offers the open demo-mode dashboard instead; key-free demo preserved."""
     return FileResponse(FRONTEND_DIR / "login.html")
 
 

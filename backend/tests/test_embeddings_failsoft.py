@@ -77,7 +77,7 @@ def test_index_written_during_outage_rebuilds_after_recovery(
     monkeypatch, tmp_path
 ):
     """The self-heal property: an index stamped 'hash' (outage boot) is stale
-    for a healthy 'local' process — signature mismatch forces the rebuild."""
+    for a healthy 'local' process; signature mismatch forces the rebuild."""
     monkeypatch.setattr(settings, "embedding_provider", "local")
     monkeypatch.setattr(embeddings, "_local_failed", True)  # outage boot
 

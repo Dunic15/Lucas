@@ -88,7 +88,7 @@ def test_search_answers_honestly_when_blocked(fresh_store, monkeypatch):
 
 def test_specs_for_offers_no_cedric_tools_when_blocked(fresh_store, monkeypatch):
     """End of the chain: the model's function specs for a blocked session are
-    exactly the native TOOL_SPECS — no cedric__* entries to call."""
+    exactly the native TOOL_SPECS; no cedric__* entries to call."""
     from app import tools
 
     _enable_mcp(monkeypatch, _MCP_TOOLS)

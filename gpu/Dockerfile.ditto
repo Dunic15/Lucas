@@ -1,14 +1,14 @@
-# Laura photoreal GPU box — Ditto live engine, pesi COTTI DENTRO l'immagine.
+# Laura photoreal GPU box. Ditto live engine, pesi COTTI DENTRO l'immagine.
 #
 # Perché: i datacenter condivisi vengono rate-limitati da HuggingFace (429,
-# vissuto il 2026-07-09) — un pod che scarica pesi all'avvio è un pod che non
+# vissuto il 2026-07-09); un pod che scarica pesi all'avvio è un pod che non
 # parte quando serve. Con l'immagine pronta il boot è: pull -> secondi -> live.
 #
 # Build (una tantum, ~15-20 min, immagine ~12-15GB):
 #   docker build -f gpu/Dockerfile.ditto -t <registry>/laura-ditto:v1 gpu/
 #   docker push <registry>/laura-ditto:v1
 # (registry: Docker Hub privato o GHCR. Poi su Runpod: template con questa
-#  immagine + porta 8080/http — vedi DITTO-LIVE.md)
+#  immagine + porta 8080/http; vedi DITTO-LIVE.md)
 #
 # Lezioni dei collaudi 2026-07-09/10 incise qui dentro:
 #   - numpy DEVE restare <2 (mediapipe & co. trascinano numpy2 che rompe torch)
@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       openssh-server \
     && rm -rf /var/lib/apt/lists/*
 
-# ── python deps (ordine e pin contano — vedi lezioni sopra) ──
+# ── python deps (ordine e pin contano; vedi lezioni sopra) ──
 RUN pip install --no-cache-dir \
       librosa tqdm filetype imageio imageio-ffmpeg opencv_python_headless \
       scikit-image cython "cuda-python<12" colored polygraphy einops mediapipe \

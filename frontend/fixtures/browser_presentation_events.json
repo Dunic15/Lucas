@@ -1,5 +1,5 @@
 {
-  "$comment": "Browser B0 PRESENTATION EVENTS — the stable lifecycle-event vocabulary the Control Center V2 design branch renders (avatar-facing narration/animation cues). These are UI EVENTS derived from backend session state + command results; they are NOT backend state-machine states (the DB state machine is creating/ready/presenting/closing/closed/failed/expired/revoked). Each event maps to observable backend signals so the panel can animate without owning browser logic.",
+  "$comment": "Browser B0 PRESENTATION EVENTS; the stable lifecycle-event vocabulary the Control Center V2 design branch renders (avatar-facing narration/animation cues). These are UI EVENTS derived from backend session state + command results; they are NOT backend state-machine states (the DB state machine is creating/ready/presenting/closing/closed/failed/expired/revoked). Each event maps to observable backend signals so the panel can animate without owning browser logic.",
 
   "events": {
     "starting":            {"derived_from": "session.state == 'creating'", "payload": {"session_id": "sess-1", "event": "starting"}},
@@ -7,7 +7,7 @@
     "observing":           {"derived_from": "command result for verb 'observe' (classification 'auto')", "payload": {"session_id": "sess-1", "event": "observing", "command_sequence": 1, "page_version": 1}},
     "planning":            {"derived_from": "a VisualPlanner proposal was produced (planner.propose returned a proposal)", "payload": {"session_id": "sess-1", "event": "planning", "proposal": {"operation": "navigate", "reason": "go to pricing", "confidence": 0.9, "consequential": false}}},
     "navigating":          {"derived_from": "command result for verb 'navigate'/'click'/'scroll' with accepted=true", "payload": {"session_id": "sess-1", "event": "navigating", "command_sequence": 2, "page_version": 2, "url": "https://demo.laura.test/pricing"}},
-    "explaining":          {"derived_from": "operator/host narration cue (a speak line rides the existing queue — NOT owned here)", "payload": {"session_id": "sess-1", "event": "explaining", "text": "Here's the team pricing."}},
+    "explaining":          {"derived_from": "operator/host narration cue (a speak line rides the existing queue. NOT owned here)", "payload": {"session_id": "sess-1", "event": "explaining", "text": "Here's the team pricing."}},
     "paused":              {"derived_from": "host paused planning/execution (B1 pause; B0 exposes the event shape only)", "payload": {"session_id": "sess-1", "event": "paused"}},
     "waiting_for_approval":{"derived_from": "command result reason == 'approval_required' (action_id present)", "payload": {"session_id": "sess-1", "event": "waiting_for_approval", "action_id": "act_9f8e7d6c5b4a", "proposed": {"action": "purchase", "target": "Buy Team plan"}}},
     "human_takeover":      {"derived_from": "human-takeover event (B5; B0 exposes the event shape only)", "payload": {"session_id": "sess-1", "event": "human_takeover"}},

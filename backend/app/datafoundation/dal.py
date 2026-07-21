@@ -795,7 +795,7 @@ def visible_heads(
     """Head records visible under the ONE rule. org-subject rows count for
     everyone; identity-subject rows require the caller's closure; mirrored
     records additionally require the owning connector's acl_mirrored=true;
-    ineligible connectors contribute nothing — including old records."""
+    ineligible connectors contribute nothing; including old records."""
     identity_ids = sorted(principal_identity_ids or set())
     filters, params = [], {
         "org_id": org_id,

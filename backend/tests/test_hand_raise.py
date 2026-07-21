@@ -274,7 +274,7 @@ def test_low_confidence_still_raises_hand(tmp_path, monkeypatch):
 
 def test_high_confidence_but_busy_floor_raises_hand(tmp_path, monkeypatch):
     """Even strongly grounded, if a human partial is in flight (someone is
-    talking right now) she must NOT interject — she raises the hand instead."""
+    talking right now) she must NOT interject; she raises the hand instead."""
     s = _session(tmp_path, monkeypatch, bot_id="hand-bot-busyfloor")
     _stub_stream(
         monkeypatch,

@@ -1,5 +1,5 @@
 """Self-knowledge split: about/ docs answer self-questions and NEVER pollute
-process retrieval. No vendors/keys — hash embeddings + the repo's own docs."""
+process retrieval. No vendors/keys; hash embeddings + the repo's own docs."""
 from __future__ import annotations
 
 import sys

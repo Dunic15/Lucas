@@ -343,7 +343,7 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
     def _show_cursor(self, page, selector: str) -> None:
         """Render a visible pointer that glides to the target so a viewer
         watching the live view can FOLLOW what the avatar is doing. Best-effort
-        cosmetic overlay — a failure never blocks the click."""
+        cosmetic overlay; a failure never blocks the click."""
         try:
             moved = page.evaluate(_CURSOR_JS, selector)
             if moved:

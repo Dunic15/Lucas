@@ -15,7 +15,7 @@ blind retry. This module settles such rows honestly:
   account BEFORE retrying. Truthfully unknown beats forever-executing.
 
 Runs lazily from org-scoped READS (dashboard summary, canonical action GET)
-— never the live transcript path — throttled per org, so it needs no
+, never the live transcript path, throttled per org, so it needs no
 cross-tenant discovery function and no scheduler. Terminal settles mirror to
 Cedric through the same single-attempt event the executor uses.
 """

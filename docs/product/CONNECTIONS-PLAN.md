@@ -162,7 +162,7 @@ list-operations` su `laura-backend` (deploy in corso?) **+** `gh pr list` **+** 
 |---|---|---|---|
 | **Persona A** (owner) | Gemini merge (#204) · flip executor (Fase 4) · scelta nicchia | env App Runner + SSM | ✅ possiede i deploy |
 | **Persona B** (codice) | Connections page (Fase 1) · `execution_mode` toggle (Fase 2) · render connettori Cedric (Fase 3) | `dashboard.py` + `config.py` (piccolo) | ❌ solo branch/draft PR |
-| **Ben** | Slack Interactivity URL · fix calendar-connect Cedric | app Slack Cedric / Vercel | — |
+| **Ben** | Slack Interactivity URL · fix calendar-connect Cedric | app Slack Cedric / Vercel | - |
 
 **Ownership file (chi tocca cosa, per evitare conflitti):**
 - **`dashboard.py`** = file caldissimo. Chi fa la pagina Connections lo **possiede** per quella finestra;

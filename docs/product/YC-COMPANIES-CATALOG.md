@@ -27,7 +27,7 @@ Sull'evidenza sopravvissuta alla verifica:
 | Recruiting & Talent | 66 (58 "Recruiting") | il più validato E il più saturato |
 | Insurance | 54 | + licenze (evitare) |
 | Legal | 54 | cluster AI-native accelerante 2025/26 |
-| — | | portfolio AI YC ~1.470 (~26% delle ~5.668 totali) |
+| - | | portfolio AI YC ~1.470 (~26% delle ~5.668 totali) |
 
 ## Per-vertical, evidenza verificata (aziende reali)
 

@@ -179,7 +179,7 @@ def test_dashboard_never_links_bare_cedric_root():
 def test_legacy_local_disconnect_is_removed(client):
     """The legacy DELETE route is gone entirely: the dashboard button posts to
     /dashboard/connections/brain/disconnect (remote-revoke-first). A stray
-    DELETE must not resolve to any endpoint — and must never flip local state."""
+    DELETE must not resolve to any endpoint; and must never flip local state."""
     user = _login(client)
     store.set_connection(
         user["org_id"], "cedric", "cedric-brain", "connected", {"team_id": "T1"}

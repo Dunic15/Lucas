@@ -396,7 +396,7 @@ def test_coordinate_without_confidence_refused(cp):
 
 def test_flag_off_page_version_matches_b0(cp, monkeypatch):
     """Adversarial: with the visual planner OFF the pre-dispatch page_version
-    write is gone — a first navigate yields page_version 1 (B0 value), not 2."""
+    write is gone; a first navigate yields page_version 1 (B0 value), not 2."""
     monkeypatch.setattr(settings, "browser_visual_planner_enabled", False)
     org = _org(cp, "pvidentity")
     sess = _session(org)

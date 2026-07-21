@@ -50,7 +50,7 @@ for reference.
 
 | Rank | Vertical (buyer → meeting) | Whitespace | Wallet | Meeting-fit | Low-reg | Ingest | Native-safe | **/30** | Beats advisory? |
 |---|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| — | **Wealth/advisory** *(ref, expansion-I)* | 5 | 4 | 5 | 3 | 5 | 4 | **26** | — |
+| - | **Wealth/advisory** *(ref, expansion-I)* | 5 | 4 | 5 | 3 | 5 | 4 | **26** | - |
 | **1** | **CS/Support**: SaaS CSM → QBR/onboarding | 3 | 4 | 5 | 5 | 4 | **1** | **22** | ✗ (native-crushed) |
 | **2** | **Construction**: GC/PE → OAC/project mtg | 4 | 2 | 4 | 4 | 4 | 2 | **20** | ✗ (Procore incumbent) |
 | **3** | **Events/hospitality**: venue/planner → client planning call | 5 | 2 | 3 | 4 | 4 | 4 | **22*** | ✗ (thin wallet, sourcing is phone/email) |

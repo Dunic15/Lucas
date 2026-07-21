@@ -54,7 +54,7 @@ def test_yaml_none_inherits_global(monkeypatch):
 def test_backchannel_suppressed_in_wake_word_mode(monkeypatch):
     """In a GROUP, a wake-word avatar makes no unprompted backchannel. (The
     1:1 relaxation; a single human present drops the wake requirement, Duccio
-    2026-07-20 — is asserted separately below, so this uses a 2-human roster.)"""
+    2026-07-20; is asserted separately below, so this uses a 2-human roster.)"""
     monkeypatch.setattr(settings, "backchannel_enabled", True)
     monkeypatch.setattr(settings, "backchannel_min_words", 3)
     session = store.Session(bot_id="b1", meeting_url="m", avatar_id="petra")

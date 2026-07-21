@@ -16,7 +16,7 @@ ROOT="$(pwd)"
 PORT="${PORT:-8000}"
 
 command -v cloudflared >/dev/null || { echo "cloudflared not installed (brew install cloudflared)"; exit 1; }
-[ -x ".venv/bin/uvicorn" ] || { echo "no .venv — run: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"; exit 1; }
+[ -x ".venv/bin/uvicorn" ] || { echo "no .venv; run: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"; exit 1; }
 
 echo "→ (re)starting tunnel…"
 pm2 delete laura-tunnel laura-api >/dev/null 2>&1 || true

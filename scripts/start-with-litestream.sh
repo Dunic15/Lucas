@@ -10,14 +10,14 @@
 # is pointing App Runner's StartCommand at this script + setting a few env vars
 # (see docs/infra/STORAGE-ROLLOUT.md). Zero CI / Dockerfile changes.
 #
-# FAIL-OPEN — the live-meeting path must NEVER depend on S3 or a GitHub fetch.
+# FAIL-OPEN; the live-meeting path must NEVER depend on S3 or a GitHub fetch.
 # If replication is not configured (no LITESTREAM_REPLICA_URL) OR the binary
 # can't be obtained OR restore fails, we log a warning and run uvicorn directly.
 # The server ALWAYS boots. Worst case = this boot has no replication (exactly
 # today's behaviour), never a boot that hangs or crashes on infra.
 #
 # Locally there is no LITESTREAM_REPLICA_URL, so this script is a transparent
-# pass-through to `uvicorn` — the key-free demo is unchanged.
+# pass-through to `uvicorn`: the key-free demo is unchanged.
 
 set -uo pipefail
 
@@ -41,7 +41,7 @@ log() { echo "[start-with-litestream] $*" >&2; }
 
 run_direct() {
   # Replication off (or unavailable): boot the server exactly as today.
-  log "launching uvicorn directly — durability OFF"
+  log "launching uvicorn directly; durability OFF"
   exec ${UVICORN_CMD}
 }
 
@@ -57,7 +57,7 @@ export LITESTREAM_SYNC_INTERVAL="${LITESTREAM_SYNC_INTERVAL:-10s}"
 export LITESTREAM_RETENTION="${LITESTREAM_RETENTION:-168h}"
 LITESTREAM_CONFIG="${LITESTREAM_CONFIG:-${REPO_ROOT}/etc/litestream.yml}"
 
-# Pin a stable 0.5.x (NOT 0.5.0 — it had early-adopter bugs; see decision doc).
+# Pin a stable 0.5.x (NOT 0.5.0; it had early-adopter bugs; see decision doc).
 LITESTREAM_VERSION="${LITESTREAM_VERSION:-v0.5.14}"
 LITESTREAM_BIN_DIR="${LITESTREAM_BIN_DIR:-/tmp/litestream-bin}"
 
@@ -98,13 +98,13 @@ resolve_litestream() {
     echo "${LITESTREAM_SHA256}  ${tgz}" | sha256sum -c - || { log "checksum MISMATCH"; return 1; }
   fi
   # Extract the binary. The App Runner managed PYTHON_311 runtime ships NO `tar`,
-  # so fall back to python3 (always present — it IS the runtime), which extracts
-  # the .tar.gz in-process via the stdlib (gzip+tarfile) — no external tar/gunzip.
+  # so fall back to python3 (always present; it IS the runtime), which extracts
+  # the .tar.gz in-process via the stdlib (gzip+tarfile); no external tar/gunzip.
   if command -v tar >/dev/null 2>&1; then
     tar -xzf "$tgz" -C "${LITESTREAM_BIN_DIR}" litestream 2>/dev/null \
       || tar -xzf "$tgz" -C "${LITESTREAM_BIN_DIR}" || { log "tar extract failed"; return 1; }
   else
-    log "no tar in this runtime — extracting with ${PYTHON}"
+    log "no tar in this runtime; extracting with ${PYTHON}"
     "${PYTHON}" - "$tgz" "${LITESTREAM_BIN_DIR}" <<'PY' || { log "python extract failed"; return 1; }
 import os, sys, tarfile
 tgz, dest = sys.argv[1], sys.argv[2]
@@ -124,7 +124,7 @@ PY
 }
 
 if ! resolve_litestream; then
-  log "could not obtain litestream — falling back to direct boot (no replication)"
+  log "could not obtain litestream; falling back to direct boot (no replication)"
   run_direct
 fi
 log "using litestream at ${LITESTREAM} (config ${LITESTREAM_CONFIG})"
@@ -136,7 +136,7 @@ log "using litestream at ${LITESTREAM} (config ${LITESTREAM_CONFIG})"
 mkdir -p "$(dirname "${LAURA_STORE_PATH}")" 2>/dev/null || true
 if ! "${LITESTREAM}" restore -config "${LITESTREAM_CONFIG}" \
       -if-replica-exists -if-db-not-exists "${LAURA_STORE_PATH}"; then
-  log "restore errored — booting anyway (app will start on a fresh DB)"
+  log "restore errored; booting anyway (app will start on a fresh DB)"
 fi
 
 # Hand off to Litestream, which supervises uvicorn and ships WAL changes to S3

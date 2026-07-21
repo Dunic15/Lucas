@@ -68,7 +68,7 @@ def route_for_typed(typed: dict | None) -> str:
     the whole Google block (calendar/gmail) and Slack stay on Laura's native
     executor; anything Laura can't map natively goes to Cedric. With
     PIPEDREAM_EXECUTOR off, ``pipedream_executor.handles`` is False so Asana
-    stamps 'native' — behaviour is byte-identical to before."""
+    stamps 'native': behaviour is byte-identical to before."""
     from .. import pipedream_executor  # lazy: keep module load order decoupled
 
     if from_typed(typed) is None:

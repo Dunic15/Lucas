@@ -54,7 +54,7 @@
 | 5 | **Insurance brokerage** (commercial SMB) | 5 | 4 | 2 | 5 | 3 | **19** |
 | 6 | **Wealth / financial advisory** | 5 | 4 | 1 | 4 | 3 | **17** |
 | 7 | **Real-estate brokerage** (residential) | 3 | 3 | 4 | 3 | 2 | **15** |
-| — | Healthcare administration | 5 | 4 | **1 (HIPAA)** | 5 | 3 | *excluded* |
+| - | Healthcare administration | 5 | 4 | **1 (HIPAA)** | 5 | 3 | *excluded* |
 
 **How to read the scores.** (c) is where the advisors' "avoid regulated" rule does
 the most work: it is what knocks Insurance (licensed brokers + E&O), Wealth

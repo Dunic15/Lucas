@@ -71,7 +71,7 @@ def _avatar_asana_enabled(org_id: str, avatar_id: str) -> bool:
     per-avatar `asana` toggle is not explicitly off. So Asana defaults ON for
     PETRA ONLY, not every avatar whose org happens to have connected it; a
     dashboard toggle can still override per avatar. Sync (sqlite/yaml, both
-    cached) — call via threadpool. Best-effort: never breaks a join/finalize."""
+    cached); call via threadpool. Best-effort: never breaks a join/finalize."""
     try:
         # "Connected" now counts a Pipedream-brokered Asana account too, so the
         # native connection can be dropped once actions run through Pipedream.
@@ -318,7 +318,7 @@ async def _retry_leave(bot_id: str, session: store.Session) -> bool:
     stop is still UNVERIFIED so the reconcile loop retries next pass.
 
     Guarded by ``_finalizing`` so a manual /end and a reconcile tick can't both
-    retry the same bot at once (idempotent regardless — defense in depth)."""
+    retry the same bot at once (idempotent regardless; defense in depth)."""
     if bot_id in _finalizing:
         return False
     _finalizing.add(bot_id)
@@ -742,7 +742,7 @@ def _merge_action_items(queued: list, extracted: list) -> list:
 
 def _fold_into_live(live: dict, extracted: object) -> None:
     """Absorb the summarizer's structured owner/deadline into the winning live
-    capture (which often has neither — the room just spoke the ask)."""
+    capture (which often has neither; the room just spoke the ask)."""
     if not isinstance(extracted, dict):
         return
     if not live.get("deadline") and extracted.get("deadline"):

@@ -223,7 +223,7 @@ then updates the mapping row / mints the Action / queues the speak.
 | `paused` | frozen by operator command | `pause` / takeover release |
 | `takeover` | a human drives via the live view; planner disabled | dashboard |
 | `closing` | provider release in flight | `close` / finalize / reconcile |
-| `closed` | terminal, released | — |
+| `closed` | terminal, released | - |
 | `failed` | terminal, unrecoverable provider/browser error | any |
 | `expired` | terminal, TTL (`BROWSER_DEFAULT_TIMEOUT_SECONDS`) hit server-side | watchdog |
 

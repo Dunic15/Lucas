@@ -219,7 +219,7 @@ def _validate(org: str, avatar_key: str, payload) -> tuple[dict, list[str]]:
 def _resolved_summary(org: str, avatar_key: str,
                       overlay: dict | None = None) -> dict:
     """The preview payload: what THIS overlay (or the published one) resolves
-    to — greeting, prompt addition, effective tools, scope, warnings."""
+    to; greeting, prompt addition, effective tools, scope, warnings."""
     canonical = avatars.load(avatar_key)
     if overlay is None:
         resolved = avatar_resolver.describe(org, avatar_key)

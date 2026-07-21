@@ -278,7 +278,7 @@ def send_action_event(org_id: str, event: str, fields: dict) -> bool:
     status MUST carry the ORIGINATING event_id in ``fields``: B treats its
     own event_id as already-rendered; A-authored events get a fresh id here.
     Single attempt (callers needing durability enqueue via the outbox);
-    responses are {ok:true} only per contract — nothing is read back."""
+    responses are {ok:true} only per contract; nothing is read back."""
     url = events_url()
     org = (org_id or "").strip()
     if not url or not org:
@@ -330,7 +330,7 @@ def send_action_requested(integration: dict | None, bot_id: str, item: dict) -> 
     ready before the meeting ends. Same discipline as session.status: single
     attempt, best-effort; the artifact's actions[] in session.ended is the
     authoritative, complete list. PII rule: only the distilled action text /
-    owner / due ever leave — never transcript content."""
+    owner / due ever leave; never transcript content."""
     url = (integration or {}).get("callback_url") or ""
     if not url:
         return False

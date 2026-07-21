@@ -7,7 +7,7 @@
       "steps": [
         {
           "request": {"verb": "navigate", "url": "https://demo.laura.test/pricing", "verify": true, "expected": {"url_contains": "pricing", "text_contains": "Team plan"}},
-          "result": {"accepted": true, "command_sequence": 1, "page_version": 1, "classification": "auto", "observation_ref": "fake-shot:https://demo.laura.test/pricing", "action_id": "", "failure_category": "", "replanning_permitted": true, "verification": "verified", "ok": true, "observation": {"session_id": "sess-1", "command_sequence": 1, "page_version": 1, "url": "https://demo.laura.test/pricing", "title": "Laura Demo — Pricing", "viewport": {"width": 1280, "height": 720}, "screenshot_ref": "fake-shot:https://demo.laura.test/pricing", "dom_summary": "Team plan: 20 EUR per seat per month. Enterprise: contact us.", "visible_text": "Team plan: 20 EUR per seat per month. Enterprise: contact us.", "elements": [{"id": "buy-team", "role": "button", "name": "Buy Team plan", "kind": "purchase", "sensitive": false}, {"id": "contact", "role": "link", "name": "Contact sales", "kind": "link", "sensitive": false}], "truncated": false, "timestamp": 1789459200.0}}
+          "result": {"accepted": true, "command_sequence": 1, "page_version": 1, "classification": "auto", "observation_ref": "fake-shot:https://demo.laura.test/pricing", "action_id": "", "failure_category": "", "replanning_permitted": true, "verification": "verified", "ok": true, "observation": {"session_id": "sess-1", "command_sequence": 1, "page_version": 1, "url": "https://demo.laura.test/pricing", "title": "Laura Demo. Pricing", "viewport": {"width": 1280, "height": 720}, "screenshot_ref": "fake-shot:https://demo.laura.test/pricing", "dom_summary": "Team plan: 20 EUR per seat per month. Enterprise: contact us.", "visible_text": "Team plan: 20 EUR per seat per month. Enterprise: contact us.", "elements": [{"id": "buy-team", "role": "button", "name": "Buy Team plan", "kind": "purchase", "sensitive": false}, {"id": "contact", "role": "link", "name": "Contact sales", "kind": "link", "sensitive": false}], "truncated": false, "timestamp": 1789459200.0}}
         },
         {
           "request": {"verb": "click", "element_id": "contact", "verify": true, "expected": {"url_contains": "contact"}},
@@ -30,11 +30,11 @@
       "description": "A purchase click with BROWSER_ALLOW_WRITES=true becomes a canonical action; result carries action_id and does NOT execute inline.",
       "request": {"verb": "click", "element_id": "buy-team"},
       "result": {"accepted": false, "command_sequence": 4, "page_version": 2, "classification": "guarded", "observation_ref": "", "action_id": "act_9f8e7d6c5b4a", "failure_category": "", "replanning_permitted": false, "verification": "", "ok": false, "reason": "approval_required", "proposed": {"action": "purchase", "target": "Buy Team plan", "text": ""}},
-      "note": "Approve through /dashboard/actions/{action_id}/approve — NOT a browser-specific door."
+      "note": "Approve through /dashboard/actions/{action_id}/approve: NOT a browser-specific door."
     },
 
     "guarded_write_rejected_read_only": {
-      "description": "Same purchase click with the default read-only posture (BROWSER_ALLOW_WRITES=false) is rejected outright — no action minted.",
+      "description": "Same purchase click with the default read-only posture (BROWSER_ALLOW_WRITES=false) is rejected outright; no action minted.",
       "request": {"verb": "click", "element_id": "buy-team"},
       "result": {"accepted": false, "command_sequence": 4, "page_version": 2, "classification": "guarded", "action_id": "", "failure_category": "write_rejected_read_only", "replanning_permitted": true, "verification": "", "ok": false, "reason": "write_rejected_read_only", "proposed": {"action": "purchase", "target": "Buy Team plan", "text": ""}}
     },

@@ -185,7 +185,7 @@ def test_transcript_grew_during_generation_defers(tmp_path, monkeypatch):
 def test_flag_off_restores_trigger_time_reading(tmp_path, monkeypatch):
     """With the recheck flag OFF, the stale trigger-time read wins and she
     interjects even though a human took the floor mid-generation (the pre-fix
-    behaviour) — proving the fix is fully gated."""
+    behaviour); proving the fix is fully gated."""
     s = _session(tmp_path, monkeypatch, bot_id="talkover-flagoff")
     monkeypatch.setattr(settings, "interject_recheck_floor_at_speak", False)
     s.last_human_partial_at = time.time() - 30.0

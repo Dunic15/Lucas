@@ -2,7 +2,7 @@
 
 DELIBERATELY INERT WITHOUT A KEY. Until ``BROWSER_VISUAL_PLANNER_ENABLED`` is
 on AND the model key is configured, ``propose`` raises ``PlannerUnconfigured``
-— the whole CI suite plans with ``FakeVisualPlanner`` and needs no model key.
+, the whole CI suite plans with ``FakeVisualPlanner`` and needs no model key.
 The real model call is exercised ONLY by the credential-gated smoke; its
 real-pixel behaviour stays UNPROVEN until that runs.
 

@@ -222,7 +222,7 @@ def test_list_accounts_distills_and_hides_credentials(monkeypatch):
 
 def test_summary_exposes_pipedream_flag_for_nav_gating(client, monkeypatch):
     """The dashboard hides its Pipedream nav tab unless the summary reports the
-    feature configured — so the key-free demo/un-configured prod look unchanged."""
+    feature configured; so the key-free demo/un-configured prod look unchanged."""
     _login(client)
     off = client.get("/dashboard/summary")
     assert off.status_code == 200

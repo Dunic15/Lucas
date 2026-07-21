@@ -468,7 +468,7 @@ def verify_webhook(raw_body: bytes, headers: Mapping[str, str]) -> None:
 
 def delete_bot(bot_id: str) -> None:
     """Delete a SCHEDULED bot (one that has not joined yet). Live bots reject
-    this — use leave_call for them; the cancel endpoint tries both."""
+    this; use leave_call for them; the cancel endpoint tries both."""
     resp = _request(
         "DELETE",
         f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/{bot_id}/",

@@ -68,12 +68,12 @@ Mancano soprattutto **gate esterni** e **hardening self-serve**.
 
 | Accesso | Stato | Chi lo sblocca |
 |---|---|---|
-| AWS (SSM, App Runner) | ✅ ho |. (pre-approvato) |
-| GitHub `gh` (Dunic15) | ✅ ho | — |
+| AWS (SSM, App Runner) | ✅ ho | - (pre-approvato) |
+| GitHub `gh` (Dunic15) | ✅ ho | - |
 | Cedric **staging** | ✅ ho | ricetta in memoria |
-| Slack `laura_ops` bot | ✅ ho | — |
-| Anthropic (Cedric) | ✅ credito |, (fatto) |
-| Recall (minuti) | ✅ credito |, (fatto) |
+| Slack `laura_ops` bot | ✅ ho | - |
+| Anthropic (Cedric) | ✅ credito | - (fatto) |
+| Recall (minuti) | ✅ credito | - (fatto) |
 | Cedric **prod** (Vercel) | ⚠️ indiretto | Duccio è VIEWER sul team di Ben → deploy via `rm -rf .git`+token (§5) o Ben |
 | **Slack Interactivity URL** (bottone Approve) | ❌ non wired | 👤 Ben. App Cedric: prod `A0BD9SW7SRH`, staging `A0BGHED8Q4A`. **Muro = collaborator**: il nostro config token dà `no_permission` (verificato 2026-07-12, non è un problema di token/workspace). Ben o (A) setta l'Interactivity URL, o (B) **aggiunge duccio come collaborator** → poi lo settiamo noi via `apps.manifest.update` (converte 👤→🤖). |
 | **App Slack Cedric distribuibile** | ❌ | 👤/🌐 owner app (Manage Distribution → Activate Public). Sbloccato anch'esso dall'opzione (B) collaborator. |

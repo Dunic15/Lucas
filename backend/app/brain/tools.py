@@ -441,7 +441,7 @@ def list_capabilities(session=None) -> str:
 def search_tools(query: str = "", session=None) -> str:
     """Look up whether a capability exists, where it runs (native vs Slack
     agent), whether it is connected, and whether it needs approval. Snapshot
-    search only — never a live call."""
+    search only; never a live call."""
     from . import tool_registry
 
     reg = getattr(session, "tool_registry", None) if session else None
@@ -607,7 +607,7 @@ def specs_for(session, *, live: bool = True) -> list[dict]:
 def _dispatch_cedric(name: str, args: dict, session, *, live: bool) -> str:
     """Route a prefixed Cedric tool call through the MCP bridge. An approval-
     gated write is CAPTURED onto the session (approve queue) and reported as
-    queued — never executed here, never claimed done."""
+    queued; never executed here, never claimed done."""
     from .. import cedric_mcp
 
     org_id = str(getattr(session, "org_id", "") or "") if session else ""

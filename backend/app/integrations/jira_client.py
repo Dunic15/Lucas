@@ -285,7 +285,7 @@ def _build_brief(org_id: str) -> str:
 
 def workspace_brief(org_id: str) -> str:
     """TTL-cached join-time snapshot of the org's Jira. "" when not connected
-    or empty. Best-effort — never raises onto the join path."""
+    or empty. Best-effort; never raises onto the join path."""
     org = (org_id or "").strip()
     if not org:
         return ""

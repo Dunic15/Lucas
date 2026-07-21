@@ -1,10 +1,10 @@
 {
-  "$comment": "Browser operator B0 — deterministic fixtures for every browser-panel state. The Control Center V2 design branch renders from these EXACT schemas; browser logic stays in the backend. Session objects mirror GET /dashboard/browser/sessions/{id} ('session' key). Observation objects mirror the 'observation' key of a command/observation response. Viewer objects mirror POST /dashboard/browser/present/exchange ('viewer' key). No provider identifiers, no provider URLs, no tokens beyond the one-shot mint example.",
+  "$comment": "Browser operator B0; deterministic fixtures for every browser-panel state. The Control Center V2 design branch renders from these EXACT schemas; browser logic stays in the backend. Session objects mirror GET /dashboard/browser/sessions/{id} ('session' key). Observation objects mirror the 'observation' key of a command/observation response. Viewer objects mirror POST /dashboard/browser/present/exchange ('viewer' key). No provider identifiers, no provider URLs, no tokens beyond the one-shot mint example.",
   "states": {
     "unavailable": {
       "http_status": 404,
       "body": {"error": "browser_operator_disabled"},
-      "render_hint": "Feature flag off — hide the browser panel entirely."
+      "render_hint": "Feature flag off; hide the browser panel entirely."
     },
     "creating": {
       "http_status": 200,
@@ -77,7 +77,7 @@
         "viewer": {
           "kind": "fake_readonly",
           "url": "https://demo.laura.test/pricing",
-          "title": "Laura Demo — Pricing",
+          "title": "Laura Demo: Pricing",
           "rendered_text": "Team plan: 20 EUR per seat per month. Enterprise: contact us.",
           "read_only": true
         }
@@ -96,7 +96,7 @@
           "seq": 6
         }
       },
-      "render_hint": "Render the existing action-approval card (canonical Actions UI) with the 'proposed' projection; approval flows through /dashboard/actions/{id}/approve — NOT a browser-specific approve."
+      "render_hint": "Render the existing action-approval card (canonical Actions UI) with the 'proposed' projection; approval flows through /dashboard/actions/{id}/approve. NOT a browser-specific approve."
     },
     "failed": {
       "http_status": 200,
@@ -152,7 +152,7 @@
         },
         "close_response": {"ok": true, "state": "closed"}
       },
-      "render_hint": "Neutral 'Browser closed' summary; idempotent close — repeating the call returns {ok:true, state:'closed', idempotent:true}."
+      "render_hint": "Neutral 'Browser closed' summary; idempotent close; repeating the call returns {ok:true, state:'closed', idempotent:true}."
     },
     "revoked": {
       "http_status": 200,
@@ -175,7 +175,7 @@
     "token_denied": {
       "http_status": 403,
       "body": {"ok": false, "reason": "expired"},
-      "render_hint": "Viewer exchange denied — reasons: malformed | not_found | revoked | expired | session_not_live. Show 'view ended'."
+      "render_hint": "Viewer exchange denied; reasons: malformed | not_found | revoked | expired | session_not_live. Show 'view ended'."
     }
   }
 }

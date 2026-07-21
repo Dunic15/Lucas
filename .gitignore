@@ -38,19 +38,19 @@ lovable/laura-meeting-expert/package-lock.json
 # Root-scoped only (leading slash) so real assets under docs/assets/ etc. stay tracked:
 #   - Framer/site preview screenshots (hero-*, preview-*, final-*, talk-*, top-*, nav-*, product-*, etc.)
 #   - Framer MCP exports (framer-*.yml) and publish-panel exports
-# These are throwaway captures from iterating on the landing site — commit real assets to docs/assets/.
+# These are throwaway captures from iterating on the landing site; commit real assets to docs/assets/.
 /*.jpeg
 /*.jpg
 /*.png
 /framer-*.yml
 /publish-panel.yml
 
-# Local A/V test clips + scratch capture dirs (media, not source — commit real assets to docs/assets/)
+# Local A/V test clips + scratch capture dirs (media, not source; commit real assets to docs/assets/)
 avatar-test-clips/
 desktop-laura-stuff/
 voice-previews/
 images laura/
 
-# GTM lead lists — real prospect emails (PII); keep strategy .md docs, never the raw contact data
+# GTM lead lists; real prospect emails (PII); keep strategy .md docs, never the raw contact data
 docs/gtm/*.xlsx
 docs/gtm/recipients.csv

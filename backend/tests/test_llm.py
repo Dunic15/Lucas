@@ -175,7 +175,7 @@ def test_post_meeting_uses_post_provider(monkeypatch):
 
 def test_complete_falls_back_to_haiku_when_groq_fails(monkeypatch):
     """Groq 429 (rate limit) on the default path must fall back to Claude Haiku,
-    not crash — so the avatar never goes dark."""
+    not crash; so the avatar never goes dark."""
     monkeypatch.setattr(llm.settings, "brain_provider", "groq")
     monkeypatch.setattr(llm.settings, "anthropic_api_key", "k")
 
@@ -197,7 +197,7 @@ def test_complete_falls_back_to_haiku_when_groq_fails(monkeypatch):
 
 def test_explicit_provider_does_not_fall_back(monkeypatch):
     """An explicit provider= (e.g. a caller pinning Groq) must NOT be silently
-    answered by the fallback model — it should raise."""
+    answered by the fallback model; it should raise."""
     monkeypatch.setattr(llm.settings, "anthropic_api_key", "k")
     monkeypatch.setattr(llm, "_complete_groq", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("429")))
     import pytest

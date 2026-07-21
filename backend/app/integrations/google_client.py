@@ -831,7 +831,7 @@ def _event_line(item: dict) -> str:
 
 def calendar_brief(org_id: str) -> str:
     """Markdown brief of the org's upcoming primary calendar; "" when the org
-    has no Google connected or on any failure — the join proceeds without it."""
+    has no Google connected or on any failure; the join proceeds without it."""
     org = (org_id or "").strip()
     if not org:
         return ""

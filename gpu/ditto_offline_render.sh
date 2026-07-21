@@ -19,7 +19,7 @@ echo "==> [1/6] system deps (ffmpeg, git, GLES/EGL per mediapipe headless)"
 apt-get update -y >/dev/null
 apt-get install -y -q ffmpeg git libgl1 libglib2.0-0 libgles2 libegl1 libopengl0 >/dev/null
 
-echo "==> [2/6] repo + deps python (numpy pinnato PER ULTIMO — vince su tutto)"
+echo "==> [2/6] repo + deps python (numpy pinnato PER ULTIMO; vince su tutto)"
 [ -d ditto-talkinghead ] || git clone --depth 1 https://github.com/antgroup/ditto-talkinghead
 cd /workspace/ditto-talkinghead
 pip install --no-cache-dir -q librosa tqdm filetype imageio imageio-ffmpeg \

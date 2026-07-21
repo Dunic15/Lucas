@@ -382,7 +382,7 @@ def resolve_item(
     every existing caller's behavior byte-identical). Scoped to ``org_id`` so
     one tenant can never resolve another's row. ``detail`` is a distilled
     one-liner (capped, never transcript content by contract). An unknown
-    outcome is a no-op (False) — callers validate first for their 400s."""
+    outcome is a no-op (False); callers validate first for their 400s."""
     if outcome not in RESOLUTION_OUTCOMES:
         return False
     with store._LOCK, store._connect() as conn:
@@ -704,7 +704,7 @@ def get_action_decision(
 
 def list_blocked_decisions(org_id: str = DEMO_ORG_ID) -> list[dict]:
     """Approve-decisions in this org still parked behind unmet dependencies
-    ([M8]) — the work-list action_deps sweeps when a dependency lands."""
+    ([M8]); the work-list action_deps sweeps when a dependency lands."""
     if _durable_actions(org_id):
         from . import outbox_pg
 
@@ -802,7 +802,7 @@ def action_statuses(
     action_ids: list[str], *, org_id: str = DEMO_ORG_ID
 ) -> dict[str, dict]:
     """Latest execution state for this org's action ids (missing ids absent).
-    One query — the dashboard decorates a page of meetings."""
+    One query; the dashboard decorates a page of meetings."""
     ids = [a for a in {(i or "").strip() for i in action_ids} if a]
     if not ids:
         return {}
@@ -838,7 +838,7 @@ def carryover_brief(
     """Compact 'what previous meetings left open' block for prompt injection
     and pre-meeting briefs. Scoped to ``org_id``: this feeds the LIVE prompt,
     so another tenant's open items must never surface mid-meeting (§6.4). Empty
-    string when there is no history — callers can skip the block entirely."""
+    string when there is no history; callers can skip the block entirely."""
     key = meeting_key(meeting_url)
     with store._LOCK, store._connect() as conn:
         open_rows = conn.execute(

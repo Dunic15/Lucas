@@ -131,7 +131,7 @@ def _recipient_addresses(msg: dict) -> set[str]:
 
 def _message_meeting_urls(token: str, msg_id: str) -> tuple[set[str], set[str], float]:
     """Fetch one message: (meeting urls in snippet+body, recipient addresses,
-    received-at epoch seconds — 0.0 when Gmail omits internalDate)."""
+    received-at epoch seconds: 0.0 when Gmail omits internalDate)."""
     r = _client.get(
         f"{GMAIL_API}/messages/{msg_id}",
         params={"format": "full"},

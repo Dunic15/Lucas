@@ -864,7 +864,7 @@ for an assistant who is in the room. Merge the existing notes with the new \
 transcript lines into ONE updated set of notes, at most 120 words. Keep only \
 what stays useful later: topics discussed, decisions, owners, deadlines, \
 numbers, blockers, and open questions. Drop small talk and filler. Plain \
-text, no markdown, no preamble — return the updated notes only."""
+text, no markdown, no preamble; return the updated notes only."""
 
 
 def rolling_summary(avatar: Avatar, prior: str, new_lines: str) -> str:
@@ -933,7 +933,7 @@ You can also USE TOOLS when they make an answer more concrete:
 - lookup_record: check a customer account (plan, seats, MRR, renewal, owner).
 - queue_action: when someone asks YOU to do something (send, schedule, book, \
 create, check, remind): queue it. Actions run AFTER the call behind an approval \
-— confirm it's queued, and NEVER claim it was already done.
+, confirm it's queued, and NEVER claim it was already done.
 Call a tool whenever it helps, you may chain them, then state the concrete \
 result plainly in a sentence or two."""
 
@@ -1468,7 +1468,7 @@ def _looks_degraded(artifact: dict) -> bool:
 # When a process template matched the meeting, readiness = the share of required
 # process steps it covered (state.readiness_score()). When NO template matched
 # (e.g. a generic non-onboarding transcript) that score is undefined and comes
-# back 0 — leaving the demo readiness tile a dead "—". Derive instead a
+# back 0; leaving the demo readiness tile a dead "-". Derive instead a
 # defensible OUTCOME-readiness from the distilled artifact alone: did the meeting
 # produce a recap, action items, owners, and a drafted follow-up? Deterministic
 # (same artifact → same score), no model call, no new artifact keys. Weights sum
@@ -1533,7 +1533,7 @@ def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dic
     artifact["missing_steps"] = list(state.missing_steps)
     # Readiness: the rigorous template-coverage score when a process template
     # matched; otherwise a defensible outcome-readiness derived from the artifact
-    # so the tile is never a dead "—" for a non-onboarding meeting.
+    # so the tile is never a dead "-" for a non-onboarding meeting.
     artifact["readiness_score"] = (
         state.readiness_score()
         if state.required_steps

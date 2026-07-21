@@ -266,7 +266,7 @@ def for_session(session) -> Avatar:
     """The avatar for a LIVE session; hot-path safe: returns the resolved
     avatar stashed at dispatch, else the canonical mtime-cached load. NEVER
     performs database I/O (a restarted instance mid-meeting falls back to
-    canonical behavior — the same frozen-at-dispatch model as mission)."""
+    canonical behavior; the same frozen-at-dispatch model as mission)."""
     stashed = getattr(session, "resolved_avatar", None)
     if stashed is not None:
         return stashed

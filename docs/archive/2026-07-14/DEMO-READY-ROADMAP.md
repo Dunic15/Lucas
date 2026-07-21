@@ -19,7 +19,7 @@ Oggi la demo è **"rough-but-ok" su tutti i fronti**: l'ingegneria è forte ma i
 | 1 | Gate `/live/token` con `auth.gate` (o eliminarlo se Anam è legacy); chiude il buco billabile aperto | blocker | 🤖 | S |
 | 2 | Script demo: la domanda-chiave è rivolta a **"Laura"** per nome → bypassa hand-raise/deference/cooldown, risponde diretta = il wow multi-persona scatta senza codice | major | 🤖+👤 | S |
 | 3 | Cue di presenza one-time all'ingresso ("ci sono, chiamami per nome") → l'avatar non sembra morto allo sconosciuto | major | 🤖 | S |
-| 4 | `readiness_score` reale in `/demo/post_meeting` + seed → colonna e tile "Avg readiness" smettono di essere "—" | major | 🤖 | S |
+| 4 | `readiness_score` reale in `/demo/post_meeting` + seed → colonna e tile "Avg readiness" smettono di essere "-" | major | 🤖 | S |
 | 5 | Seed **1 artifact flagship** su SOP onboarding/access (summary ricco, 3-4 azioni con owner, readiness alta, follow-up consegnato) come top row | major | 🤖 | S |
 | 6 | Tile ROI orientato al valore ("Follow-up hours automated" / "Email inviate + meeting schedulati") ancorato a tempo/€ | major | 🤖 | S |
 | 7 | Gate/strip `/gmail/status`: oggi leak PII (Meet URL joinabile + bot_id) | major | 🤖 | S |

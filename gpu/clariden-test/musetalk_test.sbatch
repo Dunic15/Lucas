@@ -14,6 +14,6 @@
 #SBATCH --output=/iopsstor/scratch/cscs/%u/musetalk/job_%j.out
 #SBATCH --error=/iopsstor/scratch/cscs/%u/musetalk/job_%j.out
 set -eo pipefail
-echo "Job $SLURM_JOB_NAME su $SLURM_NODELIST — $(date)"
+echo "Job $SLURM_JOB_NAME su $SLURM_NODELIST. $(date)"
 export WORK="/iopsstor/scratch/cscs/$USER/musetalk"
 bash "$WORK/setup_and_run_clariden.sh"

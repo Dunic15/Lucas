@@ -633,7 +633,7 @@ def test_wants_action_capture_bare_imperatives():
     """The 0-actions bug: users speak BARE IMPERATIVES ("schedule…", "send…",
     "post…") with no "can you/please" carrier. The capture regex must catch the
     verb leading the (wake-stripped) ask, plus messaging verbs (post/ping/dm/
-    message) the old list lacked — without capturing plain statements."""
+    message) the old list lacked; without capturing plain statements."""
     from app.brain.engine import wants_action_capture
 
     for phrase in [

@@ -462,7 +462,7 @@ def test_logged_in_user_cannot_end_demo_org_session(client, google_on, monkeypat
     showroom, NOT part of a logged-in user's allow-set; a real signup must not
     be able to force-end another visitor's demo session. (Flips the pre-self-
     serve beta behavior, where demo rows were shared with every login.) Legacy
-    unowned ('') sessions stay endable — see .._can_end_unowned_session below."""
+    unowned ('') sessions stay endable; see .._can_end_unowned_session below."""
     from app import recall_client
 
     _login(client, "alice@example.com")

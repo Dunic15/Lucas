@@ -376,7 +376,7 @@ def test_per_person_lists_stay_bounded():
 def test_readiness_derived_when_no_template(monkeypatch):
     """A generic (non-onboarding) transcript matches no process template, so the
     rigorous step-coverage readiness is undefined. The artifact must STILL carry
-    a real, defensible readiness_score (never a dead 0/"—" on the demo tile)."""
+    a real, defensible readiness_score (never a dead 0/"-" on the demo tile)."""
     import app.brain.engine as brain
 
     monkeypatch.setattr(brain, "effective_provider", lambda: "stub")
@@ -391,7 +391,7 @@ def test_readiness_derived_when_no_template(monkeypatch):
     assert artifact["meeting_type"] == ""        # no template matched
     score = artifact["readiness_score"]
     assert isinstance(score, int)
-    assert 0 < score <= 100                       # real value, never a dead "—"
+    assert 0 < score <= 100                       # real value, never a dead "-"
 
 
 def test_derived_readiness_weights():

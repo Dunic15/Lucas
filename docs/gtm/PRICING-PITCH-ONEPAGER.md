@@ -35,7 +35,7 @@ Asse di pricing: **per-seat, con monte-ore incluso pooled + overage a consumo**:
 
 | Tier | Prezzo | Incluso | Cosa aggiunge | Margine lordo |
 |---|---|---|---|---|
-| **Free** | $0 | 1 avatar, 90 min/mese, solo artifact | Acquisizione (costa ~$1,23/utente/mese → è **CAC**, non gratis-da-servire) | — |
+| **Free** | $0 | 1 avatar, 90 min/mese, solo artifact | Acquisizione (costa ~$1,23/utente/mese → è **CAC**, non gratis-da-servire) | - |
 | **Pro** | **$59/seat/mese** | 10 ore/mese pooled | Q&A live grounded + readiness score + flag step mancante + follow-up in bozza; overage $5/ora | **~86%** (costo ~$8,20 a 10h) |
 | **Business** | **$149/seat/mese** | 15 ore/mese pooled | Full Cedric action loop (Slack recap + approval card + email + follow-up con provenance), dashboard team, template library per vertical, latenza prioritaria; overage $4/ora; **+$25/seat photoreal opzionale** | **~92%** (costo ~$12,30 a 15h) |
 | **Enterprise** | **da $2.500–5.000/mese** (org, pooled) | monte-ore custom (~100h) | Tenancy dedicata (Postgres/RLS), SSO/SCIM, provenance audit-grade, SLA | **~92–96%** |

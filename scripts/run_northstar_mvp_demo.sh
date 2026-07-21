@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Northstar MVP — one-command, key-free acceptance run.
+# Northstar MVP; one-command, key-free acceptance run.
 #
 #   ./scripts/run_northstar_mvp_demo.sh
 #
@@ -8,7 +8,7 @@
 #      human live view, resetting it to the frozen seed;
 #   2. runs the deterministic end-to-end acceptance test TWICE (embedded
 #      Postgres, the in-process Northstar browser provider + fake visual
-#      planner + real product write) — proving demo-org setup, canonical
+#      planner + real product write); proving demo-org setup, canonical
 #      knowledge ingestion, ContextResolver citations + cross-org denial, the
 #      visual-only target, rejection = zero tasks, approval = exactly one
 #      task-0003 with a receipt + post-action verification, replay = no
@@ -36,7 +36,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "▸ Northstar MVP — key-free acceptance"
+echo "▸ Northstar MVP; key-free acceptance"
 echo "  python: $PY"
 
 # 1 · start the local synthetic product (for the human live view) + reset seed.
@@ -53,7 +53,7 @@ for _ in $(seq 1 40); do
   sleep 0.25
 done
 curl -fsS -X POST "http://127.0.0.1:${PRODUCT_PORT}/admin/reset" >/dev/null 2>&1 \
-  || echo "  (reset skipped — product not reachable; the e2e uses its own in-process store)"
+  || echo "  (reset skipped - product not reachable; the e2e uses its own in-process store)"
 
 # 2 · run the deterministic acceptance test TWICE from clean reset.
 echo "▸ running the deterministic MVP acceptance (embedded Postgres, key-free)"
@@ -68,11 +68,11 @@ echo "▸ local URLs"
 echo "    Northstar product : http://127.0.0.1:${PRODUCT_PORT}/"
 echo "    Acme account      : http://127.0.0.1:${PRODUCT_PORT}/customers/acme-robotics"
 echo "    Tasks             : http://127.0.0.1:${PRODUCT_PORT}/tasks"
-echo "    (dashboard: run the Laura backend separately — see docs/product/NORTHSTAR-MVP.md)"
+echo "    (dashboard: run the Laura backend separately; see docs/product/NORTHSTAR-MVP.md)"
 echo ""
 if [ "$RESULT" -eq 0 ]; then
-  echo "▸ RESULT: PASS — key-free MVP demo acceptance green (deterministic, one task)."
+  echo "▸ RESULT: PASS; key-free MVP demo acceptance green (deterministic, one task)."
 else
-  echo "▸ RESULT: FAIL — see the pytest output above."
+  echo "▸ RESULT: FAIL; see the pytest output above."
 fi
 exit "$RESULT"

@@ -198,7 +198,7 @@ class DittoEngine:
     async def talk_frames(self, audio_mp3: bytes, emotion: str | None = None):
         """Yield Ditto-generated JPEG frames for this audio clip. The emotion
         label (backend emotion.py) conditions Ditto's motion generator, so the
-        whole face leans into the line — see ditto_adapter.stream()."""
+        whole face leans into the line; see ditto_adapter.stream()."""
         async for frame in self.pipeline.stream(audio_mp3, fps=FPS,
                                                 jpeg_quality=JPEG_QUALITY,
                                                 emotion=emotion):

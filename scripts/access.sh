@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# access.sh — il "tasto" per vedere tutti gli accessi del progetto Laura da terminale.
+# access.sh; il "tasto" per vedere tutti gli accessi del progetto Laura da terminale.
 #
 #   ./scripts/access.sh              # mappa di tutti gli accessi (NOMI, non valori) + stato servizi
 #   ./scripts/access.sh --secrets    # mostra ANCHE i valori decrittati da SSM (attenzione: segreti a schermo)
@@ -41,7 +41,7 @@ SHOW_SECRETS=0
 [[ "${1:-}" == "--secrets" ]] && SHOW_SECRETS=1
 
 bold "🔑  ACCESSI PROGETTO LAURA   (region: $REGION)"
-dim  "$( [[ $SHOW_SECRETS == 1 ]] && echo 'MODE: valori decrittati visibili' || echo 'MODE: solo nomi — usa --secrets per i valori' )"
+dim  "$( [[ $SHOW_SECRETS == 1 ]] && echo 'MODE: valori decrittati visibili' || echo 'MODE: solo nomi; usa --secrets per i valori' )"
 
 # ── 1. File di config locali ──────────────────────────────────────────────────
 head_ "1. Config locali"

@@ -49,7 +49,7 @@ def _platform(meeting_url: str) -> str:
         return "Teams"
     if "webex" in url:
         return "Webex"
-    return "—" if not url else "Link"
+    return "-" if not url else "Link"
 
 
 def _action_entry(action) -> dict:
@@ -730,7 +730,7 @@ async def set_avatar_capability_endpoint(
     mutations: a logged-in owner + same-origin only (the brain-toggle door), so
     the key-free demo can't flip real behaviour. Keyed by the avatar_id string
     (no org, no ::uuid → org_id split-brain safe). Body: {capability, enabled}.
-    Takes effect at the next execute/deliver — no redeploy."""
+    Takes effect at the next execute/deliver; no redeploy."""
     user = auth.current_user(request)
     if user is None:
         if err := auth.gate(request):
@@ -970,7 +970,7 @@ async def connect_brain(request: Request) -> JSONResponse:
     """Connect an avatar to the orchestrator (Cedric, the brain): store the
     org→Slack-workspace wiring and provision it on Cedric's side when his
     /api/laura/orgs is configured. Body: {avatar_id, team_id, channel?}.
-    Requires a logged-in user (the org owner) — machine callers have no org."""
+    Requires a logged-in user (the org owner); machine callers have no org."""
     user = auth.current_user(request)
     if user is None:
         if err := auth.gate(request):
@@ -1278,12 +1278,12 @@ def _upcoming_platform(url: str) -> str:
         return "Zoom"
     if "teams." in u or "teams/" in u:
         return "Teams"
-    return "Other" if u else "—"
+    return "Other" if u else "-"
 
 
 def _native_event_start(ev: dict) -> str:
     """RFC3339/ISO start for a Google Calendar event. ``dateTime`` for a timed
-    event, ``date`` for an all-day one — or "" when neither is present."""
+    event, ``date`` for an all-day one; or "" when neither is present."""
     start = ev.get("start") or {}
     return str(start.get("dateTime") or start.get("date") or "")
 
@@ -2095,7 +2095,7 @@ def _find_org_action(caller_org: str, action_id: str) -> tuple[dict, str] | None
 def _executor_action(typed: dict | None) -> dict | None:
     """Bridge a producer typed spec ``{type, args}`` to the executor's action
     shape (``{type, event|message|task}``). None for a missing/non-native spec
-    — the signal to approve-without-executing (Cedric/manual keeps the
+    , the signal to approve-without-executing (Cedric/manual keeps the
     action). Delegates to executor.from_typed so this door and the finalize
     auto-push can never disagree about the bridge."""
     return executor.from_typed(typed)

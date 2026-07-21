@@ -96,7 +96,7 @@ def _org_token_bearer_org(request: Request) -> Optional[str]:
     control-plane paths, never the live hot path. SYNC (SQLite + optionally
     the Postgres control plane): async handlers must call it via
     run_in_threadpool so it never blocks the shared event loop (single
-    instance — a blocked loop stalls every live meeting)."""
+    instance; a blocked loop stalls every live meeting)."""
     provided = request.headers.get("authorization", "")
     if not provided.startswith("Bearer "):
         return None

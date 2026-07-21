@@ -97,7 +97,7 @@ def provider_signature() -> str:
 def warmup() -> None:
     """Resolve local-model availability NOW (bounded by fastembed's own retry
     budget, ~3min worst case) so boot decides hash-vs-local BEFORE any index
-    signature is read — and the live meeting path never pays the download."""
+    signature is read; and the live meeting path never pays the download."""
     try:
         embed(["warmup"])
     except Exception:  # noqa: BLE001; a warmup must never block boot

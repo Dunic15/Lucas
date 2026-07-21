@@ -97,7 +97,7 @@ def test_init_db_migrates_pre_action_id_ledger():
 
 def test_resolve_outcomes_terminal_and_detail():
     """rejected/failed close an item exactly like done; terminal, never
-    reopenable — and the distilled detail lands in resolution_detail."""
+    reopenable; and the distilled detail lands in resolution_detail."""
     url = "https://meet.google.com/out-comes-ts1"
     ledger.record_meeting(
         url, "laura", "bot-1",

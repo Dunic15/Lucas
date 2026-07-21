@@ -90,7 +90,7 @@ def test_avatar_alias_organizer_never_attributes(monkeypatch):
 def test_registered_guest_never_attributes_someone_elses_meeting(monkeypatch):
     """The cross-tenant case: an EXTERNAL prospect's meeting invites a
     registered user of org X as a guest. Org X must NOT be billed or have its
-    tools armed — unknown organizer means Demo fallback, full stop."""
+    tools armed; unknown organizer means Demo fallback, full stop."""
     def _resolve(addr):
         return ACME_ORG if addr == "guest@acme.com" else None
 

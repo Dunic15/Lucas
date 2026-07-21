@@ -47,7 +47,7 @@ Ora si lavora **in due**. Split del lavoro per **layer** (vedi
 | **L3 · Connettori / one-click (distrib.)** | **Persona B (codice)** | `dashboard.py` (CALDO), `config.py`, `cedric/` | ❌ solo branch/draft, no App Runner |
 | **L1 · Realismo + multi-persona** | ripartibile (live-path) | `main.py`, `decision.py`, `meeting_state.py` | review attenta, no deploy in parallelo al flip |
 | **Gemini (brain) + deploy** | Owner / sessione Gemini | `brain.py`, `llm.py`, env | ✅ **possiede App Runner** |
-| Slack URL / calendar-connect | Ben | app Slack Cedric / Vercel |; gate esterni |
+| Slack URL / calendar-connect | Ben | app Slack Cedric / Vercel | - gate esterni |
 
 **⚠️ Hot-file `dashboard.py`:** lo toccano già #204/#177/#166/#153 + la Connections (L3). Chi fa
 Connections lo **possiede** per quella finestra → **branch corto, mergiare presto**, rebase su

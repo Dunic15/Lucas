@@ -541,7 +541,7 @@ def test_runtime_cannot_backdate_resolved_at_to_fast_purge(cp, pg):
 
 def test_purge_versions_keeps_max_even_if_head_nulled(cp, pg):
     """MEDIUM: NULLing current_version_id cannot make the live (max) version
-    purgeable — the predicate is structural (never the max version_no)."""
+    purgeable; the predicate is structural (never the max version_no)."""
     org = _org(cp, "headnull")
     connector = _connector(org)
     dal.commit_batch(org, connector["id"], [_env("v", body="one")],

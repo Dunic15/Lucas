@@ -124,7 +124,7 @@ entrambe finché un design partner sceglie per noi. **No nicchia compliance** (1
 | **L3 · Connettori / one-click (distrib.)** | **Persona B (codice)** | ❌ solo branch/draft, no App Runner | `dashboard.py` file caldo → branch corto, mergiare presto |
 | **L1 · Realismo + multi-persona** | ripartibile (live-path) | review attenta, no deploy in parallelo al flip | tocca `main.py`/`decision.py`: coordinare |
 | **Gemini (brain) + deploy** | **Owner / sessione Gemini** | ✅ possiede App Runner | #204 → poi flip executor |
-| **Slack Interactivity / calendar-connect** | **Ben** | — | gate esterni |
+| **Slack Interactivity / calendar-connect** | **Ben** | - | gate esterni |
 
 **Regola d'oro:** UNA sola persona possiede i deploy App Runner (serializzano). Pre-merge/deploy:
 `aws apprunner list-operations` + `gh pr list` + `/health → active_sessions==0`.

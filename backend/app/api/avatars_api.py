@@ -12,7 +12,7 @@ router = APIRouter()
 def list_avatars(request: Request) -> dict:
     """List installed avatars (one folder each under avatars/). A logged-in
     user sees only their org's granted avatars; the anonymous/demo caller sees
-    ALL — the key-free demo picker is unchanged."""
+    ALL; the key-free demo picker is unchanged."""
     user = auth.current_user(request)
     roster = (
         avatars.list_for_org(user["org_id"]) if user else avatars.list_ids()

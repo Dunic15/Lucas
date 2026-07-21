@@ -771,7 +771,7 @@ def _mint_browser_action(org_id, row, projection, fingerprint,
                          element_id="", *, extra_permission=None,
                          typed_override=None) -> str:
     """Create a canonical queued action, route='browser', carrying the safe
-    param projection and the approval binding — reusing the M0 plane."""
+    param projection and the approval binding; reusing the M0 plane."""
     from .. import ledger
 
     action_id = ledger.new_action_id()

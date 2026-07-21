@@ -134,7 +134,7 @@ async def _tts_elevenlabs(text: str, el_voice: str = "") -> dict | None:
     Voice fallback chain: configured voice -> stock ElevenLabs voice -> None
     (edge-tts). A custom voice blocked by the account's plan (402) or licensing
     must degrade to the STOCK ElevenLabs voice; same engine, real word timings
-    — not all the way down to robotic edge-tts.
+    , not all the way down to robotic edge-tts.
     """
     if not settings.elevenlabs_api_key:
         return None

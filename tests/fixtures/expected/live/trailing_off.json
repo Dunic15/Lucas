@@ -29,7 +29,7 @@
       "control_intent": {"expected": "none"},
       "emotional_appropriateness": {"label": "neutral", "talk_mood": "neutral", "ditto_emo": 4},
       "intervention_timing": {"expected": "silent"},
-      "xfail": {"floor_holding": "deferred to smart-turn v2 audio model (see end_of_turn.py v2 note) — text heuristic cannot safely detect mid-word truncation"}
+      "xfail": {"floor_holding": "deferred to smart-turn v2 audio model (see end_of_turn.py v2 note); text heuristic cannot safely detect mid-word truncation"}
     },
     {
       "id": "t4", "speaker": "Sela Noor",

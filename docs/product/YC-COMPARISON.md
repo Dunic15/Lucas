@@ -91,17 +91,17 @@ Laura building (flag-off) ·: = does not / not applicable / not claimed · ? = u
 
 | Company (YC) | What it is | Join | Ground | Sched | Email | CRM/ATS | Flag-live | Face | $/min posture |
 |---|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|---|
-| **Alex** (W24) | Live AI interviewer, own video surface; $17M | — |, | ? | ✓ | ✓ | — | ◐ | not disclosed |
-| **Lightscreen AI** (F24) | Live AI interviewer, own surface | — |, | ? | ? | ? | — | ◐ | not disclosed |
-| **Peoplebox Nova** (S22) | Pre-screen interviewer on a talent-mgmt platform | — |. | ? | ? | ◐ own-platform | — | ◐ | SaaS seat |
-| **Juicebox / PeopleGPT** (S22) | AI sourcing, 3,000+ clients, ~$10M ARR, Sequoia $30M | — |, | — | ◐ outreach | ◐ | — |, | SaaS seat |
-| **Spott** (W25) | AI-native ATS/CRM for staffing firms; $3.2M | — |, | ◐ | — | ✓ (is the ATS) | — |, | SaaS seat |
-| **Contrario** (W25) | Recruiter network + vertical AI agents; ~$6M | — |, | ? | ◐ | ◐ | — |, | SaaS seat |
-| **Serra** (S23) | Automated sourcing + outreach | — |, | — | ◐ outreach | ◐ | — |, | SaaS seat |
-| **Perfectly** (W26) | AI-native "Recruiting OS" | — |, | ◐ | ◐ | ✓ (is the OS) | — |. | SaaS seat |
-| **Circleback** (W24) | Post-meeting auto-execution (Linear/CRM/Slack) | ◐ silent notetaker |, post-mtg | ◐ | ✓ | ✓ |, post-mtg | — | SaaS seat |
-| **Keyframe Labs** (Spr'26) | Photoreal avatar SDK ("few lines of embed") | — |, | — |, |. (action layer left open) | — | ✓✓ | **$0.06/min** |
-| **Caretta** (refuted) | *Claimed* "joins reps in live calls", **failed verify 0-3** | ✗ unverified | — |, | — |, | — |, | n/a |
+| **Alex** (W24) | Live AI interviewer - own video surface; $17M | - | - | ? | ✓ | ✓ | - | ◐ | not disclosed |
+| **Lightscreen AI** (F24) | Live AI interviewer - own surface | - | - | ? | ? | ? | - | ◐ | not disclosed |
+| **Peoplebox Nova** (S22) | Pre-screen interviewer on a talent-mgmt platform | - | - | ? | ? | ◐ own-platform | - | ◐ | SaaS seat |
+| **Juicebox / PeopleGPT** (S22) | AI sourcing - 3,000+ clients, ~$10M ARR, Sequoia $30M | - | - | - | ◐ outreach | ◐ | - | - | SaaS seat |
+| **Spott** (W25) | AI-native ATS/CRM for staffing firms; $3.2M | - | - | ◐ | - | ✓ (is the ATS) | - | - | SaaS seat |
+| **Contrario** (W25) | Recruiter network + vertical AI agents; ~$6M | - | - | ? | ◐ | ◐ | - | - | SaaS seat |
+| **Serra** (S23) | Automated sourcing + outreach | - | - | - | ◐ outreach | ◐ | - | - | SaaS seat |
+| **Perfectly** (W26) | AI-native "Recruiting OS" | - | - | ◐ | ◐ | ✓ (is the OS) | - | - | SaaS seat |
+| **Circleback** (W24) | Post-meeting auto-execution (Linear/CRM/Slack) | ◐ silent notetaker | - post-mtg | ◐ | ✓ | ✓ | - post-mtg | - | SaaS seat |
+| **Keyframe Labs** (Spr'26) | Photoreal avatar SDK ("few lines of embed") | - | - | - | - | - (action layer left open) | - | ✓✓ | **$0.06/min** |
+| **Caretta** (refuted) | *Claimed* "joins reps in live calls" - **failed verify 0-3** | ✗ unverified | - | - | - | - | - | - | n/a |
 | **▶ Laura** | Avatar live IN the client's meeting + executes | **✓** | **✓** | ◐ building | ✓ draft / ◐ auto-send | ◐ Cal+Gmail now, CRM/ATS = vertical roadmap | **✓** | ✓ | **~$0.40 / 30-min (~$0.013/min all-in)** |
 
 **How to read the rows (the whitespace, made explicit):**

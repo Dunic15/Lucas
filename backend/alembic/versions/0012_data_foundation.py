@@ -19,7 +19,7 @@ clarifications. Highlights:
   batch.
 - ``df_quarantine`` open rows are UNDELETABLE by the runtime: laura_app gets
   no DELETE grant; the only purge path is ``laura_private.purge_quarantine``
-  — SECURITY DEFINER, fixed search_path, PUBLIC revoked, org VERIFIED against
+  - SECURITY DEFINER, fixed search_path, PUBLIC revoked, org VERIFIED against
   the trusted transaction context (the argument cannot authorize cross-org
   deletion), retention cutoff CLAMPED server-side from the org's policy (a
   future cutoff cannot delete young rows), fixed state predicates

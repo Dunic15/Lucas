@@ -66,7 +66,7 @@ def _login(client, email, name="Test User") -> dict:
 
 def test_control_plane_disabled_is_total_noop():
     """The key-free contract: with an empty URL nothing runs, nothing connects
-    — every public function returns None (and no engine is ever created)."""
+    , every public function returns None (and no engine is ever created)."""
     assert settings.laura_database_url == ""  # pinned by _keyfree_settings
     control_plane.reset_engine()
     assert control_plane.enabled() is False
@@ -272,7 +272,7 @@ def test_internal_guard_is_config_driven(client, monkeypatch):
 
 def test_dashboard_hides_demo_org_rows_from_logged_in_user(client, google_on):
     """A logged-in user's dashboard shows their org + legacy unowned ('') rows
-    — never the Demo org's (each anonymous visitor's showroom meetings would
+    , never the Demo org's (each anonymous visitor's showroom meetings would
     otherwise appear in every real signup's dashboard)."""
     alice = _login(client, "alice@example.com")
     store.save_artifact(
@@ -381,7 +381,7 @@ def test_cutover_restamps_personal_rows_to_durable_org(client, monkeypatch):
 def test_cutover_never_restamps_shared_org_rows(client, monkeypatch):
     """The re-stamp fires ONLY when the previous org was the user's own
     personal u_<hash> org. Rows of a SHARED (verified-domain) org belong to
-    the org, not the person — a member's cutover must not drag them along."""
+    the org, not the person; a member's cutover must not drag them along."""
     import uuid as _uuid
 
     # Shared orgs only exist under the parked flag now (personal-first default,

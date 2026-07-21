@@ -475,7 +475,7 @@ async def jira_oauth_callback(
 ):
     """Finish Jira OAuth: verify state, exchange the code, store the grant
     (encrypted per-org, provider="jira-oauth"; cloud id in scopes), land back on
-    Connections. Any failure lands with ?jira=error — no half-connected state."""
+    Connections. Any failure lands with ?jira=error; no half-connected state."""
     def _land(result: str):
         resp = RedirectResponse(f"/dashboard?jira={result}", status_code=302)
         resp.delete_cookie(JIRA_STATE_COOKIE, path="/oauth")
