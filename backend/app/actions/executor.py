@@ -96,24 +96,33 @@ def capability_blocked(caps: dict | None, action_type: str | None) -> bool:
 def route_for_typed(typed: dict | None, org_id: str = "") -> str:
     """Per-family execution route for one typed action (immutable once stamped).
 
-    Pipedream owns Asana + Gmail + Calendar + the long tail when its Connect-
-    Proxy executor is on; Slack stays on Cedric; anything Laura can't map at all
-    goes to Cedric. The Gmail/Calendar/Drive types ALSO have a native adapter,
-    so during the cutover they route to Pipedream only once the org has actually
-    connected that Google app there (``org_id`` required for that probe) and
-    fall back to the native token path until then — no dead window. Asana + the
-    long tail have no native fallback intended, so they route to Pipedream
-    unconditionally once handled. With PIPEDREAM_EXECUTOR off,
-    ``pipedream_executor.handles`` is False so everything stamps as before."""
+    Per-org, connection-aware (multi-tenant safe). When Pipedream's executor is
+    on, a type it can map runs in Pipedream ONLY IF this org connected that app
+    there. Otherwise it falls back to a native adapter when the type has one
+    (Asana / Gmail / Calendar / Slack all do) — so an org still on native, or a
+    brand-new external user who hasn't migrated to Pipedream yet, is NEVER
+    broken (this is the Ananth incident 2026-07-21: his native Asana worked but
+    the old unconditional Pipedream route failed his tasks with 'asana isn't
+    connected in Pipedream'). Types with NO native plane (the Notion/GitHub/…
+    long tail) stay on Pipedream and fail cleanly when unconnected rather than
+    silently mis-routing. ``org_id`` is required for the connection probe. With
+    PIPEDREAM_EXECUTOR off, ``handles`` is False so everything stamps as
+    before."""
     from .. import pipedream_executor  # lazy: keep module load order decoupled
 
     action_type = str((typed or {}).get("type") or "").strip()
     if pipedream_executor.handles({"type": action_type}):
-        if pipedream_executor.is_google_type(action_type):
-            # Cutover-safe: Pipedream only when connected there, else native.
-            if pipedream_executor.app_connected(org_id, pipedream_executor.app_for_type(action_type)):
-                return "pipedream"
+        # Run in Pipedream when the org actually connected the app there.
+        if pipedream_executor.app_connected(
+            org_id, pipedream_executor.app_for_type(action_type)
+        ):
+            return "pipedream"
+        # Not connected in Pipedream — prefer a native adapter if one exists,
+        # so native-era orgs and un-migrated external users keep working.
+        if native_runtime.supports(action_type):
             return "native" if enabled() else "cedric"
+        # Long tail with no native plane: stays Pipedream (fails cleanly if the
+        # org hasn't connected it — never a silent wrong route).
         return "pipedream"
     if from_typed(typed) is None:
         return "cedric"

@@ -70,29 +70,32 @@ def test_route_off_keeps_asana_native(monkeypatch):
     assert executor.route_for_typed({"type": "asana.create_task", "args": {"name": "x"}}) == "native"
 
 
-def test_route_on_sends_asana_to_pipedream_google_falls_back_until_connected(monkeypatch):
+def test_route_falls_back_to_native_until_connected_in_pipedream(monkeypatch):
     _enable_pd(monkeypatch)
-    assert executor.route_for_typed({"type": "asana.create_task", "args": {"name": "x"}}) == "pipedream"
-    assert executor.route_for_typed({"type": "asana.update_task", "args": {"task": "1", "name": "y"}}) == "pipedream"
-    # Google types are OWNED by Pipedream now, but during the cutover they route
-    # to Pipedream only once the org has connected that Google app there. With no
-    # org (and nothing connected) they fall back to the native token path.
+    # Connection-aware + multi-tenant safe: with nothing connected in Pipedream
+    # (no org), every type that HAS a native adapter falls back to native — so a
+    # native-era org / un-migrated external user is never broken (Ananth fix).
+    assert executor.route_for_typed({"type": "asana.create_task", "args": {"name": "x"}}) == "native"
+    assert executor.route_for_typed({"type": "asana.update_task", "args": {"task": "1", "name": "y"}}) == "native"
     assert executor.route_for_typed({"type": "calendar.create_event", "args": {}}) == "native"
     assert executor.route_for_typed({"type": "email.send", "args": {}}) == "native"
-    # Slack stays native (Cedric owns the app).
     assert executor.route_for_typed({"type": "slack.post_message", "args": {"text": "hi"}}) == "native"
     # Untyped / non-native → Cedric.
     assert executor.route_for_typed(None) == "cedric"
     assert executor.route_for_typed({"type": "weird.unknown"}) == "cedric"
 
 
-def test_route_google_to_pipedream_once_connected_there(monkeypatch):
+def test_route_to_pipedream_once_connected_there(monkeypatch):
     _enable_pd(monkeypatch)
-    # Org has connected Gmail + Calendar in Pipedream → those actions route there.
+    # Org connected Gmail + Calendar + Asana in Pipedream → those route there;
+    # a type NOT connected in Pipedream still falls back to native.
     monkeypatch.setattr(pipedream_executor, "app_connected",
-                        lambda org, app: org == "org7" and app in {"gmail", "google_calendar"})
+                        lambda org, app: org == "org7" and app in {"gmail", "google_calendar", "asana"})
     assert executor.route_for_typed({"type": "email.send", "args": {}}, "org7") == "pipedream"
     assert executor.route_for_typed({"type": "calendar.create_event", "args": {}}, "org7") == "pipedream"
+    assert executor.route_for_typed({"type": "asana.create_task", "args": {"name": "x"}}, "org7") == "pipedream"
+    # Different org (nothing connected in Pipedream) → native fallback, not a failure.
+    assert executor.route_for_typed({"type": "asana.create_task", "args": {"name": "x"}}, "orgX") == "native"
     # A different org (nothing connected) still falls back to native.
     assert executor.route_for_typed({"type": "email.send", "args": {}}, "orgX") == "native"
 
