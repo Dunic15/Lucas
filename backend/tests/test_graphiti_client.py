@@ -82,7 +82,11 @@ def test_enabled_needs_flag_and_uri(monkeypatch):
 def test_group_id_is_per_org():
     a = graphiti_client._group_id("org_a")
     b = graphiti_client._group_id("org_b")
-    assert a != b and a.startswith("org:")
+    assert a != b and a.startswith("org_")
+    # graphiti-core validates group ids: alnum/_/- only. The old "org:" colon
+    # prefix raised GroupIdValidationError on every call (live 2026-07-21).
+    uuid_gid = graphiti_client._group_id("bf4a683b-11b0-4349-8201-45d1d4573912")
+    assert ":" not in uuid_gid and uuid_gid == "org_bf4a683b-11b0-4349-8201-45d1d4573912"
 
 
 # ───────────────────────── ingest ─────────────────────────

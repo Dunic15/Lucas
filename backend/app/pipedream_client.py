@@ -136,7 +136,21 @@ def _request(method: str, path: str, *, json_body: Optional[dict] = None,
         except Exception as exc:  # noqa: BLE001
             raise PipedreamError(f"{method} {path} retry failed") from exc
     if resp.status_code >= 400:
-        raise PipedreamError(f"{method} {path} http {resp.status_code}")
+        # Carry the DISTILLED server error (never credentials — PD error
+        # bodies are plain strings) so callers can tell a plan gate from an
+        # outage: "Tool calling … not available on your current plan" is an
+        # account state, not a bug (live 2026-07-21).
+        detail = ""
+        try:
+            detail = str((resp.json() or {}).get("error") or "")[:140]
+        except Exception:  # noqa: BLE001
+            detail = ""
+        if "current plan" in detail.lower():
+            _mark_plan_gated()
+        raise PipedreamError(
+            f"{method} {path} http {resp.status_code}"
+            + (f" — {detail}" if detail else "")
+        )
     try:
         return resp.json() or {}
     except Exception:  # noqa: BLE001
@@ -340,6 +354,23 @@ _actions_lock = threading.Lock()
 _actions_cache: dict[str, list] = {}  # slug -> [{key, name}]
 
 
+# Pipedream gates pre-built actions/components ("tool calling") behind a plan
+# tier that is SEPARATE from Connect accounts + proxy: connections and the
+# typed proxy executors keep working while this is True. Sticky per process —
+# flips on the first plan-gate error so the UI can say the honest thing
+# instead of "no actions listed" (live 2026-07-21).
+_PLAN_GATED = False
+
+
+def _mark_plan_gated() -> None:
+    global _PLAN_GATED
+    _PLAN_GATED = True
+
+
+def plan_gated() -> bool:
+    return _PLAN_GATED
+
+
 def list_actions(app_slug: str, *, limit: int = 25) -> list[dict]:
     """Pipedream's pre-built ACTIONS (components) for one app — the catalog of
     things this tool can do: [{key, name}]. Cached per process. Best effort:
@@ -367,6 +398,17 @@ def list_actions(app_slug: str, *, limit: int = 25) -> list[dict]:
                 if not key:
                     continue
                 out.append({"key": str(key), "name": str(c.get("name") or key)})
+        else:
+            # An empty catalog and a plan-gated catalog must not look the
+            # same to the UI (they did — every connected app showed "no
+            # pre-built actions" while the API was answering "not available
+            # on your current plan").
+            try:
+                err = str((resp.json() or {}).get("error") or "")
+            except Exception:  # noqa: BLE001
+                err = ""
+            if "current plan" in err.lower():
+                _mark_plan_gated()
     except PipedreamError:
         out = []
     with _actions_lock:

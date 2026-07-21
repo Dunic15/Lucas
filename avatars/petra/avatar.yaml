@@ -55,10 +55,12 @@ elevenlabs_voice_id: "21m00Tcm4TlvDq8ikWAM"
 require_wake_word: true
 
 # When-to-speak tuning. Leave blank to use the global .env defaults.
-# Petra runs a LONGER cooldown than the global 8s: a PM avatar that
-# interjects often reads as micromanagement — she waits out the room.
+# Cooldown history: 15s made her a wall in 1:1 testing (2026-07-21 — rapid
+# follow-ups inside the window read as "she stopped responding"). 5s keeps
+# a 1:1 conversational; in groups the wake-word requirement + deference
+# already stop her from reading as micromanagement.
 min_confidence:
-speak_cooldown_seconds: 15
+speak_cooldown_seconds: 5
 
 # Knowledge lives in:  avatars/petra/knowledge/*.md  (original PM reference
 # docs — drop your own methodology/process docs in and re-run ingest).

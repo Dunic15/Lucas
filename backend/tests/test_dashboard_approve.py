@@ -167,15 +167,49 @@ def test_flag_on_executes_typed_email_and_writes_receipt(client, monkeypatch):
     assert st["status"] == "done" and "m-123" in st["detail"]
 
 
-def test_flag_on_untyped_action_routes_to_cedric_then_fails_without_receiver(
+def test_flag_on_untyped_action_gets_retyped_on_approve_and_executes(
     client, monkeypatch
 ):
-    """Flag on but the action is untyped -> native can't run it, so it routes
-    to Cedric; with no Cedric here that's an honest dead end (failed), never a
-    native google call."""
+    """Approve-time rescue (live 2026-07-21, action e974c47c): an action that
+    reached approval untyped — fast click before finalize, or typing raced a
+    deploy — is re-typed by the SAME type_actions pass at the approve door.
+    'Email the recap to marco@acme.com' types to email.send; the stub-typed
+    spec lacks subject/body, so the flow lands on the needs_details edit
+    affordance (422 + the exact missing fields) instead of the old doomed
+    cedric route ('couldn't complete — nothing ran')."""
     monkeypatch.setattr(settings, "native_executor", True)
     user = _login(client)
-    _seed_action(user["org_id"], "a1", typed=None)  # no typed spec
+    _seed_action(user["org_id"], "a1", typed=None)  # no typed spec yet
+    calls: list = []
+    _mock_send(monkeypatch, {"ok": True, "message_id": "m1"}, calls)
+
+    r = client.post("/dashboard/actions/a1/approve")
+    assert r.status_code == 422  # rescued into the edit flow, not doomed
+    body = r.json()
+    assert body["error"] == "needs_details" and body["missing_params"]
+    assert not calls  # nothing executed until the human fills the gaps
+    st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
+    assert st["status"] == "needs_details"  # never 'failed', never cedric
+
+
+def test_flag_on_untypeable_action_still_fails_honestly_without_receiver(
+    client, monkeypatch
+):
+    """Flag on, the action can't be typed even at the approve door (no mappable
+    intent) -> routes to Cedric; with no Cedric here that's an honest dead end
+    (failed), never a native google call."""
+    monkeypatch.setattr(settings, "native_executor", True)
+    user = _login(client)
+    action = {"item": "Sort out the vendor situation", "owner": "Ben",
+              "action_id": "a1"}
+    store.save_artifact(
+        "bot_a1",
+        {"summary": "Kickoff.", "actions": [action], "checklist": [action],
+         "org_id": user["org_id"], "avatar_id": "laura",
+         "meeting_url": "https://meet.google.com/appr-test",
+         "transcript": "PII must never leak"},
+        org_id=user["org_id"],
+    )
     calls: list = []
     _mock_send(monkeypatch, {"ok": True, "message_id": "m1"}, calls)
 

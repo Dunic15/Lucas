@@ -2643,7 +2643,7 @@
     var paramsTxt=Object.keys(params).map(function(k){
       var v=params[k]; return esc(k.replace(/_/g," "))+": "+esc(Array.isArray(v)?v.join(", "):String(v)); }).join("<br/>");
     row("What it will do",esc(act.action||""));
-    if(act.origin_avatar) row("Requested by",esc(avNameOf(act.origin_avatar)));
+    if(act.origin_avatar) row("Captured by",esc(avNameOf(act.origin_avatar)));
     var srcBot=act.source&&act.source.bot_id;
     if(srcBot){
       var srcM=((DATA&&DATA.meetings)||[]).filter(function(m){return m.bot_id===srcBot;})[0];
@@ -3377,7 +3377,12 @@
           .then(function(j){
             var acts=(j&&j.actions)||[];
             b.textContent='What can I do? ▴'; out.setAttribute('data-loaded','1');
-            if(!acts.length){ out.innerHTML='<span style="color:var(--faint)">No pre-built actions listed for this app — I can still read it and, with a skill, act on it.</span>'; return; }
+            if(!acts.length){
+              out.innerHTML = (j&&j.plan_gated)
+                ? '<span style="color:var(--faint)">Pre-built actions need Pipedream’s tool-calling tier (this account’s plan covers connections + proxy execution — core Asana, Gmail &amp; Calendar actions work regardless).</span>'
+                : '<span style="color:var(--faint)">No pre-built actions listed for this app — I can still read it and, with a skill, act on it.</span>';
+              return;
+            }
             out.innerHTML='<div style="margin-bottom:4px;color:var(--faint)">Pipedream actions available for '+esc(app)+' (top '+Math.min(acts.length,8)+' of '+acts.length+'):</div>'+acts.slice(0,8).map(function(a){ return '• '+esc(a.name); }).join('<br>');
           })
           .catch(function(){ out.textContent='Could not load actions.'; b.textContent='What can I do? ▾'; out.style.display='none'; });

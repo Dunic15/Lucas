@@ -2035,16 +2035,23 @@ def _llm_type_actions(
         suffix = (f" (owner: {owner})" if owner and owner.upper() != "UNASSIGNED" else "")
         suffix += f" (deadline: {deadline})" if deadline else ""
         lines.append(f"[{i}] {str(a.get('item') or '')}{suffix}")
-    # Per-integration skill (lazy): a markdown playbook for the app, appended
-    # ONLY when this meeting may use it — zero cost for every other meeting.
-    # See app/integration_skills.py; today only Asana ships one.
+    # Per-integration skills (lazy): a markdown playbook per app, appended to
+    # the typing prompt. Asana only when this avatar may use it; the Google
+    # family (gmail + calendar are baseline for every avatar) always — this
+    # is the post-meeting path, files are mtime-cached and size-capped, and
+    # a missing file costs one stat(). See app/integration_skills.py.
+    from .. import integration_skills
+
     _asana_skill = ""
     if allow_asana:
-        from .. import integration_skills
-
         body = integration_skills.skill_for("asana")
         if body:
             _asana_skill = f"\n\nIntegration guidance (asana):\n{body}"
+    _google_skills = ""
+    for _gslug in ("gmail", "google_calendar"):
+        _gbody = integration_skills.skill_for(_gslug)
+        if _gbody:
+            _google_skills += f"\n\nIntegration guidance ({_gslug}):\n{_gbody}"
     # Per-app integration skills for the offered Pipedream apps (lazy, tiny).
     _pd_skills = ""
     for _slug in (pd_apps or {}):
@@ -2058,6 +2065,7 @@ def _llm_type_actions(
         + (TYPED_ACTION_ASANA if allow_asana else "")
         + _pd_typed_prompt(pd_apps)
         + _asana_skill
+        + _google_skills
         + _pd_skills,
         (
             f"TODAY: {_time.strftime('%Y-%m-%d')}\n\n"
