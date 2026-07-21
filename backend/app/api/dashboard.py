@@ -472,8 +472,13 @@ def dashboard_summary(request: Request) -> JSONResponse:
     google_connected = bool(store.get_org_oauth(_native_google_org))
     slack_connected = _org_connected(org_rows, "cedric-brain")
     # asana = the org's stored PAT (provider="asana") or the ASANA_TOKEN env
-    # fallback — the same signal the executor/join-snapshot eligibility reads.
-    asana_connected = asana_client.connected(_native_google_org)
+    # fallback, OR a Pipedream-brokered Asana connection — the same
+    # native-or-Pipedream signal the executor/join-snapshot eligibility reads,
+    # so a Pipedream-only org shows Connected instead of a misleading Connect.
+    asana_connected = bool(
+        asana_client.connected(_native_google_org)
+        or pipedream_executor.app_connected(_native_google_org, "asana")
+    )
     all_caps = store.all_avatar_capabilities()  # {avatar_id: {cap: bool}} — one read
     # Per-org roster: a scoped caller (cookie user or per-org bearer) sees only
     # their org's granted avatars (org_agents); the unscoped worlds see ALL —
