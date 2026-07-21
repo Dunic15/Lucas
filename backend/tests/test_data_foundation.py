@@ -1,4 +1,4 @@
-"""Data Foundation (DF0-DF1) key-free half — accepted contract v5.
+"""Data Foundation (DF0-DF1) key-free half; accepted contract v5.
 
 Flag-off inertness (every route 404s, enabled() False), the SourceEnvelope
 validator's fail-closed rules, and the network-free fake Drive connector's
@@ -41,7 +41,7 @@ def test_flag_alone_is_not_enough_without_control_plane(monkeypatch):
 
 
 def test_envelope_validation_fail_closed():
-    # Missing acl_mode NEVER means org_default — it normalizes to unknown.
+    # Missing acl_mode NEVER means org_default; it normalizes to unknown.
     clean, errors = validate_envelope({
         "external_id": "x1", "kind": "document", "title": "t",
         "deleted": False, "checksum": "c",
@@ -107,7 +107,7 @@ def test_fake_gdrive_full_sync_speaks_changes_tokens():
     assert by_id["f-open"]["acl_mode"] == "org_default"
     assert by_id["f-priv"]["acl_mode"] == "mirrored"
     assert by_id["f-priv"]["acl"][0]["principal_external_id"] == "alice@x.co"
-    # Unreadable permissions are UNKNOWN — fail-closed, never org_default.
+    # Unreadable permissions are UNKNOWN; fail-closed, never org_default.
     assert by_id["f-hidden"]["acl_mode"] == "unknown"
     assert by_id["f-open"]["checksum"] == body_checksum("open body")
     assert batch.identities and batch.identities[0]["email_verified"] is True

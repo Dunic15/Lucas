@@ -1,6 +1,6 @@
 """Pure, offline tests for the find-a-time scheduler core: duration parsing,
 constraint interpretation, slot ranking, and the finalize enrich pass (with
-free/busy mocked). No network, no flag — these exercise the producer functions
+free/busy mocked). No network, no flag; these exercise the producer functions
 directly."""
 from __future__ import annotations
 

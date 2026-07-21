@@ -1,4 +1,4 @@
-"""Two-org isolation on the REAL control plane — embedded Postgres (PR A).
+"""Two-org isolation on the REAL control plane; embedded Postgres (PR A).
 
 Boots an embedded Postgres (pgserver), runs the full Alembic chain through
 0004 with an ADMIN URL, then points the runtime DAL at a distinct
@@ -18,7 +18,7 @@ Boots an embedded Postgres (pgserver), runs the full Alembic chain through
 Skipped when pgserver isn't installed (CI installs it; the key-free suite is
 otherwise untouched). Embedded Postgres ships without contrib extensions, so
 the fixture writes tiny SHIM control files for pgcrypto (gen_random_uuid() is
-core since PG13 — the shim creates nothing) and citext (a text domain — case
+core since PG13, the shim creates nothing) and citext (a text domain, case
 folding is done app-side; nothing here relies on citext collation). Supabase
 has the real extensions; the shims exist only so 0001 runs VERBATIM here.
 """
@@ -84,7 +84,7 @@ def pg(tmp_path_factory):
     srv = pgserver.get_server(str(tmp_path_factory.mktemp("cp_pg")))
     uri = srv.get_uri()
     with psycopg.connect(uri, autocommit=True) as conn:
-        # 0001 REVOKEs on audit_log FROM laura_app — the role must pre-exist,
+        # 0001 REVOKEs on audit_log FROM laura_app; the role must pre-exist,
         # exactly as it must on Supabase before running migrations.
         conn.execute(
             f"CREATE ROLE {APP_ROLE} LOGIN PASSWORD '{APP_ROLE_PASSWORD}' "
@@ -240,7 +240,7 @@ def test_signup_is_idempotent(cp):
     assert again["created"] is False
     assert again["user_id"] == first["user_id"]
     assert again["org_id"] == first["org_id"]
-    # email-only lookup (no sub — pre-OIDC caller) lands on the same identity
+    # email-only lookup (no sub; pre-OIDC caller) lands on the same identity
     by_email = cp.ensure_user("", "alice@freemail.test", "Alice", "")
     assert by_email["user_id"] == first["user_id"]
     assert by_email["org_id"] == first["org_id"]
@@ -249,9 +249,9 @@ def test_signup_is_idempotent(cp):
 def test_concurrent_same_sub_signup_single_identity(cp, pg):
     """Adversarial-review blocker 1 (2026-07-13): concurrent same-sub signups
     used to lose on uq_users_google_sub (the INSERT named only the email
-    arbiter) and raise IntegrityError — the losing login silently fell back
+    arbiter) and raise IntegrityError; the losing login silently fell back
     to the legacy u_<hash> org. With the arbiter-less ON CONFLICT DO NOTHING
-    every racer must converge on ONE user, ONE org, ONE billing account —
+    every racer must converge on ONE user, ONE org, ONE billing account -
     and none may raise."""
     import threading
     from concurrent.futures import ThreadPoolExecutor
@@ -285,7 +285,7 @@ def test_concurrent_same_sub_signup_single_identity(cp, pg):
 
 
 def test_sub_matched_relogin_refreshes_email(cp, pg):
-    """Should-fix B (2026-07-13): the sub is the durable key — a re-login
+    """Should-fix B (2026-07-13): the sub is the durable key; a re-login
     carrying a NEW address (Google-account email change) must refresh
     users.email, not keep the signup-era one forever."""
     first = cp.ensure_user("sub-emailmove", "before@freemail.test", "Em", "")
@@ -308,7 +308,7 @@ def test_org_plan_reads_billing(cp):
 
 def test_verified_domain_resolves_to_shared_org(cp, pg):
     """A login whose VERIFIED domain is in org_domains joins THAT org as a
-    member — no personal org is created (mirrors store.org_id_for_email).
+    member; no personal org is created (mirrors store.org_id_for_email).
     Requires the parked shared-domain policy ON (personal-first default)."""
     _enable_shared_domain_orgs(pg)
     shared = str(uuid.uuid4())
@@ -336,7 +336,7 @@ def test_verified_domain_resolves_to_shared_org(cp, pg):
 def test_verified_domain_is_personal_by_default(cp, pg):
     """Personal-first (2026-07-16): with the policy OFF (the migration-seeded
     default), a login on a VERIFIED corporate domain gets its OWN personal
-    uuid org — NOT the shared one. Two colleagues → two orgs, each fully
+    uuid org: NOT the shared one. Two colleagues → two orgs, each fully
     provisioned (owner membership + free billing account)."""
     shared = str(uuid.uuid4())
     with _admin(pg) as conn:
@@ -975,7 +975,7 @@ def test_disconnect_endpoint_durable_org_repro(pg, monkeypatch, tmp_path):
         == "applied"
     )
     assert control_plane.finish_brain_install(user["org_id"], "cedric", nonce) == "connected"
-    # NOTE: no store.set_connection here — for a durable org, /complete writes
+    # NOTE: no store.set_connection here; for a durable org, /complete writes
     # Postgres ONLY (SQLite stays cold), which is the real production state and
     # forces the endpoint's rehydrate path.
 

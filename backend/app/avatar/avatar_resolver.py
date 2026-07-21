@@ -1,4 +1,4 @@
-"""The one canonical avatar resolver (M2) — every runtime path goes here.
+"""The one canonical avatar resolver (M2); every runtime path goes here.
 
 resolve(org_id, avatar_key, principal_id=None, meeting_context=None) returns a
 ``ResolvedAvatar``: the immutable canonical ``Avatar`` (repo avatar.yaml)
@@ -9,14 +9,14 @@ themselves.
 Design constraints honored:
 
 - **Latency**: resolution happens at session start / door / dashboard time.
-  The live transcript path reads the ResolvedAvatar stashed on the session —
+  The live transcript path reads the ResolvedAvatar stashed on the session -
   never Postgres. An in-process TTL cache (60s, same convergence bound as the
   knowledge indexes) bounds resolver I/O for the non-session callers too.
 - **Byte-identical off**: with ``ORG_AVATAR_OVERLAYS_ENABLED=false`` (default)
   or no control plane or no published overlay, ``resolve`` returns the
-  canonical avatar wrapped unchanged — same object contents, same behavior.
-- **Narrowing only**: effective capabilities are an INTERSECTION — canonical
-  ceiling ∩ overlay ``enabled_tools`` — and the per-avatar org toggles plus
+  canonical avatar wrapped unchanged; same object contents, same behavior.
+- **Narrowing only**: effective capabilities are an INTERSECTION; canonical
+  ceiling ∩ overlay ``enabled_tools``: and the per-avatar org toggles plus
   connected-account checks at the execution doors still apply on top
   (permissions are re-resolved at execution time; configuration is never the
   security boundary).
@@ -24,7 +24,7 @@ Design constraints honored:
   words (and therefore stop/leave phrases) are never removed.
 - **Prompt safety**: overlay behavioral fields append a bounded, clearly
   delimited block to the canonical persona prompt (avatar_overlay.
-  preferences_block) — never a replacement, and retrieved documents stay
+  preferences_block); never a replacement, and retrieved documents stay
   data, never instructions.
 """
 from __future__ import annotations
@@ -49,7 +49,7 @@ class ResolvedAvatar(Avatar):
     """An Avatar every existing consumer accepts, plus M2 provenance.
 
     ``context_scope`` rides the object into rag.retrieve (which reads it via
-    getattr — no signature changes through brain). ``effective_tools`` is the
+    getattr; no signature changes through brain). ``effective_tools`` is the
     narrowed capability-family set; the execution doors re-check it."""
 
     overlay_version: int = 0
@@ -95,7 +95,7 @@ def _cached_overlay(org_id: str, avatar_key: str) -> Optional[dict]:
 
     try:
         row = org_avatars_pg.current_overlay(org_id, avatar_key)
-    except Exception:  # noqa: BLE001 — an overlay read must never break a session
+    except Exception:  # noqa: BLE001; an overlay read must never break a session
         row = None
     with _LOCK:
         _CACHE[key] = (now + _TTL_SECONDS, row)
@@ -178,8 +178,8 @@ def resolve(
     canonical avatar (exactly like avatars.load).
 
     With no applicable overlay (flag off, non-durable org, nothing published)
-    this returns THE SAME cached instance ``avatars.load`` returns — not a
-    copy — so identity, the mtime-refresh contract, and flag-off behavior are
+    this returns THE SAME cached instance ``avatars.load`` returns; not a
+    copy; so identity, the mtime-refresh contract, and flag-off behavior are
     untouched. An applied overlay returns a fresh ResolvedAvatar built with
     dataclasses.replace (the shared cached instance is never mutated)."""
     canonical = avatars.load(avatar_key)
@@ -227,7 +227,7 @@ def resolve_avatar_key(
                 row = org_avatars_pg.assignment_for(
                     org, principal_id=principal_id or ""
                 )
-            except Exception:  # noqa: BLE001 — selection must never break dispatch
+            except Exception:  # noqa: BLE001; selection must never break dispatch
                 row = None
             if row is not None:
                 key = str(row.get("avatar_key") or "")
@@ -243,7 +243,7 @@ def family_allowed(org_id: str, avatar_key: str, family: str) -> bool:
     per-avatar org toggles and connected-account soft-fails still apply)."""
     try:
         resolved = resolve(org_id, avatar_key)
-    except Exception:  # noqa: BLE001 — never turn a config read into a 500
+    except Exception:  # noqa: BLE001; never turn a config read into a 500
         return True
     if not getattr(resolved, "overlay_version", 0):
         return True
@@ -258,12 +258,12 @@ def resolve_for_dispatch(org_id: str, avatar_key: str) -> Avatar:
         return resolve(org_id, avatar_key)
     except FileNotFoundError:
         raise
-    except Exception:  # noqa: BLE001 — dispatch must never break on config reads
+    except Exception:  # noqa: BLE001; dispatch must never break on config reads
         return avatars.load(avatar_key)
 
 
 def for_session(session) -> Avatar:
-    """The avatar for a LIVE session — hot-path safe: returns the resolved
+    """The avatar for a LIVE session; hot-path safe: returns the resolved
     avatar stashed at dispatch, else the canonical mtime-cached load. NEVER
     performs database I/O (a restarted instance mid-meeting falls back to
     canonical behavior — the same frozen-at-dispatch model as mission)."""
@@ -285,7 +285,7 @@ def for_session_offpath(session) -> Avatar:
     )
     try:
         session.resolved_avatar = resolved
-    except Exception:  # noqa: BLE001 — a stash failure only costs a re-resolve
+    except Exception:  # noqa: BLE001; a stash failure only costs a re-resolve
         pass
     return resolved
 

@@ -3,7 +3,7 @@
 Design rules that the tests and the visual-eyes challenge depend on:
   * every interactive element carries a STABLE id and data-testid;
   * URLs are predictable (see app.py routes);
-  * the onboarding *diagram* is the visual-only fixture — its nodes share one
+  * the onboarding *diagram* is the visual-only fixture: its nodes share one
     identical accessible label and carry NO stage-name text, so the stage a
     reader must click is knowable only from fill colour + position. The fully
     accessible counterpart is the onboarding *checklist* page.
@@ -134,7 +134,7 @@ def customers() -> str:
 
 def _onboarding_diagram() -> str:
     """The VISUAL-ONLY fixture. Five nodes, one shared accessible label, no
-    stage-name text — the blocked stage is identifiable only by fill+position.
+    stage-name text; the blocked stage is identifiable only by fill+position.
     Each node links to its own stage page, so the accessible layer cannot tell
     you which link is Data Integration."""
     W, H, r, gap, x0 = 720, 120, 26, 150, 90
@@ -278,7 +278,7 @@ def tasks(flash: dict[str, Any] | None = None) -> str:
         "assignee": seed.FOLLOWUP_ASSIGNEE,
         "idempotency_key": seed.FOLLOWUP_IDEMPOTENCY_KEY,
     })
-    # Tiny inline handler — the ONLY script, no external calls, same-origin fetch.
+    # Tiny inline handler; the ONLY script, no external calls, same-origin fetch.
     script = (
         "<script>"
         "async function nsPreview(){"

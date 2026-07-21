@@ -109,7 +109,7 @@ def test_anthropic_retries_without_thinking_when_rejected(monkeypatch):
 
 
 def test_anthropic_logs_on_truncation(monkeypatch, capsys):
-    """stop_reason == max_tokens means the answer was cut off — log it (the
+    """stop_reason == max_tokens means the answer was cut off; log it (the
     caller degrades to a deterministic recap) instead of silently truncating."""
 
     class Msg:
@@ -253,7 +253,7 @@ def test_cerebras_dispatches_through_openai_compat(monkeypatch):
 
 
 def test_cerebras_stream_falls_back_to_haiku_when_it_fails(monkeypatch):
-    """A Cerebras failure trips the shared breaker and streams Haiku — parity
+    """A Cerebras failure trips the shared breaker and streams Haiku; parity
     with the Groq path, so the spoken avatar never goes silent."""
     monkeypatch.setattr(llm.settings, "brain_provider", "cerebras")
     monkeypatch.setattr(llm.settings, "anthropic_api_key", "k")

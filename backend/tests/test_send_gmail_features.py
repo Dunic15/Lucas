@@ -1,7 +1,7 @@
 """send_gmail extras: thread replies, CC/BCC, HTML bodies. Google mocked.
 
 The mock captures the exact JSON payload send_gmail would POST to Gmail and
-the tests parse the raw MIME back out of it — asserting what Gmail would
+the tests parse the raw MIME back out of it; asserting what Gmail would
 actually receive, not what we hoped we built. The plain {to, subject, body}
 call must stay byte-compatible with the pre-feature client.
 """

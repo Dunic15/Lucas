@@ -1,7 +1,7 @@
 """Deterministic, network-free browser provider (B0).
 
 Every observation is a pure function of (start pages, navigation/command
-history) — reproducible for tests, demos, and the frontend fixtures. It
+history); reproducible for tests, demos, and the frontend fixtures. It
 supports deterministic pages, navigation history, clicks + text entry,
 CONTROLLED FAILURES (magic URLs), session expiration, and a fake read-only
 viewer payload. No credentials, no sockets, ever.
@@ -77,7 +77,7 @@ _PAGES: dict[str, dict[str, Any]] = {
     },
     # ── B1 visual-only page (§12) ──
     # Two identically-labelled "Continue" links: which one is the SAFE primary
-    # target CANNOT be told from visible text — only the screenshot reveals it
+    # target CANNOT be told from visible text; only the screenshot reveals it
     # (the fake screenshot marks the primary by bbox, like a vision model would
     # perceive a highlighted/primary button). Text-only selection is ambiguous.
     "https://demo.laura.test/visual": {
@@ -178,7 +178,7 @@ class FakeProvider:
         dom = page["dom"]
         elements = [dict(e) for e in page["elements"]]
         # Deterministic "screenshot": a JSON payload standing in for the pixels
-        # a vision model would perceive — it carries the visual-only cue
+        # a vision model would perceive; it carries the visual-only cue
         # (primary_visual_target + element bboxes) that is NOT in the text, so a
         # visual planner can ground a target the DOM text cannot disambiguate.
         # These BYTES are transient: the operator strips them at the boundary
@@ -284,14 +284,14 @@ class FakeProvider:
         return self._observe_state(self._get(provider_ref))
 
     def inspect(self, provider_ref: str, target: str = "") -> RawObservation:
-        # A targeted read — for the fake this is the current observation.
+        # A targeted read; for the fake this is the current observation.
         return self._observe_state(self._get(provider_ref))
 
     def viewer(self, provider_ref: str) -> dict[str, Any]:
         state = self._get(provider_ref)
         page = _PAGES.get(state.url, _MISSING_PAGE)
         # A read-only fake viewer payload: a rendered snapshot, NO permanent
-        # provider URL, NO credential — safe to hand a watcher after the
+        # provider URL, NO credential; safe to hand a watcher after the
         # server-side token exchange. Dies with the session.
         return {
             "kind": "fake_readonly",

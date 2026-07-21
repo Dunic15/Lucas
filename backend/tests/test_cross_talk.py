@@ -1,6 +1,6 @@
 """Cross-talk / locked-dyad suppression: when two humans are in a tight
 back-and-forth, an unaddressed interjection is held back to a SILENT raised hand
-and the deference wait is stretched — she never speaks over their volley.
+and the deference wait is stretched; she never speaks over their volley.
 Pure-function calibration + the webhook wiring. No keys, no model."""
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def test_stale_exchange_is_not_locked_now():
 
 def test_avatar_turns_excluded_so_a_1to1_is_not_a_dyad():
     now = 1000.0
-    # Ben <-> Laura 1:1 — if the avatar counted, this would look like a dyad.
+    # Ben <-> Laura 1:1; if the avatar counted, this would look like a dyad.
     t = [_U("Ben", 993), _U("Laura", 995), _U("Ben", 997), _U("Laura", 999)]
     assert not in_locked_dyad(t, avatar_name="Laura", now=now, **_KW)
 
@@ -149,7 +149,7 @@ def test_disabled_flag_never_consults_the_detector(tmp_path, monkeypatch):
     _seed_dyad(s)
     _stub_stream(monkeypatch, ["A grounded point."])
 
-    # With the flag off, in_locked_dyad must NEVER be consulted — behaviour is
+    # With the flag off, in_locked_dyad must NEVER be consulted; behaviour is
     # byte-identical to pre-PR. A tripwire proves the `and`-short-circuit holds.
     def _boom(*a, **k):
         raise AssertionError("in_locked_dyad called while suppression disabled")

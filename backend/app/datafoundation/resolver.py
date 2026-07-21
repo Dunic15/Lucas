@@ -1,10 +1,10 @@
-"""ContextResolver (accepted contract v5) — the ONE retrieval boundary.
+"""ContextResolver (accepted contract v5); the ONE retrieval boundary.
 
 Effective visibility = tenant ∩ connector eligibility ∩ authenticated-
 principal ACL ∩ published avatar scope ∩ request scope ∩ non-tombstoned
 current versions ∩ retention. The live-meeting guarantee is structural: the
 per-org index only ever contains org_default content, so this module is the
-sole gateway to principal-scoped mirrored records — and it is never on the
+sole gateway to principal-scoped mirrored records; and it is never on the
 transcript path.
 
 Degradation NEVER widens: any DF failure returns exactly what the M2 path
@@ -22,7 +22,7 @@ from . import dal
 
 
 def _m2_chunks(org_id: str, avatar_key: str, query: str, k: int) -> list[dict]:
-    """Exactly what the M2 seam yields today — the floor AND the ceiling of
+    """Exactly what the M2 seam yields today; the floor AND the ceiling of
     any degraded response."""
     resolved = avatar_resolver.resolve(org_id, avatar_key)
     hits = rag.retrieve(resolved, query, k=k, org_id=org_id)
@@ -86,7 +86,7 @@ def resolve(
                 "group_resolution_incomplete": not group_complete,
             },
         }
-    except Exception as exc:  # noqa: BLE001 — degrade, never widen, never 500
+    except Exception as exc:  # noqa: BLE001; degrade, never widen, never 500
         # Class + driver message only (SQL/driver text, never record content).
         print(f"[df-resolver] degraded: {type(exc).__name__}: "
               f"{str(exc)[:200]}", flush=True)
@@ -119,7 +119,7 @@ def _df_keyword_chunks(org_id: str, query: str, heads: list[dict],
         for hit in hits:
             head = by_doc.get(str(hit.get("document_id") or ""))
             if head is None:
-                continue  # outside the visible set — ACL filter holds
+                continue  # outside the visible set. ACL filter holds
             out.append({
                 "text": str(hit["text"])[:800],
                 "score": round(float(hit.get("rank") or 0.0), 4),

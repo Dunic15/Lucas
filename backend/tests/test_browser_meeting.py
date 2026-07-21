@@ -1,7 +1,7 @@
-"""Meeting → browser trigger (Sable B2/B3) — key-free invariants.
+"""Meeting → browser trigger (Sable B2/B3); key-free invariants.
 
 Intent detection, dismiss detection, flag gating, and the bridge's
-fail-closed / no-transcript-leak behaviour. No pg, no keys, no network — the
+fail-closed / no-transcript-leak behaviour. No pg, no keys, no network; the
 success path (real operator session) is in test_browser_operator_pg.py.
 """
 from __future__ import annotations
@@ -167,7 +167,7 @@ def test_no_false_fire_on_ordinary_navigation():
 
 def test_walkthrough_cancel_stops_immediately(monkeypatch):
     # A cancel() that returns True must stop the coordinator before any
-    # narration/action — the barge-in contract for walkthroughs.
+    # narration/action; the barge-in contract for walkthroughs.
     from app import browser
     from app.browser import coordinator
     calls = []

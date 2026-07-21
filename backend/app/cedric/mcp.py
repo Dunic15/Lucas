@@ -1,4 +1,4 @@
-"""Laura → Cedric programmatic tool bridge — the MCP CLIENT side.
+"""Laura → Cedric programmatic tool bridge; the MCP CLIENT side.
 
 Handshake contract v3 (2026-07-16, session hsk_ses_hbktrhxxsm0gr6ryrnyn): Cedric
 exposes its per-workspace connected tools as an MCP server over Streamable HTTP
@@ -24,10 +24,10 @@ Faithful to the contract:
   - _meta: user_ref (opaque Laura user id, NEVER an email), actor, source, ref,
     idempotency_key (reserved). No auto-retry on writes.
 
-PII: arguments carry distilled fields only — NEVER transcript content; results
+PII: arguments carry distilled fields only. NEVER transcript content; results
 and logs never carry account ids/tokens (contract) and we log tool names only.
 
-Everything here is gated by ``settings.cedric_mcp_enabled`` (default OFF) — when
+Everything here is gated by ``settings.cedric_mcp_enabled`` (default OFF); when
 off, nothing in this module runs and the caller behaves exactly as before.
 
 Handshake operations implemented (client side, direction laura->cedric):
@@ -73,7 +73,7 @@ def _reset() -> None:
 
 
 def _endpoint() -> str:
-    """The MCP URL — sibling of the existing /connectors and /orgs routes.
+    """The MCP URL; sibling of the existing /connectors and /orgs routes.
     CEDRIC_ORGS_URL points at ``.../api/laura/orgs``; swap the last segment."""
     base = settings.cedric_orgs_url.strip()
     return base.rstrip("/").rsplit("/", 1)[0] + "/mcp"
@@ -165,7 +165,7 @@ def _notify(org_id: str, method: str, *, timeout: float, session_id: str) -> Non
     try:
         _post(org_id, {"jsonrpc": "2.0", "method": method}, timeout=timeout,
               session_id=session_id)
-    except Exception:  # noqa: BLE001 — a lost 'initialized' notice is non-fatal
+    except Exception:  # noqa: BLE001; a lost 'initialized' notice is non-fatal
         pass
 
 
@@ -200,7 +200,7 @@ def _invalidate(org_id: str) -> None:
 def list_tools(org_id: str) -> list[dict] | None:
     """Discover the org's callable tools (MCP tools/list). Call at meeting-join,
     OFF the hot path. Returns the raw McpTool list (name, description,
-    inputSchema, annotations), or None when disabled / unlinked / any failure —
+    inputSchema, annotations), or None when disabled / unlinked / any failure -
     the caller then simply has no Cedric tools this session (never blocks join)."""
     if not enabled() or not (org_id or "").strip():
         return None
@@ -212,7 +212,7 @@ def list_tools(org_id: str) -> list[dict] | None:
         if e.kind not in {"transport", "auth", "timeout"}:
             print(f"[cedric-mcp] tools/list unavailable ({e.kind})", flush=True)
             return None
-        # A stale cached session can 4xx — drop it and retry once fresh.
+        # A stale cached session can 4xx; drop it and retry once fresh.
         try:
             sid = _ensure_session(org_id, timeout=t, force=True)
             result, _sid = _rpc(org_id, "tools/list", {}, timeout=t, session_id=sid, _id=2)
@@ -228,7 +228,7 @@ def list_tools(org_id: str) -> list[dict] | None:
 
 
 def is_live_safe(tool: dict) -> bool:
-    """A tool is safe on the LIVE meeting path iff it is read-only AND fast —
+    """A tool is safe on the LIVE meeting path iff it is read-only AND fast -
     exactly the contract's gate. Missing latencyClass defaults to 'slow'."""
     ann = tool.get("annotations") or {}
     return bool(ann.get("readOnlyHint")) and str(ann.get("latencyClass") or "slow") == "fast"

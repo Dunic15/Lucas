@@ -85,7 +85,7 @@ def _status_payload(bot_id: str, code: str = "in_call_recording"):
 
 def _post_webhook(*payloads: dict) -> list[httpx.Response]:
     """POST payloads to /webhooks/recall in-process, then drain every task the
-    handlers spawned (the fire-and-forget refresh) before returning — so the
+    handlers spawned (the fire-and-forget refresh) before returning; so the
     caller asserts on a settled world, deterministically."""
 
     async def _run() -> list[httpx.Response]:
@@ -175,7 +175,7 @@ def test_status_webhook_still_triggers_and_transcript_does_not_double(
     fresh_store, fetch_calls
 ):
     # The original trigger keeps working through the shared function, and the
-    # transcript fallback sees the flag — one fetch total.
+    # transcript fallback sees the flag; one fetch total.
     session = _orchestrated(fresh_store, "bot_s1")
     _post_webhook(
         _status_payload("bot_s1"),

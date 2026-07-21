@@ -1,4 +1,4 @@
-"""Anam client — the avatar's face and voice.
+"""Anam client; the avatar's face and voice.
 
 Swapping the face vendor only ever touches this file + frontend/avatar.html.
 
@@ -6,7 +6,7 @@ We use Anam only as a mouth+face we fully control:
   - Anam's model is a *session token*: you POST a personaConfig (which face, which
     voice, the persona) and get back a short-lived `sessionToken`. The avatar page
     then streams the avatar with that token via Anam's browser SDK and calls
-    `client.talk(text)` to make it speak — that is Anam's equivalent of "echo".
+    `client.talk(text)` to make it speak; that is Anam's equivalent of "echo".
   - The meeting brain is still our backend: the words come from us, over the
     websocket, and the page speaks exactly those words.
 
@@ -23,7 +23,7 @@ comes from avatar.yaml / Anam (anam_avatar_id).
 INTEGRATION SEAM TO VERIFY on a first live Anam run:
   - the exact personaConfig field names (avatarId / voiceId / llmId / systemPrompt);
   - that frontend/avatar.html joins with Anam's SDK using conversation_url as the
-    sessionToken (it currently still embeds a Daily room — update it for Anam).
+    sessionToken (it currently still embeds a Daily room; update it for Anam).
 """
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def create_persona(avatar: Avatar) -> str:
     """Resolve which Anam face this avatar uses. Returns the Anam avatarId.
 
     Anam configures the persona inline when a session token is minted, so there
-    is no separate persona-create API call — we just validate and return the face
+    is no separate persona-create API call; we just validate and return the face
     id here to keep the create_persona → create_conversation flow intact.
     """
     if not avatar.anam_avatar_id:
@@ -70,7 +70,7 @@ def create_persona(avatar: Avatar) -> str:
 
 # Keep the Anam avatar passive: our backend (RAG + Claude) is the single brain and
 # drives every spoken line via talk(). Anam still REQUIRES an llmId + systemPrompt to
-# mint a modern (non-legacy) session token, so we can't drop the brain — instead we
+# mint a modern (non-legacy) session token, so we can't drop the brain; instead we
 # neutralize it with a system prompt that tells it to never speak on its own. It only
 # says what we send it.
 _MOUTH_SYSTEM_PROMPT = (
@@ -86,7 +86,7 @@ def _expand_persona(persona_id: str) -> dict:
     """Turn a SAVED Anam persona into an inline personaConfig.
 
     Anam requires `avatarId`, `voiceId`, `llmId`, and `systemPrompt` for a modern
-    (non-legacy) session token — omitting the llmId/systemPrompt makes Anam fall
+    (non-legacy) session token; omitting the llmId/systemPrompt makes Anam fall
     back to a legacy token, which the SDK now rejects. So we re-emit the persona's
     face + voice + its llmId, but OVERRIDE the system prompt with a keep-silent
     instruction and drop its knowledge tools: the avatar won't autonomously answer

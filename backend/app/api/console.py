@@ -1,5 +1,5 @@
 from __future__ import annotations
-"""Demo + live console REST — /, /demo/*, /live/*. Non-meeting endpoints that
+"""Demo + live console REST. /, /demo/*, /live/*. Non-meeting endpoints that
 exercise the brain directly. Extracted from main.py; the live-meeting contract
 stays in main.py."""
 import asyncio, json
@@ -74,7 +74,7 @@ async def live_ask(req: AskRequest) -> StreamingResponse:
     """Stream a grounded answer as SSE for the DIRECT 'talk to Laura' web avatar.
 
     In that mode Anam captures the user's mic + does STT/TTS/lip-sync, and calls
-    THIS endpoint as its brain. Reuses the RAG + Groq streaming path — each
+    THIS endpoint as its brain. Reuses the RAG + Groq streaming path; each
     grounded sentence is emitted as `data: {"content": "..."}` (and `[DONE]` at
     the end). Stays silent (no content, just [DONE]) when the SKIP gate fires.
     """
@@ -92,11 +92,11 @@ async def live_ask(req: AskRequest) -> StreamingResponse:
 
 @router.post("/live/act")
 async def live_act(req: AskRequest) -> StreamingResponse:
-    """Grounded answer that can ACT — the model may call tools (calculate, check a
+    """Grounded answer that can ACT; the model may call tools (calculate, check a
     deadline, look up a record) before answering. Same SSE shape as /live/ask so
     the avatar page is unchanged: the final spoken answer is emitted as
     `data: {"content": "..."}` then `[DONE]`. Which tools ran is surfaced as an SSE
-    comment line (`: tools_used ...`) for transparency — clients ignore it.
+    comment line (`: tools_used ...`) for transparency; clients ignore it.
 
     Kept OFF the streaming meeting hot path on purpose: tool use needs a round-trip
     first, so this is for the direct web avatar / demo.
@@ -121,7 +121,7 @@ async def live_act(req: AskRequest) -> StreamingResponse:
                 yield f"data: {json.dumps({'content': filler})}\n\n"
         try:
             result = await task
-        except Exception as e:  # noqa: BLE001 — a failed lookup must never end in silence
+        except Exception as e:  # noqa: BLE001; a failed lookup must never end in silence
             print(f"[live/act] answer failed: {e}", flush=True)
             fail = "Sorry — that one failed on me. Mind asking again?"
             yield f"data: {json.dumps({'content': fail})}\n\n"
@@ -150,7 +150,7 @@ async def demo_post_meeting(req: PostMeetingRequest) -> JSONResponse:
         avatar = avatars.load(req.avatar_id)
     except FileNotFoundError:
         # A bogus avatar_id would otherwise raise an unhandled 500 and the demo
-        # page shows a bare "HTTP 500" — answer a clear 404 with the choices.
+        # page shows a bare "HTTP 500": answer a clear 404 with the choices.
         return JSONResponse(
             {"error": "unknown avatar_id", "available": avatars.list_ids()},
             status_code=404,
@@ -198,7 +198,7 @@ async def live_error(e: LiveError) -> JSONResponse:
 async def live_token(req: LiveTokenRequest, request: Request) -> JSONResponse:
     """Mint a fresh Anam session token for the browser to stream the avatar.
     Gated: minting an Anam conversation bills per-minute, so an anonymous caller
-    can't rack up charges — a logged-in owner (or the machine bearer) only. Open
+    can't rack up charges; a logged-in owner (or the machine bearer) only. Open
     in the key-free demo (auth disabled). The current /talk face uses TalkingHead
     + /tts (not Anam), so this only affects the legacy /live + /avatar pages."""
     if auth.current_user(request) is None:

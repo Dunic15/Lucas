@@ -5,7 +5,7 @@ When the retrieved chunks are dropped for scoring below rag_min_context_score AN
 the question reads as company/process-specific, she PREFACES the answer with a
 brief honest caveat instead of presenting world knowledge as if it came from the
 docs. A general/world question answers normally, and the grounded (above-floor)
-happy path is untouched and pays zero extra latency. No network, no API keys —
+happy path is untouched and pays zero extra latency. No network, no API keys -
 the streaming provider is forced and llm.stream_complete is stubbed.
 """
 from __future__ import annotations
@@ -128,7 +128,7 @@ def test_feature_off_no_caveat(monkeypatch):
 
 
 def test_below_floor_process_skip_stays_silent(monkeypatch):
-    """A SKIP (speech not directed at her) must stay fully silent — the caveat
+    """A SKIP (speech not directed at her) must stay fully silent; the caveat
     is only ever a lead-in to a real answer, never spoken on its own."""
     _force_provider(monkeypatch)
     monkeypatch.setattr(settings, "caveat_ungrounded_process_answers", True)
@@ -137,7 +137,7 @@ def test_below_floor_process_skip_stays_silent(monkeypatch):
 
     out = list(brain.answer_question_stream(_avatar(), "What's our refund policy?"))
 
-    assert out == []  # no caveat, no answer — silent
+    assert out == []  # no caveat, no answer; silent
 
 
 def test_italian_below_floor_process_gets_italian_caveat(monkeypatch):

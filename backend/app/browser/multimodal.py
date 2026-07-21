@@ -1,4 +1,4 @@
-"""Real multimodal VisualPlanner adapter (B1) — screenshot → one proposal.
+"""Real multimodal VisualPlanner adapter (B1); screenshot → one proposal.
 
 DELIBERATELY INERT WITHOUT A KEY. Until ``BROWSER_VISUAL_PLANNER_ENABLED`` is
 on AND the model key is configured, ``propose`` raises ``PlannerUnconfigured``
@@ -63,7 +63,7 @@ def bound_screenshot(raw: bytes) -> bytes:
     raw = raw or b""
     if len(raw) <= max_bytes:
         return raw
-    try:  # optional dependency — never required in CI
+    try:  # optional dependency; never required in CI
         import io
 
         from PIL import Image  # type: ignore
@@ -75,7 +75,7 @@ def bound_screenshot(raw: bytes) -> bytes:
         shrunk = out.getvalue()
         if len(shrunk) <= max_bytes:
             return shrunk
-    except Exception:  # noqa: BLE001 — Pillow absent or decode failed
+    except Exception:  # noqa: BLE001. Pillow absent or decode failed
         pass
     raise PlannerError("screenshot exceeds byte cap and cannot be downscaled")
 
@@ -125,7 +125,7 @@ class MultimodalPlanner:
         screenshot is bounded here; only a bounded structural digest of the
         observation + the goal + the allowed operation names go to the model."""
         if not screenshot:
-            # A visual planner with no screenshot cannot ground — fail closed.
+            # A visual planner with no screenshot cannot ground; fail closed.
             return None
         try:
             image = bound_screenshot(screenshot)
@@ -165,7 +165,7 @@ class MultimodalPlanner:
                 if attempt > self._max_retries:
                     return None
                 continue
-            except Exception:  # noqa: BLE001 — never leak payload/key
+            except Exception:  # noqa: BLE001; never leak payload/key
                 return None
         return None
 
@@ -181,7 +181,7 @@ class MultimodalPlanner:
 
     def _prompt_parts(self, observation, goal, allowed) -> tuple[str, str]:
         """The provider-neutral (system, user) prompt pair. A bounded
-        structural summary of the page (NO raw HTML, NO secrets — the
+        structural summary of the page (NO raw HTML, NO secrets; the
         observation is already sanitized/redacted upstream)."""
         import json as _json
 
@@ -242,12 +242,12 @@ class MultimodalPlanner:
                 headers={"Authorization": f"Bearer {self._api_key}",
                          "Content-Type": "application/json"},
                 json=payload, timeout=self._timeout)
-        except Exception as exc:  # noqa: BLE001 — transport → retryable
+        except Exception as exc:  # noqa: BLE001; transport → retryable
             raise _TransportError() from exc
         if resp.status_code >= 500:
             raise _TransportError()
         if resp.status_code != 200:
-            # Client error (bad key/model/schema) — NON-retryable, fail closed.
+            # Client error (bad key/model/schema). NON-retryable, fail closed.
             # The body may echo the request; do NOT surface it.
             raise PlannerError(f"model http {resp.status_code}")
         data = resp.json()
@@ -259,7 +259,7 @@ class MultimodalPlanner:
             raise PlannerError("model returned non-json") from exc
 
     def _invoke_anthropic(self, observation, goal, image, allowed):
-        """Anthropic Messages API with vision — same strict-JSON contract as
+        """Anthropic Messages API with vision; same strict-JSON contract as
         the OpenAI branch, keyed by the ANTHROPIC_API_KEY already provisioned
         for the post-meeting brain. Same posture: no key, payload, or provider
         object ever escapes this method."""
@@ -288,13 +288,13 @@ class MultimodalPlanner:
                     {"type": "text", "text": user},
                 ]}],
             )
-        except Exception as exc:  # noqa: BLE001 — classify; never leak payload
+        except Exception as exc:  # noqa: BLE001; classify; never leak payload
             if isinstance(exc, (anthropic.APIConnectionError,
                                 anthropic.RateLimitError,
                                 anthropic.InternalServerError)):
                 raise _TransportError() from exc
             if isinstance(exc, anthropic.APIStatusError):
-                # Client error (bad key/model) — NON-retryable, fail closed.
+                # Client error (bad key/model). NON-retryable, fail closed.
                 # The body may echo the request; do NOT surface it.
                 raise PlannerError(f"model http {exc.status_code}") from exc
             raise PlannerError(type(exc).__name__) from exc
@@ -312,7 +312,7 @@ class MultimodalPlanner:
 
 
 def _media_type(image: bytes) -> str:
-    """bound_screenshot may re-encode PNG captures as JPEG — sniff the actual
+    """bound_screenshot may re-encode PNG captures as JPEG; sniff the actual
     bytes so the declared media type never lies to the API."""
     if image[:3] == b"\xff\xd8\xff":
         return "image/jpeg"

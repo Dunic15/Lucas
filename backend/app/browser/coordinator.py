@@ -1,8 +1,8 @@
-"""Perception coordinator (B1) — the bounded observe→plan→act→verify loop.
+"""Perception coordinator (B1); the bounded observe→plan→act→verify loop.
 
 Composed PURELY from operator.perceive (read) + operator.issue_command
 (execute) + operator.get_session (state). It NEVER calls a provider, the DAL,
-policy.classify, or mints/approves actions directly — every side effect goes
+policy.classify, or mints/approves actions directly; every side effect goes
 through issue_command, so per-step policy classification, guarded→approval
 routing, idempotency, page_version binding, and operator-owned verification are
 all inherited unchanged. There is NO second execution or approval system.
@@ -10,7 +10,7 @@ all inherited unchanged. There is NO second execution or approval system.
 The loop is a SINGLE synchronous bounded run (never a daemon, never unbounded):
 hard caps on steps, consecutive failures, replans, duration, and model calls,
 plus session expiry and the navigation domain allowlist. A guarded step ends
-the run as ``awaiting_approval`` (the run records the action_id and STOPS — it
+the run as ``awaiting_approval`` (the run records the action_id and STOPS; it
 never waits, polls, or self-approves; resumption is a fresh run that
 re-observes and re-plans).
 
@@ -94,14 +94,14 @@ def run(
     for step_index in range(max_steps):
         # Cancellation (e.g. a meeting barge-in / "stop") checked FIRST every
         # iteration, so a human interruption halts the walkthrough immediately
-        # — the narration must never talk over someone who took the floor.
+        #; the narration must never talk over someone who took the floor.
         if cancel is not None:
             try:
                 if cancel():
                     return stop("cancelled", "cancelled")
-            except Exception:  # noqa: BLE001 — a cancel-check fault never runs away
+            except Exception:  # noqa: BLE001; a cancel-check fault never runs away
                 pass
-        # Hard bounds re-checked EVERY iteration — the loop can never run away.
+        # Hard bounds re-checked EVERY iteration; the loop can never run away.
         if now() - started > max_duration:
             return stop("budget_exhausted", "max_duration")
         if model_calls >= max_model:
@@ -129,9 +129,9 @@ def run(
                 allowed_operations=contracts.ALL_OPERATIONS,
                 budget={"steps_left": max_steps - step_index,
                         "model_calls_left": max_model - model_calls})
-        except Exception:  # noqa: BLE001 — planner failure is fail-closed
+        except Exception:  # noqa: BLE001; planner failure is fail-closed
             raw_proposal = None
-        # Drop the screenshot bytes immediately after planning — never persist.
+        # Drop the screenshot bytes immediately after planning; never persist.
         screenshot = b""
 
         if raw_proposal is None:
@@ -155,7 +155,7 @@ def run(
         op = proposal["operation"]
 
         # Live narration hook: fires BEFORE the action so the avatar's voice
-        # leads the on-screen click. Best-effort — a narration fault must never
+        # leads the on-screen click. Best-effort; a narration fault must never
         # break the loop (and never blocks: the callback dispatches async). The
         # callback receives operation + proposal; callers build a BOUNDED phrase
         # from the operation only (never page content) to keep speech leak-free.
@@ -170,10 +170,10 @@ def run(
                     pass
             try:
                 on_step(step_index, op, _step_info(op, proposal, observation))
-            except Exception:  # noqa: BLE001 — narration never breaks the run
+            except Exception:  # noqa: BLE001; narration never breaks the run
                 pass
 
-        # CONTROL ops handled locally — never dispatched.
+        # CONTROL ops handled locally; never dispatched.
         if op in _CONTROL_OPS:
             if op == "request_human_help":
                 return stop("awaiting_approval", "request_human_help")
@@ -186,7 +186,7 @@ def run(
             # The SERVER domain allowlist is the hard, page-independent gate.
             # (observation_links is available for stricter deployments that
             # additionally require the target to be an on-page link; it can
-            # only NARROW, never widen — so it is not enforced here to keep
+            # only NARROW, never widen; so it is not enforced here to keep
             # seed navigations to allowlisted hosts working.)
             nav = policy.check_navigation_target(target, allowed_domains)
             if not nav.get("ok"):
@@ -240,7 +240,7 @@ def run(
 def _execute(org_id, session_id, principal, proposal, observation,
              run_step) -> dict:
     """Map a validated proposal to exactly ONE issue_command. Verification is
-    delegated to the operator (verify=True) — the planner never self-certifies.
+    delegated to the operator (verify=True); the planner never self-certifies.
     """
     op = proposal["operation"]
     command_id = f"coord:{run_step}"
@@ -249,7 +249,7 @@ def _execute(org_id, session_id, principal, proposal, observation,
         "verify": True, "expected": proposal.get("expected_result") or {},
         "confidence": proposal.get("confidence"),
         # STALE ANCHOR: the SERVER-perceived page_version (from perceive()),
-        # NOT the model's echoed observed_page_version — an injected page/model
+        # NOT the model's echoed observed_page_version; an injected page/model
         # cannot defeat the stale gate by reporting a fresh integer.
         "observed_page_version": int(observation.get("page_version") or 0),
     }
@@ -266,7 +266,7 @@ def _execute(org_id, session_id, principal, proposal, observation,
 
 
 def _observation_link_urls(observation: dict) -> set[str]:
-    """URLs that appear as links in the CURRENT observation — used only to
+    """URLs that appear as links in the CURRENT observation; used only to
     NARROW navigation (a target must be a real on-page link), never to widen
     the server allowlist. The fake provider carries hrefs on link elements."""
     out: set[str] = set()

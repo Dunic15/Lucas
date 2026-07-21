@@ -3,17 +3,17 @@
 A spoken line carries an emotion so the renderer can move more than the mouth:
 the 3D face (TalkingHead `setMood`) and the photoreal face (Ditto's `emo`
 parameter, 0-7) both take a mood, and ElevenLabs voice settings can lean with
-it. Today the face is emotionally flat — every line, good news or bad, wears the
+it. Today the face is emotionally flat; every line, good news or bad, wears the
 same neutral expression. That flatness is the single biggest "it's a bot" tell.
 
 Design choices:
 - **Pure function, zero latency.** `classify(text)` is a keyword+punctuation
-  heuristic — no LLM call on the live path, no network, no parse risk. The brain
+  heuristic; no LLM call on the live path, no network, no parse risk. The brain
   MAY override per line (it already emits JSON), but the default never blocks.
 - **Small, honest label set.** Five moods that a talking-head can actually show
   and that map cleanly onto both renderers. More granularity than the model can
   express is wasted and reads as noise.
-- **Neutral is the floor.** Ambiguous text stays neutral — a meeting avatar that
+- **Neutral is the floor.** Ambiguous text stays neutral: a meeting avatar that
   emotes at random is worse than one that stays composed. We only leave neutral
   on a clear signal.
 - **Contract-additive.** The label rides the existing {type:"speak"} message as
@@ -26,7 +26,7 @@ from __future__ import annotations
 #   ditto_emo  -> Ditto `emo` index (0-7); 4 is the model's neutral default.
 # Ditto's emotion order, VERIFIED in its condition_handler.py source comment:
 #   0 Angry, 1 Disgust, 2 Fear, 3 Happy, 4 Neutral, 5 Sad, 6 Surprise, 7 Contempt
-# A business avatar only ever shows Happy/Neutral/Sad — anger, disgust, fear
+# A business avatar only ever shows Happy/Neutral/Sad; anger, disgust, fear
 # and contempt stay unmapped on purpose.
 _MOODS: dict[str, dict] = {
     "neutral":   {"talk_mood": "neutral", "ditto_emo": 4},
@@ -40,7 +40,7 @@ DEFAULT = "neutral"
 
 # Keyword signals. Lowercased substring match on word-ish boundaries. Bilingual
 # (IT/EN) because Laura works in both. Kept deliberately small and high-precision
-# — a false "happy" on a serious line is worse than a missed one.
+#; a false "happy" on a serious line is worse than a missed one.
 _HAPPY = (
     "congratulations", "congrats", "great job", "well done", "excellent",
     "fantastic", "wonderful", "love it", "perfect", "awesome",

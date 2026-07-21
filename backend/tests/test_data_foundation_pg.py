@@ -285,7 +285,7 @@ def test_cursor_atomicity_under_backpressure(cp, monkeypatch):
     )
     assert stats["quarantined"] == 1
     assert dal.get_cursor(org, connector["id"]) == {"page_token": 5}
-    # Second batch would exceed the cap: EVERYTHING rolls back — the valid
+    # Second batch would exceed the cap: EVERYTHING rolls back; the valid
     # envelope is not applied and the cursor stays at 5.
     with pytest.raises(dal.BackpressureError):
         dal.commit_batch(
@@ -350,7 +350,7 @@ def test_quarantine_replay_and_deletion_boundaries(cp, pg, tmp_path,
     assert dal.quarantine_rows(org, state="discarded")
 
     # Age it beyond retention (admin clock surgery; the org policy is pinned
-    # to 30 days — the definer reads THIS, proving the cutoff is the org's
+    # to 30 days; the definer reads THIS, proving the cutoff is the org's
     # server-side policy, not the caller's argument), purge, verify payload
     # cleanup + audit completion (two-phase).
     with _admin(pg) as admin:
@@ -361,7 +361,7 @@ def test_quarantine_replay_and_deletion_boundaries(cp, pg, tmp_path,
             "clock_timestamp() - interval '40 days' WHERE org_id=%s", (org,))
     assert dal.purge_quarantine(org) == 1
     # ONLY the resolved row purged; the OPEN row from the failed replay
-    # survives even though the admin aged its clock — open rows are
+    # survives even though the admin aged its clock; open rows are
     # structurally unpurgeable (the fixed state predicate).
     remaining = dal.quarantine_rows(org)
     assert remaining and all(r["state"] == "open" for r in remaining)
@@ -612,7 +612,7 @@ def test_orphaned_df_body_chunks_are_restricted(cp):
     no DF head; they must be restricted from the live index, not exposed."""
     org = _org(cp, "orphan")
     connector = _connector(org)
-    # materialize WITHOUT commit_batch — the exact park/crash window.
+    # materialize WITHOUT commit_batch; the exact park/crash window.
     sync.materialize_bodies(
         org, {"id": connector["id"], "kind": "gdrive", "name": "g"},
         [{**_env("stray"),
@@ -650,7 +650,7 @@ def test_live_index_excludes_non_org_default_df_documents(cp, monkeypatch):
                        "access": "reader"}]),
           "body_text": "# Secret\n\nRefunds secretly take NINETY days."}])
     dal.commit_batch(org, connector["id"], envs, new_cursor=None)
-    # Assign the DF body source to laura too — the ACL rule must STILL keep
+    # Assign the DF body source to laura too; the ACL rule must STILL keep
     # it out of the live index (structural, not assignment-dependent).
     for source in kdal.list_sources(org):
         if source["name"].startswith("df:"):

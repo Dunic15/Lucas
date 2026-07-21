@@ -1,7 +1,7 @@
 """Upload size cap must reject BEFORE allocating the decoded buffer.
 
 b64decode (and str.encode) allocate the full output up front, so a cap checked
-only after decoding admits an arbitrary-size allocation first — an OOM hazard
+only after decoding admits an arbitrary-size allocation first; an OOM hazard
 on the 2 GB instance that also runs live meetings (review finding 2026-07-20).
 Pure unit tests on the shared _upload_document implementation; no DB needed.
 """
@@ -44,4 +44,4 @@ def test_small_payload_still_flows_past_the_cap(monkeypatch):
     status, body = kroute._upload_document(
         "org", "src", {"filename": "ok.txt", "text": "hello"}
     )
-    assert status == 404  # unknown source (stub) — i.e. we got past the cap
+    assert status == 404  # unknown source (stub); i.e. we got past the cap

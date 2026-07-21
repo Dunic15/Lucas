@@ -3,19 +3,19 @@
 Three behaviors, each behind its own env flag and ALL OFF by default (the
 zero-key demo and the meter are untouched unless the owner opts in):
 
-  AUTOPILOT_DELIVER=true  — when a meeting finalizes, send the drafted
+  AUTOPILOT_DELIVER=true; when a meeting finalizes, send the drafted
                             follow-up email to AUTOPILOT_DELIVER_TO and post
                             the artifact summary to Slack. No more manual
                             /deliver call.
-  AUTOPILOT_BRIEF=true    — when a session starts on a meeting link that has
+  AUTOPILOT_BRIEF=true; when a session starts on a meeting link that has
                             ledger history, send the carryover brief ("what's
                             still open from last time") to AUTOPILOT_BRIEF_TO
                             (falls back to AUTOPILOT_DELIVER_TO) + Slack.
-  AUTOPILOT_NUDGE=true    — every AUTOPILOT_NUDGE_HOURS, post a Slack digest
+  AUTOPILOT_NUDGE=true; every AUTOPILOT_NUDGE_HOURS, post a Slack digest
                             of every open ledger item across meetings, so
                             owners get chased without anyone asking.
 
-Failure discipline: autopilot is best-effort — a vendor error must never
+Failure discipline: autopilot is best-effort; a vendor error must never
 block finalize (the meter stop) or a meeting join, so every entry point
 swallows exceptions and reports status dicts instead. Content is never
 logged; these functions only hand distilled text to actions.send_email /

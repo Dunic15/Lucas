@@ -68,7 +68,7 @@ def test_capture_reload_finalize_keeps_stable_action_id(tmp_path, monkeypatch):
 def test_capture_suppresses_cedric_callback_when_slack_off(tmp_path, monkeypatch):
     """Explicit slack=OFF avatar: the action IS captured, the callback is NOT.
 
-    Closes the #221 capability-gate TODO — the Cedric callback-outbox is
+    Closes the #221 capability-gate TODO; the Cedric callback-outbox is
     Cedric's Slack broker, so a slack-off avatar must not fan out to it. The
     queued_action must still persist; only the Slack callback is skipped.
     """
@@ -748,7 +748,7 @@ def test_finalize_keeps_session_when_artifact_postgres_is_down(
         bot_id,
         "https://meet.google.com/abc-defg-hij",
         "laura",
-        # A DURABLE tenant is a uuid (control plane owns identity) — a
+        # A DURABLE tenant is a uuid (control plane owns identity); a
         # session-shaped org would now correctly route to SQLite instead of
         # exercising the Postgres-down propagation this test pins.
         org_id="00000000-0000-4000-8000-000000000d01",

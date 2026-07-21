@@ -2,7 +2,7 @@
 
 Each function here is a self-contained block that ``main.py`` used to inline.
 Keeping them here means the shared session-lifecycle code in ``main.py`` stays
-close to upstream Laura — the fork's footprint is a handful of one-line calls
+close to upstream Laura; the fork's footprint is a handful of one-line calls
 (``# CEDRIC`` markers) instead of ~200 interleaved lines.
 
 Everything is best-effort by design: a callback failure must never block or
@@ -75,7 +75,7 @@ def resolve_machine_org(request: Request) -> Optional[str]:
       - The GLOBAL ``laura_api_token`` (when configured) → ``settings.
         demo_org_id``: the legacy service scope. Endpoints treat it exactly as
         today (Cedric's deployment credential, never narrowed by this PR).
-      - A PER-ORG token (org_tokens — durable control plane first, SQLite
+      - A PER-ORG token (org_tokens: durable control plane first, SQLite
         fallback; PR A) → its org_id. Callers MUST enforce that such a bearer
         only touches its own org's rows.
       - Anything else (no/blank/unknown bearer) → None; callers fall back to
@@ -83,11 +83,11 @@ def resolve_machine_org(request: Request) -> Optional[str]:
         byte-identical (open when no token is configured).
 
     Sibling of ``main._org_token_bearer_org`` (PR A), which returns None for
-    the global bearer instead — deliberately NOT consolidated so PR A's
+    the global bearer instead; deliberately NOT consolidated so PR A's
     start/end/redeliver semantics stay untouched.
 
     SYNC (SQLite + optionally a Postgres round-trip): async handlers must call
-    it via ``run_in_threadpool`` — never on the live hot path. The raw secret
+    it via ``run_in_threadpool``: never on the live hot path. The raw secret
     is compared/hashed only, never logged."""
     provided = request.headers.get("authorization", "")
     if not provided.startswith("Bearer "):
@@ -200,7 +200,7 @@ def default_external_ref() -> dict:
     """SURFACE_EXTERNAL_REF (JSON, e.g. '{"team":"T1","slack_channel":"#cedric",
     "requested_by":"duccio"}') parsed into the external_ref every session falls
     back to. Live test 2026-07-10: sessions summoned by email/dashboard reached
-    the surface with external_ref {} — the orchestrator had no Slack channel to
+    the surface with external_ref {}; the orchestrator had no Slack channel to
     route to, so cards and recaps were silently dropped. A configured default
     makes EVERY meeting routable; a session that carries its own external_ref
     (a real Cedric summon) still wins. Unset/invalid JSON → {} (old behaviour)."""
@@ -223,7 +223,7 @@ def build_integration(req: Any, brief: str) -> Optional[dict]:
     when the request carries no orchestrator wiring (plain local start).
 
     Model A default routing: when SURFACE_WEBHOOK_URL is configured, a session
-    that DIDN'T supply its own callback_url still gets one — so EVERY meeting
+    that DIDN'T supply its own callback_url still gets one; so EVERY meeting
     (however summoned: email, calendar, API) hands its session.status /
     session.ended / action.requested to Cedric's receiver, and Cedric does the
     Slack posting + execution with his own tools. Unset = today's behaviour
@@ -255,13 +255,13 @@ def build_integration(req: Any, brief: str) -> Optional[dict]:
 
 def default_integration() -> Optional[dict]:
     """The Model A default routing for summons that DON'T go through
-    ``POST /sessions/start`` — the Gmail 'Add people' auto-join watcher and the
+    ``POST /sessions/start``: the Gmail 'Add people' auto-join watcher and the
     calendar sync webhook. Those paths never build a StartRequest, so
     ``build_integration`` (which reads the SURFACE_* defaults off the request)
     never runs for them and the meeting silently falls to Model B.
 
     This is the request-less equivalent: it applies the same SURFACE_WEBHOOK_URL
-    / SURFACE_CONTEXT_URL defaults so EVERY meeting — however summoned — hands
+    / SURFACE_CONTEXT_URL defaults so EVERY meeting, however summoned, hands
     its session.status / session.ended / action.requested to Cedric's receiver
     and pulls his pre-meeting context. Returns None when NEITHER surface var is
     set (preserving the autonomous / Model B default), so a deployment with no
@@ -290,7 +290,7 @@ def default_integration() -> Optional[dict]:
 
 
 # Transcripts are PII: they live in the local artifact store (served only by
-# the local /meetings archive) and NEVER cross the orchestrator API — webhooks
+# the local /meetings archive) and NEVER cross the orchestrator API; webhooks
 # and the session endpoints get the distilled artifact. The version marker lets
 # clients parse additively as fields are added.
 ARTIFACT_VERSION = 1
@@ -412,23 +412,23 @@ async def handle_webhook_status(session: Any, bot_id: str, status_code: str) -> 
 def maybe_refresh_context(session: Any) -> bool:
     """LIVE context pull (Cedric -> Laura), shared by BOTH triggers:
 
-      - ``handle_webhook_status`` when a Recall status maps to "live" — the
+      - ``handle_webhook_status`` when a Recall status maps to "live": the
         original trigger, which production (2026-07-10) shows often never
         fires: the realtime webhook delivers no bot-status events at all
         (every finalize that day was source=reconcile), so the avatar sat in
         meetings without Cedric's brief; and
       - EVERY transcript webhook of the session (``main.py``, partial or
-        final) — a transcript is proof the bot is in the call, and repeated
+        final); a transcript is proof the bot is in the call, and repeated
         transcripts make the pull PERIODIC: while people are talking, the
         brief is re-pulled whenever the last pull is older than
         CONTEXT_REFRESH_SECONDS, so the avatar speaks from the current state
         of Asana/Slack for the whole meeting instead of a join-time snapshot.
         (0 restores the old one-shot behaviour. A quiet meeting stops
-        pulling — no transcript, no refresh, no load.)
+        pulling; no transcript, no refresh, no load.)
 
     Fire-and-forget and OFF the live path: this function only does dict/clock
     checks; the GET runs in the threadpool inside a task. The timestamp is
-    stamped (and persisted) BEFORE the task launches — and since there is no
+    stamped (and persisted) BEFORE the task launches; and since there is no
     await between check and stamp, racing partial/final webhooks on the same
     event loop cannot double-launch. Returns True when a refresh launched."""
     if session is None or not session.integration:
@@ -454,15 +454,15 @@ def maybe_refresh_context(session: Any) -> bool:
 
 
 def _with_live_meeting(session: Any, integration: dict) -> dict:
-    """A copy of ``integration`` whose ``meeting`` carries THIS call's identity —
+    """A copy of ``integration`` whose ``meeting`` carries THIS call's identity -
     the live Recall roster (everyone who's joined, incl. non-speakers) as
-    ``attendees`` and any known title — so ``fetch_context`` asks Cedric for a
+    ``attendees`` and any known title; so ``fetch_context`` asks Cedric for a
     MEETING-SPECIFIC brief instead of a workspace-only one. Best-effort: a
     roster read failure or an already-populated booking meeting is left as-is."""
     meeting = dict(integration.get("meeting") or {})
     try:
         roster = session.roster()
-    except Exception:  # noqa: BLE001 — enrichment must never break the pull
+    except Exception:  # noqa: BLE001; enrichment must never break the pull
         roster = []
     if roster and not meeting.get("attendees"):
         meeting["attendees"] = [{"name": name} for name in roster]
@@ -473,7 +473,7 @@ def _with_live_meeting(session: Any, integration: dict) -> dict:
 
 async def _refresh_context(session: Any, integration: dict) -> None:
     """The refresh body behind ``maybe_refresh_context``: GET the fresh
-    context off the event loop and fold it into the session. Best-effort —
+    context off the event loop and fold it into the session. Best-effort -
     ``fetch_context`` swallows transport errors (returns None) and a
     malformed payload just keeps the booking-time brief."""
     outbound = _with_live_meeting(session, integration)
@@ -488,13 +488,13 @@ async def _refresh_context(session: Any, integration: dict) -> None:
 
 def voice_approve(session: Any, item: dict) -> bool:
     """Voice consent: an ADDRESSED mid-meeting ask ("Petra, create a task…")
-    IS the approval. Records the ONE canonical decision (decided_via='voice' —
+    IS the approval. Records the ONE canonical decision (decided_via='voice': 
     same convergence rules as dashboard/Slack/chat: first write wins, replays
     refused) and fires ``action.approved`` on the per-org events door so
     Cedric executes NOW instead of parking a card until after the call.
 
     Only the deterministic addressed-capture path calls this (main.py):
-    actions the summarizer merely INFERS at finalize never come here — they
+    actions the summarizer merely INFERS at finalize never come here; they
     keep the human click. Best-effort and off the live path (the spoken
     confirmation has already been said); a delivery miss leaves the action
     'approved' and visible on the dashboard, where Retry semantics apply."""
@@ -514,7 +514,7 @@ def voice_approve(session: Any, item: dict) -> bool:
     )
     if not recorded:
         # A canonical decision already exists (replay, or another surface got
-        # there first — first write wins). Never double-fire the execute
+        # there first; first write wins). Never double-fire the execute
         # signal on top of someone else's decision.
         return False
     ledger.set_action_status(
@@ -548,10 +548,10 @@ def apply_context_push(
     a decision landed in Slack) instead of waiting for the next pull window.
 
     Same payload shape as ``StartRequest.context`` / ``fetch_context``. Each
-    push REPLACES the stored brief (re-summarize upstream — never an append
+    push REPLACES the stored brief (re-summarize upstream; never an append
     log; the byte cap stays authoritative), and ``inject_brief`` re-reads the
     stored brief every turn, so the avatar's next answer already speaks from
-    the pushed state. A push also resets the pull window — pushing
+    the pushed state. A push also resets the pull window; pushing
     orchestrators aren't double-polled.
 
     Scope: a PER-ORG machine bearer may only push into its own org's sessions;
@@ -586,7 +586,7 @@ def apply_context_push(
 
 def inject_brief(session: Any, memory: str) -> str:
     """Fold the orchestrator's meeting brief (agenda, participants, open items)
-    into the live-prompt memory channel, ahead of the cross-meeting carryover —
+    into the live-prompt memory channel, ahead of the cross-meeting carryover -
     it's the most specific context this session has."""
     brief = (session.integration or {}).get("brief", "")
     if brief:
@@ -599,7 +599,7 @@ def inject_brief(session: Any, memory: str) -> str:
 def resolve_mission(session: Any) -> str:
     """The per-meeting mission set on THIS session (MeetingContext.mission,
     carried on ``integration``), or "" when none was set. The caller falls back
-    to the avatar's default mission (avatar.yaml) — so a per-session mission
+    to the avatar's default mission (avatar.yaml); so a per-session mission
     wins, an avatar default applies otherwise, and neither means today's
     behaviour exactly."""
     return ((session.integration or {}).get("mission", "") if session else "") or ""

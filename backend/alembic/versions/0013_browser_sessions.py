@@ -1,4 +1,4 @@
-"""Browser operator B0 — durable session ownership + presentation tokens.
+"""Browser operator B0; durable session ownership + presentation tokens.
 
 Revision ID: 0013_browser_sessions
 Revises: 0012_data_foundation
@@ -13,20 +13,20 @@ BrowserOperator interface.
 
 Tables (all FORCE RLS, composite-org FKs, 0009-0012 discipline):
 
-- ``browser_sessions``           — the canonical session, tenancy bound to
+- ``browser_sessions``: the canonical session, tenancy bound to
                                     (org_id, principal, avatar, avatar
                                     version, meeting ref, provider). The
                                     provider's own session id lives in
                                     ``provider_ref`` and is NEVER returned by
-                                    any API or logged — Laura's ``id`` (uuid)
+                                    any API or logged: Laura's ``id`` (uuid)
                                     is the only public identifier. State
                                     machine + TTL + last command sequence +
                                     the canonical action reference for a
                                     guarded step.
-- ``browser_commands``           — (org_id, session_id, command_id) idempotency
+- ``browser_commands``: (org_id, session_id, command_id) idempotency
                                     ledger: a replayed command returns its
                                     first result, never re-executes.
-- ``browser_presentation_tokens``— opaque, short-lived, single-session,
+- ``browser_presentation_tokens``: opaque, short-lived, single-session,
                                     read-only viewer grants. Only the sha256
                                     HASH is stored; the token value never
                                     touches the database or logs. Revocable,
@@ -36,7 +36,7 @@ Guarded WRITE steps need no new action table: they are rows in
 ``queued_actions`` with ``execution_route='browser'`` (already admitted by
 the 0009 CHECK), reusing the M0 decision record + execution claim + receipt.
 
-Grant posture: SELECT/INSERT/UPDATE to laura_app (no DELETE — sessions and
+Grant posture: SELECT/INSERT/UPDATE to laura_app (no DELETE; sessions and
 tokens are revoked/expired, never deleted by the runtime; a reviewed
 retention worker is future work). Downgrade raises.
 """

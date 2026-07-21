@@ -2,7 +2,7 @@
 
 The manifest is a STATIC, non-authoritative asset. It may provide the starting
 URL, goal, checkpoints, expected visible results, allowed domains, budgets and
-guarded-operation metadata — but it can NEVER override organization/principal,
+guarded-operation metadata; but it can NEVER override organization/principal,
 browser policy, permission checks, action approval, the operation vocabulary,
 or the global safety limits (those are clamped server-side).
 """
@@ -13,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-# demos/northstar/demo/demo_manifest.json — repo-root relative.
+# demos/northstar/demo/demo_manifest.json; repo-root relative.
 _MANIFEST = (Path(__file__).resolve().parents[3]
              / "demos" / "northstar" / "demo" / "demo_manifest.json")
 _KNOWLEDGE = (Path(__file__).resolve().parents[3]
@@ -41,7 +41,7 @@ def allowed_domains() -> str:
 
 
 def clamped_budgets() -> dict[str, int]:
-    """Manifest budgets CLAMPED to the server maximums — a manifest can only
+    """Manifest budgets CLAMPED to the server maximums; a manifest can only
     tighten a limit, never widen it past the coordinator's global cap."""
     from ..config import settings
 

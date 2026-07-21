@@ -3,7 +3,7 @@ from __future__ import annotations
 (_start_avatar_session), post-meeting finalize (_finalize_session/_locked), and
 their meter/usage/recall/artifact helper closure. api/ route groups share it
 without importing main (circular). main.py re-imports the names its stayers
-call — identity preserved; _finalizing/_graphiti_tasks/_gmail_state are
+call; identity preserved; _finalizing/_graphiti_tasks/_gmail_state are
 mutate-only shared state (never rebind).
 """
 import asyncio, re, time, traceback, uuid
@@ -41,9 +41,9 @@ def _stamp_action_routing(actions: list) -> list:
     """Routing-role stamps (agreed action-lifecycle contract
     hsk_con_cnw4567mqj3p49dyn3dg): every canonical action carries an
     IMMUTABLE execution_route decided here (native iff our executor will run
-    its typed spec; else cedric), a correlation_id (defaults to action_id —
-    the cross-log join), an execution_policy, and — when no owner was
-    resolved — the visible triage payload (unresolved_roles +
+    its typed spec; else cedric), a correlation_id (defaults to action_id -
+    the cross-log join), an execution_policy, and; when no owner was
+    resolved; the visible triage payload (unresolved_roles +
     unassigned_reason) instead of a silent blank. Stamps are setdefault-only:
     a route persisted earlier is never re-evaluated (contract re-route bounds)."""
     out: list = []
@@ -67,7 +67,7 @@ def _stamp_action_routing(actions: list) -> list:
 def _avatar_asana_enabled(org_id: str, avatar_id: str) -> bool:
     """Whether this avatar may use the org's Asana: the org is connected
     (per-org token or ASANA_TOKEN) AND this avatar is purpose-built for Asana
-    (declares it in avatar.yaml — Petra does, other avatars don't) AND the
+    (declares it in avatar.yaml: Petra does, other avatars don't) AND the
     per-avatar `asana` toggle is not explicitly off. So Asana defaults ON for
     PETRA ONLY, not every avatar whose org happens to have connected it; a
     dashboard toggle can still override per avatar. Sync (sqlite/yaml, both
@@ -90,7 +90,7 @@ def _avatar_asana_enabled(org_id: str, avatar_id: str) -> bool:
 
 def _bot_meeting_key(bot: dict) -> str:
     """Platform-aware meeting_key for a Recall bot record, to compare for
-    EQUALITY against ledger.meeting_key(our_url) — not a Meet-only substring.
+    EQUALITY against ledger.meeting_key(our_url); not a Meet-only substring.
 
     Recall reports the joined meeting either as a full URL string or as a
     structured object carrying the platform-native meeting_id. ledger.meeting_key
@@ -101,7 +101,7 @@ def _bot_meeting_key(bot: dict) -> str:
         so compare on it directly (lower-cased).
     The old Meet-only regex made ``code`` the whole URL for Zoom/Teams while
     Recall reports an opaque id, so the substring test never matched and both
-    durable guards silently no-op'd — two bots, two meters, uncleaned.
+    durable guards silently no-op'd; two bots, two meters, uncleaned.
     """
     mu = bot.get("meeting_url")
     if isinstance(mu, dict):
@@ -137,7 +137,7 @@ def _status_change_epoch(
     bot: dict, codes: set[str], *, first: bool = True
 ) -> float | None:
     """Epoch of the first (or last) status_changes entry whose code is in
-    ``codes``. Recall stamps every status with its own created_at — the
+    ``codes``. Recall stamps every status with its own created_at; the
     authoritative record of when the meter actually started/stopped, immune
     to our own polling lag. None when absent or unparsable."""
     changes = bot.get("status_changes") or []
@@ -148,7 +148,7 @@ def _status_change_epoch(
                 dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             except ValueError:
                 return None
-            # A timestamp with no offset would otherwise be read as LOCAL time —
+            # A timestamp with no offset would otherwise be read as LOCAL time -
             # off by the host's UTC offset (hours of phantom consumed_seconds).
             # Recall stamps UTC; treat a naive value as UTC.
             if dt.tzinfo is None:
@@ -160,14 +160,14 @@ def _status_change_epoch(
 async def _close_usage_for(
     org_id: str, bot_id: str, end_epoch: float | None, reason: str
 ) -> None:
-    """Close the durable usage row for a finished bot (PR B). Idempotent —
+    """Close the durable usage row for a finished bot (PR B). Idempotent -
     entitlements.close_usage's ``WHERE state != 'closed'`` means the FIRST
     close wins, so manual end + webhook + reconcile retries can never rewrite
     consumed_seconds. consumed = end - in_call_at, where ``end`` is Recall's
     terminal-status timestamp when the caller had one, else now CAPPED at the
     deadline (our own enforcement lag is never billed to the org). A row that
     never went in-call closes 0 'never_joined'. Best-effort: a failure leaves
-    the row open for the reconcile restore pass — it must NEVER break
+    the row open for the reconcile restore pass; it must NEVER break
     finalize. No-op in the key-free demo (control plane disabled)."""
     if not control_plane.enabled():
         return
@@ -190,7 +190,7 @@ async def _close_usage_for(
         await run_in_threadpool(
             entitlements.close_usage, org_id, bot_id, consumed, reason
         )
-    except Exception as e:  # noqa: BLE001 — reconcile's restore pass heals it
+    except Exception as e:  # noqa: BLE001; reconcile's restore pass heals it
         print(
             f"[usage] close failed for bot={bot_id} ({type(e).__name__}); "
             f"reconcile will heal",
@@ -216,7 +216,7 @@ async def _assign_usage_bot_id(
                 return True
             # False is NOT success: retry, then force the caller down the
             # fail-closed cleanup path instead of running an unmetered bot.
-        except Exception:  # noqa: BLE001 — transient billing-DB blip; retry
+        except Exception:  # noqa: BLE001; transient billing-DB blip; retry
             if attempt == 2:
                 print(
                     "[usage] provisional bot_id swap failed after retries — "
@@ -230,7 +230,7 @@ async def _assign_usage_bot_id(
 
 async def _abandon_orphan_session(bot_id: str) -> None:
     """Drop a local session whose Recall bot no longer exists and that never
-    captured anything — a cancelled or no-show scheduled bot. Stops the Anam
+    captured anything; a cancelled or no-show scheduled bot. Stops the Anam
     conversation if one was opened (best-effort; the Recall bot is already gone,
     so no Recall meter remains), then removes the session. NO artifact and NO
     session.ended: the meeting never happened, so the orchestrator must not hear
@@ -252,7 +252,7 @@ async def _abandon_orphan_session(bot_id: str) -> None:
                 )
             except Exception:
                 pass
-        # PR B: a no-show bot consumed nothing — release its usage row so the
+        # PR B: a no-show bot consumed nothing; release its usage row so the
         # org's one-active-meeting slot frees up (idempotent; never raises).
         await _close_usage_for(session.org_id, bot_id, None, "never_joined")
         store.remove(bot_id)
@@ -266,7 +266,7 @@ _LEAVE_GONE_STATUSES = {404, 410}
 def _leave_confirmed_stopped(exc: BaseException | None) -> bool:
     """True iff the Recall meter is CONFIRMED not billing: leave_call succeeded
     (exc is None) or Recall reports the bot genuinely gone (404/410). Every other
-    error — 401/403/429 auth/rate-limit, 5xx, network/other — is UNVERIFIED, so
+    error, 401/403/429 auth/rate-limit, 5xx, network/other, is UNVERIFIED, so
     the caller keeps the session for a retry rather than dropping a still-live,
     still-billing bot (the fleet-wide meter-leak class this whole change closes)."""
     if exc is None:
@@ -278,14 +278,14 @@ def _leave_confirmed_stopped(exc: BaseException | None) -> bool:
 
 async def _bot_reports_terminal(bot_id: str) -> bool:
     """Best-effort status poll: True iff Recall AFFIRMATIVELY confirms the bot is
-    not billing — its latest status is terminal (done/call_ended/fatal) or Recall
+    not billing; its latest status is terminal (done/call_ended/fatal) or Recall
     no longer knows it (404/410 → gone). Used to DRAIN a leave_pending session
     whose leave_call keeps being rejected with a non-gone status (e.g. Recall's
     400 "bot is not in a call" for an already-ended bot): leave_pending IS a
     persisted field, so a phantom survives a redeploy (SQLite → S3 restore) and
     would otherwise be retried every reconcile pass FOREVER, inflating
-    active_sessions. Any ambiguity — a still-live/non-terminal status, a non-200
-    that isn't a gone-status, or a poll error — returns False so the caller KEEPS
+    active_sessions. Any ambiguity; a still-live/non-terminal status, a non-200
+    that isn't a gone-status, or a poll error; returns False so the caller KEEPS
     the session (never drop a possibly-live, possibly-billing bot)."""
     try:
         r = await run_in_threadpool(
@@ -295,24 +295,24 @@ async def _bot_reports_terminal(bot_id: str) -> bool:
                 timeout=20.0,
             )
         )
-    except Exception:  # noqa: BLE001 — a poll error keeps the session (retry next pass)
+    except Exception:  # noqa: BLE001; a poll error keeps the session (retry next pass)
         return False
     if r.status_code in _LEAVE_GONE_STATUSES:
         return True  # Recall no longer has the bot → gone → not billing
     if r.status_code != 200:
-        return False  # auth/rate/5xx — unknown, keep the session
+        return False  # auth/rate/5xx; unknown, keep the session
     try:
         return _bot_status_code(r.json()) in _BOT_TERMINAL
-    except Exception:  # noqa: BLE001 — unparseable body → treat as unknown
+    except Exception:  # noqa: BLE001; unparseable body → treat as unknown
         return False
 
 
 async def _retry_leave(bot_id: str, session: store.Session) -> bool:
     """Retry ONLY the Recall meter-stop for a session whose artifact was already
     built + delivered but whose leave_call could not be confirmed (so it was kept
-    in the store for this retry — see _finalize_session_locked). Drop the session
+    in the store for this retry; see _finalize_session_locked). Drop the session
     and signal the GPU meter when the meter is CONFIRMED stopped (leave succeeded
-    OR the bot is gone 404/410 — otherwise a legitimate already-ended bot would
+    OR the bot is gone 404/410; otherwise a legitimate already-ended bot would
     be retried every pass FOREVER, inflating active_sessions and defeating the
     pre-deploy gate). NO artifact rebuild, NO re-delivery. Returns False while the
     stop is still UNVERIFIED so the reconcile loop retries next pass.
@@ -325,18 +325,18 @@ async def _retry_leave(bot_id: str, session: store.Session) -> bool:
     try:
         try:
             await run_in_threadpool(recall_client.leave_call, bot_id)
-        except Exception as e:  # noqa: BLE001 — classified below
+        except Exception as e:  # noqa: BLE001; classified below
             if not _leave_confirmed_stopped(e):
                 # The leave itself didn't confirm the stop. But a bot Recall now
-                # reports terminal/gone is not billing — an already-ended bot
+                # reports terminal/gone is not billing; an already-ended bot
                 # rejects the courtesy leave with 400 "not in a call", which is
                 # NOT a gone-status, so without this a restored leave_pending
                 # phantom (leave_pending is persisted → survives redeploy) would
                 # retry forever. Confirm via a status poll before giving up.
                 if not await _bot_reports_terminal(bot_id):
-                    return False  # UNVERIFIED and not terminal — keep, retry next pass
+                    return False  # UNVERIFIED and not terminal; keep, retry next pass
             # 404/410 leave, OR Recall confirms terminal/gone → not billing → drop.
-        # PR B BLOCKER 2: the meter is NOW confirmed off — close the usage row
+        # PR B BLOCKER 2: the meter is NOW confirmed off; close the usage row
         # here (finalize deferred it on the unverified leave to keep the slot
         # held). First-close-wins, so a manual /end + a reconcile tick racing
         # this both resolve to one honest close. consumed = confirmed-stop
@@ -385,11 +385,11 @@ async def _start_avatar_session(
     requested = (requested or settings.default_avatar_id).strip()
     if avatars.is_internal(requested):
         # Internal personas are not dispatchable for ANY entry point (manual
-        # start, calendar auto-join, Gmail watcher) — same error an unknown
+        # start, calendar auto-join, Gmail watcher); same error an unknown
         # folder raises, so callers treat it as a nonexistent avatar.
         raise FileNotFoundError(f"No avatar '{requested}'")
     # ONE canonical resolution per session (M2): the org's published overlay
-    # applied over the immutable repo avatar — persona/voice/face/tools all
+    # applied over the immutable repo avatar; persona/voice/face/tools all
     # flow from this object. Flag off / no overlay ⇒ the exact avatars.load
     # cached instance (byte-identical behavior).
     avatar = await run_in_threadpool(
@@ -397,19 +397,19 @@ async def _start_avatar_session(
     )  # raises if unknown
     conversation_id = uuid.uuid4().hex
     # avatar.page: per-avatar face tier (3D "talk" vs photoreal), falling back
-    # to the global AVATAR_PAGE — the dashboard's "choose your avatar" knob.
+    # to the global AVATAR_PAGE; the dashboard's "choose your avatar" knob.
     avatar_url = (
         f"{settings.public_base_url.rstrip('/')}/{avatar.page.strip('/')}"
         f"?avatar_id={avatar.id}&conversation_id={conversation_id}"
         f"&body={avatar.talk_body}&face_fallback={avatar.face_fallback}"
     )
-    # ── entitlement gate (PR B) — THE single choke point for paid bots ──
+    # ── entitlement gate (PR B). THE single choke point for paid bots ──
     # Every entry point (manual start, calendar auto-join, Gmail watcher,
     # Cedric dispatch) funnels through here, so gating BEFORE create_bot is
     # gating everywhere. Only when the durable control plane is configured;
     # the key-free demo skips this entirely (byte-identical behaviour). The
     # usage row is inserted under a PROVISIONAL bot_id (the real id doesn't
-    # exist until Recall answers) and swapped to the real one right after —
+    # exist until Recall answers) and swapped to the real one right after -
     # both inside the caller's per-meeting lock. open_usage raising
     # EntitlementsUnavailable (billing DB outage) or UsageDenied propagates
     # to the caller BEFORE any vendor dispatch: fail closed, never free.
@@ -429,14 +429,14 @@ async def _start_avatar_session(
             avatar.id,
         )
     except Exception:
-        # No bot was born — release the pending usage row (consumes 0) so the
+        # No bot was born; release the pending usage row (consumes 0) so the
         # org's one-active-meeting slot isn't stranded by a failed dispatch.
         if usage_bot_id:
             try:
                 await run_in_threadpool(
                     entitlements.close_usage, org_id, usage_bot_id, 0, "dispatch_failed"
                 )
-            except Exception:  # noqa: BLE001 — reconcile's restore heals orphans
+            except Exception:  # noqa: BLE001; reconcile's restore heals orphans
                 print("[usage] dispatch_failed close deferred to reconcile", flush=True)
         raise
     realtime_capability = str(bot.pop("_laura_realtime_capability", "") or "")
@@ -446,7 +446,7 @@ async def _start_avatar_session(
     )
     # Stash the resolved avatar for the live path (frozen for the session,
     # exactly like mission): hot-path readers use avatar_resolver.for_session
-    # — the stash or the canonical mtime-cached load, never database I/O.
+    #; the stash or the canonical mtime-cached load, never database I/O.
     # Only an APPLIED overlay is stashed, so flag-off sessions keep the
     # canonical load()'s mid-meeting avatar.yaml refresh behavior.
     if getattr(avatar, "overlay_version", 0):
@@ -479,7 +479,7 @@ async def _start_avatar_session(
             store.remove(bot["id"])
         raise RuntimeError("could not secure Recall realtime endpoint")
     # CEDRIC: a summon that didn't carry its own wiring (the Gmail auto-join
-    # watcher passes integration=None) still gets the Model A default routing —
+    # watcher passes integration=None) still gets the Model A default routing -
     # otherwise an email-summoned meeting silently falls to Model B (no context
     # pull, no session.ended to Cedric). POST /sessions/start always passes its
     # own build_integration result, so it keeps winning; default_integration()
@@ -489,26 +489,26 @@ async def _start_avatar_session(
     if integration:
         # Tenancy on the wire: every callback event carries the owning org so
         # the orchestrator can resolve the tenant even when external_ref is
-        # empty (dashboard/email summons) — and the sender can pick a per-org
+        # empty (dashboard/email summons); and the sender can pick a per-org
         # signing secret. "" for service starts keeps today's behaviour.
         session.integration = {**integration, "org_id": org_id}
     session.anam_conversation_id = conversation_id
     store.register_conversation(conversation_id, bot["id"], org_id=org_id)
-    # Session-start briefs — five independent, best-effort reads gathered
+    # Session-start briefs; five independent, best-effort reads gathered
     # CONCURRENTLY (they were serial; each is threadpool + cached + "" on any
     # failure, and none is on the live path, but bot dispatch shouldn't pay
     # their straight-line sum):
-    #   carryover  — what previous sessions of this meeting link left open
-    #   drive      — the avatar's shared folder (avatar.yaml drive_folder_id)
-    #   asana      — workspace snapshot, when connected + avatar-enabled
-    #   registry   — org-scoped tool context (feeds list_capabilities /
+    #   carryover; what previous sessions of this meeting link left open
+    #   drive; the avatar's shared folder (avatar.yaml drive_folder_id)
+    #   asana; workspace snapshot, when connected + avatar-enabled
+    #   registry; org-scoped tool context (feeds list_capabilities /
     #                search_tools with zero network in-meeting)
-    #   calendar   — the owner org's upcoming meetings (feeds the
+    #   calendar; the owner org's upcoming meetings (feeds the
     #                upcoming_meetings brain tool, zero network in-meeting)
     async def _quiet(coro):
         try:
             return await coro
-        except Exception:  # noqa: BLE001 — best-effort: the join never fails on a brief
+        except Exception:  # noqa: BLE001; best-effort: the join never fails on a brief
             return None
 
     def _asana_brief_sync() -> str:
@@ -521,7 +521,7 @@ async def _start_avatar_session(
     def _asana_live_sync() -> bool:
         # Whether the LIVE asana_* read tools are offered this session
         # (tools.specs_for): connected org + Asana-enabled avatar. Computed
-        # once here — specs_for runs on the live path and must never touch
+        # once here; specs_for runs on the live path and must never touch
         # the DB.
         return _avatar_asana_enabled(org_id, avatar.id) and asana_client.connected(
             org_id
@@ -557,7 +557,7 @@ async def _start_avatar_session(
         )
     if asana_snapshot:
         # Honest label: this is the state at meeting START. When the live
-        # asana_* tools are on, say so — that's what makes her READ current
+        # asana_* tools are on, say so; that's what makes her READ current
         # state instead of quoting a stale snapshot.
         _asana_note = (
             " — use asana_projects / asana_tasks / asana_search for the CURRENT state"
@@ -575,7 +575,7 @@ async def _start_avatar_session(
         )
     # Feed the workspace snapshot(s) into the org's knowledge graph (graphiti,
     # optional/off by default). Off the hot path, best-effort; strong-ref'd task.
-    # (KEEP — merges keep reverting this wiring.)
+    # (KEEP; merges keep reverting this wiring.)
     _kg_src = "\n\n".join(s for s in (asana_snapshot, jira_snapshot) if s)
     if _kg_src and graphiti_client.enabled():
         _kg_task = asyncio.create_task(graphiti_client.ingest(org_id, _kg_src))
@@ -596,7 +596,7 @@ async def _start_avatar_session(
         )
     if settings.autopilot_brief and session.memory_brief:
         # Autopilot: mail/Slack "what's still open from last time" to the
-        # owner as the bot joins. Fire-and-forget — never delays the join.
+        # owner as the bot joins. Fire-and-forget; never delays the join.
         asyncio.create_task(
             run_in_threadpool(autopilot.maybe_send_brief, meeting_url, avatar.name)
         )
@@ -625,7 +625,7 @@ def _content_tokens(text: str) -> frozenset:
 
 
 def _same_action(a: str, b: str) -> bool:
-    """True when two action lines describe the SAME request — one content-token
+    """True when two action lines describe the SAME request; one content-token
     set is a subset of the other. Requires >=2 shared content tokens so a single
     shared verb ('send') never over-merges two distinct asks."""
     ta, tb = _content_tokens(a), _content_tokens(b)
@@ -644,7 +644,7 @@ _DEMO_BROWSE_RE = re.compile(
 
 def _is_live_browse_item(text: str) -> bool:
     """A captured/extracted item that is really a LIVE browser-tour request
-    ('show me the Asana dashboard', 'fammi un tour di Asana') — the avatar
+    ('show me the Asana dashboard', 'fammi un tour di Asana'); the avatar
     does it in the meeting, so it must not land in the post-meeting to-dos.
     Matches both the first-person live ask (detect_browse_intent) and the
     summarizer's third-person 'Show <name> how to…' / 'Give <name> a tour…'
@@ -661,16 +661,16 @@ def _is_live_browse_item(text: str) -> bool:
 def _merge_action_items(queued: list, extracted: list) -> list:
     """Artifact actions[] = live-captured queue_action items first, then the
     summarizer's extraction, deduped on normalized item text. A live capture
-    wins a collision — it is the wording the room actually asked for — and
+    wins a collision, it is the wording the room actually asked for, and
     ledger.record_meeting dedupes again on insert, so double-merging is safe.
 
     Every returned action carries a stable ``action_id``: a live capture keeps
     the id assigned at capture time (the same one already sent on its
-    action.requested webhook), and a summarizer-only action — which never fired
-    a live event — gets a fresh id here. The id is what the orchestrator dedupes
+    action.requested webhook), and a summarizer-only action; which never fired
+    a live event; gets a fresh id here. The id is what the orchestrator dedupes
     and resolves on.
 
-    May make ONE model call (the cross-language net below) — finalize-only;
+    May make ONE model call (the cross-language net below); finalize-only;
     callers on the event loop must run it in a threadpool."""
     merged: list = []
     seen: set[str] = set()
@@ -697,15 +697,15 @@ def _merge_action_items(queued: list, extracted: list) -> list:
     extras: list[dict] = []  # summarizer actions that survived the overlap dedup
     for a in extracted or []:
         if _is_live_browse_item((a.get("item") or a.get("action") or "")):
-            continue  # summarizer picked up a live browse ask — drop it
+            continue  # summarizer picked up a live browse ask; drop it
         text = a.get("item", "") if isinstance(a, dict) else str(a)
         key = _norm_action_text(text)
         if key in seen:
             continue
         # Semantic dedup against the live captures: the summarizer routinely
         # re-extracts an action the room already asked live, just rephrased (the
-        # deadline split into its own field). Keep the LIVE entry — its action_id
-        # already went out on action.requested — and fold in the summarizer's
+        # deadline split into its own field). Keep the LIVE entry; its action_id
+        # already went out on action.requested; and fold in the summarizer's
         # structured owner/deadline where the live capture had none. (#84 dedup.)
         dup = next((m for m in live_items if _same_action(text, m["item"])), None)
         if dup is not None:
@@ -723,8 +723,8 @@ def _merge_action_items(queued: list, extracted: list) -> list:
     # cards → double execution. The prompt-level prevention in brain.post_meeting
     # stops most of it at the source; this one cheap model call (stub: no-op;
     # failure: keeps both) catches whatever still got through. Same fold-and-drop
-    # semantics as the overlap path: the live entry — whose action_id already
-    # went out on action.requested — always wins.
+    # semantics as the overlap path: the live entry; whose action_id already
+    # went out on action.requested; always wins.
     if live_items and extras:
         drop: set[int] = set()
         for xi, li in semantic_action_duplicates(
@@ -763,14 +763,14 @@ async def _finalize_session(
 ) -> dict | None:
     """End a session once: stop both vendors, build + store the artifact.
 
-    Idempotent AND concurrency-safe — safe to call from the manual endpoint, the
+    Idempotent AND concurrency-safe; safe to call from the manual endpoint, the
     terminal-status webhook, and the reconciliation loop, even simultaneously.
     Returns the stored artifact (or None) if the session is already gone.
 
     ``source`` (manual/webhook/reconcile) is recorded PII-safely for diagnosing
     which path finalized a meeting; it never affects behaviour. ``failed_code``
     ('fatal' when the join fatally failed) fires the Cedric join-failed
-    notification ONCE, inside the guard — so a fatal seen by both the webhook and
+    notification ONCE, inside the guard; so a fatal seen by both the webhook and
     the poll notifies the orchestrator a single time, not twice.
 
     ``usage_reason``/``usage_end_epoch`` (PR B) shape the durable usage close:
@@ -783,11 +783,11 @@ async def _finalize_session(
     after process replacement without adding a global bot-id lookup.
 
     ``bot_terminal`` (set by the two callers that KNOW Recall already reports the
-    bot terminal — the reconcile terminal-status poll and the account terminal
+    bot terminal; the reconcile terminal-status poll and the account terminal
     webhook) means the meter is ALREADY stopped: a bot in done/call_ended/fatal
     is not in a call and cannot bill. The courtesy leave_call below may then be
     rejected by Recall (e.g. 400 "bot is not in a call" for an already-ended
-    bot) — which must NOT be treated as an UNVERIFIED stop, or the session is
+    bot); which must NOT be treated as an UNVERIFIED stop, or the session is
     kept as leave_pending and retried forever, inflating active_sessions (the
     phantom that blocks the pre-deploy gate). Only a leave for a possibly-still-
     live bot (manual /end, bot_terminal=False) requires a verified stop.
@@ -805,7 +805,7 @@ async def _finalize_session(
     # A prior finalize already built + delivered this session's artifact but its
     # Recall meter-stop (leave_call) was not confirmed, so the session was KEPT
     # for retry (see _finalize_session_locked). Re-finalizing must NOT rebuild or
-    # re-deliver — just retry the meter-stop and drop the session once confirmed
+    # re-deliver; just retry the meter-stop and drop the session once confirmed
     # stopped. _retry_leave self-guards on _finalizing, so a manual /end and a
     # reconcile tick can't double-retry. Return the already-stored artifact so
     # /end still answers 200 with the deliverable.
@@ -814,13 +814,13 @@ async def _finalize_session(
         return await run_in_threadpool(
             store.get_artifact, bot_id, org_id=session.org_id
         )
-    # Concurrency guard. store.remove(bot_id) — the thing that makes the
-    # `session is None` check above idempotent — only runs at the very END of
+    # Concurrency guard. store.remove(bot_id); the thing that makes the
+    # `session is None` check above idempotent; only runs at the very END of
     # the body, past several awaits (the multi-second post_meeting LLM call
     # included). So two finalizes racing on the same bot (bot.call_ended +
     # bot.done arrive as concurrent webhook POSTs; the poll loop is a third
     # racer) would BOTH pass the None check and BOTH fire session.ended to
-    # Cedric. Check-and-add is synchronous — no await between here and the add —
+    # Cedric. Check-and-add is synchronous; no await between here and the add -
     # so it is atomic under asyncio's single-threaded loop.
     if bot_id in _finalizing:
         return await run_in_threadpool(
@@ -861,19 +861,19 @@ async def _finalize_session_locked(
     # RAISES on a persistent failure (retry=True + raise_for_status). The stop is
     # only CONFIRMED when leave succeeds or Recall reports the bot genuinely gone
     # (404/410, e.g. a naturally-ended meeting); a 401/403 (rotated key), 429, or
-    # 5xx leaves it UNVERIFIED — the bot may still be live+billing. When
+    # 5xx leaves it UNVERIFIED; the bot may still be live+billing. When
     # unverified we keep the session below so the reconcile backstop retries the
     # leave; the artifact is still built + persisted + delivered here so the
     # deliverable is never lost.
     leave_verified = True
     try:
         await run_in_threadpool(recall_client.leave_call, bot_id)
-    except Exception as e:  # noqa: BLE001 — classified by _leave_confirmed_stopped
-        # A bot Recall ALREADY reports terminal (bot_terminal) is not billing —
+    except Exception as e:  # noqa: BLE001; classified by _leave_confirmed_stopped
+        # A bot Recall ALREADY reports terminal (bot_terminal) is not billing -
         # leave_call is a courtesy and its rejection (e.g. 400 "not in a call"
         # for an already-ended bot) must not strand the session as leave_pending
         # (phantom active_sessions). A possibly-still-live bot still needs a
-        # verified stop (404/410/success) — the fleet meter-leak guard.
+        # verified stop (404/410/success); the fleet meter-leak guard.
         leave_verified = bot_terminal or _leave_confirmed_stopped(e)
     if session.anam_conversation_id:
         try:
@@ -884,7 +884,7 @@ async def _finalize_session_locked(
             pass
 
     # PR B BLOCKER 2: the usage close is DEFERRED to the verified-stop branch
-    # below — closing here (before the leave is confirmed off) would free the
+    # below; closing here (before the leave is confirmed off) would free the
     # org's one-meeting slot while the bot may still be live+billing, letting a
     # 2nd meeting start against a still-running meter. On a VERIFIED stop we
     # close (first-close-wins); on an UNVERIFIED leave we stash the reason/end
@@ -905,7 +905,7 @@ async def _finalize_session_locked(
         "follow_up_email": {},
     }
     integration = dict(session.integration) if session.integration else None  # CEDRIC
-    # Live-captured action requests (tools.queue_action) — read once, used twice:
+    # Live-captured action requests (tools.queue_action); read once, used twice:
     # shown to the summarizer as "already captured, do not re-extract" (dedup
     # prevention at the source, cross-language included) and then merged into
     # the artifact's actions[] below.
@@ -933,14 +933,14 @@ async def _finalize_session_locked(
                     state=analysis_state,
                 )
             )
-        except Exception as e:  # noqa: BLE001 — a transient post-model failure must
+        except Exception as e:  # noqa: BLE001; a transient post-model failure must
             # not 500 /end and lose the whole deliverable. post_meeting passes an
             # EXPLICIT provider, so llm.complete's 'never go dark' Haiku fallback
             # (gated on provider is None) does NOT run and a 429/529/timeout
             # re-raises up to here. Degrade to the deterministic tracker recap so
             # the artifact still saves + delivers below; the meter-stop already
             # ran above and the leave-retry path stays intact. (No transcript is
-            # logged — PII: only the exception class name.)
+            # logged: PII: only the exception class name.)
             print(
                 f"[finalize] bot={bot_id} post_meeting failed "
                 f"({type(e).__name__}); degrading to deterministic recap",
@@ -953,10 +953,10 @@ async def _finalize_session_locked(
                     analysis_transcript_text,
                     state=analysis_state,
                 )
-            except Exception as e2:  # noqa: BLE001 — the degraded rebuild ALSO failed.
+            except Exception as e2:  # noqa: BLE001; the degraded rebuild ALSO failed.
                 # This is no longer a transient LLM blip: degraded_post_meeting
                 # re-runs build_from_text/_finish_artifact, so a real bug there
-                # would re-raise and 500 /end + lose the artifact — the exact
+                # would re-raise and 500 /end + lose the artifact; the exact
                 # failure Fix 3 exists to prevent. Save + deliver a bare
                 # deterministic scaffold so _finalize_session_locked can NEVER
                 # throw on the post-meeting build (the full transcript is still
@@ -987,10 +987,10 @@ async def _finalize_session_locked(
 
     # Fold the live captures into the artifact's actions[] ahead of the
     # summarizer's extraction, deduped on normalized item text. Runs BEFORE
-    # save_artifact and ledger.record_meeting so every consumer — stored
-    # artifact, wire artifact, ledger, autopilot — sees the same merged list.
+    # save_artifact and ledger.record_meeting so every consumer; stored
+    # artifact, wire artifact, ledger, autopilot; sees the same merged list.
     # Plain non-orchestrated sessions benefit too. Always run the merge (even
-    # with no live captures) so EVERY action carries a stable action_id — the
+    # with no live captures) so EVERY action carries a stable action_id; the
     # summarizer-only actions get one here too. Threadpool because the merge's
     # cross-language net may make one model call: finalize is off the live path,
     # but the event loop (other meetings' live turns) must never wait on it.
@@ -1001,9 +1001,9 @@ async def _finalize_session_locked(
 
     # Typed-action specs for the native executor (NATIVE-INTEGRATIONS-PLAN.md):
     # annotate each action with a {type, args} spec where it CLEARLY maps
-    # (calendar.create_event / email.send — plus asana.create_task for an
+    # (calendar.create_event / email.send; plus asana.create_task for an
     # avatar allowed to use the org's connected Asana) so an APPROVED action
-    # can be run natively. GATED on the flag — with NATIVE_EXECUTOR off this
+    # can be run natively. GATED on the flag; with NATIVE_EXECUTOR off this
     # whole block is skipped, so finalize is byte-identical to today (no extra
     # model call, no new field). Never invents recipients/times; unmapped
     # actions stay generic. Best-effort: typing must never break finalize.
@@ -1048,7 +1048,7 @@ async def _finalize_session_locked(
             # Asana auto-push (ASANA_AUTO_EXECUTE, off by default): typed
             # tasks land on the board NOW instead of waiting for dashboard
             # approval; receipts (task URLs) go through the same provenance
-            # channel as approved runs. Best-effort — finalize (the meter
+            # channel as approved runs. Best-effort; finalize (the meter
             # stop) is already safe above and must never wait on Asana.
             if allow_asana and settings.asana_auto_execute:
                 pushed = await run_in_threadpool(
@@ -1062,29 +1062,29 @@ async def _finalize_session_locked(
                         f"{pushed} action(s)",
                         flush=True,
                     )
-        except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
+        except Exception as e:  # noqa: BLE001; enrichment only, never fatal
             print(
                 f"[finalize] bot={bot_id} typed-action producer skipped "
                 f"({type(e).__name__})",
                 flush=True,
             )
 
-    # Routing-role stamps — UNCONDITIONAL (executor on or off): finalize is
+    # Routing-role stamps: UNCONDITIONAL (executor on or off): finalize is
     # the contract's first decision point, and the route persisted here is
     # what the approve door executes by.
     artifact["actions"] = _stamp_action_routing(artifact.get("actions") or [])
     artifact["checklist"] = artifact["actions"]
 
-    # The transcript is the raw material of the artifact — persist it so the
+    # The transcript is the raw material of the artifact; persist it so the
     # product output is complete (transcript + summary + checklist + email).
     # It lives only in the artifact store (PII: never logged).
     artifact["transcript"] = transcript_text
 
     # Attribution metadata: the session row is deleted below (store.remove), so
     # the artifact is the only place that remembers WHICH avatar ran WHICH
-    # meeting — the dashboard groups meetings per avatar from these fields.
+    # meeting; the dashboard groups meetings per avatar from these fields.
     # Duration is approximated from first-to-last utterance timestamps (counts
-    # only; no utterance text — the guard hook forbids logging transcript).
+    # only; no utterance text; the guard hook forbids logging transcript).
     artifact["avatar_id"] = session.avatar_id
     artifact["org_id"] = session.org_id
     artifact["meeting_url"] = session.meeting_url
@@ -1105,7 +1105,7 @@ async def _finalize_session_locked(
         store.save_artifact, bot_id, artifact, org_id=session.org_id
     )
     # Cross-meeting memory: fold this meeting's extracted facts into the
-    # ledger. Best-effort — memory must never block the cleanup below
+    # ledger. Best-effort; memory must never block the cleanup below
     # (session removal + GPU meter signal), so a ledger hiccup is swallowed.
     try:
         await run_in_threadpool(
@@ -1119,7 +1119,7 @@ async def _finalize_session_locked(
     elif settings.autopilot_deliver:
         # Autopilot: send the drafted follow-up + Slack summary now, without
         # holding up the finalize response (meter is already stopped above).
-        # Best-effort like the ledger — never blocks the cleanup below.
+        # Best-effort like the ledger; never blocks the cleanup below.
         try:
             name = avatar_resolver.for_session_offpath(session).name
             asyncio.create_task(run_in_threadpool(autopilot.maybe_deliver, name, artifact))
@@ -1127,7 +1127,7 @@ async def _finalize_session_locked(
             pass
     # PII-safe finalize telemetry: counts + booleans only, NEVER any utterance
     # text (the guard hook enforces this). Lets the next live test see which
-    # path finalized and whether content actually accumulated — the question
+    # path finalized and whether content actually accumulated; the question
     # left open by the empty-artifact test run.
     n_lines = len(session.transcript)
     had_content = bool(transcript_text.strip())
@@ -1139,7 +1139,7 @@ async def _finalize_session_locked(
     if leave_verified:
         # Meter CONFIRMED off → NOW close the durable usage row (first close
         # wins; idempotent across manual end + webhook + reconcile). Best-effort
-        # — a billing hiccup leaves the row for the reconcile restore pass.
+        #; a billing hiccup leaves the row for the reconcile restore pass.
         await _close_usage_for(session.org_id, bot_id, usage_end_epoch, usage_close_reason)
         store.remove(bot_id)
         # Photoreal only: last session out turns off the GPU meter (after a grace
@@ -1148,12 +1148,12 @@ async def _finalize_session_locked(
         runpod_runtime.on_session_ended(len(store.all_sessions()))
     else:
         # Meter-stop UNVERIFIED (Recall 5xx / network error): keep the session in
-        # the store so the reconcile backstop retries leave_call — the poll only
+        # the store so the reconcile backstop retries leave_call; the poll only
         # revisits sessions still in the store, so removing it now would strand a
         # still-live bot billing forever. The artifact is already saved and
         # delivered above; the retry routes through leave_pending so it must NOT
-        # re-deliver. (No transcript is logged — PII.)
-        # PR B BLOCKER 2: DO NOT close the usage row here — the slot stays held
+        # re-deliver. (No transcript is logged. PII.)
+        # PR B BLOCKER 2: DO NOT close the usage row here; the slot stays held
         # (a 2nd meeting for this org is correctly refused) until _retry_leave
         # confirms the meter is off. Stash the reason/end so that close is honest.
         session.leave_pending = True

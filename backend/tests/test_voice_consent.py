@@ -1,9 +1,9 @@
 """Voice-consent writes: an ADDRESSED mid-meeting ask ("Petra, create a task
-for X") is the approval — recorded on the canonical channel
+for X") is the approval; recorded on the canonical channel
 (decided_via='voice') and pushed to Cedric as action.approved to execute NOW,
 instead of parking a card until after the call.
 
-Covers: the unit seam (cedric.voice_approve — record + notify, first-write-
+Covers: the unit seam (cedric.voice_approve; record + notify, first-write-
 wins, never double-fires over an existing decision), the live webhook wiring
 (capture branch → voice_approve + the approved-and-running spoken line), and
 the flag-off legacy behaviour. Key-free like the rest of the suite.
@@ -116,7 +116,7 @@ def test_voice_approve_never_double_fires(client, monkeypatch):
     )
     session = store.create("bot_u2", "https://meet.example/u2", "cedric", org_id="org_w")
     session.integration = {"org_id": "org_w"}
-    # Another surface (dashboard) decided FIRST — reject, say.
+    # Another surface (dashboard) decided FIRST; reject, say.
     store.record_action_approval(
         "org_w", "act_vc2", decision="reject", decided_via="dashboard"
     )
@@ -150,7 +150,7 @@ def test_addressed_ask_voice_approves_and_says_so(
     # voice_approve is fired fire-and-forget:
     #   asyncio.create_task(run_in_threadpool(cedric.voice_approve, ...)).
     # That task can outlive the request, so asserting `approved` right after the
-    # webhook returns races it (flaky — passes alone, fails under load/ordering).
+    # webhook returns races it (flaky; passes alone, fails under load/ordering).
     # Run run_in_threadpool's target EAGERLY so the capture is synchronous.
     # Same deterministic fix as #282's test_clarify_loop `approved` fixture.
     def _eager_threadpool(fn, *a, **k):
@@ -176,7 +176,7 @@ def test_addressed_ask_voice_approves_and_says_so(
 
 def test_voice_consent_default_is_off():
     """The approval-first contract (owner ask 2026-07-18): by default nothing
-    executes on a spoken ask alone — every action waits for an explicit
+    executes on a spoken ask alone; every action waits for an explicit
     approval. Voice consent is the env opt-in, never the default."""
     from app.config import Settings
 

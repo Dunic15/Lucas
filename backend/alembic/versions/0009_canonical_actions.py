@@ -9,22 +9,22 @@ full canonical Action object from UNIFIED-ACTION-CONTROL-PLANE.md instead of
 just the distilled text triple:
 
 - two new lifecycle states: ``needs_details`` (typed spec is missing required
-  parameters — surfaced for editing instead of silently approving a no-op) and
+  parameters; surfaced for editing instead of silently approving a no-op) and
   ``executing`` (an execution claim is held; the atomic ``approved →
   executing`` compare-and-set in outbox_pg.claim_action_execution is what
   makes double-approval single-execution true across App Runner instances);
 - safe typed parameters + their JSON parameter schema (``typed_json``,
-  ``params_schema_json``) so approval surfaces can render/edit exact fields —
+  ``params_schema_json``) so approval surfaces can render/edit exact fields -
   the SAVED spec stays the only thing that executes, never a client body;
 - routing/provenance fields (``risk``, ``execution_route``, ``origin_avatar``,
   ``connected_account_json``, ``permission_json``) persisted durably instead
   of living only inside the artifact blob;
 - ``receipt_json`` (structured receipt) and ``logs_json`` (bounded append-only
-  step log — distilled one-liners only, never transcript content);
-- an enforced idempotency key: UNIQUE(org_id, idempotency_key) WHERE <> '' —
+  step log; distilled one-liners only, never transcript content);
+- an enforced idempotency key: UNIQUE(org_id, idempotency_key) WHERE <> '': 
   the same key is passed to Cedric via the existing Idempotency-Key header;
 - ``execution_lease_until`` so a crash mid-execution is observable (a stale
-  ``executing`` row is reconciled, never blindly retried — the external write
+  ``executing`` row is reconciled, never blindly retried; the external write
   may have happened);
 - a durable ``action_decisions`` table replacing the per-instance SQLite
   ``action_approvals`` convergence when the control plane is on: first write

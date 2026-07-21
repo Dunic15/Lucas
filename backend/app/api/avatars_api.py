@@ -44,7 +44,7 @@ def set_avatar_brain(
 ) -> JSONResponse:
     """Owner sets an avatar's brain from the dashboard: "gemini" (tutto-Gemini
     via the relay) or "cerebras" (the normal Deepgram + grounded brain). Takes
-    effect on the avatar's NEXT meeting — no redeploy. Not anonymous: a logged-in
+    effect on the avatar's NEXT meeting; no redeploy. Not anonymous: a logged-in
     owner (or the machine bearer) only, so the demo can't flip prod behavior."""
     if err := auth.gate(request):
         return err

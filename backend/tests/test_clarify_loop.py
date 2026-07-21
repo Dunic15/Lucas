@@ -1,6 +1,6 @@
 """Clarify-before-create: an addressed create-ask that lacks what a well-
 filed task needs (owner / project / due) makes the avatar ASK once, hold the
-approval, and resolve on the asker's reply — no more tasks born ownerless and
+approval, and resolve on the asker's reply; no more tasks born ownerless and
 invisible. Plus the executor-side net: an Asana task created with no assignee
 defaults to the connected account ("me"), so nothing can be orphaned again.
 
@@ -74,7 +74,7 @@ def approved(monkeypatch):
     #   asyncio.create_task(run_in_threadpool(cedric.voice_approve, ...)).
     # The created task can outlive the request, so asserting `approved` right
     # after the webhook returns races it (order-/timing-dependent, flaky under
-    # load). Run run_in_threadpool's target EAGERLY at call time — the capture
+    # load). Run run_in_threadpool's target EAGERLY at call time; the capture
     # then happens synchronously (before create_task defers) while awaited
     # results are preserved. Scoped to these clarify tests only.
     def _eager_threadpool(fn, *a, **k):
@@ -137,7 +137,7 @@ def test_missing_details_ask_then_answer(client, recall_stubbed, spoken, approve
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
     body = _say(client, bot_id, "Cedric, please create a task called help ducho")
     assert body.get("clarifying") == ["owner", "project", "due"]
-    assert approved == []  # held — nothing approved yet
+    assert approved == []  # held; nothing approved yet
     assert spoken[-1].startswith("Sure — before I create it:")
     assert "who should own it" in spoken[-1] and "which project" in spoken[-1]
 
@@ -171,7 +171,7 @@ def test_new_ask_resolves_stale_pending(client, recall_stubbed, spoken, approved
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
     _say(client, bot_id, "Cedric, create a task called first thing")
     session = store.get(bot_id)
-    # The asker never answers — they fire a NEW complete ask instead.
+    # The asker never answers; they fire a NEW complete ask instead.
     _age_clarify(session, seconds=50.0)  # also past the answer window
     body = _say(
         client, bot_id,
@@ -189,7 +189,7 @@ def test_default_resolution_queues_for_approval(
     client, recall_stubbed, spoken, monkeypatch
 ):
     """Code default (approval-first, 2026-07-18): the clarify answer resolves
-    the capture into the approval QUEUE — no voice approval fires, and the
+    the capture into the approval QUEUE; no voice approval fires, and the
     spoken ack points at the dashboard, not at Cedric running it."""
     monkeypatch.setattr(
         main_module.cedric, "voice_approve",

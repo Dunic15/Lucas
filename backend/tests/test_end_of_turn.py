@@ -1,7 +1,7 @@
 """End-of-turn completeness + how it sizes the deference wait.
 
 The estimator only ever SIZES a wait (never decides speech), so the tests pin
-the calibration anchors — clearly-done >= 0.8, clearly-mid-thought <= 0.3 —
+the calibration anchors; clearly-done >= 0.8, clearly-mid-thought <= 0.3 -
 and the sizer's precedence: mid-thought outranks every other signal.
 """
 from app import end_of_turn

@@ -1,4 +1,4 @@
-"""Vendor subscription/credit watchdog — "avvisami prima che scada".
+"""Vendor subscription/credit watchdog: "avvisami prima che scada".
 
 Every avatar meeting stands on a stack of paid vendors; any one of them
 expiring kills the product silently (the Google refresh token dying is the
@@ -7,10 +7,10 @@ status dict; the daily loop in main.py posts the non-ok ones to Slack
 (SLACK_WEBHOOK_URL) and GET /health/vendors serves the full picture on
 demand.
 
-Statuses: ok | warn (act soon) | crit (act now) | off (not configured —
+Statuses: ok | warn (act soon) | crit (act now) | off (not configured -
 deliberately not an alarm, the zero-key demo stays quiet). Checks are
 best-effort and cheap (one HTTP call each); a vendor being DOWN reads as
-crit with the error attached, never an exception — the watchdog must not
+crit with the error attached, never an exception; the watchdog must not
 need a watchdog.
 """
 from __future__ import annotations
@@ -71,7 +71,7 @@ def check_elevenlabs() -> dict:
 
 def check_google_oauth() -> dict:
     """The refresh token behind calendar auto-join + gmail watch. When it
-    expires/revokes, meetings silently stop being joined — the single most
+    expires/revokes, meetings silently stop being joined; the single most
     important check here."""
     try:
         from . import gmail_watcher
@@ -143,7 +143,7 @@ def check_anthropic() -> dict:
 
 
 def check_runpod() -> dict:
-    """Photoreal-GPU credit. RunPod bills from a prepaid balance — at $0 the
+    """Photoreal-GPU credit. RunPod bills from a prepaid balance; at $0 the
     pod (and the photoreal face) just stops."""
     if not settings.runpod_api_key:
         return _status("runpod", "off", "RUNPOD_API_KEY non configurata")

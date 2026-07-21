@@ -1,4 +1,4 @@
-"""Company Brain HTTP surface — /org/knowledge/* (machine) + dashboard twins.
+"""Company Brain HTTP surface: /org/knowledge/* (machine) + dashboard twins.
 
 Machine routes sit behind the same per-org bearer gate as the rest of /org/*;
 dashboard routes behind the login cookie + same-origin, org-scoped
@@ -6,7 +6,7 @@ server-side. Every route 404s cleanly when the feature flag is off so the
 key-free demo and existing deployments never see a new surface by accident.
 
 DISTILLED DATA ONLY leaves this API: source/document metadata, bounded chunk
-excerpts with citations — raw files stay in object storage, and nothing here
+excerpts with citations; raw files stay in object storage, and nothing here
 ever touches transcripts.
 """
 from __future__ import annotations
@@ -77,7 +77,7 @@ def _upload_document(org: str, source_id: str, body: dict) -> tuple[int, dict]:
     content_b64 = (body or {}).get("content_base64")
     # Enforce the cap on the ENCODED payload, before any decode: b64decode
     # (and .encode()) allocate the full output buffer, so checking len(data)
-    # afterwards would admit an arbitrary-size allocation first — an OOM
+    # afterwards would admit an arbitrary-size allocation first; an OOM
     # hazard in the same process that runs live meetings. 4/3 is base64's
     # exact expansion; +8 covers padding/newlines slack.
     max_encoded = settings.knowledge_max_file_bytes * 4 // 3 + 8
@@ -128,7 +128,7 @@ def _test_search(org: str, body: dict) -> tuple[int, dict]:
              "score": round(r.score, 4)}
             for r in rag.retrieve(avatar, q, k=6, org_id=org)
         ]
-    except Exception:  # noqa: BLE001 — an unknown avatar id keeps keyword hits
+    except Exception:  # noqa: BLE001; an unknown avatar id keeps keyword hits
         pass
     keyword = dal.keyword_search(org, q, avatar_id=avatar_id, limit=6)
     return 200, {

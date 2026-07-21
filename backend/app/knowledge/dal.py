@@ -1,4 +1,4 @@
-"""Postgres DAL for the Company Brain — outbox_pg's discipline throughout.
+"""Postgres DAL for the Company Brain; outbox_pg's discipline throughout.
 
 Every tenant operation sets transaction-local app.current_org before its
 first query, so the laura_app runtime role stays FORCE-RLS bound. Cross-org
@@ -317,7 +317,7 @@ def publish_version(
 
     Immutability + dedupe: identical checksum to the latest version is a
     no-op ({"deduped": True}); new content appends version N+1, replaces the
-    document's chunks, and marks the document published — one transaction, so
+    document's chunks, and marks the document published; one transaction, so
     retrieval never sees half a version.
     """
     engine = _engine()
@@ -495,7 +495,7 @@ def assigned_avatars(org_id: str) -> list[str]:
 
 def chunks_for_avatar(org_id: str, avatar_id: str) -> list[dict[str, Any]]:
     """Every published chunk this avatar may retrieve (assignment-gated,
-    active sources only) — the input to the index rebuild bridge. Carries the
+    active sources only); the input to the index rebuild bridge. Carries the
     chunk's ``sid`` (source id) so a resolved avatar's context scope can
     filter retrieval per source (M2 seam)."""
     engine = _engine()
@@ -524,7 +524,7 @@ def chunks_for_avatar(org_id: str, avatar_id: str) -> list[dict[str, Any]]:
     out = [dict(r) for r in rows]
     # Data Foundation live-index rule (contract v5, structural): documents
     # whose DF head is tombstoned, non-org_default, or owned by an ineligible
-    # connector never enter the per-org index — mirrored/unknown content is
+    # connector never enter the per-org index; mirrored/unknown content is
     # absent from anything a meeting can speak, BY CONSTRUCTION.
     from .. import datafoundation
 
@@ -533,7 +533,7 @@ def chunks_for_avatar(org_id: str, avatar_id: str) -> list[dict[str, Any]]:
 
         try:
             restricted = df_dal.restricted_document_ids(org_id)
-        except Exception:  # noqa: BLE001 — fail CLOSED, never widen
+        except Exception:  # noqa: BLE001; fail CLOSED, never widen
             return []
         if restricted:
             out = [r for r in out if r.get("did") not in restricted]
@@ -587,7 +587,7 @@ def keyword_search(
         for r in rows
     ]
     # Same DF live-index restriction the retrieval index applies (adversarial
-    # finding): keyword search is a read path too — a mirrored/unknown DF
+    # finding): keyword search is a read path too; a mirrored/unknown DF
     # body must never surface here either. Fail closed on any DF error.
     from .. import datafoundation
 
@@ -596,14 +596,14 @@ def keyword_search(
 
         try:
             restricted = df_dal.restricted_document_ids(org_id)
-        except Exception:  # noqa: BLE001 — never widen on a DF failure
+        except Exception:  # noqa: BLE001; never widen on a DF failure
             return []
         if restricted:
             out = [r for r in out if str(r.get("document_id")) not in restricted]
     return out
 
 
-# ── ingest jobs (claim/lease — the callback_outbox worker pattern) ─────────
+# ── ingest jobs (claim/lease; the callback_outbox worker pattern) ─────────
 
 _JOB_LEASE_SECONDS = 300
 _JOB_RETRY_SECONDS = (5.0, 30.0, 120.0, 600.0)
@@ -651,7 +651,7 @@ def knowledge_epoch(org_id: str) -> int:
     """Monotonic retrievability epoch for one org: the max id of its
     rebuild_index jobs. Every operation that changes what an avatar may
     retrieve (ingest publish, assign/unassign, source delete) enqueues one,
-    job rows are never deleted, and bigint identities only grow — so a local
+    job rows are never deleted, and bigint identities only grow; so a local
     index file stamped with an older epoch is provably stale, no matter which
     App Runner instance wrote it."""
     engine = _engine()
@@ -786,7 +786,7 @@ def job_rows(org_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
 
 
 def enqueue_boot_rebuilds() -> int:
-    """One rebuild job per org that has published chunks — regenerates the
+    """One rebuild job per org that has published chunks; regenerates the
     in-memory index files after a deploy wiped the disk. Idempotent enough:
     rebuilds are cheap and converge."""
     count = 0
@@ -817,7 +817,7 @@ def enqueue_boot_rebuilds() -> int:
                     continue
                 _enqueue_job_conn(conn, org, str(src[0]), "rebuild_index")
                 count += 1
-        except Exception:  # noqa: BLE001 — boot rebuild is best-effort per org
+        except Exception:  # noqa: BLE001; boot rebuild is best-effort per org
             continue
     return count
 

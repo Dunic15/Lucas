@@ -7,13 +7,13 @@ Create Date: 2026-07-13
 The self-serve identity/billing additions on top of the 0001 spine
 (docs/product/SELF-SERVE-FLOW-PLAN.md):
 
-- ``users.google_sub`` — the durable Google OIDC subject. Nullable (pre-OIDC
+- ``users.google_sub``: the durable Google OIDC subject. Nullable (pre-OIDC
   rows, token-only users) with a UNIQUE partial index; ``control_plane.
   ensure_user`` looks a login up by sub first and backfills it by email.
-- ``org_connections`` — the durable mirror of the SQLite Configure-tab table
+- ``org_connections``: the durable mirror of the SQLite Configure-tab table
   (same shape: config_json is NON-SECRET wiring only; credentials live in
   env/SSM, never here). PK (org_id, avatar_id, provider).
-- ``billing_accounts`` — one row per org: plan + included_seconds (the
+- ``billing_accounts``: one row per org: plan + included_seconds (the
   15-minute free trial = 900) + the Stripe linkage PR B fills in.
 
 Both new tables get the SAME RLS pattern as 0001 (ENABLE + FORCE + a
@@ -21,7 +21,7 @@ tenant_isolation policy on ``current_setting('app.current_org')``), so a
 policy-bound role is isolated by the database itself, not by remembered WHEREs.
 
 Runnable on plain PG13+: ``gen_random_uuid()`` is core since PG13 and 0001
-already issues the (redundant there) CREATE EXTENSION statements — this
+already issues the (redundant there) CREATE EXTENSION statements; this
 migration deliberately adds no new extension requirements.
 """
 from __future__ import annotations

@@ -1,8 +1,8 @@
-"""Company-aware checkpoint narration — deterministic, cited, on the EXISTING
+"""Company-aware checkpoint narration; deterministic, cited, on the EXISTING
 speech queue.
 
 For the MVP this is deterministic per-checkpoint narration (not a full
-autonomous narration loop — documented as such). For each manifest checkpoint
+autonomous narration loop; documented as such). For each manifest checkpoint
 it retrieves the relevant company material through ContextResolver (the ONE
 retrieval boundary), builds a short cited line using the SELECTED avatar
 overlay, and rides Laura's existing ``_make_avatar_speak`` queue with citations
@@ -30,7 +30,7 @@ def checkpoint_context(org_id: str, checkpoint_id: str, *,
                        avatar_key: str = "laura",
                        principal_id: str = "") -> dict[str, Any]:
     """Retrieve the cited company material for a checkpoint through the ONE
-    boundary. Returns {text, citations} — citations name the Northstar source
+    boundary. Returns {text, citations}; citations name the Northstar source
     + section. Never another org's documents."""
     query = _CHECKPOINT_QUERY.get(checkpoint_id, "")
     if not query:
@@ -67,7 +67,7 @@ async def narrate(session, org_id: str, checkpoint_id: str, *,
 
 def narration_lines(org_id: str, *, avatar_key: str = "laura",
                     principal_id: str = "") -> list[dict]:
-    """Deterministic, testable projection of every checkpoint's cited line —
+    """Deterministic, testable projection of every checkpoint's cited line -
     used by the acceptance path to prove citations WITHOUT a live meeting
     session. Same ContextResolver boundary as narrate()."""
     m = manifest.load()

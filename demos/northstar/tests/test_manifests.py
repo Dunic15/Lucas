@@ -1,4 +1,4 @@
-"""Integrity of the knowledge manifest, demo manifest, and workflow specs — and
+"""Integrity of the knowledge manifest, demo manifest, and workflow specs; and
 that they agree with the product and the knowledge docs."""
 from __future__ import annotations
 

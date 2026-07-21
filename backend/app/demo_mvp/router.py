@@ -1,11 +1,11 @@
-"""Northstar MVP demo HTTP surface — /org/demo/* + strict /dashboard/demo twin.
+"""Northstar MVP demo HTTP surface. /org/demo/* + strict /dashboard/demo twin.
 
 The smallest backend-owned entry points for the MVP journey: start a
 meeting-bound demo, run the bounded coordinator, read safe status. org/principal
 derive EXCLUSIVELY from the authenticated context (reusing the browser router's
 machine gate + the dashboard cookie gate); a client-supplied org_id is a 403.
 All routes 404 when the demo flag is off. No browser/approval/permission logic
-lives here — it delegates to the canonical operator/coordinator.
+lives here; it delegates to the canonical operator/coordinator.
 """
 from __future__ import annotations
 

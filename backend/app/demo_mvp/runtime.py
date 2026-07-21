@@ -4,7 +4,7 @@ Starts the Northstar browser demo from an ACTIVE meeting and binds, in one
 place: organization, authenticated principal, meeting, the selected avatar +
 its published overlay version, the Northstar demo definition + version, the
 Browser B1 session (northstar provider), the allowed domain, and the (clamped)
-coordinator budgets. It does NOT build a generic Skills runtime — it wires the
+coordinator budgets. It does NOT build a generic Skills runtime; it wires the
 existing bounded B1 coordinator to the versioned manifest.
 
 Everything returned is safe public session data: no provider ids/urls, no
@@ -64,7 +64,7 @@ def start(org_id: str, *, principal: str = "", meeting_ref: str = "",
 def run(org_id: str, session_id: str, *, principal: str = "",
         planner: Any = None, clock: Optional[Any] = None) -> dict[str, Any]:
     """Run the bounded B1 coordinator toward the manifest goal, starting from
-    the manifest's starting URL. Reuses the existing coordinator — no second
+    the manifest's starting URL. Reuses the existing coordinator; no second
     coordinator. Returns the transcript (safe per-step summaries)."""
     from . import enabled
 

@@ -1,4 +1,4 @@
-"""Minimal, transparent RAG — per avatar.
+"""Minimal, transparent RAG; per avatar.
 
 Each avatar has its own knowledge folder and its own index, so avatars never
 mix knowledge. Indexing chunks markdown by heading, embeds the chunks, and
@@ -239,7 +239,7 @@ def _source_paths(dirs: list[Path]) -> list[Path]:
 
 def _sources_signature(paths: list[Path]) -> list[dict]:
     """Cheap freshness fingerprint of the source docs (no content read):
-    path + size + mtime. Any edit, add, delete, or rename changes it — that's
+    path + size + mtime. Any edit, add, delete, or rename changes it; that's
     what lets _index_is_current spot a silently stale index."""
     sig = []
     for p in paths:
@@ -256,7 +256,7 @@ def _write_index(index_path: Path, chunks: list[Chunk], source_paths: list[Path]
     index_path.write_text(
         json.dumps(
             {
-                # The EFFECTIVE provider (hash when local fell back at boot) —
+                # The EFFECTIVE provider (hash when local fell back at boot) -
                 # guarantees index/query vector agreement across restarts.
                 "provider": provider_signature(),
                 "model": settings.embedding_model,
@@ -312,7 +312,7 @@ def ensure_index(avatar: Avatar) -> None:
 
     Lets the demo 'just work' with no manual ingest step. Rebuilding is free and
     instant with the default hash embedder; other providers rebuild on switch.
-    Runs at boot, on ingest, and on first retrieval per process — an already-
+    Runs at boot, on ingest, and on first retrieval per process; an already-
     warmed process keeps serving its in-memory cache until then.
     """
     if _index_is_current(avatar.index_path, _source_paths(avatar.knowledge_dirs)):
@@ -322,11 +322,11 @@ def ensure_index(avatar: Avatar) -> None:
 
 # ─────────────── "about" docs: self-knowledge, separate index ───────────────
 # Meta docs about the avatar ITSELF (architecture, playbook, runbook, costs)
-# used to live in knowledge/ and polluted process retrieval — a real "what's
+# used to live in knowledge/ and polluted process retrieval; a real "what's
 # missing before go-live?" question pulled Laura's own playbook. They now live
 # in avatars/<id>/about/ with their own index, consulted only when someone asks
 # about the avatar herself (brain._is_about_avatar). No about/ folder = no
-# index = retrieve_about returns [] — the feature is fully optional per avatar.
+# index = retrieve_about returns []; the feature is fully optional per avatar.
 _ABOUT_CACHE: dict[str, dict] = {}
 
 
@@ -459,7 +459,7 @@ def warm(avatar: Avatar) -> None:
     """Pre-load the index into cache and warm the embedder at startup.
 
     Without this the FIRST live question pays the one-off cost of lazy-loading
-    the embedding model (fastembed ONNX) plus reading/parsing the index — easily
+    the embedding model (fastembed ONNX) plus reading/parsing the index; easily
     1-3s tacked onto the first answer. A throwaway retrieve does both eagerly.
     """
     try:
@@ -472,7 +472,7 @@ def retrieve(
     avatar: Avatar, query: str, k: int = 4, *, org_id: str = ""
 ) -> list[Retrieved]:
     """Top-k chunks for a query. With an ``org_id``, the org's PRIVATE index
-    (its own ingested docs — Drive sync, uploads) is searched alongside the
+    (its own ingested docs: Drive sync, uploads) is searched alongside the
     avatar's shared base pack and the merged top-k wins; without one, or when
     the org has never ingested anything, behavior is exactly the base pack.
     Isolation is structural: each org's index is its own file, so org A can
@@ -497,7 +497,7 @@ def _scoped_org_store(store: dict, scope: dict) -> dict | None:
     """The org store narrowed to a context scope's allowed sources.
 
     ``include_org_default: true`` means the whole org store (no restriction).
-    A RESTRICTED scope with no resolvable sources returns None — an empty
+    A RESTRICTED scope with no resolvable sources returns None; an empty
     restriction must never silently widen to \"all sources\". An index file
     written before per-chunk source ids existed also returns None (fail
     closed); the publish path enqueues the rebuild that adds them."""
@@ -555,7 +555,7 @@ def build_org_index_from_chunks(
     avatar: Avatar, org_id: str, chunk_dicts: list[dict]
 ) -> int:
     """(Re)build one org's private index for one avatar from PRE-CHUNKED
-    content — the Company Brain bridge. The durable truth lives in Postgres
+    content; the Company Brain bridge. The durable truth lives in Postgres
     (knowledge_chunks); this writes the same in-memory index format the live
     path ranks, embedding with the CURRENT provider so index and query
     vectors can never disagree. Empty chunk list removes the index."""
@@ -648,7 +648,7 @@ def _load_org(avatar: Avatar, org_id: str) -> dict | None:
             raw = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError):
             return None
-        # An index from another embedder/format would rank garbage — treat it
+        # An index from another embedder/format would rank garbage; treat it
         # as absent; the next ingest rewrites it with the current signature.
         if (
             raw.get("provider") != provider_signature()

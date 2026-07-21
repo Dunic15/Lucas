@@ -2,7 +2,7 @@
 (settings.interject_recheck_floor_at_speak).
 
 In hand_mode the whole contribution is generated (deference sleep + full answer
-collected — several seconds) BEFORE the floor-open check. `last_human_partial_at`
+collected; several seconds) BEFORE the floor-open check. `last_human_partial_at`
 lags (written only on partials), so a trigger-time "floor open" reading can be
 stale by the time she's ready to speak. The floor decision is re-checked at SPEAK
 time with two extra "someone is (or just was) talking" signals: a new transcript
@@ -29,7 +29,7 @@ from app.decision import interjection_floor_open  # noqa: E402
 
 def test_default_off_signals_preserve_original_decision():
     # Defaults (transcript_grew False, generation_elapsed None) reproduce the
-    # original decision exactly — a finished line with no recent partial is open.
+    # original decision exactly; a finished line with no recent partial is open.
     assert interjection_floor_open(
         turn_completeness=0.9, since_human_partial=10.0, active_partial_seconds=0.6
     )
@@ -48,7 +48,7 @@ def test_transcript_growth_closes_the_floor():
 
 def test_partial_during_generation_closes_the_floor():
     # The last partial (1.2s ago) is OLDER than active_partial_seconds (1.0), so
-    # the trigger-time check reads open — but it arrived DURING her 2s generation
+    # the trigger-time check reads open; but it arrived DURING her 2s generation
     # window (1.2 < 2.0), i.e. someone spoke while she generated → defer.
     assert not interjection_floor_open(
         turn_completeness=0.95,
@@ -60,7 +60,7 @@ def test_partial_during_generation_closes_the_floor():
 
 def test_partial_predating_the_turn_keeps_the_floor_open():
     # A partial OLDER than the whole generation window (3.0 > 2.0) predates the
-    # turn — it is not during-turn activity, so the floor stays OPEN (a genuine
+    # turn; it is not during-turn activity, so the floor stays OPEN (a genuine
     # lull still interjects; this is what stops the guard from over-deferring).
     assert interjection_floor_open(
         turn_completeness=0.95,
@@ -124,7 +124,7 @@ def _capture_speech(monkeypatch) -> list:
 
 def _stub_stream(monkeypatch, session, sentences, *, top_score, grow=False):
     """Fake answer stream. When ``grow`` is set it appends a human line to the
-    session AS IT FINISHES generating — simulating a human final that landed
+    session AS IT FINISHES generating; simulating a human final that landed
     mid-turn (the floor closing while she generated her contribution)."""
 
     def stream(*a, **k):
@@ -160,8 +160,8 @@ def test_open_floor_still_interjects(tmp_path, monkeypatch):
 
 
 def test_transcript_grew_during_generation_defers(tmp_path, monkeypatch):
-    """last_human_partial_at is STALE (30s ago) — the trigger-time floor read
-    says OPEN — but a human final landed while she generated. She must NOT talk
+    """last_human_partial_at is STALE (30s ago); the trigger-time floor read
+    says OPEN; but a human final landed while she generated. She must NOT talk
     over them: defer to the raised hand instead."""
     s = _session(tmp_path, monkeypatch, bot_id="talkover-grew")
     s.last_human_partial_at = time.time() - 30.0  # stale "all clear"
@@ -169,7 +169,7 @@ def test_transcript_grew_during_generation_defers(tmp_path, monkeypatch):
         monkeypatch,
         s,
         ["The onboarding SOP puts security review before access provisioning."],
-        top_score=0.9,  # strongly grounded — WOULD interject on an open floor
+        top_score=0.9,  # strongly grounded: WOULD interject on an open floor
         grow=True,  # a human took the floor mid-generation
     )
     spoken = _capture_speech(monkeypatch)

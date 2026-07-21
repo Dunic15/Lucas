@@ -1,4 +1,4 @@
-"""Test a Recall API key instantly — no server restart needed.
+"""Test a Recall API key instantly; no server restart needed.
 
 Usage:
     python backend/scripts/recall_check.py                 # tests RECALL_API_KEY from .env

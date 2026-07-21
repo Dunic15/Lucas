@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Browser B1 Visual Eyes — REAL-provider smoke (credential-gated).
+"""Browser B1 Visual Eyes: REAL-provider smoke (credential-gated).
 
 Runs the full visual loop against a REAL remote browser + a REAL multimodal
 planner on a PUBLIC demo page. It is the ONLY acceptance gate for real pixels;

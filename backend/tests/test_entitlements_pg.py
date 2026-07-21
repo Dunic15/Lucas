@@ -1,4 +1,4 @@
-"""PR B — usage metering + the 15-minute free entitlement, on REAL Postgres.
+"""PR B; usage metering + the 15-minute free entitlement, on REAL Postgres.
 
 Boots an embedded Postgres (pgserver), runs ``alembic upgrade head`` (0001 +
 0002 + 0003 usage spine), then proves the money-shaped invariants:
@@ -340,7 +340,7 @@ def test_route_returns_exact_402_body_when_exhausted(cp, start_env):
 
 def test_route_409_when_org_already_has_active_meeting(cp, start_env):
     # A second concurrent meeting for the SAME org is refused by the partial
-    # unique index — surfaced as the exact 409 body. (Different meeting_url,
+    # unique index; surfaced as the exact 409 body. (Different meeting_url,
     # so the per-URL clash guard doesn't shadow the entitlement one.)
     entitlements.open_usage(settings.demo_org_id, "d-live", "laura")
     resp = TestClient(main.app).post(
@@ -429,7 +429,7 @@ def test_concurrent_starts_exactly_one_wins(cp):
 
 def test_concurrent_starts_with_one_second_left(cp):
     # remaining=1s and two racing gates: the FOR UPDATE + partial unique index
-    # still admit exactly one — never two paid bots on a 1-second balance.
+    # still admit exactly one; never two paid bots on a 1-second balance.
     org = _org(cp, "race-1s")
     entitlements.open_usage(org, "r1-old", "laura")
     entitlements.mark_in_call(org, "r1-old", time.time() - 899)
@@ -625,7 +625,7 @@ def test_orphaned_provisional_row_is_released(cp, fresh_store, monkeypatch, pg):
 def test_billing_outage_503_before_create_bot(start_env, monkeypatch):
     # Control plane "configured" but the DB is down: open_usage raises →
     # 503 billing_unavailable and create_bot is NEVER reached. (Key-free
-    # harness: no real engine anywhere — enabled() is stubbed.)
+    # harness: no real engine anywhere; enabled() is stubbed.)
     monkeypatch.setattr(main.control_plane, "enabled", lambda: True)
 
     def outage(*a, **k):
@@ -645,7 +645,7 @@ def test_billing_outage_503_before_create_bot(start_env, monkeypatch):
 
 def test_key_free_start_unchanged_no_gate_no_engine(start_env, monkeypatch):
     # LAURA_DATABASE_URL empty (the suite default): the gate must not run at
-    # all — no 402/409/503 path, no engine, exactly today's happy path.
+    # all; no 402/409/503 path, no engine, exactly today's happy path.
     assert control_plane.enabled() is False
     calls: list = []
 
@@ -665,7 +665,7 @@ def test_key_free_start_unchanged_no_gate_no_engine(start_env, monkeypatch):
 
 
 def test_key_free_entitlement_api_is_inert():
-    # Every DAL function no-ops when disabled — the offline contract.
+    # Every DAL function no-ops when disabled; the offline contract.
     assert entitlements.remaining_seconds("any-org") is None
     assert entitlements.open_usage("any-org", "any-bot") is None
     assert entitlements.mark_in_call("any-org", "any-bot", time.time()) is None
@@ -836,7 +836,7 @@ def test_untracked_live_bot_over_budget_is_cut_off(cp, fresh_store, monkeypatch)
 
 def test_orphan_sweep_preserves_slot_while_org_is_live(cp, fresh_store):
     # A stranded provisional row must NOT be closed (freeing the slot) while the
-    # owning org still has a live local session — only a truly orphaned org frees.
+    # owning org still has a live local session; only a truly orphaned org frees.
     org = _org(cp, "orphan-live")
     prov = f"pending:{uuid.uuid4().hex}"
     entitlements.open_usage(org, prov, "laura")

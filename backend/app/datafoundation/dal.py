@@ -3,15 +3,15 @@
 The load-bearing semantics live here:
 
 - ``commit_batch`` applies an ACCEPTED batch of envelopes AND advances the
-  committed connector cursor in ONE transaction — a failed batch never moves
+  committed connector cursor in ONE transaction; a failed batch never moves
   the cursor (clarification 5's cursor-atomicity test rides this).
 - Per (connector, external_id) an advisory transaction lock makes concurrent
   writers single-winner.
 - Body-checksum dedupe never suppresses metadata/ACL/deletion changes: any
   such change creates a NEW immutable version (``lineage.meta_change_of``)
   and replaces the ACL rows, invalidating retrieval.
-- ``acl_mode`` fail-closed: ``unknown`` stores ZERO acl rows; nothing —
-  principal or meeting — can see the record.
+- ``acl_mode`` fail-closed: ``unknown`` stores ZERO acl rows; nothing -
+  principal or meeting; can see the record.
 - Quarantine backpressure: at 1000 open rows per (org, connector) the batch
   ABORTS with BackpressureError (the run parks); open rows are never evicted.
 - Purges happen exclusively through the two SECURITY DEFINER functions; this
@@ -128,7 +128,7 @@ def get_connector(org_id: str, connector_id: str) -> Optional[dict[str, Any]]:
     out["config_json"] = cfg if isinstance(cfg, dict) else {}
     for key in ("live_records", "open_quarantine"):
         if out.get(key) is not None:
-            out[key] = int(out[key])  # count(*) is Decimal — JSON-unsafe
+            out[key] = int(out[key])  # count(*) is Decimal. JSON-unsafe
     return out
 
 
@@ -317,7 +317,7 @@ def _replace_acl(conn, org_id: str, connector_id: str, record_id: str,
         )
         return
     if acl_mode != "mirrored":
-        return  # unknown: FAIL-CLOSED — zero rows, visible to nobody
+        return  # unknown: FAIL-CLOSED; zero rows, visible to nobody
     seen: set[str] = set()
     for entry in entries:
         identity_id = _ensure_identity(
@@ -561,7 +561,7 @@ def commit_batch(
 
     Invalid envelopes quarantine (durably, inside the same txn) without
     failing the batch; the open-quarantine cap aborts everything with
-    BackpressureError BEFORE any change commits — the cursor never advances
+    BackpressureError BEFORE any change commits; the cursor never advances
     past an unapplied batch. Returns stats + the affected body-doc ids the
     caller must re-index post-commit (stats['affected_docs'])."""
     stats = {"seen": 0, "created": 0, "versioned": 0, "meta_updated": 0,
@@ -716,7 +716,7 @@ def bind_identity(org_id: str, identity_id: str, principal_ref: str,
 def principal_identity_closure(
     org_id: str, principal_ref: str
 ) -> tuple[set[str], bool]:
-    """(identity ids incl. group closure, complete). Bindings-table ONLY —
+    """(identity ids incl. group closure, complete). Bindings-table ONLY -
     email similarity never grants access here. Cycles / depth overrun mark
     the expansion incomplete and the affected groups contribute NOTHING."""
     pid = str(principal_ref or "").strip()
@@ -753,7 +753,7 @@ def principal_identity_closure(
             frontier = new_groups
         else:
             if frontier:
-                # Deeper than the bound (or cyclic churn): FAIL CLOSED — drop
+                # Deeper than the bound (or cyclic churn): FAIL CLOSED; drop
                 # everything gathered beyond direct bindings and report.
                 complete = False
         if not complete:
@@ -860,7 +860,7 @@ def restricted_document_ids(org_id: str) -> set[str]:
     tombstoned heads, non-org_default ACL, or an ineligible connector."""
     engine = _engine()
     # ONE snapshot transaction (reverify note): both branches read the same
-    # MVCC snapshot — no head can commit between them — and connection churn
+    # MVCC snapshot, no head can commit between them, and connection churn
     # is halved. Off the live transcript path (callers: index rebuild +
     # dashboard/resolver keyword search), so the extra scans never touch the
     # per-turn budget.
@@ -1181,7 +1181,7 @@ def get_quarantine(org_id: str, qid: str) -> Optional[dict[str, Any]]:
 
 
 def resolve_quarantine(org_id: str, qid: str, state: str, actor: str) -> bool:
-    """Resolve via the SECURITY DEFINER — the runtime has NO direct UPDATE on
+    """Resolve via the SECURITY DEFINER; the runtime has NO direct UPDATE on
     df_quarantine, so resolved_at is stamped server-side and cannot be
     backdated to fast-track a purge."""
     if state not in ("replayed", "discarded"):
@@ -1201,7 +1201,7 @@ def resolve_quarantine(org_id: str, qid: str, state: str, actor: str) -> bool:
 
 
 def purge_quarantine(org_id: str, older_than_epoch: float | None = None) -> int:
-    """The ONLY purge path — the SECURITY DEFINER function (org verified
+    """The ONLY purge path; the SECURITY DEFINER function (org verified
     against the transaction context; cutoff clamped server-side)."""
     engine = _engine()
     with engine.begin() as conn:

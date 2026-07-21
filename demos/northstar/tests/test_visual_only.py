@@ -3,7 +3,7 @@
 The acceptance property: a reader using text or the accessibility tree alone
 cannot pick the blocked stage, because all five nodes share one accessible label
 and carry no stage-name text. The blocked stage is knowable only from fill
-colour + position. These tests parse the served HTML and assert exactly that —
+colour + position. These tests parse the served HTML and assert exactly that -
 network-free, deterministic. (An optional live browser check that clicks by
 colour is described in README; it is not required for this proof.)
 """
@@ -60,7 +60,7 @@ def test_all_nodes_share_one_identical_accessible_label(client):
 
 
 def test_nodes_carry_no_stage_name_text(client):
-    # No node exposes its stage name as text — so text scraping is useless.
+    # No node exposes its stage name as text; so text scraping is useless.
     stage_names = {s["name"].lower() for s in seed.ONBOARDING_STAGES}
     for n in _nodes(client):
         txt = n["text"].strip().lower()
@@ -82,7 +82,7 @@ def test_text_or_ax_selection_is_ambiguous(client):
 
 def test_target_is_identifiable_only_by_visual_signal(client):
     # The blocked stage is the one whose ONLY distinguishing signals are the
-    # amber fill and second position — both visual.
+    # amber fill and second position; both visual.
     nodes = _nodes(client)
     target = seed.ONBOARDING_STAGES[1]               # stage-integration
     assert target["id"] == seed.VISUAL_TARGET_STAGE_ID

@@ -76,7 +76,7 @@ class Session:
     proactive_done: bool = False  # the one proactive flag fires at most once
     # Meter-stop retry flag: a finalized session whose Recall leave_call could
     # NOT be confirmed (auth/rate-limit/5xx/network) is kept in the store with
-    # this set so the reconcile backstop retries the leave. PERSISTED — a deploy
+    # this set so the reconcile backstop retries the leave. PERSISTED; a deploy
     # restart (App Runner is ephemeral) must not drop it back to "in progress"
     # and re-strand the per-minute meter leak this flag exists to close.
     leave_pending: bool = False
@@ -87,7 +87,7 @@ class Session:
     integration: dict | None = None
     ws: WebSocket | None = None
     pending_messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
-    # Live MeetingState (see meeting_state.py). In-memory only — it is derived
+    # Live MeetingState (see meeting_state.py). In-memory only; it is derived
     # entirely from the persisted transcript, so after a restart it is rebuilt
     # by replaying the utterances rather than persisted (transcript is PII;
     # one copy in the DB is enough).
@@ -95,7 +95,7 @@ class Session:
     # Cross-meeting carryover brief (ledger.carryover_brief). In-memory only:
     # None = not loaded yet (load lazily), "" = loaded, no history.
     memory_brief: Any = field(default=None, repr=False, compare=False)
-    # Until when (epoch seconds) the avatar is estimated to still be speaking —
+    # Until when (epoch seconds) the avatar is estimated to still be speaking -
     # drives barge-in (a human talking inside this window interrupts her).
     speaking_until: float = field(default=0.0, repr=False, compare=False)
     # Monotonic speech-turn counter. Every stop (barge-in) and every new answer
@@ -107,15 +107,15 @@ class Session:
     # Running notes of the meeting OLDER than the recent-history window, kept
     # fresh in the background (see main._refresh_rolling_summary). Gives the
     # live brain the whole meeting's arc without widening the hot-path prompt.
-    # In-memory only — derived from the persisted transcript (PII stays put).
+    # In-memory only; derived from the persisted transcript (PII stays put).
     rolling_summary: str = field(default="", repr=False, compare=False)
     summary_upto: int = field(default=0, repr=False, compare=False)
     summarizing: bool = field(default=False, repr=False, compare=False)
-    # When she last spoke an acknowledgment ("Mm-hm.") — set by the partial-
+    # When she last spoke an acknowledgment ("Mm-hm."); set by the partial-
     # transcript path so the final-utterance path doesn't ack the same turn
     # twice. In-memory only: an ack is worthless across a restart.
     last_ack_at: float = field(default=0.0, repr=False, compare=False)
-    # When she last backchanneled ("Mm-hm." while a human talks) — keeps the
+    # When she last backchanneled ("Mm-hm." while a human talks); keeps the
     # listening cue rare. In-memory only, like the ack timestamp.
     last_backchannel_at: float = field(default=0.0, repr=False, compare=False)
     # Recently spoken lines (normalized text -> epoch seconds) for the
@@ -123,7 +123,7 @@ class Session:
     _recent_lines: dict = field(default_factory=dict, repr=False, compare=False)
     # In-meeting map: anonymous participant id -> stable "Guest N" label. In-memory
     # only (like ws/pending_messages); on a mid-meeting restart numbering may
-    # restart, which is harmless — distinct callers still stay distinct.
+    # restart, which is harmless; distinct callers still stay distinct.
     _anon_labels: dict[str, str] = field(
         default_factory=dict, repr=False, compare=False
     )
@@ -132,7 +132,7 @@ class Session:
     # In-memory only; after a restart roster() falls back to transcript
     # speakers until the next join/leave event re-seeds it.
     participants: dict = field(default_factory=dict, repr=False, compare=False)
-    # When a HUMAN partial transcript last arrived — the deference window
+    # When a HUMAN partial transcript last arrived; the deference window
     # checks it to see whether someone started answering a room-open question
     # while she politely waited. In-memory only.
     last_human_partial_at: float = field(default=0.0, repr=False, compare=False)
@@ -169,14 +169,14 @@ class Session:
     hand_last_ignored: bool = field(default=False, repr=False, compare=False)
     hand_last_contribution: str = field(default="", repr=False, compare=False)
     # One-shot flags for the spoken usage-deadline warnings (~5 min / ~1 min
-    # before the entitlement runs out — main._usage_warn). In-memory only: a
+    # before the entitlement runs out; main._usage_warn). In-memory only: a
     # mid-meeting restart repeating one warning is harmless, and the durable
     # deadline itself lives in Postgres (entitlements.usage_sessions).
     usage_warned_5m: bool = field(default=False, repr=False, compare=False)
     usage_warned_1m: bool = field(default=False, repr=False, compare=False)
     # Deferred usage-close context (PR B BLOCKER 2): when finalize could NOT
     # confirm the Recall meter stopped (leave_pending), the usage row is left
-    # OPEN so the slot stays held until the meter is verified off — these carry
+    # OPEN so the slot stays held until the meter is verified off; these carry
     # the close reason + Recall end timestamp to the eventual _retry_leave that
     # confirms the stop and closes the row. In-memory only (a restart re-derives
     # a safe default: reason 'ended', consumed capped at the deadline).
@@ -297,8 +297,8 @@ class Session:
         to be in the meeting, from the event roster AND transcript speakers.
 
         Backed by roster()'s merge (was event-roster only) so a real participant
-        known only from the transcript — a "Lara" who spoke but never fired a
-        join event — is still shielded and never swallowed as a corruption of
+        known only from the transcript; a "Lara" who spoke but never fired a
+        join event; is still shielded and never swallowed as a corruption of
         "Laura". Broadening this exclude set can only SUPPRESS a fuzzy wake, never
         create one, so it strictly reduces false wakes. Still cheap enough for the
         partial hot path (a lowercased scan of a short transcript), and it's the
@@ -370,7 +370,7 @@ class Session:
         )
         self.transcript.append(utterance)
         # Hot path: the per-utterance write stays on local SQLite (never a
-        # network DB — latency is the product). org inherited from the session.
+        # network DB; latency is the product). org inherited from the session.
         _persist_utterance(self.org_id, self.bot_id, utterance)
 
     def transcript_text(self, *, include_agents: bool = True) -> str:
@@ -465,7 +465,7 @@ def _init_db() -> None:
             -- handshake operation approve-action): ONE decision per action,
             -- all channels (dashboard/Slack relay) converge here. Replays are
             -- answered from this row; a conflicting decision is a 409. Never
-            -- transcript content — decisions + distilled refs only.
+            -- transcript content; decisions + distilled refs only.
             CREATE TABLE IF NOT EXISTS action_approvals (
                 org_id TEXT NOT NULL,
                 action_id TEXT NOT NULL,
@@ -485,7 +485,7 @@ def _init_db() -> None:
             -- Dashboard chat channel (org ↔ Cedric, replacing Slack as the
             -- approval surface). One row per message; `kind` separates plain
             -- text from action cards (which reference action_id and render
-            -- approve/reject inline — the DECISION still lives only in
+            -- approve/reject inline; the DECISION still lives only in
             -- action_approvals above; chat never stores decisions). Distilled
             -- content only, never transcript text.
             CREATE TABLE IF NOT EXISTS chat_messages (
@@ -516,7 +516,7 @@ def _init_db() -> None:
             );
 
             -- The GRANT org↔agent (a shared avatar folder becomes callable for
-            -- an org). PK(org_id, avatar_id) — one grant per pair.
+            -- an org). PK(org_id, avatar_id); one grant per pair.
             CREATE TABLE IF NOT EXISTS org_agents (
                 org_id TEXT NOT NULL,
                 avatar_id TEXT NOT NULL,
@@ -624,7 +624,7 @@ def _init_db() -> None:
             );
 
             -- Per-avatar capability switches (dashboard toggles). One row per
-            -- (avatar, capability) — "google" | "slack" — so each avatar can
+            -- (avatar, capability), "google" | "slack", so each avatar can
             -- independently turn ON/OFF a capability the ORG connected once in
             -- the Connections view. Absent row = unset → the caller applies the
             -- default (ON when the org has that integration connected, else off).
@@ -661,7 +661,7 @@ def _init_db() -> None:
 
             -- Per-org avatar connections (the Configure tab). One row per
             -- (org, avatar, provider); config_json holds NON-SECRET wiring
-            -- only (e.g. the brain's Slack team_id + default channel) —
+            -- only (e.g. the brain's Slack team_id + default channel) -
             -- minted credentials live in the env/SSM registry, never here.
             CREATE TABLE IF NOT EXISTS org_connections (
                 org_id TEXT NOT NULL,
@@ -689,7 +689,7 @@ def _init_db() -> None:
             -- Per-USER OAuth refresh token for the personal-calendar VIEW
             -- (/dashboard/upcoming). org_oauth above is keyed by ORG, so in a
             -- SHARED org (a verified corporate domain maps every colleague to one
-            -- org_id) a single Google token would be read back by every member —
+            -- org_id) a single Google token would be read back by every member -
             -- one person's calendar leaking to the whole domain. This table keys
             -- the token to the connecting HUMAN so each member sees only their own
             -- calendar. Same encryption + shape as org_oauth. Created fresh here
@@ -754,15 +754,15 @@ def _init_db() -> None:
 
 
 def seed_builtin_orgs() -> None:
-    """Seed the first REAL tenant — SFF Studio (Swiss Founders Fund) — so the
+    """Seed the first REAL tenant, SFF Studio (Swiss Founders Fund), so the
     org_id seam is exercised for the first time: a member of an org sees only
     that org's granted agents.
 
-    Idempotent (INSERT OR IGNORE) and safe to run on every boot — the store is
+    Idempotent (INSERT OR IGNORE) and safe to run on every boot; the store is
     ephemeral and re-seeds on redeploy. Gated by ``settings.seed_builtin_orgs``
     so a test can assert the un-seeded fallback.
 
-    Only the CORPORATE domain is mapped (never a free-mail domain — org_domains
+    Only the CORPORATE domain is mapped (never a free-mail domain; org_domains
     is the trusted domain→org map; the schema comment says NEVER map gmail.com).
     Agent grants are made ONLY for avatar folders that actually exist, so a
     removed/renamed folder never leaves a dangling grant."""
@@ -772,8 +772,8 @@ def seed_builtin_orgs() -> None:
     # at load time, and store never imports avatars at load time.
     from .. import avatars
 
-    # Is the durable control plane configured? Checked DIRECTLY off settings —
-    # NOT via control_plane.enabled() — ON PURPOSE: seed_builtin_orgs runs
+    # Is the durable control plane configured? Checked DIRECTLY off settings -
+    # NOT via control_plane.enabled(): ON PURPOSE: seed_builtin_orgs runs
     # during store's OWN module init (_init_db at import tail), and
     # control_plane imports names from store at its module top, so importing
     # control_plane here creates a circular import that crashes with
@@ -785,8 +785,8 @@ def seed_builtin_orgs() -> None:
         # Durable identity owns the domain→org mapping in production
         # (laura_private.ensure_user + verified Postgres org_domains rows).
         # The SQLite seed would mint a non-uuid shadow tenant ('org_sff') that
-        # no durable path can serve — billing/entitlements/outbox all cast
-        # org_id to uuid — and that sent a whole diagnosis down the wrong
+        # no durable path can serve; billing/entitlements/outbox all cast
+        # org_id to uuid; and that sent a whole diagnosis down the wrong
         # trail (2026-07-15). Skip the seed and sweep any previously seeded
         # rows instead: idempotent, runs on every boot (init() → here) AFTER
         # the Litestream restore, so an old replica self-heals. Data rows
@@ -1040,7 +1040,7 @@ def save_artifact(bot_id: str, artifact: dict, *, org_id: str | None = None) -> 
     from . import control_plane
 
     # A session-shaped personal org (u_<hash>) has no durable archive and would
-    # crash the org_id uuid cast (same degrade as list_artifacts) — SQLite
+    # crash the org_id uuid cast (same degrade as list_artifacts). SQLite
     # remains its complete persistence path, so save errors stay fatal for it.
     durable_enabled = durable_artifacts_enabled() and control_plane.is_durable_org(
         str(row_org)
@@ -1090,7 +1090,7 @@ def get_artifact(bot_id: str, org_id: str | None = None) -> dict | None:
     if org_id is not None:
         from . import control_plane
 
-        # Personal (u_<hash>) orgs degrade to the SQLite warm cache below —
+        # Personal (u_<hash>) orgs degrade to the SQLite warm cache below -
         # the durable lookup's uuid cast would 500 (same rule as list_artifacts).
         if durable_artifacts_enabled() and control_plane.is_durable_org(
             str(org_id)
@@ -1165,7 +1165,7 @@ def create(
 
 # ── users (auth.py) ────────────────────────────────────────────────────
 # user_id is DERIVED from the email (sha256 prefix), so the same person gets
-# the same user_id — and therefore the same org_id and the same artifacts —
+# the same user_id; and therefore the same org_id and the same artifacts -
 # even if the ephemeral SQLite store is wiped by a redeploy. org_id == user_id
 # today (personal orgs); the column is the multi-tenancy seam.
 
@@ -1183,15 +1183,15 @@ def org_id_for_email(email: str) -> str:
     (org_id == user_id today). org_domains never contains a free-mail domain
     (the seed enforces that), so gmail/outlook logins always stay personal.
 
-    DURABLE deployments: this is only a pre-override hint — upsert_user replaces
+    DURABLE deployments: this is only a pre-override hint; upsert_user replaces
     the result with control_plane.ensure_user()'s uuid org (the identity source
     of truth; verified Postgres org_domains rows do the domain mapping there).
     Don't diagnose prod org resolution from this function alone."""
     normalized = (email or "").strip().lower()
     _, _, domain = normalized.partition("@")
     # PERSONAL-FIRST (owner decision): domain→shared-org routing only runs
-    # when explicitly enabled. Default off ⇒ every login — verified corporate
-    # domain included — resolves to its own personal org. The org_domains
+    # when explicitly enabled. Default off ⇒ every login; verified corporate
+    # domain included; resolves to its own personal org. The org_domains
     # rows stay in place (the parked "teams" feature flips this back on).
     if domain and settings.shared_domain_orgs:
         with _LOCK, _connect() as conn:
@@ -1215,7 +1215,7 @@ def upsert_user(
     keeps the personal-org invariant org_id == user_id (backward-compatible).
 
     DURABLE control plane (LAURA_DATABASE_URL set): the Postgres signup
-    (control_plane.ensure_user) is the identity source of truth — its UUID
+    (control_plane.ensure_user) is the identity source of truth; its UUID
     org wins and is stored on this row, while user_id stays the email-derived
     ``u_<hash>`` (the cookie cache key; this SQLite row is ephemeral and the
     cookie must land on the same user after a redeploy). ``google_sub`` is the
@@ -1230,7 +1230,7 @@ def upsert_user(
     if control_plane.enabled():
         try:
             durable = control_plane.ensure_user(google_sub, email, name, picture)
-        except Exception as exc:  # noqa: BLE001 — convert to a PII-safe failure
+        except Exception as exc:  # noqa: BLE001; convert to a PII-safe failure
             # Fail closed: a local u_<hash> fallback is not a durable UUID org
             # and could create a parallel tenant. Do not let the original
             # SQLAlchemy exception (which may render bound email/sub values)
@@ -1275,13 +1275,13 @@ def upsert_user(
         # Cutover backfill (adversarial review 2026-07-13, blocker 2): when
         # the resolved org CHANGES from the row's previous one AND that
         # previous org was the user's own personal u_<hash> org, re-stamp
-        # their existing rows in the SAME transaction — otherwise the moment
+        # their existing rows in the SAME transaction; otherwise the moment
         # the control plane flips on, a returning user's history (artifacts/
         # sessions/ledger stamped u_<hash>) silently falls outside the new
         # org's visibility set. Idempotent and one-time per user: after this
         # login the users row carries the new org, so the condition is False.
         # A previous SHARED org (verified-domain, e.g. org_sff) is never
-        # touched — those rows belong to the org, not the person.
+        # touched; those rows belong to the org, not the person.
         if prev is not None and prev["org_id"] == uid and org_id != uid:
             _restamp_personal_org(conn, uid, org_id)
         # A real org (resolved org differs from the personal uid) gets an
@@ -1299,7 +1299,7 @@ def upsert_user(
 
 def _restamp_personal_org(conn: sqlite3.Connection, old_org: str, new_org: str) -> None:
     """Move every row owned by a user's PERSONAL org (org_id == u_<hash>) to
-    their new durable org — the control-plane cutover backfill (see the call
+    their new durable org; the control-plane cutover backfill (see the call
     site in upsert_user). Runs on the caller's connection/transaction.
 
     Artifacts need BOTH the column and the JSON's own org_id field re-stamped:
@@ -1307,7 +1307,7 @@ def _restamp_personal_org(conn: sqlite3.Connection, old_org: str, new_org: str) 
     column-only update would leave the history invisible anyway. In-memory
     caches (_artifacts, _sessions) are synced so the change is visible without
     a restart; live Session objects are updated via object.__setattr__ (the
-    row is already written here — no need to re-trigger per-field persistence).
+    row is already written here; no need to re-trigger per-field persistence).
     """
     rows = conn.execute(
         "SELECT bot_id, artifact_json FROM artifacts WHERE org_id = ?", (old_org,)
@@ -1331,7 +1331,7 @@ def _restamp_personal_org(conn: sqlite3.Connection, old_org: str, new_org: str) 
         if s.org_id == old_org:
             object.__setattr__(s, "org_id", new_org)
     try:
-        # ledger_items shares the sqlite file but is owned by ledger.py — its
+        # ledger_items shares the sqlite file but is owned by ledger.py; its
         # table may not exist in store-only unit contexts; best-effort.
         conn.execute(
             "UPDATE ledger_items SET org_id = ? WHERE org_id = ?",
@@ -1343,7 +1343,7 @@ def _restamp_personal_org(conn: sqlite3.Connection, old_org: str, new_org: str) 
 
 def list_org_agent_ids(org_id: str) -> list[str]:
     """The avatar_ids granted to an org (active org_agents rows), sorted. Empty
-    when the org has no grants — the caller (avatars.list_for_org) then falls
+    when the org has no grants; the caller (avatars.list_for_org) then falls
     back to the full avatar list, so personal/demo/unknown orgs stay
     all-avatars (backward-compatible)."""
     if not (org_id or "").strip():
@@ -1369,7 +1369,7 @@ def get_user(user_id: str) -> dict | None:
 
 def resolve_org_token(raw_token: str) -> str | None:
     """org_id owning this raw machine bearer, or None. Same contract as
-    control_plane.resolve_org_token (sha256(raw) looked up in org_tokens) —
+    control_plane.resolve_org_token (sha256(raw) looked up in org_tokens) -
     the SQLite fallback so per-org service starts work before/without the
     Postgres control plane. Never logs the token."""
     import hashlib
@@ -1388,7 +1388,7 @@ def resolve_org_token(raw_token: str) -> str | None:
 def mint_org_token(org_id: str, label: str = "") -> str | None:
     """Mint a per-org machine bearer in the SQLite org_tokens table: store
     sha256(raw), return the raw ONCE (provisioning / tests). None on empty
-    org_id. NOTE: this store is ephemeral on App Runner — durable tokens come
+    org_id. NOTE: this store is ephemeral on App Runner; durable tokens come
     from control_plane.mint_org_token; this is the local/dev twin."""
     import hashlib
     import secrets
@@ -1482,7 +1482,7 @@ def begin_brain_install(
             # finished its cleanup would otherwise lock re-install forever (the
             # /slack/start route turns this False into a bogus 503 "connection
             # persistence failed"). The token is already revoked at that point,
-            # so resetting to a fresh pending install is safe — the stale
+            # so resetting to a fresh pending install is safe; the stale
             # disconnect marker is dropped below. Only a still-connected row
             # keeps "connected" while its OAuth is re-initiated.
             status = "connected" if current_status == "connected" else "pending"
@@ -1879,7 +1879,7 @@ def revoke_org_tokens(org_id: str, label: str = "") -> bool:
 def org_exists(org_id: str) -> bool:
     """Whether ``org_id`` is a provisioned org row. A SHARED org (e.g. org_sff,
     resolved from a verified domain) lives in ``orgs`` and is NEVER a ``users``
-    row — so callers validating an org must not use ``get_user`` alone, which
+    row; so callers validating an org must not use ``get_user`` alone, which
     only matches personal orgs where org_id == user_id."""
     if not (org_id or "").strip():
         return False
@@ -1955,20 +1955,20 @@ def connections_for_org(org_id: str) -> list[dict]:
 
 
 # ── per-org Google OAuth for the native executor ──
-# The refresh token is stored ENCRYPTED at rest (never plaintext) — see
+# The refresh token is stored ENCRYPTED at rest (never plaintext); see
 # backend/app/crypto.py (Fernet) + NATIVE-INTEGRATIONS-PLAN.md.
 
 
 def _oauth_enc_secret() -> str:
     """Key for encrypting per-org Google refresh tokens at rest (org_oauth).
 
-    Prefers the dedicated GOOGLE_TOKEN_ENC_KEY — set it to a random value sourced
+    Prefers the dedicated GOOGLE_TOKEN_ENC_KEY; set it to a random value sourced
     from SSM SecureString / KMS in prod so it rotates independently of the session
     cookie key. Falls back to the session secret so tokens are still never stored
     in plaintext without extra config. It never encrypts under a public constant:
     with neither set it fails closed (raises) rather than protect a live OAuth
     token with a shared default. This path is only reachable through a real Google
-    OAuth connect — the zero-key demo never stores a token — so the raise cannot
+    OAuth connect, the zero-key demo never stores a token, so the raise cannot
     hit the demo, and its one caller (main.oauth callback) treats it as a
     best-effort skip."""
     key = (settings.google_token_enc_key or "").strip() or (settings.session_secret or "").strip()
@@ -2039,12 +2039,12 @@ def get_org_oauth(org_id: str, *, provider: str = "google") -> dict | None:
 
 
 def clear_org_oauth(org_id: str, *, provider: str = "google") -> bool:
-    """Delete an org's stored OAuth for a provider — the NATIVE disconnect.
+    """Delete an org's stored OAuth for a provider; the NATIVE disconnect.
 
     Removes the encrypted per-org refresh token so the native executor can no
     longer act on that Google account. Returns True when a row was removed,
     False for an empty org or a no-op (nothing was connected). Pure SQLite,
-    keyed by the org_id string — no ``::uuid`` cast, so it is safe for both the
+    keyed by the org_id string; no ``::uuid`` cast, so it is safe for both the
     u_hash session orgs and durable uuid orgs (no split-brain crash)."""
     org = (org_id or "").strip()
     if not org:
@@ -2135,9 +2135,9 @@ def clear_user_oauth(user_id: str, *, provider: str = "google") -> bool:
 def org_for_email(email: str) -> str | None:
     """The org that owns an email address, or None when unknown.
 
-    PERSONAL-FIRST: the org of a REGISTERED USER with that email wins — after
+    PERSONAL-FIRST: the org of a REGISTERED USER with that email wins; after
     the personal-orgs cutover that is the person's own durable org, so the
-    minutes meter — and any actions — land on the owner, never on a shared
+    minutes meter, and any actions, land on the owner, never on a shared
     legacy org. The org-level Google connection (org_oauth.email) is the
     fallback for addresses that never logged in but were connected by an org
     (legacy/shared inboxes). Callers use this to attribute an inbound meeting
@@ -2236,7 +2236,7 @@ KNOWN_CAPABILITIES = ("google", "slack", "asana")
 
 def set_avatar_capability(avatar_id: str, capability: str, enabled: bool) -> bool:
     """Turn one capability ON/OFF for one avatar (dashboard toggle). Persisted
-    (Litestream-replicated), read at the execute/deliver seams — no redeploy.
+    (Litestream-replicated), read at the execute/deliver seams; no redeploy.
     False for an unknown capability (only ``KNOWN_CAPABILITIES`` are stored)."""
     aid = (avatar_id or "").strip()
     cap = (capability or "").strip().lower()
@@ -2257,7 +2257,7 @@ def get_avatar_capabilities(avatar_id: str) -> dict[str, bool]:
     """The avatar's EXPLICIT capability switches as ``{capability: bool}``.
 
     Only capabilities the owner has actually toggled appear. A capability
-    ABSENT from the map has never been set — the caller applies the default:
+    ABSENT from the map has never been set; the caller applies the default:
     ON when the org has that integration connected, else off (see
     ``capability_enabled``). Enforcement reads this raw and skips only on an
     explicit ``False`` (so an untouched avatar keeps today's behaviour)."""
@@ -2287,7 +2287,7 @@ def record_action_approval(
     previous_status: str = "", new_status: str = "",
     execution_job_id: str | None = None, blocked_on: str = "",
 ) -> bool:
-    """Persist the ONE canonical decision for an action. First write wins —
+    """Persist the ONE canonical decision for an action. First write wins -
     the approve door answers replays/conflicts from the stored row, so this
     deliberately refuses to overwrite (INSERT OR IGNORE + rowcount)."""
     org = (org_id or "").strip()
@@ -2349,7 +2349,7 @@ def add_chat_message(
     payload: dict | None = None,
 ) -> dict | None:
     """Append one message to the org's channel. Returns the stored row (with
-    id) or None on bad input. Decisions NEVER live here — an action card only
+    id) or None on bad input. Decisions NEVER live here; an action card only
     references its action_id; the canonical decision is action_approvals."""
     org = (org_id or "").strip()
     text = (body or "").strip()[:_CHAT_BODY_MAX]
@@ -2409,7 +2409,7 @@ def list_chat_messages(org_id: str, after_id: int = 0, limit: int = 200) -> list
 
 def list_blocked_action_approvals(org_id: str) -> list[dict]:
     """Every approve-decision in this org still parked behind unmet
-    dependencies ([M8]) — the work-list for the deferred release.
+    dependencies ([M8]); the work-list for the deferred release.
 
     Scoped to one org and to rows that ARE blocked, so the release sweep needs
     no cross-tenant discovery: `blocked_on` is cleared the moment the approval
@@ -2430,7 +2430,7 @@ def set_action_approval_blocked_on(
     org_id: str, action_id: str, blocked_on: str
 ) -> None:
     """Re-park a dependency-blocked approval on a SHRUNKEN dependency list (or
-    clear it with '[]'). The decision itself is never touched — only what the
+    clear it with '[]'). The decision itself is never touched; only what the
     approval is still waiting for."""
     with _LOCK, _connect() as conn:
         conn.execute(

@@ -1,8 +1,8 @@
 """The action bridge: queue_action live tool -> artifact/ledger + action.requested.
 
 Platform feature (every avatar gets it): during a meeting, "can you send the
-recap?" is CAPTURED in-memory on the live session by tools.queue_action —
-instant, zero I/O on the live path — then folded into the artifact's actions[]
+recap?" is CAPTURED in-memory on the live session by tools.queue_action -
+instant, zero I/O on the live path; then folded into the artifact's actions[]
 (and the ledger) at finalize. Orchestrated sessions additionally fire a
 best-effort action.requested webhook per capture, so the approval card is
 ready before the meeting ends.
@@ -103,7 +103,7 @@ def test_queue_action_dispatch_captures_on_session(client):
     assert {k: a0[k] for k in ("action", "owner", "due")} == {
         "action": "Send the recap to Marco", "owner": "Ben", "due": "Friday"
     }
-    # A stable id is assigned at capture — it rides action.requested and the
+    # A stable id is assigned at capture; it rides action.requested and the
     # artifact so the orchestrator correlates the two.
     assert a0["action_id"] and isinstance(a0["action_id"], str)
 
@@ -191,7 +191,7 @@ def test_orchestrated_capture_fires_action_requested(client, recall_stubbed, mon
 
     # Capture on the SYNCHRONOUS seam: cedric.notify_action_requested is called
     # in-line by capture_action and is what distils + schedules the async
-    # action.requested POST. Mocking send_action_requested — the async inner —
+    # action.requested POST. Mocking send_action_requested; the async inner -
     # is flaky: its off-thread/create_task delivery can lose the record under CI
     # load. The seam receives the raw captured item, which carries the same
     # action/owner/due/action_id the wire payload echoes.
@@ -217,7 +217,7 @@ def test_orchestrated_capture_fires_action_requested(client, recall_stubbed, mon
     assert delivered_bot == bot_id
     assert integration["external_ref"] == {"team": "T1", "meet_session_id": "ms_1"}
     # PII rule: only the distilled action/owner/due cross (+ the non-PII
-    # correlation action_id) — never transcript content.
+    # correlation action_id); never transcript content.
     assert {k: item[k] for k in ("action", "owner", "due")} == {
         "action": "Send the recap to Marco", "owner": "Ben", "due": ""
     }
@@ -278,7 +278,7 @@ def test_action_requested_is_single_attempt_best_effort(monkeypatch):
 
 def test_action_requested_surface_rejection_is_logged(monkeypatch, capsys):
     """Live-diagnosis (2026-07-10): a non-2xx from the surface used to be
-    swallowed (returned False, no log) — so 'Cedric did nothing' was
+    swallowed (returned False, no log); so 'Cedric did nothing' was
     invisible. It must now log the HTTP status, PII-safe (id + code only)."""
 
     class Rejected:
@@ -298,7 +298,7 @@ def test_action_requested_surface_rejection_is_logged(monkeypatch, capsys):
 
 def test_non_orchestrated_capture_logs_reason(monkeypatch, capsys):
     """A captured action on a session with no callback_url must say WHY nothing
-    reached the surface — the diagnostic that tells a mis-summoned session
+    reached the surface; the diagnostic that tells a mis-summoned session
     (Model B / plain) apart from a real send."""
     from app import cedric
 
@@ -397,7 +397,7 @@ def test_live_route_async_ask_captures_and_confirms(
     fired: list[tuple] = []
 
     # Capture on the SYNCHRONOUS seam (cedric.notify_action_requested, called
-    # in-request by capture_action) — NOT the async send_action_requested, whose
+    # in-request by capture_action): NOT the async send_action_requested, whose
     # create_task delivery is orphaned by the TestClient portal under CI load
     # (flake). Same pattern as test_orchestrated_capture_fires_action_requested.
     def _record(session, bot_id, item):
@@ -495,7 +495,7 @@ def test_live_route_capture_window_rejects_closing_followup(
 ):
     monkeypatch.setattr(settings, "clarify_before_create", False)  # legacy window mechanics
     """Live repro 2026-07-10: action captured, then 3s later the SAME speaker
-    says the wrap-up line — inside the 4s continuation window. That is a NEW
+    says the wrap-up line; inside the 4s continuation window. That is a NEW
     sentence, not an ASR split of the ask, and must NOT be glued onto the
     action card."""
     monkeypatch.setattr(cedric_callback, "send_action_requested", lambda *a: True)
@@ -512,7 +512,7 @@ def test_live_route_capture_window_rejects_closing_followup(
     assert len(session.queued_actions) == 1
     captured = session.queued_actions[0]["action"]
     # The real speak path marks the spoken ack (cooldown); the fake-speak
-    # fixture doesn't, so mirror it — this is exactly the live repro's state
+    # fixture doesn't, so mirror it; this is exactly the live repro's state
     # (her confirmation 3s earlier keeps the proactive wrap-up gate closed).
     session.mark_spoke()
 
@@ -529,7 +529,7 @@ def test_live_route_capture_window_rejects_acknowledgement_followup(
 ):
     monkeypatch.setattr(settings, "clarify_before_create", False)  # legacy window mechanics
     """A same-speaker acknowledgement opener ("ok great, thanks") inside the
-    window is a new thought even when it doesn't sound like a meeting close —
+    window is a new thought even when it doesn't sound like a meeting close -
     the opener alone must keep it off the card."""
     monkeypatch.setattr(cedric_callback, "send_action_requested", lambda *a: True)
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
@@ -572,7 +572,7 @@ def test_live_route_search_intent_is_not_captured(
     from app.config import settings
 
     # wants_web_search is gated on a provider key (key-free = never search);
-    # simulate production so the search-vs-capture precedence is exercised —
+    # simulate production so the search-vs-capture precedence is exercised -
     # and stub the streamed answer so no real provider call happens.
     monkeypatch.setattr(settings, "anthropic_api_key", "test-key")
 
@@ -679,7 +679,7 @@ def test_live_route_bare_imperative_captures(client, recall_stubbed, spoken, mon
 
 def test_action_id_correlates_live_event_and_artifact(client, recall_stubbed, spoken, monkeypatch):
     """The SAME action_id rides the live action.requested AND appears on that
-    action in the session.ended artifact — so Cedric dedupes the live approval
+    action in the session.ended artifact; so Cedric dedupes the live approval
     card against the final action on the id, not on text (the continuation
     window can extend the text after the live event already fired)."""
     live_ids: list = []
@@ -723,7 +723,7 @@ def test_every_finalized_action_is_id_stamped(client, recall_stubbed, monkeypatc
 
 def test_wants_action_capture_italian_bare_imperatives():
     """Italian bare imperatives ("manda una mail…", "prenota una call…") must be
-    captured live at parity with English — the workflow found they were dropped
+    captured live at parity with English; the workflow found they were dropped
     (only periphrastic "puoi mandare…" matched). Anchored, so mid-sentence
     indicatives ("dovremmo mandare…") stay out."""
     from app.brain.engine import wants_action_capture
@@ -737,7 +737,7 @@ def test_wants_action_capture_italian_bare_imperatives():
         "mandami il file",
         "ricordami di chiamare Marco",
         # calendar asks as they actually sound live (2026-07-10 test:
-        # "schedula il meeting" routed to the slow answer path — Cedric
+        # "schedula il meeting" routed to the slow answer path. Cedric
         # "thought hard" instead of instantly noting it down)
         "schedula il meeting con Marco per domani",
         "puoi schedulare una call con Ben",
@@ -760,7 +760,7 @@ def test_wants_action_capture_italian_bare_imperatives():
 
 def test_merge_dedupes_summarizer_rephrase_of_a_live_action():
     """The summarizer re-extracts a live-captured action, rephrased (deadline
-    split into its own field). It must NOT mint a second action_id — the live
+    split into its own field). It must NOT mint a second action_id; the live
     entry wins and absorbs the structured deadline/owner. Exact-text dedup missed
     this (two action_ids for one request); semantic dedup catches it. (#84)"""
     import app.main as main_module
@@ -792,7 +792,7 @@ def test_wire_artifact_still_transcript_free(client, recall_stubbed, monkeypatch
 
     # Capture on the SYNCHRONOUS delivery seam: cedric.deliver_ended runs
     # in-request at finalize and distils via wire_artifact BEFORE scheduling the
-    # fire-and-forget send_ended. Mocking send_ended — the async inner — is
+    # fire-and-forget send_ended. Mocking send_ended, the async inner, is
     # flaky under TestClient: its create_task is orphaned once the request's
     # portal closes. Distil here exactly as the real async path would, so the
     # PII assertions below are deterministic.
@@ -821,5 +821,5 @@ def test_wire_artifact_still_transcript_free(client, recall_stubbed, monkeypatch
     assert any(a.get("requested_live") for a in delivered[0]["actions"])
 
     # The full artifact (transcript included) still lives in the LOCAL store
-    # only — the PII boundary is the orchestrator API, not disk.
+    # only; the PII boundary is the orchestrator API, not disk.
     assert "transcript" in store.get_artifact(bot_id)

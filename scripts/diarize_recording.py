@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Offline speaker diarization for meeting recordings — pyannote.audio 3.1.
+"""Offline speaker diarization for meeting recordings; pyannote.audio 3.1.
 
 Purpose (stage 0 of docs/DIARIZATION.md): validate on REAL meetings whether
 open-source pyannote materially improves speaker attribution for the one case
-platform diarization can't solve — several people sharing one mic/laptop
+platform diarization can't solve; several people sharing one mic/laptop
 ("Sala Riunioni" joins as a single participant). Run it on a recording, eyeball
 the speaker timeline against what Recall's transcript claimed, and only then
 decide whether live diarization is worth infra.

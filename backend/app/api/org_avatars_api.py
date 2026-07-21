@@ -1,8 +1,8 @@
-"""Avatar Studio HTTP surface (M2) — /org/avatars/* + the dashboard twin.
+"""Avatar Studio HTTP surface (M2). /org/avatars/* + the dashboard twin.
 
 Reads are for org members; every WRITE is admin-gated: personal-org owners
 (user_id == org_id), durable members with role owner|admin
-(laura_private.billing_member_role via control_plane.member_role — called
+(laura_private.billing_member_role via control_plane.member_role; called
 with the durable member_uid, never the u_<hash> session id), or the org's
 own machine bearer (the org credential IS the org's authority). The
 dashboard twin requires cookie + same-origin on every mutation and checks
@@ -75,7 +75,7 @@ def _admin_error(user: dict) -> str:
     if member_uid:
         try:
             role = control_plane.member_role(org, member_uid)
-        except Exception:  # noqa: BLE001 — role read failure fails CLOSED
+        except Exception:  # noqa: BLE001; role read failure fails CLOSED
             role = None
         if role in ("owner", "admin"):
             return ""
@@ -89,7 +89,7 @@ _voice_cache: list[dict] | None = None
 
 def _voice_whitelist() -> list[dict]:
     """Curated ElevenLabs STOCK voices: voice-previews/ids.json plus every id
-    already used in avatar.yaml/config. Free-form ids are refused — a dead or
+    already used in avatar.yaml/config. Free-form ids are refused; a dead or
     plan-gated voice id would poison the live-path fallback memo for everyone
     on the shared key."""
     global _voice_cache
@@ -133,7 +133,7 @@ def _voice_whitelist() -> list[dict]:
 
 
 def _family_connected(org: str) -> dict[str, bool]:
-    """Per-family connected-account availability — the SAME heterogeneous
+    """Per-family connected-account availability; the SAME heterogeneous
     signals dashboard_summary derives (org_oauth google, cedric-brain row for
     slack, asana PAT/env), factored for the Studio preview."""
     from .. import asana_client, store
@@ -172,7 +172,7 @@ def _brain_sources(org: str) -> list[dict]:
              "documents": int(s.get("published_documents") or 0)}
             for s in knowledge_dal.list_sources(org)
         ]
-    except Exception:  # noqa: BLE001 — the Studio shows an empty list
+    except Exception:  # noqa: BLE001; the Studio shows an empty list
         return []
 
 
@@ -291,7 +291,7 @@ def _after_publish(org: str, avatar_key: str) -> None:
                     knowledge_dal.enqueue_job(
                         org, sources[0]["id"], "rebuild_index"
                     )
-        except Exception:  # noqa: BLE001 — the 60s epoch sweep is the backstop
+        except Exception:  # noqa: BLE001; the 60s epoch sweep is the backstop
             pass
 
 

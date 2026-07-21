@@ -1,10 +1,10 @@
-"""POST /dashboard/actions/{id}/reject — the approve door's mirror.
+"""POST /dashboard/actions/{id}/reject; the approve door's mirror.
 
 Key-free: sqlite in tmp_path, Google mocked at executor.google_client. Asserts:
-  1. auth + org scoping — a logged-in owner only, and only for their own org.
+  1. auth + org scoping: a logged-in owner only, and only for their own org.
   2. reject marks the action `rejected` (terminal) and closes the ledger row;
      nothing ever executes on this path.
-  3. approve-after-reject is refused (409) and never reaches the executor —
+  3. approve-after-reject is refused (409) and never reaches the executor -
      without that guard the monotonic chip would stay 'rejected' but the
      action would still RUN.
   4. reject-after-done is a monotonic no-op reported honestly.
@@ -30,7 +30,7 @@ from app.config import settings
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LAURA_STORE_PATH", str(tmp_path / "store.sqlite3"))
     importlib.reload(store)
-    importlib.reload(ledger)  # shares the sqlite file — needs its tables too
+    importlib.reload(ledger)  # shares the sqlite file; needs its tables too
     monkeypatch.setattr(settings, "native_executor", False)
     return TestClient(main_module.app)
 

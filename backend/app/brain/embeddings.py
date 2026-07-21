@@ -1,15 +1,15 @@
-"""Embedding provider — pluggable, with a free zero-dependency default.
+"""Embedding provider; pluggable, with a free zero-dependency default.
 
 Pick the provider with EMBEDDING_PROVIDER in .env:
 
-  hash    (default) — deterministic local hashing embedder. No API, no model
+  hash    (default); deterministic local hashing embedder. No API, no model
                       download, no cost. Approximates keyword-overlap similarity;
                       good enough to demo retrieval over a handful of SOPs.
-  local             — real semantic embeddings via `fastembed` (small local
+  local; real semantic embeddings via `fastembed` (small local
                       ONNX model, free, no API key). `pip install fastembed`.
-  voyage            — Voyage AI API (best quality). Needs VOYAGE_API_KEY.
-  openai            — OpenAI embeddings (text-embedding-3-small at a fixed
-                      512 dimensions — the durable Company Brain default).
+  voyage: Voyage AI API (best quality). Needs VOYAGE_API_KEY.
+  openai: OpenAI embeddings (text-embedding-3-small at a fixed
+                      512 dimensions; the durable Company Brain default).
                       Needs OPENAI_API_KEY.
 
 All providers expose the same `embed()` so the rest of the code never changes.
@@ -49,10 +49,10 @@ def _embed_hash(texts: list[str]) -> list[list[float]]:
 
 
 # Set once when the local model could not be acquired (e.g. a HuggingFace
-# outage at boot — observed 2026-07-16: startup hung on 504s until App
+# outage at boot; observed 2026-07-16: startup hung on 504s until App
 # Runner's health check killed the deploy). Boot must NEVER depend on a
 # third-party CDN: we degrade to hash for this process and self-heal on the
-# next boot (see provider_signature — the index stamps force a rebuild).
+# next boot (see provider_signature; the index stamps force a rebuild).
 _local_failed = False
 
 
@@ -64,13 +64,13 @@ def _embed_local(texts: list[str]) -> list[list[float]]:
         try:
             from fastembed import TextEmbedding
         except ImportError as e:
-            # A missing dependency is a CONFIG error — fail loudly, don't mask.
+            # A missing dependency is a CONFIG error; fail loudly, don't mask.
             raise RuntimeError(
                 "EMBEDDING_PROVIDER=local needs fastembed: pip install fastembed"
             ) from e
         try:
             _fastembed_model = TextEmbedding()
-        except Exception as e:  # noqa: BLE001 — model download/load failed
+        except Exception as e:  # noqa: BLE001; model download/load failed
             _local_failed = True
             print(
                 f"[embeddings] local model unavailable ({type(e).__name__}) — "
@@ -83,7 +83,7 @@ def _embed_local(texts: list[str]) -> list[list[float]]:
 
 
 def provider_signature() -> str:
-    """The provider whose vectors embed() ACTUALLY produces right now —
+    """The provider whose vectors embed() ACTUALLY produces right now -
     "hash" when local fell back. Index files stamp THIS (not the configured
     provider), so an index written during an outage mismatches on the next
     healthy boot and rebuilds with real vectors; query and index vectors can
@@ -100,7 +100,7 @@ def warmup() -> None:
     signature is read — and the live meeting path never pays the download."""
     try:
         embed(["warmup"])
-    except Exception:  # noqa: BLE001 — a warmup must never block boot
+    except Exception:  # noqa: BLE001; a warmup must never block boot
         pass
 
 
@@ -140,7 +140,7 @@ def _embed_openai(texts: list[str]) -> list[list[float]]:
     model = settings.embedding_model
     if not model.startswith("text-embedding-"):
         # embedding_model defaults to a Voyage name; the OpenAI provider needs
-        # an OpenAI one — default rather than erroring on the shared field.
+        # an OpenAI one; default rather than erroring on the shared field.
         model = "text-embedding-3-small"
     resp = httpx.post(
         "https://api.openai.com/v1/embeddings",

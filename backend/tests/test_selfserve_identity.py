@@ -1,15 +1,15 @@
-"""Self-serve identity/control-plane seams — the KEY-FREE half (PR A).
+"""Self-serve identity/control-plane seams; the KEY-FREE half (PR A).
 
 Everything here runs on SQLite with zero external services, proving:
 - control_plane is a strict no-op when LAURA_DATABASE_URL is empty (the
-  key-free demo contract — no engine, every function None/no-op);
+  key-free demo contract; no engine, every function None/no-op);
 - store.mint_org_token / resolve_org_token (the SQLite fallback of the per-org
   machine bearer) round-trip, and /sessions/start scopes a token-bearing
-  service start to the token's org — never to a body field;
+  service start to the token's org; never to a body field;
 - internal avatars (settings.internal_avatar_ids, default 'duccio') are
   invisible to every roster and refused by dispatch for every caller;
 - the demo-org sentinel flip (self-serve product decision, 2026-07-13): a
-  logged-in user's allow-set is ('', their org) — demo rows are the anonymous
+  logged-in user's allow-set is ('', their org); demo rows are the anonymous
   showroom and never leak into a real signup's dashboard/archive/redeliver.
 
 The Postgres half (real RLS, two-org isolation) lives in
@@ -36,7 +36,7 @@ from app.config import settings
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LAURA_STORE_PATH", str(tmp_path / "store.sqlite3"))
     importlib.reload(store)
-    importlib.reload(ledger)  # shares the sqlite file — needs its tables too
+    importlib.reload(ledger)  # shares the sqlite file; needs its tables too
     return TestClient(main_module.app)
 
 
@@ -145,7 +145,7 @@ def test_store_org_token_roundtrip(client):
 
 
 def test_session_start_scopes_to_org_token(client, stub_recall):
-    """A machine caller with a PER-ORG bearer dispatches into ITS org — the
+    """A machine caller with a PER-ORG bearer dispatches into ITS org; the
     service twin of the cookie principal (never a request-body field:
     StartRequest has no org field by design)."""
     raw = store.mint_org_token("org_sff", "svc")
@@ -165,7 +165,7 @@ def test_org_token_authenticates_when_login_and_token_enabled(
     client, google_on, stub_recall, monkeypatch
 ):
     """On a locked deployment (global token + Google login), a valid org token
-    must both AUTHENTICATE the start and scope it — without it the same call
+    must both AUTHENTICATE the start and scope it; without it the same call
     is a 401."""
     monkeypatch.setattr(settings, "laura_api_token", "sesame")
     denied = client.post(
@@ -212,7 +212,7 @@ def test_internal_avatar_hidden_from_all_rosters(client):
     ids = {a["id"] for a in client.get("/avatars").json()["avatars"]}
     assert "duccio" not in ids
     # the folder itself still exists and load() still works (legacy/direct
-    # uses) — only listing + dispatch are gated
+    # uses); only listing + dispatch are gated
     assert (settings.avatars_dir / "duccio" / "avatar.yaml").exists()
     assert avatars.load("duccio").id
 
@@ -261,7 +261,7 @@ def test_internal_avatar_refused_on_service_paths():
 
 
 def test_internal_guard_is_config_driven(client, monkeypatch):
-    """Emptying INTERNAL_AVATAR_IDS restores the old behavior — the guard is
+    """Emptying INTERNAL_AVATAR_IDS restores the old behavior; the guard is
     an env knob, not a hardcoded id."""
     monkeypatch.setattr(settings, "internal_avatar_ids", "")
     assert avatars.is_internal("duccio") is False
@@ -326,7 +326,7 @@ def test_anonymous_demo_caller_unchanged(client):
 
 def test_cutover_restamps_personal_rows_to_durable_org(client, monkeypatch):
     """When the control plane flips on, a returning user's org changes
-    u_<hash> → UUID — their pre-cutover rows (artifacts/sessions stamped with
+    u_<hash> → UUID; their pre-cutover rows (artifacts/sessions stamped with
     the personal u_<hash> org) must be re-stamped in the same login, or the
     owner's own history silently disappears from the new org's visibility
     set. Artifacts need BOTH the column and the JSON org_id moved (the
@@ -358,7 +358,7 @@ def test_cutover_restamps_personal_rows_to_durable_org(client, monkeypatch):
 
         rows = store.list_artifacts(org_id=durable_org)
         assert [r["bot_id"] for r in rows] == ["b_move"]
-        # the JSON field too — /meetings/list + dashboard scope on it
+        # the JSON field too. /meetings/list + dashboard scope on it
         assert rows[0]["artifact"]["org_id"] == durable_org
         assert store.get_artifact("b_move")["org_id"] == durable_org  # memory cache
         assert store.get("bot_move").org_id == durable_org  # live session (memory)
@@ -411,7 +411,7 @@ def test_cutover_never_restamps_shared_org_rows(client, monkeypatch):
 
 def test_org_token_can_end_only_its_own_org_sessions(client, stub_recall, monkeypatch):
     """The per-org bearer that can START a session can also END it (meter
-    symmetry, PR D) — but ONLY sessions of ITS org; demo-org and other-org
+    symmetry, PR D); but ONLY sessions of ITS org; demo-org and other-org
     sessions answer 404 and stay running without becoming an existence oracle."""
     from app import recall_client
 

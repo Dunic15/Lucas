@@ -1,4 +1,4 @@
-"""The Northstar demo product — an isolated FastAPI app.
+"""The Northstar demo product; an isolated FastAPI app.
 
 Self-contained: its own `app` object, never mounted into Laura's backend, no
 database, no external service, no auth. Everything it serves is derived from the
@@ -16,8 +16,8 @@ Routes (predictable, referenced by the demo manifest and tests):
   GET  /security                                      Security settings
   GET  /healthz                                       Health check
   POST /admin/reset                                   Reset to seed
-  POST /api/acme/tasks/preview                        Guarded op — preview (no write)
-  POST /api/acme/tasks                                Guarded op — idempotent create
+  POST /api/acme/tasks/preview                        Guarded op; preview (no write)
+  POST /api/acme/tasks                                Guarded op; idempotent create
 """
 from __future__ import annotations
 
@@ -102,7 +102,7 @@ def admin_reset() -> JSONResponse:
 async def _json_body(request: Request) -> dict:
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001 — empty/invalid body is fine (use defaults)
+    except Exception:  # noqa: BLE001; empty/invalid body is fine (use defaults)
         return {}
     return body if isinstance(body, dict) else {}
 

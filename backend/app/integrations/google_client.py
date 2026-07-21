@@ -1,4 +1,4 @@
-"""Native Google execution — Calendar events.insert + Gmail messages.send.
+"""Native Google execution: Calendar events.insert + Gmail messages.send.
 
 The write half of the native executor (docs/product/NATIVE-INTEGRATIONS-PLAN.md,
 "Now" slice): given an org that connected its Google account via
@@ -7,7 +7,7 @@ per-org refresh token (``store.get_org_oauth``) and make ONE Google API call.
 
 Contract for every entry point:
 - Takes ``org_id`` + a plain dict of already-distilled fields (never transcript
-  content). Resolves the token by org — a wrong/absent org yields "not
+  content). Resolves the token by org; a wrong/absent org yields "not
   connected", never a call from the wrong account.
 - Returns ``{"ok": True, ...provenance...}`` or ``{"ok": False, "error": str}``.
   It NEVER raises: this runs at finalize/approval, off the live-meeting path,
@@ -55,7 +55,7 @@ def _cal_events_url(cal_id: str) -> str:
 
 def _event_start_ts(item: dict) -> float:
     """Sortable start of a Google event item; parse failures sort last. Mixed
-    tz-aware dateTime and all-day date values normalize to UTC timestamps —
+    tz-aware dateTime and all-day date values normalize to UTC timestamps -
     plain string compare would misorder 'Z' vs '+02:00' offsets."""
     s = item.get("start") or {}
     raw = str(s.get("dateTime") or s.get("date") or "")
@@ -96,7 +96,7 @@ def _event_dedupe_key(item: dict) -> str:
 # ── per-principal access-token cache ──
 # One Google token round-trip per principal per ~hour instead of one per API
 # call. A principal is an org_id (native executor / demo) or "user:<user_id>"
-# (per-user dashboard calendar) — distinct keys, so a member's token never
+# (per-user dashboard calendar); distinct keys, so a member's token never
 # shares a slot with the org's or a colleague's. Values live only in this
 # process and are never persisted or logged; entries expire shortly before
 # Google's stated expiry, and a 401 from an API call drops the entry so
@@ -107,7 +107,7 @@ _EXPIRY_MARGIN_S = 120.0  # re-mint this long before Google's stated expiry
 _DEFAULT_TTL_S = 3300.0  # expires_in missing → assume just under Google's 1h
 
 
-# Principals whose calendarList is confirmed 403 even after a fresh mint —
+# Principals whose calendarList is confirmed 403 even after a fresh mint -
 # the grant genuinely lacks calendar.readonly (a pre-scope-change connection
 # that never reconnected) or a Workspace admin blocks the app. Without this,
 # EVERY read for such a principal would re-pay the fan-out's extra token mint +
@@ -163,17 +163,17 @@ def _access_token(
     """(access_token, "") for a principal, or ("", error) when unavailable.
 
     ``principal`` is the token-CACHE key. By default it is an ``org_id`` and the
-    refresh token is resolved from ``store.get_org_oauth`` — the native-executor
+    refresh token is resolved from ``store.get_org_oauth``: the native-executor
     path, unchanged. A caller serving a PER-USER surface passes a pre-resolved
     ``oauth`` dict (e.g. ``store.get_user_oauth``) plus a DISTINCT ``principal``
     (e.g. ``"user:<user_id>"``), so one person's calendar token never shares a
     cache slot with a colleague's. Refresh-token rotation is persisted back to
     org_oauth for the org path, or via ``on_rotate(new_rt)`` for a supplied
-    (per-user) token — never discarded (that would strand a revoked credential).
+    (per-user) token; never discarded (that would strand a revoked credential).
 
     ``force_refresh`` bypasses the cache and re-mints from the CURRENT stored
     refresh token. A reconnect that only ADDS a scope leaves the old, still
-    time-valid access token in the cache (old scopes) — so a scope-gated call
+    time-valid access token in the cache (old scopes); so a scope-gated call
     (calendarList needs calendar.readonly) keeps 403ing for up to an hour, on
     every instance whose cache holds it. The 403 self-heal in
     list_calendar_events sets this to re-mint with the new grant immediately."""
@@ -219,7 +219,7 @@ def _access_token(
         _TOKEN_CACHE[principal] = (tok, now + max(60.0, ttl - _EXPIRY_MARGIN_S))
     # Refresh-token rotation: providers may return a NEW refresh token with
     # the access token (Google does under rotation policies). Discarding it
-    # strands the credential — persist it like connect does, keeping the row's
+    # strands the credential; persist it like connect does, keeping the row's
     # email/scopes. Org path writes org_oauth; a supplied (per-user) token is
     # rewritten by its owner via on_rotate.
     new_rt = str(data.get("refresh_token") or "").strip()
@@ -258,7 +258,7 @@ def create_calendar_event(
 
     Token resolves by ``org_id`` by default (native executor). A dashboard user
     scheduling on THEIR OWN calendar passes ``oauth``/``principal`` the same way
-    as ``list_calendar_events`` — so a shared-org member creates events on their
+    as ``list_calendar_events``: so a shared-org member creates events on their
     own calendar, not a colleague's."""
     summary = str(event.get("title") or event.get("summary") or "").strip()
     start = str(event.get("start") or "").strip()
@@ -280,8 +280,8 @@ def create_calendar_event(
         # meeting actually has a join link (not just a bare calendar hold). The
         # avatar + humans join THIS Meet. requestId must be unique per create
         # call; mint it the same way the ledger mints action ids (uuid4 hex).
-        # This runs at scheduling / finalize time — off the live-meeting hot
-        # path — so a uuid here is fine (the hot-path no-uuid rule is n/a here).
+        # This runs at scheduling / finalize time; off the live-meeting hot
+        # path; so a uuid here is fine (the hot-path no-uuid rule is n/a here).
         "conferenceData": {
             "createRequest": {
                 "requestId": uuid.uuid4().hex,
@@ -308,7 +308,7 @@ def create_calendar_event(
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"calendar request failed ({type(e).__name__})"}
     if resp.status_code == 401:
-        _drop_cached_token(key)  # revoked early — next attempt re-mints
+        _drop_cached_token(key)  # revoked early; next attempt re-mints
     if resp.status_code >= 300:
         return {"ok": False, "error": f"calendar insert failed (HTTP {resp.status_code})"}
     data = resp.json()
@@ -318,7 +318,7 @@ def create_calendar_event(
         "event_url": data.get("htmlLink", ""),
         # The Meet join URL: prefer the top-level hangoutLink, else the video
         # entry point Google returns under conferenceData. Empty string when
-        # (for any reason) no conference was provisioned — callers guard null.
+        # (for any reason) no conference was provisioned; callers guard null.
         "meet_url": _meet_url(data),
     }
 
@@ -327,16 +327,16 @@ def freebusy(
     principal: str, calendar_ids: list[str], window_start: str, window_end: str, *,
     oauth: dict | None = None, on_rotate=None, timezone: str = "UTC",
 ) -> dict:
-    """Query Google's freeBusy for several calendars in ONE call — the read half
+    """Query Google's freeBusy for several calendars in ONE call; the read half
     of the find-a-time scheduler. OFF the live hot path (finalize / dashboard).
 
     Returns ``{ok, timezone, calendars: {id: {status, busy}}}`` where status is
     ``readable`` (with busy=[{start,end}] RFC3339), ``no_permission`` (Google
-    returned an error for the calendar — usually a missing free/busy grant), or
+    returned an error for the calendar; usually a missing free/busy grant), or
     ``no_account`` (Google didn't return the calendar at all). NEVER raises: a
     token/network failure returns ``{ok:False, error, calendars:{}}`` so the
     caller degrades to "couldn't check" rather than treating a calendar as free.
-    Reads via the SAME token seam as create_calendar_event — the ORG token by
+    Reads via the SAME token seam as create_calendar_event; the ORG token by
     default (the calendar the event will actually be booked on)."""
     ids = [c for c in (calendar_ids or []) if c]
     if not ids:
@@ -360,9 +360,9 @@ def freebusy(
     try:
         resp = _post(token)
         if resp.status_code == 401:
-            _drop_cached_token(key)  # revoked early — re-mint on retry
+            _drop_cached_token(key)  # revoked early; re-mint on retry
         if resp.status_code == 403:
-            # Stale cached token from before a scope-adding reconnect — re-mint
+            # Stale cached token from before a scope-adding reconnect; re-mint
             # once from the current refresh token (same self-heal as the
             # calendarList read). freeBusy rides calendar.readonly.
             _drop_cached_token(key)
@@ -384,7 +384,7 @@ def freebusy(
     for cid in ids:
         entry = cals.get(cid)
         if entry is None:
-            # Google didn't return the calendar — no such account we can see.
+            # Google didn't return the calendar; no such account we can see.
             out[cid] = {"status": "no_account", "busy": []}
         elif entry.get("errors"):
             # A returned error (commonly reason 'notFound') = free/busy not
@@ -404,7 +404,7 @@ def resolve_timezone(
 ) -> str:
     """The organizer calendar's IANA timezone (users/me/settings/timezone), or
     "" when it can't be read. Off the hot path; never raises. The scheduler
-    falls back to UTC on "" — but resolving the real zone is what keeps
+    falls back to UTC on "": but resolving the real zone is what keeps
     "9-18 working hours" from meaning 4am for a non-UTC user."""
     token, err = _access_token(principal, oauth, on_rotate=on_rotate)
     if err:
@@ -544,7 +544,7 @@ def list_calendar_events(
     By default the token is resolved by ``org_id`` (native executor / demo view).
     The per-USER dashboard passes a resolved ``oauth`` dict + a distinct
     ``principal`` (cache key), so a member of a SHARED org only ever sees THEIR
-    own calendar — never a colleague's.
+    own calendar; never a colleague's.
 
     Returns ``{"ok": True, "events": [...raw Google items...]}`` (the caller
     distills title / start / attendees / meeting URL) or
@@ -555,14 +555,14 @@ def list_calendar_events(
     token, err = _access_token(key, oauth, on_rotate=on_rotate)
     if err:
         # Diagnostic (status only, no token/email/event content): why a connected
-        # org's calendar shows empty — token-refresh rejected, not connected, etc.
+        # org's calendar shows empty; token-refresh rejected, not connected, etc.
         print(f"[calendar] read blocked: {err}", flush=True)
         return {"ok": False, "error": err}
     try:
         n = int(max_results or 20)
     except (TypeError, ValueError):
         n = 20
-    # A BOUNDED window (week navigation, time_max set) can safely pull more —
+    # A BOUNDED window (week navigation, time_max set) can safely pull more -
     # a busy shared "program" week can hold well over 50 events across several
     # calendars, and truncating there is exactly the "I don't see all my
     # standups" bug. Open-ended "from now" reads stay capped at 50.
@@ -571,7 +571,7 @@ def list_calendar_events(
 
     # Which calendars feed the view: EVERY accessible calendar in the signed-in
     # Google account (primary first, then calendars visible in Google's sidebar,
-    # then the rest). "selected" is only a UI checkbox — filtering on it silently
+    # then the rest). "selected" is only a UI checkbox; filtering on it silently
     # omitted valid meetings, including Meet events on subscribed/team calendars.
     # calendarList is paginated to exhaustion: no arbitrary account-size cap.
     # Any failure on the first page still degrades to primary-only; a later-page
@@ -670,7 +670,7 @@ def list_calendar_events(
                         }
                         for cal in cals
                     }
-        except Exception:  # noqa: BLE001 — calendarList is best-effort by design
+        except Exception:  # noqa: BLE001; calendarList is best-effort by design
             pass
 
     merged: list[dict] = []
@@ -712,7 +712,7 @@ def list_calendar_events(
                     break
                 return cid, [], f"calendar list failed ({type(e).__name__})"
             if resp.status_code == 401:
-                _drop_cached_token(key)  # revoked early — next attempt re-mints
+                _drop_cached_token(key)  # revoked early; next attempt re-mints
             if resp.status_code >= 300:
                 print(f"[calendar] list HTTP {resp.status_code}", flush=True)
                 if items:
@@ -784,7 +784,7 @@ def list_calendar_events(
 # Same discipline as drive_client.folder_brief: assembled at session start off
 # the live path, best-effort ("" on any failure), bounded (it rides the live
 # prompt every turn), cached per org for a few minutes, event content never
-# logged (counts only — list_calendar_events already follows this).
+# logged (counts only; list_calendar_events already follows this).
 
 _BRIEF_TTL = 180.0
 _BRIEF_MAX_EVENTS = 8
@@ -923,7 +923,7 @@ def send_gmail(org_id: str, message: dict) -> dict:
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"gmail request failed ({type(e).__name__})"}
     if resp.status_code == 401:
-        _drop_cached_token(org_id)  # revoked early — next attempt re-mints
+        _drop_cached_token(org_id)  # revoked early; next attempt re-mints
     if resp.status_code >= 300:
         return {"ok": False, "error": f"gmail send failed (HTTP {resp.status_code})"}
     data = resp.json()

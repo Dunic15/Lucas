@@ -2,13 +2,13 @@
 join-time snapshot.
 
 Three seams, all key-free:
-  1. LIVE Asana read tools — offered per-session (specs_for gates on the
+  1. LIVE Asana read tools: offered per-session (specs_for gates on the
      session.asana_live flag set at session start), org threaded from the
      session, reads only (writes stay behind queue_action → approval).
-  2. PERIODIC context re-pull — transcript webhooks re-pull context_url once
+  2. PERIODIC context re-pull: transcript webhooks re-pull context_url once
      the last pull is older than CONTEXT_REFRESH_SECONDS (0 = legacy
      one-shot; a quiet meeting never re-pulls).
-  3. Context PUSH door — POST /sessions/{bot_id}/context replaces the brief
+  3. Context PUSH door: POST /sessions/{bot_id}/context replaces the brief
      in real time; per-org bearers only reach their own org's sessions.
 """
 from __future__ import annotations
@@ -208,7 +208,7 @@ def test_legacy_flag_without_timestamp_does_not_repull_immediately(
     fresh_store, fetch_calls, monkeypatch
 ):
     # A session refreshed by the PRE-upgrade code (flag, no timestamp) mid-
-    # deploy: the flag counts as "just pulled" — no thundering re-pull.
+    # deploy: the flag counts as "just pulled": no thundering re-pull.
     monkeypatch.setattr(settings, "context_refresh_seconds", 120.0)
     s = _orchestrated(fresh_store, "bot_lf3")
     s.integration = {**s.integration, "context_refreshed": True}

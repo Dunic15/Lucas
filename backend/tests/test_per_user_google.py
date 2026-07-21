@@ -1,4 +1,4 @@
-"""Per-user native Google — the /oauth/google/callback relaxation and the
+"""Per-user native Google; the /oauth/google/callback relaxation and the
 Upcoming endpoint preferring the caller's OWN calendar.
 
 Key-free: Google is faked (async httpx stub), Recall's create_calendar is a spy,
@@ -126,7 +126,7 @@ def test_callback_accepts_non_avatar_account_and_skips_recall(client, monkeypatc
 
     assert resp.status_code == 302
     assert "/dashboard?google=connected" in resp.headers["location"]
-    # Token stored on the CONNECTING user's org — never the avatar's, never global.
+    # Token stored on the CONNECTING user's org; never the avatar's, never global.
     got = store.get_org_oauth("u_connecting")
     assert got and got["refresh_token"] == "rt-user"
     assert got["email"] == "alice@example.com"
@@ -171,7 +171,7 @@ def test_callback_invalid_state_still_rejected(client, monkeypatch):
 def test_callback_rejects_state_not_bound_to_this_browser(client, monkeypatch):
     """CSRF per-browser binding: a VALIDLY-SIGNED state that belongs to a
     DIFFERENT flow (a different nonce than this browser's connect cookie) is
-    rejected — a signature alone is not enough, it must match the cookie set on
+    rejected; a signature alone is not enough, it must match the cookie set on
     THIS browser. This is the login-CSRF / refresh-token-injection defense."""
     _wire_callback(monkeypatch, oauth_email="alice@example.com", invite_filter=AVATAR_EMAIL)
     # This browser starts a real flow → its nonce cookie is now in the jar.
@@ -204,7 +204,7 @@ def test_connect_requires_login_when_enabled(client, monkeypatch):
 
 def test_callback_login_enabled_unauth_not_stored_on_demo_org(client, monkeypatch):
     """Login-enabled deployment: an UNAUTHENTICATED callback is rejected (401)
-    and NOTHING is stored on the shared demo/owner org — the old anonymous
+    and NOTHING is stored on the shared demo/owner org; the old anonymous
     fallback to settings.demo_org_id is closed."""
     monkeypatch.setattr(settings, "google_calendar_client_id", "cid")
     monkeypatch.setattr(settings, "google_calendar_client_secret", "csec")  # auth.enabled()
@@ -319,12 +319,12 @@ def test_upcoming_never_leaks_a_colleagues_calendar(client, monkeypatch):
     onto one org_id) must each see ONLY their own calendar. Reproduces the real
     leak: one person connected Google and a co-worker saw THEIR calendar.
 
-    Duccio (alice@sffstudio.com) connects — dual-write: user_oauth[duccio] +
+    Duccio (alice@sffstudio.com) connects; dual-write: user_oauth[duccio] +
     org_oauth[org_sff], both his Google email. Ananth (bob@sffstudio.com) logs in
     to the SAME org and must NOT see Duccio's calendar; Duccio still sees his.
 
     Shared orgs only form under the parked flag now (personal-first default,
-    2026-07-16) — enable it so this per-user isolation invariant stays covered
+    2026-07-16); enable it so this per-user isolation invariant stays covered
     for when teams ship. (Under the default the two are in different orgs, so
     the leak is impossible by construction; per-user isolation WITHIN a shared
     org is the harder property this pins.)"""
@@ -356,7 +356,7 @@ def test_upcoming_never_leaks_a_colleagues_calendar(client, monkeypatch):
 
     monkeypatch.setattr(google_client, "list_calendar_events", _fake_list)
 
-    # Ananth (colleague, no calendar of his own) must NOT see Duccio's — and the
+    # Ananth (colleague, no calendar of his own) must NOT see Duccio's; and the
     # calendar fetch must never even be reached with a foreign token.
     _login(client, "bob@sffstudio.com")
     j = client.get("/dashboard/upcoming").json()
@@ -450,8 +450,8 @@ def test_event_ref_cannot_be_replayed_by_another_user(client):
 
 
 def test_disconnect_clears_the_per_user_token_too(client):
-    """Disconnect must revoke the credential the dashboard actually reads —
-    the PER-USER row — not just the org row (else the button silently no-ops
+    """Disconnect must revoke the credential the dashboard actually reads -
+    the PER-USER row; not just the org row (else the button silently no-ops
     and the calendar stays readable after 'disconnecting')."""
     user = _login(client, "alice@sffstudio.com")
     store.set_user_oauth(user["user_id"], "rt-x", email="duccio@sffstudio.com")

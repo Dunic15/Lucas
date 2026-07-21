@@ -21,7 +21,7 @@ _EXECUTION_STATUSES = action_plane.ACTION_STATUSES
 _TERMINAL_EXECUTION_STATUSES = action_plane.TERMINAL_STATUSES
 # Monotonic repaint guard for at-least-once, possibly out-of-order webhook
 # delivery. needs_details and proposed share a rank on purpose: finalize may
-# flag an already-proposed card as incomplete, and an edit moves it back —
+# flag an already-proposed card as incomplete, and an edit moves it back -
 # both directions are legitimate until a decision lands.
 _EXECUTION_RANK = {"": -1, "needs_details": 0, "proposed": 0, "approved": 1,
                    "executing": 2}
@@ -29,7 +29,7 @@ _EXECUTION_RANK.update({state: 3 for state in _TERMINAL_EXECUTION_STATUSES})
 
 # Execution claims outlive the slowest vendor call (Google/Asana clients use
 # ~30s HTTP timeouts); a lease that expires with the row still 'executing'
-# means the process died mid-call — reconciled, never blindly retried.
+# means the process died mid-call; reconciled, never blindly retried.
 _EXECUTION_LEASE_SECONDS = 180
 
 
@@ -70,7 +70,7 @@ def _require_capture_open(conn, org_id: str, bot_id: str) -> None:
 # Shared upsert for indexing a session.ended artifact's stable actions into
 # queued_actions. Live captures keep the id assigned at capture time; a
 # summarizer-only action carries a fresh id. ON CONFLICT(org_id, action_id)
-# refreshes owner/due where the live capture had none — identical SQL for the
+# refreshes owner/due where the live capture had none; identical SQL for the
 # row-anchored path (_index_session_ended_actions) and the callback-free path
 # (index_session_ended_actions) so the two can never drift.
 _INDEX_ACTION_SQL = text(
@@ -93,7 +93,7 @@ _INDEX_ACTION_SQL = text(
       due=CASE WHEN excluded.due <> ''
                THEN excluded.due ELSE queued_actions.due END,
       -- canonical fields fill blanks only (a live-capture row gains its typed
-      -- spec at finalize; an already-stamped row is never re-evaluated —
+      -- spec at finalize; an already-stamped row is never re-evaluated -
       -- contract re-route bounds)
       typed_json=COALESCE(queued_actions.typed_json, excluded.typed_json),
       params_schema_json=CASE
@@ -199,7 +199,7 @@ def index_session_ended_actions(
     org_id: str, bot_id: str, artifact: dict[str, Any]
 ) -> None:
     """Back-fill queued_actions from a session.ended artifact WITHOUT enqueueing
-    a Cedric callback — used when the acting avatar's Slack switch is explicitly
+    a Cedric callback; used when the acting avatar's Slack switch is explicitly
     off. The per-avatar `slack` toggle must suppress ONLY the Slack fan-out,
     never the native action list: queued_actions feeds the native executor
     (approve→calendar/gmail) and the dashboard approval queue, so a slack-off
@@ -237,7 +237,7 @@ def index_session_ended_actions(
                 action.get("item") or action.get("action") or ""
             )
             # A summarizer-only action (id not yet indexed) whose text already
-            # exists is a retry re-extraction under a new id — skip the phantom.
+            # exists is a retry re-extraction under a new id; skip the phantom.
             if action_id not in known_ids and norm and norm in known_texts:
                 continue
             conn.execute(
@@ -719,7 +719,7 @@ def set_action_status(
     """Persist one org's monotonic execution state on its durable action.
 
     ``receipt`` (optional, terminal statuses) is the structured receipt the
-    canonical Action carries — {"kind": ..., "ref": url/id} — alongside the
+    canonical Action carries: {"kind": ..., "ref": url/id}; alongside the
     human detail string the dashboard chips already render."""
     aid = str(action_id or "").strip()
     state = str(status or "").strip().lower()
@@ -804,8 +804,8 @@ def claim_action_execution(
     single-execution TRUE across App Runner instances and surfaces (the
     per-instance SQLite decision record cannot serialize two instances).
     Returns 'claimed' (this caller executes), 'lost' (someone else holds or
-    finished the claim — do NOT execute), or 'missing' (no durable row for
-    this org/action — the caller falls back to its local guard, exactly
+    finished the claim; do NOT execute), or 'missing' (no durable row for
+    this org/action; the caller falls back to its local guard, exactly
     today's semantics for never-indexed native actions)."""
     aid = str(action_id or "").strip()
     if not aid:
@@ -863,7 +863,7 @@ def reopen_failed_action(org_id: str, action_id: str, detail: str = "") -> str:
     narrow CAS is the only sanctioned exit from 'failed', and only the approve
     door calls it (the owner clicked Approve again on a failed receipt).
     done/rejected stay immutable. Returns 'reopened' (caller may re-execute),
-    'lost' (status moved on — do NOT retry), or 'missing' (no durable row;
+    'lost' (status moved on; do NOT retry), or 'missing' (no durable row;
     the caller falls back to its local guard)."""
     aid = str(action_id or "").strip()
     if not aid:
@@ -907,7 +907,7 @@ def reopen_failed_action(org_id: str, action_id: str, detail: str = "") -> str:
 
 
 def stale_executing(org_id: str) -> list[dict[str, Any]]:
-    """One org's actions whose execution claim outlived its lease — the
+    """One org's actions whose execution claim outlived its lease; the
     process died mid-vendor-call (or an async dispatch thread was lost).
     Read-only; the reconciler decides what each row becomes."""
     engine = _engine()
@@ -949,7 +949,7 @@ def record_action_decision(
     org_id: str, action_id: str, fields: dict[str, Any]
 ) -> bool:
     """Durably record THE canonical decision for (org, action). First write
-    wins via the primary key — the cross-instance twin of the SQLite
+    wins via the primary key; the cross-instance twin of the SQLite
     action_approvals INSERT OR IGNORE. Returns False when a decision row
     already exists (read it back with get_action_decision)."""
     aid = str(action_id or "").strip()
@@ -1020,7 +1020,7 @@ def get_action_decision(org_id: str, action_id: str) -> Optional[dict[str, Any]]
 
 def list_blocked_action_decisions(org_id: str) -> list[dict[str, Any]]:
     """Approve-decisions in this org still parked behind unmet dependencies
-    ([M8]) — the durable twin of store.list_blocked_action_approvals. Tenant
+    ([M8]); the durable twin of store.list_blocked_action_approvals. Tenant
     isolation is the same RLS GUC every read here sets; `blocked_on` empties
     when the approval runs, so the scan stays small."""
     engine = _engine()
@@ -1044,7 +1044,7 @@ def set_action_decision_blocked_on(
     org_id: str, action_id: str, blocked_on: str
 ) -> None:
     """Re-park a dependency-blocked decision on a SHRUNKEN dependency list (or
-    clear it with '[]') — the durable twin of
+    clear it with '[]'); the durable twin of
     store.set_action_approval_blocked_on."""
     engine = _engine()
     with engine.begin() as conn:
@@ -1142,7 +1142,7 @@ def update_action_params(
     """Merge edited safe parameters into the durable typed spec.
 
     Read-modify-write under FOR UPDATE; refused (None) for terminal or
-    currently-executing actions — an edit can never change what a held claim
+    currently-executing actions; an edit can never change what a held claim
     is about to run. When the merged spec has no missing required fields the
     status moves needs_details→proposed; both transitions append to the
     canonical log. Returns the updated typed dict."""
@@ -1435,7 +1435,7 @@ def finish_attempt(
         params: dict[str, Any] = {}
     else:
         # CAST the epoch param to double precision so its type is unambiguous.
-        # Without it, a NULL next_attempt_at (a non-transient failure — e.g. a
+        # Without it, a NULL next_attempt_at (a non-transient failure; e.g. a
         # 401 from Cedric) is sent untyped and its first use `:next_attempt_at
         # IS NULL` leaves Postgres unable to infer $1's type → AmbiguousParameter
         # → the UPDATE aborts, the row never leaves 'sending', and the worker

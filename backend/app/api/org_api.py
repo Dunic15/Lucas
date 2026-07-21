@@ -1,9 +1,9 @@
-"""Org-memory API — the read/act seam for surfaces (issue #48).
+"""Org-memory API; the read/act seam for surfaces (issue #48).
 
 Surfaces (Cedric in Slack is the first) query what the avatars learned across
 meetings: the carryover brief, open action items, and resolving them from the
-outside ("done via Slack"). Everything here is DISTILLED data — briefs and
-ledger items, never transcripts — and every route sits behind the same Bearer
+outside ("done via Slack"). Everything here is DISTILLED data; briefs and
+ledger items, never transcripts; and every route sits behind the same Bearer
 gate as the session API (open when LAURA_API_TOKEN is unset, for local dev).
 
 Kept as its own router so main.py stays a 2-line include; the functions are
@@ -31,7 +31,7 @@ async def _machine_gate(request: Request) -> tuple[Optional[JSONResponse], str]:
     """Authenticate the machine caller and resolve the tenant whose memory it
     may touch: a PER-ORG bearer (org_tokens, PR A/D) → its own org; the global
     bearer and the key-free open demo → the Demo org (exactly today's scope).
-    Returns ``(error_response, org_id)`` — send the error when it is not None.
+    Returns ``(error_response, org_id)``: send the error when it is not None.
     The resolver is sync DB I/O, so it runs in the threadpool (every route
     here is async; never the live hot path)."""
     org = await run_in_threadpool(cedric.resolve_machine_org, request)
@@ -43,7 +43,7 @@ async def _machine_gate(request: Request) -> tuple[Optional[JSONResponse], str]:
 
 
 def _search_artifacts(query: str, limit: int, org_id: str) -> list[dict]:
-    """Meetings whose summary/decisions/actions mention the query — a distilled
+    """Meetings whose summary/decisions/actions mention the query; a distilled
     snippet per hit, newest first, scoped to one org. No transcripts (they
     aren't in list_artifacts output beyond the distilled fields we read here)."""
     q = query.lower()
@@ -118,10 +118,10 @@ async def org_resolve(ref: str, request: Request) -> JSONResponse:
 
     ``ref`` is either the numeric ledger row id (as before) OR the stable
     string ``action_id`` the orchestrator carries from action.requested /
-    session.ended — the natural key for Cedric's ack loop, since it never sees
+    session.ended; the natural key for Cedric's ack loop, since it never sees
     the numeric row id.
 
-    OPTIONAL JSON body (agreed contract — orchestrator side implements in
+    OPTIONAL JSON body (agreed contract; orchestrator side implements in
     parallel): {"outcome": "done"|"rejected"|"failed", "detail": "<=300 chars"}.
     Absent/empty body means "done", so today's body-less callers keep working
     identically. All three outcomes are terminal; the response echoes the
@@ -138,7 +138,7 @@ async def org_resolve(ref: str, request: Request) -> JSONResponse:
         if body is not None and not isinstance(body, dict):
             return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
     else:
-        body = None  # no body at all — the pre-contract client shape
+        body = None  # no body at all; the pre-contract client shape
     outcome = str((body or {}).get("outcome") or "done").strip().lower()
     if outcome not in ledger.RESOLUTION_OUTCOMES:
         return JSONResponse(
@@ -165,21 +165,21 @@ async def org_action_status(action_id: str, request: Request) -> JSONResponse:
     the brain's side (proposed → approved/rejected → done/failed), keyed on the
     stable action_id it received in action.requested / session.ended. Upsert,
     latest wins; 'done' also closes the ledger item (same as /resolve). The
-    dashboard shows this per action — the meter of 'my avatar's asks actually
+    dashboard shows this per action; the meter of 'my avatar's asks actually
     got executed'. Body: {"status": "...", "detail": "one-liner, optional"}."""
     err, org = await _machine_gate(request)
     if err:
         return err
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+    except Exception:  # noqa: BLE001; malformed JSON is a client error
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     # Boundary normalization (canonical Action plane): peers historically say
-    # 'executed' for a completed run — canonical vocabulary says 'done'. The
+    # 'executed' for a completed run; canonical vocabulary says 'done'. The
     # alias map is inbound-only; Laura never emits the alias.
     status = action_plane.normalize_status(str((body or {}).get("status") or ""))
     detail = str((body or {}).get("detail") or "")
-    # Validate the status VALUE here so a genuinely bad state is still a 400 —
+    # Validate the status VALUE here so a genuinely bad state is still a 400 -
     # distinct from "valid state, but this org has no durable action row yet".
     if status not in ledger.EXECUTION_STATUSES:
         return JSONResponse(
@@ -194,7 +194,7 @@ async def org_action_status(action_id: str, request: Request) -> JSONResponse:
         ledger.set_action_status, action_id, status, detail, org_id=org
     )
     # Orchestrated mode: Cedric owns the action id. When the control-plane path
-    # has no queued_actions row for (org, action_id) it returns False — a clean
+    # has no queued_actions row for (org, action_id) it returns False; a clean
     # no-op (nothing to decorate on the dashboard), NOT a client error. Return
     # recorded=false + 200 so Cedric's best-effort provenance loop stops getting
     # 400s (and stops falling back to /resolve, which 404s).
@@ -205,7 +205,7 @@ async def org_action_status(action_id: str, request: Request) -> JSONResponse:
 
 # ─────────── the canonical approval door (handshake: approve-action) ───────────
 # Agreed action-lifecycle contract hsk_con_cnw4567mqj3p49dyn3dg: EVERY approval
-# — dashboard or a Slack decision relayed by the orchestrator — converges on
+#, dashboard or a Slack decision relayed by the orchestrator, converges on
 # this ONE idempotent transition. Cedric never executes on locally-held
 # approval state; this door's 200 is the only execution trigger.
 
@@ -224,7 +224,7 @@ def _global_bearer_used(request: Request) -> bool:
 
 def _org_action(org: str, action_id: str) -> tuple[dict, str] | None:
     """The stored artifact action visible to ``org`` (same scan the dashboard
-    approve door uses — the saved artifact is the trusted source for the typed
+    approve door uses; the saved artifact is the trusted source for the typed
     spec, never the client body)."""
     from . import dashboard  # local import: dashboard imports nothing from here
 
@@ -265,7 +265,7 @@ def _execute_route(
     if route == "browser":
         # Guarded browser step (B0): claim exactly-once, then re-check
         # ownership/state/avatar allowance and settle a receipt through the
-        # browser operator — the SAME claim + provenance path, no second
+        # browser operator; the SAME claim + provenance path, no second
         # execution system.
         from .. import browser
 
@@ -284,7 +284,7 @@ def _execute_route(
                 "done" if result.get("ok") else "failed", False)
     if route == "pipedream":
         # Pipedream Connect-Proxy execution (Asana + long tail). Same capability
-        # gate + exactly-once claim + provenance channel as the native route —
+        # gate + exactly-once claim + provenance channel as the native route -
         # only the vendor call differs. Always returns; never falls through to
         # native (which could double-run the same action type).
         exec_action = executor.from_typed(action.get("typed"))
@@ -318,7 +318,7 @@ def _execute_route(
                         new_status="done" if result.get("ok") else "failed",
                         execution_job_id=job_id,
                     )
-                except Exception:  # noqa: BLE001 — executor soft-returns
+                except Exception:  # noqa: BLE001; executor soft-returns
                     pass
 
             threading.Thread(target=_dispatch_pd, daemon=True).start()
@@ -330,7 +330,7 @@ def _execute_route(
         return None, "approved", False
     # CAPABILITY GATE (same rule as the dashboard door, from #255): the acting
     # avatar's family toggle can veto native execution; a blocked action stays
-    # `approved` — byte-identical to the executor being off. The M2 overlay
+    # `approved`: byte-identical to the executor being off. The M2 overlay
     # check is the org-scoped narrowing re-resolved at EXECUTION time (an
     # overlay can remove a capability, never grant one; flag off ⇒ allowed).
     family = executor.capability_family(exec_action.get("type"))
@@ -344,7 +344,7 @@ def _execute_route(
     # EXECUTION CLAIM (canonical Action plane, M0): the atomic CAS to
     # 'executing' is the only license to call a vendor. Losing the claim means
     # another surface/instance is executing (or already finished) this exact
-    # action — report its status instead of writing twice.
+    # action; report its status instead of writing twice.
     if not ledger.claim_action_execution(
         action_id, org_id=org, idempotency_key=idempotency_key, via=via
     ):
@@ -366,7 +366,7 @@ def _execute_route(
                     new_status="done" if result.get("ok") else "failed",
                     execution_job_id=job_id,
                 )
-            except Exception:  # noqa: BLE001 — executor soft-returns; belt+braces
+            except Exception:  # noqa: BLE001; executor soft-returns; belt+braces
                 pass
 
         threading.Thread(target=_dispatch, daemon=True).start()
@@ -383,7 +383,7 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
     (decision required; laura_user_id, idempotency_key, selected_slot_id,
     decided_via, response_text optional per contract)."""
     # [B1] auth: per-org bearer resolves the tenant; the global deployment
-    # bearer is valid ONLY for the Demo org — everywhere else 401.
+    # bearer is valid ONLY for the Demo org; everywhere else 401.
     err, org = await _machine_gate(request)
     if err:
         return err
@@ -483,7 +483,7 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
             "current_status": prev, "decided_via": "system", "decided_at": None,
         }, status_code=409)
 
-    # [M9] slot rules — only when the action carries a proposal.
+    # [M9] slot rules; only when the action carries a proposal.
     proposal = action.get("proposal") if isinstance(action.get("proposal"), dict) else None
     if decision == "approve" and proposal:
         slots = {str(s.get("slot_id")): s for s in (proposal.get("candidate_slots") or [])
@@ -508,10 +508,10 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
         args["start"], args["end"] = chosen.get("start"), chosen.get("end")
         action = {**action, "typed": {**typed, "args": args}}
 
-    # needs_details gate (AFTER slot materialization — a proposal's start/end
+    # needs_details gate (AFTER slot materialization; a proposal's start/end
     # legitimately arrive from the chosen slot): a typed spec still missing
     # REQUIRED parameters must not be approved into a broken vendor call or a
-    # silent no-op — surface the exact fields so either surface can collect
+    # silent no-op; surface the exact fields so either surface can collect
     # them through the params door.
     typed_now = action.get("typed") if isinstance(action.get("typed"), dict) else None
     missing = action_plane.missing_params(typed_now)
@@ -526,7 +526,7 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
             "params_schema": action_plane.params_schema(typed_now),
         }, status_code=422)
 
-    # Dependencies are read-only — resolve them BEFORE recording so the
+    # Dependencies are read-only; resolve them BEFORE recording so the
     # decision row carries the real blocked_on list from the start.
     blocked = (
         await run_in_threadpool(_unmet_dependencies, org, action)
@@ -616,12 +616,12 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
 @router.post("/chat")
 async def org_chat_post(request: Request) -> JSONResponse:
     """Cedric posts into the org's chat channel. NOTE: the dashboard's chat UI
-    was removed 2026-07-20 (owner request) — no in-repo surface renders these
+    was removed 2026-07-20 (owner request); no in-repo surface renders these
     messages today; the channel is retained as the transport for the planned
     Cedric bridge (docs/CEDRIC-DASHBOARD-BRIDGE.md), and the referenced action
     itself still surfaces in the Action Center regardless.
 
-    Body — exactly one of:
+    Body; exactly one of:
       {"message": {"text": "...", "sender_label"?: "Cedric"}}
       {"action_card": {"action_id": "...", "item": "...", "owner"?, "due"?,
                        "note"?: "<=300 chars lead-in shown above the card>"}}
@@ -685,7 +685,7 @@ async def org_chat_post(request: Request) -> JSONResponse:
 # ─────────── canonical Action reads + edits (control plane, M0) ───────────
 # One canonical Action object per (org, action_id): the durable queued_actions
 # row (status/receipt/logs/typed edits) merged with the saved artifact's
-# richer fields (proposal, dependencies, approvers). Distilled data only —
+# richer fields (proposal, dependencies, approvers). Distilled data only -
 # briefs and typed args, never transcript content.
 
 
@@ -777,7 +777,7 @@ async def org_action_get(action_id: str, request: Request) -> JSONResponse:
 def apply_param_edits(org: str, action_id: str, args: dict) -> tuple[int, dict]:
     """Fill or edit an action's typed parameters (the needs_details loop).
 
-    Shared by the machine door below and the dashboard door — the ONLY seam
+    Shared by the machine door below and the dashboard door; the ONLY seam
     through which a typed spec may change, so the approve doors can keep
     trusting stored specs over client bodies. Sync (threadpool caller).
     Returns (http_status, payload)."""
@@ -834,7 +834,7 @@ def apply_param_edits(org: str, action_id: str, args: dict) -> tuple[int, dict]:
             "params": {k: merged.get("args", {}).get(k) for k in cleaned},
             "missing_params": missing,
         })
-    except Exception:  # noqa: BLE001 — the edit is committed; events are best-effort
+    except Exception:  # noqa: BLE001; the edit is committed; events are best-effort
         pass
 
     return 200, {
@@ -857,7 +857,7 @@ async def org_action_params(action_id: str, request: Request) -> JSONResponse:
         return JSONResponse({"error": "action_id is required"}, status_code=400)
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+    except Exception:  # noqa: BLE001; malformed JSON is a client error
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     args = (body or {}).get("args") if isinstance(body, dict) else None
     code, payload = await run_in_threadpool(apply_param_edits, org, aid, args)

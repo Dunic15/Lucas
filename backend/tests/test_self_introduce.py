@@ -65,7 +65,7 @@ def _capture(monkeypatch) -> list:
 
 
 def _mute_answers(monkeypatch) -> None:
-    """The answer stream never yields — isolates the intro from any answer the
+    """The answer stream never yields; isolates the intro from any answer the
     unaddressed lines might otherwise trigger once she's active."""
     monkeypatch.setattr(main, "answer_question_stream", lambda *a, **k: iter(()))
 
@@ -101,7 +101,7 @@ def test_intro_fires_once_when_never_addressed(tmp_path, monkeypatch):
 
     assert len(spoken) == 1  # exactly one intro, no double-fire across lines
     assert "Laura" in spoken[0]  # she named herself
-    # The intro is the fixed template — no transcript content leaks into it.
+    # The intro is the fixed template; no transcript content leaks into it.
     assert "hear me" not in spoken[0].lower()
     assert s.self_introduced is True
     assert s.addressed_once is False  # etiquette intact: still waiting to be named

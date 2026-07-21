@@ -1,23 +1,23 @@
-"""Asana — the org's project system of record (read + write).
+"""Asana; the org's project system of record (read + write).
 
-The first task-tool connector from the commercial roadmap ("Task-tool push —
+The first task-tool connector from the commercial roadmap ("Task-tool push -
 actions become tickets"): given an org that connected Asana, read the
 workspace (projects, open/overdue tasks) into a compact meeting brief, and
 execute approved task actions (create / update / comment) as the org.
 
 Auth (simplest thing that works, upgradeable to OAuth without rework):
-a Personal Access Token, resolved per org — the encrypted per-org row
+a Personal Access Token, resolved per org; the encrypted per-org row
 (``store.set_org_oauth(org, pat, provider="asana")``) wins, with the
 ``ASANA_TOKEN`` env var as the single-tenant fallback. The default workspace
 is ``ASANA_WORKSPACE_GID``, auto-discovered from the token when unset.
 
-Contract — identical to ``google_client``:
+Contract; identical to ``google_client``:
 - Takes ``org_id`` + a plain dict of already-distilled fields (never
   transcript content). A wrong/absent org yields "not connected", never a
   call from the wrong account.
 - Returns ``{"ok": True, ...provenance...}`` or ``{"ok": False, "error"}``.
   NEVER raises: this runs at session start / finalize / approval, off the
-  live-meeting path — an Asana hiccup must degrade softly.
+  live-meeting path; an Asana hiccup must degrade softly.
 - Logs no token and no task content.
 """
 from __future__ import annotations
@@ -37,7 +37,7 @@ _TIMEOUT = 20.0
 
 # OAuth access-token cache (the "Connect Asana" button path): Asana OAuth
 # access tokens live ~1h; mint once per org per hour instead of per call.
-# Same contract as google_client's cache — in-process only, never logged.
+# Same contract as google_client's cache; in-process only, never logged.
 _oauth_lock = threading.Lock()
 _OAUTH_CACHE: dict[str, tuple[str, float]] = {}  # org_id -> (token, expires_at)
 _OAUTH_EXPIRY_MARGIN_S = 120.0
@@ -65,14 +65,14 @@ def _token(org_id: str) -> tuple[str, str]:
     """(bearer_token, "") for the org, or ("", error).
 
     Precedence: the OAuth grant from the dashboard's "Connect Asana" button
-    (provider="asana-oauth" — a refresh token minted into short-lived access
+    (provider="asana-oauth": a refresh token minted into short-lived access
     tokens, cached) → the pasted PAT (provider="asana") → the ASANA_TOKEN env
     fallback. An expired/unmintable OAuth grant falls through rather than
     masking a working PAT."""
     org = (org_id or "").strip()
     try:
         oauth_row = store.get_org_oauth(org, provider="asana-oauth")
-    except Exception:  # noqa: BLE001 — a store hiccup reads as not connected
+    except Exception:  # noqa: BLE001; a store hiccup reads as not connected
         oauth_row = None
     if oauth_row and oauth_row.get("refresh_token"):
         tok, _err = _oauth_access_token(org, oauth_row)
@@ -128,7 +128,7 @@ def _oauth_access_token(org_id: str, row: dict) -> tuple[str, str]:
         ttl = _OAUTH_DEFAULT_TTL_S
     with _oauth_lock:
         _OAUTH_CACHE[org_id] = (tok, now + max(60.0, ttl - _OAUTH_EXPIRY_MARGIN_S))
-    # Persist a rotated refresh token (never discard — that strands the grant).
+    # Persist a rotated refresh token (never discard; that strands the grant).
     new_rt = str(data.get("refresh_token") or "").strip()
     if new_rt and new_rt != row["refresh_token"]:
         try:
@@ -137,7 +137,7 @@ def _oauth_access_token(org_id: str, row: dict) -> tuple[str, str]:
                 email=str(row.get("email") or ""),
                 scopes=str(row.get("scopes") or ""),
             )
-        except Exception:  # noqa: BLE001 — best-effort; the old rt may still work
+        except Exception:  # noqa: BLE001; best-effort; the old rt may still work
             pass
     return tok, ""
 
@@ -350,11 +350,11 @@ def _task_row(t: Any) -> dict:
 
 def workspace_brief(org_id: str) -> str:
     """Markdown snapshot of the workspace for the meeting brief; "" when Asana
-    is unavailable. Sync (network) — call via run_in_threadpool at session
+    is unavailable. Sync (network); call via run_in_threadpool at session
     start only. TTL-cached per org so busy days don't hammer the API.
 
     Content is distilled and capped (project names, open task names, owners,
-    due dates, an OVERDUE flag) — it rides the live prompt, so it must stay
+    due dates, an OVERDUE flag); it rides the live prompt, so it must stay
     cheap, and it must never carry anything but workspace facts."""
     key = (org_id or "").strip() or "-"
     now = time.time()
@@ -397,7 +397,7 @@ def _build_brief(org_id: str) -> str:
 
 
 def _reset_brief_cache() -> None:
-    """Test seam — process-global state (the workspace-brief cache AND the
+    """Test seam; process-global state (the workspace-brief cache AND the
     OAuth access-token cache), cleared per test (see conftest) and on every
     connect/disconnect so a new grant never serves the old org's view."""
     with _brief_lock:
@@ -430,7 +430,7 @@ def create_task(org_id: str, task: dict) -> dict:
     else:
         # No assignee in the spec → default to the CONNECTED account ("me" =
         # the token's user). A task with no assignee and no project appears in
-        # NO Asana view (not My Tasks, not any project) — a real but invisible
+        # NO Asana view (not My Tasks, not any project); a real but invisible
         # orphan (live finding 2026-07-17: voice-created task nobody could
         # find). Defaulting to the connection owner puts every created task in
         # someone's My Tasks; the meeting flow can still assign someone else.

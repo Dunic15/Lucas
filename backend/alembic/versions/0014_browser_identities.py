@@ -1,4 +1,4 @@
-"""Browser identities — per-org saved browser logins (Browserbase Contexts).
+"""Browser identities; per-org saved browser logins (Browserbase Contexts).
 
 Revision ID: 0014_browser_identities
 Revises: 0013_browser_sessions
@@ -12,11 +12,11 @@ authenticated. Credentials never transit Laura: the user types them directly
 into the provider's live view, and the observation layer already never reads
 the cookie jar.
 
-``context_ref`` is the provider's context id — like ``provider_ref`` on
+``context_ref`` is the provider's context id; like ``provider_ref`` on
 sessions it is NEVER returned by any API or logged; the row's uuid ``id`` is
 the only public identifier.
 
-Grant posture matches 0013: SELECT/INSERT/UPDATE to laura_app (no DELETE —
+Grant posture matches 0013: SELECT/INSERT/UPDATE to laura_app (no DELETE -
 identities are revoked via status, never deleted by the runtime). Downgrade
 raises.
 """

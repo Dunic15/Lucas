@@ -1,13 +1,13 @@
-"""Northstar MVP — deterministic key-free end-to-end acceptance.
+"""Northstar MVP; deterministic key-free end-to-end acceptance.
 
 The whole MVP journey on embedded Postgres with the in-process Northstar
-provider + fake visual planner + real product write — NO Browserbase, NO model
+provider + fake visual planner + real product write. NO Browserbase, NO model
 credentials. Proves: demo-org setup, canonical knowledge ingestion,
 ContextResolver citations (+ cross-org denial), meeting-bound browser session,
 the VISUAL-ONLY target chosen by visual grounding, rejection = zero tasks,
 approval = exactly one task-0003 with a receipt + post-action verification, a
 replayed approval creating no duplicate, dashboard state mapping, and a clean
-close — twice from a clean reset, deterministically.
+close; twice from a clean reset, deterministically.
 """
 from __future__ import annotations
 
@@ -99,7 +99,7 @@ def demo(pg, monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "northstar_demo_write_enabled", True)
     monkeypatch.setattr(settings, "browser_allowed_domains",
                         "127.0.0.1:8971,localhost:8971")
-    # Knowledge files land under store.STORE_PATH.parent/knowledge_files — the
+    # Knowledge files land under store.STORE_PATH.parent/knowledge_files; the
     # tmp store path isolates them per test.
     monkeypatch.setattr(store, "STORE_PATH", tmp_path / "store.sqlite3")
     store._init_db()
@@ -250,7 +250,7 @@ def test_cross_org_cannot_retrieve_northstar_docs(demo):
 
 def test_demo_write_hook_scoped_to_northstar_provider(demo):
     """Adversarial fix: the BROWSER_ALLOW_WRITES=false mint gate opens ONLY for
-    a Northstar-provider session — never for any other session that happens to
+    a Northstar-provider session; never for any other session that happens to
     expose a 'create-followup' element."""
     northstar_row = {"provider": "northstar", "id": "s", "meeting_ref": "m"}
     other_row = {"provider": "fake", "id": "s", "meeting_ref": "m"}
@@ -281,7 +281,7 @@ def test_reset_only_removes_demo_sources(demo):
 
 
 def test_arbitrary_browser_write_still_rejected(demo):
-    """Only the follow-up is enabled — any OTHER guarded write stays rejected
+    """Only the follow-up is enabled; any OTHER guarded write stays rejected
     under BROWSER_ALLOW_WRITES=false."""
     started = runtime.start(demo, meeting_ref="m2")
     sid = started["session"]["id"]
@@ -290,7 +290,7 @@ def test_arbitrary_browser_write_still_rejected(demo):
     # a non-followup guarded click on the northstar provider is not minted.
     operator.issue_command(demo, sid, verb="navigate",
                            url="http://127.0.0.1:8971/customers", command_id="c")
-    # 'customer-acme-robotics' is a link (auto), not guarded — assert the ONLY
+    # 'customer-acme-robotics' is a link (auto), not guarded; assert the ONLY
     # guarded control that mints is create-followup by confirming a different
     # guarded op is impossible here (no other submit/purchase element exists).
     obs, _ = operator.perceive(demo, sid)

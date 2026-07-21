@@ -1,4 +1,4 @@
-"""Deferred execution of dependency-blocked approvals — the [M8] release.
+"""Deferred execution of dependency-blocked approvals; the [M8] release.
 
 The approve door resolves an approved action's `dependencies` and, when any of
 them isn't `done` yet, records the decision with a `blocked_on` list and
@@ -11,10 +11,10 @@ obligation Laura carries in the Cedric relay contract v3
 ordering is Laura's to enforce, so if Laura never releases, the action is
 approved and executes NOWHERE.
 
-TRIGGER — `ledger.set_action_status` reaching a terminal `done`, the ONE weld
+TRIGGER: `ledger.set_action_status` reaching a terminal `done`, the ONE weld
 point every completion already goes through: Laura's native executor receipt,
-the `respond` shortcut, the stale-`executing` reconciler's settle, and — the
-case that decides it — Cedric POSTing `/org/actions/{id}/status` for a
+the `respond` shortcut, the stale-`executing` reconciler's settle, and; the
+case that decides it: Cedric POSTing `/org/actions/{id}/status` for a
 cedric-routed action it executed itself. The spec suggested
 `set_action_decision_result` instead; that hook only fires for actions LAURA
 executed, so a dependency completed by Cedric would never have released its
@@ -23,7 +23,7 @@ dependency must leave its dependents parked, not run them.
 
 SAFETY, in the order the failure modes actually bite:
 - **Never two writes.** Every release executes behind
-  `ledger.claim_action_execution` — the same compare-and-set the door uses — so
+  `ledger.claim_action_execution`, the same compare-and-set the door uses, so
   a release racing a dashboard approve of the same action produces exactly one
   external write; the loser simply reports the winner's status.
 - **Never unbounded recursion.** Releasing B completes B, which re-enters this
@@ -32,7 +32,7 @@ SAFETY, in the order the failure modes actually bite:
   bounded loop. A dependency cycle can never spin: a cycle means no member ever
   reaches `done`, so nothing is ever released.
 - **Never break the caller.** A status write must not fail because a
-  dependent's calendar call did — every release is best-effort and swallows.
+  dependent's calendar call did; every release is best-effort and swallows.
 - **Never the live path.** Reached only from finalize/dashboard/relay writes,
   never from `ws/<conversation_id>`.
 """
@@ -54,7 +54,7 @@ _MAX_PASSES = 25
 
 
 def _blocked_on(raw: Any) -> list[str]:
-    """The `blocked_on` list off a decision row — stored as a JSON array of
+    """The `blocked_on` list off a decision row; stored as a JSON array of
     action_ids, tolerated as a bare list. Junk reads as 'not blocked': a row we
     cannot parse must not strand an approval forever."""
     if isinstance(raw, list):
@@ -64,7 +64,7 @@ def _blocked_on(raw: Any) -> list[str]:
         return []
     try:
         parsed = json.loads(text)
-    except Exception:  # noqa: BLE001 — malformed row, not a client error
+    except Exception:  # noqa: BLE001; malformed row, not a client error
         return []
     return [str(x) for x in parsed if str(x).strip()] if isinstance(parsed, list) else []
 
@@ -73,7 +73,7 @@ def _release_one(org_id: str, action_id: str) -> bool:
     """Settle one parked approval whose trigger just landed. True only when it
     actually reached `done` (the sweep re-scans for what THAT unblocks next).
 
-    Clearing `blocked_on` is unconditional once the dependencies are met — even
+    Clearing `blocked_on` is unconditional once the dependencies are met; even
     when Laura ends up executing nothing. An approval that stays parked would be
     re-swept on every future completion in the org, forever; and the durable
     `set_action_decision_result` does not clear `blocked_on` on its own, so the
@@ -100,7 +100,7 @@ def _release_one(org_id: str, action_id: str) -> bool:
 
     still = org_api._unmet_dependencies(org_id, action)
     if still:
-        # Another dependency is still outstanding — re-park on the SHRUNKEN list
+        # Another dependency is still outstanding; re-park on the SHRUNKEN list
         # so the dashboard shows what is genuinely still awaited.
         _repark(org_id, action_id, still)
         return False
@@ -133,7 +133,7 @@ def _release_one(org_id: str, action_id: str) -> bool:
         # Laura executed nothing and this is NOT a capability veto: the action is
         # cedric-routed, or native with no typed spec the executor handles. Its
         # dependencies are met and it is no longer parked, but Laura has no
-        # channel to dispatch it — Cedric's own loop owns a cedric-routed action
+        # channel to dispatch it. Cedric's own loop owns a cedric-routed action
         # (tenancy-v4 dispatch-action is the sanctioned push, not yet accepted).
         # Say so on the provenance channel instead of implying it ran.
         ledger.set_action_status(
@@ -198,7 +198,7 @@ def release_dependents(org_id: str, done_action_id: str) -> list[str]:
     _local.sweeping = True
     try:
         return _sweep(org, done_id)
-    except Exception:  # noqa: BLE001 — a status write must never fail on this
+    except Exception:  # noqa: BLE001; a status write must never fail on this
         return []
     finally:
         _local.sweeping = False
@@ -214,7 +214,7 @@ def _sweep(org: str, done_id: str) -> list[str]:
     for _ in range(_MAX_PASSES):
         try:
             parked = ledger.list_blocked_decisions(org)
-        except Exception:  # noqa: BLE001 — storage hiccup: leave rows parked
+        except Exception:  # noqa: BLE001; storage hiccup: leave rows parked
             break
         ready = [
             str(row.get("action_id") or "")
@@ -228,7 +228,7 @@ def _sweep(org: str, done_id: str) -> list[str]:
         for action_id in ready:
             try:
                 ran = _release_one(org, action_id)
-            except Exception:  # noqa: BLE001 — one bad action must not stop the rest
+            except Exception:  # noqa: BLE001; one bad action must not stop the rest
                 continue
             if ran:
                 executed.append(action_id)

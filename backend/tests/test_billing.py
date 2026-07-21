@@ -522,7 +522,7 @@ def test_summary_member_of_small_org_cannot_manage_but_stays_eligible(
     stripe_config, monkeypatch
 ):
     # A plain member of an ordinary (not-yet-entitled) org: the plan is still
-    # self-serve eligible, but THIS member can't open billing — so the dashboard
+    # self-serve eligible, but THIS member can't open billing; so the dashboard
     # hides the button rather than letting the click 403.
     client = _summary_client(
         monkeypatch, role="member", plan="free", included=900

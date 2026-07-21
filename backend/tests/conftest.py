@@ -2,14 +2,14 @@
 
 The suite's contract is KEY-FREE: every test must behave identically on a
 clean checkout (no ``.env``) and on a developer machine whose repo-root
-``.env`` carries real vendor keys — ``config.Settings`` loads that ``.env``
+``.env`` carries real vendor keys. ``config.Settings`` loads that ``.env``
 at import time. The autouse fixtures below enforce that contract per test:
 
 * ``_keyfree_settings`` pins every settings field back to its code default.
   Without it, a keyed ``.env`` silently flips provider routing (stub →
   groq/anthropic, Recall "ready") and tests start making real, paid,
   rate-limited network calls whose outcomes depend on which tests ran
-  before — the classic "passes alone, fails in combination" pollution.
+  before; the classic "passes alone, fails in combination" pollution.
 * ``_reset_process_globals`` clears process-global singletons/registries
   that otherwise leak between tests: the Groq circuit breaker, the cached
   Anthropic client (created once with whatever key was live at FIRST use,
@@ -54,12 +54,12 @@ def _keyfree_settings(monkeypatch):
 def _wake_word_inherits_global(monkeypatch):
     """The shipped avatar yamls set ``require_wake_word: true``. Most of the
     behavior suite predates that and exercises machinery (nudges, greetings,
-    hand-raise, proactive interventions) only reachable with wake mode off —
+    hand-raise, proactive interventions) only reachable with wake mode off -
     so loaded avatars are pinned back to "inherit the global default", which
     ``_keyfree_settings`` keeps off. The shipped-yaml state itself is covered
     by test_wake_word_per_avatar.py, which overrides this fixture."""
     real_load = avatars.load
-    # Memoize per avatar so repeated loads return the SAME instance — the
+    # Memoize per avatar so repeated loads return the SAME instance; the
     # normalized copy must still honour avatars.load's identity contract
     # (avatars.load(x) is avatars.load(x)), which the org-avatar-overlay
     # resolution tests assert. Re-derive only when the underlying cached

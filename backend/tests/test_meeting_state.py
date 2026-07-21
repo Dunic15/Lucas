@@ -237,7 +237,7 @@ def test_post_meeting_artifact_has_full_schema(monkeypatch):
     import app.brain.engine as brain
 
     # post_meeting() gates on post_provider() (per-path provider split), so pin
-    # that too — patching only effective_provider let a real key drive the model.
+    # that too; patching only effective_provider let a real key drive the model.
     monkeypatch.setattr(brain, "effective_provider", lambda: "stub")
     monkeypatch.setattr(brain, "post_provider", lambda: "stub")
     text = (

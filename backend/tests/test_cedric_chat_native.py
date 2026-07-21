@@ -1,7 +1,7 @@
 """Built-in Cedric for the dashboard chat (cedric/chat_responder.py).
 
 When no external events door is configured, the brain provider answers chat
-messages AS Cedric — grounded in org metadata, never transcripts, never
+messages AS Cedric; grounded in org metadata, never transcripts, never
 executing anything. Key-free like the rest of the suite (stub provider =
 deterministic canned reply).
 """
@@ -120,7 +120,7 @@ def test_native_answers_even_with_events_door_configured(
     client, eager_threadpool, monkeypatch
 ):
     """The prod bug (2026-07-20): CEDRIC_ORGS_URL is set for approvals/linking,
-    so events_url() is truthy — but that must NOT suppress the built-in chat
+    so events_url() is truthy; but that must NOT suppress the built-in chat
     responder (no external Cedric answers chat). With native on, Cedric still
     replies and nothing is relayed into the void."""
     monkeypatch.setattr(
@@ -134,7 +134,7 @@ def test_native_answers_even_with_events_door_configured(
     resp = client.post("/dashboard/chat", json={"text": "what's open?"})
     assert resp.status_code == 200
     assert resp.json()["native_reply"] is True
-    assert relayed == []  # native owns it — no relay into a non-answering door
+    assert relayed == []  # native owns it; no relay into a non-answering door
     senders = [m["sender"] for m in store.list_chat_messages(settings.demo_org_id)]
     assert senders == ["user", "cedric"]
 

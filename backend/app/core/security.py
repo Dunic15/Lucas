@@ -2,13 +2,13 @@
 
 Two concerns, both registered by ``install(app)`` from main.py:
 
-1. **Rate limiting** — an in-process sliding-window limiter on the PUBLIC,
+1. **Rate limiting**: an in-process sliding-window limiter on the PUBLIC,
    EXPENSIVE, UNAUTHENTICATED endpoints only (``/demo/ask``,
    ``/demo/post_meeting``, ``/tts``, ``/live/ask``, ``/live/act``). Those call an
    LLM (``/demo/post_meeting`` calls Sonnet-5 per request) or ElevenLabs, so an
    anonymous script hammering them is a real cost/abuse liability. The limiter
    NEVER runs on the live-meeting path (``/webhooks/recall``, ``ws/<id>``,
-   ``/avatar/*``, ``/sessions/*``) or the authenticated dashboard — those are not
+   ``/avatar/*``, ``/sessions/*``) or the authenticated dashboard; those are not
    in the route map, and websocket connections never reach HTTP middleware at
    all. Latency is the product on the live path; the map is exact-match, so the
    webhook/ws/sessions routes fall straight through with a single dict lookup.
@@ -16,16 +16,16 @@ Two concerns, both registered by ``install(app)`` from main.py:
    (MaxSize=1). The whole thing is disable-able via ``settings.rate_limit_enabled``
    so it can never wedge a demo.
 
-2. **Security headers** — HSTS, ``X-Content-Type-Options: nosniff``,
+2. **Security headers**: HSTS, ``X-Content-Type-Options: nosniff``,
    ``Referrer-Policy``, ``X-Permitted-Cross-Domain-Policies`` on every response.
    Deliberately NO ``X-Frame-Options`` / CSP ``frame-ancestors``: Recall renders
    the avatar page (``/talk``, ``/avatar``, ``/photoreal``, ``/live``, ``/join``)
    in an IFRAME as the bot's camera, and a global frame-block would break the
-   live avatar — far worse than a missing X-Frame-Options. (X-Frame-Options only
+   live avatar; far worse than a missing X-Frame-Options. (X-Frame-Options only
    affects documents loaded as frames, not the pages' fetch/XHR subresources like
    ``/tts`` or the ``.glb`` model, so omitting it is the clean, zero-risk choice.)
 
-Both middlewares are non-blocking, do zero I/O, and add only microseconds — safe
+Both middlewares are non-blocking, do zero I/O, and add only microseconds; safe
 on the ``/webhooks/recall`` HTTP path (the live transcript ingress).
 """
 from __future__ import annotations
@@ -56,7 +56,7 @@ def client_ip(request: Request) -> str:
     """Best-effort real client IP.
 
     App Runner sits behind a proxy, so the immediate peer (``request.client``) is
-    the proxy. ``X-Forwarded-For`` is ``client, proxy1, proxy2, …`` — the FIRST
+    the proxy. ``X-Forwarded-For`` is ``client, proxy1, proxy2, …``: the FIRST
     hop is the original client, which is what we key the limiter on. Falls back to
     the socket peer, then a constant so a missing address still buckets together.
     """
@@ -137,7 +137,7 @@ def _limit_for(knob: str) -> int:
 
 
 # Standard security headers. HSTS is added separately (its max-age is a knob and
-# 0 means "omit"). NOTE: intentionally NO X-Frame-Options / frame-ancestors —
+# 0 means "omit"). NOTE: intentionally NO X-Frame-Options / frame-ancestors -
 # see the module docstring (Recall iframe-embeds the avatar page).
 _STATIC_SECURITY_HEADERS: dict[str, str] = {
     "X-Content-Type-Options": "nosniff",
@@ -150,7 +150,7 @@ def install(app: FastAPI) -> None:
     """Register dashboard UI, rate-limit, and security-header middleware.
 
     Order matters: the security-headers middleware is added LAST so it is the
-    OUTERMOST layer and stamps headers on every response — including the 429 the
+    OUTERMOST layer and stamps headers on every response; including the 429 the
     rate-limit layer short-circuits with.
     """
     # Presentation-only owner-dashboard preference. Imported lazily so security

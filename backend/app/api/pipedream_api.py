@@ -1,11 +1,11 @@
-"""Pipedream Connect — dashboard HTTP surface for the alternative connections
+"""Pipedream Connect; dashboard HTTP surface for the alternative connections
 tab (EXPERIMENTAL / test-only).
 
 Every route 404s cleanly when the feature flag is off (project + client creds
 unset), so the key-free demo and existing deployments never see a new surface
 by accident. Reads are login-gated; the connect redirect is a GET navigation
 (cookie-authenticated, like /oauth/google/connect); the test action-run is
-login + same-origin gated. The end user is the caller's org_id — connections
+login + same-origin gated. The end user is the caller's org_id; connections
 are per-org. No credentials/tokens are ever returned to the browser.
 """
 from __future__ import annotations
@@ -40,7 +40,7 @@ _CATALOG = [
 ]
 _ALLOWED_SLUGS = {a["slug"] for a in _CATALOG}
 
-# Any of Pipedream's 3,000+ apps is connectable via the generic grid — we only
+# Any of Pipedream's 3,000+ apps is connectable via the generic grid; we only
 # guard the shape (a Pipedream name_slug) to keep garbage out of the redirect.
 _SLUG_RE = re.compile(r"^[a-z0-9_][a-z0-9_-]{0,59}$")
 
@@ -135,7 +135,7 @@ async def pipedream_connect(request: Request, app: str = "") -> RedirectResponse
 
 @router.post("/dashboard/pipedream/run")
 async def pipedream_run(request: Request) -> JSONResponse:
-    """Run a pre-built Pipedream action on the org's connected account — the
+    """Run a pre-built Pipedream action on the org's connected account; the
     'pre-configured actions' surface, for testing. Login + same-origin gated."""
     if not pipedream_client.enabled():
         return _disabled()

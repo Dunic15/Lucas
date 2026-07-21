@@ -2,7 +2,7 @@
 
 These are the shapes the demo integrator and the Control Center V2 design
 branch code against. They are provider-independent and secret-free by
-construction — the operator builds them; nothing here calls a provider.
+construction; the operator builds them; nothing here calls a provider.
 
 Field names are STABLE: additive changes only. Everything is a plain dict
 (JSON-serializable, no Decimal) so the router can return it directly.
@@ -20,7 +20,7 @@ OBSERVATION_FIELDS = (
     "session_id", "command_sequence", "page_version", "url", "title",
     "viewport", "screenshot_ref", "dom_summary", "visible_text", "elements",
     "truncated", "timestamp",
-    # B1 additive fields (all backward-compatible — legacy callers ignore them):
+    # B1 additive fields (all backward-compatible; legacy callers ignore them):
     "observation_id", "org_id", "principal", "a11y_summary",
     "screenshot_digest", "screenshot_bytes_len",
 )
@@ -28,14 +28,14 @@ OBSERVATION_FIELDS = (
 
 def observation_id(session_id: str, command_sequence: int) -> str:
     """Stable per-observation id, deterministic from (session, seq). No new
-    table — the id binds the in-flight observation object; a proposal that
+    table; the id binds the in-flight observation object; a proposal that
     references a superseded id is stale."""
     return f"obs:{session_id}:{int(command_sequence)}"
 
 
 def _assert_byte_free(value, field: str) -> None:
     """A BrowserObservation must never carry raw image bytes or an inline
-    data: image — screenshots leave only as a ref + digest. Fail loud in dev
+    data: image; screenshots leave only as a ref + digest. Fail loud in dev
     if a byte-bearing value ever reaches the contract boundary."""
     if isinstance(value, (bytes, bytearray)):
         raise ValueError(f"observation field {field!r} carries raw bytes")
@@ -49,7 +49,7 @@ def build_observation(
     org_id: str = "", principal: str = "",
 ) -> dict[str, Any]:
     """Compose the stable BrowserObservation. ``sanitized`` is the output of
-    policy.sanitize_observation (already redacted, bounded, and BYTE-FREE —
+    policy.sanitize_observation (already redacted, bounded, and BYTE-FREE -
     only a screenshot_ref + digest, never image bytes). B1 binds the
     observation to org/principal and gives it a stable id for stale detection.
     """
@@ -143,7 +143,7 @@ def verify_expectation(expected: dict, observation: dict) -> str:
 
     Compares an ``expected`` result descriptor against the NEW observation the
     operator captured AFTER executing. The planner NEVER declares its own
-    success — this function does, from the fresh observation. Returns
+    success; this function does, from the fresh observation. Returns
     verified / not_verified / inconclusive.
 
     Supported expectation keys (all optional; absent ⇒ inconclusive):
@@ -178,7 +178,7 @@ def verify_expectation(expected: dict, observation: dict) -> str:
 # ── VisualProposal + strict schema validation (B1) ──────────────────────────
 # The model proposes ONE typed operation; this validator is the fail-closed
 # gate on model output. A proposal that is malformed, carries an unknown
-# operation/extra keys, or out-of-range coordinates is REJECTED — the model
+# operation/extra keys, or out-of-range coordinates is REJECTED; the model
 # can never smuggle intent through the schema. operation/consequential/
 # confidence are SUGGESTIONS; the deterministic policy re-derives the class.
 

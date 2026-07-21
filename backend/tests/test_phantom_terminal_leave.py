@@ -1,5 +1,5 @@
 """A terminal Recall bot (done/call_ended/fatal) is NOT billing, so a failing
-leave_call on it must NOT strand the session as leave_pending — the phantom
+leave_call on it must NOT strand the session as leave_pending; the phantom
 active_sessions that blocks the pre-deploy gate.
 
 Repro for the demo-eve phantom: a naturally-ended meeting is caught by the
@@ -96,7 +96,7 @@ def test_reconcile_terminal_bot_dropped_even_if_leave_400(fresh_store, monkeypat
     _stub_offline(monkeypatch)
     _session("bot_x")
     # Recall GET reports the bot terminal (meeting ended); leave_call answers 400
-    # "bot is not in a call" (already ended) — must not strand as leave_pending.
+    # "bot is not in a call" (already ended); must not strand as leave_pending.
     monkeypatch.setattr(main.httpx, "get",
                         lambda url, *, headers, timeout: _FakeResponse(_bot("done")))
     monkeypatch.setattr(main.recall_client, "leave_call",
@@ -127,7 +127,7 @@ def test_finalize_terminal_flag_drops_on_400(fresh_store, monkeypatch):
 
 def test_manual_end_live_bot_still_kept_on_unverified_leave(fresh_store, monkeypatch):
     # bot_terminal defaults False: a 401/429/5xx (or 400) on a bot that may still
-    # be live must stay UNVERIFIED — keep the session so reconcile retries. The
+    # be live must stay UNVERIFIED; keep the session so reconcile retries. The
     # fleet meter-leak guard must be untouched by the terminal fast-path.
     _stub_offline(monkeypatch)
     _session("bot_x")
@@ -160,7 +160,7 @@ def test_retry_leave_drains_terminal_bot_on_400(fresh_store, monkeypatch):
 
 
 def test_retry_leave_drains_when_status_poll_404(fresh_store, monkeypatch):
-    # A 429 leave (auth/rate — not a gone-status) but the status poll 404s → the
+    # A 429 leave (auth/rate; not a gone-status) but the status poll 404s → the
     # bot is gone → not billing → drain.
     s = _session("bot_x")
     s.leave_pending = True

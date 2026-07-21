@@ -1,16 +1,16 @@
-"""Jira Cloud — the org's issue tracker (read), mirroring asana_client.
+"""Jira Cloud; the org's issue tracker (read), mirroring asana_client.
 
 Two ways to connect, both self-serve from the Connections tab:
-  * OAuth (Atlassian 3LO) — "Connect Jira" bounces the owner to the Atlassian
+  * OAuth (Atlassian 3LO): "Connect Jira" bounces the owner to the Atlassian
     login/consent screen; the callback stores a refresh token (provider=
     "jira-oauth"). Needs a one-time Atlassian OAuth app (JIRA_CLIENT_ID/SECRET).
     Reads hit https://api.atlassian.com/ex/jira/{cloudid}/rest/api/3 with a
     minted Bearer access token.
-  * API token — paste a Jira site URL + email + API token (provider="jira");
+  * API token: paste a Jira site URL + email + API token (provider="jira");
     Basic auth against {site}/rest/api/3. Works with NO deploy credentials.
 An env fallback (JIRA_SITE/JIRA_EMAIL/JIRA_API_TOKEN) covers single-tenant.
 
-Contract — identical to asana_client / google_client: takes ``org_id``; a
+Contract; identical to asana_client / google_client: takes ``org_id``; a
 wrong/absent org yields "not connected". Returns ``{"ok": True, ...}`` or
 ``{"ok": False, "error"}``. NEVER raises (runs at session start, off the live
 path). Logs no token and no issue content.
@@ -52,7 +52,7 @@ _BRIEF_MAX_CHARS = 2400
 
 
 def oauth_available() -> bool:
-    """True when an Atlassian OAuth app is configured — the one-click redirect.
+    """True when an Atlassian OAuth app is configured; the one-click redirect.
     The paste-a-token path works without it."""
     return bool(settings.jira_client_id and settings.jira_client_secret)
 
@@ -98,8 +98,8 @@ def _oauth_access_token(org_id: str, row: dict) -> tuple[str, str]:
 def _conn(org_id: str) -> tuple[str, str, str]:
     """(rest_base, auth_header, "") for the org, or ("", "", error).
 
-    Precedence: the OAuth grant (provider="jira-oauth" — Bearer against
-    api.atlassian.com/ex/jira/{cloudid}) → the pasted token (provider="jira" —
+    Precedence: the OAuth grant (provider="jira-oauth": Bearer against
+    api.atlassian.com/ex/jira/{cloudid}) → the pasted token (provider="jira": 
     Basic against {site}) → the JIRA_* env fallback."""
     org = (org_id or "").strip()
     try:
@@ -215,7 +215,7 @@ def exchange_code(code: str, redirect_uri: str) -> dict:
     refresh = str(data.get("refresh_token") or "")
     if not (access and refresh):
         return {"ok": False, "error": "jira did not return a refresh token (add offline_access)"}
-    # Resolve the accessible Jira site (cloud id) — reads target it.
+    # Resolve the accessible Jira site (cloud id); reads target it.
     cloudid, site = "", ""
     try:
         rr = httpx.get(_RESOURCES_URL,
@@ -296,7 +296,7 @@ def workspace_brief(org_id: str) -> str:
             return cached[1]
     try:
         brief = _build_brief(org)
-    except Exception:  # noqa: BLE001 — the join never fails on a brief
+    except Exception:  # noqa: BLE001; the join never fails on a brief
         brief = ""
     with _brief_lock:
         _brief_cache[org] = (now + _BRIEF_TTL_SECONDS, brief)

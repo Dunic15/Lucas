@@ -4,7 +4,7 @@ org_id and principal derive EXCLUSIVELY from the authenticated context; a
 client-supplied org_id in any body is a 403 on mismatch. Writes on the
 dashboard twin require cookie + same-origin + login; every branch checks its
 METHOD. Provider ids and presentation tokens never appear in responses beyond
-the single mint (token) / exchange (viewer) — and are never logged. All
+the single mint (token) / exchange (viewer); and are never logged. All
 routes 404 when the feature is off, preserving the key-free demo exactly.
 """
 from __future__ import annotations

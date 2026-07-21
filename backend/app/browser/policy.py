@@ -1,4 +1,4 @@
-"""Deterministic browser policy engine (B0) — the authority, not the model.
+"""Deterministic browser policy engine (B0); the authority, not the model.
 
 Between any planner suggestion and the provider, deterministic code decides
 the action CLASS and sanitizes what leaves the boundary. Page content is
@@ -6,12 +6,12 @@ untrusted input: an on-page instruction can never widen a class or skip a
 check (prompt-injection posture).
 
 Three classes (spec §8):
-- ``auto``    — navigate/scroll/read/find/screenshot + NON-submit typing into
+- ``auto``: navigate/scroll/read/find/screenshot + NON-submit typing into
                 NON-credential fields. Executes after checks (read-only in B0).
-- ``guarded`` — form submit; send; purchase; publish; delete; external
+- ``guarded``: form submit; send; purchase; publish; delete; external
                 comms; file upload; account creation. Becomes a canonical
-                Action requiring approval — NEVER executed inline.
-- ``blocked`` — credential/secret/token extraction; anything touching MFA
+                Action requiring approval: NEVER executed inline.
+- ``blocked``: credential/secret/token extraction; anything touching MFA
                 (OTP/recovery); downloads/executables; security-setting
                 changes. Refused and surfaced (distilled).
 
@@ -64,7 +64,7 @@ def classify(verb: str, observation: dict, *, element_id: str = "",
     """Return {class, reason, element_kind}. class ∈ auto|guarded|blocked.
 
     ``observation`` is the CURRENT page (the operator observes before acting,
-    so classification runs against live DOM — a coordinates-only click with no
+    so classification runs against live DOM; a coordinates-only click with no
     resolvable element is refused)."""
     verb = str(verb or "").lower()
     if verb in ("observe", "scroll"):
@@ -79,7 +79,7 @@ def classify(verb: str, observation: dict, *, element_id: str = "",
 
     el = _element(observation, element_id)
     if el is None:
-        # No resolvable element in the live DOM — refuse (no coord-only acts).
+        # No resolvable element in the live DOM; refuse (no coord-only acts).
         return {"class": "blocked", "reason": "element not in live DOM",
                 "element_kind": ""}
     kind = str(el.get("kind") or "")
@@ -109,7 +109,7 @@ _SENSITIVE_ELEMENT_KINDS = _BLOCKED_KINDS
 
 
 def _clamp_bbox(bbox: Any, viewport: dict) -> list | None:
-    """Bound an element bounding box to the viewport, as [x0,y0,x1,y1] ints —
+    """Bound an element bounding box to the viewport, as [x0,y0,x1,y1] ints -
     the geometry coordinate hit-testing resolves against. Reject garbage."""
     if not (isinstance(bbox, (list, tuple)) and len(bbox) >= 4):
         return None
@@ -143,7 +143,7 @@ def sanitize_observation(raw: Any, *, max_dom: int = 2000,
         sensitive = kind in _SENSITIVE_ELEMENT_KINDS
         # DEFENSE IN DEPTH (adversarial finding): a credential/mfa/secret field
         # value must NEVER become the element name, even if a provider sourced
-        # it — the shape-based redact() would miss a plain password/OTP. Blank
+        # it; the shape-based redact() would miss a plain password/OTP. Blank
         # the name for sensitive kinds unconditionally.
         name = "" if sensitive else redact(str(el.get("name") or ""))
         href = el.get("href")
@@ -159,7 +159,7 @@ def sanitize_observation(raw: Any, *, max_dom: int = 2000,
             "href": redact(str(href))[:300] if isinstance(href, str) and href
             else "",
         })
-    # The screenshot BYTES are digested here and then dropped — they never
+    # The screenshot BYTES are digested here and then dropped; they never
     # enter the returned/persisted observation. Only ref + digest + length go on.
     shot_bytes = getattr(raw, "screenshot_bytes", b"") or b""
     digest = hashlib.sha256(shot_bytes).hexdigest() if shot_bytes else ""
@@ -198,7 +198,7 @@ def check_navigation_target(url: str, allowed_domains: set[str], *,
     target is permitted ONLY when: scheme is http(s), AND its host is in the
     server allowlist, AND (it is a link present in the current observation OR
     the allowlist is the sole gate when no link set is provided). Page content
-    can NEVER widen the allowlist — an on-page link is an ADDITIONAL constraint,
+    can NEVER widen the allowlist; an on-page link is an ADDITIONAL constraint,
     never an alternative. Returns {ok, reason}."""
     url = str(url or "")
     parsed = urlparse(url) if url else None
@@ -225,7 +225,7 @@ def check_navigation_target(url: str, allowed_domains: set[str], *,
 
 
 def resolve_coordinate(observation: dict, x: int, y: int) -> str | None:
-    """Hit-test a viewport coordinate to an element id via its bbox — so a
+    """Hit-test a viewport coordinate to an element id via its bbox; so a
     coordinate action runs the EXACT SAME kind-classification as an element
     action (never a coordinate-only bypass). Returns the element id or None
     (None ⇒ blocked, mirroring 'element not in live DOM')."""
@@ -238,7 +238,7 @@ def resolve_coordinate(observation: dict, x: int, y: int) -> str | None:
 
 
 def safe_param_projection(verb: str, element: dict, text: str = "") -> dict:
-    """What a guarded-step approver actually sees (spec §8) — the safe param
+    """What a guarded-step approver actually sees (spec §8); the safe param
     projection that lands in the canonical Action's typed_json and the card.
     Never full page content, never secret values."""
     return {

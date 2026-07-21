@@ -1,4 +1,4 @@
-"""P1 — Pipedream Connect-Proxy execution plane + per-family routing.
+"""P1: Pipedream Connect-Proxy execution plane + per-family routing.
 
 Key-free: pipedream_client (list_accounts/proxy_request) and the ledger are
 monkeypatched; no real Pipedream or network calls. Asserts:
@@ -100,7 +100,7 @@ def test_handles_gated_by_flag_and_config(monkeypatch):
     _enable_pd(monkeypatch)
     assert pipedream_executor.enabled() is True
     assert pipedream_executor.handles({"type": "asana.create_task"}) is True
-    # Pipedream does NOT own Google — that stays native.
+    # Pipedream does NOT own Google; that stays native.
     assert pipedream_executor.handles({"type": "email.send"}) is False
 
 
@@ -343,7 +343,7 @@ def test_app_connected_transient_error_not_cached(monkeypatch):
 
     monkeypatch.setattr(pipedream_client, "list_accounts", boom)
     assert pipedream_executor.app_connected("orgX", "asana") is False
-    # recovers — a transient failure is not stuck as a cached False
+    # recovers; a transient failure is not stuck as a cached False
     monkeypatch.setattr(pipedream_client, "list_accounts",
                         lambda org, app="": [{"id": "apn_9"}])
     assert pipedream_executor.app_connected("orgX", "asana") is True

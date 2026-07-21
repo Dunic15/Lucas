@@ -31,7 +31,7 @@
   #stage {
     position: fixed; inset: 0;
     /* Hidden until the close-up camera is asserted, so the page NEVER shows the
-       far full-body default view — she appears already framed like a webcam. */
+       far full-body default view; she appears already framed like a webcam. */
     opacity: 0; transition: opacity .45s ease;
     background:
       radial-gradient(46% 60% at 14% 30%, rgba(255,255,255,.55) 0%, rgba(255,255,255,0) 70%),
@@ -51,14 +51,14 @@
     border-radius: 14px; overflow: hidden;
     box-shadow: 0 8px 30px rgba(0,0,0,.45);
   }
-  /* Soft vignette pulls the eye to her face, like a real webcam lens —
+  /* Soft vignette pulls the eye to her face, like a real webcam lens -
      kept very light so the office stays bright. */
   #stage::after {
     content: ""; position: absolute; inset: 0; pointer-events: none;
     background: radial-gradient(120% 90% at 50% 42%, rgba(0,0,0,0) 60%, rgba(90,104,122,.20) 100%);
   }
   /* MEETING MODE (?conversation_id= present): she must look like just another
-     participant — no buttons, no status text, nothing but her. */
+     participant; no buttons, no status text, nothing but her. */
   body.meeting #hud, body.meeting #status { display: none; }
   /* PREVIEW MODE (?preview=1): the dashboard's Avatars stage embeds this page
      as a same-origin iframe for a live 3D idle preview — same chrome-less look

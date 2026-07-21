@@ -1,4 +1,4 @@
-"""Browser operator B0 — release blockers on real Postgres as laura_app.
+"""Browser operator B0; release blockers on real Postgres as laura_app.
 
 Cross-org isolation + RLS; authenticated ownership; the state machine (invalid
 transitions rejected, idempotent close/revoke); TTL expiry; presentation-token
@@ -393,7 +393,7 @@ def test_approved_browser_action_executes_once_and_rechecks(cp, monkeypatch):
     # A receipt was written through the canonical channel.
     status = ledger.action_statuses([action_id], org_id=org)[action_id]
     assert status["status"] == "done"
-    # Repeat approval is a replay — never a second execution.
+    # Repeat approval is a replay; never a second execution.
     second = client.post(f"/org/actions/{action_id}/approve",
                          json={"decision": "approve"})
     assert second.json().get("idempotent_replay") is True
@@ -405,7 +405,7 @@ def test_execution_recheck_fails_closed_when_session_revoked(cp, monkeypatch):
     org = _org(cp, "recheck")
     monkeypatch.setattr(settings, "demo_org_id", org)
     sess, action_id = _mint_guarded(org, "bot-y")
-    # Revoke the session BEFORE approval — execution-time re-check must refuse.
+    # Revoke the session BEFORE approval; execution-time re-check must refuse.
     operator.revoke_session(org, sess["id"])
 
     import app.main as main_module
@@ -460,7 +460,7 @@ def test_nonowner_cannot_poison_command_id(cp):
     swallows the owner's later command (claim now runs AFTER the checks)."""
     org = _org(cp, "poison")
     sess = _create(org, "u_alice")
-    # B tries to pre-claim a command_id on A's session — rejected as not_owner,
+    # B tries to pre-claim a command_id on A's session; rejected as not_owner,
     # and crucially leaves NO claim behind.
     bad = operator.issue_command(org, sess["id"], verb="scroll",
                                  principal="u_bob", command_id="shared")
@@ -483,7 +483,7 @@ def test_nonowner_cannot_read_recorded_observation_via_replay(cp):
                                    url="https://demo.laura.test/pricing",
                                    command_id="step-1")
     assert owner["accepted"] is True
-    # Same-org non-owner replays the same command_id — must be rejected, and
+    # Same-org non-owner replays the same command_id; must be rejected, and
     # must NOT receive the recorded observation.
     leak = operator.issue_command(org, sess["id"], verb="navigate",
                                   principal="u_bob",
@@ -507,7 +507,7 @@ def test_approved_step_fails_closed_on_stale_page_binding(cp, monkeypatch):
     org = _org(cp, "stalebind")
     monkeypatch.setattr(settings, "demo_org_id", org)
     sess, action_id = _mint_guarded(org, "bot-stale")
-    # Navigate away — the page (and its fingerprint) changes after approval mint.
+    # Navigate away; the page (and its fingerprint) changes after approval mint.
     operator.issue_command(org, sess["id"], verb="navigate",
                            url="https://demo.laura.test/home")
 
@@ -694,7 +694,7 @@ def test_meeting_open_without_login_falls_back_public(cp, monkeypatch):
 
 def test_walkthrough_prefers_recipe_over_planner(cp, monkeypatch):
     # With a recipe present, run_walkthrough runs it (deterministic) and narrates
-    # every step — no planner, no keys needed.
+    # every step; no planner, no keys needed.
     from app import browser_meeting
     monkeypatch.setattr(settings, "browser_allowed_domains",
                         "app.asana.com,asana.com")

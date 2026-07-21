@@ -3,7 +3,7 @@
 An avatar with `drive_folder_id` in its avatar.yaml walks into every meeting
 knowing what's in that shared Drive folder: at session START the folder's docs
 are pulled and injected into the same memory channel as the cross-meeting
-brief. Reuses the Google OAuth the calendar/Gmail machinery already holds —
+brief. Reuses the Google OAuth the calendar/Gmail machinery already holds -
 the `drive.readonly` scope is part of /oauth/google/connect; reconnect once
 after upgrading so the stored refresh token carries it.
 
@@ -26,14 +26,14 @@ from . import gmail_watcher
 DRIVE_API = "https://www.googleapis.com/drive/v3"
 
 # Live prompts pay per token: cap the folder brief well below the orchestrator
-# brief cap. ~8KB ≈ a few pages — enough for status docs, not a wiki dump.
+# brief cap. ~8KB ≈ a few pages; enough for status docs, not a wiki dump.
 MAX_BRIEF_BYTES = 8 * 1024
 MAX_FILES = 12
 _CACHE_TTL_SECONDS = 240.0
 
 _cache: dict[str, tuple[float, str]] = {}
 # Bot creation happens BEFORE this fetch, so a slow Drive never delays the
-# join — only the start-API response. Keep that bound tight.
+# join; only the start-API response. Keep that bound tight.
 _client = httpx.Client(timeout=8.0)
 
 # Google-native docs export as plain text; plain/markdown files download as-is.
@@ -91,7 +91,7 @@ def _file_text(token: str, file: dict) -> str:
 def folder_brief(folder_id: str) -> str:
     """Markdown brief of a Drive folder's docs; "" when unset or unavailable.
 
-    Sync (network) — call via run_in_threadpool at session start only.
+    Sync (network); call via run_in_threadpool at session start only.
     """
     folder_id = (folder_id or "").strip()
     if not folder_id:
@@ -109,7 +109,7 @@ def folder_brief(folder_id: str) -> str:
             for f in _list_folder(token, folder_id):
                 try:
                     body = _file_text(token, f).strip()
-                except Exception:  # noqa: BLE001 — one bad file never kills the brief
+                except Exception:  # noqa: BLE001; one bad file never kills the brief
                     body = ""
                 if body:
                     parts.append(f"## {f.get('name', 'untitled')}\n\n{body}")
@@ -119,8 +119,8 @@ def folder_brief(folder_id: str) -> str:
                     text.encode()[:MAX_BRIEF_BYTES].decode("utf-8", "ignore")
                     + "\n… (folder brief truncated)"
                 )
-    except Exception as e:  # noqa: BLE001 — best-effort: join without the folder
-        # Folder id + error class only — never file contents in logs.
+    except Exception as e:  # noqa: BLE001; best-effort: join without the folder
+        # Folder id + error class only; never file contents in logs.
         print(f"[drive] folder brief unavailable ({type(e).__name__})", flush=True)
         text = ""
     _cache[folder_id] = (now, text)

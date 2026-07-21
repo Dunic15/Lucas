@@ -69,7 +69,7 @@ def _session(tmp_path, monkeypatch, bot_id="hand-bot") -> store.Session:
     s = store.create(bot_id, "https://meet.google.com/abc-defg-hij", "laura")
     s.memory_brief = ""
     s.addressed_once = True  # already activated (first-call gate has its own tests)
-    # A crowded room (>3 participants incl. Laura) — the hand-raise only
+    # A crowded room (>3 participants incl. Laura); the hand-raise only
     # applies with roster >= hand_raise_min_humans (3 humans by default).
     s.participant_event("Ben", 1, here=True)
     s.participant_event("Marco", 2, here=True)
@@ -314,7 +314,7 @@ def test_interjection_disabled_falls_back_to_hand(tmp_path, monkeypatch):
 def test_interjection_draws_from_shared_hand_raise_budget(tmp_path, monkeypatch):
     """A spoken interjection consumes the SAME per-meeting budget as a raised
     hand: repeated high-confidence, floor-open contributions hit the shared cap
-    and then fall back to silence — never a stream of interjections (BLOCKER 1).
+    and then fall back to silence; never a stream of interjections (BLOCKER 1).
     min_gap is zeroed here so ONLY the count cap is exercised."""
     s = _session(tmp_path, monkeypatch, bot_id="hand-bot-budget")
     monkeypatch.setattr(settings, "hand_raise_min_gap_seconds", 0.0)
@@ -357,6 +357,6 @@ def test_hand_times_out_silently(tmp_path, monkeypatch):
     _post(_line(s.bot_id, "Ben", "moving on to the next agenda item"))
     assert s.hand_raised_at == 0
     assert s.pending_contribution == ""
-    assert not spoken  # dropped silently — never delivered late
+    assert not spoken  # dropped silently; never delivered late
     assert any(m.get("type") == "lower_hand" for m in s.pending_messages)
     store.remove(s.bot_id)

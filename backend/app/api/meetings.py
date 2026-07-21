@@ -40,8 +40,8 @@ def meetings_page() -> FileResponse:
 @router.get("/meetings/list")
 def meetings_list(request: Request) -> JSONResponse:
     """All saved artifacts, newest first, for the /meetings page. Transcripts
-    are PII: gated to a logged-in owner (their own org) or the machine bearer —
-    never served to the anonymous internet — and never logged. Same guard as
+    are PII: gated to a logged-in owner (their own org) or the machine bearer -
+    never served to the anonymous internet; and never logged. Same guard as
     /dashboard/summary; the HTML shell (/meetings) stays open like /dashboard."""
     user = auth.current_user(request)
     machine_org = None
@@ -72,7 +72,7 @@ def meetings_list(request: Request) -> JSONResponse:
     elif user is not None:
         # Cookie login: scope to the caller's org. Unowned/legacy artifacts
         # (empty org_id) stay visible, mirroring the /sessions/*/redeliver
-        # rule; DEMO-org artifacts do not — self-serve product decision
+        # rule; DEMO-org artifacts do not; self-serve product decision
         # (2026-07-13): the anonymous showroom's transcripts never appear in a
         # real signup's archive.
         org = str(user["org_id"])

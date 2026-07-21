@@ -1,4 +1,4 @@
-"""Browser operator B0 — key-free invariants.
+"""Browser operator B0; key-free invariants.
 
 Flag-off inertness (every route 404s), the deterministic fake provider, the
 policy classifier (read-only / guarded / blocked + sanitization), and the

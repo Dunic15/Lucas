@@ -1,10 +1,10 @@
-"""Dashboard API — the owner's control view over the avatars.
+"""Dashboard API; the owner's control view over the avatars.
 
 One aggregation endpoint (`GET /dashboard/summary`) that answers "what are my
 avatars, what are they doing right now, and what have they done" from data the
 process already produces: the avatar registry, the live session store, and the
-saved artifacts. Everything served here is DISTILLED — summaries, action items,
-readiness scores, counts — never transcripts (they stay in the artifact store;
+saved artifacts. Everything served here is DISTILLED; summaries, action items,
+readiness scores, counts; never transcripts (they stay in the artifact store;
 this endpoint strips them like cedric.wire_artifact does for webhooks).
 
 Sits behind the same optional Bearer gate as the session API (open when
@@ -84,7 +84,7 @@ def _delivered(
     actions: list, email: dict, readiness: int, decisions_count: int
 ) -> list[str]:
     """The captured→DELIVERED story for one meeting, from distilled artifact
-    fields ONLY (no Cedric dispatch wiring — that's a deferred track). Short
+    fields ONLY (no Cedric dispatch wiring; that's a deferred track). Short
     chips a buyer reads as "what came OUT of this meeting", so the row proves
     Laura produced outcomes, not just that she took notes. Best-effort: an
     empty list simply means the artifact carried nothing worth surfacing."""
@@ -146,7 +146,7 @@ def _prettify(stem: str) -> str:
 
 
 def _knowledge_topics(avatar: avatars.Avatar, limit: int = 8) -> list[str]:
-    """What the avatar KNOWS — one label per knowledge doc (its heading if the
+    """What the avatar KNOWS; one label per knowledge doc (its heading if the
     file starts with '# Title', else the prettified filename)."""
     topics: list[str] = []
     seen: set[str] = set()
@@ -179,7 +179,7 @@ def _process_templates(avatar: avatars.Avatar, limit: int = 6) -> list[str]:
 
 
 def _capabilities(avatar: avatars.Avatar, knowledge: int) -> list[str]:
-    """What the avatar can DO — derived from its real config, honest about
+    """What the avatar can DO; derived from its real config, honest about
     speaking vs silent mode."""
     caps = ["Joins Zoom, Google Meet & Teams live"]
     if avatar.silent:
@@ -210,7 +210,7 @@ def _hidden(avatar_id: str) -> bool:
 
 def _description(avatar_id: str) -> str:
     """User-facing one-liner for the dashboard avatar card. Read from the
-    avatar.yaml `description` field — NEVER the persona/system prompt, which is
+    avatar.yaml `description` field: NEVER the persona/system prompt, which is
     written to be *spoken to the model* ("You are Laura…") and leaks that framing
     into the owner UI. Falls back to empty so the card simply omits it."""
     import yaml
@@ -222,21 +222,21 @@ def _description(avatar_id: str) -> str:
         return ""
 
 
-# Rough variable cost per live avatar-minute — mostly the Recall bot (~$0.01/min
+# Rough variable cost per live avatar-minute; mostly the Recall bot (~$0.01/min
 # on the web_4_core tier) plus modest LLM/TTS. A deliberate, conservative
 # ESTIMATE for the usage panel; real invoicing is a later track.
 EST_COST_PER_MIN = 0.04
 
 # Manual follow-up work a captured, owner-tagged action item saves a human from
 # doing by hand (finding the note, drafting the message, chasing the owner). A
-# deliberately conservative ESTIMATE for the ROI panel — the buyer-facing "so
+# deliberately conservative ESTIMATE for the ROI panel; the buyer-facing "so
 # what", derived from the REAL action counts, never invented data.
 FOLLOWUP_MINUTES_SAVED_PER_ACTION = 12
 
 
 def _avatar_email(avatar_id: str) -> str:
     """The avatar's personal address. The watched inbox IS the default avatar's
-    address (bare, no tag — an untagged invite falls back to it); every other
+    address (bare, no tag; an untagged invite falls back to it); every other
     avatar is a +tag alias of it (avatars.from_invite_email routes the tag)."""
     raw = (settings.calendar_invite_emails or "").split(",")[0].strip()
     if "@" not in raw:
@@ -256,7 +256,7 @@ def _is_avatar_inbox(oauth: dict) -> bool:
     user's own connect lands their own token. But if the account that was
     connected IS the avatar's shared inbox (e.g. an early setup connect, or the
     account registered for Recall auto-join), it is NOT that user's personal
-    calendar — surfacing it as "your week" is exactly the "why do I see Laura's
+    calendar; surfacing it as "your week" is exactly the "why do I see Laura's
     email?" bug. Callers treat such a token as unconnected for a logged-in user
     (→ Connect-your-own-Google), while the key-free demo path is left untouched."""
     email = str((oauth or {}).get("email") or "").lower()
@@ -272,7 +272,7 @@ def _is_avatar_inbox(oauth: dict) -> bool:
 
 def _org_connection_rows(org_id: str) -> list[dict]:
     """One org's connection rows for reads: the SQLite runtime rows overlaid
-    with the durable control-plane mirror when configured — the mirror
+    with the durable control-plane mirror when configured; the mirror
     survives the ephemeral store, so a redeploy doesn't blank the Configure
     tab or un-flag a customer's connected tools. Sync DB I/O: call from sync
     handlers, or via run_in_threadpool from async ones."""
@@ -284,7 +284,7 @@ def _org_connection_rows(org_id: str) -> list[dict]:
     if control_plane.is_durable_org(org_id):
         try:
             durable = control_plane.get_connections(org_id) or []
-        except Exception:  # noqa: BLE001 — the local rows still serve the read
+        except Exception:  # noqa: BLE001; the local rows still serve the read
             durable = []
         for r in durable:
             rows[(r["avatar_id"], r["provider"])] = r
@@ -328,7 +328,7 @@ def _set_connection_all(
 # isn't reflected until a manual/hard refresh: the app already re-fetches after the
 # mutation (dashboard.html load()), but a cached GET hands back the pre-change
 # state. The backend state itself is fresh (the disconnect saga is synchronous and
-# the reads are un-cached) — only the HTTP layer was serving it stale.
+# the reads are un-cached); only the HTTP layer was serving it stale.
 _NO_STORE = {"Cache-Control": "no-store"}
 
 
@@ -346,7 +346,7 @@ def dashboard_page() -> FileResponse:
 
 def _json_safe(obj):
     """Recursively coerce values that the durable Postgres control plane returns
-    but stdlib json can't encode — NUMERIC -> Decimal (whole numbers back to
+    but stdlib json can't encode. NUMERIC -> Decimal (whole numbers back to
     int, else float) and datetime/date -> ISO string. Prevents a single Decimal
     (e.g. a billing/usage field) from 500ing the whole /dashboard/summary."""
     import datetime
@@ -387,7 +387,7 @@ def dashboard_summary(request: Request) -> JSONResponse:
     caller_org = user["org_id"] if user else machine_org
 
     # Tenancy scoping: a scoped caller sees their own org's rows plus legacy
-    # unowned ("") rows — NOT the Demo org's. Self-serve product decision
+    # unowned ("") rows: NOT the Demo org's. Self-serve product decision
     # (2026-07-13): demo/service rows are the anonymous showroom, and a real
     # signup's dashboard must contain only their workspace, or every customer
     # sees every other anonymous demo. Anonymous/demo callers are unchanged.
@@ -411,7 +411,7 @@ def dashboard_summary(request: Request) -> JSONResponse:
     ]
 
     # Execution provenance: decorate each action with the state the brain
-    # (Cedric) reported via POST /org/actions/{id}/status — one batched query.
+    # (Cedric) reported via POST /org/actions/{id}/status; one batched query.
     # First give the stale-executing reconciler its throttled chance: a crash
     # mid-vendor-call must surface as a truthful terminal receipt on the next
     # dashboard read, never as 'executing' forever (async-dispatch safety).
@@ -461,9 +461,9 @@ def dashboard_summary(request: Request) -> JSONResponse:
     # An integration is CONNECTED once at the org level (Connections view); each
     # avatar then independently toggles whether it may USE it. Computed ONCE here
     # (reused for the `connections` block below, no double I/O) so every avatar
-    # card reads the same truth. Keyed by the org_id string — no ::uuid cast, so
+    # card reads the same truth. Keyed by the org_id string; no ::uuid cast, so
     # u_<hash> and uuid orgs alike are safe (org_id split-brain).
-    #   google = the org's NATIVE Google OAuth (store.get_org_oauth) — the same
+    #   google = the org's NATIVE Google OAuth (store.get_org_oauth); the same
     #            signal the "Google (native)" connection card reads.
     #   slack  = the org's cedric-brain connection (Slack rides Cedric): a
     #            connected cedric-brain row for any avatar in the org.
@@ -472,11 +472,11 @@ def dashboard_summary(request: Request) -> JSONResponse:
     google_connected = bool(store.get_org_oauth(_native_google_org))
     slack_connected = _org_connected(org_rows, "cedric-brain")
     # asana = the org's stored PAT (provider="asana") or the ASANA_TOKEN env
-    # fallback — the same signal the executor/join-snapshot eligibility reads.
+    # fallback; the same signal the executor/join-snapshot eligibility reads.
     asana_connected = asana_client.connected(_native_google_org)
-    all_caps = store.all_avatar_capabilities()  # {avatar_id: {cap: bool}} — one read
+    all_caps = store.all_avatar_capabilities()  # {avatar_id: {cap: bool}}; one read
     # Per-org roster: a scoped caller (cookie user or per-org bearer) sees only
-    # their org's granted avatars (org_agents); the unscoped worlds see ALL —
+    # their org's granted avatars (org_agents); the unscoped worlds see ALL -
     # today's behavior, key-free demo unchanged (docs/infra/MULTI-TENANCY.md).
     roster_ids = (
         avatars.list_for_org(caller_org) if caller_org else avatars.list_ids()
@@ -485,7 +485,7 @@ def dashboard_summary(request: Request) -> JSONResponse:
         a = avatars.load(aid)
         drive_connected = drive_connected or bool(a.drive_folder_id)
         # Knowledge-pack folders (avatar.yaml `hidden: true`, e.g. sff which
-        # Cedric reuses) are not callable avatars — keep them out of the owner
+        # Cedric reuses) are not callable avatars; keep them out of the owner
         # dashboard. Read the flag off the yaml so this stays decoupled from the
         # Avatar dataclass. `hidden` avatars still list_ids()/load() normally.
         if _hidden(aid):
@@ -565,7 +565,7 @@ def dashboard_summary(request: Request) -> JSONResponse:
 
     actions_30d = sum(len(m["actions"]) for m in recent)
     followups_30d = sum(1 for m in recent if m["follow_up_subject"])
-    # Actions the orchestrator (Cedric) actually executed — the execution
+    # Actions the orchestrator (Cedric) actually executed; the execution
     # provenance decorated onto each action above. Honest: 0 until dispatch is
     # wired, never fabricated.
     actions_executed_30d = sum(
@@ -583,7 +583,7 @@ def dashboard_summary(request: Request) -> JSONResponse:
         "weekly": weekly,
         # ── outcome / ROI framing (ADDITIVE; the keys above are untouched) ──
         # "What Laura DID", not just notes she took. All derived from the real
-        # counts above — actions captured, follow-ups automated, and a
+        # counts above; actions captured, follow-ups automated, and a
         # conservative estimate of the manual follow-up hours those saved.
         "actions_executed_30d": actions_executed_30d,
         "followups_automated_30d": followups_30d,
@@ -609,14 +609,14 @@ def dashboard_summary(request: Request) -> JSONResponse:
         "est_cost_30d": round(minutes_30d * EST_COST_PER_MIN, 2),
         "rate_per_min": EST_COST_PER_MIN,
         "by_avatar": {k: round(v) for k, v in per_avatar_min.items()},
-        "plan": "Demo",  # placeholder — no billing system yet
+        "plan": "Demo",  # placeholder; no billing system yet
         "billing_live": False,
     }
 
-    # Booleans only — which integrations are configured, never the secrets.
+    # Booleans only; which integrations are configured, never the secrets.
     # A SCOPED caller's calendar/gmail/drive/slack flags come from THEIR
     # org_connections rows only (PR D): a fresh org reads NOT connected even
-    # though the platform's global Google/Slack account exists — the global
+    # though the platform's global Google/Slack account exists; the global
     # env is Laura's own plumbing, not the customer's connection. voice and
     # meetings stay platform capabilities (the product works for every org
     # through them). Anonymous/demo/global callers keep today's global flags.
@@ -641,26 +641,26 @@ def dashboard_summary(request: Request) -> JSONResponse:
             "meetings": bool(settings.recall_api_key),
         }
 
-    # NATIVE Google — Laura's OWN Google OAuth (Calendar + Gmail write scopes),
+    # NATIVE Google: Laura's OWN Google OAuth (Calendar + Gmail write scopes),
     # the engine behind the native executor. This is the ONLY signal the "Google
-    # (native)" capability toggle reads — deliberately NOT the Cedric connector
+    # (native)" capability toggle reads; deliberately NOT the Cedric connector
     # rows above (calendar/gmail there mean a Cedric/Pipedream connector, a
     # different, optional path). Connected == a per-org refresh token is stored
     # by /oauth/google/callback. Keyed on the caller's org, else the demo/owner
     # org (matching where the callback persists it). Pure SQLite read, no
     # ::uuid cast → safe for u_hash and uuid orgs alike. Bool, so it satisfies
     # the "connections values are all bool" contract. (Same signal the
-    # per-avatar `google` capability toggle reads — computed once above as
+    # per-avatar `google` capability toggle reads; computed once above as
     # `google_connected`.)
     connections["google_native"] = google_connected
-    # NATIVE Asana — the org's OAuth grant or PAT (Connections card) or the
+    # NATIVE Asana; the org's OAuth grant or PAT (Connections card) or the
     # env fallback. Same bool contract; the same signal the per-avatar `asana`
     # toggle reads. asana_oauth = the one-click connect button is available
     # (the Asana OAuth app env is configured); without it the card falls back
     # to the paste-a-PAT flow.
     connections["asana"] = asana_connected
     connections["asana_oauth"] = asana_client.oauth_available()
-    # Jira — the org's stored token (Connections card) or the JIRA_* env
+    # Jira; the org's stored token (Connections card) or the JIRA_* env
     # fallback. jira_oauth = a future Atlassian OAuth redirect is configured;
     # until then the card uses the self-serve site+email+token flow.
     connections["jira"] = jira_client.connected(_native_google_org)
@@ -686,22 +686,22 @@ def dashboard_summary(request: Request) -> JSONResponse:
             # never exposed; owners see delivered/failed/next-attempt only.
             "callback_deliveries": callback_deliveries,
             # Which engine executes an APPROVED action (NATIVE-INTEGRATIONS-PLAN
-            # "Cedric add-on toggle"). Read-only stub for now — derived from the
+            # "Cedric add-on toggle"). Read-only stub for now; derived from the
             # NATIVE_EXECUTOR flag; a real per-org setting slots in behind this
             # same key later. Lets the dashboard show "who runs my actions".
             "settings": {
                 "execution_mode": settings.execution_mode,  # native | cedric
                 "native_executor": bool(settings.native_executor),
-                # Knowledge-graph grounding (graphiti) — surfaced in the Brain
+                # Knowledge-graph grounding (graphiti); surfaced in the Brain
                 # view as a live knowledge source. "configured" = the flag is on
                 # AND a graph DB URI is set (going live also needs graphiti-core
                 # installed; docs/GRAPHITI.md). Read-only status, like the
-                # native-executor flag — enabling is a deployment env change.
+                # native-executor flag; enabling is a deployment env change.
                 "graphiti_enabled": bool(settings.graphiti_enabled),
                 "graphiti_configured": bool(
                     settings.graphiti_enabled and settings.graphiti_uri.strip()
                 ),
-                # Pipedream alternative-connections tab — surfaced only so the
+                # Pipedream alternative-connections tab; surfaced only so the
                 # frontend can HIDE its nav tab when unconfigured, keeping the
                 # key-free demo and un-configured prod byte-identical (the tab
                 # is inert either way; this just avoids showing a dead surface).
@@ -725,7 +725,7 @@ async def set_avatar_capability_endpoint(
     """Owner flips one capability ON/OFF for one avatar from its card.
 
     The integration is connected ONCE at the org level (Connections view); this
-    only records whether THIS avatar may use it — e.g. Google connected once,
+    only records whether THIS avatar may use it; e.g. Google connected once,
     Laura's card ON while Cedric's is OFF. Owner-authed like the other dashboard
     mutations: a logged-in owner + same-origin only (the brain-toggle door), so
     the key-free demo can't flip real behaviour. Keyed by the avatar_id string
@@ -743,7 +743,7 @@ async def set_avatar_capability_endpoint(
         return JSONResponse({"error": "unknown avatar_id"}, status_code=404)
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+    except Exception:  # noqa: BLE001; malformed JSON is a client error
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     capability = str((body or {}).get("capability") or "").strip().lower()
     enabled = bool((body or {}).get("enabled"))
@@ -767,10 +767,10 @@ async def connect_asana(request: Request) -> JSONResponse:
     """Connect the org's Asana with a Personal Access Token (docs/ASANA.md).
 
     Body: {token}. The token is verified LIVE against Asana before anything is
-    stored — a typo'd token is a clean 400, never a half-connected state. On
+    stored; a typo'd token is a clean 400, never a half-connected state. On
     success it is persisted encrypted per-org (org_oauth, provider="asana";
     the row's email/scopes carry the Asana account email + workspace gid for
-    the card), and the response names who/what it authenticated as — the
+    the card), and the response names who/what it authenticated as; the
     token itself is never echoed, logged, or shipped to the browser again.
     Owner-authed like the other dashboard mutations (login + same-origin)."""
     user = auth.current_user(request)
@@ -782,7 +782,7 @@ async def connect_asana(request: Request) -> JSONResponse:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+    except Exception:  # noqa: BLE001; malformed JSON is a client error
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     token = str((body or {}).get("token") or "").strip()
     if not token:
@@ -802,7 +802,7 @@ async def connect_asana(request: Request) -> JSONResponse:
             )
         )
     except RuntimeError:
-        # set_org_oauth fails CLOSED without an encryption key — surface it as
+        # set_org_oauth fails CLOSED without an encryption key; surface it as
         # a config problem, not a mystery.
         return JSONResponse(
             {"error": "token storage is not configured (set SESSION_SECRET "
@@ -823,7 +823,7 @@ async def connect_asana(request: Request) -> JSONResponse:
 
 @router.post("/dashboard/connections/asana/disconnect")
 async def disconnect_asana(request: Request) -> JSONResponse:
-    """Remove the org's stored Asana credentials — BOTH the OAuth grant (the
+    """Remove the org's stored Asana credentials. BOTH the OAuth grant (the
     one-click connect) and a pasted PAT, mirroring Google's disconnect. Note:
     if the deployment sets the ASANA_TOKEN env fallback, the platform-level
     connection remains (the response says so honestly)."""
@@ -850,10 +850,10 @@ async def disconnect_asana(request: Request) -> JSONResponse:
 
 @router.post("/dashboard/connections/jira")
 async def connect_jira(request: Request) -> JSONResponse:
-    """Connect the org's Jira Cloud, self-serve — no deploy credentials.
+    """Connect the org's Jira Cloud, self-serve; no deploy credentials.
 
     Body: {site, email, token}. The credentials are verified LIVE against Jira
-    (GET /myself) before anything is stored — a bad token is a clean 400, never
+    (GET /myself) before anything is stored; a bad token is a clean 400, never
     a half-connected state. On success they're persisted encrypted per-org
     (org_oauth, provider="jira"; the row carries the account email + site URL
     for the card). The token is never echoed, logged, or shipped to the browser
@@ -867,7 +867,7 @@ async def connect_jira(request: Request) -> JSONResponse:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+    except Exception:  # noqa: BLE001; malformed JSON is a client error
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     site = str((body or {}).get("site") or "").strip()
     email = str((body or {}).get("email") or "").strip()
@@ -985,7 +985,7 @@ async def connect_brain(request: Request) -> JSONResponse:
 
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+    except Exception:  # noqa: BLE001; malformed JSON is a client error
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     avatar_id = str((body or {}).get("avatar_id") or "").strip()
     team_id = str((body or {}).get("team_id") or "").strip()
@@ -1109,7 +1109,7 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
 
     # This endpoint carries a credential. Never inherit the key-free/demo
     # fail-open behavior used by public session APIs. A PER-ORG bearer is a
-    # recognized machine credential too — scoped below to its own org.
+    # recognized machine credential too; scoped below to its own org.
     provisioning_ok = cedric.provisioning_auth_ok(request)
     # The dedicated bootstrap credential is already sufficient and is not an
     # org token. Do not send it through the cross-tenant token resolver (which
@@ -1139,7 +1139,7 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
     # token->org path (Option A). The shipped Cedric install callback carries
     # only webhook_secret today, so requiring the token here left every connect
     # stuck at "pending" (400 missing-required-fields). Tenant isolation still
-    # holds without it — the events path is bound by the per-org webhook_secret
+    # holds without it; the events path is bound by the per-org webhook_secret
     # HMAC, and Laura->Cedric calls use the shared deployment bearer that Cedric
     # accepts. When Cedric starts sending webhook_token, it is stored and used.
     webhook_token = str((body or {}).get("webhook_token") or "").strip()
@@ -1226,13 +1226,13 @@ async def complete_brain_slack_install(request: Request) -> JSONResponse:
 @router.get("/dashboard/connections/brain/connectors")
 async def brain_connectors(request: Request) -> JSONResponse:
     """The product bridge, Laura side: what the connected brain can touch.
-    Proxies Cedric's GET /api/laura/connectors for the caller's org — live
+    Proxies Cedric's GET /api/laura/connectors for the caller's org; live
     connector catalog (connected / account label / needs-reconnect) plus his
     browser consent links. PII-light passthrough by contract; nothing stored.
     Requires the logged-in owner. Scoped to THE CALLER'S org only (PR D): the
     upstream query carries their workspace team_id from their own connection
     row, an install mid-flow → {"status":"pending"}, and an org with no brain
-    connection at all gets {"status":"not_connected"} + an empty catalog —
+    connection at all gets {"status":"not_connected"} + an empty catalog -
     never the global demo team's."""
     user = auth.current_user(request)
     if user is None:
@@ -1252,7 +1252,7 @@ async def brain_connectors(request: Request) -> JSONResponse:
             return JSONResponse({"status": "pending", "connectors": []}, headers=_NO_STORE)
         return JSONResponse({"status": "not_connected", "connectors": []}, headers=_NO_STORE)
     team_id = str((connected.get("config") or {}).get("team_id") or "")
-    # Live passthrough of Cedric's catalog — no server-side cache here, so a
+    # Live passthrough of Cedric's catalog; no server-side cache here, so a
     # just-connected tool shows immediately; no-store keeps the browser/edge from
     # re-serving a pre-connect snapshot.
     data = await run_in_threadpool(
@@ -1263,7 +1263,7 @@ async def brain_connectors(request: Request) -> JSONResponse:
     if data.get("not_linked"):
         # Permanent mismatch: the workspace this org's connection row points at
         # is linked to a DIFFERENT Laura org on Cedric's side (his 404). The
-        # safe self-service fix is a fresh Add-to-Slack (full /complete flow —
+        # safe self-service fix is a fresh Add-to-Slack (full /complete flow -
         # last-write-wins re-link + fresh creds into SSM); the frontend renders
         # that CTA. Never a bare POST /api/laura/orgs (webhook-secret drift).
         return JSONResponse({"status": "not_linked", "connectors": []}, headers=_NO_STORE)
@@ -1282,7 +1282,7 @@ def _upcoming_platform(url: str) -> str:
 
 
 def _native_event_start(ev: dict) -> str:
-    """RFC3339/ISO start for a Google Calendar event — ``dateTime`` for a timed
+    """RFC3339/ISO start for a Google Calendar event. ``dateTime`` for a timed
     event, ``date`` for an all-day one — or "" when neither is present."""
     start = ev.get("start") or {}
     return str(start.get("dateTime") or start.get("date") or "")
@@ -1334,7 +1334,7 @@ def _read_calendar_event_ref(value: str) -> tuple[str, str, str] | None:
         if len(calendar_id) > 1024 or len(event_id) > 1024:
             return None
         return uid, calendar_id, event_id
-    except Exception:  # noqa: BLE001 — hostile browser input
+    except Exception:  # noqa: BLE001; hostile browser input
         return None
 
 
@@ -1350,7 +1350,7 @@ def _iso_plus_minutes(start_iso: str, minutes: int) -> str:
 
 @router.get("/dashboard/upcoming")
 async def dashboard_upcoming(request: Request) -> JSONResponse:
-    """Upcoming meetings — the caller's OWN Google Calendar when they've
+    """Upcoming meetings; the caller's OWN Google Calendar when they've
     connected native Google, else the avatar's Recall Calendar V2 inbox.
 
     NATIVE path (preferred when ``store.get_org_oauth`` has a token for the
@@ -1358,13 +1358,13 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
     (``google_client.list_calendar_events``), so each user sees THEIR meetings
     and can dispatch the avatar to any of them from the row.
 
-    RECALL fallback (no native token): the avatar's own invite inbox — invite
+    RECALL fallback (no native token): the avatar's own invite inbox; invite
     its address to any event and the auto-join webhook dispatches a bot; this
     view shows that queue.
 
     Either way the response shape is identical (calendar + meetings[]) so the
     frontend is source-agnostic. Read-only + PII-light: titles, counts and the
-    join URL the owner needs to dispatch — never attendee addresses. No
+    join URL the owner needs to dispatch; never attendee addresses. No
     server-side cache (no-store)."""
     user = auth.current_user(request)
     machine_org = None
@@ -1375,7 +1375,7 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
         if machine_org is None:
             if err := auth.gate(request):
                 return err
-    # The org whose native Google token we read — mirrors the dashboard summary
+    # The org whose native Google token we read; mirrors the dashboard summary
     # (caller_org or demo_org_id) so connect + read always agree on the same org.
     # Keyed by the org_id string; no ::uuid cast (org_id split-brain safe).
     native_org = (user["org_id"] if user else machine_org) or settings.demo_org_id
@@ -1420,7 +1420,7 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
             time_min=_win_min, time_max=_win_max,
         )
         if not res.get("ok"):
-            # The org HAS a native token but the read failed — surface a soft
+            # The org HAS a native token but the read failed; surface a soft
             # "connected but unavailable" state. Do NOT silently fall through to
             # the avatar's Recall calendar (that would show a different inbox).
             return {
@@ -1443,10 +1443,10 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
             for s in store.all_sessions()
             if s.meeting_url and s.org_id == org_id
         }
-        # The invite inbox base(s) — an event whose attendees include an avatar's
+        # The invite inbox base(s); an event whose attendees include an avatar's
         # +tag alias is one the avatar is set to auto-join, so it earns the same
         # "🎭 <name>" badge as a live/scheduled session. Only the resolved
-        # avatar_id is exposed (never the attendee address — PII-light).
+        # avatar_id is exposed (never the attendee address. PII-light).
         invite_bases = [
             b for b in (settings.calendar_invite_emails or "").split(",") if b.strip()
         ]
@@ -1501,7 +1501,7 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
                     # Google event without exposing the calendar id/email.
                     "event_ref": event_ref,
                     "auto_join": bool(going_avatar),
-                    # WHO is being sent (empty when none) — powers the
+                    # WHO is being sent (empty when none); powers the
                     # "🎭 <name>" badge on the calendar block.
                     "auto_join_avatar": going_avatar,
                 }
@@ -1511,7 +1511,7 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
             "calendar": {"connected": True, "source": "google", "email": cal_email},
             # A week window can legitimately hold many more than the default
             # view's 20 (a dense program week: standups + sessions + planning
-            # across several calendars) — keep them all so the grid is complete.
+            # across several calendars); keep them all so the grid is complete.
             "meetings": rows[: (200 if _win_min else 20)],
         }
 
@@ -1573,7 +1573,7 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
 
     def _load() -> dict:
         # LOGGED-IN user: read THEIR OWN calendar token (user_oauth), scoped to
-        # the human — never the org's shared token. A verified corporate domain
+        # the human; never the org's shared token. A verified corporate domain
         # maps every colleague onto ONE org_id, so an org-keyed read would show
         # one person's calendar to the whole domain (cross-tenant leak). See
         # store.user_oauth + the /oauth/google/callback dual-write.
@@ -1592,7 +1592,7 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
                 )
             # BRIDGE for users who connected BEFORE per-user storage (only an
             # org-level row exists): serve it ONLY when its email is the logged-in
-            # user's OWN — so the original connector keeps working with no
+            # user's OWN; so the original connector keeps working with no
             # reconnect, while every colleague (email mismatch) is blocked. This
             # is the immediate cross-tenant-leak stopgap; once they reconnect,
             # the per-user row above takes over.
@@ -1635,12 +1635,12 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
 @router.post("/dashboard/calendar/event")
 async def create_calendar_event_endpoint(request: Request) -> JSONResponse:
     """Owner schedules a Google Calendar event straight from the dashboard week
-    grid — and, optionally, adds an avatar so it auto-joins.
+    grid; and, optionally, adds an avatar so it auto-joins.
 
     Owner-authed like the other dashboard mutations: a logged-in owner +
     same-origin (the same door as the capability/approve endpoints). The event is
     created on the CALLER's OWN org native Google token
-    (``store.get_org_oauth`` → ``google_client.create_calendar_event``) — never a
+    (``store.get_org_oauth`` → ``google_client.create_calendar_event``); never a
     shared/global account. When ``avatar_id`` is given, that avatar's invite alias
     (the ``+tag`` address, ``_avatar_email``) is added to the attendees so the
     auto-join webhook dispatches it into the meeting. Keyed by the org_id /
@@ -1648,7 +1648,7 @@ async def create_calendar_event_endpoint(request: Request) -> JSONResponse:
 
     SOFT-FAILS by contract (this is off the live path): returns
     ``{ok:false,error}`` for a bad body / no native token
-    (``error:"connect_google"``) / a Google hiccup — it never raises. Logs no
+    (``error:"connect_google"``) / a Google hiccup; it never raises. Logs no
     token, no attendee address, no transcript. Body:
     ``{title, start (ISO), end (ISO) OR duration_min, attendees?[], avatar_id?}``.
     """
@@ -1661,7 +1661,7 @@ async def create_calendar_event_endpoint(request: Request) -> JSONResponse:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+    except Exception:  # noqa: BLE001; malformed JSON is a client error
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     from .. import google_client  # lazy: mirrors the upcoming/native path
 
@@ -1692,7 +1692,7 @@ async def create_calendar_event_endpoint(request: Request) -> JSONResponse:
         avatar_email = _avatar_email(avatar_id)
         if avatar_email and avatar_email.lower() not in {a.lower() for a in attendees}:
             attendees.append(avatar_email)
-    # Schedule on the caller's OWN calendar — the per-USER token (user_oauth),
+    # Schedule on the caller's OWN calendar; the per-USER token (user_oauth),
     # NEVER the org's shared token: in a shared org (verified domain → one
     # org_id) an org-keyed write would create events on whichever colleague
     # connected first. Mirrors dashboard_upcoming's _load(): user_oauth wins;
@@ -1702,7 +1702,7 @@ async def create_calendar_event_endpoint(request: Request) -> JSONResponse:
     native_org = (user["org_id"] if user else "") or settings.demo_org_id
     uid = user["user_id"]
     # Wrapped so a store hiccup degrades to the same soft "connect_google" the
-    # docstring promises (never a 500) — mirrors dashboard_upcoming's _load()
+    # docstring promises (never a 500); mirrors dashboard_upcoming's _load()
     # try/except. on_rotate runs later inside google_client and is best-effort.
     try:
         _oauth = await run_in_threadpool(store.get_user_oauth, uid)
@@ -1728,7 +1728,7 @@ async def create_calendar_event_endpoint(request: Request) -> JSONResponse:
                 _principal = ""  # org path: create_calendar_event resolves by org
             else:
                 _oauth = None
-    except Exception:  # noqa: BLE001 — soft-fail, never a 500
+    except Exception:  # noqa: BLE001; soft-fail, never a 500
         _oauth = None
     if not _oauth:
         return JSONResponse({"ok": False, "error": "connect_google"})
@@ -1755,7 +1755,7 @@ async def create_calendar_event_endpoint(request: Request) -> JSONResponse:
             "ok": True,
             "event_id": res.get("event_id", ""),
             "html_link": res.get("event_url", ""),
-            # The provisioned Google Meet join link (empty if none) — the UI can
+            # The provisioned Google Meet join link (empty if none); the UI can
             # show/confirm it; the avatar joins THIS Meet via its invite alias.
             "meet_url": res.get("meet_url", ""),
             "avatar_added": bool(avatar_email),
@@ -2056,7 +2056,7 @@ def _find_org_action(caller_org: str, action_id: str) -> tuple[dict, str] | None
     ``caller_org`` (its own org, or a legacy unowned '' row), as
     ``(action, acting_avatar_id)``, or None.
 
-    The typed spec to execute lives on the SAVED artifact — the trusted source
+    The typed spec to execute lives on the SAVED artifact; the trusted source
     for what an approve should run, never the client's request body. The
     artifact's ``avatar_id`` (stamped at finalize) is the ACTING avatar, so the
     approve seam can honour that avatar's per-avatar capability toggle. Scanning
@@ -2078,7 +2078,7 @@ def _find_org_action(caller_org: str, action_id: str) -> tuple[dict, str] | None
             if isinstance(a, dict) and str(a.get("action_id") or "") == aid:
                 return a, str(art.get("avatar_id") or "")
     # Browser guarded steps (B0) are minted directly into the DURABLE
-    # queued_actions index (route='browser'), not into a meeting artifact —
+    # queued_actions index (route='browser'), not into a meeting artifact -
     # the durable row is their trusted source (same org-scoping via RLS).
     from .. import browser
 
@@ -2101,7 +2101,7 @@ def _executor_action(typed: dict | None) -> dict | None:
     return executor.from_typed(typed)
 
 
-# Human-readable reason an approved action did NOT execute — so the row shows
+# Human-readable reason an approved action did NOT execute; so the row shows
 # WHAT happened (owner ask 2026-07-20) instead of a silent "approved". Keyed on
 # the dispatch_action reason codes (cedric/callback.dispatch_action).
 _DISPATCH_FAILURE_MESSAGE = {
@@ -2128,19 +2128,19 @@ def _execution_failure_detail(reason: str) -> str:
 
 @router.post("/dashboard/actions/{action_id}/approve")
 async def approve_action(action_id: str, request: Request) -> JSONResponse:
-    """Approve one finalized meeting action — the NATIVE approval surface.
+    """Approve one finalized meeting action; the NATIVE approval surface.
 
     Dashboard-authed: a logged-in owner only, scoped to their own org. Marks the
     action ``approved`` in the ledger provenance channel and, when the NATIVE
     executor is ON and the action carries a typed spec (calendar.create_event /
     email.send), runs it on the caller's own Google account via
-    ``executor.execute_approved`` — which writes the ``done``/``failed`` receipt
+    ``executor.execute_approved``: which writes the ``done``/``failed`` receipt
     (event link / message id) back to the SAME ledger channel the dashboard
     reads. With the flag OFF (or the action untyped) it is marked approved and
-    nothing executes — byte-identical to today's brokered-to-Cedric behaviour.
+    nothing executes; byte-identical to today's brokered-to-Cedric behaviour.
 
     This deliberately does NOT touch the machine-gated
-    ``POST /org/actions/{id}/resolve`` (Cedric's) — it reuses the ledger but is a
+    ``POST /org/actions/{id}/resolve`` (Cedric's); it reuses the ledger but is a
     separate, human-authed door so the two execution engines never collide."""
     user = auth.current_user(request)
     if user is None:
@@ -2162,14 +2162,14 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         )
     action, acting_avatar = found
     # Edited params (the needs_details loop) win over the artifact's original
-    # spec — still never the client's request body (canonical Action plane).
+    # spec; still never the client's request body (canonical Action plane).
     typed = await run_in_threadpool(
         lambda: ledger.effective_typed(aid, action.get("typed"), org_id=org)
     )
 
     # A rejected action is CLOSED. The monotonic status guard would keep the
     # chip 'rejected' anyway, but without this check the executor below would
-    # still RUN the action — refuse outright; un-rejecting isn't a thing.
+    # still RUN the action; refuse outright; un-rejecting isn't a thing.
     current = await run_in_threadpool(ledger.action_statuses, [aid], org_id=org)
     if (current.get(aid) or {}).get("status") == "rejected":
         return JSONResponse(
@@ -2180,7 +2180,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
 
     # needs_details gate: approving a typed spec with missing REQUIRED fields
     # would execute a broken call or silently no-op ('approved but nothing
-    # happened') — surface the exact fields for the edit affordance instead.
+    # happened'); surface the exact fields for the edit affordance instead.
     missing = action_plane.missing_params(typed)
     if typed and missing:
         await run_in_threadpool(
@@ -2195,8 +2195,8 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         )
 
     # Record THE canonical decision (first write wins across surfaces and
-    # instances). A dashboard approve after a Slack decision — or a repeated
-    # dashboard click racing itself — answers from the recorded row instead
+    # instances). A dashboard approve after a Slack decision; or a repeated
+    # dashboard click racing itself; answers from the recorded row instead
     # of executing again.
     recorded_now = await run_in_threadpool(
         lambda: ledger.record_action_decision(
@@ -2223,7 +2223,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         prior = str((latest.get(aid) or {}).get("status") or "").lower()
         # A failed receipt is the ONE re-approvable state: the row's Approve
         # button promises a retry (dead-end comment below), and before this
-        # existed the promise was a lie — the replay path answered from the
+        # existed the promise was a lie; the replay path answered from the
         # decision record without ever re-dispatching (live repro 2026-07-20).
         # reopen_failed_action is a CAS, so a double-click still retries once;
         # done/rejected/executing replay as before.
@@ -2247,7 +2247,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
 
     # Mark approved (non-terminal, monotonic) in the shared provenance channel.
     # Best-effort: a durable-org no-op here (a native action has no Cedric
-    # queued_actions row) must not fail the approval — execution is the point.
+    # queued_actions row) must not fail the approval; execution is the point.
     await run_in_threadpool(
         ledger.set_action_status, aid, "approved", "approved via dashboard",
         org_id=org,
@@ -2270,7 +2270,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             # Same dead-end honesty as the Cedric dispatch below: nothing can
             # run this step, so say WHY as a failed receipt instead of leaving
             # a silent "approved" (the exact bug 8e6e15a fixed for the Cedric
-            # route — this route had been left out). failed is re-approvable
+            # route; this route had been left out). failed is re-approvable
             # via reopen_failed_action once the operator is enabled.
             browser_error = (
                 "The browser operator is switched off on this deployment, so "
@@ -2314,7 +2314,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     if route == "pipedream" and pipedream_executor.handles(exec_action):
         # Pipedream Connect-Proxy execution (Asana + long tail), selected by the
         # persisted route. Same capability gate + exactly-once claim + provenance
-        # receipt as the native branch below — only the vendor call differs.
+        # receipt as the native branch below; only the vendor call differs.
         from .. import avatar_resolver
 
         family = executor.capability_family(exec_action.get("type"))
@@ -2346,7 +2346,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         # CAPABILITY GATE: the native executor runs an action ONLY when the
         # acting avatar's toggle for that action's FAMILY (google for
         # calendar/gmail, asana for tasks) is on. Read raw and skip on an
-        # explicit OFF — an untouched avatar keeps today's behaviour (default
+        # explicit OFF; an untouched avatar keeps today's behaviour (default
         # on when the org connected that integration, and the clients
         # soft-fail anyway when it hasn't). A blocked action stays
         # `approved`, byte-identical to the executor being off.
@@ -2358,7 +2358,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         )
         blocked_by_toggle = caps.get(family) is False
         # M2 overlay narrowing, re-resolved at EXECUTION time (org-scoped; an
-        # overlay can only remove a capability — flag off ⇒ always allowed).
+        # overlay can only remove a capability; flag off ⇒ always allowed).
         blocked_by_overlay = not blocked_by_toggle and not await run_in_threadpool(
             avatar_resolver.family_allowed, org, acting_avatar, family
         )
@@ -2366,7 +2366,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             capability_blocked = True
         else:
             # EXECUTION CLAIM (canonical Action plane): the atomic CAS to
-            # 'executing' is the only license to call a vendor — a concurrent
+            # 'executing' is the only license to call a vendor; a concurrent
             # approve on another surface/instance loses the claim and reports
             # instead of writing twice.
             claimed = await run_in_threadpool(
@@ -2385,9 +2385,9 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
                 new_status = "done" if result.get("ok") else "failed"
     # ── route=cedric: hand the approved action to the orchestrator ──
     # handshake B2 (agreed action-lifecycle contract): anything the native
-    # executor did NOT run — untyped items, non-native types, and
+    # executor did NOT run; untyped items, non-native types, and
     # capability-blocked actions (the one sanctioned native→cedric re-route)
-    # — is dispatched to Cedric pre_approved, to execute through its
+    #; is dispatched to Cedric pre_approved, to execute through its
     # connectors. Terminal status flows back via /org/actions/{id}/status.
     # Soft: a missing B-side receiver leaves the action approved and Cedric's
     # legacy action.requested loop remains the pickup path.
@@ -2429,7 +2429,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     )
 
     # Echo the latest provenance (status + distilled detail: event link /
-    # message id / error) — the receipt the row will render. Never transcript.
+    # message id / error); the receipt the row will render. Never transcript.
     latest = await run_in_threadpool(ledger.action_statuses, [aid], org_id=org)
     return JSONResponse(
         {
@@ -2453,16 +2453,16 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
 
 @router.post("/dashboard/actions/{action_id}/reject")
 async def reject_action(action_id: str, request: Request) -> JSONResponse:
-    """Reject one finalized meeting action — the approve door's mirror.
+    """Reject one finalized meeting action; the approve door's mirror.
 
     Same auth + org scoping as approve. Marks the action ``rejected`` in the
-    ledger provenance channel — a TERMINAL status, so ``set_action_status``
+    ledger provenance channel; a TERMINAL status, so ``set_action_status``
     also closes the matching ledger item and the monotonic guard means a late
     replay can't repaint the chip. Nothing ever executes on this path, and
     the approve door refuses a rejected action (409) so it can't be run later.
 
     If the action already reached a terminal state (done/failed), the mark is
-    a monotonic no-op — the response reports the real status rather than
+    a monotonic no-op; the response reports the real status rather than
     pretending the reject took."""
     user = auth.current_user(request)
     if user is None:
@@ -2484,7 +2484,7 @@ async def reject_action(action_id: str, request: Request) -> JSONResponse:
 
     # Record the canonical decision (first write wins, best-effort): an
     # undecided action gets its reject on the record; a reject AFTER a prior
-    # decision keeps this door's shipped contract — the monotonic status
+    # decision keeps this door's shipped contract; the monotonic status
     # write below is a no-op and the response reports the REAL status (done
     # stays done), never a 409.
     await run_in_threadpool(
@@ -2512,14 +2512,14 @@ async def reject_action(action_id: str, request: Request) -> JSONResponse:
     )
 
 
-# ── chat channel (org ↔ Cedric — approvals happen HERE, not in Slack) ──
+# ── chat channel (org ↔ Cedric; approvals happen HERE, not in Slack) ──
 
 
 def _chat_caller_org(request: Request):
     """Resolve the chat caller to (org, user|None) across the same four worlds
     as /dashboard/summary: cookie user, per-org machine bearer, global bearer,
     key-free demo. Returns (JSONResponse, None) when the caller must log in.
-    Chat rows are per-org, so the unscoped worlds map to the demo org — the
+    Chat rows are per-org, so the unscoped worlds map to the demo org; the
     same tenant their meetings and actions already land in."""
     from .. import cedric  # local import, same reason as auth.gate's
 
@@ -2538,7 +2538,7 @@ def _chat_caller_org(request: Request):
 async def dashboard_chat_list(request: Request, after: int = 0) -> JSONResponse:
     """The org's chat with Cedric: messages after ``after`` (poll cursor) plus
     the LIVE state of every referenced action card. NOTE: the dashboard's chat
-    UI was removed 2026-07-20 (owner request) — nothing in-repo renders this
+    UI was removed 2026-07-20 (owner request); nothing in-repo renders this
     today; the endpoint is retained as the transport for the planned Cedric
     bridge (docs/CEDRIC-DASHBOARD-BRIDGE.md). Decisions never live in chat
     rows; they converge on the canonical approval channel (Action Center)."""
@@ -2581,7 +2581,7 @@ async def dashboard_chat_list(request: Request, after: int = 0) -> JSONResponse:
             "relay_configured": settings.cedric_chat_native_reply
             or bool(cedric_callback.events_url()),
             # Built-in Cedric owns replies (the default). It answers regardless
-            # of the events door — a door means approvals/linking, not chat.
+            # of the events door; a door means approvals/linking, not chat.
             "native_chat": settings.cedric_chat_native_reply,
         },
         headers=_NO_STORE,
@@ -2593,9 +2593,9 @@ async def dashboard_chat_post(request: Request) -> JSONResponse:
     """Send a chat message to Cedric from the dashboard.
 
     Stores the row, then relays it over the per-org signed events door as a
-    ``chat.message`` event — single attempt, conversational semantics (the
+    ``chat.message`` event; single attempt, conversational semantics (the
     response carries ``delivered`` so the UI can say honestly when Cedric
-    didn't get it; the human just sends again). Never the raw transcript —
+    didn't get it; the human just sends again). Never the raw transcript -
     this is the user's own typed text, capped like every chat row."""
     org, user = _chat_caller_org(request)
     if isinstance(org, JSONResponse):
@@ -2620,10 +2620,10 @@ async def dashboard_chat_post(request: Request) -> JSONResponse:
     from ..cedric import callback as cedric_callback  # local: avoids import cycles
 
     # Who answers this chat? The built-in Cedric (native) is the default, and
-    # when on it is the SOLE responder — it answers even when an events door is
+    # when on it is the SOLE responder; it answers even when an events door is
     # configured. A configured CEDRIC_ORGS_URL means action-approvals and
     # org-linking are wired; it does NOT mean an external Cedric answers CHAT
-    # (that receiver isn't built, so a relayed chat.message goes into a void —
+    # (that receiver isn't built, so a relayed chat.message goes into a void -
     # the silence this fixes). Only when native is explicitly OFF does a
     # deployment claim a real external chat runtime, so we relay to it then.
     native = bool(settings.cedric_chat_native_reply)
@@ -2669,7 +2669,7 @@ async def dashboard_action_params(action_id: str, request: Request) -> JSONRespo
         return JSONResponse({"error": "action_id is required"}, status_code=400)
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+    except Exception:  # noqa: BLE001; malformed JSON is a client error
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     args = (body or {}).get("args") if isinstance(body, dict) else None
 

@@ -3,17 +3,17 @@
 - ``upload`` wraps the M1 Company Brain: publishes emit org_default
   envelopes at ingest time (hook in knowledge/ingest.py) and ``full`` sync is
   the backfill over already-published documents. acl_mode is EXPLICITLY
-  org_default — the only connector allowed to say so by default.
+  org_default; the only connector allowed to say so by default.
 - ``gdrive`` here is the contract-mandated NETWORK-FREE fake: it speaks the
   real Drive *Changes page token* protocol (start token, monotonically
   increasing change entries, token-expiry -> full reconciliation) against a
-  fixture held in the connector's config — deterministic for tests, seeds,
+  fixture held in the connector's config; deterministic for tests, seeds,
   and the Control Center's connector/ACL/freshness states. The real HTTP
   client is credential-gated future work behind the same protocol; watermark
   incrementals are forbidden by contract either way.
 - All other kinds raise ConnectorNotImplemented (legal rows, failed runs).
 
-Connectors NEVER touch the database directly — they return envelope batches
+Connectors NEVER touch the database directly; they return envelope batches
 + identities + the new cursor; dal.commit_batch applies everything
 atomically with the cursor advance.
 """
@@ -53,7 +53,7 @@ class UploadConnector:
 
     @staticmethod
     def backfill_envelopes(org_id: str) -> list[dict]:
-        """Envelopes for every already-published Company Brain document —
+        """Envelopes for every already-published Company Brain document -
         the binding rollout step 'upload backfill'."""
         from .. import knowledge
         from ..knowledge import dal as kdal
@@ -117,7 +117,7 @@ def envelope_for_document(org_id: str, source: dict, doc: dict) -> dict | None:
 
 
 class FakeGDriveConnector:
-    """Drive Changes-token protocol over a fixture — zero network.
+    """Drive Changes-token protocol over a fixture; zero network.
 
     Fixture shape (connector.config_json['fixture']):
       {"files": {fid: {title, body, container, author, acl_mode,
@@ -148,7 +148,7 @@ class FakeGDriveConnector:
         identities = list(fixture.get("identities") or [])
         if full or token <= 0 or token < expired_below:
             # Full reconciliation (the contract's fallback when no valid
-            # Changes page token exists — never a modified-time watermark).
+            # Changes page token exists; never a modified-time watermark).
             envelopes = [
                 self._file_envelope(fid, meta)
                 for fid, meta in (fixture.get("files") or {}).items()

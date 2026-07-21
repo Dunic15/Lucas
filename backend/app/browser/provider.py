@@ -2,12 +2,12 @@
 
 ONE interface Laura owns; provider calls never spread into routes, meeting
 code, or the frontend. A provider returns provider-native identifiers
-(``provider_ref``) and a viewer payload — both stay behind the operator and
+(``provider_ref``) and a viewer payload; both stay behind the operator and
 never become Laura's public API.
 
 A provider deals in raw pages; the operator (operator.py) owns the state
 machine, tenancy, policy classification and sanitization. Providers here do
-NOT enforce policy — that is deterministic code between planner and provider.
+NOT enforce policy; that is deterministic code between planner and provider.
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ class ProviderTimeout(RuntimeError):
 
 @dataclass
 class ProviderSession:
-    """What a provider hands back on create — the operator persists the ref
+    """What a provider hands back on create; the operator persists the ref
     and never exposes it."""
     provider_ref: str
     viewer_ref: str = ""  # provider-side viewer handle (never public/logged)
@@ -46,7 +46,7 @@ class RawObservation:
       structural ``dom_summary``.
     - ``screenshot_bytes``: the raw image, held TRANSIENTLY for the model call
       + verification ONLY. It is NEVER logged, never persisted, never returned
-      to a client, and never placed in a receipt — the operator strips it at
+      to a client, and never placed in a receipt; the operator strips it at
       the boundary and keeps only ``screenshot_ref`` + a digest. Bounded by the
       provider before it is ever set.
     """

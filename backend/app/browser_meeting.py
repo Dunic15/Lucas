@@ -8,12 +8,12 @@ login when one exists), navigate, and mint the read-only live-view URL the
 hot path; the delivery (speak/control) stays in main.py where the queue lives.
 
 DELIBERATELY INERT unless BOTH the browser operator and the meeting trigger
-flag are on. Nothing here ever raises into the caller — a browser hiccup must
+flag are on. Nothing here ever raises into the caller; a browser hiccup must
 never touch a live meeting.
 
 No transcript text crosses to the operator or the provider: the goal is a
 bounded server-built string keyed off a coarse site label, never the raw
-utterance (Sable non-negotiable — transcripts are PII).
+utterance (Sable non-negotiable; transcripts are PII).
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ _ACTIVE: dict[str, tuple[str, str]] = {}  # meeting_ref -> (org_id, session_id)
 
 
 # Per-site, per-task BOUNDED goal strings (≤300 chars, server-built from the
-# canonical task key — never the utterance). Each is read-only by construction:
+# canonical task key; never the utterance). Each is read-only by construction:
 # "point out … do not change anything", so the walkthrough shows WHERE without
 # performing the write (the read-only posture enforces this regardless).
 _TASK_GOALS = {
@@ -64,7 +64,7 @@ _TASK_GOALS = {
 }
 
 # Operation → narration. When the target control has a short label (from the
-# sanitized observation — bounded + redacted upstream), we name it so the
+# sanitized observation; bounded + redacted upstream), we name it so the
 # narration tracks what the pointer is doing ("Now I'll click Add task"); with
 # no usable label we fall back to a generic line. UI-control labels on the
 # user's own workspace, shown on their own tile, are safe to voice; secrets are
@@ -123,7 +123,7 @@ def run_walkthrough(org_id: str, session_id: str, *, site_label: str,
     """Drive the visual planner through a read-only how-to on an ALREADY-open,
     presented session, narrating each step via ``on_narrate`` (a thread-safe
     callback the caller supplies). Returns {ok, outcome, closing}. Sync
-    (threadpool). Never raises — a walkthrough fault must not touch the meeting.
+    (threadpool). Never raises; a walkthrough fault must not touch the meeting.
 
     ``on_narrate(line: str)`` is called once per action, BEFORE it happens, so
     the voice leads the on-screen click. The line is built from the operation
@@ -159,7 +159,7 @@ def run_walkthrough(org_id: str, session_id: str, *, site_label: str,
         def _on_step(index: int, operation: str, info) -> None:
             try:
                 on_narrate(_narration_for(info, index))
-            except Exception:  # noqa: BLE001 — narration never breaks the run
+            except Exception:  # noqa: BLE001; narration never breaks the run
                 pass
 
         result = coordinator.run(org_id, session_id, goal,
@@ -258,7 +258,7 @@ def finish_connect(meeting_ref: str) -> dict:
 
 
 def cancel_connect(meeting_ref: str) -> None:
-    """Abandon a pending connect (timeout / meeting end) — release the session,
+    """Abandon a pending connect (timeout / meeting end); release the session,
     do NOT save an identity (login never completed)."""
     p = _PENDING.pop(meeting_ref, None)
     if p is None:
@@ -303,7 +303,7 @@ def open_for_meeting(org_id: str, *, avatar_key: str, site_label: str,
         # Reuse the view already open for THIS meeting instead of spinning up a
         # second provider session. A meeting shows one tile at a time, and a
         # second concurrent provider session can trip the provider's session cap
-        # and fail (reason=ProviderError) — exactly what happens when a human
+        # and fail (reason=ProviderError); exactly what happens when a human
         # asks for a second thing ("...now create a task") while the tour view is
         # still open. Same meeting → same browser: re-navigate + re-present.
         active = _ACTIVE.get(meeting_ref)
@@ -323,7 +323,7 @@ def open_for_meeting(org_id: str, *, avatar_key: str, site_label: str,
                     if url:
                         return {"ok": True, "url": url, "spoken": spoken,
                                 "logged_in": logged_in, "session_id": prev_sid}
-                except Exception:  # noqa: BLE001 — fall through to a fresh open
+                except Exception:  # noqa: BLE001; fall through to a fresh open
                     pass
         # No reusable view → close any stale one and open fresh.
         _close_existing(org_id, meeting_ref)
@@ -349,7 +349,7 @@ def open_for_meeting(org_id: str, *, avatar_key: str, site_label: str,
         _ACTIVE[meeting_ref] = (org_id, sid)
         return {"ok": True, "url": url, "spoken": spoken,
                 "logged_in": logged_in, "session_id": sid}
-    except Exception as exc:  # noqa: BLE001 — a browse fault never hits the meeting
+    except Exception as exc:  # noqa: BLE001; a browse fault never hits the meeting
         # Class name only; never a payload/URL/credential.
         return {"ok": False, "reason": type(exc).__name__, "spoken": spoken}
 
@@ -364,7 +364,7 @@ def close_for_meeting(meeting_ref: str) -> bool:
         from .browser import operator
 
         operator.close_session(org_id, sid, principal="meeting")
-    except Exception:  # noqa: BLE001 — best-effort; TTL/reconcile is the backstop
+    except Exception:  # noqa: BLE001; best-effort; TTL/reconcile is the backstop
         return False
     return True
 

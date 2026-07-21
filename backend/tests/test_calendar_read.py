@@ -1,9 +1,9 @@
 """Calendar sight: the avatar knows the owner's upcoming Google Calendar.
 
 Same contract as the Drive folder brief: assembled once at session start,
-best-effort ("" when no Google is connected — the join proceeds), bounded
+best-effort ("" when no Google is connected; the join proceeds), bounded
 (it rides the live prompt), cached per org, content never logged. The
-upcoming_meetings brain tool reads the session snapshot — zero network live.
+upcoming_meetings brain tool reads the session snapshot; zero network live.
 """
 from __future__ import annotations
 
@@ -451,7 +451,7 @@ def test_calendarlist_403_remints_and_reveals_all_calendars(monkeypatch):
 
 def test_calendarlist_403_no_retry_loop_when_grant_truly_lacks_scope(monkeypatch):
     """If the re-mint returns the SAME token (the grant genuinely lacks the
-    scope — user never granted it), do NOT loop: re-mint at most once, then
+    scope; user never granted it), do NOT loop: re-mint at most once, then
     fall back to primary-only. Guards Google's token endpoint from hammering."""
     google_client._reset_token_cache()
     monkeypatch.setattr(
@@ -644,7 +644,7 @@ def test_no_time_max_stays_open_ended(monkeypatch):
 
 
 def test_windowed_read_allows_more_than_50_events(monkeypatch):
-    """A busy program week can hold >50 events across calendars — a BOUNDED
+    """A busy program week can hold >50 events across calendars; a BOUNDED
     (time_max) read must not cap at 50, or later daily standups get truncated
     ('I don't see all my standups'). Open-ended reads stay capped at 50."""
     google_client._reset_token_cache()

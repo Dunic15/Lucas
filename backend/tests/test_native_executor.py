@@ -1,4 +1,4 @@
-"""Native Google executor slice — crypto, per-org token store, google_client
+"""Native Google executor slice; crypto, per-org token store, google_client
 (mocked Google), and the executor dispatch + ledger provenance.
 
 Everything here is key-free: Google is mocked, native_executor is toggled per
@@ -221,7 +221,7 @@ def test_list_calendar_events_happy_and_soft(monkeypatch, tmp_path):
 
     res = google_client.list_calendar_events("org-a", max_results=25)
     assert res["ok"] is True and res["events"][0]["id"] == "e1"
-    # Upcoming-only, expanded, chronological — the read-side query contract.
+    # Upcoming-only, expanded, chronological; the read-side query contract.
     assert seen["singleEvents"] == "true" and seen["orderBy"] == "startTime"
     assert "timeMin" in seen and seen["maxResults"] == 25
 

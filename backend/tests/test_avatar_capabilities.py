@@ -3,7 +3,7 @@ then each avatar independently turns a capability ON/OFF.
 
 Key-free (sqlite in tmp_path, Google mocked at executor.google_client). Covers:
   1. store set/get + the default-ON-when-connected resolver.
-  2. POST /dashboard/avatar/{id}/capability — owner-only + validation.
+  2. POST /dashboard/avatar/{id}/capability: owner-only + validation.
   3. dashboard summary exposes capabilities_toggle.
   4. ENFORCEMENT: a Google action is SKIPPED when the avatar's google flag is
      off (and runs when it isn't); Slack delivery is skipped when slack is off.
@@ -29,7 +29,7 @@ from app.config import settings
 def _store(tmp_path, monkeypatch):
     monkeypatch.setenv("LAURA_STORE_PATH", str(tmp_path / "store.sqlite3"))
     importlib.reload(store)
-    importlib.reload(ledger)  # shares the sqlite file — needs its tables too
+    importlib.reload(ledger)  # shares the sqlite file; needs its tables too
     monkeypatch.setattr(settings, "native_executor", False)
 
 

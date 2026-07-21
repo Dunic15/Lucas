@@ -1,16 +1,16 @@
-"""The dashboard chat channel — Cedric's in-dashboard approval surface.
+"""The dashboard chat channel: Cedric's in-dashboard approval surface.
 
 Three seams, all key-free (sqlite in tmp_path, Cedric faked at the callback
 layer):
-  1. POST /org/chat        — Cedric posts text / action cards (machine gate,
+  1. POST /org/chat: Cedric posts text / action cards (machine gate,
                              org-scoped like every /org door).
-  2. GET/POST /dashboard/chat — the human side: same four-worlds gate as
+  2. GET/POST /dashboard/chat: the human side: same four-worlds gate as
                              /dashboard/summary (cookie user / per-org bearer /
                              global bearer / key-free demo) + same-origin POST;
                              GET enriches referenced action cards with live
                              typed/execution state; POST stores then relays
                              chat.message over the signed events door.
-  3. Decisions NEVER live in chat — cards reference action_id and the UI hits
+  3. Decisions NEVER live in chat: cards reference action_id and the UI hits
      the existing canonical approve/reject doors (covered by
      test_dashboard_approve.py); here we assert the enrichment reflects the
      ledger truth those doors write.
@@ -142,7 +142,7 @@ def test_dashboard_chat_requires_login_when_auth_enabled(client, monkeypatch):
 
 def test_dashboard_chat_keyfree_maps_to_demo_org(client, monkeypatch):
     """Key-free world: chat serves the demo org like every other dashboard
-    surface (a blanket 401 here left the whole tab dead on 'Loading…' —
+    surface (a blanket 401 here left the whole tab dead on 'Loading…': 
     live repro 2026-07-19). Same four-worlds gate as /dashboard/summary."""
     monkeypatch.setattr(cedric_callback, "send_action_event", lambda *a: False)
     listing = client.get("/dashboard/chat")
@@ -184,7 +184,7 @@ def test_dashboard_chat_send_reports_failed_relay(client, monkeypatch):
         "/dashboard/chat", json={"text": "anyone home?"},
     )
     assert resp.status_code == 200
-    assert resp.json()["delivered"] is False  # stored anyway — honesty, not loss
+    assert resp.json()["delivered"] is False  # stored anyway; honesty, not loss
 
 
 def test_dashboard_chat_list_cursor_and_org_isolation(client):

@@ -1,7 +1,7 @@
 """DF HTTP surface (accepted contract v5): /org/data/* + strict dashboard twin.
 
 org_id and principal derive EXCLUSIVELY from the authenticated context; a
-client-supplied org_id in any body is rejected on mismatch (403) — never
+client-supplied org_id in any body is rejected on mismatch (403); never
 honored. Writes on the dashboard twin require cookie + same-origin + the
 durable owner/admin gate; every branch checks its METHOD explicitly. No
 business logic lives in the frontend.
@@ -21,7 +21,7 @@ _NO_STORE = {"Cache-Control": "no-store"}
 
 def _jsonable(value):
     """Coerce Postgres numerics (extract(epoch) -> Decimal, count -> Decimal)
-    to JSON-safe types at the response boundary — Starlette's JSONResponse
+    to JSON-safe types at the response boundary. Starlette's JSONResponse
     uses plain json.dumps and would 500 on a Decimal."""
     from decimal import Decimal
 

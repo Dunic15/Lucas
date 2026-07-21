@@ -1,9 +1,9 @@
-"""MeetingState — the silent intelligence layer.
+"""MeetingState; the silent intelligence layer.
 
 Laura's product value in a meeting is knowing what the meeting has actually
 covered: which required process steps happened, what was decided, who owns
 what, what's at risk. This module folds every transcript line into a
-structured MeetingState *silently* — no model call, pure regex heuristics —
+structured MeetingState *silently*: no model call, pure regex heuristics -
 so the live path pays zero added latency. The state is then used to decide
 answer / silence / proactive warning, and to enrich the post-meeting artifact.
 
@@ -153,7 +153,7 @@ _DONE = re.compile(
     r"green[- ]?light\w*|received|sorted|granted|provisioned)\b",
     re.IGNORECASE,
 )
-# "It's ready / set up / stood up" — completion phrasing for things that get
+# "It's ready / set up / stood up": completion phrasing for things that get
 # stood up rather than approved (an environment, access).
 _READY = re.compile(
     r"\b(ready|set up|set-up|spun up|stood up|provisioned|available|live|in place)\b",
@@ -325,7 +325,7 @@ def _step_topic(step: str) -> re.Pattern:
 
 
 # "Readiness/discussion" steps are covered simply by being STATED in the meeting
-# (an objective named, an agenda set, options weighed) — not by an approval cue.
+# (an objective named, an agenda set, options weighed); not by an approval cue.
 # A question about them ("what's the agenda?") does not count as covering them.
 _DISCUSSION_STEPS = {
     "objective_clear", "agenda_set", "right_attendees", "pre_read_shared",
@@ -700,7 +700,7 @@ def state_summary(state: MeetingState) -> str:
     if state.open_questions:
         lines.append("Open questions: " + "; ".join(state.open_questions[:5]))
     # Per-person block: only people with actual content (a bare line count is
-    # noise), capped tight — this goes into the latency-critical live prompt.
+    # noise), capped tight; this goes into the latency-critical live prompt.
     person_bits = []
     for participant_key, p in state.per_person.items():
         name = str(p.get("name") or participant_key)

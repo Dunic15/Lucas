@@ -1,4 +1,4 @@
-"""Opaque presentation tokens (B0) — read-only live-view grants.
+"""Opaque presentation tokens (B0); read-only live-view grants.
 
 A watcher never receives a permanent provider URL or credential. ``present``
 mints an opaque token; the frontend exchanges it server-side for the CURRENT
@@ -9,7 +9,7 @@ viewer payload. The token is:
 - read-only,
 - revocable (and auto-revoked when the session closes/expires/revokes),
 - replay-checked (expiry + revoke + session-liveness on every exchange),
-- exchanged SERVER-SIDE (the token value never appears in a DB row or log —
+- exchanged SERVER-SIDE (the token value never appears in a DB row or log -
   only its sha256 hash is stored).
 
 The random value is returned to the caller exactly once at mint time.

@@ -2,7 +2,7 @@
 INDEPENDENT of Slack/Cedric.
 
 Pins the owner decision (2026-07-16): booking and email run natively in every
-agent, separate from the Slack path — only routed to Cedric on an explicit ask
+agent, separate from the Slack path; only routed to Cedric on an explicit ask
 or when NATIVE_EXECUTOR is turned off. Google is mocked; key-free.
 """
 from __future__ import annotations
@@ -96,7 +96,7 @@ def test_executor_never_imports_cedric():
     """Native execution must be independent of the Slack/Cedric broker: no
     MODULE-LEVEL cedric import, so the executor loads and executes natively
     with cedric absent. (The approve-door reconciliation added a lazy,
-    try-guarded action.status EVENT mirror to the Cedric surface — that
+    try-guarded action.status EVENT mirror to the Cedric surface; that
     reports provenance, it does not route execution, and it may no-op.)"""
     import app.executor as ex
     src = Path(ex.__file__).read_text()

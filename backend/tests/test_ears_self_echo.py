@@ -1,10 +1,10 @@
 """The relay-echo bug: Gemini ears re-transcribes the avatar's OWN voice from
-the meeting's mixed audio and posts it as a 'human' turn — she answers herself.
+the meeting's mixed audio and posts it as a 'human' turn; she answers herself.
 
 _is_echo's original exact-substring test only caught Recall's near-verbatim
 echo. A second ASR (Gemini) drifts in wording/punctuation and aggregates one
 turn across several spoken lines; the token-coverage extension must catch
-that, while a real human turn — even one quoting her — still gets through.
+that, while a real human turn, even one quoting her, still gets through.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from app.main import _is_echo, _norm_line
 
 @pytest.fixture(autouse=True)
 def _ears_on(monkeypatch):
-    """The token-coverage branch only arms when an ears mode is active —
+    """The token-coverage branch only arms when an ears mode is active -
     with mode off (prod today) it must stay pure Recall-substring behavior."""
     monkeypatch.setattr(settings, "gemini_ears_mode", "on")
 
@@ -41,7 +41,7 @@ def test_verbatim_echo_still_caught():
 
 
 def test_cross_asr_reworded_echo_caught():
-    """Gemini's transcription: same words, different segmentation/punctuation —
+    """Gemini's transcription: same words, different segmentation/punctuation -
     the old substring test missed this exact case."""
     s = _session(SPOKEN_1, SPOKEN_2)
     gemini_turn = (
@@ -64,7 +64,7 @@ def test_real_human_turn_not_suppressed():
 
 
 def test_human_partially_quoting_her_not_suppressed():
-    """A human referencing her words adds their own — coverage stays under
+    """A human referencing her words adds their own; coverage stays under
     the bar and the turn must be answered."""
     s = _session(SPOKEN_1)
     human = (

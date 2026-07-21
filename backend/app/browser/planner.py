@@ -1,7 +1,7 @@
-"""VisualPlanner (B0) — one provider-independent planning interface.
+"""VisualPlanner (B0); one provider-independent planning interface.
 
 Contract: ``observe → propose ONE operation``. The planner is a SUGGESTER;
-the deterministic policy engine (policy.py) remains the sole authority — a
+the deterministic policy engine (policy.py) remains the sole authority; a
 proposal's ``consequential`` field is a suggestion the policy re-derives and
 can override, and a proposal can never widen an action class or skip a check.
 The planner also never declares its own operation successful: verification is
@@ -16,14 +16,14 @@ from __future__ import annotations
 
 from typing import Optional, Protocol
 
-# Stable proposal shape — additive changes only. (B1 supersets these fields via
+# Stable proposal shape; additive changes only. (B1 supersets these fields via
 # contracts.visual_proposal: target_type, coordinates, observed_observation_id.)
 PROPOSAL_FIELDS = (
     "operation", "target", "arguments", "reason", "confidence",
     "expected_result", "observed_page_version", "consequential",
 )
 
-# Operations a proposal may carry — a UNION (B0's observe/done kept; B1 verbs
+# Operations a proposal may carry; a UNION (B0's observe/done kept; B1 verbs
 # added). Loop-control ops (finish/request_human_help) are handled by the
 # coordinator and NEVER sent to the operator.
 OPERATIONS = ("observe", "navigate", "click", "type", "scroll", "done",
@@ -69,7 +69,7 @@ class VisualPlanner(Protocol):
 class ScriptedPlanner:
     """Deterministic B0 planner: walks a fixed script of proposals, validating
     each against the CURRENT observation (element must exist; page version
-    must match what the step expects) — so a stale page yields a REPLAN
+    must match what the step expects); so a stale page yields a REPLAN
     (re-propose from the fresh observation) instead of a blind action.
     """
 
@@ -86,7 +86,7 @@ class ScriptedPlanner:
         op = str(step.get("operation") or "")
         target = str(step.get("target") or "")
         # Ground the proposal in the live observation: a targeted operation
-        # whose element is absent from the CURRENT page is not proposed —
+        # whose element is absent from the CURRENT page is not proposed -
         # the planner re-observes (stale page → replan, never a blind click).
         if op in ("click", "type") and target:
             ids = {str(e.get("id")) for e in observation.get("elements") or []}
@@ -115,7 +115,7 @@ class FakeVisualPlanner:
 
     Unlike ScriptedPlanner it grounds targets from the SCREENSHOT perception
     (the fake screenshot bytes carry a ``primary_visual_target`` + bboxes that
-    the DOM text cannot disambiguate — proving real "eyes"), and it can emit
+    the DOM text cannot disambiguate; proving real "eyes"), and it can emit
     every B1 scenario a coordinator must handle. Emits contracts.visual_proposal
     shapes. NEVER a network/model call."""
 
@@ -184,7 +184,7 @@ class FakeVisualPlanner:
             return contracts.visual_proposal(operation="finish",
                                              reason="goal met",
                                              observed_page_version=pv)
-        # default: visual_select — pick the screenshot-only primary target by
+        # default: visual_select; pick the screenshot-only primary target by
         # COORDINATES (the DOM text is ambiguous by construction).
         tgt = perception.get("primary_visual_target") or ""
         bbox = perception.get("bbox_for", {}).get(tgt)

@@ -1,11 +1,11 @@
-"""Org avatar overlays (M2) on real Postgres as laura_app — acceptance gates.
+"""Org avatar overlays (M2) on real Postgres as laura_app; acceptance gates.
 
 Full Alembic chain through 0011_org_avatars, then through the policy-bound
 runtime role: two orgs personalize the same canonical avatar independently;
 drafts never leak into resolution; publish is atomic and single-winner under
 concurrency; rollback is append-only and traceable; RLS isolates every table;
 the audit trail is INSERT-only by grant; capability narrowing re-resolves at
-execution time; and a context scope filters REAL Company Brain retrieval —
+execution time; and a context scope filters REAL Company Brain retrieval -
 with an empty restricted scope meaning "nothing", never "everything".
 """
 from __future__ import annotations
@@ -372,7 +372,7 @@ def test_context_scope_filters_real_retrieval(cp):
     assert "THREE days" in scoped
     assert "NINE eur" not in scoped
 
-    # Empty RESTRICTED scope = no org sources at all — never "everything".
+    # Empty RESTRICTED scope = no org sources at all; never "everything".
     _publish(org, {"context_scope": {
         "include_org_default": False, "knowledge_source_ids": [],
     }})

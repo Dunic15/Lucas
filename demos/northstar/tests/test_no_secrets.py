@@ -27,7 +27,7 @@ REAL_DATA_DENYLIST = [
     "readyplayer", "avaturn", "duccio", "@gmail.com", "awsapprunner",
 ]
 
-# Fixtures must be deterministic — no wall-clock / randomness in product code.
+# Fixtures must be deterministic; no wall-clock / randomness in product code.
 NONDETERMINISM = [r"\brandom\.", r"\buuid\b", r"\btime\.time\b",
                   r"datetime\.now", r"date\.today", r"Math\.random"]
 
@@ -78,7 +78,7 @@ def test_no_email_addresses_in_pack():
 
 
 def _code_without_strings_and_comments(src: str) -> str:
-    """Return only the executable tokens — strings and comments dropped — so a
+    """Return only the executable tokens, strings and comments dropped, so a
     docstring that *mentions* time.time() to explain the code is deterministic
     doesn't read as a nondeterministic call."""
     import io

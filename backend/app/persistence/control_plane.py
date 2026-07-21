@@ -1,4 +1,4 @@
-"""Durable identity / control plane — the Postgres DAL for self-serve signups.
+"""Durable identity / control plane; the Postgres DAL for self-serve signups.
 
 Active **iff** ``settings.laura_database_url`` is non-empty (the Supabase
 Postgres control plane of docs/infra/MULTI-TENANCY.md). When the URL is empty
@@ -20,10 +20,10 @@ ROLE / RLS CONTRACT:
 ``LAURA_DATABASE_ADMIN_URL``; the owner credential is never available to
 App Runner.
 
-Tenant CRUD — including mint/rotate/revoke of Cedric machine tokens — stays on short transactions with transaction-local
+Tenant CRUD, including mint/rotate/revoke of Cedric machine tokens, stays on short transactions with transaction-local
 ``app.current_org``, so FORCE RLS is the database backstop. The two operations
-whose tenant is the answer rather than an input — Google signup/domain
-provisioning and token-hash-to-org resolution — call narrowly scoped
+whose tenant is the answer rather than an input. Google signup/domain
+provisioning and token-hash-to-org resolution; call narrowly scoped
 ``SECURITY DEFINER`` functions in the non-exposed ``laura_private`` schema.
 Migration 0004 pins their search_path, fully qualifies every object, revokes
 PUBLIC/anon/authenticated, and grants only exact EXECUTE to ``laura_app``.
@@ -60,7 +60,7 @@ def enabled() -> bool:
 
 def _sqlalchemy_url(raw: str) -> str:
     """Normalize a Postgres URL to the psycopg3 SQLAlchemy dialect. Supabase
-    hands out ``postgresql://`` (which SQLAlchemy would route to psycopg2 —
+    hands out ``postgresql://`` (which SQLAlchemy would route to psycopg2 -
     not installed); requirements.txt ships psycopg[binary] v3."""
     url = raw.strip()
     if url.startswith("postgres://"):
@@ -147,10 +147,10 @@ def sync_policy_flags() -> bool:
     policy_settings table (a SQL function can't read a process env var), so
     boot pushes LAURA_SHARED_DOMAIN_ORGS down once via the SECURITY DEFINER
     setter (migration 0008). Best-effort: on failure the row keeps its LAST
-    value and the failure is logged (never raised — boot must not hang on it).
+    value and the failure is logged (never raised; boot must not hang on it).
     The migration seeds the row FALSE, so a never-synced deployment is
     personal-first; but note that once an operator has enabled shared-domain
-    routing, a later boot that fails to sync will NOT roll it back — the row
+    routing, a later boot that fails to sync will NOT roll it back; the row
     stays at its prior value until a sync succeeds. Returns True on write."""
     if not enabled():
         return False
@@ -166,7 +166,7 @@ def sync_policy_flags() -> bool:
                 {"v": bool(settings.shared_domain_orgs)},
             )
         return True
-    except Exception as exc:  # noqa: BLE001 — policy sync must never block boot
+    except Exception as exc:  # noqa: BLE001; policy sync must never block boot
         print(
             f"[control_plane] policy sync failed ({type(exc).__name__}); "
             "durable tenancy policy keeps its previous value",
@@ -396,7 +396,7 @@ def begin_brain_install(
             # finished its cleanup would otherwise lock re-install forever (the
             # /slack/start route turns this False into a bogus 503 "connection
             # persistence failed"). The token is already revoked at that point,
-            # so resetting to a fresh pending install is safe — the stale
+            # so resetting to a fresh pending install is safe; the stale
             # disconnect marker is dropped below. Only a still-connected row
             # keeps "connected" while its OAuth is re-initiated.
             status = "connected" if current_status == "connected" else "pending"
@@ -892,7 +892,7 @@ def set_connection(
     status: str,
     config: dict | None = None,
 ) -> Optional[bool]:
-    """Durable upsert of one (org, avatar, provider) connection — the Postgres
+    """Durable upsert of one (org, avatar, provider) connection; the Postgres
     mirror of store.set_connection (same validation; config is NON-SECRET
     wiring only). None when disabled; False on invalid input; True on write."""
     if not enabled():
@@ -933,7 +933,7 @@ def set_connection(
 
 
 def get_connections(org_id: str) -> Optional[list[dict[str, Any]]]:
-    """Every durable connection row for an org (config parsed) — the Postgres
+    """Every durable connection row for an org (config parsed); the Postgres
     mirror of store.connections_for_org. None when disabled."""
     if not enabled():
         return None
@@ -1193,7 +1193,7 @@ def get_billing(org_id: str) -> Optional[dict]:
     if not enabled() or not (org_id or "").strip():
         return None
     # A session-shaped personal identity (u_<hash>) has no billing_accounts row
-    # and would crash the RLS org_id uuid cast — the /billing/summary 500.
+    # and would crash the RLS org_id uuid cast; the /billing/summary 500.
     if not _is_uuid(org_id.strip()):
         return None
     from sqlalchemy import text
@@ -1237,7 +1237,7 @@ def is_durable_org(org_id: str) -> bool:
     """True when this org is a durable control-plane tenant (a real UUID), not a
     personal session identity (``u_<hash>``). Durable writes cast org_id to uuid
     and RLS pins ``app.current_org::uuid``, so a session-shaped id must never
-    reach a durable write — it fails the cast and, in the connect/disconnect
+    reach a durable write; it fails the cast and, in the connect/disconnect
     paths, surfaces as a bogus "connection persistence failed" 503. Personal
     orgs fall back to the SQLite store (the pre-control-plane behavior). Mirrors
     the ``_is_uuid`` guard ``member_role`` already applies to reads."""

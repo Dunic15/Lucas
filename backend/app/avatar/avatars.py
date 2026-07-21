@@ -33,10 +33,10 @@ class Avatar:
     speak_cooldown_seconds: float
     dir: Path
     # Other avatar folders whose knowledge/ is indexed INTO this avatar too
-    # (e.g. laura references the "sff" pack instead of copying its files —
+    # (e.g. laura references the "sff" pack instead of copying its files -
     # real-world packs live in exactly one place).
     knowledge_packs: list[str] = None  # type: ignore[assignment]
-    # Pose/gesture set for the /talk renderer ("F" | "M") — appended to the bot
+    # Pose/gesture set for the /talk renderer ("F" | "M"); appended to the bot
     # page URL as ?body=; TalkingHead picks its masculine vs feminine idle set.
     # Defaulted so existing avatars (and tests building Avatar directly) are
     # untouched; the loader normalizes whatever avatar.yaml says.
@@ -45,7 +45,7 @@ class Avatar:
     # its docs become part of the pre-meeting brief. "" = no folder.
     drive_folder_id: str = ""
     # Silent notetaker mode: the avatar joins, listens, tracks the whole meeting
-    # and builds/delivers the artifact at the end — but NEVER speaks during the
+    # and builds/delivers the artifact at the end; but NEVER speaks during the
     # call (no greeting, answers, interventions, or nudges). For "just take
     # notes and hand off to Slack" rather than a talking participant.
     silent: bool = False
@@ -53,12 +53,12 @@ class Avatar:
     # True = the avatar speaks ONLY when addressed by name: no unprompted
     # answers, backchannels, joiner greetings, quiet nudges, interjections,
     # or closing interventions. The one-time self-introduction on join is
-    # deliberately KEPT (floor-gated, at a silence) — in wake-word mode it is
+    # deliberately KEPT (floor-gated, at a silence); in wake-word mode it is
     # the only way a room learns how to call the avatar in. Follow-ups right
     # after the avatar's own answer also remain (a reply to her is not an
     # interruption). Sits between full conversational (False) and silent.
     require_wake_word: bool | None = None
-    # Which face this avatar wears in meetings — the product's two tiers:
+    # Which face this avatar wears in meetings; the product's two tiers:
     #   "talk"      -> free 3D model (TalkingHead, renders in the bot browser)
     #   "photoreal" -> Ultra-HD photoreal face (Ditto on the GPU box)
     #   ""          -> follow the global default (settings.avatar_page)
@@ -70,7 +70,7 @@ class Avatar:
     face_fallback: str = "talk"
     talk_model: str = ""
     photoreal_reference: str = ""
-    # Optional standing MISSION for this avatar's meetings — an objective she
+    # Optional standing MISSION for this avatar's meetings; an objective she
     # keeps in mind and RESURFACES if left unmet ("on an investor call, if they
     # haven't covered market size, raise it"). A per-session mission
     # (MeetingContext.mission) overrides this default. "" = no mission = today's
@@ -87,7 +87,7 @@ class Avatar:
     tasks: list[dict] = None  # type: ignore[assignment]
     # Avatar-specific NATIVE tools this avatar is purpose-built for, declared in
     # avatar.yaml (e.g. Petra -> ["asana"]). These default ON for THIS avatar
-    # only — every other avatar defaults them OFF even when the org has
+    # only; every other avatar defaults them OFF even when the org has
     # connected them (a per-avatar dashboard toggle can still override). Google
     # Calendar + Gmail are NOT listed here: they are BASELINE for every avatar.
     # [] = only the baseline tools.
@@ -99,7 +99,7 @@ class Avatar:
 
     @property
     def page(self) -> str:
-        """The renderer page this avatar's bot camera shows — its own `face`
+        """The renderer page this avatar's bot camera shows; its own `face`
         tier when set, else the global default. Values match the route names
         ("talk" | "photoreal" | "avatar")."""
         return self.face or settings.avatar_page
@@ -182,7 +182,7 @@ def _normalize_tasks(raw_tasks) -> list[dict]:
             raw_triggers = [raw_triggers]
         triggers = [str(t).strip() for t in raw_triggers if str(t).strip()]
         # A hint needs something to recognize (triggers) and something to record
-        # (an action or at least a name) — otherwise it can't bias anything.
+        # (an action or at least a name); otherwise it can't bias anything.
         if not triggers or not (name or action):
             continue
         out.append(
@@ -191,8 +191,8 @@ def _normalize_tasks(raw_tasks) -> list[dict]:
     return out
 
 
-# Config cache. The live webhook loads the avatar on EVERY transcript event —
-# and partial events arrive several times a second while anyone talks — so an
+# Config cache. The live webhook loads the avatar on EVERY transcript event -
+# and partial events arrive several times a second while anyone talks; so an
 # uncached YAML read is sync disk I/O on the hot path. Keyed by path + mtime:
 # an edited avatar.yaml or a freshly scaffolded avatar is picked up without a
 # restart, and tests that point avatars_dir elsewhere never collide.
@@ -275,9 +275,9 @@ def is_internal(avatar_id: str) -> bool:
     """Whether this id is an INTERNAL persona (settings.internal_avatar_ids):
     hidden from every roster and refused by session dispatch for every caller.
     The folder may still exist (its removal is a separate track) and load()
-    still works for direct/legacy uses — this only gates listing + dispatch.
+    still works for direct/legacy uses; this only gates listing + dispatch.
     Reviewed decision (2026-07-13): /demo/ask can still load an internal
-    avatar by explicit id — the guard is dispatch-scoped (per-minute meter +
+    avatar by explicit id; the guard is dispatch-scoped (per-minute meter +
     meeting presence), not knowledge-access control; folder removal (Codex's
     track) closes the rest."""
     return (avatar_id or "").strip().lower() in settings.internal_avatar_id_set
@@ -285,9 +285,9 @@ def is_internal(avatar_id: str) -> bool:
 
 def list_ids() -> list[str]:
     """Installed, LISTABLE avatar folders. Internal personas
-    (settings.internal_avatar_ids) are excluded here — the single choke point
+    (settings.internal_avatar_ids) are excluded here; the single choke point
     all rosters flow through (/avatars, dashboard, org grants, invite-tag
-    routing) — so an internal folder can never be enumerated or summoned by
+    routing); so an internal folder can never be enumerated or summoned by
     tag even while it exists on disk. load() is deliberately NOT filtered."""
     root = settings.avatars_dir
     if not root.exists():
@@ -303,7 +303,7 @@ def list_for_org(org_id: str) -> list[str]:
     """The avatar ids a member of ``org_id`` may call, sorted.
 
     An org with explicit grants (org_agents rows) sees ONLY those, intersected
-    with the avatars that still exist as folders — a revoked/renamed folder
+    with the avatars that still exist as folders; a revoked/renamed folder
     never yields a dead entry. An org with NO grants (personal orgs, the Demo
     org, an unknown org) sees EVERY installed avatar: today's behavior, kept
     backward-compatible for the key-free demo and personal-org logins.
@@ -319,7 +319,7 @@ def list_for_org(org_id: str) -> list[str]:
         # Grants exist but every one references a missing folder (e.g. a folder
         # was renamed/removed without updating org_agents). Fail OPEN to all
         # avatars rather than handing the org a dead, empty dashboard. org_id is
-        # a synthetic id + a count — no PII/transcript in this log.
+        # a synthetic id + a count; no PII/transcript in this log.
         _log.warning(
             "org %s has %d agent grant(s) but none resolve to a folder; "
             "falling back to all avatars",
@@ -333,7 +333,7 @@ def list_for_org(org_id: str) -> list[str]:
 # ── every avatar gets an email address, for free ──────────────────────
 # The platform watches ONE inbox (the calendar/Gmail account). Gmail plus-
 # aliases make that inbox an address PER AVATAR with zero extra accounts:
-# inviting  laura.ai.122222+cedric@gmail.com  is "Cedric's email" — same
+# inviting  laura.ai.122222+cedric@gmail.com  is "Cedric's email": same
 # inbox, and the +tag names the avatar that should join. The bare address
 # (or an unknown tag) stays the default avatar.
 
@@ -350,7 +350,7 @@ def from_invite_email(addresses: "Iterable[str]", bases: "Iterable[str]") -> str
 
     `addresses` are the invite/recipient emails seen on the event or message;
     `bases` the configured inbox address(es). Only a tag that matches an
-    installed avatar id counts — anything else falls back to the caller's
+    installed avatar id counts; anything else falls back to the caller's
     default, so a typo'd tag can never summon a ghost."""
     known = set(list_ids())
     base_keys = set()

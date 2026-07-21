@@ -1,6 +1,6 @@
 """RAG index stale-detection: editing a knowledge doc triggers a rebuild.
 
-Before the per-source signature, an index built once stayed silently stale —
+Before the per-source signature, an index built once stayed silently stale -
 you could edit/add/remove a knowledge doc and retrieval kept answering from
 the old content until someone manually ran ingest. Key-free (hash embedder).
 """

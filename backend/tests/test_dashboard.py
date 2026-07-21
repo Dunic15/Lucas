@@ -1,8 +1,8 @@
-"""Dashboard API (/dashboard/*) — the owner control view.
+"""Dashboard API (/dashboard/*); the owner control view.
 
 Key-free like the rest of the suite: sqlite in tmp_path, no vendors touched.
 The critical property under test: the summary endpoint serves DISTILLED data
-only — a transcript stored in an artifact must never appear in the response.
+only; a transcript stored in an artifact must never appear in the response.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ SECRET_LINE = "duccio: the acquisition price is nine million"
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LAURA_STORE_PATH", str(tmp_path / "store.sqlite3"))
     importlib.reload(store)
-    importlib.reload(ledger)  # shares the sqlite file — needs its tables too
+    importlib.reload(ledger)  # shares the sqlite file; needs its tables too
     return TestClient(main_module.app)
 
 
@@ -89,7 +89,7 @@ def test_summary_shape_and_attribution(client):
     assert stats["avg_readiness_30d"] == 78
     assert len(stats["weekly"]) == 8 and sum(stats["weekly"]) == 1
 
-    # Connections are booleans only — never secrets.
+    # Connections are booleans only; never secrets.
     assert all(isinstance(v, bool) for v in data["connections"].values())
     # Every connectable tool the Connections tab renders is a bool flag here,
     # including the self-serve Jira connector.
@@ -118,7 +118,7 @@ def test_summary_settings_carries_graphiti_status(client, monkeypatch):
 
 def test_stats_include_roi_framing(client):
     """The stats block surfaces OUTCOMES (actions executed, follow-ups
-    automated, follow-up hours saved), not just note-taking — all derived from
+    automated, follow-up hours saved), not just note-taking; all derived from
     the real counts, existing keys untouched."""
     _seed_artifact()  # 1 action, 1 follow-up, readiness 78, no execution
     stats = client.get("/dashboard/summary").json()["stats"]
@@ -137,7 +137,7 @@ def test_stats_include_roi_framing(client):
 
 def test_meeting_delivered_summary(client):
     """Each meeting row carries the captured→DELIVERED chips derived from the
-    artifact (actions / decisions / follow-up / readiness) — proof Laura
+    artifact (actions / decisions / follow-up / readiness); proof Laura
     produced outcomes, not just notes."""
     _seed_artifact()  # 1 action, 1 decision, follow-up subject, readiness 78
     m = client.get("/dashboard/summary").json()["meetings"][0]
@@ -174,7 +174,7 @@ def test_summary_respects_bearer_gate(client, monkeypatch):
 
 
 def test_hidden_avatar_excluded_and_enriched(client):
-    """sff is a knowledge pack (hidden: true) — not a callable avatar, so it must
+    """sff is a knowledge pack (hidden: true); not a callable avatar, so it must
     NOT appear in the dashboard list; Laura/Cedric must, with capabilities."""
     _seed_artifact()
     data = client.get("/dashboard/summary").json()

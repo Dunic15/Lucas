@@ -5,9 +5,9 @@ about the..." and "What's the deadline?" both end in silence, but one speaker
 is mid-thought and the other is waiting for an answer. Humans read this from
 the words instantly; Laura should too.
 
-`completeness(text)` returns 0..1 — the likelihood the speaker has finished
+`completeness(text)` returns 0..1; the likelihood the speaker has finished
 their thought. It feeds `decision.adaptive_deference_seconds`, which SIZES the
-deference wait (never the decision of whether to speak — the post-sleep yield
+deference wait (never the decision of whether to speak; the post-sleep yield
 check and the in-stream SKIP gate stay in charge of that, so a wrong estimate
 can only ever cost latency, never emit unaddressed speech).
 
@@ -15,11 +15,11 @@ v1 is a linguistic heuristic: zero network, zero model download, ~microseconds,
 bilingual IT/EN. It reads these signals in risk-aware order:
   1. a trailing ellipsis holds the floor;
   2. a terminal question mark is the strongest "done" signal a transcript carries;
-  3. trailing INCOMPLETENESS markers — a conjunction, preposition, article or
-     filler ("about the", "e quindi", "with a") — otherwise hold the floor;
+  3. trailing INCOMPLETENESS markers: a conjunction, preposition, article or
+     filler ("about the", "e quindi", "with a"); otherwise hold the floor;
   4. remaining punctuation and length resolve the less certain cases.
 
-v2 (the planned upgrade, do NOT bolt onto this file): pipecat smart-turn v3 —
+v2 (the planned upgrade, do NOT bolt onto this file): pipecat smart-turn v3 -
 an 8M-param audio model (BSD-2, ~12ms on CPU, Italian included) fed by Recall's
 realtime per-participant audio. That needs a websocket RECEIVER, and App Runner
 403s inbound WebSocket upgrades at the edge, so the receiver must live elsewhere
@@ -36,7 +36,7 @@ import unicodedata
 
 # Words that essentially never END a finished thought (lowercase match on the
 # final token, punctuation stripped). Bilingual: Laura works in IT and EN.
-# Deliberately high-precision — a false "incomplete" only adds ~1s of wait.
+# Deliberately high-precision; a false "incomplete" only adds ~1s of wait.
 _TRAILING_INCOMPLETE = {
     # EN: conjunctions / prepositions / articles / auxiliaries
     "and", "or", "but", "so", "because", "if", "then", "that", "which",
@@ -53,7 +53,7 @@ _TRAILING_INCOMPLETE = {
     "molto", "davvero", "abbastanza",
 }
 
-# Fillers that mark a held floor ("uhm", "allora...") — mid-thought pauses.
+# Fillers that mark a held floor ("uhm", "allora..."); mid-thought pauses.
 _TRAILING_FILLER = {
     "uh", "um", "uhm", "erm", "hmm", "like", "you know",
     "ehm", "cioè", "allora", "diciamo", "insomma", "tipo", "vediamo",
@@ -98,7 +98,7 @@ def completeness(text: str) -> float:
     if not t:
         return 0.0
 
-    # Trailing ellipsis is a spoken "..." — the transcriber heard the trail-off.
+    # Trailing ellipsis is a spoken "...": the transcriber heard the trail-off.
     if t.endswith(("...", "…")):
         return 0.15
 
@@ -120,7 +120,7 @@ def completeness(text: str) -> float:
         return 0.85
     if t.endswith("."):
         # Punctuated, but a 1-2 word "sentence" is often a transcriber artifact
-        # ("So." / "Allora.") — treat short ones as weaker evidence.
+        # ("So." / "Allora."); treat short ones as weaker evidence.
         return 0.85 if words >= 3 else 0.6
     # No terminal punctuation (common in live ASR): length is the tiebreaker.
     if words <= 2:

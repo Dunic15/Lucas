@@ -1,15 +1,15 @@
-"""Graphiti grounding — an optional temporal knowledge-graph memory for the
+"""Graphiti grounding; an optional temporal knowledge-graph memory for the
 PM avatar (Petra).
 
 OFF by default and byte-identical to today when unconfigured. This is a thin,
 best-effort wrapper around graphiti-core (an EXTERNAL dependency plus a graph
-database — Neo4j or FalkorDB — that a deployment must provision; see
+database, Neo4j or FalkorDB, that a deployment must provision; see
 docs/GRAPHITI.md). When GRAPHITI_ENABLED is set, the graph-DB creds are
 present, AND graphiti-core is installed, it does two things:
 
-  * ingest()  — feeds the org's Asana snapshot (or any text) into the graph as
+  * ingest(): feeds the org's Asana snapshot (or any text) into the graph as
                 a temporal "episode" at meeting join, off the hot path.
-  * recall()  — at answer time, hybrid-searches the graph for the question and
+  * recall(): at answer time, hybrid-searches the graph for the question and
                 returns a compact fact block to fold into the avatar's brief,
                 bounded by a STRICT timeout so the live path never stalls.
 
@@ -18,7 +18,7 @@ workspace's graph is never visible to another.
 
 Every path is best-effort and NEVER raises into the caller: a missing
 dependency, an unprovisioned/slow graph DB, or a failed search degrades to
-today's flat-snapshot behavior. Latency is the product — recall() is the only
+today's flat-snapshot behavior. Latency is the product; recall() is the only
 call on the live path and it is timeout-bounded; a miss falls back silently.
 
 NOTE (untested-live): the graphiti-core calls here follow its documented API
@@ -36,7 +36,7 @@ from ..config import settings
 # graphiti-core reads EMBEDDING_DIM at import to size its internal zero-vector
 # fallback. Our embedder is LOCAL fastembed (384-dim), not OpenAI (1024), so pin
 # it from config BEFORE graphiti_core is ever imported (that import is lazy,
-# inside _construct — this runs at app boot, well before it). Operators override
+# inside _construct; this runs at app boot, well before it). Operators override
 # via GRAPHITI_EMBEDDING_DIM.
 os.environ["EMBEDDING_DIM"] = str(settings.graphiti_embedding_dim)
 
@@ -49,14 +49,14 @@ _init_done = False
 _unavailable = False  # sticky: a failed import/connect disables the feature
 _warm_task = None     # strong ref to the in-flight background warm-up
 # add_episode reassigns the shared FalkorDB driver per group_id (getzep/graphiti
-# issue #1331) — serialize writes so concurrent orgs can't cross-contaminate.
+# issue #1331); serialize writes so concurrent orgs can't cross-contaminate.
 _write_lock = asyncio.Lock()
 
 
 def warm() -> None:
     """Kick a BACKGROUND graph-DB init if the client isn't ready and none is in
     flight. This is how the live path avoids ever awaiting init (connect +
-    build_indices — an unbounded network round-trip): recall() calls warm() and
+    build_indices; an unbounded network round-trip): recall() calls warm() and
     skips the graph for the current turn, so a slow/hung DB can never stall the
     spoken reply. Idempotent; no-op once warm or if the loop isn't running."""
     global _warm_task
@@ -66,7 +66,7 @@ def warm() -> None:
         return
     try:
         _warm_task = asyncio.create_task(_get_client())
-    except RuntimeError:  # no running loop — nothing to warm on
+    except RuntimeError:  # no running loop; nothing to warm on
         pass
 
 
@@ -87,7 +87,7 @@ def _group_id(org_id: str) -> str:
 
 
 def _construct():
-    """Build the Graphiti client wired to LAURA'S OWN stack — no OpenAI, no new
+    """Build the Graphiti client wired to LAURA'S OWN stack; no OpenAI, no new
     vendor key: Anthropic for LLM extraction (the existing anthropic_api_key),
     Laura's local fastembed for embeddings, and a local cosine reranker. All
     graphiti-core imports are lazy so a deployment without the optional
@@ -180,7 +180,7 @@ async def _get_client():
             client = _construct()
             await client.build_indices_and_constraints()
             _client = client
-        except Exception as e:  # noqa: BLE001 — must never break the app
+        except Exception as e:  # noqa: BLE001; must never break the app
             print(f"[graphiti] disabled — init failed ({type(e).__name__})", flush=True)
             _unavailable = True
             _client = None
@@ -206,7 +206,7 @@ async def ingest(
 
         # Bound the write: _write_lock is process-wide (FalkorDB race), so a
         # hung add_episode against a dead DB must NOT freeze every org's
-        # ingestion — cap it and release the lock (council 2026-07-20).
+        # ingestion; cap it and release the lock (council 2026-07-20).
         async with _write_lock:
             await asyncio.wait_for(
                 client.add_episode(
@@ -220,7 +220,7 @@ async def ingest(
                 timeout=settings.graphiti_ingest_timeout_s,
             )
         return True
-    except Exception as e:  # noqa: BLE001 — ingest never breaks the join
+    except Exception as e:  # noqa: BLE001; ingest never breaks the join
         print(f"[graphiti] ingest skipped ({type(e).__name__})", flush=True)
         return False
 
@@ -241,18 +241,18 @@ async def recall(
     """Hybrid-search the org's graph for `query`; return a compact fact block
     (one fact per line) or "" on empty/not-ready/timeout/failure.
 
-    Live-path safe (council 2026-07-20): init (connect + build_indices — an
+    Live-path safe (council 2026-07-20): init (connect + build_indices; an
     unbounded network round-trip) NEVER runs here. If the client isn't warm
     yet, kick a background warm-up and return "" for this turn (the caller
     falls back to the flat snapshot); the next question uses the warmed client.
     Only the already-connected search() is awaited, and it is strictly
-    timeout-bounded — so a slow/hung graph DB can never stall the spoken reply.
+    timeout-bounded; so a slow/hung graph DB can never stall the spoken reply.
     """
     query = (query or "").strip()
     if not query or not enabled():
         return ""
     if not _init_done:
-        # Not connected yet — warm in the background, skip the graph this turn.
+        # Not connected yet; warm in the background, skip the graph this turn.
         warm()
         return ""
     client = _client
@@ -268,7 +268,7 @@ async def recall(
     except asyncio.TimeoutError:
         print("[graphiti] recall timed out — using snapshot", flush=True)
         return ""
-    except Exception as e:  # noqa: BLE001 — a failed graph never blocks a reply
+    except Exception as e:  # noqa: BLE001; a failed graph never blocks a reply
         print(f"[graphiti] recall skipped ({type(e).__name__})", flush=True)
         return ""
     facts = [f"- {f}" for f in (_fact_of(r) for r in (results or [])) if f]
@@ -277,14 +277,14 @@ async def recall(
 
 async def ensure_ready() -> bool:
     """Block until the graph client is connected + indexed (or known-unavailable),
-    returning True when it is usable. For DIAGNOSTICS/smoke-tests ONLY — the live
+    returning True when it is usable. For DIAGNOSTICS/smoke-tests ONLY; the live
     answer path never blocks on init (it uses warm()+recall()). Lets an admin
     endpoint deterministically exercise ingest→recall on first hit."""
     return (await _get_client()) is not None
 
 
 def reset_for_tests() -> None:
-    """Clear the process singleton + sticky flags — mirrors the other clients'
+    """Clear the process singleton + sticky flags; mirrors the other clients'
     conftest resets so state can't leak between tests."""
     global _client, _init_done, _unavailable, _warm_task
     _client = None

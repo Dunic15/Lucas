@@ -377,7 +377,7 @@ def test_finalize_normal_leave_removes_and_delivers(fresh_store, monkeypatch):
 
 
 def test_finalize_404_gone_leave_still_removes(fresh_store, monkeypatch):
-    # A 404 "bot already gone" (natural end) is a CONFIRMED not-billing state — it
+    # A 404 "bot already gone" (natural end) is a CONFIRMED not-billing state; it
     # must finalize normally, not get stranded in leave_pending forever.
     delivered: list[str] = []
     _stub_finalize_offline(monkeypatch, delivered)
@@ -394,7 +394,7 @@ def test_finalize_404_gone_leave_still_removes(fresh_store, monkeypatch):
 @pytest.mark.parametrize("status", [401, 403, 429])
 def test_finalize_keeps_session_on_unverified_leave(fresh_store, monkeypatch, status):
     # BLOCKER 1: an auth/rate-limit failure (a rotated Recall key returns 401 on
-    # every leave) must be treated as UNVERIFIED — keep the session so reconcile
+    # every leave) must be treated as UNVERIFIED; keep the session so reconcile
     # retries, NOT silently "confirmed stopped" (which removed it → fleet leak).
     delivered: list[str] = []
     _stub_finalize_offline(monkeypatch, delivered)
@@ -461,7 +461,7 @@ def test_retry_leave_removes_on_success_and_signals_meter_once(fresh_store, monk
 
     assert asyncio.run(main._retry_leave("bot_x", s)) is True
     assert store.get("bot_x") is None
-    assert len(signals) == 2   # gpu + runpod, once each — no rebuild/re-deliver loop
+    assert len(signals) == 2   # gpu + runpod, once each; no rebuild/re-deliver loop
 
 
 def test_retry_leave_defers_to_in_flight_finalize(fresh_store, monkeypatch):
@@ -484,7 +484,7 @@ def test_retry_leave_defers_to_in_flight_finalize(fresh_store, monkeypatch):
 def test_store_reload_preserves_leave_pending(fresh_store):
     # BLOCKER 2: a deploy restart re-hydrates sessions from sqlite. leave_pending
     # must survive, else the session reverts to "in progress" and reconcile polls
-    # status instead of retrying the leave — the leak re-strands.
+    # status instead of retrying the leave; the leak re-strands.
     s = store.create("bot_persist", _MEET_URL, "laura")
     s.leave_pending = True                   # persisted via __setattr__
     store._load_from_db()                    # simulate a process restart
@@ -527,5 +527,5 @@ def test_reconcile_keeps_leave_pending_when_retry_still_fails(fresh_store, monke
 
     asyncio.run(main._reconcile_once())
 
-    assert store.get("bot_x") is not None  # still kept — retry again next pass
+    assert store.get("bot_x") is not None  # still kept; retry again next pass
     store.remove("bot_x")

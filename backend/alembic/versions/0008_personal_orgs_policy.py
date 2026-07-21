@@ -1,12 +1,12 @@
-"""Personal-first tenancy policy — gate domain→shared-org routing off.
+"""Personal-first tenancy policy; gate domain→shared-org routing off.
 
 Owner decision (2026-07-13, re-confirmed 2026-07-16): connections and
-workspaces are PERSONAL — one durable uuid org per user, including logins on
+workspaces are PERSONAL; one durable uuid org per user, including logins on
 a VERIFIED corporate domain. The shared-domain behavior is PARKED, not
 removed: a one-row policy table gates the "verified corporate domain wins"
 branch inside laura_private.ensure_user, default off. The app syncs the
 LAURA_SHARED_DOMAIN_ORGS env var into that row at boot (a SQL function cannot
-read a process env var) via the SECURITY DEFINER setter below — the same
+read a process env var) via the SECURITY DEFINER setter below; the same
 exact-entry-point discipline as every other laura_private function (0004).
 
 Existing shared orgs (e.g. the SFF org) are NOT touched: their orgs /
@@ -14,7 +14,7 @@ memberships / meeting history stay in place. A member whose only membership
 was the shared org simply falls through to ensure_user's personal-org branch
 on their next login and gets a fresh personal org (org + owner membership +
 org_agents + the 900s free billing account). A user who OWNS an org keeps
-resolving to it — for the legacy org's owner that org IS their personal org,
+resolving to it; for the legacy org's owner that org IS their personal org,
 which also keeps the old meeting history reachable from their dashboard.
 
 Revision ID: 0008_personal_orgs_policy
@@ -77,7 +77,7 @@ $roles$;
 
 # ensure_user, byte-compatible with 0004's contract, with ONE change: the
 # "verified corporate domain wins" branch only runs when the policy row says
-# shared_domain_orgs — otherwise every login resolves through the personal-org
+# shared_domain_orgs; otherwise every login resolves through the personal-org
 # branch (existing owned org, else a fresh personal bundle: org + owner
 # membership + org_agents laura/cedric + billing_accounts free/900s).
 _ENSURE_USER_PERSONAL_FIRST = """
@@ -186,7 +186,7 @@ BEGIN
 
   -- PERSONAL-FIRST POLICY (0008): the "verified corporate domain wins"
   -- branch is gated on the one-row policy table. Off (the default) means
-  -- every login — verified domain included — resolves to a PERSONAL org
+  -- every login, verified domain included, resolves to a PERSONAL org
   -- below. org_domains rows are untouched; flipping the row back on
   -- restores the parked shared-domain behavior unchanged.
   SELECT ps.shared_domain_orgs INTO v_shared_domain_orgs
@@ -272,7 +272,7 @@ def downgrade() -> None:
     # the policy row, then dropping the gate infrastructure. To avoid keeping
     # two full copies of the function in this file, downgrade re-enables the
     # branch structurally: set the row true (routing behaves as before) and
-    # leave the gated function in place — the table/setter stay because the
+    # leave the gated function in place; the table/setter stay because the
     # function body references them. True removal happens by re-running 0004's
     # CREATE OR REPLACE (documented in docs/infra; not automated here).
     op.execute(

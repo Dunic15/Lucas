@@ -1,8 +1,8 @@
-"""Graphiti grounding client — the optional temporal knowledge-graph memory.
+"""Graphiti grounding client; the optional temporal knowledge-graph memory.
 
 Key-free like the rest of the suite: graphiti-core is NOT installed here, so
 these tests drive the module through a MOCK client (monkeypatching _get_client)
-and assert the contract that matters — off by default, per-org partitioning,
+and assert the contract that matters; off by default, per-org partitioning,
 best-effort ingest, and a strictly timeout-bounded recall that degrades to ""
 so the live answer path never stalls.
 """
@@ -46,7 +46,7 @@ def fake(monkeypatch):
     """Enable the feature and swap the connected client for a fake."""
     monkeypatch.setattr(settings, "graphiti_enabled", True)
     monkeypatch.setattr(settings, "graphiti_uri", "neo4j://localhost:7687")
-    # graphiti-core isn't installed in the key-free suite — inject a minimal
+    # graphiti-core isn't installed in the key-free suite; inject a minimal
     # fake so ingest()'s `from graphiti_core.nodes import EpisodeType` resolves.
     core = types.ModuleType("graphiti_core")
     nodes = types.ModuleType("graphiti_core.nodes")
@@ -59,7 +59,7 @@ def fake(monkeypatch):
     monkeypatch.setitem(sys.modules, "graphiti_core.nodes", nodes)
 
     client = _FakeGraphiti()
-    # Simulate a client already WARMED off the hot path (init done at join) —
+    # Simulate a client already WARMED off the hot path (init done at join) -
     # recall() uses _client directly and never inits on the live path.
     monkeypatch.setattr(graphiti_client, "_client", client)
     monkeypatch.setattr(graphiti_client, "_init_done", True)

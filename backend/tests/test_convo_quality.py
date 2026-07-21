@@ -35,7 +35,7 @@ def test_repetition_guard_expires(monkeypatch):
     monkeypatch.setattr(settings, "repeat_suppress_seconds", 0.05)
     assert _speak(s, "Hello there team") is True
     time.sleep(0.06)
-    assert _speak(s, "Hello there team") is True  # window elapsed — allowed again
+    assert _speak(s, "Hello there team") is True  # window elapsed; allowed again
 
 
 def test_speaking_window_extends_with_queued_lines():
@@ -102,7 +102,7 @@ def test_backchannel_only_on_long_quiet_monologue(monkeypatch):
     s3 = _session("bc-3"); s3.last_spoke_at = time.time() - 60
     s3.speaking_until = time.time() + 5
     assert main._should_backchannel(s3, long_text) is False
-    # she spoke moments ago (ack/answer) — stay quiet
+    # she spoke moments ago (ack/answer); stay quiet
     s4 = _session("bc-4"); s4.last_spoke_at = time.time() - 2
     assert main._should_backchannel(s4, long_text) is False
     # kill switch

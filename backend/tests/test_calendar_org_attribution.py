@@ -1,13 +1,13 @@
 """Calendar auto-join must meter the org that OWNS the meeting, not demo_org.
 
 The dispatch path is a webhook with no authenticated principal, so ownership
-is resolved from the event itself — ORGANIZER ONLY, matched against the org's
+is resolved from the event itself. ORGANIZER ONLY, matched against the org's
 connected Google account (org_oauth.email) or a registered user (users.email).
 Attendees never attribute: an external meeting that merely invites a
 registered user must not bill that guest's org (cross-tenant risk). Events
 with a missing/unknown/avatar-alias organizer keep the pre-fix Demo-org
 behavior, and a personal u_<hash> match falls back too (it would fail the
-usage-gate uuid cast and kill the join — strictly worse than demo).
+usage-gate uuid cast and kill the join; strictly worse than demo).
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ ACME_ORG = "bf4a683b-1111-4222-8333-444455556666"  # durable uuid tenant
 
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
-    # Default: control plane off (key-free mode) — durability guard inactive.
+    # Default: control plane off (key-free mode); durability guard inactive.
     monkeypatch.setattr(control_plane, "enabled", lambda: False)
     # set_org_oauth encrypts at rest and fails closed without a key.
     monkeypatch.setattr(settings, "google_token_enc_key", "")
@@ -66,7 +66,7 @@ def test_unresolvable_event_falls_back_to_demo(monkeypatch):
 
 
 def test_avatar_alias_organizer_never_attributes(monkeypatch):
-    """An avatar-alias organizer (incl. plus-tags) resolves nothing — and
+    """An avatar-alias organizer (incl. plus-tags) resolves nothing; and
     attendees are NOT consulted as a fallback."""
     calls = []
 

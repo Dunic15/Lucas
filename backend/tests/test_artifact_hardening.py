@@ -1,5 +1,5 @@
 """Post-meeting artifact never ships a garbled recap, even when the model emits
-malformed JSON or echoes transcript chunks into a list field. Deterministic —
+malformed JSON or echoes transcript chunks into a list field. Deterministic -
 no model, no keys."""
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ def test_transcript_echoed_into_decisions_is_filtered():
 def test_post_meeting_degraded_model_yields_real_summary(monkeypatch):
     """The empty-summary bug: when the post model returns unusable output
     (truncated/non-JSON), post_meeting must rebuild a REAL recap from the
-    deterministic tracker — a non-empty summary + email — never a blank artifact.
+    deterministic tracker, a non-empty summary + email, never a blank artifact.
     Before the fix this shipped summary "" with participation intact."""
     from app import avatars
     from app.config import settings
@@ -90,7 +90,7 @@ def test_post_meeting_degraded_model_yields_real_summary(monkeypatch):
     )
     art = brain.post_meeting(avatar, transcript)
 
-    assert art["summary"].strip()  # NEVER empty — this is the whole point
+    assert art["summary"].strip()  # NEVER empty; this is the whole point
     assert "incomplete result" in art["summary"]  # degrade mode note, not stub note
     assert art["follow_up_email"].get("body")  # email is populated too
     # Participation still comes from the tracker (unchanged behaviour).

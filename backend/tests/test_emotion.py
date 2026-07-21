@@ -53,7 +53,7 @@ def test_default_is_neutral_everywhere():
 def test_ditto_indices_match_ditto_emotion_order():
     # Ditto's order (its condition_handler.py): 0 Angry, 1 Disgust, 2 Fear,
     # 3 Happy, 4 Neutral, 5 Sad, 6 Surprise, 7 Contempt. A wrong index here
-    # means a wrong FACE (happy praise rendered as disgust) — pin them.
+    # means a wrong FACE (happy praise rendered as disgust); pin them.
     assert emotion.ditto_emo("happy") == 3
     assert emotion.ditto_emo("excited") == 3
     assert emotion.ditto_emo("concerned") == 5

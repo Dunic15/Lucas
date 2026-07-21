@@ -3,11 +3,11 @@
 A session started with a `callback_url` gets three kinds of events POSTed back
 (see the Cedric X Laura project's docs/04-api-contract.md):
 
-  - session.status    — best-effort, single attempt (joining / live / failed).
-  - session.ended     — the full artifact; retried with backoff because losing
+  - session.status: best-effort, single attempt (joining / live / failed).
+  - session.ended: the full artifact; retried with backoff because losing
                         it means the orchestrator has to fall back to polling.
-  - action.requested  — someone asked the avatar to DO something mid-meeting
-                        (tools.queue_action); best-effort, single attempt —
+  - action.requested: someone asked the avatar to DO something mid-meeting
+                        (tools.queue_action); best-effort, single attempt -
                         the artifact's actions[] is the authoritative list.
 
 Requests are signed with `X-Laura-Signature: t=<unix_ts>,v1=<hmac_sha256_hex>`
@@ -16,7 +16,7 @@ carry a per-workspace bearer for customer orgs. The deployment-level
 `LAURA_WEBHOOK_TOKEN` remains only for the Demo/legacy service path.
 
 Everything here is best-effort by design: a callback failure must NEVER block
-or fail the meeting lifecycle (finalize already saved the artifact — the
+or fail the meeting lifecycle (finalize already saved the artifact; the
 orchestrator can always poll GET /sessions/{bot_id}/artifact). All functions
 are sync (called via run_in_threadpool / background tasks).
 """
@@ -88,7 +88,7 @@ def _bearer_for(org_id: str, legacy: str = "") -> str:
     A real customer org uses Cedric's per-workspace bearer WHEN ONE EXISTS, but
     Cedric's shipped install contract sends only the per-org HMAC secret (never a
     per-org bearer), so ``secret_registry.bearer_for`` is empty for those orgs.
-    Fall back to the deployment-level ``legacy`` bearer in that case — Cedric's
+    Fall back to the deployment-level ``legacy`` bearer in that case. Cedric's
     ``verifyLauraContextBearer``/``verifyLauraBearer`` accept it and event/context
     calls still verify the per-org HMAC. Without this fallback the org-provisioning
     DELETE (disconnect) sent NO Authorization header → Cedric 401 → the dashboard
@@ -176,7 +176,7 @@ def _now_iso() -> str:
 
 
 def dispatch_url() -> str:
-    """{cedric_base}/api/laura/actions — the dispatch-action door from the
+    """{cedric_base}/api/laura/actions; the dispatch-action door from the
     tenancy contract (referenced as the route=cedric execution path by the
     AGREED action-lifecycle contract, clause B2). "" when unconfigured."""
     orgs = settings.cedric_orgs_url.strip()
@@ -197,12 +197,12 @@ def _team_id_for(org_id: str) -> str:
             None,
         )
         return str((brain.get("config") or {}).get("team_id") or "") if brain else ""
-    except Exception:  # noqa: BLE001 — an unlinked org just dispatches without it
+    except Exception:  # noqa: BLE001; an unlinked org just dispatches without it
         return ""
 
 
 def dispatch_action(org_id: str, action: dict, approved_by: str = "") -> dict:
-    """handshake operation: dispatch-action (A->B) — hand an APPROVED action to
+    """handshake operation: dispatch-action (A->B); hand an APPROVED action to
     Cedric for execution through its connectors.
 
     Called by both approval doors (dashboard + /org approve) for
@@ -211,7 +211,7 @@ def dispatch_action(org_id: str, action: dict, approved_by: str = "") -> dict:
     re-ask), idempotency_key = action_id (exactly-once on B), signed with the
     per-org HMAC stack (_post fails closed for unlinked orgs). Soft contract:
     2xx -> accepted; 404/405 -> B hasn't built the receiver yet
-    (dispatch_endpoint_missing — the action stays approved and Cedric's
+    (dispatch_endpoint_missing; the action stays approved and Cedric's
     legacy action.requested loop remains the pickup path); 422 ->
     unsupported type on B. Never raises."""
     url = dispatch_url()
@@ -225,7 +225,7 @@ def dispatch_action(org_id: str, action: dict, approved_by: str = "") -> dict:
     if atype == "task.freeform":
         # Untyped item: ship the distilled fields so Cedric's agent can act on
         # them (never transcript content). B may 422 until freeform lands in
-        # the contract — reported honestly, not retried.
+        # the contract; reported honestly, not retried.
         args = {
             "item": str(action.get("item") or "")[:300],
             "owner": str(action.get("owner") or "")[:80],
@@ -246,7 +246,7 @@ def dispatch_action(org_id: str, action: dict, approved_by: str = "") -> dict:
     }
     try:
         resp = _post(url, payload, idempotency_key=aid)
-    except Exception as e:  # noqa: BLE001 — dispatch must never break an approval
+    except Exception as e:  # noqa: BLE001; dispatch must never break an approval
         print(f"[cedric-callback] dispatch failed for {aid!r}: {type(e).__name__}", flush=True)
         return {"ok": False, "reason": f"dispatch_error_{type(e).__name__}"}
     if 200 <= resp.status_code < 300:
@@ -259,7 +259,7 @@ def dispatch_action(org_id: str, action: dict, approved_by: str = "") -> dict:
 
 
 def events_url() -> str:
-    """{cedric_base}/api/laura/events — the durable per-org events door from
+    """{cedric_base}/api/laura/events; the durable per-org events door from
     the agreed action-lifecycle contract (handshake operation: action-events).
     Derived from CEDRIC_ORGS_URL the same way install_state derives the base;
     "" when the orchestrator isn't configured (feature silently off)."""
@@ -275,7 +275,7 @@ def send_action_event(org_id: str, event: str, fields: dict) -> bool:
     ...fields, event_id, at}. Signed with the per-org HMAC stack (_post fails
     closed for unprovisioned orgs, so an org without a Cedric link is a clean
     no-op). ECHO SUPPRESSION (contract): events that RE-REPORT a B-authored
-    status MUST carry the ORIGINATING event_id in ``fields`` — B treats its
+    status MUST carry the ORIGINATING event_id in ``fields``: B treats its
     own event_id as already-rendered; A-authored events get a fresh id here.
     Single attempt (callers needing durability enqueue via the outbox);
     responses are {ok:true} only per contract — nothing is read back."""
@@ -294,7 +294,7 @@ def send_action_event(org_id: str, event: str, fields: dict) -> bool:
     try:
         resp = _post(url, payload)
         return 200 <= resp.status_code < 300
-    except Exception as e:  # noqa: BLE001 — events must never break their caller
+    except Exception as e:  # noqa: BLE001; events must never break their caller
         print(f"[cedric-callback] action event '{event}' delivery failed: {e}", flush=True)
         return False
 
@@ -319,7 +319,7 @@ def send_status(
     try:
         resp = _post(url, payload)
         return 200 <= resp.status_code < 300
-    except Exception as e:  # noqa: BLE001 — never let a callback break the call
+    except Exception as e:  # noqa: BLE001; never let a callback break the call
         print(f"[cedric-callback] status '{status}' delivery failed: {e}", flush=True)
         return False
 
@@ -328,7 +328,7 @@ def send_action_requested(integration: dict | None, bot_id: str, item: dict) -> 
     """POST an action.requested event the moment the avatar queues an action
     request live (tools.queue_action), so the orchestrator's approval card is
     ready before the meeting ends. Same discipline as session.status: single
-    attempt, best-effort — the artifact's actions[] in session.ended is the
+    attempt, best-effort; the artifact's actions[] in session.ended is the
     authoritative, complete list. PII rule: only the distilled action text /
     owner / due ever leave — never transcript content."""
     url = (integration or {}).get("callback_url") or ""
@@ -339,7 +339,7 @@ def send_action_requested(integration: dict | None, bot_id: str, item: dict) -> 
         "bot_id": bot_id,
         # Stable per-action id: the same value appears on this action inside the
         # later session.ended artifact, so the orchestrator matches its live
-        # approval card to the final action (and dedupes) on the id — and passes
+        # approval card to the final action (and dedupes) on the id; and passes
         # it back to POST /org/actions/{action_id}/resolve to close the loop.
         "action_id": (item or {}).get("action_id", ""),
         "org_id": (integration or {}).get("org_id") or "",
@@ -354,7 +354,7 @@ def send_action_requested(integration: dict | None, bot_id: str, item: dict) -> 
         ok = 200 <= resp.status_code < 300
         # PII-safe telemetry (action_id + HTTP status only, never the action
         # text): a live "Cedric said he could but did nothing" report is
-        # undiagnosable otherwise — a non-2xx from the surface used to be
+        # undiagnosable otherwise; a non-2xx from the surface used to be
         # swallowed here (returned False silently, no log).
         print(
             "[cedric-callback] action.requested "
@@ -363,14 +363,14 @@ def send_action_requested(integration: dict | None, bot_id: str, item: dict) -> 
             flush=True,
         )
         return ok
-    except Exception as e:  # noqa: BLE001 — never let a callback break the call
+    except Exception as e:  # noqa: BLE001; never let a callback break the call
         print(f"[cedric-callback] action.requested delivery failed: {e}", flush=True)
         return False
 
 
 def send_ended(integration: dict | None, bot_id: str, artifact: dict) -> bool:
     """POST the session.ended event with the artifact. Retries on any failure
-    (ENDED_BACKOFF schedule); gives up after the last attempt — the artifact
+    (ENDED_BACKOFF schedule); gives up after the last attempt; the artifact
     stays available at GET /sessions/{bot_id}/artifact for polling."""
     url = (integration or {}).get("callback_url") or ""
     if not url:
@@ -390,7 +390,7 @@ def send_ended(integration: dict | None, bot_id: str, artifact: dict) -> bool:
         try:
             resp = _post(url, payload)
             if 200 <= resp.status_code < 300:
-                # Confirms the surface actually ACCEPTED the artifact — the
+                # Confirms the surface actually ACCEPTED the artifact; the
                 # [finalize] orchestrated=True flag only means a callback_url
                 # was set + the POST was fired, not that Cedric received it.
                 print(
@@ -428,8 +428,8 @@ def _context_request_url(integration: dict | None) -> str:
         so the returned brief names THIS call's people, not just the workspace.
 
     Query params already present in the configured URL are preserved, and an
-    explicit value there wins (never duplicated). Meeting metadata only —
-    attendee display names and the title, never transcript content — rides
+    explicit value there wins (never duplicated). Meeting metadata only -
+    attendee display names and the title, never transcript content; rides
     this URL."""
     url = (integration or {}).get("context_url") or ""
     if not url:
@@ -468,7 +468,7 @@ def fetch_context(integration: dict | None) -> dict | None:
     """GET the session's context_url for a fresh brief at join time.
 
     Returns the parsed `context` object ({"meeting": ..., "brief_markdown": ...})
-    or None on any failure — the caller keeps the booking-time brief.
+    or None on any failure; the caller keeps the booking-time brief.
     """
     url = _context_request_url(integration)
     if not url:
@@ -488,7 +488,7 @@ def fetch_context(integration: dict | None) -> dict | None:
         context = resp.json().get("context")
         got = isinstance(context, dict)
         # PII-safe telemetry: confirms the join-time context pull actually ran
-        # ("non ha preso il contesto" was undiagnosable — success logged nothing).
+        # ("non ha preso il contesto" was undiagnosable; success logged nothing).
         # A boolean on whether a brief came back, never the brief itself.
         print(
             f"[cedric-callback] context fetched (HTTP {resp.status_code}, "
@@ -496,7 +496,7 @@ def fetch_context(integration: dict | None) -> dict | None:
             flush=True,
         )
         return context if got else None
-    except Exception as e:  # noqa: BLE001 — never block the join on a refresh
+    except Exception as e:  # noqa: BLE001; never block the join on a refresh
         print(f"[cedric-callback] context refresh failed: {e}", flush=True)
         return None
 
@@ -550,7 +550,7 @@ def provision_org(
                 pass
         print(f"[cedric-callback] org provisioning HTTP {resp.status_code}", flush=True)
         return ProvisionResult(resp.status_code, secret, peer_token)
-    except Exception as e:  # noqa: BLE001 — connection stays pending, retry later
+    except Exception as e:  # noqa: BLE001; connection stays pending, retry later
         print(
             f"[cedric-callback] org provisioning failed ({type(e).__name__})",
             flush=True,
@@ -560,7 +560,7 @@ def provision_org(
 
 def fetch_org_connectors(org_id: str, team_id: str = "") -> dict | None:
     """The product bridge, read side: what the brain can touch for this org.
-    GET {orchestrator}/api/laura/connectors?org_id=&team= — returns Cedric's
+    GET {orchestrator}/api/laura/connectors?org_id=&team=; returns Cedric's
     connector catalog with live state (connected / account label /
     needs-reconnect) plus browser connect_url/manage_url links. ``team_id``
     (the org's OWN Slack workspace, from its org_connections config) pins the
@@ -572,7 +572,7 @@ def fetch_org_connectors(org_id: str, team_id: str = "") -> dict | None:
     base = settings.cedric_orgs_url.strip()
     if not base:
         return None
-    # CEDRIC_ORGS_URL points at .../api/laura/orgs — the sibling route.
+    # CEDRIC_ORGS_URL points at .../api/laura/orgs; the sibling route.
     url = base.rstrip("/").rsplit("/", 1)[0] + "/connectors"
     headers = {}
     token = _bearer_for(
@@ -591,7 +591,7 @@ def fetch_org_connectors(org_id: str, team_id: str = "") -> dict | None:
                 resp = client.get(target, params=params, headers=headers)
         if resp.status_code == 404:
             # Cedric's 404 body is {"error": "org … is not linked to a
-            # workspace"} — a PERMANENT org↔workspace mismatch (the workspace
+            # workspace"}; a PERMANENT org↔workspace mismatch (the workspace
             # points at a different Laura org), not a transient failure.
             # Surface a sentinel so the dashboard can render the re-link CTA
             # instead of a misleading "temporarily unavailable".
@@ -600,20 +600,20 @@ def fetch_org_connectors(org_id: str, team_id: str = "") -> dict | None:
             return None
         data = resp.json()
         return data if isinstance(data, dict) else None
-    except Exception as e:  # noqa: BLE001 — the Configure tab just shows "unavailable"
+    except Exception as e:  # noqa: BLE001; the Configure tab just shows "unavailable"
         print(f"[cedric-callback] connectors fetch failed: {e}", flush=True)
         return None
 
 
 def revoke_org(org_id: str) -> int | None:
     """Remote revoke, the write half of disconnect: DELETE the org→workspace
-    link on the orchestrator (``DELETE {CEDRIC_ORGS_URL}/{org_id}`` — the
+    link on the orchestrator (``DELETE {CEDRIC_ORGS_URL}/{org_id}``: the
     contract's `/api/laura/orgs/{org_id}` mirror of provisioning). Returns the
     HTTP status code (0 on transport error / an org_id unsafe for a URL path),
-    or None when CEDRIC_ORGS_URL isn't configured (no remote side exists —
+    or None when CEDRIC_ORGS_URL isn't configured (no remote side exists -
     the caller may disconnect locally). The caller treats 2xx and 404
     (already gone) as revoked and MUST leave local state untouched on
-    anything else — never claim a disconnection the orchestrator didn't
+    anything else; never claim a disconnection the orchestrator didn't
     confirm."""
     base = settings.cedric_orgs_url.strip()
     if not base:
@@ -640,6 +640,6 @@ def revoke_org(org_id: str) -> int | None:
                 resp = client.delete(target, headers=headers)
         print(f"[cedric-callback] org revoke HTTP {resp.status_code}", flush=True)
         return resp.status_code
-    except Exception as e:  # noqa: BLE001 — local state must stay 'connected'
+    except Exception as e:  # noqa: BLE001; local state must stay 'connected'
         print(f"[cedric-callback] org revoke failed ({type(e).__name__})", flush=True)
         return 0

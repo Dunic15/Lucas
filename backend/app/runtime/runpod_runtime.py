@@ -2,12 +2,12 @@
 
 Attivo quando RUNPOD_API_KEY e RUNPOD_POD_ID sono impostati. A differenza del
 gemello EC2 (gated sul GLOBALE avatar_page), qui il gate è PER-AVATAR: il pod
-si sveglia solo se l'avatar invitato ha `face: photoreal` (Avatar.page) — così
+si sveglia solo se l'avatar invitato ha `face: photoreal` (Avatar.page); così
 Cedric in 3D non accende mai la GPU, Laura sì.
 
   - parte una sessione con avatar photoreal -> podResume (fire-and-forget; la
     pagina photoreal resta sul ritratto statico finché lo stream non arriva,
-    poi si aggiorna da sola — è il suo comportamento nativo)
+    poi si aggiorna da sola; è il suo comportamento nativo)
   - finisce l'ultima sessione -> podStop dopo runpod_idle_stop_minutes di
     grazia (annullato se nel frattempo parte un'altra riunione)
 
@@ -77,7 +77,7 @@ def _resume_pod() -> None:
         status = (out.get("data") or {}).get("podResume") or {}
         print(f"[runpod] resume richiesto: {settings.runpod_pod_id} "
               f"-> {status.get('desiredStatus', out.get('errors'))}", flush=True)
-    except Exception as e:  # noqa: BLE001 — solo infra, mai verso il meeting
+    except Exception as e:  # noqa: BLE001; solo infra, mai verso il meeting
         print(f"[runpod] resume fallito ({type(e).__name__} "
               f"{getattr(e, 'code', '')}) — la pagina resta "
               f"sul fallback", flush=True)

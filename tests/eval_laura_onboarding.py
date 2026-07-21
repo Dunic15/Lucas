@@ -14,7 +14,7 @@ from typing import Any
 
 os.environ["BRAIN_PROVIDER"] = "stub"
 # The post-meeting path gates on BRAIN_PROVIDER_POST (per-path provider split), so
-# pin it too — otherwise a real post-provider in .env makes this eval non-
+# pin it too; otherwise a real post-provider in .env makes this eval non-
 # deterministic. build_post_meeting_artifact also force-overrides the function, so
 # this holds even when settings were already constructed by an earlier import.
 os.environ["BRAIN_PROVIDER_POST"] = "stub"

@@ -1,8 +1,8 @@
-"""Gmail watcher extracts Zoom/Teams invite links, not just Meet — key-free.
+"""Gmail watcher extracts Zoom/Teams invite links, not just Meet; key-free.
 
 A forwarded Zoom or Teams invitation email must auto-join exactly like Meet's
 "Add people" does. Join credentials embedded in the link (?pwd= passcode,
-meetup-join context) must survive extraction — a stripped Zoom link strands
+meetup-join context) must survive extraction; a stripped Zoom link strands
 the bot at the passcode screen.
 """
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 Each template must (a) lock its meeting type from a first-line hint, (b) mark its
 required steps covered from realistic phrasing, and (c) fire Laura's one closing
-intervention exactly when a CRITICAL step never happened — and stay silent when the
+intervention exactly when a CRITICAL step never happened; and stay silent when the
 critical steps were covered. These are the same guarantees the shipped
 customer_onboarding template already has (see test_meeting_state.py).
 """

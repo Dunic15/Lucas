@@ -1,15 +1,15 @@
-"""Stale-``executing`` reconciler — the prerequisite for async dispatch.
+"""Stale-``executing`` reconciler; the prerequisite for async dispatch.
 
 An ``executing`` claim whose lease expired means the process died between the
 claim and the receipt (or an ``ACTION_DISPATCH_ASYNC`` worker thread was
 lost). The external write MAY have happened, so the one forbidden move is a
 blind retry. This module settles such rows honestly:
 
-- **calendar.create_event** — verified by READING the org's calendar around
+- **calendar.create_event**: verified by READING the org's calendar around
   the intended slot (``google_client.list_calendar_events``): a matching
   event settles ``done`` with a real receipt; a definitive absence settles
-  ``failed`` ("not created — re-capture to retry"); a read error waits.
-- **everything else** (email/asana have no safe read-verify yet) — after a
+  ``failed`` ("not created; re-capture to retry"); a read error waits.
+- **everything else** (email/asana have no safe read-verify yet); after a
   grace period the row settles ``failed`` with an explicit
   ``execution_unknown`` receipt telling the owner to check the connected
   account BEFORE retrying. Truthfully unknown beats forever-executing.
@@ -30,7 +30,7 @@ from .. import control_plane
 # Per-org throttle: reads are frequent (15s dashboard refresh); one scan a
 # minute per org is plenty for a crash-recovery path.
 _TTL_SECONDS = 60.0
-# Unverifiable claims settle only after this grace beyond the expired lease —
+# Unverifiable claims settle only after this grace beyond the expired lease -
 # generous headroom for a slow-but-alive vendor call plus mirror writes.
 UNKNOWN_GRACE_SECONDS = 900.0
 
@@ -65,7 +65,7 @@ def _mirror(org_id: str, action_id: str, status: str, detail: str,
             "detail": detail[:300],
             "receipt_url": receipt_url,
         })
-    except Exception:  # noqa: BLE001 — mirroring must never break reconcile
+    except Exception:  # noqa: BLE001; mirroring must never break reconcile
         pass
 
 
@@ -82,7 +82,7 @@ def _find_calendar_event(org_id: str, args: dict) -> tuple[str, str]:
     """('found', url) | ('absent', '') | ('error', '') for the intended event.
 
     Match rule: same title (case/space-insensitive) with a start inside a
-    ±1-day read window around the intended slot — deliberately narrow enough
+    ±1-day read window around the intended slot; deliberately narrow enough
     to avoid claiming an unrelated meeting as the receipt."""
     from .. import google_client
 
@@ -165,7 +165,7 @@ def _reconcile_sqlite(org_id: str) -> int:
 
 def maybe_reconcile(org_id: str) -> int:
     """Throttled per-org pass; returns how many rows were settled. Safe to
-    call from any org-scoped read — it is sync DB I/O plus at most a bounded
+    call from any org-scoped read; it is sync DB I/O plus at most a bounded
     calendar read, and it never raises."""
     org = (org_id or "").strip()
     if not org:
@@ -182,7 +182,7 @@ def maybe_reconcile(org_id: str) -> int:
             if _reconcile_row(org, row):
                 settled += 1
         return settled
-    except Exception as exc:  # noqa: BLE001 — a read path must never 500 on this
+    except Exception as exc:  # noqa: BLE001; a read path must never 500 on this
         print(
             f"[action-reconcile] pass failed: {type(exc).__name__}", flush=True
         )

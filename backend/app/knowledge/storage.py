@@ -1,11 +1,11 @@
-"""Raw uploaded bytes for the Company Brain — S3 in production, disk in dev.
+"""Raw uploaded bytes for the Company Brain. S3 in production, disk in dev.
 
 The durable truth for RETRIEVAL is the extracted text in Postgres
 (knowledge_document_versions); this adapter only keeps the original file so a
 future re-extraction (better parser, higher caps) never needs a re-upload.
 
 With KNOWLEDGE_BUCKET set the adapter uses S3 through boto3 and the ambient
-IAM role/credentials — keys never live in git or logs. Without it, files land
+IAM role/credentials; keys never live in git or logs. Without it, files land
 in a directory next to the SQLite store, which keeps the whole feature
 key-free for local dev and tests. ``storage_ref`` strings are opaque to every
 caller ("s3://bucket/key" or "file:<relative path>").
@@ -35,7 +35,7 @@ def _local_root() -> Path:
 def _s3_client():
     try:
         import boto3
-    except ImportError as e:  # config error — fail loudly, never mask
+    except ImportError as e:  # config error; fail loudly, never mask
         raise RuntimeError(
             "KNOWLEDGE_BUCKET is set but boto3 is not installed: "
             "pip install boto3"
@@ -92,7 +92,7 @@ def get_bytes(storage_ref: str) -> Optional[bytes]:
         try:
             obj = _s3_client().get_object(Bucket=bucket, Key=key)
             return obj["Body"].read()
-        except Exception:  # noqa: BLE001 — the job records a distilled error
+        except Exception:  # noqa: BLE001; the job records a distilled error
             return None
     if ref.startswith("file:"):
         path = _local_root() / ref[len("file:"):]

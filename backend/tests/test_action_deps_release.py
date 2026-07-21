@@ -1,9 +1,9 @@
-"""[M8] deferred release — dependency-blocked approvals actually execute.
+"""[M8] deferred release; dependency-blocked approvals actually execute.
 
 The approve door parks an approved action on `blocked_on` and executes nothing
 (test_approve_door::test_approve_with_unmet_dependency_blocks_execution proves
 the gate holds). Nothing ever re-dispatched it: the approval sat `approved`
-forever — the gap named in docs/product/UNIFIED-ACTION-CONTROL-PLANE.md and the
+forever; the gap named in docs/product/UNIFIED-ACTION-CONTROL-PLANE.md and the
 obligation Laura carries in Cedric relay contract v3 (Cedric hard-stops on
 `blocked_on`, so if Laura never releases, NOBODY executes).
 
@@ -82,7 +82,7 @@ def test_dependency_landing_executes_the_parked_approval(client, sent):
     assert body["new_status"] == "approved" and body["blocked_on"] == ["dep1"]
     assert not sent, "parked approval must not execute"
 
-    # The dependency completes — by ANY route. This is the release trigger.
+    # The dependency completes; by ANY route. This is the release trigger.
     ledger.set_action_status("dep1", "done", "sent", org_id=org)
 
     assert len(sent) == 1, "the parked approval must run exactly once when its dep lands"
@@ -93,7 +93,7 @@ def test_dependency_landing_executes_the_parked_approval(client, sent):
 
 def test_release_fires_for_a_dependency_cedric_reported(client, sent):
     """The case that chose the hook. Cedric executes cedric-routed work itself
-    and reports it on /status — that path never touches
+    and reports it on /status; that path never touches
     set_action_decision_result (the hook the spec suggested), so hanging the
     release there would strand every dependent of Cedric-completed work."""
     org = settings.demo_org_id
@@ -110,7 +110,7 @@ def test_release_fires_for_a_dependency_cedric_reported(client, sent):
 
 
 def test_chain_releases_in_one_sweep(client, sent):
-    """A→B→C: releasing B completes B, which must release C — iteratively, not
+    """A→B→C: releasing B completes B, which must release C; iteratively, not
     by recursing through set_action_status."""
     org = settings.demo_org_id
     _seed(org, "a", typed=_TYPED, execution_route="native")
@@ -137,7 +137,7 @@ def test_multi_dependency_waits_for_the_last_one(client, sent):
 
     ledger.set_action_status("d1", "done", "", org_id=org)
     assert not sent, "one of two dependencies is not enough"
-    # Re-parked on the shrunken list — the dashboard should show what's left.
+    # Re-parked on the shrunken list; the dashboard should show what's left.
     assert store.get_action_approval(org, "a1")["blocked_on"] == '["d2"]'
 
     ledger.set_action_status("d2", "done", "", org_id=org)
@@ -147,7 +147,7 @@ def test_multi_dependency_waits_for_the_last_one(client, sent):
 # ── what must NOT happen ──
 
 def test_failed_dependency_never_releases(client, sent):
-    """A dependency that FAILED has not been done. Its dependents stay parked —
+    """A dependency that FAILED has not been done. Its dependents stay parked -
     running them anyway would execute work whose premise never happened."""
     org = settings.demo_org_id
     _seed(org, "dep1")
@@ -196,7 +196,7 @@ def test_capability_toggle_still_wins_at_release_time(client, sent, monkeypatch)
 
 def test_cedric_routed_release_says_it_awaits_its_own_executor(client, sent):
     """Laura cannot execute a cedric-routed action. Its deps landing unparks it,
-    but the receipt must not imply Laura ran it — and it must not be re-swept
+    but the receipt must not imply Laura ran it; and it must not be re-swept
     forever."""
     org = settings.demo_org_id
     _seed(org, "dep1")

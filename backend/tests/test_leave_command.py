@@ -82,7 +82,7 @@ LEAVE_ASKS = [
     "puoi andartene",
     "te ne puoi andare",
     # Italian masculine articles + "meet" (live regex-miss 2026-07-10:
-    # "meeting" is masculine in Italian — "il/dal meeting", not "la/dalla")
+    # "meeting" is masculine in Italian. "il/dal meeting", not "la/dalla")
     "esci dal meeting",
     "esci dal meet",
     "lascia il meeting",
@@ -362,7 +362,7 @@ def test_cedric_asr_spellings_wake_and_leave():
         "Sedric, you can leave",
         "Sedrick, you can leave now",
         "Cedrick, you can leave",
-        "Kedric, you can leave",  # not an alias — resolves via the fuzzy path
+        "Kedric, you can leave",  # not an alias; resolves via the fuzzy path
     ):
         called, question = detect_wake(cedric, utterance)
         assert called, f"Cedric should wake on ASR spelling: {utterance!r}"
@@ -405,7 +405,7 @@ def _stub_cedric_webhook(monkeypatch, tmp_path, bot_id: str) -> dict:
 
 
 def test_webhook_split_leave_across_finals(monkeypatch, tmp_path):
-    """"Cedric." then "you can leave" arrive as TWO ASR finals — neither alone
+    """"Cedric." then "you can leave" arrive as TWO ASR finals; neither alone
     fires the dismissal (the reported bug: a reconcile poll ended the meeting
     late). Same speaker within the window must still end it now."""
     bot_id = "leave-split-1"
@@ -452,7 +452,7 @@ def test_webhook_split_leave_only_on_leave_followup(monkeypatch, tmp_path):
 def test_webhook_split_leave_ignores_substantive_address(monkeypatch, tmp_path):
     """Meter safety (code-review repro): after a substantive address ("Cedric
     hold on a second"), a same-speaker aside dismissing someone else ("Sara you
-    can leave now") must never end the bot — the follow-up leads with a name,
+    can leave now") must never end the bot; the follow-up leads with a name,
     so the addressee guard (plausible_leave_followup) rejects it even though
     the roster doesn't know Sara."""
     bot_id = "leave-split-4"
@@ -468,7 +468,7 @@ def test_webhook_split_leave_ignores_substantive_address(monkeypatch, tmp_path):
 
 def test_webhook_split_leave_after_substantive_address(monkeypatch, tmp_path):
     """Live-test repro (2026-07-10): the dismissal lands a few seconds after a
-    SUBSTANTIVE addressed turn — "Cedric, thanks for that" … "you can leave
+    SUBSTANTIVE addressed turn: "Cedric, thanks for that" … "you can leave
     now". The old bare-only arming missed it ([leave] telemetry: called=False,
     split_window_armed=False); now any addressed turn arms the window."""
     bot_id = "leave-split-6"
@@ -496,7 +496,7 @@ def test_webhook_split_leave_italian_imperative_followup(monkeypatch, tmp_path):
 
 def test_webhook_solo_room_unaddressed_leave_fires(monkeypatch, tmp_path):
     """Live-test repro (2026-07-10, round 2): in a 1:1 room the owner says
-    "esci dal meeting" with NO name and long after any addressed turn — there
+    "esci dal meeting" with NO name and long after any addressed turn; there
     is no other possible addressee, so it must end the meeting."""
     bot_id = "leave-solo-1"
     calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
@@ -511,7 +511,7 @@ def test_webhook_solo_room_unaddressed_leave_fires(monkeypatch, tmp_path):
 
 def test_webhook_solo_room_name_led_dismissal_still_blocked(monkeypatch, tmp_path):
     """Meter safety in the 1:1 rule: even with one human in the roster, a
-    name-led dismissal ("Sara you can leave now" — e.g. someone on a phone
+    name-led dismissal ("Sara you can leave now": e.g. someone on a phone
     speaker, or a roster undercount after a restart) must NOT end the bot."""
     bot_id = "leave-solo-2"
     calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
@@ -541,7 +541,7 @@ def test_webhook_multi_room_unaddressed_leave_needs_window(monkeypatch, tmp_path
 
 
 def test_plausible_leads_include_discourse_markers():
-    """Live miss (2026-07-10): an armed window still didn't fire — natural
+    """Live miss (2026-07-10): an armed window still didn't fire; natural
     speech leads with a discourse marker ("dai, esci pure")."""
     from app.decision import plausible_leave_followup
 
@@ -559,7 +559,7 @@ def test_plausible_leads_include_discourse_markers():
 
 def test_webhook_split_leave_skips_dismissal_of_named_participant(monkeypatch, tmp_path):
     """Meter safety: even after a BARE address, a follow-up that dismisses another
-    NAMED participant ("Sara, you can leave") is aimed at Sara, not the avatar —
+    NAMED participant ("Sara, you can leave") is aimed at Sara, not the avatar -
     it must not end the bot."""
     bot_id = "leave-split-5"
     calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
@@ -577,7 +577,7 @@ def test_webhook_split_leave_skips_dismissal_of_named_participant(monkeypatch, t
 
 
 def test_leave_it_accepts_a_article_preposition():
-    """'vai fuori al meeting' / 'esci alla riunione' — the a+article preposition
+    """'vai fuori al meeting' / 'esci alla riunione': the a+article preposition
     ('al'/'alla'/…) was previously unmatched, so the phrase never fired."""
     from app.decision import detect_leave_command as d
 
@@ -605,7 +605,7 @@ def test_explicit_leave_fires_name_free_but_stays_safe():
 
 def test_webhook_explicit_leave_fires_without_name_multiperson(monkeypatch, tmp_path):
     """The reported gap: 'go out the meeting' (no avatar name) ends the bot even
-    when NO other path could be why — a 2-person room (not the 1:1 rule) where a
+    when NO other path could be why; a 2-person room (not the 1:1 rule) where a
     DIFFERENT speaker owns the armed window. Marco engages the avatar first (so
     the opening grace is over and the window belongs to Marco); Duccio's later
     name-free dismissal can only fire via the explicit-meeting-object path."""
@@ -630,7 +630,7 @@ def test_webhook_explicit_leave_italian_al_meeting(monkeypatch, tmp_path):
 def test_webhook_permission_leave_stays_name_gated_multiperson(monkeypatch, tmp_path):
     """Meter safety: a 2nd-person permission with no name ('you should leave the
     meeting now'), from a DIFFERENT speaker than the one who holds the armed
-    window, in a 2-person room, could be aimed at a PERSON — it must NOT end the
+    window, in a 2-person room, could be aimed at a PERSON; it must NOT end the
     bot via the name-free path."""
     bot_id = "leave-explicit-safe"
     calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)

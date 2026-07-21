@@ -7,7 +7,7 @@ paths per contract: ScopeLost -> connector needs_reconnect + run failed and
 NOT authoritative; Backpressure -> run parks (quarantine cap, nothing
 deleted); other errors retry on the ladder then park, dead-letter after 3
 parks. The two-phase purge audits complete here too (storage deletion first,
-then the audit row is marked done — retry-safe).
+then the audit row is marked done; retry-safe).
 
 Runs in the main.py lifespan loop, flag-gated, never on the live path.
 """
@@ -52,7 +52,7 @@ def _reconcile_retrieval(org_id: str, affected_docs: list[str]) -> None:
             kdal.enqueue_job(org_id, sources[0]["id"], "rebuild_index")
         else:
             kingest.rebuild_indexes(org_id)
-    except Exception as exc:  # noqa: BLE001 — the epoch sweep is the backstop
+    except Exception as exc:  # noqa: BLE001; the epoch sweep is the backstop
         print(f"[df] retrieval reconcile failed: {type(exc).__name__}",
               flush=True)
 
@@ -61,7 +61,7 @@ def materialize_bodies(org_id: str, connector: dict,
                        envelopes: list[dict]) -> list[dict]:
     """Contract: body-bearing envelopes reuse the knowledge pipeline AS A
     LIBRARY. Each body_text lands as a document in a per-connector knowledge
-    source (named ``df:<kind>:<name>``, NOT avatar-assigned — live-index
+    source (named ``df:<kind>:<name>``, NOT avatar-assigned; live-index
     exposure stays governed by explicit assignment + the org_default rule),
     and the envelope gains its ``body_ref``. With the Brain flag off,
     body-bearing envelopes are rewritten into guaranteed-invalid form with
@@ -114,7 +114,7 @@ def materialize_bodies(org_id: str, connector: dict,
                         if version_id else "",
                         "body_text": None})
             _ = result
-        except Exception:  # noqa: BLE001 — this envelope quarantines
+        except Exception:  # noqa: BLE001; this envelope quarantines
             out.append({**env, "kind": "__body_ingest_failed__"})
     return out
 
@@ -211,9 +211,9 @@ def process_due(max_orgs: int = 5, runs_per_org: int = 2) -> int:
                                outcome="park",
                                error=f"not_implemented: {exc}",
                                parks=int(run["parks"]))
-            except Exception as exc:  # noqa: BLE001 — CLASS NAME ONLY
+            except Exception as exc:  # noqa: BLE001. CLASS NAME ONLY
                 # A raw driver exception can carry failing-row column values
-                # (incl. record titles/PII). Persist the class name only —
+                # (incl. record titles/PII). Persist the class name only -
                 # last_error is surfaced on GET /org/data/runs.
                 dal.finish_run(org_id, run["id"], run["lease_token"],
                                outcome="retry",

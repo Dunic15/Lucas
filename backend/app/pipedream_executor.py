@@ -3,7 +3,7 @@
 Parallel to native_runtime/executor.py, selected by ``execution_route ==
 "pipedream"``. Runs an approved, TYPED action as a DETERMINISTIC REST call to the
 app's own API through the Pipedream Connect Proxy (Pipedream injects the
-account's credentials server-side). Core-app writes are NEVER model-constructed —
+account's credentials server-side). Core-app writes are NEVER model-constructed -
 they use the fixed mapper below; model-constructed requests are for reads + the
 low-stakes long tail only (a later phase).
 
@@ -16,7 +16,7 @@ until it is flipped on.
 
 Scope (refined 2026-07-20): Pipedream owns Asana + Jira + the long tail. The whole
 Google block (calendar/gmail/drive) stays on Laura's native executor; Slack stays
-on Cedric. So today this plane maps only the Asana action types — the ones being
+on Cedric. So today this plane maps only the Asana action types; the ones being
 moved off the native Asana adapter.
 """
 from __future__ import annotations
@@ -60,7 +60,7 @@ def _build_asana_create(org_id: str, account_id: str, args: dict) -> tuple:
     if args.get("notes"):
         body["notes"] = str(args["notes"])[:4000]
     # Default the assignee to the connection owner ("me") so a task with no
-    # project isn't an invisible orphan — same rule as the native adapter.
+    # project isn't an invisible orphan; same rule as the native adapter.
     body["assignee"] = str(args.get("assignee") or "me").strip()
     if args.get("due_on"):
         body["due_on"] = str(args["due_on"]).strip()[:10]
@@ -169,7 +169,7 @@ def app_connected(org_id: str, app_slug: str) -> bool:
         accounts = pipedream_client.list_accounts(org, app=app)
         ok = any(a.get("id") for a in accounts)
     except pipedream_client.PipedreamError:
-        return False  # transient — don't cache, retry next call
+        return False  # transient; don't cache, retry next call
     with _conn_lock:
         _conn_cache[key] = (ok, now + _CONN_TTL_S)
     return ok
@@ -239,7 +239,7 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
         method, url, body, headers = builder(org, account_id, args)
     except ValueError as exc:
         return _settle(action_id, org, False, action_type, "", str(exc))
-    except Exception as exc:  # noqa: BLE001 — any builder fault ⇒ failed receipt
+    except Exception as exc:  # noqa: BLE001; any builder fault ⇒ failed receipt
         return _settle(action_id, org, False, action_type, "",
                        f"bad arguments ({type(exc).__name__})")
 
@@ -284,7 +284,7 @@ def _settle(action_id: str, org: str, ok: bool, action_type: str, ref: str,
         else:
             detail = f"Pipedream · {error or 'failed'}"[:300]
             ledger.set_action_status(aid, "failed", detail, org_id=org)
-    except Exception as exc:  # noqa: BLE001 — result still returns
+    except Exception as exc:  # noqa: BLE001; result still returns
         print(
             f"[pipedream_executor] status write skipped ({type(exc).__name__})",
             flush=True,
@@ -299,6 +299,6 @@ def _settle(action_id: str, org: str, ok: bool, action_type: str, ref: str,
             {"action_id": aid, "status": "done" if ok else "failed",
              "detail": detail[:300], "receipt_url": ref if ok else ""},
         )
-    except Exception:  # noqa: BLE001 — a UI mirror never breaks execution
+    except Exception:  # noqa: BLE001; a UI mirror never breaks execution
         pass
     return result

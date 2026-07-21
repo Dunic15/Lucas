@@ -1,10 +1,10 @@
-"""The canonical BrowserOperator (B0) — the one place provider is touched.
+"""The canonical BrowserOperator (B0); the one place provider is touched.
 
 Owns: the state machine (creating → ready → presenting → closing → closed,
 terminal failed/expired/revoked), tenancy binding, command sequencing +
 idempotency, deterministic policy classification, presentation-token
 issuance/exchange, and the routing of WRITE commands onto the existing Action
-Control Plane (route='browser') — never a second execution system.
+Control Plane (route='browser'); never a second execution system.
 
 Tenancy comes ONLY from the authenticated caller the router resolves; nothing
 here reads org/principal from a provider ref or a client body. Ownership,
@@ -97,7 +97,7 @@ def connect_identity(org_id: str, *, label: str, principal: str = "",
     identity, open a session ATTACHED to that context, and mint a
     presentation token. The caller exchanges the token for the live view,
     the human logs into the target site there (credentials go browser →
-    site, never through Laura), then closes the session — the provider
+    site, never through Laura), then closes the session; the provider
     persists the cookie jar on session end."""
     label = (label or "").strip().lower()
     if not label or len(label) > 40 or not label.replace("-", "").isalnum():
@@ -179,7 +179,7 @@ def close_session(org_id: str, session_id: str, *, principal: str = "") -> dict:
 
 
 def revoke_session(org_id: str, session_id: str, *, principal: str = "") -> dict:
-    """Idempotent revoke — a security stop. Provider released, tokens killed.
+    """Idempotent revoke; a security stop. Provider released, tokens killed.
     Ownership re-checked."""
     row = dal.get_session_internal(org_id, session_id)
     if row is None:
@@ -196,7 +196,7 @@ def revoke_session(org_id: str, session_id: str, *, principal: str = "") -> dict
 def _close_provider(row: dict) -> None:
     try:
         get_provider(row["provider"]).close(row["provider_ref"])
-    except Exception:  # noqa: BLE001 — provider release is best-effort
+    except Exception:  # noqa: BLE001; provider release is best-effort
         pass
 
 
@@ -255,7 +255,7 @@ _VIEWER_ALLOWED_KEYS = ("kind", "url", "title", "rendered_text", "read_only")
 def _safe_viewer(viewer: dict) -> dict:
     """Strict ALLOWLIST (not denylist): only these keys leave, each redacted
     and bounded. A B1 real viewer might add a live-view URL or screenshot
-    field — a denylist would fail open on those, so we allowlist. Never any
+    field; a denylist would fail open on those, so we allowlist. Never any
     provider_ref/connect_url/image bytes/data: URI."""
     src = viewer or {}
     out: dict = {"read_only": True}
@@ -286,7 +286,7 @@ def perceive(org_id: str, session_id: str, *,
     """Read-only PERCEPTION for the coordinator's planner: returns
     ``(byte_free_observation, screenshot_bytes)`` or None. Does the same
     ownership/state checks as a command but NEVER executes or mutates. The
-    screenshot bytes are TRANSIENT — the caller feeds them to the planner and
+    screenshot bytes are TRANSIENT; the caller feeds them to the planner and
     drops them; they are never persisted, logged, returned to a client, or put
     in a receipt (the returned observation is byte-free)."""
     row = dal.get_session_internal(org_id, session_id)
@@ -317,7 +317,7 @@ def run_recipe(org_id: str, session_id: str, *, site_label: str, task_key: str,
     """Run a SCRIPTED, read-only how-to recipe (recipes.py) on an open session:
     navigate (domain-allowlisted) / point / reveal / say, narrating each step
     via ``on_narrate`` (thread-safe callback). Deterministic and reliable where
-    the planner stalls. Read-only — never types or submits. Returns
+    the planner stalls. Read-only; never types or submits. Returns
     {ok, outcome, steps, closing_ok}. Sync (threadpool). Never raises."""
     from . import recipes
 
@@ -356,7 +356,7 @@ def run_recipe(org_id: str, session_id: str, *, site_label: str, task_key: str,
             if say:
                 try:
                     on_narrate(say)
-                except Exception:  # noqa: BLE001 — narration never breaks the run
+                except Exception:  # noqa: BLE001; narration never breaks the run
                     pass
             landed = None  # True/False for point/reveal; None for navigate/say
             try:
@@ -373,10 +373,10 @@ def run_recipe(org_id: str, session_id: str, *, site_label: str, task_key: str,
                     landed = _try_selectors(_reveal_ok, provider, ref,
                                             step.get("sel"))
                 # op == "say": narration only, already spoken above.
-            except Exception:  # noqa: BLE001 — a fragile step is skipped, not fatal
+            except Exception:  # noqa: BLE001; a fragile step is skipped, not fatal
                 pass
             # PII-safe step telemetry: op + whether the control was found (never
-            # the utterance or page content) — so a silent-skip is diagnosable.
+            # the utterance or page content); so a silent-skip is diagnosable.
             if op in ("point", "reveal"):
                 print(f"[recipe] {site_label}/{task_key} step={done} op={op} "
                       f"found={landed}", flush=True)
@@ -394,7 +394,7 @@ def _wait(provider, ref, seconds: float) -> None:
 
 
 def _reveal_ok(provider, ref, selector: str) -> bool:
-    """reveal() returns an observation, not a bool — adapt it for _try_selectors
+    """reveal() returns an observation, not a bool; adapt it for _try_selectors
     (True when the click didn't raise)."""
     try:
         provider.reveal(ref, selector)
@@ -432,7 +432,7 @@ def issue_command(
     returning the stable CommandResult contract (contracts.command_result).
 
     Idempotent on (org, session, command_id). Re-checks ownership, session
-    state, resolved-avatar tool allowance, and — before any click/type —
+    state, resolved-avatar tool allowance, and; before any click/type -
     classifies against the LIVE observation via the deterministic policy
     engine. When ``verify`` is set, the operator RE-OBSERVES after executing
     and compares against ``expected`` (the planner never declares its own
@@ -455,7 +455,7 @@ def issue_command(
         return _reject("not_owner", int(row["last_command_seq"]),
                        int(row["page_version"]), replanning=False)
 
-    # A previously-completed command replays its recorded result — idempotent
+    # A previously-completed command replays its recorded result; idempotent
     # even if the session has since changed state (so a retry after close still
     # returns the recorded result rather than an invalid_state error).
     replay = dal.recorded_command(org_id, session_id, command_id)
@@ -484,10 +484,10 @@ def issue_command(
         # Always observe the live page first, so classification and receipts
         # reflect real DOM (spec §8: plan -> DOM verification -> classify).
         # The RawObservation may carry transient screenshot BYTES; sanitize
-        # drops them at once (only a ref + digest survive) — bytes never reach
+        # drops them at once (only a ref + digest survive); bytes never reach
         # _dispatch, the DB, a receipt, or the client.
         current = policy.sanitize_observation(provider.observe(ref))
-        # Stale-screen basis is the STORED page_version (a read — no
+        # Stale-screen basis is the STORED page_version (a read; no
         # pre-dispatch write, so flag-off page_version stays B0-identical): a
         # proposal grounded on an older page_version than the live session is
         # refused. Only the post-dispatch sync mutates page_version.
@@ -500,7 +500,7 @@ def issue_command(
             result = _dispatch(org_id, row, provider, ref, verb, element_id,
                                url, text, direction, current)
     except ProviderTimeout:
-        # The action MAY have landed — honest unknown, never blind-retry.
+        # The action MAY have landed; honest unknown, never blind-retry.
         result = {"ok": False, "reason": "execution_unknown",
                   "note": "provider timeout; verify by observing"}
     except ProviderUnconfigured as exc:
@@ -552,7 +552,7 @@ def _to_command_result(result: dict, seq: int, page_version: int,
     keeping the legacy keys (ok/reason/class/observation/proposed) existing
     callers and tests rely on."""
     reason = str(result.get("reason") or "")
-    # approval_required is PENDING, not a failure — action_id carries the wait.
+    # approval_required is PENDING, not a failure; action_id carries the wait.
     if reason == "approval_required":
         failure, replanning = "", False
     elif result.get("ok"):
@@ -628,12 +628,12 @@ def _grounding_gate(current, verb, element_id, coordinates, confidence,
                     element_id)
         threshold = float(_config().browser_coordinate_confidence_threshold)
         # A coordinate action REQUIRES an explicit confidence at/above the
-        # floor — a missing confidence is refused, never silently allowed.
+        # floor; a missing confidence is refused, never silently allowed.
         if confidence is None or float(confidence) < threshold:
             return ({"ok": False, "reason": "low_confidence"}, element_id)
         resolved = policy.resolve_coordinate(current, x, y)
         if not resolved:
-            # No element under the coordinate — mirror 'element not in live DOM'.
+            # No element under the coordinate; mirror 'element not in live DOM'.
             return ({"ok": False, "reason": "coordinate_unresolved"},
                     element_id)
         element_id = resolved  # execute the resolved element via normal classify
@@ -643,7 +643,7 @@ def _grounding_gate(current, verb, element_id, coordinates, confidence,
 
 def _navigation_off_allowlist(target_url: str) -> bool:
     """When the visual planner (model path) is on, the SERVER domain allowlist
-    gates ALL navigation — an explicit `navigate` AND a link `click` that would
+    gates ALL navigation; an explicit `navigate` AND a link `click` that would
     leave the allowlisted host. Page content can never widen it. Off when the
     visual planner is off, so B0 direct-navigate + fail:// URLs are unaffected."""
     if not _config().browser_visual_planner_enabled:
@@ -656,7 +656,7 @@ def _navigation_off_allowlist(target_url: str) -> bool:
 
 def _dispatch(org_id, row, provider, ref, verb, element_id, url, text,
               direction, current) -> dict:
-    # NAVIGATION allowlist (server-authoritative) — gate BEFORE any provider
+    # NAVIGATION allowlist (server-authoritative); gate BEFORE any provider
     # call, for both an explicit navigate and a link click that would navigate.
     if verb == "navigate" and _navigation_off_allowlist(url):
         return {"ok": False, "reason": "domain_blocked",
@@ -695,7 +695,7 @@ def _dispatch(org_id, row, provider, ref, verb, element_id, url, text,
         return _route_write_to_action(org_id, row, verb, element_id, text,
                                       current, classification)
 
-    # auto (read-only) — execute against the provider.
+    # auto (read-only); execute against the provider.
     if verb == "observe":
         obs = current
     elif verb == "navigate":
@@ -718,7 +718,7 @@ def _route_write_to_action(org_id, row, verb, element_id, text, current,
     """A guarded WRITE never executes inline. B0 posture: with writes
     disabled (default) it is REJECTED and surfaced; when
     BROWSER_ALLOW_WRITES is on it becomes a canonical Action
-    (route='browser') requiring approval — the SAME plane every other action
+    (route='browser') requiring approval; the SAME plane every other action
     uses, no second system."""
     element = policy._element(current, element_id) or {}
     projection = policy.safe_param_projection(verb, element, text)
@@ -728,7 +728,7 @@ def _route_write_to_action(org_id, row, verb, element_id, text, current,
     fingerprint = _observation_fingerprint(current)
 
     # The Northstar MVP enables exactly ONE controlled synthetic write behind a
-    # dedicated flag — the follow-up task — WITHOUT enabling arbitrary browser
+    # dedicated flag, the follow-up task, WITHOUT enabling arbitrary browser
     # writes. Every other guarded write stays rejected when BROWSER_ALLOW_WRITES
     # is off. The demo write still becomes a canonical action and still requires
     # approval; only the mint gate is opened for this one control.
@@ -749,7 +749,7 @@ def _demo_write_hook(org_id, row, element_id):
     """(extra_permission, typed_override) for the Northstar follow-up control,
     or (None, None) when the demo write is off, the SESSION is not a Northstar
     demo session, or the element isn't the follow-up. Inert unless
-    NORTHSTAR_DEMO_WRITE_ENABLED — the browser package imports the demo lazily
+    NORTHSTAR_DEMO_WRITE_ENABLED; the browser package imports the demo lazily
     and only on this narrow path. Scoping to provider='northstar' means the
     BROWSER_ALLOW_WRITES=false mint gate can never open on any other session,
     even one that happens to expose a 'create-followup' element."""
@@ -789,7 +789,7 @@ def _mint_browser_action(org_id, row, projection, fingerprint,
 def _index_browser_action(org_id, row, action_id, typed, fingerprint,
                           element_id="", *, extra_permission=None) -> None:
     """Index the browser action into queued_actions with route='browser',
-    the binding in permission_json, and this session as the source — so the
+    the binding in permission_json, and this session as the source; so the
     existing approve door + claim + receipt operate on it unchanged."""
     from sqlalchemy import text as sql
 
@@ -869,7 +869,7 @@ def execute_approved_step(org_id: str, action_id: str, action: dict) -> dict:
     # Re-observe and RE-VERIFY the approval binding: the approval was bound to
     # a specific page state (url+title+element-ids fingerprint) and target
     # element. If the untrusted page changed since approval, the write is NOT
-    # what the approver saw — fail closed. Enforced now (inert in B0's no-write
+    # what the approver saw; fail closed. Enforced now (inert in B0's no-write
     # stance) so B1's real write inherits the guard rather than a stale one.
     provider = get_provider(row["provider"])
     try:
@@ -903,11 +903,11 @@ def execute_approved_step(org_id: str, action_id: str, action: dict) -> dict:
 
     # B0/B1: the guarded action is settled done WITHOUT performing a real
     # external write (fake provider, read-only stance; BROWSER_ALLOW_WRITES
-    # default false) — the plane, the re-checks, and the receipt are what is
+    # default false); the plane, the re-checks, and the receipt are what is
     # proven here. B1 attaches POST-ACTION VISUAL VERIFICATION to the receipt:
     # the operator re-observes and records the deterministic verdict (the
     # planner never declares its own success). The receipt carries only the
-    # verdict + a screenshot DIGEST — never image bytes or full DOM.
+    # verdict + a screenshot DIGEST; never image bytes or full DOM.
     expected = permission.get("expected_result") if isinstance(
         permission.get("expected_result"), dict) else {}
     post = policy.sanitize_observation(provider.observe(row["provider_ref"]))
@@ -942,7 +942,7 @@ def _maybe_execute_demo_write(org_id, action_id, permission, row, provider,
 
     if not demo_mvp.write_enabled():
         # The action was minted under the demo flag but the write flag is now
-        # off — refuse rather than fall through to a silent no-op write.
+        # off; refuse rather than fall through to a silent no-op write.
         ledger.set_action_status(action_id, "failed",
                                  "northstar demo write disabled", org_id=org_id)
         return {"ok": False, "reason": "demo_write_disabled"}

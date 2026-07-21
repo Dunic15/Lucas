@@ -25,7 +25,7 @@ def _mock_freebusy(monkeypatch):
 
 
 def test_enrich_organizer_only_with_date_anchor(monkeypatch):
-    """A name-only ask with a date anchor ("next week") — no resolvable email —
+    """A name-only ask with a date anchor ("next week"); no resolvable email -
     still proposes the organizer's own free slots (organizer_only scope)."""
     _mock_freebusy(monkeypatch)
     actions = [{"action_id": "n1", "item": "book a follow-up with Ananth next week"}]

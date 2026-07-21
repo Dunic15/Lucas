@@ -1,4 +1,4 @@
-"""OAuth connect/callback flows — Google Calendar, Asana, Jira — extracted
+"""OAuth connect/callback flows, Google Calendar, Asana, Jira, extracted
 from main.py. Owner-gated when login is configured; key-free demo path
 (no credentials -> 400) unchanged."""
 import httpx
@@ -17,7 +17,7 @@ router = APIRouter()
 
 GOOGLE_CALENDAR_SCOPES = (
     "https://www.googleapis.com/auth/calendar.events.readonly",
-    # calendarList (which calendars the user displays) needs calendar.readonly —
+    # calendarList (which calendars the user displays) needs calendar.readonly -
     # calendar.events[.readonly] alone 403s users/me/calendarList, silently
     # degrading the all-calendars upcoming view to primary-only (calendars=1
     # in the [calendar] diagnostic). Existing connections must reconnect once
@@ -61,7 +61,7 @@ def _clear_calendar_state(response):
 
 def _oauth_login_required(request: Request):
     """FIX: when login is enabled, the native-Google connect/callback flow must
-    be owner-authenticated — an anonymous browser must NOT be able to complete
+    be owner-authenticated; an anonymous browser must NOT be able to complete
     OAuth and silently land a Google refresh token on demo_org_id. Returns an
     error response to send, or None to allow. auth.enabled() is exactly "the
     Google OAuth client is configured", which is also what this flow needs, so
@@ -140,7 +140,7 @@ async def google_oauth_callback(
         return err
     # FIX (CSRF): the returned `state` must match the single-use signed nonce we
     # set on THIS browser at /oauth/google/connect (cookie + signed param). This
-    # binds the callback to the browser that started the flow — the real barrier
+    # binds the callback to the browser that started the flow; the real barrier
     # against login-CSRF / refresh-token injection, replacing the old static
     # settings.calendar_oauth_state gate. Consume the cookie on every exit below.
     cookie_nonce = request.cookies.get(CALENDAR_STATE_COOKIE, "")
@@ -205,7 +205,7 @@ async def google_oauth_callback(
     # PER-USER Google connect. This callback used to accept ONLY the avatar's own
     # inbox (CALENDAR_INVITE_EMAILS) and reject everyone else with "Wrong Google
     # account". Relaxed: ANY authenticated user may connect THEIR OWN Google
-    # (Calendar + Gmail) — the per-org refresh token stored below powers their
+    # (Calendar + Gmail); the per-org refresh token stored below powers their
     # native executor AND their own Upcoming calendar. The avatar-only Recall
     # calendar auto-join step (further down) stays guarded to the avatar account,
     # so a normal user's connect can never hijack the deployment's auto-join inbox.
@@ -217,25 +217,25 @@ async def google_oauth_callback(
     is_avatar_account = (not targets) or (oauth_email in targets)
 
     # Persist the refresh token per org for the NATIVE executor + Upcoming
-    # (encrypted at rest — store.set_org_oauth). SECURITY: the owning org is
+    # (encrypted at rest; store.set_org_oauth). SECURITY: the owning org is
     # derived ONLY from the connecting browser's signed session cookie
-    # (auth.current_user), NEVER from the OAuth email or any request field — so a
+    # (auth.current_user), NEVER from the OAuth email or any request field; so a
     # user's token can only ever land on THEIR OWN org, never someone else's. The
     # per-session signed single-use `state` verified above (cookie-bound nonce)
     # is the CSRF guard on this flow, and _oauth_login_required above guarantees a
     # real logged-in owner whenever login is enabled. Falls back to the demo/owner
-    # org ONLY on the key-free/no-login demo path (login disabled) — exactly the
+    # org ONLY on the key-free/no-login demo path (login disabled); exactly the
     # org the dashboard reads it back from (dashboard.py: caller_org or
     # demo_org_id), so connect + read always agree. Best-effort and independent of
     # native_executor (the flag gates USE, not consent), so enabling native later
-    # needs no reconnect. Keyed by the org_id STRING — no ::uuid cast — so
+    # needs no reconnect. Keyed by the org_id STRING, no ::uuid cast, so
     # u_<hash> session orgs and durable uuid orgs are both safe (never trips the
     # org_id split-brain).
     try:
         _user = auth.current_user(request)
         _org = (_user or {}).get("org_id") or settings.demo_org_id
         _scopes = " ".join(GOOGLE_CALENDAR_SCOPES)
-        # Org row — the NATIVE executor (Laura acting on the org's Google account)
+        # Org row; the NATIVE executor (Laura acting on the org's Google account)
         # and the demo/machine Upcoming view. Unchanged.
         await run_in_threadpool(
             store.set_org_oauth,
@@ -244,11 +244,11 @@ async def google_oauth_callback(
             email=oauth_email,
             scopes=_scopes,
         )
-        # Per-USER row — the personal-calendar VIEW (/dashboard/upcoming) reads
+        # Per-USER row; the personal-calendar VIEW (/dashboard/upcoming) reads
         # THIS, so a member of a SHARED org (a verified corporate domain maps
         # every colleague onto one org_id) sees only their OWN calendar, never a
         # co-worker's. Keyed on the connecting human from the signed session
-        # cookie (auth.current_user) — never the OAuth email or any request field.
+        # cookie (auth.current_user); never the OAuth email or any request field.
         _uid = (_user or {}).get("user_id") or ""
         if _uid:
             await run_in_threadpool(
@@ -260,7 +260,7 @@ async def google_oauth_callback(
             )
         # A reconnect that ADDED a scope (e.g. calendar.readonly for the
         # all-calendars view) leaves the OLD, still time-valid access token in
-        # google_client's cache — old scopes, so calendarList keeps 403ing for
+        # google_client's cache; old scopes, so calendarList keeps 403ing for
         # up to an hour. Drop the cached token for both principals so THIS
         # instance re-mints with the new grant on the very next read. (Other
         # instances self-heal via the calendarList-403 re-mint; this makes the
@@ -268,13 +268,13 @@ async def google_oauth_callback(
         google_client._drop_cached_token(_org)
         if _uid:
             google_client._drop_cached_token(f"user:{_uid}")
-    except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
+    except Exception as e:  # noqa: BLE001; enrichment only, never fatal
         print(f"[oauth] native token persist skipped ({type(e).__name__})", flush=True)
 
     # Recall calendar auto-join is the AVATAR's capability: it registers the
     # avatar's own inbox with Recall so any event that invites its address gets a
     # bot. Only the avatar account (or a single-tenant deployment with no invite
-    # filter) may create it — a normal user connecting their own Google just
+    # filter) may create it; a normal user connecting their own Google just
     # keeps the per-org token stored above and SKIPS this step (their Upcoming
     # comes from their own calendar via google_client.list_calendar_events and
     # they dispatch the avatar manually). This guard is what lets per-user
@@ -302,7 +302,7 @@ async def google_oauth_callback(
             ))
 
     # Land back on the dashboard so the "Google (native)" capability toggle
-    # live-refreshes on the next summary load — exactly like the ?brain= Slack
+    # live-refreshes on the next summary load; exactly like the ?brain= Slack
     # return. This is an OAuth redirect target (the browser follows it), never an
     # API a program consumes, so the calendar_id JSON is not needed here; the
     # per-org native refresh token is already persisted above. Consume the
@@ -318,12 +318,12 @@ async def google_oauth_disconnect(request: Request) -> JSONResponse:
 
     Fully independent of the Cedric/Slack add-on: this clears the per-org
     native refresh token the executor uses (``store.clear_org_oauth``) AND the
-    caller's own per-user calendar token (``store.clear_user_oauth`` — the row
+    caller's own per-user calendar token (``store.clear_user_oauth``: the row
     the personal Upcoming view reads first, so disconnect actually revokes
     what the dashboard uses). A user can drop native Google while keeping
-    Slack — or have neither/both. Owner-authed and same-origin, like the brain
+    Slack; or have neither/both. Owner-authed and same-origin, like the brain
     disconnect. The Recall calendar auto-join is a separate capability and is
-    intentionally left untouched. Pure SQLite deletes keyed by the id strings —
+    intentionally left untouched. Pure SQLite deletes keyed by the id strings -
     no ``::uuid`` cast, so it never trips the u_hash/uuid split-brain."""
     user = auth.current_user(request)
     if user is None:
@@ -367,7 +367,7 @@ def asana_oauth_connect(request: Request):
         "redirect_uri": _asana_redirect_uri(),
         "response_type": "code",
         "state": signed_state,
-        # "default" = the app's configured permissions — the catch-all scope
+        # "default" = the app's configured permissions; the catch-all scope
         # Asana documents for full-access apps.
         "scope": "default",
     }
@@ -390,7 +390,7 @@ async def asana_oauth_callback(
 ):
     """Finish Asana OAuth: verify state, exchange the code, store the grant
     (encrypted per-org, provider="asana-oauth"), land back on Connections.
-    Every failure lands with ?asana=error — the dashboard toasts it; no
+    Every failure lands with ?asana=error; the dashboard toasts it; no
     half-connected state is ever stored."""
     def _land(result: str):
         resp = RedirectResponse(f"/dashboard?asana={result}", status_code=302)
@@ -410,7 +410,7 @@ async def asana_oauth_callback(
     )
     if not exchanged.get("ok") or not exchanged.get("refresh_token"):
         return _land("error")
-    # Who/what did we just connect? Best-effort — the grant works regardless.
+    # Who/what did we just connect? Best-effort; the grant works regardless.
     info = await run_in_threadpool(
         asana_client.verify_token, exchanged.get("access_token", "")
     )
@@ -425,7 +425,7 @@ async def asana_oauth_callback(
             )
         )
     except RuntimeError:
-        return _land("error")  # no encryption key — fails closed
+        return _land("error")  # no encryption key; fails closed
     if not stored:
         return _land("error")
     asana_client._reset_brief_cache()  # new grant → fresh workspace view
@@ -505,7 +505,7 @@ async def jira_oauth_callback(
             )
         )
     except RuntimeError:
-        return _land("error")  # no encryption key — fails closed
+        return _land("error")  # no encryption key; fails closed
     if not stored:
         return _land("error")
     jira_client._reset_brief_cache()

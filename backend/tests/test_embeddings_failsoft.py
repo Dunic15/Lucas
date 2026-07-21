@@ -4,7 +4,7 @@
 fastembed model (HF returning 504s) until App Runner's health check killed
 it. The local provider now fails SOFT: hash vectors for this process, and the
 index signature stamps the EFFECTIVE provider so a hash-built index rebuilds
-with real vectors on the next healthy boot — query and index vectors can
+with real vectors on the next healthy boot; query and index vectors can
 never silently disagree across restarts.
 """
 from __future__ import annotations

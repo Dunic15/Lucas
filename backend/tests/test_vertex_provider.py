@@ -1,4 +1,4 @@
-"""BRAIN_PROVIDER=vertex — Gemini via Vertex AI.
+"""BRAIN_PROVIDER=vertex: Gemini via Vertex AI.
 
 Key-free: the access token and the HTTP call are both mocked, so nothing here
 touches google-auth or the network. Verifies request shaping (host derived from

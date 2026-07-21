@@ -1,6 +1,6 @@
 """Standalone spike: talk to Gemini Live (gemini-live-2.5-flash) on Vertex AI.
 
-NOT part of the Laura app — nothing imports this. It exists so you can *hear* the
+NOT part of the Laura app; nothing imports this. It exists so you can *hear* the
 realtime voice and decide whether it's worth wiring into the live meeting path.
 The live meeting contract (ws/<conversation_id>, {type:"speak"}, recall_client)
 is untouched.
@@ -38,7 +38,7 @@ LOCATION = os.environ.get("VERTEX_LOCATION", "us-central1")
 MODEL = os.environ.get("VERTEX_LIVE_MODEL", "gemini-live-2.5-flash")
 LANG = os.environ.get("SPIKE_LANG", "it-IT")
 
-# Bidi runs ONLY on the global host — the region-prefixed host 1008s.
+# Bidi runs ONLY on the global host; the region-prefixed host 1008s.
 GEMINI_URL = (
     "wss://aiplatform.googleapis.com/ws/"
     "google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent"

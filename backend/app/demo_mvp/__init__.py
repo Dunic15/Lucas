@@ -4,13 +4,13 @@ The glue that wires the completed pieces into ONE testable Laura MVP:
 Browser B1 (perception + coordinator + canonical approval) drives the Northstar
 synthetic product, ContextResolver grounds the narration, and the guarded
 follow-up task flows through the existing Action Control Plane. This package
-ADDS glue only — it reuses every canonical seam and creates no second action /
+ADDS glue only; it reuses every canonical seam and creates no second action /
 RAG / browser / planner / demo system.
 
 Everything here is inert unless ``NORTHSTAR_DEMO_ENABLED`` is on AND the browser
 operator is enabled (which itself needs the control plane). With the flag off,
 the demo router 404s, the ``northstar`` provider is never selected, and no code
-path here runs — production behaviour is byte-identical.
+path here runs; production behaviour is byte-identical.
 """
 from __future__ import annotations
 

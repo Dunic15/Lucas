@@ -1,9 +1,9 @@
-"""Text-to-speech for the open-source avatar page (/talk) — replaces Anam's voice.
+"""Text-to-speech for the open-source avatar page (/talk); replaces Anam's voice.
 
-Preferred: ElevenLabs with-timestamps (set ELEVENLABS_API_KEY) — premium voice AND
+Preferred: ElevenLabs with-timestamps (set ELEVENLABS_API_KEY); premium voice AND
 character-level timing alignment, which the page turns into accurate per-word
 lip-sync. Voice fallback chain: configured voice -> stock ElevenLabs voice ->
-edge-tts (free, keyless; the page spreads word timings evenly — approximate
+edge-tts (free, keyless; the page spreads word timings evenly; approximate
 lip-sync). Response is JSON either way:
     {"audio": <base64 mp3>, "words": [...]|null, "wtimes": [ms]|null,
      "wdurations": [ms]|null, "engine": "elevenlabs"|"edge", "tts_ms": <int>}
@@ -28,8 +28,8 @@ router = APIRouter()
 
 _TTS_DEFAULT_VOICE = "en-US-AriaNeural"
 
-# Synthesis cache for SHORT lines. The fixed conversational furniture — acks
-# ("Mm-hm."), search/think fillers, goodbyes, repair lines — repeats constantly,
+# Synthesis cache for SHORT lines. The fixed conversational furniture; acks
+# ("Mm-hm."), search/think fillers, goodbyes, repair lines; repeats constantly,
 # and each repeat used to pay a full vendor round-trip (~300-800ms) right where
 # perceived latency matters most (the ack is the FIRST thing the room hears).
 # In-memory only (transcript-adjacent text is PII: never on disk, never logged),
@@ -133,7 +133,7 @@ async def _tts_elevenlabs(text: str, el_voice: str = "") -> dict | None:
 
     Voice fallback chain: configured voice -> stock ElevenLabs voice -> None
     (edge-tts). A custom voice blocked by the account's plan (402) or licensing
-    must degrade to the STOCK ElevenLabs voice — same engine, real word timings
+    must degrade to the STOCK ElevenLabs voice; same engine, real word timings
     — not all the way down to robotic edge-tts.
     """
     if not settings.elevenlabs_api_key:
@@ -162,7 +162,7 @@ async def _tts_elevenlabs(text: str, el_voice: str = "") -> dict | None:
             "wdurations": wdurs or None,
             "engine": "elevenlabs",
         }
-    except Exception as e:  # noqa: BLE001 — any EL failure degrades to edge-tts
+    except Exception as e:  # noqa: BLE001; any EL failure degrades to edge-tts
         print(f"[tts] elevenlabs failed, falling back to edge-tts: {e}", flush=True)
         return None
 
@@ -172,12 +172,12 @@ async def _tts_elevenlabs(text: str, el_voice: str = "") -> dict | None:
 # (+ word timings) to the {type:"speak"} message, so the avatar page skips its
 # whole /tts round-trip and speaks the moment the message lands. Shares the
 # LRU cache with the /tts endpoint (empty-voice key), so fixed lines (acks,
-# fillers) cost zero after the first synth — see _prewarm in main.py.
+# fillers) cost zero after the first synth; see _prewarm in main.py.
 
 
 async def synthesize_cached(text: str, el_voice: str = "") -> dict | None:
     """ElevenLabs payload (audio+timings) through the cache. None when
-    ElevenLabs is unavailable or failed — callers then leave the speak message
+    ElevenLabs is unavailable or failed; callers then leave the speak message
     audio-less and the page falls back to POST /tts (which still has the free
     edge-tts fallback), so nothing ever goes silent."""
     text = (text or "").strip()[:2000]
@@ -203,7 +203,7 @@ async def synthesize_cached(text: str, el_voice: str = "") -> dict | None:
 
 
 def cached_payload(text: str, el_voice: str = "") -> dict | None:
-    """Cache-only lookup — zero network, zero waiting. For lines whose SEND
+    """Cache-only lookup; zero network, zero waiting. For lines whose SEND
     must never block on synthesis (acks, backchannels, the goodbye)."""
     payload = _cache_get(f"{_norm_voice(el_voice)}|{(text or '').strip()[:2000]}")
     return {**payload, "tts_ms": 0} if payload is not None else None
@@ -220,15 +220,15 @@ async def tts(req: TtsRequest) -> Response:
     import edge_tts
 
     # THIS avatar's ElevenLabs voice (cedric speaks Eric, not the global
-    # default) — resolved from avatar.yaml; any load failure falls back to
+    # default); resolved from avatar.yaml; any load failure falls back to
     # the global voice rather than failing the request.
     try:
         el_voice = avatars.load(req.avatar_id).elevenlabs_voice_id or ""
-    except Exception:  # noqa: BLE001 — unknown avatar id from the page
+    except Exception:  # noqa: BLE001; unknown avatar id from the page
         el_voice = ""
     el_voice = _norm_voice(el_voice)
 
-    # Cache hit: a short line we've already synthesized (ack/filler/goodbye) —
+    # Cache hit: a short line we've already synthesized (ack/filler/goodbye) -
     # instant, no vendor round-trip. Keyed on the voice, so one avatar's line
     # never plays in another avatar's voice.
     cache_key = f"{el_voice}|{text}"
@@ -242,7 +242,7 @@ async def tts(req: TtsRequest) -> Response:
             )
 
     # tts_ms: synthesis latency for the metrics picture (issue #3). A duration
-    # only — the text itself is never logged or exported.
+    # only; the text itself is never logged or exported.
     t0 = time.perf_counter()
     el = await _tts_elevenlabs(text, el_voice)
     if el is not None:
@@ -270,7 +270,7 @@ async def tts(req: TtsRequest) -> Response:
     }
     if cacheable and not settings.elevenlabs_api_key:
         # Cache the edge voice only when it IS the configured voice. With an
-        # ElevenLabs key present, landing here means a transient EL failure —
+        # ElevenLabs key present, landing here means a transient EL failure -
         # caching would freeze the robotic fallback in for the fixed lines
         # long after ElevenLabs recovers. Keyed apart from ElevenLabs entries.
         _cache_put(edge_key, dict(payload))

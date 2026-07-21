@@ -1,4 +1,4 @@
-"""Deterministic seed for the Northstar demo product — the single source of
+"""Deterministic seed for the Northstar demo product; the single source of
 truth for every fact, id, url, and fixture in this environment.
 
 Everything here is FICTIONAL. There is no real SFF / customer / employee /
@@ -22,7 +22,7 @@ CUSTOMER_ID = "acme-robotics"
 AVATAR = "laura"
 
 # A frozen wall-clock. Created records are stamped with this so a create is
-# deterministic across runs (no time.time(), no uuid — see store.new_task_id).
+# deterministic across runs (no time.time(), no uuid; see store.new_task_id).
 DEMO_NOW = "2026-07-20T09:00:00Z"
 
 # The one guarded operation the demo exercises. The idempotency key is STABLE
@@ -82,7 +82,7 @@ def _seed() -> dict[str, Any]:
                 ),
             },
         ],
-        # Acme onboarding checklist — the ACCESSIBLE counterpart to the diagram.
+        # Acme onboarding checklist; the ACCESSIBLE counterpart to the diagram.
         "onboarding_checklist": [
             {"id": "chk-kickoff-call", "label": "Kickoff call completed",
              "status": "done"},
@@ -114,7 +114,7 @@ def _seed() -> dict[str, Any]:
                  "detail": "Target 2026-08-15, at risk given the current blocker."},
             ],
         },
-        # Seed tasks — note the demo's follow-up task is deliberately ABSENT so
+        # Seed tasks; note the demo's follow-up task is deliberately ABSENT so
         # the guarded create has a visible before/after.
         "tasks": [
             {"id": "task-0001", "title": "Send Acme kickoff recap",

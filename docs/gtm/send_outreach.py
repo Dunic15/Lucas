@@ -3,7 +3,7 @@
 Invio outreach personalizzato con CV allegato, dal TUO account Gmail.
 
 PERCHE' ESISTE: il connettore Gmail di Claude crea solo BOZZE e non allega file.
-Questo script fa cio' che al connettore manca — invia davvero e allega il CV —
+Questo script fa cio' che al connettore manca; invia davvero e allega il CV -
 usando la tua Gmail (o l'account @sffstudio.com) via SMTP. Lo esegui TU, con una
 tua "app password": le credenziali restano sul tuo computer, non passano da me.
 

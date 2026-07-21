@@ -5,7 +5,7 @@ Usage:
     python backend/scripts/simulate.py path/to/transcript.txt
     python backend/scripts/simulate.py --avatar laura meeting.txt
 
-Prints the summary, gap checklist, and draft follow-up email — the same
+Prints the summary, gap checklist, and draft follow-up email; the same
 artifact POST /sessions/{id}/end returns after a real meeting. Works offline
 with BRAIN_PROVIDER=stub; use anthropic/ollama for a real summary.
 """

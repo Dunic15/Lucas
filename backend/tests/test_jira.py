@@ -1,4 +1,4 @@
-"""Jira connector (jira_client) — the self-serve Connections-tab integration.
+"""Jira connector (jira_client); the self-serve Connections-tab integration.
 
 Key-free: Jira is mocked at the HTTP layer inside jira_client, the store is a
 fresh temp SQLite. Covers the client contract (soft returns, cred precedence,
@@ -107,7 +107,7 @@ def test_workspace_brief_content_and_cache(monkeypatch, tmp_path):
     assert "ENG-1" in brief and "Ship SSO" in brief and "Dana" in brief
     assert "due: 2026-08-01" in brief
     hits_after_first = len(log)
-    jira_client.workspace_brief("org-a")  # cached — no new HTTP
+    jira_client.workspace_brief("org-a")  # cached; no new HTTP
     assert len(log) == hits_after_first
 
 

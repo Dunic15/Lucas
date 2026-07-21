@@ -5,7 +5,7 @@ DSN, then proves through the policy-bound runtime role:
 
   1. UNIQUE(org_id, idempotency_key) is enforced on queued_actions;
   2. the execution claim (approved → executing CAS) has exactly ONE winner
-     under real concurrency — the double-approval acceptance gate;
+     under real concurrency; the double-approval acceptance gate;
   3. the durable decision record is first-write-wins under concurrency;
   4. FORCE RLS isolates action_decisions and claims across orgs;
   5. session-ended indexing stamps typed/schema/risk/route/origin_avatar and
@@ -187,7 +187,7 @@ def test_claim_race_has_exactly_one_winner(cp):
         {"kind": "email", "ref": "m-1", "route": "native"},
     )
     assert outbox_pg.claim_action_execution(org, "r1") == "lost"
-    # An action that was never indexed is 'missing' — callers fall back.
+    # An action that was never indexed is 'missing': callers fall back.
     assert outbox_pg.claim_action_execution(org, "ghost") == "missing"
 
 

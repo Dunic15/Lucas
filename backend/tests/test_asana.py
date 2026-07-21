@@ -1,4 +1,4 @@
-"""Asana integration (docs/ASANA.md) — client, executor, producer, Petra.
+"""Asana integration (docs/ASANA.md); client, executor, producer, Petra.
 
 Key-free: Asana is mocked at the HTTP layer inside asana_client, the store is
 a fresh temp SQLite, and every executor flag is toggled per test. Covers the

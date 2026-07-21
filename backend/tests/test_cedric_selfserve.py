@@ -1,4 +1,4 @@
-"""Cedric production completion, Laura side (PR D) — key-free.
+"""Cedric production completion, Laura side (PR D); key-free.
 
 Proves the four self-serve seams on SQLite with zero external services:
 
@@ -11,7 +11,7 @@ Proves the four self-serve seams on SQLite with zero external services:
    only org_token; a new nonce rotates it and stale states cannot roll it back.
 3. The brain-connectors catalog is scoped to the CALLER's org (upstream query
    carries their team_id; a fresh org reads not_connected, never the demo
-   team's catalog), and disconnect revokes REMOTELY FIRST — local state and
+   team's catalog), and disconnect revokes REMOTELY FIRST; local state and
    the signing secret survive a failed revoke untouched.
 4. A logged-in fresh org reads calendar/gmail/drive/slack as NOT connected
    even when the platform's global env is configured; the anonymous demo and
@@ -47,7 +47,7 @@ from app.config import settings
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LAURA_STORE_PATH", str(tmp_path / "store.sqlite3"))
     importlib.reload(store)
-    importlib.reload(ledger)  # shares the sqlite file — needs its tables too
+    importlib.reload(ledger)  # shares the sqlite file; needs its tables too
     return TestClient(main_module.app)
 
 
@@ -176,7 +176,7 @@ def test_cookie_user_cannot_supply_integration_wiring(
 
 def test_org_token_scopes_cancel(client, monkeypatch):
     """A per-org bearer cancels ONLY its own org's sessions; another org's
-    stays running and answers a 404 BYTE-IDENTICAL to a nonexistent bot_id —
+    stays running and answers a 404 BYTE-IDENTICAL to a nonexistent bot_id -
     no cross-tenant existence oracle (adversarial review should-fix 2). The
     global bearer is scoped to the Demo org."""
     from app import recall_client
@@ -209,7 +209,7 @@ def test_org_token_scopes_cancel(client, monkeypatch):
 
 
 def test_org_token_scopes_artifact_read(client, monkeypatch):
-    """Wrong-org bot_ids — finalized OR live — answer the IDENTICAL 404 as a
+    """Wrong-org bot_ids, finalized OR live, answer the IDENTICAL 404 as a
     nonexistent one: /artifact is never an existence/progress oracle."""
     monkeypatch.setattr(settings, "laura_api_token", "sesame")
     raw = store.mint_org_token("org_sff", "svc")
@@ -222,7 +222,7 @@ def test_org_token_scopes_artifact_read(client, monkeypatch):
     denied = client.get("/sessions/b_art_other/artifact", headers=_bearer(raw))
     assert denied.status_code == ghost.status_code == 404
     assert denied.content == ghost.content  # indistinguishable
-    # a LIVE session of another org: same identical 404 — no in_progress probe
+    # a LIVE session of another org: same identical 404; no in_progress probe
     store.create("bot_live_x", "https://meet.google.com/ax", "laura", org_id="org_other")
     try:
         live = client.get("/sessions/bot_live_x/artifact", headers=_bearer(raw))
@@ -367,7 +367,7 @@ def test_org_action_status_is_tenant_scoped_before_finalize(client, monkeypatch)
 
 def test_summary_scoped_for_per_org_bearer(client, monkeypatch):
     """/dashboard/summary's machine path: a per-org bearer sees its org + the
-    legacy unowned rows — never the Demo org's; the global bearer sees only
+    legacy unowned rows; never the Demo org's; the global bearer sees only
     Demo + legacy rows."""
     monkeypatch.setattr(settings, "laura_api_token", "sesame")
     raw = store.mint_org_token("org_sff", "svc")
@@ -624,7 +624,7 @@ def test_reinstall_rotates_token_same_state_retries_and_old_state_is_stale(
     assert store.begin_brain_install(user["org_id"], "cedric", second_nonce)
 
     # P0 regression: once a newer start is pending, an old installed nonce is
-    # stale — it must not return 200 or resync old workspace credentials.
+    # stale; it must not return 200 or resync old workspace credentials.
     old_during_new = complete(first_state)
     assert old_during_new.status_code == 409
     assert old_during_new.json()["error"] == "stale install state"
@@ -1101,7 +1101,7 @@ def test_disconnect_remote_404_counts_as_revoked(client, monkeypatch, google_on)
 
 
 def test_disconnect_without_orchestrator_is_local_only(client, monkeypatch, google_on):
-    """CEDRIC_ORGS_URL unset (local/key-free): nothing remote exists — the
+    """CEDRIC_ORGS_URL unset (local/key-free): nothing remote exists; the
     local disconnect proceeds and reports remote_revoked False."""
     monkeypatch.setattr(settings, "cedric_orgs_url", "")
     user = _login(client)

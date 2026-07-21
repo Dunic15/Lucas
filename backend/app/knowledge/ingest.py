@@ -1,16 +1,16 @@
-"""Company Brain ingestion — extraction, chunking, jobs, and the index bridge.
+"""Company Brain ingestion; extraction, chunking, jobs, and the index bridge.
 
 The worker tick (main.py lifespan loop, NEVER the live path) claims due
 knowledge_sync_jobs per org with the SKIP LOCKED + lease pattern and runs:
 
-  ingest_document — raw bytes → extract → cap → checksum → transactional
+  ingest_document; raw bytes → extract → cap → checksum → transactional
                     publish (version + chunks) → enqueue an index rebuild.
-  rebuild_index   — Postgres chunks → rag.build_org_index_from_chunks per
+  rebuild_index: Postgres chunks → rag.build_org_index_from_chunks per
                     assigned avatar; the in-memory index files this writes
                     are what rag.retrieve(org_id=...) merges live.
-  sync_drive      — list an org's Drive folder with ITS OWN OAuth token
+  sync_drive; list an org's Drive folder with ITS OWN OAuth token
                     (google_client org tokens; requires the drive.readonly
-                    scope — a clear per-job error tells the operator to
+                    scope; a clear per-job error tells the operator to
                     reconnect Google with that scope, never a silent skip).
 
 Extraction reuses rag.py's chunkers so Company Brain retrieval behaves
@@ -61,7 +61,7 @@ def extract_text(filename: str, data: bytes) -> str:
             return "\n\n".join(p.text for p in document.paragraphs)
         except Exception as e:  # noqa: BLE001
             raise RuntimeError(f"docx unreadable ({type(e).__name__})") from e
-    # Default: treat as UTF-8 text — covers extensionless pastes and .csv-ish
+    # Default: treat as UTF-8 text; covers extensionless pastes and .csv-ish
     # content without pretending to parse binaries.
     if b"\x00" in data[:1024]:
         raise RuntimeError("unsupported binary file type")
@@ -129,7 +129,7 @@ def ingest_document(org_id: str, document_id: str) -> None:
 
 
 def _avatars_with_index_files(org_id: str) -> set[str]:
-    """Avatar ids that currently have an on-disk org index file — they must
+    """Avatar ids that currently have an on-disk org index file; they must
     be swept even when their assignments vanished (a deleted source's stale
     index would otherwise keep serving removed content forever)."""
     slug = rag._org_slug(org_id)
@@ -150,14 +150,14 @@ def rebuild_indexes(org_id: str) -> int:
 
     Covers the UNION of currently assigned avatars and avatars whose index
     file exists on disk: an avatar with zero remaining chunks (source deleted
-    or unassigned) gets its file REMOVED — retrievability ends with the
+    or unassigned) gets its file REMOVED; retrievability ends with the
     assignment, not with the next deploy."""
     targets = set(dal.assigned_avatars(org_id)) | _avatars_with_index_files(org_id)
     total = 0
     for avatar_id in sorted(targets):
         try:
             avatar = avatars.load(avatar_id)
-        except Exception:  # noqa: BLE001 — an uninstalled avatar id
+        except Exception:  # noqa: BLE001; an uninstalled avatar id
             continue
         chunks = dal.chunks_for_avatar(org_id, avatar_id)
         total += rag.build_org_index_from_chunks(avatar, org_id, chunks)
@@ -167,7 +167,7 @@ def rebuild_indexes(org_id: str) -> int:
 def list_folders(org_id: str) -> tuple[list[dict], str]:
     """List the org's Google Drive folders (id + name) with its OWN OAuth token,
     so the dashboard can offer a PICKER instead of a pasted folder link when
-    Google is already connected. Returns (folders, "") or ([], reason) — never
+    Google is already connected. Returns (folders, "") or ([], reason); never
     raises; a missing token/scope is a clean reason, not a 500."""
     from .. import google_client
 
@@ -203,7 +203,7 @@ def list_folders(org_id: str) -> tuple[list[dict], str]:
 def sync_drive(org_id: str, source_id: str) -> int:
     """Pull an org's Drive folder with the org's OWN Google token.
 
-    Requires the drive.readonly scope on the org's OAuth grant — the same
+    Requires the drive.readonly scope on the org's OAuth grant; the same
     token machinery the native executor uses (google_client), never the
     global inbox token that drive_client.folder_brief uses. A 403 becomes a
     clear reconnect instruction on the job."""
@@ -260,7 +260,7 @@ def sync_drive(org_id: str, source_id: str) -> int:
             if body.status_code != 200:
                 continue
             data = body.content[: settings.knowledge_max_file_bytes]
-        except Exception:  # noqa: BLE001 — skip one file, keep the sync
+        except Exception:  # noqa: BLE001; skip one file, keep the sync
             continue
         doc = dal.upsert_document(
             org_id, source_id, filename, mime=mime, size_bytes=len(data),
@@ -277,7 +277,7 @@ def sync_drive(org_id: str, source_id: str) -> int:
 # ── multi-instance index convergence ────────────────────────────────────────
 # App Runner instances do NOT share a disk: the instance that claims a
 # rebuild job refreshes ITS index files only. Every instance therefore runs a
-# periodic epoch check (dal.knowledge_epoch — monotonic, derived from the
+# periodic epoch check (dal.knowledge_epoch; monotonic, derived from the
 # never-deleted rebuild job ids) against a local sidecar marker, and rebuilds
 # its OWN files from Postgres when behind. Convergence bound = the refresh
 # interval below; nothing here ever runs on the live transcript path.
@@ -301,7 +301,7 @@ def _local_epoch(org_id: str) -> int:
 
 
 def _local_index_org_ids() -> set[str]:
-    """Org ids with index/marker files on THIS instance's disk — they must be
+    """Org ids with index/marker files on THIS instance's disk; they must be
     swept even when the org no longer appears in the durable chunk listing
     (its last source was deleted). Slugs are byte-identical to org ids for
     every real id shape (uuid / u_<hash>)."""
@@ -323,7 +323,7 @@ def _local_index_org_ids() -> set[str]:
 def sync_local_indexes(org_id: str, *, force: bool = False) -> bool:
     """Bring THIS instance's index files for one org up to the durable epoch.
     Returns True when a rebuild ran. The epoch is read BEFORE rebuilding, so
-    a concurrent bump simply makes the next pass rebuild again — staleness
+    a concurrent bump simply makes the next pass rebuild again; staleness
     can race shorter, never longer."""
     epoch = dal.knowledge_epoch(org_id)
     if not force and _local_epoch(org_id) >= epoch:
@@ -355,7 +355,7 @@ def refresh_local_indexes(max_orgs: int = 50) -> int:
         try:
             if sync_local_indexes(org_id):
                 refreshed += 1
-        except Exception:  # noqa: BLE001 — one org's failure must not stop the rest
+        except Exception:  # noqa: BLE001; one org's failure must not stop the rest
             continue
     return refreshed
 
@@ -376,7 +376,7 @@ def process_due(max_orgs: int = 5, jobs_per_org: int = 4) -> int:
                     sync_local_indexes(org_id, force=True)
                 elif job["kind"] == "sync_drive":
                     sync_drive(org_id, job["source_id"])
-            except Exception as e:  # noqa: BLE001 — distilled reason only
+            except Exception as e:  # noqa: BLE001; distilled reason only
                 ok, error = False, f"{type(e).__name__}: {e}"[:200]
                 if job["kind"] == "ingest_document" and job["document_id"]:
                     try:

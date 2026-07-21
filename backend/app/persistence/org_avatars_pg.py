@@ -1,17 +1,17 @@
-"""Postgres DAL for org avatar overlays (M2) — outbox_pg discipline.
+"""Postgres DAL for org avatar overlays (M2); outbox_pg discipline.
 
 Draft → publish → history is strictly linear and append-only:
 
-- exactly ONE editable draft per (org, avatar) — enforced by a partial unique
+- exactly ONE editable draft per (org, avatar): enforced by a partial unique
   index; edits converge on it under an optimistic ``version_token``;
 - publish freezes the draft row forever (``published``) and moves the single
   ``org_avatars.current_version`` pointer inside one FOR UPDATE transaction,
   so two concurrent publishes serialize and the loser gets a clean conflict;
-- rollback republishes an OLD version's payload as a NEW version — history is
+- rollback republishes an OLD version's payload as a NEW version; history is
   never rewritten, and provenance always answers "what was live at time T".
 
 Every write appends to ``org_avatar_audit`` (INSERT-only by grant). Every
-function pins ``app.current_org`` first — FORCE RLS is the backstop. Nothing
+function pins ``app.current_org`` first: FORCE RLS is the backstop. Nothing
 here logs overlay content beyond field names.
 """
 from __future__ import annotations
@@ -203,7 +203,7 @@ def save_draft(
     """Create or update THE draft. Returns (draft_row, error).
 
     Optimistic concurrency: when a draft exists, the caller must present its
-    current ``version_token`` — a stale editor gets 'version_conflict', never
+    current ``version_token``: a stale editor gets 'version_conflict', never
     a silent overwrite. Every successful save rotates the token."""
     engine = _engine()
     with engine.begin() as conn:
@@ -296,7 +296,7 @@ def publish_draft(
 
     FOR UPDATE on the org_avatars row serializes concurrent publishes: the
     winner freezes the draft and moves the pointer; the loser finds no draft
-    (or a rotated token) and gets a clean conflict — the pointer can never be
+    (or a rotated token) and gets a clean conflict; the pointer can never be
     corrupted or moved twice."""
     engine = _engine()
     with engine.begin() as conn:

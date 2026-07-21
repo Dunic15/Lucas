@@ -1,4 +1,4 @@
-"""Typed-action producer (brain.type_actions) — the finalize-time step that
+"""Typed-action producer (brain.type_actions); the finalize-time step that
 turns free-text actions into native-executor specs where they CLEARLY map.
 
 Key-free: forced onto the stub post-provider (deterministic regex mapping), so

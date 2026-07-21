@@ -53,7 +53,7 @@ def test_yaml_none_inherits_global(monkeypatch):
 
 def test_backchannel_suppressed_in_wake_word_mode(monkeypatch):
     """In a GROUP, a wake-word avatar makes no unprompted backchannel. (The
-    1:1 relaxation — a single human present drops the wake requirement, Duccio
+    1:1 relaxation; a single human present drops the wake requirement, Duccio
     2026-07-20 — is asserted separately below, so this uses a 2-human roster.)"""
     monkeypatch.setattr(settings, "backchannel_enabled", True)
     monkeypatch.setattr(settings, "backchannel_min_words", 3)
@@ -138,7 +138,7 @@ def test_self_introduction_runs_when_wake_word_off(monkeypatch):
 
 def test_no_ack_on_partial_in_wake_word_mode(monkeypatch, tmp_path):
     """The core of 'listen fully, speak only after I finish': a partial that
-    addresses a wake-word avatar by name must NOT trigger the instant 'Sure —'
+    addresses a wake-word avatar by name must NOT trigger the instant 'Sure -'
     ack spoken over the still-talking speaker (owner ask 2026-07-20)."""
     import importlib
 

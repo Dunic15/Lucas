@@ -1,4 +1,4 @@
-"""In-process Northstar browser provider (BrowserProvider) — deterministic.
+"""In-process Northstar browser provider (BrowserProvider); deterministic.
 
 Drives the Northstar synthetic product WITHOUT a real browser, a network
 socket, or model credentials: it reads the product's own state
@@ -10,7 +10,7 @@ create mutates the product store; a re-observation sees task-0003).
 It is a legitimate provider behind the B0/B1 interface: policy classification,
 coordinate grounding, the canonical approval and the receipt all operate
 unchanged. Screenshot "bytes" are a deterministic JSON perception payload (the
-visual-only cue a vision model would see) — transient, stripped at the operator
+visual-only cue a vision model would see); transient, stripped at the operator
 boundary, never persisted/logged. No page-controlled ids leak: element ids are
 server-defined.
 """
@@ -25,7 +25,7 @@ _VIEWPORT = {"width": 1280, "height": 720}
 _HOME = "http://127.0.0.1:8971/"
 
 # Deterministic geometry for the five onboarding stage nodes: all share the
-# accessible name "Onboarding stage" and carry NO stage-name text — the blocked
+# accessible name "Onboarding stage" and carry NO stage-name text; the blocked
 # one is knowable only from fill (amber) + position (2nd), i.e. visually.
 _STAGE_ORDER = ["kickoff", "integration", "config", "uat", "golive"]
 _STAGE_FILL = {"kickoff": "green", "integration": "amber", "config": "grey",

@@ -1,16 +1,16 @@
 """Authenticated symmetric encryption for secrets at rest.
 
 Protects the per-org Google refresh token (``store.py`` org_oauth) so a leak of
-the SQLite file never exposes a live OAuth credential — see
+the SQLite file never exposes a live OAuth credential; see
 docs/product/NATIVE-INTEGRATIONS-PLAN.md ("persist encrypted, never in git").
 
 Cipher: **Fernet** (AES-128-CBC + HMAC-SHA256) from the vetted ``cryptography``
-library — deliberately NOT a hand-rolled construction, so it survives a security
+library; deliberately NOT a hand-rolled construction, so it survives a security
 review. The 32-byte Fernet key is derived from the caller's secret via SHA-256,
 so call sites keep passing an arbitrary key string and can source it from AWS SSM
 SecureString / KMS (see ``store._oauth_enc_secret``) without changing.
 
-Go-live: the secret must come from ``GOOGLE_TOKEN_ENC_KEY`` — a random value held
+Go-live: the secret must come from ``GOOGLE_TOKEN_ENC_KEY``: a random value held
 in SSM SecureString (KMS-encrypted at rest, as the Cedric bearer is), rotated
 independently of the session cookie key.
 
@@ -45,13 +45,13 @@ def encrypt(plaintext: str, secret: str) -> str:
 
 def decrypt(token: str, secret: str) -> str:
     """Inverse of :func:`encrypt`. Raises ``ValueError`` on a bad/forged/foreign
-    token (wrong key, truncation, tampering) — callers treat that as "no token".
+    token (wrong key, truncation, tampering); callers treat that as "no token".
     Falls back to the legacy HMAC-CTR reader so tokens written before the Fernet
     upgrade still decrypt."""
     try:
         return _fernet(secret).decrypt((token or "").encode()).decode()
     except Exception:
-        pass  # not a Fernet token (or wrong key) — try the legacy reader below
+        pass  # not a Fernet token (or wrong key); try the legacy reader below
     try:
         return _legacy_decrypt(token, secret)
     except ValueError:

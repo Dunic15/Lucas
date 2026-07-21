@@ -1,13 +1,13 @@
-"""Recall.ai client — gets the bot into the meeting and streams transcript back.
+"""Recall.ai client; gets the bot into the meeting and streams transcript back.
 
 The bot does two things for us:
   1. Renders our avatar page as its camera (output_media kind=webpage).
   2. Streams finalized transcript utterances to our webhook (transcript.data),
      each tagged with the speaking participant's name (Recall's built-in
-     diarization — no separate speaker-ID service needed for the MVP).
+     diarization; no separate speaker-ID service needed for the MVP).
 
 Field shapes follow Recall's current Create Bot schema. If your Recall API
-version differs, the request body is isolated here — adjust in one place.
+version differs, the request body is isolated here; adjust in one place.
 """
 from __future__ import annotations
 
@@ -286,10 +286,10 @@ def _create_bot_body(
             # to be delivered at all.
             "participant_events": {},
             # Real-time transcript utterances delivered here. Partials arrive
-            # WHILE someone is still talking — they power barge-in and the
+            # WHILE someone is still talking; they power barge-in and the
             # instant ack; finals (transcript.data) drive the actual answers.
             # participant_events give the avatar a live roster (who is in the
-            # room, including people who never speak) — without them she can't
+            # room, including people who never speak); without them she can't
             # know "we are 3 in this meeting" or address people by name.
             "realtime_endpoints": [
                 {
@@ -400,7 +400,7 @@ def _create_bot_attempts(
 
     if attach_ears:
         # Gemini ears: Recall streams the meeting's mixed raw audio (s16le
-        # 16 kHz mono) over a websocket realtime endpoint — audio volume is
+        # 16 kHz mono) over a websocket realtime endpoint; audio volume is
         # too high for webhooks. Ears-enabled copies of every attempt go
         # FIRST; the untouched originals remain as fallback, so a Recall 4xx
         # on the audio config can never keep Laura out of a meeting.
@@ -488,7 +488,7 @@ def create_bot(
     """Send a bot into `meeting_url` showing `avatar_page_url` on its camera.
 
     If `join_at` (ISO 8601, >=10 min in the future) is given, Recall SCHEDULES the
-    bot to join then — this is how calendar auto-join dispatches bots ahead of time.
+    bot to join then; this is how calendar auto-join dispatches bots ahead of time.
     Returns the created bot object (includes its `id`).
 
     Whether the bot streams audio to the Gemini ears relay is decided PER AVATAR
@@ -542,7 +542,7 @@ def create_bot(
             raise
         result = resp.json()
         # Which attempt won matters operationally (did the bot get the ears
-        # audio endpoint, or a fallback?) — label only, no meeting content.
+        # audio endpoint, or a fallback?); label only, no meeting content.
         print(f"[recall] bot created via {label}", flush=True)
         # Private hand-off to main.py. This key is removed before any API
         # response is built and the raw capability is never persisted/logged.
@@ -637,7 +637,7 @@ def leave_call(bot_id: str) -> None:
     Hardened like delete_bot: retry the transient 5xx/429 window, then
     raise_for_status so a PERSISTENT Recall failure propagates to the caller.
     Swallowing a 5xx (the old behavior) let finalize believe the meter had
-    stopped, delete the session, and leak the per-minute bill forever — the
+    stopped, delete the session, and leak the per-minute bill forever; the
     reconcile backstop only revisits sessions still in the store, so a
     removed-but-still-live bot was never retried.
     """
@@ -655,7 +655,7 @@ def send_chat_message(bot_id: str, message: str) -> None:
 
     Recall has no raise-hand action on any platform, so the chat message is
     the in-platform half of the avatar's hand-raise (the visual half is the
-    gesture on her /talk tile). Best-effort at the call site — a chat failure
+    gesture on her /talk tile). Best-effort at the call site; a chat failure
     must never block or delay the live path.
     """
     _request(

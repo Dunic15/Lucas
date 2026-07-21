@@ -1,4 +1,4 @@
-"""Test harness for the Northstar demo — network-free, deterministic.
+"""Test harness for the Northstar demo; network-free, deterministic.
 
 Adds the repo root to sys.path so `demos.northstar...` imports resolve, drives
 the product in-process via TestClient, and resets state before every test so

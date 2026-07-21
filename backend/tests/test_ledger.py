@@ -73,7 +73,7 @@ def test_init_db_migrates_pre_action_id_ledger():
             " VALUES ('k', 'cedric', 'action', 'legacy item', 1.0)"
         )
 
-    # Boot again on the existing DB — must NOT raise (this is what rolled back).
+    # Boot again on the existing DB; must NOT raise (this is what rolled back).
     ledger._init_db()
 
     with store._LOCK, store._connect() as conn:
@@ -96,7 +96,7 @@ def test_init_db_migrates_pre_action_id_ledger():
 
 
 def test_resolve_outcomes_terminal_and_detail():
-    """rejected/failed close an item exactly like done — terminal, never
+    """rejected/failed close an item exactly like done; terminal, never
     reopenable — and the distilled detail lands in resolution_detail."""
     url = "https://meet.google.com/out-comes-ts1"
     ledger.record_meeting(
@@ -198,7 +198,7 @@ def test_resolve_item_api():
 def test_different_meeting_type_does_not_resolve_steps():
     url = "https://meet.google.com/typ-emism-tc1"
     ledger.record_meeting(url, "laura", "bot-1", _artifact(missing=["security_approval"]))
-    # Second meeting on the same link but a different (unknown) type — the
+    # Second meeting on the same link but a different (unknown) type; the
     # step must stay open; resolution is only deterministic within one template.
     ledger.record_meeting(url, "laura", "bot-2", _artifact(missing=[], meeting_type=""))
     key = ledger.meeting_key(url)

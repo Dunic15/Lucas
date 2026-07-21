@@ -2,7 +2,7 @@
 
 Cedric's server is mocked (no network): we fake ``cedric_mcp.httpx.post`` with a
 tiny JSON-RPC server that dispatches on the posted method, and assert Laura's
-CLIENT side matches the agreed contract exactly — endpoint, headers
+CLIENT side matches the agreed contract exactly; endpoint, headers
 (X-Laura-Org-Id + bearer), tools/list, tools/call result shapes (success /
 isError / approval_required / truncated), the error discriminators, live-path
 gating (readOnlyHint && latencyClass=fast), and the tools.py dispatch routing.
@@ -78,7 +78,7 @@ def _wire(monkeypatch):
     monkeypatch.setattr(settings, "cedric_mcp_enabled", True)
     monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric.example/api/laura/orgs")
     monkeypatch.setattr(settings, "cedric_orgs_token", "deploy-bearer")
-    # Deterministic bearer — isolate from the secret registry / SSM.
+    # Deterministic bearer; isolate from the secret registry / SSM.
     monkeypatch.setattr(cedric_callback, "_bearer_for", lambda org, legacy="": "deploy-bearer")
     cedric_mcp._reset()
     yield

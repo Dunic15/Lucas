@@ -149,7 +149,7 @@ def _member_billing_role(user: Optional[dict]) -> Optional[str]:
     """This user's active org role through the private boundary, or None.
 
     Bill against the DURABLE identity: member_uid is the Postgres user UUID;
-    user_id is the ephemeral u_<hash> cookie cache-key (not a UUID — member_role
+    user_id is the ephemeral u_<hash> cookie cache-key (not a UUID; member_role
     guards the uuid cast, so a session-shaped id resolves to None, not a 500).
     Fall back to user_id for the key-free path.
     """
@@ -204,7 +204,7 @@ def _summary_for_org(org: Optional[str], user: Optional[dict] = None) -> dict:
     # An org granted more avatar-seconds than the self-serve Solo allotment
     # WITHOUT a Stripe subscription is on a managed/comped plan (e.g. an
     # enterprise grant). Self-serve "Upgrade to Solo" would be a downgrade, and
-    # the checkout role-gate would 403 any non-owner member — so mark it
+    # the checkout role-gate would 403 any non-owner member; so mark it
     # ineligible and let the dashboard hide the button instead of surfacing a
     # bare "forbidden".
     managed = (

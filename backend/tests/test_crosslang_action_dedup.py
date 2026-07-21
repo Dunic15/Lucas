@@ -1,7 +1,7 @@
 """Cross-language action dedup: one spoken request must never execute twice.
 
 Production incident (2026-07-10): the room asked live, in Italian, "schedula un
-meeting di prova con Ben domani alle 15 per la review del flusso" — captured by
+meeting di prova con Ben domani alle 15 per la review del flusso": captured by
 queue_action with a live action_id. At finalize the summarizer re-extracted the
 SAME request in English ("Schedule a test meeting with Ben tomorrow at 15:00
 for the flow review"). The #84 word-overlap dedup can't bridge the language gap
@@ -9,9 +9,9 @@ for the flow review"). The #84 word-overlap dedup can't bridge the language gap
 approval cards → both approved → two calendar events.
 
 Two-layer fix, both covered here:
-  (a) prevention at the source — post_meeting shows the live captures to the
+  (a) prevention at the source; post_meeting shows the live captures to the
       summarizer with an explicit do-not-re-extract (any language) instruction;
-  (b) safety net at the merge — brain.semantic_action_duplicates, one cheap
+  (b) safety net at the merge; brain.semantic_action_duplicates, one cheap
       completion at finalize (stub: no-op; failure: fail open, keep both).
 
 Key-free like the rest of the suite: recall/anam are monkeypatched and every
@@ -78,7 +78,7 @@ def real_post_provider(monkeypatch):
 
 def test_merge_dedupes_crosslang_summarizer_duplicate(monkeypatch, real_post_provider):
     """IT live capture vs its EN re-extraction: word overlap can't match them
-    (no shared content words), the semantic net must — live entry wins, keeps
+    (no shared content words), the semantic net must; live entry wins, keeps
     its live action_id, absorbs the summarizer's structured deadline/owner."""
     prompts: list[str] = []
 
@@ -109,7 +109,7 @@ def test_merge_stub_mode_stays_keyfree_but_open(monkeypatch):
     survives as two actions — documented fail-open gap — and NO model is called."""
     monkeypatch.setattr(settings, "brain_provider_post", "stub")
 
-    def boom(*a, **k):  # pragma: no cover — must never run
+    def boom(*a, **k):  # pragma: no cover; must never run
         raise AssertionError("stub mode must not call the model")
 
     monkeypatch.setattr(brain.llm, "complete", boom)

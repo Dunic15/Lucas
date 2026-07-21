@@ -1,6 +1,6 @@
 """Hand-raise motivation gate (Inner Thoughts-lite): the SKIP gate decides if a
 contribution is grounded; this policy decides if RAISING for it is socially
-worth it — near-dup guard, per-meeting budget, pacing, back-off after the room
+worth it; near-dup guard, per-meeting budget, pacing, back-off after the room
 ignored her. No keys, no model."""
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def test_min_gap_paces_consecutive_raises():
 
 def test_ignored_hand_backs_off_longer():
     # 100s would clear the normal gap, but the room ignored the last raise:
-    # silence means "not now" — wait ignored_gap_seconds instead.
+    # silence means "not now": wait ignored_gap_seconds instead.
     assert not should_raise_hand(now=1100.0, count=1, last_at=1000.0,
                                  last_ignored=True, **_KW)
     assert should_raise_hand(now=1250.0, count=1, last_at=1000.0,

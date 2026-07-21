@@ -1,4 +1,4 @@
-"""Ditto real-time adapter — bridges Ditto's online StreamSDK to gpu/server.py.
+"""Ditto real-time adapter; bridges Ditto's online StreamSDK to gpu/server.py.
 
 The engine seam in server.py expects a pipeline object with:
     warmup()                                  (blocking, called once via thread)
@@ -7,9 +7,9 @@ The engine seam in server.py expects a pipeline object with:
 How this maps onto Ditto (antgroup/ditto-talkinghead):
   * ONE StreamSDK is created at warmup and the avatar is registered ONCE from
     the reference portrait (face detect + appearance extraction are the slow
-    part — doing them per-utterance would blow the <2s first-frame budget).
+    part; doing them per-utterance would blow the <2s first-frame budget).
   * Ditto's writer normally saves frames to an .mp4. We swap `sdk.writer` for
-    a shim with the same call shape — `writer(frame_rgb, fmt="rgb")` — that
+    a shim with the same call shape, `writer(frame_rgb, fmt="rgb")`, that
     JPEG-encodes and pushes to a queue, which `stream()` drains.
   * Audio: server.py hands us the TTS mp3; Ditto's hubert wants 16kHz mono
     f32. ffmpeg (static binary from imageio-ffmpeg) does the decode.
@@ -19,7 +19,7 @@ How this maps onto Ditto (antgroup/ditto-talkinghead):
     samples) -> ~5 output frames per chunk at 25fps.
 
 Uses the TRT "online" config (v0.4_hubert_cfg_trt_online.pkl) + the
-ditto_trt_Ampere_Plus engines — needs an Ampere-or-newer GPU (3090 / A10G /
+ditto_trt_Ampere_Plus engines; needs an Ampere-or-newer GPU (3090 / A10G /
 L40S / 4090). The pytorch checkpoints are offline-only; keep them for clip
 generation, not live.
 
@@ -27,11 +27,11 @@ Env knobs:
   DITTO_REPO           path of the cloned repo      (default /opt/ditto/repo)
   DITTO_CHECKPOINTS    path of the checkpoints dir  (default /opt/ditto/checkpoints)
   DITTO_CHUNK          override chunksize, "3,5,2"
-  DITTO_EMO_INTENSITY  0..1 emotion strength (default 0.5) — full 1.0 overrides
+  DITTO_EMO_INTENSITY  0..1 emotion strength (default 0.5); full 1.0 overrides
                        lip articulation (closed-smile mid-syllable); 0 disables
 
 Expect a tuning session on the real GPU (chunk pacing, queue depths, fade
-settings) — that was always the plan for launch day.
+settings); that was always the plan for launch day.
 """
 from __future__ import annotations
 
@@ -60,13 +60,13 @@ _WINDOW_PAD = 80     # alignment pad Ditto's online examples add to the window
 _EMO_FOR = {"neutral": 4, "happy": 3, "excited": 3, "serious": 4, "concerned": 5}
 
 # How hard the emotion drives the face, 0..1. A FULL emotion row overrides lip
-# articulation — the 2026-07-12 A/B (same audio, aligned frames) caught "happy"
+# articulation; the 2026-07-12 A/B (same audio, aligned frames) caught "happy"
 # rendering a CLOSED smile mid-syllable where neutral had parted, articulating
 # lips. Blending the emotion row with neutral keeps the expression as a tint
 # the mouth can articulate through. 0 = always neutral, 1 = full (old behavior).
 def _read_emo_intensity() -> float:
     """Parse DITTO_EMO_INTENSITY, clamped to [0,1]. Runs at import (inside
-    DittoEngine.start); a typo'd env must NOT crash the server's whole startup —
+    DittoEngine.start); a typo'd env must NOT crash the server's whole startup -
     a wrong intensity beats a dead face. Falls back to the 0.5 default."""
     raw = os.environ.get("DITTO_EMO_INTENSITY", "0.5")
     try:
@@ -83,7 +83,7 @@ def _ffmpeg_bin() -> str:
     try:
         import imageio_ffmpeg
         return imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception:  # noqa: BLE001 — fall back to system ffmpeg
+    except Exception:  # noqa: BLE001; fall back to system ffmpeg
         return "ffmpeg"
 
 
@@ -164,7 +164,7 @@ class DittoPipeline:
         self.sdk.writer = self.writer
 
         # DITTO_TIMING=1: per-stage probes to find the fps bottleneck. Wraps
-        # wav2feat (pure hubert cost) — run_chunk minus wav2feat = queue
+        # wav2feat (pure hubert cost); run_chunk minus wav2feat = queue
         # backpressure from downstream stages. Numbers only, no content (PII).
         if os.environ.get("DITTO_TIMING"):
             import time as _t
@@ -196,7 +196,7 @@ class DittoPipeline:
     def _set_emotion(self, emotion: str | None) -> None:
         """Point Ditto's condition handler at this clip's mood.
 
-        The emotion is one row of the motion generator's conditioning vector —
+        The emotion is one row of the motion generator's conditioning vector -
         pure numpy (a softmax over 8 labels), rebuilt here in microseconds. No
         engine or avatar re-registration is involved. Safe between utterances:
         the pipeline serves one clip at a time by design."""
@@ -217,7 +217,7 @@ class DittoPipeline:
             ch.num_emo = 1
             ch.emo_seq = np.concatenate([ch.emo_lst] * ch.seq_frames, 0)
             self._cur_emo = idx
-        except Exception as e:  # noqa: BLE001 — a wrong face beats a dead face
+        except Exception as e:  # noqa: BLE001; a wrong face beats a dead face
             print(f"[ditto] set_emotion fallita ({e}) — resto neutrale", flush=True)
 
     # ── one utterance -> stream of JPEG frames ──
@@ -231,7 +231,7 @@ class DittoPipeline:
         self._set_emotion(emotion)
 
         # Flush any stale frames a previous utterance's trailing pipeline work
-        # left in the queue — serving them now would lag the lips behind the
+        # left in the queue; serving them now would lag the lips behind the
         # audio (found live: back-to-back clips bled ~30 frames into each other).
         try:
             while True:
@@ -273,12 +273,12 @@ class DittoPipeline:
             # corta, così la clip chiude ~1s dopo l'ULTIMO frame reale invece
             # di aspettare 10s un frame che non arriverà (l'off-by-one tra
             # n_expected e frame prodotti costava una coda muta di 10s a clip
-            # — era LUI il "11fps" misurato, non la pipeline).
+            #; era LUI il "11fps" misurato, non la pipeline).
             timeout = 10.0 if feeder.is_alive() else 1.0
             try:
                 frame = await asyncio.to_thread(self.writer.frames.get, True, timeout)
             except queue.Empty:
-                break   # generation stalled/finished — end the clip gracefully
+                break   # generation stalled/finished; end the clip gracefully
             served += 1
             emitted += 1.0
             if emitted >= keep_every:

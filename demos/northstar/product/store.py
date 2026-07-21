@@ -5,9 +5,9 @@ Deliberately process-local and network-free: no database, no external service.
 back-to-back and lets every test start from an identical world.
 
 The guarded operation lives here as two explicit phases:
-  * `preview_followup_task()` — pure read, returns the EXACT record that would
+  * `preview_followup_task()`: pure read, returns the EXACT record that would
     be written. Never mutates. This is what a caller shows for approval.
-  * `create_followup_task()` — the idempotent write. Keyed on a stable
+  * `create_followup_task()`: the idempotent write. Keyed on a stable
     idempotency key, so the first approved execution creates the task and every
     later execution of the same decision returns that same task, created=False.
 

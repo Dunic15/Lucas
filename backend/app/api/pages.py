@@ -1,4 +1,4 @@
-"""Static pages + per-avatar model/portrait assets — extracted from main.py.
+"""Static pages + per-avatar model/portrait assets; extracted from main.py.
 FRONTEND_DIR/REPO_ROOT_DIR derive from app.config.REPO_ROOT (never __file__)."""
 import re
 from pathlib import Path
@@ -33,24 +33,24 @@ def login_page() -> FileResponse:
 
 @router.get("/privacy")
 def privacy_page() -> FileResponse:
-    """Public privacy policy — required by the Google OAuth consent screen
+    """Public privacy policy; required by the Google OAuth consent screen
     (and linked from the marketing site). Static, no data, no auth."""
     return FileResponse(FRONTEND_DIR / "privacy.html")
 
 
 @router.get("/terms")
 def terms_page() -> FileResponse:
-    """Public terms of service — companion to /privacy for the consent
+    """Public terms of service; companion to /privacy for the consent
     screen and checkout. Static, no data, no auth."""
     return FileResponse(FRONTEND_DIR / "terms.html")
 
 
 @router.get("/talk")
 def talk_page() -> FileResponse:
-    """Open-source avatar page (TalkingHead + our TTS) — the Anam replacement.
+    """Open-source avatar page (TalkingHead + our TTS); the Anam replacement.
     Recall will render this instead of avatar.html once it's proven out.
 
-    no-store: the page's JS changes often (framing, barge-in, streaming) — without
+    no-store: the page's JS changes often (framing, barge-in, streaming); without
     this browsers serve a stale cached copy and users see old behaviour."""
     return FileResponse(
         FRONTEND_DIR / "talk.html", headers={"Cache-Control": "no-store"}
@@ -123,9 +123,9 @@ def talk_avatar_model(avatar_id: str) -> Response:
     vendored into frontend/. /talk HEAD-probes /{avatar_id}.glb and may fall
     back only to that same avatar's configured renderer; a missing model 404s
     explicitly and never borrows another identity.
-    HEAD must be explicit — FastAPI's @router.get alone 405s it, which would have
+    HEAD must be explicit: FastAPI's @router.get alone 405s it, which would have
     silently defeated the probe (curl -I caught this; FileResponse handles HEAD
-    natively). Whitelisted to simple ids resolving to real files — never a
+    natively). Whitelisted to simple ids resolving to real files; never a
     path traversal."""
     if not re.fullmatch(r"[a-z0-9_-]{1,64}", avatar_id):
         return JSONResponse({"error": "unknown model"}, status_code=404)

@@ -1,9 +1,9 @@
-"""Postgres DAL for the browser operator (B0) — outbox_pg discipline.
+"""Postgres DAL for the browser operator (B0); outbox_pg discipline.
 
 Tenancy is NEVER derived from a provider session id or a client-supplied
 org: every write pins ``app.current_org`` and FORCE RLS is the backstop.
 ``provider_ref`` is stored (the operator needs it to call the provider) but
-is NEVER returned by ``public_view`` — Laura's ``id`` uuid is the only public
+is NEVER returned by ``public_view``: Laura's ``id`` uuid is the only public
 identifier. Command idempotency is (org, session, command_id). Presentation
 tokens store only the sha256 hash.
 """
@@ -94,7 +94,7 @@ def _row_for_update(conn, org_id: str, session_id: str) -> Optional[dict]:
 
 
 def get_session_internal(org_id: str, session_id: str) -> Optional[dict]:
-    """Full row INCLUDING provider_ref — operator-internal only, lazily
+    """Full row INCLUDING provider_ref; operator-internal only, lazily
     expiring a live-but-past-TTL session."""
     engine = _engine()
     with engine.begin() as conn:
@@ -157,7 +157,7 @@ def public_view(row: dict) -> dict:
 
 def set_state(org_id: str, session_id: str, new_state: str) -> bool:
     """Transition state, but NEVER out of a terminal state (a concurrent
-    close/revoke/expire is final — no path may resurrect it). The terminal
+    close/revoke/expire is final; no path may resurrect it). The terminal
     guard is in the WHERE clause so it holds under concurrency, closing the
     check→act TOCTOU between get_session_internal and set_state."""
     engine = _engine()
@@ -204,7 +204,7 @@ def transition(org_id: str, session_id: str, new_state: str,
 def sync_page_version(org_id: str, session_id: str,
                       fingerprint: str) -> tuple[int, bool]:
     """Advance page_version iff the page fingerprint changed since last sync.
-    Deterministic + monotonic — the basis for visual verification and
+    Deterministic + monotonic; the basis for visual verification and
     stale-page detection. Returns (page_version, changed)."""
     engine = _engine()
     with engine.begin() as conn:
@@ -300,7 +300,7 @@ def claim_command(org_id: str, session_id: str, command_id: str,
     finalize_command. This is what makes concurrent same-command-id calls
     execute exactly once."""
     if not command_id:
-        return True  # no idempotency requested — every call executes
+        return True  # no idempotency requested; every call executes
     engine = _engine()
     with engine.begin() as conn:
         _set_org(conn, org_id)
@@ -344,7 +344,7 @@ def finalize_command(org_id: str, session_id: str, command_id: str, seq: int,
 
 
 def durable_browser_action(org_id: str, action_id: str) -> Optional[dict]:
-    """The durable queued_actions row for a browser guarded step — the
+    """The durable queued_actions row for a browser guarded step; the
     trusted source the approve doors execute from (never the client body).
     Only route='browser' rows resolve here; RLS scopes to the caller's org."""
     if not action_id:
@@ -407,7 +407,7 @@ def create_token(org_id: str, session_id: str, token_hash: str,
 
 def redeem_token(org_id: str, token_hash: str) -> Optional[dict]:
     """Look up a token by hash for exchange: returns {session_id, valid,
-    reason}. RLS scopes to the caller's org — a token from another org is
+    reason}. RLS scopes to the caller's org; a token from another org is
     simply not found. Marks the exchange (replay telemetry). Validity requires
     not-revoked, not-expired, AND a live session."""
     engine = _engine()
@@ -481,7 +481,7 @@ def _revoke_tokens(conn, org_id: str, session_id: str) -> None:
 # ── expiry reconcile (lifespan worker) ──────────────────────────────────────
 
 def expire_due(org_id: str, limit: int = 50) -> list[dict]:
-    """Live sessions past TTL for one org — returns rows (with provider_ref)
+    """Live sessions past TTL for one org; returns rows (with provider_ref)
     so the worker can close the provider, then marks them expired + revokes
     their tokens."""
     engine = _engine()
@@ -549,7 +549,7 @@ def create_identity(org_id: str, *, label: str, provider: str,
 
 
 def identity_internal(org_id: str, label: str) -> Optional[dict[str, Any]]:
-    """The ACTIVE identity for a label including context_ref — server-side
+    """The ACTIVE identity for a label including context_ref; server-side
     only; context_ref never leaves through any public view."""
     engine = _engine()
     with engine.begin() as conn:

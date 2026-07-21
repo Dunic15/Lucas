@@ -1,4 +1,4 @@
-"""Browser B0 demo-handoff contracts — key-free.
+"""Browser B0 demo-handoff contracts; key-free.
 
 The stable typed shapes the demo integrator + Control Center design branch code
 against: BrowserObservation, VisualPlanner proposals, CommandResult, visual

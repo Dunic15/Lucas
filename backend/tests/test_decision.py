@@ -169,7 +169,7 @@ def test_italian_reported_speech_does_not_wake():
 
 
 # ── phonetic-initial fuzzy match: STT mangles the soft-C name "Cedric" ──
-# (spoken "Cedric" is transcribed "Sedric"/"Kedric"/"Zedric" — the old literal
+# (spoken "Cedric" is transcribed "Sedric"/"Kedric"/"Zedric": the old literal
 # first-letter gate hard-rejected all of them, silently costing Cedric answers).
 
 
@@ -182,7 +182,7 @@ def test_fuzzy_still_rejects_unrelated_names():
     # the relaxed initial must NOT open the gate to genuinely different names
     assert not fuzzy_name_match("frederick", "cedric")
     assert not fuzzy_name_match("patrick", "cedric")
-    # non-sibilant initials are unaffected — "clara"/"sara" never wake "laura"
+    # non-sibilant initials are unaffected. "clara"/"sara" never wake "laura"
     assert not fuzzy_name_match("clara", "laura")
     assert not fuzzy_name_match("sara", "laura")
     # existing Laura behaviour preserved (distance-1 + skeleton rules)
@@ -191,7 +191,7 @@ def test_fuzzy_still_rejects_unrelated_names():
 
 
 def test_detect_wake_cedric_asr_spellings_via_fuzzy():
-    # bare wake word (NO aliases) — proves the fuzzy path alone now resolves the
+    # bare wake word (NO aliases); proves the fuzzy path alone now resolves the
     # soft-C corruptions, so this generalises beyond the exact-match aliases.
     cedric = _avatar(id="cedric", name="Cedric", wake_words=["cedric"])
     for utt in ("Sedric, what's the plan?", "Kedric, can you check?", "Zedric, hi"):
@@ -202,7 +202,7 @@ def test_detect_wake_cedric_asr_spellings_via_fuzzy():
 
 
 # ── high-confidence interjection escape (decision.interjection_floor_open /
-#    decision.should_interject) — DEMO-READY-ROADMAP §5 item 10 ──
+#    decision.should_interject): DEMO-READY-ROADMAP §5 item 10 ──
 
 
 def test_floor_open_when_line_finished_and_no_partial():
@@ -220,7 +220,7 @@ def test_floor_open_when_line_finished_and_no_partial():
 
 def test_floor_closed_when_speaker_mid_thought():
     from app.decision import interjection_floor_open
-    # The line sounds mid-thought (low completeness) — hold the floor, raise the
+    # The line sounds mid-thought (low completeness); hold the floor, raise the
     # hand instead of interjecting.
     assert not interjection_floor_open(
         turn_completeness=0.1, since_human_partial=10.0, active_partial_seconds=0.6
@@ -229,7 +229,7 @@ def test_floor_closed_when_speaker_mid_thought():
 
 def test_floor_closed_when_human_partial_in_flight():
     from app.decision import interjection_floor_open
-    # A human partial landed 0.2s ago (< active_partial_seconds) — someone is
+    # A human partial landed 0.2s ago (< active_partial_seconds); someone is
     # audibly talking right now, so never interject even on a finished line.
     assert not interjection_floor_open(
         turn_completeness=0.95, since_human_partial=0.2, active_partial_seconds=0.6
@@ -254,13 +254,13 @@ def test_should_interject_only_on_high_confidence_open_floor():
     assert not should_interject(
         enabled=False, confidence=0.99, min_confidence=0.5, floor_open=True
     )
-    # A bar above 1.0 is the "disable" escape hatch — nothing clears it.
+    # A bar above 1.0 is the "disable" escape hatch; nothing clears it.
     assert not should_interject(
         enabled=True, confidence=1.0, min_confidence=1.5, floor_open=True
     )
 
 
-# ── closing fallback (decision.closing_fallback_fires) — §5 item 12 ──
+# ── closing fallback (decision.closing_fallback_fires). §5 item 12 ──
 
 
 def test_closing_fallback_fires_on_idle_after_long_meeting():

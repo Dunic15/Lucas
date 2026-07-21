@@ -1,5 +1,5 @@
 """Production-hardening tests: per-IP rate limiting on the public, expensive,
-UNAUTHENTICATED demo endpoints + security response headers — proving neither
+UNAUTHENTICATED demo endpoints + security response headers; proving neither
 touches the live-meeting path nor breaks Recall's iframe embedding of the avatar
 page. No vendors, no keys, no network (the brain is monkeypatched).
 """
@@ -53,7 +53,7 @@ def test_demo_ask_429_after_limit_then_resets(client, monkeypatch):
     assert blocked.json()["error"] == "rate_limited"
 
     # Resetting the window (here: clearing the in-process counters) lets it through
-    # again — the limiter is a moving window, not a permanent ban.
+    # again; the limiter is a moving window, not a permanent ban.
     security.limiter.reset()
     assert client.post("/demo/ask", json=body).status_code == 200
 
@@ -101,7 +101,7 @@ def test_x_forwarded_for_first_hop_buckets_per_client(client, monkeypatch):
     assert client.post("/demo/ask", json=body, headers=hdr_a).status_code == 200
     assert client.post("/demo/ask", json=body, headers=hdr_a).status_code == 429
 
-    # A DIFFERENT client (8.8.8.8) is unaffected — independent bucket.
+    # A DIFFERENT client (8.8.8.8) is unaffected; independent bucket.
     hdr_b = {"X-Forwarded-For": "8.8.8.8"}
     assert client.post("/demo/ask", json=body, headers=hdr_b).status_code == 200
 

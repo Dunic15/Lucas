@@ -1,18 +1,18 @@
-"""Gemini ears — natural STT + end-of-turn detection on the live meeting audio.
+"""Gemini ears; natural STT + end-of-turn detection on the live meeting audio.
 
 Recall streams the meeting's mixed raw audio (s16le 16 kHz mono, base64) to
 /ws/recall-audio (main.py). Each frame is forwarded verbatim to a Gemini Live
-session (BidiGenerateContent on the GLOBAL Vertex websocket host — the
+session (BidiGenerateContent on the GLOBAL Vertex websocket host; the
 region-prefixed host rejects Live models). Gemini transcribes continuously
 (inputTranscription) and its native VAD closes the turn; that end-of-turn is
 the signal Deepgram endpointing only approximates.
 
 Modes (settings.gemini_ears_mode):
-  off    — module inert; nothing here runs (today's exact behavior).
-  shadow — sessions run against real meetings but record METRICS ONLY.
+  off; module inert; nothing here runs (today's exact behavior).
+  shadow; sessions run against real meetings but record METRICS ONLY.
            Transcripts are PII: no content is ever logged or exposed; the
            status surface reports counts and timing exclusively.
-  on     — Gemini turns become the utterance source: each completed turn is
+  on: Gemini turns become the utterance source: each completed turn is
            synthesized into the exact transcript.data payload Recall sends and
            POSTed to our own /webhooks/recall (marker: "laura_ears") so the
            ENTIRE existing pipeline (echo, barge-in, MeetingState, gates,
@@ -21,12 +21,12 @@ Modes (settings.gemini_ears_mode):
            attribute speakers). While an ears session is healthy the raw
            Recall finals are suppressed (they still feed the speaker ring);
            if the session dies, suppression lifts and Recall finals drive the
-           meeting again — automatic failover, never a deaf avatar.
-  reply  — everything "on" does, plus TUTTO-GEMINI: the Live model also DRAFTS
+           meeting again; automatic failover, never a deaf avatar.
+  reply; everything "on" does, plus TUTTO-GEMINI: the Live model also DRAFTS
            the spoken reply from the audio it heard (persona system prompt,
            ~150 tokens). The draft rides the synthesized payload
-           ("laura_ears_reply") and main.py speaks IT — through the same gates
-           and the same ElevenLabs voice — instead of calling the brain.
+           ("laura_ears_reply") and main.py speaks IT; through the same gates
+           and the same ElevenLabs voice; instead of calling the brain.
            Trade: the spike's instant conversational feel, but the draft is
            NOT grounded in the avatar's documents (no RAG). A/B against "on".
 
@@ -131,7 +131,7 @@ class _Metrics:
     recall_finals_seen: int = 0
     reconnects: int = 0
     last_turn_at: float = 0.0
-    last_error: str = ""  # error class/short reason only — never content
+    last_error: str = ""  # error class/short reason only; never content
 
 
 @dataclass
@@ -141,14 +141,14 @@ class EarsSession:
     avatar_name: str = "Laura"  # persona for reply mode (from the session's avatar)
     metrics: _Metrics = field(default_factory=_Metrics)
     # ring of recent Recall finals for speaker attribution: (ts, speaker)
-    # plus the text length only — the text itself is not retained here.
+    # plus the text length only; the text itself is not retained here.
     _ring: list[tuple[float, str]] = field(default_factory=list)
     _queue: asyncio.Queue | None = None
     _task: asyncio.Task | None = None
     _closed: bool = False
     # RELAY architecture (App Runner can't accept inbound WS, so the Gemini
     # session runs in a Cloudflare Worker; the backend keeps only this light
-    # state). Set every time the relay POSTs a turn — drives suppression:
+    # state). Set every time the relay POSTs a turn; drives suppression:
     # raw Recall finals are suppressed only while the relay is actively
     # delivering, and resume the instant it goes quiet (failover).
     relay_active_at: float = 0.0
@@ -264,7 +264,7 @@ class EarsSession:
         if mode() == "reply":
             # Tutto-Gemini: the Live model also DRAFTS the spoken reply (it has
             # the audio in context, so the draft streams while the turn closes
-            # — the spike's instant feel). The gate downstream still decides
+            #; the spike's instant feel). The gate downstream still decides
             # whether the draft is ever spoken, and ElevenLabs speaks it.
             gen = {"responseModalities": ["TEXT"], "maxOutputTokens": 150}
             system = (
@@ -274,7 +274,7 @@ class EarsSession:
                 "cosa, dillo brevemente. Non fare elenchi."
             )
             # When the supervised browser is on, she CAN open and show
-            # connected tools (e.g. Asana) and web pages live on her tile —
+            # connected tools (e.g. Asana) and web pages live on her tile -
             # never deny it. The action itself is triggered separately; here we
             # only stop the reply brain from wrongly saying "I can't".
             if settings.browser_meeting_trigger_enabled:
@@ -285,7 +285,7 @@ class EarsSession:
                     "puoi navigare o mostrare Asana."
                 )
         else:
-            # Ears-only: TEXT modality with a 1-token cap — we consume the
+            # Ears-only: TEXT modality with a 1-token cap; we consume the
             # *turn boundary* and the input transcription, not Gemini's answer.
             gen = {"responseModalities": ["TEXT"], "maxOutputTokens": 1}
             system = "Rispondi sempre e solo con: ."
@@ -330,7 +330,7 @@ class EarsSession:
                 reply = "".join(reply_acc).strip()
                 acc.clear()
                 reply_acc.clear()
-                if reply in (".", ""):  # ears-only sentinel — not a real draft
+                if reply in (".", ""):  # ears-only sentinel; not a real draft
                     reply = ""
                 if utterance:
                     await self._on_turn(utterance, reply)
@@ -366,7 +366,7 @@ class EarsSession:
         self.metrics.reply_chars += len(reply)
         self.metrics.last_turn_at = time.time()
         if mode() not in ("on", "reply"):
-            return  # shadow: metrics only — content goes nowhere
+            return  # shadow: metrics only; content goes nowhere
         speaker = self._match_speaker()
         if not speaker:
             # No safe attribution: let the (suppressed) Recall final own this
@@ -395,7 +395,7 @@ class EarsSession:
         }
         if reply:
             # reply mode: the draft the Live model already generated from the
-            # audio — main.py speaks THIS (via ElevenLabs) instead of calling
+            # audio; main.py speaks THIS (via ElevenLabs) instead of calling
             # the brain, IF the gates decide the turn deserves an answer.
             payload["laura_ears_reply"] = reply
         url = f"{_self_base()}/webhooks/recall?cap={self.capability}"
@@ -461,7 +461,7 @@ def stop_session(bot_id: str) -> None:
 
 def _ensure_state(bot_id: str, capability: str = "", avatar_name: str = "Laura") -> EarsSession:
     """Light per-bot state holder (ring + metrics + relay-active), NO local
-    Gemini task — in the relay architecture the Gemini session runs in the
+    Gemini task; in the relay architecture the Gemini session runs in the
     Cloudflare Worker, and the backend only tracks attribution + suppression."""
     s = _sessions.get(bot_id)
     if s is None or s._closed:
@@ -494,7 +494,7 @@ def attribute_speaker(bot_id: str) -> str:
 
 
 def last_ring_speaker(bot_id: str) -> str:
-    """The most recent Recall-final speaker for this bot, ANY age — the relay's
+    """The most recent Recall-final speaker for this bot, ANY age; the relay's
     fallback so it attributes to a real human (after a pause) instead of
     inventing a phantom name that would pollute the roster."""
     s = _sessions.get(bot_id)
@@ -512,7 +512,7 @@ def should_suppress_recall_final(
     mode_for_avatar); callers pass it so the choice is per-avatar. Defaults to
     the global mode for backward compatibility.
 
-    Synthesized payloads (marker "laura_ears") are never suppressed — they ARE
+    Synthesized payloads (marker "laura_ears") are never suppressed; they ARE
     the ears output. Suppression requires on/reply mode AND an active relay;
     the moment it goes quiet this returns False and Recall finals drive the
     meeting again (failover).

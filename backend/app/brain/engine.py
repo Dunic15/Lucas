@@ -1,17 +1,17 @@
 """The reasoning layer.
 
 Two jobs:
-  1. answer_question()  — live, grounded, cited answers when the avatar is called.
-  2. post_meeting()     — summary + gap checklist + draft follow-up email.
+  1. answer_question(): live, grounded, cited answers when the avatar is called.
+  2. post_meeting(): summary + gap checklist + draft follow-up email.
 
 Everything is grounded in retrieved process docs. The model is instructed to
 say so when context is insufficient, and to return a confidence the speak-gate
 can threshold on. That confidence + citation pair is the trust layer.
 
 The actual model is pluggable (see llm.py / BRAIN_PROVIDER):
-  - anthropic — Claude, best quality.
-  - ollama    — a local model, free.
-  - stub      — no model at all: deterministic extractive answers built from the
+  - anthropic: Claude, best quality.
+  - ollama: a local model, free.
+  - stub: no model at all: deterministic extractive answers built from the
                 retrieved chunks. Lets the whole pipeline run offline for free.
 """
 from __future__ import annotations
@@ -48,7 +48,7 @@ def _mission_directive(mission: str) -> str:
     """A standing per-meeting MISSION folded into the system prompt as an extra
     instruction. Empty mission -> "" (the prompt is byte-identical to today).
 
-    The avatar keeps the objective in mind and RESURFACES it if left unmet — but
+    The avatar keeps the objective in mind and RESURFACES it if left unmet; but
     only at a natural opening. This is an INSTRUCTION, never a gate: the existing
     turn-taking / hand-raise rules still decide WHEN she may speak, so she never
     barges in to force the mission."""
@@ -69,7 +69,7 @@ def effective_provider() -> str:
     """The provider we'll actually use.
 
     If the brain is set to 'anthropic' but no key is present yet, we transparently
-    fall back to the free offline stub — so the demo works the moment you clone it
+    fall back to the free offline stub; so the demo works the moment you clone it
     and upgrades to real Claude the moment you paste a key. No crash in between.
     """
     p = settings.brain_provider.lower()
@@ -130,7 +130,7 @@ def answer_question(
     `history` is the recent meeting conversation (last few "Speaker: line" turns)
     so the avatar understands *this* discussion, not just the isolated question.
     `org_id` scopes retrieval to include that org's private ingested docs
-    (rag.retrieve) — "" keeps the shared base pack only.
+    (rag.retrieve): "" keeps the shared base pack only.
     """
     chunks = _retrieve_for(avatar, question, history, k, org_id=org_id)
 
@@ -160,10 +160,10 @@ def answer_question(
     ]
     # Grounding floor: the model self-reports sufficient_context, but on weak
     # retrieval it sometimes labels a world-knowledge answer as document-grounded
-    # (sufficient_context=true + doc citations) — a false "this came from your
+    # (sufficient_context=true + doc citations); a false "this came from your
     # docs" signal. If the best chunk is below the relevance floor, the answer is
     # NOT grounded in company context: correct the metadata (the answer text stays
-    # — Laura is a general assistant first, so world-knowledge answers are fine,
+    #: Laura is a general assistant first, so world-knowledge answers are fine,
     # just honestly labelled un-grounded). Grounded matches score ~0.6-0.75;
     # irrelevant ones ~0.30.
     if max((c.score for c in chunks), default=0.0) < settings.answer_grounding_floor:
@@ -181,11 +181,11 @@ def answer_question(
 ANSWER_STREAM_SYSTEM = """{persona}
 
 You are {name}, a warm, sharp AI assistant participating in a live spoken \
-conversation. You are a capable general assistant FIRST — think ChatGPT or \
-Claude in a meeting: direct, concrete, genuinely useful — and a company/fund \
+conversation. You are a capable general assistant FIRST; think ChatGPT or \
+Claude in a meeting: direct, concrete, genuinely useful; and a company/fund \
 expert only when the question touches the provided documents. Default to 1-2 \
 punchy sentences (3 max); never restate the question, never open with filler \
-like "great question". Plain text only — no markdown, bullets, headings, \
+like "great question". Plain text only; no markdown, bullets, headings, \
 JSON, or preamble. NEVER mention documents, context, knowledge bases, or what \
 you do or don't "have access to" unless you are actually citing a company \
 document in this answer.
@@ -202,23 +202,23 @@ owners, or approvals that aren't there; if the context only partly covers \
 it, give the useful part and say what you'd check.
 - If you were given web search results or used search, answer from them and \
 mention it's from a quick search.
-- Live transcripts are noisy — infer the likely intent and answer what the \
+- Live transcripts are noisy: infer the likely intent and answer what the \
 person most likely meant.
-- Reply in the language the person spoke to you in — an Italian question gets \
+- Reply in the language the person spoke to you in: an Italian question gets \
 an Italian answer. Follow the conversation if it switches language.
 - Meetings often have several people. When a roster and the speaker's name are \
 provided, use them: you KNOW who and how many are in the room, so answer \
 "who's here / how many are we?" directly from the roster. Address the person \
 who asked by name when it flows naturally (not every single line), and never \
-attribute a statement to the wrong person — the "Speaker: line" transcript \
+attribute a statement to the wrong person; the "Speaker: line" transcript \
 tells you who said what.
 - Contribute something NEW. Never repeat or rephrase what a participant \
-already said as if it were your own point — if you have nothing to add \
+already said as if it were your own point; if you have nothing to add \
 beyond what was just said, reply SKIP.
 - When someone asks you to DO something (send an email, book or schedule a \
-meeting, create a task), say you'll take care of it right after the call — \
-never that it's already done. If a required detail is missing — the \
-recipient's email address to send to, or a concrete date and time to book — \
+meeting, create a task), say you'll take care of it right after the call. \
+never that it's already done. If a required detail is missing; the \
+recipient's email address to send to, or a concrete date and time to book. \
 ASK for it in the same reply so it can be captured; never invent an email \
 address or a time.
 - Reply with the single word SKIP (and nothing else) when the speech is \
@@ -266,7 +266,7 @@ def _roster_block(
     Quiet detection compares roster names with the per-person tracker (first
     names, so 'Marco' from diarization matches 'Marco Rossi' from the roster).
     Lets her answer "who's here / who hasn't spoken?" and address the room
-    accurately — at the cost of one short line, latency-neutral.
+    accurately; at the cost of one short line, latency-neutral.
     """
     if not roster:
         return ""
@@ -304,7 +304,7 @@ def _retrieval_query(question: str, history: str = "") -> str:
     return f"{history[-1200:]}\n\nCurrent ask: {question}"
 
 
-# Self-questions — someone asking about the AVATAR herself ("how do you
+# Self-questions; someone asking about the AVATAR herself ("how do you
 # work?", "chi sei?"). These ground in the about/ meta docs, which are kept
 # OUT of process retrieval (a real "what's missing for go-live?" must never
 # pull Laura's own playbook). Deliberately specific: generic words like
@@ -318,7 +318,7 @@ _ABOUT_INTENT = re.compile(
     r"(you|laura) (built|made|powered|based) (on|with|by)\b|"
     r"what (model|llm|models)\b.{0,24}\b(you|use|using|run)|"
     # Capability questions about web browsing ("CAN you browse the web?")
-    # are self-questions; bare tasks ("search the web for X") are not —
+    # are self-questions; bare tasks ("search the web for X") are not -
     # the modal + you is required so task asks keep normal routing.
     r"((can|could|do|will) (you|laura)|are (you|laura) able to)\b.{0,24}\b(browse|search|surf|navigate|look\w*)\b.{0,20}\b(web|internet|online|browser|websites?)\b|"
     r"(puoi|sai|riesci a?)\b.{0,20}\b(navigar\w+|cercar\w+|browsar\w+)\b.{0,20}\b(web|internet|online|sit[oi])\b|"
@@ -351,7 +351,7 @@ def _retrieve_for(
 
 
 # Cheap language sniff for a live utterance: enough Italian function words →
-# treat the turn as Italian (drives announce/ack/filler language — the ANSWER
+# treat the turn as Italian (drives announce/ack/filler language; the ANSWER
 # language is handled by the model itself via the prompt).
 _IT_HINT = re.compile(
     r"\b(che|chi|come|cosa|cos'è|quanto|quando|perch[eé]|dove|sono|sei|siamo|"
@@ -369,7 +369,7 @@ def sounds_italian(text: str) -> bool:
     return len(_IT_HINT.findall(text or "")) >= 2
 
 
-# Questions that want FRESH information from the internet — routed to Claude's
+# Questions that want FRESH information from the internet; routed to Claude's
 # native web_search tool (llm.web_search on live_search_model). Provider-neutral:
 # it never depends on the fast provider. English + Italian triggers: Laura's
 # meetings are bilingual, and an intent regex that only speaks English silently
@@ -382,7 +382,7 @@ _SEARCH_INTENT = re.compile(
     r"cerca\w*|cercami|su internet|ultime notizie|notizie|oggi|stasera|ieri|"
     r"attualmente|in questo momento|questa settimana|questo mese|quest.anno|"
     r"prezzo di|quanto costa|meteo|che tempo fa|chi ha vinto|successo ieri|"
-    # SFF/fund questions now come from the web too (no local pack) — see persona.
+    # SFF/fund questions now come from the web too (no local pack); see persona.
     r"sff|swiss founders fund|founders fund|portfolio)\b",
     re.IGNORECASE,
 )
@@ -408,7 +408,7 @@ def wants_web_search(question: str) -> bool:
     return _wants_search(question)
 
 
-# Clearly-analytical asks — worth the more reliable/capable Claude model even on
+# Clearly-analytical asks; worth the more reliable/capable Claude model even on
 # the live path (Groq llama is weakest exactly here, and rate-limits under load).
 _COMPLEX_INTENT = re.compile(
     r"\b(analy[sz]e|analysis|compare|comparison|versus|trade[- ]?offs?|"
@@ -424,17 +424,17 @@ _COMPLEX_INTENT = re.compile(
 
 
 def wants_deep_thought(question: str) -> bool:
-    """True when _live_route will pick the slower 'complex' Claude path —
+    """True when _live_route will pick the slower 'complex' Claude path -
     callers can announce the pause ('let me think') before the answer starts."""
     return bool(settings.anthropic_api_key and _COMPLEX_INTENT.search(question or ""))
 
 
 # Direct asks for the avatar to DO something asynchronous ("can you send the
-# recap…", "please book a follow-up") — main.py captures these DETERMINISTICALLY
+# recap…", "please book a follow-up"); main.py captures these DETERMINISTICALLY
 # on the live path (no LLM, no tool loop) and promises follow-up after the call.
 # Deliberately NARROW: only verbs that unambiguously request an act performed
 # AFTER the meeting. Content-query verbs (check/verify/look/see/find out,
-# controllare/verificare/guardare/cercare) are EXCLUDED on purpose — "can you
+# controllare/verificare/guardare/cercare) are EXCLUDED on purpose. "can you
 # check if X" is a question the streamed path answers live, and hijacking it
 # would trade away streaming latency (the forbidden trade) AND answer wrongly.
 # "remind" matches only the "remind me/us to …" form ("remind me what we
@@ -475,10 +475,10 @@ _ACTION_INTENT = re.compile(
     rf"|\bplease\s+{_ACTION_VERBS}\b"
     # Bare imperative: the verb leads the (wake-stripped) ask, e.g. "schedule a
     # follow-up with Marco", "send Priya an email", "post to Slack". The ^ anchor
-    # is the false-positive guard — plain statements ("we should send X", "I'll
+    # is the false-positive guard; plain statements ("we should send X", "I'll
     # email him") don't START with the verb.
     rf"|^{_ACTION_LEAD}{_ACTION_VERBS}\b"
-    # Italian bare imperative: "manda una mail…", "prenota una call…" — same ^
+    # Italian bare imperative: "manda una mail…", "prenota una call…": same ^
     # anchor so mid-sentence indicatives ("dovremmo mandare…") stay out.
     rf"|^{_ACTION_LEAD}{_ACTION_VERBS_IT}\b"
     # Italian periphrastic: "puoi/potresti mandare…", "mi mandi/prenoti…", "ricordami di…"
@@ -493,7 +493,7 @@ _ACTION_INTENT = re.compile(
 
 def wants_action_capture(question: str) -> bool:
     """True when the utterance directly asks the avatar to DO something after
-    the call — main.py's live loop captures it (queue_action seam) and speaks
+    the call; main.py's live loop captures it (queue_action seam) and speaks
     a fixed confirmation instead of routing the turn to an answer path."""
     return bool(_ACTION_INTENT.search(question or ""))
 
@@ -545,10 +545,10 @@ _SEARCH_FAIL_RE = re.compile(
 
 def _web_search_answer(question: str, convo: str = "") -> str:
     """One web-search answer via Claude's native web_search tool (live_search_model,
-    default Sonnet — strong at search + dynamic result filtering).
+    default Sonnet; strong at search + dynamic result filtering).
 
     Returns the spoken answer text, or "" if search errored, refused, or returned
-    nothing — so the caller can fall back to normal reasoning instead of going
+    nothing; so the caller can fall back to normal reasoning instead of going
     silent. Shared by the meeting path and the interactive /live/act path.
     """
     try:
@@ -570,7 +570,7 @@ def _web_search_answer(question: str, convo: str = "") -> str:
 # ── honest caveat on ungrounded PROCESS answers (settings.caveat_ungrounded_
 #    process_answers) ──
 # On thin retrieval the chunks are dropped (below rag_min_context_score) and she
-# answers from world knowledge — fine for a general question, but for a COMPANY/
+# answers from world knowledge; fine for a general question, but for a COMPANY/
 # PROCESS-specific one ("what's OUR refund policy?") an authoritative world-
 # knowledge answer reads as if it came from their docs, undercutting the
 # "grounded + cited from YOUR process docs" pitch. This lightweight lexical
@@ -578,10 +578,10 @@ def _web_search_answer(question: str, convo: str = "") -> str:
 # brief honest caveat instead. Simple + documented on purpose: markers are
 # org-possessives ("our/my", "the company/team/…") and process/policy nouns
 # ("policy/process/procedure/SOP/onboarding/refund/approval/…"), EN + IT. A false
-# positive only adds a caveat; a false negative only omits it — both safe.
+# positive only adds a caveat; a false negative only omits it; both safe.
 _PROCESS_SPECIFIC = re.compile(
     r"\b("
-    # org-possessives — this company's OWN thing
+    # org-possessives; this company's OWN thing
     r"our|ours|my|company'?s|team'?s|"
     r"the\s+(?:company|team|org|organi[sz]ation|firm|fund|business|office)|"
     # process / policy nouns
@@ -644,11 +644,11 @@ def answer_question_stream(
     only when the model judges the speech was not addressed to Laura (SKIP).
 
     `mission` is the optional per-meeting objective (admin-set, or the avatar's
-    default) she keeps in mind and raises if left unmet — folded into the system
+    default) she keeps in mind and raises if left unmet; folded into the system
     prompt as an instruction only, so the caller's turn-taking / hand-raise gate
     still owns WHEN she speaks. "" = no mission = today's prompt exactly.
 
-    ``meta`` (optional out-param) is filled — before the first sentence — with
+    ``meta`` (optional out-param) is filled, before the first sentence, with
     ``{"top_score": <grounding confidence>}``: the top retrieved-chunk score that
     survived the ``rag_min_context_score`` gate (0.0 when nothing grounded). It
     exposes the confidence the retrieval step ALREADY computed so a caller (the
@@ -656,44 +656,44 @@ def answer_question_stream(
 
     `memory` is the cross-meeting carryover brief (ledger.carryover_brief):
     what previous sessions of this same meeting left open or decided. Empty
-    for first-time meetings — the prompt then carries no memory block at all.
+    for first-time meetings; the prompt then carries no memory block at all.
 
-    `state` is the live MeetingState tracker (regex-built, already in memory —
+    `state` is the live MeetingState tracker (regex-built, already in memory -
     zero latency cost). It holds exactly what "what did we decide / who owns X /
     what's missing?" questions need, which the recent-history window alone can't
     answer. Injected only when it has signal, so quiet meetings add no noise.
 
     `summary` is the rolling notes of the meeting OLDER than the recent-history
-    window (kept fresh in the background) — the whole meeting's arc without
+    window (kept fresh in the background); the whole meeting's arc without
     widening the hot-path prompt.
 
     `speaker` is who said this line and `roster` who is in the room right now
-    (from Recall participant events — includes people who never spoke). They
+    (from Recall participant events; includes people who never spoke). They
     make her multi-party aware: address the asker by name, answer "how many
     are we?", and SKIP lines aimed at another named participant.
 
     `min_chars>0` coalesces tiny sentences ("Yes." "Sure.") into a chunk of at
     least that many characters before yielding, so the TTS voice flows instead of
     stuttering one fragment at a time (a touch more first-audio latency for
-    smoother prosody). The FIRST chunk uses a lower threshold — the opening words
-    are what the room is waiting on — and later chunks keep the full min_chars
+    smoother prosody). The FIRST chunk uses a lower threshold; the opening words
+    are what the room is waiting on; and later chunks keep the full min_chars
     for smooth prosody.
     """
     _t0 = time.perf_counter()
     chunks = _retrieve_for(avatar, question, history, k, org_id=org_id)
     _retrieve_ms = (time.perf_counter() - _t0) * 1000
-    # Only ground in the docs when they actually match the question —
+    # Only ground in the docs when they actually match the question -
     # irrelevant chunks bias the model into doc-quoting general answers.
     # Remember WHY they were dropped: chunks existed but scored below the floor
     # (thin retrieval) is exactly the case where a company/process-specific
-    # answer would otherwise read as doc-grounded — it earns an honest caveat.
+    # answer would otherwise read as doc-grounded; it earns an honest caveat.
     _below_floor = bool(chunks) and chunks[0].score < settings.rag_min_context_score
     if _below_floor:
         chunks = []
     citation = chunks[0].source if chunks else ""
     # Expose the grounding confidence the retrieval already computed (top
     # surviving chunk score, 0.0 when nothing grounded) for a caller that gates
-    # on it — set BEFORE the first yield so it is populated once iteration ends.
+    # on it; set BEFORE the first yield so it is populated once iteration ends.
     if meta is not None:
         meta["top_score"] = float(chunks[0].score) if chunks else 0.0
 
@@ -712,7 +712,7 @@ def answer_question_stream(
         else ""
     )
     # The silent tracker: decisions, owners, deadlines, covered/missing process
-    # steps. Only injected when it actually tracked something — an empty scaffold
+    # steps. Only injected when it actually tracked something; an empty scaffold
     # ("type: unknown") would just bias her toward process-speak on small talk.
     state_block = (
         f"Laura's own silent meeting notes (tracked live — trust these):\n"
@@ -732,10 +732,10 @@ def answer_question_stream(
         else ""
     )
     # Live roster (Recall participant events): includes people who never spoke,
-    # which the transcript alone can't see. One short line — latency-neutral.
+    # which the transcript alone can't see. One short line; latency-neutral.
     roster_block = _roster_block(avatar, roster, state)
     asker = (speaker or "").strip() or "Someone"
-    # {name} parameterizes the previously hardcoded "You are Laura" — for the
+    # {name} parameterizes the previously hardcoded "You are Laura": for the
     # avatar actually speaking (byte-identical when that avatar IS Laura), and
     # for org display-name overlays (M2) which land here via avatar.name.
     system = ANSWER_STREAM_SYSTEM.format(
@@ -776,8 +776,8 @@ def answer_question_stream(
     if _provider == "search":
         # No ungrounded-process caveat here: this branch answers from a live web
         # search, and the announce line ("let me look that up") already discloses
-        # the answer isn't from the docs — a second caveat would be redundant.
-        # Announce the lookup BEFORE the slow web call — it buys the search its
+        # the answer isn't from the docs; a second caveat would be redundant.
+        # Announce the lookup BEFORE the slow web call; it buys the search its
         # seconds honestly instead of leaving dead air. In the asker's language.
         yield random.choice(
             _SEARCH_ANNOUNCE_IT if sounds_italian(question) else _SEARCH_ANNOUNCE_EN
@@ -790,7 +790,7 @@ def answer_question_stream(
             if buf.strip():
                 yield buf.strip()
             return
-        # Search flaked (returned nothing / refused) — fall THROUGH to the fast
+        # Search flaked (returned nothing / refused); fall THROUGH to the fast
         # model so she still answers from her own knowledge instead of going
         # silent.
         question = f"{question} (You could not search the web just now — answer from your knowledge and say it may not be current.)"
@@ -809,7 +809,7 @@ def answer_question_stream(
             if len(head) < 5 and head.upper() != "SKIP":
                 continue
             if _is_skip(head):
-                return  # insufficient context — stay silent
+                return  # insufficient context; stay silent
             decided = True
             # SKIP is ruled out → she IS answering. If this is a below-floor
             # process-specific answer, lead with the honest caveat before any
@@ -824,7 +824,7 @@ def answer_question_stream(
         for s in sentences:
             if min_chars > 0:
                 outbuf = f"{outbuf} {s}".strip()
-                # First chunk: lower bar — those opening words are the perceived
+                # First chunk: lower bar; those opening words are the perceived
                 # latency. Later chunks keep min_chars for smooth prosody.
                 need = min_chars if spoke_any else min(min_chars, _FIRST_CHUNK_MIN_CHARS)
                 if len(outbuf) >= need:
@@ -842,7 +842,7 @@ def answer_question_stream(
     remainder = f"{outbuf} {tail}".strip() if min_chars > 0 else tail
     if remainder and (decided or not _is_skip(remainder)):
         # A very short answer can flush only here (never set `decided` in the
-        # loop) — still lead with the caveat if it applies and wasn't emitted.
+        # loop); still lead with the caveat if it applies and wasn't emitted.
         if _caveat_line and not _caveat_emitted:
             _caveat_emitted = True
             yield _caveat_line
@@ -851,7 +851,7 @@ def answer_question_stream(
         spoke_any = True
 
     # Citation is not auto-appended: it made small talk read absurdly ("nice joke
-    # — per onboarding_sop.md"). The model is instructed to name the source doc
+    #; per onboarding_sop.md"). The model is instructed to name the source doc
     # itself when (and only when) it actually answers from a process document.
 
 
@@ -871,7 +871,7 @@ def rolling_summary(avatar: Avatar, prior: str, new_lines: str) -> str:
     """Fold new transcript lines into the running notes. Returns the updated
     notes, or "" on stub/error (the caller then keeps the old notes)."""
     if _is_stub():
-        return ""  # keyless demo: no model — the recent-history window suffices
+        return ""  # keyless demo: no model; the recent-history window suffices
     try:
         raw = llm.complete(
             ROLLING_SUMMARY_SYSTEM,
@@ -883,7 +883,7 @@ def rolling_summary(avatar: Avatar, prior: str, new_lines: str) -> str:
             max_tokens=260,
             model=settings.brain_model_fast,
         )
-    except Exception as e:  # noqa: BLE001 — notes are a bonus, never a failure
+    except Exception as e:  # noqa: BLE001; notes are a bonus, never a failure
         print(f"[notes] rolling summary failed: {e}", flush=True)
         return ""
     return (raw or "").strip()[:1600]
@@ -906,17 +906,17 @@ def _split_sentences(buf: str) -> tuple[str, list[str]]:
 
 # ───────────────────── live answers WITH tools (the 'act' layer) ─────────
 # Same grounding as answer_question, but the model can CALL tools to do things:
-# calculate, reason about a deadline, or look up a record. Not streamed — tool
-# use needs a round-trip first — so this is for the direct web avatar / demo,
+# calculate, reason about a deadline, or look up a record. Not streamed; tool
+# use needs a round-trip first; so this is for the direct web avatar / demo,
 # not (yet) the latency-critical meeting path. Falls back to a plain grounded
 # answer when tools aren't available (stub/offline), so nothing breaks.
 ANSWER_TOOLS_SYSTEM = """{persona}
 
-You are in a live spoken conversation — a capable general assistant FIRST \
+You are in a live spoken conversation; a capable general assistant FIRST \
 (think ChatGPT or Claude), and a company/process expert only when the question \
 actually touches that. Default to 1-2 short spoken sentences (3 max); sound like \
 a real person, never restate the question, and never open with filler like \
-"great question". Plain text only — no markdown, bullets, headings, or preamble. \
+"great question". Plain text only; no markdown, bullets, headings, or preamble. \
 NEVER mention documents, context, a knowledge base, or your "system architecture" \
 unless the person specifically asks how you work.
 
@@ -928,13 +928,13 @@ take. Don't steer the conversation toward work topics nobody asked about.
 don't invent specific numbers, companies, or facts that aren't there.
 
 You can also USE TOOLS when they make an answer more concrete:
-- calculator — for any arithmetic (percentages, totals, per-seat cost, annualizing).
-- date_math — today's date, or days until a deadline/renewal.
-- lookup_record — check a customer account (plan, seats, MRR, renewal, owner).
-- queue_action — when someone asks YOU to do something (send, schedule, book, \
+- calculator: for any arithmetic (percentages, totals, per-seat cost, annualizing).
+- date_math: today's date, or days until a deadline/renewal.
+- lookup_record: check a customer account (plan, seats, MRR, renewal, owner).
+- queue_action: when someone asks YOU to do something (send, schedule, book, \
 create, check, remind): queue it. Actions run AFTER the call behind an approval \
 — confirm it's queued, and NEVER claim it was already done.
-Call a tool whenever it helps — you may chain them — then state the concrete \
+Call a tool whenever it helps, you may chain them, then state the concrete \
 result plainly in a sentence or two."""
 
 
@@ -944,17 +944,17 @@ def answer_with_tools(
     """Grounded answer that may CALL tools to act. Returns answer + tools_used.
 
     `session` (optional) is the live store.Session: it is threaded into the
-    tool dispatch so session-aware tools (queue_action) can capture onto it —
+    tool dispatch so session-aware tools (queue_action) can capture onto it -
     session=None keeps the exact pre-existing behavior."""
     convo = f"Recent conversation:\n{history}\n\n" if history.strip() else ""
 
-    # Web search for questions that want fresh/current info — Claude's native
+    # Web search for questions that want fresh/current info. Claude's native
     # web_search tool (same provider-neutral path the meeting path uses). Falls
     # through to normal tool-using reasoning if search errors or returns nothing.
     if not _is_stub() and wants_web_search(question):
         answer = _web_search_answer(question, convo)
         if answer:
-            # Route name only — the question is live-meeting content (PII).
+            # Route name only; the question is live-meeting content (PII).
             print("[search] tool-path question answered from web", flush=True)
             return {
                 "answer": answer,
@@ -963,13 +963,13 @@ def answer_with_tools(
             }
 
     chunks = _retrieve_for(avatar, question, history, k)
-    # Only inject docs when they actually match the question — otherwise irrelevant
+    # Only inject docs when they actually match the question; otherwise irrelevant
     # chunks framed as "context" bias her into doc-quoting a general/opinion ask.
     if chunks and chunks[0].score < settings.rag_min_context_score:
         chunks = []
 
     if _is_stub():
-        # No tool use offline — fall back to the deterministic grounded answer.
+        # No tool use offline; fall back to the deterministic grounded answer.
         r = _stub_answer(chunks)
         return {"answer": r["answer"], "tools_used": [], "citations": r.get("citations", [])}
     context_block = (
@@ -995,18 +995,18 @@ def answer_with_tools(
             tools.dispatch_for(session, live=True),
             model=settings.brain_model_fast,
         )
-    except Exception as e:  # noqa: BLE001 — Groq tool endpoint 429s/errors have no fallback
+    except Exception as e:  # noqa: BLE001. Groq tool endpoint 429s/errors have no fallback
         print(f"[tools] complete_with_tools failed ({e}); plain answer", flush=True)
         text = ""
     if used:
-        # Tool names only — the question is live-meeting content (PII).
+        # Tool names only; the question is live-meeting content (PII).
         print("[tools] used: " + ", ".join(u["tool"] for u in used), flush=True)
     answer = (text or "").strip()
     if not answer:
         # The tool path can raise (Groq's tool endpoint rate-limits with no
         # fallback) or return empty (Groq llama does this intermittently). Never go
-        # silent on the interactive avatar: retry as a PLAIN answer — llm.complete
-        # falls back to Claude Haiku when Groq fails — and if that's still empty,
+        # silent on the interactive avatar: retry as a PLAIN answer; llm.complete
+        # falls back to Claude Haiku when Groq fails; and if that's still empty,
         # say something rather than leaving dead air.
         try:
             answer = (llm.complete(system, user, model=settings.brain_model_fast) or "").strip()
@@ -1036,9 +1036,9 @@ Detect PROCESS GAPS, specifically any of: missing owner, missing deadline, \
 missing approval, missing required document, unresolved blocker. Only flag a \
 gap if it is genuinely implied by the discussion; do not pad the list.
 
-Capture EVERY action anyone asked for or committed to as an actions[] entry — \
+Capture EVERY action anyone asked for or committed to as an actions[] entry. \
 including short, in-passing requests ("send the recap", "schedule a follow-up \
-with Marco", "post it to Slack", "email Priya") — even when no owner or deadline \
+with Marco", "post it to Slack", "email Priya"); even when no owner or deadline \
 was stated (use "UNASSIGNED"/"" and gap_type accordingly). Do not drop an action \
 just because it was said casually. For each extracted action, include a short, \
 verbatim evidence excerpt copied from the MEETING TRANSCRIPT. If there is no \
@@ -1046,7 +1046,7 @@ supporting transcript excerpt, do not emit the action.
 
 If the prompt lists actions ALREADY CAPTURED LIVE during the meeting, those are \
 already queued for execution: do NOT put them (or any semantically equivalent \
-restatement) into actions[]. Equivalence is by MEANING, not wording — a \
+restatement) into actions[]. Equivalence is by MEANING, not wording; a \
 translation counts (an Italian live capture and its English restatement are the \
 SAME action; re-listing it would execute it twice). Only add actions that are \
 genuinely new relative to that list.
@@ -1099,7 +1099,7 @@ def _live_actions_block(live_actions: list[dict] | None) -> str:
 
     One line per queue_action capture (action + any owner/due), under a header
     that repeats the do-not-re-extract rule next to the data it applies to.
-    "" when there were no live captures — the prompt is unchanged for the
+    "" when there were no live captures; the prompt is unchanged for the
     common no-capture meeting.
     """
     lines = []
@@ -1133,7 +1133,7 @@ def _task_hints_block(tasks: list[dict] | None) -> str:
     This never fabricates: the SOURCE BOUNDARY and the verbatim-evidence rule
     still apply, so a hint only lands as an action when the TRANSCRIPT actually
     contains that ask (``_scope_actions_to_transcript`` drops the rest). "" when
-    the avatar defines no tasks — the prompt is unchanged for every avatar
+    the avatar defines no tasks; the prompt is unchanged for every avatar
     without hints.
     """
     lines = []
@@ -1164,13 +1164,13 @@ def _task_hints_block(tasks: list[dict] | None) -> str:
 # model, so "do not re-extract" is obeyed almost always, not always. The merge
 # in main._merge_action_items catches same-language rephrases by content-word
 # overlap, but an Italian live capture and its English re-extraction share no
-# words — that gap produced a real double execution (two approval cards → two
+# words; that gap produced a real double execution (two approval cards → two
 # calendar events for one spoken request). This ONE cheap completion closes it.
 ACTION_DEDUP_SYSTEM = """You compare two lists of action items from the same \
 meeting: LIVE actions (captured in the room, already queued for execution) and \
 EXTRACTED actions (from a post-meeting summary). Identify every EXTRACTED \
-action that is the SAME real-world request as one of the LIVE actions — same \
-task and same target — even when it is worded differently or written in a \
+action that is the SAME real-world request as one of the LIVE actions; same \
+task and same target; even when it is worded differently or written in a \
 DIFFERENT LANGUAGE (e.g. an Italian live capture restated in English). \
 Executing both entries of a matched pair would do the task twice, so match on \
 meaning, not wording. Be conservative: if two items could plausibly be two \
@@ -1185,13 +1185,13 @@ def semantic_action_duplicates(
     live: list[str], extracted: list[str]
 ) -> list[tuple[int, int]]:
     """(extracted_idx, live_idx) pairs where a summarizer-extracted action is
-    semantically the same request as a live capture — cross-language included.
+    semantically the same request as a live capture; cross-language included.
 
     Called by the finalize merge only for the extracted actions that survived
-    the word-overlap dedup, and only when live captures exist — so in the
+    the word-overlap dedup, and only when live captures exist; so in the
     common case (no live captures, or the summarizer obeyed the prompt-level
     prevention) it costs nothing or one small completion, always OFF the live
-    path. Fails OPEN: stub mode, a model error, or junk output returns [] —
+    path. Fails OPEN: stub mode, a model error, or junk output returns [] -
     a missed dedup is a reviewable duplicate card, a false merge would silently
     drop a real action.
     """
@@ -1211,7 +1211,7 @@ def semantic_action_duplicates(
             provider=post_provider(),
         )
         duplicates = _parse_json(raw).get("duplicates") or []
-    except Exception:  # noqa: BLE001 — fail open, never break finalize
+    except Exception:  # noqa: BLE001; fail open, never break finalize
         return []
     pairs: list[tuple[int, int]] = []
     for d in duplicates:
@@ -1256,7 +1256,7 @@ def proactive_flag(
     """Decide if the avatar should proactively flag ONE missing step. Default: no.
 
     When the tracked MeetingState says a critical required process step never
-    happened, this is deterministic — the templated intervention line goes out
+    happened, this is deterministic; the templated intervention line goes out
     with no model call (reliable in stub AND Claude mode, zero extra latency).
     Otherwise the model judges from the transcript, with the structured state
     as extra grounding.
@@ -1340,8 +1340,8 @@ def post_meeting(
     steps, readiness score, risks, and a draft follow-up email.
 
     The tracked MeetingState (rebuilt from the transcript) supplies the
-    deterministic parts — missing_steps and readiness_score come from the
-    process template, not model judgement — and backfills decisions/risks when
+    deterministic parts; missing_steps and readiness_score come from the
+    process template, not model judgement; and backfills decisions/risks when
     the model returns none. `context` is an optional pre-meeting brief (the
     orchestrator's agenda/participants/open items) so the summary understands
     what the meeting was FOR. It is never an action source: model actions must
@@ -1349,7 +1349,7 @@ def post_meeting(
 
     `live_actions` are the session's queue_action captures (action/owner/due
     dicts). They are shown to the model with an explicit do-not-re-extract
-    instruction — dedup PREVENTION at the source. Without it the summarizer
+    instruction; dedup PREVENTION at the source. Without it the summarizer
     re-extracts a live capture in ITS OWN words (often translating an Italian
     ask into English), the downstream word-overlap dedup can't bridge the
     language gap, and one spoken request becomes two approval cards → double
@@ -1423,8 +1423,8 @@ def degraded_post_meeting(
 
     post_meeting() already rebuilds a real recap from the silent tracker when the
     model returns unusable JSON; this reuses that exact path for the harder case
-    where the model call itself raised — so a finalize-time model hiccup DEGRADES
-    to a plain (but full) artifact — summary + follow-up email + actions — instead
+    where the model call itself raised; so a finalize-time model hiccup DEGRADES
+    to a plain (but full) artifact, summary + follow-up email + actions, instead
     of losing the whole deliverable. Off the live path (finalize only)."""
     if state is None:
         state = meeting_state.build_from_text(avatar, transcript_text)
@@ -1433,7 +1433,7 @@ def degraded_post_meeting(
 
 
 # A decision/risk is one short line. The model occasionally (a) emits malformed
-# JSON — _parse_json then returns an {"answer": <raw>} shape with no summary —
+# JSON: _parse_json then returns an {"answer": <raw>} shape with no summary -
 # or (b) echoes whole transcript chunks into a list field. Either way garbled
 # text must never reach the recap email / notes doc, so list fields are cleaned
 # and a degraded artifact is rebuilt from the deterministic silent tracker.
@@ -1512,7 +1512,7 @@ def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dic
     NOTE: post_meeting() already recovers a degraded model result into a real
     deterministic recap (summary + email + actions) before calling this, so the
     guard below is now a defensive backstop only. It must not be the primary
-    degrade path — dropping to {} here leaves summary "" (the empty-summary bug);
+    degrade path; dropping to {} here leaves summary "" (the empty-summary bug);
     a non-empty recap has to come from post_meeting."""
     if _looks_degraded(artifact):
         artifact = {}  # backstop: post_meeting normally intercepts this first
@@ -1542,7 +1542,7 @@ def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dic
     artifact["meeting_type"] = state.meeting_type
     # Participation view (Read.ai-style, but in the same product as the voice):
     # per-person talk share + what each person committed to. Straight from the
-    # silent tracker — no extra model call.
+    # silent tracker; no extra model call.
     total_lines = sum(p["lines"] for p in state.per_person.values()) or 1
     artifact["participation"] = [
         {
@@ -1560,7 +1560,7 @@ def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dic
 
 # ─────────────── typed-action producer (native executor) ────────────
 # The native executor (backend/app/executor.py) will run an APPROVED ledger
-# action only when it carries a TYPED spec — one of:
+# action only when it carries a TYPED spec; one of:
 #   {"type": "calendar.create_event", "args": {title, start, end, attendees?}}
 #   {"type": "email.send",            "args": {to, subject, body}}
 # type_actions() annotates the finalized artifact actions[] with such a spec
@@ -1570,7 +1570,7 @@ def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dic
 # deadline / summary brief), never guessed; a start/end must be a real ISO-8601
 # datetime. An item that does not clearly map stays generic (no `typed`), so the
 # dashboard still shows it and the Cedric path is unaffected. The raw transcript
-# is NOT passed here — only already-distilled fields flow — so this adds no PII
+# is NOT passed here, only already-distilled fields flow, so this adds no PII
 # surface beyond what post_meeting already sent to the post model.
 TYPED_ACTION_SYSTEM = """You convert a meeting's action items into typed, \
 executable specs, but ONLY when an item unambiguously maps to one of the two \
@@ -1589,7 +1589,7 @@ HARD RULES (precision over recall):
 - NEVER invent a recipient, an email address, a date, or a time. Use ONLY \
 values that literally appear in the item's source text (you may normalise a \
 stated date/time to ISO using TODAY). If a required field is not present, DO \
-NOT emit a type for that item — leave it untyped.
+NOT emit a type for that item; leave it untyped.
 - If you are not sure, leave it untyped.
 
 Return ONLY a JSON object mapping the 0-based item index (as a string) to its \
@@ -1598,7 +1598,7 @@ typed spec, omitting every item that does not map:
 
 # Appended to TYPED_ACTION_SYSTEM only when the org's Asana is connected and
 # the acting avatar may use it (type_actions allow_asana): action items become
-# proposed Asana tasks. Deliberately the LAST resort type — an item that maps
+# proposed Asana tasks. Deliberately the LAST resort type; an item that maps
 # to calendar/email keeps that mapping.
 TYPED_ACTION_ASANA = """
 
@@ -1607,7 +1607,7 @@ A third type is also supported for this meeting:
 Required args: name (a short imperative task title drawn from the item). \
 Optional: notes (one sentence of context from the item), assignee (an email \
 address that LITERALLY appears in the item's source text), due_on \
-(YYYY-MM-DD — only when the item states a concrete date), project (a project \
+(YYYY-MM-DD; only when the item states a concrete date), project (a project \
 name that LITERALLY appears in the item's source text or the meeting summary).
 - Prefer calendar.create_event / email.send when an item maps to those; use \
 asana.create_task for every OTHER item that is a discrete piece of work \
@@ -1633,7 +1633,7 @@ _ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 
 
 def _grounded_emails(value: object, source: str) -> list[str]:
-    """Emails from ``value`` (str or list) that LITERALLY appear in ``source`` —
+    """Emails from ``value`` (str or list) that LITERALLY appear in ``source``: 
     the mechanical no-invented-recipients guard. Case-insensitive, de-duped,
     order-preserving."""
     src = (source or "").lower()
@@ -1657,7 +1657,7 @@ def _is_isoish(value: object) -> bool:
 
 
 def _action_source(action: dict, brief: str = "") -> str:
-    """The distilled text a typed spec's args may draw from — never the raw
+    """The distilled text a typed spec's args may draw from; never the raw
     transcript, only fields already extracted into the artifact."""
     parts = [
         str(action.get("item") or ""),
@@ -1707,7 +1707,7 @@ def _sanitize_typed(typed: object, action: dict, brief: str = "") -> dict | None
         notes = str(args.get("notes") or "").strip()[:1000]
         if notes:
             spec_args["notes"] = notes
-        # Assignee: a grounded email only — a bare first name can't be safely
+        # Assignee: a grounded email only; a bare first name can't be safely
         # resolved to an Asana user, and inventing an assignee is worse than
         # creating the task unassigned.
         assignee = _grounded_emails(args.get("assignee"), source)
@@ -1718,7 +1718,7 @@ def _sanitize_typed(typed: object, action: dict, brief: str = "") -> dict | None
         due = str(args.get("due_on") or "").strip()
         if _ISO_DATE_RE.fullmatch(due):
             spec_args["due_on"] = due
-        # Project: only a name that literally appears in the source text —
+        # Project: only a name that literally appears in the source text -
         # a wrong project is a misfiled task in someone's real board.
         project = str(args.get("project") or "").strip()[:100]
         if project and project.lower() in source.lower():
@@ -1732,7 +1732,7 @@ def _stub_type_actions(
 ) -> dict[int, dict]:
     """Deterministic, key-free mapping for the offline demo + tests: map the
     obvious cases from literal values only (an email address / ISO datetimes
-    that actually appear). Precision over recall — anything ambiguous is left
+    that actually appear). Precision over recall; anything ambiguous is left
     untyped, exactly like the model path. With ``allow_asana``, every item
     that didn't map to email/calendar becomes an asana.create_task (the item
     text IS the task name, so it is grounded by construction)."""
@@ -1834,11 +1834,11 @@ def type_actions(
 ) -> list:
     """Annotate each action with a ``typed`` spec where it clearly maps to a
     native-executor action (calendar.create_event / email.send, plus
-    asana.create_task when ``allow_asana`` — set by finalize only for an
+    asana.create_task when ``allow_asana``: set by finalize only for an
     avatar that MAY use the org's connected Asana).
 
     Returns a NEW list; an action that doesn't map is returned unchanged (no
-    ``typed`` key). Never invents recipients or times — args draw only from that
+    ``typed`` key). Never invents recipients or times; args draw only from that
     action's distilled fields + the meeting ``brief`` (never the raw
     transcript). Finalize-only, off the live path: it may make one
     post_provider() call (stub = a deterministic regex mapping, so the key-free
@@ -1855,7 +1855,7 @@ def type_actions(
             if prov == "stub"
             else _llm_type_actions(indexed, brief, prov, allow_asana=allow_asana)
         )
-    except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
+    except Exception as e:  # noqa: BLE001; enrichment only, never fatal
         print(f"[type_actions] skipped ({type(e).__name__})", flush=True)
         return src
     if not mapping:
@@ -1873,7 +1873,7 @@ def type_actions(
 def _stub_answer(chunks: list[Retrieved]) -> dict:
     """Deterministic extractive answer: quote the best-matching process chunk.
 
-    No model involved — this proves the retrieve→answer→cite pipeline for free.
+    No model involved; this proves the retrieve→answer→cite pipeline for free.
     """
     if not chunks or chunks[0].score < 0.12:
         return {
@@ -1906,7 +1906,7 @@ def _stub_post_meeting(
     """Deterministic post-meeting artifact from simple transcript heuristics.
 
     `degraded=True` marks a recap built because the real post model returned an
-    unusable result (rather than because we're in offline stub mode) — only the
+    unusable result (rather than because we're in offline stub mode); only the
     summary's mode note differs."""
     lines = [ln.strip() for ln in transcript_text.splitlines() if ln.strip()]
     speakers = []

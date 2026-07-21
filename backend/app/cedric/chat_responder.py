@@ -3,13 +3,13 @@
 The chat tab's contract is honest conversation: a sent message should get an
 answer. The full Cedric orchestrator answers over the per-org events door
 (chat.message -> external runtime -> POST /org/chat); until a deployment
-configures that relay, THIS module is Cedric — the same brain provider that
+configures that relay, THIS module is Cedric; the same brain provider that
 answers in meetings, prompted with Cedric's persona plus a compact, PII-safe
 view of the org's real state (pending actions, connections, recent meetings),
 so "what's waiting on me?" gets a grounded answer instead of vibes.
 
 Deliberate boundaries (v1):
-- Replies never EXECUTE anything. Approvals stay on the canonical doors —
+- Replies never EXECUTE anything. Approvals stay on the canonical doors -
   the chat card buttons and the Action Center hit those doors themselves.
 - Context is artifact metadata only: action items, owners, statuses, summary
   first-lines. Never transcripts (PII stays in the meeting store) and never
@@ -26,7 +26,7 @@ _SETTLED = ("done", "rejected", "failed")
 
 _STUB_PREFIX = "Got it — noted."
 
-_CHAT_FRAME = """You are Cedric, answering in the ORG DASHBOARD CHAT — typed
+_CHAT_FRAME = """You are Cedric, answering in the ORG DASHBOARD CHAT; typed
 messages, not a live meeting. Keep replies short (1-3 sentences), warm and
 concrete. You can see the org's real state below; ground answers in it and
 say plainly when something isn't in view. You cannot run tools or execute
@@ -38,13 +38,13 @@ says done. If a tool isn't connected yet, point at the Connections page.
 Persona:
 {persona}
 
-Org state (metadata only — no transcripts):
+Org state (metadata only; no transcripts):
 {context}"""
 
 
 def _org_context(org: str) -> str:
     """A compact, PII-safe brief of the org: connections, open actions,
-    recent meetings. Artifact metadata only — transcripts never leave the
+    recent meetings. Artifact metadata only; transcripts never leave the
     meeting store. Every read is best-effort: a failed source just drops
     out of the brief."""
     lines: list[str] = []
@@ -142,7 +142,7 @@ def respond_and_store(org: str, text: str) -> bool:
     honest apology instead of silence."""
     try:
         reply = build_reply(org, text)
-    except Exception:  # noqa: BLE001 — never let the channel go silent
+    except Exception:  # noqa: BLE001; never let the channel go silent
         reply = "Sorry — I hit an error answering that. Try me again in a moment."
     row = store.add_chat_message(org, "cedric", body=reply, sender_label="Cedric")
     return row is not None

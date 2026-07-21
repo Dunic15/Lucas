@@ -1,4 +1,4 @@
-"""The when-to-speak gate — wake detection, closing detection, dismissal.
+"""The when-to-speak gate; wake detection, closing detection, dismissal.
 
 Laura tracks the WHOLE meeting silently (see meeting_state.py) no matter what.
 The wake word is optional and only gates *speaking*: with REQUIRE_WAKE_WORD
@@ -65,21 +65,21 @@ def _is_reported_reference(lower: str, wake: str) -> bool:
 # ASR mangles spoken names ("Laura" -> "Lara"/"Lora"/"Loura"); benchmarks show
 # explicit-name cue response drops from ~94% to ~68% under phonetic corruption
 # (docs/research/multiparty-meeting-intelligence.md). Guarded tightly: same
-# first letter (or a phonetically-equivalent sibilant initial — STT hears the
-# soft-C "Cedric" as "Sedric"/"Kedric"), similar length, and edit distance 1 —
+# first letter (or a phonetically-equivalent sibilant initial. STT hears the
+# soft-C "Cedric" as "Sedric"/"Kedric"), similar length, and edit distance 1 -
 # or distance 2 only when the consonant skeleton matches exactly ("lora"→"lr"
 # == "laura"→"lr", while "libra"→"lbr" stays out, and "clara" still fails:
 # 'c' and 'l' are not equivalent initials).
 _VOWELS = set("aeiou")
 # Real dictionary words that sit within fuzzy range of a wake word but are
 # never a name. "laurea/lauree" (Italian: degree) is edit distance 1 from
-# "laura" — without this, every graduation mention would wake her.
+# "laura": without this, every graduation mention would wake her.
 _FUZZY_EXCLUDE = {"laurea", "lauree", "lauro"}
 
 # Soft-C / sibilant initials ASR confuses: spoken "Cedric" is transcribed
 # "Sedric"/"Kedric"/"Zedric" (soft C ≈ /s/, hard C ≈ /k/). Treating c/s/k/z as
 # one initial class lets those corruptions resolve WITHOUT opening the gate to
-# unrelated names — the length + edit-distance checks still reject the rest, so
+# unrelated names; the length + edit-distance checks still reject the rest, so
 # "Cedric" never matches "Frederick", and non-sibilant names are unaffected
 # ("clara" still fails against "laura": 'c' and 'l' aren't equivalent).
 _SIBILANT_INITIALS = frozenset("cskz")
@@ -155,7 +155,7 @@ def detect_wake(
         "Laura mentioned the deadline"
 
     `exclude_names` (other meeting participants) suppresses only the FUZZY
-    path: with a real Lara in the room, "Lara, …" is her turn — while an
+    path: with a real Lara in the room, "Lara, …" is her turn; while an
     exact wake word always wins.
     """
     lower = utterance.lower()
@@ -206,7 +206,7 @@ _NO_COMMA_VOCATIVE = re.compile(
 
 def addressed_to_other(utterance: str, roster: list[str]) -> bool:
     """True when the line is a vocative aimed at ANOTHER participant by name
-    ("Marco, can you take this?", "hey Marco…", "…right, Marco?") — even in
+    ("Marco, can you take this?", "hey Marco…", "…right, Marco?"); even in
     no-wake-word mode that's their turn, not the avatar's. Callers must check
     the wake word FIRST: a line naming both ("Laura, tell Marco…") is hers.
 
@@ -250,29 +250,29 @@ def adaptive_deference_seconds(
     is_question: bool,
     turn_completeness: float | None = None,
 ) -> float:
-    """Size ONLY the deference wait — never the decision of WHETHER she speaks.
+    """Size ONLY the deference wait; never the decision of WHETHER she speaks.
 
     The caller's post-sleep yield check (transcript grew OR a human partial
     landed) and the in-stream SKIP sentinel are unchanged, so a mis-sized wait
     can at worst change latency: it can never emit unaddressed or double speech.
 
-    When ``enabled`` is False (the default) this returns ``base`` verbatim — a
+    When ``enabled`` is False (the default) this returns ``base`` verbatim; a
     strict no-op reproducing the fixed ``deference_seconds`` behaviour. The
     ``0 < lo < hi`` guard makes a mis-configured range (a non-positive or
     inverted bound) fall back to ``base`` rather than shrink the yield window to
-    zero — a ``lo`` of 0 would let the single-human branch sleep(0) and give a
+    zero; a ``lo`` of 0 would let the single-human branch sleep(0) and give a
     human no chance to take the floor, so it is rejected, not honoured.
 
     When enabled, the wait adapts to signals already on hand, strongest first:
       • the utterance sounds MID-THOUGHT (``turn_completeness`` low, from
         end_of_turn.completeness: trailing conjunction/filler/trail-off) →
         wait ``hi``: the speaker is still holding the floor, whatever the
-        room's shape — this outranks every other signal;
+        room's shape; this outranks every other signal;
       • a human partial is mid-utterance (``since_partial`` small) → wait ``hi``
         (someone is audibly talking right now);
       • only one human present → wait ``lo`` (respond snappily, no one to defer
-        to) — trimmed further when their line sounds clearly FINISHED;
-      • a room-open question with several humans → split the difference —
+        to); trimmed further when their line sounds clearly FINISHED;
+      • a room-open question with several humans → split the difference -
         trimmed toward ``lo`` when clearly finished (a fully-formed question
         deserves a snappy answer, someone is waiting for it);
       • otherwise (a statement) → the ``base`` wait.
@@ -311,14 +311,14 @@ def in_locked_dyad(
     raised hand and to wait longer, never to speak. Suppression-only, so a wrong
     read can only cost a beat, never emit unaddressed speech.
 
-    The avatar's OWN turns are excluded (they're in the transcript too) — without
+    The avatar's OWN turns are excluded (they're in the transcript too); without
     that, an avatar↔single-human 1:1 would look like a dyad and wrongly suppress.
     Pure and ~O(window): walks back from the end collecting at most `window`
     non-avatar turns, no full rescan, no model. `ts` is arrival time so gaps are
     a noisy proxy, but every fuzzy case errs toward NOT suppressing.
     """
     av = (avatar_name or "").strip().lower()
-    turns = []  # last `window` NON-avatar turns, newest last — walk from the end
+    turns = []  # last `window` NON-avatar turns, newest last; walk from the end
     for u in reversed(transcript):
         if (u.speaker or "").strip().lower() != av:
             turns.append(u)
@@ -342,7 +342,7 @@ def in_locked_dyad(
 
 
 def passes_confidence(avatar: Avatar, result: dict) -> bool:
-    """LEGACY — not used on the live streaming path (the in-stream SKIP sentinel
+    """LEGACY; not used on the live streaming path (the in-stream SKIP sentinel
     replaced it). Kept for back-compat + unit tests. Speak only if the model had
     enough grounded confidence for this avatar."""
     if not result.get("sufficient_context", False):
@@ -354,7 +354,7 @@ _CLOSING = re.compile(
     r"\b(wrap(ping)? up|that'?s (it|everything|all)|anything else|any other|"
     r"before we (go|close|end|wrap)|to summari[sz]e|let'?s (close|end|wrap)|"
     r"we'?re done|any final|last thing|"
-    # Italian — without these the proactive wrap-up never fires in an Italian
+    # Italian; without these the proactive wrap-up never fires in an Italian
     # meeting (and the MeetingState stage never reaches "wrapping_up").
     r"per riassumere|riassumendo|prima di (chiudere|concludere|salutarci)|"
     r"direi che (abbiamo finito|è tutto)|abbiamo finito|è tutto per oggi|"
@@ -380,14 +380,14 @@ def closing_fallback_fires(
     min_meeting_seconds: float,
 ) -> bool:
     """Additive wrap-up trigger for the facilitation beats (proactive wrap-up +
-    quiet-participant nudge) — it NEVER replaces ``detect_closing``, only ORs an
+    quiet-participant nudge); it NEVER replaces ``detect_closing``, only ORs an
     extra path so both beats can also fire on a natural end-of-meeting LULL that
     carries no exact closing phrase.
 
     Fires only when BOTH hold: the room has been idle ≥ ``idle_seconds`` since
     the last substantive line (``now - last_line_at``) AND the meeting has run at
     least ``min_meeting_seconds`` (``now - meeting_start``). Conservative by
-    construction — it can never fire early in a short call (duration gate) or an
+    construction; it can never fire early in a short call (duration gate) or an
     actively-talking one (idle gate). Disabled by ``enabled`` False or a
     non-positive threshold; a never-seen previous line (``last_line_at`` <= 0)
     never fires."""
@@ -408,7 +408,7 @@ def closing_fallback_fires(
 # messaggio di prova a Ben su Slack…" + 3s later "perfetto, direi che abbiamo
 # finito il test" → dirty card). A real ASR split picks up MID-PHRASE; a new
 # thought opens with an acknowledgement/appreciation marker or sounds like the
-# meeting wrapping up (detect_closing). Lexical only, O(1) — this sits on the
+# meeting wrapping up (detect_closing). Lexical only, O(1); this sits on the
 # live path. Openers that can plausibly start a real split continuation are
 # deliberately NOT here ("right after lunch", "good before Friday").
 _CAPTURE_BREAK_OPENERS = re.compile(
@@ -485,7 +485,7 @@ def detect_stop_command(question: str) -> bool:
 _INVITE_WORDS = (
     r"go ahead|go on|tell (?:us|me)|what'?s up|what is it|what'?ve you got|"
     r"you have the floor|floor is yours|we'?re listening|shoot|speak|"
-    # "would you like to add anything?" / "anything to add?" — the most common
+    # "would you like to add anything?" / "anything to add?": the most common
     # way a room hands the floor to a raised hand.
     r"(?:would you like|do you want|want) to (?:add|say)(?: (?:anything|something))?|"
     r"(?:is there )?anything (?:else )?(?:you'?d like )?to add|"
@@ -504,7 +504,7 @@ _INVITE = re.compile(
 
 
 def detect_invite(question: str) -> bool:
-    """True if the (wake-stripped) ask hands the avatar the floor — the "yes,
+    """True if the (wake-stripped) ask hands the avatar the floor; the "yes,
     what is it?" reply to her raised hand."""
     q = (question or "").strip()
     return bool(q) and bool(_INVITE.match(q))
@@ -514,7 +514,7 @@ def detect_invite(question: str) -> bool:
 # A raised hand is a social ask, and each raise also posts a meeting-chat line:
 # raising too often reads as an over-eager participant spamming the room. The
 # in-stream SKIP gate already decides "is this contribution GROUNDED"; this
-# policy decides "is raising the hand for it SOCIALLY worth it" — a budget, a
+# policy decides "is raising the hand for it SOCIALLY worth it": a budget, a
 # minimum gap, a longer back-off after the room ignored her, and a near-dup
 # check so the same point never raises the hand twice. Pure functions: the
 # webhook passes state in, tests pin the calibration.
@@ -549,7 +549,7 @@ def should_raise_hand(
     - hard cap per meeting (a guest who raises a hand ten times is a nuisance
       no matter how grounded each point is);
     - a minimum gap between raises;
-    - after a raise the room IGNORED (timeout), the next one waits longer —
+    - after a raise the room IGNORED (timeout), the next one waits longer -
       the polite read of silence is "not now".
     """
     if count >= max_per_meeting:
@@ -566,7 +566,7 @@ def should_raise_hand(
 # decided raising a hand for it is socially worth it. These two decide the
 # stronger move: when the contribution is ALSO high-confidence AND the floor is
 # genuinely open, say ONE line directly instead of raising a silent hand nobody
-# may notice in time. Pure functions — the webhook passes in signals it already
+# may notice in time. Pure functions; the webhook passes in signals it already
 # holds (top retrieval score, end-of-turn completeness, time since the last human
 # partial), so there is no extra model call and the logic stays unit-testable.
 
@@ -582,10 +582,10 @@ def interjection_floor_open(
 ) -> bool:
     """True when it is socially safe to interject a single grounded line: the
     line that just opened the floor SOUNDS finished (``turn_completeness`` at or
-    above ``min_completeness`` — 0.6, since 0.5 reads as "can't tell", not
+    above ``min_completeness``: 0.6, since 0.5 reads as "can't tell", not
     "finished", per end_of_turn.py) AND no human is audibly mid-utterance right
     now (the last human partial is older than ``active_partial_seconds``). Either
-    signal failing keeps the safe raised hand — interrupting a held floor is
+    signal failing keeps the safe raised hand; interrupting a held floor is
     exactly what the hand-raise exists to avoid.
 
     Because the whole contribution is generated BEFORE this check (several
@@ -599,26 +599,26 @@ def interjection_floor_open(
         arrived at ANY point AFTER the turn started (``since_human_partial`` <
         ``generation_elapsed``, i.e. the last partial is newer than the whole
         window) means someone spoke during her generation → busy. The longer the
-        generation ran, the wider this "someone talked" catch — the stale
+        generation ran, the wider this "someone talked" catch; the stale
         trigger-time all-clear is no longer trusted. In a genuine lull no partial
         lands during generation, so this never fires and she still interjects.
 
     Deliberately conservative: a wrong "open" talks over someone, while a wrong
     "not open" merely falls back to raising the hand (no harm). ``turn_
-    completeness`` None (no estimate) does not by itself block — the partial-gap
+    completeness`` None (no estimate) does not by itself block; the partial-gap
     check still guards the "someone is talking right now" case."""
     if transcript_grew:
-        return False  # a new final landed mid-turn — a human took the floor
+        return False  # a new final landed mid-turn; a human took the floor
     if (
         generation_elapsed is not None
         and generation_elapsed > 0
         and since_human_partial < generation_elapsed
     ):
-        return False  # a human partial arrived DURING her generation — busy
+        return False  # a human partial arrived DURING her generation; busy
     if since_human_partial < active_partial_seconds:
-        return False  # a human partial is in flight — someone is talking now
+        return False  # a human partial is in flight; someone is talking now
     if turn_completeness is not None and turn_completeness < min_completeness:
-        return False  # the speaker sounded mid-thought — hold the floor for them
+        return False  # the speaker sounded mid-thought; hold the floor for them
     return True
 
 
@@ -640,11 +640,11 @@ def should_interject(
 # Dismissal ("Laura, you can leave"). Only ever checked on the wake-stripped
 # question of an utterance that addressed her BY NAME, so the patterns can stay
 # tight. Two shapes: an imperative aimed at her at the start of the ask, or an
-# explicit "you can/may …" permission anywhere in it. Deliberately narrow —
+# explicit "you can/may …" permission anywhere in it. Deliberately narrow -
 # a missed command costs a repeat ask; a false positive kills the meeting bot.
 _LEAVE_IMPERATIVE = re.compile(
     # The imperative must be the WHOLE ask ("leave", "please leave the call
-    # now", "go out of the meeting") — anything else after the verb ("leave
+    # now", "go out of the meeting"); anything else after the verb ("leave
     # the pricing for later", "go out and check X") means a topic, not the
     # meeting. Non-native/ASR-noisy prepositions are all accepted ("go out
     # FROM the meeting", "go out the meeting").
@@ -669,9 +669,9 @@ _LEAVE_REQUEST = re.compile(
     re.IGNORECASE,
 )
 _LEAVE_PERMISSION = re.compile(
-    # "you can leave [the meeting] [now]" — the verb must end the clause, so
+    # "you can leave [the meeting] [now]": the verb must end the clause, so
     # "you can leave time for Q&A" / "you can go to the next slide" never match.
-    # Bare "go" is how a host hands over the floor ("your turn — you can go"),
+    # Bare "go" is how a host hands over the floor ("your turn; you can go"),
     # i.e. an invitation to SPEAK, so "go" only counts with an explicit
     # dismissal marker after it; "free to go" is unambiguous on its own.
     r"\b(?:you|she) (?:"
@@ -689,7 +689,7 @@ _LEAVE_PERMISSION = re.compile(
     re.IGNORECASE,
 )
 # The whole ask is just a farewell ("Laura, bye!", "goodbye Laura").
-# NOTE: bare "ciao" is deliberately NOT here — in Italian it's also a GREETING
+# NOTE: bare "ciao" is deliberately NOT here; in Italian it's also a GREETING
 # ("Laura, ciao!" at the start of a meeting must never make her leave).
 # "ciao ciao" and "arrivederci" are unambiguous farewells.
 _LEAVE_FAREWELL = re.compile(
@@ -703,7 +703,7 @@ _LEAVE_FAREWELL = re.compile(
 # andare avanti" (= go ahead / continue) never matches.
 _LEAVE_IT = re.compile(
     r"^(?:per favore\s+|ora\s+|adesso\s+|pure\s+|ok\s+)*"
-    # "lascia" only with the meeting as object ("lascia la riunione") — bare
+    # "lascia" only with the meeting as object ("lascia la riunione"); bare
     # "lascia pure/stare" means "never mind", not a dismissal.
     r"(?:esci(?:\s+fuori)?|vattene|vai via|vai fuori|scollegati|abbandona|vai pure|"
     r"lascia(?:ci)?(?=\s+(?:pure\s+)?(?:la|il|lo|questa|questo)\s+(?:riunione|call|chiamata|meeting|meet)))"
@@ -718,7 +718,7 @@ _LEAVE_IT = re.compile(
     re.IGNORECASE,
 )
 # Negation / hypothetical right before the verb ("don't leave", "before you
-# leave the meeting…", "non andare", "prima di uscire…") — never a command.
+# leave the meeting…", "non andare", "prima di uscire…"); never a command.
 _LEAVE_BLOCKED = re.compile(
     r"\b(?:don'?t|do not|never|shouldn'?t|won'?t|before|unless|until|if|when|"
     r"why(?: did| would)?|instead of|non|prima di|se|quando|perch[eé])\b"
@@ -748,7 +748,7 @@ _LEAVE_MEETING_OBJECT = re.compile(
     r"\b(?:meeting|meet|call|room|riunione|chiamata)\b", re.IGNORECASE
 )
 # 2nd-person / plural PERMISSION leads ("you can leave the meeting", "puoi
-# uscire", "we can leave") — these could be aimed at a PERSON, so they're
+# uscire", "we can leave"); these could be aimed at a PERSON, so they're
 # excluded from the name-free path below (they still fire the normal named /
 # 1:1-room / armed-window paths in main.py).
 _LEAVE_PERMISSION_LEAD = re.compile(
@@ -760,7 +760,7 @@ _LEAVE_PERMISSION_LEAD = re.compile(
 
 
 def detect_leave_command_explicit(question: str) -> bool:
-    """A whole-ask leave IMPERATIVE whose explicit object is the meeting itself —
+    """A whole-ask leave IMPERATIVE whose explicit object is the meeting itself -
     "leave the meeting", "go out the meeting", "esci dalla riunione", "vai fuori
     al meeting". Unambiguous enough to act on WITHOUT the avatar's name: a human
     dismisses another human BY NAME, never with a bare imperative to the room.
@@ -779,7 +779,7 @@ def detect_leave_command_explicit(question: str) -> bool:
 
 # First tokens a dismissal aimed at THE AVATAR can start with: the leave verbs
 # themselves, second-person pronouns, modals, and politeness/discourse lead-ins
-# — everything the _LEAVE_* shapes actually accept. A follow-up that starts
+#; everything the _LEAVE_* shapes actually accept. A follow-up that starts
 # with anything else ("Sara you can leave now") is aimed at whoever was just
 # named, never at the avatar. Used ONLY on the split-window follow-up path,
 # where there is no wake word to disambiguate the addressee.
@@ -822,7 +822,7 @@ _BROWSE_VERB = (
     r"(show|open)|let me see|apri|aprimi|mostra|mostrami|fammi vedere|"
     r"portami|vai (su|dentro)|puoi (mostrar|aprir))"
 )
-# How-to lead-ins (EN + IT) — also count as an intent verb.
+# How-to lead-ins (EN + IT); also count as an intent verb.
 _HOWTO_LEAD = (
     r"(how (do (i|you)|to|can i|i)|walk me through|show me how|teach me|"
     r"guide me|give me a tour|step by step|come (si|faccio|posso)|"
@@ -914,7 +914,7 @@ def detect_browse_intent(utterance: str) -> tuple[bool, str, str]:
 
 
 # Asana-domain nouns that (with a verb) mean "show me my Asana", even without
-# the word "Asana" — for a 1:1 with the PM avatar this is unambiguous.
+# the word "Asana": for a 1:1 with the PM avatar this is unambiguous.
 _ASANA_CONTEXT = (
     r"\b(my |the |le mie |i miei )?(tasks?|attivit\w*|projects?|progett\w*|"
     r"board|bacheca|portfolio|portafogli|workspace|spazio di lavoro)\b"
@@ -923,7 +923,7 @@ _ASANA_CONTEXT = (
 
 def browse_signal(utterance: str) -> tuple[bool, bool]:
     """PII-safe telemetry: (has_verb_or_howto, has_site_or_surface) booleans
-    only — never returns or logs the utterance. Lets the meeting path record
+    only; never returns or logs the utterance. Lets the meeting path record
     WHY an intent matched or not without touching transcript content."""
     t = (utterance or "").lower()
     has_verb = bool(re.search(_BROWSE_VERB, t)) or bool(re.search(_HOWTO_LEAD, t))

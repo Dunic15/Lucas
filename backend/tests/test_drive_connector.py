@@ -75,7 +75,7 @@ def test_folder_brief_renders_docs_and_caches(monkeypatch):
 
     n = len(calls)
     assert drive_client.folder_brief(FOLDER) == brief
-    assert len(calls) == n  # served from cache — no second HTTP round
+    assert len(calls) == n  # served from cache; no second HTTP round
 
 
 def test_folder_brief_truncates_at_cap(monkeypatch):

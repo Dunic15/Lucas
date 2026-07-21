@@ -1,18 +1,18 @@
-"""Canonical Action Control Plane (M0) — needs_details, params door, claim.
+"""Canonical Action Control Plane (M0); needs_details, params door, claim.
 
 The invariants from docs/product/UNIFIED-ACTION-CONTROL-PLANE.md on the
 key-free SQLite path:
 
   1. Approving a typed action with missing REQUIRED parameters is refused
      (422 needs_details + the exact fields) instead of executing a broken
-     vendor call or silently no-opping — the 2026-07-16 "approved but nothing
+     vendor call or silently no-opping; the 2026-07-16 "approved but nothing
      executed" failure class.
   2. The params door is the ONLY way a typed spec changes: schema-validated,
      refused after a decision, and the approve door then executes the EDITED
      params (never a client body on the approve door itself).
   3. GET /org/actions/{id} exposes ONE canonical Action object.
   4. Peer statuses are normalized at the boundary ('executed' → 'done').
-  5. Double approval — same door or across doors — produces exactly one
+  5. Double approval, same door or across doors, produces exactly one
      external write (decision record + execution claim).
 """
 from __future__ import annotations
@@ -36,7 +36,7 @@ from app.config import settings
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LAURA_STORE_PATH", str(tmp_path / "store.sqlite3"))
     importlib.reload(store)
-    importlib.reload(ledger)  # shares the sqlite file — needs its tables too
+    importlib.reload(ledger)  # shares the sqlite file; needs its tables too
     monkeypatch.setattr(settings, "native_executor", True)
     return TestClient(main_module.app)
 
@@ -131,7 +131,7 @@ def test_params_fill_then_approve_executes_edited_spec(client, monkeypatch):
 
     r = client.post("/org/actions/p1/approve", json={"decision": "approve"})
     assert r.status_code == 200 and r.json()["new_status"] == "done"
-    # The EDITED params executed — not the artifact's original empty list.
+    # The EDITED params executed; not the artifact's original empty list.
     assert sink and sink[0][1]["to"] == ["ceo@acme.com"]
 
 
@@ -185,7 +185,7 @@ def test_canonical_action_get(client):
 
 def test_canonical_get_is_org_scoped(client):
     _seed_action("11111111-1111-1111-1111-111111111111", "g2", _COMPLETE)
-    # The key-free caller resolves to the Demo org — another org's action is
+    # The key-free caller resolves to the Demo org; another org's action is
     # indistinguishable from an unknown id.
     assert client.get("/org/actions/g2").status_code == 404
 

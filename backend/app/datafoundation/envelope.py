@@ -1,7 +1,7 @@
 """SourceEnvelope + typed ACL validation (accepted contract v5). Pure.
 
 FAIL-CLOSED is the design center: a missing or unknown ``acl_mode`` NEVER
-means org-readable — validation normalizes it to ``unknown`` and the DAL
+means org-readable; validation normalizes it to ``unknown`` and the DAL
 stores such records with zero ACL rows (visible to nobody, absent from every
 live index). ``upload`` must say ``org_default`` explicitly.
 """

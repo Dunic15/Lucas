@@ -1,21 +1,21 @@
-"""Dashboard login — Google Sign-In + a signed session cookie.
+"""Dashboard login: Google Sign-In + a signed session cookie.
 
 The identity layer for the owner dashboard: a user signs in with Google
 (OIDC authorization-code flow), gets a row in the users table and an
 HttpOnly HMAC-signed cookie, and from then on the dashboard scopes what it
-shows to their org (org_id == user_id today — the multi-tenancy seam of
+shows to their org (org_id == user_id today; the multi-tenancy seam of
 docs/infra/MULTI-TENANCY.md, not the full build).
 
 Deliberate properties:
 - Key-free demo preserved: with no Google client configured, ``enabled()``
   is False and every gate in dashboard.py falls back to today's behavior
   (open, or bearer-token when LAURA_API_TOKEN is set).
-- Reuses the SAME Google OAuth client as calendar auto-join — one more
+- Reuses the SAME Google OAuth client as calendar auto-join: one more
   redirect URI ({public_base_url}/auth/google/callback) in the console,
   no new secrets.
 - The id_token is accepted from Google's token endpoint DIRECTLY over TLS
   (not from the browser), so we validate iss/aud/exp/email_verified but
-  skip JWKS signature verification — the token can't have been tampered
+  skip JWKS signature verification; the token can't have been tampered
   with in transit. If we ever accept tokens from the client, add JWKS.
 - Cookie = base64(payload).hmac_sha256(secret). No JWT dependency; stdlib
   only. SESSION_SECRET empty -> random per boot (re-login after restart).
@@ -92,7 +92,7 @@ def _sign(payload: str, purpose: str) -> str:
 
 
 def _verify(payload: str, signature: str, purpose: str) -> bool:
-    """Constant-time check that is robust to a hostile signature — a non-ASCII
+    """Constant-time check that is robust to a hostile signature; a non-ASCII
     byte in an attacker-supplied cookie must not raise (compare_digest on str
     with non-ASCII does), so we compare encoded bytes and swallow anything."""
     try:
@@ -127,8 +127,8 @@ def read_cookie(value: str) -> Optional[str]:
 # ── per-browser OAuth state (login-CSRF / token-injection defense) ──────
 #
 # The exact per-browser-nonce pattern the login flow (google_start /
-# google_callback) uses, factored out so OTHER OAuth entrypoints — e.g. the
-# native Google calendar connect in main.py — can bind their `state` the same
+# google_callback) uses, factored out so OTHER OAuth entrypoints; e.g. the
+# native Google calendar connect in main.py; can bind their `state` the same
 # way without duplicating the crypto. A random nonce lives in an HttpOnly
 # cookie AND (signed) inside the `state` param; the callback requires both to
 # match, so an attacker's pre-obtained signed state can't be planted in a
@@ -175,7 +175,7 @@ def check_oauth_state(state: str, cookie_nonce: str, purpose: str) -> bool:
 
 def current_user(request: Request) -> Optional[dict]:
     """The logged-in user for this request, or None. A cookie whose user row
-    vanished (ephemeral store wiped by a redeploy) is treated as logged-out —
+    vanished (ephemeral store wiped by a redeploy) is treated as logged-out -
     the user just signs in again and lands on the same user_id (it derives
     from the email)."""
     uid = read_cookie(request.cookies.get(COOKIE_NAME, ""))
@@ -324,8 +324,8 @@ async def google_callback(request: Request) -> RedirectResponse:
     if not email_allowed(claims["email"]):
         return _err_redirect("not_allowed")
 
-    # Threadpooled: upsert_user is sync SQLite and — when the control plane is
-    # configured — a sync Postgres round-trip (ensure_user). This handler is
+    # Threadpooled: upsert_user is sync SQLite and; when the control plane is
+    # configured; a sync Postgres round-trip (ensure_user). This handler is
     # async, so running it inline would block the shared event loop that also
     # serves every live meeting (single instance).
     user = await run_in_threadpool(
@@ -338,7 +338,7 @@ async def google_callback(request: Request) -> RedirectResponse:
         google_sub=str(claims.get("sub") or ""),
     )
     # Comped access (BILLING_COMP_EMAILS): waive metering for this user's org
-    # at every login — idempotent, and re-granting here means the comp follows
+    # at every login; idempotent, and re-granting here means the comp follows
     # the user through org re-resolutions (the #251 class) automatically.
     # Best-effort: a billing hiccup must never break a login.
     from . import entitlements  # lazy: auth loads before the control plane
@@ -377,7 +377,7 @@ async def google_callback(request: Request) -> RedirectResponse:
 
 def _decode_id_token(id_token: str) -> Optional[dict]:
     """Claims from Google's id_token, validated for iss/aud/exp/email.
-    Signature is NOT checked — see the module docstring for why that is
+    Signature is NOT checked; see the module docstring for why that is
     sound here (token comes straight from Google's token endpoint over TLS).
     """
     try:
@@ -403,7 +403,7 @@ def _first_party_origin(origin: str) -> bool:
 
     ``public_base_url`` is the App Runner URL (it backs the OAuth redirect_uri and
     internal links), but real users reach the dashboard at **lauravatar.com**
-    through the Cloudflare Worker — so their genuinely same-origin logout POST
+    through the Cloudflare Worker; so their genuinely same-origin logout POST
     carries ``Origin: https://lauravatar.com``, which is first-party, NOT
     cross-site. Comparing only against ``public_base_url`` 403'd every real logout
     (and the two dashboard POSTs that share this check). The host allowlist mirrors
@@ -463,7 +463,7 @@ def me(request: Request) -> JSONResponse:
 @router.get("/auth/allowed")
 def allowed(email: str = "") -> JSONResponse:
     """Private-beta gate check for the login page. `gated` is True when an
-    allowlist is configured at all (DASHBOARD_ALLOWED_EMAILS) — the page skips
+    allowlist is configured at all (DASHBOARD_ALLOWED_EMAILS); the page skips
     the email step and goes straight to Google when it isn't. `allowed` says
     whether THIS email may proceed to Google; a non-allowed email is shown a
     'coming soon' waitlist message instead of Google's unverified-app wall.

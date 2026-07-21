@@ -1,7 +1,7 @@
-"""Granola client — pull finished meeting transcripts (post-meeting only).
+"""Granola client; pull finished meeting transcripts (post-meeting only).
 
 Granola is a meeting notetaker. Its API returns transcripts of meetings you've
-ALREADY recorded with Granola — there is no real-time stream and it cannot join a
+ALREADY recorded with Granola; there is no real-time stream and it cannot join a
 call or render an avatar. So it powers the *post-meeting* artifact path (summary +
 gap checklist + follow-up email) as a keyless-vendor alternative to Recall; it
 does NOT power the live in-call agent.
@@ -15,7 +15,7 @@ API (per Granola's OpenAPI):
 Auth: Authorization: Bearer grn_...   (Granola app → Settings → Connectors → API keys)
 
 INTEGRATION SEAM: field names follow the current OpenAPI; if Granola changes the
-shape, adjust `_format_transcript` — it's the only vendor-specific parser here.
+shape, adjust `_format_transcript`: it's the only vendor-specific parser here.
 """
 from __future__ import annotations
 

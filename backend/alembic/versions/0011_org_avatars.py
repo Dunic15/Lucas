@@ -5,35 +5,35 @@ Revises: 0010_company_brain
 Create Date: 2026-07-17
 
 The repo's ``avatars/<id>/avatar.yaml`` files stay the immutable canonical
-definitions — the capability CEILING an org can never widen. These tables add
+definitions; the capability CEILING an org can never widen. These tables add
 the org-owned personalization layer:
 
-- ``org_avatars``            — one row per (org, canonical avatar key):
+- ``org_avatars``: one row per (org, canonical avatar key):
                                enabled switch + the currently published
                                version pointer + actor provenance.
-- ``org_avatar_versions``    — immutable overlay versions. Drafts are edited
+- ``org_avatar_versions``: immutable overlay versions. Drafts are edited
                                in place (optimistic ``version_token``); a
                                publish freezes the row forever and moves the
                                ``org_avatars.current_version`` pointer;
                                rollback = republishing an older version's
                                payload as a NEW version (history is linear
                                and append-only, nothing is ever rewritten).
-- ``org_avatar_assignments`` — which overlayed avatar applies in which
+- ``org_avatar_assignments``: which overlayed avatar applies in which
                                context. Scopes match what the application
                                actually supports today: ``org_default`` and
                                ``user`` (an explicit avatar on the session
                                request always wins; richer scopes arrive with
                                their runtime concepts, never speculatively).
-- ``org_avatar_audit``       — append-only actor trail for every create /
+- ``org_avatar_audit``: append-only actor trail for every create /
                                edit / publish / rollback / assignment write.
-                               laura_app gets INSERT+SELECT only — the grant
+                               laura_app gets INSERT+SELECT only; the grant
                                IS the append-only guarantee (the PG audit_log
                                from 0001 is deliberately out of laura_app's
                                reach, so this table is the smallest compliant
                                substitute).
 
 The overlay payload is a VALIDATED, allowlisted JSONB (see
-``backend/app/avatar_overlay.py``) — never raw system-prompt replacement,
+``backend/app/avatar_overlay.py``); never raw system-prompt replacement,
 never credentials, never capability widening. All tables follow the
 0006/0009/0010 discipline: FORCE RLS with the transaction-local
 ``app.current_org`` NULLIF policy TO laura_app, REVOKE-then-GRANT.

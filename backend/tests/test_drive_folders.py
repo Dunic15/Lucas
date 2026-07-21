@@ -1,6 +1,6 @@
 """Drive folder listing for the Brain picker: when Google is connected the
 dashboard lists the org's Drive folders (id+name) with its own token, so the
-user PICKS a folder instead of pasting a link. Never raises — a missing
+user PICKS a folder instead of pasting a link. Never raises; a missing
 token/scope is a clean reason. Key-free (google_client + httpx stubbed)."""
 from __future__ import annotations
 

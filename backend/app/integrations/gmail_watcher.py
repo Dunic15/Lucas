@@ -1,14 +1,14 @@
 """Watch Laura's Gmail for meeting invitations and auto-join them.
 
 Product flow this enables (no extension, no calendar scheduling):
-  Any email that lands in Laura's inbox with a joinable meeting link — Meet's
+  Any email that lands in Laura's inbox with a joinable meeting link. Meet's
   native "Add people" (which emails the meet.google.com URL), a forwarded Zoom
   invite, a forwarded Teams invite  ->  this watcher sees the email, extracts
   the meeting URL  ->  the backend sends a Recall bot into that exact meeting.
 
 Meet's "Add people" does NOT create a calendar event, so Recall's calendar sync
-can't catch it — the reliable signal is the invitation email in Laura's inbox.
-Zoom/Teams links are kept whole (?pwd=, the meetup-join context) — stripping
+can't catch it; the reliable signal is the invitation email in Laura's inbox.
+Zoom/Teams links are kept whole (?pwd=, the meetup-join context); stripping
 their join credentials would strand the bot at the passcode screen.
 
 Auth: reuses the same Google OAuth already set up for the calendar. The watcher
@@ -32,7 +32,7 @@ GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
 # Standard Google Meet code: xxx-xxxx-xxx (lowercase letters).
 _MEET_RE = re.compile(r"https://meet\.google\.com/([a-z]{3}-[a-z]{4}-[a-z]{3})")
 # Zoom join links (any subdomain: zoom.us, us02web.zoom.us, company.zoom.us).
-# The whole URL is kept — ?pwd= is the embedded passcode the bot needs to join.
+# The whole URL is kept. ?pwd= is the embedded passcode the bot needs to join.
 _ZOOM_RE = re.compile(
     r"https://(?:[\w-]+\.)?zoom\.us/(?:j|s|w|wc/join|wc)/\d{8,13}[^\s\"'<>]*"
 )
@@ -96,7 +96,7 @@ def _extract_meeting_urls(text: str) -> set[str]:
     """Every joinable Meet/Zoom/Teams URL in `text`, normalized.
 
     Meet links are rebuilt from the room code (their query params are tracking
-    noise); Zoom/Teams links are kept whole minus trailing punctuation — their
+    noise); Zoom/Teams links are kept whole minus trailing punctuation; their
     query carries the passcode/context needed to actually get into the call.
     """
     text = text or ""
@@ -166,7 +166,7 @@ def poll_new_invites(
     token: str, seen_ids: set[str]
 ) -> list[tuple[str, str, set[str], float]]:
     """Return [(message_id, meeting_url, recipient_addresses, received_at)] for
-    unseen invites — Meet "Add people" invites plus forwarded Zoom/Teams
+    unseen invites: Meet "Add people" invites plus forwarded Zoom/Teams
     invitations.
 
     Only looks at very recent mail so we react to a live invite, not stale

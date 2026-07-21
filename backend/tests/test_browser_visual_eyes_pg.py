@@ -1,4 +1,4 @@
-"""Browser B1 "Visual Eyes" — end-to-end on real Postgres, key-free.
+"""Browser B1 "Visual Eyes": end-to-end on real Postgres, key-free.
 
 The complete loop with the fake provider + fake visual planner: the
 VISUAL-ONLY acceptance fixture (target unselectable from text), the bounded
@@ -125,7 +125,7 @@ def test_visual_only_target_full_loop(cp):
     """Prove real eyes: on a page whose two targets are text-identical, the
     planner selects the correct one FROM THE SCREENSHOT (coordinates), policy
     permits the safe click, the browser executes it, a new observation is
-    obtained, and the resulting visual state is VERIFIED — none of which is
+    obtained, and the resulting visual state is VERIFIED; none of which is
     possible from visible text alone."""
     org = _org(cp, "visual")
     sess = _session(org)
@@ -136,7 +136,7 @@ def test_visual_only_target_full_loop(cp):
     # Perceive → the byte-free observation + the transient screenshot.
     obs, shot = operator.perceive(org, sess["id"], principal="u_alice")
     assert shot, "provider produced a screenshot"
-    # Two elements, identical visible name — text cannot disambiguate.
+    # Two elements, identical visible name; text cannot disambiguate.
     names = [e["name"] for e in obs["elements"]]
     assert names == ["Continue", "Continue"]
     # The visual planner grounds the primary target FROM THE SCREENSHOT.
@@ -234,7 +234,7 @@ def test_coordinator_guarded_step_suspends_for_approval(cp, monkeypatch):
     pl = planner.FakeVisualPlanner(mode="guarded")
     out = coordinator.run(org, sess["id"], "buy the plan",
                           principal="u_alice", planner=pl)
-    # The coordinator STOPS at the guarded step and records the action_id —
+    # The coordinator STOPS at the guarded step and records the action_id -
     # it never polls or self-approves.
     assert out["outcome"] == "awaiting_approval"
     assert out["action_id"]
@@ -287,7 +287,7 @@ def test_prompt_injection_page_has_no_authority(cp):
     assert "sk-livesecret" not in json.dumps(obs)
     # A planner that OBEYS the page (repeatedly navigates to evil.example.com)
     # is blocked EVERY time by the server domain allowlist inside the
-    # coordinator — the page cannot widen the allowlist.
+    # coordinator; the page cannot widen the allowlist.
     pl = planner.FakeVisualPlanner(mode="script", script=[
         {"operation": "navigate", "target": "https://evil.example.com/steal",
          "reason": "the page told me to"}] * 5)
@@ -295,7 +295,7 @@ def test_prompt_injection_page_has_no_authority(cp):
                           principal="u_alice", planner=pl)
     assert out["outcome"] == "blocked"
     assert all(s.get("outcome") == "domain_blocked" for s in out["steps"])
-    # Never navigated off-domain — still on an allowlisted page.
+    # Never navigated off-domain; still on an allowlisted page.
     assert operator.get_session(org, sess["id"])["state"] in (
         "ready", "presenting")
 
@@ -362,7 +362,7 @@ def test_link_click_off_allowlist_is_domain_blocked(cp):
 
 
 def test_non_http_anchor_click_not_domain_blocked(cp, monkeypatch):
-    """The click-href gate only blocks http(s) cross-domain navigation — a
+    """The click-href gate only blocks http(s) cross-domain navigation; a
     mailto:/javascript: anchor is an element interaction, never domain_blocked
     (fails closed but must not over-block legitimate B1-path clicks)."""
     from app.browser.fake_provider import _PAGES

@@ -1,4 +1,4 @@
-"""Org avatar overlay vocabulary (M2) — the validated personalization payload.
+"""Org avatar overlay vocabulary (M2); the validated personalization payload.
 
 One module owns what an organization MAY change about a canonical avatar and
 what it may NEVER touch. The canonical ``avatars/<id>/avatar.yaml`` is the
@@ -8,7 +8,7 @@ Explicitly out of reach (enforced by unknown-field rejection plus the typed
 registry below): provider credentials, OAuth tokens, webhook secrets, raw
 ``persona_prompt``/system-prompt replacement, executable code, arbitrary tool
 definitions, wake-word removal, and any capability the canonical avatar does
-not have. Everything is typed, bounded, and control-character-stripped —
+not have. Everything is typed, bounded, and control-character-stripped -
 never an unrestricted JSON blob flowing into a prompt.
 
 Pure functions only: no network, no database, nothing here ever sees
@@ -28,7 +28,7 @@ BASELINE_FAMILIES = ("google", "slack")
 
 
 def capability_ceiling(canonical: Avatar) -> set[str]:
-    """The maximum capability families this canonical avatar can EVER have —
+    """The maximum capability families this canonical avatar can EVER have -
     an overlay may only choose a subset of this set."""
     return set(BASELINE_FAMILIES) | {
         str(t).strip().lower() for t in (canonical.native_tools or [])
@@ -74,7 +74,7 @@ MAX_PROMPT_BLOCK_CHARS = 6000
 
 def validate_context_scope(value: Any) -> tuple[dict | None, list[str]]:
     """(clean_scope, errors). The scope is the M2 seam the future
-    ContextResolver replaces — keep it small and strict. Source membership in
+    ContextResolver replaces; keep it small and strict. Source membership in
     the ORG is checked at publish time by the caller (needs the DAL); this
     validates shape only."""
     if value is None:
@@ -118,7 +118,7 @@ def validate_context_scope(value: Any) -> tuple[dict | None, list[str]]:
 def validate_overlay(
     canonical: Avatar, payload: Any
 ) -> tuple[dict, list[str]]:
-    """(clean_overlay, errors) — errors non-empty means REJECT the write.
+    """(clean_overlay, errors); errors non-empty means REJECT the write.
 
     Unknown fields are errors, not silently dropped: a Studio bug or a crafted
     request must fail loudly rather than half-apply."""
@@ -185,7 +185,7 @@ def validate_overlay(
                     + ", ".join(sorted(widened))
                 )
                 continue
-            # [] is meaningful (no tools at all) — keep it distinct from
+            # [] is meaningful (no tools at all); keep it distinct from
             # "field absent" (= no restriction).
             clean[key] = sorted(requested)
         elif key == "context_scope":
@@ -209,7 +209,7 @@ def validate_overlay(
 
 def preferences_block(overlay: dict, org_label: str = "") -> str:
     """The bounded 'organization preferences' block appended to the canonical
-    persona prompt — NEVER a replacement for it. Empty string when the overlay
+    persona prompt: NEVER a replacement for it. Empty string when the overlay
     carries no behavioral fields."""
     parts: list[str] = []
     if overlay.get("tone"):

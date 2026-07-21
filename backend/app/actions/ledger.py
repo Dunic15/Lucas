@@ -1,7 +1,7 @@
 """Cross-meeting memory: the action & decision ledger.
 
-Each finished meeting deposits its extracted facts — action items, decisions,
-missing process steps — into a persistent ledger keyed by the *meeting*, so
+Each finished meeting deposits its extracted facts; action items, decisions,
+missing process steps; into a persistent ledger keyed by the *meeting*, so
 the next session on the same meeting link starts knowing what is still open:
 "the DPA was flagged missing on Jul 1 and never resolved". This is the layer
 that turns Laura from a per-meeting notetaker into something that remembers.
@@ -14,7 +14,7 @@ Design constraints:
     once (at finalize). Nothing runs per-utterance.
   - Determinism: only template process steps auto-resolve (a step missing in
     meeting N that is no longer missing in meeting N+1 of the same type).
-    Free-text actions never auto-resolve — they stay open until marked done
+    Free-text actions never auto-resolve; they stay open until marked done
     via the API, so Laura never silently drops a commitment.
 """
 from __future__ import annotations
@@ -41,7 +41,7 @@ DEMO_ORG_ID = settings.demo_org_id
 def new_action_id() -> str:
     """A fresh stable id for one action item. Assigned once (at live capture, or
     at finalize for a summarizer-only action) and carried through the
-    action.requested webhook, the artifact's actions[], and this ledger row — so
+    action.requested webhook, the artifact's actions[], and this ledger row; so
     the orchestrator correlates + dedupes + resolves on it."""
     return uuid.uuid4().hex[:16]
 
@@ -58,7 +58,7 @@ def meeting_key(meeting_url: str) -> str:
 
     Recurring meetings reuse their link (Meet code / Zoom id / Teams thread),
     so the platform code is the natural key. Unknown formats fall back to the
-    normalized URL — still stable for a re-used link.
+    normalized URL; still stable for a re-used link.
     """
     url = (meeting_url or "").strip()
     for pattern in (_MEET_CODE, _ZOOM_CODE, _TEAMS_CODE):
@@ -104,7 +104,7 @@ def _init_db() -> None:
         )
         # Migration for stores created before the action_id column. This MUST
         # run BEFORE the action_id index below: on an EXISTING ledger DB the
-        # CREATE TABLE above is a no-op, so the column doesn't exist yet — and
+        # CREATE TABLE above is a no-op, so the column doesn't exist yet; and
         # `CREATE INDEX ON ledger_items(action_id)` would raise "no such column"
         # and crash the boot. (Fresh-DB tests never hit this ordering because
         # their CREATE TABLE already includes the column.)
@@ -127,7 +127,7 @@ def _init_db() -> None:
                 "UPDATE ledger_items SET item_norm=? WHERE id=?",
                 (_norm(row["item"]), row["id"]),
             )
-        # Column now guaranteed to exist (fresh OR migrated) — safe to index.
+        # Column now guaranteed to exist (fresh OR migrated); safe to index.
         conn.executescript(
             """
             CREATE INDEX IF NOT EXISTS idx_ledger_org_key_status
@@ -145,11 +145,11 @@ def _init_db() -> None:
                 "ON ledger_items(org_id, meeting_key, kind, item_norm)"
             )
         except sqlite3.OperationalError:
-            pass  # legacy duplicates — the Python dedupe guard still applies
+            pass  # legacy duplicates; the Python dedupe guard still applies
         # Execution provenance reported back by the orchestrator (Cedric) via
         # POST /org/actions/{action_id}/status: the brain's side of the story
         # (proposed → approved/rejected → done/failed), keyed on the same
-        # stable action_id the events carry. Latest state only — the dashboard
+        # stable action_id the events carry. Latest state only; the dashboard
         # shows where each action stands, not a full audit trail.
         conn.executescript(
             f"""
@@ -369,7 +369,7 @@ def search(
 
 
 # Terminal outcomes a resolve may carry (agreed contract with the orchestrator
-# side): all three CLOSE the item — "rejected" and "failed" are as final as
+# side): all three CLOSE the item. "rejected" and "failed" are as final as
 # "done", so a declined or errored action stops resurfacing as open forever.
 RESOLUTION_OUTCOMES = ("done", "rejected", "failed")
 
@@ -399,7 +399,7 @@ def resolve_by_action_id(
     action_id: str, bot_id: str = "", outcome: str = "done", detail: str = "",
     *, org_id: str = DEMO_ORG_ID,
 ) -> bool:
-    """Close an action by its stable cross-channel action_id — the id the
+    """Close an action by its stable cross-channel action_id; the id the
     orchestrator (Cedric) holds from the live action.requested event and the
     session.ended artifact, so it can ack 'done/approved in Slack' without ever
     seeing the numeric ledger row id. Scoped to ``org_id``. Only resolves after
@@ -452,7 +452,7 @@ def resolve_by_action_id(
         raise
 
 
-# Execution states a surface may report — the canonical Action lifecycle
+# Execution states a surface may report; the canonical Action lifecycle
 # (action_plane.ACTION_STATUSES): capture → needs_details/proposed → decision
 # → executing → done/failed/rejected. needs_details and executing are the M0
 # additions (UNIFIED-ACTION-CONTROL-PLANE.md).
@@ -460,13 +460,13 @@ EXECUTION_STATUSES = ACTION_STATUSES
 
 
 # Terminal execution statuses close the ledger item with the matching resolve
-# outcome — one weld point so the provenance channel (/status, what Cedric's
+# outcome; one weld point so the provenance channel (/status, what Cedric's
 # own loop reports) and the closure channel (/resolve) can never disagree.
 # 'needs_details'/'proposed'/'approved'/'executing' are in-flight and must
 # NOT close anything.
 _TERMINAL_STATUS_OUTCOME = {"done": "done", "rejected": "rejected", "failed": "failed"}
 
-# Statuses an execution claim may be taken from — everything pre-decision plus
+# Statuses an execution claim may be taken from; everything pre-decision plus
 # 'approved' (the door records the decision first, then claims).
 _CLAIMABLE_STATUSES = ("", "needs_details", "proposed", "approved")
 
@@ -477,8 +477,8 @@ def set_action_status(
 ) -> bool:
     """Record the orchestrator-reported execution state of an action (upsert,
     latest wins). Terminal statuses (done/rejected/failed) also close the
-    ledger item with the matching outcome — same effect as the resolve
-    endpoint — so the two reporting paths can't disagree (live gap 2026-07-10:
+    ledger item with the matching outcome; same effect as the resolve
+    endpoint; so the two reporting paths can't disagree (live gap 2026-07-10:
     Cedric's status loop reported 'rejected' but the ledger row stayed open
     forever). Unknown status or empty id is a no-op (False). ``detail`` is a
     distilled one-liner (card link, error class); it is capped, and it is
@@ -544,7 +544,7 @@ def set_action_status(
             )
     if st == "done":
         # [M8] release: this action completing may unblock approvals parked on
-        # it. THE weld point — every completion path lands here (native executor
+        # it. THE weld point; every completion path lands here (native executor
         # receipt, 'respond', the stale-executing reconciler's settle, and
         # Cedric's /status report for work IT executed), which is why the
         # release hangs off the status write and not off
@@ -577,7 +577,7 @@ def claim_action_execution(
     'executing', so two surfaces (dashboard + Slack relay) approving the same
     action concurrently produce exactly one external write. Durable orgs CAS
     on the Postgres row (cross-instance); everything else falls back to the
-    per-process SQLite action_status CAS — exactly as safe as today's
+    per-process SQLite action_status CAS; exactly as safe as today's
     behaviour, never less. A durable org whose action was never indexed (no
     queued_actions row) also falls back rather than blocking execution."""
     aid = (action_id or "").strip()
@@ -594,7 +594,7 @@ def claim_action_execution(
             return True
         if claim == "lost":
             return False
-        # 'missing' — no durable row; fall through to the local guard.
+        # 'missing': no durable row; fall through to the local guard.
     with store._LOCK, store._connect() as conn:
         row = conn.execute(
             "SELECT status FROM action_status WHERE org_id=? AND action_id=?",
@@ -619,12 +619,12 @@ def reopen_failed_action(
     action_id: str, *, org_id: str = DEMO_ORG_ID, detail: str = ""
 ) -> bool:
     """CAS a 'failed' receipt back to 'approved' so the approve door can retry
-    it (the owner clicked Approve again on a failed action — live gap
+    it (the owner clicked Approve again on a failed action; live gap
     2026-07-20: the button promised a retry that never re-dispatched).
 
-    'failed' stays terminal everywhere else on purpose — set_action_status
+    'failed' stays terminal everywhere else on purpose; set_action_status
     must keep refusing to un-fail so late/replayed Cedric events can't
-    repaint a receipt — which makes this narrow, caller-explicit CAS the one
+    repaint a receipt; which makes this narrow, caller-explicit CAS the one
     sanctioned exit. done/rejected remain immutable. The matching ledger_items
     row reopens too, so the retry's real outcome closes it later. Returns True
     when the caller may re-run the execution/dispatch pipeline."""
@@ -642,7 +642,7 @@ def reopen_failed_action(
         if verdict == "lost":
             return False
         pg_reopened = verdict == "reopened"
-        # 'missing' — no durable row; the local guard below is authoritative.
+        # 'missing': no durable row; the local guard below is authoritative.
     with store._LOCK, store._connect() as conn:
         cur = conn.execute(
             """UPDATE action_status SET status='approved', detail=?, updated_at=?
@@ -667,7 +667,7 @@ def record_action_decision(
     new_status: str = "", execution_job_id: str | None = None,
     blocked_on: str = "",
 ) -> bool:
-    """Record THE canonical decision for (org, action) — first write wins.
+    """Record THE canonical decision for (org, action); first write wins.
 
     Durable orgs write the Postgres action_decisions row so two App Runner
     instances converge; everyone else keeps the SQLite action_approvals row
@@ -697,7 +697,7 @@ def get_action_decision(
         if found is not None:
             return found
         # Decisions recorded before the durable table existed (or while the
-        # control plane was off) live in the local SQLite row — still honour
+        # control plane was off) live in the local SQLite row; still honour
         # them so an upgrade never re-executes an already-decided action.
     return store.get_action_approval(org_id, action_id)
 
@@ -758,7 +758,7 @@ def update_action_params(
         typed = outbox_pg.update_action_params(org_id, aid, args)
         if typed is not None:
             return typed
-        # No editable durable row (never indexed) — fall through to the
+        # No editable durable row (never indexed); fall through to the
         # override path so the feature still works for these actions.
     base = effective_typed(aid, artifact_typed, org_id=org_id)
     if not isinstance(base, dict) or not base.get("type"):
@@ -773,7 +773,7 @@ def effective_typed(
 ) -> Optional[dict]:
     """The typed spec the approve doors execute: durable edited params win,
     then the key-free override table, then the artifact's original spec. The
-    saved artifact is never the loser to a CLIENT body — edits arrive only
+    saved artifact is never the loser to a CLIENT body; edits arrive only
     through the params door, which validates against the schema first."""
     durable = get_durable_action(action_id, org_id=org_id)
     if durable is not None and isinstance(durable.get("typed_json"), dict):
@@ -808,7 +808,7 @@ def action_statuses(
         return {}
     from .. import control_plane
 
-    # Session-shaped orgs (u_<hash>) would crash the Postgres uuid cast — they
+    # Session-shaped orgs (u_<hash>) would crash the Postgres uuid cast; they
     # fall through to the SQLite action_status query (local/empty statuses).
     if control_plane.enabled() and control_plane.is_durable_org(org_id):
         from . import outbox_pg
@@ -836,7 +836,7 @@ def carryover_brief(
     meeting_url: str, *, limit: int = 8, org_id: str = DEMO_ORG_ID
 ) -> str:
     """Compact 'what previous meetings left open' block for prompt injection
-    and pre-meeting briefs. Scoped to ``org_id`` — this feeds the LIVE prompt,
+    and pre-meeting briefs. Scoped to ``org_id``: this feeds the LIVE prompt,
     so another tenant's open items must never surface mid-meeting (§6.4). Empty
     string when there is no history — callers can skip the block entirely."""
     key = meeting_key(meeting_url)

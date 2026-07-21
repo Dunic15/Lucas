@@ -1,4 +1,4 @@
-"""Schedule a meeting FROM the dashboard calendar — POST /dashboard/calendar/event.
+"""Schedule a meeting FROM the dashboard calendar. POST /dashboard/calendar/event.
 
 Key-free: Google's create_calendar_event is mocked (no network), the store is a
 fresh temp SQLite, native OAuth is faked via store.set_org_oauth. Covers the

@@ -1,4 +1,4 @@
-"""Pipedream Connect alternative-connections tab — flag gating, auth, and the
+"""Pipedream Connect alternative-connections tab; flag gating, auth, and the
 client's token/URL/distillation logic. Key-free: no real Pipedream calls (the
 client is monkeypatched / httpx is stubbed)."""
 from __future__ import annotations
@@ -252,7 +252,7 @@ def test_access_token_is_cached(monkeypatch):
     pc._token_expiry = 0.0
     monkeypatch.setattr("httpx.post", fake_post)
     assert pc._access_token() == "tok_abc"
-    assert pc._access_token() == "tok_abc"  # cached — no second exchange
+    assert pc._access_token() == "tok_abc"  # cached; no second exchange
     assert calls["n"] == 1
 
 
@@ -279,7 +279,7 @@ def _live_token(pc):
     pc._token_expiry = pc._now() + 9999
 
 
-# catalog search — client unit
+# catalog search; client unit
 
 def test_search_apps_parses_and_paginates(monkeypatch):
     _enable(monkeypatch)
@@ -310,7 +310,7 @@ def test_search_apps_short_page_has_no_cursor(monkeypatch):
     assert out["next_cursor"] == ""
 
 
-# Connect Proxy — client unit
+# Connect Proxy; client unit
 
 def test_proxy_request_builds_b64url_and_headers(monkeypatch):
     _enable(monkeypatch)
@@ -370,7 +370,7 @@ def test_proxy_request_returns_downstream_error_without_raising(monkeypatch):
     assert out["json"] is None and out["text"] == "nope"
 
 
-# revoke — client unit
+# revoke; client unit
 
 def test_delete_account_treats_404_as_success(monkeypatch):
     _enable(monkeypatch)
@@ -388,7 +388,7 @@ def test_delete_account_treats_404_as_success(monkeypatch):
     assert pc.delete_account("") is False  # empty id ⇒ no call
 
 
-# API routes — generic grid + disconnect
+# API routes; generic grid + disconnect
 
 def test_apps_and_disconnect_404_when_disabled(client):
     assert client.get("/dashboard/pipedream/apps").status_code == 404

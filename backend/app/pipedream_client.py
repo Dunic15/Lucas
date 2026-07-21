@@ -1,4 +1,4 @@
-"""Pipedream Connect client — managed-auth account connections + pre-built
+"""Pipedream Connect client; managed-auth account connections + pre-built
 actions, behind one flag.
 
 This is the server side of an ALTERNATIVE connections surface (a test tab that
@@ -73,7 +73,7 @@ def _fetch_access_token() -> str:
             headers={"Content-Type": "application/json"},
             timeout=20,
         )
-    except Exception as exc:  # noqa: BLE001 — network/DNS/timeout
+    except Exception as exc:  # noqa: BLE001; network/DNS/timeout
         raise PipedreamError("token exchange failed") from exc
     if resp.status_code >= 400:
         # Never echo the body verbatim (may reflect the secret); just the code.
@@ -153,7 +153,7 @@ def create_connect_token(
     """Mint a short-lived connect token for one org (external_user_id).
 
     Returns {token, expires_at, connect_url}. ``connect_url`` is the hosted
-    Connect Link the browser is sent to (redirect flow — no SDK). When ``app``
+    Connect Link the browser is sent to (redirect flow; no SDK). When ``app``
     is given the link is pre-scoped to that app slug so the user lands straight
     on its consent screen.
     """
@@ -298,7 +298,7 @@ def search_apps(query: str = "", *, limit: int = 30, after: str = "") -> dict:
     return {"apps": apps, "next_cursor": next_cursor, "total": page.get("total_count")}
 
 
-# ── Connect Proxy — run any authenticated REST call against a connected app ──
+# ── Connect Proxy; run any authenticated REST call against a connected app ──
 # Pipedream injects the account's credentials server-side; we send the target
 # app's own API request. This is the generic execution path (mirrors Cedric's
 # proxyGoogleCaller). NO auto-retry: a 401 is surfaced to the caller so a write
@@ -309,7 +309,7 @@ def proxy_request(external_user_id: str, account_id: str, method: str, url: str,
                   headers: Optional[dict] = None, timeout: float = 30) -> dict:
     """Call ``url`` (the app's own API) through the Connect Proxy on the org's
     connected account. Returns {status, ok, json, text?}. Never raises on a
-    downstream 4xx/5xx — the caller decides. Raises PipedreamError only on a
+    downstream 4xx/5xx; the caller decides. Raises PipedreamError only on a
     transport failure or when the feature is unconfigured."""
     if not enabled():
         raise PipedreamUnconfigured("pipedream not configured")

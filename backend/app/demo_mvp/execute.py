@@ -4,11 +4,11 @@ Arbitrary browser writes stay disabled. This module provides two narrow hooks
 the browser operator calls ONLY when ``NORTHSTAR_DEMO_WRITE_ENABLED`` is on and
 the guarded element is the Northstar follow-up control:
 
-- ``followup_permission_extras`` — the Northstar metadata stamped onto the
+- ``followup_permission_extras``: the Northstar metadata stamped onto the
   canonical action at mint time (idempotency key, customer, demo def/version,
   the exact previewed record, and the expected visible result the operator
   verifies after execution). Everything the approver must see.
-- ``execute_followup`` — invoked from ``execute_approved_step`` AFTER the M0
+- ``execute_followup``: invoked from ``execute_approved_step`` AFTER the M0
   exactly-once claim + the page-binding re-verification. It performs the
   product write once (itself idempotent on the same key), re-observes the
   product, verifies the visible confirmation, and returns a safe receipt.
@@ -92,7 +92,7 @@ def execute_followup(org_id: str, action_id: str, permission: dict,
     return {
         "ok": True,
         "verification": verification,
-        # Safe product receipt — no provider internals, no page bytes.
+        # Safe product receipt; no provider internals, no page bytes.
         "receipt": {
             "product": "northstar",
             "task_id": product_receipt.get("task_id") or task.get("id"),

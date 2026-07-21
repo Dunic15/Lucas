@@ -1,4 +1,4 @@
-"""Browser B1 "Visual Eyes" — key-free invariants.
+"""Browser B1 "Visual Eyes": key-free invariants.
 
 The full screenshot→plan→validate→policy→execute→verify loop on the
 deterministic fake provider + fake visual planner. No model key, no network.
@@ -170,7 +170,7 @@ def test_sensitive_element_value_never_in_name():
 
 
 def test_screenshot_ref_redacts_embedded_secret():
-    """Adversarial: a fake screenshot_ref embeds the URL — a secret-shaped
+    """Adversarial: a fake screenshot_ref embeds the URL; a secret-shaped
     token in it must be redacted, matching url redaction."""
     from app.browser.provider import RawObservation
 
@@ -190,7 +190,7 @@ def test_browserbase_selector_is_synthetic_and_injection_safe():
     from app.browser import browserbase_provider as bb
 
     # A page-controlled id with CSS metacharacters cannot expand a selector
-    # list — it is a quoted attribute-value match on the synthetic handle.
+    # list; it is a quoted attribute-value match on the synthetic handle.
     sel = bb._el_selector("x,.buy-now")
     assert sel == '[data-laura-el="x,.buy-now"]'
     assert sel.startswith("[data-laura-el=") and "#" not in sel
@@ -219,7 +219,7 @@ def test_fake_visual_planner_grounds_target_from_screenshot():
     obs, shot = _obs_for("https://demo.laura.test/visual")
     pl = planner.FakeVisualPlanner(mode="visual_select")
     prop = pl.propose(obs, "continue", screenshot=shot)
-    # It picks the screenshot-only primary (right) by COORDINATES — the DOM
+    # It picks the screenshot-only primary (right) by COORDINATES; the DOM
     # text ("Continue"/"Continue") cannot disambiguate.
     assert prop["operation"] == "click"
     assert prop["target_type"] == "coordinates"
@@ -362,7 +362,7 @@ def test_anthropic_invoke_maps_errors_and_never_leaks(monkeypatch):
     with pytest.raises(multimodal._TransportError):
         p._invoke_anthropic({}, "g", b"png", ("navigate",))
 
-    # Anything else fails closed with the class name only — no payload/body.
+    # Anything else fails closed with the class name only; no payload/body.
     secret_exc = ValueError("body-with-secret sk-DO-NOT-LEAK")
     monkeypatch.setattr(anthropic, "Anthropic", _raising_client(secret_exc))
     with pytest.raises(multimodal.PlannerError) as ei:
@@ -392,7 +392,7 @@ def test_anthropic_refusal_fails_closed(monkeypatch):
         p._invoke_anthropic({}, "g", b"png", ("navigate",))
 
 
-# ── browserbase contexts (saved logins) — payload contracts, no network ─────
+# ── browserbase contexts (saved logins); payload contracts, no network ─────
 
 def _bb_enabled(monkeypatch):
     monkeypatch.setattr(settings, "browser_real_provider_enabled", True)

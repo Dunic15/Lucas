@@ -9,7 +9,7 @@ Active when GPU_INSTANCE_ID is set AND avatar_page == "photoreal":
 
 Every AWS call is best-effort in a daemon thread: a boto3 failure can never
 block or break the live-meeting path. And this module is only ONE of three
-cost guards — the box also stops itself via its boot TTL (90 min) and its own
+cost guards; the box also stops itself via its boot TTL (90 min) and its own
 idle watchdog (gpu/server.py), so a crashed backend can't leave it running.
 
 Requires ec2:StartInstances/StopInstances on the App Runner instance role,
@@ -22,7 +22,7 @@ from typing import Callable, Optional
 
 from ..config import settings
 
-try:  # optional dependency — only exercised when GPU_INSTANCE_ID is set
+try:  # optional dependency; only exercised when GPU_INSTANCE_ID is set
     import boto3
 except ImportError:  # pragma: no cover
     boto3 = None
@@ -67,7 +67,7 @@ def _start_instance() -> None:
     try:
         _ec2().start_instances(InstanceIds=[settings.gpu_instance_id])
         print(f"[gpu] start requested: {settings.gpu_instance_id}", flush=True)
-    except Exception as e:  # noqa: BLE001 — infra-only, never surfaces to the meeting
+    except Exception as e:  # noqa: BLE001; infra-only, never surfaces to the meeting
         print(f"[gpu] start failed ({type(e).__name__}) — page stays on fallback",
               flush=True)
 

@@ -1,7 +1,7 @@
 """Design B spike: Gemini Live = ears + turn-taking, Laura's gate decides, ElevenLabs speaks.
 
 The combination you'd actually ship: keep Laura's control layer (decision.py) and
-her ElevenLabs brand voice, and let Gemini Live upgrade the weak part — natural
+her ElevenLabs brand voice, and let Gemini Live upgrade the weak part; natural
 ears + turn detection. NOT wired into the live meeting path; this imports app.* to
 reuse the *real* gate + voice config, and runs off the repo .env.
 
@@ -61,7 +61,7 @@ PERSONA = (
     "frasi brevi come al telefono. Se non sai qualcosa, dillo."
 )
 
-# Gemini as ears + brain, but TEXT out — the voice is ElevenLabs, downstream.
+# Gemini as ears + brain, but TEXT out; the voice is ElevenLabs, downstream.
 SETUP = {
     "setup": {
         "model": MODEL_PATH,
@@ -111,7 +111,7 @@ async def _finish_turn(browser, st):
         json.dumps({"type": "gate", "addressed": bool(addressed), "require_wake": st["require_wake"]})
     )
     # The gate: when wake is required and she wasn't addressed, decision.py holds
-    # her back — exactly as in a real meeting. Otherwise she answers.
+    # her back; exactly as in a real meeting. Otherwise she answers.
     if st["require_wake"] and not addressed:
         await browser.send(json.dumps({"type": "silent"}))
         return
@@ -146,7 +146,7 @@ async def _browser_to_gemini(browser, gemini, st):
                     ]}}
                 )
             )
-        elif kind == "text":  # typed — the gate reads this directly
+        elif kind == "text":  # typed; the gate reads this directly
             st["user"] = msg["text"]
             await gemini.send(
                 json.dumps({"clientContent": {

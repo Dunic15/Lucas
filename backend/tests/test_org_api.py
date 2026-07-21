@@ -1,4 +1,4 @@
-"""Org-memory API (/org/*) — the read/act seam surfaces consume (issue #48).
+"""Org-memory API (/org/*); the read/act seam surfaces consume (issue #48).
 
 Key-free like the rest of the suite: sqlite in tmp_path, no vendors touched.
 """
@@ -63,7 +63,7 @@ def test_org_actions_groups_open_items(client):
 
 
 def test_org_resolve_closes_item(client):
-    """No body at all — the pre-outcome-contract client shape (Cedric today).
+    """No body at all; the pre-outcome-contract client shape (Cedric today).
     Must keep behaving byte-identically: item closes as 'done'."""
     _seed_ledger()
     key = ledger.meeting_key(MEETING_URL)
@@ -130,7 +130,7 @@ def test_org_resolve_outcome_failed_by_action_id(client):
     row = next(i for i in ledger.items(key) if i["action_id"] == "aid_fail01")
     assert row["status"] == "failed"
     assert row["resolution_detail"] == "gmail auth expired"
-    assert ledger.items(key, status="open") == []  # terminal — never reopens
+    assert ledger.items(key, status="open") == []  # terminal; never reopens
     assert client.post("/org/actions/aid_fail01/resolve").status_code == 404
 
 
@@ -142,7 +142,7 @@ def test_org_resolve_invalid_outcome_400(client):
     resp = client.post(f"/org/actions/{item_id}/resolve", json={"outcome": "exploded"})
     assert resp.status_code == 400
     assert "outcome" in resp.json()["error"]
-    # nothing was applied — the item is still open
+    # nothing was applied; the item is still open
     assert ledger.items(key, status="open")[0]["id"] == item_id
     # malformed JSON with a non-empty body is a client error too
     resp = client.post(
@@ -166,8 +166,8 @@ def test_org_resolve_detail_capped_at_300(client):
 
 
 def test_org_resolve_by_action_id(client):
-    """Cedric closes an action by its stable action_id — the id it holds from the
-    live action.requested event and the session.ended artifact — without ever
+    """Cedric closes an action by its stable action_id; the id it holds from the
+    live action.requested event and the session.ended artifact; without ever
     seeing the numeric ledger row id."""
     ledger.record_meeting(
         MEETING_URL,

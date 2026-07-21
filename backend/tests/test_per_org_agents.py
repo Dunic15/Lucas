@@ -1,4 +1,4 @@
-"""Per-org agents — the org_id seam made real (SFF Studio).
+"""Per-org agents; the org_id seam made real (SFF Studio).
 
 Key-free like the rest of the suite: sqlite in tmp_path, no vendors touched.
 The property under test: a member of a REAL org (verified corporate domain)
@@ -28,14 +28,14 @@ def fresh_store(tmp_path, monkeypatch):
     """A clean sqlite store (re-seeded on reload) pointed at tmp_path."""
     monkeypatch.setenv("LAURA_STORE_PATH", str(tmp_path / "store.sqlite3"))
     importlib.reload(store)
-    importlib.reload(ledger)  # shares the sqlite file — needs its tables too
+    importlib.reload(ledger)  # shares the sqlite file; needs its tables too
     yield store
     importlib.reload(store)
     importlib.reload(ledger)
 
 
 def _expected_sff_agents() -> list[str]:
-    """The seeded SFF grants that still exist as folders, sorted — the expected
+    """The seeded SFF grants that still exist as folders, sorted; the expected
     subset of ["cedric", "laura"] (skips any grant whose folder is gone)."""
     installed = set(avatars.list_ids())
     return sorted(a for a in ("cedric", "laura") if a in installed)
@@ -177,7 +177,7 @@ def test_org_exists_shared_vs_personal(fresh_store):
 
 def test_list_for_org_fails_open_when_grants_dangle(fresh_store):
     """If an org's grants all reference missing folders (e.g. a folder rename
-    without a seed update), the org must fall back to ALL avatars — never a
+    without a seed update), the org must fall back to ALL avatars; never a
     dead, empty dashboard."""
     store = fresh_store
     with store._connect() as conn:
@@ -196,11 +196,11 @@ def test_list_for_org_fails_open_when_grants_dangle(fresh_store):
 
 def test_seed_skipped_and_swept_when_control_plane_enabled(fresh_store, monkeypatch):
     """DURABLE deployments: the SQLite org_sff seed is a non-uuid shadow tenant
-    no durable path can serve (billing/entitlements cast org_id to uuid) — with
+    no durable path can serve (billing/entitlements cast org_id to uuid); with
     the control plane enabled, seed_builtin_orgs must not mint it AND must
     sweep rows left by an earlier boot / restored replica (idempotent)."""
     store = fresh_store
-    # The fixture reload already seeded org_sff (control plane off) — the rows
+    # The fixture reload already seeded org_sff (control plane off); the rows
     # a Litestream-restored prod replica would carry.
     with store._connect() as conn:
         assert conn.execute(
@@ -208,11 +208,11 @@ def test_seed_skipped_and_swept_when_control_plane_enabled(fresh_store, monkeypa
         ).fetchone()["c"] == 1
 
     # Signal "durable control plane configured" the way the code actually
-    # checks it — settings.laura_database_url (NOT control_plane.enabled(),
+    # checks it; settings.laura_database_url (NOT control_plane.enabled(),
     # which store must not import at init: see the cycle note in store.py).
     monkeypatch.setattr(settings, "laura_database_url", "postgres://ci-not-connected")
     store.seed_builtin_orgs()  # sweep
-    store.seed_builtin_orgs()  # idempotent — second run is a no-op
+    store.seed_builtin_orgs()  # idempotent; second run is a no-op
 
     with store._connect() as conn:
         for table, col in (("orgs", "id"), ("org_domains", "org_id"), ("org_agents", "org_id")):
@@ -225,7 +225,7 @@ def test_seed_skipped_and_swept_when_control_plane_enabled(fresh_store, monkeypa
             "SELECT COUNT(*) c FROM orgs WHERE id=?", (settings.demo_org_id,)
         ).fetchone()["c"] == 1
     # With the control plane back OFF (a real durable login would need Postgres),
-    # a corporate login now falls back to the personal org — the swept domain
+    # a corporate login now falls back to the personal org; the swept domain
     # row no longer maps it.
     monkeypatch.setattr(settings, "laura_database_url", "")
     user = store.upsert_user(email="ceo@sffstudio.com")

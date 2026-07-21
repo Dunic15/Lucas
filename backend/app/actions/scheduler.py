@@ -1,8 +1,8 @@
-"""Find-a-time scheduler — the PRODUCER half of the calendar flow.
+"""Find-a-time scheduler; the PRODUCER half of the calendar flow.
 
 Turns a vague scheduling ask ("book a 45-min with Ananth next week") into a
 ``CalendarProposal`` (candidate slots the existing approve doors can act on).
-The CONSUMER — selecting a slot and creating the event — already lives on the
+The CONSUMER, selecting a slot and creating the event, already lives on the
 approve doors (org_api.py / dashboard.py); this only produces the proposal.
 
 Design rules:
@@ -17,7 +17,7 @@ Design rules:
   attaches a proposal, so every downstream door is byte-identical to today.
 
 Emitted slot times are NAIVE-LOCAL ISO (``2026-07-20T09:00:00``, no offset) in
-``proposal.timezone`` — the exact format the shipped staleness check and
+``proposal.timezone``: the exact format the shipped staleness check and
 approve-door tests require; create_calendar_event re-attaches the zone.
 """
 from __future__ import annotations
@@ -29,10 +29,10 @@ from zoneinfo import ZoneInfo
 
 _LOCAL_FMT = "%Y-%m-%dT%H:%M:%S"
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
-# Scheduling intent — a vague ask that should become a proposal (the explicit-
+# Scheduling intent; a vague ask that should become a proposal (the explicit-
 # time asks are already typed by brain.type_actions; enrich only sees untyped).
 _SCHED_RE = re.compile(
-    # a scheduling verb, then — within a short span — a meeting noun OR "with
+    # a scheduling verb, then, within a short span, a meeting noun OR "with
     # <someone>" OR a duration. The attendee gate in enrich_actions is the real
     # filter, so the intent match can afford to be liberal here.
     r"\b(?:schedule|book|set\s?up|arrange|find\s+(?:a\s+)?time|put\s+together)\b"
@@ -76,7 +76,7 @@ def interpret_constraints(
     text: str, now_local: datetime, *, default_minutes: int = 30
 ) -> dict:
     """Deterministic constraint table over the ASK TEXT ONLY (never the
-    transcript — PII boundary). Returns a window (tz-aware, in now_local's
+    transcript: PII boundary). Returns a window (tz-aware, in now_local's
     zone), duration, working hours, preferred time-of-day, and whether a single
     day was targeted (so the ranker can honour a named weekend day)."""
     t = (text or "").lower()
@@ -148,7 +148,7 @@ def rank_slots(
     times. Fully offline: ``busy`` is a list of {start,end} RFC3339 strings."""
     try:
         zone = ZoneInfo(tz)
-    except Exception:  # noqa: BLE001 — unknown zone never crashes slot math
+    except Exception:  # noqa: BLE001; unknown zone never crashes slot math
         zone = ZoneInfo("UTC")
     blocks = []
     for b in busy or []:
@@ -205,7 +205,7 @@ def build_calendar_proposal(
     """Read free/busy over organizer + attendees and rank open slots into a
     CalendarProposal (the aura-v2 shape the approve doors consume). Never
     raises; empty candidate_slots when nothing fits or availability can't be
-    read. Availability is read with ``principal`` (the ORG token — the calendar
+    read. Availability is read with ``principal`` (the ORG token; the calendar
     the event is actually booked on)."""
     from .. import google_client
 
@@ -288,13 +288,13 @@ def enrich_actions(
         if not _SCHED_RE.search(item) or _ISOISH_RE.search(item):
             out.append(a)
             continue
-        # Resolve attendees: emails named in the ask UNION the meeting roster —
+        # Resolve attendees: emails named in the ask UNION the meeting roster -
         # never invented. A name-only ask ("with Ananth") resolves to nobody;
-        # that's fine — we still propose the organizer's own free times.
+        # that's fine; we still propose the organizer's own free times.
         named = [e for e in _EMAIL_RE.findall(item)]
         who = list(dict.fromkeys([*named, *roster]))
         who = [e for e in who if e and e != organizer_email]
-        # Concreteness gate: only propose when the ask carries SOME signal — an
+        # Concreteness gate: only propose when the ask carries SOME signal; an
         # attendee, an explicit duration, or a date anchor ("next week"). A bare
         # "we should sync sometime" has none, so it stays untyped (today's
         # behaviour) rather than dumping arbitrary free slots.
@@ -313,7 +313,7 @@ def enrich_actions(
                 constraint_text=item,
                 default_minutes=30, timezone=timezone or "UTC",
             )
-        except Exception:  # noqa: BLE001 — producer never breaks finalize
+        except Exception:  # noqa: BLE001; producer never breaks finalize
             out.append(a)
             continue
         out.append({

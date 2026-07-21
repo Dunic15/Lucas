@@ -72,8 +72,8 @@ def pack(
 
 
 def unpack(state: str, *, now: float | None = None) -> dict | None:
-    """Verify + decode a state we minted in ``pack``. None on ANY failure —
-    bad shape, wrong signature, expired, or wrong version — so a forged or
+    """Verify + decode a state we minted in ``pack``. None on ANY failure -
+    bad shape, wrong signature, expired, or wrong version; so a forged or
     stale state can never bind an install (the caller treats None as
     'not initiated'). Constant-time signature compare; never raises on
     hostile input (a missing signing key is 'cannot verify' → None)."""
@@ -90,7 +90,7 @@ def unpack(state: str, *, now: float | None = None) -> dict | None:
     try:
         pad = "=" * (-len(payload) % 4)
         data = json.loads(base64.urlsafe_b64decode(payload + pad))
-    except Exception:  # noqa: BLE001 — hostile payloads must not raise
+    except Exception:  # noqa: BLE001; hostile payloads must not raise
         return None
     if not isinstance(data, dict) or data.get("v") != 1:
         return None

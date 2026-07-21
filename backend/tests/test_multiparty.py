@@ -23,7 +23,7 @@ def _session(tmp_path, monkeypatch, bot_id="roster-bot") -> store.Session:
     # These scenarios model a meeting already UNDERWAY (roster built, turns
     # taken, avatar already named once). Mark her activated so unaddressed lines
     # exercise deference / greeting / nudge / follow-up instead of being held
-    # silent — the first-call gate is covered on its own in test_opening_grace.py.
+    # silent; the first-call gate is covered on its own in test_opening_grace.py.
     s.addressed_once = True
     return s
 
@@ -203,9 +203,9 @@ def test_fuzzy_wake_on_asr_corrupted_name():
 def test_fuzzy_wake_does_not_fire_on_lookalike_words():
     avatar = avatars.load("laura")
     for utterance in [
-        "ho preso la laurea l'anno scorso",  # IT: degree — dist 1, excluded
+        "ho preso la laurea l'anno scorso",  # IT: degree; dist 1, excluded
         "Clara said the deadline moved",     # different first letter
-        "loro hanno già firmato il contratto",  # IT: "they" — too far
+        "loro hanno già firmato il contratto",  # IT: "they": too far
         "we discussed the launch timeline",
         "a che ora è la riunione di domani",  # "l'ora" must not tokenize into lora
     ]:
@@ -236,7 +236,7 @@ def test_fuzzy_name_match_unit():
 # Pure-function tests (no Session): the helper takes floats/int/bool and returns
 # a wait length. The single load-bearing invariant is that with adaptation OFF
 # (or a mis-configured range) it returns `base` verbatim, so the existing
-# webhook deference tests below — which monkeypatch a tiny base — are unaffected.
+# webhook deference tests below, which monkeypatch a tiny base, are unaffected.
 
 _DEFER_KW = dict(
     lo=1.0, hi=2.6, since_partial=5.0, active_partial_seconds=0.6,
@@ -618,7 +618,7 @@ def test_partial_ack_requires_exact_name_and_a_forming_question(tmp_path, monkey
 def test_present_names_shields_transcript_only_participant(tmp_path, monkeypatch):
     """A real "Lara" known ONLY from the transcript (she spoke but never fired a
     join event) must be shielded from the fuzzy wake. present_names() now merges
-    transcript speakers (backed by roster()), so "Lara, …" is her turn — not a
+    transcript speakers (backed by roster()), so "Lara, …" is her turn; not a
     corruption of "Laura". Strictly reduces false wakes; never makes her speak
     more."""
     from app.avatars import Avatar
@@ -644,7 +644,7 @@ def test_present_names_shields_transcript_only_participant(tmp_path, monkeypatch
 # ── closing fallback: facilitation beats also fire on a natural lull ──
 # (DEMO-READY-ROADMAP §5 item 12). The proactive wrap-up + quiet-participant
 # nudge no longer depend on the exact detect_closing() phrase: a long idle gap
-# after a long-enough meeting is an additive trigger. Conservative — both a
+# after a long-enough meeting is an additive trigger. Conservative; both a
 # duration gate and an idle gate must hold, so it never fires in a short or
 # actively-talking call.
 
@@ -724,7 +724,7 @@ def test_closing_fallback_silent_in_active_meeting(tmp_path, monkeypatch):
 
 
 def test_exact_closing_phrase_still_nudges_when_fallback_disabled(tmp_path, monkeypatch):
-    """Regression: the regex path is untouched — an exact closing phrase nudges
+    """Regression: the regex path is untouched; an exact closing phrase nudges
     even with the fallback turned off and a young, active meeting."""
     from app.config import settings
 

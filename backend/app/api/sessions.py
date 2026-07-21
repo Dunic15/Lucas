@@ -33,7 +33,7 @@ class StartRequest(BaseModel):
     meeting_url: str
     avatar_id: str = ""  # empty -> settings.default_avatar_id
     join_at: Optional[str] = None  # ISO 8601; set (>=10 min out) to schedule the bot
-    # CEDRIC: orchestrator integration fields — all optional; models, the auth
+    # CEDRIC: orchestrator integration fields; all optional; models, the auth
     # gate, and validation live in the `cedric` package (docs/04-api-contract.md).
     context: Optional[cedric.MeetingContext] = None
     callback_url: Optional[str] = None   # where session.status/.ended events go
@@ -43,7 +43,7 @@ class StartRequest(BaseModel):
 
 def _existing_session_clash(meeting_url: str, caller_org: str) -> JSONResponse | None:
     """The 409 to return when a local-store session is already booked for this
-    exact meeting_url — one live/scheduled booking per URL (rebooking must cancel
+    exact meeting_url; one live/scheduled booking per URL (rebooking must cancel
     first, else two bots + two per-minute meters land in one call). None when
     there is no clash. Another tenant's clashing bot_id is never leaked."""
     for existing in store.all_sessions():
@@ -65,7 +65,7 @@ def _existing_session_clash(meeting_url: str, caller_org: str) -> JSONResponse |
 
 async def _reconcile_after_start(meeting_url: str, bot_id: str) -> None:
     """Give a racing duplicate bot a moment to register with Recall, then keep
-    the best variant and drop the rest — same as the Gmail auto-join loop, but
+    the best variant and drop the rest; same as the Gmail auto-join loop, but
     fire-and-forget so the /sessions/start response returns immediately."""
     from .. import main as _main  # Path A: shared lifecycle helpers resolve on main at call time
     try:
@@ -87,12 +87,12 @@ def _schedule_start_reconcile(meeting_url: str, bot_id: str) -> None:
 def _org_token_bearer_org(request: Request) -> Optional[str]:
     """The org owning the request's Bearer, when it is a PER-ORG machine token
     (org_tokens: durable control plane first, SQLite fallback). None for no/
-    non-org bearers — including the GLOBAL laura_api_token, which keeps its
+    non-org bearers; including the GLOBAL laura_api_token, which keeps its
     demo-org behavior. Sibling of cedric.resolve_machine_org (PR D), which
-    additionally maps the global bearer to the Demo org — kept separate so PR
+    additionally maps the global bearer to the Demo org; kept separate so PR
     A's start/end/redeliver semantics stay untouched.
     A raw secret is compared/hashed, never logged. Called
-    on /sessions/start, /sessions/{id}/end and /sessions/{id}/redeliver —
+    on /sessions/start, /sessions/{id}/end and /sessions/{id}/redeliver -
     control-plane paths, never the live hot path. SYNC (SQLite + optionally
     the Postgres control plane): async handlers must call it via
     run_in_threadpool so it never blocks the shared event loop (single
@@ -120,7 +120,7 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     # caller can NOT dispatch a per-minute bot on a login-protected deployment.
     # A valid cookie stamps the session with the user's org for later scoping.
     # A PER-ORG machine bearer (org_tokens) both authenticates the start and
-    # scopes it to ITS org — the service twin of the cookie principal.
+    # scopes it to ITS org; the service twin of the cookie principal.
     from .. import main as _main  # Path A: shared lifecycle helpers resolve on main at call time
     user = auth.current_user(request)
     token_org: Optional[str] = None
@@ -151,16 +151,16 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     # The owning tenant: the logged-in user's org, else the org-token's org,
     # else the Demo org for the global-bearer/anon service path (Cedric
     # bearer, key-free demo). NEVER derived from a request body field or a
-    # meeting participant (MULTI-TENANCY §0/§3.1) — StartRequest deliberately
+    # meeting participant (MULTI-TENANCY §0/§3.1). StartRequest deliberately
     # has no org field; keep it that way.
     caller_org = user["org_id"] if user else (token_org or settings.demo_org_id)
     # Internal personas (INTERNAL_AVATAR_IDS) are not dispatchable by ANY
-    # caller — same 404 an unknown avatar id gets (defense-in-depth while the
+    # caller; same 404 an unknown avatar id gets (defense-in-depth while the
     # folder still exists; see config.internal_avatar_ids).
     if avatars.is_internal(req.avatar_id or settings.default_avatar_id):
         return JSONResponse({"error": "unknown avatar_id"}, status_code=404)
     # One live/scheduled booking per meeting URL: rebooking must cancel first
-    # (otherwise two bots — and two per-minute meters — end up in one call).
+    # (otherwise two bots, and two per-minute meters, end up in one call).
     # Fast path: an obvious local-store clash needs no lock or Recall round-trip
     # (the common re-click of the same link).
     if clash := _existing_session_clash(req.meeting_url, caller_org):
@@ -208,7 +208,7 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
                 headers={"Retry-After": "60"},
             )
         except entitlements.EntitlementsUnavailable:
-            # Billing DB outage: fail CLOSED before any vendor dispatch —
+            # Billing DB outage: fail CLOSED before any vendor dispatch -
             # never hand out unmetered paid minutes because Postgres blinked.
             return JSONResponse({"error": "billing_unavailable"}, status_code=503)
         except entitlements.UsageDenied as e:
@@ -217,7 +217,7 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
                 return JSONResponse(
                     {"error": "active_session_exists"}, status_code=409
                 )
-            # Free allowance exhausted — the upgrade path (PR C) is the fix.
+            # Free allowance exhausted; the upgrade path (PR C) is the fix.
             return JSONResponse(
                 {
                     "error": "usage_limit_reached",
@@ -250,8 +250,8 @@ async def end_session(bot_id: str, request: Request) -> JSONResponse:
     # Cookie (dashboard) or bearer (machine). auth.gate blocks an anonymous
     # caller from force-ending a bot (DoS + meter) on a login-protected
     # deployment. A logged-in user may end their own org's and unowned/service
-    # sessions — never another org's. A PER-ORG machine bearer (org_tokens)
-    # may end ONLY sessions of ITS org — never demo/unowned/another org's —
+    # sessions; never another org's. A PER-ORG machine bearer (org_tokens)
+    # may end ONLY sessions of ITS org; never demo/unowned/another org's -
     # so a token that can start a session can also stop its meter (PR D
     # symmetry) without gaining the global bearer's reach.
     from .. import main as _main  # Path A: shared lifecycle helpers resolve on main at call time
@@ -266,7 +266,7 @@ async def end_session(bot_id: str, request: Request) -> JSONResponse:
     else:
         live = store.get(bot_id)
         # A logged-in user may end their own org's and legacy unowned ("")
-        # sessions. Demo-org sessions are NOT theirs — self-serve product
+        # sessions. Demo-org sessions are NOT theirs; self-serve product
         # decision (2026-07-13): the Demo org is the anonymous showroom, and a
         # real signup must not be able to kill (or see) another visitor's demo.
         if live is not None and live.org_id not in ("", user["org_id"]):
@@ -284,7 +284,7 @@ async def end_session(bot_id: str, request: Request) -> JSONResponse:
     )
     if artifact is None:
         # _main._finalize_session returns None only when the session is already gone
-        # AND no artifact was stored — i.e. a genuinely unknown bot, OR a
+        # AND no artifact was stored; i.e. a genuinely unknown bot, OR a
         # concurrent terminal-webhook/reconcile finalize still in flight (its
         # artifact isn't saved until late in the body). Distinguish the two: a
         # bare 404 for a bot Cedric just had live is a misleading signal, so
@@ -327,19 +327,19 @@ async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
     # Stop the meter: works for live bots; scheduled bots may reject leave_call,
     # so fall back to deleting the scheduled bot. Track whether the meter is
     # CONFIRMED off (leave succeeded, bot already gone 404/410, or the scheduled
-    # bot was deleted) — PR B BLOCKER 2 gates the slot-release on that.
+    # bot was deleted): PR B BLOCKER 2 gates the slot-release on that.
     meter_off = False
     try:
         await run_in_threadpool(recall_client.leave_call, bot_id)
         meter_off = True
-    except Exception as e:  # noqa: BLE001 — classified by _main._leave_confirmed_stopped
+    except Exception as e:  # noqa: BLE001; classified by _main._leave_confirmed_stopped
         if _main._leave_confirmed_stopped(e):
             meter_off = True  # 404/410: bot genuinely gone → not billing
         else:
             try:
                 await run_in_threadpool(recall_client.delete_bot, bot_id)
                 meter_off = True  # a scheduled bot deleted → never billed
-            except Exception as e2:  # noqa: BLE001 — surface but don't fail cancel
+            except Exception as e2:  # noqa: BLE001; surface but don't fail cancel
                 print(f"[sessions] cancel: recall cleanup failed: {e2}", flush=True)
     if session.anam_conversation_id:
         try:
@@ -352,7 +352,7 @@ async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
         # Meter-stop UNVERIFIED (Recall 5xx/network on BOTH leave and delete):
         # the bot may still be live+billing. Keep the session (leave_pending) so
         # the reconcile backstop retries the leave, and DO NOT close the usage
-        # row / free the slot — a 2nd meeting for this org stays correctly
+        # row / free the slot; a 2nd meeting for this org stays correctly
         # refused until the meter is confirmed off. _retry_leave closes the row.
         session.leave_pending = True
         session.usage_close_reason = "cancelled"
@@ -402,14 +402,14 @@ async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -
 
     # Finalize already ran store.remove(bot_id), so store.get(bot_id) is None here
     # and the live session no longer carries the avatar identity. The saved
-    # artifact does (avatar_id stamped at finalize) — resolve the follow-up's
+    # artifact does (avatar_id stamped at finalize); resolve the follow-up's
     # name from there first, so a Cedric meeting's Slack header reads "Cedric"
     # and not the default "Laura". Fall back to the default only when absent
     # (pre-finalize / legacy artifacts) or on an unknown id.
     avatar_id = artifact.get("avatar_id") or settings.default_avatar_id
     try:
         name = avatars.load(avatar_id).name
-    except Exception:  # noqa: BLE001 — an unknown avatar id must never block delivery
+    except Exception:  # noqa: BLE001; an unknown avatar id must never block delivery
         name = avatars.load(settings.default_avatar_id).name
     email = artifact.get("follow_up_email", {}) or {}
 
@@ -419,7 +419,7 @@ async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -
     slack_res = {"sent": False, "reason": "disabled"}
     if req.slack:
         # CAPABILITY GATE: Slack delivery happens ONLY when this avatar's `slack`
-        # toggle is on. Read raw and skip on an explicit OFF — an untouched
+        # toggle is on. Read raw and skip on an explicit OFF; an untouched
         # avatar keeps today's behaviour (default on when the org connected
         # Slack via Cedric). avatar_id comes from the saved artifact above.
         caps = await run_in_threadpool(store.get_avatar_capabilities, avatar_id)
@@ -436,7 +436,7 @@ async def deliver_artifact(bot_id: str, req: DeliverRequest, request: Request) -
 def session_artifact(bot_id: str, request: Request) -> JSONResponse:
     """Retrieve a finished session's artifact (summary + checklist + email)."""
     # A PER-ORG bearer may read ONLY its own org's sessions/artifacts. Another
-    # org's bot_id — live OR finalized — answers the IDENTICAL not-found body,
+    # org's bot_id, live OR finalized, answers the IDENTICAL not-found body,
     # so the endpoint is never an existence/progress oracle (adversarial
     # review 2026-07-13, should-fix 2). The global bearer and the key-free
     # demo keep today's full service scope.
@@ -484,7 +484,7 @@ async def redeliver_artifact(bot_id: str, request: Request) -> JSONResponse:
     if artifact is None:
         return JSONResponse({"error": "unknown bot_id"}, status_code=404)
     artifact_org = str(artifact.get("org_id") or "")
-    # Own-org + legacy unowned ("") only — demo-org artifacts excluded for
+    # Own-org + legacy unowned ("") only; demo-org artifacts excluded for
     # logged-in users (self-serve product decision, 2026-07-13; same rule as
     # /sessions/{id}/end and dashboard.visible).
     if user is not None and artifact_org not in ("", user["org_id"]):
@@ -503,7 +503,7 @@ async def redeliver_artifact(bot_id: str, request: Request) -> JSONResponse:
     # the SAME fire-and-forget seam finalize uses (cedric.deliver_ended: distils
     # via wire_artifact, then schedules the retrying send off the request) and
     # answer 202 immediately. Delivery semantics are unchanged (still the full
-    # retry chain, still the distilled/no-transcript payload) — only the blocking
+    # retry chain, still the distilled/no-transcript payload); only the blocking
     # of the HTTP request is removed.
     cedric.deliver_ended(integration, bot_id, artifact)
     return JSONResponse({"status": "retrying", "bot_id": bot_id}, status_code=202)

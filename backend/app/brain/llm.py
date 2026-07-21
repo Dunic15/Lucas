@@ -1,24 +1,24 @@
-"""LLM provider — pluggable, with a free local option.
+"""LLM provider; pluggable, with a free local option.
 
 Pick the provider with BRAIN_PROVIDER in .env:
 
-  anthropic (default) — Claude (best quality). Needs ANTHROPIC_API_KEY. With no
+  anthropic (default): Claude (best quality). Needs ANTHROPIC_API_KEY. With no
                       key present, brain.effective_provider() transparently falls
                       back to `stub` so the demo still runs.
-  cerebras          — FASTEST live inference (~0.17s first token). Same
+  cerebras: FASTEST live inference (~0.17s first token). Same
                       OpenAI-compatible wire format as Groq, different endpoint.
                       Streams + supports tool use. Needs CEREBRAS_API_KEY. This
                       is what prod runs on the live spoken path.
-  groq              — fast, cheap open models via an OpenAI-compatible API.
+  groq; fast, cheap open models via an OpenAI-compatible API.
                       Streams + supports tool use. Needs GROQ_API_KEY.
-  vertex            — Google Gemini via Vertex AI (GCP-billed, so it can run on
-                      Google Cloud credits — unlike the AI Studio Gemini API).
+  vertex: Google Gemini via Vertex AI (GCP-billed, so it can run on
+                      Google Cloud credits; unlike the AI Studio Gemini API).
                       Auth via a service account / ADC (google-auth). Set
                       VERTEX_PROJECT (+ optional VERTEX_LOCATION/VERTEX_MODEL).
                       Text brain only here; realtime voice is a separate spike.
-  ollama            — a local model via Ollama (free, runs on your machine).
+  ollama; a local model via Ollama (free, runs on your machine).
                       `ollama run llama3.2` then BRAIN_PROVIDER=ollama.
-  stub              — no model at all. Deterministic, offline, zero-cost. Used to
+  stub; no model at all. Deterministic, offline, zero-cost. Used to
                       prove the end-to-end pipeline for free; the stub answers
                       live in brain.py (they need the retrieved chunks), so this
                       module only handles *real* models.
@@ -53,7 +53,7 @@ _FALLBACK_MODEL = "claude-haiku-4-5"
 
 
 # ── OpenAI-compatible fast providers ───────────────────────────────────
-# Groq and Cerebras speak the identical OpenAI /chat/completions wire format —
+# Groq and Cerebras speak the identical OpenAI /chat/completions wire format -
 # only the endpoint + API key differ. One implementation (_complete_groq /
 # _stream_groq / complete_with_tools) serves both; _compat_creds() picks the
 # right base URL + key for the resolved provider.
@@ -73,12 +73,12 @@ def _compat_creds(provider: str) -> tuple[str, str]:
 
 # ── fast-provider circuit breaker ──────────────────────────────────────
 # Groq/Cerebras rate-limit (HTTP 429) under load. Rather than hammer them on
-# every request — eating the failure + fallback latency each time — we trip a
+# every request, eating the failure + fallback latency each time, we trip a
 # breaker on failure: for a cooldown window (the 429's Retry-After if present,
 # else a default) live answers skip the fast provider entirely and go straight
 # to Claude Haiku. The breaker is process-local and self-heals when the window
 # elapses. (Names keep the `groq` prefix for backward compatibility with tests
-# and callers; the breaker is provider-agnostic — a single timestamp gate.)
+# and callers; the breaker is provider-agnostic; a single timestamp gate.)
 _GROQ_COOLDOWN_DEFAULT = 30.0
 _GROQ_COOLDOWN_MAX = 300.0
 _groq_blocked_until = 0.0  # monotonic timestamp; 0 = breaker closed
@@ -117,11 +117,11 @@ def _reset_groq_breaker() -> None:
 
 
 # ── Vertex AI (Google Gemini) ──────────────────────────────────────────
-# Gemini via Vertex AI (GCP-billed — funded by Google Cloud credits, unlike the
+# Gemini via Vertex AI (GCP-billed; funded by Google Cloud credits, unlike the
 # AI Studio Gemini API which the GCP Free Trial does NOT cover). Plain REST
 # generateContent with a bearer minted from Application Default Credentials / a
 # service account (google-auth, lazy-imported so the rest of the app and the
-# tests never need it). Opt-in via BRAIN_PROVIDER=vertex — the live spoken path
+# tests never need it). Opt-in via BRAIN_PROVIDER=vertex; the live spoken path
 # stays on cerebras/anthropic. Realtime *voice* (gemini-live-2.5-flash over a
 # websocket) is a separate concern and lives in the standalone spike, never here.
 #
@@ -136,10 +136,10 @@ def _vertex_token() -> str:
     """Mint (and cache) a Vertex access token via google-auth.
 
     Credential resolution order:
-      1. GOOGLE_VERTEX_SA_JSON — the full service-account JSON as an env value
+      1. GOOGLE_VERTEX_SA_JSON: the full service-account JSON as an env value
          (how App Runner gets it, via SSM). Parsed here BEFORE importing google
          libs so a malformed value fails with a clear message.
-      2. Ambient ADC — GOOGLE_APPLICATION_CREDENTIALS file / gcloud login (dev).
+      2. Ambient ADC: GOOGLE_APPLICATION_CREDENTIALS file / gcloud login (dev).
     Cached until ~1 min before expiry.
     """
     now = time.time()
@@ -278,7 +278,7 @@ def complete(
 # would otherwise consume the max_tokens budget BEFORE emitting the answer,
 # returning truncated or empty text that the caller reads as a degraded result
 # (the empty-summary bug). Disabling thinking spends the whole budget on the
-# JSON. "disabled" is the only valid shape here — passing budget_tokens 400s on
+# JSON. "disabled" is the only valid shape here; passing budget_tokens 400s on
 # Sonnet-5. The live SPOKEN path uses stream_complete/_stream_anthropic and is
 # unaffected.
 _THINKING_OFF = {"type": "disabled"}
@@ -311,14 +311,14 @@ def _complete_anthropic(
         else:
             raise
     if getattr(msg, "stop_reason", None) == "max_tokens":
-        # Truncated before the model finished — the JSON is likely invalid, which
+        # Truncated before the model finished; the JSON is likely invalid, which
         # the caller degrades to a deterministic recap. Log so it's diagnosable.
         print(
             f"[llm] anthropic {model} hit max_tokens={max_tokens}; "
             "output may be truncated",
             flush=True,
         )
-    # Models with adaptive thinking (Sonnet 5+) put a thinking block FIRST —
+    # Models with adaptive thinking (Sonnet 5+) put a thinking block FIRST -
     # content[0] is not necessarily text. Return the first text block.
     return next((b.text for b in msg.content if b.type == "text"), "")
 
@@ -338,7 +338,7 @@ def stream_complete(
         yield from _stream_anthropic(system, user, max_tokens, model)
         return
     # Circuit breaker: while the fast provider is in cooldown after a 429, don't
-    # even try it — stream Haiku directly so the spoken path never goes silent.
+    # even try it; stream Haiku directly so the spoken path never goes silent.
     if provider in _OPENAI_COMPAT and _groq_breaker_open() and settings.anthropic_api_key:
         yield from _stream_anthropic(system, user, max_tokens, _FALLBACK_MODEL)
         return
@@ -370,7 +370,7 @@ def web_search(
 
     Returns the final spoken text, or "" if nothing came back. The tool runs on
     Anthropic's side (no client execution); the server may pause after its own tool
-    rounds with stop_reason 'pause_turn' — re-send the turn to continue. `web_search`
+    rounds with stop_reason 'pause_turn': re-send the turn to continue. `web_search`
     with dynamic filtering needs a capable model (Sonnet/Opus); the older basic tool
     is used automatically for smaller models via the try/except fallback below.
     """
@@ -388,7 +388,7 @@ def web_search(
                 tools=[{"type": tool_type, "name": "web_search"}],
             )
             if msg.stop_reason == "pause_turn":
-                # Server hit its tool-round limit — resend to let it continue.
+                # Server hit its tool-round limit; resend to let it continue.
                 messages = [
                     {"role": "user", "content": user},
                     {"role": "assistant", "content": msg.content},
@@ -421,7 +421,7 @@ def _stream_anthropic(
 ) -> Iterator[str]:
     client = _ensure_anthropic()
     # Cache the (byte-identical) system prompt so repeat calls skip re-processing
-    # it. Note: Haiku's minimum cacheable prefix is 4096 tokens — if the persona
+    # it. Note: Haiku's minimum cacheable prefix is 4096 tokens; if the persona
     # prompt is shorter, this silently won't cache (harmless).
     with client.messages.stream(
         model=model or settings.brain_model,
@@ -525,7 +525,7 @@ def complete_with_tools(
     Runs the OpenAI function-calling loop: the model may ask to call tools; we
     execute each via `dispatch(name, args)`, feed the results back, and let it
     answer. Wired for the OpenAI-compatible providers (cerebras | groq). For other
-    providers — or while the fast-provider breaker is open — we fall back to a
+    providers, or while the fast-provider breaker is open, we fall back to a
     normal completion with no tools (which itself routes to Haiku), so nothing
     breaks: the caller still gets a sensible answer, just without acting.
     """
@@ -584,7 +584,7 @@ def complete_with_tools(
                         }
                     )
 
-            # Out of rounds — force a final answer with the tool results in hand.
+            # Out of rounds; force a final answer with the tool results in hand.
             resp = client.post(
                 url,
                 headers=headers,
@@ -596,7 +596,7 @@ def complete_with_tools(
             )
             resp.raise_for_status()
             return (resp.json()["choices"][0]["message"].get("content") or "").strip(), used
-    except Exception as e:  # noqa: BLE001 — trip the breaker so the caller's plain
+    except Exception as e:  # noqa: BLE001; trip the breaker so the caller's plain
         _trip_groq_breaker(e)  # -answer fallback routes to Haiku, not back to Groq
         raise
 

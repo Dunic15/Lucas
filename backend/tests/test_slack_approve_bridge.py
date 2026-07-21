@@ -32,7 +32,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _seed_typed_calendar_action(action_id: str) -> None:
-    """An artifact whose action carries a TYPED calendar.create_event spec — the
+    """An artifact whose action carries a TYPED calendar.create_event spec; the
     trusted, executable shape the approve door reads (never the request body)."""
     artifact = {
         "summary": "Weekly sync",
@@ -112,7 +112,7 @@ def test_unknown_action_is_404(client, monkeypatch):
 
 
 def test_approve_respects_bearer_gate(client, monkeypatch):
-    """With a configured token, an unauthenticated machine call is refused —
+    """With a configured token, an unauthenticated machine call is refused -
     the same gate as /resolve and /status."""
     monkeypatch.setattr(settings, "laura_api_token", "sekret")
     _seed_typed_calendar_action("act-approve-4")

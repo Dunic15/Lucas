@@ -8,7 +8,7 @@ The irreversible minimum (MULTI-TENANCY.md §4, MULTI-TENANCY-IMPLEMENTATION.md
 §3), written for Supabase Postgres, eu-central-1. The app connects as a
 dedicated NON-superuser role ``laura_app`` (superusers bypass RLS).
 
-This migration is NOT exercised by the SQLite test suite — the store/ledger
+This migration is NOT exercised by the SQLite test suite; the store/ledger
 bootstrap mirrors the same org_id columns in SQLite so ``WHERE org_id=?`` is
 tested locally, and Alembic env.py is a no-op when LAURA_DATABASE_URL is empty.
 It runs only against the future Postgres control plane.

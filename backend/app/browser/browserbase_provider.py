@@ -1,7 +1,7 @@
-"""Real remote-browser adapter behind BrowserProvider (B1) — Browserbase+CDP.
+"""Real remote-browser adapter behind BrowserProvider (B1). Browserbase+CDP.
 
 Implements the ACTUAL remote-browser connection, real screenshot acquisition,
-bounded server-side image handling, navigation and observation — behind the
+bounded server-side image handling, navigation and observation; behind the
 same BrowserProvider interface B0 defined. It is DELIBERATELY INERT WITHOUT
 KEYS: every method raises ``ProviderUnconfigured`` until
 ``BROWSER_REAL_PROVIDER_ENABLED`` is on AND
@@ -47,7 +47,7 @@ _HIGHLIGHT_DWELL_MS = 2600  # hold the highlight long enough to be seen on a
 #                             small/fast to register there)
 
 # A BIG, bright box drawn around the target element (full rect, not a point),
-# with a glow + a dim backdrop over the rest so the eye is pulled to it — the
+# with a glow + a dim backdrop over the rest so the eye is pulled to it; the
 # small arrow is invisible on Recall's compressed camera, this is not. Held,
 # then faded. Read-only overlay; touches no cookie/storage/network channel.
 _HIGHLIGHT_JS = r"""
@@ -150,11 +150,11 @@ _CURSOR_XY_JS = r"""
 #
 # Two adversarial-hardening rules baked in here:
 # 1. Each enumerated node is stamped with a SERVER-MINTED synthetic id
-#    (`data-laura-el="el-N"`) and that synthetic id is returned as `id` — the
+#    (`data-laura-el="el-N"`) and that synthetic id is returned as `id`: the
 #    page's own id/class is NEVER used to address the element, so a page cannot
 #    smuggle CSS metacharacters that would make the executor act on a different
 #    (guarded) node than the one policy classified.
-# 2. The element name is NEVER sourced from `el.value` — a credential/OTP field
+# 2. The element name is NEVER sourced from `el.value`: a credential/OTP field
 #    value (plaintext behind the mask) must never enter the observation.
 _OBSERVE_JS = r"""
 () => {
@@ -181,7 +181,7 @@ _OBSERVE_JS = r"""
     const r = el.getBoundingClientRect();
     const synth = 'el-' + i;
     el.setAttribute('data-laura-el', synth);  // server-minted addressing handle
-    // NEVER read el.value — a masked password/OTP value is still plaintext here.
+    // NEVER read el.value; a masked password/OTP value is still plaintext here.
     const name = (el.getAttribute('aria-label') || el.innerText ||
                   el.getAttribute('placeholder') || '').trim().slice(0,120);
     return {
@@ -207,7 +207,7 @@ _OBSERVE_JS = r"""
 
 
 def _el_selector(element_id: str):
-    """Address an element by its SERVER-MINTED synthetic handle — never by a
+    """Address an element by its SERVER-MINTED synthetic handle; never by a
     page-controlled id interpolated into a CSS selector (which could expand to
     a selector-list and act on a different, guarded node). Playwright treats
     the quoted attribute value as a literal exact match."""
@@ -263,7 +263,7 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
                 json={"projectId": settings.browserbase_project_id,
                       "browserSettings": browser_settings},
                 timeout=30)
-        except Exception as exc:  # noqa: BLE001 — never surface the payload
+        except Exception as exc:  # noqa: BLE001; never surface the payload
             raise ProviderError("browser session create failed") from exc
         if resp.status_code >= 400:
             raise ProviderError(f"browser session http {resp.status_code}")
@@ -279,7 +279,7 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
             from playwright.sync_api import sync_playwright  # type: ignore
         except Exception as exc:  # noqa: BLE001
             raise ProviderUnconfigured("playwright not installed") from exc
-        # The connect_url is a bearer capability — used here, never stored/logged.
+        # The connect_url is a bearer capability; used here, never stored/logged.
         pw = sync_playwright().start()
         browser = pw.chromium.connect_over_cdp(connect_url,
                                                timeout=_CDP_TIMEOUT_MS)
@@ -301,7 +301,7 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
         try:
             data = page.evaluate(_OBSERVE_JS)
             shot = page.screenshot(type="png")  # bounded viewport
-        except Exception as exc:  # noqa: BLE001 — never surface page internals
+        except Exception as exc:  # noqa: BLE001; never surface page internals
             raise ProviderError("observe failed") from exc
         return RawObservation(
             url=str(data.get("url") or ""),
@@ -348,12 +348,12 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
             moved = page.evaluate(_CURSOR_JS, selector)
             if moved:
                 page.wait_for_timeout(_CURSOR_GLIDE_MS)  # let the glide land
-        except Exception:  # noqa: BLE001 — cosmetic only
+        except Exception:  # noqa: BLE001; cosmetic only
             pass
 
     def point(self, provider_ref: str, selector: str) -> bool:
         """Glide the visible cursor to a control addressed by a REAL selector
-        (CSS / Playwright text=) and pulse — no click. For scripted recipes
+        (CSS / Playwright text=) and pulse; no click. For scripted recipes
         that show WHERE a control is. Read-only; returns False if not found."""
         _require_config()
         page = self._page(provider_ref)
@@ -370,11 +370,11 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
                                           "y": box["y"] + box["height"] / 2})
             page.wait_for_timeout(_HIGHLIGHT_DWELL_MS)  # hold so it's seen
             return True
-        except Exception:  # noqa: BLE001 — a missing control is skipped, not fatal
+        except Exception:  # noqa: BLE001; a missing control is skipped, not fatal
             return False
 
     def reveal(self, provider_ref: str, selector: str) -> RawObservation:
-        """Click a control that only OPENS a form/menu (never submits) — the
+        """Click a control that only OPENS a form/menu (never submits); the
         read-safe half of a how-to. Points first so the cursor leads the click.
         The domain never changes (recipes only open in-app UI)."""
         _require_config()
@@ -421,7 +421,7 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
         page = self._page(provider_ref)
         try:
             page.go_back(timeout=_CDP_TIMEOUT_MS)
-        except Exception:  # noqa: BLE001 — back at history root is not fatal
+        except Exception:  # noqa: BLE001; back at history root is not fatal
             pass
         return self._observe_page(page)
 
@@ -442,7 +442,7 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
         """Mint a KEEP-ALIVE session on ``context_ref``, open ``login_url``, and
         return an INTERACTIVE live-view URL a human can sign into from their own
         browser. Keep-alive so it survives while they log in (the meeting tile
-        is one-way video — they can't type there). The cookie jar persists to
+        is one-way video; they can't type there). The cookie jar persists to
         the context when the session is later released. Returns
         {provider_ref, login_view_url}; raises on failure."""
         _require_config()
@@ -467,7 +467,7 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
             sid, connect = str(data.get("id") or ""), str(data.get("connectUrl") or "")
             if not sid or not connect:
                 raise ProviderError("login session missing id/connectUrl")
-            # Navigate to the login page, then disconnect — keepAlive holds it.
+            # Navigate to the login page, then disconnect; keepAlive holds it.
             page = self._connect(connect)
             try:
                 page.goto(login_url, timeout=_CDP_TIMEOUT_MS,
@@ -490,7 +490,7 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
             return {"provider_ref": sid, "login_view_url": url}
         except ProviderError:
             raise
-        except Exception as exc:  # noqa: BLE001 — never surface the payload
+        except Exception as exc:  # noqa: BLE001; never surface the payload
             raise ProviderError("login session failed") from exc
 
     def login_state(self, provider_ref: str, login_host: str) -> str:
@@ -513,7 +513,7 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
             finally:
                 br.close(); pw.stop()
             return "logged_in" if login_host and login_host not in url else "waiting"
-        except Exception:  # noqa: BLE001 — session ended / not reachable
+        except Exception:  # noqa: BLE001; session ended / not reachable
             return "gone"
 
     def release_login_session(self, provider_ref: str) -> None:
@@ -528,12 +528,12 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
                          "Content-Type": "application/json"},
                 json={"projectId": settings.browserbase_project_id,
                       "status": "REQUEST_RELEASE"}, timeout=15)
-        except Exception:  # noqa: BLE001 — best-effort; TTL is the backstop
+        except Exception:  # noqa: BLE001; best-effort; TTL is the backstop
             pass
 
     def create_context(self) -> str:
         """Mint a provider-side persistent Context (saved browser profile).
-        Returns the context id — stored server-side as an identity's
+        Returns the context id; stored server-side as an identity's
         context_ref, never returned by any API or logged."""
         _require_config()
         try:
@@ -591,5 +591,5 @@ class BrowserbaseProvider(BrowserProvider):  # type: ignore[misc]
                 page.context.browser.close()
                 if pw:
                     pw.stop()
-            except Exception:  # noqa: BLE001 — best-effort release
+            except Exception:  # noqa: BLE001; best-effort release
                 pass

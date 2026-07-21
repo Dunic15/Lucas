@@ -3,7 +3,7 @@ the avatar's own tool brief.
 
 Owner ask: an avatar whose Slack toggle is off must not be able to use the
 Slack-agent (Cedric) tools, and when asked it should say it can't because the
-toggle is off — never pretend or silently fail. The gate lives at snapshot
+toggle is off; never pretend or silently fail. The gate lives at snapshot
 time (tool_registry.assemble, off the hot path); the brief/search text is what
 makes the avatar answer honestly."""
 from __future__ import annotations

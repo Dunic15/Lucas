@@ -70,9 +70,9 @@ def saas_body(r: dict) -> str:
 
 I'm Duccio, an MSc student at Politecnico di Milano (previously on Microsoft's AI pre-sales team). I'm building an AI teammate for meetings and think {company} would be a great first pilot.
 
-It joins your calls on Zoom/Meet/Teams, answers questions live from your own docs, and afterwards writes up the decisions, action items and owners. The fit for {company} — {pain}.
+It joins your calls on Zoom/Meet/Teams, answers questions live from your own docs, and afterwards writes up the decisions, action items and owners. The fit for {company}. {pain}.
 
-I'm taking on a few companies as free, hands-on first testers. You can see it here: {SITE} — if it's useful, grab 30 min ({CALENDLY}) or just reply. I've attached my CV for context.
+I'm taking on a few companies as free, hands-on first testers. You can see it here: {SITE}; if it's useful, grab 30 min ({CALENDLY}) or just reply. I've attached my CV for context.
 
 Thanks,
 Duccio Profeti
@@ -86,9 +86,9 @@ def hr_body(r: dict) -> str:
 
 sono Duccio, studente magistrale al Politecnico di Milano (in passato nel team AI pre-sales di Microsoft). Sto costruendo un collega AI per le riunioni e penso che {company} sarebbe un ottimo primo pilot.
 
-Si unisce alle vostre call su Zoom/Meet/Teams, risponde in diretta dai vostri documenti, e a fine riunione produce il verbale con decisioni, prossimi passi e responsabili. Il punto per {company} — {pain}.
+Si unisce alle vostre call su Zoom/Meet/Teams, risponde in diretta dai vostri documenti, e a fine riunione produce il verbale con decisioni, prossimi passi e responsabili. Il punto per {company}. {pain}.
 
-Sto prendendo poche aziende come primi tester gratuiti. Puoi vederla qui: {SITE} — se ti va prenota 30 min ({CALENDLY}) o rispondi a questa mail. In allegato il mio CV.
+Sto prendendo poche aziende come primi tester gratuiti. Puoi vederla qui: {SITE}; se ti va prenota 30 min ({CALENDLY}) o rispondi a questa mail. In allegato il mio CV.
 
 Grazie,
 Duccio Profeti

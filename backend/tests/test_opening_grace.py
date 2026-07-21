@@ -1,5 +1,5 @@
 """Opening settle-in ("wait to be called"): after joining, the avatar stays
-silent UNLESS directly addressed by name — no joiner greetings, no unprompted
+silent UNLESS directly addressed by name; no joiner greetings, no unprompted
 room-open answers. With first_call_required (the default) ONLY being named once
 activates her; in legacy mode (first_call_required=False) the window also
 expires after settings.opening_grace_seconds. No keys, no model."""
@@ -65,7 +65,7 @@ def test_in_opening_grace_logic(tmp_path, monkeypatch):
     s.addressed_once = True
     assert main._in_opening_grace(s) is False
 
-    # first-call activation (the default): time alone NEVER ends it — however
+    # first-call activation (the default): time alone NEVER ends it; however
     # long the meeting runs, she waits to be named once
     s.addressed_once = False
     s.created_at -= settings.opening_grace_seconds + 1
@@ -126,7 +126,7 @@ def test_being_named_ends_grace(tmp_path, monkeypatch):
 
 
 def test_grace_expires_by_time_then_answers(tmp_path, monkeypatch):
-    """Legacy time-boxed mode only — with first_call_required the grace never
+    """Legacy time-boxed mode only; with first_call_required the grace never
     expires (covered in test_in_opening_grace_logic)."""
     s = _session(tmp_path, monkeypatch)
     s.memory_brief = ""
@@ -153,7 +153,7 @@ def test_grace_expires_by_time_then_answers(tmp_path, monkeypatch):
 
 def test_joiner_greeting_suppressed_during_grace(tmp_path, monkeypatch):
     s = _session(tmp_path, monkeypatch)
-    # enough lines that the greeting's own len>=4 gate is satisfied — so the ONLY
+    # enough lines that the greeting's own len>=4 gate is satisfied; so the ONLY
     # thing holding the greeting back is the opening grace.
     for i in range(4):
         s.add_utterance("Ben", f"opening remark number {i}")

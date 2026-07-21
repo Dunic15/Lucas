@@ -1,13 +1,13 @@
-"""Gemini ears (GEMINI_EARS_MODE) — key-free, no network.
+"""Gemini ears (GEMINI_EARS_MODE); key-free, no network.
 
 Covers the contract that matters before this ever runs in prod:
-  * off (default) keeps the bot config byte-identical to today — the
+  * off (default) keeps the bot config byte-identical to today: the
     live-meeting contract is untouched.
   * shadow/on prepend ears-enabled bot attempts and KEEP the plain ones as
     fallback (a Recall 4xx on the audio config can never block the invite).
   * the audio websocket route rejects a missing/invalid capability.
   * turn assembly + speaker merge + suppression/failover logic.
-  * the status surface exposes counts only — never transcript content.
+  * the status surface exposes counts only: never transcript content.
 """
 from __future__ import annotations
 

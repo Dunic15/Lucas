@@ -123,7 +123,7 @@ def test_interactive_path_falls_back_when_search_flakes(monkeypatch):
 def test_interactive_path_never_silent_on_empty_tool_answer(monkeypatch):
     _force_groq(monkeypatch)
     # "who's in the SFF portfolio?" matches the web-search intent (sff|portfolio),
-    # so with keys "present" answer_with_tools tries _web_search_answer FIRST —
+    # so with keys "present" answer_with_tools tries _web_search_answer FIRST -
     # unstubbed, that's a live Anthropic call that only "passed" because the fake
     # key errors out. Stub it to "" (search flaked) so the test exercises exactly
     # its subject: the empty-tool-answer -> plain-retry path, with zero network.
@@ -136,7 +136,7 @@ def test_interactive_path_never_silent_on_empty_tool_answer(monkeypatch):
 
 
 def test_interactive_path_survives_tool_endpoint_error(monkeypatch):
-    """Groq's tool endpoint 429s with no fallback — answer_with_tools must catch it
+    """Groq's tool endpoint 429s with no fallback; answer_with_tools must catch it
     and retry a plain answer (Haiku-capable), not raise and go silent."""
     _force_groq(monkeypatch)
     monkeypatch.setattr(brain, "retrieve", lambda *a, **k: [])

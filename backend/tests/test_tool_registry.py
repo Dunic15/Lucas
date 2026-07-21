@@ -1,4 +1,4 @@
-"""Tool context on join — the org-scoped registry + the two brain tools.
+"""Tool context on join; the org-scoped registry + the two brain tools.
 
 Key-free like the rest of the suite: Cedric's catalog is monkeypatched, the
 Google state comes from the sqlite org_oauth table, no vendors touched.

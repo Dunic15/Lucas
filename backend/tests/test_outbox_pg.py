@@ -367,7 +367,7 @@ def test_session_ended_slack_off_indexing_is_retry_idempotent(
         actions = conn.execute(
             "SELECT action_id FROM queued_actions WHERE org_id=%s", (org,)
         ).fetchall()
-    assert actions == [("summ-A",)]  # summ-B deduped by text — no phantom row
+    assert actions == [("summ-A",)]  # summ-B deduped by text; no phantom row
 
 
 def test_two_org_reads_claims_and_retry_are_isolated(cp):

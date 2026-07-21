@@ -2,7 +2,7 @@
 
 Key-free: the control plane stays off (grant_comp cleanly no-ops), the
 comp plan's allowance math is unit-tested against the row shape, and the
-login hook is asserted through the mocked Google callback — the same
+login hook is asserted through the mocked Google callback; the same
 machinery test_auth.py uses.
 """
 from __future__ import annotations

@@ -1,5 +1,5 @@
 """Model A default routing: SURFACE_WEBHOOK_URL makes EVERY meeting (even an
-email/API summon with no callback_url) hand off to Cedric — so Cedric does the
+email/API summon with no callback_url) hand off to Cedric; so Cedric does the
 Slack posting + execution, and Laura's own autonomous execution is skipped.
 Unset = today's autonomous behaviour (Model B). Key-free."""
 from __future__ import annotations
@@ -59,7 +59,7 @@ def client(tmp_path, monkeypatch):
 def test_finalize_routes_to_cedric_and_skips_autonomous(client, monkeypatch):
     # Model A: with SURFACE_WEBHOOK_URL set, a plain email-style session hands
     # off to Cedric (deliver_ended) and does NOT also run Laura's own autopilot
-    # delivery (orchestrated sessions belong to Cedric — no double-send).
+    # delivery (orchestrated sessions belong to Cedric; no double-send).
     monkeypatch.setattr(settings, "surface_webhook_url", "https://meet-cedric.com/api/laura/events")
     monkeypatch.setattr(settings, "autopilot_deliver", True)
     monkeypatch.setattr(main_module.recall_client, "assert_ready", lambda: None)
@@ -72,7 +72,7 @@ def test_finalize_routes_to_cedric_and_skips_autonomous(client, monkeypatch):
                         lambda integ, bot, art: delivered.append(bot) or True)
     monkeypatch.setattr(autopilot, "maybe_deliver", lambda *a, **k: autopiloted.append(a))
 
-    # a bare start — no callback_url in the request
+    # a bare start; no callback_url in the request
     client.post("/sessions/start", json={"meeting_url": "https://meet.google.com/mod-a-test", "avatar_id": "cedric"})
     store.get("bot_a").add_utterance("Ben", "Let's ship it.")
     assert client.post("/sessions/bot_a/end").status_code == 200

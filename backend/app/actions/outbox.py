@@ -202,7 +202,7 @@ def _slack_capability_off(avatar_id: str | None) -> bool:
     callback-outbox is Cedric's Slack broker, so an avatar whose owner turned
     Slack OFF must not fan a callback out to it. An UNSET/True switch, a
     missing/empty ``avatar_id``, or any store hiccup all fall through to
-    deliver-as-before — fail-open, matching #221, so a store blip can never
+    deliver-as-before; fail-open, matching #221, so a store blip can never
     silently drop a legitimate callback. Only an explicit ``False`` suppresses.
     Reads the avatar-keyed switch only; no transcript/PII is touched.
     """
@@ -211,7 +211,7 @@ def _slack_capability_off(avatar_id: str | None) -> bool:
         return False
     try:
         return store.get_avatar_capabilities(aid).get("slack") is False
-    except Exception:  # noqa: BLE001 — fail-open: delivery beats a store blip
+    except Exception:  # noqa: BLE001; fail-open: delivery beats a store blip
         return False
 
 
@@ -251,7 +251,7 @@ def _callback_record(session: Any, item: dict) -> tuple[str, dict | None]:
     callback_record = None
     # Capability gate (migration-free): suppress the Cedric callback when the
     # acting avatar's Slack switch is explicitly OFF. session.avatar_id is known
-    # here, so both backends stay ungated of avatar_id — the queued_action still
+    # here, so both backends stay ungated of avatar_id; the queued_action still
     # persists below/at the caller; only the Slack fan-out is skipped.
     if (
         action_id
@@ -735,7 +735,7 @@ def checkpoint_session_ended(
         # The only non-error way to get here is the capability gate: the avatar's
         # Slack switch is explicitly OFF, so the session.ended fan-out to Cedric
         # is intentionally suppressed. No durable row was committed, so the wire
-        # artifact passed in IS canonical — return it rather than failing
+        # artifact passed in IS canonical; return it rather than failing
         # finalize. (A genuine store failure raises OutboxUnavailable upstream.)
         if _slack_capability_off(str((artifact or {}).get("avatar_id") or "")):
             return dict(artifact)
@@ -826,7 +826,7 @@ def process_due(
     # Per-avatar `slack` capability is enforced at ENQUEUE (see
     # _slack_capability_off, applied in _callback_record / _enqueue): a row only
     # exists here if the acting avatar's Slack switch was unset/True/absent when
-    # captured. Gating at capture — where session.avatar_id is known — keeps this
+    # captured. Gating at capture, where session.avatar_id is known, keeps this
     # delivery path (and callback_outbox) free of an avatar_id column, so no
     # schema change or migration is needed on either the SQLite or Postgres path.
     from ..cedric import callback

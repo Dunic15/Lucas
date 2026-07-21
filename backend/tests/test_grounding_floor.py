@@ -2,7 +2,7 @@
 falsely claim the answer is document-grounded (sufficient_context + citations).
 The model self-reports sufficient_context and sometimes labels a world-knowledge
 answer as grounded; a retrieval-score floor corrects the metadata deterministically
-(the answer text is left alone — Laura is a general assistant first). Key-free/stub.
+(the answer text is left alone. Laura is a general assistant first). Key-free/stub.
 """
 from __future__ import annotations
 

@@ -116,11 +116,11 @@ def test_reconcile_404_needs_three_consecutive_misses(fresh_store, monkeypatch):
                         lambda url, *, headers, timeout: _FakeResponse(status_code=404))
 
     asyncio.run(main._reconcile_once())
-    assert store.get("bot_x") is not None             # miss 1 — don't finalize
+    assert store.get("bot_x") is not None             # miss 1; don't finalize
     asyncio.run(main._reconcile_once())
-    assert store.get("bot_x") is not None             # miss 2 — still not
+    assert store.get("bot_x") is not None             # miss 2; still not
     asyncio.run(main._reconcile_once())
-    assert store.get("bot_x") is None                 # miss 3 — gone, finalize
+    assert store.get("bot_x") is None                 # miss 3; gone, finalize
 
 
 def test_reconcile_404_counter_resets_when_reachable_again(fresh_store, monkeypatch):
@@ -133,7 +133,7 @@ def test_reconcile_404_counter_resets_when_reachable_again(fresh_store, monkeypa
 
     for _ in range(3):
         asyncio.run(main._reconcile_once())
-    assert store.get("bot_x") is not None             # counter reset — no false finalize
+    assert store.get("bot_x") is not None             # counter reset; no false finalize
     assert main._reconcile_missing.get("bot_x") is None
     store.remove("bot_x")
 

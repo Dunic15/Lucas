@@ -1,6 +1,6 @@
 """Cedric-integration surface: StartRequest fields, API auth, callbacks, cancel.
 
-Key-free like the rest of the suite: no vendors are called — recall/anam are
+Key-free like the rest of the suite: no vendors are called; recall/anam are
 monkeypatched, callbacks hit a local capture, the brain stays stub.
 """
 from __future__ import annotations
@@ -100,7 +100,7 @@ def test_oversized_brief_is_400(client, recall_stubbed):
 
 
 def test_calendar_autojoin_carries_avatar_bot_name(client, recall_stubbed, monkeypatch):
-    """Calendar-booked bots must join under the avatar's name — the echo guard
+    """Calendar-booked bots must join under the avatar's name; the echo guard
     matches speaker == avatar.name, so a 'Laura'-labelled cedric bot would
     answer its own transcribed speech (the self-conversation bug class)."""
     monkeypatch.setattr(
@@ -158,7 +158,7 @@ def test_end_delivers_ended_callback(client, recall_stubbed, monkeypatch):
 
     # Capture on the SYNCHRONOUS delivery seam. cedric.deliver_ended runs
     # in-request at finalize and distils via wire_artifact BEFORE scheduling the
-    # fire-and-forget send_ended. Mocking send_ended — the async inner — is
+    # fire-and-forget send_ended. Mocking send_ended, the async inner, is
     # flaky under TestClient: its create_task is orphaned once the request's
     # portal closes, so `delivered` may never fill under CI load. Distil here
     # exactly as the real async path would, so the assertions are deterministic.
@@ -189,7 +189,7 @@ def test_end_delivers_ended_callback(client, recall_stubbed, monkeypatch):
     assert delivered_artifact["artifact_version"] == 1
     assert delivered_artifact["summary"] == artifact["summary"]
     # The full artifact (transcript included) is still served by the LOCAL
-    # meetings archive — the PII boundary is the orchestrator API, not disk.
+    # meetings archive; the PII boundary is the orchestrator API, not disk.
     stored = client.get("/meetings/list").json()["meetings"]
     assert any("transcript" in m.get("artifact", {}) for m in stored)
     # And the orchestrator's poll endpoint serves the same distilled copy.
@@ -217,7 +217,7 @@ def test_redeliver_uses_saved_distilled_artifact(client, monkeypatch):
     # redeliver is now fire-and-forget: it hands off to cedric.deliver_ended (the
     # SYNCHRONOUS distil-then-schedule seam) and answers 202 immediately, instead
     # of awaiting send_ended's ~150s blocking retry chain and 504-ing. Capture at
-    # that seam — deterministic under TestClient, unlike the orphaned async
+    # that seam; deterministic under TestClient, unlike the orphaned async
     # send_ended (see test_end_delivers_ended_callback for why).
     def fake_deliver_ended(integration, delivered_bot, artifact):
         captured.append(

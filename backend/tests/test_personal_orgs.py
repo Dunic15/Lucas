@@ -209,7 +209,7 @@ def test_gmail_watcher_does_not_expose_sender_for_attribution():
     """B1 guard (adversarial review 2026-07-16): Reply-To/From are
     unauthenticated and the watcher reads one shared inbox, so the sender must
     never become an org-attribution signal. poll_new_invites returns exactly
-    the 4-tuple (no sender element) and the module exposes no sender helper —
+    the 4-tuple (no sender element) and the module exposes no sender helper -
     a future dev re-adding one has to defeat this test on purpose."""
     from app import gmail_watcher
 
@@ -223,7 +223,7 @@ def test_gmail_watcher_does_not_expose_sender_for_attribution():
         "payload": {
             "headers": [
                 {"name": "To", "value": "laura.ai.122222@gmail.com"},
-                # a FORGED Reply-To naming a victim — must be inert
+                # a FORGED Reply-To naming a victim; must be inert
                 {"name": "Reply-To", "value": "victim@sffstudio.com"},
                 {"name": "From", "value": "attacker@evil.test"},
             ],
@@ -255,7 +255,7 @@ def test_gmail_watcher_does_not_expose_sender_for_attribution():
         )
         out = gmail_watcher.poll_new_invites("tok", set())
     assert len(out) == 1
-    assert len(out[0]) == 4  # (mid, url, recipients, received_at) — no sender
+    assert len(out[0]) == 4  # (mid, url, recipients, received_at); no sender
     # the forged victim address appears nowhere in the emitted tuple
     assert "victim@sffstudio.com" not in str(out[0])
 

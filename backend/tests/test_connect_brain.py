@@ -1,4 +1,4 @@
-"""Connect the brain — the org→Slack-workspace link behind the Configure tab.
+"""Connect the brain; the org→Slack-workspace link behind the Configure tab.
 POST saves the wiring and provisions on Cedric when configured (connected) or
 records it locally when not (pending); DELETE marks disconnected; the summary
 exposes org_connections for the logged-in org only. Key-free."""
@@ -166,7 +166,7 @@ def test_dashboard_renders_teamscope_connect_urls_not_only_the_grid():
 def test_dashboard_never_links_bare_cedric_root():
     """The Manage-tools button must never fall back to a bare meet-cedric.com
     href: with no org-scoped manage_url, that link lands on Cedric's account
-    picker / login wall — on a shared browser it opens the WRONG account (the
+    picker / login wall; on a shared browser it opens the WRONG account (the
     'opens Ben's Cedric' class). It starts disabled and is enabled only once a
     real manage_url resolves."""
     dashboard = (Path(__file__).resolve().parents[2] / "frontend/dashboard.html").read_text()
@@ -282,7 +282,7 @@ def test_brain_connectors_requires_login(client):
 
 def test_brain_connectors_not_linked_sentinel(client, monkeypatch):
     """Cedric's 404 (the workspace points at a DIFFERENT Laura org) surfaces as
-    status=not_linked — the dashboard renders the Reconnect-to-Slack CTA instead
+    status=not_linked; the dashboard renders the Reconnect-to-Slack CTA instead
     of a misleading 'temporarily unavailable'."""
     monkeypatch.setattr(settings, "cedric_orgs_url", "https://cedric/api/laura/orgs")
     user = _login(client)
@@ -328,7 +328,7 @@ def test_fetch_org_connectors_404_is_not_linked(monkeypatch):
         def __init__(self, status):
             self._status = status
 
-        def Client(self, **kw):  # noqa: N802 — mirrors httpx's API
+        def Client(self, **kw):  # noqa: N802; mirrors httpx's API
             return _Client(self._status)
 
     monkeypatch.setattr(callback, "httpx", _FakeHttpx(404))

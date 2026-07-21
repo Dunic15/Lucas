@@ -21,7 +21,7 @@ router = APIRouter()
 def gmail_status(request: Request) -> JSONResponse:
     """Health of the Gmail 'Add people' auto-join watcher. Gated: `recent_joins`
     carries live meeting URLs + bot_ids (joinable links = PII), so only a
-    logged-in owner (or the machine bearer) may read it — never the anonymous
+    logged-in owner (or the machine bearer) may read it; never the anonymous
     internet. Open in the key-free demo (auth disabled)."""
     if auth.current_user(request) is None:
         if err := auth.gate(request):
@@ -77,7 +77,7 @@ def vendors_view(request: Request) -> JSONResponse:
 
 @router.get("/health/graphiti")
 async def graphiti_health(request: Request, run: int = 0) -> JSONResponse:
-    """Knowledge-graph (Graphiti) status, and — with ?run=1 — a LIVE ingest→recall
+    """Knowledge-graph (Graphiti) status, and; with ?run=1; a LIVE ingest→recall
     smoke test against the configured Neo4j using the Anthropic extraction LLM +
     Laura's local embedder. Auth-gated (statuses reveal what's configured). The
     live round-trip writes to a dedicated ``__smoke__`` group, so it never
@@ -86,7 +86,7 @@ async def graphiti_health(request: Request, run: int = 0) -> JSONResponse:
     ``python`` + ``graphiti_core`` in the response settle the 2026-07-20 deploy
     incident (#319) in one curl: graphiti-core has NO release for Python <3.10,
     so on an old runtime the dep is marker-skipped and reads MISSING here.
-    First-activation check: GET this with ?run=1 after wiring GRAPHITI_* —
+    First-activation check: GET this with ?run=1 after wiring GRAPHITI_*: 
     ``live.ok:true`` means ingest wrote and recall read facts back."""
     if err := cedric.auth_error(request):  # CEDRIC
         return err
@@ -163,7 +163,7 @@ async def ears_config(capability: str, request: Request) -> JSONResponse:
     with the per-bot capability to learn the mode/model/persona and get a token
     to open the Gemini Live session. Bearer-protected with LAURA_API_TOKEN; the
     capability itself binds the response to exactly one bot. No transcript/PII
-    here — only config + a short-lived token.
+    here; only config + a short-lived token.
     """
     expected = settings.laura_api_token.strip()
     got = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()

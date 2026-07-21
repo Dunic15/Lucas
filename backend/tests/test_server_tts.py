@@ -20,7 +20,7 @@ def _session(bot_id: str = "tts-bot") -> store.Session:
 
 
 _PAYLOAD = {
-    "audio": "QUJD",  # base64("ABC") — never decoded server-side
+    "audio": "QUJD",  # base64("ABC"); never decoded server-side
     "words": ["ciao", "a", "tutti"],
     "wtimes": [0, 400, 800],
     "wdurations": [300, 300, 1200],
@@ -49,7 +49,7 @@ def test_speak_without_audio_has_no_audio_fields():
 
 
 def test_pipelined_speaks_preserve_sentence_order(monkeypatch):
-    """Sentence 1's synth is SLOW, sentence 2's is instant — sends must still
+    """Sentence 1's synth is SLOW, sentence 2's is instant; sends must still
     happen in sentence order (the prev-chain is the ordering guarantee)."""
     s = _session()
 
@@ -86,7 +86,7 @@ def test_synth_failure_degrades_to_plain_speak(monkeypatch):
         gen = store.bump_speech_generation(s)
         return await main._speak_with_audio(s, "still spoken", force=True, generation=gen, prev=None)
 
-    assert asyncio.run(run()) is True  # she still speaks — page-side /tts covers it
+    assert asyncio.run(run()) is True  # she still speaks; page-side /tts covers it
     assert "audio" not in s.pending_messages[-1]
 
 

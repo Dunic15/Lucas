@@ -1,4 +1,4 @@
-"""Callable AI Process Avatar — backend.
+"""Callable AI Process Avatar; backend.
 
 Flow:
   POST /sessions/start  -> create Anam avatar (ElevenLabs voice) + send Recall
@@ -148,9 +148,9 @@ def _browser_expire_tick() -> None:
                 try:
                     browser_provider.get_provider(
                         row["provider"]).close(row["provider_ref"])
-                except Exception:  # noqa: BLE001 — provider release best-effort
+                except Exception:  # noqa: BLE001; provider release best-effort
                     pass
-    except Exception as exc:  # noqa: BLE001 — never break the worker loop
+    except Exception as exc:  # noqa: BLE001; never break the worker loop
         print(f"[browser] expire tick failed: {type(exc).__name__}",
               flush=True)
 
@@ -177,7 +177,7 @@ async def _lifespan(app: FastAPI):
     if control_plane.enabled():
         await run_in_threadpool(control_plane.runtime_role_status)
         # Tenancy policy: push LAURA_SHARED_DOMAIN_ORGS into the durable
-        # resolver (ensure_user's domain-routing gate). Best-effort — the
+        # resolver (ensure_user's domain-routing gate). Best-effort; the
         # migration-seeded default is personal-first, the safe direction.
         await run_in_threadpool(control_plane.sync_policy_flags)
 
@@ -203,7 +203,7 @@ async def _lifespan(app: FastAPI):
 
     if settings.reconcile_enabled:
         # Backstop that finalizes sessions whose Recall bot is terminal but whose
-        # status webhook never arrived — keeps the per-minute meter from leaking.
+        # status webhook never arrived; keeps the per-minute meter from leaking.
         asyncio.create_task(_reconcile_sessions_loop())
 
     async def _outbox_loop() -> None:
@@ -228,7 +228,7 @@ async def _lifespan(app: FastAPI):
 
     if knowledge.enabled():
         # Company Brain ingest worker (M1): claims durable knowledge_sync_jobs
-        # with SKIP LOCKED + leases — same ownership model as the outbox. On
+        # with SKIP LOCKED + leases; same ownership model as the outbox. On
         # boot it re-enqueues one index rebuild per org with published chunks,
         # so the in-memory per-org index files regenerate from Postgres after
         # a deploy wiped the disk. Never on the live transcript path.
@@ -238,7 +238,7 @@ async def _lifespan(app: FastAPI):
 
             try:
                 await run_in_threadpool(knowledge_dal.enqueue_boot_rebuilds)
-            except Exception as exc:  # noqa: BLE001 — boot rebuild is best-effort
+            except Exception as exc:  # noqa: BLE001; boot rebuild is best-effort
                 print(
                     f"[knowledge] boot rebuild enqueue failed: {type(exc).__name__}",
                     flush=True,
@@ -253,7 +253,7 @@ async def _lifespan(app: FastAPI):
                         knowledge_ingest.refresh_local_indexes
                     )
                     # Data Foundation sync runs ride the same tick when the
-                    # flag is on (claim/lease — safe on every instance).
+                    # flag is on (claim/lease; safe on every instance).
                     from . import datafoundation
 
                     if datafoundation.enabled():
@@ -302,10 +302,10 @@ app = FastAPI(title="Callable AI Process Avatar", lifespan=_lifespan)
 # Avatar pages stay iframe-embeddable (no X-Frame-Options). See security.py.
 security.install(app)
 app.include_router(tts.router)  # POST /tts (open-source avatar voice)
-app.include_router(org_api.router)  # /org/* — org-memory seam for surfaces (#48)
-app.include_router(auth.router)  # /auth/* — dashboard login (Google Sign-In)
+app.include_router(org_api.router)  # /org/*: org-memory seam for surfaces (#48)
+app.include_router(auth.router)  # /auth/*: dashboard login (Google Sign-In)
 app.include_router(billing.router)  # /billing/* + signed /webhooks/stripe
-app.include_router(dashboard.router)  # /dashboard — owner control view
+app.include_router(dashboard.router)  # /dashboard; owner control view
 from .knowledge import router as knowledge_router  # noqa: E402
 
 app.include_router(knowledge_router.router)  # /org/knowledge + dashboard twin (M1)
@@ -379,7 +379,7 @@ def _prebuild_indexes() -> None:
     """
     # Resolve the local embedder's availability FIRST (fail-soft: a HuggingFace
     # outage degrades to hash instead of hanging boot until the App Runner
-    # health check kills the deploy — root cause of the 2026-07-16 rollback).
+    # health check kills the deploy; root cause of the 2026-07-16 rollback).
     # Must precede any ensure_index: the index signature reads the EFFECTIVE
     # provider, which is only known after this attempt.
     from . import embeddings
@@ -411,14 +411,14 @@ _shutting_down = False
 # Spoken the instant she decides to web-search, so the ~4s search isn't dead air.
 
 # Spoken when a NON-search answer is taking a beat (tool round-trips, slow
-# provider) — an acknowledgment beats dead air on the interactive avatar.
+# provider); an acknowledgment beats dead air on the interactive avatar.
 
 # How long a /live/act answer may take before she speaks an acknowledgment
 # filler. Below this, a filler is just noise in front of an instant answer.
 
 # bot_ids whose finalize is currently in flight. Recall emits bot.call_ended
 # THEN bot.done (both terminal) as SEPARATE concurrent webhook POSTs, and the
-# reconciliation loop can race them — this in-flight set makes _finalize_session
+# reconciliation loop can race them; this in-flight set makes _finalize_session
 # safe to call from all three sources without double-delivering session.ended.
 _LIVE_REPAIR_RE = re.compile(
     r"\b(can you hear|do you hear|hear me|are you there|hello|hi laura|"
@@ -500,7 +500,7 @@ def _meeting_has_active_bot(meeting_url: str) -> bool:
     Durable, cross-instance dedup: the in-memory / per-process guards can miss a
     duplicate across a deploy overlap or a second invite email, so we check
     Recall itself (the source of truth) before dispatching another bot. Matching
-    is platform-aware via ledger.meeting_key (Meet/Zoom/Teams) — the old
+    is platform-aware via ledger.meeting_key (Meet/Zoom/Teams); the old
     Meet-only regex never matched a Zoom/Teams link, so this guard no-op'd there.
     """
     if not settings.recall_api_key.strip():
@@ -541,7 +541,7 @@ def _meeting_has_active_bot(meeting_url: str) -> bool:
 # Seeding cutoff for the gmail watcher's FIRST poll after boot: mail older
 # than this is history (never join it), mail fresher is a LIVE invite that
 # just happened to land during an instance flip. Before this cutoff existed,
-# the first pass swallowed EVERYTHING — with several deploys back-to-back
+# the first pass swallowed EVERYTHING; with several deploys back-to-back
 # (2026-07-10: five in ~40min, each restart ≈ a fresh first pass) a real
 # invite sent mid-deploy was silently marked seen and the bot never joined.
 _GMAIL_SEED_FRESH_SECONDS = 600.0
@@ -566,7 +566,7 @@ async def _vendor_watch_loop() -> None:
                 f"da attenzionare{' (postato su Slack)' if text and settings.slack_webhook_url else ''}",
                 flush=True,
             )
-        except Exception as e:  # noqa: BLE001 — the watchdog never dies
+        except Exception as e:  # noqa: BLE001; the watchdog never dies
             print(f"[vendors] check fallito: {e}", flush=True)
         await asyncio.sleep(max(1.0, settings.vendor_check_hours) * 3600)
 
@@ -612,7 +612,7 @@ async def _gmail_watch_loop() -> None:
                 new = fresh
             for _mid, url, invite_addrs, _received_at in new:
                 if _shutting_down:
-                    break  # draining — don't start new bots
+                    break  # draining; don't start new bots
                 if store.is_scheduled(url):
                     continue
                 # Durable cross-instance guard against duplicate bots.
@@ -621,7 +621,7 @@ async def _gmail_watch_loop() -> None:
                     continue
                 try:
                     # A plus-tagged recipient (laura.ai.122222+cedric@…) is
-                    # that avatar's email — route the invite to it.
+                    # that avatar's email; route the invite to it.
                     aid = (
                         avatars.from_invite_email(
                             invite_addrs, _calendar_target_emails()
@@ -632,7 +632,7 @@ async def _gmail_watch_loop() -> None:
                     # org_id passed). The sender headers (Reply-To/From) are
                     # unauthenticated and this watcher reads one shared inbox,
                     # so trusting them to pick a tenant would let a forged
-                    # header bill/arm someone else's org — see
+                    # header bill/arm someone else's org; see
                     # _org_for_calendar_event. Personal attribution here waits
                     # on a per-user mailbox (like #247 did for the calendar).
                     res = await _start_avatar_session(url, aid)
@@ -662,7 +662,7 @@ _RECONCILE_MISSING_LIMIT = 3
 
 
 # Recall status codes that mean the bot is IN the meeting and the per-minute
-# meter is running — the usage clock (entitlements.mark_in_call) starts on the
+# meter is running; the usage clock (entitlements.mark_in_call) starts on the
 # FIRST of these. Status-based on purpose: a silent meeting consumes minutes
 # exactly like a talkative one (Recall bills either way).
 _IN_CALL_CODES = {"in_call_recording", "in_call_not_recording"}
@@ -677,8 +677,8 @@ _IN_CALL_CODES = {"in_call_recording", "in_call_not_recording"}
 
 
 # Recall statuses that CONFIRM a bot is no longer billing: the bot is genuinely
-# gone. Everything else — 401/403 (rotated/expired key), 429 (rate limit), any
-# 5xx, network/other — leaves the meter-stop UNVERIFIED: the bot may still be
+# gone. Everything else: 401/403 (rotated/expired key), 429 (rate limit), any
+# 5xx, network/other; leaves the meter-stop UNVERIFIED: the bot may still be
 # live and billing, so the session must be kept and the leave retried.
 
 
@@ -692,22 +692,22 @@ async def _reconcile_once() -> None:
     """One reconciliation pass: finalize every active session whose Recall bot is
     terminal, and drop orphaned sessions whose bot Recall no longer knows about.
     Extracted from the loop so it is unit-testable without touching asyncio.sleep.
-    Best-effort per session — a bad poll skips that bot, never the whole pass.
+    Best-effort per session; a bad poll skips that bot, never the whole pass.
 
     PR B threads the usage clock + entitlement enforcement through this SAME
-    pass (gate at start, clock at reconcile — nothing on the live hot path):
+    pass (gate at start, clock at reconcile; nothing on the live hot path):
     - a store session whose usage row has no in_call_at yet gets its clock
       started from Recall's OWN in-call status timestamp (mark_in_call);
     - live sessions get the spoken ~5min/~1min warnings and the hard stop
       at/after the deadline (the hardened finalize path: verified leave,
       artifact preserved, usage closed 'limit_reached');
-    - durable usage rows whose bot is NOT in the (ephemeral) local store —
-      a redeploy wiped it — are STILL enforced straight from Recall
+    - durable usage rows whose bot is NOT in the (ephemeral) local store -
+      a redeploy wiped it; are STILL enforced straight from Recall
       (_reconcile_usage_orphan): the restart-restore that heals the
       orphan-meter class. All of it disabled when the control plane is
       (the key-free demo runs this pass byte-identically to before)."""
-    active = store.all_sessions()  # a COPY — safe while finalize removes
-    # Durable pending/active usage rows, fetched ONCE per pass (threadpooled —
+    active = store.all_sessions()  # a COPY; safe while finalize removes
+    # Durable pending/active usage rows, fetched ONCE per pass (threadpooled -
     # sync engine). {} when the control plane is disabled (no engine touched)
     # or momentarily unreachable (skip usage work this pass, never the pass).
     usage_by_bot: dict[str, dict] = {}
@@ -717,7 +717,7 @@ async def _reconcile_once() -> None:
             rows = await run_in_threadpool(entitlements.open_usage_rows)
             usage_by_bot = {u["bot_id"]: u for u in rows}
             usage_fetch_ok = True
-        except Exception:  # noqa: BLE001 — a PG blip must not kill the meter backstop
+        except Exception:  # noqa: BLE001; a PG blip must not kill the meter backstop
             usage_by_bot = {}
             usage_fetch_ok = False
     # Prune miss-counters for bots that already left the store by ANY path
@@ -732,7 +732,7 @@ async def _reconcile_once() -> None:
         bid = session.bot_id
         # A prior finalize built + delivered this session but its Recall
         # meter-stop failed (5xx / network) and kept it for retry. The bot may
-        # still be live, so the terminal-status path below would never fire —
+        # still be live, so the terminal-status path below would never fire -
         # retry the leave directly. On success the session is dropped; the
         # artifact already went out, so there is NO re-delivery.
         if getattr(session, "leave_pending", False):
@@ -808,7 +808,7 @@ async def _reconcile_once() -> None:
             code = _bot_status_code(bot)
             usage = usage_by_bot.get(bid)
             # BLOCKER 1 self-heal: a LIVE local session with an org but NO usage
-            # row means the provisional-id swap failed after create_bot — the
+            # row means the provisional-id swap failed after create_bot; the
             # bot is running untracked. Re-associate the stranded provisional
             # row (or open a fresh one); if it genuinely can't be metered, cut
             # it off rather than let it bill free. Only on a good usage read and
@@ -821,9 +821,9 @@ async def _reconcile_once() -> None:
             ):
                 usage = await _repair_untracked_usage(session, usage_by_bot)
                 if store.get(bid) is None:
-                    continue  # repair force-finalized it (can't meter) — gone
+                    continue  # repair force-finalized it (can't meter); gone
             if usage is not None and usage.get("in_call_at") is None:
-                # Start the usage clock on Recall's OWN in-call timestamp —
+                # Start the usage clock on Recall's OWN in-call timestamp -
                 # status-based, so a silent meeting consumes exactly like a
                 # talkative one. Idempotent; a PG blip just retries next pass.
                 started = _status_change_epoch(bot, _IN_CALL_CODES)
@@ -834,12 +834,12 @@ async def _reconcile_once() -> None:
                         )
                         usage["in_call_at"] = started or time.time()
                         usage["deadline"] = deadline
-                    except Exception:  # noqa: BLE001 — clock starts next pass
+                    except Exception:  # noqa: BLE001; clock starts next pass
                         pass
             if code in _BOT_TERMINAL:
                 # notify_failed fires ONCE, inside the guarded finalize body, so a
                 # fatal seen by both this poll and the webhook notifies Cedric once.
-                # The terminal status carries Recall's own end timestamp — the
+                # The terminal status carries Recall's own end timestamp; the
                 # authoritative consumed_seconds source for the usage close.
                 await _finalize_session(
                     bid,
@@ -867,7 +867,7 @@ async def _reconcile_once() -> None:
     if usage_fetch_ok and usage_by_bot:
         local_ids = {s.bot_id for s in active}
         # Orgs that still have a LIVE local session: a stranded provisional row
-        # of such an org belongs to its live meeting (one row per org) — the
+        # of such an org belongs to its live meeting (one row per org); the
         # orphan sweep must NOT free that slot (BLOCKER 1). list() so a repair
         # that mutated usage_by_bot mid-pass can't trip "changed during iteration".
         live_orgs = {s.org_id for s in active}
@@ -885,14 +885,14 @@ async def _repair_untracked_usage(
     *,
     force_finalize: bool = True,
 ) -> dict | None:
-    """BLOCKER 1 self-heal: a LIVE local session whose usage row is missing —
+    """BLOCKER 1 self-heal: a LIVE local session whose usage row is missing -
     the provisional-id swap failed after create_bot, so the real bot runs
     untracked (no clock, no deadline, no cutoff → unmetered forever). Re-point
     the org's stranded provisional row at this real bot id, else open a fresh
     row; if the org genuinely can't host it (budget exhausted, or the slot is
     held by a DIFFERENT live meeting), FORCE-FINALIZE so the meter stops the
     hardened way instead of billing free. Returns the usage dict to meter from
-    now on, or None (billing down this pass — bot kept; or force-finalized —
+    now on, or None (billing down this pass; bot kept; or force-finalized -
     the caller checks store.get()). At most one pending/active row exists per
     org (the partial unique index), so the org's row, if any, is unambiguous."""
     org = session.org_id
@@ -934,7 +934,7 @@ async def _repair_untracked_usage(
             )
             return row
     except entitlements.EntitlementsUnavailable:
-        return None  # billing down this pass — retry next pass, bot kept
+        return None  # billing down this pass; retry next pass, bot kept
     # Can't meter it (org exhausted, slot held by another live meeting). A
     # normal live session is force-finalized. A leave-pending session was
     # ALREADY finalized/delivered, so its caller retries the meter-stop without
@@ -949,17 +949,17 @@ async def _reconcile_usage_orphan(
     bid: str, usage: dict, live_orgs: set[str] | None = None
 ) -> None:
     """Restart restore: a durable pending/active usage row whose bot is NOT in
-    the local store — the process restarted (App Runner's store is ephemeral)
+    the local store; the process restarted (App Runner's store is ephemeral)
     or a provisional gate row was stranded mid-dispatch. Without this, a
     redeploy would both leak the Recall meter AND grant unmetered minutes; the
-    deadline is enforced straight from Recall instead. Best-effort per row —
+    deadline is enforced straight from Recall instead. Best-effort per row -
     never raises, never breaks the pass."""
     try:
         if bid.startswith("pending:"):
             # The gate's provisional id: create_bot never completed, or the
             # id swap was interrupted. If the OWNING org still has a live local
             # session, this provisional belongs to THAT live meeting (one row
-            # per org) and the store-loop self-heal will re-associate it — do
+            # per org) and the store-loop self-heal will re-associate it; do
             # NOT free the slot out from under a billing bot (BLOCKER 1). Only
             # when the org has no live session, and after a grace window, is it
             # a true orphan → close it (consumes 0: it never went in-call).
@@ -1011,11 +1011,11 @@ async def _reconcile_usage_orphan(
         if deadline and time.time() >= deadline:
             try:
                 await run_in_threadpool(recall_client.leave_call, bid)
-            except Exception as e:  # noqa: BLE001 — classified below
+            except Exception as e:  # noqa: BLE001; classified below
                 if not _leave_confirmed_stopped(e):
-                    return  # UNVERIFIED — bot may still bill; retry next pass
+                    return  # UNVERIFIED; bot may still bill; retry next pass
             await _close_usage_for(usage["org_id"], bid, None, "limit_reached")
-    except Exception:  # noqa: BLE001 — an orphan hiccup must never break the pass
+    except Exception:  # noqa: BLE001; an orphan hiccup must never break the pass
         pass
 
 
@@ -1026,7 +1026,7 @@ async def _reconcile_sessions_loop() -> None:
     Terminal status events reach Laura only via the account status-change webhook
     (Recall structurally can't put them on the per-bot realtime endpoint). If that
     webhook is un/mis-configured or a delivery is dropped, the session sticks in
-    'in_progress' forever and the per-minute Anam meter leaks — and a bot.fatal
+    'in_progress' forever and the per-minute Anam meter leaks; and a bot.fatal
     can fail to reach the webhook at all, so this poll is the ONLY guaranteed
     recovery for it.
     """
@@ -1092,7 +1092,7 @@ async def _reconcile_sessions_loop() -> None:
 
 
 
-# TTS for the open-source avatar page lives in its own router (tts.py) — a
+# TTS for the open-source avatar page lives in its own router (tts.py); a
 # self-contained concern with no coupling to the live meeting path.
 
 
@@ -1110,7 +1110,7 @@ async def _reconcile_sessions_loop() -> None:
 # ── Google Calendar OAuth: connect Laura's calendar to Recall Calendar V2 ──
 # Per-browser CSRF state for THIS flow. The nonce lives in an HttpOnly cookie
 # scoped to /oauth (covers both connect and callback) and, signed, inside the
-# `state` param — the callback requires both to match. CALENDAR_STATE_PURPOSE
+# `state` param; the callback requires both to match. CALENDAR_STATE_PURPOSE
 # domain-separates the signature from the login flow's "state", so neither
 # flow's state can be replayed in the other. This REPLACES the old static
 # settings.calendar_oauth_state as the real CSRF barrier.
@@ -1174,7 +1174,7 @@ async def _reconcile_sessions_loop() -> None:
 
 # Telemetry-only (never gates behaviour): a loose "leave-ish word" check used to
 # log that an ADDRESSED line looked like a dismissal but detect_leave_command
-# didn't match — i.e. a phrasing we should probably add. Deliberately broad;
+# didn't match; i.e. a phrasing we should probably add. Deliberately broad;
 # it only ever feeds a PII-safe boolean log line.
 _LEAVE_HINT = re.compile(
     r"\b(?:leave|exit|drop|hang up|disconnect|log ?o(?:ff|ut)|sign ?o(?:ff|ut)|"
@@ -1187,7 +1187,7 @@ _LEAVE_HINT = re.compile(
 # ("send the rollout doc to Marco by Friday"); the summarizer re-extracts the
 # SAME action but splits the deadline into its own field ("Send the rollout doc
 # to Marco" + deadline="Friday"). Exact-text dedup misses that, so both survive
-# with two action_ids — breaking the #84 dedup contract Cedric relies on.
+# with two action_ids; breaking the #84 dedup contract Cedric relies on.
 # Comparing on content-token subset catches the rephrase.
 
 
@@ -1196,7 +1196,7 @@ _LEAVE_HINT = re.compile(
 
 
 # The post-meeting summarizer rephrases a live how-to/tour ask into a
-# THIRD-person to-do — "Show Duccio how to create a task", "Give Duccio a tour
+# THIRD-person to-do: "Show Duccio how to create a task", "Give Duccio a tour
 # of the Asana dashboard", "Show Duccio step-by-step what to click". Those miss
 # detect_browse_intent (first-person-anchored: "show me how to…"), so without
 # this they land in the to-dos AND get executed as real Asana tasks. Catch the
@@ -1205,7 +1205,7 @@ _LEAVE_HINT = re.compile(
 
 # Per-meeting walkthrough epoch (keyed by bot_id), DECOUPLED from
 # speech_generation. A running browser walkthrough is cancelled only when this
-# advances — on a new browse ask or an explicit dismiss — never by the ambient
+# advances, on a new browse ask or an explicit dismiss, never by the ambient
 # per-utterance generation churn of a 1:1 meeting, which was draining a turn
 # backlog the instant we awaited the walkthrough and cancelling every tour at
 # step 0. Bounded by live meetings; overwritten per ask.
@@ -1213,7 +1213,7 @@ _BROWSE_EPOCH: dict[str, int] = {}
 
 # Per-meeting in-flight debounce (bot_id -> monotonic deadline). While a browse
 # is opening (provider cold-start + saved-login load is ~15-20s), re-asks from
-# the human — who can't see anything happening yet — are IGNORED instead of
+# the human, who can't see anything happening yet, are IGNORED instead of
 # spawning a second open and advancing the epoch, which cancelled the first
 # walkthrough. Auto-expires (backstop) and is cleared the moment the view is on
 # the tile, so a genuine follow-up ("...now create a task") is still honored.
@@ -1230,7 +1230,7 @@ _BROWSE_INFLIGHT: dict[str, float] = {}
 
 
 
-# CEDRIC: live context push — the orchestrator POSTs a fresh brief the moment
+# CEDRIC: live context push; the orchestrator POSTs a fresh brief the moment
 # something changes (real-time counterpart of the periodic context pull);
 # inject_brief re-reads per turn, so the next answer speaks from it.
 
@@ -1277,12 +1277,12 @@ async def avatar_ws(websocket: WebSocket, conversation_id: str) -> None:
 
 @app.get("/avatar/stream/{conversation_id}")
 async def avatar_stream(conversation_id: str) -> StreamingResponse:
-    """SSE push channel for speak messages — the low-latency replacement for the
+    """SSE push channel for speak messages; the low-latency replacement for the
     500ms polling loop. App Runner rejects WebSocket upgrades at the edge but
     streams SSE fine (same mechanism as /live/ask), so queued messages are pushed
     within ~100ms instead of waiting out a poll interval. The page's EventSource
     auto-reconnects when App Runner recycles the request, and the 2s poll fallback
-    below still catches anything in between — both drain the same queue, so a
+    below still catches anything in between; both drain the same queue, so a
     message is only ever delivered once.
     """
 
@@ -1336,7 +1336,7 @@ def avatar_speaking(conversation_id: str, rep: SpeakingReport) -> JSONResponse:
 
     The backend's barge-in window is otherwise a words-per-second estimate that
     drifts both ways on long answers. True = heartbeat (extend the window a beat
-    past the next report); false = she actually finished — close the window now,
+    past the next report); false = she actually finished; close the window now,
     unless a speak was sent so recently the page may not have received it yet
     (keep a short grace so barge-in still covers the delivery gap)."""
     session = store.get_by_conversation(conversation_id)
@@ -1368,7 +1368,7 @@ def _maybe_refresh_rolling_summary(
 
     Fire-and-forget and self-throttling: at most one refresh in flight per
     session, only every _SUMMARY_EVERY_LINES lines, never on the stub (keyless
-    demo). Zero cost on the live path — the model call runs in a worker thread.
+    demo). Zero cost on the live path; the model call runs in a worker thread.
     """
     if effective_provider() == "stub":
         return
@@ -1404,7 +1404,7 @@ async def _refresh_rolling_summary(
             session.rolling_summary = notes
             session.summary_upto = cutoff
     except Exception:
-        pass  # notes are a bonus — never let them disturb the live path
+        pass  # notes are a bonus; never let them disturb the live path
     finally:
         session.summarizing = False
 
@@ -1464,7 +1464,7 @@ _STREAM_RECOVERY_LINES_IT = [
 
 # Confirmation for a captured action request (queue_action seam): promises
 # follow-up after the call, never execution. Fixed lines so they're TTS-
-# prewarmed — the confirmation must land as fast as an ack.
+# prewarmed; the confirmation must land as fast as an ack.
 _QUEUE_LINES = [
     "Got it — it'll be on the dashboard for your approval right after the call.",
     "Noted — I'll line it up on the dashboard for approval once we wrap.",
@@ -1476,7 +1476,7 @@ _QUEUE_LINES_IT = [
 ]
 
 # Voice-consent confirmations (settings.voice_consent_writes): the addressed
-# ask was auto-approved and handed to Cedric to RUN now. Honesty rule intact —
+# ask was auto-approved and handed to Cedric to RUN now. Honesty rule intact -
 # she says it's approved and underway, never that it's already done (the
 # receipt lands on the dashboard when Cedric reports back).
 _VOICE_LINES = [
@@ -1490,8 +1490,8 @@ _VOICE_LINES_IT = [
 ]
 
 # Clarify-before-create (settings.clarify_before_create): the addressed ask is
-# missing what a well-filed task needs, so the avatar asks ONCE — assembled
-# from per-field slots, spoken via the normal TTS cache — and holds the
+# missing what a well-filed task needs, so the avatar asks ONCE; assembled
+# from per-field slots, spoken via the normal TTS cache; and holds the
 # approval until the asker replies (or the window lapses).
 _CLARIFY_SLOTS = {
     "owner": "who should own it",
@@ -1516,7 +1516,7 @@ def _clarify_line(heard: str, missing: list[str]) -> str:
     return f"Sure — before I create it: {joined}?"
 
 # Listening cues spoken WHILE a human is mid-monologue (backchanneling, the
-# thing that makes a listener feel present). Two syllables max — anything
+# thing that makes a listener feel present). Two syllables max; anything
 # longer becomes an interruption instead of a nod.
 _BACKCHANNEL_LINES = ["Mm-hm.", "Mm.", "Right."]
 _BACKCHANNEL_LINES_IT = ["Mm-hm.", "Mm.", "Capito."]
@@ -1548,7 +1548,7 @@ def _avatar_voice(session: "store.Session") -> str:
 
 def _wake_required(avatar: avatars.Avatar,
                    session: "store.Session | None" = None) -> bool:
-    """Whether THIS avatar speaks only when addressed by name — the per-avatar
+    """Whether THIS avatar speaks only when addressed by name; the per-avatar
     require_wake_word (avatar.yaml), inheriting the global REQUIRE_WAKE_WORD
     when unset. When true, every unprompted speech path is silenced: answers,
     backchannels, joiner greetings, quiet nudges, confident interjections, and
@@ -1565,7 +1565,7 @@ def _wake_required(avatar: avatars.Avatar,
     if not base:
         return False
     # 1:1 relaxation (owner 2026-07-20): with a single human present, the ask
-    # is unambiguously for her, so no wake word is needed — the conversation
+    # is unambiguously for her, so no wake word is needed; the conversation
     # stays fluid. Groups keep name-required (unprompted speech there risks
     # interrupting). Deference + cooldown still gate every reply.
     if session is not None and len(session.roster(avatar.name)) <= 1:
@@ -1576,7 +1576,7 @@ def _wake_required(avatar: avatars.Avatar,
 def _should_backchannel(
     session: store.Session, text: str, avatar: "avatars.Avatar | None" = None
 ) -> bool:
-    """A human is deep into a long utterance and she's been silent a while —
+    """A human is deep into a long utterance and she's been silent a while -
     one tiny cue ("Mm-hm.") reads as listening. Deliberately rare: long
     partials only, one per gap window, never while (or right after) she talks,
     so it stays a nod and never becomes chatter."""
@@ -1592,11 +1592,11 @@ def _should_backchannel(
     if now - session.last_backchannel_at < settings.backchannel_gap_seconds:
         return False
     if now - session.last_spoke_at < 12.0:
-        return False  # just spoke/acked — another sound now reads as noise
+        return False  # just spoke/acked; another sound now reads as noise
     return True
 
 
-# Spoken when dismissed by voice — short enough to finish inside
+# Spoken when dismissed by voice; short enough to finish inside
 # settings.leave_grace_seconds before the bot disconnects.
 _GOODBYE_LINES = [
     "Sure — bye everyone!",
@@ -1616,7 +1616,7 @@ _GOODBYE_LINES_IT = [
 
 # Footing (see docs/research/multiparty-meeting-intelligence.md): acknowledging
 # people by name measurably drives liking and participation. {name} slots the
-# joiner's / quiet participant's first name — dynamic, so never TTS-prewarmed.
+# joiner's / quiet participant's first name; dynamic, so never TTS-prewarmed.
 _WELCOME_LINES = [
     "Hi {name}, welcome!",
     "Hey {name} — good to have you.",
@@ -1638,7 +1638,7 @@ _QUIET_NUDGE_LINES_IT = [
 
 # Usage-deadline warnings (PR B): ONE short heads-up ~5 minutes before the
 # included avatar time runs out, and one ~1 minute before she must leave.
-# Spoken from the reconcile pass — never the live hot path. Each fires at most
+# Spoken from the reconcile pass; never the live hot path. Each fires at most
 # once per session (Session.usage_warned_5m / usage_warned_1m).
 _USAGE_WARN_5M_LINES = [
     "Quick heads-up — about five minutes of included avatar time left for "
@@ -1683,7 +1683,7 @@ async def _usage_warn(session: store.Session, deadline: float) -> None:
             session.usage_warned_5m = True
             line = _line_for(heard, _USAGE_WARN_5M_LINES, _USAGE_WARN_5M_LINES_IT)
             await _make_avatar_speak(session, line, force=True)
-    except Exception:  # noqa: BLE001 — a warning must never crash the pass
+    except Exception:  # noqa: BLE001; a warning must never crash the pass
         pass
 
 
@@ -1691,7 +1691,7 @@ async def _usage_warn(session: store.Session, deadline: float) -> None:
 # self_introduce_on_join). It breaks the "joined-but-mute" first impression
 # WITHOUT breaking the etiquette: it names herself and tells the room how to
 # call her in, then she goes back to waiting to be addressed. {name} slots the
-# avatar's name — dynamic, so never TTS-prewarmed.
+# avatar's name; dynamic, so never TTS-prewarmed.
 _SELF_INTRO_LINES = [
     "Hi, I'm {name} — here to help if you need me. Just say my name whenever "
     "you'd like me to jump in.",
@@ -1710,15 +1710,15 @@ _SPEECH_WORDS_PER_SECOND = 2.6  # ~ElevenLabs/edge-tts pace, for the barge-in wi
 
 async def _prewarm_tts_cache() -> None:
     """Pre-synthesize the fixed lines (acks, think lines, backchannels,
-    goodbyes, search announces — both languages) into the TTS cache at boot.
-    Sequential trickle, best-effort — vendor trouble here just means the live
+    goodbyes, search announces; both languages) into the TTS cache at boot.
+    Sequential trickle, best-effort; vendor trouble here just means the live
     path warms lazily as before. Two consecutive misses = key/vendor trouble;
     stop burning boot-time calls.
     """
     warmed = 0
     misses = 0
     # One pass per DISTINCT avatar voice: "" (the global default) plus each
-    # avatar.yaml override (e.g. cedric's Eric) — so his acks/confirmations are
+    # avatar.yaml override (e.g. cedric's Eric); so his acks/confirmations are
     # as instant as Laura's.
     voices = {""}
     for aid in avatars.list_ids():
@@ -1751,7 +1751,7 @@ async def _prewarm_tts_cache() -> None:
             except Exception:  # noqa: BLE001
                 misses += 1
         # Bail once ElevenLabs looks down for a whole line across all voices
-        # (no key / outage) — no point paying the rest of the round-trips.
+        # (no key / outage); no point paying the rest of the round-trips.
         if misses >= 2 * len(voices):
             break
     print(f"[startup] tts cache prewarmed: {warmed} fixed lines", flush=True)
@@ -1763,7 +1763,7 @@ def _norm_line(text: str) -> str:
 
 def _is_repeat(session: store.Session, text: str) -> bool:
     """Repetition guard: True if this exact line was already spoken recently.
-    Saying the same sentence twice in a couple of minutes is never useful — it
+    Saying the same sentence twice in a couple of minutes is never useful; it
     reads as a glitch (looping repair lines, identical stub answers)."""
     norm = _norm_line(text)
     if not norm:
@@ -1802,19 +1802,19 @@ async def _make_avatar_speak(
     newer turn bumped the session's generation while this sentence was still
     being generated, the line is dropped instead of un-muting her. Every
     message carries its generation_id so the page can drop a stale speak that
-    raced a stop over the wire (additive — pages that don't know it ignore it).
+    raced a stop over the wire (additive; pages that don't know it ignore it).
 
     `backchannel=True` marks a listening cue ("Mm-hm." while a human talks):
-    it must NOT refresh the speak cooldown — a backchannel is not a turn, and
+    it must NOT refresh the speak cooldown; a backchannel is not a turn, and
     it must never suppress a real answer seconds later.
 
     `audio` is an optional server-synthesized voice payload (the
     tts.synthesize_cached shape: base64 mp3 + word timings). When present it
     rides along in the speak message and the page skips its whole /tts
     round-trip; pages that don't know the fields ignore them and POST /tts as
-    before — the contract stays additive.
+    before; the contract stays additive.
     """
-    # Silent notetaker mode: this avatar never speaks during the meeting — it
+    # Silent notetaker mode: this avatar never speaks during the meeting; it
     # only listens, tracks state, and delivers the artifact at the end. One gate
     # here suppresses EVERY spoken line (greeting, answers, interventions,
     # nudges, action-capture confirmations); transcript capture + MeetingState
@@ -1822,7 +1822,7 @@ async def _make_avatar_speak(
     try:
         if avatar_resolver.for_session(session).silent:
             return False
-    except Exception:  # noqa: BLE001 — never let a config read mute the guard logic
+    except Exception:  # noqa: BLE001; never let a config read mute the guard logic
         pass
     if generation is not None and generation != session.speech_generation:
         return False  # turn was cancelled while this sentence was in flight
@@ -1836,7 +1836,7 @@ async def _make_avatar_speak(
             generation if generation is not None else session.speech_generation
         ),
         # Per-sentence emotion for the face: the brain's own label when it gave
-        # one (`mood`), else derived from the words. Additive — a page that
+        # one (`mood`), else derived from the words. Additive; a page that
         # doesn't read it renders neutral as before. A backchannel ("Mm-hm.")
         # stays neutral: a listening cue shouldn't emote. See emotion.py.
         "emotion": emotion.DEFAULT if backchannel else emotion.normalize(
@@ -1851,7 +1851,7 @@ async def _make_avatar_speak(
         message["engine"] = audio.get("engine")
     # Estimate how long this line keeps her talking; queued lines extend it.
     # With server-synthesized audio the REAL duration is known from the last
-    # word's timings — barge-in stops estimating and starts knowing.
+    # word's timings; barge-in stops estimating and starts knowing.
     est = max(1.0, len(text.split()) / _SPEECH_WORDS_PER_SECOND)
     if audio and audio.get("wtimes") and audio.get("wdurations"):
         est = max(1.0, (audio["wtimes"][-1] + audio["wdurations"][-1]) / 1000 + 0.3)
@@ -1881,12 +1881,12 @@ async def _speak_with_audio(
     prev: "asyncio.Task | None",
     t0: float | None = None,
 ) -> bool:
-    """Synthesize server-side, then speak — pipelined across sentences.
+    """Synthesize server-side, then speak; pipelined across sentences.
 
     Each sentence's synthesis runs CONCURRENTLY with the still-streaming
     answer (sentence N+1 generates while N synthesizes); awaiting `prev`
     before sending keeps the spoken order strict. Synthesis failure (or no
-    ElevenLabs key) degrades to an audio-less speak — the page then does its
+    ElevenLabs key) degrades to an audio-less speak; the page then does its
     own /tts with the edge fallback, exactly as before this feature.
 
     `t0` (set on the turn's first sentence) logs the wake->first_speak
@@ -1896,12 +1896,12 @@ async def _speak_with_audio(
     try:
         if generation == session.speech_generation:
             payload = await tts.synthesize_cached(text, _avatar_voice(session))
-    except Exception:  # noqa: BLE001 — synth is an optimization, never a blocker
+    except Exception:  # noqa: BLE001; synth is an optimization, never a blocker
         payload = None
     if prev is not None:
         try:
             await prev
-        except Exception:  # noqa: BLE001 — a failed older send must not mute the rest
+        except Exception:  # noqa: BLE001; a failed older send must not mute the rest
             pass
     if t0 is not None:
         print(
@@ -1915,7 +1915,7 @@ async def _speak_with_audio(
 
 async def _make_avatar_stop(session: store.Session) -> None:
     """Barge-in: tell the avatar page to stop the current speech immediately
-    (TalkingHead cancels audio + queue). Same delivery contract as speak —
+    (TalkingHead cancels audio + queue). Same delivery contract as speak -
     additive message type; pages that don't know it ignore it.
 
     A stop kills the WHOLE turn, not just the audio playing right now, via
@@ -1939,7 +1939,7 @@ async def _make_avatar_stop(session: store.Session) -> None:
 
 async def _send_avatar_control(session: store.Session, message: dict) -> None:
     """Deliver a non-speech control message ({"type": ...}) to the avatar page.
-    Same additive delivery contract as speak/stop — ws first, HTTP queue as the
+    Same additive delivery contract as speak/stop; ws first, HTTP queue as the
     net; pages that don't know the type ignore it."""
     if session.ws is not None:
         try:
@@ -1952,7 +1952,7 @@ async def _send_avatar_control(session: store.Session, message: dict) -> None:
 
 async def _raise_hand(session: store.Session, avatar, heard: str = "") -> None:
     """Hand-raise etiquette: the room is talking among itself and she has a
-    grounded contribution — instead of speaking over the conversation she
+    grounded contribution; instead of speaking over the conversation she
     raises her hand (gesture on her /talk tile) and posts one meeting-chat
     line saying how to give her the floor. The contribution itself waits in
     session.pending_contribution until someone invites her ("dimmi, Laura")."""
@@ -1962,7 +1962,7 @@ async def _raise_hand(session: store.Session, avatar, heard: str = "") -> None:
     session.hand_last_raise_at = session.hand_raised_at
     session.hand_last_contribution = session.pending_contribution
     await _send_avatar_control(session, {"type": "raise_hand"})
-    # Chat line: genuinely fire-and-forget — Recall's read timeout is up to 60s,
+    # Chat line: genuinely fire-and-forget. Recall's read timeout is up to 60s,
     # so posting it inline could hold THIS webhook's response open on a slow/hung
     # chat endpoint. Detach it: a Recall hiccup (or the key-free demo, where there
     # is no real bot) must never block or delay the meeting.
@@ -2006,12 +2006,12 @@ def _in_opening_grace(session: store.Session) -> bool:
     """Opening settle-in ("wait to be called"): True while she should stay silent
     unless DIRECTLY addressed by name. Ends the instant she's first addressed
     (session.addressed_once) or after settings.opening_grace_seconds from join,
-    whichever comes first — so she never talks over the room while it settles,
+    whichever comes first; so she never talks over the room while it settles,
     but engages immediately when named and becomes proactive once things settle
     even if nobody names her.
 
     With first_call_required (the default) the grace never expires on its own:
-    being named once is the ONLY thing that activates her — before that she is
+    being named once is the ONLY thing that activates her; before that she is
     a silent guest, however long the meeting runs."""
     if session.addressed_once:
         return False
@@ -2028,7 +2028,7 @@ def _in_opening_grace(session: store.Session) -> bool:
 _self_intro_tasks: set = set()
 
 # Strong refs to in-flight graphiti ingest tasks (fired off the join path).
-# KEEP — merges keep reverting this.
+# KEEP; merges keep reverting this.
 
 # Recheck cadence while waiting for the floor to open before the self-intro.
 _SELF_INTRO_RECHECK_SECONDS = 2.0
@@ -2036,13 +2036,13 @@ _SELF_INTRO_RECHECK_SECONDS = 2.0
 
 def _self_intro_already_active(session: store.Session) -> bool:
     """True when the meeting has already activated her (named her, or she
-    already spoke/acked) — the self-introduction's whole job (tell the room how
+    already spoke/acked); the self-introduction's whole job (tell the room how
     to call her in) is then moot, so it must NOT fire."""
     return session.addressed_once or session.last_spoke_at > 0
 
 
 def _self_intro_floor_busy(session: store.Session) -> bool:
-    """True when a human is audibly mid-utterance right now — introducing herself
+    """True when a human is audibly mid-utterance right now; introducing herself
     over them is the exact talk-over the etiquette avoids. Uses the same signal
     the interjection floor gate uses: a human partial landed within
     interject_min_pause_seconds (last_human_partial_at is stamped on EVERY human
@@ -2061,7 +2061,7 @@ def maybe_self_introduce(session: store.Session) -> bool:
     shortly after she is proven to be in the call (the FIRST transcript webhook,
     the same "proof the bot is in the call" trigger cedric.maybe_refresh_context
     uses), schedule ONE short spoken line introducing herself and telling the
-    room how to call her in — then she goes back to waiting to be addressed.
+    room how to call her in; then she goes back to waiting to be addressed.
 
     Fire-and-forget and OFF the live hot path: this does only flag checks; the
     delay + speak run inside a detached task. The one-shot flag is flipped BEFORE
@@ -2070,19 +2070,19 @@ def maybe_self_introduce(session: store.Session) -> bool:
     self-intro task was scheduled."""
     if not settings.self_introduce_on_join:
         return False
-    # Wake-word avatars enter SILENT — no self-introduction on join (owner ask
+    # Wake-word avatars enter SILENT; no self-introduction on join (owner ask
     # 2026-07-20): they just listen and transcribe until someone says their
     # name. Mark it done so we stop re-checking on every webhook.
     try:
         if _wake_required(avatars.load(session.avatar_id)):
             session.self_introduced = True
             return False
-    except Exception:  # noqa: BLE001 — resolution must never break the join path
+    except Exception:  # noqa: BLE001; resolution must never break the join path
         pass
     if session.self_introduced:
         return False
     if _self_intro_already_active(session):
-        # The meeting named her / she spoke before the first transcript we saw —
+        # The meeting named her / she spoke before the first transcript we saw -
         # the intro is moot. Mark it done so we stop re-checking every webhook.
         session.self_introduced = True
         return False
@@ -2095,14 +2095,14 @@ def maybe_self_introduce(session: store.Session) -> bool:
 
 async def _self_introduce_after_delay(session: store.Session) -> None:
     """The delayed body behind maybe_self_introduce. Waits the settle-in delay,
-    then introduces herself at the first OPEN floor — never over a human.
+    then introduces herself at the first OPEN floor; never over a human.
 
     Two guards, re-checked on every loop:
       - suppression: if the room activated her (named her or heard her speak),
-        abort — the intro is now redundant;
+        abort; the intro is now redundant;
       - talk-over: if a human is audibly mid-utterance, do NOT speak. Re-poll for
         a natural pause every _SELF_INTRO_RECHECK_SECONDS and introduce at the
-        first open floor, up to self_introduce_max_wait_seconds — after which the
+        first open floor, up to self_introduce_max_wait_seconds; after which the
         moment has passed and she gives up silently.
 
     So she self-introduces at the first natural pause, never over a human, and
@@ -2111,26 +2111,26 @@ async def _self_introduce_after_delay(session: store.Session) -> None:
         await asyncio.sleep(max(0.0, settings.self_introduce_after_seconds))
         deadline = time.time() + max(0.0, settings.self_introduce_max_wait_seconds)
         while _self_intro_floor_busy(session):
-            # Someone is talking right now — don't barge in. Abort if she got
+            # Someone is talking right now; don't barge in. Abort if she got
             # engaged meanwhile, or if the wait cap is reached (moment passed).
             if _self_intro_already_active(session) or time.time() >= deadline:
                 return
             await asyncio.sleep(_SELF_INTRO_RECHECK_SECONDS)
-    except asyncio.CancelledError:  # pragma: no cover — loop teardown
+    except asyncio.CancelledError:  # pragma: no cover; loop teardown
         return
     if _self_intro_already_active(session):
-        return  # activated during the wait — the intro is now redundant
+        return  # activated during the wait; the intro is now redundant
     # Session finalized/removed while she waited → don't speak into an orphaned
     # object (the meeting is over; the meter has stopped).
     if store.get(session.bot_id) is None:
         return
     try:
         avatar = avatar_resolver.for_session(session)
-    except Exception:  # noqa: BLE001 — never let a config read crash a bg task
+    except Exception:  # noqa: BLE001; never let a config read crash a bg task
         return
     # Language follows the room if anything was heard, else defaults to English.
     heard = session.recent_transcript(3) if session.transcript else ""
-    # An org overlay may provide the greeting verbatim (M2). Spoken as-is —
+    # An org overlay may provide the greeting verbatim (M2). Spoken as-is -
     # bounded + sanitized at overlay-write time; like every self-intro line it
     # is dynamic and therefore never TTS-prewarmed (one lazy synth, off-path).
     greeting = ""
@@ -2155,7 +2155,7 @@ def _is_echo(session: store.Session, text: str) -> bool:
     answered as if a human said it."""
     norm = _norm_line(text)
     if len(norm) < 12 or len(norm.split()) < 3:
-        return False  # too short to attribute — leave it to the other gates
+        return False  # too short to attribute; leave it to the other gates
     now = time.time()
     recent = [
         spoken for spoken, ts in session._recent_lines.items() if now - ts < 45.0
@@ -2164,12 +2164,12 @@ def _is_echo(session: store.Session, text: str) -> bool:
         return True
     # A Gemini-ears turn is ANOTHER model's transcription of her voice: the
     # wording/segmentation drifts from what she spoke, and one aggregated turn
-    # can span several spoken lines — the substring test above misses both.
+    # can span several spoken lines; the substring test above misses both.
     # Token coverage catches it, but ONLY while an ears mode could actually be
     # feeding turns (off = Recall-only, where this branch is pure
     # false-positive risk against humans paraphrasing her). Two conditions
     # keep a human's confirmation/paraphrase alive: near-total coverage AND a
-    # contiguous 4-word run she literally spoke — reordered paraphrases fail
+    # contiguous 4-word run she literally spoke; reordered paraphrases fail
     # the run test; a human's framing words ("so…", "…correct?") cut coverage.
     if settings.gemini_ears_mode.strip().lower() == "off":
         return False
@@ -2186,7 +2186,7 @@ def _is_echo(session: store.Session, text: str) -> bool:
 
 def _has_contiguous_run(words: list[str], spoken_lines: list[str], n: int = 4) -> bool:
     """True when any contiguous n-word window of the turn appears verbatim
-    inside one line she spoke — the signature of a re-transcription, which
+    inside one line she spoke; the signature of a re-transcription, which
     preserves word runs even when overall wording drifts."""
     if len(words) < n:
         return False
@@ -2195,7 +2195,7 @@ def _has_contiguous_run(words: list[str], spoken_lines: list[str], n: int = 4) -
 
 
 # Partials made ONLY of filler/backchannel tokens ("yeah yeah", "uh uh ok",
-# "sì sì va bene") — listening noises, never an interruption.
+# "sì sì va bene"); listening noises, never an interruption.
 _FILLER_ONLY = re.compile(
     r"^(?:\s*(?:uh|um|mm+|hm+|eh|ah|oh|yeah|yep|yes|no|ok(?:ay)?|right|sure|"
     r"sì|si|già|va bene|bene|certo|ecco|beh|cioè|esatto|capito|giusto)"
@@ -2216,7 +2216,7 @@ def _should_barge_in(
 
     Not her own transcribed speech (the meeting bot hears her too), not her own
     ECHO through someone's open mic, and not filler/backchannels ("yeah yeah",
-    "ok right") — those shouldn't cut her off.
+    "ok right"); those shouldn't cut her off.
     """
     if not settings.barge_in_enabled:
         return False
@@ -2241,7 +2241,7 @@ async def _ask_avatar_persona(session: store.Session, text: str) -> None:
 # Point a Recall calendar webhook (or your own calendar sync) at this endpoint.
 # For each upcoming event that has a meeting link, we SCHEDULE Laura to join it.
 # See docs/CALENDAR.md for the one-time OAuth setup. Payload shapes vary by
-# provider, so parsing here is defensive — adjust `_extract_events` if needed.
+# provider, so parsing here is defensive; adjust `_extract_events` if needed.
 def _extract_events(payload: dict) -> list[dict]:
     evs = (
         payload.get("events")
@@ -2366,7 +2366,7 @@ def _calendar_event_targets_avatar(event: dict) -> bool:
     if not target_emails:
         return True
     # Plus-aliases of a target inbox count as the inbox: an invite to
-    # laura.ai.122222+cedric@gmail.com targets us (and names the avatar —
+    # laura.ai.122222+cedric@gmail.com targets us (and names the avatar -
     # resolved separately via avatars.from_invite_email).
     def _base(addr: str) -> tuple[str, str]:
         base, _tag, domain = avatars.email_parts(addr)
@@ -2393,15 +2393,15 @@ def _org_for_calendar_event(event: dict) -> str:
     """Attribute a calendar-summoned meeting to the org that owns it.
 
     ORGANIZER-ONLY on purpose: the organizer's address resolves through
-    store.org_for_email — since the personal-orgs cutover that is the
+    store.org_for_email; since the personal-orgs cutover that is the
     organizer's own durable org. That org's meter runs and its tools act,
     not the Demo org's. Attendees never attribute: an external prospect's
     meeting that merely INVITES a registered user must not bill (or arm the
-    tools of) that guest's org — cross-tenant mis-attribution is strictly
+    tools of) that guest's org; cross-tenant mis-attribution is strictly
     worse than the Demo fallback.
 
     The organizer is TRUSTWORTHY here because it comes from Recall's sync of a
-    connected Google Calendar (Google stamps the event creator) — unlike a raw
+    connected Google Calendar (Google stamps the event creator); unlike a raw
     mail header. The gmail-invite path deliberately does NOT attribute from the
     sender: Reply-To/From are unauthenticated (no SPF/DKIM on Reply-To) and the
     watcher reads one shared inbox, so a forged header could bill/arm a
@@ -2479,10 +2479,10 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             dispatch_org = await run_in_threadpool(_org_for_calendar_event, ev)
             # Entitlement gate (PR B): calendar auto-join takes this INLINED
             # dispatch path (not _start_avatar_session), so it must be gated
-            # here too — every paid bot passes an open_usage gate. Same
+            # here too; every paid bot passes an open_usage gate. Same
             # provisional-id dance; a refusal marks the event skipped (fail
             # closed) and an EntitlementsUnavailable falls to the per-event
-            # error handler below — either way no unmetered bot is born.
+            # error handler below; either way no unmetered bot is born.
             usage_bot_id = ""
             if control_plane.enabled():
                 usage_bot_id = f"pending:{uuid.uuid4().hex}"
@@ -2501,20 +2501,20 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                     avatar.id,
                 )
             except Exception:
-                if usage_bot_id:  # release the slot — no bot was born
+                if usage_bot_id:  # release the slot; no bot was born
                     try:
                         await run_in_threadpool(
                             entitlements.close_usage,
                             dispatch_org, usage_bot_id, 0, "dispatch_failed",
                         )
-                    except Exception:  # noqa: BLE001 — reconcile heals orphans
+                    except Exception:  # noqa: BLE001; reconcile heals orphans
                         pass
                 raise
             realtime_capability = str(
                 bot.pop("_laura_realtime_capability", "") or ""
             )
             # Calendar auto-join has no authenticated principal (a webhook on
-            # Laura's one Google account) — the owning org is resolved from the
+            # Laura's one Google account); the owning org is resolved from the
             # event itself (_org_for_calendar_event); Demo org is the fallback.
             s = store.create(
                 bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id,
@@ -2522,7 +2522,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
             )
             # M2 overlay stash (behavioral personalization for the live path).
             # The page URL above was built BEFORE org attribution, so autojoin
-            # keeps the canonical face/body — a documented limitation; name,
+            # keeps the canonical face/body; a documented limitation; name,
             # persona, greeting, voice and tool narrowing still apply.
             try:
                 resolved = await run_in_threadpool(
@@ -2531,7 +2531,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 )
                 if getattr(resolved, "overlay_version", 0):
                     s.resolved_avatar = resolved
-            except Exception:  # noqa: BLE001 — overlays must never break autojoin
+            except Exception:  # noqa: BLE001; overlays must never break autojoin
                 pass
             if usage_bot_id and not await _assign_usage_bot_id(
                 dispatch_org, usage_bot_id, bot["id"]
@@ -2559,7 +2559,7 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 raise RuntimeError("could not secure Recall realtime endpoint")
             runpod_runtime.on_session_started(avatar.page)
             # CEDRIC: calendar-summoned (scheduled) bots take this inlined path,
-            # NOT _start_avatar_session, so wire the Model A default here too —
+            # NOT _start_avatar_session, so wire the Model A default here too -
             # otherwise a calendar invite bypasses the orchestrator exactly like
             # the email path did. None when no SURFACE_* is set.
             default_integ = cedric.default_integration()
@@ -2586,7 +2586,7 @@ _ADDRESS_FILLERS = frozenset(
 
 def _address_is_bare(avatar, text: str) -> bool:
     """True when an addressed turn is essentially JUST the name ("Cedric.",
-    "hey Cedric") — the interrupted-dismissal shape that can split across ASR
+    "hey Cedric"); the interrupted-dismissal shape that can split across ASR
     finals. A turn carrying real content ("Cedric, can you check the budget")
     is a complete utterance and must NOT arm the split-leave window, or a later
     same-speaker aside could end the meeting early (meter safety)."""
@@ -2597,7 +2597,7 @@ def _address_is_bare(avatar, text: str) -> bool:
         if t not in wake and t not in _ADDRESS_FILLERS
     ]
     # 0 residual tokens for an exact bare name; 1 for a fuzzy-corrupted name
-    # (the mis-transcribed token isn't in wake_words) — both are "just the name".
+    # (the mis-transcribed token isn't in wake_words); both are "just the name".
     return len(residual) <= 1
 
 
@@ -2622,7 +2622,7 @@ def _closing_signal(session: store.Session, text: str) -> bool:
 
     ``detect_closing``'s regex stays PRIMARY; this only ORs an additive fallback
     (decision.closing_fallback_fires) so the beats also fire on a natural lull
-    with no exact closing phrase — the room went quiet for a while and someone
+    with no exact closing phrase; the room went quiet for a while and someone
     just broke the silence. The current line is already appended to the
     transcript, so the previous line's timestamp is how long the room was idle
     before it. Both the regex and the fallback keep every downstream guard (the
@@ -2723,9 +2723,9 @@ async def recall_audio_ws(websocket: WebSocket, cap_path: str = "") -> None:
     Same trust model as /webhooks/recall: realtime endpoints are unsigned, so
     the URL carries the per-bot capability; an invalid/missing one is closed
     before any audio is read. Frames are JSON text messages whose payload is
-    base64 s16le 16 kHz mono — forwarded verbatim to the bot's ears session.
+    base64 s16le 16 kHz mono; forwarded verbatim to the bot's ears session.
 
-    Path note: deliberately OUTSIDE /ws/ — the live-meeting contract route
+    Path note: deliberately OUTSIDE /ws/; the live-meeting contract route
     /ws/{conversation_id} is registered first and would capture any /ws/*
     path (including this one) as a conversation id.
     """
@@ -2758,7 +2758,7 @@ async def recall_audio_ws(websocket: WebSocket, cap_path: str = "") -> None:
     if _sess is not None:
         try:
             _ears_avatar = avatars.load(_sess.avatar_id).name
-        except Exception:  # noqa: BLE001 — persona nicety, never block audio
+        except Exception:  # noqa: BLE001; persona nicety, never block audio
             pass
     ears = gemini_ears.ensure_session(bot_id, capability, avatar_name=_ears_avatar)
     try:
@@ -2846,7 +2846,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if event == "transcript.partial_data":
         # Partials arrive WHILE someone is still talking; finals only land after
         # endpointing (~1-2s later). Two fluency wins here, but NO speak
-        # decisions — answers, transcript, and MeetingState are finals-only
+        # decisions; answers, transcript, and MeetingState are finals-only
         # (partials repeat and get revised):
         #   - barge-in fires the instant a human talks over her
         #   - the ack fires the moment her name is heard, not when the
@@ -2856,16 +2856,16 @@ async def recall_webhook(request: Request) -> JSONResponse:
         session = store.get(bot_id)
         if session is None:
             return JSONResponse({"ok": True, "note": "no session"})
-        # CEDRIC: fallback context pull — production (2026-07-10) shows the
+        # CEDRIC: fallback context pull; production (2026-07-10) shows the
         # realtime webhook often carries NO bot-status events (every finalize
         # arrived via reconcile), so handle_webhook_status's "live" trigger
         # never fires and the avatar sits in the meeting without Cedric's
         # brief. The first transcript IS proof the bot is in the call: launch
         # the same one-shot refresh here. Flag-guarded (runs once per session),
-        # sync dict checks + create_task only — zero latency on the live path.
+        # sync dict checks + create_task only; zero latency on the live path.
         cedric.maybe_refresh_context(session)
         # One-time self-introduction: the first transcript is proof she's in the
-        # call — schedule the delayed intro off it (one-shot, non-blocking).
+        # call; schedule the delayed intro off it (one-shot, non-blocking).
         maybe_self_introduce(session)
         words = data.get("words", [])
         text = " ".join(w.get("text", "") for w in words).strip()
@@ -2894,11 +2894,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # ack, backchannel, or (via the stamp below) cancel a deference wait.
         if _is_echo(session, text):
             return JSONResponse({"ok": True, "partial": True, "echo": True})
-        # A human is audibly talking right now — any deference window waiting
+        # A human is audibly talking right now; any deference window waiting
         # on the final-transcript path sees this and yields to them.
         session.last_human_partial_at = time.time()
         called, question = detect_wake(avatar, text, session.present_names(avatar.name))
-        # "Laura, stop / aspetta / basta" — obey on the PARTIAL, before the
+        # "Laura, stop / aspetta / basta": obey on the PARTIAL, before the
         # sentence even finalizes. Complements barge-in (which needs 3+ words):
         # a two-word "Laura stop" must cut her off instantly, not get answered.
         if called and detect_stop_command(question):
@@ -2908,13 +2908,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if (
             settings.ack_enabled
             and called
-            # Wake-word mode: stay SILENT until the actual answer — no "Sure —"
+            # Wake-word mode: stay SILENT until the actual answer; no "Sure -"
             # ack over a still-talking speaker (owner ask 2026-07-20). KEEP THIS
-            # — a merge has reverted it 3x; the answer already waits for the
+            #; a merge has reverted it 3x; the answer already waits for the
             # final (which lands after the pause), so no ack is needed here.
             and not _wake_required(avatar)
             # Ack discipline: partials are noisy half-words, so the ack (an
-            # audible "Sure —") needs the EXACT name — a fuzzy match on a
+            # audible "Sure -") needs the EXACT name; a fuzzy match on a
             # partial fragment must never make her speak. And wait until a
             # question is actually forming (3+ words): a bare "Laura…" pause
             # acked instantly reads as talking over the person.
@@ -2932,7 +2932,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 else _line_for(question or text, _ACK_LINES, _ACK_LINES_IT)
             )
             # cached_payload: attach the voice only if it's already synthesized
-            # (prewarmed at boot) — an ack must never wait on a vendor call.
+            # (prewarmed at boot); an ack must never wait on a vendor call.
             acked = await _make_avatar_speak(
                 session, line, force=True, audio=tts.cached_payload(line, _avatar_voice(session))
             )
@@ -3006,7 +3006,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # Auto end-of-meeting: when Recall reports the call is over / bot done,
         # finalize the session (stop billing on both vendors + build the artifact).
         # NOTE: terminal status events (bot.done / bot.call_ended / bot.fatal)
-        # CANNOT ride the per-bot realtime webhook — Recall delivers them ONLY to
+        # CANNOT ride the per-bot realtime webhook. Recall delivers them ONLY to
         # the account/dashboard (Svix) webhook, so point that at
         # PUBLIC_BASE_URL/webhooks/recall (see docs/infra/RECALL-WEBHOOK-SETUP.md).
         # The reconciliation loop (_reconcile_sessions_loop) is the backstop if
@@ -3025,7 +3025,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             or ""
         )
         term = event in TERMINAL or status_code in TERMINAL
-        # Fatal join failure — pass it INTO finalize so the Cedric notify_failed
+        # Fatal join failure; pass it INTO finalize so the Cedric notify_failed
         # fires under the guard (once), not here (which would double-fire when the
         # reconcile poll also sees the fatal). Catch it from either the short code
         # or the bot.fatal event name.
@@ -3051,10 +3051,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if session is None:
         return JSONResponse({"ok": True, "note": "no session"})
 
-    # CEDRIC: fallback context pull — see the partial path above. Finals cover
+    # CEDRIC: fallback context pull; see the partial path above. Finals cover
     # the (rare) delivery where the session's very first webhook is a final.
     cedric.maybe_refresh_context(session)
-    # One-time self-introduction — same one-shot trigger as the partial path,
+    # One-time self-introduction; same one-shot trigger as the partial path,
     # for the (rare) delivery whose very first webhook is a final.
     maybe_self_introduce(session)
 
@@ -3070,7 +3070,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if payload.get("laura_ears"):
         gemini_ears.note_relay_turn(bot_id)
         if not participant.get("name"):
-            # Attribute to a REAL, already-known human — never invent a generic
+            # Attribute to a REAL, already-known human; never invent a generic
             # name. A phantom "Partecipante" would show up as an extra roster
             # entry and (e.g.) trip the hand-raise threshold in a 1:1. Chain:
             # recent Recall-final speaker -> last known ring speaker (any age) ->
@@ -3096,7 +3096,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
 
     # ── Gemini ears (PER-AVATAR; off = this block is dead code) ──
     # The brain is chosen per avatar from the dashboard (store.avatar_brain_mode),
-    # falling back to the global default — so Laura can be Gemini while Cedric is
+    # falling back to the global default; so Laura can be Gemini while Cedric is
     # Cerebras, changed live with no redeploy.
     _ears_mode = gemini_ears.mode_for_avatar(session.avatar_id)
     if gemini_ears.mode_enabled(_ears_mode):
@@ -3106,7 +3106,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if not payload.get("laura_ears"):
             gemini_ears.observe_recall_final(bot_id, speaker)
         # on/reply with an active relay: the synthesized final is the
-        # authoritative utterance — suppress the raw one BEFORE it can enter
+        # authoritative utterance; suppress the raw one BEFORE it can enter
         # the transcript (no double lines, no double answers). The moment the
         # relay goes quiet this returns False and Recall drives again.
         if gemini_ears.should_suppress_recall_final(bot_id, payload, _ears_mode):
@@ -3114,7 +3114,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # control commands that MUST be reliable, and Deepgram transcribes
             # command words ("go out of the meeting", "stop") far better than
             # Gemini's conversational STT (which garbles them). The downstream
-            # leave/stop guards still decide whether to actually act — this only
+            # leave/stop guards still decide whether to actually act; this only
             # stops the raw final from being dropped before they can see it.
             _ctrl = detect_leave_command(text) or detect_stop_command(text)
             if not _ctrl:
@@ -3160,8 +3160,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
 
     # ── silent intelligence layer ──
     # Fold this line into the structured MeetingState (steps covered, decisions,
-    # owners, deadlines, risks) BEFORE any speak decision. Pure regex — adds no
-    # latency to the live path — and informs both the closing intervention below
+    # owners, deadlines, risks) BEFORE any speak decision. Pure regex; adds no
+    # latency to the live path; and informs both the closing intervention below
     # and the post-meeting artifact.
     state = meeting_state.observe(
         session,
@@ -3190,13 +3190,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # Per-meeting MISSION (admin objective): a per-session mission
     # (MeetingContext.mission) wins, else the avatar's default (avatar.yaml). "" =
     # no mission = today's behaviour exactly. Folded into the answer + closing
-    # prompts as an instruction — never a gate, so turn-taking still owns WHEN.
+    # prompts as an instruction; never a gate, so turn-taking still owns WHEN.
     mission = cedric.resolve_mission(session) or avatar.mission
 
     # ── when-to-speak gate ──
     # By default (require_wake_word=False) she answers any grounded question; the
     # SKIP sentinel + cooldown keep her from interjecting on things she can't ground.
-    # Computed HERE — before the closing/proactive block — so a DIRECTLY-ADDRESSED
+    # Computed HERE, before the closing/proactive block, so a DIRECTLY-ADDRESSED
     # turn never pays for the synchronous proactive model call: the fast answer
     # path owns that turn, and the wrap-up check only looks at the next UNADDRESSED
     # lull. (Without this, the idle closing-fallback would fire the proactive
@@ -3207,7 +3207,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if (
         settings.proactive_enabled
         and not _wake_required(avatar)  # wake-word mode: even the closing flag stays silent
-        and not called  # a direct ask owns its turn — never add proactive latency
+        and not called  # a direct ask owns its turn; never add proactive latency
         and not session.proactive_done
         and not _in_opening_grace(session)  # never activated → stays a silent guest
         and _closing_signal(session, text)
@@ -3231,11 +3231,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
 
     # ── opening settle-in: wait to be called ──
     # For the first moments after joining she stays silent unless directly
-    # addressed — the room is still settling (hellos, "can you hear me?", late
+    # addressed; the room is still settling (hellos, "can you hear me?", late
     # joiners) and an unprompted answer/greeting there reads as interrupting.
     # Being named ONCE wakes her for the rest of the meeting; otherwise the grace
     # expires on its own. Direct commands (stop/leave) are `called`-gated, so
-    # they still work during the grace — this only suppresses UNADDRESSED speech.
+    # they still work during the grace; this only suppresses UNADDRESSED speech.
     if called:
         session.addressed_once = True
     elif _in_opening_grace(session):
@@ -3243,7 +3243,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
 
     # ── hand-raise timeout ──
     # Nobody invited her and the conversation moved on: put the hand down
-    # silently and drop the queued point — delivering it minutes later would
+    # silently and drop the queued point; delivering it minutes later would
     # derail the room worse than the interruption she avoided. The room's
     # silence is feedback: the next raise backs off (ignored_gap_seconds).
     if (
@@ -3267,7 +3267,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             and capture_fingerprint
             and capture_fingerprint == c_fingerprint
         ):
-            # Recall retry of the original ask — already captured + asked.
+            # Recall retry of the original ask; already captured + asked.
             return JSONResponse(
                 {"ok": True, "spoke": False, "action_capture": True, "duplicate": True}
             )
@@ -3300,12 +3300,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
                         "ok": True,
                         "spoke": False,
                         "capture_extended": True,
-                        # A replayed older fragment dedupes durably — report it
+                        # A replayed older fragment dedupes durably; report it
                         # honestly so retries are visibly no-ops.
                         "duplicate": not c_extended,
                     }
                 )
-            answered = True  # the fragment completed the ask — resolve below
+            answered = True  # the fragment completed the ask; resolve below
             text_is_details = False
         else:
             text_is_details = answered and not tools.is_detail_skip(text)
@@ -3355,7 +3355,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # whole ask even when ASR split it across finals. Short window only, and
     # only when the follow-up actually READS as a continuation: a new sentence
     # said inside the window ("perfetto, direi che abbiamo finito il test" 3s
-    # after the capture — live repro 2026-07-10) must not be glued onto the
+    # after the capture; live repro 2026-07-10) must not be glued onto the
     # card. A real ASR split picks up mid-phrase; is_capture_continuation
     # (decision.py) rejects acknowledgement openers and wrap-up lines.
     pending = getattr(session, "last_capture", None)
@@ -3448,11 +3448,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # Addressed by name + an explicit leave command → say goodbye, then end the
     # session exactly like a natural meeting end: bot leaves the call, the
     # post-meeting artifact is built, billing stops on both vendors. The
-    # goodbye is best-effort — leaving (= stopping the meter) must never be
+    # goodbye is best-effort; leaving (= stopping the meter) must never be
     # blocked by a TTS hiccup.
     #
     # Split-final case: "Cedric." and "you can leave" often arrive as TWO ASR
-    # finals — the first wakes, the second isn't a wake, so neither final alone
+    # finals; the first wakes, the second isn't a wake, so neither final alone
     # fires the dismissal and a background reconcile poll ends the meeting
     # late. Complete it: if the SAME speaker addressed the avatar in the last
     # few seconds (bare or substantive turn), re-check the leave command on the
@@ -3469,14 +3469,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # same-speaker dismissal aimed at someone the roster doesn't yet know (a
     # never-spoken participant) or at no one ("ok you can go now") still fires.
     # Closing it needs a leading-proper-noun heuristic on ASR-cased text, which
-    # would also swallow the common real dismissal ("You can leave" — leading
+    # would also swallow the common real dismissal ("You can leave": leading
     # capital, no name), so it's left as a documented trade-off, not a bug.
     leave_now = called and detect_leave_command(question)
     if settings.leave_on_command and not leave_now and not called:
         # ── Unambiguous dismissal that NAMES the meeting itself ──
         # "go out the meeting", "leave the meeting", "esci dalla riunione", "vai
         # fuori al meeting": a whole-ask leave IMPERATIVE whose explicit object
-        # is the meeting/call/room is aimed at the bot even without its name — a
+        # is the meeting/call/room is aimed at the bot even without its name; a
         # human dismisses another human BY NAME, never with a bare imperative to
         # the room. Fires in any room size and outside the split window (the
         # owner naturally says "vai fuori al meeting" with no name). Kept safe by
@@ -3492,7 +3492,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # addressee, so a whole-ask leave command fires without the name and
         # without the split window (live test 2026-07-10: the owner naturally
         # says "esci dal meeting" with no name, later than any window). The
-        # addressee guard still applies — a name-led "Sara you can leave now"
+        # addressee guard still applies; a name-led "Sara you can leave now"
         # never fires even here (the roster can undercount right after a
         # mid-meeting restart, when it reseeds from transcript speakers).
         if (
@@ -3509,7 +3509,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 speaker_id == a_speaker
                 and time.time() - a_ts < 8.0
                 # Addressee guard: the follow-up must START like a command
-                # aimed at the avatar ("you can…", "esci…") — a leading name
+                # aimed at the avatar ("you can…", "esci…"); a leading name
                 # ("Sara you can leave now") is aimed at that person, known to
                 # the roster or not.
                 and plausible_leave_followup(text)
@@ -3533,7 +3533,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     #    split window was armed (wake-gate miss);
     #  - called=True + hint → she was addressed and the line contains a
     #    leave-ish word, but detect_leave_command didn't match (regex-miss
-    #    candidate — the phrasing needs to be added).
+    #    candidate; the phrasing needs to be added).
     if settings.leave_on_command and not leave_now:
         if not called and detect_leave_command(text):
             # humans + lead expose WHICH guard blocked it: roster size (the
@@ -3550,7 +3550,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             )
         elif called and _LEAVE_HINT.search(question):
             # The matched hint verb is one generic word (esci/leave/vai…), not
-            # transcript content — enough to reproduce the regex miss offline.
+            # transcript content; enough to reproduce the regex miss offline.
             print(
                 "[leave] addressed line has a leave-ish word but no leave match "
                 f"(regex-miss candidate, hint={_LEAVE_HINT.search(question).group(0)!r})",
@@ -3560,7 +3560,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # ("Cedric." / "Cedric, thanks for that"). Live testing (2026-07-10,
     # [leave] telemetry: called=False, split_window_armed=False) showed the
     # dismissal usually lands a few seconds AFTER a substantive addressed turn
-    # — the old bare-only arming missed it. Meter safety holds because the
+    #; the old bare-only arming missed it. Meter safety holds because the
     # follow-up must still be a whole-ask leave command (see the guards above);
     # a new speaker or a stale (>8s) window clears the arm, so it can never
     # linger into unrelated speech.
@@ -3585,7 +3585,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         finally:
             # finally, not just except: CancelledError (deploy/restart killing
             # this request mid-goodbye) is a BaseException and would otherwise
-            # skip the finalize — leaving the bot in the call, meter running.
+            # skip the finalize; leaving the bot in the call, meter running.
             await _finalize_session(bot_id)
         return JSONResponse(
             {"ok": True, "spoke": True, "left": True, "reason": "leave_command"}
@@ -3595,7 +3595,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # Her hand is up and someone said her name. A bare address ("Laura?") or an
     # explicit invitation ("dimmi, Laura" / "go ahead") hands her the floor:
     # deliver the queued contribution. Any substantive ask instead ("Laura,
-    # what's the budget?") answers on the normal path below — either way the
+    # what's the budget?") answers on the normal path below; either way the
     # hand comes down now.
     if called and session.hand_raised_at:
         pending = session.pending_contribution
@@ -3617,7 +3617,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # speak is the only thing on the turn. A browse fault never touches the
     # meeting (browser_meeting swallows its own errors).
     # In a 1:1 room (only one human present) a browse request doesn't need her
-    # name — "open Asana and show me" is unambiguously for her, so the
+    # name: "open Asana and show me" is unambiguously for her, so the
     # conversation stays fluid. In a group she still needs to be addressed
     # (mirrors the leave-command 1:1 relaxation). The utterance is `question`
     # when named, else the whole line.
@@ -3639,7 +3639,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             asyncio.create_task(_hide_browser())
             return JSONResponse({"ok": True, "spoke": False, "browse_hide": True})
         browse_ok, browse_site, browse_task = detect_browse_intent(_ask)
-        # PII-safe telemetry: booleans + labels only, NEVER the utterance —
+        # PII-safe telemetry: booleans + labels only, NEVER the utterance -
         # so a non-firing trigger is diagnosable (verb vs site) without logging
         # transcript content.
         _bv, _bs = browse_signal(_ask)
@@ -3660,7 +3660,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # Anchor every browse speak to THIS turn's generation: a barge-in
             # or "stop" bumps the generation, which (a) drops queued/late
             # narration in _make_avatar_speak and (b) cancels the walkthrough
-            # loop itself — she never talks over a human who took the floor.
+            # loop itself; she never talks over a human who took the floor.
             browse_gen = store.bump_speech_generation(session)
             # Claim the walkthrough epoch for THIS ask. Advancing it also cancels
             # any walkthrough still running from a previous ask. Unlike
@@ -3740,7 +3740,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                         session, f"I couldn't open {spoken_name} just now.",
                         force=True, generation=browse_gen)
                     return
-                # View is on the tile now — clear the debounce so a genuine
+                # View is on the tile now; clear the debounce so a genuine
                 # follow-up ("...now create a task") is honored via reuse.
                 await _send_avatar_control(
                     session, {"type": "browser_view", "url": result["url"]})
@@ -3763,7 +3763,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 # line carries browse_gen, so a stop silences it server-side.
                 if browse_task:
                     # Cancel the walkthrough ONLY on a new browse ask or an
-                    # explicit dismiss (the per-meeting epoch) — never on the
+                    # explicit dismiss (the per-meeting epoch); never on the
                     # ambient speech-generation churn of a 1:1, which drained a
                     # turn backlog the instant we awaited and cancelled the recipe
                     # at step 0. Narration is sent un-gated (generation=None) so it
@@ -3800,7 +3800,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
 
     # ── footing: quiet-participant nudge (fires once, at wrap-up) ──
     # She knows who is in the room (roster) and who has spoken (transcript).
-    # As the meeting wraps up — and she wasn't addressed directly — invite ONE
+    # As the meeting wraps up, and she wasn't addressed directly, invite ONE
     # silent participant in: the verbal analogue of turn-yielding gaze, which
     # no shipping meeting-AI does by voice (research doc). Placed after the
     # proactive intervention (critical process gaps win the wrap-up slot).
@@ -3836,7 +3836,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
 
     if _wake_required(avatar, session) and not called:
         # Per-avatar wake-word mode (falls back to the global flag): she was
-        # not addressed by name — stay silent, UNLESS this is a follow-up
+        # not addressed by name; stay silent, UNLESS this is a follow-up
         # right after her own answer (handled below: a reply to her turn).
         followup_ok = (
             settings.followup_window_seconds > 0
@@ -3848,13 +3848,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
     question = question or text  # no wake word → treat the whole utterance as the ask
     # ── multi-party turn-taking ──
     # A line aimed at ANOTHER participant by name ("Marco, can you take
-    # this?") is their turn, not hers — even in no-wake-word mode. Her own
+    # this?") is their turn, not hers; even in no-wake-word mode. Her own
     # wake word wins (checked above): "Laura, tell Marco…" still answers.
     roster = session.roster(avatar.name)
     if not called and addressed_to_other(text, roster):
         return JSONResponse({"ok": True, "spoke": False, "reason": "addressed to other"})
     # ── engaged follow-up ──
-    # She JUST spoke and someone asks a question without her name — in a live
+    # She JUST spoke and someone asks a question without her name; in a live
     # conversation that's almost always a follow-up to HER answer ("and what
     # about the deadline?"). Dialogue context is a first-class addressee
     # signal (research doc), so it bypasses the cooldown and the deference
@@ -3867,13 +3867,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
     )
 
     # Cooldown throttles UNPROMPTED interjections. Being addressed by name is a
-    # direct ask — follow-ups right after her answer are what a fluent
+    # direct ask; follow-ups right after her answer are what a fluent
     # conversation is made of, so `called` (and `followup`) bypass it.
     if not called and not followup and session.in_cooldown(avatar.speak_cooldown_seconds):
         return JSONResponse({"ok": True, "spoke": False, "reason": "cooldown"})
 
     # While her hand is up, unaddressed talk is the room continuing without
-    # her: don't generate a second contribution — the first one is already
+    # her: don't generate a second contribution; the first one is already
     # queued and waiting for the invite (or the timeout above).
     if not called and session.hand_raised_at:
         return JSONResponse({"ok": True, "spoke": False, "reason": "hand raised"})
@@ -3882,11 +3882,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # Nobody addressed her by name, so this is at best a room-open question:
     # humans get first right of reply. Wait briefly; if anyone starts talking
     # (a partial lands or the transcript grows), yield silently. Deliberately
-    # AFTER the cheap gates — a line that would be skipped anyway never waits.
+    # AFTER the cheap gates; a line that would be skipped anyway never waits.
     if not called and not followup and settings.deference_seconds > 0:
         _defer_mark = len(session.human_transcript())
         _defer_t0 = time.time()
-        # Size ONLY the wait — the yield decision below is unchanged. Adaptation
+        # Size ONLY the wait; the yield decision below is unchanged. Adaptation
         # is off by default (returns deference_seconds verbatim).
         _defer_wait = adaptive_deference_seconds(
             settings.deference_seconds,
@@ -3902,7 +3902,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             turn_completeness=end_of_turn.completeness(text),
         )
         # Cross-talk: if two humans are in a tight back-and-forth right now, they
-        # own the floor — wait the MAX rather than the sized window so she never
+        # own the floor; wait the MAX rather than the sized window so she never
         # clips their volley. Suppression-only (still just a wait).
         if settings.cross_talk_suppression_enabled and in_locked_dyad(
             session.human_transcript(),
@@ -3924,19 +3924,19 @@ async def recall_webhook(request: Request) -> JSONResponse:
 
     # This is a NEW speech turn: bump the generation so an older turn that is
     # still streaming (slow model, long answer) stops queueing sentences under
-    # her — its loop sees the newer generation and breaks. Barge-in stops
+    # her; its loop sees the newer generation and breaks. Barge-in stops
     # already bumped; this covers the no-audio overlap case (she was silent but
     # a previous answer was still generating).
     turn_gen = store.bump_speech_generation(session)
 
     # ── action requests: capture, never execute (queue_action platform seam) ──
     # "Cedric, can you send the recap?" is a request to DO something. Capture is
-    # DETERMINISTIC — no LLM call, no tool loop, nothing slower than an ack: the
+    # DETERMINISTIC; no LLM call, no tool loop, nothing slower than an ack: the
     # utterance itself becomes the queued action (the finalize summarizer and
     # the orchestrator's approval card refine it), the spoken confirmation is a
     # fixed line (cached TTS ⇒ instant), and action.requested fires OFF the
     # live path for orchestrated sessions. wants_action_capture is deliberately
-    # narrow — content questions ("can you check if…") stay on the streamed
+    # narrow; content questions ("can you check if…") stay on the streamed
     # path, and search intents keep their announced streamed answer. Placed
     # BEFORE the generic ack: this confirmation IS the reply for the turn.
     # Only when addressed by name: an unaddressed "someone should send X" is
@@ -3944,7 +3944,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if (called and wants_action_capture(question)
             and not wants_web_search(question)
             # A 'show me Asana / give me a tour' ask is a LIVE thing the
-            # avatar does now (browser walkthrough) — never a post-meeting
+            # avatar does now (browser walkthrough); never a post-meeting
             # to-do. Keep it off the capture seam.
             and not detect_browse_intent(question)[0]):
         # detect_wake already stripped the wake word: `question` is the ask
@@ -4014,7 +4014,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 )
         missing = tools.missing_action_details(item.get("action") or "")
         if settings.clarify_before_create and missing:
-            # The ask lacks what a well-filed task needs — Petra ASKS instead
+            # The ask lacks what a well-filed task needs. Petra ASKS instead
             # of filing an orphan. The approval is held until the asker's
             # reply resolves it (clarify block above), or the window lapses.
             session.pending_clarify = (
@@ -4039,7 +4039,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 }
             )
         if settings.voice_consent_writes:
-            # CEDRIC voice consent: the addressed ask IS the approval — record
+            # CEDRIC voice consent: the addressed ask IS the approval; record
             # it on the canonical channel and tell Cedric to run it NOW, off
             # the live path. The spoken line says approved-and-running.
             asyncio.create_task(
@@ -4059,18 +4059,18 @@ async def recall_webhook(request: Request) -> JSONResponse:
         return JSONResponse({"ok": True, "spoke": bool(spoke), "action_capture": True})
 
     # ── instant acknowledgment ──
-    # She was addressed BY NAME, so she will answer — say so immediately while
+    # She was addressed BY NAME, so she will answer; say so immediately while
     # the model generates. Sub-second social feedback is what makes the
     # conversation feel fluent instead of laggy. Slow routes get a line that
     # justifies their pause; search questions are announced by the stream
-    # itself (brain._SEARCH_ANNOUNCE), so no ack here — she'd say two openers.
+    # itself (brain._SEARCH_ANNOUNCE), so no ack here; she'd say two openers.
     # Usually the partial-transcript path already acked this turn (it hears the
-    # name ~1-2s before this final lands) — last_ack_at dedupes the two paths.
+    # name ~1-2s before this final lands); last_ack_at dedupes the two paths.
     if (
         settings.ack_enabled
         and called
         # Wake-word mode stays silent until the real answer (owner ask
-        # 2026-07-20; KEEP — reverted 3x by merges). The final lands after the
+        # 2026-07-20; KEEP; reverted 3x by merges). The final lands after the
         # speaker's pause, so the answer already waits for them to finish.
         and not _wake_required(avatar)
         and not wants_web_search(question)
@@ -4092,7 +4092,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
 
     # Backend is the brain: answer from OUR knowledge (RAG) with the recent
     # meeting conversation as context, plus the silent MeetingState tracker and
-    # the rolling notes of everything older than the history window — so "what
+    # the rolling notes of everything older than the history window; so "what
     # did we decide / who owns X / what's missing?" answers from what she
     # actually tracked. Streamed sentence-by-sentence so the avatar starts
     # speaking on the first sentence instead of waiting for the whole answer.
@@ -4102,7 +4102,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     history = session.recent_transcript(n=8)
     # ── tutto-Gemini (GEMINI_EARS_MODE=reply) ──
     # The ears session already DRAFTED the spoken reply from the live audio
-    # (same Live model that closed the turn — the draft streamed while the
+    # (same Live model that closed the turn; the draft streamed while the
     # human was finishing, so it costs zero extra model latency). When the
     # synthesized final carries it, speak THAT instead of calling the brain.
     # Every gate above already ran (wake, cooldown, deference, hand-raise);
@@ -4120,7 +4120,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # ── hand-raise mode ──
     # Nobody addressed her and the room is a multi-human conversation: whatever
     # grounded contribution the stream produces is QUEUED behind a raised hand
-    # instead of spoken over the talk (the SKIP sentinel still applies — no
+    # instead of spoken over the talk (the SKIP sentinel still applies; no
     # contribution, no hand). 1:1 meetings keep today's direct answers.
     hand_mode = (
         settings.hand_raise_enabled
@@ -4130,14 +4130,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
     )
     hand_sentences: list[str] = []
     # Grounding confidence the retrieval already computed (top surviving chunk
-    # score), read back after the stream ends to gate the interjection escape —
+    # score), read back after the stream ends to gate the interjection escape -
     # no second model call. Only consulted on the hand-raise path below.
     _answer_meta: dict = {}
     # Knowledge-graph recall (graphiti, optional/off by default): when the PM
     # avatar is addressed, hybrid-search the org's temporal graph for THIS
     # question and fold the facts into her grounding ahead of the flat snapshot.
     # Gated on the join-cached asana_live flag (never a live DB read); recall()
-    # is timeout-bounded and never inits on the hot path. (KEEP — reverted by
+    # is timeout-bounded and never inits on the hot path. (KEEP; reverted by
     # merges repeatedly.)
     if graphiti_client.enabled() and getattr(session, "asana_live", False):
         _kg = await graphiti_client.recall(session.org_id, question or text)
@@ -4150,7 +4150,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # transcript length and the turn-start clock BEFORE generation, so the
     # interjection floor check below can tell whether a human took the floor while
     # she was generating (a new final landed, or a human partial arrived during
-    # the generation window). Cheap ints — no latency on the hot path.
+    # the generation window). Cheap ints; no latency on the hot path.
     _interject_len0 = len(session.human_transcript())
     _interject_t0 = time.time()
     try:
@@ -4199,7 +4199,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 )
             )
             speak_tasks.append(prev_task)
-    except Exception as e:  # noqa: BLE001 — a mid-stream provider drop must not 500
+    except Exception as e:  # noqa: BLE001; a mid-stream provider drop must not 500
         # llm.stream_complete deliberately RE-RAISES a fast-provider error that
         # lands AFTER the first token (a pre-token failure is already covered by
         # its Haiku fallback), so a Cerebras/Groq blip mid-answer arrives here.
@@ -4212,7 +4212,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # only queues, never speaks) -> re-raise to preserve today's behavior; a
         # pre-token failure must not be swallowed into silence when llm.py's
         # fallback (or Recall's re-delivery) is the existing recovery. No
-        # transcript is logged — PII: only the exception class name.
+        # transcript is logged: PII: only the exception class name.
         if hand_mode or not speak_tasks:
             raise
         print(
@@ -4249,7 +4249,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # remark, not a lecture.
             contribution = " ".join(hand_sentences)[:600]
             # Motivation gate: grounded (SKIP already passed) is necessary but
-            # not sufficient — the same point must not raise the hand twice,
+            # not sufficient; the same point must not raise the hand twice,
             # and raising has a social budget (cap + pacing + back-off after
             # being ignored). A suppressed point isn't lost to the meeting:
             # the finalize summarizer still reads the whole transcript.
@@ -4259,8 +4259,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 )
             # ── ONE shared social budget for an interjection AND a raised hand ──
             # Grounded (SKIP passed) + not-a-duplicate is necessary but not
-            # sufficient: taking the floor at all — spoken interjection OR silent
-            # hand — draws from the SAME per-meeting budget (cap + minimum gap +
+            # sufficient: taking the floor at all; spoken interjection OR silent
+            # hand; draws from the SAME per-meeting budget (cap + minimum gap +
             # longer back-off after the room ignored a raise). Checked ONCE, up
             # front, so a "single-interjection" stays singular: without this the
             # spoken escape would bypass the budget and she could interject every
@@ -4283,14 +4283,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # grounded (top retrieval score ≥ the bar) AND the floor is open (the
             # line that opened it sounds FINISHED and no human is audibly
             # mid-utterance), say ONE line directly instead of raising a silent
-            # hand nobody may notice+invite in time — the marquee "she jumped in
+            # hand nobody may notice+invite in time; the marquee "she jumped in
             # with the right fact" beat. Weaker or floor-busy points fall through
             # to the raised hand. The generation was already bumped for this turn;
             # barge-in during generation is caught by the interrupted check above,
             # so speaking under turn_gen here is safe.
             _top_score = float(_answer_meta.get("top_score", 0.0))
             # Cross-talk: a tight two-human back-and-forth closes the floor for an
-            # UNPROMPTED interjection — she falls to the audio-silent raised hand
+            # UNPROMPTED interjection; she falls to the audio-silent raised hand
             # (waiting to be invited) instead of talking over their volley.
             _dyad = settings.cross_talk_suppression_enabled and in_locked_dyad(
                 session.human_transcript(),
@@ -4325,8 +4325,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
             ):
                 # Charge the interjection to the shared budget EXACTLY as
                 # _raise_hand does: it counts against the cap, paces the next one
-                # (hand_last_raise_at), and — since it was ENGAGED (spoken), not
-                # ignored — resets the back-off. Also dedup a future repeat of
+                # (hand_last_raise_at), and; since it was ENGAGED (spoken), not
+                # ignored; resets the back-off. Also dedup a future repeat of
                 # this same point (hand OR interject).
                 session.hand_raise_count += 1
                 session.hand_last_raise_at = time.time()
@@ -4356,14 +4356,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
         suppressed_any = any(r is not True for r in results)
 
     if interrupted or session.speech_generation != turn_gen:
-        # The turn died mid-answer — report it honestly and skip the repair
+        # The turn died mid-answer; report it honestly and skip the repair
         # line (a human is talking; silence is correct). Any still-pending
         # speak tasks drop themselves via the generation check.
         return JSONResponse({"ok": True, "spoke": spoke_any, "interrupted": True})
 
     if not spoke_any:
         if suppressed_any:
-            # She had an answer but already said exactly this recently —
+            # She had an answer but already said exactly this recently -
             # stay silent and say so, instead of claiming she spoke.
             return JSONResponse(
                 {"ok": True, "spoke": False, "reason": "duplicate answer suppressed"}

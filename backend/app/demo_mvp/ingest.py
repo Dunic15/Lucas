@@ -1,11 +1,11 @@
-"""Northstar knowledge ingestion — through the CANONICAL Company Brain / Data
+"""Northstar knowledge ingestion; through the CANONICAL Company Brain / Data
 Foundation path, never a direct table insert.
 
 Loads ``demos/northstar/knowledge/*.md`` into ONE demo org using exactly the
 seams a real upload uses: create_source(upload) → upsert_document →
 storage.put_bytes → set_document_storage → ingest.ingest_document (publishes an
-immutable version with an extracted-text checksum, and — when Data Foundation
-is on — mirrors a DF SourceEnvelope head at acl_mode=org_default) → assign to
+immutable version with an extracted-text checksum, and; when Data Foundation
+is on; mirrors a DF SourceEnvelope head at acl_mode=org_default) → assign to
 the demo avatar → rebuild the per-org index. Idempotent: re-running dedupes by
 filename + extracted-text checksum and re-assigns without duplicating.
 
@@ -82,7 +82,7 @@ def setup(org_id: str, *, avatar_key: str = "laura") -> dict[str, Any]:
 
 
 def reset(org_id: str) -> dict[str, Any]:
-    """Remove ONLY this org's DEMO knowledge sources — matched strictly on the
+    """Remove ONLY this org's DEMO knowledge sources; matched strictly on the
     ``northstar-`` provenance prefix, never on a bare generic slug. A real org
     source (e.g. its own "security-policy") is therefore never touched. Deletes
     are org-scoped (RLS) so another org is never affected."""

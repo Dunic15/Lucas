@@ -1,20 +1,20 @@
-"""Laura photoreal avatar — GPU streaming server (Stage 2).
+"""Laura photoreal avatar: GPU streaming server (Stage 2).
 
 Runs on the laura-gpu EC2 box (launch template `laura-gpu`, g5.xlarge) and turns
 TTS audio into a photoreal talking-head video stream that photoreal.html renders
-as the bot camera. The BRAIN and TTS stay on the App Runner backend — this box
+as the bot camera. The BRAIN and TTS stay on the App Runner backend; this box
 only does face rendering, so it can be stopped whenever no meeting is running
 (GPU idle = money; same rule as the Recall meter).
 
 Three engines behind one seam (pick with AVATAR_ENGINE=stub|musetalk|ditto):
 
-  stub      — no GPU needed. Streams the reference portrait with a subtle
+  stub; no GPU needed. Streams the reference portrait with a subtle
               breathing sway. Exists so the ENTIRE pipeline (page, websocket,
               framing, audio sync, meeting mode) is testable on a laptop today.
-  musetalk  — MuseTalk (open source, Tencent): lip-sync only, head stays
+  musetalk: MuseTalk (open source, Tencent): lip-sync only, head stays
               still. Install via setup.sh.
-  ditto     — Ditto (open source, Ant Group; Apache-2.0): lip-sync PLUS head
-              motion and expressions — the chosen production face
+  ditto: Ditto (open source, Ant Group; Apache-2.0): lip-sync PLUS head
+              motion and expressions; the chosen production face
               (owner-approved 2026-07-09). TRT online pipeline, Ampere+ GPU.
               See Dockerfile.ditto + DITTO-LIVE.md; expect launch-day tuning.
 
@@ -51,17 +51,17 @@ JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "82"))
 # Frames SENT per second (0 = every generated frame). Recall delivers at most
 # 15fps in-meeting: pushing the full 25fps timeline through the proxy is pure
 # wasted bandwidth, and the backlog is what makes lips drift behind the audio.
-# Generation stays on the FPS timeline (pacing untouched) — we only skip sends.
+# Generation stays on the FPS timeline (pacing untouched); we only skip sends.
 SEND_FPS = int(os.environ.get("SEND_FPS", "0"))
 
 # Cost controls (issue #3). Idle watchdog: if no page is connected for this many
 # minutes, run GPU_SHUTDOWN_CMD (EBS-backed EC2: shutdown -h == STOP, meter off).
-# 0 disables it — the local/dev default; setup.sh sets it on the real box.
+# 0 disables it; the local/dev default; setup.sh sets it on the real box.
 IDLE_SHUTDOWN_MINUTES = int(os.environ.get("GPU_IDLE_SHUTDOWN_MINUTES", "0"))
 SHUTDOWN_CMD = os.environ.get("GPU_SHUTDOWN_CMD", "sudo shutdown -h now")
 HOURLY_USD = float(os.environ.get("GPU_HOURLY_USD", "1.006"))
 
-# ── metrics state: counters and timings ONLY — never transcript/audio/content ─
+# ── metrics state: counters and timings ONLY; never transcript/audio/content ─
 STARTED_AT = time.time()
 CLIENTS = 0
 IDLE_SINCE: float | None = STARTED_AT  # None while >=1 client is connected
@@ -98,7 +98,7 @@ class StubEngine:
     """No-GPU engine: reference portrait + subtle breathing sway.
 
     Proves transport, framing, and audio timing without any ML. The page can't
-    tell the difference protocol-wise — swap AVATAR_ENGINE and nothing else.
+    tell the difference protocol-wise; swap AVATAR_ENGINE and nothing else.
     """
 
     def __init__(self, image_path: str) -> None:
@@ -131,7 +131,7 @@ class StubEngine:
         """Stub 'talking': same idle loop for the clip's rough duration.
 
         Yields frames at FPS; duration is estimated from mp3 size (~4KB/s at
-        32kbps mono — rough is fine, the page ends on talk_end anyway).
+        32kbps mono; rough is fine, the page ends on talk_end anyway).
         `emotion` is accepted for interface parity and ignored (no face).
         """
         seconds = max(0.8, len(audio_mp3) / 4000.0)
@@ -145,7 +145,7 @@ class MuseTalkEngine:
     Interface-compatible with StubEngine. The heavy imports happen in start()
     so the module loads on any machine. NOTE: written against MuseTalk's
     realtime inference API; expect to tune chunk sizes / fps on the actual GPU
-    box on launch day — that's normal for these models.
+    box on launch day; that's normal for these models.
     """
 
     def __init__(self, image_path: str) -> None:
@@ -172,12 +172,12 @@ class MuseTalkEngine:
 
 
 class DittoEngine:
-    """Real engine #2: Ditto (Ant Group) — lip-sync + head motion/expressions.
+    """Real engine #2: Ditto (Ant Group); lip-sync + head motion/expressions.
 
     Interface-compatible with StubEngine/MuseTalkEngine. The heavy imports
     happen in start() so the module loads on any machine. The pipeline keeps
     ONE StreamSDK alive (avatar registered once at warmup) and serves each
-    speak clip as an async stream of JPEG frames — see ditto_adapter.py.
+    speak clip as an async stream of JPEG frames; see ditto_adapter.py.
     """
 
     def __init__(self, image_path: str) -> None:
@@ -358,7 +358,7 @@ async def stream(ws: WebSocket) -> None:
                         send_acc -= 1.0
                         # Tag each kept frame with its native-timeline index so the
                         # page can lock presentation to the AUDIO clock (frame i
-                        # belongs at audio second i/FPS) instead of newest-wins —
+                        # belongs at audio second i/FPS) instead of newest-wins -
                         # which is what lets sub-realtime generation drift the mouth
                         # off the voice. Additive: a legacy page ignores this text
                         # and the binary stays a bare JPEG.
@@ -371,7 +371,7 @@ async def stream(ws: WebSocket) -> None:
                     if first_frame:
                         FIRST_FRAME_MS.append((t0 - t_speak) * 1000)
                         first_frame = False
-                    # keep real-time pacing even if generation is faster —
+                    # keep real-time pacing even if generation is faster -
                     # a skipped frame still burns its slot on the timeline
                     delay = frame_interval - (time.perf_counter() - t0)
                     if delay > 0:

@@ -1,14 +1,14 @@
 """Robustness-audit regressions (6 adversarially-confirmed defects). Key-free:
-no vendors, no network, no secrets — brain/Recall/callbacks are all stubbed.
+no vendors, no network, no secrets; brain/Recall/callbacks are all stubbed.
 
   1. A mid-stream LLM drop AFTER the first spoken sentence must NOT 500 the live
      webhook (Recall would re-deliver + cut her off): she says ONE recovery line
      and the route returns 200. A PRE-token drop keeps today's behavior.
   2. store.roster() must not strip a HUMAN named "Laura" from a non-Laura
-     meeting — only the running avatar's own name.
+     meeting; only the running avatar's own name.
   3. A transient post-meeting model failure at finalize must DEGRADE to a
      deterministic recap (saved + delivered), never 500 /end and lose it.
-  4. /redeliver must be fire-and-forget (202) — never block ~150s on send_ended's
+  4. /redeliver must be fire-and-forget (202): never block ~150s on send_ended's
      retry chain and 504.
   5. Manual /deliver must stamp the follow-up with the artifact's avatar name
      (Cedric), not the default Laura, after finalize removed the session.
@@ -254,7 +254,7 @@ def test_finalize_saves_bare_scaffold_when_degraded_recap_also_raises(
 ):
     # Hardening on Fix 3: if the degraded rebuild ALSO throws (a real bug in
     # build_from_text/_finish_artifact, not an LLM blip), finalize must STILL not
-    # 500 or lose the meeting — it saves + delivers a bare deterministic scaffold.
+    # 500 or lose the meeting; it saves + delivers a bare deterministic scaffold.
     left: list[str] = []
     delivered: list[tuple] = []
     monkeypatch.setattr(main.anam_client, "end_conversation", lambda c: None)
@@ -282,7 +282,7 @@ def test_finalize_saves_bare_scaffold_when_degraded_recap_also_raises(
 
     artifact = asyncio.run(main._finalize_session("bot_bare", source="manual"))
 
-    # /end still returns a (bare) artifact — never 500, never lost.
+    # /end still returns a (bare) artifact; never 500, never lost.
     assert artifact is not None
     assert "recap unavailable" in artifact["summary"].lower()
     assert store.get_artifact("bot_bare") is not None

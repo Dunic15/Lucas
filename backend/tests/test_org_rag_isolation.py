@@ -1,8 +1,8 @@
 """Per-org RAG isolation: an org's ingested docs are ITS retrieval context.
 
 The base pack (avatars/*/knowledge) stays shared and synthetic; real customer
-documents land in a per-(org, avatar) index file. Isolation is structural —
-org A's retrieve can never surface org B's documents — and the seam is fully
+documents land in a per-(org, avatar) index file. Isolation is structural -
+org A's retrieve can never surface org B's documents; and the seam is fully
 optional: no org_id (or no ingested docs) is byte-for-byte today's behavior.
 """
 from __future__ import annotations

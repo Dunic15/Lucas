@@ -1,10 +1,10 @@
-"""The /health/graphiti admin endpoint — status + optional live smoke test.
+"""The /health/graphiti admin endpoint; status + optional live smoke test.
 
 Lets an operator verify a deploy's knowledge-graph wiring (Neo4j creds +
 Anthropic extraction + runtime Python version, the #319 incident's root cause)
 end-to-end without a live meeting: GET ?run=1 runs a real ingest→recall against
 a dedicated __smoke__ group. Here we cover the cheap paths (status shape,
-disabled-guard, auth gate) — the live round-trip needs a real graph DB, so it
+disabled-guard, auth gate); the live round-trip needs a real graph DB, so it
 is exercised on the deploy, not in the key-free suite.
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ def test_status_shape_when_off():
     assert body["enabled"] is False
     assert body["configured"] is False
     assert "graphiti_core" in body and "embedding_dim" in body
-    assert body["python"].count(".") == 2  # e.g. "3.12.4" — the runtime readout
+    assert body["python"].count(".") == 2  # e.g. "3.12.4": the runtime readout
     assert "live" not in body  # no ?run → no round-trip
 
 

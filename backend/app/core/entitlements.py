@@ -2,8 +2,8 @@
 
 The durable Postgres ledger of avatar-minutes per org, layered on PR A's
 control plane (same engine, same enabled() switch, same role contract). Active
-**iff** ``settings.laura_database_url`` is non-empty; when it is empty — the
-key-free demo and the whole offline test suite — every public function here is
+**iff** ``settings.laura_database_url`` is non-empty; when it is empty; the
+key-free demo and the whole offline test suite; every public function here is
 a no-op returning ``None``/``[]`` and **no engine is ever created**, so the
 demo stays byte-identical to today.
 
@@ -11,7 +11,7 @@ Model (alembic 0003, ``usage_sessions``):
 
   pending  → the atomic gate passed and a bot is being dispatched. Consumes 0.
   active   → Recall reported an in-call status. ``in_call_at`` is Recall's own
-             timestamp (authoritative — the meter is what Recall bills, not
+             timestamp (authoritative; the meter is what Recall bills, not
              what our process observed); ``deadline`` = in_call_at + the org's
              remaining seconds AT THAT MOMENT.
   closed   → final. ``consumed_seconds`` is written once (first close wins;
@@ -21,15 +21,15 @@ remaining = billing_accounts.included_seconds
             - SUM(consumed_seconds of closed rows)
             - elapsed(now - in_call_at) of any ACTIVE row   (pending rows: 0)
 
-Concurrency: ``open_usage`` is THE gate — one transaction that locks the
+Concurrency: ``open_usage`` is THE gate; one transaction that locks the
 billing row (``FOR UPDATE``), computes remaining inside the lock, and inserts
 the pending row. Two racing starts serialize on the row lock, and the partial
 unique index ``uq_usage_one_active_per_org`` (one pending/active row per org)
-makes the loser fail with a unique violation instead of an overspend — the
+makes the loser fail with a unique violation instead of an overspend; the
 database enforces "one concurrent meeting per org" even across processes.
 
 Latency: NOTHING here runs on the transcript→token hot path. The gate runs at
-session start, the clock at the ~60s reconcile pass — both via
+session start, the clock at the ~60s reconcile pass; both via
 ``run_in_threadpool`` (sync engine) so the event loop never blocks.
 
 Role/RLS contract: the runtime is always ``laura_app`` (NOSUPERUSER and
@@ -52,7 +52,7 @@ from .. import control_plane
 
 class EntitlementsUnavailable(RuntimeError):
     """The billing database is configured but unreachable/broken. Callers must
-    fail CLOSED for new paid dispatches (503 before any vendor call) — never
+    fail CLOSED for new paid dispatches (503 before any vendor call); never
     silently grant free minutes."""
 
 
@@ -155,7 +155,7 @@ def _used_seconds(conn, org_id: str, *, exclude_bot_id: str | None = None) -> fl
     return float(closed or 0) + float(active or 0)
 
 
-# Comped orgs (plan='comp'): effectively unlimited — ~31 years of seconds.
+# Comped orgs (plan='comp'): effectively unlimited. ~31 years of seconds.
 # A sentinel this large keeps every "remaining > 0" gate trivially true
 # without a special case at each call site.
 _COMP_ALLOWANCE = 10**9
@@ -174,7 +174,7 @@ def is_comp_email(email: str) -> bool:
 
 def grant_comp(org_id: str) -> bool:
     """Waive billing for an org: upsert its billing row to plan='comp' with
-    the unlimited allowance. Called at login for comped emails — best-effort
+    the unlimited allowance. Called at login for comped emails; best-effort
     and idempotent; a clean no-op (False) when the control plane is off (no
     metering means nothing to waive). Never raises: a billing hiccup must
     never break a login."""
@@ -304,18 +304,18 @@ def remaining_seconds(org_id: str) -> Optional[int]:
 
 
 def open_usage(org_id: str, bot_id: str, avatar_id: str = "") -> Optional[dict]:
-    """THE ATOMIC GATE — call BEFORE dispatching a paid bot. One transaction:
+    """THE ATOMIC GATE; call BEFORE dispatching a paid bot. One transaction:
 
     1. lock the org's billing row (FOR UPDATE; created free/900 if missing),
     2. compute remaining INSIDE the lock,
     3. remaining <= 0 → ``{"ok": False, "reason": "usage_limit_reached"}``,
-    4. INSERT the 'pending' usage row — a unique violation on the partial
+    4. INSERT the 'pending' usage row: a unique violation on the partial
        index (a concurrent pending/active row for this org) →
        ``{"ok": False, "reason": "active_session_exists"}``.
 
     Success: ``{"ok": True, "usage_id", "remaining_seconds"}``. ``None`` when
-    the control plane is disabled (key-free demo — no enforcement). Any
-    operational DB error raises :class:`EntitlementsUnavailable` — callers
+    the control plane is disabled (key-free demo; no enforcement). Any
+    operational DB error raises :class:`EntitlementsUnavailable`: callers
     must refuse the dispatch (fail closed), never treat it as a free pass.
     """
     if not enabled():
@@ -329,7 +329,7 @@ def open_usage(org_id: str, bot_id: str, avatar_id: str = "") -> Optional[dict]:
         raise ValueError("open_usage requires org_id and bot_id")
     try:
         # NOTE: the IntegrityError must propagate OUT of the ``begin()`` block
-        # (clean rollback) before being classified — catching it inside would
+        # (clean rollback) before being classified; catching it inside would
         # let the context manager COMMIT an aborted transaction.
         with _engine().begin() as conn:
             control_plane._set_org(conn, org)
@@ -568,7 +568,7 @@ def usage_summary(org_id: str) -> Optional[dict]:
     if not enabled() or not (org_id or "").strip():
         return None
     # A session-shaped personal identity (u_<hash>) has no durable billing row
-    # and would crash the RLS org_id uuid cast — a 500 on /billing/summary.
+    # and would crash the RLS org_id uuid cast; a 500 on /billing/summary.
     # Degrade to the free-tier defaults instead (see control_plane.is_durable_org).
     if not control_plane._is_uuid(org_id.strip()):
         return None
@@ -611,7 +611,7 @@ def has_active_session(org_id: str) -> bool:
     if not enabled() or not (org_id or "").strip():
         return False
     # Personal (u_<hash>) orgs have no usage_sessions rows and would only burn
-    # a doomed uuid-cast query (caught below, but noisy) — answer directly.
+    # a doomed uuid-cast query (caught below, but noisy); answer directly.
     if not control_plane._is_uuid(org_id.strip()):
         return False
     from sqlalchemy import text

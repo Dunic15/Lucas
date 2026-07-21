@@ -1,8 +1,8 @@
-"""POST /dashboard/actions/{id}/approve — the native approve→execute loop.
+"""POST /dashboard/actions/{id}/approve; the native approve→execute loop.
 
 Key-free: sqlite in tmp_path, Google mocked at executor.google_client, and the
 NATIVE_EXECUTOR flag toggled per test. Asserts the two invariants that matter:
-  1. auth + org scoping — a logged-in owner only, and only for their own org.
+  1. auth + org scoping: a logged-in owner only, and only for their own org.
   2. the executor runs ONLY when the flag is on AND the action is typed; with
      the flag off (today's default) approve marks the row and executes nothing.
 The receipt (event link / message id) lands in the same ledger provenance
@@ -29,7 +29,7 @@ from app.config import settings
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LAURA_STORE_PATH", str(tmp_path / "store.sqlite3"))
     importlib.reload(store)
-    importlib.reload(ledger)  # shares the sqlite file — needs its tables too
+    importlib.reload(ledger)  # shares the sqlite file; needs its tables too
     monkeypatch.setattr(settings, "native_executor", False)
     return TestClient(main_module.app)
 
@@ -228,7 +228,7 @@ def test_unknown_action_is_404(client):
 def test_reapprove_after_failure_retries_dispatch(client, monkeypatch):
     """The failed row's Approve button must RETRY (live repro 2026-07-20: the
     replay branch answered from the first-write-wins decision record and never
-    re-called dispatch_action — the action was permanently stuck at 'failed'
+    re-called dispatch_action; the action was permanently stuck at 'failed'
     while the UI kept offering an Approve that did nothing)."""
     from app.cedric import callback as cedric_callback
 
@@ -294,7 +294,7 @@ def test_reopen_failed_action_is_a_narrow_cas(client):
 
 def test_browser_route_with_operator_off_fails_with_reason(client):
     """route='browser' + operator disabled: the approve must say WHY as a
-    failed receipt — the same honesty 8e6e15a gave the Cedric route — instead
+    failed receipt, the same honesty 8e6e15a gave the Cedric route, instead
     of returning a silent 'approved' nothing will ever run."""
     user = _login(client)
     action = {"item": "Submit the portal form", "owner": "Ben",

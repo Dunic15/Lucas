@@ -1,4 +1,4 @@
-"""Dashboard login (auth.py) — cookie signing, Google callback, org scoping.
+"""Dashboard login (auth.py); cookie signing, Google callback, org scoping.
 
 Key-free like the rest of the suite. Google's token endpoint is mocked; no
 network. The properties under test: the demo stays open when login isn't
@@ -29,7 +29,7 @@ from app.config import settings
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LAURA_STORE_PATH", str(tmp_path / "store.sqlite3"))
     importlib.reload(store)
-    importlib.reload(ledger)  # shares the sqlite file — needs its tables too
+    importlib.reload(ledger)  # shares the sqlite file; needs its tables too
     return TestClient(main_module.app)
 
 
@@ -106,7 +106,7 @@ def test_summary_with_cookie_when_auth_enabled(client, google_on):
 
 
 def test_meetings_list_requires_login_when_auth_enabled(client, google_on):
-    # Transcripts are PII — the meetings archive must not be readable anonymously.
+    # Transcripts are PII; the meetings archive must not be readable anonymously.
     resp = client.get("/meetings/list")
     assert resp.status_code == 401
     assert resp.json()["error"] == "login_required"
@@ -133,12 +133,12 @@ def test_meetings_list_scopes_to_caller_org(client, google_on):
 
 
 def test_gmail_status_requires_login_when_auth_enabled(client, google_on):
-    # recent_joins leaks joinable Meet URLs + bot_ids — must not be anonymous.
+    # recent_joins leaks joinable Meet URLs + bot_ids; must not be anonymous.
     assert client.get("/gmail/status").status_code == 401
 
 
 def test_live_token_requires_login_when_auth_enabled(client, google_on):
-    # Minting an Anam token bills per-minute — no anonymous minting in prod.
+    # Minting an Anam token bills per-minute; no anonymous minting in prod.
     assert client.post("/live/token", json={"avatar_id": "laura"}).status_code == 401
 
 
@@ -253,7 +253,7 @@ def test_callback_rejects_state_without_matching_cookie(client, google_on):
         __import__("json").dumps({"n": "attacker", "exp": time.time() + 600}).encode()
     )
     signed = f"{payload}.{auth._sign(payload, 'state')}"
-    # no client.cookies.set(STATE_COOKIE) — the victim never started this flow
+    # no client.cookies.set(STATE_COOKIE); the victim never started this flow
     resp = client.get(
         "/auth/google/callback",
         params={"code": "x", "state": signed},
@@ -384,7 +384,7 @@ def test_logout_rejects_cross_site(client, google_on):
 
 # ── logout works from the real browser origin (lauravatar.com via CF Worker) ──
 # public_base_url is the App Runner URL, but users are on lauravatar.com, so the
-# browser sends Origin: https://lauravatar.com — which was 403'd before the fix.
+# browser sends Origin: https://lauravatar.com; which was 403'd before the fix.
 
 def test_logout_allows_first_party_lauravatar_origin(client, google_on):
     _login(client, "alice@example.com")
@@ -395,7 +395,7 @@ def test_logout_allows_first_party_lauravatar_origin(client, google_on):
     )
     assert resp.status_code == 302
     # The 302 actually emits the cookie-clearing Set-Cookie (the header the
-    # browser needs — the old test manually cleared cookies and never checked it).
+    # browser needs; the old test manually cleared cookies and never checked it).
     set_cookie = " ".join(resp.headers.get_list("set-cookie"))
     assert auth.COOKIE_NAME in set_cookie
 
@@ -459,7 +459,7 @@ def test_token_plus_login_anonymous_gets_google_gate(client, google_on, monkeypa
 
 def test_logged_in_user_cannot_end_demo_org_session(client, google_on, monkeypatch):
     """Self-serve product decision (2026-07-13): the Demo org is the anonymous
-    showroom, NOT part of a logged-in user's allow-set — a real signup must not
+    showroom, NOT part of a logged-in user's allow-set; a real signup must not
     be able to force-end another visitor's demo session. (Flips the pre-self-
     serve beta behavior, where demo rows were shared with every login.) Legacy
     unowned ('') sessions stay endable — see .._can_end_unowned_session below."""
@@ -479,7 +479,7 @@ def test_logged_in_user_cannot_end_demo_org_session(client, google_on, monkeypat
 
 def test_meetings_list_hides_demo_org_rows_from_logged_in_user(client, google_on):
     """Self-serve product decision (2026-07-13): demo/service artifacts
-    (DEMO_ORG_ID) are invisible to a logged-in user — the anonymous showroom's
+    (DEMO_ORG_ID) are invisible to a logged-in user; the anonymous showroom's
     transcripts never land in a real signup's archive. (Flips the beta-era
     shared-demo behavior.) Legacy unowned ('') rows remain visible."""
     _login(client, "alice@example.com")
@@ -493,14 +493,14 @@ def test_meetings_list_hides_demo_org_rows_from_logged_in_user(client, google_on
 
 
 def test_logged_in_user_can_end_unowned_session(client, google_on, monkeypatch):
-    """A user may end a legacy/service (org_id == '') session — the by-design
+    """A user may end a legacy/service (org_id == '') session; the by-design
     branch the original tests never exercised."""
     from app import cedric, recall_client
 
     _login(client, "alice@example.com")
     store.create("bot_unowned", "https://meet.google.com/u", "laura", org_id="")
     monkeypatch.setattr(cedric, "wire_artifact", lambda a: a)
-    # /end finalizes the session, which stops the Recall meter (leave_call) —
+    # /end finalizes the session, which stops the Recall meter (leave_call) -
     # stub it like every other finalize test does, or the key-free suite dies
     # on assert_ready (and a keyed machine would hit the real Recall API).
     monkeypatch.setattr(recall_client, "leave_call", lambda bot_id: None)
@@ -541,7 +541,7 @@ def test_allowed_endpoint_gates_by_email(client, monkeypatch):
 
 def test_non_ascii_cookie_does_not_crash():
     """A hostile cookie/state with a non-ASCII byte must not raise (hmac.
-    compare_digest on a non-ASCII str raises TypeError) — it must read as
+    compare_digest on a non-ASCII str raises TypeError); it must read as
     invalid so the caller falls to the login gate, never a 500. Exercised at
     the unit boundary: httpx's test transport refuses to even send a non-ASCII
     header, so a live request can't reproduce the server-side path here."""

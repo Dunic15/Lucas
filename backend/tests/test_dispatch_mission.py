@@ -5,7 +5,7 @@ must land that mission in MeetingContext -> build_integration -> the session
 integration dict (where ``cedric.resolve_mission`` reads it on the live path).
 
 Key-free: sqlite in tmp_path, the Recall bot creation short-circuited, and no
-orchestrator surface configured — so the mission is the ONLY thing that can make
+orchestrator surface configured; so the mission is the ONLY thing that can make
 the session carry an integration. An empty mission = today's request shape.
 """
 from __future__ import annotations

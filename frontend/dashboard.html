@@ -140,7 +140,7 @@
   .livestrip .txt b{font-weight:600;}
   .livestrip .meta{font-family:var(--mono);font-size:.74rem;color:var(--live);}
 
-  /* how it works — compact 3-step title flow */
+  /* how it works; compact 3-step title flow */
   /* Full-width stepper: the 3 steps + arrows stretch edge-to-edge (space-between),
      never a narrow centered cluster. */
   .how{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 14px;margin-bottom:20px;}
@@ -284,11 +284,11 @@
     padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--faint);flex:0 0 auto;}
   .stchip.connected{color:#54D28F;border-color:rgba(84,210,143,.4);background:rgba(84,210,143,.08);}
   .stchip.pending{color:#F5C33B;border-color:rgba(245,195,59,.4);background:rgba(245,195,59,.08);}
-  /* Weekly calendar (Upcoming) — a real Apple/Google-style week view.
+  /* Weekly calendar (Upcoming); a real Apple/Google-style week view.
      Mobile-first: day-grouped SECTION cards (one column, empty days hidden). At
      >=820px the 7 days become ONE framed week grid with hairline column dividers
      (a 1px gap over a line-coloured background), shared day headers, and today
-     subtly highlighted — it reads as a calendar, not a list. */
+     subtly highlighted; it reads as a calendar, not a list. */
   .wkbar{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;margin-bottom:16px;flex-wrap:wrap;}
   .wk-month{font-size:1.2rem;font-weight:650;letter-spacing:-.03em;line-height:1;}
   .wkrange{font-family:var(--mono);color:var(--faint);font-size:.72rem;letter-spacing:.03em;margin-top:5px;}
@@ -389,7 +389,7 @@
   .cal-ev .avbadge{align-self:flex-start;font-size:.58rem;padding:1px 6px;}
   .cal-now{position:absolute;left:0;right:0;height:0;border-top:2px solid var(--accent);z-index:2;pointer-events:none;}
   .cal-now::before{content:"";position:absolute;left:-1px;top:-4px;width:7px;height:7px;border-radius:50%;background:var(--accent);}
-  /* send/manage popover — fixed, viewport-clamped, scroll-proof */
+  /* send/manage popover; fixed, viewport-clamped, scroll-proof */
   .wkpop{position:fixed;z-index:60;background:var(--raised);border:1px solid var(--line);border-radius:12px;
     box-shadow:var(--shadow);padding:12px;display:flex;flex-direction:column;gap:9px;}
   .wkpop-t{font-size:.88rem;font-weight:650;letter-spacing:-.01em;line-height:1.25;word-break:break-word;}
@@ -454,14 +454,14 @@
   /* Executed-action receipt: the "Done ↗" pill links to the real event/message. */
   a.exec{text-decoration:none;cursor:pointer;}
   a.exec.done:hover{background:rgba(84,210,143,.12);}
-  /* Per-row "Approve & run" — the native executor's human-authed door. Same
+  /* Per-row "Approve & run": the native executor's human-authed door. Same
      compact pill footprint as .exec so the row stays tidy. */
   .btn-appr{font-family:var(--mono);font-size:.58rem;letter-spacing:.04em;text-transform:uppercase;
     padding:2px 9px;border-radius:999px;margin-left:8px;white-space:nowrap;cursor:pointer;
     border:1px solid rgba(126,182,255,.5);background:transparent;color:var(--live);transition:background .15s,filter .15s;}
   .btn-appr:hover{background:rgba(126,182,255,.12);}
   .btn-appr:disabled{opacity:.55;cursor:default;}
-  /* Per-row "Reject" — approve's mirror; accent-red like the rejected pill. */
+  /* Per-row "Reject": approve's mirror; accent-red like the rejected pill. */
   .btn-rej{font-family:var(--mono);font-size:.58rem;letter-spacing:.04em;text-transform:uppercase;
     padding:2px 9px;border-radius:999px;margin-left:6px;white-space:nowrap;cursor:pointer;
     border:1px solid rgba(245,72,77,.4);background:transparent;color:var(--accent);transition:background .15s,filter .15s;}
@@ -512,7 +512,7 @@
   .ctool-chip{font-size:.74rem;padding:3px 10px;border-radius:999px;background:var(--live-soft);border:1px solid rgba(126,182,255,.3);color:var(--live);font-weight:500;}
   .ctool-chip.warn{color:#F5C33B;border-color:rgba(245,195,59,.4);background:rgba(245,195,59,.08);}
   /* Team-scope connect chips: a direct per-connector connect action rendered from
-     the connector's own connect_url (return-flow contract v3) — never the grid. */
+     the connector's own connect_url (return-flow contract v3); never the grid. */
   .ctool-chip.connect{cursor:pointer;text-decoration:none;transition:border-color .15s,background .15s,color .15s;}
   .ctool-chip.connect:hover{border-color:var(--live);background:var(--live-soft);}
   .ctool-chip.add{color:var(--faint);background:transparent;border-style:dashed;}
@@ -558,18 +558,18 @@
   .stage .pedestal{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);
     width:min(62%,320px);height:30px;border-radius:50%;pointer-events:none;
     background:radial-gradient(ellipse at center, rgba(126,182,255,.30), rgba(126,182,255,.08) 55%, transparent 75%);}
-  /* Ambient drift on the stage light — slow, dark-theme only, reduced-motion safe. */
+  /* Ambient drift on the stage light; slow, dark-theme only, reduced-motion safe. */
   .stage .stagelight{position:absolute;inset:0;pointer-events:none;opacity:.5;
     background:radial-gradient(42% 40% at 50% 8%, rgba(126,182,255,.14), transparent 70%);
     animation:stagelight 14s ease-in-out infinite;}
   @keyframes stagelight{0%,100%{transform:translateX(-14px);}50%{transform:translateX(14px);}}
-  /* The AvatarPreview mount: whatever the adapter renders fills this box —
+  /* The AvatarPreview mount: whatever the adapter renders fills this box -
      the same-origin 3D iframe (/talk?preview=1) or the 2D portrait fallback. */
   .stage .preview{position:absolute;inset:0;display:grid;place-items:center;}
   .stage .preview img{max-height:82%;max-width:74%;object-fit:cover;border-radius:16px;
     border:1px solid var(--line);box-shadow:0 26px 60px -28px rgba(0,0,0,.75);z-index:1;}
   .stage .preview iframe{position:absolute;inset:0;width:100%;height:100%;border:0;z-index:1;}
-  /* Legibility scrim under the stagemeta caption — only over the live 3D
+  /* Legibility scrim under the stagemeta caption; only over the live 3D
      iframe (its office backdrop is bright); the 2D portrait keeps the old
      look, and light theme's dark caption text needs no scrim. */
   .stage .preview:has(iframe)::after{content:"";position:absolute;left:0;right:0;bottom:0;height:36%;
@@ -622,7 +622,7 @@
   .ac-todo{font-size:.8rem;color:var(--dim);margin-top:7px;}
   .ac-ctl{display:flex;align-items:center;gap:7px;flex-wrap:wrap;flex:0 0 auto;}
   .ac-ctl .btn{padding:7px 13px;font-size:.78rem;}
-  /* Plain-language state chips. Color NEVER carries the meaning alone — the
+  /* Plain-language state chips. Color NEVER carries the meaning alone; the
      label text is always present. */
   .st{font-family:var(--mono);font-size:.6rem;letter-spacing:.05em;text-transform:uppercase;
     padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--faint);white-space:nowrap;flex:0 0 auto;}
@@ -707,7 +707,7 @@
   @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms !important;}}
   @media (max-width:860px){
     /* min-width:0 releases the grid track from the nav row's intrinsic
-       min-content width — without it the whole page scrolls horizontally. */
+       min-content width; without it the whole page scrolls horizontally. */
     .side{position:sticky;top:0;z-index:20;padding:12px 14px;gap:10px;background:var(--bg);min-width:0;}
     .side .nav{flex-direction:row;overflow-x:auto;padding-bottom:3px;scrollbar-width:none;min-width:0;max-width:100%;}
     .side .nav::-webkit-scrollbar{display:none;}
@@ -795,10 +795,10 @@
         <div class="note">The host may need to admit it from the waiting room. Sessions bill per minute — end them from the live bar above.</div>
       </div>
 
-      <!-- Compact "Needs your attention" — rendered ONLY when pending actions
+      <!-- Compact "Needs your attention": rendered ONLY when pending actions
            exist (max 3 rows + a View-all link into the Action Center). -->
       <div id="ov-attn"></div>
-      <!-- Optional setup checklist — rendered only while the org is incomplete. -->
+      <!-- Optional setup checklist; rendered only while the org is incomplete. -->
       <div id="ov-checklist"></div>
 
       <div class="grid2">
@@ -814,7 +814,7 @@
       <div class="foot">AVATARS ACT AUTONOMOUSLY — SEE MEETINGS FOR THE RECORD OF WHAT THEY DID. TRANSCRIPTS NEVER LEAVE THE STORE.</div>
     </section>
 
-    <!-- AVATARS — game-like chooser: live 3D stage (2D portrait fallback) +
+    <!-- AVATARS; game-like chooser: live 3D stage (2D portrait fallback) +
          roster selector + identity/controls. The stage box is owned by the
          AvatarPreview adapter so the same-origin 3D iframe can attach later
          without touching this page's structure. -->
@@ -862,7 +862,7 @@
       </div>
     </section>
 
-    <!-- ACTION CENTER — one place to review what the avatars want to do.
+    <!-- ACTION CENTER; one place to review what the avatars want to do.
          The list aggregates the action summaries already present in
          /dashboard/summary; expanding a card lazily fetches the canonical
          record from GET /dashboard/actions/{id}. Approval/rejection reuse the
@@ -938,7 +938,7 @@
       <div class="foot">EACH TOOL NEEDS ITS OWN AUTHORIZATION. CONNECTED NEVER MEANS UNRESTRICTED ACCESS.</div>
     </section>
 
-    <!-- PIPEDREAM (alternative connections surface — experimental test tab).
+    <!-- PIPEDREAM (alternative connections surface; experimental test tab).
          Same per-org model as Connections, but every account is brokered
          through Pipedream Connect (managed OAuth + pre-built actions) rather
          than each vendor's own flow. Populated by loadPipedream(). -->
@@ -2284,7 +2284,7 @@
     fetch("/dashboard/connections/brain/connectors?t="+Date.now(),{headers:headers(),cache:"no-store"})
       .then(function(r){ return r.json(); })
       .then(function(j){ window._connectorsCache=j||{}; applySlackTools(window._connectorsCache); })
-      .catch(function(){ /* keep the fallback href/label + empty chips — never crash */ });
+      .catch(function(){ /* keep the fallback href/label + empty chips; never crash */ });
   }
 
   // ═════════ Shared action helpers (Meetings rows + Action Center) ═════════

@@ -6,26 +6,26 @@ walkthroughs a meeting asks for ("show me how to create a task"), a scripted
 RECIPE against confirmed, stable selectors is reliable where the planner
 stalls. Each recipe is a short list of read-only steps:
 
-  navigate  — go to a page (domain-allowlist enforced by the caller)
-  point     — glide the visible cursor to a control and pulse (no click)
-  reveal    — click a control that only OPENS a form/menu (never submits)
-  say       — narration only (the avatar speaks it)
+  navigate; go to a page (domain-allowlist enforced by the caller)
+  point; glide the visible cursor to a control and pulse (no click)
+  reveal; click a control that only OPENS a form/menu (never submits)
+  say; narration only (the avatar speaks it)
 
 Recipes are STRICTLY read-only: they point and open, they never type or submit,
 so nothing in the user's workspace changes. Selectors were captured from the
-live app (Italian UI here — aria-labels/text are language-specific, so keep a
+live app (Italian UI here; aria-labels/text are language-specific, so keep a
 few fallbacks per control). A step whose control isn't found is skipped
-gracefully — the narration still lands, the walkthrough never hard-fails.
+gracefully; the narration still lands, the walkthrough never hard-fails.
 """
 from __future__ import annotations
 
 # {site_label: {task_key: [steps]}}. Each step: op + (url|sel) + say.
-# `sel` may carry alternates separated by " || " — the runner tries each.
+# `sel` may carry alternates separated by " || ": the runner tries each.
 # STRICTLY READ-ONLY: `reveal` only OPENS things that don't persist (the Create
 # form, a task's detail view). Action controls that would CHANGE the workspace
-# (mark complete, save) are `point`-only — shown, never clicked.
+# (mark complete, save) are `point`-only; shown, never clicked.
 _ASANA_HOME = "https://app.asana.com/"
-# Opening any task's detail view — read-safe (just views it).
+# Opening any task's detail view; read-safe (just views it).
 _OPEN_TASK = ("[aria-label^='Apri modale'] || [aria-label^='Open task'] "
               "|| [aria-label*='task actions'] || div[role='row'] a[href*='/task/']")
 

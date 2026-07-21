@@ -1,6 +1,6 @@
 """Silent-mode MECHANISM: an avatar with silent=True never speaks during the
 meeting, but still captures the transcript / builds the artifact. Cedric and
-Laura both ship TALKING (silent=False) — Cedric interacts like a colleague and
+Laura both ship TALKING (silent=False). Cedric interacts like a colleague and
 captures tasks in the background. Key-free."""
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def test_silent_flag_suppresses_speech(monkeypatch):
             sent.append(m)
 
     s.ws = FakeWS()
-    # force=True would normally bypass the repeat guard and speak — silent wins.
+    # force=True would normally bypass the repeat guard and speak; silent wins.
     spoke = asyncio.run(main._make_avatar_speak(s, "Hello everyone.", force=True))
     assert spoke is False
     assert sent == []  # nothing was pushed to the page

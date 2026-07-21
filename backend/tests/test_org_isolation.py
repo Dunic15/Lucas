@@ -1,10 +1,10 @@
-"""Two-org isolation on SQLite — the safety thesis of the org_id spine.
+"""Two-org isolation on SQLite; the safety thesis of the org_id spine.
 
 Seeds org A and org B on the SAME recurring meeting link (the cross-org
 meeting_key merge that would otherwise leak another tenant's open items into the
 LIVE prompt, MULTI-TENANCY §6.4) and proves B can read NONE of A's rows through
 every store/ledger enumeration, and can resolve none of A's items. Also proves
-the demo/service path (demo_org_id) still works unchanged — single-tenant is
+the demo/service path (demo_org_id) still works unchanged; single-tenant is
 byte-identical.
 
 Key-free like the rest of the suite: sqlite in tmp_path, no vendors touched.
@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 ORG_A = "org-aaaaaaaa-1111"
 ORG_B = "org-bbbbbbbb-2222"
-# Same link for both tenants — this is exactly the merge the org scope prevents.
+# Same link for both tenants; this is exactly the merge the org scope prevents.
 SHARED_URL = "https://meet.google.com/iso-late-tst"
 
 
@@ -142,7 +142,7 @@ def test_shared_meeting_key_does_not_merge_or_evict(seeded):
     """Same meeting_key + kind + normalized text under two orgs must COEXIST
     (the dedupe UNIQUE and the eviction DELETE are both org-scoped, §6.5)."""
     store, ledger = seeded
-    # Re-record identical text for BOTH orgs — dedupe is per-org, so each keeps
+    # Re-record identical text for BOTH orgs; dedupe is per-org, so each keeps
     # its own single copy; neither deletes the other's row.
     same = _artifact("Book the venue", "aid_same", "Same decision", "sync")
     ledger.record_meeting(SHARED_URL, "laura", "bot_a2", {**same, "org_id": ORG_A},

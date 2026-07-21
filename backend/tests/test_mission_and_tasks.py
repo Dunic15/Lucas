@@ -2,13 +2,13 @@
 
 Two additive, off-by-default upgrades:
 
-  1. MISSION — an admin objective the avatar keeps in mind and RESURFACES if
+  1. MISSION: an admin objective the avatar keeps in mind and RESURFACES if
      unmet. It is folded into the live-answer and closing (proactive) system
      prompts as an instruction only; it never gates when she speaks.
-  2. TASK HINTS — recognizable asks (avatar.yaml `tasks`) that BIAS post-meeting
+  2. TASK HINTS: recognizable asks (avatar.yaml `tasks`) that BIAS post-meeting
      action capture toward typed actions, without fabricating anything.
 
-Key-free like the rest of the suite: no vendors are called — the brain is forced
+Key-free like the rest of the suite: no vendors are called; the brain is forced
 onto a fake `llm` seam that just captures the assembled prompt, and retrieval is
 stubbed. The whole point is that an EMPTY mission / EMPTY tasks leave the prompt
 byte-identical to today.
@@ -96,7 +96,7 @@ def test_task_hints_block_lists_triggers_and_action():
     assert "KNOWN TASK TYPES" in block
     assert "Draft and send a recap email" in block
     assert '"send the recap"' in block and '"email the summary"' in block
-    # It must not license fabrication — the evidence rule is restated.
+    # It must not license fabrication; the evidence rule is restated.
     assert "Do NOT invent" in block
 
 
@@ -105,7 +105,7 @@ def _force_streaming(monkeypatch, captured: dict) -> None:
     monkeypatch.setattr(brain.settings, "brain_provider", "anthropic")
     monkeypatch.setattr(brain.settings, "anthropic_api_key", "test-key")
     monkeypatch.setattr(brain, "_retrieve_for", lambda *a, **k: _chunk())
-    # Skip the web-search / deep-thought router — force the plain fast path.
+    # Skip the web-search / deep-thought router; force the plain fast path.
     monkeypatch.setattr(brain, "_live_route", lambda q: ("anthropic", "m"))
 
     def fake_stream(system, user, *a, **k):
@@ -293,7 +293,7 @@ def test_build_integration_carries_mission():
 
 def test_build_integration_carries_mission_only(monkeypatch):
     """A per-meeting mission ALONE (no callback/context_url/external_ref/brief)
-    must still build a session integration — a plain dashboard dispatch that only
+    must still build a session integration; a plain dashboard dispatch that only
     sets a mission would otherwise return None and silently drop the objective."""
     import types
 

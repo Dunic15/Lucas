@@ -8,14 +8,14 @@ The retrieval seam already exists (rag.py per-org index files merged into
 retrieve(org_id=...)); what never existed is the INGESTION side and a durable
 home for customer documents. These tables are that home:
 
-- ``knowledge_sources``      — an org's connected source (upload | drive)
-- ``knowledge_documents``    — one file/document inside a source
-- ``knowledge_document_versions`` — immutable extracted text per version
+- ``knowledge_sources``: an org's connected source (upload | drive)
+- ``knowledge_documents``: one file/document inside a source
+- ``knowledge_document_versions``: immutable extracted text per version
                                (new content ⇒ new version, dedup by checksum)
-- ``knowledge_chunks``       — retrieval units + a generated tsvector for
+- ``knowledge_chunks``: retrieval units + a generated tsvector for
                                keyword search (the FTS half of hybrid search)
-- ``knowledge_assignments``  — which avatars may retrieve a source
-- ``knowledge_sync_jobs``    — claim/lease ingestion jobs (the callback_outbox
+- ``knowledge_assignments``: which avatars may retrieve a source
+- ``knowledge_sync_jobs``: claim/lease ingestion jobs (the callback_outbox
                                worker pattern; nothing runs on the live path)
 
 The per-(org, avatar) index files that the live path ranks in memory are
@@ -23,7 +23,7 @@ REBUILT from these tables (ingest + boot), which closes the pre-M1 durability
 gap where org indexes died with the App Runner disk.
 
 Deliberate deviation from the no-DELETE grant convention: ``laura_app`` gets
-DELETE on ``knowledge_chunks`` (and only there) — deleting a source must
+DELETE on ``knowledge_chunks`` (and only there); deleting a source must
 remove retrievability, and chunks are derived data always rebuildable from
 their document version. Sources/documents themselves tombstone via status.
 

@@ -10,7 +10,7 @@ Blocks:
   2. Edits/commits that add print/logger calls on transcript content
      -> golden rule: transcripts are PII, memory only, never logged.
 
-Fail-open by design: if this guard crashes, the tool call proceeds — a broken
+Fail-open by design: if this guard crashes, the tool call proceeds; a broken
 guard must not brick the workflow.
 """
 from __future__ import annotations
@@ -77,7 +77,7 @@ def scan_bash(command: str) -> None:
 
 def scan_edit(tool_input: dict) -> None:
     path = tool_input.get("file_path", "")
-    # Only police files INSIDE this repo — scratchpads/temp files elsewhere are
+    # Only police files INSIDE this repo; scratchpads/temp files elsewhere are
     # not at risk of being committed or deployed.
     project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     if path and not os.path.abspath(path).startswith(os.path.abspath(project) + os.sep):

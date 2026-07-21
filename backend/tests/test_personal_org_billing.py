@@ -14,7 +14,7 @@ import pytest
 
 from app import billing, control_plane, entitlements, store
 
-PERSONAL_ORG = "u_3f9a1c"  # session-shaped identity — NOT a uuid
+PERSONAL_ORG = "u_3f9a1c"  # session-shaped identity. NOT a uuid
 
 
 def _explode(*a, **k):  # any engine touch for a personal org IS the old bug
@@ -38,7 +38,7 @@ def test_get_billing_degrades_for_personal_org(durable_on):
 
 
 def test_billing_summary_is_free_tier_not_500(durable_on, monkeypatch):
-    """The endpoint's worker: a personal org yields the free-tier summary —
+    """The endpoint's worker: a personal org yields the free-tier summary -
     before the fix this raised out of usage_summary/get_billing (a 500)."""
     data = billing._summary_for_org(PERSONAL_ORG, None)
     assert data["plan"] == "free"
