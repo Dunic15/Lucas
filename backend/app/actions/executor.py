@@ -185,6 +185,11 @@ def auto_execute_asana(org_id: str, actions: list) -> int:
     for item in actions or []:
         if not isinstance(item, dict):
             continue
+        if item.get("source") == "inferred":
+            # Petra's PROPOSED plan steps (goal decomposition) are suggestions,
+            # never commitments: they reach a tool only through a human Approve
+            # in the Action Centre — auto-push is for explicit asks only.
+            continue
         action = from_typed(item.get("typed"))
         if action is None or action.get("type") not in ASANA_ACTION_TYPES:
             continue

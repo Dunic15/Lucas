@@ -75,9 +75,17 @@ def _action_entry(action) -> dict:
             "done": bool(action.get("done") or action.get("status") == "done"),
             "typed": isinstance(action.get("typed"), dict)
             and bool(action["typed"].get("type")),
+            # Provenance (Petra's PM judgement, bounded): "explicit" = a stated
+            # commitment; "inferred" = a PROPOSED step decomposed from a spoken
+            # goal — rendered in the Action Centre's "Proposed" subsection with
+            # its parent goal + the verbatim excerpt it was inferred from.
+            "source": str(action.get("source") or "explicit")[:16],
+            "goal": str(action.get("goal") or "")[:200],
+            "inferred_from": str(action.get("inferred_from") or "")[:300],
         }
     return {"action_id": "", "item": str(action)[:300], "owner": "",
-            "unassigned": False, "gap": "", "done": False, "typed": False}
+            "unassigned": False, "gap": "", "done": False, "typed": False,
+            "source": "explicit", "goal": "", "inferred_from": ""}
 
 
 def _delivered(
@@ -102,15 +110,23 @@ def _delivered(
     return chips
 
 
-def _meeting_row(row: dict) -> dict:
-    """One artifact → one dashboard meeting row. Distilled fields only: the
-    transcript never leaves the store through this projection."""
+def _meeting_row(row: dict, include_transcript: bool = False) -> dict:
+    """One artifact → one dashboard meeting row. Distilled fields only by
+    default: the transcript leaves the store through this projection ONLY when
+    the org's explicit show_transcripts preference is ON (owner-gated summary
+    endpoint; default OFF preserves the historical posture)."""
     art = row.get("artifact") or {}
     email = art.get("follow_up_email") or {}
     actions = [_action_entry(a) for a in (art.get("actions") or [])[:12]]
     readiness = int(art.get("readiness_score") or 0)
     decisions_count = len(art.get("decisions") or [])
+    extra = (
+        {"transcript": str(art.get("transcript") or "")[:40000]}
+        if include_transcript
+        else {}
+    )
     return {
+        **extra,
         "bot_id": row.get("bot_id"),
         "saved_at": row.get("saved_at"),
         "avatar_id": art.get("avatar_id", ""),
@@ -404,9 +420,18 @@ def dashboard_summary(request: Request) -> JSONResponse:
             artifact_scope = settings.demo_org_id
     # Key-free SQLite remains a global read plus the legacy visibility filter.
     artifact_rows = store.list_artifacts(artifact_scope)  # newest first
+    # Transcript pane: org-level opt-in (default OFF — absent pref row). The
+    # pref is keyed to the caller's org; unscoped worlds fall to the Demo org.
+    show_transcripts = (
+        store.get_org_pref(caller_org or settings.demo_org_id, "show_transcripts")
+        == "1"
+    )
     meetings = [
         m
-        for m in (_meeting_row(r) for r in artifact_rows)
+        for m in (
+            _meeting_row(r, include_transcript=show_transcripts)
+            for r in artifact_rows
+        )
         if visible(m["org_id"])
     ]
 
@@ -680,6 +705,9 @@ def dashboard_summary(request: Request) -> JSONResponse:
             "avatars": avatar_rows,
             "live": live,
             "meetings": meetings[:60],
+            # Org preference switches the UI renders (Settings): today only the
+            # transcript pane toggle. Booleans only — never content.
+            "prefs": {"show_transcripts": show_transcripts},
             "stats": stats,
             "billing": billing,
             "connections": connections,
@@ -721,6 +749,30 @@ def dashboard_summary(request: Request) -> JSONResponse:
         }),
         headers=_NO_STORE,
     )
+
+
+@router.post("/dashboard/prefs/transcripts")
+async def set_transcript_pref(request: Request) -> JSONResponse:
+    """Owner toggles the meeting-view transcript pane for their org.
+
+    Org-level opt-in, default OFF (absent row). Gated exactly like the other
+    dashboard mutations: logged-in owner + same-origin, so the key-free demo
+    (no login) flips only the Demo org's own pane and a foreign page can't
+    flip it cross-site. Body: {"enabled": true|false}."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — malformed JSON is a client error
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    enabled = bool((body or {}).get("enabled"))
+    org = user["org_id"] if user else settings.demo_org_id
+    store.set_org_pref(org, "show_transcripts", "1" if enabled else "0")
+    return JSONResponse({"ok": True, "show_transcripts": enabled})
 
 
 @router.post("/dashboard/avatar/{avatar_id}/capability")

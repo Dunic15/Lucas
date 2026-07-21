@@ -231,6 +231,11 @@
   .rd .pc{font-family:var(--mono);font-size:.78rem;color:var(--dim);width:30px;text-align:right;}
   .detail td{background:var(--panel-2);padding:0;border-bottom:1px solid var(--line-soft);}
   .detail .inner{padding:14px 18px 16px;display:grid;grid-template-columns:1.4fr 1fr;gap:20px;}
+  .summary.tscript{max-height:260px;overflow-y:auto;white-space:pre-wrap;font-size:.8rem;color:var(--dim);padding-right:6px;}
+  .ac-sub-h{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:18px 0 8px;}
+  .ac-sub-note{font-size:.78rem;color:var(--faint);margin:-4px 0 10px;}
+  .ac-card.proposed{border-style:dashed;}
+  .ac-quote{font-size:.76rem;color:var(--dim);font-style:italic;margin:2px 0 4px;}
   @media (max-width:640px){ .detail .inner{grid-template-columns:1fr;} }
   .sm-h{font-family:var(--mono);font-size:.58rem;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-bottom:7px;}
   .summary{font-size:.9rem;line-height:1.55;}
@@ -958,6 +963,10 @@
       <div class="head"><div><h1>Settings</h1><div class="sub">Appearance, account, plan and security</div></div></div>
       <div class="settings">
         <div class="fset">
+          <div class="frow"><div><div class="t">Show transcripts</div><div class="h">Display the stored meeting transcript in the Meetings view (org-wide)</div></div>
+            <div class="seg" id="seg-transcripts"><button data-tx="0" class="on">Off</button><button data-tx="1">On</button></div></div>
+        </div>
+        <div class="fset">
           <div class="frow"><div><div class="t">Theme</div><div class="h">Dashboard appearance</div></div>
             <div class="seg" id="seg-theme"><button class="on" data-t="">Dark</button><button data-t="light">Light</button></div></div>
         </div>
@@ -1187,7 +1196,7 @@
         if(r.status===401){ return r.json().catch(function(){return {};}).then(function(j){ showGate(true, !!j.auth_enabled); throw new Error("401"); }); }
         showGate(false,false); return r.json();
       })
-      .then(function(d){ DATA=d; renderAll(d); if(d.user) loadBilling(); })
+      .then(function(d){ DATA=d; renderAll(d); syncTxToggle(); if(d.user) loadBilling(); })
       .catch(function(e){ if(String(e.message)!=="401") toast("Could not load: "+e.message,true); });
   }
   function loadBilling(){
@@ -1906,11 +1915,13 @@
         '<td class="when">'+fmtWhen(m.saved_at)+'</td><td class="dur">'+fmtDur(m.duration_seconds)+'</td>'+
         '<td class="r tnum">'+m.actions.length+'</td>'+
         '<td class="r"><div class="rd"><div class="track"><div class="fill'+(m.readiness_score<70?" low":"")+'" style="width:'+Math.max(0,Math.min(100,m.readiness_score))+'%"></div></div><span class="pc">'+(m.readiness_score||"—")+'</span></div></td></tr>'+
-        '<tr class="detail" data-d="'+i+'" hidden><td colspan="6"><div class="inner">'+
+        '<tr class="detail" data-d="'+i+'" hidden><td colspan="6"><div class="inner"'+(m.transcript?' style="grid-template-columns:1.2fr 1fr .7fr"':'')+'>'+
+        (m.transcript?'<div><div class="sm-h">Transcript</div><div class="summary tscript">'+esc(m.transcript)+'</div></div>':'')+
         '<div><div class="sm-h">AI summary</div><div class="summary">'+(m.summary?esc(m.summary):'<span style="color:var(--faint)">No summary captured.</span>')+'</div>'+
         (m.follow_up_subject?'<div class="sm-h" style="margin-top:12px">Follow-up email</div><div class="summary">'+esc(m.follow_up_subject)+'</div>':'')+'</div>'+
         '<div><div class="sm-h">Actions</div><div class="did">'+
-        (m.actions.length? m.actions.map(function(a){return '<div class="d'+(a.done?"":" attn")+'"><span class="ic">'+(a.done?"✓":"→")+'</span><span>'+esc(a.item)+ownerChip(a)+execChip(a)+apprBtn(a)+rejBtn(a)+'</span></div>';}).join("") : '<div class="empty" style="padding:6px 0;text-align:left">'+((m.saved_at&&(Date.now()/1000-m.saved_at)<180)?'Recap still processing — refresh in a moment.':'No actions captured.')+'</div>')+
+        (m.actions.length?'<div class="summary" style="margin-bottom:8px">'+m.actions.length+' action'+(m.actions.length>1?'s':'')+' from this meeting'+((m.actions.some(function(a){return a.source==="inferred";}))?' (incl. proposed plan steps)':'')+'</div><button class="btn primary" data-goto-actions="1">Open in Action Centre →</button>'
+          : '<div class="empty" style="padding:6px 0;text-align:left">'+((m.saved_at&&(Date.now()/1000-m.saved_at)<180)?'Recap still processing — refresh in a moment.':'No actions captured.')+'</div>')+
         (m.missing_steps.length?'<div class="sm-h" style="margin-top:12px">Missing steps</div>'+m.missing_steps.map(function(s){return '<div class="d attn"><span class="ic">!</span><span>'+esc(s.replace(/_/g," "))+'</span></div>';}).join(""):'')+
         '</div></div></td></tr>';
     }
@@ -1924,6 +1935,7 @@
         : '<tr><td colspan="6"><div class="empty">No meetings match.</div></td></tr>';
       $$("tr.row",tb).forEach(function(r){ r.addEventListener("click",function(){
         var dEl=tb.querySelector('tr.detail[data-d="'+r.getAttribute("data-i")+'"]'); if(dEl) dEl.hidden=!dEl.hidden; }); });
+      $$("button[data-goto-actions]",tb).forEach(function(b){ b.addEventListener("click",function(e){ e.stopPropagation(); go("actions"); }); });
       // Per-row Approve & run / Reject (live inside the expandable detail row).
       $$("button[data-approve]",tb).forEach(function(b){ b.addEventListener("click",function(e){ e.stopPropagation(); approveAction(b); }); });
       $$("button[data-reject]",tb).forEach(function(b){ b.addEventListener("click",function(e){ e.stopPropagation(); rejectAction(b); }); });
@@ -2562,7 +2574,7 @@
       box.innerHTML='<div class="empty">'+msg+'<br/><a data-goto="overview" style="cursor:pointer;text-decoration:underline">Send an avatar to a meeting</a></div>';
       return;
     }
-    box.innerHTML=rows.map(function(x){
+    function acCard(x){
       var a=x.a,m=x.m,s=stateOf(a);
       var ctl="";
       if(a.typed&&a.action_id&&bucketOf(a)==="attn"){
@@ -2573,9 +2585,12 @@
         var recUrl=((a.execution.detail||"").match(/https?:\/\/[^\s"'<>]+/)||[])[0]||"";
         if(recUrl) ctl='<a class="btn" style="text-decoration:none" href="'+esc(recUrl)+'" target="_blank" rel="noopener">Open receipt ↗</a>';
       }
-      return '<article class="ac-card">'+
+      var prov=(a.source==="inferred")
+        ?'<div class="ac-quote">Proposed by Petra'+(a.goal?' for goal: <b>'+esc(a.goal)+'</b>':'')+(a.inferred_from?' — inferred from: “'+esc(a.inferred_from)+'”':'')+'</div>'
+        :'';
+      return '<article class="ac-card'+(a.source==="inferred"?" proposed":"")+'">'+
         '<div class="ac-top">'+stateChipHTML(s)+
-        '<div class="ac-what"><div class="ac-item">'+esc(a.item)+ownerChip(a)+'</div>'+
+        '<div class="ac-what"><div class="ac-item">'+esc(a.item)+ownerChip(a)+'</div>'+prov+
         '<div class="ac-meta">'+avatarBadge(m.avatar_id,avNameOf(m.avatar_id))+'<span>'+esc(avNameOf(m.avatar_id))+'</span>'+
         '<span aria-hidden="true">·</span><span>'+esc(m.platform)+' meeting</span>'+
         '<span aria-hidden="true">·</span><span>'+fmtWhen(m.saved_at)+'</span></div>'+
@@ -2584,7 +2599,15 @@
         (a.action_id?('<button class="ac-open" data-acx="'+esc(a.action_id)+'" aria-expanded="false">View details ▾</button>'+
         '<div class="ac-details" data-acd="'+esc(a.action_id)+'" hidden></div>'):'')+
         '</article>';
-    }).join("");
+    }
+    var defRows=rows.filter(function(x){return x.a.source!=="inferred";});
+    var propRows=rows.filter(function(x){return x.a.source==="inferred";});
+    var html="";
+    if(defRows.length) html+='<div class="ac-sub-h">Definitive actions</div>'+defRows.map(acCard).join("");
+    if(propRows.length) html+='<div class="ac-sub-h">Proposed — goals &amp; intents</div>'+
+      '<div class="ac-sub-note">Steps Petra decomposed from goals you voiced. Nothing runs until you approve.</div>'+
+      propRows.map(acCard).join("");
+    box.innerHTML=html;
     wireAvatarImages();
     $$("#ac-list [data-approve]").forEach(function(b){ b.addEventListener("click",function(){ approveAction(b); }); });
     $$("#ac-list [data-reject]").forEach(function(b){ b.addEventListener("click",function(){ rejectAction(b); }); });
@@ -3158,6 +3181,17 @@
   $("#billing-upgrade").addEventListener("click",function(){openBilling("/billing/checkout",this,{plan:"solo"});});
   $("#billing-manage").addEventListener("click",function(){openBilling("/billing/portal",this,{});});
 
+  function syncTxToggle(){ var on=!!(DATA&&DATA.prefs&&DATA.prefs.show_transcripts);
+    $$("#seg-transcripts button").forEach(function(b){ b.classList.toggle("on",b.getAttribute("data-tx")===(on?"1":"0")); }); }
+  $$("#seg-transcripts button").forEach(function(b){ b.addEventListener("click",function(){
+    var want=b.getAttribute("data-tx")==="1";
+    fetch("/dashboard/prefs/transcripts",{method:"POST",headers:headers(),body:JSON.stringify({enabled:want})})
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,j:j}; }); })
+      .then(function(res){ if(!res.ok){ toast("Couldn't update the transcript setting.",true); return; }
+        if(DATA){ DATA.prefs=DATA.prefs||{}; DATA.prefs.show_transcripts=want; }
+        syncTxToggle(); toast(want?"Transcripts will show in the Meetings view.":"Transcript pane hidden.");
+        load(); })
+      .catch(function(){ toast("Network error.",true); }); }); });
   $$("#seg-theme button").forEach(function(b){ b.addEventListener("click",function(){
     $$("#seg-theme button").forEach(function(x){x.classList.remove("on");}); b.classList.add("on");
     var t=b.getAttribute("data-t");

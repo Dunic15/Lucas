@@ -1051,12 +1051,29 @@ translation counts (an Italian live capture and its English restatement are the 
 SAME action; re-listing it would execute it twice). Only add actions that are \
 genuinely new relative to that list.
 
+Separately from committed actions, detect GOALS: things a speaker WANTS to do \
+or is uncertain how to start ("I want to start a research project", "I need a \
+roadmap for X", "I should figure out Y") that never became concrete commitments \
+in the meeting. For each goal, act as a project manager and propose a SHORT \
+practical plan: 3-5 first steps that would genuinely move that goal forward. \
+Proposed steps are suggestions for the speaker to approve later — keep them \
+concrete but NEVER invent specifics the transcript does not support (no made-up \
+names, dates, tools, or amounts). Each goal needs a verbatim transcript \
+excerpt; if there is no supporting excerpt, do not emit the goal. A goal that \
+duplicates an actions[] entry must be omitted.
+
 Return ONLY a JSON object:
 {
-  "summary": "<3-5 sentence plain summary of what was discussed and decided>",
+  "summary": "<3-6 sentences, action-oriented: what the speaker(s) said they want to do, what was decided, what is still open or uncertain, and the recommended next steps — a readout someone can act on, not minutes>",
   "decisions": ["<each decision the group actually reached, one short line>"],
   "actions": [
     {"item": "<action>", "owner": "<name or 'UNASSIGNED'>", "deadline": "<stated deadline or ''>", "gap_type": "<owner|deadline|approval|document|blocker|none>", "evidence": "<exact supporting excerpt from the meeting transcript>"}
+  ],
+  "goals": [
+    {"goal": "<the intent in the speaker's own terms>", "evidence": "<exact supporting excerpt from the meeting transcript>",
+     "proposed_steps": [
+       {"item": "<concrete first step>", "owner": "<the speaker or 'UNASSIGNED'>", "deadline": ""}
+     ]}
   ],
   "risks": ["<each risk or unresolved blocker raised, one short line>"],
   "follow_up_email": {
@@ -1092,6 +1109,58 @@ def _scope_actions_to_transcript(artifact: dict, transcript_text: str) -> None:
         scoped.append(clean)
     artifact["actions"] = scoped
     artifact["checklist"] = scoped
+
+
+# Petra's PM judgement, bounded: at most this many goals, this many proposed
+# steps each. A rambling monologue must never become a 30-task board.
+_MAX_GOALS = 3
+_MAX_STEPS_PER_GOAL = 5
+
+
+def _absorb_goals(artifact: dict, transcript_text: str) -> None:
+    """Fold model-detected goals into actions[] as PROPOSED (inferred) items.
+
+    Provenance is the anti-hallucination contract: every surviving step carries
+    ``source: "inferred"``, its parent ``goal``, and the goal's verbatim
+    ``inferred_from`` transcript excerpt — the same deterministic evidence gate
+    as ``_scope_actions_to_transcript`` (no excerpt in the transcript, no goal).
+    Explicit actions are tagged ``source: "explicit"``. Inferred items are
+    proposals only: the executor's auto-run path skips them, so they can reach a
+    tool solely through a human Approve in the Action Centre.
+    """
+    for a in artifact.get("actions") or []:
+        if isinstance(a, dict):
+            a.setdefault("source", "explicit")
+    transcript = " ".join((transcript_text or "").split()).casefold()
+    absorbed: list[dict] = []
+    for goal in (artifact.pop("goals", None) or [])[:_MAX_GOALS]:
+        if not isinstance(goal, dict):
+            continue
+        goal_text = str(goal.get("goal") or "").strip()
+        quote = str(goal.get("evidence") or "").strip()
+        norm = " ".join(quote.split()).casefold()
+        if not goal_text or not norm or norm not in transcript:
+            continue  # ungrounded goal: drop, never guess
+        for step in (goal.get("proposed_steps") or [])[:_MAX_STEPS_PER_GOAL]:
+            if not isinstance(step, dict):
+                continue
+            item = str(step.get("item") or "").strip()
+            if not item:
+                continue
+            owner = str(step.get("owner") or "").strip() or "UNASSIGNED"
+            absorbed.append({
+                "item": item,
+                "owner": owner,
+                "deadline": str(step.get("deadline") or "").strip(),
+                "gap_type": "owner" if owner == "UNASSIGNED" else "none",
+                "source": "inferred",
+                "goal": goal_text,
+                "inferred_from": quote,
+            })
+    if absorbed:
+        merged = list(artifact.get("actions") or []) + absorbed
+        artifact["actions"] = merged
+        artifact["checklist"] = merged
 
 
 def _live_actions_block(live_actions: list[dict] | None) -> str:
@@ -1407,6 +1476,7 @@ def post_meeting(
             )
         else:
             _scope_actions_to_transcript(artifact, transcript_text)
+            _absorb_goals(artifact, transcript_text)
 
     return _finish_artifact(artifact, state)
 

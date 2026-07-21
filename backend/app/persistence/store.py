@@ -623,6 +623,18 @@ def _init_db() -> None:
                 updated_at REAL NOT NULL
             );
 
+            -- Small per-org preference switches (dashboard toggles), one row per
+            -- (org_id, key). First key: "show_transcripts" — whether the meeting
+            -- view displays the stored transcript pane (default OFF: absent row).
+            -- Values are short strings ("1"/"0"); never store content here.
+            CREATE TABLE IF NOT EXISTS org_prefs (
+                org_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (org_id, key)
+            );
+
             -- Per-avatar capability switches (dashboard toggles). One row per
             -- (avatar, capability) — "google" | "slack" — so each avatar can
             -- independently turn ON/OFF a capability the ORG connected once in
@@ -2215,6 +2227,36 @@ def get_avatar_brain_mode(avatar_id: str) -> str | None:
     with _LOCK, _connect() as conn:
         row = conn.execute(
             "SELECT brain_mode FROM avatar_brain_mode WHERE avatar_id = ?", (aid,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def set_org_pref(org_id: str, key: str, value: str) -> bool:
+    """Upsert one per-org preference switch (short string values only)."""
+    org = (org_id or "").strip()
+    k = (key or "").strip()
+    if not org or not k:
+        return False
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            "INSERT INTO org_prefs (org_id, key, value, updated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(org_id, key) DO UPDATE SET "
+            "value = excluded.value, updated_at = excluded.updated_at",
+            (org, k, str(value or ""), time.time()),
+        )
+    return True
+
+
+def get_org_pref(org_id: str, key: str) -> str | None:
+    """The org's stored preference value, or None when never set (caller
+    applies the default — e.g. show_transcripts defaults OFF)."""
+    org = (org_id or "").strip()
+    k = (key or "").strip()
+    if not org or not k:
+        return None
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT value FROM org_prefs WHERE org_id = ? AND key = ?", (org, k)
         ).fetchone()
     return row[0] if row else None
 
