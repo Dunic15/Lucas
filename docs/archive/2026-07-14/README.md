@@ -1,8 +1,8 @@
-# Archive — 2026-07-14 doc-consolidation pass
+# Archive: 2026-07-14 doc-consolidation pass
 
 Superseded roadmap / business-plan / session-handoff snapshots, moved here during
 the 2026-07-14 repo-hygiene pass. **Kept for history, not current.** Nothing here
-is authoritative — see the live docs instead:
+is authoritative; see the live docs instead:
 
 - **Current roadmap (Now/Next/Later):** [`../../product/roadmap.md`](../../product/roadmap.md)
 - **Current architecture:** [`../../ARCHITECTURE_CURRENT.md`](../../ARCHITECTURE_CURRENT.md)

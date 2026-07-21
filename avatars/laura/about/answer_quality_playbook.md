@@ -25,7 +25,7 @@ When the organization has connected knowledge sources (the Company Brain),
 assigned sources are retrieved alongside the avatar's own docs and cited
 the same way. The citation contract is unchanged: name the source, give
 the useful part, and say plainly when the sources do not cover the ask.
-Never present a Brain citation as personal memory — it is the customer's
+Never present a Brain citation as personal memory; it is the customer's
 document speaking.
 
 ## When to answer versus skip

@@ -36,8 +36,8 @@ curl -X POST http://127.0.0.1:8000/sessions/start \
 
 **Every avatar also gets its own email, for free.** The watched inbox
 (`CALENDAR_INVITE_EMAILS`) answers to plus-aliases: invite
-`laura.ai.122222+marcus@gmail.com` to a calendar event — or add it via Meet's
-"Add people" — and *marcus* joins instead of the default avatar. Bare address
+`laura.ai.122222+marcus@gmail.com` to a calendar event, or add it via Meet's
+"Add people", and *marcus* joins instead of the default avatar. Bare address
 or unknown tag → `DEFAULT_AVATAR_ID`.
 
 ## Field reference (`avatar.yaml`)
@@ -51,8 +51,8 @@ or unknown tag → `DEFAULT_AVATAR_ID`.
 | `persona_prompt` | yes | How the avatar introduces itself; injected into the system prompt. |
 | `anam_avatar_id` | no | Per-avatar face. Blank → global `ANAM_AVATAR_ID`. |
 | `elevenlabs_voice_id` | no | Per-avatar voice. Blank → global `ELEVENLABS_VOICE_ID`. |
-| `knowledge_packs` | no | List of OTHER avatar ids whose `knowledge/` this avatar also retrieves from (e.g. cedric reuses the `sff` pack) — packs live in one place, never copied. |
-| `talk_body` | no | `F` (default) or `M` — TalkingHead pose/gesture set on the /talk renderer. The 3D model is `frontend/<id>.glb`, falling back to `laura.glb`. |
+| `knowledge_packs` | no | List of OTHER avatar ids whose `knowledge/` this avatar also retrieves from (e.g. cedric reuses the `sff` pack); packs live in one place, never copied. |
+| `talk_body` | no | `F` (default) or `M`: TalkingHead pose/gesture set on the /talk renderer. The 3D model is `frontend/<id>.glb`, falling back to `laura.glb`. |
 | `drive_folder_id` | no | Google Drive folder read at session start (drive_client): its docs become part of the avatar's pre-meeting brief. Needs the `drive.readonly` scope on the connected Google account. |
 | `min_confidence` | no | Speak threshold 0–1. Blank → global `MIN_CONFIDENCE`. |
 | `speak_cooldown_seconds` | no | Quiet time after speaking. Blank → global default. |
@@ -60,6 +60,6 @@ or unknown tag → `DEFAULT_AVATAR_ID`.
 ## Knowledge docs
 
 Plain markdown. Headings become retrieval sections and are cited back to the
-team (e.g. *"per onboarding_sop.md — Approvals required"*). Keep one process
+team (e.g. *"per onboarding_sop.md: Approvals required"*). Keep one process
 concept per heading so citations stay precise. **No real PII** in committed
-docs — use synthetic examples.
+docs; use synthetic examples.

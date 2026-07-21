@@ -1,4 +1,4 @@
-# Cedric — Task Playbooks (common in-meeting asks)
+# Cedric: Task Playbooks (common in-meeting asks)
 
 **Process owner:** Ben (Cedric agent + integrations)
 **Applies to:** The most common "Cedric, can you..." requests in a meeting
@@ -7,7 +7,7 @@
 Every playbook below follows the same shape: a trigger phrase, what Cedric
 captures with `queue_action` right then, what happens once the card is
 approved in Slack, and what he says out loud in the meeting. Cedric never
-runs the connector action live — see `cedric_tools_and_actions.md` for the
+runs the connector action live; see `cedric_tools_and_actions.md` for the
 full capture-approve-execute contract.
 
 ## Send a follow-up email
@@ -23,7 +23,7 @@ requester; deadline if one was given ("before end of day").
 connector, and the sent message (or a link to it) posts back to the
 approval thread.
 
-**What I say:** "Got it — I'll draft that and get it out once we wrap.
+**What I say:** "Got it. I'll draft that and get it out once we wrap.
 You'll see it as a card in Slack before it actually sends."
 
 ## Schedule or reschedule a meeting
@@ -42,7 +42,7 @@ live.
 event and invites the attendees; the confirmed time posts back to the
 thread.
 
-**What I say:** "Friday works on the calendar I can see — I'll lock that in
+**What I say:** "Friday works on the calendar I can see. I'll lock that in
 as soon as we're done here."
 
 ## Create a Linear issue
@@ -57,7 +57,7 @@ named; the person named as owner (assignee).
 **On approval:** the `linear` connector creates the issue with that title,
 description, and assignee, and the issue link posts back to the thread.
 
-**What I say:** "Noted — I'll get that filed in Linear with [name] as the
+**What I say:** "Noted: I'll get that filed in Linear with [name] as the
 assignee once we wrap."
 
 ## Pull a Stripe revenue report
@@ -69,14 +69,14 @@ have."
 **Captured with queue_action:** action type `stripe_revenue_report`; the
 time range asked for; who requested it and where the summary should land
 (reply in Slack vs. a document). This one is capture-only even though it's
-a read, not a write — Cedric doesn't have live access to Stripe from inside
+a read, not a write. Cedric doesn't have live access to Stripe from inside
 the meeting, so he's honest that the number isn't something he can state on
 the spot.
 
 **On approval:** the `stripe` connector pulls the report and posts the
 summary (revenue, customer count, trend) to the thread.
 
-**What I say:** "I don't have that number live in the room — I'll pull the
+**What I say:** "I don't have that number live in the room. I'll pull the
 actual Stripe report right after this and drop it in Slack."
 
 ## Update HubSpot
@@ -90,7 +90,7 @@ actual Stripe report right after this and drop it in Slack."
 **On approval:** the `hubspot` connector applies the update and confirms
 the record was changed in the thread.
 
-**What I say:** "Got it — I'll log that against their record once we're
+**What I say:** "Got it. I'll log that against their record once we're
 done here."
 
 ## Share or create a document (Notion / Drive)
@@ -105,7 +105,7 @@ which existing doc to share; who it should be shared with.
 **On approval:** the `notion` connector drafts or updates the page (or the
 Drive share is applied) and the doc link posts back to the thread. Note:
 Cedric can already READ a shared Drive folder live if his brief includes
-one (see `about/cedric_capabilities.md`) — that's separate from creating or
+one (see `about/cedric_capabilities.md`); that's separate from creating or
 sharing a NEW doc, which always goes through this queued flow.
 
 **What I say:** "I'll draft that up and share it with them right after the
@@ -122,7 +122,7 @@ of; who for; when.
 **On approval:** the reminder is scheduled (typically as a Slack message at
 the target time) and confirmed in the thread.
 
-**What I say:** "I've got that — I'll remind you before it's due."
+**What I say:** "I've got that. I'll remind you before it's due."
 
 ## Summarize a Slack channel
 
@@ -133,11 +133,11 @@ this."
 **Captured with queue_action:** action type `slack_summarize`; the channel
 named; the time window (since when).
 
-**On approval — or live if already connected and low-risk:** the `slack`
+**On approval; or live if already connected and low-risk:** the `slack`
 connector pulls recent messages and returns a short summary. Because this
 is a read of a channel Cedric already has access to (not a new side effect),
 it's the one playbook most likely to come back quickly after the call
-rather than sit as a long-pending card — but it still surfaces as a normal
+rather than sit as a long-pending card; but it still surfaces as a normal
 approval card, since Cedric doesn't pull channel history live inside the
 meeting.
 
@@ -157,18 +157,18 @@ we wrap."
 A playbook is complete only when the Slack card was approved AND the
 connector's result (sent email, created event, filed issue, posted report,
 updated record, shared doc, scheduled reminder, or channel summary) posted
-back to the thread — not when Cedric merely confirmed it out loud in the
+back to the thread; not when Cedric merely confirmed it out loud in the
 meeting.
 
 ## Common gaps
 
-- Capturing WHAT to do but not WHO it's for in a multi-person room — always
+- Capturing WHAT to do but not WHO it's for in a multi-person room; always
   anchor the action to a named owner before queuing it (see
   `about/cedric_meeting_conduct.md`).
 - Assuming a report or lookup (Stripe, HubSpot, Slack summary) happened live
-  just because Cedric answered fluently — reads still route through the
+  just because Cedric answered fluently; reads still route through the
   queued flow unless explicitly marked live-safe above.
 - Letting an approval card sit unapproved and assuming the task is handled
   because Cedric "said he'd do it."
-- Requesting an action on a tool that isn't connected yet — the card will
+- Requesting an action on a tool that isn't connected yet: the card will
   come back as "not connected," not silently fail.

@@ -6,7 +6,7 @@ dashboard) da solo, e tutto è configurato per SFF Studio._
 
 ## Legenda: chi può farlo
 - 🤖 = Claude/Codex (autonomo, "Ben ok a fixare tutto")
-- 👤 = Owner (Duccio) — azione manuale / decisione / pagamento
+- 👤 = Owner (Duccio): azione manuale / decisione / pagamento
 - 🌐 = Gate esterno (Google/Slack review, non aggirabile da noi)
 
 ---
@@ -25,31 +25,31 @@ dashboard) da solo, e tutto è configurato per SFF Studio._
 
 ---
 
-## FASE 1 — "demo che gira per un workspace configurato" (giorni: ~1, quasi tutto pronto)
+## FASE 1: "demo che gira per un workspace configurato" (giorni: ~1, quasi tutto pronto)
 1. 🤖/👤 **Slack Interactivity URL** (staging + prod) → il bottone Approve umano scatta.
    *api.slack.com → app → Interactivity → `…/api/slack/interactions`.* Config app = Ben,
    ma posso guidarlo click-by-click.
 2. 🤖 **Prod promotion Cedric**: merge `staging`→`main` (fix gmail + #17 + #18 + test),
    poi `vercel --prod` (👤 Ben lancia, o mi dà VERCEL token prod). Poi 🤖 flip URL Laura
    `SURFACE_*`/`CEDRIC_ORGS_URL` a meet-cedric.com + re-provision.
-3. ✅ **Anthropic (Cedric) ricaricato** — fatto 2026-07-12. Path ricco sbloccato.
+3. ✅ **Anthropic (Cedric) ricaricato**: fatto 2026-07-12. Path ricco sbloccato.
 
-## FASE 2 — "un cliente ESTERNO si registra da solo" (giorni: 3-7, gate esterni)
+## FASE 2: "un cliente ESTERNO si registra da solo" (giorni: 3-7, gate esterni)
 4. 🌐 **Google OAuth fuori da Testing**: verificare/pubblicare l'app (o "Internal" nel
    Workspace SFF → tutti gli @sffstudio.com entrano senza allow-list). *Serve admin
    Workspace SFF; la verifica Google può richiedere giorni.*
 5. 🌐 **App Slack Cedric distribuibile**: perché il cliente faccia "Add to Slack" sul SUO
    Slack (non il playground). Config pubblica + eventuale review Slack.
-6. ✅ **Crediti Recall** ricaricati — fatto 2026-07-12. Minuti meeting reali coperti.
+6. ✅ **Crediti Recall** ricaricati: fatto 2026-07-12. Minuti meeting reali coperti.
 7. 🤖 **Test end-to-end su un workspace fresco**: nuovo utente → Add-to-Slack → connette
    Gmail → dispatch → azione → esecuzione. (Verifica il flusso #17 su tenant vergine.)
 
-## FASE 3 — "pronto per SFF Studio" (parallelo)
+## FASE 3: "pronto per SFF Studio" (parallelo)
 8. 🤖 **Dominio pulito** `app.lauravatar.com` (App Runner custom domain + Cloudflare DNS).
 9. 👤+🤖 **Rotazione chiavi** esposte (Cerebras/Anthropic/ElevenLabs/Recall) → 🤖 aggiorno SSM.
-10. 🤖 **Avatar conversazione multi-persona** (vedi sotto — lavoro prodotto continuo).
+10. 🤖 **Avatar conversazione multi-persona** (vedi sotto: lavoro prodotto continuo).
 
-## FASE 4 — scala oltre i primi utenti (dopo)
+## FASE 4: scala oltre i primi utenti (dopo)
 11. 🤖 **Multi-tenancy vera** (Postgres/RLS al posto di SQLite+litestream).
 12. 🤖 Osservabilità, rate-limit per-org, billing reale.
 

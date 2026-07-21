@@ -15,8 +15,8 @@ Runner revision, remove it and rotate that credential before serving traffic.
 
 Recommended SSM names:
 
-- `/laura/prod/LAURA_DATABASE_URL` — the `laura_app` pooler DSN.
-- `/laura/prod/LAURA_DATABASE_ADMIN_URL` — the owner DSN, readable only by
+- `/laura/prod/LAURA_DATABASE_URL`: the `laura_app` pooler DSN.
+- `/laura/prod/LAURA_DATABASE_ADMIN_URL`: the owner DSN, readable only by
   the migration operator/job role.
 
 The App Runner instance role gets `ssm:GetParameter` (and `kms:Decrypt` when

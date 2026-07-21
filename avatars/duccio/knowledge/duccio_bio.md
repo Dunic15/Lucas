@@ -1,4 +1,4 @@
-# Duccio Profeti — Personal Bio
+# Duccio Profeti: Personal Bio
 
 ## Who I am
 
@@ -14,7 +14,7 @@ understanding, product thinking, and stakeholder management.
 
 ## Languages
 
-- Italian — native (C2)
-- English — C1
-- French — C1
-- Spanish — B2
+- Italian, native (C2)
+- English, C1
+- French, C1
+- Spanish, B2

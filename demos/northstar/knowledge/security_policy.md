@@ -7,7 +7,7 @@
 The Northstar Platform stores workflow configuration, task metadata, and
 status. It does **not** store the customer's production records; those remain in
 the customer's own systems. During onboarding, integrations use **sandbox**
-credentials only — never production credentials.
+credentials only; never production credentials.
 
 ## Two-person approval
 

@@ -1,6 +1,6 @@
 > **Archived:** this document may be stale and is kept only for reference.
 
-# Prompt for Claude Code — Build a startup "operating team" of agents for Laura
+# Prompt for Claude Code: Build a startup "operating team" of agents for Laura
 
 > **How to use:** Open Claude Code in the root of the Laura repo and paste
 > everything inside the fenced block below as a single message. It tells Claude
@@ -8,14 +8,14 @@
 > code review + backend/infra, growth/GTM + market intel, fundraising/finance)
 > under `.claude/agents/`, plus a shared context file they all read. It is
 > deliberately verbose so the generated agents are grounded in Laura's *real*
-> stack and constraints — not generic boilerplate.
+> stack and constraints; not generic boilerplate.
 
 ---
 
 ```text
 You are setting up the "operating team" for a pre-seed startup called Laura,
 whose codebase you are sitting inside. Your job in THIS session is NOT to build
-product features — it is to author a set of specialized Claude Code subagents
+product features; it is to author a set of specialized Claude Code subagents
 (and one shared context file) that I can call on repeatedly to run the company:
 product, engineering quality, growth/market, and fundraising/finance.
 
@@ -27,7 +27,7 @@ Read these first and build an accurate mental model. Do not skip:
 - docs/*.md               (FREE_TIER, DEMO, DEPLOY, CALENDAR, LATENCY_OPTIMIZATION, AWS_MIGRATION_ASSESSMENT)
 - backend/app/*.py        (main, brain, llm, rag, embeddings, decision, recall_client, anam_client, store, config)
 - avatars/README.md and avatars/laura/*   (the editable "add an avatar = add a folder" surface)
-- .claude/agents/*.md     (existing helper agents: avatar-author, backend-tester, demo-runner — match their style)
+- .claude/agents/*.md     (existing helper agents: avatar-author, backend-tester, demo-runner; match their style)
 - Run `git log --oneline -40` to understand how the product evolved.
 
 Key facts you must internalize (verify against the code, correct me if the code disagrees):
@@ -50,13 +50,13 @@ Key facts you must internalize (verify against the code, correct me if the code 
     face-SDK embed, recall_client function signatures).
   * The offline DEMO must always run with ZERO API keys in free stub/hash mode.
   * No secrets in git (.env is gitignored; only .env.example is tracked).
-  * Synthetic, audit-safe data only in avatars/*/knowledge — no real PII/customers.
+  * Synthetic, audit-safe data only in avatars/*/knowledge: no real PII/customers.
   * Per-minute avatar billing: sessions MUST be ended to stop the Recall+Anam meter.
-  * Transcripts are PII — kept in memory only, never logged.
+  * Transcripts are PII: kept in memory only, never logged.
 
 === STEP 1: CREATE A SHARED CONTEXT FILE ===
 
-Write `.claude/CONTEXT.md` — a one-screen "company brief" that every agent below
+Write `.claude/CONTEXT.md`: a one-screen "company brief" that every agent below
 is told to read first. Include: the one-line pitch, the ICP hypothesis (who feels
 the pain of "the one person who knows the process isn't in the meeting"), the
 current stage (working demo + live AWS test backend, pre-revenue), the vendor
@@ -90,7 +90,7 @@ Create these agents:
      demo's zero-key guarantee.
 
 2) code-reviewer  (model: sonnet)
-   - Reviews a diff/PR/branch for correctness, security, latency, and — above all —
+   - Reviews a diff/PR/branch for correctness, security, latency, and, above all,
      whether it violates the live-meeting integration CONTRACT (CODEX.md) or the
      "no secrets in git" / "always end sessions" rules. Flags N+1s, blocking calls
      on the live path (first-token latency is the product), and PII leaks into logs.
@@ -111,7 +111,7 @@ Create these agents:
      into words a buyer feels. Runs lightweight funnel thinking (call Laura into a
      meeting → aha → team adoption). Writes copy/positioning to docs/gtm/ (create it).
    - Anchors on Laura's wedge: a grounded, cited, VERTICAL process expert that speaks
-     only when called — vs. passive notetakers (Otter/Fireflies/MeetGeek) and the
+     only when called; vs. passive notetakers (Otter/Fireflies/MeetGeek) and the
      incumbents moving in (Zoom Zoomie, MS Teams Facilitator). MUST NOT fabricate
      traction, testimonials, or metrics.
 
@@ -122,13 +122,13 @@ Create these agents:
      plumbing), and where Laura's defensibility actually lives (knowledge
      ingestion + answer accuracy + verticalization, NOT the plumbing). Uses web
      search when available; otherwise reasons from provided material and labels
-     assumptions. MUST NOT present guesses as facts — cite or caveat.
+     assumptions. MUST NOT present guesses as facts; cite or caveat.
 
 6) fundraise-narrative  (model: opus)
    - Builds and maintains the investor story: problem, why-now, wedge, moat,
      10-slide deck outline, and a crisp market-sizing (TAM/SAM/SOM) with stated
      assumptions. Drafts monthly investor-update templates. Writes to docs/fundraise/
-     (create it). MUST NOT invent numbers — every figure is either sourced or
+     (create it). MUST NOT invent numbers; every figure is either sourced or
      clearly flagged as an assumption to validate.
 
 7) finance-unit-economics  (model: sonnet)
@@ -137,7 +137,7 @@ Create these agents:
      contribution-margin model (cost per meeting-minute, break-even seats, gross
      margin at various price points) as a spreadsheet or markdown table in
      docs/fundraise/unit-economics.md. Flags the latency/cost/quality tradeoff of
-     the Groq-vs-Claude brain choice. MUST NOT overstate margins — show the inputs.
+     the Groq-vs-Claude brain choice. MUST NOT overstate margins; show the inputs.
 
 === STEP 3: WIRE IT TOGETHER ===
 
@@ -151,7 +151,7 @@ Create these agents:
 
 When done, print: the files you created, a one-line description of each agent, and
 3 example prompts I could type to invoke them (one product, one review, one GTM/
-fundraise). Do NOT commit or push — leave everything staged for me to review.
+fundraise). Do NOT commit or push; leave everything staged for me to review.
 
 Constraints for THIS setup session: create only markdown agent/context files and
 the docs/ subfolders (empty or with a stub README). Do not modify any backend
@@ -170,5 +170,5 @@ outside .claude/ and docs/.
 - If you later want operational agents too, add to STEP 2: a `support-triage`
   agent (turns user issues into avatar-knowledge gaps), a `sales-outreach` agent,
   or a `data-analyst` agent once you have usage events.
-- Keep `.claude/CONTEXT.md` updated as the single source of truth — every agent
+- Keep `.claude/CONTEXT.md` updated as the single source of truth; every agent
   reads it, so one edit propagates to the whole team.

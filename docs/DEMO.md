@@ -2,7 +2,7 @@
 
 Two ways to show this off.
 
-## Path A — Free / offline (no keys, ~2 min)
+## Path A: Free / offline (no keys, ~2 min)
 
 The value pitch without touching a single paid vendor.
 
@@ -15,17 +15,17 @@ uvicorn backend.app.main:app --port 8000
 
 Open **http://127.0.0.1:8000** and walk through:
 
-1. **Ask the avatar** — e.g. *"What approvals are required before IT provisions
+1. **Ask the avatar**: e.g. *"What approvals are required before IT provisions
    access?"* → a grounded answer with the source document cited and a confidence
    bar. Ask something not in the docs → the avatar declines instead of hallucinating.
-2. **Post-meeting artifact** — click **Load sample → Analyze meeting**. You get a
+2. **Post-meeting artifact**: click **Load sample → Analyze meeting**. You get a
    summary, a checklist with flagged gaps (missing approval / owner / deadline),
    and a draft follow-up email.
 
 Talking points:
 - The brain answers **only** from `avatars/laura/knowledge/*.md`, and cites.
 - Adding an avatar = adding a folder (`avatars/README.md`). No code.
-- This same brain drives the live meeting avatar — the demo just skips the face.
+- This same brain drives the live meeting avatar: the demo just skips the face.
 
 Upgrade the answer quality live by pasting `ANTHROPIC_API_KEY` into `.env` and
 restarting; the header flips from "free offline mode" to the Claude model.
@@ -36,7 +36,7 @@ python backend/scripts/ask.py "Who approves elevated access?"
 python backend/scripts/simulate.py       # transcript -> artifact JSON
 ```
 
-## Path B — Live meeting (trials/paid)
+## Path B: Live meeting (trials/paid)
 
 A real avatar face joins a real call.
 

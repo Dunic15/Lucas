@@ -1,7 +1,7 @@
-# Browser B1 — Visual Eyes
+# Browser B1: Visual Eyes
 
 **Status:** implemented on `claude/browser-b0-visual-eyes` (stacked on Browser
-B0 PR #275). **Additive** to B0 — no parallel observation/planner/policy/
+B0 PR #275). **Additive** to B0; no parallel observation/planner/policy/
 session/approval/receipt/execution system. All new flags default **false**;
 with them off, B0 behaviour is byte-identical. Last reviewed: 2026-07-17.
 
@@ -48,7 +48,7 @@ stays deferred.
   post-action `verify_expectation` (B0, reused).
 - **`planner.py`**: `VisualPlanner.propose` gains keyword-only
   `previous_result` / `allowed_operations` / `budget` / `screenshot` (B0's
-  positional `(observation, goal)` unchanged — no shim). `FakeVisualPlanner`
+  positional `(observation, goal)` unchanged; no shim). `FakeVisualPlanner`
   covers every scenario (visual-select, wrong-target, low-confidence, stale,
   malformed, unknown-op, guarded, blocked, finish, script).
 - **`multimodal.py`**: `MultimodalPlanner` (OpenAI computer-use by config),
@@ -59,7 +59,7 @@ stays deferred.
   the byte-identical `classify`); `resolve_coordinate` (hit-test).
 - **`coordinator.py`**: the bounded observe→plan→validate→policy→execute→verify
   loop, composed **purely** from `operator.perceive` + `operator.issue_command`
-  + `operator.get_session` — never a provider/DAL/second-execution path. A
+  + `operator.get_session`: never a provider/DAL/second-execution path. A
   guarded step ends the run as `awaiting_approval` (never polls/self-approves).
 - **`operator.py`**: coordinate resolution + stale-screen + confidence gate
   before dispatch; `wait`/`inspect`/`go_back` verbs; `perceive()` (read that
@@ -91,13 +91,13 @@ BROWSER_COORD_MAX_MODEL_CALLS=16
 
 ## Real-provider smoke (the ONLY real-pixels acceptance gate)
 
-`backend/scripts/browser_b1_smoke.py` — refuses to run and prints **UNPROVEN**
+`backend/scripts/browser_b1_smoke.py`: refuses to run and prints **UNPROVEN**
 (exit 2) unless all B1 flags + `BROWSERBASE_API_KEY`/`BROWSERBASE_PROJECT_ID` +
 a planner key + `BROWSER_B1_SMOKE_URL` (a public page you trust) are set. It
 proves, on a real browser: a real screenshot observation, ≥3 multimodal
 navigation steps, one guarded operation, and post-action visual verification,
 inside the bounded coordinator with the domain allowlist enforced. It records
-model/provider/steps/replans/latency/cost — **only if it actually ran**.
+model/provider/steps/replans/latency/cost: **only if it actually ran**.
 Screenshots stay in memory (never written to disk or logs).
 
 ```
@@ -107,8 +107,8 @@ BROWSER_VISUAL_PLANNER_ENABLED=true \
 python3 backend/scripts/browser_b1_smoke.py
 ```
 
-**Run record — 2026-07-20 (PROVEN):** provider `browserbase` + planner
-`anthropic` / `claude-opus-4-8` (reusing the prod `ANTHROPIC_API_KEY` — no
+**Run record: 2026-07-20 (PROVEN):** provider `browserbase` + planner
+`anthropic` / `claude-opus-4-8` (reusing the prod `ANTHROPIC_API_KEY`: no
 OpenAI key). Target `https://example.com`, demo org. Real screenshot
 15,362 bytes (digest `1054c33efcb0`), coordinator outcome `finished`,
 steps=0, replans=0, model_calls=1, 1,577 in / 174 out tokens, 13.3 s
@@ -121,5 +121,5 @@ navigation run on a richer allowlisted page has not been recorded yet.
 
 Real approved external writes (behind the real-DOM gate), meeting-lifecycle
 autostart, human takeover, authenticated profiles, the dashboard connection
-(the later MVP integration branch — `frontend/dashboard.html` and PR #274 are
+(the later MVP integration branch. `frontend/dashboard.html` and PR #274 are
 untouched).

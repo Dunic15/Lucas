@@ -1,21 +1,21 @@
-# Laura photoreal avatar — GPU track (Stage 2)
+# Laura photoreal avatar: GPU track (Stage 2)
 
 Turns Laura photorealistic: a GPU EC2 box runs **MuseTalk** (open source) to
 lip-sync a real-looking reference face to her TTS audio, streamed into
 `frontend/photoreal.html`, which Recall renders as the bot camera. Brain, TTS,
-and all meeting logic stay on the App Runner backend — this box ONLY renders
+and all meeting logic stay on the App Runner backend; this box ONLY renders
 the face, so it runs (and bills) only during meetings.
 
 ## Status / what's already prepared (2026-07-06)
 
 | Piece | State |
 |---|---|
-| GPU quota (the blocker) | **Requested** (8 vCPUs, req id `5e206c5f…AiMv1Gxw`) — status was `CASE_OPENED` |
+| GPU quota (the blocker) | **Requested** (8 vCPUs, req id `5e206c5f…AiMv1Gxw`); status was `CASE_OPENED` |
 | Security group | `sg-0515115a1c3a13a9d` (8080 open) |
 | IAM role/profile | `laura-gpu-role` / `laura-gpu-profile` (SSM-managed, no SSH) |
 | Launch template | **`laura-gpu`** (`lt-03496053f2de60222`): DLAMI Ubuntu 22.04 + driver, g5.xlarge, 120GB gp3 |
-| Streaming server | `gpu/server.py` — stub engine tested end-to-end; MuseTalk engine seam ready |
-| Page | `frontend/photoreal.html` — same speak contract as talk.html |
+| Streaming server | `gpu/server.py`, stub engine tested end-to-end; MuseTalk engine seam ready |
+| Page | `frontend/photoreal.html`, same speak contract as talk.html |
 | Reference face | `gpu/assets/reference.jpg` = PLACEHOLDER (3D render). Swap for an AI-generated photoreal portrait (no real person → no likeness issues) |
 
 ## Launch day (when the quota is APPROVED)
@@ -34,20 +34,20 @@ aws service-quotas get-requested-service-quota-change \
 #      (aws ssm send-command with AWS-RunShellScript, files inlined/base64)
 # 4. MODE=stub bash setup.sh          -> verify the transport end-to-end first
 # 5. MODE=musetalk bash setup.sh      -> weights download + real engine
-#    wire musetalk_adapter.py (thin wrapper over MuseTalk realtime inference —
+#    wire musetalk_adapter.py (thin wrapper over MuseTalk realtime inference -
 #    expect a tuning session: chunk size, fps, face-crop box)
 # 6. TLS for the browser: Cloudflare DNS record gpu.lauravatar.com (proxied)
 #    -> wss://gpu.lauravatar.com/stream terminates TLS at Cloudflare, ws to :8080
 # 7. backend env: GPU_STREAM_URL=wss://gpu.lauravatar.com/stream, then
 #    AVATAR_PAGE=photoreal to flip meetings onto it (talk.html stays fallback)
 # 8. done testing?  ./stop.sh   (GPU idle = money; same golden rule as the
-#    Recall meter — but see Cost controls: the box also stops itself)
+#    Recall meter, but see Cost controls: the box also stops itself)
 ```
 
-## Cost controls (issue #3) — the box must NEVER be always-on
+## Cost controls (issue #3), the box must NEVER be always-on
 
 The GPU runs **only during a meeting or demo window**. Four layers make sure of
-it — each one alone is enough to stop the meter:
+it; each one alone is enough to stop the meter:
 
 | Layer | What | When it fires |
 |---|---|---|
@@ -72,12 +72,12 @@ aws iam put-role-policy --role-name LauraAppRunnerInstanceRole \
   --policy-document file://gpu/iam-backend-gpu-policy.json
 ```
 
-Keep the box **stopped, not terminated** — autostart can only wake a stopped
+Keep the box **stopped, not terminated**: autostart can only wake a stopped
 instance. Boot ~90s: calendar-scheduled joins hide it; instant Gmail joins run
 on the static portrait until the stream connects (fallbacks below).
 
-**Budget safety net (recommended):** a monthly EC2 budget alert at ~$50 —
-about 50 GPU-hours, far beyond normal meeting use — emails you if some path
+**Budget safety net (recommended):** a monthly EC2 budget alert at ~$50 -
+about 50 GPU-hours, far beyond normal meeting use; emails you if some path
 above ever fails:
 
 ```bash
@@ -91,7 +91,7 @@ aws budgets create-budget --account-id 836739852304 \
 ```
 
 The boot TTL doubles as the daily-runtime guard: one boot can never exceed its
-TTL, so runaway cost requires something restarting the box in a loop — which
+TTL, so runaway cost requires something restarting the box in a loop; which
 the budget alert catches.
 
 **Safe metrics only:** `GET :8080/metrics` → uptime, actual FPS, first-frame
@@ -106,7 +106,7 @@ No transcript text or user content is ever logged or exported (PII rule).
 
 ## Cost
 g5.xlarge $1.006/hr eu-central-1 → **~$0.017/min of meeting**, $0 stopped.
-(Keyframe Labs, the commercial alternative: $0.06/min, zero ops — the fallback
+(Keyframe Labs, the commercial alternative: $0.06/min, zero ops; the fallback
 if this track stalls.)
 
 ## Protocol (page <-> GPU server)

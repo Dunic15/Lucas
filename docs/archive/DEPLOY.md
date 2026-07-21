@@ -1,11 +1,11 @@
 > **Archived:** this document may be stale and is kept only for reference.
 
-# Deploy — get a permanent URL (kill the quick-tunnel)
+# Deploy: get a permanent URL (kill the quick-tunnel)
 
 The `cloudflared` quick tunnel gets a **new random URL every restart**, which
 breaks `PUBLIC_BASE_URL` and any webhooks. For real use, pick ONE permanent URL.
 
-## Option A — Deploy the backend (recommended)
+## Option A: Deploy the backend (recommended)
 A container host gives you a stable `https://…` URL and runs 24/7.
 
 **Current AWS App Runner backend:**
@@ -37,7 +37,7 @@ using it) the **calendar webhook** at:
 - `https://YOUR_URL/webhooks/recall`
 - `https://YOUR_URL/webhooks/recall-calendar`
 
-## Option B — Cloudflare *named* tunnel (keep running locally, stable URL)
+## Option B: Cloudflare *named* tunnel (keep running locally, stable URL)
 Uses your **Cloudflare $100k credits** + a domain. One-time:
 ```bash
 cloudflared tunnel login                      # authorize (opens browser)
@@ -48,4 +48,4 @@ cloudflared tunnel run --url http://localhost:8000 laura
 Set `PUBLIC_BASE_URL=https://laura.yourdomain.com`. This URL never changes.
 
 ## Local, non-permanent (what `./scripts/serve.sh` does)
-Fine for quick demos only — the URL changes each run.
+Fine for quick demos only; the URL changes each run.

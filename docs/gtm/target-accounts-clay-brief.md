@@ -1,8 +1,8 @@
-# Laura — Target Account Brief (Clay-ready, multi-niche)
+# Laura: Target Account Brief (Clay-ready, multi-niche)
 
 > Paste each niche's "Clay search prompt" into Clay's AI company finder (or feed
 > as criteria to `find-and-enrich-company` / `find-and-enrich-list-of-contacts`
-> once Clay or Apollo is connected). Run one niche at a time — pull a batch,
+> once Clay or Apollo is connected). Run one niche at a time; pull a batch,
 > layer contact enrichment, test outreach, then move to the next niche.
 
 ## Global settings (apply to every niche)
@@ -32,7 +32,7 @@
 
 ---
 
-## Niche 1 — SaaS / product-led companies (10–300 employees)
+## Niche 1: SaaS / product-led companies (10–300 employees)
 
 **Why first:** closest match to Laura's already-built process templates
 (`customer_onboarding`, `implementation_access`) and the internally validated
@@ -61,7 +61,7 @@ turns into churn.
 
 ---
 
-## Niche 2 — Consulting & digital transformation firms (10–500 employees)
+## Niche 2: Consulting & digital transformation firms (10–500 employees)
 
 **Clay search prompt:**
 > Find strategy consulting, innovation consultancy, or digital transformation
@@ -75,7 +75,7 @@ turns into churn.
 > service is one-off delivery with minimal recurring meetings.
 
 **Pain hypothesis:** decision-quality gaps in recurring steering/status
-calls — "we'll decide next time" repeated across sessions, no clear action
+calls: "we'll decide next time" repeated across sessions, no clear action
 owner, client asks "what did we agree" a week later.
 
 **Personalization angle:** number of concurrent client engagements (more
@@ -84,7 +84,7 @@ published case studies on transformation projects.
 
 ---
 
-## Niche 3 — Marketing / creative / branding / design agencies
+## Niche 3: Marketing / creative / branding / design agencies
 
 **Clay search prompt:**
 > Find marketing, creative, branding, or design agencies with 10–300
@@ -104,7 +104,7 @@ deadlines or scope creep with no record of client sign-off.
 
 ---
 
-## Niche 4 — HR, recruiting & talent agencies
+## Niche 4: HR, recruiting & talent agencies
 
 **Clay search prompt:**
 > Find HR consultancies, recruiting agencies, or talent/staffing firms with
@@ -128,7 +128,7 @@ slips).
 
 ## Suggested sequencing
 
-Run **Niche 1** first — pull 20–30 companies, layer contact enrichment, send
+Run **Niche 1** first; pull 20–30 companies, layer contact enrichment, send
 a small test batch of outreach. Only expand to niches 2–4 once Niche 1's
 reply data gives a read on messaging. This also lets you A/B the "readiness
 score" pitch vs. the "decision follow-through" pitch across different buyer
@@ -136,7 +136,7 @@ psychologies before spending across all four niches at once.
 
 ## Next step for named contacts
 
-This brief is company/criteria-level by design — it doesn't invent names,
+This brief is company/criteria-level by design; it doesn't invent names,
 LinkedIn URLs, or emails. Connect **Clay** or **Apollo.io** (surfaced as
 connectable in this chat) so real, verified contacts and emails can be pulled
 against these criteria per niche.

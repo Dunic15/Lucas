@@ -1,4 +1,4 @@
-# Acme Robotics — Account Brief
+# Acme Robotics: Account Brief
 
 > SYNTHETIC DEMO DATA. Acme Robotics is a fictional customer. No real customer
 > data.
@@ -25,7 +25,7 @@ and the mutual success plan is signed.
 
 Data Integration is the most common place for an onboarding to stall, and with a
 go-live target of **2026-08-15** the blocker puts the timeline at risk. Under the
-*Escalation Policy* this is **P1 — go-live at risk**.
+*Escalation Policy* this is **P1; go-live at risk**.
 
 ## What good looks like next
 
@@ -35,7 +35,7 @@ can proceed to field mapping.
 
 ## Systems in scope
 
-- Warehouse-management system (WMS) — the long pole for a robotics manufacturer.
+- Warehouse-management system (WMS): the long pole for a robotics manufacturer.
 - ERP.
 - Ticketing.
 

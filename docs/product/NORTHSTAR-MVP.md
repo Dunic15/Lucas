@@ -1,8 +1,8 @@
-# Northstar MVP — final integration
+# Northstar MVP: final integration
 
 The integration branch (`claude/demo-mvp-integration`) that combines the
 completed **Browser B1 Visual Eyes**, **Dashboard Control Center** and
-**Northstar synthetic company** into one testable Laura MVP. Additive only —
+**Northstar synthetic company** into one testable Laura MVP. Additive only -
 no second action / RAG / browser / planner / demo system. All integration
 flags default **false**; with them off, production behaviour is byte-identical.
 Cedric PR #41 is untouched. Last reviewed: 2026-07-17.
@@ -27,7 +27,7 @@ principal + meeting + avatar & overlay version + demo def/version + B1 session
 + allowed domain + clamped budgets).
 5. Laura grounds Northstar + Acme through **ContextResolver** (cited).
 6–8. The B1 coordinator drives the **northstar** browser provider; the
-**visual-only** onboarding target (the amber, 2nd node — text-ambiguous across
+**visual-only** onboarding target (the amber, 2nd node; text-ambiguous across
 all five) is chosen by visual grounding, not text.
 9. Deterministic checkpoint narration cites the Northstar source, on the
 existing speak queue.
@@ -48,7 +48,7 @@ duplicate**.
 | Guarded follow-up → canonical action; **reject = 0 writes**; **approve = exactly-once** + re-checks + product write + post-action verification + receipt; **replay = no dup** | ✅ proven, key-free |
 | Dashboard state mapping; honestly-disabled pause/resume/takeover | ✅ proven |
 | Arbitrary browser writes stay disabled (`BROWSER_ALLOW_WRITES=false`) | ✅ proven |
-| **Real remote browser (Browserbase) + real multimodal model** | ❌ **UNPROVEN** — inert without keys; only the credential-gated smoke exercises it |
+| **Real remote browser (Browserbase) + real multimodal model** | ❌ **UNPROVEN**: inert without keys; only the credential-gated smoke exercises it |
 | Meeting autostart, human takeover, real approved writes to a real external site | ⏸️ deferred |
 
 **No fake-provider result substitutes for the real-pixels gate.**
@@ -61,7 +61,7 @@ NORTHSTAR_DEMO_WRITE_ENABLED=false  # ONLY the follow-up task write (arbitrary
                                     # writes stay off via BROWSER_ALLOW_WRITES)
 BROWSER_OPERATOR_ENABLED=false      # B0 (needs the control plane)
 BROWSER_VISUAL_PLANNER_ENABLED=false# B1 coordinator
-BROWSER_ALLOW_WRITES=false          # stays false — arbitrary writes disabled
+BROWSER_ALLOW_WRITES=false          # stays false; arbitrary writes disabled
 COMPANY_BRAIN_ENABLED=false         # M1 knowledge ingestion (needs Postgres)
 DATA_FOUNDATION_ENABLED=false       # DF0-DF1 (optional; resolver works on M1 alone)
 BROWSER_ALLOWED_DOMAINS=127.0.0.1:8971,localhost:8971   # for the demo
@@ -71,7 +71,7 @@ BROWSER_ALLOWED_DOMAINS=127.0.0.1:8971,localhost:8971   # for the demo
 
 The durable stack requires a Postgres control plane and migrations **0009–0013**
 (`alembic upgrade head`): 0009 canonical actions, 0010 company brain, 0011 org
-avatars, 0012 data foundation, 0013 browser sessions. **No new migration** —
+avatars, 0012 data foundation, 0013 browser sessions. **No new migration**: 
 the integration adds no tables (demo observations are ephemeral; the guarded
 action reuses `queued_actions`).
 
@@ -84,7 +84,7 @@ action reuses `queued_actions`).
 4. `NORTHSTAR_DEMO_ENABLED=true`, set `BROWSER_ALLOWED_DOMAINS` to the demo host.
 5. `NORTHSTAR_DEMO_WRITE_ENABLED=true` (enables ONLY the follow-up write).
 6. Real pixels (optional, separate): `BROWSER_REAL_PROVIDER_ENABLED=true` +
-   Browserbase/model keys — then run the smoke below.
+   Browserbase/model keys; then run the smoke below.
 
 **Rollback order** (reverse): clear `NORTHSTAR_DEMO_WRITE_ENABLED` →
 `NORTHSTAR_DEMO_ENABLED` → `BROWSER_VISUAL_PLANNER_ENABLED` →
@@ -111,10 +111,10 @@ credentials. Cleans up child processes on exit. See
 2. Start the Laura backend against a control-plane Postgres with the flags above
    (`alembic upgrade head` first). **Key-free identity:** with no Google OAuth
    client and no `LAURA_API_TOKEN`, action doors are open and the org resolves
-   to the Demo org — no login needed for the acceptance path. (The dashboard UI
+   to the Demo org; no login needed for the acceptance path. (The dashboard UI
    cookie door needs a session; the acceptance approves through the canonical
    machine door `POST /org/actions/{id}/approve`, which is the same claim +
-   receipt path — no production auth is weakened and no bypass is added.)
+   receipt path; no production auth is weakened and no bypass is added.)
 3. Open the dashboard (`frontend/dashboard.html` served by the backend). Select
    the Product Specialist (`laura`). Open the demo meeting view.
 4. Start the browser presentation: `POST /org/demo/northstar/start` →
@@ -134,10 +134,10 @@ credentials. Cleans up child processes on exit. See
 
 Preserved from B1: `backend/scripts/browser_b1_smoke.py`. To run against a
 Northstar preview you need Browserbase + a multimodal key AND a **publicly
-reachable** Northstar preview — do NOT expose the localhost product through an
+reachable** Northstar preview; do NOT expose the localhost product through an
 unreviewed public tunnel. Without credentials or a safe preview:
 
-**REAL PIXELS: UNPROVEN** — never replaced with fake-provider evidence.
+**REAL PIXELS: UNPROVEN**: never replaced with fake-provider evidence.
 
 ## Security review
 

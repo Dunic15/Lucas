@@ -1,6 +1,6 @@
 ---
 name: fundraise-narrative
-description: Builds and maintains the investor story — problem, why-now, wedge, moat, 10-slide deck outline, market sizing (TAM/SAM/SOM) with stated assumptions, and monthly investor-update templates. Use for pitch narrative, deck structure, market-sizing, and investor comms.
+description: Builds and maintains the investor story; problem, why-now, wedge, moat, 10-slide deck outline, market sizing (TAM/SAM/SOM) with stated assumptions, and monthly investor-update templates. Use for pitch narrative, deck structure, market-sizing, and investor comms.
 tools: Read, Grep, Glob, Write, Edit, WebSearch
 model: opus
 ---
@@ -16,7 +16,7 @@ backed by clear thinking, not inflated numbers.
 - **Why now:** meeting-bot infra (Recall) + cheap fast LLMs (Groq) + real-time
   avatars make a *callable, grounded expert* newly possible and cheap.
 - **Wedge:** a live process agent that makes meetings ready before they start,
-  complete before they end, and actionable after — tracks silently, speaks only when
+  complete before they end, and actionable after; tracks silently, speaks only when
   it matters (missing step, direct question). Not a notetaker, not a horizontal copilot.
 - **Moat:** knowledge ingestion + answer accuracy + verticalization; the plumbing is
   bought and swappable, so we compound on the expert layer.

@@ -1,4 +1,4 @@
-# laura-ears — Cloudflare Worker relay for Gemini ears
+# laura-ears: Cloudflare Worker relay for Gemini ears
 
 Why this exists: **AWS App Runner (the Laura backend) does not accept inbound
 WebSockets**, so Recall's real-time audio (`audio_mixed_raw`) can't reach it
@@ -18,7 +18,7 @@ meeting pipeline (gates, brain, ElevenLabs voice). Per session the relay:
 3. On each completed turn, POSTs a synthesized `transcript.data` (marker
    `laura_ears`, + the draft reply in reply mode) to `/webhooks/recall?cap=`.
 
-## Deploy (via the Cloudflare API — the MCP tools return opaque output)
+## Deploy (via the Cloudflare API: the MCP tools return opaque output)
 Needs a CF API token with **Workers Scripts: Edit** (account `8ff2d56d...`).
 ```bash
 # subdomain (one-time): PUT .../workers/subdomain {"subdomain":"lauravatar"}
@@ -36,8 +36,8 @@ Backend must have `EARS_RELAY_WS_BASE=wss://laura-ears.lauravatar.workers.dev`
 and `GEMINI_EARS_MODE=reply` (or `on`/`shadow`).
 
 ## Gotchas learned the hard way
-- Gemini sends **binary** WS frames — decode Blob/ArrayBuffer with TextDecoder,
+- Gemini sends **binary** WS frames: decode Blob/ArrayBuffer with TextDecoder,
   not a naive string cast (a throwing decode silently ate every message).
-- A plain Worker is torn down after `fetch()` returns — keep the session alive
+- A plain Worker is torn down after `fetch()` returns: keep the session alive
   with `ctx.waitUntil(handleSession(...))` or the audio pumps die.
 - Logs are **PII-safe**: counts and message *types* only, never transcript text.

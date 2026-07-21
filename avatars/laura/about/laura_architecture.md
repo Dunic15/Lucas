@@ -25,7 +25,7 @@ The live brain is tiered by question type:
 
 - **Fast live answers: Cerebras running `gemma-4-31b`** through its
   OpenAI-compatible API (`BRAIN_PROVIDER=cerebras`, a first-class provider).
-  Cerebras was chosen for first-token latency (roughly 200-400 ms live) — inside
+  Cerebras was chosen for first-token latency (roughly 200-400 ms live); inside
   a meeting, fast first-token response matters more than long-form writing quality.
 - **Clearly complex questions** (analyze, compare, recommend) route to
   **Claude Haiku**.
@@ -86,39 +86,39 @@ and English. The Recall region is EU: `RECALL_API_BASE=https://eu-central-1.reca
 - **Presence:** during long monologues she occasionally gives a small
   listening cue ("Mm-hm."); when addressed she acknowledges instantly while
   the answer generates.
-- **Languages:** she replies in the language she was addressed in — Italian
+- **Languages:** she replies in the language she was addressed in. Italian
   question, Italian answer.
 - **Dismissal:** "Laura, you can leave" makes her say goodbye and leave the
   meeting, which also stops billing.
 - **Calendar sight:** when the meeting owner's org has Google connected, she
   joins knowing their upcoming calendar (a bounded snapshot taken at session
   start) and can answer "when is my next meeting?" or "do I have a meeting
-  with Marco?" via her `upcoming_meetings` tool — no live network call.
+  with Marco?" via her `upcoming_meetings` tool; no live network call.
 - **Echo immunity:** she never answers her own voice coming back through a
-  participant's open mic or a second transcription source — near-verbatim
+  participant's open mic or a second transcription source; near-verbatim
   echoes and re-worded re-transcriptions are both recognized and dropped.
 - **Personal workspaces:** every user who signs in gets their OWN workspace
-  (their meetings, artifacts, connections, free minutes) — colleagues on the
+  (their meetings, artifacts, connections, free minutes); colleagues on the
   same company domain are NOT grouped together. Meetings she is invited to
   are attributed to the inviting person's workspace: their meter runs, their
   tools act. Team/shared workspaces are a planned later feature.
 - **Native execution:** when someone in the meeting asks her to book a
-  meeting or send an email, she captures it (asking for any missing detail —
-  the recipient's address, a concrete time — rather than guessing), and after
+  meeting or send an email, she captures it (asking for any missing detail -
+  the recipient's address, a concrete time; rather than guessing), and after
   the owner approves it on the dashboard she executes it HERSELF on the
-  workspace's own Google account — a real calendar invite with a Meet link, a
-  real sent email — with a receipt shown next to the action. This is native
+  workspace's own Google account, a real calendar invite with a Meet link, a
+  real sent email, with a receipt shown next to the action. This is native
   and independent of Slack: the Slack agent (Cedric) is a separate, optional
   delivery/approval surface, used only when asked. Every avatar has this;
   the owner can switch it off per avatar.
 - **One action, every surface:** each captured action is a single canonical
   record. If its details are incomplete, approving it asks for the exact
   missing fields (which can be filled right there) instead of silently doing
-  nothing; and approving the same action twice — or from the dashboard and
-  Slack at the same time — executes it exactly once, with one receipt.
+  nothing; and approving the same action twice, or from the dashboard and
+  Slack at the same time, executes it exactly once, with one receipt.
 - **Actions that wait on other actions:** an action can depend on another one.
   Approving it records the approval but does not run it while a dependency is
-  still outstanding; the moment the last one completes, Laura runs it herself —
+  still outstanding; the moment the last one completes, Laura runs it herself -
   including when the dependency was completed by the Slack agent rather than by
   her. A dependency that FAILED does not release anything: work whose premise
   never happened stays parked rather than running anyway.
@@ -130,7 +130,7 @@ Answer quality is owned by:
 - `avatars/laura/knowledge/*` (real process docs; `about/*` covers Laura herself)
 - the Company Brain (when enabled): an organization's own documents, uploaded
   in the dashboard's Brain tab or synced from a Drive folder, stored durably
-  per tenant and merged into retrieval with citations — each org's knowledge
+  per tenant and merged into retrieval with citations; each org's knowledge
   is isolated from every other org's, and it survives redeploys because the
   in-memory index is rebuilt from the durable store
 - `backend/app/rag.py`
@@ -155,10 +155,10 @@ failure is not the LLM provider; it is missing or poorly retrieved context.
 **"What model are you built on?"**
 The live brain is Cerebras running gemma-4-31b for speed, with Claude models
 for complex reasoning, web search, and the post-meeting artifact. The stack is
-deliberately pluggable — providers can be swapped by configuration.
+deliberately pluggable; providers can be swapped by configuration.
 
 **"Is it still in AWS?"**
-Yes — AWS App Runner in `eu-central-1`.
+Yes: AWS App Runner in `eu-central-1`.
 
 **"Do we need ElevenLabs?"**
 Yes for the premium voice: ElevenLabs synthesizes Laura's voice server-side
@@ -166,8 +166,8 @@ with word timings for lip-sync. If it is unavailable, a free fallback voice
 keeps her speaking.
 
 **"Can you browse the web or look something up online?"**
-Yes — I have a supervised cloud browser. A real Chrome runs in the cloud
-(Browserbase), and my visual planner — Claude reading the actual screen —
+Yes: I have a supervised cloud browser. A real Chrome runs in the cloud
+(Browserbase), and my visual planner, Claude reading the actual screen,
 drives it one step at a time, with every step re-checked by a policy
 engine. Today it is read-only and limited to an approved list of sites,
 and anything consequential stops at an approval door for a human. So I can

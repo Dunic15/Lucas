@@ -1,4 +1,4 @@
-# Northstar × Laura — Demo Script (5–7 minutes)
+# Northstar × Laura: Demo Script (5–7 minutes)
 
 > SYNTHETIC DEMO. Northstar and Acme Robotics are fictional. Reset before every
 > run: `python -m demos.northstar.product.reset` (or `POST /admin/reset`).
@@ -9,7 +9,7 @@ guarded follow-up task after approval.
 
 ---
 
-## 0 · Setup (before the room) — 20s
+## 0 · Setup (before the room): 20s
 
 Reset the product. Confirm health: `GET /healthz` → `tasks: 2`, version `1.0.0`.
 Laura's Company Brain has ingested the Northstar knowledge pack.
@@ -19,12 +19,12 @@ customer called Acme Robotics. Everything here is synthetic."
 
 ---
 
-## 1 · Understand Northstar — 45s
+## 1 · Understand Northstar: 45s
 
 **User asks Laura:** "What is Northstar, and what are the onboarding stages?"
 
 **Laura explains (grounded):** Northstar is an operations workflow-automation
-platform; onboarding runs five stages — Kickoff → Data Integration →
+platform; onboarding runs five stages. Kickoff → Data Integration →
 Configuration → UAT → Go-Live *(cite: customer-onboarding-process → "The five
 onboarding stages")*.
 
@@ -32,29 +32,29 @@ onboarding stages")*.
 
 ---
 
-## 2 · Explain Acme's onboarding status — 60s
+## 2 · Explain Acme's onboarding status: 60s
 
 **User asks:** "Where is Acme Robotics, and what's blocking them?"
 
 **Laura explains:** Acme is **at risk**. Onboarding has reached **Data
-Integration** and is **blocked** — Acme hasn't provisioned the WMS sandbox
+Integration** and is **blocked**: Acme hasn't provisioned the WMS sandbox
 credentials *(cite: acme-robotics-account-brief → "Current status";
 acme-onboarding-plan → "Blocker: WMS sandbox credentials")*. With a 2026-08-15
-go-live this is **P1 — go-live at risk**, escalating to the CSM within **4
+go-live this is **P1; go-live at risk**, escalating to the CSM within **4
 business hours** *(cite: escalation-policy → "Blocker severity and timers")*.
 She does **not** confuse that with the 1-business-day approval window.
 
-**Pages:** Acme account (`/customers/acme-robotics`) — health "at risk", blocker
+**Pages:** Acme account (`/customers/acme-robotics`); health "at risk", blocker
 banner.
 
 ---
 
-## 3 · The visual-only target — 60s
+## 3 · The visual-only target: 60s
 
 **User asks:** "Open the stage that's blocked."
 
 The Acme page shows the onboarding **pipeline diagram**. Every node has the same
-accessible label ("Onboarding stage") and no stage-name text — **text alone
+accessible label ("Onboarding stage") and no stage-name text. **text alone
 can't tell them apart**. Laura must read the diagram: the **amber** node, second
 from the left, is the blocked stage. She clicks it and lands on the **Data
 Integration** stage page, blocker shown.
@@ -64,29 +64,29 @@ Integration** stage page, blocker shown.
 
 ---
 
-## 4 · Propose the guarded operation (preview) — 45s
+## 4 · Propose the guarded operation (preview): 45s
 
 **User asks:** "What should we do about it?"
 
 **Laura proposes:** a **follow-up task** for the CSM to chase the WMS sandbox
 credentials *(cite: approval-policy → "Follow-up task creation")*. She
-**previews** it — the exact task is shown, and **nothing is written yet** (Tasks
+**previews** it; the exact task is shown, and **nothing is written yet** (Tasks
 table unchanged).
 
 **Pages:** Tasks (`/tasks`) → **Preview task**.
 
 ---
 
-## 5 · Rejection path — 30s
+## 5 · Rejection path: 30s
 
 **Presenter says:** "First, what if we reject?"
 
 Approval is **rejected**. Laura writes nothing. The Tasks page still shows only
-the two seed tasks — **zero follow-up tasks**. (This is the safe default.)
+the two seed tasks: **zero follow-up tasks**. (This is the safe default.)
 
 ---
 
-## 6 · Approval path — 45s
+## 6 · Approval path: 45s
 
 **Presenter says:** "Now we approve."
 
@@ -98,20 +98,20 @@ task_id: task-0003`.
 
 ---
 
-## 7 · Visual verification — 30s
+## 7 · Visual verification: 30s
 
 **User asks:** "Did it actually get created?"
 
-Laura re-reads the Tasks page and points to the **new row `task-0003`** —
-"Follow up with Acme Robotics on Data Integration blocker" — visibly present.
+Laura re-reads the Tasks page and points to the **new row `task-0003`**: 
+"Follow up with Acme Robotics on Data Integration blocker": visibly present.
 If asked to run it again, a second approved execution returns **exists** and
 creates **no duplicate** (idempotent).
 
-**Pages:** Tasks (`/tasks`) — row `task-task-0003` present.
+**Pages:** Tasks (`/tasks`); row `task-task-0003` present.
 
 ---
 
-## 8 · Clean ending — 15s
+## 8 · Clean ending: 15s
 
 **Presenter says:** "That's the loop: understand, perceive, propose, wait for
 approval, verify. Everything is reversible."

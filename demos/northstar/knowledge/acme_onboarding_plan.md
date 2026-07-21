@@ -1,4 +1,4 @@
-# Acme Robotics — Onboarding Plan
+# Acme Robotics: Onboarding Plan
 
 > SYNTHETIC DEMO DATA. Fictional plan for the Laura demo only.
 
@@ -22,7 +22,7 @@ Integration.
 
 - [x] Kickoff call completed
 - [x] Mutual success plan signed
-- [ ] **Sandbox data access granted — blocked**
+- [ ] **Sandbox data access granted: blocked**
 - [ ] Integration field mapping approved
 - [ ] Workspace configuration
 - [ ] UAT sign-off
@@ -32,7 +32,7 @@ Integration.
 
 Data Integration cannot start until Acme provisions **WMS sandbox API
 credentials**. This is the single blocker on the plan. Owner to chase: **Dana
-Whitfield** (CSM). Severity **P1 — go-live at risk** per the *Escalation
+Whitfield** (CSM). Severity **P1; go-live at risk** per the *Escalation
 Policy*.
 
 ## Next action

@@ -1,6 +1,6 @@
-# Agent Card — cross-repo skill discovery (Laura ⇄ Cedric)
+# Agent Card, cross-repo skill discovery (Laura ⇄ Cedric)
 
-**Status: PLAN / CONTRACT DRAFT — no code in this doc.** Written 2026-07-09.
+**Status: PLAN / CONTRACT DRAFT, no code in this doc.** Written 2026-07-09.
 This is the shared contract both repos pin to so each agent knows the other's
 skills and nothing falls through the cracks. Companion to the live integration
 contract ([`SURFACE-API.md`](SURFACE-API.md)) and the tenancy plan
@@ -8,7 +8,7 @@ contract ([`SURFACE-API.md`](SURFACE-API.md)) and the tenancy plan
 
 Laura and Cedric are two independently-deployed services in **two separate
 repos** (Laura here; Cedric's Slack orchestrator in Ben's workspace). They must
-NOT share a code package — a shared pip/npm dep forces lockstep version bumps on
+NOT share a code package; a shared pip/npm dep forces lockstep version bumps on
 every independent deploy. Instead **both repos pin to one versioned JSON Schema**
 (this doc) and each serves its own card.
 
@@ -18,7 +18,7 @@ every independent deploy. Instead **both repos pin to one versioned JSON Schema*
 
 > Capabilities are **static, declarative metadata generated from the same
 > `avatar.yaml` that defines the persona**, served on the control-plane HTTP
-> surface, and injected into the brain prompt as a compact digest — **never on
+> surface, and injected into the brain prompt as a compact digest. **never on
 > the live `ws/{conversation_id}` path, never carrying transcript.**
 
 This makes discovery + routing structurally incapable of regressing the
@@ -29,13 +29,13 @@ folder" true (the folder's `capabilities:` block auto-publishes as a skill).
 
 ## 1. The card schema (A2A-shaped subset)
 
-We adopt the **shape** of a Google A2A *Agent Card* — not the A2A JSON-RPC
+We adopt the **shape** of a Google A2A *Agent Card*: not the A2A JSON-RPC
 transport (two known, mutually-authenticated partners don't need it). Served at
 `GET /.well-known/agent-card.json`.
 
 ```jsonc
 {
-  "schema_version": "1.0",        // CONTRACT version — bumped only on breaking change; additive otherwise
+  "schema_version": "1.0",        // CONTRACT version; bumped only on breaking change; additive otherwise
   "agent_id": "laura",            // "laura" | "cedric"
   "name": "Laura",
   "description": "Callable AI process avatar: joins meetings, answers grounded+cited from process docs, tracks vs templates, delivers post-meeting artifacts.",
@@ -70,7 +70,7 @@ families** (`cedric.calendar.*`, `cedric.email.*`, `cedric.slack.*`,
 
 ### Versioning
 
-`schema_version` (shared, additive-only — copy the `ARTIFACT_VERSION` discipline
+`schema_version` (shared, additive-only; copy the `ARTIFACT_VERSION` discipline
 in `cedric/integration.py`), plus a per-card `version` and an HTTP `ETag`. The
 two repos stay in sync by pinning `schema_version` here **and** a CI fixture
 test in *both* repos (see §4).
@@ -79,12 +79,12 @@ test in *both* repos (see §4).
 
 ## 2. How each avatar declares its skills (`avatars/<id>/avatar.yaml`)
 
-Keeps the moat literal — a new avatar is still one folder, and its skills
+Keeps the moat literal; a new avatar is still one folder, and its skills
 auto-publish with it, generated from the same yaml that defines the persona (so
 they never drift from reality).
 
 ```yaml
-# avatars/cedric/avatar.yaml  (append; optional — absent → derived from
+# avatars/cedric/avatar.yaml  (append; optional: absent → derived from
 # role + process_templates + knowledge headings, so existing avatars still
 # publish something)
 capabilities:
@@ -94,7 +94,7 @@ capabilities:
       family: meeting
       name: In-meeting answers & action capture
       examples: ["schedule the follow-up", "remind me to send the deck"]
-      defer_to_me_when: "someone asks to DO something (schedule/send/create/remind) — I capture it and hand to Slack"
+      defer_to_me_when: "someone asks to DO something (schedule/send/create/remind). I capture it and hand to Slack"
   peer:                                # who to hand OFF to (mirror of the fetched peer card)
     agent_id: cedric-slack
     card_url: ${SURFACE_CARD_URL}      # Ben's /.well-known/agent-card.json
@@ -114,7 +114,7 @@ Loader: `Avatar` gains `capabilities: dict = None` (parsed with the same
 
 ## 3. Endpoints, fetch/cache, and the prompt digest
 
-All on the control-plane HTTP surface, all off the live path — this mirrors the
+All on the control-plane HTTP surface, all off the live path; this mirrors the
 `org_api.py` pattern exactly (new router, 2-line `include_router` in `main.py`).
 
 **Laura serves (new `cards_api.py` + `cedric/cards.py`):**
@@ -125,22 +125,22 @@ GET /avatars/{id}/card             → build_card(load(id)) # per-avatar A2A car
 ```
 
 Both read-only, `ETag = sha256(body)`, `304` on matching `If-None-Match`. Reuse
-the deliberately-open `/avatars` auth stance — static skill metadata, zero PII.
+the deliberately-open `/avatars` auth stance; static skill metadata, zero PII.
 (Once `org_id` lands and the card becomes per-org, move it behind the Bearer.)
 
-**Laura consumes Cedric's card** — `fetch_peer_card()` as a sibling of
+**Laura consumes Cedric's card**: `fetch_peer_card()` as a sibling of
 `fetch_context()` in `cedric/callback.py`: `GET` Cedric's card URL at startup +
 on a TTL, send `If-None-Match` with the stored ETag, reuse the existing Bearer,
 cache the parsed card + ETag in a module global. New config:
 `surface_card_url`, `peer_card_ttl_seconds` (mirroring `surface_context_url`).
 
-**The digest** — distilled to one line per skill and injected in the **same
+**The digest**: distilled to one line per skill and injected in the **same
 place** `inject_brief()` folds context into the live memory channel (precomputed,
 cached, so nothing touches `answer_question_stream`'s retrieval hot path):
 
 ```
-PEER AGENT — Cedric (Slack). If a request matches one of his skill families,
-DON'T answer it: say "that's Cedric's area — want me to bring him in?" and
+PEER AGENT: Cedric (Slack). If a request matches one of his skill families,
+DON'T answer it: say "that's Cedric's area; want me to bring him in?" and
 capture it with queue_action(route_to='cedric', family=<family>).
 - meeting: someone asks to DO something (schedule/send/create/remind)
 - calendar: book/reschedule/find a time
@@ -153,10 +153,10 @@ absent from the current card.**
 
 ---
 
-## 4. The handoff (NEXT — additive fields on the existing webhook)
+## 4. The handoff (NEXT: additive fields on the existing webhook)
 
 Reuse the signed, retried, PII-safe `action.requested` seam
-(`callback.send_action_requested` / `notify_action_requested`) — no new
+(`callback.send_action_requested` / `notify_action_requested`); no new
 transport. Two additive optional fields:
 
 ```jsonc
@@ -177,7 +177,7 @@ cracks"), it needs delivery guarantees, or we shouldn't oversell it:
 - **Cedric → Laura ack** that flips the ledger action to `routed`, so Laura
   learns the handoff landed (falling back to "check the artifact later" *is* the
   manual gap the feature claims to remove).
-- **Hop-count / origin tag** — Laura routes to Cedric, who can book Laura via
+- **Hop-count / origin tag**: Laura routes to Cedric, who can book Laura via
   `/sessions/start`; a loop-guard prevents ping-pong.
 
 ---
@@ -185,13 +185,13 @@ cracks"), it needs delivery guarantees, or we shouldn't oversell it:
 ## 5. Gotchas the adversarial review caught
 
 1. **Cedric's half is assumed, not owned.** "Mutual" discovery depends entirely
-   on Ben's repo serving the same-schema card and running the fixture test —
+   on Ben's repo serving the same-schema card and running the fixture test -
    neither enforceable from here. **A doc is not a cross-repo contract:** open an
    explicit issue/PR into Cedric's repo with a named owner and a target
    `schema_version` as a tracked dependency. Until then, Laura ships only her
    PUBLISH half + graceful-degrade CONSUME half.
 2. **Route by skill FAMILY/tag, never by hardcoded leaf id.** The plan warns
-   against hardcoding peer skill strings — so the defer logic must match by
+   against hardcoding peer skill strings; so the defer logic must match by
    `family` with alias tolerance, or every Cedric-side rename silently
    misroutes. (This is why the schema carries `family`.)
 3. **Card rot.** Skills must be generated from `avatar.yaml`/source, never
@@ -225,18 +225,18 @@ cracks"), it needs delivery guarantees, or we shouldn't oversell it:
 
 ## Open questions for the owner / Ben
 
-1. **Cedric's card URL + auth** — does Ben's orchestrator expose
+1. **Cedric's card URL + auth**: does Ben's orchestrator expose
    `GET /.well-known/agent-card.json`, and does it accept the same Bearer
    (`LAURA_CONTEXT_TOKEN`) Laura already presents on `fetch_context`, or a
    distinct token?
-2. **Owner of the shared taxonomy** — this file is the one home both repos pin
+2. **Owner of the shared taxonomy**: this file is the one home both repos pin
    to; confirm Ben references it (vs a `docs/04-api-contract.md` on his side).
-3. **Cedric's ~41 tools → ~8 skill families** — confirm the family list so
+3. **Cedric's ~41 tools → ~8 skill families**: confirm the family list so
    Laura's defer logic targets stable families, not individual tools.
-4. **Cedric as a per-org principal** — the same open question that blocks the
+4. **Cedric as a per-org principal**: the same open question that blocks the
    tenancy meeting→org binding
    ([`../infra/MULTI-TENANCY.md`](../infra/MULTI-TENANCY.md) §5.1). *Flagged as
    "depends on Ben" (2026-07-09).*
-5. **In-meeting handoff** — conversational-only + user consent
+5. **In-meeting handoff**: conversational-only + user consent
    ("want me to bring him in?"), or auto-fire the `action.requested` webhook the
    moment a peer-domain ask is detected?

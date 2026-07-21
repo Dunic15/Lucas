@@ -1,7 +1,7 @@
-# Northstar Demo — Integration Handoff Contract
+# Northstar Demo: Integration Handoff Contract
 
 > What the later **MVP integration branch** must connect. Nothing in this list
-> is implemented on `ananth/northstar-demo-company` — this branch ships only the
+> is implemented on `ananth/northstar-demo-company`: this branch ships only the
 > isolated environment (knowledge pack, workflows, product, manifest, script,
 > tests). The integration agent wires Laura's runtime to it.
 
@@ -42,7 +42,7 @@ this doc maps each Laura-side seam to the concrete thing it must read.
 ## 4 · BrowserObservation checkpoints
 
 - **Wire:** map each `ordered_checkpoints[]` entry to a BrowserObservation
-  assertion. Every checkpoint carries a `url` and (mostly) a `testid` — assert
+  assertion. Every checkpoint carries a `url` and (mostly) a `testid`: assert
   the element is present and shows the `expect_visible` state.
 - **Determinism:** element ids/`data-testid`s are stable (see product tests);
   no timestamps or random ids appear in the DOM.
@@ -69,7 +69,7 @@ this doc maps each Laura-side seam to the concrete thing it must read.
 ## 7 · Canonical approval (Action Control Plane)
 
 - **Wire:** route the decision through Laura's canonical approve door
-  (`POST /org/actions/{action_id}/approve`) — **the Action Control Plane is out
+  (`POST /org/actions/{action_id}/approve`): **the Action Control Plane is out
   of scope for this branch and must not be modified here.** On the door's
   approval, and only then, call the product's guarded create.
 - **Contract:** exactly one product write per approved action; rejection →

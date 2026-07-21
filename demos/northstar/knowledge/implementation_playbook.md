@@ -12,7 +12,7 @@ the technical how-to.
 
 Data Integration begins when the customer provisions **sandbox API
 credentials** for each source system. The engineer never uses production
-credentials during onboarding — only sandbox. If credentials are missing, the
+credentials during onboarding; only sandbox. If credentials are missing, the
 stage is **blocked** and the engineer raises it to the CSM to chase (a
 follow-up task), rather than working around it.
 

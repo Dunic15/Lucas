@@ -1,12 +1,12 @@
-Priya: Alright, this is the kickoff to onboard Meridian Retail onto the platform — thanks for joining, Daniel.
+Priya: Alright, this is the kickoff to onboard Meridian Retail onto the platform; thanks for joining, Daniel.
 Daniel: Glad to be here. Our side's ready to move; the contract is countersigned.
-Priya: Let's lock the go-live date — we're targeting August 4 for launch.
+Priya: Let's lock the go-live date; we're targeting August 4 for launch.
 Daniel: August 4 works for us, we can commit to that launch date.
 Priya: Good. The customer handoff to your success manager is scheduled for the week after launch.
-Daniel: On the DPA — legal is still reviewing it, so it isn't signed yet.
-Priya: And the security review — where do we stand on that?
+Daniel: On the DPA; legal is still reviewing it, so it isn't signed yet.
+Priya: And the security review; where do we stand on that?
 Daniel: It hasn't started; we still need to book the security assessment.
-Priya: That's a gap to close before we provision anything — it could delay go-live if we don't. Laura, are we missing anything?
+Priya: That's a gap to close before we provision anything; it could delay go-live if we don't. Laura, are we missing anything?
 Laura: You still don't have security approval or a signed DPA, and I didn't hear who owns the implementation on your side.
-Daniel: Fair — we'll name the implementation owner internally and get security moving this week.
+Daniel: Fair; we'll name the implementation owner internally and get security moving this week.
 Priya: Perfect. Let's wrap up and I'll send the recap.

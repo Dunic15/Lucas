@@ -1,4 +1,4 @@
-# Northstar — Laura MVP demo environment
+# Northstar: Laura MVP demo environment
 
 An **isolated, deterministic, resettable** synthetic company for Laura's first
 end-to-end demonstration. A fictional B2B SaaS company (**Northstar**) with one
@@ -8,7 +8,7 @@ presenter script, and network-free tests.
 
 > **Everything here is synthetic.** No real SFF, customer, employee, or
 > credential data (a test enforces it). Nothing reads the clock or a random
-> source — the world is byte-identical on every run.
+> source; the world is byte-identical on every run.
 
 This branch adds **only** `demos/northstar/**`. It does not touch Browser B0/B1,
 `frontend/dashboard.html`, `talk.html`, the Action Control Plane, the avatar
@@ -67,7 +67,7 @@ Pages (predictable URLs, stable `data-testid`s):
 `POST /api/acme/tasks/preview` (**pure read, no write**). It previews before
 writing, is idempotent (repeated approved execution → exactly one task),
 rejection creates zero tasks, shows a visible confirmation, and `reset` restores
-the initial state. Laura's approval system is **not** implemented here — the
+the initial state. Laura's approval system is **not** implemented here; the
 product exposes only the controlled write the Action Control Plane will call.
 
 ## The visual-only fixture

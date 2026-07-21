@@ -9,7 +9,7 @@ https://sff.vc, 2026-07-06). Sector groupings use the derived sector labels.
 The site lists 41 selected investments (33 active, 8 exited). Headline
 names: Foodpanda (exited to Delivery Hero), Bring! (exited to Swiss Post),
 Everphone, GuestReady, RemotePass, Polychain Capital, AirConsole (exited to
-KPIT), Staking Rewards, Deskimo, PropertyScout — plus a recent AI-native
+KPIT), Staking Rewards, Deskimo, PropertyScout; plus a recent AI-native
 group. The full per-company list with descriptions is in
 portfolio_companies.md; the site notes it is a selection, with the complete
 list available from info@sff.vc.
@@ -19,15 +19,15 @@ list available from info@sff.vc.
 Companies whose own public descriptions are explicitly AI-powered or
 AI-native:
 
-- Even — AI-native accounting platform automating bookkeeping and finance ops
-- Flashy — AI content operations platform for brands and marketers
-- Gauss — AI-powered platform helping consumers lower credit card rates
-- Inspekt AI — AI and drone-powered building facade inspection
-- Oware — AI-powered supply chain and warehousing platform
-- Stanify — AI-powered social media community management for DTC brands
-- WolfPak — AI-powered leadership development and training
-- Zelf — AI agent for on-demand consumer insights
-- Zenadmin — AI-powered HR and employee management platform
+- Even, AI-native accounting platform automating bookkeeping and finance ops
+- Flashy, AI content operations platform for brands and marketers
+- Gauss, AI-powered platform helping consumers lower credit card rates
+- Inspekt AI, AI and drone-powered building facade inspection
+- Oware, AI-powered supply chain and warehousing platform
+- Stanify, AI-powered social media community management for DTC brands
+- WolfPak, AI-powered leadership development and training
+- Zelf, AI agent for on-demand consumer insights
+- Zenadmin: AI-powered HR and employee management platform
 
 Adjacent but not described as AI by the site: Staking Rewards and Polychain
 Capital (crypto/data), Matter (workspace software).
@@ -66,7 +66,7 @@ laser focus, relentless drive. Pitches go to https://pitch.sff.vc.
 ## "Who are the mentors / how does the bootcamp work?"
 
 Not published on the SFF website, and the owner has not added these notes
-yet — say exactly that and refer to info@sff.vc. See
+yet; say exactly that and refer to info@sff.vc. See
 mentor_and_bootcamp_context.md.
 
 ## Synergy starting points (suggestions to explore, NOT partnerships)

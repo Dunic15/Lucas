@@ -1,6 +1,6 @@
 # SFF portfolio companies
 
-The companies in the SFF portfolio (41 listed on https://sff.vc — 33 active,
+The companies in the SFF portfolio (41 listed on https://sff.vc. 33 active,
 8 exited): active portfolio companies include Everphone, GuestReady,
 RemotePass, Polychain Capital, Staking Rewards, Deskimo, PropertyScout,
 Coachbetter, Flashy, Inspekt AI, Gauss, Even, Oware, Orderli, Dojah, and
@@ -24,23 +24,23 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: E-commerce / delivery)
 - Stage/status if public: Exited (acquirer not stated on the SFF site); SFF invested in 2017
 - Website: https://www.abetterflorist.com/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## AirConsole
 - What it does: Browser-based multiplayer gaming using smartphones as controllers
 - Sector: to be filled by owner (suggested from the company's own description: Gaming)
-- Stage/status if public: Exited — acquired by KPIT; SFF invested in 2019
+- Stage/status if public: Exited, acquired by KPIT; SFF invested in 2019
 - Website: https://www.airconsole.com/
-- Notes: —
+- Notes:,
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Bring!
 - What it does: Collaborative grocery shopping list app for households
 - Sector: to be filled by owner (suggested from the company's own description: Consumer app)
-- Stage/status if public: Exited — acquired by Swiss Post; SFF invested in 2017
+- Stage/status if public: Exited, acquired by Swiss Post; SFF invested in 2017
 - Website: https://www.getbring.com/
-- Notes: —
+- Notes:,
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Calingo
@@ -48,15 +48,15 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: InsurTech)
 - Stage/status if public: Active portfolio; SFF invested in 2022
 - Website: https://www.calingo.ch/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Careloop
 - What it does: Reverse-recruiting platform for international nurses in Germany
 - Sector: to be filled by owner (suggested from the company's own description: HR tech / healthcare recruiting)
-- Stage/status if public: Exited — acquired by Klett Verlag; SFF invested in 2021
+- Stage/status if public: Exited, acquired by Klett Verlag; SFF invested in 2021
 - Website: https://careloop.io/
-- Notes: —
+- Notes:,
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## CashYou
@@ -64,15 +64,15 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: FinTech / consumer loyalty)
 - Stage/status if public: Active portfolio; SFF invested in 2015
 - Website: https://www.cashyou.ch
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Caterspot
 - What it does: B2B marketplace connecting businesses with caterers
 - Sector: to be filled by owner (suggested from the company's own description: B2B marketplace / food)
-- Stage/status if public: Exited — acquired by Boom Internet; SFF invested in 2016
+- Stage/status if public: Exited, acquired by Boom Internet; SFF invested in 2016
 - Website: https://www.caterspot.sg/
-- Notes: —
+- Notes:,
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Coachbetter
@@ -80,7 +80,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: Sports tech / SaaS)
 - Stage/status if public: Active portfolio; SFF invested in 2021
 - Website: https://www.coachbetter.com/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Deskimo
@@ -88,7 +88,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: PropTech / flexible workspaces)
 - Stage/status if public: Active portfolio; SFF invested in 2021
 - Website: https://www.deskimo.com/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Dojah
@@ -96,7 +96,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: FinTech infrastructure / identity & KYC)
 - Stage/status if public: Active portfolio; SFF invested in 2022
 - Website: https://dojah.io/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Even
@@ -104,7 +104,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: AI / FinTech accounting)
 - Stage/status if public: Active portfolio; SFF invested in 2019
 - Website: https://evenapp.ai
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Everphone
@@ -112,7 +112,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: Enterprise IT / Device-as-a-Service)
 - Stage/status if public: Active portfolio; SFF invested in 2017
 - Website: https://everphone.com/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Explorest
@@ -120,7 +120,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: Consumer app / travel & photography)
 - Stage/status if public: Active portfolio; SFF invested in 2022
 - Website: https://www.explorest.com/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Flashy
@@ -128,15 +128,15 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: AI / marketing tech)
 - Stage/status if public: Active portfolio; SFF invested in 2024
 - Website: https://www.flashy.ai
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Foodpanda
 - What it does: On-demand food & grocery delivery platform across Asia
 - Sector: to be filled by owner (suggested from the company's own description: Food delivery / marketplace)
-- Stage/status if public: Exited — acquired by Delivery Hero (DHER); SFF invested in 2012
+- Stage/status if public: Exited: acquired by Delivery Hero (DHER); SFF invested in 2012
 - Website: https://www.foodpanda.com/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Freterium
@@ -144,7 +144,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: Logistics / SaaS)
 - Stage/status if public: Active portfolio; SFF invested in 2022
 - Website: https://www.freterium.com/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Gauss
@@ -152,15 +152,15 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: AI / consumer FinTech)
 - Stage/status if public: Active portfolio; SFF invested in 2023
 - Website: https://www.gauss.money
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## GotCourts
 - What it does: Court booking and club management for racquet sports
 - Sector: to be filled by owner (suggested from the company's own description: Sports tech / booking)
-- Stage/status if public: Exited — acquired by Playtomic; SFF invested in 2016
+- Stage/status if public: Exited, acquired by Playtomic; SFF invested in 2016
 - Website: https://www.gotcourts.com/
-- Notes: —
+- Notes:,
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## GuestReady
@@ -168,7 +168,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: PropTech / short-term rentals)
 - Stage/status if public: Active portfolio; SFF invested in 2016
 - Website: https://www.guestready.com/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## HackVC
@@ -176,7 +176,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: Crypto / venture fund)
 - Stage/status if public: Active portfolio; SFF invested in 2024
 - Website: https://hack.vc/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Inspekt AI
@@ -184,15 +184,15 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: AI / drones / construction tech)
 - Stage/status if public: Active portfolio; SFF invested in 2025
 - Website: https://inspektai.com/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Matter
 - What it does: Workspace operating system for hybrid teams
 - Sector: to be filled by owner (suggested from the company's own description: Workplace software)
-- Stage/status if public: Exited — acquired by Noii; SFF invested in 2021
+- Stage/status if public: Exited, acquired by Noii; SFF invested in 2021
 - Website: https://www.noii.ch
-- Notes: —
+- Notes:,
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Orderli
@@ -200,7 +200,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: Restaurant tech)
 - Stage/status if public: Active portfolio; SFF invested in 2023
 - Website: https://orderli.com/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Oware
@@ -208,7 +208,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: AI / supply chain & warehousing)
 - Stage/status if public: Active portfolio; SFF invested in 2021
 - Website: https://www.o360cloud.com
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Pioneer Fund
@@ -216,7 +216,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: Accelerator / venture fund)
 - Stage/status if public: Active portfolio; SFF invested in 2024
 - Website: https://pioneer.app/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Poinz
@@ -224,7 +224,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: Consumer loyalty / FinTech)
 - Stage/status if public: Active portfolio; SFF invested in 2018
 - Website: https://poinz.ch/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Polychain Capital
@@ -232,7 +232,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: Crypto / investment fund)
 - Stage/status if public: Active portfolio; SFF invested in 2016
 - Website: https://polychain.capital/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Propera
@@ -240,7 +240,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: PropTech / energy efficiency)
 - Stage/status if public: Active portfolio; SFF invested in 2023
 - Website: https://propera.ch
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## PropertyScout
@@ -248,7 +248,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: PropTech / real estate marketplace)
 - Stage/status if public: Active portfolio; SFF invested in 2019
 - Website: https://propertyscout.co.th/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Ready
@@ -256,7 +256,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: EdTech)
 - Stage/status if public: Active portfolio; SFF invested in 2012
 - Website: https://www.ready.ch/en/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## RemotePass
@@ -264,7 +264,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: HR tech / global payroll)
 - Stage/status if public: Active portfolio; SFF invested in 2024
 - Website: https://www.remotepass.com/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Reno
@@ -272,7 +272,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: PropTech / home renovation)
 - Stage/status if public: Active portfolio; SFF invested in 2016
 - Website: https://www.renohome.ae
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Skylink
@@ -280,7 +280,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: Aviation tech)
 - Stage/status if public: Active portfolio; SFF invested in 2018
 - Website: not listed on the SFF site
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Staking Rewards
@@ -288,7 +288,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: Crypto / data & analytics)
 - Stage/status if public: Active portfolio; SFF invested in 2020
 - Website: https://www.stakingrewards.com/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Stanify
@@ -296,7 +296,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: AI / marketing tech)
 - Stage/status if public: Active portfolio; SFF invested in 2026
 - Website: https://stanify.ai/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## StayHopper
@@ -304,7 +304,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: Travel tech / hospitality)
 - Stage/status if public: Active portfolio; SFF invested in 2020
 - Website: https://www.stayhopper.com
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Stockoss
@@ -312,7 +312,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: Logistics / SaaS)
 - Stage/status if public: Active portfolio; SFF invested in 2023
 - Website: https://stockoss.com/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## WolfPak
@@ -320,7 +320,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: AI / HR & leadership development)
 - Stage/status if public: Active portfolio; SFF invested in 2025
 - Website: https://www.wolfpak.ai
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Yhangry
@@ -328,7 +328,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: Consumer marketplace / food)
 - Stage/status if public: Active portfolio; SFF invested in 2022
 - Website: https://yhangry.com/
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Zelf
@@ -336,7 +336,7 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: AI / consumer insights)
 - Stage/status if public: Active portfolio; SFF invested in 2022
 - Website: https://www.hellozelf.com
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06
 
 ## Zenadmin
@@ -344,5 +344,5 @@ Total companies listed: 41 (33 active, 8 exited).
 - Sector: to be filled by owner (suggested from the company's own description: AI / HR tech)
 - Stage/status if public: Active portfolio; SFF invested in 2019
 - Website: https://www.zenadmin.ai
-- Notes: —
+- Notes:: 
 - Source: https://sff.vc (portfolio section), retrieved 2026-07-06

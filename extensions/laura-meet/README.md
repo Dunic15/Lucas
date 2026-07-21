@@ -8,10 +8,10 @@ join the call. The host may still need to admit Laura from the waiting room /
 lobby (Meet, Zoom, and Teams can all gate guests).
 
 Per platform:
-- **Google Meet** — works from inside the call (the room URL is the join URL).
-- **Zoom** — works on `/j/<id>` join pages and the `/wc/<id>` web client; the
+- **Google Meet**: works from inside the call (the room URL is the join URL).
+- **Zoom**: works on `/j/<id>` join pages and the `/wc/<id>` web client; the
   `?pwd=` passcode is preserved.
-- **Teams** — works on the `/l/meetup-join/...` or `/meet/<id>` join-link page
+- **Teams**: works on the `/l/meetup-join/...` or `/meet/<id>` join-link page
   (the in-app URL after joining doesn't carry the meeting link, so send Laura
   from the join page).
 

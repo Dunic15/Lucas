@@ -12,7 +12,7 @@ buffer explicitly at the project level, never hidden inside each task.
 
 Points and t-shirt sizes (S/M/L/XL) work because humans compare better than
 they measure. Rules that keep them useful: the whole team estimates together
-(planning poker surfaces hidden disagreement — a 2 next to an 8 is a
+(planning poker surfaces hidden disagreement; a 2 next to an 8 is a
 conversation, not an average); points are local to one team and never a
 cross-team productivity metric; and anything XL must be split before it
 enters a sprint.
@@ -20,17 +20,17 @@ enters a sprint.
 ## Three-point (PERT) estimation
 
 For calendar answers, take optimistic (O), most likely (M), pessimistic (P)
-and use (O + 4M + P) / 6. The value isn't the formula — it's forcing the
+and use (O + 4M + P) / 6. The value isn't the formula; it's forcing the
 pessimistic case into the open. If P is 5× O, the task is not understood;
 spike it first.
 
 ## Critical path
 
-The critical path is the longest chain of dependent work — the project's true
+The critical path is the longest chain of dependent work; the project's true
 minimum duration. Tasks on it deserve the senior people, the earliest starts,
 and the most monitoring; a day slipped there is a day slipped for the project.
 Off-path tasks have slack: use it deliberately (level workloads) instead of
-discovering it accidentally. Recompute the path when dependencies change —
+discovering it accidentally. Recompute the path when dependencies change -
 it moves.
 
 ## Buffers that survive contact with management
@@ -51,6 +51,6 @@ focused people is a 10-week plan wearing makeup.
 ## Re-planning is not failure
 
 Plans are forecasts. When actuals diverge, the professional move is a
-deliberate re-plan — new date or reduced scope, communicated with reasons —
+deliberate re-plan, new date or reduced scope, communicated with reasons,
 not weekly one-day slips ("the death of a thousand Fridays"). One honest
 re-plan costs less credibility than five silent ones.

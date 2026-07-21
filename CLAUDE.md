@@ -1,4 +1,4 @@
-# CLAUDE.md — working in the Laura repo
+# CLAUDE.md: working in the Laura repo
 
 Laura is a **Callable AI Process Avatar** (joins Zoom/Meet/Teams, answers grounded
 from process docs, drafts post-meeting artifacts). Full context:
@@ -36,10 +36,10 @@ piece of work that produces a durable artifact.** Otherwise do it inline.
 
 **Do it INLINE (no agent) when…**
 - It's a **quick edit or one-file change** you can finish in a few tool calls.
-- You're **mid-task and already hold the context** — spawning restarts cold and
+- You're **mid-task and already hold the context**: spawning restarts cold and
   re-derives what you already know (the expensive path).
-- It's **debugging / a direct question / a small fix** — faster inline.
-- The task **spans several agents' domains at once** — handle it yourself and only
+- It's **debugging / a direct question / a small fix**: faster inline.
+- The task **spans several agents' domains at once**: handle it yourself and only
   pull in an agent for a genuinely separable chunk.
 
 **Rule of thumb:** a *substantial, single-domain deliverable* (a GTM doc, a market
@@ -57,16 +57,16 @@ unless asked; they prefer writing artifacts to `docs/`.
 
 - **AWS access is deliberate and pre-approved.** `.mcp.json` keeps
   `READ_OPERATIONS_ONLY=false` because Claude drives App Runner deploys/config
-  here, and `mcp__aws-api__call_aws` sits in `permissions.allow` — the owner
+  here, and `mcp__aws-api__call_aws` sits in `permissions.allow`: the owner
   asked (2026-07-08) to never be prompted for AWS calls. The safety bar moves
   to behavior: destructive/irreversible AWS ops (deletes, teardown of running
   services) still deserve a heads-up in chat before running.
-- **Parallel sessions — check before you push/deploy.** No live channel links
+- **Parallel sessions: check before you push/deploy.** No live channel links
   concurrent Claude/Codex sessions; they share this repo's auto-memory but only
   async (loaded at session start, not live). Before `git push` to `main` or a
   prod `update-service`, confirm another session isn't mid-flight: `aws apprunner
   list-operations` on `laura-backend` (a deploy running?) + `gh pr list`. App
-  Runner serializes deploys and errors on a concurrent op — wait for `RUNNING`,
+  Runner serializes deploys and errors on a concurrent op; wait for `RUNNING`,
   don't fight it. And never restart prod without confirming no live meeting
   (`GET /health` → `active_sessions:0`, cross-check Recall for in-call bots).
 - **PreToolUse hooks** (`.claude/hooks/guard.py`) mechanically enforce the two
@@ -81,4 +81,4 @@ unless asked; they prefer writing artifacts to `docs/`.
   against the contract/latency/PII/meter checklist), `/smoke-demo`,
   `/test-backend`, `/check-sessions` (orphaned billing sessions).
 - **Verification agents can't edit**: `backend-tester` and `demo-runner` are
-  Bash+Read only — they run and report; fixes go through the main session.
+  Bash+Read only; they run and report; fixes go through the main session.

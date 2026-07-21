@@ -1,10 +1,10 @@
-# Cedric ⇄ Laura dashboard bridge — implementation spec for the Cedric service
+# Cedric ⇄ Laura dashboard bridge: implementation spec for the Cedric service
 
 **Audience:** whoever owns the Cedric orchestrator (the `SFF-Studio/Cedric`
-repo — the service that today runs entirely in Slack).
+repo; the service that today runs entirely in Slack).
 **Goal:** let a user drive the **same** Cedric from the Laura dashboard
 (chat with it, and approve meeting actions that Cedric then executes through
-its connectors) — without Slack.
+its connectors); without Slack.
 
 **Status of the two sides**
 
@@ -14,7 +14,7 @@ its connectors) — without Slack.
   production. Laura already *calls* every endpoint below and already *serves*
   every callback below.
 - **Cedric side: to build.** Cedric must expose an HTTP front door alongside
-  its Slack front door — three inbound receivers, and two outbound callbacks
+  its Slack front door; three inbound receivers, and two outbound callbacks
   into Laura. That is the entirety of the work in this document.
 
 Nothing here requires further Laura changes. The moment Cedric answers these
@@ -48,7 +48,7 @@ LAURA_BASE = https://dhfgfe6yw6.eu-central-1.awsapprunner.com   (prod)
 ```
 
 Cedric calls back into `POST {LAURA_BASE}/org/chat` and
-`POST {LAURA_BASE}/org/actions/{action_id}/status` — both already live.
+`POST {LAURA_BASE}/org/actions/{action_id}/status`: both already live.
 
 ---
 
@@ -60,7 +60,7 @@ There are two credential pairs, established at provisioning time (§2).
 
 Every request Laura sends to Cedric carries:
 
-- **`Authorization: Bearer <webhook_token>`** — the `webhook_token` Cedric
+- **`Authorization: Bearer <webhook_token>`**: the `webhook_token` Cedric
   minted for this org at provisioning (or the deployment-wide
   `LAURA_WEBHOOK_TOKEN` for the demo org only).
 - **`X-Laura-Signature: t=<unix_ts>,v1=<hex>`** where
@@ -70,30 +70,30 @@ Every request Laura sends to Cedric carries:
   `t` (suggest ±5 min) to stop replay.
 - **`Idempotency-Key: <action_id>`** on `/api/laura/actions` (see §3).
 
-`Content-Type: application/json`. Bodies are signed **raw** — verify against
+`Content-Type: application/json`. Bodies are signed **raw**: verify against
 the exact received bytes, not a re-serialization.
 
 ### 1b. Cedric → Laura  (Laura verifies)
 
 Every callback Cedric sends to Laura carries:
 
-- **`Authorization: Bearer <laura_org_token>`** — a per-org bearer **Laura**
+- **`Authorization: Bearer <laura_org_token>`**: a per-org bearer **Laura**
   issues for this workspace. Laura resolves it to the org and scopes the write
   to that org only. (The deployment-wide `LAURA_API_TOKEN`, if shared, resolves
-  to the demo org — fine for a single-tenant pilot, not for multi-tenant.)
+  to the demo org; fine for a single-tenant pilot, not for multi-tenant.)
 
 > **⚠ One handshake detail to finalize:** today Laura's provisioning call (§2)
 > sends Cedric the org identity but does **not** yet hand Cedric a
 > `laura_org_token` for the callback direction. Pick one:
 > **(a)** Laura includes a freshly minted per-org bearer in the provisioning
-> request body (recommended — one round trip; Laura change is ~5 lines), or
+> request body (recommended; one round trip; Laura change is ~5 lines), or
 > **(b)** for a single pilot org, share one `LAURA_API_TOKEN` out of band and
 > Cedric uses it for all callbacks. Tell me which and I'll wire Laura's side
 > for (a).
 
 ---
 
-## 2. Provisioning handshake  (`POST /api/laura/orgs`) — prerequisite
+## 2. Provisioning handshake  (`POST /api/laura/orgs`): prerequisite
 
 When a workspace connects Cedric as its "brain", Laura POSTs:
 
@@ -120,7 +120,7 @@ credentials without rotating anyone else's.
 
 ---
 
-## 3. Action execution  (`POST /api/laura/actions`) — **the core**
+## 3. Action execution  (`POST /api/laura/actions`): **the core**
 
 When a user clicks **Approve** on a meeting action in the dashboard, Laura
 sends exactly this (already implemented, `cedric/callback.dispatch_action`):
@@ -146,7 +146,7 @@ Content-Type: application/json
 ```
 
 **`approval_mode: "pre_approved"` means the human already approved in the
-dashboard — Cedric must NOT re-ask.** Just execute.
+dashboard: Cedric must NOT re-ask.** Just execute.
 
 ### `type` + `args` shapes
 
@@ -157,7 +157,7 @@ dashboard — Cedric must NOT re-ask.** Just execute.
 | `asana.create_task` | `{ name, notes?, project?, assignee?, due_on? }` |
 | `asana.update_task` | `{ task: "<gid>", completed?, due_on?, … }` |
 | `asana.add_comment` | `{ task: "<gid>", text }` |
-| `task.freeform` | `{ item, owner }` — untyped ask; Cedric's agent interprets it |
+| `task.freeform` | `{ item, owner }`: untyped ask; Cedric's agent interprets it |
 
 `task.freeform` is the common case today (items Laura couldn't type). Cedric's
 agent should reason over `item`/`owner` and pick the connector, exactly as it
@@ -178,7 +178,7 @@ with the same `Idempotency-Key`/`action_id` must execute **once**.
 
 ---
 
-## 4. Chat bridge — inbound half  (`POST /api/laura/events`)
+## 4. Chat bridge: inbound half  (`POST /api/laura/events`)
 
 When a user types in the dashboard Cedric tab, Laura sends:
 
@@ -205,7 +205,7 @@ them, dedupe on `event_id` to avoid echo loops.
 
 ---
 
-## 5. Callbacks INTO Laura (already live — Cedric calls these)
+## 5. Callbacks INTO Laura (already live: Cedric calls these)
 
 ### 5a. Post a chat reply  (`POST {LAURA_BASE}/org/chat`)
 
@@ -214,7 +214,7 @@ POST /org/chat
 Authorization: Bearer <laura_org_token>
 
 # a text reply:
-{ "message": { "text": "On it — I'll chase legal and confirm here.",
+{ "message": { "text": "On it. I'll chase legal and confirm here.",
                "sender_label": "Cedric" } }
 
 # …or an action card the user can Approve/Reject inline in the thread:
@@ -224,7 +224,7 @@ Authorization: Bearer <laura_org_token>
 ```
 
 Send exactly one of `message` | `action_card`. The message appears in the
-dashboard chat within its 4-second poll. **Distilled content only — never raw
+dashboard chat within its 4-second poll. **Distilled content only; never raw
 meeting-transcript text.**
 
 ### 5b. Report action status  (`POST {LAURA_BASE}/org/actions/{action_id}/status`)
@@ -236,12 +236,12 @@ POST /org/actions/<aid>/status
 Authorization: Bearer <laura_org_token>
 
 { "status": "done",
-  "detail": "Sent — https://mail.google.com/…/<msgid>" }
+  "detail": "Sent; https://mail.google.com/…/<msgid>" }
 ```
 
 `status` ∈ `{ executing, done, failed, rejected, needs_details, proposed,
 approved }` (terminal: `done` / `failed` / `rejected`). Put the receipt
-link/text in `detail` — the dashboard renders it as the row's receipt
+link/text in `detail`: the dashboard renders it as the row's receipt
 (`done` becomes a "Done ↗" link when `detail` contains a URL). This closes the
 loop: the Action Center row flips from "approved · with Cedric" to the final
 receipt.
@@ -278,7 +278,7 @@ receipt.
 
 Until Cedric answers §3/§4, the dashboard Cedric tab is served by a **built-in
 stand-in** (`CEDRIC_CHAT_NATIVE_REPLY`, `backend/app/cedric/chat_responder.py`)
-— Laura's own model answering *as* Cedric, grounded in org state, so the tab
+-- Laura's own model answering *as* Cedric, grounded in org state, so the tab
 isn't dead. **Set `CEDRIC_CHAT_NATIVE_REPLY=false` once Cedric's chat bridge is
 live**, and the dashboard hands chat to the real Cedric instead. Action
 dispatch (§3) already prefers Cedric whenever the receiver answers `2xx`; no

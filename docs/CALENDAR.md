@@ -1,7 +1,7 @@
-# Calendar auto-join — Laura joins meetings like a colleague
+# Calendar auto-join: Laura joins meetings like a colleague
 
 Goal: employees add Laura to a meeting (or she watches a shared calendar) and she
-**auto-joins on time** — no one has to send an API call.
+**auto-joins on time**: no one has to send an API call.
 
 There are two ways, from simplest to fullest.
 

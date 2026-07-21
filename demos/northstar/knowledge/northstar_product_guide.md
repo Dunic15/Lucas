@@ -1,4 +1,4 @@
-# Northstar Platform — Product Guide
+# Northstar Platform: Product Guide
 
 > SYNTHETIC DEMO DATA. Fictional product details for the Laura demo only.
 
@@ -12,15 +12,15 @@ guarded actions that require approval before they execute.
 
 Every customer implementation is tracked as a pipeline of five stages, in order:
 
-1. **Kickoff** — goals, success plan, and roles are agreed.
-2. **Data Integration** — the customer's source systems are connected in a
+1. **Kickoff**: goals, success plan, and roles are agreed.
+2. **Data Integration**: the customer's source systems are connected in a
    sandbox. This is where credentials are provisioned.
-3. **Configuration** — workflows, fields, and approvals are set up.
-4. **UAT** — the customer validates the configured workflows.
-5. **Go-Live** — production cutover.
+3. **Configuration**: workflows, fields, and approvals are set up.
+4. **UAT**: the customer validates the configured workflows.
+5. **Go-Live**: production cutover.
 
 A stage can be *done*, *blocked*, *pending*, or *not started*. A stage is
-**blocked** when it cannot proceed without an input the customer owes — most
+**blocked** when it cannot proceed without an input the customer owes; most
 commonly sandbox credentials during Data Integration.
 
 ## Guarded actions
@@ -28,7 +28,7 @@ commonly sandbox credentials during Data Integration.
 Some steps write to a customer account (creating a task, sending a
 notification, opening a ticket). These are **guarded**: the platform shows an
 exact preview, and the action executes only after approval. Guarded actions are
-**idempotent** — re-running an approved action does not create a duplicate.
+**idempotent**: re-running an approved action does not create a duplicate.
 
 ## Follow-up tasks
 

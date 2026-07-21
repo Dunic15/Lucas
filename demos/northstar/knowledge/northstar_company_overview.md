@@ -1,4 +1,4 @@
-# Northstar — Company Overview
+# Northstar: Company Overview
 
 > SYNTHETIC DEMO DATA. Northstar and every person, customer, and figure in this
 > pack are fictional. No real SFF, customer, employee, or credential data.
@@ -6,8 +6,8 @@
 ## What Northstar is
 
 Northstar is a B2B SaaS company. Its product, the **Northstar Platform**, helps
-operations teams automate multi-step workflows — intake, routing, approvals, and
-status tracking — across the tools they already run. Northstar sells to
+operations teams automate multi-step workflows, intake, routing, approvals, and
+status tracking, across the tools they already run. Northstar sells to
 mid-market and enterprise operations, IT, and customer-success teams.
 
 ## How Northstar sells and delivers

@@ -4,7 +4,7 @@
 
 ## Why is an onboarding stuck?
 
-The most common cause is a **blocked Data Integration stage** — the customer has
+The most common cause is a **blocked Data Integration stage**: the customer has
 not provisioned sandbox credentials. Data Integration is the most common place
 for an onboarding to stall. The remedy is a follow-up task to chase the input.
 

@@ -6,16 +6,16 @@ Two axes: interest and influence. High-influence/high-interest people are
 managed closely (they co-own decisions); high-influence/low-interest people
 are kept satisfied (short, outcome-focused updates); high-interest/
 low-influence people are kept informed (they're often your best early-warning
-network); the rest get the newsletter. Re-map at every phase change — reorgs
+network); the rest get the newsletter. Re-map at every phase change; reorgs
 quietly rewrite this grid.
 
 ## RACI, the decision unglue-er
 
 For each major deliverable or decision, assign:
-- **R — Responsible**: does the work (can be several people).
-- **A — Accountable**: owns the outcome and the final call. **Exactly one.**
-- **C — Consulted**: input *before* the decision (two-way).
-- **I — Informed**: told *after* (one-way).
+- **R: Responsible**: does the work (can be several people).
+- **A: Accountable**: owns the outcome and the final call. **Exactly one.**
+- **C: Consulted**: input *before* the decision (two-way).
+- **I: Informed**: told *after* (one-way).
 
 Most project dysfunction is a RACI bug: two A's (deadlock), zero A's (drift),
 ten C's (molasses), or a stakeholder who believed they were C discovering
@@ -36,7 +36,7 @@ unnecessary: the anxious ad-hoc "quick sync" that eats calendars.
 The playbook: early, direct, with options. State the fact ("we will miss
 March 15"), the cause in one sentence (no blame theater), the options with
 your recommendation ("cut reporting scope and hold the date, or ship complete
-on April 5 — we recommend the date move"), and the decision you need, by
+on April 5; we recommend the date move"), and the decision you need, by
 when. People forgive slips; they don't forgive discovering them late.
 
 ## Meetings that respect the room

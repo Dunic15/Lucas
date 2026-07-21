@@ -1,4 +1,4 @@
-# Design B spike — Gemini ears + Laura's gate + ElevenLabs voice
+# Design B spike: Gemini ears + Laura's gate + ElevenLabs voice
 
 The combination you'd actually ship: **keep Laura's control layer and brand voice,
 let Gemini upgrade the ears.** Proves that the realtime model integrates *with*
@@ -29,7 +29,7 @@ Needs: `gcloud auth login` (mints the Vertex token), an ElevenLabs key in `.env`
 
 - Toggle **«richiedi Laura»** to feel the gate: off = she answers everything; on =
   `decision.detect_wake` holds her back unless addressed by name (fuzzy match, so
-  "Lara"/"Laur" still wake her — the real logic).
+  "Lara"/"Laur" still wake her; the real logic).
 - Type in the box to test without a mic (e.g. `Laura, riassumi` vs `riassumi`).
 
 Validated end-to-end 2026-07-14: gate release + gate hold + ElevenLabs audio.
@@ -38,7 +38,7 @@ Validated end-to-end 2026-07-14: gate release + gate hold + ElevenLabs audio.
 - **Intelligence layer is free**: everything downstream runs on the transcript,
   which Gemini provides (`inputAudioTranscription`).
 - **Control layer plugs in**: `decision.py` sits between Gemini's turn and the
-  voice — the same gates (wake / deference / leave) apply.
+  voice; the same gates (wake / deference / leave) apply.
 - **Brand voice kept**: ElevenLabs speaks, not Gemini.
 
 Next: swap the reply source from Gemini's text to Laura's grounded brain (RAG +

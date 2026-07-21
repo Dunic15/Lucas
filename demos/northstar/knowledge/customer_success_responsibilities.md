@@ -37,4 +37,4 @@ A P1 blocker escalates from the CSM to the CSM's manager within 1 business day
 ## For Acme Robotics
 
 The CSM is **Dana Whitfield** and the Implementation Engineer is **Marco
-Ferris** (see *Acme Robotics — Account Brief*).
+Ferris** (see *Acme Robotics: Account Brief*).

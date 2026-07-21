@@ -5,7 +5,7 @@
 - SFF's website links to **SFF Studio** (https://sffstudio.com) as a related
   entity, but the main site publishes no detail about how the studio or any
   bootcamp/mentoring program works.
-- The public site does NOT name any team members, mentors, or advisors — the
+- The public site does NOT name any team members, mentors, or advisors; the
   team section is a placeholder.
 - The fund's background is described only as "Built by Alumni of:"
   Y Combinator, Rocket Internet, UBS, KPMG, HSG, CEMS, Wharton, and RSM.
@@ -34,8 +34,8 @@ this data has not been added yet. Say so, and refer people to info@sff.vc.**
   in sff_overview.md) and ticket size (CHF 100k–300k, Pre-Seed/Seed); point
   pitches to https://pitch.sff.vc.
 - **For sector/synergy scouting:** group companies by the derived sector
-  labels and present overlaps as suggestions to explore — for example,
-  companies serving restaurants/food, or the AI-native group — never as
+  labels and present overlaps as suggestions to explore, for example,
+  companies serving restaurants/food, or the AI-native group, never as
   established partnerships.
 - Keep every answer short enough to say out loud, and always separate
   "the site says" from "not published / ask SFF".

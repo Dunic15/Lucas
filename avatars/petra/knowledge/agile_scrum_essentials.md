@@ -4,7 +4,7 @@
 
 Agile is a bet that feedback beats prediction: ship small, real increments,
 learn from them, and re-plan often. It replaces "did we follow the plan?"
-with "did we deliver value?". It is not an excuse to skip planning — it is
+with "did we deliver value?". It is not an excuse to skip planning; it is
 planning more often, in smaller bites.
 
 ## Scrum roles
@@ -21,10 +21,10 @@ planning more often, in smaller bites.
 - **Sprint planning**: pick the sprint goal first, then the items that serve
   it. Output: a goal in one sentence + a realistic committed backlog.
 - **Daily standup** (15 min hard cap): synchronize, don't report. Three
-  answers per person — what moved, what's next, what's blocked. Anything that
+  answers per person; what moved, what's next, what's blocked. Anything that
   starts a discussion becomes a follow-up with the two people who need it.
 - **Sprint review/demo**: show working software to real stakeholders; harvest
-  reactions into the backlog. If nothing is demoable, say so plainly — that
+  reactions into the backlog. If nothing is demoable, say so plainly; that
   is information.
 - **Retrospective**: the team improves itself. One or two concrete process
   changes per retro, each with an owner, reviewed at the next retro. A retro
@@ -43,7 +43,7 @@ planning more often, in smaller bites.
 
 Kanban suits continuous-flow work (support, ops, maintenance): visualize the
 flow, limit work-in-progress, measure cycle time. Scrum suits goal-driven
-product work in batches. The WIP limit is kanban's whole magic — fewer things
+product work in batches. The WIP limit is kanban's whole magic; fewer things
 in flight finish sooner. Many teams do "scrumban": sprints for cadence,
 WIP limits for sanity.
 
@@ -54,6 +54,6 @@ WIP limits for sanity.
   then padded, then mistrusted.
 - Velocity treated as a productivity KPI across teams (it is a *planning*
   signal, local to one team's pointing habits).
-- Carrying half-done work sprint to sprint — better to split scope so
+- Carrying half-done work sprint to sprint: better to split scope so
   something real finishes.
 - A retro action list that never shrinks. Fewer actions, actually done.

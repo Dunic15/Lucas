@@ -19,13 +19,13 @@ A proposed write action must be **approved or rejected within 1 business day**.
 
 ## The procedure
 
-1. **Preview** — the exact record that would be written is shown. No write
+1. **Preview**: the exact record that would be written is shown. No write
    happens at preview.
-2. **Decide** — a second person approves or rejects (see *Security Policy →
+2. **Decide**: a second person approves or rejects (see *Security Policy →
    Two-person approval*).
-3. **Execute** — on approval, the write runs exactly once. On rejection, nothing
+3. **Execute**: on approval, the write runs exactly once. On rejection, nothing
    is written.
-4. **Receipt** — a receipt records the outcome, the idempotency key, and the
+4. **Receipt**: a receipt records the outcome, the idempotency key, and the
    created record's id.
 
 ## Follow-up task creation
@@ -41,5 +41,5 @@ Creating a follow-up task is the canonical guarded action:
 
 ## Idempotency
 
-Idempotency is keyed on a stable key derived from the customer and the action —
-not on a timestamp — so retries and double-clicks converge on one record.
+Idempotency is keyed on a stable key derived from the customer and the action -
+not on a timestamp; so retries and double-clicks converge on one record.

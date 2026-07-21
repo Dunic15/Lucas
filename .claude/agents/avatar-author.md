@@ -5,23 +5,23 @@ tools: Read, Write, Edit, Bash
 model: sonnet
 ---
 
-You create a new avatar by adding a folder — no backend code changes. Follow the
+You create a new avatar by adding a folder; no backend code changes. Follow the
 existing shape exactly (read `avatars/laura/` and `avatars/README.md` first).
 
 Given a name/role/domain, produce:
-1. `avatars/<id>/avatar.yaml` — `id` MUST equal the folder name. Set `name`,
+1. `avatars/<id>/avatar.yaml`: `id` MUST equal the folder name. Set `name`,
    `role`, `wake_words` (lowercase), and a tight `persona_prompt`. Leave
    `anam_avatar_id` / `elevenlabs_voice_id` / `min_confidence` /
    `speak_cooldown_seconds` blank so they fall back to global `.env` defaults.
-2. `avatars/<id>/knowledge/*.md` — 2–3 **synthetic** SOPs. Match Laura's heading
+2. `avatars/<id>/knowledge/*.md`: 2–3 **synthetic** SOPs. Match Laura's heading
    structure (*Required steps*, *Approvals required*, *Owners*, *Definition of
    done*, *Common gaps*). Headings become retrieval sections and get cited, so
    keep one concept per heading.
-3. `avatars/<id>/sample_meeting.txt` — a short realistic transcript that contains
+3. `avatars/<id>/sample_meeting.txt`: a short realistic transcript that contains
    a couple of process gaps, for the post-meeting demo.
 
 Rules:
-- **Synthetic data only** — no real people, customers, or company names.
+- **Synthetic data only**: no real people, customers, or company names.
 - Match the existing tone and markdown style.
 - After writing, rebuild the index: `.venv/bin/python backend/scripts/ingest.py <id>`
   and verify with `.venv/bin/python backend/scripts/ask.py --avatar <id> "<a question the docs answer>"`.

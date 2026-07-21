@@ -1,19 +1,19 @@
 # Jira Cloud connector
 
 Petra reads the org's **open issues** (owners, due dates) into her meeting brief
-at join — the same shape as the Asana connector (`backend/app/jira_client.py`).
+at join; the same shape as the Asana connector (`backend/app/jira_client.py`).
 Two ways to connect, both self-serve from the **Connections** tab:
 
 ## 1. One-click OAuth ("Connect Jira" → Atlassian login → connected)
 
 The nice flow. It needs a **one-time Atlassian OAuth app** (its client-id/secret
-live in the server env — that's inherent to OAuth, exactly like the Google and
+live in the server env; that's inherent to OAuth, exactly like the Google and
 Asana connect buttons). Once configured, the card shows a single **Connect Jira**
-button that bounces the user to Atlassian and back, connected — no tokens to paste.
+button that bounces the user to Atlassian and back, connected; no tokens to paste.
 
 **Set it up once:**
 1. https://developer.atlassian.com/console/myapps/ → **Create** → **OAuth 2.0 integration**.
-2. **Permissions** → add **Jira API** with scopes: `read:jira-work`, `read:jira-user`, `offline_access` (offline_access is required — it mints the refresh token).
+2. **Permissions** → add **Jira API** with scopes: `read:jira-work`, `read:jira-user`, `offline_access` (offline_access is required; it mints the refresh token).
 3. **Authorization** → **OAuth 2.0 (3LO)** → **Callback URL**: `{PUBLIC_BASE_URL}/oauth/jira/callback` (prod: `https://<host>/oauth/jira/callback`).
 4. **Settings** → copy the **Client ID** and **Secret**, and set on the deployment:
    ```

@@ -1,4 +1,4 @@
-# Laura ↔ Cedric — per-workspace bearer contract (Option A)
+# Laura ↔ Cedric: per-workspace bearer contract (Option A)
 
 **Decision (2026-07-13):** resolve tenancy from a **per-workspace bearer token**,
 not a shared global credential. This closes PR D item 3 and reconciles it with
@@ -6,7 +6,7 @@ item 5 (which today ships only `webhook_secret`, never `webhook_token`).
 
 Chosen over Option B (per-org HMAC everywhere + shared deployment bearer) because:
 - GET routes (`/context`) can't HMAC a body; a per-org **bearer** authenticates a
-  GET naturally — no query-string HMAC canonicalization foot-gun.
+  GET naturally; no query-string HMAC canonicalization foot-gun.
 - The token **is** the org → eliminates the "trust the claimed `org_id`" bug class
   entirely. For a self-serve tenant boundary, the design that can't be gotten
   wrong wins.
@@ -31,16 +31,16 @@ The token still never enters a browser URL (server-to-server only, Bearer
 
 ---
 
-## Laura side (owned by the PR D session — this doc is the spec, not an edit)
+## Laura side (owned by the PR D session: this doc is the spec, not an edit)
 
 1. **Store `webhook_token` per org.** Mirror the existing per-org secret store
    (`LAURA_WEBHOOK_SECRETS_BY_ORG` → add `LAURA_WEBHOOK_TOKENS_BY_ORG`, or a
    `webhook_token` column on the control-plane org row once PR A's Postgres lands).
    Encrypted at rest, never in `config_json`, never logged.
 2. **Send the per-org bearer on every Laura→Cedric call**, not the shared token:
-   `/events` (webhook), `/context`, `/orgs`, `/actions/status`, connectors — all use
+   `/events` (webhook), `/context`, `/orgs`, `/actions/status`, connectors; all use
    `Authorization: Bearer <that org's webhook_token>`.
-3. **Keep per-org HMAC on `/events`** (defense in depth — the token authenticates,
+3. **Keep per-org HMAC on `/events`** (defense in depth: the token authenticates,
    the HMAC binds the payload).
 4. **Update `complete_brain_slack_install` (`backend/app/dashboard.py`)** to accept +
    persist `webhook_token` from the payload.

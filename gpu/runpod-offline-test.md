@@ -1,12 +1,12 @@
-# Runpod offline test — foto + voce → clip parlante (MuseTalk)
+# Runpod offline test: foto + voce → clip parlante (MuseTalk)
 
 Obiettivo: **vedere la qualità** del volto photoreal di Laura che parla, con la sua
 voce ElevenLabs, PRIMA di costruire il live. È un job batch: dai a MuseTalk la foto +
-l'audio, ti sputa un video. Nessun endpoint, nessun adapter — solo qualità da valutare.
+l'audio, ti sputa un video. Nessun endpoint, nessun adapter; solo qualità da valutare.
 
 **Input pronti** (sul desktop, cartella `laura-runpod-test/`):
-- `laura_face.jpg` — il ritratto AI approvato (1122×1402)
-- `laura_voice.wav` — voce ElevenLabs di Laura, 8.5s, 16kHz mono (dal backend `/tts`)
+- `laura_face.jpg`, il ritratto AI approvato (1122×1402)
+- `laura_voice.wav`, voce ElevenLabs di Laura, 8.5s, 16kHz mono (dal backend `/tts`)
 
 **Costo/tempo:** GPU 24GB (RTX 4090 ~$0.34–0.69/h). ~1–2h in tutto (gran parte è il
 download dei pesi ~15GB) → **~$1–2**.
@@ -23,7 +23,7 @@ Nel file-manager di Jupyter Lab, trascina `laura_face.jpg` e `laura_voice.wav` i
 `/workspace/`. *(In alternativa da locale: `runpodctl send laura-runpod-test/` e sul pod
 `runpodctl receive <code>`.)*
 
-## 3. Installa MuseTalk (il pezzo un po' fiddly — vai con calma qui)
+## 3. Installa MuseTalk (il pezzo un po' fiddly: vai con calma qui)
 ```bash
 cd /workspace
 apt-get update && apt-get install -y ffmpeg git
@@ -34,7 +34,7 @@ cd MuseTalk
 pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 --index-url https://download.pytorch.org/whl/cu118
 pip install -r requirements.txt
 
-# mmlab (la parte che si rompe più spesso — installa in QUEST'ordine)
+# mmlab (la parte che si rompe più spesso: installa in QUEST'ordine)
 pip install -U openmim
 mim install mmengine
 mim install "mmcv==2.0.1"
@@ -98,7 +98,7 @@ Runpod → **Stop**/**Terminate** (paghi finché è acceso).
 
 Nota: MuseTalk su foto ferma muove **solo la bocca** (testa immobile → può sembrare un po'
 statico). Se vogliamo più "vita" (testa/espressioni che si muovono), lo step successivo è
-**Ditto** — stessa pipeline, aggiunge il movimento della testa.
+**Ditto**: stessa pipeline, aggiunge il movimento della testa.
 
 ## Se la qualità convince → il live
 Riusa TUTTO: stessa foto, stessa voce, stesso modello. Si aggiunge solo `musetalk_adapter.py`

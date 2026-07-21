@@ -1,4 +1,4 @@
-# Avatar connections + Cedric-brain link — plan
+# Avatar connections + Cedric-brain link: plan
 
 _Written 2026-07-10. Grounds on the live dashboard/auth/avatar code in this repo._
 
@@ -22,7 +22,7 @@ to the default `laura.ai.122222@gmail.com`. If that isn't the inbox Gmail-watch 
 monitors, every address shown is wrong (invites won't summon anyone). Fix = set the env
 to the real watched inbox; then the `+tag` addresses are automatically correct.
 
-**Connections.** The Avatars view lists Gmail/Calendar/Slack/Drive as **static rows** —
+**Connections.** The Avatars view lists Gmail/Calendar/Slack/Drive as **static rows**: 
 they're display only, not a real connect/disconnect flow. `drive_folder_id` is the only
 per-avatar wiring that exists.
 
@@ -48,7 +48,7 @@ Ben owns the Cedric side (see enterprise-tenancy-plan + the e2e map).
   Cedric = `+cedric`, Duccio = `+duccio`. Small change to `_avatar_email` so the primary
   avatar returns the bare base. (Duccio's `+duccio` alias already exists and works.)
 - Longer term: if we get a Workspace on a real domain, watch `avatars@ourdomain` and use
-  `avatars+cedric@…` — same mechanism, professional address.
+  `avatars+cedric@…`: same mechanism, professional address.
 
 ### 2. Per-agent "Configure / Connections" section
 - New tab on the avatar detail: **Configure** with a live list of connections, each a
@@ -56,9 +56,9 @@ Ben owns the Cedric side (see enterprise-tenancy-plan + the e2e map).
 - Storage: per-(org, avatar) connection records (provider, scopes, token ref). Tokens in
   SSM/secret store, never in the row. Reuse the `org_id` seam.
 - Providers v1: Google (Calendar + Drive + Gmail-send), Slack. Each connection is the
-  seam Cedric plugs into — so "what this avatar can touch" is data, not code.
+  seam Cedric plugs into; so "what this avatar can touch" is data, not code.
 
-### 3. Cedric-brain link (cross-repo) — the core
+### 3. Cedric-brain link (cross-repo): the core
 - Add a **"Connect to Cedric (brain)"** connection in Cedric's Configure tab.
 - Define the **contract** with Ben's repo (one page): (a) a server-to-server auth token
   per org; (b) an endpoint on the brain that accepts a *captured action* payload
@@ -70,7 +70,7 @@ Ben owns the Cedric side (see enterprise-tenancy-plan + the e2e map).
   for one principal (Cedric) first.
 
 ### 4. Auto-provisioning on signup
-- On first Google login here: mint `org_id` (done), upsert user (done), and — new —
+- On first Google login here: mint `org_id` (done), upsert user (done), and, new,
   fire a server-to-server "provision org on Cedric brain" call so the counterpart exists
   without manual steps. Idempotent; failure is non-fatal (retry later from Configure).
 
@@ -80,8 +80,8 @@ Ben owns the Cedric side (see enterprise-tenancy-plan + the e2e map).
 - Same data (`a.email`), better presentation; optionally a QR / "add to calendar" helper.
 
 ## Sequencing
-1. **Now:** #1 (addresses) + #5 (invite redesign) — pure this-repo, fast, demo-ready.
-2. **Next:** #2 (Configure/Connections UI + storage) — this-repo, no Cedric dependency
+1. **Now:** #1 (addresses) + #5 (invite redesign): pure this-repo, fast, demo-ready.
+2. **Next:** #2 (Configure/Connections UI + storage): this-repo, no Cedric dependency
    for Google/Slack.
 3. **Then, with Ben:** #3 (brain contract) → #4 (auto-provision). Blocked on the Cedric
    repo exposing the org-provision + action endpoints.

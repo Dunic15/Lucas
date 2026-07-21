@@ -1,8 +1,8 @@
-# Connections — piano integrazioni (Slack via Cedric · Google nativo · estendibile)
+# Connections: piano integrazioni (Slack via Cedric · Google nativo · estendibile)
 
 > Piano per l'area **Connessioni** della piattaforma: una pagina, ogni integrazione è una
-> **card con toggle** (connetti/disconnetti, stato, account). Due famiglie oggi — **Slack
-> (via Cedric, add-on)** e **Google Calendar+Gmail (nativo)** — con un registro pronto ad
+> **card con toggle** (connetti/disconnetti, stato, account). Due famiglie oggi, **Slack
+> (via Cedric, add-on)** e **Google Calendar+Gmail (nativo)**, con un registro pronto ad
 > accogliere i prossimi connettori (CRM/ATS della nicchia, ecc.).
 > Consolida il roadmap: NOW #3 (due-toggle), NEXT #6 (Cedric add-on toggle), NEXT #7 (OAuth
 > per-org), LATER #16 (connettore CRM/ATS). Agg. 2026-07-14.
@@ -11,14 +11,14 @@
 
 ## 0. Il principio (una frase)
 
-L'utente porta **solo la sua LLM key** (direttiva Christian: *"Cedric doesn't even exist — it's
-just an LLM"*). Tutto il resto — Slack, Google, il CRM di domani — sono **connettori opzionali,
+L'utente porta **solo la sua LLM key** (direttiva Christian: *"Cedric doesn't even exist; it's
+just an LLM"*). Tutto il resto, Slack, Google, il CRM di domani, sono **connettori opzionali,
 ognuno un toggle**, che accendono capacità. Slack passa da Cedric (l'add-on a pagamento di
 Jacopo); Google è nativo dentro Laura; i due sono **indipendenti** (uno, l'altro, o entrambi).
 
 ---
 
-## 1. Cosa ESISTE già (i seam — non partiamo da zero)
+## 1. Cosa ESISTE già (i seam: non partiamo da zero)
 
 | Pezzo | Dove | Stato |
 |---|---|---|
@@ -37,7 +37,7 @@ una scelta utente per-org, e aprire il registro ai prossimi connettori.**
 
 ## 2. L'architettura target (due famiglie + un registro)
 
-### A) Slack — via **Cedric** (add-on opzionale, pay-tier)
+### A) Slack: via **Cedric** (add-on opzionale, pay-tier)
 - **Card "Connect Slack"** = il flow `brain/slack/start` → `…/slack/complete` (l'"Add to Slack").
 - Una volta connesso, sotto la card compaiono i **connettori di Cedric** (dal proxy
   `/connectors`): stato per-connettore (connesso / etichetta account / serve riconnessione).
@@ -46,11 +46,11 @@ una scelta utente per-org, e aprire il registro ai prossimi connettori.**
 - **`execution_mode = cedric`** → le azioni approvate vengono eseguite via Cedric→Slack.
 - Owner del gate: **Ben** per l'Interactivity URL (fa scattare il bottone Approve reale).
 
-### B) Google — **nativo** dentro Laura (Calendar + Gmail)
+### B) Google: **nativo** dentro Laura (Calendar + Gmail)
 - **Card "Connect Google"** = `GET /oauth/google/connect` (scope `calendar.events` + `gmail.send`).
   Token refresh cifrato a riposo (Fernet, PR #205). Alimenta il **native executor**.
 - Scelta UX: **una card "Google Workspace"** (un consenso, entrambi gli scope) è più pulita di due
-  card separate Calendar/Gmail — Google chiede un solo consenso. Mostriamo però **due righe di
+  card separate Calendar/Gmail: Google chiede un solo consenso. Mostriamo però **due righe di
   capacità** sotto la card ("📅 Calendar · scrive eventi" / "✉️ Gmail · manda email") con lo stato,
   così l'utente vede cosa abilita. (Se in futuro serve granularità, si splitta.)
 - **`execution_mode = native`** → Laura esegue Calendar/Gmail sul Google dell'utente, zero Cedric.
@@ -60,7 +60,7 @@ una scelta utente per-org, e aprire il registro ai prossimi connettori.**
   flag globale). Con **cedric** → approvazioni instradate a Cedric/Slack; con **native** → executor
   Google diretto. Default sicuro: com'è oggi (demo key-free intatta).
 
-### D) Il registro connettori (estendibile — il pezzo che rende "tutto il resto" facile)
+### D) Il registro connettori (estendibile: il pezzo che rende "tutto il resto" facile)
 - Un **catalogo dichiarativo** dei connettori: `{id, nome, icona, famiglia (native|cedric),
   scope/capacità, connect_url, disconnect_url, status_source}`. La pagina Connections renderizza
   il catalogo → **aggiungere un connettore = una riga nel registro**, non una riscrittura.
@@ -96,26 +96,26 @@ spiega cosa cambia. In coda: card **"Prossimamente"** per i connettori futuri (C
 
 ## 4. Fasi (in ordine di esecuzione)
 
-### Fase 1 — Consolidare le due card-toggle (Google nativo + Slack/Cedric) — 🤖 codice, no deploy
+### Fase 1, Consolidare le due card-toggle (Google nativo + Slack/Cedric), 🤖 codice, no deploy
 - Render della pagina Connections come **griglia di card** dal registro (Google nativo + Slack/Cedric).
 - Cablare stato/etichetta/disconnect già esistenti su ogni card; connect via i route esistenti.
 - **Nessun deploy necessario** per il codice (render-side + config); il go-live vero è la Fase 4.
 
-### Fase 2 — `execution_mode` come scelta utente per-org — 🤖 codice
+### Fase 2, `execution_mode` come scelta utente per-org, 🤖 codice
 - Promuovere lo stub globale a **preferenza per-org** (persisti su org_connections / settings).
 - Toggle in cima alla pagina; branch in finalize/`cedric/integration.py` (già previsto: NEXT #6).
 - Org Cedric esistenti **invariate** (default = comportamento attuale).
 
-### Fase 3 — Rifinire il catalogo connettori di Cedric sotto la card Slack — 🤖 codice
+### Fase 3, Rifinire il catalogo connettori di Cedric sotto la card Slack, 🤖 codice
 - Renderizzare live il proxy `/connectors` (connesso / needs-reconnect / label) come sotto-righe
   della card Slack. "Finire tutte le integrazioni con quello" = mostrare e gestire ognuna.
 - Self-heal link + honor team hint (già risolti lato Cedric #24).
 
-### Fase 4 — Go-live esecuzione nativa (il gate) — 👤+🤖 UN env-deploy
+### Fase 4, Go-live esecuzione nativa (il gate), 👤+🤖 UN env-deploy
 - `GOOGLE_TOKEN_ENC_KEY` in SSM + `NATIVE_EXECUTOR=true` (coordinato con la sessione Gemini).
 - Crypto già pronta (**#205**). → il toggle "Nativo" esegue davvero eventi/mail.
 
-### Fase 5 — Registro pronto ai prossimi connettori — 🤖 codice
+### Fase 5, Registro pronto ai prossimi connettori, 🤖 codice
 - **OAuth per-org** (NEXT #7): ogni utente il suo Google (oggi → org di default). ⚠️ non introdurre
   un terzo id (evita lo split-brain `u_<hash>` vs uuid).
 - **Connettore CRM/ATS** (LATER #16) come nuova card nativa quando la nicchia è scelta
@@ -145,12 +145,12 @@ spiega cosa cambia. In coda: card **"Prossimamente"** per i connettori futuri (C
 
 ---
 
-## 8. Coordinamento — 2 persone sul progetto
+## 8. Coordinamento: 2 persone sul progetto
 
 > Ora si lavora **in due**. `dashboard.py`, `config.py`, `store.py` sono **file caldi** (li toccano già
 > #204 Gemini, #177 org_id, #166 billing, #153 self-serve, ecc.). Regole per non pestarsi i piedi.
 
-**Regola d'oro deploy (App Runner serializza):** **UNA sola persona possiede i deploy App Runner** — in
+**Regola d'oro deploy (App Runner serializza):** **UNA sola persona possiede i deploy App Runner**: in
 questa fase la **sessione Gemini** (owner). L'altra persona lavora **fuori da App Runner** (solo codice +
 branch + draft PR + `ssm put-parameter`). Prima di ogni merge su `main` o deploy: `aws apprunner
 list-operations` su `laura-backend` (deploy in corso?) **+** `gh pr list` **+** `GET /health` →
@@ -178,11 +178,11 @@ list-operations` su `laura-backend` (deploy in corso?) **+** `gh pr list` **+** 
 
 **Meccanica di coordinamento (già in repo):**
 - **`docs/product/COORDINATION-STATUS.md`** = board vivo: chi lavora su cosa, PR in volo, delta non
-  mergiati. **Aggiornarlo a ogni inizio/fine task** — è il canale async tra le due persone.
-- **`origin/main` è la verità** (il main locale può essere stale — confronta sempre vs `origin/main`).
+  mergiati. **Aggiornarlo a ogni inizio/fine task**: è il canale async tra le due persone.
+- **`origin/main` è la verità** (il main locale può essere stale; confronta sempre vs `origin/main`).
 - **Draft PR di default** (l'owner marca ready) per evitare spam review; un branch per feature.
 - **`gh pr list` prima di iniziare** un file caldo → vedi se qualcuno lo sta già toccando.
 
-**Rischio di conflitto ORA (da sapere):** `dashboard.py` è toccato da più draft aperti — la Connections
+**Rischio di conflitto ORA (da sapere):** `dashboard.py` è toccato da più draft aperti; la Connections
 va fatta **dopo** aver visto quali di quei draft mergiano prima (o rebase su `origin/main` appena mergiano).
 Questo lo tiene tracciato `COORDINATION-STATUS.md`.

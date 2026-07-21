@@ -1,13 +1,13 @@
-# Gemini via Vertex AI — setup
+# Gemini via Vertex AI: setup
 
 Adds Google **Gemini** as a brain provider (`BRAIN_PROVIDER=vertex`) and documents
 the **realtime voice** path (Gemini Live). The point of going through **Vertex AI**
 rather than the AI Studio Gemini API: Vertex bills to **Google Cloud**, so it can
 run on **GCP credits** (a Free-Trial credit covers Vertex AI but **not** the AI
-Studio Gemini API — that's why an AI Studio key hits "prepay depleted" even with
+Studio Gemini API; that's why an AI Studio key hits "prepay depleted" even with
 credit sitting in the project).
 
-The live meeting path is **unchanged** — prod still runs Cerebras (live) + Claude
+The live meeting path is **unchanged**: prod still runs Cerebras (live) + Claude
 Sonnet (post). This is opt-in and off by default.
 
 Verified end-to-end 2026-07-14 on project `868562221752` (region `us-central1`,
@@ -38,7 +38,7 @@ gcloud iam service-accounts keys create ~/laura-vertex-sa.json \
   --iam-account=laura-vertex@868562221752.iam.gserviceaccount.com
 ```
 
-Point the app at the key (never commit it — env/SSM only):
+Point the app at the key (never commit it; env/SSM only):
 
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS=~/laura-vertex-sa.json
@@ -56,13 +56,13 @@ VERTEX_LOCATION=global          # required for gemini-3.5-flash; region ok for 2
 VERTEX_MODEL=gemini-3.5-flash   # or gemini-2.5-flash
 ```
 
-`google-auth` is in `requirements.txt` but lazy-imported — the rest of the app and
+`google-auth` is in `requirements.txt` but lazy-imported; the rest of the app and
 the whole test suite never need it. Tool-calling on Vertex is **not** wired (the
 live tool path stays on Cerebras); `complete()` / `stream_complete()` (text) work.
 
 Recommended split: **voice = Gemini** (see below), **brain/organization = Claude**
 (reasons best on action extraction). Claude via *Vertex Model Garden* is a partner
-model and is **not** covered by the GCP Free Trial — use Claude on its own Anthropic
+model and is **not** covered by the GCP Free Trial; use Claude on its own Anthropic
 API.
 
 ## 3. Gemini ears in production (GEMINI_EARS_MODE)
@@ -72,24 +72,24 @@ meeting's mixed raw audio (websocket realtime endpoint → `/realtime/recall-aud
 capability-bound) into a Gemini Live session for native STT + natural end-of-turn.
 
 ```bash
-GEMINI_EARS_MODE=off      # default — today's exact behavior
+GEMINI_EARS_MODE=off      # default; today's exact behavior
 GEMINI_EARS_MODE=shadow   # ears run on real meetings, METRICS ONLY (no PII), zero live impact
 GEMINI_EARS_MODE=on       # ears authoritative: turns feed the same webhook pipeline
                           # (synthesized transcript.data, speaker merged from Recall);
                           # automatic failover to Recall finals if the session dies
 VERTEX_PROJECT=868562221752
-GOOGLE_VERTEX_SA_JSON=<the SA JSON — from SSM /laura/prod/GOOGLE_VERTEX_SA_JSON>
+GOOGLE_VERTEX_SA_JSON=<the SA JSON; from SSM /laura/prod/GOOGLE_VERTEX_SA_JSON>
 ```
 
-Telemetry: `GET /gemini-ears/status` (counts/timing only — transcripts are PII and
+Telemetry: `GET /gemini-ears/status` (counts/timing only; transcripts are PII and
 never leave memory). Rollout: shadow first, validate a real meeting, then flip on.
 
-## 4. Realtime voice (Gemini Live) — spike only
+## 4. Realtime voice (Gemini Live): spike only
 
 Not wired into the live meeting path yet. A standalone spike to feel it lives in
 [`backend/spikes/vertex_live/`](../../backend/spikes/vertex_live/). Key facts
 (cost 6 probes to find):
 
-- Bidi runs **only** on the `global` host — `wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent`. The region-prefixed host 1008s with "was not found".
+- Bidi runs **only** on the `global` host: `wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent`. The region-prefixed host 1008s with "was not found".
 - Model: `gemini-live-2.5-flash`. Output audio is PCM **24 kHz** 16-bit mono; input is PCM **16 kHz**.
 - Setup: `{"setup":{"model": "...gemini-live-2.5-flash", "generationConfig":{"responseModalities":["AUDIO"],"speechConfig":{"languageCode":"it-IT"}}}}`.

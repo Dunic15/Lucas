@@ -1,7 +1,7 @@
-# Demo E2E — runbook & checklist (owner walkthrough)
+# Demo E2E: runbook & checklist (owner walkthrough)
 
 Repeatable script to validate the complete user journey before a demo.
-Sanitized: no tokens, no real customer data — test accounts and the staging
+Sanitized: no tokens, no real customer data; test accounts and the staging
 workspace only. Billing stays in **sandbox** (`BILLING_ENABLED=false` until
 the billing train is merged and flipped deliberately).
 
@@ -10,9 +10,9 @@ the billing train is merged and flipped deliberately).
 | Piece | Where |
 |---|---|
 | Laura backend (prod) | `https://dhfgfe6yw6.eu-central-1.awsapprunner.com` |
-| Cedric (staging — Laura points here) | `https://cedric-staging.vercel.app` |
-| Cedric (prod — after Ben's promote + env flip) | `https://www.meet-cedric.com` |
-| Slack app (staging) | `A0BGHED8Q4A` — Interactivity URL must end in `/api/slack/interactions` (plural!) |
+| Cedric (staging, Laura points here) | `https://cedric-staging.vercel.app` |
+| Cedric (prod, after Ben's promote + env flip) | `https://www.meet-cedric.com` |
+| Slack app (staging) | `A0BGHED8Q4A`: Interactivity URL must end in `/api/slack/interactions` (plural!) |
 | Test Slack workspace | `T0AT2QWB4C8`, approvals channel `C0BGBG3EQDR` |
 
 **Reset between runs:** end any live session (`GET /health` → `active_sessions:0`),
@@ -28,11 +28,11 @@ link per run (the per-URL dedup guard blocks rebooking the same link).
       `GET {cedric}/api/laura/context` → 401 · `POST {cedric}/api/slack/interactions` → 401 "invalid signature"
 - [ ] Tampered install state rejected: `GET {cedric}/api/slack/install?state=garbage` → 400
 - [ ] Slack Interactivity Request URL ends in `/api/slack/interactions` (a missing
-      `s` saves fine in Slack but makes every button dead — verified failure mode)
+      `s` saves fine in Slack but makes every button dead; verified failure mode)
 
 ## 1. USER FLOW (browser, test Google account)
 
-- [ ] New user signs in with Google (scopes: openid/email/profile only — no
+- [ ] New user signs in with Google (scopes: openid/email/profile only; no
       Gmail/Drive consent should appear at login)
 - [ ] Org resolved/created; dashboard loads
 - [ ] Roster shows exactly **Laura + Cedric** (no internal avatars)
@@ -41,7 +41,7 @@ link per run (the per-URL dedup guard blocks rebooking the same link).
 - [ ] "Send an avatar to a meeting": invalid URL (`https://evil.example.com`)
       → toast, **no** session started; valid Meet/Zoom/Teams URL passes
 - [ ] **Add a brief (optional)** → fill Title/Objective/Participants/Notes →
-      Send → in the call, ask the avatar "what's this meeting about?" — it must
+      Send → in the call, ask the avatar "what's this meeting about?": it must
       answer from the brief (context.meeting + brief_markdown reached the session)
 - [ ] Minutes remaining visible in Usage & billing; Free = 15 lifetime minutes
 
@@ -50,7 +50,7 @@ link per run (the per-URL dedup guard blocks rebooking the same link).
 - [ ] Avatars → Cedric → **Connect** → "Add to Slack" (channel field is under
       *Advanced / optional*; leaving it empty = approvals land in installer's DM)
 - [ ] Complete Slack OAuth → status chip flips to **connected**, workspace id shown
-- [ ] Connector catalog loads (list of tools with connected/not-connected state —
+- [ ] Connector catalog loads (list of tools with connected/not-connected state -
       no tokens or secrets anywhere in the UI)
 - [ ] **Disconnect** → chip flips to disconnected, button becomes **Reconnect**
       · if Cedric's revoke fails (502): UI KEEPS "connected" and shows
@@ -94,7 +94,7 @@ link per run (the per-URL dedup guard blocks rebooking the same link).
 3. Stripe test-checkout card entry.
 4. Being present in the actual meeting (speaking the trigger phrases).
 
-## Failure triage — where to look when a step breaks
+## Failure triage: where to look when a step breaks
 
 | Symptom | Ring to inspect |
 |---|---|

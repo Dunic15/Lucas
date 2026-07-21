@@ -36,14 +36,14 @@ questions, and Sonnet for the post-meeting artifact.
 browser operator: one real Chrome session per browse task, created and
 closed by the backend, always bounded and recorded. The visual planner that
 reads the screen is **Claude** (`claude-opus-4-8`) on the existing Anthropic
-account — a browse step costs roughly 1,600–1,800 input tokens plus ~200
+account; a browse step costs roughly 1,600–1,800 input tokens plus ~200
 output, i.e. well under a cent. The free Browserbase tier allows 3
 concurrent sessions and no residential proxies, so bot-protected sites are
 out of scope until a paid tier. The provider sits behind the
 `BrowserProvider` seam, so any CDP-capable vendor could replace it without
 touching the operator, policy engine, or planner.
 
-The **face** is the open-source TalkingHead WebGL avatar (the `/talk` page) —
+The **face** is the open-source TalkingHead WebGL avatar (the `/talk` page) -
 free, no vendor. Anam (the previous paid face vendor) is kept only as a
 fallback page. The **voice** is ElevenLabs, synthesized server-side with word
 timings for lip-sync; free edge-tts is the fallback. **Transcription** is

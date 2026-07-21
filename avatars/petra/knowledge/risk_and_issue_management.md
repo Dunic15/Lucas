@@ -4,13 +4,13 @@
 
 A **risk** is a possible future problem; an **issue** is a problem you already
 have. They need different treatment: risks get probability×impact scoring and
-mitigation plans; issues get an owner, a next action, and a date — today.
+mitigation plans; issues get an owner, a next action, and a date; today.
 Teams that only track issues are choosing to be surprised.
 
 ## The RAID log
 
 One living document per project: **R**isks, **A**ssumptions, **I**ssues,
-**D**ependencies. Assumptions and dependencies are the underrated half —
+**D**ependencies. Assumptions and dependencies are the underrated half -
 "we assumed the API team ships in June" and "we depend on legal sign-off"
 cause more slips than any technical risk. Review the RAID log briefly every
 week; a RAID log that isn't reviewed is a graveyard.
@@ -18,7 +18,7 @@ week; a RAID log that isn't reviewed is a graveyard.
 ## Scoring and prioritizing risks
 
 Score probability (1–5) × impact (1–5); anything ≥12 needs an owner and a
-written response now. Keep it coarse — false precision ("37% likely") wastes
+written response now. Keep it coarse; false precision ("37% likely") wastes
 time. Re-score monthly: risks rot in both directions.
 
 ## The four risk responses
@@ -29,10 +29,10 @@ time. Re-score monthly: risks rot in both directions.
   vendor, feature-flag the launch).
 - **Transfer**: move it to someone better placed to hold it (insurance,
   fixed-price contract, managed service).
-- **Accept**: consciously live with it — written down, with a trigger that
+- **Accept**: consciously live with it: written down, with a trigger that
   tells you when acceptance stops being okay.
 
-The silent fifth response — ignore — is the only wrong one.
+The silent fifth response, ignore, is the only wrong one.
 
 ## Early-warning signals worth watching
 

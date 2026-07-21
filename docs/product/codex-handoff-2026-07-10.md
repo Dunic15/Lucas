@@ -1,13 +1,13 @@
-# Codex handoff — finish the Laura↔Cedric product loop (2026-07-10)
+# Codex handoff: finish the Laura↔Cedric product loop (2026-07-10)
 
 **GOAL (definition of done):** a brand-new user goes `lauravatar.com → Try the
 product → Google login → dashboard → Connect the brain → Send to a meeting →
 asks for a task out loud → approval card in their Slack → Approve → the task
-executes → the dashboard shows the action with a green "done" chip` — with no
+executes → the dashboard shows the action with a green "done" chip`: with no
 manual ops step in the middle, and the avatar leaves the call when asked.
 
 Read first: `CLAUDE.md`, `CODEX.md` (integration contract), and
-`docs/product/laura-cedric-brain-contract.md` (the wire contract of record —
+`docs/product/laura-cedric-brain-contract.md` (the wire contract of record -
 shapes are bit-for-bit, do not drift).
 
 ## Current state (all verified live today)
@@ -35,7 +35,7 @@ shapes are bit-for-bit, do not drift).
   at **staging** (flip to prod after Ben promotes).
 - **Test tenancy**: playground Slack `T0BD32TEEVD` is linked to org
   `u_37428c48502d08b6` (= ducciprofeti@gmail.com), approvals channel
-  `#all-bots-playground` (`C0BECQVB6KS`). Real SFF Slack = `T0AT2QWB4C8` —
+  `#all-bots-playground` (`C0BECQVB6KS`). Real SFF Slack = `T0AT2QWB4C8`: 
   never run tests there. One workspace ↔ one org (409 on cross-org).
 - Today's live-test artifacts: capture works (artifact + action_id), card
   delivery works (verified on the playground), session reconciler closes
@@ -43,7 +43,7 @@ shapes are bit-for-bit, do not drift).
 
 ## Punch list (priority order, each with acceptance criteria)
 
-1. **Leave-on-command bug — issue Dunic15/Laura#117.** The avatar ignored
+1. **Leave-on-command bug: issue Dunic15/Laura#117.** The avatar ignored
    repeated "end/exit" asks (bot `9993f7aa…`). Own the fix in the live path
    (`backend/app/decision.py` / leave handling; see PRs #93/#99 for the prior
    fixes). ACCEPT: in a live Meet, "Cedric puoi uscire" / "you can leave" makes
@@ -54,21 +54,21 @@ shapes are bit-for-bit, do not drift).
    `dashboard.connect_brain`, write `{org_id: secret}` into the SSM param
    `/laura/prod/LAURA_WEBHOOK_SECRETS_BY_ORG` (merge, never clobber) via boto3
    (App Runner instance role must get `ssm:GetParameter/PutParameter` on that
-   ARN — check; if missing, add to the instance role) **and** hot-reload the
+   ARN; check; if missing, add to the instance role) **and** hot-reload the
    registry in-process (make `_secret_for` read a cached dict refreshed from
    SSM every N minutes, instead of the env var frozen at boot). ACCEPT: a new
    user's Connect-the-brain → their next meeting's events verify per-org with
    zero human steps and no redeploy.
 3. **Recall 507 → human error.** `POST /sessions/start` bubbles raw vendor
    errors. Map 507 to `{"error":"avatar_busy", "detail":"All avatars are busy
-   right now — retry in a minute."}` (+ dashboard toast). ACCEPT: unit test +
+   right now; retry in a minute."}` (+ dashboard toast). ACCEPT: unit test +
    dispatch UI shows the friendly message.
 4. **Approve→execute e2e with a real connector.** Connect Gmail on the
    playground workspace via the bridge (Configure → Connect → Cedric's flow),
    then Approve a captured "send recap" action. ACCEPT: email actually sent by
    Cedric, `reportActionStatus('done')` lands, dashboard chip green. If the
    execution needs `LAURA_AUTOEXECUTE`-style wiring, do NOT resurrect PR #7
-   as-is (see its review) — approval-card flow only.
+   as-is (see its review); approval-card flow only.
 5. **"Add to Slack" instead of team-ID paste.** Replace the Connect-the-brain
    form's manual `T…` entry with an OAuth-style flow: Laura redirects to
    Cedric's Slack install URL with `state=org_id`; on install callback Cedric
@@ -78,7 +78,7 @@ shapes are bit-for-bit, do not drift).
    what a team ID is.
 6. **Signup auto-provision (contract §(d) tail).** On first Google login,
    fire-and-forget `provision_org(org_id, …)` when the user later links a team
-   — i.e. keep it lazy, but pre-create the org row on Cedric with
+   - i.e. keep it lazy, but pre-create the org row on Cedric with
    `team_id: null → pending` so Cedric knows the org exists. ACCEPT: Cedric's
    `laura_org_links` gains the row at first login; Connect later just fills
    the team.
@@ -89,12 +89,12 @@ shapes are bit-for-bit, do not drift).
    green against prod Cedric; staging left for staging.
 8. **Auth polish**: custom domain `app.lauravatar.com` (App Runner custom
    domain + Cloudflare DNS); Google OAuth out of Testing (verification or
-   Workspace-internal app — needs the SFF Workspace admin).
+   Workspace-internal app; needs the SFF Workspace admin).
 9. **Cleanup**: remove `LAURA_DEBUG` code block in Cedric `lib/laura.ts` once
    Ben agrees; retire Cedric's legacy `/api/meet/*` fail-open path (Ben's
    call); Cedric PR #7 re-implementation as opt-in with provenance wiring.
 
-## The exact keys Codex needs (pull them yourself — don't ask for pastes)
+## The exact keys Codex needs (pull them yourself: don't ask for pastes)
 
 Grab every secret in one shot (writes a local `laura-secrets.env`, values never
 printed to a shared transcript). zsh does NOT treat `#` as a comment, so this
@@ -118,7 +118,7 @@ You should get exactly these **19 keys** (if any are missing, that's a finding):
 - **Misc (1):** `SLACK_WEBHOOK_URL`
 - **Staging admin (1):** `CEDRIC_ADMIN_SECRET` (under `/laura/staging/`)
 
-Non-secret runtime config (URLs, allow-list) is separate — dump it with:
+Non-secret runtime config (URLs, allow-list) is separate; dump it with:
 ```bash
 aws apprunner describe-service --service-arn arn:aws:apprunner:eu-central-1:836739852304:service/laura-backend/f169c4a486cd47bfac9736ab01367a26 --region eu-central-1 --query 'Service.SourceConfiguration.CodeRepository.CodeConfiguration.CodeConfigurationValues.RuntimeEnvironmentVariables' --output json > laura-config.json
 ```
@@ -133,9 +133,9 @@ aws apprunner describe-service --service-arn arn:aws:apprunner:eu-central-1:8367
 **Best practice: don't paste keys at all.** Give Codex your AWS creds
 (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, region `eu-central-1`) + `gh` auth
 on both repos, and it reads secrets straight from SSM exactly like these
-handoff steps did — nothing sensitive lands in a prompt.
+handoff steps did; nothing sensitive lands in a prompt.
 
-## Credentials / API map (names + WHERE — values live in the stores, never here)
+## Credentials / API map (names + WHERE: values live in the stores, never here)
 
 | Credential | Where it lives | Used for |
 |---|---|---|
@@ -147,13 +147,13 @@ handoff steps did — nothing sensitive lands in a prompt.
 | `GOOGLE_CALENDAR_CLIENT_ID/SECRET`, `SESSION_SECRET` | SSM `/laura/prod/*` | Google login + calendar; cookie HMAC |
 | Plain env (App Runner `laura-backend`) | `aws apprunner describe-service` | `CEDRIC_ORGS_URL`, `DASHBOARD_ALLOWED_EMAILS`, `SURFACE_*`, `CALENDAR_INVITE_EMAILS`, … |
 | `VERCEL_TOKEN`, `CRON_SECRET` | GitHub secrets on `SFF-Studio/Cedric` | staging deploy workflow + ops-staging-env workflow |
-| Cedric envs (`DATABASE_URL` Neon, Slack app creds, Pipedream, `ADMIN_SECRET` prod) | Vercel projects `cedric` / `cedric-staging` (Ben's team) | Cedric runtime — reachable only via Ben or the CI workflows |
+| Cedric envs (`DATABASE_URL` Neon, Slack app creds, Pipedream, `ADMIN_SECRET` prod) | Vercel projects `cedric` / `cedric-staging` (Ben's team) | Cedric runtime; reachable only via Ben or the CI workflows |
 | Google OAuth app + test users | console.cloud.google.com, project `868562221752` → Google Auth Platform → Audience | who can log in while in Testing |
 
 Ops idioms that MUST be followed (they cost money/PII when skipped):
 - **Session guard as its own step** before ANY Laura merge/deploy/update-service:
   `GET /health` `active_sessions==0` AND `apprunner list-operations` not
-  IN_PROGRESS — read the result, THEN act. Never batch check+merge.
+  IN_PROGRESS; read the result, THEN act. Never batch check+merge.
 - App Runner env changes: `describe-service` → patch the FULL
   `CodeConfigurationValues` env maps → `update-service` (partial maps clobber).
 - Cedric: branch from `staging`, draft PRs, never `main` direct, never
@@ -168,4 +168,4 @@ Ops idioms that MUST be followed (they cost money/PII when skipped):
 - What a bot token sees: `GET .../api/admin/slack-channels?team=T0BD32TEEVD`
 - Dry-run pipeline: `POST .../api/laura/test/dry-run`; full trace: `/api/laura/test/trace?bot_id=`
 - Laura status receiver: `POST {laura}/org/actions/{id}/status` (bearer)
-- Synthetic signed event recipe: see `docs/product/laura-cedric-brain-contract.md` §wire shapes (HMAC `t.body`, per-org secret from a re-provision — creds are re-returned idempotently)
+- Synthetic signed event recipe: see `docs/product/laura-cedric-brain-contract.md` §wire shapes (HMAC `t.body`, per-org secret from a re-provision; creds are re-returned idempotently)

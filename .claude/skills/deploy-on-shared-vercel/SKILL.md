@@ -1,18 +1,18 @@
 ---
 name: deploy-on-shared-vercel
-description: Wire up continuous deployment for a GitHub repo on a SHARED / Pro Vercel team so that every push to the production branch deploys — regardless of who authored the commit (teammates, bots, unverified emails) — by creating a DEDICATED new Vercel project, a GitHub Actions workflow that deploys via the Vercel CLI (owner-attributed, so it bypasses Vercel's commit-author block), the token/secret wiring, and an optional custom domain assumed to be on Cloudflare. Use when the user wants to "set up Vercel deploys", "auto-deploy on push", "deploy this repo to our Vercel team", "connect a domain", or reports that Vercel deployments are BLOCKED because a commit author isn't a team member.
+description: Wire up continuous deployment for a GitHub repo on a SHARED / Pro Vercel team so that every push to the production branch deploys, regardless of who authored the commit (teammates, bots, unverified emails), by creating a DEDICATED new Vercel project, a GitHub Actions workflow that deploys via the Vercel CLI (owner-attributed, so it bypasses Vercel's commit-author block), the token/secret wiring, and an optional custom domain assumed to be on Cloudflare. Use when the user wants to "set up Vercel deploys", "auto-deploy on push", "deploy this repo to our Vercel team", "connect a domain", or reports that Vercel deployments are BLOCKED because a commit author isn't a team member.
 allowed-tools: Bash, Read, Write, Edit
 user-invocable: true
 ---
 
 # Deploy on a shared Vercel team (any committer) + Cloudflare domain
 
-## Why this skill exists — the core problem
+## Why this skill exists: the core problem
 
 On a **Pro/Team** Vercel account, Vercel **blocks every git-sourced deployment whose commit author's email is not a verified member of the Vercel team.** This applies to:
 
 - the native Git integration (push → deploy),
-- **deploy hooks** (they are still git-sourced — they do NOT bypass the check),
+- **deploy hooks** (they are still git-sourced: they do NOT bypass the check),
 - `vercel deploy` run inside a checkout that still has a `.git` directory (it reads the HEAD commit author).
 
 So if commits come from teammates, bots, or emails not attached to a GitHub account (e.g. `someone@university.edu`), those deploys land as **BLOCKED** and production never updates. The error looks like:
@@ -24,9 +24,9 @@ So if commits come from teammates, bots, or emails not attached to a GitHub acco
 ## Two hard rules (learned the hard way)
 
 1. **NEVER reuse an existing Vercel project.** Always create a NEW, dedicated project for the repo. Reusing a project that already runs another app (it will have that app's env vars / domains / deployments) risks clobbering a live app and commingling deployments. Before creating, check whether a same-named project already exists and confirm it is not a live app.
-2. **The agent usually CANNOT write GitHub secrets or edit permission settings** in auto mode — a safety classifier hard-blocks `gh secret set` and self-granting permission rules. Plan for the user to add the one secret (`VERCEL_TOKEN`) themselves, OR to add a `Bash(gh secret set:*)` allow rule first. Put the non-secret IDs directly in the workflow so only ONE secret is ever needed.
+2. **The agent usually CANNOT write GitHub secrets or edit permission settings** in auto mode; a safety classifier hard-blocks `gh secret set` and self-granting permission rules. Plan for the user to add the one secret (`VERCEL_TOKEN`) themselves, OR to add a `Bash(gh secret set:*)` allow rule first. Put the non-secret IDs directly in the workflow so only ONE secret is ever needed.
 
-## Keep questions light — prefer defaults over asking
+## Keep questions light: prefer defaults over asking
 
 Don't interrogate the user. Resolve what you can yourself (`gh auth status`, `vercel teams ls`, existing project list, repo framework detection) and lean on these defaults, noting assumptions in a line rather than asking:
 
@@ -35,15 +35,15 @@ Don't interrogate the user. Resolve what you can yourself (`gh auth status`, `ve
 - **Framework** → auto-detect from `package.json`.
 - **Team/scope** → if there is exactly one Vercel team, use it; ask if several exist.
 - **`www` handling** → 308 redirect to apex.
-- **Token** → for the GitHub secret, a **dedicated dashboard token is strongly preferred** — the CLI login token ROTATES (sometimes within a day), silently breaking the Action with "token is not valid". The CLI token is fine for the agent's own API calls during setup.
+- **Token** → for the GitHub secret, a **dedicated dashboard token is strongly preferred**: the CLI login token ROTATES (sometimes within a day), silently breaking the Action with "token is not valid". The CLI token is fine for the agent's own API calls during setup.
 
-Questions are fine for genuinely consequential unknowns — typically the **domain** (which one, apex vs subdomain) or an ambiguous team — but bundle them together rather than asking serially, and mark a recommended default. Skip questions whose answer has an obvious conventional default.
+Questions are fine for genuinely consequential unknowns, typically the **domain** (which one, apex vs subdomain) or an ambiguous team, but bundle them together rather than asking serially, and mark a recommended default. Skip questions whose answer has an obvious conventional default.
 
 ## Inputs to gather first
 
 - **Repo**: `OWNER/REPO` on GitHub (must be pushable; `gh auth status` OK).
-- **Vercel scope/team**: get the team id — `vercel teams ls` or `GET https://api.vercel.com/v2/teams`. It looks like `team_xxx`. Confirm the plan is Pro (`GET /v2/teams/{id}` → `billing.plan`).
-- **New project name**: e.g. `<repo>-landing` / `<repo>-site` — something that is NOT an existing project.
+- **Vercel scope/team**: get the team id: `vercel teams ls` or `GET https://api.vercel.com/v2/teams`. It looks like `team_xxx`. Confirm the plan is Pro (`GET /v2/teams/{id}` → `billing.plan`).
+- **New project name**: e.g. `<repo>-landing` / `<repo>-site`: something that is NOT an existing project.
 - **Production branch**: usually `main`.
 - **Domain** (optional): apex like `example.ai` and/or subdomain like `app.example.ai`, assumed registered on **Cloudflare**.
 - **Vercel token**: read the CLI token from disk for API calls (see below). For the GitHub Action, prefer a **dedicated dashboard token**; the CLI login token also works.
@@ -55,7 +55,7 @@ TOKEN=$(python -c "import json;print(json.load(open('C:/Users/<you>/AppData/Roam
 
 All API calls below use `Authorization: Bearer $TOKEN` and `?teamId=$T` where `T=team_xxx`.
 
-## Step 1 — Create a NEW dedicated Vercel project (git-linked)
+## Step 1: Create a NEW dedicated Vercel project (git-linked)
 
 ```bash
 NEW=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -66,12 +66,12 @@ echo "$NEW"   # prj_...
 ```
 
 - Set `framework` to the real framework (`nextjs`, `vite`, `astro`, or `null` to auto-detect).
-- Git-linking requires the account to have a GitHub **Login Connection** in Vercel (Account → Settings → Login Connections / the GitHub app installed on the org). If `vercel git connect` / linking errors with *"add a Login Connection"*, the user must connect GitHub once in the Vercel dashboard (browser step) — it cannot be done headlessly.
-- Copy any required **environment variables** into the new project (`POST /v10/projects/{id}/env`) — the deploy pulls prod env from project settings.
+- Git-linking requires the account to have a GitHub **Login Connection** in Vercel (Account → Settings → Login Connections / the GitHub app installed on the org). If `vercel git connect` / linking errors with *"add a Login Connection"*, the user must connect GitHub once in the Vercel dashboard (browser step); it cannot be done headlessly.
+- Copy any required **environment variables** into the new project (`POST /v10/projects/{id}/env`); the deploy pulls prod env from project settings.
 
-## Step 2 — Disable native git deploys entirely (avoid duplicate/blocked deploys)
+## Step 2: Disable native git deploys entirely (avoid duplicate/blocked deploys)
 
-Add `vercel.json` at the repo root disabling the native Git integration for ALL branches — the Action owns both production and previews:
+Add `vercel.json` at the repo root disabling the native Git integration for ALL branches; the Action owns both production and previews:
 
 ```json
 {
@@ -83,9 +83,9 @@ Add `vercel.json` at the repo root disabling the native Git integration for ALL 
 
 Disabling only `main` is not enough: native **PR preview** deploys still run and show a red ❌ check ("No GitHub account was found matching the commit author email address") on any PR from an unverified author.
 
-## Step 3 — Add the GitHub Actions workflow (production + PR previews)
+## Step 3, Add the GitHub Actions workflow (production + PR previews)
 
-`.github/workflows/deploy.yml` — both jobs strip git metadata so the deploy is attributed to the token owner (bypasses the commit-author block), then deploy via the CLI. **Hardcode the non-secret org/project IDs** so `VERCEL_TOKEN` is the only secret:
+`.github/workflows/deploy.yml`, both jobs strip git metadata so the deploy is attributed to the token owner (bypasses the commit-author block), then deploy via the CLI. **Hardcode the non-secret org/project IDs** so `VERCEL_TOKEN` is the only secret:
 
 ```yaml
 name: Deploy to Vercel
@@ -117,7 +117,7 @@ jobs:
       - name: Deploy to production
         run: |
           if [ -z "$VERCEL_TOKEN" ]; then
-            echo "::warning::VERCEL_TOKEN not set yet — skipping deploy."
+            echo "::warning::VERCEL_TOKEN not set yet; skipping deploy."
             exit 0
           fi
           vercel deploy --prod --yes --token="$VERCEL_TOKEN"
@@ -142,7 +142,7 @@ jobs:
         id: deploy
         run: |
           if [ -z "$VERCEL_TOKEN" ]; then
-            echo "::warning::VERCEL_TOKEN unavailable (fork PR or secret unset) — skipping preview."
+            echo "::warning::VERCEL_TOKEN unavailable (fork PR or secret unset); skipping preview."
             echo "url=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -158,11 +158,11 @@ jobs:
 
 The `if [ -z ... ]` guards keep runs green before the secret exists and on fork PRs (which don't receive secrets).
 
-## Step 4 — The token + secret
+## Step 4: The token + secret
 
 - **Cannot mint a token from the CLI's OAuth token** (`POST /v3/user/tokens` → `Cannot create tokens for this app`). Have the user create a dedicated token at **Vercel → Account → Settings → Tokens** (scope to the team). Verify a token works: `vercel whoami --token="$TOKEN"`.
-- ⚠️ **Do NOT put the CLI login token in the GitHub secret** except as a stopgap: it rotates (sometimes within a day) and the Action then fails with *"The token provided via --token argument is not valid"*. If that error appears later, the secret is stale — replace it with a dedicated token.
-- **Set the one secret.** Smoothest flow that works out of the box: ask the user to create the dedicated token in the dashboard (open `https://vercel.com/account/settings/tokens` for them; name it `github-actions-<repo>`, no expiration) and **paste the token into the chat**. Once the user has explicitly handed over the token, the agent can run `gh secret set` itself — the auto-mode classifier allows it (it blocks the agent inventing/harvesting a secret, not storing one the user provided):
+- ⚠️ **Do NOT put the CLI login token in the GitHub secret** except as a stopgap: it rotates (sometimes within a day) and the Action then fails with *"The token provided via --token argument is not valid"*. If that error appears later, the secret is stale; replace it with a dedicated token.
+- **Set the one secret.** Smoothest flow that works out of the box: ask the user to create the dedicated token in the dashboard (open `https://vercel.com/account/settings/tokens` for them; name it `github-actions-<repo>`, no expiration) and **paste the token into the chat**. Once the user has explicitly handed over the token, the agent can run `gh secret set` itself; the auto-mode classifier allows it (it blocks the agent inventing/harvesting a secret, not storing one the user provided):
 
   ```bash
   vercel whoami --token="$PASTED"                     # verify BEFORE storing
@@ -170,9 +170,9 @@ The `if [ -z ... ]` guards keep runs green before the secret exists and on fork 
   gh secret list --repo OWNER/REPO                    # confirm
   ```
 
-  Remind the user the token passed through the chat transcript — rotate it if the transcript is ever shared. Fallback if the secret write is still blocked: give the user the PowerShell one-liner `gh secret set VERCEL_TOKEN --repo OWNER/REPO --body "PASTE"`.
+  Remind the user the token passed through the chat transcript; rotate it if the transcript is ever shared. Fallback if the secret write is still blocked: give the user the PowerShell one-liner `gh secret set VERCEL_TOKEN --repo OWNER/REPO --body "PASTE"`.
 
-## Step 5 — Commit, push, verify
+## Step 5: Commit, push, verify
 
 ```bash
 git add .github/workflows/deploy.yml vercel.json && git commit -m "ci: auto-deploy to Vercel (any committer)" && git push origin main
@@ -203,8 +203,8 @@ If deploys failed for a while (e.g. the token went stale), commits landed on the
    ```bash
    gh workflow run deploy.yml --repo OWNER/REPO --ref main   # workflow_dispatch always deploys current HEAD
    ```
-   (Rerunning the newest failed run also works — just make sure it's the newest.)
-2. **Always verify production matches HEAD afterward** — compare content, not just run status:
+   (Rerunning the newest failed run also works; just make sure it's the newest.)
+2. **Always verify production matches HEAD afterward**: compare content, not just run status:
    ```bash
    gh api repos/OWNER/REPO/commits/main --jq '.sha[0:8]'      # what should be live
    gh run list --repo OWNER/REPO --limit 3                    # all green?
@@ -213,7 +213,7 @@ If deploys failed for a while (e.g. the token went stale), commits landed on the
 
 Diagnosis shortcut: `"The token provided via --token argument is not valid"` in the run log = stale token → replace the secret (Step 4), then deploy HEAD as above.
 
-## Step 6 — Custom domain on Cloudflare
+## Step 6: Custom domain on Cloudflare
 
 **Vercel side (agent, via API):** add the domain(s) to the project.
 
@@ -235,7 +235,7 @@ curl -s -H "Authorization: Bearer $TOKEN" "https://api.vercel.com/v6/domains/exa
   | python -c "import sys,json;d=json.load(sys.stdin);print('misconfigured',d.get('misconfigured'));print('A',d.get('recommendedIPv4'));print('CNAME',d.get('recommendedCNAME'))"
 ```
 
-**Cloudflare side (BROWSER — give the user these instructions):** in Cloudflare → the zone → **DNS → Records**, add and set **Proxy status = DNS only (grey cloud)** on each:
+**Cloudflare side (BROWSER; give the user these instructions):** in Cloudflare → the zone → **DNS → Records**, add and set **Proxy status = DNS only (grey cloud)** on each:
 
 | Kind | Type | Name | Value |
 |------|------|------|-------|
@@ -243,8 +243,8 @@ curl -s -H "Authorization: Bearer $TOKEN" "https://api.vercel.com/v6/domains/exa
 | www | CNAME | `www` | `cname.vercel-dns.com` |
 | subdomain | CNAME | `app` (or `studio`) | `cname.vercel-dns.com` |
 
-> 🔴 **Grey cloud (DNS only), NOT orange/proxied.** Vercel provisions its own HTTPS cert and validates the record directly; the Cloudflare proxy causes cert-validation failures and redirect loops. Cloudflare will show "not proxied / cannot reach" warnings — **expected and ignorable** in this setup. To proxy later, first set Cloudflare **SSL/TLS → Full (strict)**.
-> Moving a domain between Vercel projects needs **no DNS change** — just re-assign it in Vercel (`DELETE` from old project, `POST` to new); Vercel routes by assignment, not IP.
+> 🔴 **Grey cloud (DNS only), NOT orange/proxied.** Vercel provisions its own HTTPS cert and validates the record directly; the Cloudflare proxy causes cert-validation failures and redirect loops. Cloudflare will show "not proxied / cannot reach" warnings. **expected and ignorable** in this setup. To proxy later, first set Cloudflare **SSL/TLS → Full (strict)**.
+> Moving a domain between Vercel projects needs **no DNS change**: just re-assign it in Vercel (`DELETE` from old project, `POST` to new); Vercel routes by assignment, not IP.
 
 **Verify** after the user adds the records:
 ```bash

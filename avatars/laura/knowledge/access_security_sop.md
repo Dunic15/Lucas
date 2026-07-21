@@ -1,4 +1,4 @@
-# Access & Security Provisioning — Standard Operating Procedure
+# Access & Security Provisioning: Standard Operating Procedure
 
 **Process owner:** IT / Security
 **Applies to:** Any request to grant, change, or revoke system access
@@ -6,18 +6,18 @@
 
 ## Required steps
 
-1. **Access request filed** — via the access request form. Must name the
+1. **Access request filed**: via the access request form. Must name the
    requester, the person receiving access, the systems, and the access level.
-2. **Manager approval** — the receiving person's manager approves the request.
+2. **Manager approval**: the receiving person's manager approves the request.
    Standard access stops here.
-3. **Security review for elevated access** — admin, production, or
+3. **Security review for elevated access**: admin, production, or
    data-export access requires a documented Security lead approval. No elevated
    access is granted without it.
-4. **Provisioning** — IT grants access through SSO. Direct (non-SSO) grants are
+4. **Provisioning**: IT grants access through SSO. Direct (non-SSO) grants are
    not allowed except for documented break-glass cases.
-5. **Evidence recorded** — the approval and the provisioning action are logged
+5. **Evidence recorded**: the approval and the provisioning action are logged
    with a ticket id. This is the audit trail.
-6. **Quarterly access review** — all elevated access is re-reviewed every
+6. **Quarterly access review**: all elevated access is re-reviewed every
    quarter; unused access is revoked.
 
 ## Approvals required

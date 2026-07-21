@@ -24,7 +24,7 @@ notes now live in [docs/DEPLOY.md](DEPLOY.md).
 - **Container (App Runner / Lightsail / ECS Fargate), existing Docker image:** a
   **1–2 day lift-and-shift**, no code changes. The only sane AWS path.
 - **Region matters:** must be **eu-central-1 (Frankfurt)** to sit next to Recall.
-  The Lambda console link that started this was `us-east-1` — wrong side of the
+  The Lambda console link that started this was `us-east-1`: wrong side of the
   Atlantic.
 - **Nothing on AWS fixes the 2–4s first-token** (that's Anthropic-side) or is
   cheaper-with-effort than the **one-click Render Standard (2 GB) upgrade** that
@@ -49,7 +49,7 @@ targets "any container host (Render, Fly, Railway, Cloud Run, AWS VM)."
 
 ---
 
-## Option A — Serverless (Lambda + API Gateway + DynamoDB): NOT recommended
+## Option A: Serverless (Lambda + API Gateway + DynamoDB): NOT recommended
 
 Lambda is stateless and ephemeral (dies after each request, 15-min max). Every one
 of Laura's four properties breaks:
@@ -63,7 +63,7 @@ of Laura's four properties breaks:
 
 **The irony:** to avoid Lambda cold-start latency on the first-token path (the
 exact thing we're trying to speed up) you buy **provisioned concurrency**, which is
-always-on billing — so the "pay per request" saving disappears and you're paying
+always-on billing; so the "pay per request" saving disappears and you're paying
 for a running server anyway, just a more complex one.
 
 - **Effort:** ~**2–4 weeks** rewrite + full re-test of the Recall / Anam / Gmail /
@@ -73,7 +73,7 @@ for a running server anyway, just a more complex one.
 
 ---
 
-## Option B — Container on AWS (the sane path, if AWS at all)
+## Option B: Container on AWS (the sane path, if AWS at all)
 
 Run the **existing Docker image unchanged** on a managed container service. No code
 rewrite; WebSockets, background loop, and in-memory state all keep working.
@@ -82,7 +82,7 @@ rewrite; WebSockets, background loop, and in-memory state all keep working.
 
 | Service | Model | Notes |
 |---|---|---|
-| **App Runner** | Managed, closest to Render | Auto HTTPS, auto-restart, deploy from image/repo. WebSocket support is limited/newer — verify before committing. |
+| **App Runner** | Managed, closest to Render | Auto HTTPS, auto-restart, deploy from image/repo. WebSocket support is limited/newer; verify before committing. |
 | **Lightsail Containers** | Flat-rate, simplest | 1 GB "Small" ~$20/mo, 2 GB "Medium" ~$40/mo. Managed HTTPS + restart. Easiest lift-and-shift. |
 | **ECS Fargate + ALB** | Most control | ALB handles WebSockets well; more setup (task def, ALB, ACM cert, target group). |
 
@@ -98,7 +98,7 @@ rewrite; WebSockets, background loop, and in-memory state all keep working.
 6. **Re-point every webhook/redirect** (this is where things silently break):
    - Recall realtime transcript endpoint (`PUBLIC_BASE_URL/webhooks/recall`)
    - Recall calendar webhook (`/webhooks/recall-calendar`)
-   - Google OAuth redirect URI (`/oauth/google/callback`) — must match Google
+   - Google OAuth redirect URI (`/oauth/google/callback`): must match Google
      Cloud console exactly or calendar auth 401s
 7. Point the domain (`lauravatar.com` Worker) at the new backend.
 8. Re-run the full live test: Add-people join → she hears → she answers → female
@@ -128,7 +128,7 @@ long-term.
   the fastest model; no faster tier exists). Identical from Render, EC2, App Runner,
   or Lambda. Fix path is prompt-cache + smaller prompt (already deployed) and, if it
   persists, an **Anthropic account rate-limit tier** check in the Console.
-- **The 512 MB glitch/OOM problem.** Fixed by *more RAM* — one click on Render
+- **The 512 MB glitch/OOM problem.** Fixed by *more RAM*: one click on Render
   Standard, or a right-sized container anywhere. Not an AWS-specific benefit.
 
 ---

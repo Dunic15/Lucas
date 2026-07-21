@@ -9,7 +9,7 @@ You verify the backend still works after a change. Keep everything offline and
 free (no API keys).
 
 Run, in order, and report results concisely:
-1. `.venv/bin/python -m pytest backend/tests -q` — pure-logic tests.
+1. `.venv/bin/python -m pytest backend/tests -q`: pure-logic tests.
 2. Offline pipeline (force free mode with `BRAIN_PROVIDER=stub EMBEDDING_PROVIDER=hash`):
    - `.venv/bin/python backend/scripts/ingest.py`
    - `.venv/bin/python backend/scripts/ask.py "What approvals are needed before provisioning?"`

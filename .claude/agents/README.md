@@ -1,17 +1,17 @@
-# Laura — Agent Team & Operating Model
+# Laura: Agent Team & Operating Model
 
 The "operating team" for the company. Every agent reads
 [`.claude/CONTEXT.md`](../CONTEXT.md), `README.md`, and `CODEX.md` first. Claude Code
 auto-routes by the `description` field; you can also name an agent explicitly.
 
-## How we work (operating model — all sessions obey)
+## How we work (operating model: all sessions obey)
 
 - **No direct pushes to `main`.** All work happens on a branch (or worktree) and
   merges through a PR: `claude/<topic>` for Claude sessions, `codex/<topic>` for
   Codex. Worktrees are preferred when parallel sessions share this checkout.
 - **Every session declares, before touching files:** (1) which agent role it is
   acting as, and (2) exactly which files it will touch. Stay inside that set.
-- **code-reviewer reviews every diff before merge** — contract, latency, PII,
+- **code-reviewer reviews every diff before merge**: contract, latency, PII,
   meter safety. No merge without it.
 - **Session ownership (do not cross):**
 
@@ -28,7 +28,7 @@ auto-routes by the `description` field; you can also name an agent explicitly.
   (it assigns branches + file ownership and flags overlap), and **before** merging
   any PR (it checks changed files against ownership, finds cross-PR conflicts,
   confirms code-reviewer + tests happened, and recommends a merge order). It
-  never writes code, never merges, never pushes — it produces an Orchestration
+  never writes code, never merges, never pushes; it produces an Orchestration
   Report the sessions act on.
 
 ## Golden rules (all agents obey)
@@ -43,7 +43,7 @@ auto-routes by the `description` field; you can also name an agent explicitly.
 - **Meters off:** end sessions (Recall per-minute), and never leave the photoreal
   GPU box running (`gpu/stop.sh` / the auto-stop layers).
 - **Synthetic data only** in `avatars/*/knowledge`.
-- **Transcripts are PII** — memory + artifact store only, never logged. **Latency
+- **Transcripts are PII**: memory + artifact store only, never logged. **Latency
   is the product** on the live path.
 - Agents don't commit/push unless explicitly asked; they prefer writing durable
   artifacts to `docs/` over chat-only answers.
@@ -63,7 +63,7 @@ auto-routes by the `description` field; you can also name an agent explicitly.
 
 Plus the existing engineering helpers: **avatar-author** (new avatar = new folder),
 **backend-tester** (test + offline pipeline), **demo-runner** (smoke-test the demo).
-The verification agents (backend-tester, demo-runner) are Bash+Read only — they run
+The verification agents (backend-tester, demo-runner) are Bash+Read only; they run
 and report; fixes go through the owning session.
 
 ## Where each writes (no ownership conflicts)
@@ -77,7 +77,7 @@ and report; fixes go through the owning session.
 
 - **Product:** "product-strategist: spec the smallest version of 'Laura flags a
   missing approval live in the meeting', grounded in decision.py/brain.py."
-- **Review:** "code-reviewer: review the current branch — does anything touch the
+- **Review:** "code-reviewer: review the current branch: does anything touch the
   ws speak-contract, add latency to the live path, or log transcripts?"
 - **GTM / Fundraise:** "growth-gtm: write the landing hero + 3 value props for the
   wedge vs. notetakers." · "fundraise-narrative: draft the 10-slide deck outline and

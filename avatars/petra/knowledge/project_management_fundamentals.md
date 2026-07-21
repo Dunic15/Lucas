@@ -4,10 +4,10 @@
 
 Every project balances three constraints: scope (what gets built), time (when
 it ships), and cost (people and money). Quality is the fourth, implicit
-dimension. You can fix at most two — the third must flex. When a stakeholder
+dimension. You can fix at most two; the third must flex. When a stakeholder
 asks for more scope on the same deadline with the same team, the honest
 answers are: cut other scope, move the date, add capacity (which helps less
-than people expect — see Brooks's law), or knowingly accept lower quality.
+than people expect; see Brooks's law), or knowingly accept lower quality.
 A project manager's core job is making that trade-off explicit *before* it
 gets made silently by exhausted engineers.
 
@@ -38,14 +38,14 @@ that is itself the project's biggest risk.
 Decompose the deliverable, not the activity: break the outcome into smaller
 outcomes until each piece is estimable and ownable (rule of thumb: no work
 package larger than ~two weeks for one owner). The WBS is the backbone for
-estimates, assignments, and progress tracking — anything not in it is, by
+estimates, assignments, and progress tracking; anything not in it is, by
 definition, scope creep when it appears.
 
 ## Milestones and the definition of done
 
 A milestone is a binary, verifiable event ("contract signed", "beta live for
 10 customers"), never a percentage ("80% done" is the most dangerous phrase
-in project reporting — the last 20% routinely takes half the time). Every
+in project reporting; the last 20% routinely takes half the time). Every
 deliverable needs a definition of done agreed *before* work starts: the
 checklist that makes "done" mean the same thing to the builder, the PM, and
 the stakeholder.
@@ -53,6 +53,6 @@ the stakeholder.
 ## Scope creep and change control
 
 Scope creep is not a villain; it is unmanaged change. The fix is a lightweight
-change process: any scope addition gets written down, sized, and traded — what
-moves out, or what date/cost moves — with the sponsor deciding. The discipline
+change process: any scope addition gets written down, sized, and traded, what
+moves out, or what date/cost moves, with the sponsor deciding. The discipline
 is writing it down; a five-line change note beats a meeting memory every time.

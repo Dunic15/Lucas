@@ -11,15 +11,15 @@ pyyaml>=6.0
 
 # Vetted symmetric encryption (Fernet) for the per-org Google refresh token at
 # rest (backend/app/crypto.py). Only imported on a real OAuth connect for the
-# native executor — the zero-key demo never touches it. Ships manylinux wheels,
+# native executor: the zero-key demo never touches it. Ships manylinux wheels,
 # so `pip install` needs no compiler on the python:3.12-slim image.
 cryptography>=42.0,<46
 
-# Optional — only needed for the "best quality" brain (BRAIN_PROVIDER=anthropic).
+# Optional: only needed for the "best quality" brain (BRAIN_PROVIDER=anthropic).
 # The free stub/ollama paths and the whole demo run without it.
 anthropic>=0.40
 
-# Optional — only needed for the Gemini-on-Vertex brain (BRAIN_PROVIDER=vertex).
+# Optional: only needed for the Gemini-on-Vertex brain (BRAIN_PROVIDER=vertex).
 # Lazy-imported in llm.py, so nothing else (nor the tests) requires it.
 google-auth>=2.0
 
@@ -30,10 +30,10 @@ websockets>=12
 # PDF ingestion (drop a PDF into an avatar knowledge/ folder)
 pypdf>=4.0
 
-# Local semantic embeddings (EMBEDDING_PROVIDER=local) — free, no API key.
+# Local semantic embeddings (EMBEDDING_PROVIDER=local): free, no API key.
 fastembed>=0.3
 
-# Free avatar voice (TTS) for the open-source avatar page (/talk) — no key, no GPU.
+# Free avatar voice (TTS) for the open-source avatar page (/talk); no key, no GPU.
 # Replaces Anam's per-minute voice. Swappable for self-hosted Piper/Kokoro later.
 edge-tts>=6.1
 
@@ -44,14 +44,14 @@ boto3>=1.34
 # Multi-tenancy control plane (docs/infra/MULTI-TENANCY*.md). Only used when
 # LAURA_DATABASE_URL is set (Supabase Postgres): Alembic runs the 0001 migration
 # (identity spine + org_id + RLS) and SQLAlchemy/psycopg drive the control DAO.
-# The key-free SQLite demo never imports these — Alembic env.py is a no-op when
+# The key-free SQLite demo never imports these: Alembic env.py is a no-op when
 # the URL is empty.
 sqlalchemy>=2.0
 alembic>=1.13
 psycopg[binary]>=3.1
 
 # Pure-python IANA timezone database so zoneinfo.ZoneInfo(...) resolves on the
-# slim base image (python:*-slim ships no system tzdb) — the find-a-time
+# slim base image (python:*-slim ships no system tzdb): the find-a-time
 # scheduler does all slot math in the organizer's real zone; without this the
 # first non-UTC user would crash in prod only.
 tzdata>=2024.1
@@ -64,15 +64,15 @@ stripe>=14,<16
 playwright>=1.40
 
 # Graphiti temporal knowledge graph (GRAPHITI_ENABLED=true + a Neo4j URI).
-# Extraction runs on Laura's OWN stack (Anthropic LLM + local fastembed — no
+# Extraction runs on Laura's OWN stack (Anthropic LLM + local fastembed; no
 # OpenAI, no new key); lazy-imported in graphiti_client.py, inert when off.
 #
 # The python_version marker is the fix for the 2026-07-20 incident (#319):
 # every graphiti-core release requires Python >=3.10 (verified against PyPI's
 # full history), so on an older build runtime the unmarked line made
-# `pip install -r` fail outright — build dead before boot, zero logs, every
+# `pip install -r` fail outright: build dead before boot, zero logs, every
 # deploy rolled back. With the marker, an old runtime SKIPS the dep (feature
 # stays off, deploy safe) and a >=3.10 runtime installs it. Do not remove the
-# marker until the App Runner runtime is confirmed >=3.10 — check the `python`
+# marker until the App Runner runtime is confirmed >=3.10: check the `python`
 # field of GET /health/graphiti.
 graphiti-core>=0.29,<0.30; python_version >= "3.10"
