@@ -120,6 +120,7 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
         # avatar knows IN CONVERSATION what it can capture, not only at typing
         # time. Opt-in per avatar (same toggle the approve door enforces).
         pd_apps: list[dict] = []
+        pd_org_available: list[str] = []
         try:
             from .. import pipedream_client, pipedream_executor
 
@@ -139,9 +140,22 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
                     pd_apps.append(
                         {"slug": slug, "actions": [n for n in names if n][:4]}
                     )
+                # Org-connected apps this avatar is NOT enabled for — surfaced
+                # as their own brief bucket so the avatar can say "your org has
+                # Notion, but I'm not enabled for it" instead of denying the
+                # tool exists (truthfulness gap seen live 2026-07-21).
+                enabled_slugs = {a["slug"] for a in pd_apps}
+                for acct in pipedream_client.list_accounts(org_id):
+                    slug = str(acct.get("app") or "")
+                    if (slug and slug not in _skip
+                            and slug not in enabled_slugs
+                            and not caps.get(slug)
+                            and slug not in pd_org_available):
+                        pd_org_available.append(slug)
         except Exception:  # noqa: BLE001 — never block a join over the catalog
-            pd_apps = []
+            pd_apps = pd_apps or []
         reg["pd_apps"] = pd_apps
+        reg["pd_org_available"] = pd_org_available[:6]
 
         # Cedric connectors — only when this org has a connected Slack agent.
         cedric_reg: dict = {"connected": [], "available": [], "not_linked": False}
@@ -157,24 +171,32 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
                 team_id = str((brain.get("config") or {}).get("team_id") or "")
         except Exception:  # noqa: BLE001
             brain = None
-        if team_id or brain:
+        # Truthfulness gates (live incident 2026-07-21 — the avatar claimed it
+        # could use Slack in an org whose Slack agent wasn't actually usable):
+        # 1. require the row's OWN team_id — a stale 'connected' row with an
+        #    empty config must NOT trigger an org-only catalog fetch that can
+        #    resolve to another workspace's connectors;
+        # 2. a not_linked (or malformed) catalog yields NO claims at all —
+        #    never fall back to whatever the stale row said.
+        if team_id:
             data = cedric_callback.fetch_org_connectors(org_id, team_id)
             if isinstance(data, dict):
                 if data.get("not_linked"):
                     cedric_reg["not_linked"] = True
-                for c in data.get("connectors") or []:
-                    if not isinstance(c, dict):
-                        continue
-                    name = str(c.get("name") or c.get("key") or "").strip()
-                    if not name:
-                        continue
-                    entry = {"name": name, "kind": "cedric", "write": True,
-                             "approval": "approve",
-                             "needs_reconnect": bool(c.get("needs_reconnect"))}
-                    if c.get("connected"):
-                        cedric_reg["connected"].append(entry)
-                    else:
-                        cedric_reg["available"].append(name)
+                else:
+                    for c in data.get("connectors") or []:
+                        if not isinstance(c, dict):
+                            continue
+                        name = str(c.get("name") or c.get("key") or "").strip()
+                        if not name:
+                            continue
+                        entry = {"name": name, "kind": "cedric", "write": True,
+                                 "approval": "approve",
+                                 "needs_reconnect": bool(c.get("needs_reconnect"))}
+                        if c.get("connected"):
+                            cedric_reg["connected"].append(entry)
+                        else:
+                            cedric_reg["available"].append(name)
         reg["cedric"] = cedric_reg
 
         # THE PER-AVATAR SLACK TOGGLE IS ENFORCED HERE, at snapshot time (off
@@ -255,7 +277,8 @@ def brief(reg: dict | None) -> str:
     else:
         if connected:
             lines.append(
-                "Via the Slack agent after owner approval: " + ", ".join(connected) + "."
+                "Enabled via the Slack agent (captured, then run after owner "
+                "approval): " + ", ".join(connected) + "."
             )
         if available:
             lines.append(
@@ -269,6 +292,16 @@ def brief(reg: dict | None) -> str:
         lines.append(
             f"{nm} (connected via Pipedream — captured then run after owner approval)"
             + (f": e.g. {acts}." if acts else ".")
+        )
+    # Org-connected apps NOT enabled for this avatar: name them honestly as
+    # present-but-off so the avatar neither denies them nor promises them.
+    org_avail = [
+        str(s).replace("_", " ").title() for s in (reg.get("pd_org_available") or [])
+    ]
+    if org_avail:
+        lines.append(
+            "Connected in your org but NOT enabled for you (the owner can "
+            "toggle them on): " + ", ".join(org_avail) + " — don't promise these."
         )
     know = reg.get("knowledge") or {}
     lines.append(
