@@ -248,3 +248,38 @@ def test_create_task_defaults_assignee_to_me(monkeypatch):
 
     asana_client.create_task("org_x", {"name": "Other", "assignee": "dana@x.com"})
     assert posted[1]["assignee"] == "dana@x.com"  # explicit assignee always wins
+
+
+# ───────────── solo-fluid capture (owner ask 2026-07-21) ─────────────
+def test_solo_instruction_captures_without_wake_word(client, recall_stubbed, spoken):
+    """One human in the roster: a direct instruction with NO name is still an
+    unambiguous ask for the avatar — captured + confirmed, not left to the
+    summarizer (round-3 live repro: solo asks became mere 'goals')."""
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    body = _say(
+        client, bot_id,
+        "Please create a task to send the recap, assigned to Dana, "
+        "in the launch project, due Friday",
+    )
+    assert body.get("action_capture") is True
+    assert spoken and spoken[-1]  # a confirmation line was spoken
+
+
+def test_group_instruction_still_requires_the_name(client, recall_stubbed, spoken):
+    """Two humans present: an unaddressed 'someone should…' stays the
+    summarizer's job — capture keeps requiring the name in groups."""
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    _say(client, bot_id, "Hi everyone, thanks for joining")  # speaker: Ben
+    client.post(
+        "/webhooks/recall",
+        json={"event": "transcript.data",
+              "data": {"bot": {"id": bot_id},
+                       "data": {"words": [{"text": "hello"}],
+                                "participant": {"name": "Alice", "id": 2}}}},
+    )
+    body = _say(
+        client, bot_id,
+        "Please create a task to send the recap, assigned to Dana, "
+        "in the launch project, due Friday",
+    )
+    assert body.get("action_capture") is not True
