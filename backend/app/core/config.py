@@ -325,6 +325,13 @@ class Settings(BaseSettings):
     browserbase_api_key: str = ""
     browserbase_project_id: str = ""
 
+    # ── Product analytics (PostHog, server-side) ──
+    # Same project key as the lauravatar.com JS snippet so site + product form
+    # ONE funnel. Empty key = every capture is a no-op (key-free demo, CI).
+    # Events carry ids/counters only — never transcripts, never raw emails.
+    posthog_api_key: str = ""
+    posthog_host: str = "https://eu.i.posthog.com"
+
     # ── Browser B1 "Visual Eyes" (screenshot-driven perception) ──
     # A multimodal planner reads a screenshot + sanitized structure and proposes
     # ONE typed operation; the deterministic B0 policy stays authoritative. OFF

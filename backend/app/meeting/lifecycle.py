@@ -1137,6 +1137,18 @@ async def _finalize_session_locked(
     await run_in_threadpool(
         store.save_artifact, bot_id, artifact, org_id=session.org_id
     )
+    # Product analytics: one counter per finished meeting (ids + counts only,
+    # NEVER content) — the last step of the site→signup→meeting funnel.
+    try:
+        from ..integrations import product_analytics
+
+        product_analytics.capture(
+            "meeting_finalized", session.org_id,
+            {"avatar_id": session.avatar_id,
+             "actions": len(artifact.get("actions") or [])},
+        )
+    except Exception:  # noqa: BLE001 — analytics never break finalize
+        pass
     # Cross-meeting memory: fold this meeting's extracted facts into the
     # ledger. Best-effort — memory must never block the cleanup below
     # (session removal + GPU meter signal), so a ledger hiccup is swallowed.
