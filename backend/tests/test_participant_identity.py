@@ -73,8 +73,11 @@ def test_missing_final_name_resolves_from_participant_id(tmp_path, monkeypatch):
         )
     )
 
-    assert session.transcript[-1].speaker == "Marco"
-    assert session.transcript[-1].participant_id == "2"
+    # The avatar may have answered (solo-fluid), appending her own archived
+    # line — the pin is on the last HUMAN utterance.
+    last_human = session.human_transcript()[-1]
+    assert last_human.speaker == "Marco"
+    assert last_human.participant_id == "2"
     store.remove(session.bot_id)
 
 
@@ -191,7 +194,7 @@ def test_explicit_agent_without_participant_id_does_not_poison_same_name_human(
     store.remove(session.bot_id)
 
 
-def test_agent_assertion_stays_in_transcript_but_not_meeting_state(
+def test_agent_asr_assertion_never_reaches_transcript_or_meeting_state(
     tmp_path, monkeypatch
 ):
     session = _session(tmp_path, monkeypatch, "identity-agent")
@@ -222,7 +225,10 @@ def test_agent_assertion_stays_in_transcript_but_not_meeting_state(
     )
 
     assert body.get("reason") == "own speech"
-    assert session.transcript[-1].speaker_kind == "agent"
+    # Her ASR'd own speech is no longer archived at all — the verbatim line is
+    # written at dispatch by _make_avatar_speak, so archiving the ASR rendition
+    # would double every agent turn. And it must never become evidence.
+    assert "Security is approved" not in session.transcript_text()
     assert "security_approval" in state.missing_steps
     assert not state.decisions
     assert "Security is approved" not in session.transcript_text(

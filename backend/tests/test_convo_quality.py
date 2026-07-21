@@ -179,3 +179,22 @@ def test_ack_lines_are_short_and_varied():
     assert len(main._ACK_LINES) >= 3
     assert all(len(l.split()) <= 4 for l in main._ACK_LINES)
 
+
+
+def test_avatar_speech_is_archived_in_transcript():
+    """Her spoken lines are archived verbatim at dispatch (Recall never
+    transcribes the bot's own output audio) — visible in the raw transcript,
+    invisible to every human-evidence view."""
+    s = _session("convo-archive")
+    assert _speak(s, "I will create that task for you.") is True
+    assert "I will create that task for you." in s.transcript_text()
+    assert s.transcript[-1].speaker_kind == "agent"
+    assert s.transcript[-1].participant_id == "agent:self"
+    assert "create that task" not in s.transcript_text(include_agents=False)
+
+
+def test_backchannel_is_not_archived():
+    """A listening cue ("Mm-hm.") is not a turn: no cooldown, no archive."""
+    s = _session("convo-archive-bc")
+    assert _speak(s, "Mm-hm.", backchannel=True) is True
+    assert "Mm-hm" not in s.transcript_text()

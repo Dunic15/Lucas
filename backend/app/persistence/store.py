@@ -371,7 +371,10 @@ class Session:
         self.transcript.append(utterance)
         # Hot path: the per-utterance write stays on local SQLite (never a
         # network DB — latency is the product). org inherited from the session.
-        _persist_utterance(self.org_id, self.bot_id, utterance)
+        # Honors _persist_enabled like the field writes: an ephemeral session
+        # (unit tests flip it off) has no sessions row for the utterances FK.
+        if getattr(self, "_persist_enabled", False):
+            _persist_utterance(self.org_id, self.bot_id, utterance)
 
     def transcript_text(self, *, include_agents: bool = True) -> str:
         utterances = self.transcript if include_agents else self.human_transcript()
