@@ -236,6 +236,7 @@
   .ac-sub-note{font-size:.78rem;color:var(--faint);margin:-4px 0 10px;}
   .ac-card.proposed{border-style:dashed;}
   .ac-quote{font-size:.76rem;color:var(--dim);font-style:italic;margin:2px 0 4px;}
+  .tsnote{font-size:.72rem;color:var(--faint);font-style:italic;margin:0 0 6px;}
   @media (max-width:640px){ .detail .inner{grid-template-columns:1fr;} }
   .sm-h{font-family:var(--mono);font-size:.58rem;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-bottom:7px;}
   .summary{font-size:.9rem;line-height:1.55;}
@@ -1923,7 +1924,7 @@
         '<td class="r tnum">'+m.actions.length+'</td>'+
         '<td class="r"><div class="rd"><div class="track"><div class="fill'+(m.readiness_score<70?" low":"")+'" style="width:'+Math.max(0,Math.min(100,m.readiness_score))+'%"></div></div><span class="pc">'+(m.readiness_score||"—")+'</span></div></td></tr>'+
         '<tr class="detail" data-d="'+i+'" hidden><td colspan="6"><div class="inner"'+(m.transcript?' style="grid-template-columns:1.2fr 1fr .7fr"':'')+'>'+
-        (m.transcript?'<div><div class="sm-h">Transcript</div><div class="summary tscript">'+esc(m.transcript)+'</div></div>':'')+
+        (m.transcript?'<div><div class="sm-h">Transcript</div><div class="tsnote">Recording begins when the avatar joins the call.</div><div class="summary tscript">'+esc(m.transcript)+'</div></div>':'')+
         '<div><div class="sm-h">AI summary</div><div class="summary">'+(m.summary?esc(m.summary):'<span style="color:var(--faint)">No summary captured.</span>')+'</div>'+
         (m.follow_up_subject?'<div class="sm-h" style="margin-top:12px">Follow-up email</div><div class="summary">'+esc(m.follow_up_subject)+'</div>':'')+'</div>'+
         '<div><div class="sm-h">Actions</div><div class="did">'+
@@ -2525,7 +2526,7 @@
   function acTodoText(a){
     var s=stateOf(a);
     if(s==="needs_details") return "Add the missing details, then approve.";
-    if(s==="proposed") return (a.typed&&a.action_id)?"Review and approve — nothing runs without you.":"Captured from the meeting — tracked here for the record.";
+    if(s==="proposed") return a.action_id?"Review and approve — nothing runs without you.":"Captured from the meeting — tracked here for the record.";
     if(s==="approved") return "Approved — waiting to run.";
     if(s==="executing") return "Running now.";
     if(s==="done") return "Completed — the receipt links to what was created.";
@@ -2566,9 +2567,9 @@
     function acCard(x){
       var a=x.a,m=x.m,s=stateOf(a);
       var ctl="";
-      if(a.typed&&a.action_id&&bucketOf(a)==="attn"){
+      if(a.action_id&&bucketOf(a)==="attn"){
         ctl='<button class="btn primary" data-approve="'+esc(a.action_id)+'">Approve</button>'+
-            '<button class="btn" data-acdetailsbtn="'+esc(a.action_id)+'">Add details</button>'+
+            (a.typed?'<button class="btn" data-acdetailsbtn="'+esc(a.action_id)+'">Add details</button>':'')+
             '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Reject</button>';
       } else if(s==="done"&&a.execution){
         var recUrl=((a.execution.detail||"").match(/https?:\/\/[^\s"'<>]+/)||[])[0]||"";

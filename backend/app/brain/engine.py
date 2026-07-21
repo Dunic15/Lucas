@@ -1056,7 +1056,9 @@ genuinely new relative to that list.
 Separately from committed actions, detect GOALS: things a speaker WANTS to do \
 or is uncertain how to start ("I want to start a research project", "I need a \
 roadmap for X", "I should figure out Y") that never became concrete commitments \
-in the meeting. For each goal, act as a project manager and propose a SHORT \
+in the meeting. A DIRECT REQUEST to the assistant ("create a task in Asana", \
+"send the plan to Marco by Friday") is an ACTION with the assistant as its \
+owner — NEVER a goal, even in a one-on-one where no name was used. For each goal, act as a project manager and propose a SHORT \
 practical plan: 3-5 first steps that would genuinely move that goal forward. \
 Proposed steps are suggestions for the speaker to approve later — keep them \
 concrete but NEVER invent specifics the transcript does not support (no made-up \

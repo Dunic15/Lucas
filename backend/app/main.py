@@ -2015,6 +2015,17 @@ def _in_opening_grace(session: store.Session) -> bool:
     a silent guest, however long the meeting runs."""
     if session.addressed_once:
         return False
+    # Solo-fluid relaxation (owner ask 2026-07-21, round-3 live repro): with ONE
+    # human present the meeting IS a conversation with her — there is no room to
+    # settle into and nobody she could talk over. Without this, the
+    # first_call_required default turns a 1:1 where nobody says her name into a
+    # PERMANENT silent guest (Petra answered nothing for a whole solo meeting),
+    # making the #306 fluid mode unreachable in exactly the case it exists for.
+    try:
+        if len(session.roster(avatar_resolver.for_session(session).name)) <= 1:
+            return False
+    except Exception:  # noqa: BLE001 — resolution trouble: keep the strict gate
+        pass
     if settings.first_call_required:
         return True
     if settings.opening_grace_seconds <= 0:
@@ -3939,9 +3950,15 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # narrow — content questions ("can you check if…") stay on the streamed
     # path, and search intents keep their announced streamed answer. Placed
     # BEFORE the generic ack: this confirmation IS the reply for the turn.
-    # Only when addressed by name: an unaddressed "someone should send X" is
-    # the summarizer's job at finalize.
-    if (called and wants_action_capture(question)
+    # Only when addressed by name — EXCEPT in a true 1:1, where an instruction
+    # is unambiguously for her even without her name (same roster rule as the
+    # _wake_required fluid relaxation; owner ask 2026-07-21, round-3 test: solo
+    # instructions were never captured, so no confirmation ever spoke and every
+    # ask fell to the summarizer as a mere "goal"). Groups keep name-required
+    # capture: an unaddressed "someone should send X" stays the summarizer's
+    # job at finalize.
+    if ((called or len(session.roster(avatar.name)) <= 1)
+            and wants_action_capture(question)
             and not wants_web_search(question)
             # A 'show me Asana / give me a tour' ask is a LIVE thing the
             # avatar does now (browser walkthrough) — never a post-meeting

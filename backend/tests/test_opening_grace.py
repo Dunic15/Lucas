@@ -59,6 +59,12 @@ def _post(payload: dict) -> dict:
 def test_in_opening_grace_logic(tmp_path, monkeypatch):
     s = _session(tmp_path, monkeypatch)
     s.memory_brief = ""
+    # SOLO relaxation (owner ask 2026-07-21): one (or zero) humans present →
+    # the meeting IS a conversation with her; grace never applies.
+    assert main._in_opening_grace(s) is False
+    # A second human makes it a room again → grace applies as before.
+    s.add_utterance("Ben", "hi")
+    s.add_utterance("Alice", "hello")
     assert main._in_opening_grace(s) is True  # fresh join, not addressed
 
     # being named ends it
@@ -96,6 +102,10 @@ def test_unaddressed_line_is_silent_during_grace(tmp_path, monkeypatch):
         return True
 
     monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+    # Two humans present: grace applies (solo meetings skip it — see the
+    # logic test above).
+    _post(_join(s.bot_id, "Alice", 2))
+    _post(_join(s.bot_id, "Marco", 3))
     body = _post(_line(s.bot_id, "Ben", "can everyone hear me okay?"))
     assert body.get("reason") == "opening grace"
     assert body.get("spoke") is False

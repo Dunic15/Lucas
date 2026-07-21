@@ -26,6 +26,11 @@ def _session(tmp_path, monkeypatch, bot_id="intro-bot") -> store.Session:
     store._init_db()
     s = store.create(bot_id, "https://meet.google.com/abc-defg-hij", "laura")
     s.memory_brief = ""
+    # These tests pin the ROOM behavior (grace + intro address a settling
+    # group). Solo meetings skip opening grace entirely (owner ask 2026-07-21),
+    # so give the fixture two humans to stay a valid group scenario.
+    s.participant_event("Ben", 1, here=True)
+    s.participant_event("Alice", 2, here=True)
     monkeypatch.setattr(settings, "deference_seconds", 0)  # no wait if reached
     return s
 
