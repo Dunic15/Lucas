@@ -203,6 +203,26 @@ async def pipedream_apps(request: Request, q: str = "", after: str = "") -> JSON
     )
 
 
+@router.get("/dashboard/pipedream/actions")
+async def pipedream_app_actions(request: Request, app: str = "") -> JSONResponse:
+    """The pre-built Pipedream actions for one app — "what can I do with this
+    tool". Returns [{key, name}] (top of the catalog). Login-gated, cached."""
+    if not pipedream_client.enabled():
+        return _disabled()
+    err, _org = _dash_org(request)
+    if err is not None:
+        return err
+    slug = (app or "").strip().lower()
+    if not _valid_slug(slug):
+        return JSONResponse({"error": "unknown app"}, status_code=400, headers=_NO_STORE)
+    try:
+        actions = pipedream_client.list_actions(slug, limit=25)
+    except pipedream_client.PipedreamError as exc:
+        return JSONResponse({"ok": False, "actions": [], "degraded": type(exc).__name__},
+                            headers=_NO_STORE)
+    return JSONResponse({"ok": True, "app": slug, "actions": actions}, headers=_NO_STORE)
+
+
 @router.post("/dashboard/pipedream/disconnect")
 async def pipedream_disconnect(request: Request) -> JSONResponse:
     """Revoke a connected account on Pipedream. Login + same-origin gated.
