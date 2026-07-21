@@ -130,7 +130,7 @@ def test_session_start_merges_drive_brief(tmp_path, monkeypatch):
     monkeypatch.setattr(
         main_module.drive_client,
         "folder_brief",
-        lambda folder_id: "Pilot starts July 15." if folder_id == FOLDER else "",
+        lambda folder_id, org_id="": "Pilot starts July 15." if folder_id == FOLDER else "",
     )
 
     resp = client.post(

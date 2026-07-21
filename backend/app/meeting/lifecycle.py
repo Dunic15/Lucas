@@ -538,7 +538,7 @@ async def _start_avatar_session(
      jira_snapshot) = await asyncio.gather(
         _quiet(run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org_id)),
         _quiet(
-            run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id)
+            run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id, org_id)
         )
         if avatar.drive_folder_id
         else _quiet(asyncio.sleep(0)),

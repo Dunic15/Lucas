@@ -201,46 +201,89 @@ def list_folders(org_id: str) -> tuple[list[dict], str]:
 
 
 def sync_drive(org_id: str, source_id: str) -> int:
-    """Pull an org's Drive folder with the org's OWN Google token.
+    """Pull an org's Drive folder into the knowledge base.
 
-    Requires the drive.readonly scope on the org's OAuth grant — the same
-    token machinery the native executor uses (google_client), never the
-    global inbox token that drive_client.folder_brief uses. A 403 becomes a
-    clear reconnect instruction on the job."""
+    Cutover-aware: when the org has connected google_drive in Pipedream, reads
+    through the Connect Proxy (managed OAuth — no raw token held here); otherwise
+    the org's native drive.readonly grant (same google_client machinery). List +
+    per-file export/download are identical either way; only the transport
+    differs. A 403 on the native path becomes a clear reconnect instruction."""
     source = dal.get_source(org_id, source_id)
     if source is None or source["kind"] != "drive":
         raise RuntimeError("drive source missing")
     folder = str(source.get("drive_folder_id") or "").strip()
     if not folder:
         raise RuntimeError("source has no drive_folder_id")
-    from .. import google_client
 
-    token, err = google_client._access_token(org_id)
-    if not token:
-        raise RuntimeError(f"google not connected ({err})")
-    headers = {"Authorization": f"Bearer {token}"}
-    try:
-        resp = httpx.get(
-            _DRIVE_FILES_URL,
-            params={
+    from urllib.parse import urlencode
+
+    from ..integrations import drive_client
+
+    pd_account = drive_client._pd_drive_account(org_id)
+
+    # Resolve the two transports up front: `files` (the folder listing) and a
+    # `fetch(url, params) -> (status, bytes)` used per file below.
+    if pd_account:
+        from .. import pipedream_client
+
+        def _pd_get(url: str, params: dict) -> tuple[int, bytes]:
+            full = f"{url}?{urlencode(params)}" if params else url
+            r = pipedream_client.proxy_request(org_id, pd_account, "GET", full)
+            # Export/download bodies are non-JSON → proxy returns them as text.
+            raw = r.get("text")
+            data = raw.encode() if isinstance(raw, str) else b""
+            return int(r.get("status") or 0), data
+
+        lst = pipedream_client.proxy_request(
+            org_id, pd_account, "GET",
+            f"{_DRIVE_FILES_URL}?" + urlencode({
                 "q": f"'{folder}' in parents and trashed=false",
                 "fields": "files(id,name,mimeType,size,modifiedTime)",
                 "orderBy": "modifiedTime desc",
                 "pageSize": _DRIVE_MAX_FILES,
-            },
-            headers=headers,
-            timeout=20.0,
+            }),
         )
-    except Exception as e:  # noqa: BLE001
-        raise RuntimeError(f"drive list failed ({type(e).__name__})") from e
-    if resp.status_code == 403:
-        raise RuntimeError(
-            "drive scope missing — reconnect Google including drive.readonly"
-        )
-    if resp.status_code != 200:
-        raise RuntimeError(f"drive list HTTP {resp.status_code}")
+        if not lst.get("ok"):
+            raise RuntimeError(f"drive list HTTP {lst.get('status')}")
+        files = (lst.get("json") or {}).get("files") or []
+        fetch = _pd_get
+    else:
+        from .. import google_client
+
+        token, err = google_client._access_token(org_id)
+        if not token:
+            raise RuntimeError(f"google not connected ({err})")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        def _native_get(url: str, params: dict) -> tuple[int, bytes]:
+            r = httpx.get(url, params=params, headers=headers, timeout=30.0)
+            return r.status_code, r.content
+
+        try:
+            resp = httpx.get(
+                _DRIVE_FILES_URL,
+                params={
+                    "q": f"'{folder}' in parents and trashed=false",
+                    "fields": "files(id,name,mimeType,size,modifiedTime)",
+                    "orderBy": "modifiedTime desc",
+                    "pageSize": _DRIVE_MAX_FILES,
+                },
+                headers=headers,
+                timeout=20.0,
+            )
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"drive list failed ({type(e).__name__})") from e
+        if resp.status_code == 403:
+            raise RuntimeError(
+                "drive scope missing — reconnect Google including drive.readonly"
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"drive list HTTP {resp.status_code}")
+        files = resp.json().get("files", []) or []
+        fetch = _native_get
+
     ingested = 0
-    for f in resp.json().get("files", []) or []:
+    for f in files:
         mime = str(f.get("mimeType") or "")
         if mime.startswith("application/vnd.google-apps"):
             export = _DRIVE_EXPORT_MIMES.get(mime)
@@ -254,12 +297,10 @@ def sync_drive(org_id: str, source_id: str) -> int:
             params = {"alt": "media"}
             filename = str(f.get("name") or f["id"])
         try:
-            body = httpx.get(
-                url, params=params, headers=headers, timeout=30.0
-            )
-            if body.status_code != 200:
+            status, content = fetch(url, params)
+            if status != 200:
                 continue
-            data = body.content[: settings.knowledge_max_file_bytes]
+            data = content[: settings.knowledge_max_file_bytes]
         except Exception:  # noqa: BLE001 — skip one file, keep the sync
             continue
         doc = dal.upsert_document(
