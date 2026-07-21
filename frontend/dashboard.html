@@ -2564,9 +2564,16 @@
       var a=x.a,m=x.m,s=stateOf(a);
       var ctl="";
       if(a.action_id&&bucketOf(a)==="attn"){
-        ctl='<button class="btn primary" data-approve="'+esc(a.action_id)+'">Approve</button>'+
-            (a.typed?'<button class="btn" data-acdetailsbtn="'+esc(a.action_id)+'">Add details</button>':'')+
-            '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Reject</button>';
+        if(a.executable===false){
+          // No connected tool can run this (free-form capture) — approving it
+          // would dead-end in "Nothing ran". Say so instead of offering it.
+          ctl='<span class="stchip" title="Heard as a free-form ask — no connected tool can run it automatically. It still appears in the follow-up email.">Can\u2019t auto-run</span>'+
+              '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Dismiss</button>';
+        } else {
+          ctl='<button class="btn primary" data-approve="'+esc(a.action_id)+'">Approve</button>'+
+              (a.typed?'<button class="btn" data-acdetailsbtn="'+esc(a.action_id)+'">Add details</button>':'')+
+              '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Reject</button>';
+        }
       } else if(s==="done"&&a.execution){
         var recUrl=((a.execution.detail||"").match(/https?:\/\/[^\s"'<>]+/)||[])[0]||"";
         if(recUrl) ctl='<a class="btn" style="text-decoration:none" href="'+esc(recUrl)+'" target="_blank" rel="noopener">Open receipt ↗</a>';
@@ -2576,7 +2583,7 @@
         :'';
       return '<article class="ac-card'+(a.source==="inferred"?" proposed":"")+'">'+
         '<div class="ac-top">'+stateChipHTML(s)+
-        '<div class="ac-what"><div class="ac-item">'+esc(a.item)+ownerChip(a)+'</div>'+prov+
+        '<div class="ac-what"><div class="ac-item" title="Heard: \u201c'+esc(a.item)+'\u201d">'+esc(a.title||a.item)+ownerChip(a)+'</div>'+prov+
         '<div class="ac-meta">'+avatarBadge(m.avatar_id,avNameOf(m.avatar_id))+'<span>'+esc(avNameOf(m.avatar_id))+'</span>'+
         '<span aria-hidden="true">·</span><span>'+esc(m.platform)+' meeting</span>'+
         '<span aria-hidden="true">·</span><span>'+fmtWhen(m.saved_at)+'</span></div>'+
@@ -2844,7 +2851,7 @@
       '<div class="ph">Actions your avatars proposed — nothing runs without your approval.</div>'+
       rows.map(function(x){
         return '<div class="attnrow">'+stateChipHTML(stateOf(x.a))+
-          '<span class="t">'+esc(x.a.item)+'</span>'+
+          '<span class="t">'+esc(x.a.title||x.a.item)+'</span>'+
           '<span class="who">'+esc(avNameOf(x.m.avatar_id))+' · '+fmtWhen(x.m.saved_at)+'</span>'+
           '<button class="btn" data-acgo="1" style="padding:6px 12px;font-size:.76rem">Review</button></div>';
       }).join("")+

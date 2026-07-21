@@ -159,10 +159,79 @@ _DETAIL_SKIP = re.compile(
 )
 
 
-def missing_action_details(text: str) -> list[str]:
-    """The details a well-filed task still needs, in ask order."""
+# ── ask kinds (live repro 2026-07-21: "send an email to Duccio" got the
+# Asana owner/project/due questionnaire) ────────────────────────────────
+# The clarify slots depend on WHAT was asked: an email wants a recipient and
+# a body, a calendar invite wants attendees and a time, only a task wants the
+# Asana fields. Task patterns win ties ("create a task to email X" files a
+# task); "other" (Slack messages, free-form asks) never clarifies.
+_KIND_TASK = re.compile(
+    r"\b(task|ticket|issue|attivit\w+|asana|jira|backlog|board)\b", re.IGNORECASE
+)
+_KIND_EMAIL = re.compile(r"\b(e-?mail\w*|gmail)\b", re.IGNORECASE)
+_KIND_CALENDAR = re.compile(
+    r"\b(meeting|riunione|call|invite|invito|appointment|appuntamento"
+    r"|calendar|calendario|event[oi]?)\b",
+    re.IGNORECASE,
+)
+_DETAIL_EMAIL_TO = re.compile(
+    r"\b(?:to|for)\s+(?!me\b|us\b|please\b)[a-zà-ù]{3,}"
+    r"|\bsend\s+\w+\s+an?\s+e-?mail",
+    re.IGNORECASE,
+)
+_DETAIL_EMAIL_BODY = re.compile(
+    r"\b(saying|that\s+says|should\s+say|tell(?:ing)?\s+(?:him|her|them)"
+    r"|subject|about\s+\w+|dicendo|che\s+dice)\b",
+    re.IGNORECASE,
+)
+_DETAIL_INVITE_WITH = re.compile(
+    r"\b(?:with|between\s+me\s+and|invite)\s+(?!me\b|us\b)[a-zà-ù]{3,}"
+    r"|\bcon\s+[a-zà-ù]{3,}",
+    re.IGNORECASE,
+)
+_DETAIL_INVITE_WHEN = re.compile(
+    r"\b(at\s+\d|\d{1,2}(?::\d{2})?\s*(?:am|pm)|alle\s+\d)"
+    r"|\b(today|tomorrow|tonight|domani|oggi|stasera"
+    r"|monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+    r"|luned\w|marted\w|mercoled\w|gioved\w|venerd\w|sabato|domenica"
+    r"|next\s+week)\b",
+    re.IGNORECASE,
+)
+
+
+def ask_kind(text: str) -> str:
+    """What family of thing was asked for: task | email | calendar | other."""
+    t = text or ""
+    if _KIND_TASK.search(t):
+        return "task"
+    if _KIND_EMAIL.search(t):
+        return "email"
+    if _KIND_CALENDAR.search(t):
+        return "calendar"
+    return "other"
+
+
+def missing_action_details(text: str, kind: str = "task") -> list[str]:
+    """The details a well-filed action of this kind still needs, in ask
+    order. Kind-blind callers keep the historical task slots."""
     t = " ".join((text or "").split())
     missing: list[str] = []
+    if kind == "email":
+        if not _DETAIL_EMAIL_TO.search(t):
+            missing.append("email_to")
+        if not _DETAIL_EMAIL_BODY.search(t):
+            missing.append("email_body")
+        return missing
+    if kind == "calendar":
+        if not _DETAIL_INVITE_WITH.search(t):
+            missing.append("invite_with")
+        if not _DETAIL_INVITE_WHEN.search(t):
+            missing.append("invite_when")
+        return missing
+    if kind == "other":
+        # Free-form asks (Slack messages, "remind me to…") have no slot
+        # schema — never interrogate, just confirm and queue.
+        return missing
     if not _DETAIL_OWNER.search(t):
         missing.append("owner")
     if not _DETAIL_PROJECT.search(t):
@@ -172,6 +241,80 @@ def missing_action_details(text: str) -> list[str]:
     if not _DETAIL_DESCRIPTION.search(t):
         missing.append("description")
     return missing
+
+
+# ── same-intent retry damping (live repro 2026-07-21: four cards for one
+# email — every ASR-mangled retry minted a fresh action) ────────────────
+_ASK_STOP = {
+    "can", "could", "you", "please", "the", "a", "an", "to", "for", "me",
+    "just", "i", "wanted", "want", "hi", "hello", "so", "okay", "ok", "and",
+    "would", "will", "hey", "still", "talking", "petra", "cedric", "laura",
+    "puoi", "potresti", "per", "una", "un", "il", "la", "mi", "ciao",
+}
+# Action machinery: words every ask of a kind shares. They establish the KIND
+# (checked separately) but carry no identity — two different task asks share
+# create/task/assigned/due/project, and counting those as overlap merged
+# genuinely distinct instructions.
+_ASK_BOILER = {
+    "create", "task", "tasks", "email", "mail", "meeting", "call", "invite",
+    "ticket", "issue", "event", "assigned", "assign", "due", "project",
+    "board", "backlog", "description", "should", "say", "saying", "says",
+    "called", "send", "schedule", "book", "also", "new", "between",
+    "invito", "riunione", "evento", "crea", "manda", "invia", "prenota",
+}
+_ASK_VOCATIVE = re.compile(r"^\s*[A-Z][a-zà-ù]+,\s*")
+_ASK_RECIPIENT = re.compile(
+    r"\b(?:to|with|for|between\s+me\s+and|con)\s+([a-zà-ù]+)", re.IGNORECASE
+)
+
+
+def _ask_payload(text: str) -> set[str]:
+    """Identity-carrying tokens: everything minus stopwords, minus the kind's
+    boilerplate, minus a leading vocative ('Patrick, …' is the ASR mis-hearing
+    the wake word, not payload)."""
+    t = _ASK_VOCATIVE.sub("", text or "")
+    return {
+        w
+        for w in re.findall(r"[a-zà-ù]+", t.lower())
+        if w not in _ASK_STOP and w not in _ASK_BOILER and len(w) >= 3
+    }
+
+
+def _ask_recipient(text: str) -> str:
+    m = _ASK_RECIPIENT.search(text or "")
+    w = m.group(1).lower() if m else ""
+    return "" if (w in _ASK_STOP or w in _ASK_BOILER or len(w) < 3) else w
+
+
+def same_ask(a: str, b: str) -> bool:
+    """Whether two heard asks are retries of ONE intent.
+
+    Same kind always required. Conflicting recipients always split ("email to
+    Ben" vs "email to Duccio"), with a 4-char prefix tolerance for ASR drift.
+    Email/calendar asks then MERGE unless both carry substantial payloads
+    that clearly diverge — a bare retry ("could you send an email") and an
+    ASR-mangled one merge into the original. Task/free-form asks carry their
+    identity in the payload (the task NAME), so those need real overlap."""
+    kind = ask_kind(a)
+    if kind != ask_kind(b):
+        return False
+    ra, rb = _ask_recipient(a), _ask_recipient(b)
+    if ra and rb and ra != rb and not (
+        ra.startswith(rb[:4]) or rb.startswith(ra[:4])
+    ):
+        return False
+    pa, pb = _ask_payload(a), _ask_payload(b)
+    if kind in ("email", "calendar"):
+        if (
+            len(pa) >= 2
+            and len(pb) >= 2
+            and len(pa & pb) / min(len(pa), len(pb)) < 0.5
+        ):
+            return False
+        return True
+    if len(pa) < 2 or len(pb) < 2:
+        return False
+    return len(pa & pb) / min(len(pa), len(pb)) >= 0.6
 
 
 def is_detail_skip(text: str) -> bool:

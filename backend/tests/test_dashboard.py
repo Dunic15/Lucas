@@ -225,3 +225,41 @@ def test_legacy_artifact_without_avatar_id(client):
     assert m["avatar_id"] == ""
     assert m["platform"] == "—"
     assert m["duration_seconds"] == 0
+
+
+def test_action_entry_executable_and_title():
+    """Untyped free-text captures route to the approval-blocked Cedric
+    dispatch — the dashboard must not offer an Approve that dead-ends in
+    'Nothing ran' (live repro 2026-07-21). Typed actions stay approvable.
+    Cards also carry a cleaned display title; the verbatim ASR stays in
+    'item' as evidence."""
+    from app.api.dashboard import _action_entry
+
+    untyped = _action_entry({
+        "action_id": "a1",
+        "item": "Patrick, can you send an email to please?",
+    })
+    assert untyped["executable"] is False
+    assert untyped["title"] == "Send an email to please"
+    assert untyped["item"] == "Patrick, can you send an email to please?"
+
+    typed = _action_entry({
+        "action_id": "a2",
+        "item": "Create a task called launch checklist",
+        "typed": {"type": "asana.create_task", "args": {"name": "launch"}},
+    })
+    assert typed["executable"] is True
+
+    routed = _action_entry({
+        "action_id": "a3",
+        "item": "book the room",
+        "execution_route": "native",
+    })
+    assert routed["executable"] is True
+
+    stutter = _action_entry({
+        "action_id": "a4",
+        "item": "Can , can you book a meeting for tomorrow Can you book a "
+                "meeting for tomorrow with Anant?",
+    })
+    assert stutter["title"] == "Book a meeting for tomorrow with Anant"

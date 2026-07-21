@@ -17,6 +17,7 @@ import asyncio
 import base64
 import json
 import platform
+import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -128,6 +129,44 @@ def _platform(meeting_url: str) -> str:
     return "—" if not url else "Link"
 
 
+_TITLE_JUNK = re.compile(
+    r"^(?:(?:so|okay|ok|well|and|then|also|yeah|please|hi|hello|um|uh"
+    r"|allora|quindi|dai|va\s+bene)[,.\s]+)+",
+    re.IGNORECASE,
+)
+_TITLE_VOCATIVE = re.compile(r"^\s*[A-Za-zà-ù]+,\s+")
+_TITLE_ASK_PREFIX = re.compile(
+    r"^(?:can|could|would|will)\s+you\s+(?:please\s+)?", re.IGNORECASE
+)
+
+
+def _display_title(text: str) -> str:
+    """A cleaned card title from a verbatim heard ask. The ASR transcript is
+    kept character-for-character as EVIDENCE ('item'); this strips the spoken
+    scaffolding — leading fillers, the vocative name ('Patrick, …'), the
+    'can you' frame, doubled words — so the card reads like a to-do."""
+    t = " ".join((text or "").split())
+    t = re.sub(r"\b(\w+)(\s*,\s*\1)+\b", r"\1", t, flags=re.IGNORECASE)
+    # ASR stutter: the whole clause re-heard mid-sentence ("book a meeting
+    # for tomorrow Can you book a meeting for tomorrow with Anant").
+    t = re.sub(
+        r"(.{10,}?)[,.\s]+(?:can|could|would|will)\s+you\s+(?:please\s+)?\1",
+        r"\1",
+        t,
+        flags=re.IGNORECASE,
+    )
+    for _ in range(2):
+        t = _TITLE_JUNK.sub("", t)
+        t = _TITLE_VOCATIVE.sub("", t) if _TITLE_ASK_PREFIX.match(
+            _TITLE_VOCATIVE.sub("", t)
+        ) or _TITLE_JUNK.match(_TITLE_VOCATIVE.sub("", t)) else t
+    t = _TITLE_ASK_PREFIX.sub("", t)
+    t = re.sub(r"[.?!\s]+$", "", t).strip()
+    if not t:
+        return str(text or "")[:300]
+    return (t[0].upper() + t[1:])[:300]
+
+
 def _action_entry(action) -> dict:
     """Normalize an artifact action (dict or bare string) for the wire.
     action_id rides along so summary() can decorate each action with the
@@ -151,6 +190,20 @@ def _action_entry(action) -> dict:
             "done": bool(action.get("done") or action.get("status") == "done"),
             "typed": isinstance(action.get("typed"), dict)
             and bool(action["typed"].get("type")),
+            "title": _display_title(
+                str(action.get("item") or action.get("step") or "")
+            ),
+            # Whether approving can actually RUN something. Untyped free-text
+            # captures route to the Cedric dispatch that dashboard approvals
+            # deliberately block (approval_runtime_guard) — approving one dead-
+            # ends in "Nothing ran" (live repro 2026-07-21). The dashboard
+            # hides Approve for these and says why instead.
+            "executable": (
+                isinstance(action.get("typed"), dict)
+                and bool(action["typed"].get("type"))
+            )
+            or str(action.get("execution_route") or "")
+            in ("native", "pipedream", "browser"),
             # Provenance (Petra's PM judgement, bounded): "explicit" = a stated
             # commitment; "inferred" = a PROPOSED step decomposed from a spoken
             # goal — rendered in the Action Centre's "Proposed" subsection with
@@ -161,6 +214,7 @@ def _action_entry(action) -> dict:
         }
     return {"action_id": "", "item": str(action)[:300], "owner": "",
             "unassigned": False, "gap": "", "done": False, "typed": False,
+            "title": _display_title(str(action)), "executable": False,
             "source": "explicit", "goal": "", "inferred_from": ""}
 
 
