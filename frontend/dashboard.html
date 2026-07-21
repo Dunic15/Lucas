@@ -1199,7 +1199,9 @@
   // Otherwise, restore the view from the URL hash so a plain refresh keeps you
   // where you were (Connections stays Connections) instead of resetting to Overview.
   var _hashView=(window.location.hash||"").replace(/^#/,"");
-  if(pdResult){ go("pipedream"); }
+  // "pipedream" stopped being its own view when it merged into Connections —
+  // go("pipedream") would fall back to Overview and strand the user there.
+  if(pdResult){ go("connections"); }
   else if(oauthResult||googleResult||connResult||asanaResult||jiraResult){ go("connections"); }
   else if(VIEWS.indexOf(_hashView)>=0){ go(_hashView); }
   // After a norefresh return, Cedric's callback already burned its own retries —
@@ -3430,6 +3432,12 @@
         var html='';
         if(degraded){
           html+='<div class="cnote" style="padding:9px 13px;margin-bottom:10px;border-color:rgba(245,72,77,.4)">Couldn’t reach Pipedream just now, so connection status may be out of date. You can still start a connect flow below.</div>';
+        }
+        // Dev-mode Connect only completes for teammates signed in to
+        // pipedream.com with project access — everyone else fails at
+        // "Continue" with no explanation. Say so up front instead.
+        if(env==="development"){
+          html+='<div class="cnote" style="padding:9px 13px;margin-bottom:10px;border-color:rgba(240,170,50,.45)">Pipedream is in <b>development mode</b>: connecting an app only works if you are signed in to pipedream.com in this browser with access to the project — for anyone else the connect page fails at “Continue”. An administrator can open this to everyone by enabling production for the Connect project on pipedream.com and setting <code>PIPEDREAM_ENVIRONMENT=production</code>.</div>';
         }
         // 1) Pipedream-connected tools — NO heading here; they visually continue
         //    the "Your connected tools" block that starts in #conns (native cards)
