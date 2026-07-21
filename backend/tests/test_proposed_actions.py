@@ -110,3 +110,63 @@ def test_summary_carries_provenance_and_gates_transcript():
     d3 = c.get("/dashboard/summary").json()
     m3 = next(mm for mm in d3["meetings"] if mm["bot_id"] == "bot_prov")
     assert "transcript" not in m3
+
+
+def test_total_wipe_triggers_one_verbatim_retry(monkeypatch):
+    """Model extracts asks but grounding kills all of them -> exactly one retry
+    with the verbatim reminder; the retry's surviving actions win."""
+    import json
+    from app import avatars
+    from app.brain import engine as brain
+
+    transcript = "Petra, please create a task in Asana for the connectivity check"
+    bad = {"summary": "s", "decisions": [], "risks": [], "follow_up_email": {},
+           "actions": [{"item": "Organize the quarterly offsite in Lisbon",
+                        "owner": "X", "deadline": "",
+                        "evidence": "they talked about an offsite event"}]}
+    good = {"summary": "s", "decisions": [], "risks": [], "follow_up_email": {},
+            "actions": [{"item": "Create a task in Asana", "owner": "Petra",
+                         "deadline": "", "gap_type": "none",
+                         "evidence": "please create a task in Asana for the connectivity check"}]}
+    calls = []
+
+    def fake_complete(system, user, **kwargs):
+        calls.append(system)
+        return json.dumps(bad if len(calls) == 1 else good)
+
+    monkeypatch.setattr(settings, "brain_provider_post", "anthropic")
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-key")
+    monkeypatch.setattr(brain.llm, "complete", fake_complete)
+    monkeypatch.setattr(brain, "retrieve", lambda avatar, query, k=6: [])
+
+    artifact = brain.post_meeting(avatars.load("petra"), transcript)
+
+    assert len(calls) == 2
+    assert "EXACTLY, character-for-character" in calls[1]
+    assert [a["item"] for a in artifact["actions"]] == ["Create a task in Asana"]
+
+
+def test_no_retry_when_actions_survive(monkeypatch):
+    import json
+    from app import avatars
+    from app.brain import engine as brain
+
+    transcript = "Petra, please create a task in Asana for the connectivity check"
+    good = {"summary": "s", "decisions": [], "risks": [], "follow_up_email": {},
+            "actions": [{"item": "Create a task in Asana", "owner": "Petra",
+                         "deadline": "", "gap_type": "none",
+                         "evidence": "make an Asana task for the connectivity check"}]}
+    calls = []
+
+    def fake_complete(system, user, **kwargs):
+        calls.append(1)
+        return json.dumps(good)
+
+    monkeypatch.setattr(settings, "brain_provider_post", "anthropic")
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-key")
+    monkeypatch.setattr(brain.llm, "complete", fake_complete)
+    monkeypatch.setattr(brain, "retrieve", lambda avatar, query, k=6: [])
+
+    artifact = brain.post_meeting(avatars.load("petra"), transcript)
+    assert len(calls) == 1  # fuzzy grounding accepted the light paraphrase
+    assert [a["item"] for a in artifact["actions"]] == ["Create a task in Asana"]

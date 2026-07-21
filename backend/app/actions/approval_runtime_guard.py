@@ -74,7 +74,7 @@ def _patch_runtime() -> None:
         # stamped 'pipedream' (or 'browser') is left untouched. Dependency-release
         # rows retain their existing compatibility behavior.
         if route not in ("browser", "pipedream") and via != "dependency-release":
-            resolved = executor.route_for_typed((action or {}).get("typed"))
+            resolved = executor.route_for_typed((action or {}).get("typed"), org)
             if resolved != "cedric":
                 action = dict(action or {})
                 action["execution_route"] = resolved

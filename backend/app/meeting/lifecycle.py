@@ -37,7 +37,7 @@ _BOT_VARIANT_RANK = {
 }
 
 
-def _stamp_action_routing(actions: list) -> list:
+def _stamp_action_routing(actions: list, org_id: str = "") -> list:
     """Routing-role stamps (agreed action-lifecycle contract
     hsk_con_cnw4567mqj3p49dyn3dg): every canonical action carries an
     IMMUTABLE execution_route decided here (native iff our executor will run
@@ -53,7 +53,7 @@ def _stamp_action_routing(actions: list) -> list:
             continue
         a = dict(a)
         if not a.get("execution_route"):
-            a["execution_route"] = executor.route_for_typed(a.get("typed"))
+            a["execution_route"] = executor.route_for_typed(a.get("typed"), org_id)
         a.setdefault("correlation_id", str(a.get("action_id") or ""))
         a.setdefault("execution_policy", "approval_required")
         owner = str(a.get("owner") or "").strip()
@@ -566,7 +566,7 @@ async def _start_avatar_session(
      jira_snapshot) = await asyncio.gather(
         _quiet(run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org_id)),
         _quiet(
-            run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id)
+            run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id, org_id)
         )
         if avatar.drive_folder_id
         else _quiet(asyncio.sleep(0)),
@@ -1104,7 +1104,8 @@ async def _finalize_session_locked(
     # Routing-role stamps — UNCONDITIONAL (executor on or off): finalize is
     # the contract's first decision point, and the route persisted here is
     # what the approve door executes by.
-    artifact["actions"] = _stamp_action_routing(artifact.get("actions") or [])
+    artifact["actions"] = _stamp_action_routing(
+        artifact.get("actions") or [], session.org_id)
     artifact["checklist"] = artifact["actions"]
 
     # The transcript is the raw material of the artifact — persist it so the

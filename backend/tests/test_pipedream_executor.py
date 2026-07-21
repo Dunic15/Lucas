@@ -70,17 +70,31 @@ def test_route_off_keeps_asana_native(monkeypatch):
     assert executor.route_for_typed({"type": "asana.create_task", "args": {"name": "x"}}) == "native"
 
 
-def test_route_on_sends_asana_to_pipedream_google_slack_stay_native(monkeypatch):
+def test_route_on_sends_asana_to_pipedream_google_falls_back_until_connected(monkeypatch):
     _enable_pd(monkeypatch)
     assert executor.route_for_typed({"type": "asana.create_task", "args": {"name": "x"}}) == "pipedream"
     assert executor.route_for_typed({"type": "asana.update_task", "args": {"task": "1", "name": "y"}}) == "pipedream"
-    # The whole Google block stays native; Slack stays native (Cedric owns the app).
+    # Google types are OWNED by Pipedream now, but during the cutover they route
+    # to Pipedream only once the org has connected that Google app there. With no
+    # org (and nothing connected) they fall back to the native token path.
     assert executor.route_for_typed({"type": "calendar.create_event", "args": {}}) == "native"
     assert executor.route_for_typed({"type": "email.send", "args": {}}) == "native"
+    # Slack stays native (Cedric owns the app).
     assert executor.route_for_typed({"type": "slack.post_message", "args": {"text": "hi"}}) == "native"
     # Untyped / non-native → Cedric.
     assert executor.route_for_typed(None) == "cedric"
     assert executor.route_for_typed({"type": "weird.unknown"}) == "cedric"
+
+
+def test_route_google_to_pipedream_once_connected_there(monkeypatch):
+    _enable_pd(monkeypatch)
+    # Org has connected Gmail + Calendar in Pipedream → those actions route there.
+    monkeypatch.setattr(pipedream_executor, "app_connected",
+                        lambda org, app: org == "org7" and app in {"gmail", "google_calendar"})
+    assert executor.route_for_typed({"type": "email.send", "args": {}}, "org7") == "pipedream"
+    assert executor.route_for_typed({"type": "calendar.create_event", "args": {}}, "org7") == "pipedream"
+    # A different org (nothing connected) still falls back to native.
+    assert executor.route_for_typed({"type": "email.send", "args": {}}, "orgX") == "native"
 
 
 def test_route_pipedream_requires_config_not_just_flag(monkeypatch):
@@ -100,8 +114,64 @@ def test_handles_gated_by_flag_and_config(monkeypatch):
     _enable_pd(monkeypatch)
     assert pipedream_executor.enabled() is True
     assert pipedream_executor.handles({"type": "asana.create_task"}) is True
-    # Pipedream does NOT own Google — that stays native.
-    assert pipedream_executor.handles({"type": "email.send"}) is False
+    # Pipedream now OWNS the Google block too (Gmail + Calendar), so it handles
+    # those types; routing (route_for_typed) still gates them on a live
+    # Pipedream connection during the cutover.
+    assert pipedream_executor.handles({"type": "email.send"}) is True
+    assert pipedream_executor.handles({"type": "calendar.create_event"}) is True
+    assert pipedream_executor.is_google_type("email.send") is True
+    assert pipedream_executor.is_google_type("asana.create_task") is False
+    assert pipedream_executor.app_for_type("calendar.create_event") == "google_calendar"
+
+
+# ── Google request builders (Gmail + Calendar via REST proxy) ───────────────
+
+def test_gmail_send_builder_encodes_mime():
+    import base64
+    m, u, b, _h = pipedream_executor._build_gmail_send(
+        "org", "apn", {"to": "a@b.com, c@d.com", "subject": "Hi", "body": "hello"})
+    assert m == "POST" and u.endswith("/messages/send")
+    raw = base64.urlsafe_b64decode(b["raw"].encode()).decode()
+    assert "To: a@b.com, c@d.com" in raw and "Subject: Hi" in raw
+    # Body rides as a base64 MIME payload — decode it back to confirm.
+    import email as _email
+    msg = _email.message_from_string(raw)
+    assert msg.get_payload(decode=True).decode() == "hello"
+
+
+def test_gmail_send_requires_recipient():
+    with pytest.raises(ValueError):
+        pipedream_executor._build_gmail_send("o", "a", {"subject": "x", "body": "y"})
+
+
+def test_gmail_draft_wraps_message():
+    m, u, b, _h = pipedream_executor._build_gmail_draft(
+        "o", "a", {"to": "a@b.com", "subject": "s", "body": "t"})
+    assert m == "POST" and u.endswith("/drafts") and "raw" in b["message"]
+
+
+def test_calendar_create_builder_sets_meet_and_attendees():
+    m, u, b, _h = pipedream_executor._build_calendar_create(
+        "o", "a", {"title": "Sync", "start": "2026-07-24T15:00:00",
+                   "end": "2026-07-24T15:30:00", "attendees": "x@y.com",
+                   "timezone": "Europe/Rome"})
+    assert m == "POST" and "conferenceDataVersion=1" in u and "sendUpdates=all" in u
+    assert b["summary"] == "Sync"
+    assert b["start"] == {"dateTime": "2026-07-24T15:00:00", "timeZone": "Europe/Rome"}
+    assert b["attendees"] == [{"email": "x@y.com"}]
+    assert b["conferenceData"]["createRequest"]["conferenceSolutionKey"]["type"] == "hangoutsMeet"
+
+
+def test_calendar_create_requires_title_start_end():
+    with pytest.raises(ValueError):
+        pipedream_executor._build_calendar_create("o", "a", {"title": "x", "start": "t"})
+
+
+def test_calendar_update_patches_only_changes():
+    m, u, b, _h = pipedream_executor._build_calendar_update(
+        "o", "a", {"event_id": "ev1", "start": "2026-07-24T16:00:00"})
+    assert m == "PATCH" and "/events/ev1" in u
+    assert b["start"]["dateTime"] == "2026-07-24T16:00:00" and "summary" not in b
 
 
 # ── Asana request builders (faithful to asana_client) ───────────────────────
