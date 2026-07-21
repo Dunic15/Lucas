@@ -77,10 +77,13 @@ def meetings_list(request: Request) -> JSONResponse:
         # key-free/unscoped worlds. DEMO-org artifacts stay hidden too — the
         # anonymous showroom's transcripts never appear in a real signup's
         # archive (2026-07-13).
+        from .dashboard import _user_attended
+
         org = str(user["org_id"])
         artifacts = [
             a
             for a in artifacts
             if str((a.get("artifact") or {}).get("org_id") or "") == org
+            and _user_attended(user, a.get("artifact") or {})
         ]
     return JSONResponse({"meetings": artifacts})
