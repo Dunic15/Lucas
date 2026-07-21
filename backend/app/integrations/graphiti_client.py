@@ -28,9 +28,17 @@ should smoke-test ingest()+recall() end to end (docs/GRAPHITI.md).
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timezone
 
 from ..config import settings
+
+# graphiti-core reads EMBEDDING_DIM at import to size its internal zero-vector
+# fallback. Our embedder is LOCAL fastembed (384-dim), not OpenAI (1024), so pin
+# it from config BEFORE graphiti_core is ever imported (that import is lazy,
+# inside _construct — this runs at app boot, well before it). Operators override
+# via GRAPHITI_EMBEDDING_DIM.
+os.environ["EMBEDDING_DIM"] = str(settings.graphiti_embedding_dim)
 
 # One Graphiti instance per process, connected + indexed once. Import + connect
 # are lazy (only when enabled), so a deployment WITHOUT graphiti-core installed
@@ -265,6 +273,14 @@ async def recall(
         return ""
     facts = [f"- {f}" for f in (_fact_of(r) for r in (results or [])) if f]
     return "\n".join(facts[:limit])
+
+
+async def ensure_ready() -> bool:
+    """Block until the graph client is connected + indexed (or known-unavailable),
+    returning True when it is usable. For DIAGNOSTICS/smoke-tests ONLY — the live
+    answer path never blocks on init (it uses warm()+recall()). Lets an admin
+    endpoint deterministically exercise ingest→recall on first hit."""
+    return (await _get_client()) is not None
 
 
 def reset_for_tests() -> None:

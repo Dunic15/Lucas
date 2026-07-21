@@ -63,8 +63,16 @@ stripe>=14,<16
 # Browser operator (B1 real provider): CDP client for Browserbase sessions.
 playwright>=1.40
 
-# NOTE: graphiti-core is intentionally NOT here. Adding it to requirements.txt
-# broke the App Runner boot (health check failed → rollback; the flat
-# `pip install --target .` install differs from CI's venv install). Graphiti
-# stays optional/lazy in graphiti_client.py; provision graphiti-core via the
-# deploy image separately once the --target install issue is resolved.
+# Graphiti temporal knowledge graph (GRAPHITI_ENABLED=true + a Neo4j URI).
+# Extraction runs on Laura's OWN stack (Anthropic LLM + local fastembed — no
+# OpenAI, no new key); lazy-imported in graphiti_client.py, inert when off.
+#
+# The python_version marker is the fix for the 2026-07-20 incident (#319):
+# every graphiti-core release requires Python >=3.10 (verified against PyPI's
+# full history), so on an older build runtime the unmarked line made
+# `pip install -r` fail outright — build dead before boot, zero logs, every
+# deploy rolled back. With the marker, an old runtime SKIPS the dep (feature
+# stays off, deploy safe) and a >=3.10 runtime installs it. Do not remove the
+# marker until the App Runner runtime is confirmed >=3.10 — check the `python`
+# field of GET /health/graphiti.
+graphiti-core>=0.29,<0.30; python_version >= "3.10"
