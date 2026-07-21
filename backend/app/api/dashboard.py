@@ -1723,7 +1723,114 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
             "meetings": rows[:20],
         }
 
+    def _build_rows_pd(events: list, cal_email: str) -> dict:
+        """Rows from Google Calendar API items fetched via the Pipedream proxy —
+        same row shape as _load_native, but READ-ONLY (source='pipedream', so the
+        week UI shows events + the send-avatar action without offering the native
+        write form that the cutover removed). event_ref stays '' (calendar writes
+        route through Pipedream, not the signed native calendar-event door)."""
+        now = datetime.now(timezone.utc)
+        booked = {
+            s.meeting_url: s.avatar_id
+            for s in store.all_sessions()
+            if s.meeting_url and s.org_id == org_id
+        }
+        invite_bases = [
+            b for b in (settings.calendar_invite_emails or "").split(",") if b.strip()
+        ]
+        rows: list[dict] = []
+        for ev in events:
+            if str(ev.get("status") or "") == "cancelled":
+                continue
+            start_raw = _native_event_start(ev)
+            try:
+                start = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            if not _keep_past and start < now - timedelta(minutes=90):
+                continue
+            url = _native_event_url(ev)
+            end = ev.get("end") or {}
+            invited = avatars.from_invite_email(
+                [str((a or {}).get("email") or "") for a in (ev.get("attendees") or [])],
+                invite_bases,
+            )
+            going_avatar = (booked.get(url, "") if url else "") or invited or ""
+            rows.append(
+                {
+                    "id": str(ev.get("id") or ""),
+                    "title": str(ev.get("summary") or "Untitled meeting"),
+                    "start_time": start_raw,
+                    "end_time": str(end.get("dateTime") or end.get("date") or ""),
+                    "platform": _upcoming_platform(url),
+                    "has_link": bool(url),
+                    "meeting_url": url,
+                    "attendees": len(ev.get("attendees") or []),
+                    "calendar_name": "",
+                    "calendar_color": "",
+                    "event_ref": "",
+                    "auto_join": bool(going_avatar),
+                    "auto_join_avatar": going_avatar,
+                }
+            )
+        rows.sort(key=lambda r: r["start_time"])
+        return {
+            "calendar": {"connected": True, "source": "pipedream", "email": cal_email},
+            "meetings": rows[: (200 if _win_min else 20)],
+        }
+
+    def _load_pipedream() -> dict | None:
+        """Preferred source post-cutover: the org's Pipedream-connected
+        google_calendar, read through the Connect Proxy (managed OAuth). Returns
+        None (fall through to native/Recall) when Pipedream is off or the org
+        has not connected Calendar there — so nothing regresses."""
+        from urllib.parse import urlencode
+
+        from .. import pipedream_client, pipedream_executor
+
+        if not pipedream_executor.enabled():
+            return None
+        try:
+            if not pipedream_executor.app_connected(native_org, "google_calendar"):
+                return None
+            accts = pipedream_client.list_accounts(native_org, app="google_calendar")
+        except pipedream_client.PipedreamError:
+            return None
+        acct = next((a for a in accts if a.get("id")), None)
+        if acct is None:
+            return None
+        cal_email = str(acct.get("name") or "")
+        now = datetime.now(timezone.utc)
+        params = {
+            "singleEvents": "true",
+            "orderBy": "startTime",
+            "timeMin": (_win_min or now.isoformat()),
+            "maxResults": (150 if _win_min else 25),
+        }
+        if _win_max:
+            params["timeMax"] = _win_max
+        url = (
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events?"
+            + urlencode(params)
+        )
+        try:
+            resp = pipedream_client.proxy_request(
+                native_org, str(acct["id"]), "GET", url)
+        except pipedream_client.PipedreamError:
+            return None
+        if not resp.get("ok"):
+            return None
+        items = (resp.get("json") or {}).get("items") or []
+        return _build_rows_pd(items, cal_email)
+
     def _load() -> dict:
+        # Cutover: prefer the org's Pipedream-connected Google Calendar; only
+        # fall through to the native/Recall paths below when it's absent.
+        pd = _load_pipedream()
+        if pd is not None:
+            return pd
         # LOGGED-IN user: read THEIR OWN calendar token (user_oauth), scoped to
         # the human — never the org's shared token. A verified corporate domain
         # maps every colleague onto ONE org_id, so an org-keyed read would show

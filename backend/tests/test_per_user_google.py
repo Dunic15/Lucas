@@ -226,6 +226,35 @@ def _future_iso(hours: int = 2) -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
 
 
+def test_upcoming_prefers_pipedream_calendar_when_connected(client, monkeypatch):
+    """Post-cutover: when the org has google_calendar connected in Pipedream,
+    Upcoming is built from the Connect-Proxy read (source=pipedream, read-only),
+    ahead of any native/Recall path."""
+    from app import pipedream_client, pipedream_executor
+
+    monkeypatch.setattr(pipedream_executor, "enabled", lambda: True)
+    monkeypatch.setattr(pipedream_executor, "app_connected",
+                        lambda org, app: app == "google_calendar")
+    monkeypatch.setattr(pipedream_client, "list_accounts",
+                        lambda org, app=None: [{"id": "apn_cal", "name": "owner@example.com"}])
+    ev = {
+        "id": "e1", "summary": "Proxy standup", "status": "confirmed",
+        "start": {"dateTime": _future_iso()}, "end": {"dateTime": _future_iso(3)},
+        "hangoutLink": "https://meet.google.com/xyz-1234-abc",
+        "attendees": [{"email": "a@b.com"}],
+    }
+    monkeypatch.setattr(pipedream_client, "proxy_request",
+                        lambda *a, **k: {"ok": True, "status": 200, "json": {"items": [ev]}})
+
+    j = client.get("/dashboard/upcoming").json()
+    assert j["calendar"]["source"] == "pipedream"
+    assert j["calendar"]["email"] == "owner@example.com"
+    m = j["meetings"][0]
+    assert m["title"] == "Proxy standup"
+    assert m["meeting_url"] == "https://meet.google.com/xyz-1234-abc"
+    assert m["event_ref"] == ""  # read-only: no signed native write ref
+
+
 def test_upcoming_prefers_native_google_calendar(client, monkeypatch):
     """When the caller's org has a native token, Upcoming is built from THEIR own
     Google calendar (source=google) with the meeting URL for dispatch."""
