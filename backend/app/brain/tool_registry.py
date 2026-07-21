@@ -57,12 +57,25 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
     try:
         reg: dict = {"generated_at": time.time(), "native": list(_BUILTINS)}
 
-        # Native Google (the org's OWN OAuth → the native executor).
+        # Google (Gmail + Calendar). Post-cutover the org connects these in
+        # Pipedream (managed OAuth), so count a Pipedream-connected account too —
+        # otherwise the avatar would tell people "Google isn't connected" in a
+        # meeting even though it can execute. Native OAuth still counts (fallback).
         google_on = False
         try:
             google_on = bool(store.get_org_oauth(org_id, provider="google"))
         except Exception:  # noqa: BLE001 — absence of a token is not an error
             google_on = False
+        try:
+            from .. import pipedream_executor
+
+            if not google_on and pipedream_executor.enabled():
+                google_on = (
+                    pipedream_executor.app_connected(org_id, "gmail")
+                    or pipedream_executor.app_connected(org_id, "google_calendar")
+                )
+        except Exception:  # noqa: BLE001 — Pipedream absence is not an error
+            pass
         reg["native"].append({
             "name": "google_calendar", "does": "schedule meetings on the owner's Google",
             "kind": "native", "write": True, "approval": "approve", "connected": google_on,
@@ -79,9 +92,13 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
         # above stay baseline for every avatar.
         asana_on = False
         try:
-            from .. import asana_client
+            from .. import asana_client, pipedream_executor
 
-            if asana_client.connected(org_id):
+            asana_connected = asana_client.connected(org_id) or (
+                pipedream_executor.enabled()
+                and pipedream_executor.app_connected(org_id, "asana")
+            )
+            if asana_connected:
                 declares = bool(
                     getattr(avatar, "uses_native_tool", lambda _n: False)("asana")
                 )
@@ -97,6 +114,34 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
                 "kind": "native", "write": True, "approval": "approve",
                 "connected": asana_on,
             })
+
+        # Generic Pipedream apps enabled for THIS avatar (Notion / GitHub / Jira
+        # / HubSpot / …), each with a few of its pre-built actions — so the
+        # avatar knows IN CONVERSATION what it can capture, not only at typing
+        # time. Opt-in per avatar (same toggle the approve door enforces).
+        pd_apps: list[dict] = []
+        try:
+            from .. import pipedream_client, pipedream_executor
+
+            if pipedream_executor.enabled():
+                caps = store.get_avatar_capabilities(getattr(avatar, "id", ""))
+                _skip = {"slack", "asana", "google",
+                         "gmail", "google_calendar", "google_drive"}
+                for slug in sorted(
+                    k for k, v in caps.items() if v and k not in _skip
+                )[:4]:
+                    if not pipedream_executor.app_connected(org_id, slug):
+                        continue
+                    names = [
+                        str(a.get("name") or "")
+                        for a in pipedream_client.list_actions(slug, limit=5)
+                    ]
+                    pd_apps.append(
+                        {"slug": slug, "actions": [n for n in names if n][:4]}
+                    )
+        except Exception:  # noqa: BLE001 — never block a join over the catalog
+            pd_apps = []
+        reg["pd_apps"] = pd_apps
 
         # Cedric connectors — only when this org has a connected Slack agent.
         cedric_reg: dict = {"connected": [], "available": [], "not_linked": False}
@@ -216,6 +261,15 @@ def brief(reg: dict | None) -> str:
             lines.append(
                 "NOT connected (never promise these): " + ", ".join(available) + "."
             )
+    # Generic Pipedream apps this avatar may use (Notion / GitHub / Jira / …),
+    # with a few example actions so the avatar can speak to them concretely.
+    for app in (reg.get("pd_apps") or [])[:4]:
+        nm = str(app.get("slug", "")).replace("_", " ").title()
+        acts = ", ".join(app.get("actions") or [])
+        lines.append(
+            f"{nm} (connected via Pipedream — captured then run after owner approval)"
+            + (f": e.g. {acts}." if acts else ".")
+        )
     know = reg.get("knowledge") or {}
     lines.append(
         "You can read: your indexed process docs"
