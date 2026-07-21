@@ -102,8 +102,13 @@ def test_capability_policy_generic_is_opt_in():
     assert executor.capability_blocked({"github": False}, "pd.github.run") is True
     assert executor.capability_blocked({"github": True}, "pd.github.run") is False
     # Native families keep default-ON semantics (blocked only on explicit OFF).
+    # Google is governed by its SPLIT per-app toggle (gmail/google_calendar/
+    # google_drive), not the legacy combined 'google' key.
     assert executor.capability_blocked({}, "calendar.create_event") is False
-    assert executor.capability_blocked({"google": False}, "calendar.create_event") is True
+    assert executor.capability_blocked({"google_calendar": False}, "calendar.create_event") is True
+    assert executor.capability_blocked({"gmail": False}, "email.send") is True
+    # A stale combined 'google=False' row must NOT veto an individually-on app.
+    assert executor.capability_blocked({"google": False, "gmail": True}, "email.send") is False
 
 
 # ── store: slug capability keys ─────────────────────────────────────────────

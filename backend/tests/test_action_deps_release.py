@@ -184,7 +184,7 @@ def test_capability_toggle_still_wins_at_release_time(client, sent, monkeypatch)
     _seed(org, "dep1")
     _seed(org, "a1", typed=_TYPED, execution_route="native", dependencies=["dep1"])
     _approve(client, "a1")
-    monkeypatch.setattr(store, "get_avatar_capabilities", lambda a: {"google": False})
+    monkeypatch.setattr(store, "get_avatar_capabilities", lambda a: {"gmail": False})
 
     ledger.set_action_status("dep1", "done", "", org_id=org)
 

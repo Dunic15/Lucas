@@ -166,7 +166,7 @@ def test_google_action_skipped_when_capability_off(client, monkeypatch):
     monkeypatch.setattr(settings, "native_executor", True)
     user = _login(client)
     _seed_action(user["org_id"], "a1", avatar_id="laura")
-    store.set_avatar_capability("laura", "google", False)  # owner turns Google OFF
+    store.set_avatar_capability("laura", "gmail", False)  # owner turns Gmail OFF (split toggle)
     calls: list = []
     _mock_send(monkeypatch, {"ok": True, "message_id": "m1"}, calls)
 

@@ -90,6 +90,16 @@ def capability_blocked(caps: dict | None, action_type: str | None) -> bool:
     family = capability_family(action_type)
     if pipedream_executor.generic_app(action_type):
         return caps.get(family) is not True
+    if family == "google":
+        # The dashboard split the old combined "Google" switch into per-app
+        # toggles (gmail / google_calendar / google_drive). Honor the CONCRETE
+        # per-app toggle for this action type and IGNORE the legacy combined
+        # 'google' row — otherwise a stale google=0 vetoes Gmail/Calendar even
+        # when gmail=1 / google_calendar=1 are individually ON (live bug
+        # 2026-07-21: every approved Gmail/Calendar action silently blocked).
+        app = pipedream_executor.app_for_type(action_type)  # email.send→gmail, calendar.*→google_calendar
+        if app:
+            return caps.get(app) is False
     return caps.get(family) is False
 
 
