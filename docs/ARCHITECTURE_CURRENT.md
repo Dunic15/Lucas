@@ -107,7 +107,7 @@ intelligence instead of doc-quoting. Embeddings: `hash` (offline default), `loca
 ## Avatar face (swappable, env-selected)
 
 `AVATAR_PAGE` picks the page the bot renders: `talk` (open-source TalkingHead +
-free `/tts`, **default, $0/min, what prod runs**), `photoreal` (GPU MuseTalk,
+free `/tts`, **default, $0/min, what prod runs**), `photoreal` (GPU **Ditto**,
 degrades to static portrait → `/talk`), `avatar` (Anam, paid, legacy). Same
 `{type:"speak"}` ws contract for all three, so switching is env-only.
 
