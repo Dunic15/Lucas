@@ -1055,8 +1055,10 @@ async def retry_callback_delivery(request: Request) -> JSONResponse:
 @router.post("/dashboard/test/integrations")
 async def test_integrations(request: Request) -> JSONResponse:
     """Owner-triggered live check of the execution integrations: creates a real
-    calendar event + sends a real email (native Google) and creates a real
-    Asana task (Pipedream) on the CALLER's org, returning each receipt. Login +
+    calendar event + sends a real email + creates a real Asana task on the
+    CALLER's org, each on the plane the meeting would use (Pipedream when the
+    org connected the app there, else the native fallback). Returns each
+    receipt. Login +
     same-origin gated (only the signed-in owner, for their own org) — the same
     door as approvals. No ledger action is created; this is a direct smoke."""
     user = auth.current_user(request)
@@ -1077,25 +1079,33 @@ async def test_integrations(request: Request) -> JSONResponse:
 
     import datetime as _dt
 
-    from .. import google_client, pipedream_executor
+    from .. import executor, google_client, pipedream_executor
 
     now = _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0)
     start = (now + _dt.timedelta(hours=1)).isoformat().replace("+00:00", "Z")
     end = (now + _dt.timedelta(hours=1, minutes=30)).isoformat().replace("+00:00", "Z")
 
+    # Route each smoke the SAME way finalize would: Pipedream when the org has
+    # connected the app there (the cutover path), else the native fallback. So
+    # the button proves whatever plane the meeting will actually use.
+    def _smoke(typed: dict, native_fn, native_args: dict) -> dict:
+        if executor.route_for_typed(typed, org) == "pipedream":
+            return pipedream_executor.dry_run(org, typed)
+        return native_fn(org, native_args)
+
+    cal_args = {"title": "Laura — integration test", "start": start, "end": end,
+                "attendees": [email], "timezone": "UTC",
+                "description": "Automated test event from Laura's integration check."}
+    email_args = {"to": [email], "subject": "Laura — integration test",
+                  "body": "This is a test email from Laura's integration check. "
+                          "If you received it, Gmail sending works."}
     results: dict = {}
     results["calendar"] = await run_in_threadpool(
-        google_client.create_calendar_event, org,
-        {"title": "Laura — integration test", "start": start, "end": end,
-         "attendees": [email], "timezone": "UTC",
-         "description": "Automated test event from Laura's integration check."},
-    )
+        _smoke, {"type": "calendar.create_event", "args": cal_args},
+        google_client.create_calendar_event, cal_args)
     results["email"] = await run_in_threadpool(
-        google_client.send_gmail, org,
-        {"to": [email], "subject": "Laura — integration test",
-         "body": "This is a test email from Laura's integration check. "
-                 "If you received it, Gmail sending works."},
-    )
+        _smoke, {"type": "email.send", "args": email_args},
+        google_client.send_gmail, email_args)
     results["asana"] = await run_in_threadpool(
         pipedream_executor.dry_run, org,
         {"type": "asana.create_task",

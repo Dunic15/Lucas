@@ -944,8 +944,9 @@
 
     <!-- CONNECTIONS -->
     <!-- ONE Connections page (2026-07-21, owner request — less confusion):
-         Google stays native, Slack stays the Cedric add-on, and EVERY other
-         tool connects through Pipedream in the "More tools" section below
+         Google (Gmail/Calendar/Drive) + Asana/Jira + EVERY other tool now
+         connect AND execute through Pipedream in the "More tools" section below;
+         Slack stays the Cedric add-on. Section
          (search the 3,000+ app catalog). The separate ⚡ Pipedream tab was
          folded in here; #pd-more/#pdconns stay hidden until the deployment
          has Pipedream configured, so the key-free demo is unchanged. -->
@@ -2002,7 +2003,8 @@
         :"Native is off — approved actions are handed to Cedric. To have Laura run them directly on your own Google/Asana, ask your admin to enable native execution (NATIVE_EXECUTOR).")+'</div>'+
       '<div class="foot" style="gap:14px;flex-wrap:wrap">'+
         '<span class="cstat'+(nativeOn?" on":"")+'"><b></b>Native execution '+(nativeOn?"on":"off")+'</span>'+
-        '<span class="cstat'+(googleNative?" on":"")+'"><b></b>Google '+(googleNative?"connected":"not connected")+'</span>'+
+        // Google now lives in the Pipedream block below (its own status chips) —
+        // no native "Google connected" line here after the cutover.
         '<span class="cstat'+(asanaConnected?" on":"")+'"><b></b>Asana '+(asanaConnected?"connected":"not connected")+'</span>'+
       '</div>'+
       '<div class="foot" style="margin-top:10px;gap:8px;flex-wrap:wrap;align-items:center">'+
@@ -2049,39 +2051,16 @@
           '<a class="btn" data-slack-manage target="_blank" rel="noopener" aria-disabled="true" style="text-decoration:none;opacity:.55;pointer-events:none">Manage tools ↗</a>'+
           '<div class="cnote">Connect a tool above, or manage them on the hosted connector page.</div></div>'
         :'')+
-      '</div>'+
-      // ── Asana + Jira native cards REMOVED (2026-07-21, unified page):
-      //    they connect through the "More tools (via Pipedream)" section
-      //    below. The native OAuth/PAT endpoints still exist as a fallback
-      //    (flag-off revert path); the execution router sends approved Asana
-      //    actions through Pipedream when PIPEDREAM_EXECUTOR is on. ──
-      // ── Google Calendar (native) — shares ONE Google sign-in with Gmail
-      //    (/oauth/google/connect grants both); googleNative drives both cards. ──
-      '<div class="conn"><div class="nm">'+LOGO_CALENDAR+' Google Calendar <span class="stchip" style="margin-left:6px">native</span></div>'+
-      '<div class="ds">Read your week and schedule meetings on your own Google Calendar. Uses your Google sign-in (shared with Gmail).</div>'+
-      '<div class="foot"><span class="cstat'+(googleNative?" on":"")+'"><b></b>'+(googleNative?"Connected":"Not connected")+'</span>'+
-      (googleNative
-        ?'<button class="btn" data-google-off>Disconnect</button>'
-        :'<a class="btn primary" style="text-decoration:none" href="/oauth/google/connect">Connect</a>')+
-      '</div></div>'+
-      // ── Gmail (native) — same Google sign-in as Calendar ──
-      '<div class="conn"><div class="nm">'+LOGO_GMAIL+' Gmail <span class="stchip" style="margin-left:6px">native</span></div>'+
-      '<div class="ds">Send recap and follow-up emails on your own Gmail. Uses your Google sign-in (shared with Calendar).</div>'+
-      '<div class="foot"><span class="cstat'+(googleNative?" on":"")+'"><b></b>'+(googleNative?"Connected":"Not connected")+'</span>'+
-      (googleNative
-        ?'<button class="btn" data-google-off>Disconnect</button>'
-        :'<a class="btn primary" style="text-decoration:none" href="/oauth/google/connect">Connect</a>')+
-      '</div></div>'+
-      // ── Google Drive (native) — same Google sign-in as Gmail/Calendar; the
-      //    /oauth/google/connect grant includes drive.readonly. Reuses
-      //    data-google-off. Folder→avatar wiring lives in the Brain tab. ──
-      '<div class="conn"><div class="nm">'+LOGO_DRIVE+' Google Drive <span class="stchip" style="margin-left:6px">native</span></div>'+
-      '<div class="ds">Avatars read shared Drive folders and cite your team’s docs in meetings — pick a folder for an avatar in the Brain tab. Uses your Google sign-in (shared with Gmail &amp; Calendar); if you connected before Drive was enabled, reconnect once to grant it.</div>'+
-      '<div class="foot"><span class="cstat'+(googleNative?" on":"")+'"><b></b>'+(googleNative?"Connected":"Not connected")+'</span>'+
-      (googleNative
-        ?'<button class="btn" data-google-off>Disconnect</button>'
-        :'<a class="btn primary" style="text-decoration:none" href="/oauth/google/connect">Connect</a>')+
-      '</div></div>';
+      '</div>';
+      // ── Native Google (Gmail / Calendar / Drive), Asana + Jira cards REMOVED
+      //    (2026-07-21 cutover — owner: "keep only Pipedream for Google"): all of
+      //    these now connect AND execute through the "More tools (via Pipedream)"
+      //    section below (#pdconns). Gmail/Calendar/Drive appear there once the
+      //    org connects them in Pipedream. The native OAuth endpoints
+      //    (/oauth/google/connect, /oauth/asana …) still exist as a flag-off
+      //    revert path; the execution router prefers Pipedream when the org has
+      //    connected the app there, and only falls back to the native token
+      //    otherwise (see executor.route_for_typed). ──
     // 🧪 Test integrations — real calendar + email (Google) + task (Pipedream).
     var _tr=$("#pd-test-run");
     if(_tr) _tr.addEventListener("click",function(){
