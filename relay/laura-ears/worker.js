@@ -100,6 +100,20 @@ async function runSession(recall, cap, cfg, env, done) {
         generationConfig: gen,
         systemInstruction: { parts: [{ text: sys }] },
         inputAudioTranscription: {},
+        // Fluidity: tune Gemini's automatic VAD so a turn ends promptly after
+        // the speaker stops (snappier replies) without cutting people off.
+        // Moderate values — validate the FEEL on a real call and dial from here
+        // (lower silenceDurationMs = snappier but more interrupt-risk). A bad
+        // config just makes Gemini reject setup → ears fall back to Deepgram
+        // (not mute), so this can never take the avatar off the air.
+        realtimeInputConfig: {
+          automaticActivityDetection: {
+            startOfSpeechSensitivity: "START_SENSITIVITY_HIGH",
+            endOfSpeechSensitivity: "END_SENSITIVITY_HIGH",
+            prefixPaddingMs: 60,
+            silenceDurationMs: 700,
+          },
+        },
       },
     })
   );
