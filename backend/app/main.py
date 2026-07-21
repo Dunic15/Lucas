@@ -1475,6 +1475,26 @@ _QUEUE_LINES_IT = [
     "Segnato — va in dashboard per l'approvazione subito dopo la call.",
 ]
 
+# Task-creation captures get the fuller pointer: the fields that are better
+# filled by click than by voice (subtasks / dependencies / attachments) live on
+# the approval card. Fixed lines -> TTS-prewarmed, instant.
+_QUEUE_LINES_TASK = [
+    "Got it — it'll be on the dashboard for your approval. Subtasks, dependencies or attachments: add them right on the card.",
+    "Noted — approve it on the dashboard after the call; you can attach files or add subtasks and dependencies there too.",
+]
+_QUEUE_LINES_TASK_IT = [
+    "Ricevuto — lo approvi in dashboard a fine call; sottoattività, dipendenze o allegati li aggiungi direttamente sulla scheda.",
+]
+_TASKISH_RE = re.compile(r"\b(create|task|attivit|crea(?:re)?|ticket)\b", re.IGNORECASE)
+
+
+def _queue_line_for(heard: str, item: dict | None) -> str:
+    """Confirmation for a capture: task-creating asks get the card pointer
+    (subtasks/dependencies/attachments), everything else the classic line."""
+    if _TASKISH_RE.search(str((item or {}).get("action") or "")):
+        return _line_for(heard, _QUEUE_LINES_TASK, _QUEUE_LINES_TASK_IT)
+    return _line_for(heard, _QUEUE_LINES, _QUEUE_LINES_IT)
+
 # Voice-consent confirmations (settings.voice_consent_writes): the addressed
 # ask was auto-approved and handed to Cedric to RUN now. Honesty rule intact —
 # she says it's approved and underway, never that it's already done (the
@@ -1497,11 +1517,13 @@ _CLARIFY_SLOTS = {
     "owner": "who should own it",
     "project": "which project it goes in",
     "due": "when it's due",
+    "description": "anything the description should say",
 }
 _CLARIFY_SLOTS_IT = {
     "owner": "chi la prende in carico",
     "project": "in quale progetto va",
     "due": "per quando serve",
+    "description": "cosa scrivere nella descrizione",
 }
 _CLARIFY_WINDOW_S = 45.0  # after this, resolve quietly with what we have
 
@@ -1735,6 +1757,8 @@ async def _prewarm_tts_cache() -> None:
         *_STREAM_RECOVERY_LINES_IT,
         *_QUEUE_LINES,
         *_QUEUE_LINES_IT,
+        *_QUEUE_LINES_TASK,
+        *_QUEUE_LINES_TASK_IT,
         *_BACKCHANNEL_LINES,
         *_BACKCHANNEL_LINES_IT,
         *_GOODBYE_LINES,
@@ -3352,7 +3376,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 line = (
                     _line_for(text, _VOICE_LINES, _VOICE_LINES_IT)
                     if settings.voice_consent_writes
-                    else _line_for(text, _QUEUE_LINES, _QUEUE_LINES_IT)
+                    else _queue_line_for(text, c_item)
                 )
                 session.last_ack_at = time.time()
                 spoke = await _make_avatar_speak(
@@ -4077,7 +4101,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             )
             line = _line_for(question, _VOICE_LINES, _VOICE_LINES_IT)
         else:
-            line = _line_for(question, _QUEUE_LINES, _QUEUE_LINES_IT)
+            line = _queue_line_for(question, item)
         session.last_ack_at = time.time()  # the confirmation doubles as the ack
         spoke = await _make_avatar_speak(
             session,

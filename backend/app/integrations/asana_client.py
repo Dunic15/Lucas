@@ -509,11 +509,71 @@ def create_task(org_id: str, task: dict) -> dict:
     if project_gid:
         body["projects"] = [project_gid]
 
-    return _post(
+    result = _post(
         pat, "/tasks", body,
         params={"opt_fields": "gid,name,permalink_url"},
         what="task",
     )
+    gid = str(result.get("task_gid") or "")
+    if result.get("ok") and gid:
+        extras = _apply_task_extras(pat, ws, gid, task)
+        if extras:
+            result["extras"] = extras
+    return result
+
+
+def _resolve_task_ref(pat: str, ws: str, ref: str) -> str:
+    """A dependency reference -> task gid: digits pass through; names go
+    through workspace typeahead (first hit). "" when unresolvable."""
+    ref = str(ref or "").strip()
+    if not ref:
+        return ""
+    if ref.isdigit():
+        return ref
+    data, err = _get(pat, f"/workspaces/{ws}/typeahead",
+                     {"resource_type": "task", "query": ref[:100], "count": 1})
+    if err or not isinstance(data, list) or not data:
+        return ""
+    return str((data[0] or {}).get("gid") or "")
+
+
+def _apply_task_extras(pat: str, ws: str, gid: str, task: dict) -> str:
+    """Best-effort application of the fuller task spec after creation:
+    subtasks (child tasks), dependencies (addDependencies), attachments
+    (external URL attachments). The parent task already exists — an extras
+    failure never fails the action; it is reported in the receipt detail."""
+    applied: list[str] = []
+    failed: list[str] = []
+    subs = [str(x).strip() for x in (task.get("subtasks") or []) if str(x).strip()]
+    for sub in subs[:10]:
+        r = _post(pat, f"/tasks/{gid}/subtasks", {"name": sub[:300]}, what="subtask")
+        (applied if r.get("ok") else failed).append(f"subtask:{sub[:40]}")
+    dep_gids = []
+    for dep in [str(x).strip() for x in (task.get("dependencies") or []) if str(x).strip()][:10]:
+        dgid = _resolve_task_ref(pat, ws, dep)
+        if dgid:
+            dep_gids.append(dgid)
+        else:
+            failed.append(f"dependency:{dep[:40]}")
+    if dep_gids:
+        r = _post(pat, f"/tasks/{gid}/addDependencies", {"dependencies": dep_gids},
+                  what="dependencies")
+        (applied if r.get("ok") else failed).append(f"{len(dep_gids)} dependencies")
+    for url in [str(x).strip() for x in (task.get("attachments") or []) if str(x).strip()][:10]:
+        if not url.lower().startswith(("http://", "https://")):
+            failed.append("attachment:non-url")
+            continue
+        r = _post(pat, "/attachments",
+                  {"url": url, "parent": gid, "resource_subtype": "external",
+                   "name": url.rsplit("/", 1)[-1][:100] or "attachment"},
+                  what="attachment")
+        (applied if r.get("ok") else failed).append("attachment")
+    parts = []
+    if applied:
+        parts.append("applied " + ", ".join(applied[:6]))
+    if failed:
+        parts.append("FAILED " + ", ".join(failed[:6]))
+    return "; ".join(parts)
 
 
 def update_task(org_id: str, update: dict) -> dict:

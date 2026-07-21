@@ -1771,7 +1771,10 @@ Required args: name (a short imperative task title drawn from the item). \
 Optional: notes (one sentence of context from the item), assignee (an email \
 address that LITERALLY appears in the item's source text), due_on \
 (YYYY-MM-DD — only when the item states a concrete date), project (a project \
-name that LITERALLY appears in the item's source text or the meeting summary).
+name that LITERALLY appears in the item's source text or the meeting summary), \
+subtasks (a short list of subtask titles, only when the item LITERALLY breaks \
+the work into steps), dependencies (task names the item LITERALLY says this \
+depends on), attachments (URLs that LITERALLY appear in the item's text).
 - Prefer calendar.create_event / email.send when an item maps to those; use \
 asana.create_task for every OTHER item that is a discrete piece of work \
 someone agreed to do. Do not create tasks for vague remarks, questions, or \

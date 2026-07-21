@@ -81,6 +81,12 @@ PARAMS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
         _FIELD(name="project", type="string", required=False),
         _FIELD(name="assignee", type="string", required=False),
         _FIELD(name="due_on", type="string", required=False),
+        _FIELD(name="subtasks", type="array", required=False,
+               description="subtask titles, one per entry"),
+        _FIELD(name="dependencies", type="array", required=False,
+               description="tasks this depends on (name or gid)"),
+        _FIELD(name="attachments", type="array", required=False,
+               description="attachment URLs"),
     ],
     "asana.update_task": [
         _FIELD(

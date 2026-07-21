@@ -125,7 +125,8 @@ def test_full_details_skip_clarify(client, recall_stubbed, spoken, approved):
     body = _say(
         client, bot_id,
         "Cedric, create a task to send the recap, assigned to Dana, "
-        "in the launch project, due Friday",
+        "in the launch project, due Friday, the description should say "
+        "prep the notes",
     )
     assert body.get("action_capture") is True
     assert "clarifying" not in body
@@ -136,7 +137,7 @@ def test_full_details_skip_clarify(client, recall_stubbed, spoken, approved):
 def test_missing_details_ask_then_answer(client, recall_stubbed, spoken, approved):
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
     body = _say(client, bot_id, "Cedric, please create a task called help ducho")
-    assert body.get("clarifying") == ["owner", "project", "due"]
+    assert body.get("clarifying") == ["owner", "project", "due", "description"]
     assert approved == []  # held — nothing approved yet
     assert spoken[-1].startswith("Sure — before I create it:")
     assert "who should own it" in spoken[-1] and "which project" in spoken[-1]
@@ -145,7 +146,8 @@ def test_missing_details_ask_then_answer(client, recall_stubbed, spoken, approve
     _age_clarify(session)
     body = _say(
         client, bot_id,
-        "Dana should take it, put it in the launch project, due Monday",
+        "Dana should take it, put it in the launch project, due Monday, "
+        "the description should say chase the update",
     )
     assert body.get("clarified") is True
     assert len(approved) == 1
@@ -176,7 +178,8 @@ def test_new_ask_resolves_stale_pending(client, recall_stubbed, spoken, approved
     body = _say(
         client, bot_id,
         "Cedric, create a task to email Marco, assigned to Dana, "
-        "in the launch project, by Friday",
+        "in the launch project, by Friday, the description should say "
+        "send the weekly update",
     )
     assert body.get("action_capture") is True
     # BOTH resolved: the stale one quietly, the new one on its merits.
@@ -199,9 +202,10 @@ def test_default_resolution_queues_for_approval(
     _say(client, bot_id, "Cedric, please create a task called help ducho")
     session = store.get(bot_id)
     _age_clarify(session)
-    body = _say(client, bot_id, "Dana should take it, due Monday")
+    body = _say(client, bot_id, "Dana should take it, due Monday, description: chase ducho")
     assert body.get("clarified") is True
-    assert spoken[-1] in main_module._QUEUE_LINES + main_module._QUEUE_LINES_IT
+    assert spoken[-1] in (main_module._QUEUE_LINES + main_module._QUEUE_LINES_IT
+                          + main_module._QUEUE_LINES_TASK + main_module._QUEUE_LINES_TASK_IT)
     assert len(session.queued_actions) == 1  # captured, waiting for the click
 
 
@@ -218,12 +222,13 @@ def test_flag_off_keeps_immediate_confirmation(
 # ───────────────────────── the detail heuristics ─────────────────────────
 def test_missing_action_details_cases():
     m = tools.missing_action_details
-    assert m("create a task called help ducho") == ["owner", "project", "due"]
-    assert m("create a task, assigned to Dana, in the launch project, due Friday") == []
+    assert m("create a task called help ducho") == ["owner", "project", "due", "description"]
+    assert m("create a task, assigned to Dana, in the launch project, due Friday, "
+             "the description should say prep the notes") == []
     assert "owner" not in m("Dana will own the recap task")
     assert "due" not in m("send it by tomorrow")
     assert "project" not in m("put it on the growth board")
-    assert m("") == ["owner", "project", "due"]
+    assert m("") == ["owner", "project", "due", "description"]
 
 
 def test_is_detail_skip_cases():
@@ -294,10 +299,14 @@ def test_back_to_back_instructions_capture_separately(client, recall_stubbed, sp
     r1 = _say(
         client, bot_id,
         "Create a task called research kickoff, assigned to Dana, "
-        "in the research project, due Friday",
+        "in the research project, due Friday, the description should say "
+        "kick off the research",
     )
     assert r1.get("action_capture") is True
-    r2 = _say(client, bot_id, "Also create a task to email Duccio the summary")
+    r2 = _say(client, bot_id,
+              "Also create a task to email Duccio the summary, assigned to me, "
+              "in the research project, due Friday, the description should say "
+              "send the summary")
     assert r2.get("action_capture") is True or r2.get("clarifying")
     caps = store.get(bot_id).queued_actions
     texts = [str(c.get("action")) for c in caps]
