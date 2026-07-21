@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import control_plane, ledger, main, outbox, store, tools
+from app.meeting import lifecycle  # noqa: E402  (lifecycle hoisted from main)
 from app.cedric import integration
 
 
@@ -445,7 +446,7 @@ def test_finalize_enqueues_ended_before_local_artifact_and_cleanup(
     async def no_close(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(main, "_close_usage_for", no_close)
+    monkeypatch.setattr(lifecycle, "_close_usage_for", no_close)
     artifact = asyncio.run(
         main._finalize_session_locked(
             "bot-order", session, "test", usage_reason="ended"

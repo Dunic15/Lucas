@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import avatars, granola_client  # noqa: E402
-from app.brain import post_meeting  # noqa: E402
+from app.brain.engine import post_meeting  # noqa: E402
 
 
 def main() -> None:

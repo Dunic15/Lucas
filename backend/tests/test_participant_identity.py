@@ -4,7 +4,8 @@ from __future__ import annotations
 import asyncio
 import json
 
-from app import avatars, brain, main, meeting_state, store
+from app import avatars, main, meeting_state, store
+from app.brain import engine as brain
 from app.config import settings
 
 

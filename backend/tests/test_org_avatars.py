@@ -20,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app import avatar_overlay, avatar_resolver, avatars, brain, store
+from app import avatar_overlay, avatar_resolver, avatars, store
+from app.brain import engine as brain
 from app.config import settings
 
 

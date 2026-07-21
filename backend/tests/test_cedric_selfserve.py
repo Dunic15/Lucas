@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 
 import app.main as main_module
+from app.api import sessions as _sessions  # noqa: E402  (sessions extracted)
 from app import auth, cedric, control_plane, ledger, store
 from app.cedric import callback, install_state, secret_registry
 from app.config import settings
@@ -112,7 +113,7 @@ def test_durable_token_miss_never_falls_back_to_sqlite(client, monkeypatch):
     )
     request = _request_with("stale-token")
     assert cedric.resolve_machine_org(request) is None
-    assert main_module._org_token_bearer_org(request) is None
+    assert _sessions._org_token_bearer_org(request) is None
     assert local_calls == []
 
 

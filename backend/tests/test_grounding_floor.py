@@ -11,7 +11,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import avatars, brain  # noqa: E402
+from app import avatars  # noqa: E402
+from app.brain import engine as brain  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.rag import Retrieved  # noqa: E402
 
