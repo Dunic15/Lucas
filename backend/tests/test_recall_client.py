@@ -272,7 +272,10 @@ def test_create_bot_can_use_deepgram_streaming_transcription(monkeypatch):
 
     provider = captured["json"]["recording_config"]["transcript"]["provider"]
     assert provider == {
-        "deepgram_streaming": {"model": "nova-3", "language": "multi"}
+        # endpointing rides along by default now (500ms — round-4 live repro:
+        # Deepgram's raw default fragmented one instruction into three finals).
+        "deepgram_streaming": {"model": "nova-3", "language": "multi",
+                               "endpointing": 500}
     }
 
 

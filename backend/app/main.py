@@ -2182,7 +2182,14 @@ def _is_echo(session: store.Session, text: str) -> bool:
     # keep a human's confirmation/paraphrase alive: near-total coverage AND a
     # contiguous 4-word run she literally spoke — reordered paraphrases fail
     # the run test; a human's framing words ("so…", "…correct?") cut coverage.
-    if settings.gemini_ears_mode.strip().lower() == "off":
+    ears_off = settings.gemini_ears_mode.strip().lower() == "off"
+    # Recall-only mode: ASR word-drift breaks the substring test the same way
+    # ("Who owns it…" spoken -> "who owned it…" transcribed, round-4 live repro
+    # 2026-07-21 — her clarify question re-entered as a 'human' line). Scope the
+    # fuzzy test to the seconds right after she actually spoke (echo is only
+    # physically possible then); outside that window keep the strict behavior
+    # so a human paraphrasing her minutes later is never eaten.
+    if ears_off and time.time() - getattr(session, "last_spoke_at", 0.0) > 12.0:
         return False
     words = norm.split()
     if len(words) >= 5 and recent:
@@ -3399,6 +3406,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
             and speaker_id == p_speaker
             and time.time() - p_ts < 4.0
             and is_capture_continuation(text)
+            # A follow-up that is ITSELF a complete new ask ("Also create a
+            # task to email Duccio…") is a NEW action, never a continuation —
+            # gluing it merged two distinct instructions into one monster item
+            # and silently swallowed the second one's confirmation (round-4
+            # live repro 2026-07-21). It falls through to the capture branch.
+            and not wants_action_capture(text)
         ):
             try:
                 updated_item, extended = await run_in_threadpool(
