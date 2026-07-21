@@ -321,6 +321,64 @@ def test_org_scoping_on_meetings(client, google_on):
     assert "bob meeting" not in summaries
 
 
+def test_meetings_scoped_to_attendance_within_shared_org(client, google_on):
+    """Teammates share one org (verified-domain mapping), so org scoping alone
+    still surfaced every colleague's meetings. A cookie user sees only rows
+    they dispatched (principal_id) or audibly attended (transcript speaker);
+    rows with no signal at all stay visible (fail-open, never vanish)."""
+    alice = _login(client, "alice@example.com", name="Ananth Iyer")
+    org = alice["org_id"]
+
+    attended = _artifact(org, "attended meeting")
+    attended["transcript"] = "Ananth Iyer: kickoff for onboarding\nlaura: noted."
+    store.save_artifact("bot_att", attended)
+
+    teammate_only = _artifact(org, "teammate only meeting")
+    teammate_only["transcript"] = "Duccio Profeti: testing Cedric again"
+    store.save_artifact("bot_mate", teammate_only)
+
+    dispatched = _artifact(org, "dispatched not attended")
+    dispatched["transcript"] = "Duccio Profeti: hello"
+    dispatched["principal_id"] = alice["user_id"]
+    store.save_artifact("bot_disp", dispatched)
+
+    no_signal = _artifact(org, "no signal meeting")
+    store.save_artifact("bot_nosig", no_signal)
+
+    asr_drift = _artifact(org, "asr drift meeting")
+    asr_drift["transcript"] = "Anant: can you book a meeting tomorrow"
+    store.save_artifact("bot_asr", asr_drift)
+
+    avatar_only = _artifact(org, "avatar only meeting")
+    avatar_only["transcript"] = "laura: is anyone here?"
+    store.save_artifact("bot_avonly", avatar_only)
+
+    data = client.get("/dashboard/summary").json()
+    summaries = {m["summary"] for m in data["meetings"]}
+    assert "attended meeting" in summaries
+    assert "dispatched not attended" in summaries
+    assert "no signal meeting" in summaries          # fail-open
+    assert "asr drift meeting" in summaries          # Anant ~ Ananth
+    assert "avatar only meeting" in summaries        # her lines aren't evidence
+    assert "teammate only meeting" not in summaries  # the complaint
+
+    # Same narrowing on the /meetings/list archive.
+    bots = {m["bot_id"] for m in client.get("/meetings/list").json()["meetings"]}
+    assert "bot_att" in bots
+    assert "bot_mate" not in bots
+
+
+def test_session_create_threads_principal_id():
+    s = store.create(
+        "bot_principal", "https://meet.google.com/p", "laura",
+        org_id="org_p", principal_id="u_dispatcher",
+    )
+    try:
+        assert s.principal_id == "u_dispatcher"
+    finally:
+        store.remove("bot_principal")
+
+
 def test_org_scoping_on_live_sessions(client, google_on):
     alice = _login(client, "alice@example.com")
     store.create("bot_a", "https://meet.google.com/a", "laura", org_id=alice["org_id"])

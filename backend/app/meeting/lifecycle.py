@@ -470,7 +470,7 @@ async def _start_avatar_session(
     realtime_capability = str(bot.pop("_laura_realtime_capability", "") or "")
     session = store.create(
         bot_id=bot["id"], meeting_url=meeting_url, avatar_id=avatar.id,
-        org_id=org_id,
+        org_id=org_id, principal_id=principal_id,
     )
     # Stash the resolved avatar for the live path (frozen for the session,
     # exactly like mission): hot-path readers use avatar_resolver.for_session
@@ -1120,6 +1120,10 @@ async def _finalize_session_locked(
     # only; no utterance text — the guard hook forbids logging transcript).
     artifact["avatar_id"] = session.avatar_id
     artifact["org_id"] = session.org_id
+    # WHO sent the avatar in (dashboard user), "" for service/legacy starts —
+    # the per-user archive scope reads this before falling back to
+    # transcript attendance.
+    artifact["principal_id"] = getattr(session, "principal_id", "")
     artifact["meeting_url"] = session.meeting_url
     if len(session.transcript) >= 2:
         artifact["duration_seconds"] = int(

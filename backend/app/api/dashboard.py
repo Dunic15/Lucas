@@ -62,6 +62,59 @@ def _org_visible(caller_org: str | None, row_org: str) -> bool:
     return caller_org == settings.demo_org_id and row_org == ""
 
 
+def _transcript_speakers(artifact: dict) -> set[str]:
+    """Speaker labels from the archived transcript ('Name: text' lines),
+    casefolded, minus the avatar's own archived lines (her speech is not
+    attendance evidence for any human)."""
+    avatar_id = str(artifact.get("avatar_id") or "").casefold()
+    out: set[str] = set()
+    for line in str(artifact.get("transcript") or "").splitlines():
+        name, sep, _ = line.partition(":")
+        name = name.strip().casefold()
+        if sep and name and name != avatar_id:
+            out.add(name)
+    return out
+
+
+def _name_matches(user_name: str, speakers: set[str]) -> bool:
+    """ASR-tolerant name match: exact full-name, same first name, or first
+    names where one prefixes the other at >= 4 chars ('Anant' drifts from
+    'Ananth'; 'Ben' stays distinct from 'Benjamin')."""
+    un = user_name.strip().casefold()
+    if not un:
+        return False
+    if un in speakers:
+        return True
+    ufirst = un.split()[0]
+    for sp in speakers:
+        sfirst = sp.split()[0]
+        if sfirst == ufirst:
+            return True
+        shorter, longer = sorted((sfirst, ufirst), key=len)
+        if len(shorter) >= 4 and longer.startswith(shorter):
+            return True
+    return False
+
+
+def _user_attended(user: dict | None, artifact: dict) -> bool:
+    """Per-user archive scope INSIDE an org (2026-07-21): teammates share an
+    org (verified-domain mapping), so org scoping alone still surfaced every
+    colleague's test meetings. A cookie user sees a meeting when they
+    dispatched it (principal_id) or audibly attended it (transcript speaker).
+    Rows with no signal either way — no principal, nobody spoke — stay
+    visible rather than vanish. Machine/service callers pass user=None and
+    keep the full org view."""
+    if user is None:
+        return True
+    pid = str(artifact.get("principal_id") or "")
+    if pid and pid == str(user.get("user_id") or ""):
+        return True
+    speakers = _transcript_speakers(artifact)
+    if not speakers:
+        return True
+    return _name_matches(str(user.get("name") or ""), speakers)
+
+
 def _platform(meeting_url: str) -> str:
     url = (meeting_url or "").lower()
     if "meet.google" in url:
@@ -447,12 +500,10 @@ def dashboard_summary(request: Request) -> JSONResponse:
         == "1"
     )
     meetings = [
-        m
-        for m in (
-            _meeting_row(r, include_transcript=show_transcripts)
-            for r in artifact_rows
-        )
-        if visible(m["org_id"])
+        _meeting_row(r, include_transcript=show_transcripts)
+        for r in artifact_rows
+        if visible(str((r.get("artifact") or {}).get("org_id") or ""))
+        and _user_attended(user, r.get("artifact") or {})
     ]
 
     # Execution provenance: decorate each action with the state the brain

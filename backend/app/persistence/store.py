@@ -69,6 +69,10 @@ class Session:
     # org, and legacy/unowned rows may still carry "" explicitly (the pre-auth
     # world). org_id == user_id today; the seam is what matters (MULTI-TENANCY.md).
     org_id: str = DEMO_ORG_ID
+    # WHO dispatched the session (dashboard user_id), "" for service starts.
+    # In-memory only (not a persisted field): a mid-meeting restart loses it
+    # and the artifact falls back to transcript-attendance scoping.
+    principal_id: str = ""
     anam_conversation_id: str = ""
     anam_conversation_url: str = ""
     transcript: list[Utterance] = field(default_factory=list)
@@ -1168,10 +1172,12 @@ def list_artifacts(org_id: str | None = None) -> list[dict]:
     return out
 
 def create(
-    bot_id: str, meeting_url: str, avatar_id: str = "laura", org_id: str = DEMO_ORG_ID
+    bot_id: str, meeting_url: str, avatar_id: str = "laura", org_id: str = DEMO_ORG_ID,
+    principal_id: str = "",
 ) -> Session:
     s = Session(
-        bot_id=bot_id, meeting_url=meeting_url, avatar_id=avatar_id, org_id=org_id
+        bot_id=bot_id, meeting_url=meeting_url, avatar_id=avatar_id, org_id=org_id,
+        principal_id=principal_id,
     )
     _sessions[bot_id] = s
     _persist_session(s)
