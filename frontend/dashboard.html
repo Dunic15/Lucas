@@ -3543,12 +3543,21 @@
       // reason about who owns what / who's overloaded, not just quote docs.
       // Status only (enabling is a deployment env change, like the native
       // executor); reads the flag surfaced in /dashboard/summary.settings.
-      var kgOn=!!(DATA&&DATA.settings&&DATA.settings.graphiti_configured);
+      var kgConf=!!(DATA&&DATA.settings&&DATA.settings.graphiti_configured);
+      var kgCore=(DATA&&DATA.settings&&DATA.settings.graphiti_core)||"";
+      var kgPy=(DATA&&DATA.settings&&DATA.settings.runtime_python)||"";
+      // Three states, not two: "Active" must mean the graph can actually run.
+      // Configured but graphiti-core absent = the requirements marker skipped
+      // the dep on a <3.10 runtime (#319/#330) — say so instead of lying.
+      var kgOn=kgConf&&!!kgCore;
+      var kgRt=kgPy?(' <span style="color:var(--faint)">Runtime: Python '+esc(kgPy)+(kgCore?' · graphiti-core '+esc(kgCore):'')+'</span>'):'';
       var kgCard='<div class="brkg">'+
-        '<div class="brkg-h">🕸 Knowledge graph <span class="brkg-chip'+(kgOn?" on":"")+'">'+(kgOn?"Active":"Off")+'</span></div>'+
+        '<div class="brkg-h">🕸 Knowledge graph <span class="brkg-chip'+(kgOn?" on":"")+'">'+(kgOn?'Active':(kgConf?'Blocked':'Off'))+'</span></div>'+
         '<div class="brkg-d">'+(kgOn
-          ?'A live temporal knowledge graph of your workspace (Graphiti) — Petra grounds answers about who owns what, what’s due and who’s overloaded in it, not just the uploaded docs. It updates from your Asana as meetings happen.'
-          :'Off. When enabled, a temporal knowledge graph (Graphiti) lets Petra reason about your workspace — who owns what, capacity, dependencies — beyond the documents above. Enabling is a deployment step (a graph database + env); see docs/GRAPHITI.md.')+'</div>'+
+          ?'A live temporal knowledge graph of your workspace (Graphiti) — Petra grounds answers about who owns what, what’s due and who’s overloaded in it, not just the uploaded docs. It updates from your Asana as meetings happen.'+kgRt
+          :(kgConf
+            ?'Configured, but <b>graphiti-core is not installed</b> on this deployment (runtime Python '+esc(kgPy||'?')+'). On a runtime below 3.10 the dependency is deliberately skipped so deploys stay safe — upgrade the App Runner runtime to ≥3.10 (or switch the service to the repo’s Dockerfile) and the graph activates on the next deploy.'
+            :'Off. When enabled, a temporal knowledge graph (Graphiti) lets Petra reason about your workspace — who owns what, capacity, dependencies — beyond the documents above. Enabling is a deployment step (a graph database + env); see docs/GRAPHITI.md.'+kgRt))+'</div>'+
         '</div>';
       box.innerHTML=css+
         '<div class="brwrap">'+

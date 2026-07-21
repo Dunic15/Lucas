@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import platform
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -37,6 +38,16 @@ FRONTEND_DIR = Path(__file__).resolve().parents[3] / "frontend"
 
 _30D = 30 * 24 * 3600
 _WEEK = 7 * 24 * 3600
+
+# graphiti-core presence, probed ONCE per process (it can't change without a
+# redeploy, and summary is called on every dashboard load). "" = not installed
+# — on a Python <3.10 build runtime the requirements marker skips the dep
+# (#319/#330), and the Brain card uses this to say so.
+try:
+    from importlib.metadata import version as _pkg_version
+    _GRAPHITI_CORE_VERSION = _pkg_version("graphiti-core")
+except Exception:  # noqa: BLE001 — absent (or metadata-less) ⇒ not installed
+    _GRAPHITI_CORE_VERSION = ""
 
 
 def _platform(meeting_url: str) -> str:
@@ -763,6 +774,13 @@ def dashboard_summary(request: Request) -> JSONResponse:
                 "graphiti_configured": bool(
                     settings.graphiti_enabled and settings.graphiti_uri.strip()
                 ),
+                # Whether the optional graphiti-core dependency actually
+                # installed on THIS deployment ("" = no), plus the build
+                # runtime's Python. On a <3.10 runtime the requirements marker
+                # deliberately skips the dep (#319/#330) — this is where a
+                # logged-in owner sees that without the API bearer.
+                "graphiti_core": _GRAPHITI_CORE_VERSION,
+                "runtime_python": platform.python_version(),
                 # Pipedream alternative-connections tab — surfaced only so the
                 # frontend can HIDE its nav tab when unconfigured, keeping the
                 # key-free demo and un-configured prod byte-identical (the tab
