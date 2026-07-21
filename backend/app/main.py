@@ -1905,6 +1905,22 @@ async def _make_avatar_speak(
     if audio and audio.get("wtimes") and audio.get("wdurations"):
         est = max(1.0, (audio["wtimes"][-1] + audio["wdurations"][-1]) / 1000 + 0.3)
     session.speaking_until = max(session.speaking_until, time.time()) + est
+    # Archive her side of the conversation verbatim at dispatch — Recall never
+    # transcribes the bot's own output audio, so without this the meeting
+    # transcript shows only the humans. kind="agent" keeps the line out of the
+    # roster, MeetingState, and every evidence/analysis path (those all filter
+    # on speaker_kind); the synthetic participant_id skips the name-match
+    # rebind in add_utterance. Backchannels ("Mm-hm.") are listening cues, not
+    # turns — they stay out of the archive like they stay out of the cooldown.
+    if not backchannel:
+        try:
+            _speaker_name = avatar_resolver.for_session(session).name
+        except Exception:  # noqa: BLE001 — a config read must never mute her
+            _speaker_name = (session.avatar_id or "avatar").title()
+        session.add_utterance(
+            _speaker_name, text, participant_id="agent:self",
+            speaker_kind="agent",
+        )
     if session.ws is not None:
         try:
             await session.ws.send_json(message)
@@ -3204,17 +3220,20 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if _is_echo(session, text):
         return JSONResponse({"ok": True, "spoke": False, "reason": "echo"})
 
-    # Agent speech may remain in the transcript for audit/presentation, but it
-    # must exit before barge-in, MeetingState, actions, readiness or prompts.
+    # Her own transcribed speech exits BEFORE the archive write: the verbatim
+    # line was already recorded at dispatch (_make_avatar_speak), so archiving
+    # the ASR rendition of the same words would double every agent turn. It
+    # still must exit before barge-in, MeetingState, actions, readiness or
+    # prompts.
+    avatar = avatar_resolver.for_session(session)
+    if _is_own_speech(avatar.name, speaker, speaker_kind):
+        return JSONResponse({"ok": True, "spoke": False, "reason": "own speech"})
     session.add_utterance(
         speaker,
         text,
         participant_id=speaker_id,
         speaker_kind=speaker_kind,
     )
-    avatar = avatar_resolver.for_session(session)
-    if _is_own_speech(avatar.name, speaker, speaker_kind):
-        return JSONResponse({"ok": True, "spoke": False, "reason": "own speech"})
 
     # ── barge-in: never talk over a human ──
     if _should_barge_in(
