@@ -202,7 +202,7 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
             return JSONResponse(
                 {
                     "error": "avatar_busy",
-                    "detail": "All avatars are busy right now — retry in a minute.",
+                    "detail": "All avatars are busy right now; retry in a minute.",
                 },
                 status_code=503,
                 headers={"Retry-After": "60"},
@@ -358,7 +358,7 @@ async def cancel_session(bot_id: str, request: Request) -> JSONResponse:
         session.usage_close_reason = "cancelled"
         session.usage_end_epoch = None
         print(
-            f"[sessions] cancel: leave unverified — bot={bot_id} kept for "
+            f"[sessions] cancel: leave unverified; bot={bot_id} kept for "
             f"reconcile meter-stop retry",
             flush=True,
         )

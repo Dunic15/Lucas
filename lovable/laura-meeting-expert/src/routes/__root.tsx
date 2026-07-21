@@ -77,7 +77,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Laura — Your company's process expert, live in every meeting" },
+      { title: "Laura: Your company's process expert, live in every meeting" },
       {
         name: "description",
         content:
@@ -86,7 +86,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "author", content: "Laura" },
       {
         property: "og:title",
-        content: "Laura — Your company's process expert, live in every meeting",
+        content: "Laura: Your company's process expert, live in every meeting",
       },
       {
         property: "og:description",
@@ -97,11 +97,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "twitter:card", content: "summary_large_image" },
       {
         property: "og:title",
-        content: "Laura — Your company's process expert, live in every meeting",
+        content: "Laura: Your company's process expert, live in every meeting",
       },
       {
         name: "twitter:title",
-        content: "Laura — Your company's process expert, live in every meeting",
+        content: "Laura: Your company's process expert, live in every meeting",
       },
       {
         name: "description",

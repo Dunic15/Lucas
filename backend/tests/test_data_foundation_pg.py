@@ -572,7 +572,7 @@ def test_purge_versions_keeps_max_even_if_head_nulled(cp, pg):
 
 
 def test_connector_get_never_returns_credential_ref(cp):
-    """MEDIUM: credential_ref is a secret pointer — never in a response."""
+    """MEDIUM: credential_ref is a secret pointer; never in a response."""
     org = _org(cp, "cred")
     dal.create_connector(org, "gdrive", "leaky",
                          credential_ref="ssm:/laura/refresh=SECRET")

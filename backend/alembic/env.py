@@ -76,7 +76,7 @@ if not DATABASE_URL:
         )
     # Both URLs empty is the intentional key-free SQLite demo.
     print(
-        "Both database URLs are empty — key-free SQLite demo runs no "
+        "Both database URLs are empty; key-free SQLite demo runs no "
         "control-plane migrations. Skipping."
     )
 elif context.is_offline_mode():

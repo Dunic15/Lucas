@@ -189,13 +189,13 @@ def brief(reg: dict | None) -> str:
     ced = reg.get("cedric") or {}
     connected = [t["name"] for t in (ced.get("connected") or [])][:8]
     available = [str(n) for n in (ced.get("available") or [])][:6]
-    lines = ["[YOUR TOOLS — this meeting]"]
+    lines = ["[YOUR TOOLS; this meeting]"]
     lines.append(
         "Native: capture any requested task for approval (queue_action); "
-        + ("Google Calendar + Gmail (connected — executed after owner approval); "
+        + ("Google Calendar + Gmail (connected: executed after owner approval); "
            if google_on else
            "Google Calendar + Gmail NOT connected (owner can connect in the dashboard); ")
-        + ("Asana tasks (connected — executed after owner approval); "
+        + ("Asana tasks (connected: executed after owner approval); "
            if asana_on else "")
         + "calculator; date math."
     )
@@ -203,7 +203,7 @@ def brief(reg: dict | None) -> str:
         # The owner toggled Slack OFF for this avatar: no Slack-agent tools are
         # offered, and the avatar must say so plainly when asked.
         lines.append(
-            "Slack agent: DISABLED for you — the owner toggled it off. If "
+            "Slack agent: DISABLED for you; the owner toggled it off. If "
             "asked to use Slack or any Slack-agent tool, say you can't because "
             "it isn't toggled on for you; never pretend or work around it."
         )
@@ -223,7 +223,7 @@ def brief(reg: dict | None) -> str:
         + "."
     )
     lines.append(
-        "Honesty: actions are CAPTURED then approved after the call — say "
+        "Honesty: actions are CAPTURED then approved after the call; say "
         "\"queued for approval\", never claim something was already done."
     )
     text = "\n".join(lines)
@@ -246,7 +246,7 @@ def search(reg: dict | None, query: str) -> str:
             if "connected" in t:
                 state = " (connected)" if t.get("connected") else " (NOT connected)"
             hits.append(
-                f"{t['name']} — native{state}; "
+                f"{t['name']}; native{state}; "
                 + ("runs after owner approval" if t.get("approval") == "approve"
                    else "instant")
             )
@@ -256,24 +256,24 @@ def search(reg: dict | None, query: str) -> str:
         if q in str(t.get("name", "")).lower():
             if blocked:
                 hits.append(
-                    f"{t['name']} — via the Slack agent, but Slack is toggled "
+                    f"{t['name']}; via the Slack agent, but Slack is toggled "
                     "OFF for you by the owner; say you can't use it"
                 )
             else:
                 hits.append(
-                    f"{t['name']} — via the Slack agent (connected); runs after owner approval"
+                    f"{t['name']}; via the Slack agent (connected); runs after owner approval"
                     + ("; needs reconnect" if t.get("needs_reconnect") else "")
                 )
     for n in ced.get("available") or []:
         if q in str(n).lower():
             hits.append(
-                f"{n} — via the Slack agent but "
+                f"{n}; via the Slack agent but "
                 + ("Slack is toggled OFF for you; say you can't use it"
                    if blocked else "NOT connected; do not promise it")
             )
     if not hits and blocked and "slack" in q:
         hits.append(
-            "Slack agent — toggled OFF for you by the owner; if asked, say you "
+            "Slack agent; toggled OFF for you by the owner; if asked, say you "
             "can't use Slack because it isn't toggled on"
         )
     if not hits:

@@ -18,7 +18,7 @@ const steps = [
     icon: ListChecks,
     step: "03",
     title: "Ask live, get a checklist",
-    body: "Get grounded answers with citations during the call — then a summary, gap checklist, and follow-up email after.",
+    body: "Get grounded answers with citations during the call; then a summary, gap checklist, and follow-up email after.",
   },
 ];
 

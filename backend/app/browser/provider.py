@@ -24,7 +24,7 @@ class ProviderError(RuntimeError):
 
 
 class ProviderTimeout(RuntimeError):
-    """A provider operation timed out — the write MAY have landed."""
+    """A provider operation timed out; the write MAY have landed."""
 
 
 @dataclass

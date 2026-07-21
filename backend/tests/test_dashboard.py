@@ -213,7 +213,7 @@ def test_billing_block_real_minutes(client):
 def test_dashboard_page_served(client):
     resp = client.get("/dashboard")
     assert resp.status_code == 200
-    assert "Laura — Dashboard" in resp.text
+    assert "Laura - Dashboard" in resp.text
 
 
 def test_legacy_artifact_without_avatar_id(client):

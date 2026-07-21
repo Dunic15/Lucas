@@ -41,7 +41,7 @@
         },
         "observation": {
           "url": "https://demo.laura.test/home",
-          "title": "Laura Demo — Home",
+          "title": "Laura Demo - Home",
           "dom_summary": "Welcome to the Laura product demo. Explore features below.",
           "elements": [
             {"id": "nav-pricing", "role": "link", "name": "Pricing", "kind": "link", "sensitive": false},

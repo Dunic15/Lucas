@@ -150,7 +150,7 @@ async def _tts_elevenlabs(text: str, el_voice: str = "") -> dict | None:
             status = e.response.status_code
             if status in (402, 403, 404):  # plan tier / licensing / deleted voice
                 _el_broken_voices.add(voice_id)
-            print(f"[tts] voice {voice_id} unavailable (HTTP {status}) — using stock voice", flush=True)
+            print(f"[tts] voice {voice_id} unavailable (HTTP {status}); using stock voice", flush=True)
             r = await _el_synthesize(_el_fallback_voice(), text)
         data = r.json()
         alignment = data.get("normalized_alignment") or data.get("alignment") or {}

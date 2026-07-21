@@ -33,7 +33,7 @@ ORG_SUBJECT = "org"
 
 
 class BackpressureError(RuntimeError):
-    """Open-quarantine cap reached — park the run, never delete data."""
+    """Open-quarantine cap reached; park the run, never delete data."""
 
 
 class ScopeLostError(RuntimeError):
@@ -687,7 +687,7 @@ def _maybe_bind_verified_email(conn, org_id: str, identity_id: str,
 
 def bind_identity(org_id: str, identity_id: str, principal_ref: str,
                   actor: str) -> bool:
-    """Explicit admin binding — the audited manual path."""
+    """Explicit admin binding; the audited manual path."""
     engine = _engine()
     with engine.begin() as conn:
         _set_org(conn, org_id)

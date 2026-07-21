@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Laura — Design B (Gemini ears + gate + ElevenLabs)</title>
+<title>Laura: Design B (Gemini ears + gate + ElevenLabs)</title>
 <style>
   :root { color-scheme: light dark; }
   body { font-family: -apple-system, system-ui, sans-serif; max-width: 680px;
@@ -34,7 +34,7 @@
 </style>
 </head>
 <body>
-  <h1>🎙️ Laura — <span class="muted">Design B</span></h1>
+  <h1>🎙️ Laura: <span class="muted">Design B</span></h1>
   <p class="flow">Gemini <b>ascolta</b> (orecchie + turni) → <b>decision.detect_wake</b> (il gate di Laura) → <b>ElevenLabs</b> parla con la voce di Laura</p>
 
   <div class="row"><span id="status"><span class="dot" id="dot"></span>connessione…</span></div>
@@ -108,7 +108,7 @@ function connect() {
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.type === 'ready') {
-      setStatus(`pronta — voce ElevenLabs ${m.voice ? '✓' : '✗ (manca key)'}`, 'ready');
+      setStatus(`pronta; voce ElevenLabs ${m.voice ? '✓' : '✗ (manca key)'}`, 'ready');
       ['mic', 'txt', 'send'].forEach((id) => ($(id).disabled = false));
     } else if (m.type === 'user') {
       curTurn = turnEl();
@@ -116,7 +116,7 @@ function connect() {
     } else if (m.type === 'gate') {
       const badge = m.addressed
         ? `<span class="badge ok">gate: rivolto a Laura ✓</span>`
-        : `<span class="badge hold">gate: non rivolta a Laura${m.require_wake ? ' — resta zitta' : ''}</span>`;
+        : `<span class="badge hold">gate: non rivolta a Laura${m.require_wake ? ': resta zitta' : ''}</span>`;
       if (curTurn) curTurn.innerHTML += badge;
     } else if (m.type === 'silent') {
       if (curTurn) curTurn.innerHTML += ` <i class="muted">(il gate l'ha trattenuta)</i>`;
@@ -128,8 +128,8 @@ function connect() {
       setStatus('errore: ' + m.message, 'err');
     }
   };
-  ws.onclose = () => setStatus('connessione chiusa — ricarica', 'err');
-  ws.onerror = () => setStatus('errore websocket — è avviato server.py?', 'err');
+  ws.onclose = () => setStatus('connessione chiusa; ricarica', 'err');
+  ws.onerror = () => setStatus('errore websocket; è avviato server.py?', 'err');
 }
 
 $('wake').onchange = () => ws && ws.readyState === 1 &&

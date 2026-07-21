@@ -25,7 +25,7 @@ export function Architecture() {
           <Reveal delay={140}>
             <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
               Laura separates the brain from the avatar. The reasoning engine stays in the backend,
-              grounded in your company knowledge. The avatar is only the interface — swappable,
+              grounded in your company knowledge. The avatar is only the interface; swappable,
               optional, and controlled.
             </p>
           </Reveal>
@@ -86,7 +86,7 @@ function BrainDiagram() {
           Avatar · interface
         </span>
         <p className="mt-2 text-sm text-muted-foreground">
-          Only the interface — swappable, optional, and fully controlled. Never the source of truth.
+          Only the interface; swappable, optional, and fully controlled. Never the source of truth.
         </p>
       </div>
     </div>

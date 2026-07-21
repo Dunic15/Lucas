@@ -192,7 +192,7 @@ def list_folders(org_id: str) -> tuple[list[dict], str]:
     except Exception as e:  # noqa: BLE001
         return [], f"drive list failed ({type(e).__name__})"
     if resp.status_code == 403:
-        return [], "drive scope missing — reconnect Google including drive.readonly"
+        return [], "drive scope missing; reconnect Google including drive.readonly"
     if resp.status_code != 200:
         return [], f"drive list HTTP {resp.status_code}"
     folders = [{"id": f["id"], "name": (f.get("name") or f["id"])[:200]}
@@ -235,7 +235,7 @@ def sync_drive(org_id: str, source_id: str) -> int:
         raise RuntimeError(f"drive list failed ({type(e).__name__})") from e
     if resp.status_code == 403:
         raise RuntimeError(
-            "drive scope missing — reconnect Google including drive.readonly"
+            "drive scope missing; reconnect Google including drive.readonly"
         )
     if resp.status_code != 200:
         raise RuntimeError(f"drive list HTTP {resp.status_code}")

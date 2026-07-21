@@ -1,4 +1,4 @@
-"""Avatar roster + per-avatar brain-mode routes — extracted from main.py."""
+"""Avatar roster + per-avatar brain-mode routes; extracted from main.py."""
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel

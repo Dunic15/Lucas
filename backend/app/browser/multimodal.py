@@ -44,7 +44,7 @@ _DEFAULT_MODELS = {
 
 
 class PlannerError(RuntimeError):
-    """A model call failed after bounded retries — the caller fails closed."""
+    """A model call failed after bounded retries; the caller fails closed."""
 
 
 def _cfg():
@@ -331,7 +331,7 @@ def _strip_fences(text: str) -> str:
 
 
 class _TransportError(RuntimeError):
-    """Retryable transport/5xx error — carries no payload."""
+    """Retryable transport/5xx error; carries no payload."""
 
 
 def _extract_text(data: dict) -> str:

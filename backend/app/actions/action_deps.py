@@ -125,7 +125,7 @@ def _release_one(org_id: str, action_id: str) -> bool:
         # toggle wins. Approved, nothing ran, nothing retried.
         ledger.set_action_status(
             action_id, "approved",
-            "dependencies met — not executed: tool disabled for this avatar",
+            "dependencies met; not executed: tool disabled for this avatar",
             org_id=org_id,
         )
         return False
@@ -138,7 +138,7 @@ def _release_one(org_id: str, action_id: str) -> bool:
         # Say so on the provenance channel instead of implying it ran.
         ledger.set_action_status(
             action_id, "approved",
-            "dependencies met — awaiting its own executor", org_id=org_id,
+            "dependencies met; awaiting its own executor", org_id=org_id,
         )
         return False
     ledger.set_action_decision_result(

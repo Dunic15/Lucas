@@ -1,5 +1,5 @@
 # Builda l'immagine GPU Ditto (pesi cotti dentro) e la pusha su GHCR.
-# Lancio MANUALE (workflow_dispatch) — l'immagine è ~12-15GB, non va buildata
+# Lancio MANUALE (workflow_dispatch); l'immagine è ~12-15GB, non va buildata
 # a ogni push. Il runner standard ha poco disco: il primo step lo libera.
 #
 # Risultato: ghcr.io/dunic15/laura-ditto:<tag>  (usalo nel template Runpod;

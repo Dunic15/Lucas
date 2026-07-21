@@ -6,7 +6,7 @@ const problems = [
   {
     icon: FolderLock,
     title: "Policies are buried",
-    body: "Procedures live in Notion, Confluence, SharePoint, Drive, and scattered PDFs — impossible to reach mid-conversation.",
+    body: "Procedures live in Notion, Confluence, SharePoint, Drive, and scattered PDFs; impossible to reach mid-conversation.",
   },
   {
     icon: Brain,
@@ -36,7 +36,7 @@ export function Problem() {
           <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
             Approvals, compliance steps, onboarding flows, customer handoffs, and internal
             procedures are often buried in Notion, Confluence, SharePoint, Google Drive, or PDFs.
-            During meetings, people rely on memory — and critical steps get missed.
+            During meetings, people rely on memory; and critical steps get missed.
           </p>
         </Reveal>
       </div>

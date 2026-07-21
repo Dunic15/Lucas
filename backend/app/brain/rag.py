@@ -540,7 +540,7 @@ _ORG_CACHE: dict[tuple[str, str], dict] = {}
 
 
 def _org_slug(org_id: str) -> str:
-    """org ids are uuids or u_<hash> — keep the filename strictly safe anyway."""
+    """org ids are uuids or u_<hash>; keep the filename strictly safe anyway."""
     return re.sub(r"[^A-Za-z0-9_-]", "_", (org_id or "").strip())
 
 

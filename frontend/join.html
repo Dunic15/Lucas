@@ -80,7 +80,7 @@
       <label for="avatarId">Avatar</label>
       <select id="avatarId"><option value="laura">Laura</option></select>
 
-      <label for="apiToken">API token <span class="muted">(only if this server requires one — saved in this browser)</span></label>
+      <label for="apiToken">API token <span class="muted">(only if this server requires one; saved in this browser)</span></label>
       <input id="apiToken" type="password" placeholder="LAURA_API_TOKEN" autocomplete="off" />
 
       <div class="row">
@@ -205,7 +205,7 @@
         const r = await fetch("/avatars");
         const data = await r.json();
         $("avatarId").innerHTML = (data.avatars || []).map(a =>
-          `<option value="${esc(a.id)}">${esc(a.name)} — ${esc(a.role)}</option>`
+          `<option value="${esc(a.id)}">${esc(a.name)}: ${esc(a.role)}</option>`
         ).join("") || '<option value="laura">Laura</option>';
       } catch (_) {}
 

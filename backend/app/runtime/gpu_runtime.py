@@ -68,7 +68,7 @@ def _start_instance() -> None:
         _ec2().start_instances(InstanceIds=[settings.gpu_instance_id])
         print(f"[gpu] start requested: {settings.gpu_instance_id}", flush=True)
     except Exception as e:  # noqa: BLE001; infra-only, never surfaces to the meeting
-        print(f"[gpu] start failed ({type(e).__name__}) — page stays on fallback",
+        print(f"[gpu] start failed ({type(e).__name__}); page stays on fallback",
               flush=True)
 
 
@@ -85,17 +85,17 @@ def on_session_ended(active_count: int) -> None:
         )
         _stop_timer.daemon = True
         _stop_timer.start()
-    print(f"[gpu] no active sessions — stop scheduled in "
+    print(f"[gpu] no active sessions; stop scheduled in "
           f"{settings.gpu_idle_stop_minutes} min", flush=True)
 
 
 def _stop_if_still_idle() -> None:
     try:
         if _count_active() > 0:
-            print("[gpu] stop cancelled — a new session is active", flush=True)
+            print("[gpu] stop cancelled; a new session is active", flush=True)
             return
         _ec2().stop_instances(InstanceIds=[settings.gpu_instance_id])
         print(f"[gpu] stop requested: {settings.gpu_instance_id}", flush=True)
     except Exception as e:  # noqa: BLE001
-        print(f"[gpu] stop failed ({type(e).__name__}) — box TTL/idle watchdog "
+        print(f"[gpu] stop failed ({type(e).__name__}); box TTL/idle watchdog "
               f"will stop it", flush=True)

@@ -21,29 +21,29 @@ FRONTEND_DIR = REPO_ROOT / "frontend"
 
 
 _SEARCH_FILLERS = (
-    "Sure, let me look that up — one sec.",
-    "Let me quickly check the web on that — one moment.",
-    "Good one — give me a sec to search that.",
+    "Sure, let me look that up; one sec.",
+    "Let me quickly check the web on that; one moment.",
+    "Good one; give me a sec to search that.",
 )
 
 
 _SEARCH_FILLERS_IT = (
-    "Certo, lo cerco subito — un attimo.",
-    "Do un'occhiata veloce sul web — un momento.",
-    "Bella domanda — un secondo che cerco.",
+    "Certo, lo cerco subito; un attimo.",
+    "Do un'occhiata veloce sul web; un momento.",
+    "Bella domanda; un secondo che cerco.",
 )
 
 
 _ACK_FILLERS = (
     "Give me a second to think about that.",
-    "One sec — let me work that out.",
+    "One sec; let me work that out.",
     "Hmm, give me a moment on that one.",
 )
 
 
 _ACK_FILLERS_IT = (
     "Dammi un secondo per pensarci.",
-    "Un attimo — ci ragiono.",
+    "Un attimo; ci ragiono.",
     "Mmm, dammi un momento su questa.",
 )
 
@@ -123,7 +123,7 @@ async def live_act(req: AskRequest) -> StreamingResponse:
             result = await task
         except Exception as e:  # noqa: BLE001; a failed lookup must never end in silence
             print(f"[live/act] answer failed: {e}", flush=True)
-            fail = "Sorry — that one failed on me. Mind asking again?"
+            fail = "Sorry; that one failed on me. Mind asking again?"
             yield f"data: {json.dumps({'content': fail})}\n\n"
             yield "data: [DONE]\n\n"
             return

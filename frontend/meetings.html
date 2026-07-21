@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Laura — Meetings archive</title>
+  <title>Laura: Meetings archive</title>
   <style>
     :root { --bg:#0b1020; --panel:#141b31; --line:#28324f; --text:#e6ecff;
       --muted:#93a1c8; --accent:#5b8cff; --good:#3ad29f; --warn:#ffcf6b; }
@@ -38,7 +38,7 @@
 <body>
   <header>
     <h1>Meetings archive</h1>
-    <p class="sub">Every meeting Laura attended — summary, checklist, follow-up email and full transcript.</p>
+    <p class="sub">Every meeting Laura attended; summary, checklist, follow-up email and full transcript.</p>
   </header>
   <main id="list"><p class="empty">Loading…</p></main>
 
@@ -48,7 +48,7 @@
     function render(meetings) {
       const root = document.getElementById("list");
       if (!meetings.length) {
-        root.innerHTML = '<p class="empty">No meetings yet — artifacts appear here when a session ends.</p>';
+        root.innerHTML = '<p class="empty">No meetings yet; artifacts appear here when a session ends.</p>';
         return;
       }
       root.innerHTML = meetings.map(({ bot_id, saved_at, artifact: a }) => {

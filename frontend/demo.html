@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Callable AI Process Avatar — Demo Console</title>
+  <title>Callable AI Process Avatar: Demo Console</title>
   <style>
     :root { --bg:#0b1020; --panel:#141b31; --panel2:#1b2440; --line:#28324f;
       --text:#e6ecff; --muted:#93a1c8; --accent:#5b8cff; --good:#3ad29f; --warn:#ffcf6b; --bad:#ff6b6b; }
@@ -71,7 +71,7 @@
 <body>
   <header>
     <div>
-      <h1>Callable AI Process Avatar — Demo Console</h1>
+      <h1>Callable AI Process Avatar: Demo Console</h1>
       <div class="sub">Ask an avatar from your process docs, or turn a meeting transcript into an action list. No meeting software required.</div>
     </div>
     <div class="pill"><span id="statusDot" class="dot"></span><span id="statusText">connecting…</span></div>
@@ -142,7 +142,7 @@
           ? "free offline mode (stub brain)"
           : `brain: ${h.brain_provider} · ${h.brain_model}`;
         const list = (await api("/avatars")).avatars;
-        $("avatar").innerHTML = list.map(a => `<option value="${a.id}">${esc(a.name)} — ${esc(a.role)}</option>`).join("");
+        $("avatar").innerHTML = list.map(a => `<option value="${a.id}">${esc(a.name)}. ${esc(a.role)}</option>`).join("");
       } catch (e) {
         $("statusDot").className = "dot"; $("statusText").textContent = "backend unreachable";
       }
@@ -195,7 +195,7 @@
       try {
         const r = await api("/demo/post_meeting", { avatar_id: $("avatar").value, transcript: $("transcript").value });
 
-        // Readiness verdict — only when a process template matched this meeting
+        // Readiness verdict; only when a process template matched this meeting
         // (a score of 0 on a random chat would be noise, not a verdict).
         let readiness = "";
         if (r.meeting_type && typeof r.readiness_score === "number") {
@@ -213,7 +213,7 @@
         const missingBlock = missing ? `
           <div class="missing"><b class="muted">Still to cover before go-live:</b><br>${missing}</div>` : "";
 
-        // actions is the new name; checklist is the back-compat alias — accept either.
+        // actions is the new name; checklist is the back-compat alias; accept either.
         const rows = (r.actions || r.checklist || []).map(c => `
           <tr><td>${esc(c.item)}</td><td>${esc(c.owner)}</td>
           <td><span class="gap ${c.gap_type==='none'?'none':''}">${esc(c.gap_type||'none')}</span></td></tr>`).join("");

@@ -40,7 +40,7 @@ _ACTION_HINTS = re.compile(
 def _format_context(chunks: list[Retrieved]) -> str:
     blocks = []
     for i, c in enumerate(chunks, 1):
-        blocks.append(f"[{i}] (source: {c.source} — {c.section})\n{c.text}")
+        blocks.append(f"[{i}] (source: {c.source}: {c.section})\n{c.text}")
     return "\n\n".join(blocks)
 
 
@@ -60,7 +60,7 @@ def _mission_directive(mission: str) -> str:
         + m
         + " Keep this objective in mind throughout. If the meeting is nearing its "
         "end and the objective is still unaddressed, raise it ONCE at a natural "
-        "opening — briefly and politely, phrased as a question. Never interrupt, "
+        "opening; briefly and politely, phrased as a question. Never interrupt, "
         "never force it, and let it go if no natural moment comes."
     )
 
@@ -519,14 +519,14 @@ def _live_route(question: str) -> tuple[str, str]:
 # silently swallows the announce during back-to-back searches. Safe to say
 # unconditionally: the search path never SKIPs, so an answer always follows.
 _SEARCH_ANNOUNCE_EN = (
-    "One moment — let me look that up online.",
+    "One moment; let me look that up online.",
     "Give me a second, I'll check the latest on that.",
     "Let me search for that quickly.",
     "Hang on, checking the web for you.",
-    "Let me pull that up — one sec.",
+    "Let me pull that up; one sec.",
 )
 _SEARCH_ANNOUNCE_IT = (
-    "Un attimo — lo cerco online.",
+    "Un attimo; lo cerco online.",
     "Dammi un secondo, controllo le ultime su questo.",
     "Vado a cercarlo, un momento.",
     "Aspetta, guardo sul web.",
@@ -599,9 +599,9 @@ _PROCESS_SPECIFIC = re.compile(
 
 # The caveat prefix itself, spoken as a lead-in before the world-knowledge
 # answer. Ends with an em-dash so it flows straight into the answer.
-_CAVEAT_UNGROUNDED_EN = "I don't see this in your process docs, so answering generally —"
+_CAVEAT_UNGROUNDED_EN = "I don't see this in your process docs, so answering generally -"
 _CAVEAT_UNGROUNDED_IT = (
-    "Non lo trovo nei vostri documenti di processo, quindi rispondo in generale —"
+    "Non lo trovo nei vostri documenti di processo, quindi rispondo in generale -"
 )
 
 
@@ -702,7 +702,7 @@ def answer_question_stream(
         if r.get("sufficient_context"):
             yield r["answer"]
             if citation:
-                yield f"— per {citation}"
+                yield f": per {citation}"
         return
 
     convo = f"Recent meeting conversation:\n{history}\n\n" if history.strip() else ""
@@ -715,7 +715,7 @@ def answer_question_stream(
     # steps. Only injected when it actually tracked something; an empty scaffold
     # ("type: unknown") would just bias her toward process-speak on small talk.
     state_block = (
-        f"Laura's own silent meeting notes (tracked live — trust these):\n"
+        f"Laura's own silent meeting notes (tracked live; trust these):\n"
         f"{meeting_state.state_summary(state)}\n\n"
         if state is not None and _state_has_signal(state)
         else ""
@@ -793,7 +793,7 @@ def answer_question_stream(
         # Search flaked (returned nothing / refused); fall THROUGH to the fast
         # model so she still answers from her own knowledge instead of going
         # silent.
-        question = f"{question} (You could not search the web just now — answer from your knowledge and say it may not be current.)"
+        question = f"{question} (You could not search the web just now; answer from your knowledge and say it may not be current.)"
         _provider, _model = settings.brain_provider, settings.brain_model_fast
     _max_tokens = 400
     for delta in llm.stream_complete(
@@ -1013,7 +1013,7 @@ def answer_with_tools(
         except Exception:
             answer = ""
         if not answer:
-            answer = "Sorry, I didn't catch that — could you say it again?"
+            answer = "Sorry, I didn't catch that; could you say it again?"
     return {
         "answer": answer,
         "tools_used": used,
@@ -1117,7 +1117,7 @@ def _live_actions_block(live_actions: list[dict] | None) -> str:
         return ""
     return (
         "Actions ALREADY CAPTURED LIVE during the meeting (each already has an "
-        "approval card — do NOT re-extract these, nor any rephrasing or "
+        "approval card; do NOT re-extract these, nor any rephrasing or "
         "translation of them; only genuinely new actions belong in actions[]):\n"
         + "\n".join(lines)
         + "\n\n"
@@ -1146,7 +1146,7 @@ def _task_hints_block(tasks: list[dict] | None) -> str:
         if not label or not triggers:
             continue
         quoted = "; ".join(f'"{p}"' for p in triggers)
-        lines.append(f"- {label} — recognized when someone asks for something like {quoted}.")
+        lines.append(f"- {label}; recognized when someone asks for something like {quoted}.")
     if not lines:
         return ""
     return (
@@ -1319,7 +1319,7 @@ def _stub_proactive(chunks: list[Retrieved], transcript_text: str) -> dict:
     if "approv" in ctx and "approv" in low and "security lead" not in low:
         return {
             "should_speak": True,
-            "line": "Before we close, I didn't hear who's giving the required approval — should we assign an owner for that?",
+            "line": "Before we close, I didn't hear who's giving the required approval; should we assign an owner for that?",
             "gap_type": "approval",
             "citations": [chunks[0].source] if chunks else [],
             "confidence": 0.72,
@@ -1366,7 +1366,7 @@ def post_meeting(
             avatar, transcript_text[-3000:] or "process steps owners approvals", k=k
         )
         brief_block = (
-            "BACKGROUND ONLY — PRE-MEETING BRIEF (not evidence of what was "
+            "BACKGROUND ONLY: PRE-MEETING BRIEF (not evidence of what was "
             f"discussed or agreed):\n\n{context}\n\n"
             if context.strip()
             else ""
@@ -1803,7 +1803,7 @@ def _llm_type_actions(
         (
             f"TODAY: {_time.strftime('%Y-%m-%d')}\n\n"
             + (f"Meeting summary (context only):\n{brief}\n\n" if brief.strip() else "")
-            + "ACTION ITEMS (0-based index in brackets — the source text for each):\n"
+            + "ACTION ITEMS (0-based index in brackets: the source text for each):\n"
             + "\n".join(lines)
             + "\n\nRespond with the JSON object only."
         ),
@@ -1939,7 +1939,7 @@ def _stub_post_meeting(
         "auto-generated from the meeting tracker after the summary model "
         "returned an incomplete result"
         if degraded
-        else "offline stub mode — enable a real brain for a true summary"
+        else "offline stub mode; enable a real brain for a true summary"
     )
     summary = (
         f"{avatar.name} sat in on a meeting with {len(speakers)} participant(s) "
@@ -1974,7 +1974,7 @@ def _stub_post_meeting(
 
 
 def _parse_json(text: str) -> dict:
-    """Tolerant JSON extraction — strips ``` fences and surrounding prose."""
+    """Tolerant JSON extraction; strips ``` fences and surrounding prose."""
     text = text.strip()
     if text.startswith("```"):
         text = text.split("```", 2)[1]

@@ -51,7 +51,7 @@ def post_to_slack(text: str) -> dict:
 
 def artifact_to_slack_text(avatar_name: str, artifact: dict) -> str:
     """Render a post-meeting artifact as a Slack message."""
-    lines = [f"*{avatar_name} — meeting follow-up*", artifact.get("summary", ""), ""]
+    lines = [f"*{avatar_name}; meeting follow-up*", artifact.get("summary", ""), ""]
     for c in artifact.get("checklist", []) or []:
         gap = c.get("gap_type", "none")
         tag = "" if gap in ("none", None) else f"  _[{gap}]_"

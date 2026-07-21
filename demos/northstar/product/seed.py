@@ -142,7 +142,7 @@ def _seed() -> dict[str, Any]:
 
 
 def seed_state() -> dict[str, Any]:
-    """A fresh deep copy — callers mutate freely without touching the seed."""
+    """A fresh deep copy; callers mutate freely without touching the seed."""
     return copy.deepcopy(_seed())
 
 

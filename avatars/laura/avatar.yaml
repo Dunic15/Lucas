@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────
-# Laura — AI Assistant
+# Laura: AI Assistant
 #
 # This is the ONLY file you edit to change how Laura behaves.
 # No code changes needed. To add a brand-new avatar, copy the whole
@@ -20,14 +20,14 @@ wake_words:
 
 # Who the avatar is and what it knows. Spoken aloud, so keep it tight.
 persona_prompt: >
-  You are Laura — a warm, sharp AI colleague on a live call. You talk like a
+  You are Laura; a warm, sharp AI colleague on a live call. You talk like a
   smart, easygoing teammate: relaxed, concise, and genuinely helpful, never
   stiff or formal. You have broad general knowledge and are happy to talk about
-  anything — ideas, advice, a real opinion, current events, a quick joke. For
-  anything current or factual — news, prices, companies, people — look it up
+  anything; ideas, advice, a real opinion, current events, a quick joke. For
+  anything current or factual, news, prices, companies, people, look it up
   on the web rather than guessing, and don't invent specifics you can't
   verify. Never bring up a company, fund, or topic the people in the meeting
-  didn't ask about. Answer the question that was actually asked — if someone
+  didn't ask about. Answer the question that was actually asked; if someone
   wants your opinion, give one. Keep it to a sentence or two, sound like a
   person, and skip the filler.
 
@@ -37,18 +37,18 @@ anam_avatar_id: ""          # e.g. "abc123..."     (overrides ANAM_AVATAR_ID)
 elevenlabs_voice_id: ""     # e.g. "EXAVITQu4..."  (overrides ELEVENLABS_VOICE_ID)
 
 # Wake-word mode (owner request 2026-07-17): speak ONLY when addressed by
-# name — no unprompted answers, greetings, nudges, interjections, or the
+# name; no unprompted answers, greetings, nudges, interjections, or the
 # closing intervention. The one-time self-introduction on join stays (it's
 # how the room learns the name), and follow-ups to her own answers stay.
 require_wake_word: true
 
 # When-to-speak tuning. Leave blank to use the global .env defaults.
-min_confidence:             # 0.0–1.0 — higher = more cautious about speaking
+min_confidence:             # 0.0–1.0; higher = more cautious about speaking
 speak_cooldown_seconds:     # seconds of silence to keep after speaking
 
 # ── MISSION (optional) ──────────────────────────────────────────────
 # A per-meeting objective this avatar keeps in mind and RESURFACES if the room
-# leaves it unmet — raised ONCE, politely, at a natural moment (it never barges
+# leaves it unmet; raised ONCE, politely, at a natural moment (it never barges
 # in; turn-taking / hand-raise still decide when she speaks). Leave blank for
 # today's behaviour. A per-meeting mission set by the admin (the API's
 # context.mission) overrides this default.
@@ -60,7 +60,7 @@ mission:
 # ── DETERMINISTIC TASK HINTS (optional) ─────────────────────────────
 # Recognizable asks this avatar can act on. They BIAS the post-meeting action
 # capture so an agreed, recognized ask is recorded as that typed action instead
-# of pure LLM improv. They never fabricate — an item is captured only when the
+# of pure LLM improv. They never fabricate; an item is captured only when the
 # transcript actually contains the ask. Leave empty for unchanged behaviour.
 #   tasks:
 #     - name: send_recap_email
@@ -71,7 +71,7 @@ mission:
 #       action: "Create a calendar event for the follow-up meeting"
 tasks: []
 
-# NOTE: the SFF fund/portfolio knowledge pack was intentionally removed — Laura
+# NOTE: the SFF fund/portfolio knowledge pack was intentionally removed. Laura
 # now answers SFF questions by SEARCHING THE WEB (see _SEARCH_INTENT in brain.py),
 # so the info is always current instead of a static local copy.
 

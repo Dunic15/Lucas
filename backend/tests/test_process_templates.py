@@ -129,7 +129,7 @@ def test_decision_quality_no_decision_intervenes():
 def test_meeting_readiness_ready_scores_full_no_intervention():
     state = _feed(
         MEETING_READINESS,
-        ("Ana", "Let's start our meeting readiness review — what's the objective?"),
+        ("Ana", "Let's start our meeting readiness review; what's the objective?"),
         ("Bo", "The objective is to approve the Q3 budget."),
         ("Ana", "I've set the agenda and shared the pre-read deck."),
         ("Bo", "The right attendees are the finance leads; I'll invite them."),
@@ -145,7 +145,7 @@ def test_meeting_readiness_question_does_not_cover_objective():
     """Merely ASKING 'what's the objective?' must not mark objective_clear covered."""
     state = _feed(
         MEETING_READINESS,
-        ("Ana", "Let's start our meeting readiness review — what's the objective?"),
+        ("Ana", "Let's start our meeting readiness review; what's the objective?"),
     )
     assert "objective_clear" not in state.completed_steps
 

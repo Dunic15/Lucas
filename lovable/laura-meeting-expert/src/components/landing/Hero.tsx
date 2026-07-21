@@ -23,7 +23,7 @@ export function Hero() {
           <Reveal delay={160}>
             <p className="mt-6 max-w-xl text-lg leading-relaxed text-muted-foreground">
               Laura is a live AI avatar that joins your Zoom, Meet, or Teams call, listens in, and
-              answers from trusted company knowledge — so teams never miss a critical step.
+              answers from trusted company knowledge; so teams never miss a critical step.
             </p>
           </Reveal>
           <Reveal delay={240}>
@@ -151,7 +151,7 @@ function HeroMockup() {
           </span>
         </div>
         <p className="mt-2.5 text-sm leading-relaxed text-foreground/90">
-          "Finance approval is required before the contract is signed — that's step 3 of the
+          "Finance approval is required before the contract is signed; that's step 3 of the
           procurement policy."
         </p>
         <div className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary/60 px-2.5 py-1 text-xs text-muted-foreground">

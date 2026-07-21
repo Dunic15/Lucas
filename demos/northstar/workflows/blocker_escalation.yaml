@@ -1,9 +1,9 @@
-# SYNTHETIC DEMO WORKFLOW — Northstar / Acme Robotics. Fictional.
+# SYNTHETIC DEMO WORKFLOW: Northstar / Acme Robotics. Fictional.
 id: blocker-escalation
 name: Blocker escalation
 purpose: >
   Classify a blocker's severity and state the correct escalation timer, grounded
-  in the Escalation Policy — without conflating it with the approval window.
+  in the Escalation Policy; without conflating it with the approval window.
 
 inputs:
   customer_id: acme-robotics

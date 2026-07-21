@@ -252,12 +252,12 @@ def queue_action(
 ) -> str:
     """Capture a requested action durably; delivery remains asynchronous."""
     if not (action or "").strip():
-        return "error: 'action' is required — one short line saying what should be done"
+        return "error: 'action' is required; one short line saying what should be done"
     if session is None:
         # No live meeting session behind this conversation (e.g. the direct
         # web-avatar page): be honest; nothing gets queued here.
         return (
-            "note: there is no live meeting session, so nothing was queued — "
+            "note: there is no live meeting session, so nothing was queued. "
             "tell the person you can only queue actions during a meeting."
         )
     try:
@@ -271,11 +271,11 @@ def queue_action(
             )
         if isinstance(exc, OutboxUnavailable):
             return (
-                "error: I couldn't save that action safely — please try again "
+                "error: I couldn't save that action safely; please try again "
                 "in a moment."
             )
         raise
-    return "Noted — I'll queue that for approval in Slack right after the call."
+    return "Noted: I'll queue that for approval in Slack right after the call."
 
 
 # ─────────────────────── registry (OpenAI/Groq format) ─────────────────
@@ -352,7 +352,7 @@ TOOL_SPECS = [
                 "Queue a REQUESTED action for approval after the call. Use whenever "
                 "someone asks you to DO something: send an email or recap, schedule "
                 "or book a follow-up, create a ticket or doc, check on something, "
-                "remind someone, invite someone. This only captures the request — "
+                "remind someone, invite someone. This only captures the request. "
                 "it is executed AFTER the meeting behind an approval, never during "
                 "the call. NEVER claim the action was already done; confirm it is "
                 "queued for approval right after the call."
@@ -454,7 +454,7 @@ def upcoming_meetings(session=None) -> str:
     path. "" from the assembler means no Google connected for the org."""
     brief = getattr(session, "calendar_brief", "") if session else ""
     return brief or (
-        "no calendar is connected for this meeting's org — connect Google "
+        "no calendar is connected for this meeting's org; connect Google "
         "in the dashboard to give me calendar sight"
     )
 
@@ -516,7 +516,7 @@ ASANA_TOOL_SPECS = [
         "function": {
             "name": "asana_projects",
             "description": (
-                "Read the CURRENT list of Asana projects (live — not the "
+                "Read the CURRENT list of Asana projects (live; not the "
                 "meeting-start snapshot). Use before asana_tasks when you "
                 "need the exact project name."
             ),
@@ -530,7 +530,7 @@ ASANA_TOOL_SPECS = [
             "description": (
                 "Read the CURRENT open tasks of ONE Asana project (live), "
                 "with owners and due dates. Use for 'what's open/overdue in "
-                "X right now' — the workspace brief in your context is only "
+                "X right now': the workspace brief in your context is only "
                 "a snapshot from when the meeting started."
             ),
             "parameters": {

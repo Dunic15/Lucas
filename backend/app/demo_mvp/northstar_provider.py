@@ -104,7 +104,7 @@ class NorthstarProvider:
 
         if path == "/":
             company = store.company()
-            title = "Northstar — Customer Success"
+            title = "Northstar: Customer Success"
             dom = (f"Northstar. Demo version {company.get('demo_version','')}. "
                    "Customer success workspace.")
             elements = [
@@ -116,7 +116,7 @@ class NorthstarProvider:
                  "href": "http://127.0.0.1:8971/tasks"},
             ]
         elif path == "/customers":
-            title = "Northstar — Customers"
+            title = "Northstar: Customers"
             dom = "Customers. Acme Robotics."
             elements = [{"id": "customer-acme-robotics", "role": "link",
                          "name": "Acme Robotics", "kind": "link",
@@ -136,7 +136,7 @@ class NorthstarProvider:
         elif path.startswith("/customers/acme-robotics/onboarding/"):
             slug = path.rsplit("/", 1)[-1]
             stage = store.stage_by_slug(slug) or {}
-            title = f"Acme — {stage.get('name', slug)}"
+            title = f"Acme: {stage.get('name', slug)}"
             state = stage.get("status", "")
             dom = f"Stage {stage.get('name', slug)}: {state}."
             if state == "blocked":
@@ -144,7 +144,7 @@ class NorthstarProvider:
                              "name": "Blocked: WMS sandbox credentials",
                              "kind": "note", "bbox": [40, 120, 900, 160]}]
         elif path == "/tasks":
-            title = "Northstar — Tasks"
+            title = "Northstar: Tasks"
             rows = store.tasks()
             dom = "Tasks. " + "; ".join(t["title"] for t in rows)
             elements = [
@@ -166,7 +166,7 @@ class NorthstarProvider:
                                  "name": "Follow-up task created",
                                  "kind": "note", "bbox": [40, 60, 900, 96]})
         elif path == "/security":
-            title = "Northstar — Security"
+            title = "Northstar: Security"
             dom = "Security settings. External data sharing: off."
         else:
             title = "Not found"

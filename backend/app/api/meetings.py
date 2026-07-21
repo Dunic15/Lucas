@@ -1,4 +1,4 @@
-"""Meeting reads: /ledger, /meetings, /meetings/list — extracted from main.py."""
+"""Meeting reads: /ledger, /meetings, /meetings/list; extracted from main.py."""
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
 

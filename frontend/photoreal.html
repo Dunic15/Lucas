@@ -93,7 +93,7 @@
   // hand the meeting to the 3D /talk page so she always has a face.
   frameEl.onerror = () => {
     if (!gpuReady && frameEl.src.includes("/laura-reference.jpg")) {
-      status("static portrait unavailable — trying same-avatar fallback");
+      status("static portrait unavailable; trying same-avatar fallback");
       fallbackSameAvatar("portrait");
     }
   };
@@ -120,7 +120,7 @@
   // Frame presentation is locked to the AUDIO clock, not to frame arrival.
   // The GPU tags each talk frame with its native-timeline index (frame i belongs
   // at audio second i/nativeFps). We buffer a clip's frames and, every display
-  // tick, paint the newest frame whose moment the audio has already reached —
+  // tick, paint the newest frame whose moment the audio has already reached -
   // holding the last one if the next hasn't been generated yet, dropping
   // intermediates after a stall. This is what keeps the mouth on the voice when
   // generation runs below realtime (the drift the newest-wins scheme couldn't
@@ -174,9 +174,9 @@
         streamUrl = cfg.stream_url;
       } catch (_) { /* backend unreachable */ }
     }
-    if (!streamUrl) { status("no GPU stream configured — static portrait mode"); return; }
+    if (!streamUrl) { status("no GPU stream configured; static portrait mode"); return; }
     // multi-volto: dice al GPU server QUALE faccia servire su questa
-    // connessione (un server a volto singolo la ignora — retrocompatibile)
+    // connessione (un server a volto singolo la ignora; retrocompatibile)
     streamUrl += (streamUrl.includes("?") ? "&" : "?") + "avatar_id=" + encodeURIComponent(avatarId);
     const ws = new WebSocket(streamUrl);
     ws.binaryType = "blob";
@@ -188,14 +188,14 @@
           if (msg.type === "hello") {
             gpuReady = true;
             if (msg.fps) nativeFps = msg.fps;
-            status(`live — ${msg.mode} engine @ ${msg.fps}fps`);
+            status(`live: ${msg.mode} engine @ ${msg.fps}fps`);
           }
           // New clip: reset the frame clock + ring. Audio still starts on the
           // clip's FIRST frame (the GPU takes ~200-400ms to produce it, and
           // starting the sound early is a head start the lips never recover).
           if (msg.type === "face_unavailable") {
             gpuReady = false;
-            status("photoreal face unavailable — trying same-avatar fallback");
+            status("photoreal face unavailable; trying same-avatar fallback");
             fallbackSameAvatar("GPU face");
             return;
           }
@@ -236,7 +236,7 @@
       if (pendingIdx != null) {
         frameBuf.set(pendingIdx, ev.data); pendingIdx = null;
         // Defence-in-depth cap: pruning normally keeps this at 1-2 entries, but
-        // never let a clock-skew regression grow it unbounded — drop oldest.
+        // never let a clock-skew regression grow it unbounded; drop oldest.
         while (frameBuf.size > 120) frameBuf.delete(Math.min(...frameBuf.keys()));
       } else { nextBlob = ev.data; }            // untagged (legacy/idle) → newest-wins
       if (waitingFirstFrame && pendingAudio.length) {
@@ -257,7 +257,7 @@
       );
       waitingFirstFrame = false;
       stranded.reduce((p, item) => p.then(() => playClip(item)), Promise.resolve());
-      status("GPU stream lost — static portrait mode; retrying");
+      status("GPU stream lost; static portrait mode; retrying");
       setTimeout(connectGpu, 3000);
     };
   }
@@ -310,7 +310,7 @@
   // Long answers are split into sentence-sized clips: Ditto generates at
   // ~23fps against a 25fps timeline, so lips fall ~0.1s behind per second of
   // audio. Per-clip alignment (audio starts on the clip's first frame) resets
-  // that drift at every sentence — it can never accumulate past ~0.2s.
+  // that drift at every sentence; it can never accumulate past ~0.2s.
   function sentenceChunks(text, max = 160) {
     const parts = text.match(/[^.!?…]+[.!?…]+["»']?\s*|[^.!?…]+\s*$/g) || [text];
     const chunks = [];

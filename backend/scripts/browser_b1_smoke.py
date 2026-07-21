@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def _unproven(reason: str) -> None:
-    print(f"UNPROVEN: real visual perception not exercised — {reason}")
+    print(f"UNPROVEN: real visual perception not exercised. {reason}")
     print("Do NOT record any latency/cost/reliability numbers from this run.")
     sys.exit(2)
 

@@ -67,7 +67,7 @@ def enabled() -> bool:
 
 
 def _reset() -> None:
-    """Test seam — clear the process-global session cache."""
+    """Test seam; clear the process-global session cache."""
     with _SESSION_LOCK:
         _SESSIONS.clear()
 
@@ -350,7 +350,7 @@ def result_to_model_text(res: dict) -> str:
         "tool_not_connected": "that tool isn't connected for this org",
         "scope_missing": "the connected account lacks permission for that",
         "invalid_args": "I called that tool with the wrong arguments",
-        "rate_limited": "that tool is rate-limited right now — try again shortly",
+        "rate_limited": "that tool is rate-limited right now; try again shortly",
         "timeout": "that lookup took too long, so I skipped it",
         "auth": "the tool bridge rejected our credentials",
         "disabled": "the tool bridge is off",

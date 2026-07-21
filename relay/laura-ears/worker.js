@@ -1,4 +1,4 @@
-// laura-ears — Cloudflare Worker relay.
+// laura-ears: Cloudflare Worker relay.
 //
 // Why this exists: AWS App Runner (the Laura backend) does NOT accept inbound
 // WebSockets, so Recall's real-time audio (audio_mixed_raw) can't reach it.
@@ -50,7 +50,7 @@ export default {
     const [client, server] = Object.values(pair);
     server.accept();
     // ctx.waitUntil keeps the worker (and the outbound Gemini WS + its pumps)
-    // alive for the whole session — without it a plain Worker is torn down after
+    // alive for the whole session; without it a plain Worker is torn down after
     // fetch() returns and the audio never reaches Gemini.
     ctx.waitUntil(handleSession(server, cap, cfg, env));
     return new Response(null, { status: 101, webSocket: client });
@@ -88,7 +88,7 @@ async function runSession(recall, cap, cfg, env, done) {
   const sys = reply
     ? `You are ${cfg.persona || "Laura"}, an assistant taking part in a work ` +
       `meeting. CRITICAL: always reply in the SAME language the person just ` +
-      `spoke — if they speak English, reply in English. Keep it short and ` +
+      `spoke; if they speak English, reply in English. Keep it short and ` +
       `natural, like on a phone call. If you don't know something, say so ` +
       `briefly. No bullet lists.`
     : "Reply only with: .";
@@ -169,7 +169,7 @@ async function runSession(recall, cap, cfg, env, done) {
 async function postTurn(cap, cfg, env, text, reply) {
   // Synthesize the exact transcript.data payload the backend already knows how
   // to process (marker laura_ears). The backend attributes the speaker from its
-  // own Recall-final ring — the relay hears mixed audio and can't. bot_id lets
+  // own Recall-final ring; the relay hears mixed audio and can't. bot_id lets
   // the webhook's capability/session check pass.
   const payload = {
     event: "transcript.data",

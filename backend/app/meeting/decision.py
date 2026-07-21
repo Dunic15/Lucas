@@ -182,7 +182,7 @@ def _strip_wake(utterance: str, wake: str) -> str:
     """Remove the wake word + filler ('hey', trailing/leading punctuation)."""
     cleaned = re.sub(rf"\b{re.escape(wake)}\b", "", utterance, flags=re.IGNORECASE)
     cleaned = re.sub(r"\b(hey|ok|okay|hi)\b", "", cleaned, flags=re.IGNORECASE)
-    cleaned = cleaned.strip(" ,.?!-—\t")
+    cleaned = cleaned.strip(" ,.?!--\t")
     return cleaned or utterance.strip()
 
 

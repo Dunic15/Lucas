@@ -73,7 +73,7 @@ def _embed_local(texts: list[str]) -> list[list[float]]:
         except Exception as e:  # noqa: BLE001; model download/load failed
             _local_failed = True
             print(
-                f"[embeddings] local model unavailable ({type(e).__name__}) — "
+                f"[embeddings] local model unavailable ({type(e).__name__}). "
                 "hash fallback for this process; indexes rebuild automatically "
                 "on the next boot with the model",
                 flush=True,

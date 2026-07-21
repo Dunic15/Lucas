@@ -72,7 +72,7 @@ def _read_emo_intensity() -> float:
     try:
         return min(1.0, max(0.0, float(raw)))
     except ValueError:
-        print(f"[ditto] bad DITTO_EMO_INTENSITY={raw!r} — using 0.5", flush=True)
+        print(f"[ditto] bad DITTO_EMO_INTENSITY={raw!r}; using 0.5", flush=True)
         return 0.5
 
 
@@ -218,7 +218,7 @@ class DittoPipeline:
             ch.emo_seq = np.concatenate([ch.emo_lst] * ch.seq_frames, 0)
             self._cur_emo = idx
         except Exception as e:  # noqa: BLE001; a wrong face beats a dead face
-            print(f"[ditto] set_emotion fallita ({e}) — resto neutrale", flush=True)
+            print(f"[ditto] set_emotion fallita ({e}); resto neutrale", flush=True)
 
     # ── one utterance -> stream of JPEG frames ──
     async def stream(self, audio_mp3: bytes, fps: int = 25, jpeg_quality: int = 82,

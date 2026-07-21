@@ -1,9 +1,9 @@
-# SYNTHETIC DEMO WORKFLOW — Northstar / Acme Robotics. Fictional.
+# SYNTHETIC DEMO WORKFLOW: Northstar / Acme Robotics. Fictional.
 id: implementation-status-review
 name: Implementation-status review
 purpose: >
-  Report the technical implementation state for a customer — milestone status
-  and go-live readiness — grounded in the implementation documents.
+  Report the technical implementation state for a customer; milestone status
+  and go-live readiness; grounded in the implementation documents.
 
 inputs:
   customer_id: acme-robotics

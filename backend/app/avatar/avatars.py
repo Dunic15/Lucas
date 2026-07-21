@@ -137,7 +137,7 @@ class Avatar:
     def about_dir(self) -> Path:
         """Meta docs about the avatar ITSELF (architecture, playbook, costs).
         Indexed separately and retrieved only for self-questions ("how do you
-        work?") — they must never pollute real process retrieval."""
+        work?"); they must never pollute real process retrieval."""
         return self.dir / "about"
 
     @property
@@ -159,7 +159,7 @@ class Avatar:
 
 
 def _coalesce(value, fallback):
-    """yaml blank fields parse to None/'' — fall back to the global default."""
+    """yaml blank fields parse to None/'': fall back to the global default."""
     return fallback if value in (None, "") else value
 
 

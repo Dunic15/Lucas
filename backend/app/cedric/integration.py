@@ -212,7 +212,7 @@ def default_external_ref() -> dict:
         return ref if isinstance(ref, dict) else {}
     except ValueError:
         print(
-            "[cedric] SURFACE_EXTERNAL_REF is not valid JSON — ignoring it",
+            "[cedric] SURFACE_EXTERNAL_REF is not valid JSON; ignoring it",
             flush=True,
         )
         return {}
@@ -535,7 +535,7 @@ def voice_approve(session: Any, item: dict) -> bool:
 
 
 class ContextPush(BaseModel):
-    """Body of POST /sessions/{bot_id}/context — a LIVE push (Cedric → Laura)."""
+    """Body of POST /sessions/{bot_id}/context; a LIVE push (Cedric → Laura)."""
 
     context: MeetingContext
 

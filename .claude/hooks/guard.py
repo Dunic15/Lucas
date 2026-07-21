@@ -47,7 +47,7 @@ def scan_bash(command: str) -> None:
         if re.search(pat, command):
             block(
                 "BLOCKED: this command contains an API-key-shaped string. "
-                "Golden rule: no secrets in git or shell history — use .env "
+                "Golden rule: no secrets in git or shell history; use .env "
                 "(gitignored) or SSM /laura/prod/*."
             )
     if re.search(r"\bgit\b[^|;&]*\bcommit\b", command):

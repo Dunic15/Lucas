@@ -292,7 +292,7 @@ async def _lifespan(app: FastAPI):
             await outbox_task
         except asyncio.CancelledError:
             pass
-        print("[gmail-watch] shutdown signal — watcher draining", flush=True)
+        print("[gmail-watch] shutdown signal; watcher draining", flush=True)
 
 
 app = FastAPI(title="Callable AI Process Avatar", lifespan=_lifespan)
@@ -441,7 +441,7 @@ def _should_repair_silent_answer(called: bool, text: str) -> bool:
 def _silent_answer_repair_line(avatar: avatars.Avatar) -> str:
     return (
         f"I can hear you, but I didn't catch a clear question. "
-        f"Ask me about our processes or the portfolio — for example: "
+        f"Ask me about our processes or the portfolio; for example: "
         f"{avatar.name}, what are we missing before go-live?"
     )
 
@@ -575,7 +575,7 @@ async def _gmail_watch_loop() -> None:
     seeded = False  # first pass records existing mail; only FRESH invites join
     while True:
         if _shutting_down:
-            print("[gmail-watch] instance draining — watcher stopped", flush=True)
+            print("[gmail-watch] instance draining; watcher stopped", flush=True)
             return
         await asyncio.sleep(settings.gmail_poll_seconds)
         if not settings.gmail_watch_enabled or _shutting_down:
@@ -584,7 +584,7 @@ async def _gmail_watch_loop() -> None:
             rt = await run_in_threadpool(gmail_watcher.refresh_token)
             if not rt:
                 _gmail_state["last_error"] = (
-                    "no refresh token — run /oauth/google/connect (with gmail scope)"
+                    "no refresh token; run /oauth/google/connect (with gmail scope)"
                 )
                 continue
             token = await run_in_threadpool(gmail_watcher.access_token, rt)
@@ -940,7 +940,7 @@ async def _repair_untracked_usage(
     # ALREADY finalized/delivered, so its caller retries the meter-stop without
     # rebuilding or re-delivering the artifact.
     if force_finalize:
-        print(f"[usage] cannot meter untracked bot={real} — cutting off", flush=True)
+        print(f"[usage] cannot meter untracked bot={real}; cutting off", flush=True)
         await _finalize_session(real, source="reconcile", usage_reason="limit_reached")
     return None
 
@@ -1414,37 +1414,37 @@ async def _refresh_rolling_summary(
 # the pool matching what was just heard; the ANSWER language is the model's job.
 _ACK_LINES = [
     "Mm-hm.",
-    "Sure —",
+    "Sure -",
     "On it.",
-    "Let me think —",
-    "Good one —",
-    "Okay —",
-    "Got it —",
+    "Let me think -",
+    "Good one -",
+    "Okay -",
+    "Got it -",
 ]
 _ACK_LINES_IT = [
     "Mm-hm.",
-    "Certo —",
+    "Certo -",
     "Subito.",
-    "Vediamo —",
-    "Arrivo —",
-    "Ok —",
-    "Ci penso io —",
+    "Vediamo -",
+    "Arrivo -",
+    "Ok -",
+    "Ci penso io -",
 ]
 
 # Ack for questions routed to the slower 'complex' Claude path: a line that
 # JUSTIFIES the extra beat of latency instead of leaving it unexplained.
 _THINK_LINES = [
-    "Good question — give me a second to think it through.",
+    "Good question; give me a second to think it through.",
     "Let me reason through that for a moment.",
-    "Hmm — let me think about that properly.",
-    "Interesting one — give me a moment.",
+    "Hmm; let me think about that properly.",
+    "Interesting one; give me a moment.",
     "Let me take a second on that.",
 ]
 _THINK_LINES_IT = [
-    "Bella domanda — dammi un secondo per pensarci.",
+    "Bella domanda; dammi un secondo per pensarci.",
     "Fammi ragionare un attimo.",
-    "Mmm — fammici pensare bene.",
-    "Interessante — dammi un momento.",
+    "Mmm; fammici pensare bene.",
+    "Interessante; dammi un momento.",
     "Un secondo che ci ragiono.",
 ]
 
@@ -1454,25 +1454,25 @@ _THINK_LINES_IT = [
 # 500 that cuts her off mid-sentence and makes Recall re-deliver. Fixed + short
 # so they're TTS-prewarmed and land instantly.
 _STREAM_RECOVERY_LINES = [
-    "— sorry, I lost my train of thought there.",
-    "— hmm, my thought dropped out there for a second. Give me a nudge?",
+    ": sorry, I lost my train of thought there.",
+    ": hmm, my thought dropped out there for a second. Give me a nudge?",
 ]
 _STREAM_RECOVERY_LINES_IT = [
-    "— scusa, ho perso il filo un attimo.",
-    "— mmh, mi si è interrotto il pensiero. Rilanciatemi pure.",
+    ": scusa, ho perso il filo un attimo.",
+    ": mmh, mi si è interrotto il pensiero. Rilanciatemi pure.",
 ]
 
 # Confirmation for a captured action request (queue_action seam): promises
 # follow-up after the call, never execution. Fixed lines so they're TTS-
 # prewarmed; the confirmation must land as fast as an ack.
 _QUEUE_LINES = [
-    "Got it — it'll be on the dashboard for your approval right after the call.",
-    "Noted — I'll line it up on the dashboard for approval once we wrap.",
-    "On it — it goes to the dashboard for your approval right after this meeting.",
+    "Got it; it'll be on the dashboard for your approval right after the call.",
+    "Noted: I'll line it up on the dashboard for approval once we wrap.",
+    "On it; it goes to the dashboard for your approval right after this meeting.",
 ]
 _QUEUE_LINES_IT = [
-    "Ricevuto — lo trovi in dashboard per l'approvazione appena finiamo.",
-    "Segnato — va in dashboard per l'approvazione subito dopo la call.",
+    "Ricevuto; lo trovi in dashboard per l'approvazione appena finiamo.",
+    "Segnato; va in dashboard per l'approvazione subito dopo la call.",
 ]
 
 # Voice-consent confirmations (settings.voice_consent_writes): the addressed
@@ -1480,13 +1480,13 @@ _QUEUE_LINES_IT = [
 # she says it's approved and underway, never that it's already done (the
 # receipt lands on the dashboard when Cedric reports back).
 _VOICE_LINES = [
-    "On it — approved, and Cedric's running it now.",
-    "Got it — that's approved and on its way through Cedric right now.",
-    "Done — I've approved it and handed it to Cedric to run.",
+    "On it; approved, and Cedric's running it now.",
+    "Got it; that's approved and on its way through Cedric right now.",
+    "Done: I've approved it and handed it to Cedric to run.",
 ]
 _VOICE_LINES_IT = [
-    "Subito — approvato, Cedric lo sta eseguendo ora.",
-    "Ricevuto — approvato e già in lavorazione con Cedric.",
+    "Subito; approvato, Cedric lo sta eseguendo ora.",
+    "Ricevuto; approvato e già in lavorazione con Cedric.",
 ]
 
 # Clarify-before-create (settings.clarify_before_create): the addressed ask is
@@ -1510,10 +1510,10 @@ def _clarify_line(heard: str, missing: list[str]) -> str:
     if sounds_italian(heard):
         slots = [_CLARIFY_SLOTS_IT[m] for m in missing if m in _CLARIFY_SLOTS_IT]
         joined = slots[0] if len(slots) == 1 else ", ".join(slots[:-1]) + " e " + slots[-1]
-        return f"Certo — prima di crearla: {joined}?"
+        return f"Certo; prima di crearla: {joined}?"
     slots = [_CLARIFY_SLOTS[m] for m in missing if m in _CLARIFY_SLOTS]
     joined = slots[0] if len(slots) == 1 else ", ".join(slots[:-1]) + ", and " + slots[-1]
-    return f"Sure — before I create it: {joined}?"
+    return f"Sure, before I create it: {joined}?"
 
 # Listening cues spoken WHILE a human is mid-monologue (backchanneling, the
 # thing that makes a listener feel present). Two syllables max; anything
@@ -1525,12 +1525,12 @@ _BACKCHANNEL_LINES_IT = ["Mm-hm.", "Mm.", "Capito."]
 # action, so the chat is the in-platform signal; the gesture on her /talk tile
 # is the visual one). Tells the room HOW to give her the floor.
 _HAND_CHAT_LINES = [
-    '✋ {name} here — I have something to add when there\'s a moment. Just say "go ahead, {name}".',
-    '✋ {name}: quick point on this when you have a second — just say "{name}, what\'s up?".',
+    '✋ {name} here: I have something to add when there\'s a moment. Just say "go ahead, {name}".',
+    '✋ {name}: quick point on this when you have a second; just say "{name}, what\'s up?".',
 ]
 _HAND_CHAT_LINES_IT = [
-    '✋ {name}: avrei una cosa da aggiungere quando c\'è un attimo — basta dire "dimmi, {name}".',
-    '✋ {name}: un appunto veloce su questo punto quando volete — dite "vai, {name}".',
+    '✋ {name}: avrei una cosa da aggiungere quando c\'è un attimo; basta dire "dimmi, {name}".',
+    '✋ {name}: un appunto veloce su questo punto quando volete; dite "vai, {name}".',
 ]
 
 
@@ -1588,7 +1588,7 @@ def _should_backchannel(
         return False
     now = time.time()
     if now < session.speaking_until:
-        return False  # she's talking — that's not listening
+        return False  # she's talking; that's not listening
     if now - session.last_backchannel_at < settings.backchannel_gap_seconds:
         return False
     if now - session.last_spoke_at < 12.0:
@@ -1599,18 +1599,18 @@ def _should_backchannel(
 # Spoken when dismissed by voice; short enough to finish inside
 # settings.leave_grace_seconds before the bot disconnects.
 _GOODBYE_LINES = [
-    "Sure — bye everyone!",
+    "Sure; bye everyone!",
     "Okay, leaving now. Bye!",
-    "Got it — see you next time!",
+    "Got it; see you next time!",
     "Alright, I'll drop off. Bye!",
-    "Thanks everyone — bye!",
+    "Thanks everyone; bye!",
     "Okay, heading out. Take care!",
 ]
 _GOODBYE_LINES_IT = [
-    "Certo — ciao a tutti!",
+    "Certo; ciao a tutti!",
     "Va bene, esco. Ciao!",
     "D'accordo, vi lascio. A presto!",
-    "Grazie a tutti — ciao!",
+    "Grazie a tutti; ciao!",
     "Perfetto, vado. Buon lavoro!",
 ]
 
@@ -1619,20 +1619,20 @@ _GOODBYE_LINES_IT = [
 # joiner's / quiet participant's first name; dynamic, so never TTS-prewarmed.
 _WELCOME_LINES = [
     "Hi {name}, welcome!",
-    "Hey {name} — good to have you.",
+    "Hey {name}; good to have you.",
     "Welcome, {name}!",
 ]
 _WELCOME_LINES_IT = [
     # gender-neutral on purpose ("benvenuto/a" would have to guess)
     "Ciao {name}, che bello averti qui!",
-    "Ciao {name} — piacere di averti qui.",
+    "Ciao {name}; piacere di averti qui.",
 ]
 _QUIET_NUDGE_LINES = [
-    "Before we close — {name}, anything from your side?",
+    "Before we close: {name}, anything from your side?",
     "One thing before we wrap up: {name}, anything you'd add?",
 ]
 _QUIET_NUDGE_LINES_IT = [
-    "Prima di chiudere — {name}, qualcosa da aggiungere?",
+    "Prima di chiudere: {name}, qualcosa da aggiungere?",
     "Un attimo prima di chiudere: {name}, tutto chiaro dal tuo lato?",
 ]
 
@@ -1641,23 +1641,23 @@ _QUIET_NUDGE_LINES_IT = [
 # Spoken from the reconcile pass; never the live hot path. Each fires at most
 # once per session (Session.usage_warned_5m / usage_warned_1m).
 _USAGE_WARN_5M_LINES = [
-    "Quick heads-up — about five minutes of included avatar time left for "
+    "Quick heads-up; about five minutes of included avatar time left for "
     "this workspace.",
     "Just so you know, this workspace has roughly five minutes of included "
     "time left.",
 ]
 _USAGE_WARN_5M_LINES_IT = [
-    "Un avviso veloce — restano circa cinque minuti di tempo incluso per "
+    "Un avviso veloce; restano circa cinque minuti di tempo incluso per "
     "questo workspace.",
     "Solo per informarvi: restano più o meno cinque minuti di tempo incluso.",
 ]
 _USAGE_WARN_1M_LINES = [
-    "We're at the last minute of included time — I'll have to leave shortly.",
-    "One minute of included time left — I'll drop off in a moment.",
+    "We're at the last minute of included time. I'll have to leave shortly.",
+    "One minute of included time left. I'll drop off in a moment.",
 ]
 _USAGE_WARN_1M_LINES_IT = [
-    "Siamo all'ultimo minuto di tempo incluso — tra poco dovrò uscire.",
-    "Resta un minuto di tempo incluso — tra pochissimo dovrò lasciarvi.",
+    "Siamo all'ultimo minuto di tempo incluso; tra poco dovrò uscire.",
+    "Resta un minuto di tempo incluso; tra pochissimo dovrò lasciarvi.",
 ]
 
 
@@ -1693,15 +1693,15 @@ async def _usage_warn(session: store.Session, deadline: float) -> None:
 # call her in, then she goes back to waiting to be addressed. {name} slots the
 # avatar's name; dynamic, so never TTS-prewarmed.
 _SELF_INTRO_LINES = [
-    "Hi, I'm {name} — here to help if you need me. Just say my name whenever "
+    "Hi, I'm {name}; here to help if you need me. Just say my name whenever "
     "you'd like me to jump in.",
-    "Hey everyone, {name} here — I'll be listening. Say my name any time you "
+    "Hey everyone, {name} here: I'll be listening. Say my name any time you "
     "want me to weigh in.",
 ]
 _SELF_INTRO_LINES_IT = [
-    "Ciao, sono {name} — sono qui se vi serve. Chiamatemi per nome quando "
+    "Ciao, sono {name}; sono qui se vi serve. Chiamatemi per nome quando "
     "volete che intervenga.",
-    "Ciao a tutti, sono {name} — resto in ascolto. Ditemi il mio nome quando "
+    "Ciao a tutti, sono {name}; resto in ascolto. Ditemi il mio nome quando "
     "volete un mio contributo.",
 ]
 
@@ -3225,7 +3225,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if flag.get("should_speak") and flag.get("line") and conf >= settings.proactive_min_confidence:
             session.proactive_done = True
             cits = flag.get("citations", [])
-            line = flag["line"] + (f" — per {cits[0]}" if cits else "")
+            line = flag["line"] + (f": per {cits[0]}" if cits else "")
             await _make_avatar_speak(session, line, cits)
             return JSONResponse({"ok": True, "spoke": True, "proactive": True, "line": line})
 
@@ -3687,12 +3687,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     await run_in_threadpool(
                         recall_client.send_chat_message, session.bot_id,
                         f"Sign in to {spoken_name} here so I can show it to "
-                        f"you — it's private, I only keep the session, never "
+                        f"you; it's private, I only keep the session, never "
                         f"your password: {res['login_url']}")
                     await _make_avatar_speak(
                         session,
                         f"I don't have your {spoken_name} login yet. I've put a "
-                        "sign-in link in the meeting chat — open it, log in, and "
+                        "sign-in link in the meeting chat; open it, log in, and "
                         "I'll remember it for next time.", force=True,
                         generation=browse_gen)
                     for _ in range(60):  # poll ~6 minutes
@@ -3704,7 +3704,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                                 browser_meeting.finish_connect, session.bot_id)
                             await _make_avatar_speak(
                                 session,
-                                f"Great — I'm connected to {spoken_name} now. "
+                                f"Great: I'm connected to {spoken_name} now. "
                                 "Ask me again and I'll show you.", force=True)
                             return
                         if state in ("gone", "none"):
@@ -3723,8 +3723,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 # plays regardless of ambient chatter.
                 await _make_avatar_speak(
                     session,
-                    (f"One moment — opening {spoken_name} to show you."
-                     if browse_task else f"One moment — opening {spoken_name}."),
+                    (f"One moment; opening {spoken_name} to show you."
+                     if browse_task else f"One moment; opening {spoken_name}."),
                     force=True)
                 result = await run_in_threadpool(
                     browser_meeting.open_for_meeting, session.org_id,
@@ -3754,7 +3754,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     return
                 await _make_avatar_speak(
                     session,
-                    (f"Sure — here's how you'd do that in {spoken_name}."
+                    (f"Sure; here's how you'd do that in {spoken_name}."
                      if browse_task else f"Opening {spoken_name} for you."),
                     force=True, generation=browse_gen)
                 # Guided how-to: drive the visual planner, narrating each step.
@@ -4143,7 +4143,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         _kg = await graphiti_client.recall(session.org_id, question or text)
         if _kg:
             memory = (
-                "[Knowledge graph — facts relevant to this question]\n"
+                "[Knowledge graph; facts relevant to this question]\n"
                 + _kg + "\n\n" + (memory or "")
             )
     # Talk-over guard baseline (interject_recheck_floor_at_speak): snapshot the

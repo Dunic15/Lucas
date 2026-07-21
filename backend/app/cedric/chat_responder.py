@@ -24,7 +24,7 @@ from .. import avatars, ledger, store
 # Statuses that mean an action no longer waits on anyone.
 _SETTLED = ("done", "rejected", "failed")
 
-_STUB_PREFIX = "Got it — noted."
+_STUB_PREFIX = "Got it; noted."
 
 _CHAT_FRAME = """You are Cedric, answering in the ORG DASHBOARD CHAT; typed
 messages, not a live meeting. Keep replies short (1-3 sentences), warm and
@@ -98,7 +98,7 @@ def _org_context(org: str) -> str:
 
 
 def _history(org: str, limit: int = 10) -> str:
-    """The last few chat turns, oldest first — continuity, not archive."""
+    """The last few chat turns, oldest first; continuity, not archive."""
     try:
         msgs = store.list_chat_messages(org)[-limit:]
     except Exception:  # noqa: BLE001
@@ -121,7 +121,7 @@ def build_reply(org: str, text: str) -> str:
     if brain.effective_provider() == "stub":
         return (
             f"{_STUB_PREFIX} On this key-free run I answer canned lines, "
-            "but your message is saved — actions and approvals live in the "
+            "but your message is saved; actions and approvals live in the "
             "Action Center."
         )
     try:
@@ -133,7 +133,7 @@ def build_reply(org: str, text: str) -> str:
     from .. import llm  # lazy: keeps module import light for pure-unit tests
 
     reply = (llm.complete(system, user, max_tokens=400) or "").strip()
-    return reply or "I'm here — say that again? I didn't produce an answer."
+    return reply or "I'm here; say that again? I didn't produce an answer."
 
 
 def respond_and_store(org: str, text: str) -> bool:
@@ -143,6 +143,6 @@ def respond_and_store(org: str, text: str) -> bool:
     try:
         reply = build_reply(org, text)
     except Exception:  # noqa: BLE001; never let the channel go silent
-        reply = "Sorry — I hit an error answering that. Try me again in a moment."
+        reply = "Sorry: I hit an error answering that. Try me again in a moment."
     row = store.add_chat_message(org, "cedric", body=reply, sender_label="Cedric")
     return row is not None

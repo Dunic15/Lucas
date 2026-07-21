@@ -52,13 +52,13 @@ def main() -> None:
     if not os.path.exists(args.audio):
         _fail(f"no such file: {args.audio}")
     if not args.hf_token:
-        _fail("HF_TOKEN not set — the pyannote 3.1 model is gated; accept its "
+        _fail("HF_TOKEN not set; the pyannote 3.1 model is gated; accept its "
               "terms on huggingface.co and export HF_TOKEN=hf_...")
 
     try:
         from pyannote.audio import Pipeline  # heavy import, on purpose here
     except ImportError:
-        _fail("pyannote.audio not installed — run: pip install pyannote.audio torch torchaudio")
+        _fail("pyannote.audio not installed; run: pip install pyannote.audio torch torchaudio")
 
     print("[diarize] loading pyannote/speaker-diarization-3.1 (first run downloads ~1GB)…")
     pipeline = Pipeline.from_pretrained(

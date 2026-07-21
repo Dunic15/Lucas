@@ -63,7 +63,7 @@ def _basic(email: str, token: str) -> str:
 
 def _oauth_access_token(org_id: str, row: dict) -> tuple[str, str]:
     """Mint (or serve cached) a short-lived Bearer token from the org's OAuth
-    refresh token. ("", error) on any failure — the caller falls through."""
+    refresh token. ("", error) on any failure; the caller falls through."""
     now = time.time()
     with _oauth_lock:
         cached = _OAUTH_CACHE.get(org_id)

@@ -51,7 +51,7 @@ def test_roster_excludes_explicit_agent_not_same_name_human(tmp_path, monkeypatc
 
 
 def test_roster_falls_back_to_transcript_speakers(tmp_path, monkeypatch):
-    """After a restart the event roster is empty — people who spoke still count."""
+    """After a restart the event roster is empty; people who spoke still count."""
     s = _session(tmp_path, monkeypatch)
     s.add_utterance("Duccio", "let's get started")
     s.add_utterance("Marco", "sounds good")

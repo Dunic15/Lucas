@@ -219,7 +219,7 @@ async def _assign_usage_bot_id(
         except Exception:  # noqa: BLE001; transient billing-DB blip; retry
             if attempt == 2:
                 print(
-                    "[usage] provisional bot_id swap failed after retries — "
+                    "[usage] provisional bot_id swap failed after retries. "
                     "reconcile self-heals",
                     flush=True,
                 )
@@ -552,7 +552,7 @@ async def _start_avatar_session(
     session.memory_brief = carryover or ""
     if folder:
         session.memory_brief = (
-            f"[Shared Drive folder — current team docs]\n{folder}\n\n"
+            f"[Shared Drive folder; current team docs]\n{folder}\n\n"
             + (session.memory_brief or "")
         )
     if asana_snapshot:
@@ -560,17 +560,17 @@ async def _start_avatar_session(
         # asana_* tools are on, say so; that's what makes her READ current
         # state instead of quoting a stale snapshot.
         _asana_note = (
-            " — use asana_projects / asana_tasks / asana_search for the CURRENT state"
+            ": use asana_projects / asana_tasks / asana_search for the CURRENT state"
             if asana_live
             else ""
         )
         session.memory_brief = (
-            f"[Asana workspace — snapshot from meeting start{_asana_note}]\n"
+            f"[Asana workspace; snapshot from meeting start{_asana_note}]\n"
             f"{asana_snapshot}\n\n" + (session.memory_brief or "")
         )
     if jira_snapshot:
         session.memory_brief = (
-            "[Jira — open issues snapshot from meeting start]\n"
+            "[Jira; open issues snapshot from meeting start]\n"
             f"{jira_snapshot}\n\n" + (session.memory_brief or "")
         )
     # Feed the workspace snapshot(s) into the org's knowledge graph (graphiti,
@@ -591,7 +591,7 @@ async def _start_avatar_session(
     if cal_brief:
         session.calendar_brief = cal_brief
         session.memory_brief = (
-            f"[Owner's calendar — upcoming meetings]\n{cal_brief}\n\n"
+            f"[Owner's calendar; upcoming meetings]\n{cal_brief}\n\n"
             + (session.memory_brief or "")
         )
     if settings.autopilot_brief and session.memory_brief:
@@ -972,7 +972,7 @@ async def _finalize_session_locked(
                 )
                 artifact = {
                     "summary": (
-                        "Automated recap unavailable — the post-meeting summarizer "
+                        "Automated recap unavailable; the post-meeting summarizer "
                         "failed. The full transcript is preserved in the meeting "
                         "archive."
                     ),
@@ -1160,7 +1160,7 @@ async def _finalize_session_locked(
         session.usage_close_reason = usage_close_reason
         session.usage_end_epoch = usage_end_epoch
         print(
-            f"[finalize] bot={bot_id} leave_call unverified — session kept for "
+            f"[finalize] bot={bot_id} leave_call unverified; session kept for "
             f"reconcile meter-stop retry",
             flush=True,
         )

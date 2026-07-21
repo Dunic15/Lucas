@@ -38,7 +38,7 @@ _LOCK = threading.Lock()
 _LAST_SCAN: dict[str, float] = {}
 
 _UNKNOWN_DETAIL = (
-    "execution_unknown — a crash interrupted this call; check the connected "
+    "execution_unknown; a crash interrupted this call; check the connected "
     "account before retrying"
 )
 
@@ -55,7 +55,7 @@ def _throttled(org_id: str) -> bool:
 
 def _mirror(org_id: str, action_id: str, status: str, detail: str,
             receipt_url: str = "") -> None:
-    """Best-effort Cedric mirror — identical discipline to the executor's."""
+    """Best-effort Cedric mirror; identical discipline to the executor's."""
     try:
         from ..cedric import callback as cedric_callback
 
@@ -125,7 +125,7 @@ def _reconcile_row(org_id: str, row: dict) -> bool:
         if verdict == "absent":
             _settle(
                 org_id, action_id, "failed",
-                "execution_unknown resolved — the event was NOT created; "
+                "execution_unknown resolved; the event was NOT created; "
                 "re-capture to retry",
                 {"kind": "unknown", "ref": "", "route": "native",
                  "reconciled": True},

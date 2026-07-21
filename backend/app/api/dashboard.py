@@ -791,7 +791,7 @@ async def connect_asana(request: Request) -> JSONResponse:
     info = await run_in_threadpool(asana_client.verify_token, token)
     if not info.get("ok"):
         return JSONResponse(
-            {"error": f"Asana rejected the token — {info.get('error', 'unknown')}"},
+            {"error": f"Asana rejected the token. {info.get('error', 'unknown')}"},
             status_code=400,
         )
     try:
@@ -876,7 +876,7 @@ async def connect_jira(request: Request) -> JSONResponse:
     info = await run_in_threadpool(jira_client.verify_token, site, email, token)
     if not info.get("ok"):
         return JSONResponse(
-            {"error": f"Jira rejected the credentials — {info.get('error', 'unknown')}"},
+            {"error": f"Jira rejected the credentials. {info.get('error', 'unknown')}"},
             status_code=400,
         )
     try:
@@ -2107,7 +2107,7 @@ def _executor_action(typed: dict | None) -> dict | None:
 _DISPATCH_FAILURE_MESSAGE = {
     "not_configured": "Cedric isn't connected on this deployment, so nothing ran.",
     "dispatch_endpoint_missing": (
-        "Cedric can't run actions from the dashboard yet — its action receiver "
+        "Cedric can't run actions from the dashboard yet; its action receiver "
         "isn't built. Nothing ran."
     ),
     "unsupported_type": "Cedric can't run this type of action yet. Nothing ran.",

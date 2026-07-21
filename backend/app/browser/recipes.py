@@ -46,7 +46,7 @@ RECIPES: dict[str, dict[str, list[dict]]] = {
             {"op": "point", "sel": "[aria-label='Descrizione'] || [aria-label='Description']",
              "say": "And any details go here."},
             {"op": "say",
-             "say": "Then you assign it and save — and it's on the board. "
+             "say": "Then you assign it and save; and it's on the board. "
                     "I'll leave the actual creating to you."},
         ],
         "create_project": [
@@ -59,8 +59,8 @@ RECIPES: dict[str, dict[str, list[dict]]] = {
              "sel": "text=Crea progetto || text=Create project || [aria-label='Nuovo progetto o portfolio']",
              "say": "That's where you pick a blank project or a template."},
             {"op": "say",
-             "say": "You give it a name, choose a layout — list, board, "
-                    "timeline — and add your tasks. I'll leave the rest to you."},
+             "say": "You give it a name, choose a layout; list, board, "
+                    "timeline; and add your tasks. I'll leave the rest to you."},
         ],
         "tour": [
             {"op": "navigate", "url": _ASANA_HOME,
@@ -72,7 +72,7 @@ RECIPES: dict[str, dict[str, list[dict]]] = {
             {"op": "point", "sel": "[aria-label='Cerca'] || [aria-label='Search'] || [placeholder='Cerca'] || [placeholder='Search']",
              "say": "Search up top finds any task or project fast."},
             {"op": "say",
-             "say": "Your projects are in the sidebar on the left — open one "
+             "say": "Your projects are in the sidebar on the left; open one "
                     "to see its tasks. That's the lay of the land."},
         ],
         "my_tasks": [
@@ -86,10 +86,10 @@ RECIPES: dict[str, dict[str, list[dict]]] = {
         "add_section": [
             {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
             {"op": "reveal", "sel": "[aria-label^='Apri progetto'] || [aria-label^='Open project'] || text=Monitoraggio dei compiti || a[href*='/project/']",
-             "say": "Open a project — sections organise its tasks into groups."},
+             "say": "Open a project; sections organise its tasks into groups."},
             {"op": "point", "sel": "text=Aggiungi sezione || text=Add section || [aria-label='Aggiungi sezione'] || [aria-label='Add section']",
-             "say": "Add section, here, creates a new group — like To do, "
-                    "Doing, Done — and you drag tasks into it."},
+             "say": "Add section, here, creates a new group; like To do, "
+                    "Doing, Done; and you drag tasks into it."},
         ],
         "add_task_in_project": [
             {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
@@ -97,14 +97,14 @@ RECIPES: dict[str, dict[str, list[dict]]] = {
              "say": "Inside a project,"},
             {"op": "point", "sel": "text=Aggiungi attività || text=Add task || [aria-label='Aggiungi attività'] || [aria-label='Add task']",
              "say": "Add task, here, drops a new task straight into this "
-                    "project — type the name and hit enter."},
+                    "project; type the name and hit enter."},
         ],
         "add_comment": [
             {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
             {"op": "reveal", "sel": _OPEN_TASK,
              "say": "Open any task to see its detail panel."},
             {"op": "point", "sel": "[aria-label='Commenta'] || [aria-label='Comment'] || [aria-label='Add a comment'] || [aria-label='Modifica commento'] || text=Commenta || [placeholder*='comment']",
-             "say": "Down here is where you comment — @-mention someone and "
+             "say": "Down here is where you comment. @-mention someone and "
                     "they get notified. That's how the discussion stays on the "
                     "task itself."},
         ],
@@ -119,7 +119,7 @@ RECIPES: dict[str, dict[str, list[dict]]] = {
             {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
             {"op": "reveal", "sel": _OPEN_TASK, "say": "Open a task,"},
             {"op": "point", "sel": "[aria-label='Data di scadenza'] || [aria-label='Due date']",
-             "say": "and Due date, here, is where you set when it's due — you "
+             "say": "and Due date, here, is where you set when it's due; you "
                     "can even give it a start-to-end range."},
         ],
         "assign_task": [
@@ -127,7 +127,7 @@ RECIPES: dict[str, dict[str, list[dict]]] = {
             {"op": "reveal", "sel": _OPEN_TASK, "say": "Open a task,"},
             {"op": "point",
              "sel": "[aria-label^='Aggiungi o rimuovi collaboratori'] || [aria-label^='Add or remove collaborators'] || [aria-label*='Assignee'] || [aria-label*='Assegnatario']",
-             "say": "and the assignee and collaborators go here — pick who owns "
+             "say": "and the assignee and collaborators go here; pick who owns "
                     "it and who should follow along."},
         ],
         "complete_task": [
@@ -135,26 +135,26 @@ RECIPES: dict[str, dict[str, list[dict]]] = {
             {"op": "reveal", "sel": _OPEN_TASK, "say": "Open a task,"},
             {"op": "point",
              "sel": "[aria-label^='Contrassegna come completata'] || [aria-label^='Mark complete'] || [aria-label^='Mark as complete']",
-             "say": "and this check — Mark complete — closes it out. I'm just "
+             "say": "and this check, Mark complete, closes it out. I'm just "
                     "pointing, not clicking, so nothing changes."},
         ],
         "invite_member": [
             {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
             {"op": "point",
              "sel": "text=Invita colleghi del team || text=Invita un collega || text=Invite teammates || text=Invite || [aria-label*='Invite']",
-             "say": "Invite, down here, adds a teammate — you type their email "
+             "say": "Invite, down here, adds a teammate; you type their email "
                     "and they can see and be assigned tasks."},
         ],
         "create_portfolio": [
             {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
             {"op": "point", "sel": "text=Portfolio || [aria-label='Portfolio'] || text=Portfolios",
              "say": "Portfolios, here, group several projects so you can watch "
-                    "their status in one place — good for a program view."},
+                    "their status in one place; good for a program view."},
         ],
         "search": [
             {"op": "navigate", "url": _ASANA_HOME, "say": "Opening your Asana."},
             {"op": "point", "sel": "[aria-label='Cerca'] || [aria-label='Search'] || [placeholder='Cerca'] || [placeholder='Search']",
-             "say": "Search, up top, jumps to any task, project, or person — "
+             "say": "Search, up top, jumps to any task, project, or person. "
                     "and you can build saved searches for advanced filters."},
         ],
     },

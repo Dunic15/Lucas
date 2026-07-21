@@ -181,7 +181,7 @@ async def _get_client():
             await client.build_indices_and_constraints()
             _client = client
         except Exception as e:  # noqa: BLE001; must never break the app
-            print(f"[graphiti] disabled — init failed ({type(e).__name__})", flush=True)
+            print(f"[graphiti] disabled; init failed ({type(e).__name__})", flush=True)
             _unavailable = True
             _client = None
         _init_done = True
@@ -266,7 +266,7 @@ async def recall(
             timeout=budget,
         )
     except asyncio.TimeoutError:
-        print("[graphiti] recall timed out — using snapshot", flush=True)
+        print("[graphiti] recall timed out; using snapshot", flush=True)
         return ""
     except Exception as e:  # noqa: BLE001; a failed graph never blocks a reply
         print(f"[graphiti] recall skipped ({type(e).__name__})", flush=True)

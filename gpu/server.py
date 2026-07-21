@@ -89,7 +89,7 @@ async def _idle_watchdog() -> None:
         idle_min = (time.time() - IDLE_SINCE) / 60
         if idle_min >= IDLE_SHUTDOWN_MINUTES:
             print(f"[gpu-avatar] no clients for {idle_min:.0f} min "
-                  f"(limit {IDLE_SHUTDOWN_MINUTES}) — shutting down", flush=True)
+                  f"(limit {IDLE_SHUTDOWN_MINUTES}); shutting down", flush=True)
             os.system(SHUTDOWN_CMD)
             return
 
@@ -247,7 +247,7 @@ def health() -> JSONResponse:
 
 @app.get("/metrics")
 def metrics() -> JSONResponse:
-    """Operational numbers only (issue #3) — no transcript, no user content."""
+    """Operational numbers only (issue #3); no transcript, no user content."""
     now = time.time()
     fps_actual = 0.0
     if len(FRAME_TIMES) >= 2:

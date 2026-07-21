@@ -79,7 +79,7 @@ def _resume_pod() -> None:
               f"-> {status.get('desiredStatus', out.get('errors'))}", flush=True)
     except Exception as e:  # noqa: BLE001; solo infra, mai verso il meeting
         print(f"[runpod] resume fallito ({type(e).__name__} "
-              f"{getattr(e, 'code', '')}) — la pagina resta "
+              f"{getattr(e, 'code', '')}); la pagina resta "
               f"sul fallback", flush=True)
 
 
@@ -96,14 +96,14 @@ def on_session_ended(active_count: int) -> None:
         )
         _stop_timer.daemon = True
         _stop_timer.start()
-    print(f"[runpod] nessuna sessione attiva — stop pod fra "
+    print(f"[runpod] nessuna sessione attiva; stop pod fra "
           f"{settings.runpod_idle_stop_minutes} min", flush=True)
 
 
 def _stop_if_still_idle() -> None:
     try:
         if _count_active() > 0:
-            print("[runpod] stop annullato — nuova sessione attiva", flush=True)
+            print("[runpod] stop annullato; nuova sessione attiva", flush=True)
             return
         _gql(
             f'mutation {{ podStop(input: {{podId: "{settings.runpod_pod_id}"}}) '
@@ -112,5 +112,5 @@ def _stop_if_still_idle() -> None:
         print(f"[runpod] stop richiesto: {settings.runpod_pod_id}", flush=True)
     except Exception as e:  # noqa: BLE001
         print(f"[runpod] stop fallito ({type(e).__name__} "
-              f"{getattr(e, 'code', '')}) — fermarlo a mano "
+              f"{getattr(e, 'code', '')}); fermarlo a mano "
               f"da console.runpod.io", flush=True)

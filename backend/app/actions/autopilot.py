@@ -72,10 +72,10 @@ def maybe_send_brief(meeting_url: str, avatar_name: str) -> dict[str, Any]:
         if not brief:
             return {"sent": False, "reason": "no history"}
         key = ledger.meeting_key(meeting_url)
-        subject = f"{avatar_name} — pre-meeting brief ({key})"
+        subject = f"{avatar_name}; pre-meeting brief ({key})"
         body = (
             f"Your meeting is starting. Here's what previous sessions left open:\n\n"
-            f"{brief}\n\n— {avatar_name}"
+            f"{brief}\n\n- {avatar_name}"
         )
         to = _recipients(settings.autopilot_brief_to or settings.autopilot_deliver_to)
         email_res: dict[str, Any] = {"sent": False, "reason": "no recipients"}
@@ -96,7 +96,7 @@ def nudge_digest() -> str:
         return ""
     lines = ["*Open items Laura is tracking across meetings:*"]
     for key, items in sorted(by_meeting.items()):
-        lines.append(f"\n*{key}* — {len(items)} open")
+        lines.append(f"\n*{key}*: {len(items)} open")
         for it in items[:10]:
             label = (
                 ledger.humanize_step(it["item"])

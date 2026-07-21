@@ -1,4 +1,4 @@
-# SYNTHETIC DEMO WORKFLOW — Northstar / Acme Robotics. Fictional.
+# SYNTHETIC DEMO WORKFLOW: Northstar / Acme Robotics. Fictional.
 # This is the ONE guarded MVP operation. It is reversible and idempotent.
 id: followup-task-creation
 name: Follow-up task creation
@@ -17,7 +17,7 @@ required_company_knowledge:
   - acme-onboarding-plan
 
 allowed_read_operations:
-  - POST /api/acme/tasks/preview   # PURE READ — returns the exact task, no write
+  - POST /api/acme/tasks/preview   # PURE READ: returns the exact task, no write
   - GET /tasks
 
 guarded_operations:

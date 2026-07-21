@@ -28,7 +28,7 @@ def test_create_bot_maps_recall_507_to_avatar_busy(monkeypatch):
             "https://meet.google.com/abc-defg-hij", "https://example.test/avatar"
         )
     except recall_client.AvatarBusyError as exc:
-        assert str(exc) == "All avatars are busy right now — retry in a minute."
+        assert str(exc) == "All avatars are busy right now; retry in a minute."
         assert "vendor-internal" not in str(exc)
     else:
         raise AssertionError("Recall 507 was not mapped to AvatarBusyError")
@@ -54,7 +54,7 @@ def test_sessions_start_returns_friendly_avatar_busy_payload(monkeypatch):
     assert response.headers["retry-after"] == "60"
     assert response.json() == {
         "error": "avatar_busy",
-        "detail": "All avatars are busy right now — retry in a minute.",
+        "detail": "All avatars are busy right now; retry in a minute.",
     }
 
 

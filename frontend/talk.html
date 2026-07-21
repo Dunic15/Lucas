@@ -1,5 +1,5 @@
 <!--
-  Laura — open-source avatar page (Anam replacement, Stage 1).
+  Laura; open-source avatar page (Anam replacement, Stage 1).
 
   Runs ENTIRELY in the browser: TalkingHead (3D avatar, Three.js/WebGL) renders a
   Ready Player Me character and lip-syncs to audio we feed it. No Anam, no GPU
@@ -15,7 +15,7 @@
     2. Type text + "Speak"  -> she lip-syncs it.               [needs /tts endpoint]
     3. Ask a question       -> she pulls a grounded answer.    [needs /tts + /live/ask]
 
-  The model is /laura.glb — an HD photorealistic avatar vendored into this repo
+  The model is /laura.glb; an HD photorealistic avatar vendored into this repo
   (Ready Player Me shut down Jan 2026, so we self-host). To try another model:
   ?avatar_url=<glb-url> (needs ARKit + Oculus viseme morph targets). Sources:
   Avaturn or MetaPerson/AvatarSDK exports are compatible.
@@ -24,7 +24,7 @@
   html, body { margin: 0; height: 100%; background: #dfe3e8; }
   /* Bright-office backdrop, webcam depth-of-field style: pale warm wall, soft
      daylight from the left, a hint of warm interior light right, faint
-     out-of-focus depth. Light and clean — reads as a tidy office on webcam.
+     out-of-focus depth. Light and clean; reads as a tidy office on webcam.
      The canvas is transparent so this shows through. Framing is done with the
      3D camera (see below), NOT a CSS transform: CSS scaling magnifies rendered
      pixels and blurs her; camera zoom stays sharp. */
@@ -43,7 +43,7 @@
   }
   #stage.live { opacity: 1; }
   /* Browser B0 presentation: the browser fills the frame, the avatar shrinks
-     to a legible corner tile (Recall's 720p ceiling — spec §3 gate). z above
+     to a legible corner tile (Recall's 720p ceiling; spec §3 gate). z above
      the browser iframe so the avatar stays visible while she narrates. */
   body.browser-presenting #stage {
     position: fixed; inset: auto 2.5% 2.5% auto;
@@ -61,7 +61,7 @@
      participant; no buttons, no status text, nothing but her. */
   body.meeting #hud, body.meeting #status { display: none; }
   /* PREVIEW MODE (?preview=1): the dashboard's Avatars stage embeds this page
-     as a same-origin iframe for a live 3D idle preview — same chrome-less look
+     as a same-origin iframe for a live 3D idle preview; same chrome-less look
      as meeting mode, but with NO conversation_id there is no SSE/poll/speaking
      heartbeat and nothing billable: just the model rendering. */
   body.preview #hud, body.preview #status { display: none; }
@@ -116,14 +116,14 @@
   const params = new URLSearchParams(location.search);
 
   // Dashboard stage preview (?preview=1): hide the HUD/status chrome so only
-  // the avatar shows. Everything network-side stays untouched — with no
+  // the avatar shows. Everything network-side stays untouched; with no
   // conversation_id this page never opens SSE/polling or reports speaking
   // state, so an embedded preview costs nothing and starts no session.
   if (params.get("preview") === "1") document.body.classList.add("preview");
 
   // HD photorealistic models (samples from the TalkingHead repo), vendored
   // into OUR repo and served same-origin: Ready Player Me's CDN shutdown
-  // (Jan 2026) killed the previous third-party URL — never again. Override for
+  // (Jan 2026) killed the previous third-party URL; never again. Override for
   // A/B tests with ?avatar_url=<glb url> (must have ARKit+Oculus viseme morphs).
   const avatarId = params.get("avatar_id") || "laura";
   // Identity-safe model resolution: a meeting may only render the selected
@@ -156,7 +156,7 @@
   const status = (t) => (document.getElementById("status").textContent = t);
 
   const head = new TalkingHead(document.getElementById("stage"), {
-    // TalkingHead's constructor THROWS if ttsEndpoint is missing — even though we
+    // TalkingHead's constructor THROWS if ttsEndpoint is missing; even though we
     // never call speakText(). We drive audio ourselves via speakAudio() with our own
     // free /tts, so this is a harmless dummy that is never actually fetched. (Without
     // it, the constructor throws at load and the whole page dies: no avatar, dead HUD.)
@@ -164,15 +164,15 @@
     lipsyncModules: ["en"],
     cameraView: "upper",
     cameraDistance: 0,
-    avatarMood: "happy",          // subtle smile — reads far more human than neutral
+    avatarMood: "happy",          // subtle smile; reads far more human than neutral
     // Supersampling: 2x in the demo (a human's browser, sharpness is the point),
     // but keep the proven 1.5 on the Recall bot browser (web_4_core has no GPU
-    // guarantee — an unverified +78% render load on the LIVE camera isn't worth
+    // guarantee; an unverified +78% render load on the LIVE camera isn't worth
     // it when the close-up framing already added face pixels). Meeting mode is
     // detectable here: Recall always renders us with ?conversation_id=.
     // Off-Recall (standalone /talk) has NO 720p cap: 2x supersample already
     // renders the face far beyond 720p (a ~4000px canvas on a retina display).
-    // Sharpness is not the bottleneck — physically-based lighting is (added
+    // Sharpness is not the bottleneck; physically-based lighting is (added
     // below). Recall meeting mode keeps the proven 1.5 (web_4_core has no GPU
     // guarantee) since TalkingHead multiplies this by devicePixelRatio.
     modelPixelRatio: params.get("conversation_id") ? 1.5 : 2,
@@ -188,7 +188,7 @@
     status("loading avatar…");
     const AVATAR_URL = await avatarUrlPromise;
     await head.showAvatar({ url: AVATAR_URL, body: BODY, lipsyncLang: "en" });
-    // Some avatar sources (e.g. MetaPerson — cedric.glb) ship per-eye eyeLook*
+    // Some avatar sources (e.g. MetaPerson; cedric.glb) ship per-eye eyeLook*
     // morphs but NOT the aggregate eyesLookUp/eyesLookDown that TalkingHead's
     // eye-contact system writes every frame. The missing key made animate()
     // throw per-frame: no blinking, no breathing, head frozen mid-pose.
@@ -196,7 +196,7 @@
     // morphs): the vertical-gaze compensation that feeds them is calibrated to
     // RPM bind poses and computes garbage on this rig (~0.9 "look down" for a
     // level head). Forwarding even a capped value to the per-eye lookDown
-    // morphs drooped his upper lids — he sat in meetings with his eyes shut.
+    // morphs drooped his upper lids; he sat in meetings with his eyes shut.
     // Horizontal eye contact still works via the native eyeLookIn/Out morphs;
     // the camera sits at eye height, so vertical tracking loses nothing.
     const sinkEyeMorph = (agg, likeKey) => {
@@ -207,7 +207,7 @@
         system: null, fixed: null, newvalue: null, base: null, limit: null,
       });
       // The blink limiter reads the sink's value and would pin his lids
-      // >= eyesLookDown/2 — the same garbage signal by another path. Blink
+      // >= eyesLookDown/2; the same garbage signal by another path. Blink
       // anims write the eyeBlink morphs directly, so dropping the limiter
       // only removes the bogus floor, never real blinks.
       for (const k of ["eyeBlinkLeft", "eyeBlinkRight"]) {
@@ -217,7 +217,7 @@
     sinkEyeMorph("eyesLookDown", "eyeLookDownLeft");
     sinkEyeMorph("eyesLookUp", "eyeLookUpLeft");
     // MetaPerson skeletons carry different bind orientations than the RPM/
-    // Avaturn rigs TalkingHead's pose templates were authored on — untouched,
+    // Avaturn rigs TalkingHead's pose templates were authored on; untouched,
     // the head lands pitched ~25° down staring at the floor. A small fixed
     // baseline levels it (values tuned live against cedric.glb). Keyed on the
     // rig's AvatarHead mesh, so laura.glb (Avaturn, no such node) is untouched.
@@ -226,12 +226,12 @@
       head.setBaselineValue("headRotateY", 0.08);
     }
     // ── Laura photoreal lift ──────────────────────────────────────────────
-    // SAME avatar (laura.glb) — just rendered as photoreal as a GLB gets. The
+    // SAME avatar (laura.glb); just rendered as photoreal as a GLB gets. The
     // GPU photoreal-VIDEO path (Ditto/MuseTalk on Runpod) is off, and the
     // standalone /talk page is OFF-Recall (no 720p/15fps cap), so we spend the
     // headroom on physically-based rendering: image-based lighting for real skin
     // specular + reflections, ACES filmic tone mapping so highlights read like a
-    // photo instead of clipping flat, and sRGB output. Laura-only — Cedric keeps
+    // photo instead of clipping flat, and sRGB output. Laura-only. Cedric keeps
     // his separately-tuned MetaPerson look. Everything tunable live in-browser:
     // ?env= (IBL strength, 0 disables) and ?exposure=.
     if (avatarId === "laura") {
@@ -244,11 +244,11 @@
         }
         const envI = _f("env", 0.35);
         if (envI > 0 && head.scene && head.renderer) {
-          // Procedural neutral-studio IBL — no external HDR file, fully offline.
+          // Procedural neutral-studio IBL; no external HDR file, fully offline.
           // A neutral, softer env at a controlled strength reads more natural than
           // TalkingHead's default (intensity 1), whose brightness pushed the skin
           // toward blown-out/waxy (the very "brighter blows out the cheeks" the
-          // light tuning fought). One knob — scene.environmentIntensity — scales it.
+          // light tuning fought). One knob, scene.environmentIntensity, scales it.
           const pmrem = new THREE.PMREMGenerator(head.renderer);
           head.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
           head.scene.environmentIntensity = envI;
@@ -262,11 +262,11 @@
     }
     head.start();
     // Meeting-webcam framing: CLOSE face shot, eyes on the upper third, a hint
-    // of shoulders — like a participant sitting near their camera. Values tuned
+    // of shoulders; like a participant sitting near their camera. Values tuned
     // live in-browser at 1280x720 (Recall's capture size). Direct camera control
     // renders at native resolution (sharp), unlike CSS scaling. TalkingHead
     // re-frames the camera shortly after start(), so assert our framing several
-    // times to win the race — and keep #stage hidden until the first assert so
+    // times to win the race; and keep #stage hidden until the first assert so
     // the far full-body default view is NEVER visible (no far->close jump).
     window.__head = head; // handy for live debugging/tuning
     // Head-and-shoulders framing with full headroom: the previous close-up
@@ -279,7 +279,7 @@
     let CAM_Y = camParam("cam_y", 1.675);
     let CAM_TY = camParam("cam_ty", 1.705);
     // Per-avatar auto-framing: the constants above were tuned on laura.glb,
-    // whose EYE LINE measures worldY≈1.726 — so they encode "camera at
+    // whose EYE LINE measures worldY≈1.726; so they encode "camera at
     // eyes−0.051, look-at at eyes−0.021". A shorter rig (petra.glb: eyes at
     // ≈1.597, 13cm lower) framed with laura's constants ends up with her face
     // at the BOTTOM of the shot. Measure this rig's eye bones once the
@@ -306,13 +306,13 @@
       try {
         // Kill TalkingHead's own camera GLIDE at the source: after setView its
         // animate loop eases the camera toward ITS view for 1000ms (while
-        // cameraClock < 1000, talkinghead.mjs ~L2459) — and since its loop runs
+        // cameraClock < 1000, talkinghead.mjs ~L2459); and since its loop runs
         // interleaved with ours, that glide is the visible far->close zoom on
         // load, no matter how often we re-assert our framing. cameraClock=1000
         // ends any glide instantly; a no-op setView stops it ever restarting.
         head.cameraClock = 1000;
         head.setView = () => {};
-        // TalkingHead's OrbitControls clamp minDistance=2.0 — any closer framing
+        // TalkingHead's OrbitControls clamp minDistance=2.0; any closer framing
         // silently snaps back to z=2.0 (this was why she never got truly close).
         // Release the clamp, then place the camera. enableDamping=false so any
         // camera move is INSTANT, never a smooth far->close glide on load.
@@ -340,9 +340,9 @@
       const beforeZ = head.camera?.position?.z;
       frameCamera();
       // Reveal only once TalkingHead has STOPPED pulling the camera off our
-      // close-up for a few consecutive frames — so the first VISIBLE frame is
+      // close-up for a few consecutive frames; so the first VISIBLE frame is
       // already the tight webcam shot, never a far->close zoom. (Checking the
-      // value we just set would reveal instantly, mid-zoom — that was the bug.)
+      // value we just set would reveal instantly, mid-zoom; that was the bug.)
       if (!revealed) {
         pinnedFrames = (beforeZ != null && Math.abs(beforeZ - CAM_Z) < 0.03) ? pinnedFrames + 1 : 0;
         if (pinnedFrames >= 4) reveal();
@@ -353,7 +353,7 @@
     for (const ms of [600, 1500, 3000]) setTimeout(gazeAtCamera, ms);
     setInterval(gazeAtCamera, 25000);
     setTimeout(reveal, 2500); // fallback: never leave the stage hidden, even if it never settles
-    status("live — avatar rendering ✅ (type + Speak to test lip-sync)");
+    status("live; avatar rendering ✅ (type + Speak to test lip-sync)");
   } catch (e) {
     const reason = e?.message || String(e);
     if (!sameAvatarFallback(reason)) {
@@ -372,10 +372,10 @@
 
   // ── TTS: turn text into { audio, words, wtimes, wdurations } for speakAudio ──
   // /tts returns JSON: base64 mp3 + (with ElevenLabs) REAL per-word timings from
-  // character-level alignment — that's what makes the lips match the voice. If
+  // character-level alignment; that's what makes the lips match the voice. If
   // timings are absent (edge-tts fallback), spread words evenly as approximation.
   // ONE reusable AudioContext for decoding: browsers hard-cap ~6 live contexts,
-  // and a long meeting synthesizes many sentences — a fresh context per sentence
+  // and a long meeting synthesizes many sentences; a fresh context per sentence
   // eventually throws and the avatar goes silent. Lazily created, never closed.
   let _decodeCtx = null;
   const decodeCtx = () => (_decodeCtx ||= new (window.AudioContext || window.webkitAudioContext)());
@@ -407,10 +407,10 @@
     return payloadToAudio(j, text);
   }
 
-  // Browsers start AudioContexts suspended until a user gesture — and TalkingHead
+  // Browsers start AudioContexts suspended until a user gesture; and TalkingHead
   // plays speech through ITS OWN context created at page load. Without this
   // resume, the demo is SILENT: lips move, no sound. (Meeting mode always had a
-  // defensive resume; the demo path didn't — that was the "she's not talking"
+  // defensive resume; the demo path didn't; that was the "she's not talking"
   // bug.) Resume on every speak AND on the first gesture, both harmless no-ops
   // once the context is running.
   const unlockAudio = () => {
@@ -421,12 +421,12 @@
   document.addEventListener("keydown", unlockAudio, { once: true });
 
   // Pipelined speech: START synthesis the moment a sentence arrives (so sentence
-  // 2's audio is being fetched while sentence 1 plays — no gaps between
+  // 2's audio is being fetched while sentence 1 plays; no gaps between
   // sentences), but hand audio to speakAudio strictly in arrival order so she
   // never speaks out of sequence. TalkingHead queues speakAudio internally.
   let _sayChain = Promise.resolve();
   let _sayGen = 0; // bumped on interrupt: queued sentences from before are dropped
-  // Barge-in: a human started talking over her — stop the mouth NOW (TalkingHead
+  // Barge-in: a human started talking over her; stop the mouth NOW (TalkingHead
   // stopSpeaking cancels current audio + its internal queue) and drop anything
   // we queued but haven't synthesized/handed over yet.
   function interruptSpeech() {
@@ -435,7 +435,7 @@
     try { head.stopSpeaking(); } catch (_) {}
     // Kill the in-flight brain request too: chunks that arrived AFTER a human cut
     // her off used to be spoken anyway (stop, then resume with the next streamed
-    // chunk) — an interrupt must cancel the whole turn, not just the current audio.
+    // chunk); an interrupt must cancel the whole turn, not just the current audio.
     if (_askController) { try { _askController.abort(); } catch (_) {} }
     _thinking = false;
     // Collapse the "she is speaking" window: the audio it covered was just
@@ -443,7 +443,7 @@
     // interrupt, swallowing real follow-up questions as "her own echo".
     speakingUntil = 0;
     herText = "";
-    status("(interrupted — listening)");
+    status("(interrupted; listening)");
   }
   window.interruptSpeech = interruptSpeech;
   // Sentences accepted but not yet handed to the mouth (fetching/queued). Lets
@@ -458,7 +458,7 @@
   function say(text, pre) {
     if (!text || !text.trim()) return _sayChain;
     unlockAudio();
-    // Server-attached audio (pre.audio) skips the whole /tts round-trip —
+    // Server-attached audio (pre.audio) skips the whole /tts round-trip -
     // the voice arrived inside the speak message. Otherwise fetch as before.
     const synth = pre && pre.audio ? payloadToAudio(pre, text) : synthesize(text);
     const mood = MOOD_FOR[(pre && pre.emotion) || "neutral"] || "neutral";
@@ -467,7 +467,7 @@
     _sayChain = _sayChain.then(async () => {
       try {
         const a = await synth;
-        if (gen !== _sayGen) return; // interrupted while synthesizing — drop it
+        if (gen !== _sayGen) return; // interrupted while synthesizing; drop it
         try { head.setMood(mood); } catch (_) {} // lean the face into the line
         markSpeaking(a.audio.duration, text);
         head.speakAudio(a);
@@ -488,14 +488,14 @@
   let _thinking = false; // a /live/act request is in flight (thinking or searching)
   async function ask(question) {
     // A new user turn cuts off whatever she's saying now AND aborts any older
-    // in-flight request (a web search can take ~15s) — she's never "blocked"
+    // in-flight request (a web search can take ~15s); she's never "blocked"
     // waiting on the old search.
     interruptSpeech();
     status("thinking…");
     const ctrl = new AbortController();
     _askController = ctrl;
     _thinking = true;
-    const genAtStart = _sayGen; // an interrupt mid-stream bumps this — stop speaking
+    const genAtStart = _sayGen; // an interrupt mid-stream bumps this; stop speaking
     let r;
     try {
       r = await fetch("/live/act", {
@@ -510,7 +510,7 @@
       status("ask failed: " + (e?.message || e));
       return;
     }
-    // Stream the SSE and speak each chunk as it arrives — so the "let me search"
+    // Stream the SSE and speak each chunk as it arrives; so the "let me search"
     // filler plays immediately and the searched answer follows when it's ready,
     // instead of dead air until the whole thing is done.
     const reader = r.body.getReader();
@@ -543,7 +543,7 @@
   // ── voice input: talk to Laura with your mic (Web Speech API, free, Chrome) ──
   // Click 🎤 to toggle. What you say is transcribed in-browser and sent to the
   // grounded+tools brain (/live/act); she answers out loud. The mic keeps
-  // LISTENING while she talks so you can barge in ("wait Laura") and cut her off —
+  // LISTENING while she talks so you can barge in ("wait Laura") and cut her off -
   // stop commands also cancel a THINKING/SEARCHING turn, not just her voice;
   // her own voice bleeding into the mic is filtered out by comparing what's heard
   // against what she's currently saying. (Headphones make barge-in bulletproof.)
@@ -564,19 +564,19 @@
     return words.filter((w) => her.has(w)).length / words.length >= 0.5;
   }
   // Called from say() when audio starts: mark the speaking window + echo text.
-  // (No longer stops the recognizer — we WANT to keep hearing the human.)
+  // (No longer stops the recognizer; we WANT to keep hearing the human.)
   function markSpeaking(durationSec, text) {
     speakingUntil = Math.max(speakingUntil, performance.now()) + (durationSec + 0.6) * 1000;
     herText = _norm(text);
   }
   window.markSpeaking = markSpeaking;
 
-  // Stop commands: "Laura wait", "stop", "hold on"… obeyed INSTANTLY — even on a
-  // partial transcript, even while she's mid-search — and NEVER forwarded to the
+  // Stop commands: "Laura wait", "stop", "hold on"… obeyed INSTANTLY; even on a
+  // partial transcript, even while she's mid-search; and NEVER forwarded to the
   // brain as a question. STRICT match: the utterance must be nothing but stop
   // vocabulary (+ her name / politeness), so a real question that merely contains
   // a stop word ("when do we stop the meter?") still reaches the brain. And only
-  // when she isn't currently saying that stop word herself — otherwise her own
+  // when she isn't currently saying that stop word herself; otherwise her own
   // "hold on, let me check…" leaking into the mic would self-interrupt.
   // Longest-first so "one second" wins over "one sec" (a shorter prefix match
   // would leave a garbage remainder and break the strict whole-utterance test).
@@ -598,7 +598,7 @@
     const w = stopWordIn(_norm(heard));
     return !!w && !herText.includes(w);
   }
-  // Strict test: the WHOLE utterance is stop vocabulary — this one gets swallowed.
+  // Strict test: the WHOLE utterance is stop vocabulary; this one gets swallowed.
   function isStopCommand(heard) {
     let h = _norm(heard);
     if (!h || !containsStopWord(heard)) return false;
@@ -618,24 +618,24 @@
       const res = ev.results[ev.results.length - 1];
       const heard = (res[0] && res[0].transcript || "").trim();
       if (!heard) return;
-      // Estimated window OR the renderer's live flag — the estimate alone ended
+      // Estimated window OR the renderer's live flag; the estimate alone ended
       // early sometimes (queue lag), leaving a window where talking over her did
       // nothing until your sentence finalized.
       const sheSpeaking = performance.now() < speakingUntil || !!head.isSpeaking;
       // "Laura stop" while she's talking, thinking, or searching: obey NOW
-      // (partials included) and swallow it — it's a command, not a question.
+      // (partials included) and swallow it; it's a command, not a question.
       if ((sheSpeaking || _thinking) && isStopCommand(heard)) {
         interruptSpeech();
-        status("(stopped — listening)");
+        status("(stopped; listening)");
         return;
       }
       if (sheSpeaking && looksLikeEcho(heard)) {
         // A stop buried in an echo-mix transcript (her leaked audio + your
-        // "stop") still stops her — but a garbled mix is never a question.
+        // "stop") still stops her; but a garbled mix is never a question.
         if (containsStopWord(heard)) interruptSpeech();
         return;
       }
-      if (sheSpeaking) interruptSpeech();              // real human over her — STOP
+      if (sheSpeaking) interruptSpeech();              // real human over her. STOP
       if (!res.isFinal) { status("hearing: " + heard); return; }
       // A bare "stop"/"wait" when she's already idle: nothing to stop, and the
       // brain must not answer it as if it were a question.
@@ -644,10 +644,10 @@
       status("heard: " + heard);
       ask(heard); // grounded + tools, spoken back
     };
-    // Chrome ends recognition on silence — restart while toggled on.
+    // Chrome ends recognition on silence; restart while toggled on.
     rec.onend = () => { if (micOn) { try { rec.start(); } catch (_) {} } };
     rec.onerror = (e) => {
-      if (e.error === "not-allowed") { micOn = false; micBtn.textContent = "🎤 Talk"; status("mic blocked — allow microphone access"); }
+      if (e.error === "not-allowed") { micOn = false; micBtn.textContent = "🎤 Talk"; status("mic blocked; allow microphone access"); }
     };
     micBtn.onclick = () => {
       micOn = !micOn;
@@ -655,7 +655,7 @@
         try { rec.start(); } catch (_) {}
         micBtn.textContent = "🔴 Listening…";
         micBtn.style.background = "#c0392b";
-        status("listening — talk to Laura (say 'wait Laura' to cut her off)");
+        status("listening; talk to Laura (say 'wait Laura' to cut her off)");
       } else {
         try { rec.stop(); } catch (_) {}
         micBtn.textContent = "🎤 Talk";
@@ -670,20 +670,20 @@
 
   // ── Meeting mode: same contract as avatar.html so /talk is a drop-in for the
   // Anam page. When a conversation_id is present (Recall renders us with one), we
-  // listen for {type:"speak",text} from the backend — exactly what
+  // listen for {type:"speak",text} from the backend; exactly what
   // _make_avatar_speak sends. Only the RENDERER changed (Anam -> our TalkingHead
   // + free TTS); the backend brain/contract are untouched.
   const conversationId = params.get("conversation_id");
   if (conversationId) {
-    document.body.classList.add("meeting"); // hide all UI — just her
+    document.body.classList.add("meeting"); // hide all UI; just her
 
-    // The Recall bot browser never clicks — resume defensively on load too
+    // The Recall bot browser never clicks; resume defensively on load too
     // (same shared unlockAudio as the demo path).
     unlockAudio();
 
     // Optional generation ids (additive, backward compatible): if the backend
     // ever stamps messages with generation_id, a stop invalidates every speak
-    // from the same-or-older generation — so a speak that raced the stop over
+    // from the same-or-older generation; so a speak that raced the stop over
     // the wire can never un-mute her. Messages without ids behave as before.
     let staleBefore = -Infinity;
     const genOf = (msg) => {
@@ -702,7 +702,7 @@
         interruptSpeech();
       } else if (msg.type === "raise_hand") {
         // Hand-raise etiquette: she has a point queued and waits to be
-        // invited — hand stays up on her tile until the backend lowers it.
+        // invited; hand stays up on her tile until the backend lowers it.
         try { head.playGesture("handup", 600, false, 900); } catch (_) {}
       } else if (msg.type === "lower_hand") {
         try { head.stopGesture(900); } catch (_) {}
@@ -712,7 +712,7 @@
         // message on the same at-most-once queue (never a second consumer of
         // the speak channel); pages that don't know the type ignore it.
         // TalkingHead keeps rendering; CSS-only. The URL is a viewer surface
-        // handed back by the server-side presentation-token exchange — never
+        // handed back by the server-side presentation-token exchange; never
         // a permanent provider URL.
         showBrowserView(msg.url);
       } else if (msg.type === "browser_view_hide") {
@@ -721,7 +721,7 @@
     };
 
     // B0 presentation overlay (CSS-only; created lazily so flag-off pages are
-    // byte-identical — no DOM, no listeners until a browser_view arrives).
+    // byte-identical; no DOM, no listeners until a browser_view arrives).
     function showBrowserView(url){
       if(!url) return;
       var wrap = document.getElementById("browser-view");
@@ -745,7 +745,7 @@
       document.body.classList.remove("browser-presenting");
     }
 
-    // Path 1: SSE push — App Runner 403s WebSocket upgrades at the edge but
+    // Path 1: SSE push. App Runner 403s WebSocket upgrades at the edge but
     // streams SSE fine, so speak messages arrive within ~100ms instead of
     // waiting out a poll interval. EventSource auto-reconnects when App Runner
     // recycles the request (~2min), and the slow poll below covers the gap.
@@ -754,7 +754,7 @@
       try { handleBackendMessage(JSON.parse(ev.data)); } catch (_) { /* non-JSON */ }
     };
 
-    // Path 2: slow HTTP polling as belt-and-braces (2s — SSE does the real-time
+    // Path 2: slow HTTP polling as belt-and-braces (2s. SSE does the real-time
     // work). Both paths drain the same backend queue, so a message is only ever
     // delivered once; whichever path gets there first wins.
     const poll = async () => {

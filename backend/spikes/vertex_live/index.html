@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Laura — Gemini Live spike</title>
+<title>Laura: Gemini Live spike</title>
 <style>
   :root { color-scheme: light dark; }
   body { font-family: -apple-system, system-ui, sans-serif; max-width: 640px;
@@ -28,7 +28,7 @@
 </style>
 </head>
 <body>
-  <h1>🎙️ Laura — Gemini Live <span class="muted">(spike)</span></h1>
+  <h1>🎙️ Laura: Gemini Live <span class="muted">(spike)</span></h1>
   <p class="muted">Parla e Laura ti risponde a voce in tempo reale
     (<code>gemini-live-2.5-flash</code> su Vertex). Non tocca il path live di Laura.</p>
 
@@ -125,7 +125,7 @@ function connect() {
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.type === 'ready') {
-      setStatus('pronta — premi Parla o scrivi', 'ready');
+      setStatus('pronta; premi Parla o scrivi', 'ready');
       ['mic', 'txt', 'send'].forEach((id) => ($(id).disabled = false));
     } else if (m.type === 'audio') {
       playChunk(base64ToF32(m.data));
@@ -137,8 +137,8 @@ function connect() {
       setStatus('errore: ' + m.message, 'err');
     }
   };
-  ws.onclose = () => setStatus('connessione chiusa — ricarica la pagina', 'err');
-  ws.onerror = () => setStatus('errore websocket — è avviato server.py?', 'err');
+  ws.onclose = () => setStatus('connessione chiusa; ricarica la pagina', 'err');
+  ws.onerror = () => setStatus('errore websocket; è avviato server.py?', 'err');
 }
 
 $('mic').onclick = async () => {

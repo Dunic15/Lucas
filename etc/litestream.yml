@@ -1,4 +1,4 @@
-# Litestream config — continuous S3 replication of Laura's org-memory SQLite DB.
+# Litestream config; continuous S3 replication of Laura's org-memory SQLite DB.
 #
 # WHY: sessions/artifacts/ledger live in one SQLite file on App Runner's
 # EPHEMERAL disk, so every deploy wipes cross-meeting memory. Litestream tails
@@ -7,7 +7,7 @@
 # docs/infra/STORAGE-ROLLOUT.md (owner steps).
 #
 # This file is consumed by scripts/start-with-litestream.sh, NOT by the Python
-# app — the app never imports or knows about Litestream.
+# app; the app never imports or knows about Litestream.
 #
 # Values are ENV-EXPANDED at load (Litestream expands ${VAR} in the config).
 # The wrapper exports safe defaults for everything except LITESTREAM_REPLICA_URL,
@@ -28,8 +28,8 @@ dbs:
         # Sync as often as the WAL changes (only uploads during live meetings).
         sync-interval: ${LITESTREAM_SYNC_INTERVAL}
         # Keep a week of history; noncurrent objects also expire via the bucket
-        # lifecycle rule (belt and suspenders — see STORAGE-ROLLOUT.md).
+        # lifecycle rule (belt and suspenders; see STORAGE-ROLLOUT.md).
         retention: ${LITESTREAM_RETENTION}
         # Credentials come from the App Runner instance role
-        # (LauraAppRunnerInstanceRole) via the container-credentials endpoint —
+        # (LauraAppRunnerInstanceRole) via the container-credentials endpoint -
         # no access keys in env, no secrets in git.

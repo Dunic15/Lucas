@@ -28,7 +28,7 @@ def main() -> None:
         return
     if key.startswith("whsec_"):
         print("✗ This is a WEBHOOK/Workspace secret (whsec_…), NOT an API key.")
-        print("  The API key is a different value on the dashboard — it does not")
+        print("  The API key is a different value on the dashboard; it does not")
         print("  start with whsec_. Create one at Developers → API Keys.")
         return
 

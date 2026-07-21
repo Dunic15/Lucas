@@ -2012,7 +2012,7 @@ def set_org_oauth(
 def get_org_oauth(org_id: str, *, provider: str = "google") -> dict | None:
     """An org's stored OAuth: {refresh_token, email, scopes, updated_at} with the
     token DECRYPTED, or None when there is no usable row (missing or a token that
-    can't be decrypted — e.g. the enc key rotated, which reads as 'reconnect')."""
+    can't be decrypted; e.g. the enc key rotated, which reads as 'reconnect')."""
     from .. import crypto
 
     org = (org_id or "").strip()
@@ -2093,7 +2093,7 @@ def set_user_oauth(
 def get_user_oauth(user_id: str, *, provider: str = "google") -> dict | None:
     """A user's stored OAuth: {refresh_token, email, scopes, updated_at} with the
     token DECRYPTED, or None when there is no usable row (missing or a token that
-    can't be decrypted — reads as 'reconnect', same as get_org_oauth)."""
+    can't be decrypted; reads as 'reconnect', same as get_org_oauth)."""
     from .. import crypto
 
     uid = (user_id or "").strip()

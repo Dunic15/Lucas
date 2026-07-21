@@ -102,7 +102,7 @@ def test_asr_vocative_without_punctuation_defers_to_named_human():
 
 @pytest.mark.xfail(
     reason=(
-        "deferred to smart-turn v2 audio model (see end_of_turn.py v2 note) — "
+        "deferred to smart-turn v2 audio model (see end_of_turn.py v2 note). "
         "text heuristic cannot safely detect mid-word truncation"
     )
 )

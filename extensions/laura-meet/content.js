@@ -153,7 +153,7 @@ function normalizeMeetingUrl(raw) {
   try {
     const url = new URL(raw);
 
-    // Google Meet: /xxx-xxxx-xxx — query/hash are tracking noise, drop them.
+    // Google Meet: /xxx-xxxx-xxx; query/hash are tracking noise, drop them.
     if (url.hostname === "meet.google.com") {
       if (!/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(url.pathname)) return "";
       url.search = "";
@@ -162,7 +162,7 @@ function normalizeMeetingUrl(raw) {
     }
 
     // Zoom (any subdomain): join links /j/<id> and web-client /wc/<id>[/join].
-    // Rebuild as a canonical join URL, keeping ?pwd= — it is the passcode.
+    // Rebuild as a canonical join URL, keeping ?pwd=; it is the passcode.
     if (url.hostname === "zoom.us" || url.hostname.endsWith(".zoom.us")) {
       const match = url.pathname.match(/^\/(?:j|s|w|wc)\/(\d{8,13})/);
       if (!match) return "";
@@ -171,7 +171,7 @@ function normalizeMeetingUrl(raw) {
     }
 
     // Teams: /l/meetup-join/<thread>/… and /meet/<id>?p=… deep links. Keep the
-    // URL whole — the encoded thread + query context are needed to join. The
+    // URL whole; the encoded thread + query context are needed to join. The
     // in-app URL after joining doesn't carry the link; the button only works
     // on the join page.
     if (url.hostname === "teams.microsoft.com" || url.hostname === "teams.live.com") {

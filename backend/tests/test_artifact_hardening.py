@@ -78,7 +78,7 @@ def test_post_meeting_degraded_model_yields_real_summary(monkeypatch):
     monkeypatch.setattr(settings, "brain_provider_post", "anthropic")
     monkeypatch.setattr(settings, "anthropic_api_key", "k")
     monkeypatch.setattr(
-        brain.llm, "complete", lambda *a, **k: "Sorry — I couldn't format that as JSON."
+        brain.llm, "complete", lambda *a, **k: "Sorry. I couldn't format that as JSON."
     )
     monkeypatch.setattr(brain, "retrieve", lambda avatar, q, k=6: [])
 

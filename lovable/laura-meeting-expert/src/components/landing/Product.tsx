@@ -11,7 +11,7 @@ const features = [
   {
     icon: Mic,
     title: "Wake-word activation",
-    body: "It stays silent until called by name — no interruptions, no noise.",
+    body: "It stays silent until called by name; no interruptions, no noise.",
   },
   {
     icon: Quote,

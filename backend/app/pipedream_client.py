@@ -23,7 +23,7 @@ from .config import settings
 
 
 class PipedreamError(RuntimeError):
-    """A Connect API call failed — the caller degrades to 'not connected'."""
+    """A Connect API call failed; the caller degrades to 'not connected'."""
 
 
 class PipedreamUnconfigured(PipedreamError):
@@ -255,7 +255,7 @@ def _authed_request(method: str, url: str, *, params: Optional[dict] = None,
 
 
 def _b64url_nopad(value: str) -> str:
-    """base64url without padding — the Connect Proxy target-URL encoding."""
+    """base64url without padding; the Connect Proxy target-URL encoding."""
     import base64
     return base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii").rstrip("=")
 

@@ -90,7 +90,7 @@ def _token(org_id: str) -> tuple[str, str]:
 
 def _oauth_access_token(org_id: str, row: dict) -> tuple[str, str]:
     """Mint (or serve cached) a short-lived access token from the org's OAuth
-    refresh token. ("", error) on any failure — the caller falls through."""
+    refresh token. ("", error) on any failure; the caller falls through."""
     now = time.time()
     with _oauth_lock:
         cached = _OAUTH_CACHE.get(org_id)
@@ -223,7 +223,7 @@ def _get(pat: str, path: str, params: dict | None = None) -> tuple[Any, str]:
     except Exception as e:  # noqa: BLE001
         return None, f"asana request failed ({type(e).__name__})"
     if resp.status_code == 401:
-        return None, "asana rejected the token (HTTP 401) — reconnect"
+        return None, "asana rejected the token (HTTP 401); reconnect"
     if resp.status_code >= 300:
         return None, f"asana GET {path.split('?')[0]} failed (HTTP {resp.status_code})"
     try:
@@ -382,7 +382,7 @@ def _build_brief(org_id: str) -> str:
         if not tasks.get("ok"):
             continue
         open_tasks = [t for t in tasks["tasks"] if not t["completed"]]
-        lines.append(f"• {p['name']} — {len(open_tasks)} open task(s)")
+        lines.append(f"• {p['name']}: {len(open_tasks)} open task(s)")
         for t in open_tasks[:_BRIEF_MAX_TASKS_PER_PROJECT]:
             bits = [t["name"]]
             if t["assignee"]:

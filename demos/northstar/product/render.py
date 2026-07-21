@@ -161,7 +161,7 @@ def _onboarding_diagram() -> str:
     return (
         '<figure class=card style="margin:0 0 14px">'
         '<figcaption class=muted>Onboarding pipeline (visual). The blocked stage '
-        'is shown in amber — read the diagram to find it.</figcaption>'
+        'is shown in amber; read the diagram to find it.</figcaption>'
         f'<svg viewBox="0 0 {W} {H}" width="100%" role="group" '
         f'aria-label="Acme Robotics onboarding pipeline" '
         f'data-testid="onboarding-diagram">'
@@ -206,7 +206,7 @@ def onboarding_checklist() -> str:
         for i in store.onboarding_checklist()
     )
     body = (
-        '<h1 data-testid="page-title">Acme Robotics — Onboarding checklist</h1>'
+        '<h1 data-testid="page-title">Acme Robotics: Onboarding checklist</h1>'
         '<p class=sub>Accessible, fully labelled counterpart to the account '
         'pipeline diagram.</p>'
         f'<div class=card>{rows}</div>'
@@ -249,7 +249,7 @@ def implementation() -> str:
         for m in im["milestones"]
     )
     body = (
-        '<h1 data-testid="page-title">Acme Robotics — Implementation status</h1>'
+        '<h1 data-testid="page-title">Acme Robotics: Implementation status</h1>'
         f'<p class=sub>Go-live readiness: '
         f'<strong data-testid="go-live-readiness">{r["complete"]}/{r["total"]}'
         f'</strong></p><div class=card>{rows}</div>'
@@ -299,7 +299,7 @@ def tasks(flash: dict[str, Any] | None = None) -> str:
         f'<table data-testid="tasks-table"><thead><tr><th>Id</th><th>Title</th>'
         f'<th>Assignee</th><th>Status</th><th>Created</th></tr></thead>'
         f'<tbody>{rows}</tbody></table>'
-        '<h2>Guarded operation — create Acme follow-up task</h2>'
+        '<h2>Guarded operation; create Acme follow-up task</h2>'
         '<p class=muted>Preview is read-only. Creation is idempotent on a stable '
         'key: repeated approved execution yields exactly one task.</p>'
         '<div class=card>'

@@ -29,7 +29,7 @@ _app_kw = {**_ci.conninfo_to_dict(uri), "user": "laura_app", "password": "pw"}
 with psycopg.connect(**_app_kw, autocommit=True) as c:
     su = c.execute("SELECT rolsuper FROM pg_roles WHERE rolname=current_user").fetchone()[0]
     if su:
-        fails.append("laura_app is SUPERUSER — FORCE RLS test invalid")
+        fails.append("laura_app is SUPERUSER: FORCE RLS test invalid")
     for org in (A, B):
         c.execute("SELECT set_config('app.current_org', %s, false)", (org,))
         c.execute("INSERT INTO t (org_id, data) VALUES (%s, %s)", (org, f"secret-{org[:8]}"))
@@ -48,11 +48,11 @@ with psycopg.connect(**_app_kw, autocommit=True) as c:
     # cross-org UPDATE reaches 0 rows (can't even see A's row to update it)
     c.execute("UPDATE t SET data='hacked'")
     n = c.execute("SELECT count(*) FROM t WHERE data='hacked'").fetchone()[0]
-    print(f"as org B, `UPDATE t SET data='hacked'` (no WHERE) touched {n} row(s) — B's only")
+    print(f"as org B, `UPDATE t SET data='hacked'` (no WHERE) touched {n} row(s). B's only")
 
 srv.cleanup()
 if fails:
     print("\n❌ RLS FAILED:"); [print("  -", f) for f in fails]; sys.exit(1)
 print("\n✅ RLS SAFETY THESIS VALIDATED on real Postgres: FORCE row-level security "
       "isolates org B from org A for a non-superuser even on a forgotten WHERE, and "
-      "WITH CHECK blocks cross-org writes — the migration's exact isolation pattern holds.")
+      "WITH CHECK blocks cross-org writes; the migration's exact isolation pattern holds.")

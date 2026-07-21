@@ -49,7 +49,7 @@ _CALENDAR_READ_WORKERS = 8
 
 
 def _cal_events_url(cal_id: str) -> str:
-    """events.list URL for one calendar (ids contain '@' and '#' — quote them)."""
+    """events.list URL for one calendar (ids contain '@' and '#': quote them)."""
     return f"https://www.googleapis.com/calendar/v3/calendars/{quote(cal_id, safe='')}/events"
 
 
@@ -120,7 +120,7 @@ _CALLIST_BLOCK_TTL = 300.0
 
 
 def _reset_token_cache() -> None:
-    """Test seam — process-global state, cleared per test (see conftest)."""
+    """Test seam; process-global state, cleared per test (see conftest)."""
     with _TOKEN_LOCK:
         _TOKEN_CACHE.clear()
         _CALLIST_BLOCK.clear()
@@ -793,7 +793,7 @@ _brief_cache: dict[str, tuple[float, str]] = {}
 
 
 def _event_line(item: dict) -> str:
-    """One compact line: '- Mon 21 Jul 14:00–14:30 — Weekly Planning (with A, B)'."""
+    """One compact line: '- Mon 21 Jul 14:00–14:30. Weekly Planning (with A, B)'."""
     start = item.get("start") or {}
     end = item.get("end") or {}
     title = str(item.get("summary") or "(no title)").strip()
@@ -826,7 +826,7 @@ def _event_line(item: dict) -> str:
         shown = ", ".join(guests[:3])
         more = f" +{len(guests) - 3}" if len(guests) > 3 else ""
         extra = f" (with {shown}{more})"
-    return f"- {when} — {title}{extra}" if when or title else ""
+    return f"- {when}: {title}{extra}" if when or title else ""
 
 
 def calendar_brief(org_id: str) -> str:

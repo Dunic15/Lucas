@@ -117,7 +117,7 @@ def get_session_internal(org_id: str, session_id: str) -> Optional[dict]:
 
 
 def _num(value):
-    """extract(epoch) returns Decimal — JSON-unsafe for Starlette. Coerce."""
+    """extract(epoch) returns Decimal: JSON-unsafe for Starlette. Coerce."""
     from decimal import Decimal
 
     if isinstance(value, Decimal):
@@ -136,7 +136,7 @@ def _as_dict(value) -> dict:
 
 
 def public_view(row: dict) -> dict:
-    """The API-safe projection — NO provider_ref, NO provider viewer handle."""
+    """The API-safe projection: NO provider_ref, NO provider viewer handle."""
     if row is None:
         return {}
     return {

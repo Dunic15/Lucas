@@ -55,7 +55,7 @@ def test_fake_provider_is_deterministic_and_networkless():
     s = p.create(ttl_seconds=1800)
     obs = p.observe(s.provider_ref)
     assert obs.url == "https://demo.laura.test/home"
-    assert obs.title == "Laura Demo — Home"
+    assert obs.title == "Laura Demo - Home"
     # Navigation history + click-follows-href are deterministic.
     p.navigate(s.provider_ref, "https://demo.laura.test/pricing")
     obs2 = p.click(s.provider_ref, "contact")

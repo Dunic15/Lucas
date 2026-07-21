@@ -92,7 +92,7 @@ def test_brief_blank_org_is_empty():
 
 
 def test_upcoming_meetings_tool_reads_snapshot():
-    session = SimpleNamespace(calendar_brief="- Mon 20 Jul 14:00 — Weekly Planning")
+    session = SimpleNamespace(calendar_brief="- Mon 20 Jul 14:00. Weekly Planning")
     out = tools.upcoming_meetings(session=session)
     assert "Weekly Planning" in out
 

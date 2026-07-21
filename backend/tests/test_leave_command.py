@@ -483,7 +483,7 @@ def test_webhook_split_leave_after_substantive_address(monkeypatch, tmp_path):
 
 def test_webhook_split_leave_italian_imperative_followup(monkeypatch, tmp_path):
     """Live-test repro (2026-07-10, Italian): "Cedric, grazie" … "esci dal
-    meeting" — masculine article + follow-up imperative without the name."""
+    meeting": masculine article + follow-up imperative without the name."""
     bot_id = "leave-split-7"
     calls = _stub_cedric_webhook(monkeypatch, tmp_path, bot_id)
 

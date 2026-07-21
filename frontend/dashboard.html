@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Laura — Dashboard</title>
+<title>Laura - Dashboard</title>
 <style>
   :root{
     /* dark-first, lauravatar.com world pushed further: deep black, glass panels,
@@ -354,7 +354,7 @@
   .cal-dh.today .dn,.cal-dh.today .dd{color:var(--live);}
   .cal-axis{position:relative;border-right:1px solid var(--line-soft);}
   /* Each hour label is TOP-anchored to its gridline (its `top` == the line's y),
-     the SAME anchor events use — so "9:00" sits on the 9:00 line and lines up
+     the SAME anchor events use; so "9:00" sits on the 9:00 line and lines up
      with the top of a 9:00 event. The 1px nudge drops the glyphs just under the
      hairline instead of straddling it. */
   .cal-hr{position:absolute;right:6px;transform:translateY(1px);font-family:var(--mono);font-size:.58rem;color:var(--faint);white-space:nowrap;}
@@ -573,7 +573,7 @@
      iframe (its office backdrop is bright); the 2D portrait keeps the old
      look, and light theme's dark caption text needs no scrim. */
   .stage .preview:has(iframe)::after{content:"";position:absolute;left:0;right:0;bottom:0;height:36%;
-    /* z-index:1 matches the iframe's — as the mount's last child the scrim
+    /* z-index:1 matches the iframe's; as the mount's last child the scrim
        then paints above it (equal z, later tree order), below stagemeta (z2). */
     pointer-events:none;background:linear-gradient(180deg,transparent,rgba(8,12,18,.60));z-index:1;}
   html[data-theme="light"] .stage .preview:has(iframe)::after{content:none;}
@@ -772,7 +772,7 @@
 
       <div class="panel" style="margin-bottom:20px">
         <h2>Send an avatar to a meeting</h2>
-        <div class="ph">Paste a Zoom / Meet / Teams link — the avatar joins as a participant.</div>
+        <div class="ph">Paste a Zoom / Meet / Teams link; the avatar joins as a participant.</div>
         <div class="dispatch">
           <select id="dsp-avatar" aria-label="Avatar"></select>
           <input id="dsp-url" type="url" inputmode="url" autocomplete="off" aria-label="Meeting link" placeholder="https://meet.google.com/…" />
@@ -781,18 +781,18 @@
         <!-- Optional pre-meeting brief: mapped onto the live-session contract
              (context.meeting.title / context.meeting.attendees +
              context.brief_markdown) so a dashboard-launched avatar enters the
-             call already prepared — same mechanism the orchestrator uses. -->
+             call already prepared; same mechanism the orchestrator uses. -->
         <details class="dsp-brief" id="dsp-brief">
-          <summary>Add a brief (optional) — the avatar walks in prepared</summary>
+          <summary>Add a brief (optional); the avatar walks in prepared</summary>
           <div class="brief-grid">
-            <input id="dsp-title" type="text" autocomplete="off" aria-label="Meeting title (optional)" placeholder="Meeting title — e.g. Demo with Acme" />
-            <input id="dsp-parts" type="text" autocomplete="off" aria-label="Participants (optional)" placeholder="Participants — e.g. Anna (Ops), Marco (CTO)" />
-            <textarea id="dsp-obj" rows="2" aria-label="Objective (optional)" placeholder="Objective — what should this meeting achieve?"></textarea>
-            <textarea id="dsp-notes" rows="2" aria-label="Notes (optional)" placeholder="Notes — anything the avatar should know walking in"></textarea>
-            <input id="dsp-mission" type="text" autocomplete="off" aria-label="Mission (optional)" placeholder="Mission — an aim the avatar keeps in mind and raises if left unmet" />
+            <input id="dsp-title" type="text" autocomplete="off" aria-label="Meeting title (optional)" placeholder="Meeting title; e.g. Demo with Acme" />
+            <input id="dsp-parts" type="text" autocomplete="off" aria-label="Participants (optional)" placeholder="Participants; e.g. Anna (Ops), Marco (CTO)" />
+            <textarea id="dsp-obj" rows="2" aria-label="Objective (optional)" placeholder="Objective; what should this meeting achieve?"></textarea>
+            <textarea id="dsp-notes" rows="2" aria-label="Notes (optional)" placeholder="Notes; anything the avatar should know walking in"></textarea>
+            <input id="dsp-mission" type="text" autocomplete="off" aria-label="Mission (optional)" placeholder="Mission; an aim the avatar keeps in mind and raises if left unmet" />
           </div>
         </details>
-        <div class="note">The host may need to admit it from the waiting room. Sessions bill per minute — end them from the live bar above.</div>
+        <div class="note">The host may need to admit it from the waiting room. Sessions bill per minute; end them from the live bar above.</div>
       </div>
 
       <!-- Compact "Needs your attention": rendered ONLY when pending actions
@@ -811,7 +811,7 @@
           <div class="avcards" id="avcards"></div>
         </div>
       </div>
-      <div class="foot">AVATARS ACT AUTONOMOUSLY — SEE MEETINGS FOR THE RECORD OF WHAT THEY DID. TRANSCRIPTS NEVER LEAVE THE STORE.</div>
+      <div class="foot">AVATARS ACT AUTONOMOUSLY: SEE MEETINGS FOR THE RECORD OF WHAT THEY DID. TRANSCRIPTS NEVER LEAVE THE STORE.</div>
     </section>
 
     <!-- AVATARS; game-like chooser: live 3D stage (2D portrait fallback) +
@@ -819,7 +819,7 @@
          AvatarPreview adapter so the same-origin 3D iframe can attach later
          without touching this page's structure. -->
     <section class="view" id="view-avatars" hidden>
-      <div class="head"><div><h1>Avatars</h1><div class="sub">Your AI colleagues — pick one, see who they are, send them to a meeting</div></div></div>
+      <div class="head"><div><h1>Avatars</h1><div class="sub">Your AI colleagues; pick one, see who they are, send them to a meeting</div></div></div>
       <div class="avpage">
         <div class="stage" id="av-stage">
           <div class="stagelight" aria-hidden="true"></div>
@@ -838,10 +838,10 @@
 
     <!-- MEETINGS -->
     <section class="view" id="view-meetings" hidden>
-      <div class="head"><div><h1>Meetings</h1><div class="sub">What your avatars did — and what's coming up</div></div>
+      <div class="head"><div><h1>Meetings</h1><div class="sub">What your avatars did; and what's coming up</div></div>
         <div class="seg" id="seg-when"><button class="on" data-w="past">Past</button><button data-w="upcoming">Upcoming</button></div></div>
       <!-- Browser demonstration (active-meeting experience): a fixture-driven,
-           read-only presentation shell — rendered only when a demonstration
+           read-only presentation shell; rendered only when a demonstration
            exists. Behind the BrowserDemoSource adapter; Browser B0 owns the
            real contract. -->
       <div id="browser-demo"></div>
@@ -866,7 +866,7 @@
          The list aggregates the action summaries already present in
          /dashboard/summary; expanding a card lazily fetches the canonical
          record from GET /dashboard/actions/{id}. Approval/rejection reuse the
-         exact same doors the meeting rows use — nothing is duplicated. -->
+         exact same doors the meeting rows use; nothing is duplicated. -->
     <section class="view" id="view-actions" hidden>
       <div class="head"><div><h1>Action Center</h1><div class="sub">Review and follow what your avatars need to do</div></div></div>
       <div class="acbar">
@@ -889,11 +889,11 @@
 
     <!-- PLAN & BILLING (usage reachable from Settings) -->
     <section class="view" id="view-usage" hidden>
-      <div class="head"><div><h1>Plan &amp; billing</h1><div class="sub">Minutes, plan and invoices — shared across your avatars</div></div>
+      <div class="head"><div><h1>Plan &amp; billing</h1><div class="sub">Minutes, plan and invoices; shared across your avatars</div></div>
         <button class="btn" data-goto="settings">← Back to Settings</button></div>
       <div class="usage-hero">
-        <div class="ubig"><div class="k">Minutes remaining</div><div class="v tnum" id="u-remaining">—</div></div>
-        <div class="ubig"><div class="k">Minutes used this period</div><div class="v tnum" id="u-used">—</div><div class="s" id="u-period">Shared across Laura and Cedric</div></div>
+        <div class="ubig"><div class="k">Minutes remaining</div><div class="v tnum" id="u-remaining">-</div></div>
+        <div class="ubig"><div class="k">Minutes used this period</div><div class="v tnum" id="u-used">-</div><div class="s" id="u-period">Shared across Laura and Cedric</div></div>
       </div>
       <div class="panel" style="margin-bottom:16px">
         <h2>Minutes by avatar</h2><div class="ph">Meeting history</div>
@@ -923,7 +923,7 @@
           <article class="plan">
             <div class="ptop"><h3>Enterprise</h3><span class="stchip pending">Early access</span></div>
             <div class="price">Talk to us</div>
-            <p class="ph">Design-partner scope — enterprise controls are not presented as live today.</p>
+            <p class="ph">Design-partner scope; enterprise controls are not presented as live today.</p>
             <ul><li>Planned: shared workspaces and roles</li><li>Planned: SSO, auditability and retention</li><li>Planned: security review and guided rollout</li></ul>
             <a class="btn" href="mailto:duccio@sffstudio.com?subject=Laura%20enterprise%20early%20access">Contact sales</a>
           </article>
@@ -944,14 +944,14 @@
          than each vendor's own flow. Populated by loadPipedream(). -->
     <section class="view" id="view-pipedream" hidden>
       <div class="head"><div><h1>Pipedream <span class="stchip" style="margin-left:6px">experimental</span></h1>
-        <div class="sub">An alternative way to connect your tools — brokered through Pipedream Connect, with pre-built actions. Side-by-side test surface; the native Connections tab is unaffected.</div></div></div>
+        <div class="sub">An alternative way to connect your tools; brokered through Pipedream Connect, with pre-built actions. Side-by-side test surface; the native Connections tab is unaffected.</div></div></div>
       <div id="pdconns"><div class="empty" style="padding:14px">Loading…</div></div>
       <div class="foot">EXPERIMENTAL · CONNECTIONS MADE HERE ARE HELD BY PIPEDREAM, SCOPED TO YOUR ORG.</div>
     </section>
 
     <!-- BRAIN -->
     <section class="view" id="view-brain" hidden>
-      <div class="head"><div><h1>Brain</h1><div class="sub">Your company's knowledge — add it once, and your avatars answer from it with citations</div></div></div>
+      <div class="head"><div><h1>Brain</h1><div class="sub">Your company's knowledge; add it once, and your avatars answer from it with citations</div></div></div>
       <div id="brain-body"><div class="empty" style="padding:14px">Loading…</div></div>
     </section>
 
@@ -991,7 +991,7 @@
   var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));};
   var esc=function(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c];});};
 
-  // Inline brand marks — self-contained SVG (no external assets, CSP-safe). Brand
+  // Inline brand marks; self-contained SVG (no external assets, CSP-safe). Brand
   // colours read fine in both themes. Used on the Connections cards + capability rows.
   var LOGO_GOOGLE='<svg class="clogo" width="15" height="15" viewBox="0 0 48 48" aria-hidden="true" focusable="false">'+
     '<path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>'+
@@ -1072,34 +1072,34 @@
   // Returned from the NATIVE Google OAuth (/oauth/google/callback bounces back
   // here with ?google=<connected|error>). Independent of ?brain= (Cedric/Slack).
   var googleResult=query.get("google");
-  // Returned from a Cedric connector OAuth (Gmail/Calendar/…) — Cedric bounces
+  // Returned from a Cedric connector OAuth (Gmail/Calendar/…). Cedric bounces
   // the user back here with ?connected=<ok|norefresh|error>.
   var connResult=query.get("connected");
   // Returned from the native Asana OAuth (/oauth/asana/callback bounces back
   // here with ?asana=<connected|error>).
   var asanaResult=query.get("asana");
   if(asanaResult==="connected"){
-    toast("Asana connected — avatars with the Asana toggle can now read the board and file tasks.",false);
+    toast("Asana connected; avatars with the Asana toggle can now read the board and file tasks.",false);
   } else if(asanaResult){
-    toast("Asana could not be connected. Nothing was stored — try Connect again.",true);
+    toast("Asana could not be connected. Nothing was stored; try Connect again.",true);
   }
   var jiraResult=query.get("jira");
   if(jiraResult==="connected"){
-    toast("Jira connected — Petra now reads your open issues at meeting start.",false);
+    toast("Jira connected: Petra now reads your open issues at meeting start.",false);
   } else if(jiraResult){
-    toast("Jira could not be connected. Nothing was stored — try Connect again.",true);
+    toast("Jira could not be connected. Nothing was stored; try Connect again.",true);
   }
   // Returned from a Pipedream Connect flow (?pd=connected|error&app=<slug>).
   var pdResult=query.get("pd");
   if(pdResult==="connected"){
     toast((query.get("app")||"The tool")+" connected through Pipedream.",false);
   } else if(pdResult){
-    toast("That Pipedream connection didn't finish. Nothing was stored — try Connect again.",true);
+    toast("That Pipedream connection didn't finish. Nothing was stored; try Connect again.",true);
   }
   if(connResult==="ok"){
-    toast("Tool connected — Cedric can use it now.",false);
+    toast("Tool connected: Cedric can use it now.",false);
   } else if(connResult==="norefresh"){
-    toast("Almost there — the connection is still syncing. It will appear below in a moment.",true);
+    toast("Almost there; the connection is still syncing. It will appear below in a moment.",true);
   } else if(connResult==="signin"||connResult==="forbidden"){
     // Cedric's connect flow needs the browser that installed Slack (or the
     // consent expired). Actionable: re-run Add to Slack from here.
@@ -1108,10 +1108,10 @@
     toast("That tool couldn't be connected. Please try again.",true);
   }
   // Back from a connect round-trip: the pending-connect eager refresh has done
-  // its job — stop the eager catalog re-fetching in THIS tab.
+  // its job; stop the eager catalog re-fetching in THIS tab.
   if(connResult){ try{ sessionStorage.removeItem("laura_pending_connect"); }catch(e){} }
   if(oauthResult==="connected"){
-    toast("Slack agent connected — its tools and meeting actions now flow through here.",false);
+    toast("Slack agent connected; its tools and meeting actions now flow through here.",false);
   } else if(oauthResult==="pending"){
     toast("Slack is installed, but the secure brain link is still pending. Retry Connect if it does not finish.",true);
   } else if(oauthResult==="error"){
@@ -1120,7 +1120,7 @@
     toast("The Slack connection result could not be verified. Check Connections before continuing.",true);
   }
   if(googleResult==="connected"){
-    toast("Google connected — Laura can schedule and email on your account.",false);
+    toast("Google connected: Laura can schedule and email on your account.",false);
   } else if(googleResult==="error"){
     toast("Google could not be connected. Retry Connect.",true);
   } else if(googleResult){
@@ -1128,7 +1128,7 @@
   }
   if(billingResult){
     toast(billingResult==="success"
-      ?"Solo is activating — your allowance updates after Stripe confirms payment."
+      ?"Solo is activating; your allowance updates after Stripe confirms payment."
       :"Checkout was cancelled; your current plan is unchanged.",billingResult!=="success");
   }
   if(oauthResult||billingResult||connResult||googleResult||asanaResult||jiraResult){
@@ -1139,7 +1139,7 @@
 
   // Visible top-level navigation: Overview, Avatars, Brain,
   // Meetings, Action Center, Connections, Settings. "usage" (Plan & billing,
-  // reached from Settings) keeps its view + route but has no nav entry — it
+  // reached from Settings) keeps its view + route but has no nav entry; it
   // highlights its nav owner instead.
   var VIEWS=["overview","avatars","brain","meetings","actions","connections","pipedream","settings","usage"];
   var NAV_OWNER={usage:"settings"};
@@ -1160,7 +1160,7 @@
   document.addEventListener("click",function(e){var t=e.target.closest("[data-goto]");if(t){go(t.getAttribute("data-goto"));}});
 
   // A Slack/brain connect (?brain=), a native Google connect (?google=), or a
-  // brokered-tool connect (?connected=) all land back here — open the Connections
+  // brokered-tool connect (?connected=) all land back here; open the Connections
   // view instead of dropping the user on Overview (E). Runs AFTER go()/VIEWS are
   // defined (the return params were captured up top, before replaceState cleared
   // the URL). The chosen view sticks through the auth gate and the first summary
@@ -1171,7 +1171,7 @@
   if(pdResult){ go("pipedream"); }
   else if(oauthResult||googleResult||connResult||asanaResult||jiraResult){ go("connections"); }
   else if(VIEWS.indexOf(_hashView)>=0){ go(_hashView); }
-  // After a norefresh return, Cedric's callback already burned its own retries —
+  // After a norefresh return, Cedric's callback already burned its own retries -
   // a couple of delayed catalog re-fetches usually catch the Pipedream lag so
   // the new chip appears without a manual reload.
   if(connResult==="norefresh"){
@@ -1207,11 +1207,11 @@
   function minuteLabel(seconds){ return Math.max(0,Math.ceil(seconds/60))+" min"; }
   function billingErrorText(code){
     switch(String(code||"")){
-      case "forbidden": return "Billing is managed by your workspace owner — you don't have permission to change it.";
+      case "forbidden": return "Billing is managed by your workspace owner; you don't have permission to change it.";
       case "billing_not_enabled": return "Billing isn't enabled on this deployment yet.";
-      case "no_customer": return "No billing account yet — start a subscription first.";
+      case "no_customer": return "No billing account yet; start a subscription first.";
       case "subscription_exists": return "This workspace already has an active subscription.";
-      case "checkout_in_progress": return "A checkout is already in progress — check your other tab.";
+      case "checkout_in_progress": return "A checkout is already in progress; check your other tab.";
       default: return "Could not open billing: "+code;
     }
   }
@@ -1223,7 +1223,7 @@
     var used=secondsOf(b,"used"), remaining=secondsOf(b,"remaining"), included=secondsOf(b,"included");
     $("#u-used").textContent=minuteLabel(used);
     $("#u-remaining").textContent=minuteLabel(remaining);
-    // (The "N min included in this trial" sub-line was removed — the remaining
+    // (The "N min included in this trial" sub-line was removed; the remaining
     // minutes above are enough on their own.)
     $("#u-period").textContent=b.current_period_end
       ?"Renews "+new Date(b.current_period_end*1000).toLocaleDateString()
@@ -1266,7 +1266,7 @@
     $("#authgate").hidden=!on; $("#views").hidden=on;
     if(on){
       $("#gate-google").hidden=!authEnabled;
-      $("#gate-msg").textContent = authEnabled ? "Sign in to see your avatars, dispatch them, and read what they did." : "This deployment is protected — paste the API token to continue.";
+      $("#gate-msg").textContent = authEnabled ? "Sign in to see your avatars, dispatch them, and read what they did." : "This deployment is protected; paste the API token to continue.";
       if(!authEnabled){ $("#gate-token").setAttribute("open",""); }
     }
   }
@@ -1310,7 +1310,7 @@
       return '<div class="rost" data-goto="avatars">'+avatarBadge(a.id,a.name)+
         '<span class="nm">'+esc(a.name)+'</span><span class="sdot'+(a.live_now?" live":"")+'"></span></div>';}).join("")
       || '<div class="empty" style="padding:8px;font-size:.78rem">No avatars installed</div>';
-    // (Sidebar "Connections / Slack agent" chip removed — the Connections view
+    // (Sidebar "Connections / Slack agent" chip removed; the Connections view
     // is the single home for connection state; the chip over the account was
     // redundant and confusing next to the login identity.)
 
@@ -1327,7 +1327,7 @@
       b.disabled=true; b.textContent="Ending…";
       fetch("/sessions/"+encodeURIComponent(b.getAttribute("data-end"))+"/end",{method:"POST",headers:headers()})
         .then(function(r){ if(!r.ok&&r.status!==202) throw new Error("HTTP "+r.status);
-          toast("Session ended — meter stopped. Artifact will appear in Meetings."); setTimeout(load,1200); })
+          toast("Session ended; meter stopped. Artifact will appear in Meetings."); setTimeout(load,1200); })
         .catch(function(e){ toast("Could not end: "+e.message,true); b.disabled=false; b.textContent="End session"; }); }); });
 
     var prevAvatar=$("#dsp-avatar").value;
@@ -1344,18 +1344,18 @@
       || '<div class="empty">No avatars installed</div>';
 
     // Avatars page: the game-like chooser (stage + roster + identity). It
-    // renders only while the view is open — nothing (not even the 2D
+    // renders only while the view is open; nothing (not even the 2D
     // portrait) loads before the user opens Avatars. All the old card
     // controls kept their #220/#221 wiring: see renderAvatars /
     // avatarDetailHTML / wireAvatarControls at module scope.
     if(!$("#view-avatars").hidden) renderAvatars(d);
 
-    // upcoming meetings — the connected calendar's queue (auto-join inbox).
+    // upcoming meetings; the connected calendar's queue (auto-join inbox).
     // Prefetched once per page (window-scoped guard: renderAll reruns on every
     // summary refresh and must NOT refetch the calendar each tick); the ↻
     // button and OAuth return force a refresh.
     // ── Weekly calendar (Upcoming) ─────────────────────────────────────────────
-    // Desktop: a real Apple/Google-style HOUR GRID — a left time axis + 7 day
+    // Desktop: a real Apple/Google-style HOUR GRID; a left time axis + 7 day
     // columns, each meeting an absolutely-positioned block (top = start time,
     // height ∝ duration, overlapping meetings side-by-side). Narrow screens fall
     // back to compact day-grouped sections. HOUR_PX is the single source of truth
@@ -1410,7 +1410,7 @@
       return a?a.name:(id.charAt(0).toUpperCase()+id.slice(1));
     }
     // Parse a meeting into calendar geometry. Returns null when start_time is
-    // missing/unparseable (robust — the caller skips it, never crashes). All-day
+    // missing/unparseable (robust; the caller skips it, never crashes). All-day
     // events arrive as a bare date (no "T"); duration falls back to 40 min.
     function parseEvent(m){
       var raw=String(m.start_time||""), s=new Date(raw);
@@ -1471,7 +1471,7 @@
       });
       flush();
     }
-    // Shared dispatch — the exact POST /sessions/start the main form uses
+    // Shared dispatch; the exact POST /sessions/start the main form uses
     // (org-scoped, billing-gated, one-bot-per-URL dedup server-side). #197 guard:
     // an empty url never reaches here (a block with no link is not a send target).
     function dispatchMeeting(url,title,avatar,btn,doneLabel){
@@ -1489,7 +1489,7 @@
             throw new Error(msg);
           }
           var picked=(DATA&&DATA.avatars||[]).find(function(a){return a.id===avatar;});
-          toast((picked?picked.name:"Laura")+" is joining — admit it from the waiting room if prompted.");
+          toast((picked?picked.name:"Laura")+" is joining; admit it from the waiting room if prompted.");
           btn.textContent=doneLabel||"Sent ✓"; closePop();
           setTimeout(function(){ loadUpcoming(true); },1600);
         })
@@ -1571,10 +1571,10 @@
         ((!short&&geo.height>=54&&cal)?'<span class="ev-cal">'+esc(cal)+'</span>':'');
       var data=' data-url="'+esc(url)+'" data-title="'+esc(m.title||"")+'" data-time="'+esc(timeLabel(ev))+'" data-calendar="'+esc(cal)+'" data-event-ref="'+esc(m.event_ref||"")+'"';
       if(going) return '<div class="cal-ev going'+cls+'" style="'+style+'"'+data+' data-going="1" role="button" tabindex="0" title="'+esc(meta+' — '+avName(m.auto_join_avatar)+' is going')+'">'+t+'<span class="avbadge">🎭 '+esc(avName(m.auto_join_avatar))+'</span></div>';
-      if(url) return '<div class="cal-ev avail'+cls+'" style="'+style+'"'+data+' role="button" tabindex="0" title="'+esc(meta+' — open options')+'">'+t+'<span class="ev-send">Open ▾</span></div>';
-      return '<div class="cal-ev nolink'+cls+'" style="'+style+'" title="'+esc(meta+' — no meeting link')+'">'+t+'<span class="ev-nolink">No link</span></div>';
+      if(url) return '<div class="cal-ev avail'+cls+'" style="'+style+'"'+data+' role="button" tabindex="0" title="'+esc(meta+': open options')+'">'+t+'<span class="ev-send">Open ▾</span></div>';
+      return '<div class="cal-ev nolink'+cls+'" style="'+style+'" title="'+esc(meta+': no meeting link')+'">'+t+'<span class="ev-nolink">No link</span></div>';
     }
-    // All-day events (rare here; usually link-less) — small chips stacked at the
+    // All-day events (rare here; usually link-less); small chips stacked at the
     // top of the day column, off the hour axis.
     function evBlockAllDay(ev,idx){
       var m=ev.m, url=m.meeting_url||"", going=!!m.auto_join;
@@ -1630,7 +1630,7 @@
       });
     }
     // Desktop: clicking (or Enter/Space on) an event block opens the send/manage
-    // popover — fixed-position + viewport-clamped so grid scroll never clips it.
+    // popover; fixed-position + viewport-clamped so grid scroll never clips it.
     function wirePopover(box,multi,avOpts,av0){
       box.querySelectorAll(".cal-ev[role='button']").forEach(function(el){
         el.addEventListener("click",function(){ openPop(el,multi,avOpts,av0); });
@@ -1716,7 +1716,7 @@
       prefill=prefill||{};
       var p=document.createElement("div"); p.className="wkpop"; p.id="wkpop-new";
       if(!nativeCal){
-        // Read-only week (no native Google token) — can't write events here.
+        // Read-only week (no native Google token); can't write events here.
         p.innerHTML='<div class="wkpop-t">New meeting</div>'+
           '<div class="wkpop-sub">Connect Google to schedule meetings straight from your calendar.</div>'+
           '<div class="wkpop-row"><button class="btn primary np-goconn" style="flex:1">Connect Google to schedule</button></div>';
@@ -1792,10 +1792,10 @@
       fetch("/dashboard/upcoming?start="+encodeURIComponent(rangeStart.toISOString())+"&days="+RANGE_DAYS,{headers:headers()})
         .then(function(r){ return r.json(); })
         .then(function(j){
-          // A faster later click may have moved the range — drop this stale response.
+          // A faster later click may have moved the range; drop this stale response.
           if(rangeStart.getTime()!==calRangeStart(window._calRange||0).getTime()) return;
           var cal=j.calendar||{};
-          // Empty state — no calendar connected. Point to the Google connect
+          // Empty state; no calendar connected. Point to the Google connect
           // (same flow as the Connections view); fall back to Connections when
           // the endpoint couldn't hand back a connect URL.
           if(!cal.connected){
@@ -1812,7 +1812,7 @@
             return;
           }
           // Connected but the calendar read failed (native token present, read
-          // errored) — soft "connected, retry" state, not a hard error.
+          // errored); soft "connected, retry" state, not a hard error.
           if(cal.error){
             box.innerHTML=wkHead(cal,false,rangeStart)+'<div class="ph" style="padding:26px;text-align:center">Calendar connected but temporarily unavailable. <button class="btn" id="wk-retry" style="margin-left:8px;padding:6px 12px;font-size:.78rem">↻ Retry</button></div>';
             var rb=document.getElementById("wk-retry");
@@ -1847,26 +1847,26 @@
           }
           var anyMeeting=days.some(function(dd){ return dd.evs.length>0; });
           var desktop=!!(window.matchMedia && window.matchMedia("(min-width:820px)").matches);
-          // Native Google (source=google) is the only calendar we can WRITE to —
+          // Native Google (source=google) is the only calendar we can WRITE to -
           // scheduling from the grid needs it. A Recall-sourced week is read-only,
           // so the "+ New meeting" form points to Connect Google instead.
           var nativeCal=(cal.source==="google");
-          // Desktop ALWAYS renders the full week hour-grid — time axis, 7 day
-          // columns, gridlines, today highlight, now-line — even with ZERO
+          // Desktop ALWAYS renders the full week hour-grid; time axis, 7 day
+          // columns, gridlines, today highlight, now-line; even with ZERO
           // meetings (like Google Calendar), never a text block. A faint hint sits
           // above the grid when the week is empty. Mobile keeps its day-sections
           // fallback and shows a short hint on an empty week.
           if(desktop){
             var first=days.slice(0,7), second=days.slice(7,14);
             box.innerHTML=wkHead(cal,true,anchor)+calendarLegend(meetings)+rangeNote+
-              (anyMeeting?"":'<div class="cnote" style="margin:-4px 0 10px;text-align:center">No meetings in the next 14 days — click a slot to add one.</div>')+
+              (anyMeeting?"":'<div class="cnote" style="margin:-4px 0 10px;text-align:center">No meetings in the next 14 days; click a slot to add one.</div>')+
               '<div class="cal-band">'+esc(bandLabel(first))+'</div>'+renderHourGrid(first,multi,avOpts,av0)+
               '<div class="cal-band">'+esc(bandLabel(second))+'</div>'+renderHourGrid(second,multi,avOpts,av0);
           } else if(anyMeeting){
             box.innerHTML=wkHead(cal,true,anchor)+calendarLegend(meetings)+rangeNote+renderSections(days,multi,avOpts,av0);
           } else {
             box.innerHTML=wkHead(cal,true,anchor)+calendarLegend(meetings)+'<div class="ph" style="padding:34px;text-align:center">No meetings in the next 14 days.<br>'+
-              '<span class="cnote">Tap “+ New meeting” to schedule one — or your Google Calendar meetings appear here automatically.</span></div>';
+              '<span class="cnote">Tap “+ New meeting” to schedule one; or your Google Calendar meetings appear here automatically.</span></div>';
           }
           var rl=document.getElementById("upcoming-reload");
           if(rl) rl.addEventListener("click",function(){ loadUpcoming(true); });
@@ -1889,11 +1889,11 @@
     window._loadUpcoming=loadUpcoming;
     loadUpcoming(false);
 
-    // meetings tables — clean filterable columns; click a row for AI summary + actions
+    // meetings tables; clean filterable columns; click a row for AI summary + actions
     function platformsIn(){ var s={}; (d.meetings||[]).forEach(function(m){ if(m.platform&&m.platform!=="—") s[m.platform]=1; }); return Object.keys(s); }
     // The action chip renderers (ownerChip / execChip / apprBtn / rejBtn) and
     // the approve/reject doors now live at MODULE scope, shared with the
-    // Action Center — one execution path for every surface (see above). The
+    // Action Center; one execution path for every surface (see above). The
     // module-scope approveAction folds in the "Approve → Cedric" dispatch path.
     function rowHTML(m,i){ var nm=avName(m.avatar_id);
       return '<tr class="row" data-i="'+i+'"><td><div class="cell-av">'+
@@ -1906,7 +1906,7 @@
         '<div><div class="sm-h">AI summary</div><div class="summary">'+(m.summary?esc(m.summary):'<span style="color:var(--faint)">No summary captured.</span>')+'</div>'+
         (m.follow_up_subject?'<div class="sm-h" style="margin-top:12px">Follow-up email</div><div class="summary">'+esc(m.follow_up_subject)+'</div>':'')+'</div>'+
         '<div><div class="sm-h">Actions</div><div class="did">'+
-        (m.actions.length? m.actions.map(function(a){return '<div class="d'+(a.done?"":" attn")+'"><span class="ic">'+(a.done?"✓":"→")+'</span><span>'+esc(a.item)+ownerChip(a)+execChip(a)+apprBtn(a)+rejBtn(a)+'</span></div>';}).join("") : '<div class="empty" style="padding:6px 0;text-align:left">'+((m.saved_at&&(Date.now()/1000-m.saved_at)<180)?'Recap still processing — refresh in a moment.':'No actions captured.')+'</div>')+
+        (m.actions.length? m.actions.map(function(a){return '<div class="d'+(a.done?"":" attn")+'"><span class="ic">'+(a.done?"✓":"→")+'</span><span>'+esc(a.item)+ownerChip(a)+execChip(a)+apprBtn(a)+rejBtn(a)+'</span></div>';}).join("") : '<div class="empty" style="padding:6px 0;text-align:left">'+((m.saved_at&&(Date.now()/1000-m.saved_at)<180)?'Recap still processing; refresh in a moment.':'No actions captured.')+'</div>')+
         (m.missing_steps.length?'<div class="sm-h" style="margin-top:12px">Missing steps</div>'+m.missing_steps.map(function(s){return '<div class="d attn"><span class="ic">!</span><span>'+esc(s.replace(/_/g," "))+'</span></div>';}).join(""):'')+
         '</div></div></td></tr>';
     }
@@ -1924,7 +1924,7 @@
       $$("button[data-approve]",tb).forEach(function(b){ b.addEventListener("click",function(e){ e.stopPropagation(); approveAction(b); }); });
       $$("button[data-reject]",tb).forEach(function(b){ b.addEventListener("click",function(e){ e.stopPropagation(); rejectAction(b); }); });
     }
-    // (overview "Recent meetings" removed — the record lives in the Meetings view)
+    // (overview "Recent meetings" removed; the record lives in the Meetings view)
     // meetings: excel-style filters ON the column headers (Avatar / Platform / When)
     (function(){ var fa=$("#f-avatar"), fp=$("#f-platform"), fw=$("#f-when");
       var pa=fa.value||"all", pp=fp.value||"all", pw=fw.value||"all";
@@ -1942,7 +1942,7 @@
     var b=d.billing||{};
     $("#u-used").textContent=(b.minutes_30d||0)+" min";
     $("#u-remaining").textContent="15 min";
-    // ("N min included in this trial" sub-line removed — remaining minutes suffice.)
+    // ("N min included in this trial" sub-line removed; remaining minutes suffice.)
     $("#u-plan").textContent=(b.plan&&b.plan!=="Demo")?b.plan:"Free";
     $("#billing-state").textContent="Free trial";
     var byAv=b.by_avatar||{}, maxMin=Math.max.apply(null,Object.keys(byAv).map(function(k){return byAv[k];}).concat([1]));
@@ -1954,8 +1954,8 @@
       || '<div class="empty" style="padding:10px 0">No usage yet.</div>';
 
     // TWO INDEPENDENT capability toggles. Laura is native-first: Google is her
-    // OWN OAuth (Calendar + Gmail, powers the native executor — no Cedric), Slack
-    // is the OPTIONAL Cedric add-on. Either/both/neither — the code paths never
+    // OWN OAuth (Calendar + Gmail, powers the native executor; no Cedric), Slack
+    // is the OPTIONAL Cedric add-on. Either/both/neither; the code paths never
     // couple. NOTE: both cards build their connect target from FIXED URLs
     // (/oauth/google/connect, /dashboard/connections/brain/slack/start), never a
     // Cedric connect_url, so there is no null-connect_url .indexOf hazard here
@@ -1967,7 +1967,7 @@
     var asanaOAuth=!!(d.connections&&d.connections.asana_oauth);
     var jiraConnected=!!(d.connections&&d.connections.jira);
     var jiraOAuth=!!(d.connections&&d.connections.jira_oauth);
-    // Execution readiness — whether an APPROVED action actually runs, and on
+    // Execution readiness; whether an APPROVED action actually runs, and on
     // what. native_executor is the master switch (env NATIVE_EXECUTOR); off =
     // approvals route to Cedric. The two connection chips are the accounts
     // native runs on. Reads fields already in /dashboard/summary.
@@ -1976,8 +1976,8 @@
       '<div class="conn" style="border-left:3px solid '+(nativeOn?"var(--live)":"#c9971c")+'">'+
       '<div class="nm">⚙ Execution <span class="stchip" style="margin-left:6px">'+(nativeOn?"native":"via Cedric")+'</span></div>'+
       '<div class="ds">'+(nativeOn
-        ?"Native is on — when you approve an action, Laura runs it on your connected account below and posts a receipt on the row."
-        :"Native is off — approved actions are handed to Cedric. To have Laura run them directly on your own Google/Asana, ask your admin to enable native execution (NATIVE_EXECUTOR).")+'</div>'+
+        ?"Native is on; when you approve an action, Laura runs it on your connected account below and posts a receipt on the row."
+        :"Native is off; approved actions are handed to Cedric. To have Laura run them directly on your own Google/Asana, ask your admin to enable native execution (NATIVE_EXECUTOR).")+'</div>'+
       '<div class="foot" style="gap:14px;flex-wrap:wrap">'+
         '<span class="cstat'+(nativeOn?" on":"")+'"><b></b>Native execution '+(nativeOn?"on":"off")+'</span>'+
         '<span class="cstat'+(googleNative?" on":"")+'"><b></b>Google '+(googleNative?"connected":"not connected")+'</span>'+
@@ -1990,11 +1990,11 @@
       // ── Slack agent (optional add-on), independent of Google ──
       // One connection lets the Slack agent use Slack + a catalog of tools
       // (Notion, HubSpot, …). Those tools render below as team-scope connect
-      // chips (each links its OWN connect_url — see applySlackTools); "Manage
+      // chips (each links its OWN connect_url; see applySlackTools); "Manage
       // tools" is a secondary link to the hosted grid for advanced management.
       // Connect + Disconnect (org-level) are preserved here.
       '<div class="conn"><div class="nm">'+LOGO_SLACK+' Slack agent <span class="stchip" style="margin-left:6px">add-on</span></div>'+
-      '<div class="ds">Slack agent and meeting assistant — runs the actions from your meetings (email, calendar, messages) and checks with you before doing them. One connection also unlocks its tool catalog (Notion, HubSpot, …) below.</div>'+
+      '<div class="ds">Slack agent and meeting assistant; runs the actions from your meetings (email, calendar, messages) and checks with you before doing them. One connection also unlocks its tool catalog (Notion, HubSpot, …) below.</div>'+
       '<div class="foot"><span class="cstat'+(slackConnected?" on":"")+'"><b></b>'+(slackConnected?"Connected":"Not connected")+'</span>'+
       (slackConnected
         ?'<button class="btn" data-slack-off>Disconnect</button>'
@@ -2009,7 +2009,7 @@
       (slackConnected
         ?'<div class="ctools"><div class="ctool-chips" id="ctool-chips"></div>'+
           // Starts DISABLED (no href): a bare meet-cedric.com link lands on
-          // Cedric's account picker / login wall — often the WRONG account on a
+          // Cedric's account picker / login wall; often the WRONG account on a
           // shared browser. applySlackTools enables it only once a real
           // manage_url (org-scoped) resolves; until then the loop's entry
           // points are the connect chips above + "Add to Slack".
@@ -2017,7 +2017,7 @@
           '<div class="cnote">Connect a tool above, or manage them on the hosted connector page.</div></div>'
         :'')+
       '</div>'+
-      // ── Asana (native) — the project system of record (docs/ASANA.md).
+      // ── Asana (native); the project system of record (docs/ASANA.md).
       // Restored 2026-07-20 (owner request; reverses the 2026-07-17
       // Cedric-mediated decision). Preferred: one-click OAuth (Connect Asana →
       // sign in on asana.com → back here connected), available when the
@@ -2026,7 +2026,7 @@
       // before storing it encrypted per-org. Tokens never render back into
       // the page either way.
       '<div class="conn"><div class="nm">'+LOGO_ASANA+' Asana <span class="stchip" style="margin-left:6px">native</span></div>'+
-      '<div class="ds">Project system of record — avatars read the workspace when they join (projects, open &amp; overdue tasks) and file approved action items as tasks.'+
+      '<div class="ds">Project system of record; avatars read the workspace when they join (projects, open &amp; overdue tasks) and file approved action items as tasks.'+
       (asanaOAuth?'':' Token: Asana → Settings → Apps → Developer apps.')+'</div>'+
       '<div class="foot"><span class="cstat'+(asanaConnected?" on":"")+'"><b></b>'+(asanaConnected?"Connected":"Not connected")+'</span>'+
       (asanaConnected
@@ -2037,14 +2037,14 @@
             'style="flex:1;min-width:120px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
             '<button class="btn primary" data-asana-on>Connect</button>'))+
       '</div></div>'+
-      // ── Jira (native PM connector) — one-click OAuth when the Atlassian app
+      // ── Jira (native PM connector); one-click OAuth when the Atlassian app
       //    is configured (Connect Jira → Atlassian login → connected); otherwise
       //    the paste-a-token fallback (works with no deploy credentials). ──
       '<div class="conn"><div class="nm">'+LOGO_JIRA+' Jira <span class="stchip" style="margin-left:6px">native</span></div>'+
       '<div class="ds">Avatars read your open issues when they join (owners, due dates).'+
       (jiraConnected?''
         :(jiraOAuth
-          ? ' You’ll sign in with an Atlassian account that has a Jira site — <a href="https://www.atlassian.com/software/jira/free" target="_blank" rel="noopener">don’t have one? create a free Jira site</a> first, or the login shows “access denied”.'
+          ? ' You’ll sign in with an Atlassian account that has a Jira site. <a href="https://www.atlassian.com/software/jira/free" target="_blank" rel="noopener">don’t have one? create a free Jira site</a> first, or the login shows “access denied”.'
           : ' Connect with your Jira site + email + an API token (Jira → Account settings → Security → API tokens).'))+'</div>'+
       (jiraConnected
         ? '<div class="foot"><span class="cstat on"><b></b>Connected</span>'+
@@ -2059,7 +2059,7 @@
               '<button class="btn primary" data-jira-on style="align-self:flex-start">Connect Jira</button>'+
             '</div>'))+
       '</div>'+
-      // ── Google Calendar (native) — shares ONE Google sign-in with Gmail
+      // ── Google Calendar (native); shares ONE Google sign-in with Gmail
       //    (/oauth/google/connect grants both); googleNative drives both cards. ──
       '<div class="conn"><div class="nm">'+LOGO_CALENDAR+' Google Calendar <span class="stchip" style="margin-left:6px">native</span></div>'+
       '<div class="ds">Read your week and schedule meetings on your own Google Calendar. Uses your Google sign-in (shared with Gmail).</div>'+
@@ -2068,7 +2068,7 @@
         ?'<button class="btn" data-google-off>Disconnect</button>'
         :'<a class="btn primary" style="text-decoration:none" href="/oauth/google/connect">Connect</a>')+
       '</div></div>'+
-      // ── Gmail (native) — same Google sign-in as Calendar ──
+      // ── Gmail (native); same Google sign-in as Calendar ──
       '<div class="conn"><div class="nm">'+LOGO_GMAIL+' Gmail <span class="stchip" style="margin-left:6px">native</span></div>'+
       '<div class="ds">Send recap and follow-up emails on your own Gmail. Uses your Google sign-in (shared with Calendar).</div>'+
       '<div class="foot"><span class="cstat'+(googleNative?" on":"")+'"><b></b>'+(googleNative?"Connected":"Not connected")+'</span>'+
@@ -2076,17 +2076,17 @@
         ?'<button class="btn" data-google-off>Disconnect</button>'
         :'<a class="btn primary" style="text-decoration:none" href="/oauth/google/connect">Connect</a>')+
       '</div></div>'+
-      // ── Google Drive (native) — same Google sign-in as Gmail/Calendar; the
+      // ── Google Drive (native); same Google sign-in as Gmail/Calendar; the
       //    /oauth/google/connect grant includes drive.readonly. Reuses
       //    data-google-off. Folder→avatar wiring lives in the Brain tab. ──
       '<div class="conn"><div class="nm">'+LOGO_DRIVE+' Google Drive <span class="stchip" style="margin-left:6px">native</span></div>'+
-      '<div class="ds">Avatars read shared Drive folders and cite your team’s docs in meetings — pick a folder for an avatar in the Brain tab. Uses your Google sign-in (shared with Gmail &amp; Calendar); if you connected before Drive was enabled, reconnect once to grant it.</div>'+
+      '<div class="ds">Avatars read shared Drive folders and cite your team’s docs in meetings; pick a folder for an avatar in the Brain tab. Uses your Google sign-in (shared with Gmail &amp; Calendar); if you connected before Drive was enabled, reconnect once to grant it.</div>'+
       '<div class="foot"><span class="cstat'+(googleNative?" on":"")+'"><b></b>'+(googleNative?"Connected":"Not connected")+'</span>'+
       (googleNative
         ?'<button class="btn" data-google-off>Disconnect</button>'
         :'<a class="btn primary" style="text-decoration:none" href="/oauth/google/connect">Connect</a>')+
       '</div></div>';
-    // Asana (native) connect — verify + store the pasted PAT server-side.
+    // Asana (native) connect; verify + store the pasted PAT server-side.
     $$("#conns [data-asana-on]").forEach(function(btn){btn.addEventListener("click",function(){
       var input=$("#asana-pat"), token=(input&&input.value||"").trim();
       if(!token){ toast("Paste your Asana Personal Access Token first.",true); return; }
@@ -2095,11 +2095,11 @@
         .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,j:j}; }); })
         .then(function(res){
           if(!res.ok||!res.j.ok){ throw new Error(res.j.error||"Couldn't connect Asana. Check the token."); }
-          toast("Asana connected"+(res.j.workspace?" — workspace: "+res.j.workspace:"")+".");
+          toast("Asana connected"+(res.j.workspace?": workspace: "+res.j.workspace:"")+".");
           load(); })
         .catch(function(err){ toast(err.message||"Couldn't connect Asana. Try again.",true);
           btn.disabled=false; btn.textContent=prev; }); }); });
-    // Asana (native) disconnect — clears ONLY the org's stored Asana token.
+    // Asana (native) disconnect; clears ONLY the org's stored Asana token.
     $$("#conns [data-asana-off]").forEach(function(btn){btn.addEventListener("click",function(){
       btn.disabled=true; var prev=btn.textContent; btn.textContent="Disconnecting…";
       fetch("/dashboard/connections/asana/disconnect",{method:"POST",headers:headers()})
@@ -2107,12 +2107,12 @@
         .then(function(res){
           if(!res.ok||!res.j.ok){ throw new Error("Couldn't disconnect Asana. Try again."); }
           toast(res.j.still_connected_via_env
-            ?"Org token removed — the deployment's ASANA_TOKEN still applies."
+            ?"Org token removed; the deployment's ASANA_TOKEN still applies."
             :"Asana disconnected.");
           load(); })
         .catch(function(err){ toast(err.message||"Couldn't disconnect Asana. Try again.",true);
           btn.disabled=false; btn.textContent=prev; }); }); });
-    // Google (native) disconnect — clears ONLY the native token, never Slack.
+    // Google (native) disconnect; clears ONLY the native token, never Slack.
     $$("#conns [data-google-off]").forEach(function(btn){btn.addEventListener("click",function(){
       btn.disabled=true; var prev=btn.textContent; btn.textContent="Disconnecting…";
       fetch("/oauth/google/disconnect",{method:"POST",headers:headers()})
@@ -2121,10 +2121,10 @@
           toast("Google disconnected."); load(); }); })
         .catch(function(err){ toast(err.message||"Couldn't disconnect Google. Try again.",true);
           btn.disabled=false; btn.textContent=prev; }); }); });
-    // Jira (native PM connector) — not wired to a backend yet; honest placeholder
+    // Jira (native PM connector); not wired to a backend yet; honest placeholder
     // (no fake connect). When the native Jira client lands, swap this for the
     // real connect flow.
-    // Jira (native) connect — verify + store the site+email+token server-side.
+    // Jira (native) connect; verify + store the site+email+token server-side.
     $$("#conns [data-jira-on]").forEach(function(btn){btn.addEventListener("click",function(){
       var site=($("#jira-site")&&$("#jira-site").value||"").trim();
       var email=($("#jira-email")&&$("#jira-email").value||"").trim();
@@ -2147,10 +2147,10 @@
         .then(function(){ toast("Jira disconnected."); load(); })
         .catch(function(){ toast("Couldn't disconnect Jira. Try again.",true); btn.disabled=false; btn.textContent=prev; });
     }); });
-    // Slack (add-on) connect — the existing Cedric Slack-install flow (fixed URL).
+    // Slack (add-on) connect; the existing Cedric Slack-install flow (fixed URL).
     $$("#conns [data-slack-on]").forEach(function(btn){btn.addEventListener("click",function(){
       window.location.assign("/dashboard/connections/brain/slack/start?avatar_id=cedric&channel="); }); });
-    // Slack (add-on) disconnect — the existing remote-revoke-first brain saga.
+    // Slack (add-on) disconnect; the existing remote-revoke-first brain saga.
     $$("#conns [data-slack-off]").forEach(function(btn){btn.addEventListener("click",function(){
       btn.disabled=true; var prev=btn.textContent; btn.textContent="Disconnecting…";
       fetch("/dashboard/connections/brain/disconnect",{
@@ -2188,19 +2188,19 @@
   // defaulting grid). NULL-SAFE (#197 class): typeof/guard checks before any use;
   // the button starts on a working fallback so the link is NEVER dead, a failed
   // fetch leaves that fallback + empty chips in place (never a crash). The catalog
-  // is cached on window so the 15s summary refresh doesn't refetch — but the chips
+  // is cached on window so the 15s summary refresh doesn't refetch; but the chips
   // + href are RE-APPLIED from cache on every render because renderConnections
   // rebuilds #conns each tick.
   // Append return_url=<this dashboard> so Cedric can bounce the user straight
   // back here after a connect on the hosted page. Cedric validates it
-  // server-side against its Laura-origin allow-list (isSafeLauraReturnUrl) —
+  // server-side against its Laura-origin allow-list (isSafeLauraReturnUrl) -
   // this is a hint, never trusted there.
   function withReturnUrl(u){
     if(typeof u!=="string"||!u) return u;
     if(u.indexOf("return_url=")>=0) return u;
     return u+(u.indexOf("?")>=0?"&":"?")+"return_url="+encodeURIComponent(location.origin+"/dashboard");
   }
-  // A connect is likely in flight for ~10 min after "Manage tools" was opened —
+  // A connect is likely in flight for ~10 min after "Manage tools" was opened -
   // during that window the catalog re-fetches on every render/focus so the new
   // tool appears in THIS tab without a manual reload. Cleared by ?connected=.
   function pendingConnect(){
@@ -2224,7 +2224,7 @@
         // No org-scoped manage_url -> keep the button DISABLED. Never fall back
         // to bare meet-cedric.com: on a shared browser it opens whatever Cedric
         // session is lying around (the wrong account) or a login wall.
-        a.removeAttribute("href"); a.textContent="Manage unavailable — use Add to Slack";
+        a.removeAttribute("href"); a.textContent="Manage unavailable; use Add to Slack";
         a.setAttribute("aria-disabled","true"); a.style.opacity=".55"; a.style.pointerEvents="none";
       }
     }
@@ -2233,7 +2233,7 @@
       if(j.status==="not_linked"){
         // Permanent org↔workspace mismatch (Cedric's 404): this workspace is
         // linked to a DIFFERENT Laura account. The only safe re-link is the
-        // full Add-to-Slack flow (fresh creds via /complete) — never a bare
+        // full Add-to-Slack flow (fresh creds via /complete); never a bare
         // org re-point. Same handler as the "Add to Slack" button.
         box.innerHTML='<span class="cnote warn" style="margin-top:0">This Slack workspace is linked to a different Laura account.</span>'+
           '<button class="btn" data-slack-relink>Reconnect Slack</button>';
@@ -2243,7 +2243,7 @@
       }
       // Render the TEAM-SCOPE connector catalog. Connected tools show as status
       // chips; AVAILABLE tools show as direct "+ Connect" chips whose href is the
-      // connector's OWN team-scope connect_url (with return_url appended) — so the
+      // connector's OWN team-scope connect_url (with return_url appended); so the
       // user connects that specific tool straight from here and NEVER lands on
       // Cedric's hosted grid, which defaults new connections to PRIVATE scope that
       // Laura can't see or use (Handshake return-flow contract v3,
@@ -2277,7 +2277,7 @@
   function resolveSlackManageUrl(force){
     if(!document.querySelector("#conns [data-slack-manage]")) return;
     if(window._connectorsCache){ applySlackTools(window._connectorsCache); }  // re-apply on rebuild
-    // Fetch once per page normally; a pending connect (or an explicit force —
+    // Fetch once per page normally; a pending connect (or an explicit force -
     // the post-norefresh retries) re-fetches so a just-connected tool shows up.
     if(window._slackManageTried && !force && !pendingConnect()) return;
     window._slackManageTried=true;
@@ -2289,16 +2289,16 @@
 
   // ═════════ Shared action helpers (Meetings rows + Action Center) ═════════
   // ONE set of chip renderers and ONE approve/reject path for every surface
-  // that shows an action — the meeting detail rows and the Action Center reuse
+  // that shows an action; the meeting detail rows and the Action Center reuse
   // these, so execution behavior is never duplicated.
   function avInfo(id){ return ((DATA&&DATA.avatars)||[]).find(function(x){return x.id===id;})||null; }
   function avNameOf(id){ var a=avInfo(id); return a?a.name:(id?(id.charAt(0).toUpperCase()+id.slice(1)):"—"); }
 
-  // Owner label OR — when the action couldn't be routed — a visible
+  // Owner label OR, when the action couldn't be routed, a visible
   // "Unassigned" triage chip (with the gap reason on hover).
   function ownerChip(a){
     if(a.unassigned){
-      var why=a.gap?("Needs "+esc(a.gap)+" — assign to route it"):"Needs an owner — assign to route it";
+      var why=a.gap?("Needs "+esc(a.gap)+", assign to route it"):"Needs an owner, assign to route it";
       return ' <span class="ow unassigned" title="'+why+'">⚠ Unassigned</span>';
     }
     return a.owner?' <span class="ow">· '+esc(a.owner)+'</span>':'';
@@ -2309,7 +2309,7 @@
     if(s==="done"&&url) return '<a class="exec done" href="'+esc(url)+'" target="_blank" rel="noopener" title="'+esc(det)+'">Done ↗</a>';
     return '<span class="exec '+esc(s)+'" title="'+esc(det)+'">'+esc(s)+'</span>';
   }
-  // Per-row "Approve & run" — only for a native-typed action (calendar/email
+  // Per-row "Approve & run": only for a native-typed action (calendar/email
   // spec) that hasn't already been run. Posts to the human-authed approve door
   // (POST /dashboard/actions/{id}/approve).
   function apprBtn(a){
@@ -2323,7 +2323,7 @@
     return '<button class="btn-rej" data-reject="'+esc(a.action_id)+'">Reject</button>';
   }
 
-  // Plain-language state labels — canonical values stay internal, the UI never
+  // Plain-language state labels; canonical values stay internal, the UI never
   // shows the raw vocabulary. Color NEVER carries the meaning alone.
   var STATE_LABEL={needs_details:"Needs information",proposed:"Ready for approval",
     approved:"Approved",executing:"Running",done:"Completed",failed:"Couldn’t complete",
@@ -2344,7 +2344,7 @@
     if(s==="approved"||s==="executing") return "progress";
     return "attn"; }
 
-  // Every action across every meeting in the already-loaded summary — the
+  // Every action across every meeting in the already-loaded summary; the
   // Action Center's initial list source (the canonical record is fetched
   // lazily per action on expand; no second action-list API is invented).
   function actionIndex(){
@@ -2385,8 +2385,8 @@
         if(appr) appr.remove();
         var det=btn.parentElement&&btn.parentElement.querySelector("button[data-acdetailsbtn]");
         if(det) det.remove();
-        btn.outerHTML='<span class="exec rejected" title="Rejected — it will not run.">rejected</span>';
-        toast("Action rejected — it will not run.");
+        btn.outerHTML='<span class="exec rejected" title="Rejected; it will not run.">rejected</span>';
+        toast("Action rejected; it will not run.");
         patchActionState(aid,res.j.status||{status:"rejected"});
       })
       .catch(function(e){ btn.disabled=false; btn.innerHTML=old; toast("Could not reject: "+e.message,true); });
@@ -2397,7 +2397,7 @@
     fetch("/dashboard/actions/"+encodeURIComponent(aid)+"/approve",{method:"POST",headers:headers()})
       .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); })
       .then(function(res){
-        // needs_details: the typed spec is missing required fields — collect
+        // needs_details: the typed spec is missing required fields; collect
         // them in the accessible inline form (schema comes from the server;
         // the backend stays authoritative) and retry once saved.
         if(res.status===422 && res.j.error==="needs_details"){
@@ -2413,17 +2413,17 @@
         }
         if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
         var j=res.j, st=j.status||null;
-        // Routed to Cedric: approved here, executing over there — the chip
+        // Routed to Cedric: approved here, executing over there; the chip
         // flips to done/failed when Cedric reports back on the status door.
         if(!j.executed&&j.dispatched){
-          if(btn) btn.outerHTML='<span class="exec approved" title="Approved — Cedric is executing this through its connectors; the receipt lands here when it reports back.">approved · with Cedric</span>';
-          toast("Approved — routed to Cedric for execution.");
+          if(btn) btn.outerHTML='<span class="exec approved" title="Approved. Cedric is executing this through its connectors; the receipt lands here when it reports back.">approved · with Cedric</span>';
+          toast("Approved; routed to Cedric for execution.");
           patchActionState(aid,st||{status:"approved"});
           return;
         }
         // Dead end: approved, but nothing ran AND Cedric didn't accept it.
         // Show WHAT happened (the server's one-line reason) instead of a
-        // misleading "captured" — the row goes to "failed" so it's visible.
+        // misleading "captured": the row goes to "failed" so it's visible.
         if(!j.executed){
           var why=j.execution_error||(j.status&&j.status.detail)||"The action couldn't be executed.";
           if(btn) btn.outerHTML='<span class="exec failed" title="'+esc(why)+'">Couldn’t run ↗</span>';
@@ -2434,7 +2434,7 @@
         // Executed: render the SAME receipt the row uses (Done ↗ / failed pill).
         var failed=st&&st.status==="failed";
         if(btn) btn.outerHTML=execChip({execution:st})||'<span class="exec done">done</span>';
-        toast(failed?("Approved, but it couldn't run: "+((st&&st.detail)||"see receipt")):"Approved & run — receipt attached.",failed);
+        toast(failed?("Approved, but it couldn't run: "+((st&&st.detail)||"see receipt")):"Approved & run; receipt attached.",failed);
         patchActionState(aid,st||{status:"done"});
       })
       .catch(function(e){ if(btn){ btn.disabled=false; btn.innerHTML=old; } toast("Could not approve: "+e.message,true); });
@@ -2443,7 +2443,7 @@
   // ── Inline missing-details form (replaces the window.prompt chain) ──
   // Generated from the server-provided params_schema; POSTs to the existing
   // params door. Validation, permissions and approval eligibility stay
-  // server-side — this form only renders the schema and the server's errors.
+  // server-side; this form only renders the schema and the server's errors.
   function closeParamsForm(){
     var s=document.getElementById("params-scrim");
     if(s){ if(s._esc) document.removeEventListener("keydown",s._esc,true); s.remove(); }
@@ -2514,7 +2514,7 @@
           var still=res.j.missing_params||[];
           if(still.length && thenApprove){ missing=still; showErrors(still); return; }
           closeParamsForm();
-          toast(still.length?("Saved — still missing: "+still.join(", ")):"Details saved.");
+          toast(still.length?("Saved; still missing: "+still.join(", ")):"Details saved.");
           if(thenApprove && opts.onApproved) opts.onApproved();
         })
         .catch(function(){ if(sb) sb.disabled=false; toast("Network error saving details.",true); });
@@ -2532,13 +2532,13 @@
   function acTodoText(a){
     var s=stateOf(a);
     if(s==="needs_details") return "Add the missing details, then approve.";
-    if(s==="proposed") return (a.typed&&a.action_id)?"Review and approve — nothing runs without you.":"Captured from the meeting — tracked here for the record.";
-    if(s==="approved") return "Approved — waiting to run.";
+    if(s==="proposed") return (a.typed&&a.action_id)?"Review and approve; nothing runs without you.":"Captured from the meeting; tracked here for the record.";
+    if(s==="approved") return "Approved; waiting to run.";
     if(s==="executing") return "Running now.";
-    if(s==="done") return "Completed — the receipt links to what was created.";
-    if(s==="failed") return "It couldn’t complete — open details for the receipt.";
-    if(s==="rejected") return "Rejected — it will not run.";
-    return "Captured from the meeting — tracked here for the record.";
+    if(s==="done") return "Completed; the receipt links to what was created.";
+    if(s==="failed") return "It couldn’t complete; open details for the receipt.";
+    if(s==="rejected") return "Rejected; it will not run.";
+    return "Captured from the meeting; tracked here for the record.";
   }
   function renderActions(){
     var box=$("#ac-list"); if(!box) return;
@@ -2652,9 +2652,9 @@
     row("Parameters",paramsTxt);
     if((act.missing_params||[]).length) row("Still missing",esc(act.missing_params.join(", ")));
     if(act.risk) row("Risk",esc(act.risk));
-    if(act.route) row("Runs through",esc(act.route==="native"?"Laura — your own connected account"
-      :act.route==="cedric"?"Cedric — the Slack agent"
-      :act.route==="browser"?"Browser demonstration — a guarded browser session; the live view sits in the meeting's Browser demonstration panel"
+    if(act.route) row("Runs through",esc(act.route==="native"?"Laura; your own connected account"
+      :act.route==="cedric"?"Cedric; the Slack agent"
+      :act.route==="browser"?"Browser demonstration; a guarded browser session; the live view sits in the meeting's Browser demonstration panel"
       :act.route));
     if((act.dependencies||[]).length) row("Depends on",esc(act.dependencies.join(", ")));
     var dec=act.decision;
@@ -2674,11 +2674,11 @@
   // ═════════ Browser demonstration (presentation shell ONLY) ═════════
   // The future one-company browser demo, rendered inside the Meetings
   // experience. This is a PRESENTATION shell: no planning, no policies, no
-  // workflows, no execution, no browser APIs — Browser B0 owns all of those.
+  // workflows, no execution, no browser APIs. Browser B0 owns all of those.
   // BrowserDemoSource is the narrow adapter and the ONLY seam: today it
   // serves deterministic fixtures (dev preview: ?browser_demo_fixture=<state>);
   // when Browser B0's final contract lands, only this adapter is
-  // reimplemented. Fixtures carry ONLY safe human fields — never provider
+  // reimplemented. Fixtures carry ONLY safe human fields; never provider
   // ids, planner reasoning, screenshots outside the authorized live view,
   // credentials, DOM payloads or model/provider configuration.
   var BROWSER_DEMO_STATES=["unavailable","starting","ready","observing","navigating",
@@ -2695,15 +2695,15 @@
     explaining:"run",paused:"",waiting_approval:"attn",human_takeover:"attn",
     verifying:"run",completed:"ok",failed:"bad",expired:"bad",closed:""};
   // The adapter is the ONLY browser seam. Two modes:
-  //  * fixture mode (?browser_demo_fixture=<state> or window._bdOverride) —
+  //  * fixture mode (?browser_demo_fixture=<state> or window._bdOverride) -
   //    explicit developer/test preview; deterministic, no network.
-  //  * real mode — reads canonical session + guarded-action state from the
+  //  * real mode; reads canonical session + guarded-action state from the
   //    backend demo status endpoint (GET /dashboard/demo/northstar/sessions/
   //    {id}), which returns ONLY safe public fields. No browser/planning/policy
   //    logic lives here; provider ids/urls, screenshots, planner reasoning and
   //    raw page structure are never fetched or shown.
   // Controls the backend does NOT implement (pause/resume/take control) are
-  // disabled honestly with a tooltip — never simulated.
+  // disabled honestly with a tooltip; never simulated.
   var BROWSER_DEMO_UNSUPPORTED={pause:1,resume:1,takeover:1};
   var BrowserDemoSource=(function(){
     function fixture(){
@@ -2712,7 +2712,7 @@
       var av=(DATA&&DATA.avatars&&DATA.avatars[0])||{id:"laura",name:"Laura"};
       return {
         mode:"fixture", state:state, avatar_id:av.id,
-        page_title:"Northstar — Acme Robotics",
+        page_title:"Northstar: Acme Robotics",
         checkpoint:"Fixture preview · "+state,
         started_at:(window._bdStartedAt=window._bdStartedAt||Date.now()/1000-240),
         action_id:""
@@ -2748,7 +2748,7 @@
     return {current:current, refresh:refresh, fromStatus:fromStatus};
   })();
   // Narrow fetch to the demo dashboard twin (cookie + same-origin; 404 when
-  // the demo flag is off — the panel then simply stays empty).
+  // the demo flag is off; the panel then simply stays empty).
   function bFetchDemo(path){
     return fetch("/dashboard/demo/northstar/"+path,{credentials:"same-origin",
       headers:{"Accept":"application/json"}})
@@ -2773,7 +2773,7 @@
     function ctlBtn(k,label,cls){
       var dis=unsupported(k);
       return '<button class="btn'+(cls?" "+cls:"")+'" data-bd="'+k+'"'+
-        (dis?' disabled title="Not available yet — the browser backend does not support this control"':'')+
+        (dis?' disabled title="Not available yet; the browser backend does not support this control"':'')+
         '>'+esc(label)+'</button>';
     }
     var ctl="";
@@ -2786,7 +2786,7 @@
     }
     var viewMsg=st==="starting"?"The live view appears here once the demo starts."
       :terminal?(BD_ACTIVITY[st]||"Demo ended.")
-      :"Live view — read-only. You watch exactly what the avatar sees; nothing here can be clicked.";
+      :"Live view; read-only. You watch exactly what the avatar sees; nothing here can be clicked.";
     box.innerHTML='<div class="panel" style="margin-bottom:20px"><h2>Browser demonstration</h2>'+
       '<div class="ph">'+esc(avNameOf(demo.avatar_id))+' is demonstrating inside a controlled browser session.</div>'+
       '<div class="bd-grid"><div class="bd-view">'+
@@ -2807,7 +2807,7 @@
       var k=b.getAttribute("data-bd");
       if(k==="action"){
         // Jump to the exact pending canonical action (never a browser-owned
-        // approval — the Action Center owns the decision).
+        // approval; the Action Center owns the decision).
         if(demo.action_id) window._acFocusId=demo.action_id;
         acBucket="attn"; go("actions"); return;
       }
@@ -2825,7 +2825,7 @@
         BrowserDemoSource.refresh().then(renderBrowserDemo);
         return;
       }
-      // Fixture-local transitions only — deterministic, no network, no APIs.
+      // Fixture-local transitions only; deterministic, no network, no APIs.
       if(k==="pause") window._bdOverride="paused";
       else if(k==="resume") window._bdOverride="observing";
       else if(k==="takeover") window._bdOverride="human_takeover";
@@ -2840,7 +2840,7 @@
     var all=attnActions(), rows=all.slice(0,3);
     if(!rows.length){ box.innerHTML=""; return; }
     box.innerHTML='<div class="panel" style="margin-bottom:20px"><h2>Needs your attention</h2>'+
-      '<div class="ph">Actions your avatars proposed — nothing runs without your approval.</div>'+
+      '<div class="ph">Actions your avatars proposed; nothing runs without your approval.</div>'+
       rows.map(function(x){
         return '<div class="attnrow">'+stateChipHTML(stateOf(x.a))+
           '<span class="t">'+esc(x.a.item)+'</span>'+
@@ -2875,16 +2875,16 @@
       '<div class="ph">A few steps and your avatars are fully at work.</div><div class="checklist">'+
       visible.map(function(it){
         return '<button type="button" class="ckitem'+(it.done?" done":"")+'" data-goto="'+esc(it.go)+'"'+
-          (it.done?' aria-label="'+esc(it.label)+' — done"':'')+'>'+
+          (it.done?' aria-label="'+esc(it.label)+': done"':'')+'>'+
           '<span class="ck" aria-hidden="true">✓</span>'+esc(it.label)+'</button>';
       }).join("")+'</div></div>';
   }
 
   // ═════════ AvatarPreview adapter ═════════
   // ONE seam owns what renders inside the Avatars stage. When the avatar's own
-  // 3D model is on disk (renderer.talk.ready — never borrow another avatar's
+  // 3D model is on disk (renderer.talk.ready; never borrow another avatar's
   // model/face), a same-origin /talk?preview=1 iframe renders the LIVE 3D idle
-  // animation (blinks, gaze, sway — TalkingHead, browser-side only, nothing
+  // animation (blinks, gaze, sway. TalkingHead, browser-side only, nothing
   // billable). Otherwise: the identity-safe 2D portrait chain the thumbnails
   // use (/laura-reference.jpg → letter/gradient fallback).
   var AvatarPreview=(function(){
@@ -2895,7 +2895,7 @@
       var img=new Image();
       img.alt=esc(av.name||av.id)+" portrait"; img.decoding="async";
       img.addEventListener("load",function(){
-        if(currentId!==av.id) return;  // selection moved on — drop it
+        if(currentId!==av.id) return;  // selection moved on; drop it
         mountEl.innerHTML=""; mountEl.appendChild(img);
       });
       img.addEventListener("error",function(){
@@ -2912,7 +2912,7 @@
       mountEl.innerHTML='<div class="skel">Loading '+esc(av.name||av.id)+'…</div>';
       var ready3d=!!(av.renderer&&av.renderer.talk&&av.renderer.talk.ready);
       // The 3D idle animation can't see the parent page's reduced-motion
-      // preference across the iframe boundary — honor it here by serving the
+      // preference across the iframe boundary; honor it here by serving the
       // static portrait instead.
       var reduceMotion=window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       if(ready3d && !reduceMotion){
@@ -2920,7 +2920,7 @@
         f.src="/talk?preview=1&avatar_id="+encodeURIComponent(av.id);
         f.title=(av.name||av.id)+" 3D preview";
         f.setAttribute("aria-label",(av.name||av.id)+" 3D preview");
-        // Hidden (not display:none — that would stall loading in some
+        // Hidden (not display:none; that would stall loading in some
         // browsers) UNDER the skeleton until the document loads; the skeleton
         // keeps showing meanwhile, then talk.html fades the avatar in itself
         // once its close-up camera settles (its own reveal logic).
@@ -2931,7 +2931,7 @@
           var sk=mountEl.querySelector(".skel"); if(sk) sk.remove();
         });
         // Only true network-level failures fire error on an iframe (an HTTP
-        // error page or an in-document crash still fires load) — talk.html's
+        // error page or an in-document crash still fires load); talk.html's
         // own "face unavailable" notice covers those; this covers the rest.
         f.addEventListener("error",function(){
           if(currentId!==av.id) return;
@@ -2993,10 +2993,10 @@
         (a.persona?'<div class="persona">'+esc(a.persona)+(a.persona.length>=220?"…":"")+'</div>':'')+
         (a.email?'<div class="alias"><div class="al-row"><span class="al-ic">✉</span>'+
           '<span class="al-addr">'+esc(a.email)+'</span><button class="btn conn-btn" data-copy="'+esc(a.email)+'">Copy</button></div>'+
-          '<div class="al-hint">Add this address to any calendar invite — '+esc(a.name)+' joins the meeting.</div></div>':'')+
+          '<div class="al-hint">Add this address to any calendar invite. '+esc(a.name)+' joins the meeting.</div></div>':'')+
         '<div class="acts"><button class="btn primary" data-dispatch="'+esc(a.id)+'">Use for next meeting</button>'+
         (a.id==="laura"
-          ? '<span class="btn" title="Ultra HD photorealistic avatar — in the works, not live yet" style="opacity:.55;cursor:default">🎬 Ultra HD realistic avatar · coming soon</span>'
+          ? '<span class="btn" title="Ultra HD photorealistic avatar; in the works, not live yet" style="opacity:.55;cursor:default">🎬 Ultra HD realistic avatar · coming soon</span>'
           : '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a>')+
         '</div>'+
         '</div>'+
@@ -3006,7 +3006,7 @@
       '<details data-avsec="who"><summary>Who they are</summary><div class="dsec">'+
         (a.persona?esc(a.persona):("The "+esc(a.role)+" on your roster."))+'</div></details>'+
       '<details data-avsec="know"><summary>What they know</summary><div class="dsec">'+
-        (a.knowledge_docs?(a.knowledge_docs+' knowledge document'+(a.knowledge_docs===1?'':'s')+' indexed.'):'No knowledge documents yet — add company knowledge in Brain.')+
+        (a.knowledge_docs?(a.knowledge_docs+' knowledge document'+(a.knowledge_docs===1?'':'s')+' indexed.'):'No knowledge documents yet; add company knowledge in Brain.')+
         (topics?'<div class="chips" style="margin-top:8px">'+topics+'</div>':'')+
         '<div style="margin-top:8px"><a data-goto="brain" style="cursor:pointer;color:var(--live)">Manage in Brain →</a></div></div></details>'+
       '<details data-avsec="do"><summary>What they can do</summary><div class="dsec"><div class="cap">'+
@@ -3014,7 +3014,7 @@
         (tmpls?'<div class="chips" style="margin-top:8px">'+tmpls+'</div>':'')+'</div></details>'+
       '<details data-avsec="voice"><summary>Voice and appearance</summary><div class="dsec">'+
         'Voice: <span style="font-family:var(--mono);font-size:.78rem">'+esc(a.voice_id||"default")+'</span><br/>'+
-        'Face: '+esc(rend.preferred||"talk")+(rend.ready?' — ready':(rend.fallback?' — falls back to '+esc(rend.fallback):''))+'</div></details>'+
+        'Face: '+esc(rend.preferred||"talk")+(rend.ready?': ready':(rend.fallback?': falls back to '+esc(rend.fallback):''))+'</div></details>'+
       '<details data-avsec="used"><summary>Used by</summary><div class="dsec">'+
         a.meetings_total+' meeting'+(a.meetings_total===1?"":"s")+' · '+(a.minutes_total||0)+' minutes'+
         (a.last_meeting_at?' · last '+fmtWhen(a.last_meeting_at):'')+'</div></details>'+
@@ -3025,7 +3025,7 @@
     if(!stage.getAttribute("data-mounted")){ AvatarPreview.mount($("#av-preview")); stage.setAttribute("data-mounted","1"); }
     var avs=(d.avatars||[]);
     if(!avs.length){
-      $("#av-roster").innerHTML='<div class="empty" style="padding:10px">No avatars yet — they appear here once your workspace has them.</div>';
+      $("#av-roster").innerHTML='<div class="empty" style="padding:10px">No avatars yet; they appear here once your workspace has them.</div>';
       $("#av-stagemeta").innerHTML=""; $("#av-detail").innerHTML=""; AvatarPreview.dispose();
       return;
     }
@@ -3059,7 +3059,7 @@
     $$("#av-detail [data-copy]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); var v=b.getAttribute("data-copy");
       if(navigator.clipboard) navigator.clipboard.writeText(v);
-      toast("Copied "+v+" — invite it to a meeting to summon this avatar."); }); });
+      toast("Copied "+v+": invite it to a meeting to summon this avatar."); }); });
     // AI model per avatar: Gemini (relay) vs Cerebras (normal). Applies next meeting.
     $$("#av-detail [data-brain-set]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation();
@@ -3120,7 +3120,7 @@
     var b=this; b.disabled=true; b.textContent="Sending…";
     // Optional brief → the live-session contract: context.meeting carries
     // title/attendees, context.brief_markdown carries the narrative the avatar
-    // is grounded on. Only attached when the user actually wrote something —
+    // is grounded on. Only attached when the user actually wrote something -
     // a bare link keeps today's exact request shape.
     var body={meeting_url:url,avatar_id:avatar};
     var title=($("#dsp-title")||{value:""}).value.trim(),
@@ -3154,7 +3154,7 @@
           var msg=res.j.error==="avatar_busy" ? res.j.detail : (res.j.error||res.j.detail||"request failed");
           throw new Error(msg); }
         var picked=(DATA&&DATA.avatars||[]).find(function(a){return a.id===avatar;});
-        toast((picked?picked.name:"Avatar")+" is joining"+(body.context?" with your brief":"")+" — admit them from the waiting room if asked.");
+        toast((picked?picked.name:"Avatar")+" is joining"+(body.context?" with your brief":"")+": admit them from the waiting room if asked.");
         $("#dsp-url").value="";
         ["dsp-title","dsp-parts","dsp-obj","dsp-notes","dsp-mission"].forEach(function(id){var el=document.getElementById(id); if(el) el.value="";});
         var det=document.getElementById("dsp-brief"); if(det) det.open=false;
@@ -3185,7 +3185,7 @@
     if(w==="upcoming" && window._loadUpcoming) window._loadUpcoming(false); }); });
 
   // Action Center: primary filter tabs + secondary avatar/date filters
-  // (static elements, wire once — the list itself re-renders).
+  // (static elements, wire once; the list itself re-renders).
   $$("#ac-tabs button").forEach(function(b){ b.addEventListener("click",function(){
     acBucket=b.getAttribute("data-ab")||"attn"; renderActions(); }); });
   $("#ac-avatar").addEventListener("change",renderActions);
@@ -3233,7 +3233,7 @@
     return fetch("/dashboard/knowledge/"+path,opts)
       .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); }); }
   // Plain-language readiness for a Brain source. Canonical states stay
-  // internal — the UI translates: active→Ready, pending→Syncing,
+  // internal; the UI translates: active→Ready, pending→Syncing,
   // needs_reconnect→Reconnect required, acl_incomplete→Access needs attention,
   // paused→Paused, revoked→Disconnected.
   function brainChip(s){
@@ -3251,14 +3251,14 @@
     var st=String(s.status||"active");
     if(st==="needs_reconnect"||st==="acl_incomplete")
       return {label:"Reconnect it from the Connections page.",act:"connections"};
-    if(st==="revoked") return {label:"This source was disconnected — reconnect or delete it.",act:"connections"};
-    if(st==="paused") return {label:"Paused — its documents stay available but nothing new syncs.",act:""};
+    if(st==="revoked") return {label:"This source was disconnected; reconnect or delete it.",act:"connections"};
+    if(st==="paused") return {label:"Paused; its documents stay available but nothing new syncs.",act:""};
     if((s.published_documents|0)===0&&(s.pending_documents|0)===0)
-      return {label:"Add your first document — open Manage.",act:"docs"};
-    if((s.pending_documents|0)>0) return {label:"Indexing — ready in a moment.",act:""};
+      return {label:"Add your first document; open Manage.",act:"docs"};
+    if((s.pending_documents|0)>0) return {label:"Indexing; ready in a moment.",act:""};
     if((s.failed_documents|0)>0) return {label:"Some documents failed to index.",act:"sync"};
     if(!(s.avatars||[]).length) return {label:"Choose which avatars can use it:",act:"assign"};
-    return {label:"Ready — test an answer below.",act:""};
+    return {label:"Ready; test an answer below.",act:""};
   }
   // Advanced diagnostics ride the Data Foundation dashboard twin (GET-only
   // here; admin writes stay on their own doors). Best-effort: disabled → say
@@ -3277,7 +3277,7 @@
       var cl=(conns.ok&&conns.j.connectors)||[];
       if(cl.length){
         html+='<div class="sm-h">Connected sources</div>'+cl.map(function(c){
-          return '<div style="margin:2px 0">'+esc(c.name||c.kind||"connector")+' — <span style="font-family:var(--mono);font-size:.72rem">'+esc(c.status||"")+'</span></div>';
+          return '<div style="margin:2px 0">'+esc(c.name||c.kind||"connector")+': <span style="font-family:var(--mono);font-size:.72rem">'+esc(c.status||"")+'</span></div>';
         }).join("");
       }
       var rl=((runs.ok&&runs.j.runs)||[]).slice(0,5);
@@ -3294,7 +3294,7 @@
   }
   // Auto-refresh the ready/indexing counts while anything is still indexing.
   // The ingest worker publishes a doc a few seconds after upload (server tick
-  // ~5s), but loadBrain only ran ONCE ~1.5s post-upload and never again — so a
+  // ~5s), but loadBrain only ran ONCE ~1.5s post-upload and never again; so a
   // doc that finished looked stuck at "indexing" forever. Re-poll on a short
   // interval until nothing is pending, bounded so a genuinely stuck/failed doc
   // stops polling (its real state is then shown truthfully, not hammered).
@@ -3333,7 +3333,7 @@
     var slug=esc(a.slug), nm=esc(a.name||_pdName(a.slug)), acct=_pdConnected[a.slug], on=!!acct;
     var acctName=(on&&acct&&acct.name)?(' · '+esc(acct.name)):'';
     var img=a.img?('<img src="'+esc(a.img)+'" alt="" style="width:18px;height:18px;border-radius:4px;vertical-align:-3px;margin-right:6px"/>'):'';
-    var desc=a.description?esc(a.description):('Connect '+nm+' through Pipedream Connect — managed OAuth.');
+    var desc=a.description?esc(a.description):('Connect '+nm+' through Pipedream Connect; managed OAuth.');
     return '<div class="conn"><div class="nm">'+img+nm+' <span class="stchip" style="margin-left:6px">via Pipedream</span></div>'+
       '<div class="ds">'+desc+'</div>'+
       '<div class="foot"><span class="cstat'+(on?" on":"")+'"><b></b>'+(on?("Connected"+acctName):"Not connected")+'</span>'+
@@ -3392,8 +3392,8 @@
         connectedApps.forEach(function(a){ if(a&&a.app) _pdConnected[a.app]=a; });
         var html='';
         html+='<div class="cnote" style="padding:9px 13px;margin-bottom:12px">Connect any of Pipedream’s 3,000+ apps to your organization (environment: <b>'+esc(env)+'</b>). The native Connections tab is separate and unaffected.</div>';
-        // Search is the primary connect action — pinned to the top, above the app cards.
-        html+='<div style="display:flex;gap:8px;margin-bottom:14px"><input id="pd-search" type="text" placeholder="Search apps to connect — Asana, Notion, HubSpot, Stripe…" autocomplete="off" style="flex:1;box-sizing:border-box;background:transparent;border:1px solid var(--line);border-radius:9px;padding:10px 13px;color:inherit;font:inherit;font-size:.86rem"/><button class="btn primary" id="pd-search-btn">Search</button></div>';
+        // Search is the primary connect action; pinned to the top, above the app cards.
+        html+='<div style="display:flex;gap:8px;margin-bottom:14px"><input id="pd-search" type="text" placeholder="Search apps to connect. Asana, Notion, HubSpot, Stripe…" autocomplete="off" style="flex:1;box-sizing:border-box;background:transparent;border:1px solid var(--line);border-radius:9px;padding:10px 13px;color:inherit;font:inherit;font-size:.86rem"/><button class="btn primary" id="pd-search-btn">Search</button></div>';
         if(degraded){
           html+='<div class="cnote" style="padding:9px 13px;margin-bottom:10px;border-color:rgba(245,72,77,.4)">Couldn’t reach Pipedream just now, so connection status may be out of date. You can still start a connect flow below.</div>';
         }
@@ -3443,7 +3443,7 @@
     window._brainLoaded=true;
     var box=$("#brain-body"); if(!box) return;
     bFetch("sources").then(function(res){
-      if(res.status===404){ box.innerHTML='<div class="empty" style="padding:14px">The company Brain isn’t enabled on this deployment yet. Your avatars still answer from their built-in knowledge — ask your administrator to enable the Brain.</div>'; return; }
+      if(res.status===404){ box.innerHTML='<div class="empty" style="padding:14px">The company Brain isn’t enabled on this deployment yet. Your avatars still answer from their built-in knowledge; ask your administrator to enable the Brain.</div>'; return; }
       if(!res.ok){ box.innerHTML='<div class="empty" style="padding:14px">Could not load knowledge. <button class="btn" id="br-retry" style="margin-left:8px;padding:6px 12px">Try again</button></div>';
         window._brainLoaded=false; var rb=$("#br-retry"); if(rb) rb.addEventListener("click",function(){ loadBrain(true); }); return; }
       var srcs=res.j.sources||[];
@@ -3460,7 +3460,7 @@
           return '<div class="brdoc"><span class="brdoc-nm">'+esc(s.name)+'</span>'+
             '<span class="brdoc-meta">'+(s.published_documents|0)+' ready'+((s.pending_documents|0)?' · '+(s.pending_documents|0)+' indexing':'')+((s.failed_documents|0)?' · '+(s.failed_documents|0)+' failed':'')+'</span>'+
             '<button class="brdoc-del" data-brdel="'+esc(s.id)+'" title="Remove this knowledge">✕</button></div>';
-        }).join("") : '<div class="empty" style="padding:12px 2px">Nothing yet — drop a file above and '+esc(avName)+' will start citing it in meetings.</div>';
+        }).join("") : '<div class="empty" style="padding:12px 2px">Nothing yet; drop a file above and '+esc(avName)+' will start citing it in meetings.</div>';
       var css='<style>'+
         '.brwrap{max-width:none}'+
         '.brdrive-hint{font-size:.8rem;color:var(--dim);line-height:1.45}'+
@@ -3495,7 +3495,7 @@
         '.brkg-d{margin-top:7px;font-size:.82rem;color:var(--dim);line-height:1.45}'+
         '.brkg-d a{color:var(--accent)}'+
         '</style>';
-      // Knowledge graph (graphiti) — a LIVE knowledge source alongside the
+      // Knowledge graph (graphiti); a LIVE knowledge source alongside the
       // uploaded docs: a temporal graph of the workspace so the PM avatar can
       // reason about who owns what / who's overloaded, not just quote docs.
       // Status only (enabling is a deployment env change, like the native
@@ -3504,8 +3504,8 @@
       var kgCard='<div class="brkg">'+
         '<div class="brkg-h">🕸 Knowledge graph <span class="brkg-chip'+(kgOn?" on":"")+'">'+(kgOn?"Active":"Off")+'</span></div>'+
         '<div class="brkg-d">'+(kgOn
-          ?'A live temporal knowledge graph of your workspace (Graphiti) — Petra grounds answers about who owns what, what’s due and who’s overloaded in it, not just the uploaded docs. It updates from your Asana as meetings happen.'
-          :'Off. When enabled, a temporal knowledge graph (Graphiti) lets Petra reason about your workspace — who owns what, capacity, dependencies — beyond the documents above. Enabling is a deployment step (a graph database + env); see docs/GRAPHITI.md.')+'</div>'+
+          ?'A live temporal knowledge graph of your workspace (Graphiti). Petra grounds answers about who owns what, what’s due and who’s overloaded in it, not just the uploaded docs. It updates from your Asana as meetings happen.'
+          :'Off. When enabled, a temporal knowledge graph (Graphiti) lets Petra reason about your workspace, who owns what, capacity, dependencies, beyond the documents above. Enabling is a deployment step (a graph database + env); see docs/GRAPHITI.md.')+'</div>'+
         '</div>';
       box.innerHTML=css+
         '<div class="brwrap">'+
@@ -3525,7 +3525,7 @@
             '<input type="file" id="brfile" multiple hidden accept=".pdf,.md,.markdown,.txt,.csv,.json,.htm,.html,.log,text/*,application/pdf" />'+
             // Folder mode needs its OWN input: webkitdirectory is a property of
             // the picker, not of the selection, so one input can't offer both.
-            // `accept` is ignored in directory mode — _brainUploadItems filters.
+            // `accept` is ignored in directory mode. _brainUploadItems filters.
             '<input type="file" id="brdir" multiple hidden webkitdirectory directory />'+
           '</div>'+
           '<div class="brrow2">'+
@@ -3535,7 +3535,7 @@
           '</div>'+
           kgCard+
           '<div class="brpaste-box" id="brpaste-box" hidden>'+
-            '<input type="text" id="brpaste-fn" placeholder="Title — e.g. Refund policy" aria-label="Title" />'+
+            '<input type="text" id="brpaste-fn" placeholder="Title; e.g. Refund policy" aria-label="Title" />'+
             '<textarea id="brpaste-txt" rows="4" placeholder="Paste the text…" aria-label="Text"></textarea>'+
             '<button class="btn primary" id="brpaste-go">Add to '+esc(avName)+'</button>'+
           '</div>'+
@@ -3552,7 +3552,7 @@
       // zone's own click handler (which opens the files dialog).
       if(pickFiles&&file) pickFiles.addEventListener("click",function(e){ e.stopPropagation(); file.click(); });
       if(pickFolder){
-        // Prefer the File System Access API — window.showDirectoryPicker() opens
+        // Prefer the File System Access API; window.showDirectoryPicker() opens
         // a REAL directory picker (Chrome/Edge). The webkitdirectory <input> was
         // unreliable in practice: the native macOS dialog sometimes stayed in
         // file-select mode, so "Choose folder" only let you pick files. Fall back
@@ -3576,7 +3576,7 @@
         file.addEventListener("change",function(){ _brainUpload(sel,file.files); });
         ["dragenter","dragover"].forEach(function(ev){ drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.add("over"); }); });
         ["dragleave","dragend"].forEach(function(ev){ drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.remove("over"); }); });
-        // A dropped FOLDER contributes nothing to dataTransfer.files — only the
+        // A dropped FOLDER contributes nothing to dataTransfer.files; only the
         // entry API sees inside it. webkitGetAsEntry() must run SYNCHRONOUSLY
         // here: the item list is neutered as soon as the handler yields.
         drop.addEventListener("drop",function(e){
@@ -3611,7 +3611,7 @@
   }
 
   // Google Drive PICKER: when Google is connected, list the org's Drive folders
-  // (backend uses the stored token) and let the user pick one — no pasted link.
+  // (backend uses the stored token) and let the user pick one; no pasted link.
   // Falls back to the link input when Google isn't connected / listing fails.
   function _brainDriveOpen(avatarId){
     var body=$("#brdrive-body"); if(!body) return;
@@ -3621,7 +3621,7 @@
       var folders=(r.ok&&r.j.folders)||[];
       if(r.ok && r.j.connected && folders.length){
         var opts=folders.map(function(f){ return '<option value="'+esc(f.id)+'">'+esc(f.name)+'</option>'; }).join("");
-        body.innerHTML='<div class="brdrive-hint">Choose a folder from your Google Drive — '+esc(nm)+' reads up to 25 files from it and cites them in meetings.</div>'+
+        body.innerHTML='<div class="brdrive-hint">Choose a folder from your Google Drive. '+esc(nm)+' reads up to 25 files from it and cites them in meetings.</div>'+
           '<select id="brdrive-sel" aria-label="Google Drive folder">'+opts+'</select>'+
           '<button class="btn primary" id="brdrive-go">Connect &amp; sync to '+esc(nm)+'</button>';
         $("#brdrive-go").addEventListener("click",function(){ _brainConnectDrive(avatarId,$("#brdrive-sel").value); });
@@ -3629,7 +3629,7 @@
         var connected=(r.ok&&r.j.connected);
         var reason=(r.ok&&r.j.reason&&!connected)?(' ('+esc(r.j.reason)+')'):'';
         body.innerHTML='<div class="brdrive-hint">'+(connected
-            ?'No folders found in your Google Drive — '
+            ?'No folders found in your Google Drive. '
             :'Connect Google with Drive access in the <b>Connections</b> tab'+reason+', then reopen this to pick a folder. Or ')+
           'paste a Google Drive <b>folder</b> link:</div>'+
           '<input type="text" id="brdrive-url" placeholder="https://drive.google.com/drive/folders/…" aria-label="Google Drive folder link" />'+
@@ -3654,7 +3654,7 @@
   function _brainConnectDrive(avatarId,link){
     var fid=_brainDriveFolderId(link);
     if(!fid){ toast("Paste a Google Drive folder link (or its ID).",true); return; }
-    var nm=avNameOf(avatarId)+" — Google Drive";
+    var nm=avNameOf(avatarId)+": Google Drive";
     toast("Connecting Drive folder…");
     return bFetch("sources").then(function(r){
       var srcs=(r.ok&&r.j.sources)||[];
@@ -3668,7 +3668,7 @@
       return ensure.then(function(id){
         return bFetch("sources/"+id+"/sync",{method:"POST"}).then(function(sr){
           if(!sr.ok) throw new Error((sr.j&&sr.j.error)||"sync failed");
-          toast(avNameOf(avatarId)+"’s Drive folder connected — syncing now. Docs appear as they index.");
+          toast(avNameOf(avatarId)+"’s Drive folder connected; syncing now. Docs appear as they index.");
           loadBrain(true);
         });
       });
@@ -3676,10 +3676,10 @@
   }
 
   // Ensure the per-avatar upload bundle exists (reuse an assigned upload
-  // source, else the "<Avatar> — documents" one, else create + assign it).
+  // source, else the "<Avatar>; documents" one, else create + assign it).
   // Hides the "source" concept: the user just picks an avatar and drops files.
   function _brainEnsureSource(avatarId){
-    var want=avNameOf(avatarId)+" — documents";
+    var want=avNameOf(avatarId)+": documents";
     return bFetch("sources").then(function(r){
       var srcs=(r.ok&&r.j.sources)||[];
       var found=srcs.filter(function(s){ return s.kind!=="drive" && (s.avatars||[]).indexOf(avatarId)>=0; })[0]
@@ -3700,11 +3700,11 @@
   // server sanitises it for storage (knowledge/storage.py::_safe_name).
   var _BR_SUPPORTED=/\.(pdf|md|markdown|txt|csv|json|html?|log)$/i;
   var _BR_SKIP_DIR=/^(node_modules|__pycache__|\.git|\.svn|venv|dist|build)$/i;
-  var _BR_MAX_FILES=100;   // uploads are one request each — keep it bounded
+  var _BR_MAX_FILES=100;   // uploads are one request each; keep it bounded
   var _BR_MAX_SCAN=500;    // stop WALKING long before we melt a big tree
 
   /** File System Access API folder pick (Chrome/Edge). showDirectoryPicker()
-   *  is a guaranteed directory chooser — no "file mode" ambiguity — so this is
+   *  is a guaranteed directory chooser, no "file mode" ambiguity, so this is
    *  the primary path. Recurses the handle into the same {file, path} items the
    *  rest of the pipeline expects, honouring the dotfile/noise-dir/scan caps.
    *  Promise-based (no async/await) to match the rest of this script. */
@@ -3767,7 +3767,7 @@
     if(_BR_SKIP_DIR.test(entry.name||"")||/^\./.test(entry.name||"")) return Promise.resolve();
     var reader=entry.createReader(), kids=[];
     return new Promise(function(resolve){
-      // readEntries() returns at most ~100 per call — keep calling until empty.
+      // readEntries() returns at most ~100 per call; keep calling until empty.
       (function next(){
         reader.readEntries(function(batch){
           if(!batch||!batch.length) return resolve(kids);
@@ -3823,7 +3823,7 @@
     var skipped=seen-keep.length, over=0;
     if(keep.length>_BR_MAX_FILES){ over=keep.length-_BR_MAX_FILES; keep=keep.slice(0,_BR_MAX_FILES); }
     if(!keep.length){
-      toast("Nothing to add — none of the "+seen+" file"+(seen===1?"":"s")+" is a PDF, Markdown, text, CSV, JSON, HTML or log file.",true);
+      toast("Nothing to add; none of the "+seen+" file"+(seen===1?"":"s")+" is a PDF, Markdown, text, CSV, JSON, HTML or log file.",true);
       return;
     }
     var notes=[];
@@ -3841,7 +3841,7 @@
       payloads.forEach(function(pl){ chain=chain.then(function(){
         return bFetch("sources/"+sid+"/documents",{method:"POST",body:JSON.stringify(pl)}).then(function(r){ if(r.ok) ok++; else fail++; }); }); });
       return chain.then(function(){
-        toast(ok+" added"+(fail?" · "+fail+" failed":"")+" — indexing in the background.",!!fail&&!ok);
+        toast(ok+" added"+(fail?" · "+fail+" failed":"")+": indexing in the background.",!!fail&&!ok);
         window._brainPollStart=0;   // restart the poll budget for this fresh upload
         setTimeout(function(){ loadBrain(true); },1500);
       });

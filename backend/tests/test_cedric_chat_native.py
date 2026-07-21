@@ -88,7 +88,7 @@ def test_llm_prompt_is_grounded_and_pii_safe(client, monkeypatch):
     def fake_complete(system, user, **kw):
         captured["system"] = system
         captured["user"] = user
-        return "On it — one action is waiting on Ben."
+        return "On it; one action is waiting on Ben."
 
     monkeypatch.setattr(settings, "brain_provider", "groq")
     import app.llm as llm_module

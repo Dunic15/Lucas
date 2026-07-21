@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Laura — AI Process Expert</title>
+  <title>Laura: AI Process Expert</title>
   <style>
     html, body { margin: 0; height: 100%; background: #0b1020; overflow: hidden;
       font: 600 14px/1.3 system-ui, sans-serif; color: #cfe0ff; }
@@ -64,7 +64,7 @@
       - the Anam SDK export/method names (createClient / streamToVideoElement /
         sendUserMessage / talk) against the current @anam-ai/js-sdk;
       - that Recall captures the <video> element's audio+video.
-    All isolated below — adjust if the vendor changes.
+    All isolated below; adjust if the vendor changes.
 
     Manually test the caption without a backend: open devtools and run
       speak("Testing the caption bar.")
@@ -104,7 +104,7 @@
 
     // ── Anam stream (the avatar's face) ─────────────────────────────
     async function joinAvatar() {
-      // Mint a FRESH Anam token at render time (so scheduled/calendar bots work —
+      // Mint a FRESH Anam token at render time (so scheduled/calendar bots work -
       // a token baked into the URL would expire before a future meeting starts).
       const tr = await fetch("/live/token", { method: "POST",
         headers: { "Content-Type": "application/json" },

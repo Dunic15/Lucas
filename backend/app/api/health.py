@@ -124,7 +124,7 @@ async def graphiti_health(request: Request, run: int = 0) -> JSONResponse:
     t_connect = round(time.monotonic() - t0, 2)
     if not ready:
         info["live"] = {"ok": False, "stage": "connect", "connect_s": t_connect,
-                        "hint": "init failed — check server logs for '[graphiti] "
+                        "hint": "init failed; check server logs for '[graphiti] "
                                 "disabled' (creds/URI/graphiti-core)"}
         return JSONResponse(info, status_code=503)
     t1 = time.monotonic()

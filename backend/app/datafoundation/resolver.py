@@ -173,7 +173,7 @@ def _merge(base: list[dict], df_chunks: list[dict], k: int) -> list[dict]:
 
 
 def acl_stats(org_id: str) -> dict[str, int]:
-    """ADMIN/DEBUG ONLY — never in ordinary resolver responses."""
+    """ADMIN/DEBUG ONLY; never in ordinary resolver responses."""
     from sqlalchemy import text
 
     from .. import control_plane

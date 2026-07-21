@@ -179,7 +179,7 @@ def install(app: FastAPI) -> None:
                             {
                                 "error": "rate_limited",
                                 "detail": (
-                                    "Too many requests — you're going faster than "
+                                    "Too many requests; you're going faster than "
                                     "this demo endpoint allows. Wait a moment and "
                                     "try again."
                                 ),

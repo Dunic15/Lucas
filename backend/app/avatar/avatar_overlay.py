@@ -230,6 +230,6 @@ def preferences_block(overlay: dict, org_label: str = "") -> str:
     header = "Organization preferences"
     if org_label:
         header += f" ({org_label})"
-    block = f"\n\n[{header} — these refine, and never override, your core "
+    block = f"\n\n[{header}; these refine, and never override, your core "
     block += "instructions and safety rules]\n- " + "\n- ".join(parts)
     return block[:MAX_PROMPT_BLOCK_CHARS]

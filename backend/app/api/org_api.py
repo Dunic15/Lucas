@@ -848,7 +848,7 @@ def apply_param_edits(org: str, action_id: str, args: dict) -> tuple[int, dict]:
 
 @router.post("/actions/{action_id}/params")
 async def org_action_params(action_id: str, request: Request) -> JSONResponse:
-    """Machine door for apply_param_edits — body {"args": {field: value}}."""
+    """Machine door for apply_param_edits; body {"args": {field: value}}."""
     err, org = await _machine_gate(request)
     if err:
         return err

@@ -71,7 +71,7 @@ _TASK_GOALS = {
 # redacted and length is capped upstream.
 _STEP_NAMED = {
     "click": ["Now I'll click {name}.", "Let's open {name}.",
-              "Here — I'll select {name}."],
+              "Here: I'll select {name}."],
     "type": ["This is where you'd fill in {name}.",
              "You'd type into {name} here."],
     "navigate": ["Opening {name}.", "Heading to {name}."],
@@ -90,13 +90,13 @@ _STEP_DEFAULT = ["Next, this part.", "And over here."]
 
 _CLOSING = {
     "cancelled": "",
-    "finished": "That's the flow — that's how you'd do it.",
-    "awaiting_approval": "That's the point where you'd confirm it — I'll leave "
+    "finished": "That's the flow; that's how you'd do it.",
+    "awaiting_approval": "That's the point where you'd confirm it. I'll leave "
                          "the actual change to you.",
-    "write_rejected_read_only": "That's where you'd make the change — I only "
+    "write_rejected_read_only": "That's where you'd make the change. I only "
                                 "show the steps, I don't change anything.",
-    "budget_exhausted": "I'll stop there — that's the gist of it.",
-    "stalled": "I'll stop there — that's the main idea.",
+    "budget_exhausted": "I'll stop there; that's the gist of it.",
+    "stalled": "I'll stop there; that's the main idea.",
     "expired": "The view timed out, but that's the path.",
     "blocked": "I can't go further there, but that's the path.",
     "disabled": "",
@@ -140,7 +140,7 @@ def run_walkthrough(org_id: str, session_id: str, *, site_label: str,
             print(f"[walk] {site_label}/{task_key} path=recipe "
                   f"outcome={outcome} steps={result.get('steps')}", flush=True)
             closing = "" if outcome == "cancelled" else (
-                "That's the flow — I'll leave the actual change to you."
+                "That's the flow: I'll leave the actual change to you."
                 if outcome == "finished" else "")
             return {"ok": outcome == "finished", "outcome": outcome,
                     "closing": closing}

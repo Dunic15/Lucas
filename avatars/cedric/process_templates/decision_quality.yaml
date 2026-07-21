@@ -1,4 +1,4 @@
-# Process template: a decision meeting MUST actually reach a good decision —
+# Process template: a decision meeting MUST actually reach a good decision -
 # options weighed, a decision made, an owner, success criteria, and a next step.
 # MeetingState tracks these silently; critical_gaps still open at wrap-up trigger
 # Laura's one polite closing intervention ("we never actually decided…").

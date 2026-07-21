@@ -138,7 +138,7 @@ def test_missing_details_ask_then_answer(client, recall_stubbed, spoken, approve
     body = _say(client, bot_id, "Cedric, please create a task called help ducho")
     assert body.get("clarifying") == ["owner", "project", "due"]
     assert approved == []  # held; nothing approved yet
-    assert spoken[-1].startswith("Sure — before I create it:")
+    assert spoken[-1].startswith("Sure, before I create it:")
     assert "who should own it" in spoken[-1] and "which project" in spoken[-1]
 
     session = store.get(bot_id)

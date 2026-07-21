@@ -64,7 +64,7 @@ def main() -> None:
 
     cv_bytes = CV_PATH.read_bytes() if CV_PATH.exists() else None
     if cv_bytes is None:
-        print(f"[attenzione] CV non trovato in {CV_PATH} — invio SENZA allegato.")
+        print(f"[attenzione] CV non trovato in {CV_PATH}; invio SENZA allegato.")
     else:
         print(f"[CV] verra' allegato: {CV_PATH.name} ({len(cv_bytes) // 1024} KB)")
 

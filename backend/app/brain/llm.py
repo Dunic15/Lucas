@@ -85,7 +85,7 @@ _groq_blocked_until = 0.0  # monotonic timestamp; 0 = breaker closed
 
 
 def _groq_breaker_open() -> bool:
-    """True while the breaker is tripped — skip Groq, use the Haiku fallback."""
+    """True while the breaker is tripped; skip Groq, use the Haiku fallback."""
     return time.monotonic() < _groq_blocked_until
 
 
@@ -245,7 +245,7 @@ def _dispatch_complete(
         return _complete_ollama(system, user, max_tokens)
     if provider == "stub":
         raise RuntimeError(
-            "BRAIN_PROVIDER=stub does not call an LLM — brain.py handles it. "
+            "BRAIN_PROVIDER=stub does not call an LLM; brain.py handles it. "
             "This path should not be reached."
         )
     raise RuntimeError(f"Unknown BRAIN_PROVIDER '{provider}'.")

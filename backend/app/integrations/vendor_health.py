@@ -85,7 +85,7 @@ def check_google_oauth() -> dict:
         return _status(
             "google-oauth",
             "crit",
-            f"refresh FALLITO — ricollegare via /oauth/google/connect ({e})",
+            f"refresh FALLITO; ricollegare via /oauth/google/connect ({e})",
         )
 
 
@@ -107,7 +107,7 @@ def check_recall() -> dict:
 
 
 def check_groq() -> dict:
-    """Fast-brain provider (Groq/Cerebras — GROQ_BASE decides which)."""
+    """Fast-brain provider (Groq/Cerebras: GROQ_BASE decides which)."""
     if not settings.groq_api_key:
         return _status("llm-fast", "off", "GROQ_API_KEY non configurata")
     try:
@@ -202,7 +202,7 @@ def slack_text(results: list[dict]) -> str:
     bad = [r for r in results if r["status"] in icons]
     if not bad:
         return ""
-    lines = ["⚠️ *Laura — controllo abbonamenti/crediti*"]
+    lines = ["⚠️ *Laura; controllo abbonamenti/crediti*"]
     for r in sorted(bad, key=lambda r: r["status"]):  # crit first
         lines.append(f"{icons[r['status']]} *{r['service']}*: {r['detail']}")
     ok_n = sum(1 for r in results if r["status"] == "ok")

@@ -530,7 +530,7 @@ def create_bot(
             if e.response.status_code == 507:
                 # Do not bubble Recall's raw response body to the product UI.
                 raise AvatarBusyError(
-                    "All avatars are busy right now — retry in a minute."
+                    "All avatars are busy right now; retry in a minute."
                 ) from e
             if e.response.status_code == 400 and idx < len(attempts) - 1:
                 last_error = e

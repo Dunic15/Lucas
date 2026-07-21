@@ -689,11 +689,11 @@ def state_summary(state: MeetingState) -> str:
         lines.append("Decisions: " + "; ".join(d["decision"] for d in state.decisions[:5]))
     if state.owners:
         lines.append(
-            "Owners: " + "; ".join(f"{o['owner']} — {o['item']}" for o in state.owners[:5])
+            "Owners: " + "; ".join(f"{o['owner']}. {o['item']}" for o in state.owners[:5])
         )
     if state.deadlines:
         lines.append(
-            "Deadlines: " + "; ".join(f"{d['when']} — {d['item']}" for d in state.deadlines[:5])
+            "Deadlines: " + "; ".join(f"{d['when']}. {d['item']}" for d in state.deadlines[:5])
         )
     if state.risks:
         lines.append("Risks: " + "; ".join(r["risk"] for r in state.risks[:5]))
@@ -712,7 +712,7 @@ def state_summary(state: MeetingState) -> str:
         if p["risks"]:
             frags.append("flagged: " + p["risks"][-1])
         if frags:
-            person_bits.append(f"{name} ({p['lines']} turns) — " + "; ".join(frags))
+            person_bits.append(f"{name} ({p['lines']} turns): " + "; ".join(frags))
     if person_bits:
         lines.append("Per person:\n  " + "\n  ".join(person_bits[:6]))
     return "\n".join(lines)

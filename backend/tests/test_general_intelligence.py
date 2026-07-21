@@ -1,4 +1,4 @@
-"""Live path: general-assistant behavior — search routing + conditional grounding."""
+"""Live path: general-assistant behavior; search routing + conditional grounding."""
 from __future__ import annotations
 
 import sys
@@ -96,14 +96,14 @@ def test_web_search_answer_empty_on_refusal_or_blank(monkeypatch):
     assert brain._web_search_answer("latest news") == ""
     monkeypatch.setattr(brain.llm, "web_search", lambda *a, **k: "")
     assert brain._web_search_answer("latest news") == ""
-    monkeypatch.setattr(brain.llm, "web_search", lambda *a, **k: "Milan is sunny, 24°C — from a quick search.")
+    monkeypatch.setattr(brain.llm, "web_search", lambda *a, **k: "Milan is sunny, 24°C; from a quick search.")
     assert "quick search" in brain._web_search_answer("weather Milan today")
 
 
 def test_interactive_path_uses_web_search_for_current_info(monkeypatch):
     _force_groq(monkeypatch)
     monkeypatch.setattr(
-        brain, "_web_search_answer", lambda q, convo="": "Milan is sunny — from a quick search."
+        brain, "_web_search_answer", lambda q, convo="": "Milan is sunny; from a quick search."
     )
     r = brain.answer_with_tools(_avatar(), "what's the weather in Milan today?")
     assert "quick search" in r["answer"]
