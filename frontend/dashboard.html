@@ -3331,12 +3331,35 @@
       '<div class="foot"><span class="cstat'+(on?" on":"")+'"><b></b>'+(on?("Connected"+acctName):"Not connected")+'</span>'+
       '<a class="btn'+(on?"":" primary")+'" style="text-decoration:none" href="/dashboard/pipedream/connect?app='+slug+'">'+(on?"Reconnect":"Connect")+'</a>'+
       (on?('<button class="btn pd-disc" data-app="'+slug+'" style="margin-left:6px">Disconnect</button>'):'')+
-      '</div></div>';
+      '</div>'+
+      // "What can I do?" — the app's pre-built Pipedream actions (connected only).
+      (on?('<div class="pd-acts" style="margin-top:8px"><button class="btn pd-acts-btn" data-actapp="'+slug+'" style="padding:5px 11px;font-size:.75rem">What can I do? ▾</button><div class="pd-acts-out" style="display:none;margin-top:7px;font-size:.76rem;color:var(--dim);line-height:1.5"></div></div>'):'')+
+      '</div>';
   }
   function _pdBind(scope){
     (scope||document).querySelectorAll('.pd-disc').forEach(function(b){
       if(b._pdb) return; b._pdb=1;
       b.addEventListener('click',function(){ _pdDisc(b.getAttribute('data-app'),b); });
+    });
+    (scope||document).querySelectorAll('.pd-acts-btn').forEach(function(b){
+      if(b._pda) return; b._pda=1;
+      b.addEventListener('click',function(){
+        var app=b.getAttribute('data-actapp');
+        var out=b.parentNode.querySelector('.pd-acts-out');
+        if(out.style.display!=='none'){ out.style.display='none'; b.textContent='What can I do? ▾'; return; }
+        out.style.display='block';
+        if(out.getAttribute('data-loaded')==='1'){ b.textContent='What can I do? ▴'; return; }
+        b.textContent='Loading…';
+        fetch('/dashboard/pipedream/actions?app='+encodeURIComponent(app),{headers:headers(),cache:'no-store'})
+          .then(function(r){ return r.json().catch(function(){return {};}); })
+          .then(function(j){
+            var acts=(j&&j.actions)||[];
+            b.textContent='What can I do? ▴'; out.setAttribute('data-loaded','1');
+            if(!acts.length){ out.innerHTML='<span style="color:var(--faint)">No pre-built actions listed for this app — I can still read it and, with a skill, act on it.</span>'; return; }
+            out.innerHTML='<div style="margin-bottom:4px;color:var(--faint)">Pipedream actions available for '+esc(app)+' (top '+Math.min(acts.length,8)+' of '+acts.length+'):</div>'+acts.slice(0,8).map(function(a){ return '• '+esc(a.name); }).join('<br>');
+          })
+          .catch(function(){ out.textContent='Could not load actions.'; b.textContent='What can I do? ▾'; out.style.display='none'; });
+      });
     });
   }
   function _pdSearch(q,after,append){

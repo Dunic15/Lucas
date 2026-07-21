@@ -483,3 +483,32 @@ def test_disconnect_specific_owned_account(client, monkeypatch):
                     json={"app": "slack", "account_id": "apn_b"},
                     headers={"sec-fetch-site": "same-origin"})
     assert r.status_code == 200 and deleted == ["apn_b"]
+
+
+# ── pre-built actions catalog (what a tool can do) ──────────────────────────
+
+def test_actions_404_when_disabled(client):
+    assert client.get("/dashboard/pipedream/actions?app=notion").status_code == 404
+
+
+def test_actions_requires_login(client, monkeypatch):
+    _enable(monkeypatch)
+    assert client.get("/dashboard/pipedream/actions?app=notion").status_code == 401
+
+
+def test_actions_lists_prebuilt(client, monkeypatch):
+    _enable(monkeypatch)
+    _login(client)
+    monkeypatch.setattr(pipedream_client, "list_actions",
+                        lambda slug, limit=25: [{"key": "notion-create-page", "name": "Create Page"},
+                                                {"key": "notion-append", "name": "Append Block"}])
+    r = client.get("/dashboard/pipedream/actions?app=notion")
+    assert r.status_code == 200
+    b = r.json()
+    assert b["app"] == "notion" and b["actions"][0]["name"] == "Create Page"
+
+
+def test_actions_rejects_bad_slug(client, monkeypatch):
+    _enable(monkeypatch)
+    _login(client)
+    assert client.get("/dashboard/pipedream/actions", params={"app": "bad slug!!"}).status_code == 400
