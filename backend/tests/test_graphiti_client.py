@@ -170,3 +170,54 @@ def test_ingest_bounds_a_hung_write(fake, monkeypatch):
 
     fake.add_episode = _hang  # type: ignore
     assert asyncio.run(graphiti_client.ingest("org_a", "something")) is False
+
+
+# ─────────────── Anthropic + local-stack wiring ───────────────
+# These exercise the REAL graphiti-core client builders when the dependency is
+# installed (it's marker-gated to Python >=3.10 in requirements); skipped
+# cleanly otherwise, so the key-free suite still passes without it.
+def test_embedding_dim_pinned_to_local_model():
+    """graphiti-core sizes its zero-vector fallback from EMBEDDING_DIM at import;
+    the module pins it to the local fastembed dimension so a text-only search
+    can't mix a 1024-dim default with our 384-dim stored vectors."""
+    import os
+    assert os.environ.get("EMBEDDING_DIM") == str(settings.graphiti_embedding_dim)
+
+
+def test_ensure_ready_reflects_client(fake):
+    """ensure_ready() is the diagnostics/smoke seam: True once a client is warm."""
+    assert asyncio.run(graphiti_client.ensure_ready()) is True
+
+
+def test_ensure_ready_false_when_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "graphiti_enabled", False)
+    assert asyncio.run(graphiti_client.ensure_ready()) is False
+
+
+def test_construct_wires_laura_stack_no_openai(monkeypatch):
+    """_construct wires Anthropic (extraction) + a LOCAL fastembed embedder + a
+    LOCAL cosine reranker — no OpenAI, no new key."""
+    pytest.importorskip("graphiti_core")
+    from app import embeddings
+
+    monkeypatch.setattr(settings, "anthropic_api_key", "unit-test-key-value")
+    monkeypatch.setattr(settings, "graphiti_uri", "neo4j://localhost:7687")
+    monkeypatch.setattr(
+        embeddings, "_embed_local", lambda texts: [[0.1] * 384 for _ in texts])
+
+    # Construct OUTSIDE a running loop so graphiti's neo4j driver doesn't
+    # schedule its background index-build task (harmless, but noisy in pytest).
+    client = graphiti_client._construct()
+    assert type(client.llm_client).__name__ == "AnthropicClient"
+
+    async def _exercise():
+        emb, rk = client.embedder, client.cross_encoder
+        assert len(await emb.create("a query")) == 384          # str
+        assert len(await emb.create(["one in a list"])) == 384  # iterable → first
+        batch = await emb.create_batch(["a", "b", "c"])
+        assert len(batch) == 3 and all(len(v) == 384 for v in batch)
+        ranked = await rk.rank("q", ["p0", "p1", "p2"])
+        assert {p for p, _ in ranked} == {"p0", "p1", "p2"}  # cosine may reorder
+        assert await rk.rank("q", []) == []
+
+    asyncio.run(_exercise())
