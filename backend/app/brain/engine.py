@@ -447,7 +447,11 @@ _ACTION_VERBS = (
     r"ping|dm|message|post(?!-)|"
     r"follow\s+up|organi[sz]e|arrange|"
     r"remind\s+(?:me|us|him|her|them)\s+to|"
-    r"(?:create|open)\s+(?:a\s+|an\s+|the\s+)?(?:ticket|task|issue|doc(?:ument)?|event|meeting|invite)|"
+    # Allow up to two qualifier words between the article and the noun so
+    # "create an Asana task", "create a new Jira ticket", "open the follow-up
+    # event" match (the app/adjective in the middle used to break capture — the
+    # #1 reason Petra never confirmed a task, live repro 2026-07-21).
+    r"(?:create|open)\s+(?:a\s+|an\s+|the\s+)?(?:[\w-]+\s+){0,2}(?:ticket|task|issue|doc(?:ument)?|event|meeting|invite)|"
     r"add\s+(?:\w+\s+)?to\s+(?:the\s+|my\s+|our\s+)?(?:calendar|slack|notion|channel))"
 )
 # Optional leading fillers (EN + IT) so "Ok, schedule…", "So send…", "Allora
@@ -467,7 +471,7 @@ _ACTION_VERBS_IT = (
     # (2026-07-10 test: "schedula il meeting" routed to the slow answer path
     # instead of instant capture), plus the "crea/aggiungi" calendar shapes.
     r"organi[sz]za|programma|schedula(?:mi)?|prepara|ricordami\s+di|"
-    r"crea\s+(?:un[oa]?\s+|il\s+|la\s+)?(?:meeting|riunione|evento|invito|task|ticket)|"
+    r"crea\s+(?:un[oa]?\s+|il\s+|la\s+)?(?:[\w']+\s+){0,2}(?:meeting|riunione|evento|invito|task|ticket)|"
     r"aggiungi\s+(?:[\w']+\s+){0,4}al\s+calendario|metti\s+in\s+calendario)"
 )
 _ACTION_INTENT = re.compile(

@@ -1529,13 +1529,17 @@ _CLARIFY_WINDOW_S = 45.0  # after this, resolve quietly with what we have
 
 
 def _clarify_line(heard: str, missing: list[str]) -> str:
+    # Always LEAD with a capture confirmation, THEN ask for the missing detail —
+    # the action is already durably captured at this point, so the owner must
+    # hear it was taken even when a detail is still needed (live repro 2026-07-21:
+    # Petra asked for details but never confirmed she'd queued anything).
     if sounds_italian(heard):
         slots = [_CLARIFY_SLOTS_IT[m] for m in missing if m in _CLARIFY_SLOTS_IT]
         joined = slots[0] if len(slots) == 1 else ", ".join(slots[:-1]) + " e " + slots[-1]
-        return f"Certo — prima di crearla: {joined}?"
+        return f"Fatto, la metto in coda per l'approvazione. Prima però: {joined}?"
     slots = [_CLARIFY_SLOTS[m] for m in missing if m in _CLARIFY_SLOTS]
     joined = slots[0] if len(slots) == 1 else ", ".join(slots[:-1]) + ", and " + slots[-1]
-    return f"Sure — before I create it: {joined}?"
+    return f"Got it — I'll queue that for your approval. First though: {joined}?"
 
 # Listening cues spoken WHILE a human is mid-monologue (backchanneling, the
 # thing that makes a listener feel present). Two syllables max — anything
@@ -1568,6 +1572,27 @@ def _avatar_voice(session: "store.Session") -> str:
 
 
 
+def _human_count(session: "store.Session", avatar: avatars.Avatar) -> int:
+    """Humans in the room, EXCLUDING the avatar's own Recall bot.
+
+    The bot joins Meet/Zoom under ``avatar.name`` and Recall's participant-join
+    payload carries no ``is_bot`` flag, so ``resolve_participant`` classifies it
+    as a human (names are deliberately never identity — store.py). ``roster()``
+    then counts the bot as a second person, so a genuine 1:1 (one human + the
+    bot) reads as 2 and every "solo" relaxation below stays off — the avatar
+    only answered when named (the fluidity bug 2026-07-21; PR #341 added the
+    relaxations but never fixed the count). Subtract at most ONE bot-named entry:
+    a real 2-human call still reads as ≥2, so multiparty deference is untouched;
+    the only edge (a real human literally named like the avatar) merely makes the
+    room slightly more fluid, still gated by deference + cooldown + SKIP."""
+    roster = session.roster(avatar.name)
+    bot = (avatar.name or "").strip().lower()
+    n = len(roster)
+    if bot and any((r or "").strip().lower() == bot for r in roster):
+        n -= 1
+    return max(n, 0)
+
+
 def _wake_required(avatar: avatars.Avatar,
                    session: "store.Session | None" = None) -> bool:
     """Whether THIS avatar speaks only when addressed by name — the per-avatar
@@ -1590,7 +1615,7 @@ def _wake_required(avatar: avatars.Avatar,
     # is unambiguously for her, so no wake word is needed — the conversation
     # stays fluid. Groups keep name-required (unprompted speech there risks
     # interrupting). Deference + cooldown still gate every reply.
-    if session is not None and len(session.roster(avatar.name)) <= 1:
+    if session is not None and _human_count(session, avatar) <= 1:
         return False
     return base
 
@@ -2046,7 +2071,8 @@ def _in_opening_grace(session: store.Session) -> bool:
     # PERMANENT silent guest (Petra answered nothing for a whole solo meeting),
     # making the #306 fluid mode unreachable in exactly the case it exists for.
     try:
-        if len(session.roster(avatar_resolver.for_session(session).name)) <= 1:
+        _av = avatar_resolver.for_session(session)
+        if _human_count(session, _av) <= 1:
             return False
     except Exception:  # noqa: BLE001 — resolution trouble: keep the strict gate
         pass
@@ -3545,7 +3571,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # mid-meeting restart, when it reseeds from transcript speakers).
         if (
             not leave_now
-            and len(session.roster(avatar.name)) <= 1
+            and _human_count(session, avatar) <= 1
             and plausible_leave_followup(text)
             and detect_leave_command(text)
         ):
@@ -3669,7 +3695,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # conversation stays fluid. In a group she still needs to be addressed
     # (mirrors the leave-command 1:1 relaxation). The utterance is `question`
     # when named, else the whole line.
-    _browse_solo = len(session.roster(avatar.name)) <= 1
+    _browse_solo = _human_count(session, avatar) <= 1
     if (called or _browse_solo) and browser_meeting.trigger_enabled():
         _ask = question if called else text
         if detect_browse_dismiss(_ask):
@@ -3994,7 +4020,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # ask fell to the summarizer as a mere "goal"). Groups keep name-required
     # capture: an unaddressed "someone should send X" stays the summarizer's
     # job at finalize.
-    if ((called or len(session.roster(avatar.name)) <= 1)
+    if ((called or _human_count(session, avatar) <= 1)
             and wants_action_capture(question)
             and not wants_web_search(question)
             # A 'show me Asana / give me a tour' ask is a LIVE thing the
