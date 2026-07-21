@@ -88,6 +88,34 @@ def _avatar_asana_enabled(org_id: str, avatar_id: str) -> bool:
         return False
 
 
+def _avatar_pd_apps(avatar_id: str) -> dict:
+    """The generic Pipedream apps this avatar may use, with each app's
+    pre-built action catalog: {slug: [{key, name}]} — the offer type_actions
+    presents to the model. An app qualifies only when the OWNER explicitly
+    toggled it ON for this avatar (generic apps are opt-in; the approve door
+    enforces the same rule via executor.capability_blocked). Capped to a few
+    apps so the typing prompt stays small. Sync — call via threadpool.
+    Best-effort: {} on any failure, never breaks finalize."""
+    try:
+        from .. import pipedream_client, pipedream_executor  # lazy
+
+        if not pipedream_executor.enabled():
+            return {}
+        caps = store.get_avatar_capabilities(avatar_id)
+        slugs = sorted(
+            k for k, v in caps.items()
+            if v and k not in ("google", "slack", "asana")
+        )[:4]
+        out: dict = {}
+        for slug in slugs:
+            catalog = pipedream_client.list_actions(slug, limit=15)
+            if catalog:
+                out[slug] = catalog
+        return out
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _bot_meeting_key(bot: dict) -> str:
     """Platform-aware meeting_key for a Recall bot record, to compare for
     EQUALITY against ledger.meeting_key(our_url) — not a Meet-only substring.
@@ -1012,10 +1040,14 @@ async def _finalize_session_locked(
             allow_asana = await run_in_threadpool(
                 _avatar_asana_enabled, session.org_id, session.avatar_id
             )
+            pd_apps = await run_in_threadpool(
+                _avatar_pd_apps, session.avatar_id
+            )
             summary_brief = artifact.get("summary") or ""
             artifact["actions"] = await run_in_threadpool(
                 lambda: type_actions(
-                    artifact["actions"], summary_brief, allow_asana=allow_asana
+                    artifact["actions"], summary_brief,
+                    allow_asana=allow_asana, pd_apps=pd_apps,
                 )
             )
             artifact["checklist"] = artifact["actions"]

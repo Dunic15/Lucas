@@ -292,7 +292,7 @@ def _execute_route(
             return None, "approved", False
         family = executor.capability_family(exec_action.get("type"))
         caps = store.get_avatar_capabilities(acting_avatar)
-        if caps.get(family) is False:
+        if executor.capability_blocked(caps, exec_action.get("type")):
             return None, "approved", True
         from .. import avatar_resolver
 
@@ -335,7 +335,7 @@ def _execute_route(
     # overlay can remove a capability, never grant one; flag off ⇒ allowed).
     family = executor.capability_family(exec_action.get("type"))
     caps = store.get_avatar_capabilities(acting_avatar)
-    if caps.get(family) is False:
+    if executor.capability_blocked(caps, exec_action.get("type")):
         return None, "approved", True
     from .. import avatar_resolver
 

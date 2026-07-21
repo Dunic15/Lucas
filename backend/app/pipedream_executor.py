@@ -128,6 +128,102 @@ _MAPPER: dict[str, tuple[str, Builder, ReceiptFn]] = {
     "asana.add_comment": ("asana", _build_asana_comment, _asana_receipt),
 }
 
+# ── generic pre-built actions (pd.<app>.run) ────────────────────────────────
+# The long-tail plane: any Pipedream app the OWNER toggled on for an avatar can
+# execute that app's own PRE-BUILT actions (run_action), instead of a hand-kept
+# per-app request builder. The trade-off vs the deterministic mappers above:
+# the model fills the action's props from meeting context, so the SAFETY moves
+# to (a) the approval door — the card shows the exact action + props before a
+# human clicks — and (b) the schema gate below: props are validated against the
+# component's own configurable_props (unknown props dropped, required props
+# checked, the auth prop NEVER model-writable) before anything runs.
+import re as _re
+
+_GENERIC_TYPE_RE = _re.compile(r"^pd\.([a-z0-9_][a-z0-9_-]{0,59})\.run$")
+
+
+def generic_app(action_type: str | None) -> str:
+    """The app slug of a generic ``pd.<app>.run`` action type, or ''."""
+    m = _GENERIC_TYPE_RE.match(str(action_type or "").strip())
+    return m.group(1) if m else ""
+
+
+def _execute_generic(org: str, action_id: str, action_type: str,
+                     app: str, args: dict) -> dict:
+    """Run one pre-built Pipedream action with schema-gated props."""
+    action_key = str(args.get("action_key") or "").strip()
+    props = args.get("props") if isinstance(args.get("props"), dict) else {}
+    if not action_key:
+        return _settle(action_id, org, False, action_type, "",
+                       "missing the Pipedream action key")
+    # The component key embeds its app (github-create-issue) — a key from a
+    # DIFFERENT app than the typed family would dodge the capability gate.
+    if not action_key.startswith(app.replace("_", "-")) and not action_key.startswith(app):
+        return _settle(action_id, org, False, action_type, "",
+                       f"action {action_key!r} doesn't belong to {app}")
+
+    try:
+        accounts = pipedream_client.list_accounts(org, app=app)
+    except pipedream_client.PipedreamError as exc:
+        return _settle(action_id, org, False, action_type, "",
+                       f"couldn't reach Pipedream ({type(exc).__name__})")
+    account = next((a for a in accounts if a.get("id") and a.get("healthy", True)), None)
+    if account is None:
+        account = next((a for a in accounts if a.get("id")), None)
+    if account is None:
+        return _settle(action_id, org, False, action_type, "",
+                       f"{app} isn't connected in Pipedream")
+    account_id = str(account["id"])
+
+    component = pipedream_client.get_component(action_key)
+    schema = component.get("configurable_props") or []
+    if not schema:
+        # No schema ⇒ we can't validate what would run. Refuse rather than
+        # fire a write we can't describe on the approval card.
+        return _settle(action_id, org, False, action_type, "",
+                       f"couldn't load the definition of {action_key}")
+
+    auth_prop = ""
+    allowed: dict[str, dict] = {}
+    for p in schema:
+        if not isinstance(p, dict) or not p.get("name"):
+            continue
+        name = str(p["name"])
+        if str(p.get("type") or "") == "app":
+            # First app prop is the account slot. (Pre-built actions have one.)
+            auth_prop = auth_prop or name
+            continue
+        allowed[name] = p
+    if not auth_prop:
+        return _settle(action_id, org, False, action_type, "",
+                       f"{action_key} has no account slot to fill")
+
+    # Schema gate: keep only props the component declares; the model can never
+    # smuggle an extra field (least of all the auth prop) into the run.
+    configured: dict = {
+        name: value for name, value in props.items()
+        if name in allowed and name != auth_prop
+    }
+    missing = [
+        name for name, p in allowed.items()
+        if not p.get("optional") and not p.get("hidden")
+        and configured.get(name) in (None, "", [], {})
+    ]
+    if missing:
+        return _settle(action_id, org, False, action_type, "",
+                       "missing required fields: " + ", ".join(sorted(missing)[:6]))
+    configured[auth_prop] = {"authProvisionId": account_id}
+
+    try:
+        result = pipedream_client.run_action(org, action_key, configured)
+    except pipedream_client.PipedreamError as exc:
+        return _settle(action_id, org, False, action_type, "",
+                       f"{app} action failed ({type(exc).__name__})")
+    exports = result.get("exports") if isinstance(result.get("exports"), dict) else {}
+    ref = str(exports.get("$summary") or "").strip()[:300]
+    kind = f"{app} · {component.get('name') or action_key}"[:120]
+    return _settle(action_id, org, True, action_type, ref, "", kind=kind)
+
 
 # ── public surface (mirrors executor.py) ────────────────────────────────────
 
@@ -186,8 +282,12 @@ def _type_of(action: dict | None) -> str:
 
 
 def handles(action: dict | None) -> bool:
-    """True when this approved action executes through the Pipedream proxy."""
-    return enabled() and _type_of(action) in _MAPPER
+    """True when this approved action executes through the Pipedream proxy —
+    a hand-mapped type (Asana) or a generic pre-built one (pd.<app>.run)."""
+    if not enabled():
+        return False
+    t = _type_of(action)
+    return t in _MAPPER or bool(generic_app(t))
 
 
 def _args_of(action: dict | None) -> dict:
@@ -211,12 +311,15 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
     if not enabled():
         return {"ok": False, "skipped": "pipedream_executor off"}
     action_type = _type_of(action)
-    spec = _MAPPER.get(action_type)
-    if spec is None:
-        return {"ok": False, "skipped": f"unhandled action type {action_type!r}"}
     org = str(org_id or "").strip()
     if not org:
         return {"ok": False, "error": "missing org"}
+    app = generic_app(action_type)
+    if app and action_type not in _MAPPER:
+        return _execute_generic(org, action_id, action_type, app, _args_of(action))
+    spec = _MAPPER.get(action_type)
+    if spec is None:
+        return {"ok": False, "skipped": f"unhandled action type {action_type!r}"}
 
     app_slug, builder, receipt_fn = spec
     args = _args_of(action)

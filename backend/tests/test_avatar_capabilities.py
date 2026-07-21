@@ -89,9 +89,12 @@ def test_set_get_capability_roundtrip():
 
 
 def test_set_capability_rejects_junk():
-    assert not store.set_avatar_capability("laura", "notion", True)
+    # Slug-shaped keys are ACCEPTED (generic Pipedream apps are per-avatar
+    # toggles under their name_slug); junk shapes are still rejected.
+    assert store.set_avatar_capability("laura", "notion", True)
+    assert not store.set_avatar_capability("laura", "Not A Slug!", True)
     assert not store.set_avatar_capability("", "google", True)
-    assert store.get_avatar_capabilities("laura") == {}
+    assert store.get_avatar_capabilities("laura") == {"notion": True}
 
 
 def test_capability_default_on_when_connected():
@@ -126,10 +129,16 @@ def test_capability_endpoint_owner_sets_flag(client):
 
 def test_capability_endpoint_rejects_unknown_capability(client):
     _login(client)
+    # Junk-shaped keys are rejected; slug-shaped app keys are accepted (the
+    # dashboard only offers slugs the org actually connected via Pipedream).
     r = client.post("/dashboard/avatar/laura/capability",
-                    json={"capability": "dropbox", "enabled": True})
+                    json={"capability": "Not A Slug!", "enabled": True})
     assert r.status_code == 400
     assert store.get_avatar_capabilities("laura") == {}
+    r = client.post("/dashboard/avatar/laura/capability",
+                    json={"capability": "dropbox", "enabled": True})
+    assert r.status_code == 200
+    assert store.get_avatar_capabilities("laura") == {"dropbox": True}
 
 
 def test_capability_endpoint_unknown_avatar_404(client):
