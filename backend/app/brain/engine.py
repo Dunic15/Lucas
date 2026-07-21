@@ -1798,8 +1798,20 @@ def _llm_type_actions(
         suffix = (f" (owner: {owner})" if owner and owner.upper() != "UNASSIGNED" else "")
         suffix += f" (deadline: {deadline})" if deadline else ""
         lines.append(f"[{i}] {str(a.get('item') or '')}{suffix}")
+    # Per-integration skill (lazy): a markdown playbook for the app, appended
+    # ONLY when this meeting may use it — zero cost for every other meeting.
+    # See app/integration_skills.py; today only Asana ships one.
+    _asana_skill = ""
+    if allow_asana:
+        from .. import integration_skills
+
+        body = integration_skills.skill_for("asana")
+        if body:
+            _asana_skill = f"\n\nIntegration guidance (asana):\n{body}"
     raw = llm.complete(
-        TYPED_ACTION_SYSTEM + (TYPED_ACTION_ASANA if allow_asana else ""),
+        TYPED_ACTION_SYSTEM
+        + (TYPED_ACTION_ASANA if allow_asana else "")
+        + _asana_skill,
         (
             f"TODAY: {_time.strftime('%Y-%m-%d')}\n\n"
             + (f"Meeting summary (context only):\n{brief}\n\n" if brief.strip() else "")
