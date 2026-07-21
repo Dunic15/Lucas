@@ -337,6 +337,20 @@ async def google_callback(request: Request) -> RedirectResponse:
         # keys the user on it, so an email change never forks the identity.
         google_sub=str(claims.get("sub") or ""),
     )
+    # Product analytics: signup vs returning login, counted in the same
+    # PostHog project as the marketing site → one funnel. Fire-and-forget,
+    # ids + email DOMAIN only (never the address) — and a no-op without a key.
+    try:
+        from ..integrations import product_analytics
+
+        product_analytics.capture(
+            "user_signed_up" if user.get("created") else "user_logged_in",
+            str(user.get("user_id") or ""),
+            {"org_id": str(user.get("org_id") or ""),
+             "email_domain": claims["email"].rsplit("@", 1)[-1]},
+        )
+    except Exception:  # noqa: BLE001 — analytics never break a login
+        pass
     # Comped access (BILLING_COMP_EMAILS): waive metering for this user's org
     # at every login — idempotent, and re-granting here means the comp follows
     # the user through org re-resolutions (the #251 class) automatically.
