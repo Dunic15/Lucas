@@ -121,6 +121,13 @@ and English. The Recall region is EU: `RECALL_API_BASE=https://eu-central-1.reca
   task is filed straight into the team's Asana, with the task link as the
   receipt — behind the same approve door and exactly-once guarantee as
   everything else.
+- **Per-avatar app switches:** every Pipedream-connected app (GitHub, Notion,
+  Linear, …) appears as an on/off switch on each avatar's card, right beside
+  the avatar. Flipping an app ON lets that avatar propose that app's own
+  pre-built actions from a meeting — say, opening a GitHub issue that was
+  agreed on a call. These apps are strictly opt-in per avatar (default OFF),
+  the proposed fields are validated against the action's own schema, and
+  nothing runs until a human approves the exact action on the card.
 - **One action, every surface:** each captured action is a single canonical
   record. If its details are incomplete, approving it asks for the exact
   missing fields (which can be filled right there) instead of silently doing

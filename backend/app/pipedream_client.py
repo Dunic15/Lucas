@@ -374,6 +374,46 @@ def list_actions(app_slug: str, *, limit: int = 25) -> list[dict]:
     return out
 
 
+# One component's full definition — the props schema the generic executor
+# validates against before a run. Keyed by component key; cached per process
+# (component definitions are versioned + stable within a deploy's lifetime).
+_component_cache: dict[str, dict] = {}
+
+
+def get_component(component_key: str) -> dict:
+    """One pre-built component's definition: {key, name, configurable_props}
+    (GET /connect/{proj}/components/{key}). Cached per process. Best effort:
+    {} on failure or malformed key — callers treat that as "schema unknown"."""
+    key = str(component_key or "").strip()
+    # Component keys are app_slug-action_name, e.g. "github-create-issue".
+    if not key or not all(c.isalnum() or c in "_-" for c in key):
+        return {}
+    with _actions_lock:
+        hit = _component_cache.get(key)
+        if hit is not None:
+            return hit
+    out: dict = {}
+    try:
+        resp = _authed_request("GET", _project_url(f"components/{key}"))
+        if resp.status_code < 400:
+            data = (resp.json() or {}).get("data") or {}
+            if isinstance(data, dict) and data.get("key"):
+                props = data.get("configurable_props")
+                out = {
+                    "key": str(data["key"]),
+                    "name": str(data.get("name") or data["key"]),
+                    "configurable_props": props if isinstance(props, list) else [],
+                }
+    except PipedreamError:
+        out = {}
+    with _actions_lock:
+        # Don't cache a failed lookup — a transient outage would otherwise pin
+        # "unknown component" for the process lifetime.
+        if out:
+            _component_cache[key] = out
+    return out
+
+
 # ── Connect Proxy — run any authenticated REST call against a connected app ──
 # Pipedream injects the account's credentials server-side; we send the target
 # app's own API request. This is the generic execution path (mirrors Cedric's

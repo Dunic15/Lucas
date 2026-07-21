@@ -28,7 +28,14 @@ NATIVE_ACTION_TYPES = native_runtime.action_types()
 
 
 def capability_family(action_type: str | None) -> str:
-    """Per-avatar capability family governing this action type."""
+    """Per-avatar capability family governing this action type. A generic
+    Pipedream action (``pd.<app>.run``) is governed by its APP's own toggle —
+    never lumped under google."""
+    from .. import pipedream_executor  # lazy: keep module load order decoupled
+
+    app = pipedream_executor.generic_app(action_type)
+    if app:
+        return app
     return native_runtime.family_for(action_type) or "google"
 
 
@@ -42,6 +49,16 @@ def from_typed(typed: dict | None) -> dict | None:
     """
     normalized = native_runtime.from_typed(typed)
     if normalized is None:
+        # Generic Pipedream actions (pd.<app>.run) aren't native, but they ARE
+        # executable when the Pipedream plane is on — pass them through so the
+        # approve doors and route_for_typed see one consistent shape. With the
+        # plane OFF they stay None → cedric, byte-identical to before.
+        from .. import pipedream_executor
+
+        t = str((typed or {}).get("type") or "").strip()
+        if pipedream_executor.generic_app(t) and pipedream_executor.enabled():
+            args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
+            return {"type": t, "args": dict(args)}
         return None
     action_type = normalized["type"]
     args = normalized["args"]
@@ -59,6 +76,21 @@ def from_typed(typed: dict | None) -> dict | None:
 def enabled() -> bool:
     """Whether the Laura-native execution plane is active."""
     return bool(settings.native_executor)
+
+
+def capability_blocked(caps: dict | None, action_type: str | None) -> bool:
+    """ONE policy for every approve door: does this avatar's toggle set block
+    this action? Native families (google/slack/asana) keep default-ON semantics
+    — blocked only on an explicit OFF. Generic Pipedream apps (pd.<app>.run)
+    are explicit OPT-IN — blocked unless the owner turned that app ON for this
+    avatar (emission is gated the same way; this is the defense in depth)."""
+    from .. import pipedream_executor  # lazy: keep module load order decoupled
+
+    caps = caps or {}
+    family = capability_family(action_type)
+    if pipedream_executor.generic_app(action_type):
+        return caps.get(family) is not True
+    return caps.get(family) is False
 
 
 def route_for_typed(typed: dict | None, org_id: str = "") -> str:

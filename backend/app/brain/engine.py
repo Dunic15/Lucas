@@ -1775,6 +1775,41 @@ asana.create_task for every OTHER item that is a discrete piece of work \
 someone agreed to do. Do not create tasks for vague remarks, questions, or \
 things already done."""
 
+# Regex for the generic Pipedream typed-action family (pd.<app>.run) — kept in
+# sync with pipedream_executor._GENERIC_TYPE_RE (the executor re-validates).
+_PD_TYPE_RE = re.compile(r"^pd\.([a-z0-9_][a-z0-9_-]{0,59})\.run$")
+
+
+def _pd_typed_prompt(pd_apps: dict | None) -> str:
+    """Prompt section offering the avatar's ENABLED Pipedream apps and their
+    pre-built actions. Empty when none — zero cost for every other meeting."""
+    if not pd_apps:
+        return ""
+    lines = []
+    for slug, actions in pd_apps.items():
+        keys = "; ".join(
+            f"{a['key']}" + (f" ({a['name']})" if a.get("name") else "")
+            for a in (actions or [])[:12]
+        )
+        if keys:
+            lines.append(f'- "{slug}": {keys}')
+    if not lines:
+        return ""
+    return (
+        "\n\nThis avatar may also use these connected apps (pre-built actions "
+        "listed as key (name)):\n" + "\n".join(lines) + "\n"
+        'For an item that CLEARLY calls for one of these apps, emit '
+        '{"type": "pd.<app>.run", "args": {"action_key": "<a listed key>", '
+        '"props": {<the fields that action needs>}, '
+        '"summary": "<one plain-language line: what will happen where>"}}.\n'
+        "- Use ONLY the apps and action keys listed above.\n"
+        "- Draw prop values from the item's source text or the meeting summary "
+        "only — NEVER invent identifiers (repository names, page/database IDs, "
+        "channel names) that don't literally appear there. If a needed "
+        "identifier is missing, leave the item untyped.\n"
+        "- Prefer calendar/email/asana types when an item maps to those."
+    )
+
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 _ISO_DT_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?")
 _EMAIL_INTENT_RE = re.compile(
@@ -1829,7 +1864,8 @@ def _action_source(action: dict, brief: str = "") -> str:
     return "\n".join(p for p in parts if p)
 
 
-def _sanitize_typed(typed: object, action: dict, brief: str = "") -> dict | None:
+def _sanitize_typed(typed: object, action: dict, brief: str = "",
+                    pd_apps: dict | None = None) -> dict | None:
     """Validate + normalise one model/stub-proposed typed spec against its
     action, or None when it doesn't cleanly map. Enforces grounded recipients
     and ISO-shaped times so a hallucinated field can never reach the executor."""
@@ -1838,6 +1874,31 @@ def _sanitize_typed(typed: object, action: dict, brief: str = "") -> dict | None
     t = str(typed.get("type") or "").strip()
     args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
     source = _action_source(action, brief)
+    pd_match = _PD_TYPE_RE.match(t)
+    if pd_match:
+        # Generic Pipedream spec: only for an app this meeting OFFERED, only
+        # with an action key from that app's presented catalog. Props are
+        # size-capped and JSON-scalar only here; the executor's schema gate
+        # (configurable_props) does the authoritative field validation.
+        catalog = (pd_apps or {}).get(pd_match.group(1)) or []
+        keys = {str(c.get("key")) for c in catalog if isinstance(c, dict)}
+        action_key = str(args.get("action_key") or "").strip()
+        if not action_key or action_key not in keys:
+            return None
+        raw_props = args.get("props") if isinstance(args.get("props"), dict) else {}
+        props: dict = {}
+        for k, v in list(raw_props.items())[:20]:
+            if not isinstance(k, str) or not k or len(k) > 60:
+                continue
+            if isinstance(v, str):
+                props[k] = v[:2000]
+            elif isinstance(v, (int, float, bool)):
+                props[k] = v
+            elif isinstance(v, list):
+                props[k] = [str(x)[:300] for x in v[:20]]
+        summary = str(args.get("summary") or action.get("item") or "").strip()[:200]
+        return {"type": t, "args": {"action_key": action_key, "props": props,
+                                    "summary": summary}}
     if t == EMAIL_SEND:
         to = _grounded_emails(args.get("to"), source)
         if not to:
@@ -1945,7 +2006,7 @@ def _stub_type_actions(
 
 def _llm_type_actions(
     indexed: list[tuple[int, dict]], brief: str, provider: str,
-    *, allow_asana: bool = False,
+    *, allow_asana: bool = False, pd_apps: dict | None = None,
 ) -> dict[int, dict]:
     """One post_provider() call to classify the actions; every returned spec is
     re-validated by _sanitize_typed (grounded recipients, ISO times) before it
@@ -1969,10 +2030,20 @@ def _llm_type_actions(
         body = integration_skills.skill_for("asana")
         if body:
             _asana_skill = f"\n\nIntegration guidance (asana):\n{body}"
+    # Per-app integration skills for the offered Pipedream apps (lazy, tiny).
+    _pd_skills = ""
+    for _slug in (pd_apps or {}):
+        from .. import integration_skills as _iskills
+
+        _body = _iskills.skill_for(_slug)
+        if _body:
+            _pd_skills += f"\n\nIntegration guidance ({_slug}):\n{_body}"
     raw = llm.complete(
         TYPED_ACTION_SYSTEM
         + (TYPED_ACTION_ASANA if allow_asana else "")
-        + _asana_skill,
+        + _pd_typed_prompt(pd_apps)
+        + _asana_skill
+        + _pd_skills,
         (
             f"TODAY: {_time.strftime('%Y-%m-%d')}\n\n"
             + (f"Meeting summary (context only):\n{brief}\n\n" if brief.strip() else "")
@@ -1995,7 +2066,7 @@ def _llm_type_actions(
             continue
         if i not in by_idx:
             continue
-        clean = _sanitize_typed(spec, by_idx[i], brief)
+        clean = _sanitize_typed(spec, by_idx[i], brief, pd_apps=pd_apps)
         if clean:
             out[i] = clean
     return out
@@ -2003,7 +2074,7 @@ def _llm_type_actions(
 
 def type_actions(
     actions: list, brief: str = "", *, provider: str | None = None,
-    allow_asana: bool = False,
+    allow_asana: bool = False, pd_apps: dict | None = None,
 ) -> list:
     """Annotate each action with a ``typed`` spec where it clearly maps to a
     native-executor action (calendar.create_event / email.send, plus
@@ -2026,7 +2097,9 @@ def type_actions(
         mapping = (
             _stub_type_actions(indexed, brief, allow_asana=allow_asana)
             if prov == "stub"
-            else _llm_type_actions(indexed, brief, prov, allow_asana=allow_asana)
+            else _llm_type_actions(
+                indexed, brief, prov, allow_asana=allow_asana, pd_apps=pd_apps
+            )
         )
     except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
         print(f"[type_actions] skipped ({type(e).__name__})", flush=True)

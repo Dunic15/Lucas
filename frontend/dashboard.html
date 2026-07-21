@@ -545,11 +545,18 @@
   .foot{margin-top:20px;font-family:var(--mono);font-size:.64rem;letter-spacing:.06em;color:var(--faint);line-height:1.7;}
 
   /* ── Avatars: game-like chooser (stage left, roster right; stacks on mobile) ── */
-  .avpage{display:grid;grid-template-columns:1.5fr 1fr;gap:16px;align-items:stretch;margin-bottom:16px;}
+  /* Simplified layout (owner 2026-07-21): a SMALL stage with the Capabilities
+     panel right beside it — the video is a portrait, not the hero. */
+  .avpage{display:grid;grid-template-columns:minmax(240px,340px) 1fr;gap:16px;align-items:stretch;margin-bottom:16px;}
   .avpage>*{min-width:0;}
   @media (max-width:900px){ .avpage{grid-template-columns:1fr;} }
+  .avside{display:flex;flex-direction:column;gap:0;min-width:0;}
+  .avside .caps{margin-top:0;height:100%;}
+  /* Horizontal roster strip above the stage. */
+  .avstrip{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:12px;scrollbar-width:thin;}
+  .avstrip .aitem{flex:0 0 auto;width:auto;min-width:190px;}
   .stage{position:relative;border-radius:18px;border:1px solid var(--line-soft);overflow:hidden;
-    min-height:440px;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:var(--glass);
+    min-height:240px;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:var(--glass);
     background:
       radial-gradient(60% 55% at 30% 18%, rgba(77,124,254,.16), transparent 65%),
       radial-gradient(50% 45% at 78% 30%, rgba(255,180,154,.12), transparent 70%),
@@ -558,7 +565,7 @@
       radial-gradient(60% 55% at 30% 18%, rgba(77,124,254,.10), transparent 65%),
       radial-gradient(50% 45% at 78% 30%, rgba(255,180,154,.12), transparent 70%),
       linear-gradient(180deg, #FFFFFF, #EEF1F6);}
-  @media (max-width:900px){ .stage{min-height:340px;} }
+  @media (max-width:900px){ .stage{min-height:220px;} }
   /* Pedestal: a soft lit ellipse the avatar "stands" on. */
   .stage .pedestal{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);
     width:min(62%,320px);height:30px;border-radius:50%;pointer-events:none;
@@ -823,7 +830,10 @@
          AvatarPreview adapter so the same-origin 3D iframe can attach later
          without touching this page's structure. -->
     <section class="view" id="view-avatars" hidden>
-      <div class="head"><div><h1>Avatars</h1><div class="sub">Your AI colleagues — pick one, see who they are, send them to a meeting</div></div></div>
+      <div class="head"><div><h1>Avatars</h1><div class="sub">Your AI colleagues — pick one, see what they can do, send them to a meeting</div></div></div>
+      <!-- Compact horizontal roster strip (pick an avatar). -->
+      <div class="avstrip" id="av-roster" role="listbox" aria-label="Choose an avatar"></div>
+      <!-- Small avatar stage on the LEFT, its Capabilities right NEXT to it. -->
       <div class="avpage">
         <div class="stage" id="av-stage">
           <div class="stagelight" aria-hidden="true"></div>
@@ -831,10 +841,7 @@
           <div class="preview" id="av-preview"></div>
           <div class="stagemeta" id="av-stagemeta"></div>
         </div>
-        <div>
-          <div class="lbl" id="av-roster-label">Choose an avatar</div>
-          <div class="avsel" id="av-roster" role="listbox" aria-labelledby="av-roster-label"></div>
-        </div>
+        <aside class="avside" id="av-caps"></aside>
       </div>
       <div id="av-detail"></div>
       <div class="foot">LAURA AND CEDRIC SHARE ONE ACCOUNT BALANCE. CHOOSE PER MEETING.</div>
@@ -2989,26 +2996,34 @@
       '<div class="savail">'+(ready3d?'<span class="stchip">3D model ready</span>':'')+
       (av.silent?'<span class="pill silent">silent notetaker</span>':'')+'</div>';
   }
-  function avatarDetailHTML(a){
-    // Same content and control wiring as the old avatar card (#220/#221
-    // endpoints + data attributes unchanged), reorganized into plain sections.
-    var capHtml='<div class="caps"><div class="sm-h">Capabilities</div><div class="cap-list">'+
+  // Capabilities panel — rendered NEXT TO the stage (#av-caps), not below it.
+  // Same #220/#221 endpoints + data attributes; only the placement changed.
+  function avatarCapsHTML(a){
+    // Generic Pipedream apps the org connected (beyond the native trio) —
+    // per-avatar OPT-IN switches, same endpoint as the native toggles.
+    var pdRows=Object.keys(a.capabilities_toggle||{}).filter(function(k){
+      return (a.capabilities_toggle[k]||{}).pd;
+    }).sort().map(function(k){
+      var nm=(a.capabilities_toggle[k].name||k);
+      return capRowHTML(a,k,nm,esc(nm.charAt(0).toUpperCase()));
+    }).join("");
+    return '<div class="caps"><div class="sm-h">Capabilities</div><div class="cap-list">'+
         capRowHTML(a,"slack","Slack agent",LOGO_SLACK)+capRowHTML(a,"google","Google",LOGO_GOOGLE)+
-        (a.id==="petra"?capRowHTML(a,"asana","Asana",LOGO_ASANA):"")+'</div>'+
+        (a.id==="petra"?capRowHTML(a,"asana","Asana",LOGO_ASANA):"")+pdRows+'</div>'+
         '<div class="modelpick sm"><div class="sm-h">AI model</div><div class="mp-row">'+
           '<button class="mp-opt'+(a.brain==="gemini"?" on":"")+'" data-brain-set="gemini" data-brain-av="'+esc(a.id)+'">Gemini</button>'+
           '<button class="mp-opt'+(a.brain==="cerebras"?" on":"")+'" data-brain-set="cerebras" data-brain-av="'+esc(a.id)+'">Cerebras</button></div>'+
         '</div></div>';
+  }
+  function avatarDetailHTML(a){
+    // Simplified (owner 2026-07-21): one compact identity card + ONE optional
+    // "More" accordion. Capabilities moved beside the stage (avatarCapsHTML).
     var topics=(a.knowledge_topics||[]).map(function(t){return '<span class="chip">'+esc(t)+'</span>';}).join("");
-    var tmpls=(a.process_templates||[]).map(function(t){return '<span class="chip tmpl">'+esc(t)+'</span>';}).join("");
-    var caps=(a.capabilities||[]).map(function(c){return '<div class="c"><span class="ic">✓</span><span>'+esc(c)+'</span></div>';}).join("");
     var rend=a.renderer||{};
-    return '<div class="avd"><div class="avd-cols">'+
-        '<div class="avd-left">'+
+    return '<div class="avd">'+
         '<div class="idn">'+avatarBadge(a.id,a.name)+
         '<div style="min-width:0"><div class="nm">'+esc(a.name)+' <span class="pill '+(a.live_now?"live":"idle")+'">'+(a.live_now?"in call":"idle")+'</span></div>'+
         '<div class="ro">'+esc(a.role)+' · '+a.meetings_total+' meeting'+(a.meetings_total===1?"":"s")+(a.last_meeting_at?' · last '+fmtWhen(a.last_meeting_at):'')+'</div></div></div>'+
-        (a.persona?'<div class="persona">'+esc(a.persona)+(a.persona.length>=220?"…":"")+'</div>':'')+
         (a.email?'<div class="alias"><div class="al-row"><span class="al-ic">✉</span>'+
           '<span class="al-addr">'+esc(a.email)+'</span><button class="btn conn-btn" data-copy="'+esc(a.email)+'">Copy</button></div>'+
           '<div class="al-hint">Add this address to any calendar invite — '+esc(a.name)+' joins the meeting.</div></div>':'')+
@@ -3017,25 +3032,16 @@
           ? '<span class="btn" title="Ultra HD photorealistic avatar — in the works, not live yet" style="opacity:.55;cursor:default">🎬 Ultra HD realistic avatar · coming soon</span>'
           : '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a>')+
         '</div>'+
-        '</div>'+
-        '<aside class="avd-right">'+capHtml+'</aside>'+
-      '</div>'+
       '<div class="avinfo" style="margin-top:14px">'+
-      '<details data-avsec="who"><summary>Who they are</summary><div class="dsec">'+
-        (a.persona?esc(a.persona):("The "+esc(a.role)+" on your roster."))+'</div></details>'+
-      '<details data-avsec="know"><summary>What they know</summary><div class="dsec">'+
-        (a.knowledge_docs?(a.knowledge_docs+' knowledge document'+(a.knowledge_docs===1?'':'s')+' indexed.'):'No knowledge documents yet — add company knowledge in Brain.')+
+      '<details data-avsec="more"><summary>More about '+esc(a.name)+'</summary><div class="dsec">'+
+        (a.persona?esc(a.persona)+'<br/><br/>':'')+
+        (a.knowledge_docs?(a.knowledge_docs+' knowledge document'+(a.knowledge_docs===1?'':'s')+' indexed. '):'No knowledge documents yet — add company knowledge in Brain. ')+
+        '<a data-goto="brain" style="cursor:pointer;color:var(--live)">Manage in Brain →</a>'+
         (topics?'<div class="chips" style="margin-top:8px">'+topics+'</div>':'')+
-        '<div style="margin-top:8px"><a data-goto="brain" style="cursor:pointer;color:var(--live)">Manage in Brain →</a></div></div></details>'+
-      '<details data-avsec="do"><summary>What they can do</summary><div class="dsec"><div class="cap">'+
-        (caps||'<div class="c"><span class="ic">✓</span><span>Joins meetings, answers grounded questions, and drafts the follow-up.</span></div>')+'</div>'+
-        (tmpls?'<div class="chips" style="margin-top:8px">'+tmpls+'</div>':'')+'</div></details>'+
-      '<details data-avsec="voice"><summary>Voice and appearance</summary><div class="dsec">'+
-        'Voice: <span style="font-family:var(--mono);font-size:.78rem">'+esc(a.voice_id||"default")+'</span><br/>'+
-        'Face: '+esc(rend.preferred||"talk")+(rend.ready?' — ready':(rend.fallback?' — falls back to '+esc(rend.fallback):''))+'</div></details>'+
-      '<details data-avsec="used"><summary>Used by</summary><div class="dsec">'+
-        a.meetings_total+' meeting'+(a.meetings_total===1?"":"s")+' · '+(a.minutes_total||0)+' minutes'+
-        (a.last_meeting_at?' · last '+fmtWhen(a.last_meeting_at):'')+'</div></details>'+
+        '<div style="margin-top:8px;color:var(--faint);font-size:.78rem">Voice: <span style="font-family:var(--mono)">'+esc(a.voice_id||"default")+'</span>'+
+        ' · Face: '+esc(rend.preferred||"talk")+(rend.ready?' (ready)':'')+
+        ' · '+(a.minutes_total||0)+' minutes in meetings</div>'+
+      '</div></details>'+
       '</div></div>';
   }
   function renderAvatars(d){
@@ -3044,7 +3050,7 @@
     var avs=(d.avatars||[]);
     if(!avs.length){
       $("#av-roster").innerHTML='<div class="empty" style="padding:10px">No avatars yet — they appear here once your workspace has them.</div>';
-      $("#av-stagemeta").innerHTML=""; $("#av-detail").innerHTML=""; AvatarPreview.dispose();
+      $("#av-stagemeta").innerHTML=""; $("#av-caps").innerHTML=""; $("#av-detail").innerHTML=""; AvatarPreview.dispose();
       return;
     }
     if(!window._selAvatar||!avs.some(function(a){return a.id===window._selAvatar;})) window._selAvatar=avs[0].id;
@@ -3060,26 +3066,23 @@
       window._selAvatar=b.getAttribute("data-sel"); renderAvatars(DATA); }); });
     AvatarPreview.show(sel);
     $("#av-stagemeta").innerHTML=stageMetaHTML(sel);
+    $("#av-caps").innerHTML=avatarCapsHTML(sel);
     $("#av-detail").innerHTML=avatarDetailHTML(sel);
     if(openSecs.length){
       $$("#av-detail details").forEach(function(x){ if(openSecs.indexOf(x.getAttribute("data-avsec"))>=0) x.setAttribute("open",""); });
-    } else if(!window._avDetailInit){
-      window._avDetailInit=true;
-      var whoSec=document.querySelector('#av-detail details[data-avsec="who"]');
-      if(whoSec) whoSec.setAttribute("open","");
     }
     wireAvatarImages();
     wireAvatarControls();
   }
   function wireAvatarControls(){
-    $$("#av-detail [data-dispatch]").forEach(function(b){ b.addEventListener("click",function(e){
+    $$("#view-avatars [data-dispatch]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); go("overview"); $("#dsp-avatar").value=b.getAttribute("data-dispatch"); $("#dsp-url").focus(); }); });
-    $$("#av-detail [data-copy]").forEach(function(b){ b.addEventListener("click",function(e){
+    $$("#view-avatars [data-copy]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); var v=b.getAttribute("data-copy");
       if(navigator.clipboard) navigator.clipboard.writeText(v);
       toast("Copied "+v+" — invite it to a meeting to summon this avatar."); }); });
     // AI model per avatar: Gemini (relay) vs Cerebras (normal). Applies next meeting.
-    $$("#av-detail [data-brain-set]").forEach(function(b){ b.addEventListener("click",function(e){
+    $$("#view-avatars [data-brain-set]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation();
       var av=b.getAttribute("data-brain-av"), br=b.getAttribute("data-brain-set");
       fetch("/avatars/"+encodeURIComponent(av)+"/brain-mode",{method:"POST",
@@ -3095,7 +3098,7 @@
       }).catch(function(){ toast("Network error"); });
     }); });
     // Per-avatar capability switch (Slack/Google/Asana). Optimistic; reverts on failure.
-    $$("#av-detail [data-cap]").forEach(function(cb){ cb.addEventListener("change",function(e){
+    $$("#view-avatars [data-cap]").forEach(function(cb){ cb.addEventListener("change",function(e){
       e.stopPropagation();
       var av=cb.getAttribute("data-cap-av"), cap=cb.getAttribute("data-cap"), on=cb.checked;
       cb.disabled=true;
@@ -3109,7 +3112,7 @@
         } else { cb.checked=!on; toast((res.j&&res.j.error)||"Could not change capability",true); }
       }).catch(function(){ cb.disabled=false; cb.checked=!on; toast("Network error",true); });
     }); });
-    $$("#av-detail [data-goto-conn]").forEach(function(b){ b.addEventListener("click",function(e){
+    $$("#view-avatars [data-goto-conn]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); go("connections"); }); });
   }
 

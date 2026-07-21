@@ -2275,14 +2275,22 @@ def all_avatar_brain_modes() -> dict[str, str]:
 # whether it may USE it. Mirrors the brain-mode primitives above.
 KNOWN_CAPABILITIES = ("google", "slack", "asana")
 
+# Beyond the native trio, any Pipedream-connected app is toggleable per avatar
+# under its Pipedream name_slug (github, notion, linear, …). Slug-shaped keys
+# only — this is a storage guard, not an existence check (the dashboard only
+# offers slugs the org actually connected).
+import re as _re
+
+_CAPABILITY_SLUG = _re.compile(r"^[a-z0-9_][a-z0-9_-]{0,59}$")
+
 
 def set_avatar_capability(avatar_id: str, capability: str, enabled: bool) -> bool:
     """Turn one capability ON/OFF for one avatar (dashboard toggle). Persisted
     (Litestream-replicated), read at the execute/deliver seams — no redeploy.
-    False for an unknown capability (only ``KNOWN_CAPABILITIES`` are stored)."""
+    False for a key that is neither a KNOWN capability nor slug-shaped."""
     aid = (avatar_id or "").strip()
     cap = (capability or "").strip().lower()
-    if not aid or cap not in KNOWN_CAPABILITIES:
+    if not aid or (cap not in KNOWN_CAPABILITIES and not _CAPABILITY_SLUG.match(cap)):
         return False
     with _LOCK, _connect() as conn:
         conn.execute(

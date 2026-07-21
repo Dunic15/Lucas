@@ -504,6 +504,23 @@ def dashboard_summary(request: Request) -> JSONResponse:
         asana_client.connected(_native_google_org)
         or pipedream_executor.app_connected(_native_google_org, "asana")
     )
+    # Org-connected Pipedream apps beyond the native trio → per-avatar toggles.
+    # One accounts read for the whole roster; best-effort (an unreachable
+    # Pipedream just hides the extra rows, never breaks the summary). Slugs
+    # colliding with the native toggle keys are excluded — those families
+    # already have a switch above.
+    pd_apps: list[dict] = []
+    if pipedream_executor.enabled() and caller_org:
+        try:
+            _pd_seen: set[str] = set()
+            for _acct in pipedream_client.list_accounts(caller_org):
+                _slug = str(_acct.get("app") or "")
+                if (_slug and _slug not in _pd_seen
+                        and _slug not in ("google", "slack", "asana")):
+                    _pd_seen.add(_slug)
+                    pd_apps.append({"slug": _slug, "name": _slug.replace("_", " ").title()})
+        except pipedream_client.PipedreamError:
+            pd_apps = []
     all_caps = store.all_avatar_capabilities()  # {avatar_id: {cap: bool}} — one read
     # Per-org roster: a scoped caller (cookie user or per-org bearer) sees only
     # their org's granted avatars (org_agents); the unscoped worlds see ALL —
@@ -572,6 +589,18 @@ def dashboard_summary(request: Request) -> JSONResponse:
                             asana_connected and a.uses_native_tool("asana"),
                         ),
                         "connected": asana_connected,
+                    },
+                    # Generic Pipedream apps: explicit OPT-IN per avatar
+                    # (default OFF — the same rule the approve door enforces
+                    # via executor.capability_blocked).
+                    **{
+                        p["slug"]: {
+                            "on": all_caps.get(aid, {}).get(p["slug"], False),
+                            "connected": True,
+                            "pd": True,
+                            "name": p["name"],
+                        }
+                        for p in pd_apps
                     },
                 },
                 "live_now": live_by_avatar.get(aid, 0),
@@ -810,7 +839,8 @@ async def set_avatar_capability_endpoint(
     if not ok:
         return JSONResponse(
             {"error": "capability must be one of "
-             + ", ".join(store.KNOWN_CAPABILITIES)},
+             + ", ".join(store.KNOWN_CAPABILITIES)
+             + " — or a connected app's slug"},
             status_code=400,
         )
     return JSONResponse(
@@ -2433,7 +2463,9 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         caps = await run_in_threadpool(
             store.get_avatar_capabilities, acting_avatar
         )
-        blocked_by_toggle = caps.get(family) is False
+        blocked_by_toggle = executor.capability_blocked(
+            caps, exec_action.get("type")
+        )
         blocked_by_overlay = not blocked_by_toggle and not await run_in_threadpool(
             avatar_resolver.family_allowed, org, acting_avatar, family
         )
@@ -2468,7 +2500,9 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         caps = await run_in_threadpool(
             store.get_avatar_capabilities, acting_avatar
         )
-        blocked_by_toggle = caps.get(family) is False
+        blocked_by_toggle = executor.capability_blocked(
+            caps, exec_action.get("type")
+        )
         # M2 overlay narrowing, re-resolved at EXECUTION time (org-scoped; an
         # overlay can only remove a capability — flag off ⇒ always allowed).
         blocked_by_overlay = not blocked_by_toggle and not await run_in_threadpool(
