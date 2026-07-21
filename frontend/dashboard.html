@@ -1048,6 +1048,18 @@
     '<path fill="#00832d" d="M43.65 25L57.4 1.2C56.05.4 54.5 0 52.9 0H34.4c-1.6 0-3.15.45-4.5 1.2z"/>'+
     '<path fill="#2684fc" d="M59.8 53H27.5L13.75 76.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z"/>'+
     '<path fill="#ffba00" d="M73.4 26.5L60.75 4.5c-.8-1.4-1.95-2.5-3.3-3.3L43.65 25 59.8 53h27.45c0-1.55-.4-3.1-1.2-4.5z"/></svg>';
+  var LOGO_NOTION='<svg class="clogo" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'+
+    '<rect x="1" y="1" width="22" height="22" rx="4" fill="#fff" stroke="#111" stroke-width="1"/>'+
+    '<path fill="#111" d="M7.4 7.1v9.4l1.5.15v-6.2l5.9 6.6 1.8-.15V7.15l-1.55-.15v6.1L9.2 7.05z"/></svg>';
+  var LOGO_GITHUB='<svg class="clogo" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'+
+    '<path fill="#181717" d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.5-3.9-1.5-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 5 18.3 5.3 18.3 5.3c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>';
+  // Slug → brand logo for the per-avatar capability toggles; a letter chip when
+  // we don't ship a logo for that app yet.
+  var PD_LOGOS={gmail:LOGO_GMAIL,google_calendar:LOGO_CALENDAR,google_drive:LOGO_DRIVE,
+    asana:LOGO_ASANA,jira:LOGO_JIRA,slack:LOGO_SLACK,notion:LOGO_NOTION,github:LOGO_GITHUB,google:LOGO_GOOGLE};
+  function capIcon(slug,name){
+    return PD_LOGOS[slug]||esc((name||slug||"?").charAt(0).toUpperCase());
+  }
 
   var GRADS=["linear-gradient(135deg,#F5484D,#FFB49A)","linear-gradient(135deg,#4D7CFE,#7EB6FF)",
              "linear-gradient(135deg,#8b5cf6,#c4b5fd)","linear-gradient(135deg,#1F9D63,#4FC08A)"];
@@ -1997,24 +2009,6 @@
     // native runs on. Reads fields already in /dashboard/summary.
     var nativeOn=!!(d.settings&&d.settings.native_executor);
     $("#conns").innerHTML =
-      '<div class="conn" style="border-left:3px solid '+(nativeOn?"var(--live)":"#c9971c")+'">'+
-      '<div class="nm">⚙ Execution <span class="stchip" style="margin-left:6px">'+(nativeOn?"native":"via Cedric")+'</span></div>'+
-      '<div class="ds">'+(nativeOn
-        ?"Native is on — when you approve an action, Laura runs it on your connected account below and posts a receipt on the row."
-        :"Native is off — approved actions are handed to Cedric. To have Laura run them directly on your own Google/Asana, ask your admin to enable native execution (NATIVE_EXECUTOR).")+'</div>'+
-      '<div class="foot" style="gap:14px;flex-wrap:wrap">'+
-        '<span class="cstat'+(nativeOn?" on":"")+'"><b></b>Native execution '+(nativeOn?"on":"off")+'</span>'+
-        // Google now lives in the Pipedream block below (its own status chips) —
-        // no native "Google connected" line here after the cutover.
-        '<span class="cstat'+(asanaConnected?" on":"")+'"><b></b>Asana '+(asanaConnected?"connected":"not connected")+'</span>'+
-      '</div>'+
-      '<div class="foot" style="margin-top:10px;gap:8px;flex-wrap:wrap;align-items:center">'+
-        '<span style="font-size:.78rem;color:var(--faint)">Send a real test — calendar + email (Google) + a task (Pipedream):</span>'+
-        '<input id="pd-test-email" type="email" value="duccio@sffstudio.com" autocomplete="off" style="flex:1;min-width:180px;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:inherit;font:inherit;font-size:.78rem"/>'+
-        '<button class="btn" id="pd-test-run">🧪 Test integrations</button>'+
-      '</div>'+
-      '<pre id="pd-test-out" style="margin-top:8px;font-size:.74rem;white-space:pre-wrap;word-break:break-word;color:var(--dim)"></pre>'+
-      '</div>'+
       // ── ONE "Your connected tools" block: native (Google/Slack) + the
       //    Pipedream-connected tools (appended right below by loadPipedream,
       //    from #pdconns). Full-width heading (spans the 2-col .conns grid). ──
@@ -2979,17 +2973,23 @@
   // Capabilities panel — rendered NEXT TO the stage (#av-caps), not below it.
   // Same #220/#221 endpoints + data attributes; only the placement changed.
   function avatarCapsHTML(a){
-    // Generic Pipedream apps the org connected (beyond the native trio) —
-    // per-avatar OPT-IN switches, same endpoint as the native toggles.
-    var pdRows=Object.keys(a.capabilities_toggle||{}).filter(function(k){
-      return (a.capabilities_toggle[k]||{}).pd;
+    // Per-avatar OPT-IN switches for the org's connected Pipedream apps (Gmail /
+    // Calendar / Drive / Notion / GitHub / … — post-cutover Google lives here as
+    // its three apps, so the old combined "Google" toggle is gone). Exclude the
+    // slack/asana/google keys — they have their own rows / are native-shaped.
+    var ct=a.capabilities_toggle||{};
+    var pdRows=Object.keys(ct).filter(function(k){
+      return (ct[k]||{}).pd && k!=="asana" && k!=="google" && k!=="slack";
     }).sort().map(function(k){
-      var nm=(a.capabilities_toggle[k].name||k);
-      return capRowHTML(a,k,nm,esc(nm.charAt(0).toUpperCase()));
+      var nm=(ct[k].name||k);
+      return capRowHTML(a,k,nm,capIcon(k,nm));
     }).join("");
+    // Order: the connected Pipedream tools first, then Asana (Petra), then the
+    // Slack agent add-on LAST (it's the optional Cedric bridge, not a primary).
     return '<div class="caps"><div class="sm-h">Capabilities</div><div class="cap-list">'+
-        capRowHTML(a,"slack","Slack agent",LOGO_SLACK)+capRowHTML(a,"google","Google",LOGO_GOOGLE)+
-        (a.id==="petra"?capRowHTML(a,"asana","Asana",LOGO_ASANA):"")+pdRows+'</div>'+
+        pdRows+
+        (a.id==="petra"?capRowHTML(a,"asana","Asana",LOGO_ASANA):"")+
+        capRowHTML(a,"slack","Slack agent",LOGO_SLACK)+'</div>'+
         '<div class="modelpick sm"><div class="sm-h">AI model</div><div class="mp-row">'+
           '<button class="mp-opt'+(a.brain==="gemini"?" on":"")+'" data-brain-set="gemini" data-brain-av="'+esc(a.id)+'">Gemini</button>'+
           '<button class="mp-opt'+(a.brain==="cerebras"?" on":"")+'" data-brain-set="cerebras" data-brain-av="'+esc(a.id)+'">Cerebras</button></div>'+
