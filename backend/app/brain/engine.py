@@ -1041,8 +1041,10 @@ including short, in-passing requests ("send the recap", "schedule a follow-up \
 with Marco", "post it to Slack", "email Priya") — even when no owner or deadline \
 was stated (use "UNASSIGNED"/"" and gap_type accordingly). Do not drop an action \
 just because it was said casually. For each extracted action, include a short, \
-verbatim evidence excerpt copied from the MEETING TRANSCRIPT. If there is no \
-supporting transcript excerpt, do not emit the action.
+verbatim evidence excerpt copied from the MEETING TRANSCRIPT — copy it \
+EXACTLY, character-for-character; never paraphrase, shorten, translate, or \
+re-punctuate it. If there is no supporting transcript excerpt, do not emit \
+the action.
 
 If the prompt lists actions ALREADY CAPTURED LIVE during the meeting, those are \
 already queued for execution: do NOT put them (or any semantically equivalent \
@@ -1083,6 +1085,45 @@ Return ONLY a JSON object:
 }"""
 
 
+# Grounding tolerance: models under a large output schema paraphrase their
+# "verbatim" excerpts (live repro 2026-07-21: both of a meeting's real asks
+# were dropped by the exact-substring check — silently). The gate now accepts
+# an excerpt whose CONTENT WORDS overwhelmingly appear in the transcript, and
+# falls back to checking the action item's own words. Invented actions still
+# fail (their content words aren't in the transcript at all).
+_GROUND_STOPWORDS = frozenset(
+    "the and for with that this from your their have will been about what when "
+    "into over does also each just like more some than then were you all can "
+    "una alla della delle degli nella sulla per con che non gli come sono".split()
+)
+_GROUND_OVERLAP = 0.6  # >=60% of content tokens must appear in the transcript
+_GROUND_MIN_TOKENS = 2
+
+
+def _ground_tokens(text: str) -> set[str]:
+    return {
+        t
+        for t in re.findall(r"[a-z0-9]+", (text or "").casefold())
+        if len(t) >= 4 and t not in _GROUND_STOPWORDS
+    }
+
+
+def _grounded_in(text: str, transcript_norm: str, transcript_tokens: set[str]) -> bool:
+    """Is this excerpt/item genuinely grounded in the transcript? Verbatim
+    substring passes instantly; otherwise its content tokens must mostly appear
+    in the transcript (paraphrase-tolerant, fabrication-rejecting)."""
+    norm = " ".join((text or "").split()).casefold()
+    if not norm:
+        return False
+    if norm in transcript_norm:
+        return True
+    toks = _ground_tokens(text)
+    if len(toks) < _GROUND_MIN_TOKENS:
+        return False
+    hit = sum(1 for t in toks if t in transcript_tokens)
+    return hit / len(toks) >= _GROUND_OVERLAP
+
+
 def _scope_actions_to_transcript(artifact: dict, transcript_text: str) -> None:
     """Keep only model-extracted actions grounded in the meeting transcript.
 
@@ -1096,19 +1137,32 @@ def _scope_actions_to_transcript(artifact: dict, transcript_text: str) -> None:
     merged later by ``main._merge_action_items`` and remain authoritative.
     """
     transcript = " ".join((transcript_text or "").split()).casefold()
+    ttokens = _ground_tokens(transcript_text)
     actions = artifact.get("actions") or artifact.get("checklist") or []
     scoped: list[dict] = []
     for action in actions:
         if not isinstance(action, dict):
             continue
-        evidence = " ".join(str(action.get("evidence") or "").split()).casefold()
-        if not evidence or evidence not in transcript:
+        evidence = str(action.get("evidence") or "")
+        item = str(action.get("item") or action.get("step") or "")
+        if not (
+            _grounded_in(evidence, transcript, ttokens)
+            or _grounded_in(item, transcript, ttokens)
+        ):
             continue
         clean = dict(action)
         clean.pop("evidence", None)
         scoped.append(clean)
     artifact["actions"] = scoped
     artifact["checklist"] = scoped
+    # PII-safe telemetry (counts only, never content): a silent total drop is
+    # exactly how the 2026-07-21 zero-actions regression stayed invisible.
+    total = len([a for a in actions if isinstance(a, dict)])
+    if total:
+        kept = len(scoped)
+        note = " — ALL actions dropped by the evidence gate" if kept == 0 else ""
+        print(f"[post_meeting] evidence gate: kept {kept}/{total} actions{note}",
+              flush=True)
 
 
 # Petra's PM judgement, bounded: at most this many goals, this many proposed
@@ -1132,14 +1186,20 @@ def _absorb_goals(artifact: dict, transcript_text: str) -> None:
         if isinstance(a, dict):
             a.setdefault("source", "explicit")
     transcript = " ".join((transcript_text or "").split()).casefold()
+    ttokens = _ground_tokens(transcript_text)
     absorbed: list[dict] = []
-    for goal in (artifact.pop("goals", None) or [])[:_MAX_GOALS]:
+    goals_in = (artifact.pop("goals", None) or [])[:_MAX_GOALS]
+    dropped_goals = 0
+    for goal in goals_in:
         if not isinstance(goal, dict):
             continue
         goal_text = str(goal.get("goal") or "").strip()
         quote = str(goal.get("evidence") or "").strip()
-        norm = " ".join(quote.split()).casefold()
-        if not goal_text or not norm or norm not in transcript:
+        if not goal_text or not (
+            _grounded_in(quote, transcript, ttokens)
+            or _grounded_in(goal_text, transcript, ttokens)
+        ):
+            dropped_goals += 1
             continue  # ungrounded goal: drop, never guess
         for step in (goal.get("proposed_steps") or [])[:_MAX_STEPS_PER_GOAL]:
             if not isinstance(step, dict):
@@ -1161,6 +1221,10 @@ def _absorb_goals(artifact: dict, transcript_text: str) -> None:
         merged = list(artifact.get("actions") or []) + absorbed
         artifact["actions"] = merged
         artifact["checklist"] = merged
+    if goals_in:
+        print(f"[post_meeting] goals: {len(goals_in)} detected, "
+              f"{dropped_goals} dropped ungrounded, {len(absorbed)} steps absorbed",
+              flush=True)
 
 
 def _live_actions_block(live_actions: list[dict] | None) -> str:
@@ -1444,18 +1508,19 @@ def post_meeting(
         # Deterministic task hints (avatar.yaml `tasks`): bias action capture
         # toward this avatar's recognized asks. "" when the avatar has no tasks.
         task_block = _task_hints_block(getattr(avatar, "tasks", None))
+        user_prompt = (
+            f"{brief_block}"
+            f"{live_block}"
+            f"{task_block}"
+            f"Relevant company process context:\n\n{_format_context(chunks)}\n\n"
+            f"Structured meeting state (tracked during the meeting):\n"
+            f"{meeting_state.state_summary(state)}\n\n"
+            f"Meeting transcript:\n\n{transcript_text}\n\n"
+            "Respond with the JSON object only."
+        )
         raw = llm.complete(
             POSTMEETING_SYSTEM,
-            (
-                f"{brief_block}"
-                f"{live_block}"
-                f"{task_block}"
-                f"Relevant company process context:\n\n{_format_context(chunks)}\n\n"
-                f"Structured meeting state (tracked during the meeting):\n"
-                f"{meeting_state.state_summary(state)}\n\n"
-                f"Meeting transcript:\n\n{transcript_text}\n\n"
-                "Respond with the JSON object only."
-            ),
+            user_prompt,
             max_tokens=4000,
             provider=post_provider(),
         )
@@ -1475,8 +1540,34 @@ def post_meeting(
                 avatar, transcript_text, state, degraded=True
             )
         else:
+            model_actions = len([
+                a for a in (artifact.get("actions") or []) if isinstance(a, dict)
+            ])
             _scope_actions_to_transcript(artifact, transcript_text)
             _absorb_goals(artifact, transcript_text)
+            if model_actions and not artifact["actions"]:
+                # Total wipe: the model clearly extracted asks but none survived
+                # grounding. One retry with an explicit verbatim reminder —
+                # cheap (finalize-time, off the live path) and it converts a
+                # silent data loss into a second chance + a visible log trail.
+                print("[post_meeting] retrying once: model returned "
+                      f"{model_actions} action(s), 0 survived grounding", flush=True)
+                raw2 = llm.complete(
+                    POSTMEETING_SYSTEM
+                    + "\n\nIMPORTANT: your previous attempt was rejected because "
+                      "the evidence excerpts were not verbatim. Copy each "
+                      "evidence excerpt EXACTLY, character-for-character, from "
+                      "the MEETING TRANSCRIPT.",
+                    user_prompt,
+                    max_tokens=4000,
+                    provider=post_provider(),
+                )
+                retry = _parse_json(raw2)
+                if not _looks_degraded(retry):
+                    _scope_actions_to_transcript(retry, transcript_text)
+                    _absorb_goals(retry, transcript_text)
+                    if retry.get("actions"):
+                        artifact = retry
 
     return _finish_artifact(artifact, state)
 
