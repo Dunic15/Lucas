@@ -335,6 +335,45 @@ def search_apps(query: str = "", *, limit: int = 30, after: str = "") -> dict:
     return {"apps": apps, "next_cursor": next_cursor, "total": page.get("total_count")}
 
 
+# ── pre-built actions catalog (what a tool can DO) ──────────────────────────
+_actions_lock = threading.Lock()
+_actions_cache: dict[str, list] = {}  # slug -> [{key, name}]
+
+
+def list_actions(app_slug: str, *, limit: int = 25) -> list[dict]:
+    """Pipedream's pre-built ACTIONS (components) for one app — the catalog of
+    things this tool can do: [{key, name}]. Cached per process. Best effort:
+    a lookup failure yields []. GET /connect/{proj}/actions?app=<slug>."""
+    slug = str(app_slug or "").strip().lower()
+    if not slug:
+        return []
+    with _actions_lock:
+        hit = _actions_cache.get(slug)
+        if hit is not None:
+            return hit
+    out: list[dict] = []
+    try:
+        resp = _authed_request(
+            "GET", _project_url("actions"),
+            params={"app": slug, "limit": str(max(1, min(int(limit or 25), 100)))},
+        )
+        if resp.status_code < 400:
+            data = resp.json() or {}
+            raw = data.get("data") if isinstance(data.get("data"), list) else []
+            for c in raw:
+                if not isinstance(c, dict):
+                    continue
+                key = c.get("key")
+                if not key:
+                    continue
+                out.append({"key": str(key), "name": str(c.get("name") or key)})
+    except PipedreamError:
+        out = []
+    with _actions_lock:
+        _actions_cache[slug] = out
+    return out
+
+
 # ── Connect Proxy — run any authenticated REST call against a connected app ──
 # Pipedream injects the account's credentials server-side; we send the target
 # app's own API request. This is the generic execution path (mirrors Cedric's
