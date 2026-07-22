@@ -3,7 +3,7 @@ name: Phase 1 canonical preview follow-up
 on:
   push:
     branches:
-      - fix/phase1-canonical-preview-verification
+      - fix/phase1-canonical-preview-verification-v2
     paths:
       - scripts/phase1_followup_apply.py
       - .github/workflows/phase1-followup.yml
@@ -19,7 +19,7 @@ jobs:
       - name: Check out branch
         uses: actions/checkout@v4
         with:
-          ref: fix/phase1-canonical-preview-verification
+          ref: fix/phase1-canonical-preview-verification-v2
           fetch-depth: 0
 
       - name: Set up Python
@@ -74,7 +74,7 @@ jobs:
             MSG="chore(actions): capture Phase 1 follow-up diagnostic"
           fi
           git commit -m "$MSG"
-          git push origin HEAD:fix/phase1-canonical-preview-verification
+          git push origin HEAD:fix/phase1-canonical-preview-verification-v2
 
       - name: Fail on patch or test error
         if: steps.followup.outputs.apply_rc != '0' || steps.followup.outputs.install_rc != '0' || steps.followup.outputs.test_rc != '0'
