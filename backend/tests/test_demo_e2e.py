@@ -13,6 +13,20 @@ The whole loop is proven deterministically, offline, no clock dependence:
     POST /demo/post_meeting  → the post-meeting artifact (summary + actions +
                                decisions + risks + readiness) with the action
                                lifecycle fields the dashboard renders
+    POST /org/actions/{id}/approve → the approve DOOR (runbook step 7): key-free
+                               it can't drive a real approve (no seeded action),
+                               so we guard that the exact route + its app-level
+                               gate still exist — a rename breaks this test.
+    GET  /dashboard/summary  → the stat TILES the runbook's step-10 tally reads
+                               (`hours_saved_30d`, `actions_30d`, …) are present
+                               in the payload key-free.
+
+Coverage honesty (runbook §"CI-guarded vs presenter-verified"): steps 2-6 are
+end-to-end asserted through the real endpoints; the approve/execute/dashboard-
+tally steps (7-10) can't run a full authenticated approve+execute key-free, so
+this file guards their *contract surface* (the route and the tile keys) — enough
+that a rename or a dropped tile turns the build red — while the presenter drives
+the actual clicks live.
 
 NOTE on the "source/citation" field (runbook step 3): `/demo/ask` already
 returns a first-class `citations` list (the source filename Laura grounded on)
@@ -108,11 +122,25 @@ def test_demo_post_meeting_produces_the_full_artifact():
     assert actions, "the sample meeting has action-shaped lines to capture"
     # … and every captured action carries the lifecycle fields the dashboard
     # renders (item text, an owner slot — UNASSIGNED until named — and the gap
-    # that drives needs-details vs proposed).
+    # that drives needs-details vs proposed). These are the fields the row
+    # binds to, so require real non-empty values, not just present keys.
     for a in actions:
         assert a["item"].strip()
-        assert "owner" in a
-        assert "gap_type" in a
+        assert isinstance(a["owner"], str) and a["owner"]
+        assert isinstance(a["gap_type"], str) and a["gap_type"]
+    # Strengthened guards (not tautologies): prove the gap detector actually
+    # fired on THIS transcript rather than merely emitting well-shaped rows.
+    # The customer side never names who owns the implementation, so that must
+    # surface as an owner-gap action (the beat that drives "needs-details").
+    assert any(a["gap_type"] == "owner" for a in actions), (
+        "the unnamed implementation owner must surface as an owner-gap action"
+    )
+    # Heuristic capture is honest-but-imperfect key-free: some captured lines
+    # are questions, not imperatives (the runbook says this on camera). Assert
+    # the signal, not purity — at least one captured action is a real statement.
+    assert any(not a["item"].rstrip().endswith("?") for a in actions), (
+        "at least one captured action must be a statement, not a question"
+    )
     # `checklist` is the legacy alias the demo page reads — it must mirror actions.
     assert art["checklist"] == actions
 
@@ -158,3 +186,51 @@ def test_ungrounded_question_is_honestly_uncited():
     ).json()
     assert body["sufficient_context"] is False
     assert body["citations"] == []
+
+
+def test_approve_door_exists_and_reaches_its_gate_keyfree():
+    """Step 7 · the approve DOOR the runbook clicks is real and reachable.
+
+    Key-free we can't drive a genuine approve (no action is seeded in the
+    ledger by the stateless `/demo/*` endpoints), so we assert the next-best
+    honest thing: the exact route `POST /org/actions/{id}/approve` exists AND
+    its machine gate lets the key-free/demo caller through to the app's own
+    action-lookup gate. A bogus id returns the app-level 404
+    (`{"error": "unknown action for this org"}`), NOT FastAPI's routing 404
+    (`{"detail": "Not Found"}`) — so renaming the route, moving its prefix, or
+    tightening the key-free gate all turn this test red."""
+    r = _client().post("/org/actions/no-such-action/approve", json={"decision": "approve"})
+    # The door is present and the demo/key-free caller passed auth (else 401):
+    # we reached the handler's own "unknown action" gate.
+    assert r.status_code == 404, r.status_code
+    body = r.json()
+    assert body.get("error") == "unknown action for this org", body
+    # Guard against a silent rename that leaves a *different* 404: FastAPI's
+    # routing miss has `detail`, never our app-level `error`.
+    assert "detail" not in body, body
+
+
+def test_dashboard_summary_exposes_the_runbook_stat_tiles():
+    """Step 10 · the stat tiles the runbook's time-saved tally advertises are
+    real keys in the `/dashboard/summary` payload, key-free.
+
+    The tally beat names five tiles; a rename or a dropped key would make the
+    runbook lie, so pin them here. (Values are 0 with no meetings — we assert
+    the KEYS exist and are numeric, which is what the on-camera claim rests on:
+    'every number derived from real counts, never fabricated'.)"""
+    r = _client().get("/dashboard/summary")
+    assert r.status_code == 200, r.status_code
+    stats = r.json().get("stats")
+    assert isinstance(stats, dict), r.json()
+    for key in (
+        "hours_saved_30d",
+        "actions_30d",
+        "followups_automated_30d",
+        "actions_executed_30d",
+        "avg_readiness_30d",
+    ):
+        assert key in stats, f"stat tile {key!r} missing from /dashboard/summary"
+        assert isinstance(stats[key], (int, float)), (key, stats[key])
+    # The ROI multiplier the runbook's hours-saved formula cites must be exposed
+    # too (so the tile's derivation stays honest and inspectable).
+    assert isinstance(stats.get("roi_minutes_per_action"), (int, float))

@@ -13,7 +13,19 @@ answer → cite → capture → artifact pipeline runs for free, offline, and
 **deterministically** — the same inputs give byte-for-byte the same answer every
 run, so the demo is safe to script and safe to record. This is exactly the path
 the CI guard exercises: `backend/tests/test_demo_e2e.py`
-(`./scripts/run_demo_e2e.sh`). If a step in this runbook breaks, that test breaks.
+(`./scripts/run_demo_e2e.sh`).
+
+**What the CI guard covers (be precise on camera).** Steps 2-6 — sample →
+grounded-answer-with-citation → post-meeting artifact — are asserted **end-to-end
+through the real endpoints**: if one breaks, the test goes red. Steps 7 and 10 —
+the approve door and the time-saved stat tiles — are guarded at the **contract
+surface**: the test proves the `POST /org/actions/{id}/approve` route and its
+gate still exist and that every advertised `/dashboard/summary` stat key is
+present, so a rename or a dropped tile turns the build red. What the test does
+**not** run key-free is a full authenticated approve + external execute (steps
+8-9) — those are **presenter-verified** live against a dashboard that already
+has data. So: steps 2-6 CI-guarded end-to-end; steps 7 & 10 CI-guarded at the
+contract; steps 8-9 presenter-verified.
 
 **Real vs stubbed in key-free mode** (call this out honestly on camera if asked):
 
@@ -39,7 +51,7 @@ the final external write are stubbed without a key.
 
 # 2 · Start the backend key-free for the live browser demo.
 cd backend && BRAIN_PROVIDER=stub EMBEDDING_PROVIDER=hash \
-  ../"$HOME"/venvs/laura/bin/python -m uvicorn app.main:app --port 8000
+  "$HOME"/venvs/laura/bin/python -m uvicorn app.main:app --port 8000
 # Demo console:  http://127.0.0.1:8000/           (the /demo page)
 # Dashboard:     http://127.0.0.1:8000/dashboard  (owner view)
 ```
@@ -92,11 +104,21 @@ provisions; Security-lead approval for elevated access). A **source chip** shows
 > yesterday?") — she returns **no citation** and says she can't answer from the
 > docs. "From your docs" always means it.
 
-### 4 · Request a task (REAL capture)
-*"Now watch her act. Someone says: 'Laura, email Daniel the security checklist.'"*
-This ask lives in the meeting; Laura captures it as an action rather than
-pretending it's already done. **Expected:** in the post-meeting artifact (next
-step) the request appears as a captured action item, owner **UNASSIGNED**.
+### 4 · Laura captures the next-steps from the room (REAL capture)
+*"Now watch her act. The room throws out concrete next-steps — Daniel says
+'we still need to book the security assessment' and 'we'll name the
+implementation owner internally.' Laura captures those as action items rather
+than pretending they're already done."*
+Both of those lines are in the shipped transcript, so they appear as real
+captured rows. **Expected (in step 6's artifact):** those next-steps show up in
+`actions[]`, owner **UNASSIGNED** until named.
+> Honesty beat: heuristic capture is imperfect key-free — some captured rows are
+> *question* lines (e.g. "the security review — where do we stand on that?"),
+> not imperatives. Call that out if asked; a real brain filters actions down to
+> genuine to-dos. If you want a punchier on-camera ask you may *say* an
+> illustrative line like "Laura, email Daniel the security checklist," but that
+> exact wording is **not** in the shipped transcript and won't appear as a row —
+> the rows come from the real lines above.
 
 ### 5 · Laura asks for the missing detail (REAL gap detection)
 *"She doesn't invent an email address or a deadline. The transcript itself has
@@ -104,20 +126,26 @@ gaps — no signed DPA, no security review booked, and no named implementation
 owner — so she flags exactly what's missing."*
 **Expected (visible in step 6's artifact):** `missing_steps` includes
 `security_approval`, `dpa_confirmation`, and **`implementation_owner`** — the
-detail she'd ask for before executing. Actions carry a **`gap_type`**
-(`owner`/`approval`/`deadline`/…) that drives the "needs details" state.
+detail she'd ask for before executing. Every action carries a **`gap_type`**
+field; the unnamed-owner ask gets `gap_type: "owner"` (the beat that drives the
+"needs details" state), while lines with no missing slot read `"none"`.
 
 ### 6 · Task appears in the dashboard: needs-details → proposed (REAL)
 **[click]** Click **Analyze meeting** in the console (`POST /demo/post_meeting`),
 then open the meeting in the **dashboard**.
-*"The meeting becomes a structured artifact — a summary, the decisions, the
-risks, and every action she captured, each with an owner slot and the gap that
-still needs filling."*
-**Expected:** the artifact renders `summary`, `decisions`, `risks`, and
-`actions[]` (alias `checklist`). Each action shows `item` / `owner` /
-`gap_type`. An action with a gap shows **needs-details**; once the gap is filled
-it reads **proposed**. A readiness tile shows the onboarding **readiness score**
-(≈40/100 for this meeting — several required steps still open).
+*"The meeting becomes a structured artifact — a summary, the risks, and every
+action she captured, each with an owner slot and the gap that still needs
+filling."*
+**Expected:** the artifact renders `summary`, `risks`, and `actions[]` (alias
+`checklist`), each action showing `item` / `owner` / `gap_type`. An action whose
+gap is unfilled shows **needs-details**; once the gap is filled it reads
+**proposed**. A readiness tile shows the onboarding **readiness score**
+(**40/100** for this meeting — several required steps still open).
+> Key-free the `decisions` list comes back **empty** for this short transcript —
+> the offline heuristic extractor is conservative and records no explicit
+> decision (with a real key the "commit to August 4" line surfaces as one). So
+> don't point at a Decisions section on camera in stub mode; lead with the
+> summary, risks, and actions.
 
 ### 7 · Approve the task (REAL approve door)
 **[click]** On a proposed action, click **Approve**.
@@ -144,11 +172,11 @@ the provenance record itself is real.)
 **[click]** Return to the dashboard overview.
 *"And here's the point for a busy team: what Laura DID, and the hours she gave
 back — every number derived from real counts, never fabricated."*
-**Expected stat tiles** (keys from `GET /dashboard` stats):
-`actions_30d` (captured), `followups_automated_30d`, `actions_executed_30d`
-(completed), `avg_readiness_30d`, and **`hours_saved_30d`** (=
-captured actions × `roi_minutes_per_action` ÷ 60 — a conservative,
-clearly-labelled estimate of manual follow-up hours saved).
+**Expected stat tiles** (keys under `stats` in the `GET /dashboard/summary`
+payload): `actions_30d` (captured), `followups_automated_30d`,
+`actions_executed_30d` (completed), `avg_readiness_30d`, and
+**`hours_saved_30d`** (= captured actions × `roi_minutes_per_action` ÷ 60 — a
+conservative, clearly-labelled estimate of manual follow-up hours saved).
 
 ---
 
@@ -159,16 +187,28 @@ offline, so a broken demo is a red build:
 
 ```bash
 ./scripts/run_demo_e2e.sh
-# → backend/tests/test_demo_e2e.py :  GET /demo/sample → POST /demo/ask
-#   (quotes the doc + carries a citation) → POST /demo/post_meeting
-#   (summary + actions + decisions + risks + readiness + lifecycle fields),
-#   run twice to prove determinism.
+# → backend/tests/test_demo_e2e.py :
+#     steps 2-6 end-to-end:  GET /demo/sample → POST /demo/ask (quotes the doc
+#       + carries a citation) → POST /demo/post_meeting (summary + actions +
+#       risks + readiness + lifecycle fields; owner-gap detection asserted),
+#       run twice to prove determinism;
+#     step 7 contract:  POST /org/actions/{id}/approve exists and reaches its
+#       app-level gate key-free (a rename → red);
+#     step 10 contract:  every /dashboard/summary stat tile the tally reads
+#       (hours_saved_30d, actions_30d, followups_automated_30d,
+#       actions_executed_30d, avg_readiness_30d) is present.
 ```
 
 ## Known key-free gaps (say these if asked)
 - **Spoken answers are extractive quotes**, not paraphrase — with a key they read
   conversationally (structure/citation identical).
+- **Action capture is heuristic** — some captured rows are question lines, not
+  imperatives; a real brain filters to genuine to-dos.
+- **`decisions` comes back empty** for the sample transcript in stub mode (the
+  offline extractor records no explicit decision); with a key the go-live
+  commitment surfaces as one. Lead with summary/risks/actions on camera.
 - **Execution is stubbed** — approve records a receipt but performs no external
-  write without a connected account.
+  write without a connected account. The approve door + stat tiles are contract-
+  guarded by the e2e test; the actual approve→execute clicks are presenter-run.
 - The **System Check** page is referenced by name (sibling PR); this runbook does
   not depend on its code.
