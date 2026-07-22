@@ -712,6 +712,13 @@ class Settings(BaseSettings):
     cross_talk_min_turns: int = 4
     cross_talk_max_gap_seconds: float = 8.0
     cross_talk_window: int = 6
+    # ConversationFrame-backed Turn Manager rollout:
+    #   off    = compute no live policy changes
+    #   shadow = build/test the deterministic plan, preserve current behaviour
+    #   on     = skip the deference sleep for clearly-finished 1:1 questions and
+    #            suppress unprompted spoken interjections in locked dyads / large groups.
+    # Unknown values fail closed to shadow in meeting.turn_manager.
+    conversation_turn_manager_mode: str = "shadow"
     # Talk-over guard for the interjection escape: in hand_mode the WHOLE
     # contribution is generated (deference sleep + full answer collected — several
     # seconds) BEFORE the floor-open check. `interjection_floor_open` judged the
