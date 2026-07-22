@@ -101,6 +101,7 @@ from .brain.engine import (
     semantic_action_duplicates,
     type_actions,
 )
+from .meeting import conversation_frame
 from .meeting.lifecycle import (  # noqa: E402  (hoisted lifecycle core; re-import = compat)
     _BOT_TERMINAL, _BOT_VARIANT_RANK, _LEAVE_GONE_STATUSES,
     _ACTION_STOP, _DEMO_BROWSE_RE, _finalizing, _graphiti_tasks, _recall_list_headers,
@@ -2088,6 +2089,15 @@ async def _make_avatar_speak(
         message["wtimes"] = audio.get("wtimes")
         message["wdurations"] = audio.get("wdurations")
         message["engine"] = audio.get("engine")
+    try:
+        _frame_avatar_name = avatar_resolver.for_session(session).name
+    except Exception:  # noqa: BLE001 — shadow state must never block speech
+        _frame_avatar_name = (session.avatar_id or "avatar").title()
+    conversation_frame.observe_session_avatar_speech_started(
+        session,
+        avatar_name=_frame_avatar_name,
+        generation=message["generation_id"],
+    )
     # Estimate how long this line keeps her talking; queued lines extend it.
     # With server-synthesized audio the REAL duration is known from the last
     # word's timings — barge-in stops estimating and starts knowing.
@@ -3253,6 +3263,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
             )
             label = identity["name"]
             avatar = avatar_resolver.for_session(session)
+            conversation_frame.observe_session_participant(
+                session,
+                avatar_name=avatar.name,
+                participant_id=identity["id"],
+                speaker_kind=identity["kind"],
+                here=(event == "participant_events.join"),
+            )
             if identity["kind"] != "agent":
                 # Empty-room grace is a HUMAN-presence property: roster() counts
                 # only humans, so gate the whole block on kind != agent. An agent
@@ -3491,6 +3508,26 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # lull. (Without this, the idle closing-fallback would fire the proactive
     # retrieve+LLM in front of her first token on any "Laura, …?" after a pause.)
     called, question = detect_wake(avatar, text, session.present_names(avatar.name))
+
+    # Shadow-only social state: observe the turn without changing any existing
+    # speak/silence gate. The frame stores classifications, never utterance text.
+    _frame_addressed_elsewhere = (
+        not called and _addressed_elsewhere(session, avatar, text)
+    )
+    conversation_frame.observe_session_utterance(
+        session,
+        avatar_name=avatar.name,
+        participant_id=speaker_id,
+        speaker_kind=speaker_kind,
+        text=text,
+        addressed_avatar=avatar.name if called else "",
+        addressed_participant_id="other" if _frame_addressed_elsewhere else "",
+        action=(
+            {"verb": "candidate"}
+            if called and wants_action_capture(text)
+            else None
+        ),
+    )
 
     # ── proactive intervention (fires once, as the meeting wraps up) ──
     if (
