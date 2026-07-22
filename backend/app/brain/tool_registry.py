@@ -76,13 +76,51 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
                 )
         except Exception:  # noqa: BLE001 — Pipedream absence is not an error
             pass
+        # Live capability awareness (owner ask 2026-07-22): the verb list for
+        # each family is DERIVED from the executor's own registry — the
+        # avatar's self-knowledge can never lag the execution plane again.
+        def _family_verbs(slug: str) -> str:
+            try:
+                from .. import pipedream_executor as _pe
+
+                verbs = sorted(
+                    t.split(".", 1)[1].replace("_", " ")
+                    for t, spec in _pe._MAPPER.items()
+                    if spec[0] == slug
+                )
+                return ", ".join(verbs)
+            except Exception:  # noqa: BLE001 — never block a join on this
+                return ""
+
         reg["native"].append({
-            "name": "google_calendar", "does": "schedule meetings on the owner's Google",
+            "name": "google_calendar",
+            "does": ("on the owner's Google Calendar: "
+                     + (_family_verbs("google_calendar") or "schedule meetings")),
             "kind": "native", "write": True, "approval": "approve", "connected": google_on,
+            "verbs": _family_verbs("google_calendar"),
         })
         reg["native"].append({
-            "name": "gmail_send", "does": "send email as the owner",
+            "name": "gmail_send",
+            "does": ("as the owner's Gmail: "
+                     + (_family_verbs("gmail") or "send email")),
             "kind": "native", "write": True, "approval": "approve", "connected": google_on,
+            "verbs": _family_verbs("gmail"),
+        })
+        # Google Drive actions are Pipedream-only (no native plane): shown
+        # connected only when the org linked google_drive in Connect.
+        drive_on = False
+        try:
+            from .. import pipedream_executor as _pe2
+
+            drive_on = _pe2.enabled() and _pe2.app_connected(org_id, "google_drive")
+        except Exception:  # noqa: BLE001
+            drive_on = False
+        reg["native"].append({
+            "name": "google_drive",
+            "does": ("in the owner's Drive: "
+                     + (_family_verbs("google_drive") or "share and organize files")),
+            "kind": "native", "write": True, "approval": "approve", "connected": drive_on,
+            "verbs": _family_verbs("google_drive"),
         })
 
         # Native Asana — Petra-only: the org is connected AND this avatar is
@@ -110,9 +148,12 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
         if asana_on:
             reg["native"].append({
                 "name": "asana_tasks",
-                "does": "create and update tasks in the team's Asana workspace",
+                "does": ("in the team's Asana workspace: "
+                         + (_family_verbs("asana")
+                            or "create and update tasks")),
                 "kind": "native", "write": True, "approval": "approve",
                 "connected": asana_on,
+                "verbs": _family_verbs("asana"),
             })
 
         # Generic Pipedream apps enabled for THIS avatar (Notion / GitHub / Jira
@@ -253,17 +294,34 @@ def brief(reg: dict | None) -> str:
     asana_on = any(
         t.get("name") == "asana_tasks" and t.get("connected") for t in native
     )
+    drive_on = any(
+        t.get("name") == "google_drive" and t.get("connected") for t in native
+    )
+
+    def _verbs_of(name: str) -> str:
+        for t in native:
+            if t.get("name") == name and t.get("verbs"):
+                return str(t["verbs"])
+        return ""
+
     ced = reg.get("cedric") or {}
     connected = [t["name"] for t in (ced.get("connected") or [])][:8]
     available = [str(n) for n in (ced.get("available") or [])][:6]
     lines = ["[YOUR TOOLS — this meeting]"]
+    # Verb lists come from the EXECUTOR's own registry (assemble derives them
+    # from the action mapper) — what she claims is exactly what can run.
+    cal_v = _verbs_of("google_calendar") or "create event"
+    gm_v = _verbs_of("gmail_send") or "send"
+    dr_v = _verbs_of("google_drive") or "share file"
+    as_v = _verbs_of("asana_tasks") or "create task"
     lines.append(
         "Native: capture any requested task for approval (queue_action); "
-        + ("Google Calendar + Gmail (connected — executed after owner approval); "
+        + (f"Calendar ({cal_v}) + Gmail ({gm_v}) — connected, run after owner approval; "
            if google_on else
            "Google Calendar + Gmail NOT connected (owner can connect in the dashboard); ")
-        + ("Asana tasks (connected — executed after owner approval); "
-           if asana_on else "")
+        + (f"Asana ({as_v}) — connected; " if asana_on else "")
+        + (f"Drive ({dr_v}) — connected; " if drive_on else
+           "Drive NOT connected (owner can connect it in Connections); ")
         + "calculator; date math."
     )
     if reg.get("slack_blocked"):
