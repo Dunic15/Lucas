@@ -145,21 +145,31 @@ def test_payload_shape(client):
     assert any(f["kind"] == "follow_up_email" for f in data["files"])
 
 
-def test_overview_roster_from_session(client):
-    _seed_artifact("bot_ws_roster", ORG_A)
-    session = store.create(
-        "bot_ws_roster", "https://meet.google.com/ws-test", "laura", ORG_A
+def test_overview_roster_from_archived_meeting(client):
+    """Production reality: finalize calls store.remove(bot_id), so an archived
+    meeting has NO live session — the roster must come from the ARCHIVED
+    transcript speakers (avatar's own lines excluded), not store.get(bot_id)
+    (which is None here). Seeds a finalized meeting with a saved artifact and
+    NO live session, and asserts the roster is populated from the archive."""
+    transcript = (
+        "Ben: Let's confirm the sandbox for day one.\n"
+        "laura: Noted — I'll draft the follow-up.\n"
+        "Priya: Security sign-off is still pending.\n"
+        "Ben: Right, we'll chase that.\n"
     )
-    session.participants["p1"] = {
-        "id": "p1", "name": "Ben", "kind": "human", "here": True,
-    }
-    session.participants["laura"] = {
-        "id": "laura", "name": "laura", "kind": "avatar", "here": True,
-    }
+    _seed_artifact("bot_ws_roster", ORG_A, transcript=transcript)
+    assert store.get("bot_ws_roster") is None  # finalized: no live session
+
     data = client.get("/dashboard/meetings/bot_ws_roster").json()
-    names = {p["name"] for p in data["overview"]["participants"]}
+    roster = data["overview"]["participants"]
+    names = {p["name"] for p in roster}
     assert "Ben" in names
-    assert "laura" not in names  # the avatar's own presence is not roster
+    assert "Priya" in names
+    assert "laura" not in names  # the avatar's own lines are not attendance
+    # Archived attendees are not "here" — the meeting is over.
+    assert all(p["here"] is False for p in roster)
+    # Deduped case-insensitively: Ben spoke twice, one roster entry.
+    assert sum(1 for p in roster if p["name"] == "Ben") == 1
 
 
 def test_timeline_is_time_ordered_and_merges_events(client):

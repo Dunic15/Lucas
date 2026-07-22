@@ -2954,7 +2954,7 @@
         var isUrl=/^https?:\/\//.test(f.ref||"");
         var label=esc(f.label||f.kind||"file");
         return '<div class="d"><span class="ic">↳</span><span>'+label+
-          (isUrl?' — <a href="'+esc(f.ref)+'" target="_blank" rel="noopener">open ↗</a>':(f.ref?' <span class="sub">('+esc(f.ref)+')</span>':''))+'</span></div>'; }).join("")+
+          (isUrl?' — <a href="'+esc(f.ref)+'" target="_blank" rel="noopener noreferrer">open ↗</a>':(f.ref?' <span class="sub">('+esc(f.ref)+')</span>':''))+'</span></div>'; }).join("")+
       '</div>'; }
 
     $("#mw-body").innerHTML=ovHTML+smHTML+decHTML+actHTML+tlHTML+filesHTML;

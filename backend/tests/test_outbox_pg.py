@@ -1009,6 +1009,53 @@ def test_durable_artifacts_are_rls_isolated_and_keep_composite_pk(cp, pg):
     assert pk_columns == ["org_id", "bot_id"]
 
 
+def test_action_capture_times_scopes_by_bot_and_is_rls_isolated(cp, pg):
+    """The meeting-workspace timeline's 'captured' anchor under Postgres.
+    action_capture_times joins action_capture_events → queued_actions to scope
+    by bot, returns the earliest stamp per action, and is FORCE-RLS isolated so
+    one org never reads another org's capture stamps (the workspace payload
+    calls this through outbox.action_capture_times → _pg_call)."""
+    org_a = _org(cp, "capture-a")
+    org_b = _org(cp, "capture-b")
+    session_a = SimpleNamespace(
+        org_id=org_a,
+        bot_id="bot-cap-a",
+        integration=_integration(org_a),
+        queued_actions=[],
+    )
+    item, created = tools.capture_action_once(
+        session_a,
+        "Send the reviewed recap",
+        source_event_key="cap-a-" + "a" * 58,
+        source_fingerprint="cap-a-" + "b" * 58,
+    )
+    assert created is True
+    action_id = item["action_id"]
+    # The per-source action_capture_events row (the timeline's capture anchor)
+    # lands on the ASR-continuation write in the PG path.
+    _canonical, extended = tools.extend_action_once(
+        session_a,
+        item,
+        "by Friday",
+        source_event_key="cap-a-cont-" + "c" * 53,
+        source_fingerprint="cap-a-cont-" + "d" * 53,
+    )
+    assert extended is True
+
+    # The captured action surfaces with a positive epoch stamp for its bot.
+    times = outbox_pg.action_capture_times(org_a, "bot-cap-a")
+    assert set(times) == {action_id}
+    assert times[action_id] > 0
+
+    # bot-scoped: a different bot in the same org joins to nothing.
+    assert outbox_pg.action_capture_times(org_a, "bot-other") == {}
+    # FORCE-RLS isolated: a foreign org reads nothing for the same bot id.
+    assert outbox_pg.action_capture_times(org_b, "bot-cap-a") == {}
+
+    # And the same read through the DAL dispatcher the workspace payload uses.
+    assert set(outbox.action_capture_times(org_a, "bot-cap-a")) == {action_id}
+
+
 def test_non_transient_failure_marks_failed_without_retry(cp, monkeypatch):
     """A non-transient delivery failure (e.g. Cedric 401) finishes the attempt
     with next_attempt_at=NULL. Regression for the prod 2026-07-20 outage: the

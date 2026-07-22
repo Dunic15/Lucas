@@ -77,6 +77,27 @@ def _transcript_speakers(artifact: dict) -> set[str]:
     return out
 
 
+def _transcript_speaker_names(artifact: dict) -> list[str]:
+    """Ordered, deduped DISPLAY names of the humans who spoke in the archived
+    transcript ('Name: text' lines), the avatar's own lines excluded. This is
+    the roster source once the meeting is finalized: finalize calls
+    store.remove(bot_id), which cascade-drops the live session (and its
+    session_participants rows), so for every drill-in-able meeting the live map
+    is already gone. Names only — never the transcript text, which stays PII
+    behind the show_transcripts pref."""
+    avatar_id = str(artifact.get("avatar_id") or "").casefold()
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in str(artifact.get("transcript") or "").splitlines():
+        name, sep, _ = line.partition(":")
+        name = name.strip()
+        key = name.casefold()
+        if sep and key and key != avatar_id and key not in seen:
+            seen.add(key)
+            out.append(name)
+    return out
+
+
 def _name_matches(user_name: str, speakers: set[str]) -> bool:
     """ASR-tolerant name match: exact full-name, same first name, or first
     names where one prefixes the other at >= 4 chars ('Anant' drifts from
@@ -3279,16 +3300,27 @@ def _visible_meeting_row(
 
 
 def _workspace_overview(row: dict, session) -> dict:
-    """Header facts: who/where/when + the human roster. Roster comes from the
-    live session's participant map (avatar's own lines excluded); duration and
-    saved_at come from the artifact. usage_sessions (in_call_at/closed_at) is a
-    Postgres-only refinement — the SQLite/demo path derives start from
-    saved_at − duration, so the shape is identical either way."""
+    """Header facts: who/where/when + the human roster. The roster is sourced
+    from the ARCHIVED meeting (transcript speaker labels — the avatar's own
+    lines excluded), because finalize removes the live session before a meeting
+    is drill-in-able, so store.get(bot_id) is None for every archived meeting.
+    A still-live session (rare: viewing an in-progress meeting) is preferred
+    when present and carries live here-status; its participant dict is snapshot
+    under store._LOCK so a concurrent live mutation can't raise RuntimeError
+    (dict changed size) on the threadpool. duration and saved_at come from the
+    artifact. usage_sessions (in_call_at/closed_at) is a Postgres-only
+    refinement — the SQLite/demo path derives start from saved_at − duration,
+    so the shape is identical either way."""
     art = row.get("artifact") or {}
     roster: list[dict] = []
     seen: set[str] = set()
     if session is not None:
-        for participant in getattr(session, "participants", {}).values():
+        try:
+            with store._LOCK:  # snapshot: no unlocked iteration on the live map
+                live = list(getattr(session, "participants", {}).values())
+        except Exception:  # noqa: BLE001 — a roster read never 500s the page
+            live = []
+        for participant in live:
             name = str(participant.get("name") or "").strip()
             if not name or str(participant.get("kind") or "") == "avatar":
                 continue
@@ -3297,6 +3329,14 @@ def _workspace_overview(row: dict, session) -> dict:
                 continue
             seen.add(key)
             roster.append({"name": name[:80], "here": bool(participant.get("here"))})
+    # Archived source: transcript speakers survive finalize (the live session
+    # does not). `here` is False — the meeting is over.
+    for name in _transcript_speaker_names(art):
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        roster.append({"name": name[:80], "here": False})
     saved_at = row.get("saved_at")
     duration = int(art.get("duration_seconds") or 0)
     started_at = (
@@ -3465,11 +3505,11 @@ def _meeting_workspace_payload(
     art = row.get("artifact") or {}
     scope = caller_org or settings.demo_org_id
 
-    # Same stale-executing settle the summary/action doors run: a claim held by
-    # a process that died mid-call must surface as a truthful terminal receipt.
-    from .. import action_reconcile
-
-    action_reconcile.maybe_reconcile(scope)
+    # NOTE: no top-level maybe_reconcile here — org_api._canonical_action_view
+    # already runs the throttled stale-executing settle per action below, so a
+    # claim held by a process that died mid-call still surfaces as a truthful
+    # terminal receipt. A page with zero actions has nothing to settle for the
+    # display anyway.
 
     show_transcripts = store.get_org_pref(scope, "show_transcripts") == "1"
     session = store.get(bot_id)
