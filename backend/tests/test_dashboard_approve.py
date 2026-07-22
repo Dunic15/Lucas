@@ -376,3 +376,37 @@ def test_browser_route_with_operator_off_fails_with_reason(client):
     st = ledger.action_statuses(["b1"], org_id=user["org_id"])["b1"]
     assert st["status"] == "failed"
     assert "browser operator" in st["detail"]
+
+
+def test_rescue_typing_receives_the_meeting_brief(client, monkeypatch):
+    """The approve-door retype must see the artifact SUMMARY: clarify-given
+    details (times, emails) live there, not in the card text (live
+    2026-07-22 — 'schedule a meeting for tomorrow with Anant' typed to
+    nothing without them)."""
+    monkeypatch.setattr(settings, "native_executor", True)
+    user = _login(client)
+    action = {"item": "Can you schedule a meeting for tomorrow with Anant?",
+              "owner": "", "action_id": "a1"}
+    store.save_artifact(
+        "bot_a1",
+        {"summary": "Agreed: meeting tomorrow at 3 PM with anant@sffstudio.com.",
+         "actions": [action], "checklist": [action],
+         "org_id": user["org_id"], "avatar_id": "petra",
+         "meeting_url": "https://meet.google.com/appr-test",
+         "transcript": "PII must never leak"},
+        org_id=user["org_id"],
+    )
+    from app.brain import engine as brain_engine
+
+    seen = {}
+
+    def fake_type_actions(actions, brief="", **kw):
+        seen["brief"] = brief
+        seen["item"] = actions[0].get("item") if actions else ""
+        return list(actions)  # untyped: flow proceeds to tracked-only
+
+    monkeypatch.setattr(brain_engine, "type_actions", fake_type_actions)
+    r = client.post("/dashboard/actions/a1/approve")
+    assert r.status_code == 200
+    assert "3 PM with anant@sffstudio.com" in seen["brief"]
+    assert "schedule a meeting" in seen["item"].lower()
