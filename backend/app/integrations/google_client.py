@@ -840,6 +840,21 @@ def calendar_brief(org_id: str) -> str:
     if cached and now - cached[0] < _BRIEF_TTL:
         return cached[1]
     res = list_calendar_events(org, max_results=_BRIEF_MAX_EVENTS)
+    if not res.get("ok"):
+        # Native first, Pipedream second (owner call 2026-07-22): an org whose
+        # Google lives ONLY in Connect still gets calendar sight at join —
+        # without this, the avatar had no data and improvised "I'll check it"
+        # promises all call long.
+        try:
+            from .. import pipedream_executor
+
+            pd = pipedream_executor.read_calendar_events(
+                org, max_results=_BRIEF_MAX_EVENTS
+            )
+            if pd.get("ok"):
+                res = pd
+        except Exception:  # noqa: BLE001 — the join never fails on a brief
+            pass
     brief = ""
     if res.get("ok"):
         lines = [

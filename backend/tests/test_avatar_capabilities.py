@@ -175,11 +175,13 @@ def test_google_action_skipped_when_capability_off(client, monkeypatch):
     body = r.json()
     assert body["executed"] is False and body["capability_blocked"] is True
     assert not calls  # the native executor never ran the Google action
-    # Google is off for this avatar, so it re-routes to Cedric; with no Cedric
-    # wired here nothing can run, and the row says so honestly rather than
-    # sitting at a silent "approved".
+    # Google is off for this avatar and this org has NO Slack agent linked:
+    # since 2026-07-22 ("Cedric lives inside Slack") that's a track-only
+    # approved card — recorded for the humans, nothing dispatches, never a
+    # doomed "couldn't complete".
     st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
-    assert st and st["status"] == "failed"
+    assert st and st["status"] == "approved"
+    assert "tracked only" in st["detail"]
 
 
 def test_google_action_runs_when_capability_not_off(client, monkeypatch):

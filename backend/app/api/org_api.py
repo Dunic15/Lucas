@@ -250,7 +250,10 @@ def _execute_route(
         # Legacy actions (pre routing-fields) derive the route the same per-family
         # way finalize now stamps it (Pipedream for Asana + long tail when on,
         # else native for Google/Slack, else Cedric).
-        executor.route_for_typed(action.get("typed"), org)
+        executor.route_for_typed(
+            action.get("typed"), org,
+            item_text=str(action.get("item") or action.get("action") or ""),
+        )
     )
     if route == "cedric":
         # handshake B2: hand the approved action to Cedric for execution

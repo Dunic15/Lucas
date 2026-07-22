@@ -503,3 +503,64 @@ def test_test_integrations_needs_email(client, monkeypatch):
     r = client.post("/dashboard/test/integrations", json={"email": "notanemail"},
                     headers={"sec-fetch-site": "same-origin"})
     assert r.status_code == 400
+
+
+def test_untyped_route_is_manual_without_cedric(monkeypatch):
+    """Owner rule 2026-07-22 ('Cedric lives inside Slack'): an org with NO
+    connected cedric-brain never gets a 'cedric' stamp — untyped work becomes
+    a track-only 'manual' card. Linked orgs, the demo org and the no-org
+    legacy path keep the Slack-agent route."""
+    from app import store as store_mod
+    from app.config import settings
+
+    monkeypatch.setattr(store_mod, "connections_for_org", lambda org: [])
+    assert executor.route_for_typed(None, "org-real") == "manual"
+    assert executor.route_for_typed({"type": "weird.unknown"}, "org-real") == "manual"
+    # Even an explicit Slack ask stays manual when nothing is linked.
+    assert executor.route_for_typed(
+        None, "org-real", item_text="post the recap to Slack") == "manual"
+    monkeypatch.setattr(
+        store_mod, "connections_for_org",
+        lambda org: [{"provider": "cedric-brain", "status": "connected"}],
+    )
+    # Linked org: ONLY an explicit Slack ask reaches the Slack agent
+    # (owner rule 2026-07-22 part two — Cedric is never the catch-all).
+    assert executor.route_for_typed(
+        None, "org-real", item_text="post the recap to Slack") == "cedric"
+    assert executor.route_for_typed(
+        None, "org-real", item_text="share it in #general please") == "cedric"
+    assert executor.route_for_typed(
+        None, "org-real", item_text="sort out the vendor situation") == "manual"
+    assert executor.route_for_typed(None, "org-real") == "manual"
+    # Demo / no-org service scope keeps the legacy catch-all.
+    assert executor.route_for_typed(None, settings.demo_org_id) == "cedric"
+    assert executor.route_for_typed(None) == "cedric"
+
+
+def test_read_calendar_events_via_proxy(monkeypatch):
+    """The calendar-brief Pipedream fallback: read-only upcoming events through
+    the Connect proxy, same {'ok','events'} contract as the native reader."""
+    _enable_pd(monkeypatch)
+    monkeypatch.setattr(pipedream_client, "enabled", lambda: True)
+    monkeypatch.setattr(
+        pipedream_client, "list_accounts",
+        lambda org, app="": [{"id": "apn_1", "healthy": True}],
+    )
+    seen = {}
+
+    def fake_proxy(org, acct, method, url, **kw):
+        seen.update(org=org, acct=acct, method=method, url=url)
+        return {"ok": True, "json": {"items": [
+            {"summary": "Standup", "start": {"dateTime": "2026-07-23T09:00:00Z"}},
+        ]}}
+
+    monkeypatch.setattr(pipedream_client, "proxy_request", fake_proxy)
+    res = pipedream_executor.read_calendar_events("org9", max_results=5)
+    assert res["ok"] and res["events"][0]["summary"] == "Standup"
+    assert seen["org"] == "org9" and seen["acct"] == "apn_1"
+    assert seen["method"] == "GET"
+    assert "maxResults=5" in seen["url"] and "singleEvents=true" in seen["url"]
+    # Not connected in Pipedream → clean error, never a raise.
+    monkeypatch.setattr(pipedream_client, "list_accounts", lambda org, app="": [])
+    out = pipedream_executor.read_calendar_events("org9")
+    assert not out["ok"] and "not connected" in out["error"]
