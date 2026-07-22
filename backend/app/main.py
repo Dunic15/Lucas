@@ -558,12 +558,20 @@ async def _vendor_watch_loop() -> None:
         try:
             results = await run_in_threadpool(vendor_health.run_checks)
             text = vendor_health.slack_text(results)
+            posted = False
             if text and settings.slack_webhook_url:
-                await run_in_threadpool(actions.post_to_slack, text)
+                # Dedupe: the boot-time first run re-posted the SAME warning
+                # on every deploy (vendor_health.should_post).
+                if await run_in_threadpool(vendor_health.should_post, text):
+                    await run_in_threadpool(actions.post_to_slack, text)
+                    await run_in_threadpool(vendor_health.mark_posted, text)
+                    posted = True
             bad = [r for r in results if r["status"] in ("warn", "crit")]
             print(
                 f"[vendors] check: {len(results) - len(bad)} ok, {len(bad)} "
-                f"da attenzionare{' (postato su Slack)' if text and settings.slack_webhook_url else ''}",
+                f"da attenzionare"
+                f"{' (postato su Slack)' if posted else ''}"
+                f"{' (ripetizione soppressa)' if text and settings.slack_webhook_url and not posted else ''}",
                 flush=True,
             )
         except Exception as e:  # noqa: BLE001 — the watchdog never dies

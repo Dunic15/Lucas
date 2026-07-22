@@ -140,3 +140,27 @@ def test_slack_text_lists_bad_crit_first():
     assert "google-oauth" in text and "elevenlabs" in text
     assert text.index("google-oauth") < text.index("elevenlabs")  # crit first
     assert "recall" not in text.replace("(altri", "")  # ok items summarized only
+
+
+def test_alert_dedupe_same_content_suppressed(tmp_path, monkeypatch):
+    """The boot-time first run re-posted the SAME low-credit warning on every
+    deploy (4x in 30 min, live 2026-07-22). Same content inside the 6h window
+    is suppressed; changed content or an elapsed window posts again."""
+    from app import store, vendor_health
+
+    monkeypatch.setattr(store, "STORE_PATH", tmp_path / "store.sqlite3")
+    store._init_db()
+
+    text = ":warning: runpod: credito $1.67"
+    assert vendor_health.should_post(text)          # first time: post
+    vendor_health.mark_posted(text)
+    assert not vendor_health.should_post(text)      # same content: suppressed
+    assert vendor_health.should_post("different")   # new content: post
+    # Age the window: same content posts again after 6h.
+    monkeypatch.setattr(
+        vendor_health.time, "time",
+        lambda _t=vendor_health.time.time: _t() + 7 * 3600,
+    )
+    assert vendor_health.should_post(text)
+    # Empty alert never posts.
+    assert not vendor_health.should_post("")

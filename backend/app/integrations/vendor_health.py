@@ -195,6 +195,53 @@ def run_checks() -> list[dict]:
     return results
 
 
+# Repeat-suppression for the Slack alert. The watch loop fires ~2 min after
+# EVERY boot (so a dead key is flagged right after a deploy) — but on a day of
+# back-to-back deploys that re-posted the SAME low-credit warning on every
+# instance flip (4× in 30 min, live 2026-07-22). Post when the alert CONTENT
+# changes; re-post unchanged content at most every _ALERT_REPEAT_S.
+_ALERT_REPEAT_S = 6 * 3600.0
+
+
+def _alert_fp(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256((text or "").encode()).hexdigest()[:16]
+
+
+def should_post(text: str) -> bool:
+    """True when this alert is new content, or the same content not posted in
+    the last 6h. Best-effort: any store hiccup means POST (an extra alert
+    beats a silent outage)."""
+    if not text:
+        return False
+    try:
+        from .. import store
+        from ..config import settings
+
+        org = settings.demo_org_id  # system scope for the singleton watchdog
+        prev_fp = store.get_org_pref(org, "vendor_alert_fp") or ""
+        prev_at = float(store.get_org_pref(org, "vendor_alert_at") or 0.0)
+    except Exception:  # noqa: BLE001
+        return True
+    if _alert_fp(text) != prev_fp:
+        return True
+    return (time.time() - prev_at) >= _ALERT_REPEAT_S
+
+
+def mark_posted(text: str) -> None:
+    """Record the just-posted alert for the dedupe window. Best-effort."""
+    try:
+        from .. import store
+        from ..config import settings
+
+        org = settings.demo_org_id
+        store.set_org_pref(org, "vendor_alert_fp", _alert_fp(text))
+        store.set_org_pref(org, "vendor_alert_at", str(time.time()))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def slack_text(results: list[dict]) -> str:
     """Alert body: only the actionable items, ok/off summarized in one line.
     Returns "" when everything is fine (caller then posts nothing)."""
