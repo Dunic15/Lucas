@@ -51,15 +51,19 @@ def _line(bot_id: str, speaker: str, pid, text: str) -> dict:
     }
 
 
-def _post(payload: dict) -> dict:
+async def _post_async(payload: dict) -> dict:
     class FakeRequest:
         headers: dict = {}
 
         async def body(self) -> bytes:
             return json.dumps(payload).encode()
 
-    resp = asyncio.run(main.recall_webhook(FakeRequest()))
+    resp = await main.recall_webhook(FakeRequest())
     return json.loads(resp.body)
+
+
+def _post(payload: dict) -> dict:
+    return asyncio.run(_post_async(payload))
 
 
 def _mute(monkeypatch) -> list:
@@ -184,6 +188,41 @@ def test_empty_room_rejoin_cancels_finalize(tmp_path, monkeypatch):
     store.remove(s.bot_id)
 
 
+def test_leave_rejoin_leave_gets_a_fresh_full_grace(tmp_path, monkeypatch):
+    """The second leave must not inherit the first leave's older deadline."""
+    s = _session(tmp_path, monkeypatch, bot_id="empty-room-renew")
+    s.participant_event("Kai", 1, here=True)
+
+    monkeypatch.setattr(main, "_EMPTY_ROOM_GRACE_S", 0.08)
+    finalized = []
+
+    async def fake_finalize(bot_id, source="", **kw):
+        finalized.append((bot_id, source))
+        return {}
+
+    monkeypatch.setattr(main, "_finalize_session", fake_finalize)
+
+    async def scenario():
+        s.participant_event("Kai", 1, here=False)
+        main._schedule_empty_room_leave(s)
+        await asyncio.sleep(0.03)
+
+        s.participant_event("Kai", 1, here=True)
+        main._invalidate_empty_room_leave(s)
+        s.participant_event("Kai", 1, here=False)
+        main._schedule_empty_room_leave(s)
+
+        # The original deadline has passed, but the renewed one has not.
+        await asyncio.sleep(0.06)
+        assert not finalized
+
+        await asyncio.sleep(0.04)
+
+    asyncio.run(scenario())
+    assert finalized == [(s.bot_id, "empty_room")]
+    store.remove(s.bot_id)
+
+
 def test_leave_webhook_schedules_empty_room_check(tmp_path, monkeypatch):
     """End-to-end through the webhook: the LAST leave event arms the check."""
     s = _session(tmp_path, monkeypatch, bot_id="empty-room-3")
@@ -198,12 +237,61 @@ def test_leave_webhook_schedules_empty_room_check(tmp_path, monkeypatch):
             },
         }
 
-    join = dict(leave_payload(1, "Kai"))
-    join["event"] = "participant_events.join"
-    _post(join)
-    assert getattr(s, "empty_room_task", None) is None
-    _post(leave_payload(1, "Kai"))
-    assert getattr(s, "empty_room_task", None) is not None
+    async def scenario():
+        join = dict(leave_payload(1, "Kai"))
+        join["event"] = "participant_events.join"
+        await _post_async(join)
+        assert getattr(s, "empty_room_task", None) is None
+
+        await _post_async(leave_payload(1, "Kai"))
+        assert getattr(s, "empty_room_task", None) is not None
+        main._invalidate_empty_room_leave(s)  # deterministic test cleanup
+
+    asyncio.run(scenario())
+    store.remove(s.bot_id)
+
+
+def test_agent_join_during_grace_keeps_meter_finalize_armed(tmp_path, monkeypatch):
+    """A bot/agent join must NOT cancel a pending empty-room finalize.
+
+    Empty-room grace is a HUMAN-presence property (roster() counts only humans).
+    A join never reschedules, so if an agent/bot join (bot reconnect, co-avatar)
+    were allowed to cancel the pending finalize, the room would sit human-empty
+    with NO timer and the per-minute meter would leak until the call actually
+    ends. The empty-room block is therefore gated on kind != agent.
+    """
+    s = _session(tmp_path, monkeypatch, bot_id="empty-room-agent-join")
+    _mute(monkeypatch)
+
+    def participant_payload(event, pid, name, extra=None):
+        p = {"id": pid, "name": name}
+        if extra:
+            p.update(extra)
+        return {
+            "event": event,
+            "data": {"bot": {"id": s.bot_id}, "data": {"participant": p}},
+        }
+
+    async def scenario():
+        # A human joins then leaves → the last-human leave arms the finalize.
+        await _post_async(participant_payload("participant_events.join", 1, "Kai"))
+        await _post_async(participant_payload("participant_events.leave", 1, "Kai"))
+        armed = getattr(s, "empty_room_task", None)
+        assert armed is not None and not armed.done()
+
+        # A bot/agent join lands during the grace window (is_agent → kind=agent).
+        await _post_async(
+            participant_payload(
+                "participant_events.join", 99, "Laura", {"is_agent": True}
+            )
+        )
+
+        # Meter-safety invariant: the pending finalize survives, untouched.
+        assert getattr(s, "empty_room_task", None) is armed
+        assert not armed.cancelled()
+        main._invalidate_empty_room_leave(s)  # deterministic cleanup
+
+    asyncio.run(scenario())
     store.remove(s.bot_id)
 
 

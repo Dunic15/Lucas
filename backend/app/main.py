@@ -1702,17 +1702,41 @@ def _followup_speaker_ok(session: "store.Session", speaker_id: str) -> bool:
 _EMPTY_ROOM_GRACE_S = 75.0
 
 
-def _schedule_empty_room_leave(session: "store.Session") -> None:
-    if getattr(session, "empty_room_task", None) is not None:
-        return  # one pending check per session is plenty
+def _invalidate_empty_room_leave(session: "store.Session") -> None:
+    """Invalidate the current empty-room deadline when the room is occupied.
 
-    async def _check(bot_id: str) -> None:
+    A join starts a new room-presence generation. Cancelling and clearing the
+    task lets a later non-empty -> empty transition receive a full grace period
+    instead of inheriting the deadline from an earlier disconnect.
+    """
+    session.empty_room_generation = (
+        getattr(session, "empty_room_generation", 0) + 1
+    )
+    task = getattr(session, "empty_room_task", None)
+    if task is not None and not task.done():
+        task.cancel()
+    session.empty_room_task = None
+
+
+def _schedule_empty_room_leave(session: "store.Session") -> None:
+    task = getattr(session, "empty_room_task", None)
+    if task is not None and not task.done():
+        return  # already timing this exact empty-room generation
+
+    generation = getattr(session, "empty_room_generation", 0) + 1
+    session.empty_room_generation = generation
+
+    async def _check(bot_id: str, expected_generation: int) -> None:
         try:
             await asyncio.sleep(_EMPTY_ROOM_GRACE_S)
             live = store.get(bot_id)
             if live is None:
                 return  # already finalized elsewhere
-            live.empty_room_task = None
+            if (
+                getattr(live, "empty_room_generation", 0)
+                != expected_generation
+            ):
+                return  # a join invalidated this deadline
             av = avatar_resolver.for_session(live)
             if live.roster(av.name):
                 return  # someone rejoined during the grace window
@@ -1722,10 +1746,24 @@ def _schedule_empty_room_leave(session: "store.Session") -> None:
                 flush=True,
             )
             await _finalize_session(bot_id, source="empty_room")
+        except asyncio.CancelledError:
+            return  # a participant rejoined; the next leave gets a fresh timer
         except Exception as exc:  # noqa: BLE001 — a failed check must not crash the loop
             print(f"[leave] empty-room check failed ({type(exc).__name__})", flush=True)
+        finally:
+            live = store.get(bot_id)
+            if (
+                live is not None
+                and getattr(live, "empty_room_generation", 0)
+                == expected_generation
+                and getattr(live, "empty_room_task", None)
+                is asyncio.current_task()
+            ):
+                live.empty_room_task = None
 
-    session.empty_room_task = asyncio.create_task(_check(session.bot_id))
+    session.empty_room_task = asyncio.create_task(
+        _check(session.bot_id, generation)
+    )
 
 
 _LEADING_VOCATIVE = re.compile(r"^\s*([A-Za-zà-ù]+)\s*,\s+")
@@ -3215,13 +3253,19 @@ async def recall_webhook(request: Request) -> JSONResponse:
             )
             label = identity["name"]
             avatar = avatar_resolver.for_session(session)
-            if (
-                event == "participant_events.leave"
-                and not session.roster(avatar.name)
-            ):
-                # Last human gone → grace-checked auto-finalize (meter safety).
-                _schedule_empty_room_leave(session)
             if identity["kind"] != "agent":
+                # Empty-room grace is a HUMAN-presence property: roster() counts
+                # only humans, so gate the whole block on kind != agent. An agent
+                # or bot join (bot reconnect, co-avatar) must NOT cancel a pending
+                # finalize — a join never reschedules, so the meter would leak
+                # until the call actually ends.
+                if event == "participant_events.join":
+                    # A human joined → invalidate the old deadline; a later
+                    # last-human leave receives a full fresh grace.
+                    _invalidate_empty_room_leave(session)
+                elif not session.roster(avatar.name):
+                    # Last human gone → grace-checked auto-finalize (meter safety).
+                    _schedule_empty_room_leave(session)
                 # ── footing: greet a late joiner by name ──
                 # Only when the meeting is genuinely underway (start-of-call
                 # joins greet each other anyway), only for NEW named humans,
