@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import action_plane, executor, native_runtime, store  # noqa: E402
+from app.config import settings  # noqa: E402
 
 
 def test_runtime_supports_all_current_native_writes():
