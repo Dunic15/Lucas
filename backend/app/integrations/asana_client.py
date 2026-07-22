@@ -82,10 +82,28 @@ def _token(org_id: str) -> tuple[str, str]:
         row = store.get_org_oauth(org, provider="asana")
     except Exception:  # noqa: BLE001
         row = None
-    pat = (row or {}).get("refresh_token", "") or settings.asana_token.strip()
+    pat = (row or {}).get("refresh_token", "")
+    if not pat and _env_pat_allowed(org):
+        # The ASANA_TOKEN env PAT is the DEPLOYMENT owner's own workspace. It
+        # may serve only the deployment's own (demo/key-free) org — never an
+        # arbitrary tenant, which would execute that tenant's approved actions
+        # against someone else's Asana (security audit 2026-07-23, gap #2).
+        pat = settings.asana_token.strip()
     if not pat:
         return "", "Asana is not connected for this org"
     return pat, ""
+
+
+def _env_pat_allowed(org_id: str) -> bool:
+    """May this org fall back to the deployment-wide ASANA_TOKEN?
+
+    Only the deployment's own org (the key-free demo tenant) may: the env PAT
+    authenticates the DEPLOYMENT OWNER's Asana workspace, so handing it to a
+    real tenant would run that tenant's approved writes inside the owner's
+    workspace — cross-tenant execution with a truthful-looking receipt.
+    """
+    org = (org_id or "").strip()
+    return not org or org == str(settings.demo_org_id or "").strip()
 
 
 def _oauth_access_token(org_id: str, row: dict) -> tuple[str, str]:

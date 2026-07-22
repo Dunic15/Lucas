@@ -1821,7 +1821,11 @@ async def disconnect_asana(request: Request) -> JSONResponse:
     asana_client._reset_brief_cache()
     return JSONResponse(
         {"ok": True, "removed": bool(removed_oauth or removed_pat),
-         "still_connected_via_env": bool(settings.asana_token.strip())},
+         # The env PAT is the DEPLOYMENT owner's workspace and now serves only
+         # the deployment's own org, so a real tenant that disconnects really
+         # is disconnected — saying otherwise would be a false reassurance.
+         "still_connected_via_env": bool(settings.asana_token.strip())
+         and asana_client._env_pat_allowed(str(user["org_id"]))},
         headers=_NO_STORE,
     )
 

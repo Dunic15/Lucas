@@ -41,10 +41,18 @@ _TASKS = [
 ]
 
 
-def _mock_asana(monkeypatch, *, task_resp=None):
+def _mock_asana(monkeypatch, *, task_resp=None, org_id="org-a"):
     """asana_client with a token configured and Asana mocked; returns the
-    captured request log [(method, path, body-or-params)]."""
+    captured request log [(method, path, body-or-params)].
+
+    The token is seeded as the ORG'S OWN grant. It used to rely on the
+    ASANA_TOKEN env fallback, but that PAT is the deployment owner's workspace
+    and no longer serves an arbitrary tenant (security fix 2026-07-23) — and a
+    tenant connected to its own Asana is the realistic shape anyway."""
     monkeypatch.setattr(settings, "asana_token", "pat-env")
+    monkeypatch.setattr(settings, "session_secret", "sek")
+    if org_id:
+        store.set_org_oauth(org_id, "pat-env", provider="asana")
     monkeypatch.setattr(settings, "asana_workspace_gid", "ws-1")
     log: list[tuple] = []
     task_resp = task_resp or {
@@ -83,10 +91,18 @@ def test_not_connected_is_soft(monkeypatch, tmp_path):
 
 
 def test_org_row_beats_env_token(monkeypatch, tmp_path):
+    """Precedence, and the tenancy boundary around the env PAT.
+
+    ASANA_TOKEN is the DEPLOYMENT owner's workspace, so it serves only the
+    deployment's own org; a real tenant needs its own grant (security fix
+    2026-07-23 — before it, 'org-a' silently executed inside the owner's
+    Asana)."""
     _fresh_store(monkeypatch, tmp_path)
     monkeypatch.setattr(settings, "session_secret", "sek")
     monkeypatch.setattr(settings, "asana_token", "pat-env")
-    assert asana_client._token("org-a") == ("pat-env", "")
+    assert asana_client._token(str(settings.demo_org_id)) == ("pat-env", "")
+    token, err = asana_client._token("org-a")
+    assert token == "" and "not connected" in err
     store.set_org_oauth("org-a", "pat-org", provider="asana")
     assert asana_client._token("org-a") == ("pat-org", "")
 
@@ -262,8 +278,10 @@ def test_avatar_asana_enabled_rules(monkeypatch, tmp_path):
     _fresh_store(monkeypatch, tmp_path)
     # Not connected → never eligible.
     assert main_module._avatar_asana_enabled("org-a", "petra") is False
-    # Connected → default ON for any avatar…
-    monkeypatch.setattr(settings, "asana_token", "pat-env")
+    # Connected (the org's OWN grant — the env PAT is the deployment owner's
+    # and no longer serves a tenant) → default ON for any avatar…
+    monkeypatch.setattr(settings, "session_secret", "sek")
+    store.set_org_oauth("org-a", "pat-org", provider="asana")
     assert main_module._avatar_asana_enabled("org-a", "petra") is True
     # …until the per-avatar toggle is explicitly switched off.
     store.set_avatar_capability("petra", "asana", False)

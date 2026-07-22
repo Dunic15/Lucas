@@ -214,7 +214,7 @@ def test_slack_delivery_skipped_when_capability_off(monkeypatch):
                         lambda name, art: "txt")
     posted: list = []
     monkeypatch.setattr(autopilot.actions, "post_to_slack",
-                        lambda text: posted.append(text) or {"sent": True})
+                        lambda text, org="": posted.append(text) or {"sent": True})
 
     store.set_avatar_capability("laura", "slack", False)
     res = autopilot.maybe_deliver("Laura", {"avatar_id": "laura", "follow_up_email": {}})

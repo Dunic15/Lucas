@@ -55,7 +55,7 @@ def maybe_deliver(avatar_name: str, artifact: dict[str, Any]) -> dict[str, Any]:
             slack_res = {"sent": False, "reason": "slack capability off"}
         else:
             slack_res = actions.post_to_slack(
-                actions.artifact_to_slack_text(avatar_name, artifact)
+                actions.artifact_to_slack_text(avatar_name, artifact), org_id
             )
         return {"delivered": True, "email": email_res, "slack": slack_res}
     except Exception as e:  # never block finalize on a vendor hiccup

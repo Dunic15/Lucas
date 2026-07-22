@@ -374,7 +374,7 @@ def test_deliver_stamps_cedric_name_from_artifact_after_finalize(fresh_store, mo
 
     monkeypatch.setattr(main.actions, "send_email", lambda to, subj, body: {"sent": False})
     monkeypatch.setattr(main.actions, "artifact_to_slack_text", fake_slack)
-    monkeypatch.setattr(main.actions, "post_to_slack", lambda text: {"sent": True})
+    monkeypatch.setattr(main.actions, "post_to_slack", lambda text, org="": {"sent": True})
 
     client = TestClient(main.app)
     resp = client.post("/sessions/bot_c/deliver", json={"to": [], "slack": True})
