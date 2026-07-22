@@ -11,6 +11,10 @@ Pick the provider with EMBEDDING_PROVIDER in .env:
   openai            — OpenAI embeddings (text-embedding-3-small at a fixed
                       512 dimensions — the durable Company Brain default).
                       Needs OPENAI_API_KEY.
+  vertex / gemini   — Google Vertex text-embedding-004 (768-dim). Reuses the
+                      SAME service account as the Gemini brain (GOOGLE_VERTEX_
+                      SA_JSON + VERTEX_PROJECT) — NO new API key, runs on the
+                      existing Google/Vertex credits.
 
 All providers expose the same `embed()` so the rest of the code never changes.
 """
@@ -154,11 +158,62 @@ def _embed_openai(texts: list[str]) -> list[list[float]]:
     return [d["embedding"] for d in data]
 
 
+# Vertex text-embedding: reuses the SAME service-account auth as the Gemini
+# brain (llm._vertex_token / _vertex_host), so no new API key — it runs on the
+# Google/Vertex credits already configured. text-embedding-004 is 768-dim and
+# supports asymmetric task types (RETRIEVAL_DOCUMENT vs RETRIEVAL_QUERY), like
+# Voyage's input_type. Batched (Vertex caps instances per predict call).
+_VERTEX_EMBED_BATCH = 100
+
+
+def _embed_vertex(texts: list[str], input_type: str) -> list[list[float]]:
+    from . import llm  # lazy: avoid an import cycle at module load
+
+    token = llm._vertex_token()
+    project = (settings.vertex_project or "").strip()
+    if not (token and project):
+        raise RuntimeError(
+            "EMBEDDING_PROVIDER=vertex needs GOOGLE_VERTEX_SA_JSON + VERTEX_PROJECT."
+        )
+    # Embedding models are REGIONAL — never on the 'global' host the brain may
+    # use for gemini-3.5-flash. Pin a regional location for embeddings.
+    location = (settings.vertex_location or "").strip()
+    if not location or location == "global":
+        location = "us-central1"
+    model = settings.embedding_model
+    if not (model.startswith("text-embedding") or model.startswith("gemini-embedding")):
+        # embedding_model defaults to a Voyage name; use a Vertex one instead.
+        model = "text-embedding-004"
+    host = llm._vertex_host(location)
+    url = (
+        f"https://{host}/v1/projects/{project}/locations/{location}"
+        f"/publishers/google/models/{model}:predict"
+    )
+    task = "RETRIEVAL_QUERY" if input_type == "query" else "RETRIEVAL_DOCUMENT"
+
+    import httpx
+
+    out: list[list[float]] = []
+    for i in range(0, len(texts), _VERTEX_EMBED_BATCH):
+        batch = texts[i:i + _VERTEX_EMBED_BATCH]
+        resp = httpx.post(
+            url,
+            headers={"Authorization": f"Bearer {token}",
+                     "Content-Type": "application/json"},
+            json={"instances": [{"content": t, "task_type": task} for t in batch]},
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        preds = resp.json().get("predictions") or []
+        out.extend(p["embeddings"]["values"] for p in preds)
+    return out
+
+
 def embed(texts: list[str], *, input_type: str = "document") -> list[list[float]]:
     """Return one embedding vector per input text.
 
     input_type ("document" | "query") only matters for providers that support
-    asymmetric embeddings (Voyage). It is accepted and ignored otherwise.
+    asymmetric embeddings (Voyage, Vertex). It is accepted and ignored otherwise.
     """
     if not texts:
         return []
@@ -172,4 +227,6 @@ def embed(texts: list[str], *, input_type: str = "document") -> list[list[float]
         return _embed_voyage(texts, input_type)
     if provider == "openai":
         return _embed_openai(texts)
+    if provider in ("vertex", "gemini"):
+        return _embed_vertex(texts, input_type)
     raise RuntimeError(f"Unknown EMBEDDING_PROVIDER '{provider}'.")
