@@ -238,8 +238,8 @@ replace_once(
 )
 replace_once(
     path,
-    '       (opts.approveAfter?\'<button class="btn primary" data-msaveappr>Save and approve</button>\':\'\')+\n',
-    '       (opts.approveAfter?\'<button class="btn primary" data-msaveappr>Save and review</button>\':\'\')+\n'
+    '      (opts.approveAfter?\'<button class="btn primary" data-msaveappr>Save and approve</button>\':\'\')+\n',
+    '      (opts.approveAfter?\'<button class="btn primary" data-msaveappr>Save and review</button>\':\'\')+\n'
 )
 replace_once(
     path,

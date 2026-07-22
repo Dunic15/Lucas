@@ -117,6 +117,26 @@ PARAMS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
     ],
 }
 
+FIELD_LABELS: dict[str, str] = {
+    "title": "Title", "start": "Start time", "end": "End time",
+    "attendees": "Attendees", "description": "Description",
+    "to": "Recipients", "subject": "Subject", "body": "Message",
+    "name": "Task name", "notes": "Task description",
+    "project": "Project", "assignee": "Assignee", "due_on": "Due date",
+    "subtasks": "Subtasks", "dependencies": "Dependencies",
+    "attachments": "Attachments", "task": "Task ID",
+    "completed": "Completed", "text": "Comment",
+}
+
+ACTION_LABELS: dict[str, str] = {
+    "calendar.create_event": "Create calendar event",
+    "email.send": "Send email",
+    "asana.create_task": "Create Asana task",
+    "asana.update_task": "Update Asana task",
+    "asana.add_comment": "Add Asana comment",
+    "slack.post_message": "Post Slack message",
+}
+
 RISK_BY_TYPE: dict[str, str] = {
     "calendar.create_event": "low",
     "email.send": "medium",
@@ -132,7 +152,8 @@ def params_schema(typed: dict | None) -> list[dict[str, Any]]:
     if not isinstance(typed, dict):
         return []
     return [
-        dict(field)
+        {**dict(field), "label": FIELD_LABELS.get(str(field.get("name") or ""),
+                                                   str(field.get("name") or "").replace("_", " ").title())}
         for field in PARAMS_SCHEMAS.get(str(typed.get("type") or ""), [])
     ]
 
@@ -142,6 +163,38 @@ def risk_for(typed: dict | None) -> str:
     if not isinstance(typed, dict):
         return ""
     return RISK_BY_TYPE.get(str(typed.get("type") or ""), "")
+
+
+def preview_for(typed: dict | None, *, route: str = "") -> dict:
+    """Canonical approval preview shared by every control surface.
+
+    It is deliberately built from the stored typed spec and the same schema
+    used by validation; a browser never invents labels or execution fields.
+    """
+    if not isinstance(typed, dict) or not typed.get("type"):
+        return {}
+    action_type = str(typed.get("type") or "")
+    args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
+    fields: list[dict[str, Any]] = []
+    for field in params_schema(typed):
+        name = str(field.get("name") or "")
+        value = args.get(name)
+        if _empty(value) and not field.get("required"):
+            continue
+        fields.append({
+            "name": name,
+            "label": str(field.get("label") or name.replace("_", " ").title()),
+            "value": value,
+            "required": bool(field.get("required")),
+        })
+    return {
+        "type": action_type,
+        "title": ACTION_LABELS.get(action_type, action_type.replace(".", " · ")),
+        "fields": fields,
+        "risk": risk_for(typed),
+        "route": str(route or ""),
+        "missing_params": missing_params(typed),
+    }
 
 
 def _empty(value: Any) -> bool:

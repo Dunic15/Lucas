@@ -254,6 +254,8 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
                         "ref": receipt,
                         "route": "native",
                         "runtime": "laura",
+                        "verified": bool(result.get("verified")),
+                        "verification": str(result.get("verification") or ""),
                     },
                 )
             else:

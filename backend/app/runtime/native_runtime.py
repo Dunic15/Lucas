@@ -132,6 +132,9 @@ def execute(org_id: str, action: dict) -> dict:
     normalized["ok"] = bool(normalized.get("ok"))
     normalized.setdefault("kind", adapter.label)
     normalized.setdefault("ref", "")
+    normalized.setdefault("verified", bool(normalized["ok"] and normalized.get("ref")))
+    normalized.setdefault("verification",
+                          "provider write response" if normalized.get("verified") else "")
     if not normalized["ok"]:
         normalized.setdefault("error", "execution failed")
     return normalized

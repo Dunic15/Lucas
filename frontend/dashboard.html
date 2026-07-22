@@ -2308,7 +2308,7 @@
   function apprBtn(a){
     if(!a.typed||!a.action_id) return "";
     if(a.execution&&(a.execution.status==="done"||a.execution.status==="rejected")) return "";  // terminal → pill shows
-    return '<button class="btn-appr" data-approve="'+esc(a.action_id)+'">Approve &amp; run</button>';
+    return '<button class="btn-appr" data-approve="'+esc(a.action_id)+'">Review &amp; approve</button>';
   }
   function rejBtn(a){
     if(!a.typed||!a.action_id) return "";
@@ -2384,6 +2384,74 @@
       })
       .catch(function(e){ btn.disabled=false; btn.innerHTML=old; toast("Could not reject: "+e.message,true); });
   }
+  function closeActionPreview(){
+    var s=document.getElementById("action-preview-scrim");
+    if(s){ if(s._esc) document.removeEventListener("keydown",s._esc,true); s.remove(); }
+  }
+  function previewValue(v){
+    if(Array.isArray(v)) return v.join(", ");
+    if(v===true) return "Yes";
+    if(v===false) return "No";
+    return v==null?"":String(v);
+  }
+  function openActionPreview(opts){
+    closeActionPreview();
+    var act=opts.action||{}, p=act.preview||{}, fields=p.fields||[];
+    var route=p.route||act.route||"";
+    var routeLabel=route==="native"?"Laura — your connected account"
+      :route==="pipedream"?"Pipedream — your organisation's connected account"
+      :route==="cedric"?"Cedric — Slack agent"
+      :route==="browser"?"Guarded browser session"
+      :route==="manual"?"Tracked only — no automatic execution":route;
+    var rows=fields.map(function(f){
+      return '<dt>'+esc(f.label||f.name||"")+'</dt><dd>'+esc(previewValue(f.value))+'</dd>';
+    }).join("");
+    var s=document.createElement("div"); s.className="scrim"; s.id="action-preview-scrim";
+    s.innerHTML='<div class="modal" role="dialog" aria-modal="true" aria-labelledby="apv-t">'+
+      '<h2 id="apv-t">'+esc(p.title||act.action||"Review action")+'</h2>'+
+      '<div class="mh">Review the exact stored action. Nothing runs until you approve here.</div>'+
+      '<dl class="ac-kv">'+rows+
+      (routeLabel?'<dt>Runs through</dt><dd>'+esc(routeLabel)+'</dd>':'')+
+      ((p.risk||act.risk)?'<dt>Risk</dt><dd>'+esc(p.risk||act.risk)+'</dd>':'')+
+      '</dl><div class="macts"><button class="btn" data-apvcancel>Cancel</button>'+
+      ((act.params_schema||[]).length?'<button class="btn" data-apvedit>Edit details</button>':'')+
+      '<button class="btn primary" data-apvapprove>Approve &amp; run</button></div></div>';
+    document.body.appendChild(s);
+    s.querySelector("[data-apvcancel]").addEventListener("click",closeActionPreview);
+    var edit=s.querySelector("[data-apvedit]");
+    if(edit) edit.addEventListener("click",function(){
+      closeActionPreview();
+      openParamsForm({actionId:act.action_id,schema:act.params_schema||[],
+        missing:act.missing_params||[],params:act.params||{},approveAfter:true,
+        onApproved:function(){ reviewAction(opts.button,act.action_id); }});
+    });
+    s.querySelector("[data-apvapprove]").addEventListener("click",function(){
+      closeActionPreview(); approveAction(opts.button,act.action_id);
+    });
+    var esc2=function(e){ if(e.key==="Escape") closeActionPreview(); };
+    s._esc=esc2; document.addEventListener("keydown",esc2,true);
+    s.addEventListener("mousedown",function(e){ if(e.target===s) closeActionPreview(); });
+  }
+  function reviewAction(btn,aidArg){
+    var aid=aidArg||(btn&&btn.getAttribute("data-approve")); if(!aid) return;
+    var old=btn?btn.innerHTML:""; if(btn){ btn.disabled=true; btn.textContent="Loading preview…"; }
+    fetch("/dashboard/actions/"+encodeURIComponent(aid),{headers:headers()})
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); })
+      .then(function(res){
+        if(btn){ btn.disabled=false; btn.innerHTML=old; }
+        if(!res.ok||!res.j.action) throw new Error(res.j.error||("HTTP "+res.status));
+        var act=res.j.action;
+        if((act.missing_params||[]).length){
+          openParamsForm({actionId:aid,schema:act.params_schema||[],missing:act.missing_params||[],
+            params:act.params||{},approveAfter:true,
+            onApproved:function(){ reviewAction(btn,aid); }});
+          return;
+        }
+        openActionPreview({action:act,button:btn});
+      })
+      .catch(function(e){ if(btn){ btn.disabled=false; btn.innerHTML=old; } toast("Could not load preview: "+e.message,true); });
+  }
+
   function approveAction(btn,aidArg){
     var aid=aidArg||(btn&&btn.getAttribute("data-approve")); if(!aid) return;
     var old=btn?btn.innerHTML:""; if(btn){ btn.disabled=true; btn.textContent="Approving…"; }
@@ -2400,7 +2468,7 @@
             schema:res.j.params_schema||[],
             missing:res.j.missing_params||[],
             approveAfter:true,
-            onApproved:function(){ approveAction(btn,aid); }
+            onApproved:function(){ reviewAction(btn,aid); }
           });
           return;
         }
@@ -2459,11 +2527,11 @@
     }).join("");
     s.innerHTML='<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mdl-t">'+
       '<h2 id="mdl-t">Add details</h2>'+
-      '<div class="mh">This action needs a few details before it can run. Nothing happens until you save.</div>'+
+      '<div class="mh">This action needs a few details. Saving only updates the draft; nothing runs until the separate review and approval step.</div>'+
       fields+
       '<div class="macts"><button class="btn" data-mcancel>Cancel</button>'+
       '<button class="btn" data-msave>Save details</button>'+
-      (opts.approveAfter?'<button class="btn primary" data-msaveappr>Save and approve</button>':'')+
+      (opts.approveAfter?'<button class="btn primary" data-msaveappr>Save and review</button>':'')+
       '</div></div>';
     document.body.appendChild(s);
     var first=s.querySelector('[data-mfin="'+(missing[0]||"")+'"]')||s.querySelector("[data-mfin]");
@@ -2576,12 +2644,12 @@
           // Incomplete card: NEVER a blind Approve (owner rule 2026-07-22).
           // The primary action collects exactly the missing fields — the
           // approve endpoint re-types, answers 422 with the schema, and the
-          // inline form runs the action once saved.
+          // inline form saves only; the next screen is the canonical preview.
           ctl='<button class="btn primary" data-approve="'+esc(a.action_id)+'">Complete details…</button>'+
               (a.typed?'<button class="btn" data-acdetailsbtn="'+esc(a.action_id)+'">Edit fields</button>':'')+
               '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Reject</button>';
         } else {
-          ctl='<button class="btn primary" data-approve="'+esc(a.action_id)+'">Approve</button>'+
+          ctl='<button class="btn primary" data-approve="'+esc(a.action_id)+'">Review &amp; approve</button>'+
               (a.typed?'<button class="btn" data-acdetailsbtn="'+esc(a.action_id)+'">Add details</button>':'')+
               '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Reject</button>';
         }
@@ -2635,7 +2703,7 @@
     });
     box.innerHTML=html;
     wireAvatarImages();
-    $$("#ac-list [data-approve]").forEach(function(b){ b.addEventListener("click",function(){ approveAction(b); }); });
+    $$("#ac-list [data-approve]").forEach(function(b){ b.addEventListener("click",function(){ reviewAction(b); }); });
     $$("#ac-list [data-reject]").forEach(function(b){ b.addEventListener("click",function(){ rejectAction(b); }); });
     $$("#ac-list [data-acdetailsbtn]").forEach(function(b){ b.addEventListener("click",function(){ openDetailsFor(b.getAttribute("data-acdetailsbtn"),b); }); });
     $$("#ac-list [data-acx]").forEach(function(b){ b.addEventListener("click",function(){ toggleActionDetails(b); }); });
@@ -2653,7 +2721,7 @@
         if(!(act.params_schema||[]).length){ toast("This action has no editable details.",true); return; }
         openParamsForm({actionId:aid,schema:act.params_schema,missing:act.missing_params||[],
           params:act.params||{},approveAfter:true,
-          onApproved:function(){ approveAction(null,aid); }});
+          onApproved:function(){ reviewAction(null,aid); }});
       })
       .catch(function(){ btn.disabled=false; toast("Network error.",true); });
   }

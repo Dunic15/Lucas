@@ -41,6 +41,41 @@ from .config import settings
 Builder = Callable[[str, str, dict], tuple]
 ReceiptFn = Callable[[str, dict], tuple]
 
+
+def _readback(org: str, account_id: str, action_type: str, args: dict, data: dict) -> tuple[bool, str]:
+    """Re-read the object just written. A successful write without a readable
+    provider object remains successful but is explicitly unverified."""
+    try:
+        url = ""
+        expected = ""
+        if action_type in ("asana.create_task", "asana.update_task"):
+            expected = str((data.get("data") or {}).get("gid") or args.get("task") or args.get("task_gid") or "")
+            if expected: url = f"{_ASANA_API}/tasks/{expected}?opt_fields=gid"
+        elif action_type == "asana.add_comment":
+            expected = str((data.get("data") or {}).get("gid") or "")
+            if expected: url = f"{_ASANA_API}/stories/{expected}?opt_fields=gid"
+        elif action_type == "email.send":
+            expected = str(data.get("id") or "")
+            if expected: url = f"{_GMAIL_API}/messages/{expected}?format=metadata"
+        elif action_type == "gmail.create_draft":
+            expected = str(data.get("id") or "")
+            if expected: url = f"{_GMAIL_API}/drafts/{expected}?format=metadata"
+        elif action_type in ("calendar.create_event", "calendar.update_event"):
+            expected = str(data.get("id") or args.get("event_id") or args.get("event") or "")
+            if expected: url = f"{_CAL_API}/calendars/primary/events/{expected}"
+        if not url:
+            return False, "provider returned no object id"
+        check = pipedream_client.proxy_request(org, account_id, "GET", url)
+        if not check.get("ok"):
+            return False, f"provider readback HTTP {check.get('status')}"
+        got = check.get("json") or {}
+        got_id = str((got.get("data") or {}).get("gid") or got.get("id") or "")
+        if action_type == "gmail.create_draft" and not got_id:
+            got_id = str((got.get("message") or {}).get("id") or "")
+        return bool(got_id and (not expected or got_id == expected)), "provider readback"
+    except Exception as exc:  # noqa: BLE001 — verification never hides write result
+        return False, f"verification error ({type(exc).__name__})"
+
 _ASANA_API = "https://app.asana.com/api/1.0"
 
 
@@ -609,8 +644,11 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
         return _settle(action_id, org, False, action_type, "",
                        f"{app_slug} API returned {resp.get('status')}")
 
-    kind, ref = receipt_fn(action_type, resp.get("json") or {})
-    return _settle(action_id, org, True, action_type, ref, "", kind=kind)
+    response_json = resp.get("json") or {}
+    kind, ref = receipt_fn(action_type, response_json)
+    verified, verification = _readback(org, account_id, action_type, args, response_json)
+    return _settle(action_id, org, True, action_type, ref, "", kind=kind,
+                   verified=verified, verification=verification)
 
 
 def dry_run(org_id: str, action: dict) -> dict:
@@ -658,12 +696,15 @@ def dry_run(org_id: str, action: dict) -> dict:
 
 
 def _settle(action_id: str, org: str, ok: bool, action_type: str, ref: str,
-            error: str, *, kind: str = "") -> dict:
+            error: str, *, kind: str = "", verified: bool = False,
+            verification: str = "") -> dict:
     """Write the canonical done/failed ledger receipt (route='pipedream') and
     mirror status to the Slack surface, exactly like executor.execute_approved.
     Returns the normalized result."""
     kind = kind or action_type or "action"
-    result: dict[str, Any] = {"ok": ok, "kind": kind, "ref": ref}
+    result: dict[str, Any] = {"ok": ok, "kind": kind, "ref": ref,
+                              "verified": bool(verified),
+                              "verification": str(verification or "")}
     if not ok:
         result["error"] = error or "execution failed"
 
@@ -678,7 +719,8 @@ def _settle(action_id: str, org: str, ok: bool, action_type: str, ref: str,
             ledger.set_action_status(
                 aid, "done", detail, org_id=org,
                 receipt={"kind": kind, "ref": ref, "route": "pipedream",
-                         "runtime": "pipedream"},
+                         "runtime": "pipedream", "verified": bool(verified),
+                         "verification": str(verification or "")},
             )
         else:
             detail = f"Pipedream · {error or 'failed'}"[:300]

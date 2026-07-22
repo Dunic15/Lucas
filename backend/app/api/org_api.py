@@ -716,6 +716,11 @@ def _canonical_action_view(org: str, action_id: str) -> dict | None:
         status = "needs_details" if (typed and missing) else "proposed"
     receipt = (durable or {}).get("receipt_json")
     logs = (durable or {}).get("logs_json")
+    route = str(
+        (durable or {}).get("execution_route")
+        or action.get("execution_route") or ""
+    )
+    preview = action_plane.preview_for(typed, route=route)
     return {
         "action_id": action_id,
         "org_id": org,
@@ -729,11 +734,9 @@ def _canonical_action_view(org: str, action_id: str) -> dict | None:
         "owner": str(action.get("owner") or (durable or {}).get("owner") or ""),
         "due": str(action.get("deadline") or (durable or {}).get("due") or ""),
         "tool": str((typed or {}).get("type") or ""),
-        "route": str(
-            (durable or {}).get("execution_route")
-            or action.get("execution_route") or ""
-        ),
+        "route": route,
         "params": dict((typed or {}).get("args") or {}),
+        "preview": preview,
         "params_schema": schema,
         "missing_params": missing,
         "risk": str((durable or {}).get("risk") or action_plane.risk_for(typed)),
