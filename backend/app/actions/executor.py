@@ -235,6 +235,19 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
     result = native_runtime.execute(org, normalized)
     what = str(result.get("kind") or action_type or "action")
     receipt = str(result.get("ref") or "")
+    # Phase-1 read-back on the NATIVE plane too (the Pipedream executor
+    # already does this): re-read the object we just wrote so the receipt is
+    # evidence, not presumption. Best-effort — never fails a succeeded action.
+    if result.get("ok"):
+        verified = False
+        if action_type == "calendar.create_event" and result.get("event_id"):
+            verified = google_client.verify_calendar_event(
+                org, str(result["event_id"]))
+        elif action_type == "email.send" and result.get("message_id"):
+            verified = google_client.verify_gmail_message(
+                org, str(result["message_id"]))
+        if verified:
+            what += " · verified"
 
     aid = str(action_id or "").strip()
     detail = ""

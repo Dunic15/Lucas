@@ -410,3 +410,21 @@ def test_rescue_typing_receives_the_meeting_brief(client, monkeypatch):
     assert r.status_code == 200
     assert "3 PM with anant@sffstudio.com" in seen["brief"]
     assert "schedule a meeting" in seen["item"].lower()
+
+
+def test_native_receipt_carries_verified_on_readback(client, monkeypatch):
+    """Native-plane read-back (Phase-1 parity with Pipedream): when the
+    just-sent message re-reads OK, the receipt says '· verified'."""
+    monkeypatch.setattr(settings, "native_executor", True)
+    user = _login(client)
+    _seed_action(user["org_id"], "a1", _EMAIL_TYPED)
+    _mock_send(monkeypatch, {"ok": True, "message_id": "m-777"})
+    monkeypatch.setattr(executor.google_client, "verify_gmail_message",
+                        lambda org, mid: mid == "m-777")
+
+    r = client.post("/dashboard/actions/a1/approve")
+    body = r.json()
+    assert body["executed"] is True
+    st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
+    assert st["status"] == "done"
+    assert "· verified" in st["detail"] and "m-777" in st["detail"]
