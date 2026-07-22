@@ -233,7 +233,13 @@
   .detail .inner{padding:14px 18px 16px;display:grid;grid-template-columns:1.4fr 1fr;gap:20px;}
   .summary.tscript{max-height:260px;overflow-y:auto;white-space:pre-wrap;font-size:.8rem;color:var(--dim);padding-right:6px;}
   .ac-sub-h{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:18px 0 8px;}
-  .ac-meet-h{display:flex;align-items:center;gap:8px;margin:22px 0 6px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);font-size:.86rem;color:var(--fg);}
+  .ac-meet-h{display:flex;align-items:center;gap:8px;margin:22px 0 6px;padding:9px 14px;border:1px solid var(--line-soft,var(--line));border-radius:12px;background:var(--panel);font-size:.86rem;color:var(--fg);cursor:pointer;user-select:none;transition:background .18s ease;}
+  .ac-meet-h:hover{background:var(--panel-2,var(--panel));}
+  .ac-meet-h .ac-meet-sum{margin-left:auto;color:var(--dim);font-size:.8rem;}
+  .ac-meet-h .ac-meet-caret{color:var(--dim);}
+  .ac-meet-body{animation:acbody .18s ease;}
+  @keyframes acbody{from{opacity:.4;transform:translateY(-3px);}to{opacity:1;transform:none;}}
+  @media (prefers-reduced-motion: reduce){ .ac-meet-body{animation:none;} .ac-meet-h{transition:none;} }
   .ac-meet-h:first-child{margin-top:4px;}
   .ac-needs{margin-top:6px;font-size:.8rem;color:var(--warn,#b45309);}
   .pbox{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:10px 0;}
@@ -2737,19 +2743,41 @@
       byKey[k].rows.push(x);
     });
     var html="";
-    groups.forEach(function(g){
-      html+='<div class="ac-meet-h">'+avatarBadge(g.m.avatar_id,avNameOf(g.m.avatar_id))+
+    groups.forEach(function(g,gi){
+      // Latest meeting open, older ones collapsed behind a one-line summary
+      // (owner 2026-07-22: the board must read at a glance).
+      var open=(gi===0);
+      var needsMe=g.rows.filter(function(x){return bucketOf(x.a)==="attn";}).length;
+      var sum=g.rows.length+(g.rows.length===1?" action":" actions")+(needsMe?" · "+needsMe+" for you":"");
+      html+='<div class="ac-meet-h'+(open?"":" collapsed")+'" data-acgroup="'+gi+'" role="button" tabindex="0" aria-expanded="'+(open?"true":"false")+'">'+
+        avatarBadge(g.m.avatar_id,avNameOf(g.m.avatar_id))+
         '<b>'+esc(avNameOf(g.m.avatar_id))+'</b><span aria-hidden="true">·</span>'+
         '<span>'+esc(g.m.platform)+' meeting</span><span aria-hidden="true">·</span>'+
-        '<span>'+fmtWhen(g.m.saved_at)+'</span></div>';
+        '<span>'+fmtWhen(g.m.saved_at)+'</span>'+
+        '<span class="ac-meet-sum">'+esc(sum)+'</span>'+
+        '<span class="ac-meet-caret" aria-hidden="true">'+(open?"▾":"▸")+'</span></div>';
+      html+='<div class="ac-meet-body" data-acbody="'+gi+'"'+(open?"":" hidden")+'>';
       var defRows=g.rows.filter(function(x){return x.a.source!=="inferred";});
       var propRows=g.rows.filter(function(x){return x.a.source==="inferred";});
       if(defRows.length) html+='<div class="ac-sub-h">Definitive actions</div>'+defRows.map(acCard).join("");
       if(propRows.length) html+='<div class="ac-sub-h">Proposed — goals &amp; intents</div>'+
         '<div class="ac-sub-note">Steps decomposed from goals you voiced. Nothing runs until you approve.</div>'+
         propRows.map(acCard).join("");
+      html+='</div>';
     });
     box.innerHTML=html;
+    $$("#ac-list [data-acgroup]").forEach(function(h){
+      function tgl(){
+        var b=box.querySelector('[data-acbody="'+h.getAttribute("data-acgroup")+'"]');
+        if(!b) return;
+        var open=b.hidden; b.hidden=!open;
+        h.classList.toggle("collapsed",!open);
+        h.setAttribute("aria-expanded",open?"true":"false");
+        var c=h.querySelector(".ac-meet-caret"); if(c) c.textContent=open?"▾":"▸";
+      }
+      h.addEventListener("click",tgl);
+      h.addEventListener("keydown",function(e){ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); tgl(); } });
+    });
     wireAvatarImages();
     $$("#ac-list [data-approve]").forEach(function(b){ b.addEventListener("click",function(){ reviewAction(b); }); });
     $$("#ac-list [data-reject]").forEach(function(b){ b.addEventListener("click",function(){ rejectAction(b); }); });
