@@ -454,6 +454,34 @@ def app_connected(org_id: str, app_slug: str) -> bool:
     return ok
 
 
+def note_connections(org_id: str, connected_slugs: set[str] | frozenset[str]) -> None:
+    """Write-through from a FRESH accounts listing (the Connections view):
+    mark these slugs connected NOW so the avatar cards and route probes stop
+    serving a stale negative for up to _CONN_TTL_S (live 2026-07-22: after a
+    disconnect+reconnect the avatar card kept saying "Connect in Connections"
+    for two minutes). Only positives are asserted — absence in one filtered
+    listing is not proof of disconnection."""
+    org = str(org_id or "").strip()
+    if not org:
+        return
+    now = time.monotonic()
+    with _conn_lock:
+        for slug in connected_slugs:
+            s = str(slug or "").strip().lower()
+            if s:
+                _conn_cache[(org, s)] = (True, now + _CONN_TTL_S)
+
+
+def forget_connection(org_id: str, app_slug: str) -> None:
+    """Immediate cache bust after an explicit disconnect — the next probe
+    re-reads Pipedream instead of serving a stale True."""
+    org = str(org_id or "").strip()
+    app = str(app_slug or "").strip().lower()
+    if org and app:
+        with _conn_lock:
+            _conn_cache.pop((org, app), None)
+
+
 def _reset_conn_cache() -> None:
     """Test seam."""
     with _conn_lock:

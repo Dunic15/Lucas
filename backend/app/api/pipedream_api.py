@@ -84,6 +84,13 @@ async def pipedream_accounts(request: Request) -> JSONResponse:
             slug = str(acct.get("app") or "")
             if slug:
                 connected.setdefault(slug, acct)  # first (healthy) wins
+        # Write-through: this is the freshest possible listing — sync the
+        # executor's connection cache so avatar cards / route probes agree
+        # with what the Connections view just showed (stale-negative fix,
+        # live 2026-07-22).
+        from .. import pipedream_executor
+
+        pipedream_executor.note_connections(org, set(connected))
     except pipedream_client.PipedreamError as exc:
         degraded = type(exc).__name__
     # Real catalog logos for the featured + connected slugs (cached best-effort).
@@ -257,4 +264,10 @@ async def pipedream_disconnect(request: Request) -> JSONResponse:
                             status_code=502, headers=_NO_STORE)
     targets = [want_id] if (want_id and want_id in owned) else list(owned)
     revoked = sum(1 for aid in targets if pipedream_client.delete_account(aid))
+    if revoked and app:
+        # Immediate cache bust so avatar cards / route probes don't serve a
+        # stale "connected" for up to two minutes after the revoke.
+        from .. import pipedream_executor
+
+        pipedream_executor.forget_connection(org, app)
     return JSONResponse({"ok": True, "revoked": revoked}, headers=_NO_STORE)
