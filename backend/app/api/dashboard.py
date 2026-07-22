@@ -2846,7 +2846,22 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     dispatched = False
     execution_error = ""
     dispatch_reason = ""
-    if not executed:
+    if not executed and (
+        route == "manual"
+        or (route in ("", "cedric")
+            and not await run_in_threadpool(executor._cedric_linked, org))
+    ):
+        # Track-only (owner rule 2026-07-22: Cedric lives inside Slack). This
+        # org has no Slack agent and the item has no executable spec even
+        # after the retype rescue — approving RECORDS the decision for the
+        # humans; nothing dispatches, nothing pretends to run, no doomed
+        # "couldn't complete".
+        await run_in_threadpool(
+            ledger.set_action_status, aid, "approved",
+            "approved · tracked only — no automatic executor for this item",
+            org_id=org,
+        )
+    elif not executed:
         from ..cedric import callback as cedric_callback  # lazy, cycle-free
 
         dispatch = await run_in_threadpool(

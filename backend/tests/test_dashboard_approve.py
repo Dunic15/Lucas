@@ -84,9 +84,11 @@ def test_approve_requires_login(client):
 
 # ── flag OFF, no Cedric: nothing can run, so approve FAILS honestly ──
 
-def test_flag_off_no_cedric_marks_failed_with_reason(client, monkeypatch):
-    """Native off AND no Cedric configured -> the action cannot execute. The
-    row must say so (owner ask 2026-07-20), not sit at a silent 'approved'."""
+def test_flag_off_cedricless_org_is_tracked_only(client, monkeypatch):
+    """Native off AND the org never linked the Slack agent -> approving RECORDS
+    the decision as a track-only card (owner rule 2026-07-22: Cedric lives
+    inside Slack — a cedric-less org never sees a doomed dispatch or a
+    'couldn't complete')."""
     user = _login(client)
     _seed_action(user["org_id"], "a1", _EMAIL_TYPED)
     calls: list = []
@@ -97,7 +99,30 @@ def test_flag_off_no_cedric_marks_failed_with_reason(client, monkeypatch):
     body = r.json()
     assert body["approved"] is True and body["executed"] is False
     assert not calls  # google was never called with the flag off
-    # Honest dead end: failed + a reason the user can read, not "approved".
+    st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
+    assert st and st["status"] == "approved"
+    assert "tracked only" in st["detail"]
+
+
+def _link_cedric(org: str) -> None:
+    """Give the org a connected Slack agent so the dispatch path is exercised."""
+    store.set_connection(org, "cedric", "cedric-brain", "connected", {})
+
+
+def test_flag_off_linked_org_dead_end_marks_failed_with_reason(client, monkeypatch):
+    """Org WITH the Slack agent linked but Cedric unreachable/unconfigured ->
+    the honest failed receipt with a readable reason (owner ask 2026-07-20)."""
+    user = _login(client)
+    _link_cedric(user["org_id"])
+    _seed_action(user["org_id"], "a1", _EMAIL_TYPED)
+    calls: list = []
+    _mock_send(monkeypatch, {"ok": True, "message_id": "m1"}, calls)
+
+    r = client.post("/dashboard/actions/a1/approve")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["approved"] is True and body["executed"] is False
+    assert not calls
     assert body["dispatch_reason"] == "not_configured"
     assert "Cedric isn't connected" in body["execution_error"]
     st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
@@ -111,6 +136,7 @@ def test_dead_end_dispatch_endpoint_missing_surfaces_reason(client, monkeypatch)
     from app.cedric import callback as cedric_callback
 
     user = _login(client)
+    _link_cedric(user["org_id"])
     _seed_action(user["org_id"], "a1", _EMAIL_TYPED)
     monkeypatch.setattr(
         cedric_callback, "dispatch_action",
@@ -132,6 +158,7 @@ def test_dispatch_ok_marks_approved_routed_to_cedric(client, monkeypatch):
     from app.cedric import callback as cedric_callback
 
     user = _login(client)
+    _link_cedric(user["org_id"])
     _seed_action(user["org_id"], "a1", _EMAIL_TYPED)
     monkeypatch.setattr(
         cedric_callback, "dispatch_action",
@@ -192,12 +219,12 @@ def test_flag_on_untyped_action_gets_retyped_on_approve_and_executes(
     assert st["status"] == "needs_details"  # never 'failed', never cedric
 
 
-def test_flag_on_untypeable_action_still_fails_honestly_without_receiver(
+def test_flag_on_untypeable_action_tracked_only_without_cedric(
     client, monkeypatch
 ):
     """Flag on, the action can't be typed even at the approve door (no mappable
-    intent) -> routes to Cedric; with no Cedric here that's an honest dead end
-    (failed), never a native google call."""
+    intent), and the org has no Slack agent -> a track-only approved card
+    (owner rule 2026-07-22), never a doomed dispatch, never a google call."""
     monkeypatch.setattr(settings, "native_executor", True)
     user = _login(client)
     action = {"item": "Sort out the vendor situation", "owner": "Ben",
@@ -219,7 +246,8 @@ def test_flag_on_untypeable_action_still_fails_honestly_without_receiver(
     assert body["executed"] is False and body["typed"] is False
     assert not calls
     st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
-    assert st["status"] == "failed"  # honest: nothing ran
+    assert st["status"] == "approved"
+    assert "tracked only" in st["detail"]
 
 
 def test_flag_on_soft_failure_records_failed_receipt(client, monkeypatch):
@@ -267,6 +295,7 @@ def test_reapprove_after_failure_retries_dispatch(client, monkeypatch):
     from app.cedric import callback as cedric_callback
 
     user = _login(client)
+    _link_cedric(user["org_id"])  # dispatch path needs a linked Slack agent
     _seed_action(user["org_id"], "a1", _EMAIL_TYPED)
     calls: list = []
 

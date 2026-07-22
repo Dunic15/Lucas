@@ -672,3 +672,21 @@ def test_windowed_read_allows_more_than_50_events(monkeypatch):
     seen.clear()
     google_client.list_calendar_events("org-o", max_results=150)
     assert seen.get("maxResults") == 50
+
+
+def test_brief_falls_back_to_pipedream_when_native_absent(monkeypatch):
+    """Native first, Pipedream second (owner call 2026-07-22): an org whose
+    Google lives only in Connect still gets the join-time calendar brief."""
+    google_client._brief_cache.clear()
+    monkeypatch.setattr(
+        google_client, "list_calendar_events",
+        lambda org, max_results=8: {"ok": False, "error": "no oauth"},
+    )
+    from app import pipedream_executor
+
+    monkeypatch.setattr(
+        pipedream_executor, "read_calendar_events",
+        lambda org, max_results=8: {"ok": True, "events": _items()},
+    )
+    brief = google_client.calendar_brief("org-pd")
+    assert "Weekly Planning" in brief

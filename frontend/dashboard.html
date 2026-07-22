@@ -2662,6 +2662,8 @@
     if(act.risk) row("Risk",esc(act.risk));
     if(act.route) row("Runs through",esc(act.route==="native"?"Laura — your own connected account"
       :act.route==="cedric"?"Cedric — the Slack agent"
+      :act.route==="pipedream"?"Pipedream — the org's connected account"
+      :act.route==="manual"?"Nobody — tracked for you, nothing runs automatically"
       :act.route==="browser"?"Browser demonstration — a guarded browser session; the live view sits in the meeting's Browser demonstration panel"
       :act.route));
     if((act.dependencies||[]).length) row("Depends on",esc(act.dependencies.join(", ")));

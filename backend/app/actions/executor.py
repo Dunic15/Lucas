@@ -103,6 +103,33 @@ def capability_blocked(caps: dict | None, action_type: str | None) -> bool:
     return caps.get(family) is False
 
 
+def _cedric_linked(org_id: str) -> bool:
+    """Whether this org actually HAS the Slack agent (a connected cedric-brain
+    row). Owner rule 2026-07-22: "Cedric lives inside Slack" — an org that
+    never linked it must never see a 'Runs through Cedric' card, a doomed
+    dispatch, or the credentials-unavailable noise. The demo org keeps the
+    legacy service-scope behavior (its Cedric wiring is global env)."""
+    org = str(org_id or "").strip()
+    if not org or org == settings.demo_org_id:
+        return True
+    try:
+        from .. import store  # lazy: keep module load order decoupled
+
+        return any(
+            r.get("provider") == "cedric-brain" and r.get("status") == "connected"
+            for r in store.connections_for_org(org)
+        )
+    except Exception:  # noqa: BLE001 — no store, no claim
+        return False
+
+
+def _brokered_route(org_id: str) -> str:
+    """The route for work Laura can't execute herself: the Slack agent when
+    the org has one, otherwise 'manual' (a track-only card — recorded for the
+    humans, nothing pretends to run it)."""
+    return "cedric" if _cedric_linked(org_id) else "manual"
+
+
 def route_for_typed(typed: dict | None, org_id: str = "") -> str:
     """Per-family execution route for one typed action (immutable once stamped).
 
@@ -130,13 +157,13 @@ def route_for_typed(typed: dict | None, org_id: str = "") -> str:
         # Not connected in Pipedream — prefer a native adapter if one exists,
         # so native-era orgs and un-migrated external users keep working.
         if native_runtime.supports(action_type):
-            return "native" if enabled() else "cedric"
+            return "native" if enabled() else _brokered_route(org_id)
         # Long tail with no native plane: stays Pipedream (fails cleanly if the
         # org hasn't connected it — never a silent wrong route).
         return "pipedream"
     if from_typed(typed) is None:
-        return "cedric"
-    return "native" if enabled() else "cedric"
+        return _brokered_route(org_id)
+    return "native" if enabled() else _brokered_route(org_id)
 
 
 def handles(action: dict | None) -> bool:
