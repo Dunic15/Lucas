@@ -79,6 +79,27 @@ def _transcript_speakers(artifact: dict) -> set[str]:
     return out
 
 
+def _transcript_speaker_names(artifact: dict) -> list[str]:
+    """Ordered, deduped DISPLAY names of the humans who spoke in the archived
+    transcript ('Name: text' lines), the avatar's own lines excluded. This is
+    the roster source once the meeting is finalized: finalize calls
+    store.remove(bot_id), which cascade-drops the live session (and its
+    session_participants rows), so for every drill-in-able meeting the live map
+    is already gone. Names only — never the transcript text, which stays PII
+    behind the show_transcripts pref."""
+    avatar_id = str(artifact.get("avatar_id") or "").casefold()
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in str(artifact.get("transcript") or "").splitlines():
+        name, sep, _ = line.partition(":")
+        name = name.strip()
+        key = name.casefold()
+        if sep and key and key != avatar_id and key not in seen:
+            seen.add(key)
+            out.append(name)
+    return out
+
+
 def _name_matches(user_name: str, speakers: set[str]) -> bool:
     """ASR-tolerant name match: exact full-name, same first name, or first
     names where one prefixes the other at >= 4 chars ('Anant' drifts from
@@ -3705,6 +3726,348 @@ async def dashboard_action_params(action_id: str, request: Request) -> JSONRespo
         org_api.apply_param_edits, user["org_id"], aid, args
     )
     return JSONResponse(payload, status_code=code, headers=_NO_STORE)
+
+
+# ── per-meeting workspace (read-only) ────────────────────────────────────────
+# One page tying a meeting's before/during/after together: overview + roster,
+# the DISTILLED summary, the canonical actions (captured→approved→executed with
+# provenance + receipts), a derived timeline, and the files it produced. Purely
+# a projection over data the pipeline already writes — it changes NO meeting
+# behaviour, adds NO model call, and is off the live path.
+
+
+def _visible_meeting_row(
+    caller_org: str | None, user: dict | None, bot_id: str
+) -> dict | None:
+    """The saved artifact row for ``bot_id`` this caller may see, or None.
+
+    Same tenancy + per-user attendance scoping as the summary listing
+    (_org_visible + _user_attended) and the approve door (_find_org_action):
+    a real org sees only its own rows (+ the legacy unowned '' for Demo), and
+    a cookie user only meetings they dispatched or audibly attended. None here
+    ⇒ the route answers 404 (never leak existence across the tenant boundary)."""
+    target = (bot_id or "").strip()
+    if not target:
+        return None
+    scope = None
+    if store.durable_artifacts_enabled():
+        scope = caller_org or settings.demo_org_id
+    for row in store.list_artifacts(scope):
+        if str(row.get("bot_id") or "") != target:
+            continue
+        art = row.get("artifact") or {}
+        if not _org_visible(caller_org, art.get("org_id", "")):
+            return None
+        if not _user_attended(user, art):
+            return None
+        return row
+    return None
+
+
+def _workspace_overview(row: dict, session) -> dict:
+    """Header facts: who/where/when + the human roster. The roster is sourced
+    from the ARCHIVED meeting (transcript speaker labels — the avatar's own
+    lines excluded), because finalize removes the live session before a meeting
+    is drill-in-able, so store.get(bot_id) is None for every archived meeting.
+    A still-live session (rare: viewing an in-progress meeting) is preferred
+    when present and carries live here-status. The live writers
+    (Session.participant_event / resolve_participant) mutate the dict WITHOUT
+    holding store._LOCK, so the lock here does not truly serialise against them;
+    the surrounding try/except is the real guard — if a concurrent live mutation
+    races the snapshot and raises RuntimeError (dict changed size), we fall back
+    to the archived transcript roster rather than 500 the page. duration and
+    saved_at come from the artifact. usage_sessions (in_call_at/closed_at) is a
+    Postgres-only
+    refinement — the SQLite/demo path derives start from saved_at − duration,
+    so the shape is identical either way."""
+    art = row.get("artifact") or {}
+    roster: list[dict] = []
+    seen: set[str] = set()
+    if session is not None:
+        try:
+            with store._LOCK:  # best-effort snapshot; try/except below is the real guard
+                live = list(getattr(session, "participants", {}).values())
+        except Exception:  # noqa: BLE001 — a roster read never 500s the page
+            live = []
+        for participant in live:
+            name = str(participant.get("name") or "").strip()
+            if not name or str(participant.get("kind") or "") == "avatar":
+                continue
+            key = name.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            roster.append({"name": name[:80], "here": bool(participant.get("here"))})
+    # Archived source: transcript speakers survive finalize (the live session
+    # does not). `here` is False — the meeting is over.
+    for name in _transcript_speaker_names(art):
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        roster.append({"name": name[:80], "here": False})
+    saved_at = row.get("saved_at")
+    duration = int(art.get("duration_seconds") or 0)
+    started_at = (
+        (saved_at - duration) if (saved_at and duration) else None
+    )
+    return {
+        "bot_id": row.get("bot_id"),
+        "avatar_id": art.get("avatar_id", ""),
+        "org_id": art.get("org_id", ""),
+        "platform": _platform(art.get("meeting_url", "")),
+        "meeting_type": art.get("meeting_type", ""),
+        "meeting_url": str(art.get("meeting_url") or ""),
+        "started_at": started_at,
+        "ended_at": saved_at,
+        "saved_at": saved_at,
+        "duration_seconds": duration,
+        "readiness_score": int(art.get("readiness_score") or 0),
+        "participants": roster,
+    }
+
+
+def _as_str_list(value, cap: int, item_cap: int) -> list[str]:
+    """Coerce an artifact list field (strings, or {text/step/...} dicts) into a
+    bounded list of plain strings for the wire — distilled, never transcript."""
+    out: list[str] = []
+    for entry in (value or [])[:cap]:
+        if isinstance(entry, dict):
+            text = str(
+                entry.get("text")
+                or entry.get("step")
+                or entry.get("title")
+                or entry.get("summary")
+                or entry.get("decision")
+                or ""
+            )
+        else:
+            text = str(entry)
+        text = text.strip()
+        if text:
+            out.append(text[:item_cap])
+    return out
+
+
+def _workspace_summary(art: dict, include_transcript: bool) -> dict:
+    """The DISTILLED recap: summary + risks + missing steps + goals. The
+    transcript rides ONLY when the org's show_transcripts pref is ON — the same
+    gate _meeting_row enforces (default OFF; PII stays in the store otherwise)."""
+    out = {
+        "summary": str(art.get("summary") or "")[:2000],
+        "risks": _as_str_list(art.get("risks"), 12, 300),
+        "missing_steps": _as_str_list(art.get("missing_steps"), 12, 200),
+        "goals": _as_str_list(art.get("goals"), 12, 300),
+        "decisions_count": len(art.get("decisions") or []),
+        "follow_up_subject": str(
+            (art.get("follow_up_email") or {}).get("subject") or ""
+        )[:200],
+    }
+    if include_transcript:
+        out["transcript"] = str(art.get("transcript") or "")[:40000]
+    return out
+
+
+def _timeline_event(
+    ts, event: str, detail: str = "", actor: str = "", action_id: str = ""
+) -> dict:
+    return {
+        "ts": float(ts or 0.0),
+        "event": str(event or ""),
+        "detail": str(detail or "")[:200],
+        "actor": str(actor or "")[:80],
+        "action_id": str(action_id or ""),
+    }
+
+
+def _workspace_timeline(
+    art: dict, saved_at, views: list[dict], capture_times: dict[str, float]
+) -> list[dict]:
+    """A single time-ordered story merged from the states the pipeline already
+    records: per-action CAPTURE (action_capture_events.created_at, else the
+    meeting finalize), the human DECISION (action_decisions.decided_at +
+    laura_user_id), the EXECUTION outcome (queued_actions execution stamp), and
+    the canonical log entries. NOTE: logs_json entries carry no per-entry
+    timestamp, so they anchor to the action's execution stamp (fallback: its
+    capture ts) to sort into place. Sorted ascending by ts."""
+    events: list[dict] = []
+    avatar = str(art.get("avatar_id") or "")
+    if saved_at:
+        events.append(
+            _timeline_event(saved_at, "meeting_finalized",
+                            "Meeting ended; recap saved", actor=avatar)
+        )
+    for view in views:
+        aid = str(view.get("action_id") or "")
+        cap_ts = capture_times.get(aid) or saved_at or 0.0
+        events.append(
+            _timeline_event(cap_ts, "action_captured", view.get("action", ""),
+                            actor=str(view.get("origin_avatar") or ""),
+                            action_id=aid)
+        )
+        decision = view.get("decision")
+        if isinstance(decision, dict) and decision.get("decision"):
+            verb = str(decision["decision"]).lower()
+            label = "action_approved" if verb.startswith("approve") else (
+                "action_rejected" if verb.startswith("reject") else "action_decided"
+            )
+            events.append(
+                _timeline_event(
+                    decision.get("decided_at"), label, view.get("action", ""),
+                    actor=str(decision.get("laura_user_id") or ""),
+                    action_id=aid,
+                )
+            )
+        status = str(view.get("status") or "")
+        exec_ts = view.get("updated_at") or cap_ts
+        if status in ("executing", "done", "failed"):
+            events.append(
+                _timeline_event(exec_ts, "action_" + status,
+                                view.get("detail", ""), action_id=aid)
+            )
+        for entry in (view.get("logs") or [])[-10:]:
+            if isinstance(entry, dict):
+                detail = " ".join(
+                    p for p in (str(entry.get("event") or ""),
+                                str(entry.get("detail") or "")) if p
+                ).strip(": ")
+            else:
+                detail = str(entry)
+            if detail:
+                events.append(
+                    _timeline_event(exec_ts, "action_log", detail, action_id=aid)
+                )
+    events.sort(key=lambda entry: entry["ts"])
+    return events
+
+
+def _workspace_files(art: dict, views: list[dict]) -> list[dict]:
+    """What the meeting produced, distilled: the drafted follow-up email and
+    every action RECEIPT ({kind, ref} — a link/id the executor returned, never
+    a raw storage secret; that's all the receipt_json ever carries)."""
+    files: list[dict] = []
+    subject = str((art.get("follow_up_email") or {}).get("subject") or "").strip()
+    if subject:
+        files.append({"kind": "follow_up_email", "label": subject[:160], "ref": ""})
+    for view in views:
+        receipt = view.get("receipt")
+        if isinstance(receipt, dict) and receipt.get("ref"):
+            kind = str(receipt.get("kind") or "receipt")[:40]
+            files.append({
+                "kind": kind,
+                "label": kind.replace("_", " "),
+                "ref": str(receipt.get("ref"))[:400],
+                "action_id": str(view.get("action_id") or ""),
+            })
+    return files
+
+
+def _meeting_workspace_payload(
+    caller_org: str | None, user: dict | None, bot_id: str
+) -> dict | None:
+    """Assemble the read-only workspace for one meeting, or None when the
+    bot_id is not visible to the caller (→ 404). Sync (threadpool caller);
+    every read goes through the DALs so Postgres RLS applies."""
+    row = _visible_meeting_row(caller_org, user, bot_id)
+    if row is None:
+        return None
+    art = row.get("artifact") or {}
+    scope = caller_org or settings.demo_org_id
+
+    # NOTE: no top-level maybe_reconcile here — org_api._canonical_action_view
+    # already runs the throttled stale-executing settle per action below, so a
+    # claim held by a process that died mid-call still surfaces as a truthful
+    # terminal receipt. A page with zero actions has nothing to settle for the
+    # display anyway.
+
+    show_transcripts = store.get_org_pref(scope, "show_transcripts") == "1"
+    session = store.get(bot_id)
+
+    # Canonical action ids: the artifact's captured actions plus any durable
+    # queued actions for this bot (browser B0 steps are minted straight into
+    # the durable index, never into the artifact). Order preserved, deduped.
+    action_ids: list[str] = []
+    seen: set[str] = set()
+    for action in (art.get("actions") or []):
+        if isinstance(action, dict):
+            aid = str(action.get("action_id") or "")
+            if aid and aid not in seen:
+                seen.add(aid)
+                action_ids.append(aid)
+    try:
+        for queued in outbox.queued_actions(scope, bot_id):
+            aid = str(queued.get("action_id") or "")
+            if aid and aid not in seen:
+                seen.add(aid)
+                action_ids.append(aid)
+    except Exception:  # noqa: BLE001 — a durable read blip never 500s the page
+        pass
+
+    from . import org_api  # local import: org_api lazily imports dashboard
+
+    views: list[dict] = []
+    for aid in action_ids:
+        try:
+            view = org_api._canonical_action_view(scope, aid)
+        except Exception:  # noqa: BLE001 — one bad row can't sink the workspace
+            view = None
+        if view is not None:
+            views.append(view)
+
+    try:
+        capture_times = outbox.action_capture_times(scope, bot_id)
+    except Exception:  # noqa: BLE001
+        capture_times = {}
+
+    return {
+        "overview": _workspace_overview(row, session),
+        "summary": _workspace_summary(art, show_transcripts),
+        "actions": views,
+        "timeline": _workspace_timeline(
+            art, row.get("saved_at"), views, capture_times
+        ),
+        "files": _workspace_files(art, views),
+        # Placeholder key for the sibling decisions PR — the artifact's decision
+        # count rides in summary.decisions_count until that lands.
+        "decisions": [],
+        "prefs": {"show_transcripts": show_transcripts},
+    }
+
+
+@router.get("/dashboard/meetings/{bot_id}")
+async def dashboard_meeting_workspace(
+    bot_id: str, request: Request
+) -> JSONResponse:
+    """Read-only per-meeting workspace: overview + roster, the distilled
+    summary, the canonical actions, a derived timeline, and files. Auth-gated
+    and tenant-scoped through the same four-world gate as /dashboard/summary;
+    404 when the meeting is not visible to the caller's org. no-store, and off
+    the live path (runs in the threadpool). DISTILLED only — the transcript
+    rides ONLY when the org's show_transcripts pref is ON."""
+    from .. import cedric  # local import, same reason as auth.gate's
+
+    user = auth.current_user(request)
+    machine_org = None
+    if user is None:
+        machine_org = cedric.resolve_machine_org(request)
+        if machine_org is None:
+            if err := auth.gate(request):
+                return err
+    caller_org = user["org_id"] if user else machine_org
+    target = (bot_id or "").strip()
+    if not target:
+        return JSONResponse(
+            {"error": "bot_id is required"}, status_code=400, headers=_NO_STORE
+        )
+    payload = await run_in_threadpool(
+        _meeting_workspace_payload, caller_org, user, target
+    )
+    if payload is None:
+        return JSONResponse(
+            {"error": "unknown meeting for this org"}, status_code=404,
+            headers=_NO_STORE,
+        )
+    return JSONResponse(_json_safe(payload), headers=_NO_STORE)
 
 
 @router.get("/dashboard/actions/{action_id}")

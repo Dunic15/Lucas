@@ -888,6 +888,24 @@
       </div>
     </section>
 
+    <!-- MEETING WORKSPACE (read-only drill-in): one page tying a single
+         meeting's before/during/after together — overview + roster, the
+         distilled summary, the canonical actions (captured → approved →
+         executed), a derived timeline, and the files it produced. Fetched
+         from GET /dashboard/meetings/{bot_id}. Not a nav view — reached by
+         opening a meetings-list row; the Back button returns to Meetings.
+         NEVER renders the transcript. -->
+    <section class="view" id="view-meeting" hidden>
+      <div class="head">
+        <div>
+          <button class="btn" id="mw-back" style="margin-bottom:8px">&larr; Meetings</button>
+          <h1 id="mw-title">Meeting</h1>
+          <div class="sub" id="mw-sub"></div>
+        </div>
+      </div>
+      <div id="mw-body"><div class="ph" style="padding:24px;text-align:center">Loading…</div></div>
+    </section>
+
     <!-- ACTION CENTER — one place to review what the avatars want to do.
          The list aggregates the action summaries already present in
          /dashboard/summary; expanding a card lazily fetches the canonical
@@ -1199,6 +1217,9 @@
   var VIEWS=["overview","avatars","brain","meetings","actions","connections","syscheck","settings","usage"];
   var NAV_OWNER={usage:"settings"};
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
+    // The meeting workspace is a drill-in, not a nav view — any nav click
+    // (including "Meetings") leaves it, so always hide it here.
+    var mwEl=$("#view-meeting"); if(mwEl) mwEl.hidden=true;
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
     var navName=NAV_OWNER[name]||name;
     document.querySelectorAll("#nav button").forEach(function(a){var current=a.getAttribute("data-view")===navName;a.classList.toggle("on",current);if(current)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current");});
@@ -1213,6 +1234,7 @@
     if(name==="avatars" && DATA) renderAvatars(DATA);
     window.scrollTo(0,0); }
   $$("#nav button").forEach(function(a){a.addEventListener("click",function(e){e.preventDefault();go(a.getAttribute("data-view"));});});
+  (function(){ var back=$("#mw-back"); if(back) back.addEventListener("click",function(){ go("meetings"); }); })();
   document.addEventListener("click",function(e){var t=e.target.closest("[data-goto]");if(t){go(t.getAttribute("data-goto"));}});
 
   // A Slack/brain connect (?brain=), a native Google connect (?google=), or a
@@ -1970,6 +1992,7 @@
         (m.actions.length?'<div class="summary" style="margin-bottom:8px">'+m.actions.length+' action'+(m.actions.length>1?'s':'')+' from this meeting'+((m.actions.some(function(a){return a.source==="inferred";}))?' (incl. proposed plan steps)':'')+'</div><button class="btn primary" data-goto-actions="1">Open in Action Centre →</button>'
           : '<div class="empty" style="padding:6px 0;text-align:left">'+((m.saved_at&&(Date.now()/1000-m.saved_at)<180)?'Recap still processing — refresh in a moment.':'No actions captured.')+'</div>')+
         (m.missing_steps.length?'<div class="sm-h" style="margin-top:12px">Missing steps</div>'+m.missing_steps.map(function(s){return '<div class="d attn"><span class="ic">!</span><span>'+esc(s.replace(/_/g," "))+'</span></div>';}).join(""):'')+
+        (m.bot_id?'<div style="margin-top:14px"><button class="btn" data-open-workspace="'+esc(m.bot_id)+'">Open meeting workspace →</button></div>':'')+
         '</div></div></td></tr>';
     }
     function renderRows(sel,opts,limit){ var tb=$(sel), now=Date.now()/1000;
@@ -1983,6 +2006,7 @@
       $$("tr.row",tb).forEach(function(r){ r.addEventListener("click",function(){
         var dEl=tb.querySelector('tr.detail[data-d="'+r.getAttribute("data-i")+'"]'); if(dEl) dEl.hidden=!dEl.hidden; }); });
       $$("button[data-goto-actions]",tb).forEach(function(b){ b.addEventListener("click",function(e){ e.stopPropagation(); go("actions"); }); });
+      $$("button[data-open-workspace]",tb).forEach(function(b){ b.addEventListener("click",function(e){ e.stopPropagation(); openMeeting(b.getAttribute("data-open-workspace")); }); });
       // Per-row Approve & run / Reject (live inside the expandable detail row).
       $$("button[data-approve]",tb).forEach(function(b){ b.addEventListener("click",function(e){ e.stopPropagation(); approveAction(b); }); });
       $$("button[data-reject]",tb).forEach(function(b){ b.addEventListener("click",function(e){ e.stopPropagation(); rejectAction(b); }); });
@@ -2868,6 +2892,113 @@
       return esc(typeof l==="string"?l:JSON.stringify(l)); }).join("<br/>");
     return '<dl class="ac-kv">'+kv.join("")+'</dl>'+
       (logs?'<div class="sm-h" style="margin-top:9px">Log</div><div class="ac-logs">'+logs+'</div>':'');
+  }
+
+  // ═════════ Meeting workspace (read-only drill-in) ═════════
+  // GET /dashboard/meetings/{bot_id} → one page tying a meeting's
+  // before/during/after together. Reuses the module-scope renderers (esc,
+  // fmtWhen, fmtDur, avatarBadge, stateChipHTML, actionDetailHTML). NEVER
+  // renders the transcript, even if the payload carries one (pref-gated field).
+  var MW_EVENT_LABEL={meeting_finalized:"Meeting ended · recap saved",
+    action_captured:"Action captured",action_approved:"Approved",
+    action_rejected:"Rejected",action_decided:"Decision recorded",
+    action_executing:"Executing…",action_done:"Executed",
+    action_failed:"Execution failed",action_log:"Update"};
+  function mwEventLabel(ev){ return MW_EVENT_LABEL[ev]||String(ev||"").replace(/_/g," "); }
+
+  function openMeeting(botId){
+    // Hide every nav view + show the workspace shell (it is not in VIEWS, so
+    // go() never shows it; go() DOES hide it, which is the way back).
+    VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=true;});
+    var sec=$("#view-meeting"); if(sec) sec.hidden=false;
+    $("#mw-body").innerHTML='<div class="ph" style="padding:24px;text-align:center">Loading…</div>';
+    $("#mw-title").textContent="Meeting";
+    $("#mw-sub").textContent="";
+    window.scrollTo(0,0);
+    fetch("/dashboard/meetings/"+encodeURIComponent(botId),{headers:headers()})
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); })
+      .then(function(res){
+        if(!res.ok){ $("#mw-body").innerHTML='<div class="empty" style="padding:24px">'+(res.status===404?"This meeting isn’t available.":"Could not load this meeting.")+'</div>'; return; }
+        renderWorkspace(res.j);
+      })
+      .catch(function(){ $("#mw-body").innerHTML='<div class="empty" style="padding:24px">Network error loading this meeting.</div>'; });
+  }
+
+  function renderWorkspace(d){
+    var ov=d.overview||{}, sm=d.summary||{}, acts=d.actions||[], tl=d.timeline||[], files=d.files||[];
+    var nm=avNameOf(ov.avatar_id);
+    $("#mw-title").textContent=(ov.platform&&ov.platform!=="—"?ov.platform+" meeting":"Meeting");
+    $("#mw-sub").innerHTML=esc(nm)+' · '+esc(fmtWhen(ov.ended_at||ov.saved_at))+' · '+esc(fmtDur(ov.duration_seconds));
+
+    // Overview card — who / where / when / roster.
+    var roster=(ov.participants||[]).map(function(p){
+      return '<span class="platc" title="'+(p.here?"was present":"joined")+'">'+esc(p.name)+'</span>'; }).join(" ");
+    var ovHTML='<div class="panel" style="padding:16px;margin-bottom:14px">'+
+      '<div class="sm-h">Overview</div>'+
+      '<div class="ac-meta" style="margin:6px 0 4px">'+avatarBadge(ov.avatar_id,nm)+'<span>'+esc(nm)+'</span>'+
+      '<span aria-hidden="true">·</span><span>'+esc(ov.platform||"—")+' meeting</span>'+
+      '<span aria-hidden="true">·</span><span>'+esc(fmtWhen(ov.ended_at||ov.saved_at))+'</span>'+
+      '<span aria-hidden="true">·</span><span>'+esc(fmtDur(ov.duration_seconds))+'</span>'+
+      (typeof ov.readiness_score==="number"&&ov.readiness_score?'<span aria-hidden="true">·</span><span>readiness '+esc(ov.readiness_score)+'</span>':'')+'</div>'+
+      (roster?'<div style="margin-top:8px"><span class="sub">Attendees</span><div style="margin-top:4px">'+roster+'</div></div>':'')+
+      '</div>';
+
+    // Summary card — DISTILLED only. Transcript is deliberately never shown.
+    function bulletList(title,arr){ if(!arr||!arr.length) return "";
+      return '<div class="sm-h" style="margin-top:12px">'+esc(title)+'</div>'+arr.map(function(s){
+        return '<div class="d"><span class="ic">•</span><span>'+esc(String(s).replace(/_/g," "))+'</span></div>'; }).join(""); }
+    var smHTML='<div class="panel" style="padding:16px;margin-bottom:14px">'+
+      '<div class="sm-h">Summary</div>'+
+      '<div class="summary">'+(sm.summary?esc(sm.summary):'<span style="color:var(--faint)">No summary captured.</span>')+'</div>'+
+      bulletList("Goals",sm.goals)+
+      bulletList("Risks",sm.risks)+
+      bulletList("Missing steps",sm.missing_steps)+
+      '</div>';
+
+    // Decisions — placeholder for the sibling decisions PR. Until it lands we
+    // surface the count the summary already carries.
+    var decCount=sm.decisions_count||0;
+    var decHTML='<div class="panel" style="padding:16px;margin-bottom:14px">'+
+      '<div class="sm-h">Decisions</div>'+
+      '<div class="summary" style="color:var(--faint)">'+(decCount?(decCount+' decision'+(decCount>1?'s':'')+' recorded in this meeting. A dedicated decisions view is coming soon.'):'No decisions recorded.')+'</div>'+
+      '</div>';
+
+    // Actions — reuse the canonical action detail renderer for each card.
+    var actHTML='<div class="panel" style="padding:16px;margin-bottom:14px"><div class="sm-h">Actions</div>';
+    if(!acts.length){ actHTML+='<div class="empty" style="padding:8px 0;text-align:left">No actions captured.</div>'; }
+    else { actHTML+=acts.map(function(a){
+      // Canonical Action view carries `status` directly (not `.execution`).
+      return '<article class="ac-card" style="margin-top:10px"><div class="ac-top">'+stateChipHTML(a.status||"")+
+        '<div class="ac-what"><div class="ac-item">'+esc(a.action||a.item||"")+'</div>'+
+        '<div class="ac-meta"><span>'+esc(a.tool||a.route||"tracked")+'</span>'+
+        (a.risk?'<span aria-hidden="true">·</span><span>risk '+esc(a.risk)+'</span>':'')+'</div></div></div>'+
+        '<div class="ac-details" style="display:block;margin-top:8px">'+actionDetailHTML(a)+'</div></article>'; }).join(""); }
+    actHTML+='</div>';
+
+    // Timeline — a vertical, time-ordered list of the derived events.
+    var tlHTML='<div class="panel" style="padding:16px;margin-bottom:14px"><div class="sm-h">Timeline</div>';
+    if(!tl.length){ tlHTML+='<div class="empty" style="padding:8px 0;text-align:left">No timeline events yet.</div>'; }
+    else { tlHTML+='<div class="mw-timeline">'+tl.map(function(e){
+      return '<div class="d" style="align-items:flex-start"><span class="ic">•</span><span>'+
+        '<b>'+esc(mwEventLabel(e.event))+'</b>'+
+        (e.actor?' <span class="sub">· '+esc(avNameOf(e.actor)||e.actor)+'</span>':'')+
+        ' <span class="sub">· '+esc(fmtWhen(e.ts))+'</span>'+
+        (e.detail?'<div class="summary" style="margin-top:2px">'+esc(e.detail)+'</div>':'')+
+        '</span></div>'; }).join("")+'</div>'; }
+    tlHTML+='</div>';
+
+    // Files — the follow-up email + any action receipts (links/ids only).
+    var filesHTML="";
+    if(files.length){ filesHTML='<div class="panel" style="padding:16px;margin-bottom:14px"><div class="sm-h">Files &amp; links</div>'+
+      files.map(function(f){
+        var isUrl=/^https?:\/\//.test(f.ref||"");
+        var label=esc(f.label||f.kind||"file");
+        return '<div class="d"><span class="ic">↳</span><span>'+label+
+          (isUrl?' — <a href="'+esc(f.ref)+'" target="_blank" rel="noopener noreferrer">open ↗</a>':(f.ref?' <span class="sub">('+esc(f.ref)+')</span>':''))+'</span></div>'; }).join("")+
+      '</div>'; }
+
+    $("#mw-body").innerHTML=ovHTML+smHTML+decHTML+actHTML+tlHTML+filesHTML;
+    wireAvatarImages();
   }
 
   // ═════════ Browser demonstration (presentation shell ONLY) ═════════
