@@ -322,6 +322,129 @@ def is_detail_skip(text: str) -> bool:
     return bool(_DETAIL_SKIP.search(text or ""))
 
 
+# ── live corrections on the active draft (spec M, 2026-07-22) ───────────
+# "No, non venerdì — lunedì" must MUTATE the one captured card, never mint a
+# second one or get appended to its text (live repro: the cancel/correction
+# phrase ended up INSIDE the action text and the wrong card reached the
+# dashboard). Deterministic regex — no LLM on the live path.
+_CANCEL_DRAFT = re.compile(
+    r"^\s*(?:[\w'à-ù]+[,.]?\s+){0,2}?(?:"
+    r"lascia\s+(?:perdere|stare)|annulla(?:l[ao])?|cancella(?:l[ao])?|"
+    r"non\s+(?:serve|importa)(?:\s+pi[uù])?|niente\s+pi[uù]|"
+    r"never\s*mind|forget\s+(?:it|that|about\s+it)|scratch\s+that|"
+    r"drop\s+(?:it|that)|cancel\s+(?:it|that)|don.?t\s+bother"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# not-X-but-Y shapes, EN + IT. Function words (a/to/il/for…) are absorbed so
+# "not to Anant, to Marco" and "non a venerdì ma lunedì" both parse clean.
+_CORR_PATTERNS = [
+    re.compile(  # "non Anant, Marco" / "non venerdì ma lunedì"
+        r"\bnon\s+(?:a|ad|al|il|lo|la|per|con|di|da)?\s*(?P<old>[\w@.'-]+)"
+        r"\s*[,;]?\s*(?:ma|bens[iì]|piuttosto)?\s*"
+        r"(?:a|ad|al|il|lo|la|per|con|di|da)?\s*(?P<new>[\w@.'-]+)",
+        re.IGNORECASE,
+    ),
+    re.compile(  # "not Anant, Marco" / "not Friday but Monday"
+        r"\bnot\s+(?:to|on|for|with|at)?\s*(?P<old>[\w@.'-]+)"
+        r"\s*[,;]?\s*(?:but)?\s*(?:to|on|for|with|at)?\s*(?P<new>[\w@.'-]+)",
+        re.IGNORECASE,
+    ),
+    re.compile(  # "invece di Anant, Marco" / "instead of Friday, Monday"
+        r"\b(?:invece\s+di|instead\s+of)\s+(?P<old>[\w@.'-]+)"
+        r"\s*[,;]?\s*(?:metti|usa|fai|use|put|make\s+it)?\s*(?P<new>[\w@.'-]+)",
+        re.IGNORECASE,
+    ),
+]
+# Words that regex-capture as OLD/NEW but never identify a draft value
+# ("non so, Marco" must not read as so→Marco). apply_correction's
+# old-must-occur-in-the-draft check is the main guard; this trims the rest.
+_CORR_GUARD = {
+    "so", "che", "cosa", "poi", "più", "piu", "forse", "credo", "penso",
+    "proprio", "davvero", "ancora", "adesso", "quindi", "sure", "really",
+    "just", "that", "this", "know", "think", "yet", "now", "then", "quite",
+}
+
+
+def is_draft_cancel(text: str) -> bool:
+    """'Lascia perdere' / 'never mind' aimed at the action she just captured."""
+    t = (text or "").strip()
+    return bool(t) and len(t) <= 60 and bool(_CANCEL_DRAFT.match(t))
+
+
+def parse_corrections(text: str) -> list[tuple[str, str]]:
+    """(old, new) replacement candidates heard in one utterance. Callers try
+    them against the draft in order; apply_correction rejects any whose OLD
+    doesn't actually occur there."""
+    out: list[tuple[str, str]] = []
+    for pat in _CORR_PATTERNS:
+        for m in pat.finditer(text or ""):
+            old, new = m.group("old") or "", m.group("new") or ""
+            ol, nl = old.lower(), new.lower()
+            if len(old) < 3 or len(new) < 3 or ol == nl:
+                continue
+            if ol in _CORR_GUARD or nl in _CORR_GUARD:
+                continue
+            if (old, new) not in out:
+                out.append((old, new))
+    return out
+
+
+def apply_correction(item: dict, old: str, new: str) -> dict | None:
+    """Field replacements for one candidate, or None when OLD isn't in the
+    draft (then it wasn't a correction of THIS card). Word-boundary,
+    case-insensitive — 'Anant' never rewrites 'Anantara'."""
+    pat = re.compile(rf"(?<![\w@]){re.escape(old)}(?![\w@])", re.IGNORECASE)
+    updates: dict[str, str] = {}
+    for field in ("action", "owner", "due"):
+        val = str((item or {}).get(field) or "")
+        if val and pat.search(val):
+            updates[field] = pat.sub(new, val)
+    return updates or None
+
+
+def revise_action_once(
+    session,
+    item: dict,
+    updates: dict,
+    *,
+    source_event_key: str = "",
+    source_fingerprint: str = "",
+    dedupe_window_seconds: float = 30.0,
+) -> tuple[dict, bool]:
+    """Durably REPLACE draft fields (never append); retries apply once."""
+    from .. import outbox
+
+    canonical, applied = outbox.rewrite_action_capture_once(
+        session,
+        item,
+        updates,
+        source_event_key=source_event_key,
+        source_fingerprint=source_fingerprint,
+        dedupe_window_seconds=dedupe_window_seconds,
+    )
+    if isinstance(item, dict):
+        item.clear()
+        item.update(canonical)
+    return canonical, applied
+
+
+def withdraw_action_once(session, item: dict) -> bool:
+    """Withdraw the captured draft everywhere the room can still see it:
+    durable row, queued list, continuation window. True = a card was removed."""
+    from .. import outbox
+
+    removed = outbox.withdraw_action_capture(session, item)
+    aid = str((item or {}).get("action_id") or "")
+    queued = getattr(session, "queued_actions", None) or []
+    session.queued_actions = [
+        q for q in queued if str(q.get("action_id") or "") != aid
+    ]
+    session.last_capture = None
+    return removed
+
+
 def capture_action_once(
     session,
     action: str,

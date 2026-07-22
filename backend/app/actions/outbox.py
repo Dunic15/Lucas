@@ -523,6 +523,175 @@ def extend_action_capture_once(
         }, True
 
 
+def rewrite_action_capture_once(
+    session: Any,
+    item: dict,
+    updates: dict,
+    *,
+    source_event_key: str = "",
+    source_fingerprint: str = "",
+    dedupe_window_seconds: float = 30.0,
+) -> tuple[dict, bool]:
+    """REPLACE draft fields once (live correction: "no, not Anant — Marco").
+
+    The extend twin APPENDS a continuation; this one substitutes what the
+    asker corrected. Same idempotency ledger (action_capture_events), so a
+    Recall re-delivery of the correction final applies exactly once.
+    """
+    org_id = str(getattr(session, "org_id", "") or settings.demo_org_id)
+    action_id = str((item or {}).get("action_id") or "")
+    event_key = str(source_event_key or "")[:128]
+    fingerprint = str(source_fingerprint or "")[:128]
+    window = max(1.0, min(float(dedupe_window_seconds), 300.0))
+    if control_plane.enabled():
+        return _pg_call(
+            outbox_pg.rewrite_action_capture_once,
+            org_id,
+            str(session.bot_id),
+            action_id,
+            updates,
+            source_event_key=event_key,
+            source_fingerprint=fingerprint,
+            dedupe_window_seconds=window,
+        )
+
+    _ensure_schema()
+    now = time.time()
+    with store._LOCK, store._connect() as conn:
+        closed = conn.execute(
+            "SELECT state FROM action_finalize_state "
+            "WHERE org_id=? AND bot_id=?",
+            (org_id, str(session.bot_id)),
+        ).fetchone()
+        if closed is not None:
+            raise ActionCaptureClosed(str(closed["state"]))
+        row = conn.execute(
+            """
+            SELECT action_id, action, owner, due
+            FROM queued_actions
+            WHERE org_id=? AND bot_id=? AND action_id=?
+            """,
+            (org_id, str(session.bot_id), action_id),
+        ).fetchone()
+        if row is None:
+            raise OutboxUnavailable("queued action missing during correction")
+        duplicate = None
+        if event_key:
+            duplicate = conn.execute(
+                """
+                SELECT 1 FROM action_capture_events
+                WHERE org_id=? AND action_id=? AND source_event_key=?
+                LIMIT 1
+                """,
+                (org_id, action_id, event_key),
+            ).fetchone()
+        elif fingerprint:
+            duplicate = conn.execute(
+                """
+                SELECT 1 FROM action_capture_events
+                WHERE org_id=? AND action_id=? AND source_fingerprint=?
+                  AND created_at >= ?
+                LIMIT 1
+                """,
+                (org_id, action_id, fingerprint, now - window),
+            ).fetchone()
+        if duplicate is not None:
+            return dict(row), False
+
+        new_action = str(updates.get("action", row["action"]) or "")[:300]
+        new_owner = str(updates.get("owner", row["owner"]) or "")[:100]
+        new_due = str(updates.get("due", row["due"]) or "")[:100]
+        conn.execute(
+            """
+            INSERT INTO action_capture_events (
+              org_id, action_id, source_event_key,
+              source_fingerprint, created_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (org_id, action_id, event_key, fingerprint, now),
+        )
+        conn.execute(
+            """
+            UPDATE queued_actions SET action=?, owner=?, due=?, updated_at=?
+            WHERE org_id=? AND bot_id=? AND action_id=?
+            """,
+            (
+                new_action, new_owner, new_due, now,
+                org_id, str(session.bot_id), action_id,
+            ),
+        )
+        # Refresh the pending wire payload too. Unlike extend, an ALREADY-SENT
+        # action.requested is not an error here: the queued row (what finalize
+        # and the approval doors read) is the durable truth, and the correction
+        # must land there even when the Slack card already went out.
+        conn.execute(
+            """
+            UPDATE callback_outbox
+            SET payload_json=json_set(
+                  json_set(json_set(payload_json, '$.action', ?), '$.owner', ?),
+                  '$.due', ?),
+                next_attempt_at=MAX(next_attempt_at, ?)
+            WHERE org_id=? AND action_id=? AND event='action.requested'
+              AND status IN ('pending', 'failed')
+            """,
+            (new_action, new_owner, new_due, now + 1.0, org_id, action_id),
+        )
+        return {
+            "action_id": str(row["action_id"]),
+            "action": new_action,
+            "owner": new_owner,
+            "due": new_due,
+        }, True
+
+
+def withdraw_action_capture(session: Any, item: dict) -> bool:
+    """Withdraw a captured draft the asker cancelled ("lascia perdere").
+
+    Deletes the queued action and cancels any not-yet-delivered
+    action.requested callback. True = the card existed and was removed;
+    False = already gone (a Recall retry of the cancel — nothing to redo).
+    Finalize-in-progress reports False rather than raising: the drain already
+    owns the rows at that point.
+    """
+    org_id = str(getattr(session, "org_id", "") or settings.demo_org_id)
+    action_id = str((item or {}).get("action_id") or "")
+    if not action_id:
+        return False
+    if control_plane.enabled():
+        return _pg_call(
+            outbox_pg.withdraw_action_capture,
+            org_id,
+            str(session.bot_id),
+            action_id,
+        )
+
+    _ensure_schema()
+    with store._LOCK, store._connect() as conn:
+        closed = conn.execute(
+            "SELECT state FROM action_finalize_state "
+            "WHERE org_id=? AND bot_id=?",
+            (org_id, str(session.bot_id)),
+        ).fetchone()
+        if closed is not None:
+            return False
+        gone = conn.execute(
+            """
+            DELETE FROM queued_actions
+            WHERE org_id=? AND bot_id=? AND action_id=?
+            """,
+            (org_id, str(session.bot_id), action_id),
+        )
+        conn.execute(
+            """
+            UPDATE callback_outbox SET status='cancelled'
+            WHERE org_id=? AND action_id=? AND event='action.requested'
+              AND status IN ('pending', 'failed')
+            """,
+            (org_id, action_id),
+        )
+        return bool(gone.rowcount)
+
+
 def begin_action_finalize(org_id: str, bot_id: str) -> list[dict]:
     """Drain active captures and atomically reject every later capture."""
     org = org_id or settings.demo_org_id
