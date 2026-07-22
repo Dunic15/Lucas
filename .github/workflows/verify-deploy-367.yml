@@ -6,6 +6,11 @@ on:
       - chore/verify-deploy-367
     paths:
       - .github/workflows/verify-deploy-367.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/verify-deploy-367.yml
 
 permissions:
   actions: read
