@@ -87,12 +87,13 @@ def test_route_falls_back_to_native_until_connected_in_pipedream(monkeypatch):
 
 def test_route_to_pipedream_once_connected_there(monkeypatch):
     _enable_pd(monkeypatch)
-    # Org connected Gmail + Calendar + Asana in Pipedream → those route there;
-    # a type NOT connected in Pipedream still falls back to native.
+    # Google writes now stamp the native coordinator even when Pipedream is
+    # connected: execution-time native-first selection owns the cutover.
+    # Asana keeps its existing direct-to-Pipedream route.
     monkeypatch.setattr(pipedream_executor, "app_connected",
                         lambda org, app: org == "org7" and app in {"gmail", "google_calendar", "asana"})
-    assert executor.route_for_typed({"type": "email.send", "args": {}}, "org7") == "pipedream"
-    assert executor.route_for_typed({"type": "calendar.create_event", "args": {}}, "org7") == "pipedream"
+    assert executor.route_for_typed({"type": "email.send", "args": {}}, "org7") == "native"
+    assert executor.route_for_typed({"type": "calendar.create_event", "args": {}}, "org7") == "native"
     assert executor.route_for_typed({"type": "asana.create_task", "args": {"name": "x"}}, "org7") == "pipedream"
     # Different org (nothing connected in Pipedream) → native fallback, not a failure.
     assert executor.route_for_typed({"type": "asana.create_task", "args": {"name": "x"}}, "orgX") == "native"
