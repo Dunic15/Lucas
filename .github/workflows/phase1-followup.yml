@@ -7,6 +7,12 @@ on:
     paths:
       - scripts/phase1_followup_apply.py
       - .github/workflows/phase1-followup.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/phase1_followup_apply.py
+      - .github/workflows/phase1-followup.yml
 
 permissions:
   contents: write
