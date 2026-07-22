@@ -164,6 +164,33 @@ def rebuild_indexes(org_id: str) -> int:
     return total
 
 
+def _list_folders_pd(org_id: str) -> tuple[list[dict], str]:
+    """Folder list through the Pipedream Connect Proxy (google_drive account).
+    Same (folders, reason) contract as the native path; never raises."""
+    try:
+        from .. import drive_client, pipedream_client
+
+        acct = drive_client._pd_drive_account(org_id)
+        if not acct:
+            return [], "google_drive not connected in Pipedream"
+        url = (
+            _DRIVE_FILES_URL
+            + "?q=mimeType='application/vnd.google-apps.folder' and trashed=false"
+            + "&fields=files(id,name)&orderBy=name&pageSize=200&spaces=drive"
+        )
+        resp = pipedream_client.proxy_request(org_id, acct, "GET", url)
+        if not resp.get("ok"):
+            return [], f"drive list via Pipedream HTTP {resp.get('status')}"
+        files = (resp.get("json") or {}).get("files") or []
+        return (
+            [{"id": f["id"], "name": (f.get("name") or f["id"])[:200]}
+             for f in files if f.get("id")],
+            "",
+        )
+    except Exception as e:  # noqa: BLE001 — a picker never 500s
+        return [], f"drive list failed ({type(e).__name__})"
+
+
 def list_folders(org_id: str) -> tuple[list[dict], str]:
     """List the org's Google Drive folders (id + name) with its OWN OAuth token,
     so the dashboard can offer a PICKER instead of a pasted folder link when
@@ -173,6 +200,13 @@ def list_folders(org_id: str) -> tuple[list[dict], str]:
 
     token, err = google_client._access_token(org_id)
     if not token:
+        # Native first, Pipedream second — the SAME cutover rule sync_drive
+        # already follows (owner 2026-07-22: the picker was the one Drive
+        # surface still native-only, so a Connect-only org saw an empty
+        # folder list while its Drive was perfectly connected).
+        pd_folders, pd_reason = _list_folders_pd(org_id)
+        if pd_folders or not pd_reason:
+            return pd_folders, pd_reason
         return [], (f"google not connected ({err})" if err
                     else "google not connected")
     try:
