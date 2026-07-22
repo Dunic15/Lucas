@@ -237,6 +237,23 @@
   .ac-meet-h:hover{background:var(--panel-2,var(--panel));}
   .ac-meet-h .ac-meet-sum{margin-left:auto;color:var(--dim);font-size:.8rem;}
   .ac-meet-h .ac-meet-caret{color:var(--dim);}
+  /* Per-meeting interactivity (owner 2026-07-22): count chips FILTER the group
+     by state; a tiny bar shows how much of the meeting is settled. The chips
+     double as the collapsed one-line summary. */
+  .ac-meet-h .ac-chips{display:flex;gap:6px;margin-left:auto;align-items:center;flex-wrap:wrap;}
+  .ac-chip{font:inherit;font-family:var(--mono);font-size:.64rem;font-weight:700;padding:2px 8px;border-radius:999px;
+    border:1px solid transparent;cursor:pointer;color:var(--dim);background:var(--panel-2,rgba(126,182,255,.08));transition:border-color .14s;}
+  .ac-chip:hover{border-color:rgba(126,182,255,.5);}
+  .ac-chip.attn{color:var(--warn);background:var(--warn-soft);}
+  .ac-chip.prog{color:#7eb6ff;background:rgba(126,182,255,.14);}
+  .ac-chip.settled{color:var(--ok,#34d399);background:rgba(52,211,153,.12);}
+  .ac-chip.on{border-color:currentColor;}
+  .ac-meet-prog{height:3px;border-radius:99px;background:var(--line-soft,var(--line));flex:0 0 56px;overflow:hidden;}
+  .ac-meet-prog i{display:block;height:100%;width:var(--p,0%);background:var(--grad,#7eb6ff);border-radius:99px;}
+  .ac-meet-body[data-acfilter] .ac-sub-h,.ac-meet-body[data-acfilter] .ac-sub-note{display:none;}
+  .ac-meet-body[data-acfilter="attn"] .ac-card:not([data-bucket="attn"]),
+  .ac-meet-body[data-acfilter="progress"] .ac-card:not([data-bucket="progress"]),
+  .ac-meet-body[data-acfilter="done"] .ac-card:not([data-bucket="done"]){display:none;}
   .ac-meet-body{animation:acbody .18s ease;}
   @keyframes acbody{from{opacity:.4;transform:translateY(-3px);}to{opacity:1;transform:none;}}
   @media (prefers-reduced-motion: reduce){ .ac-meet-body{animation:none;} .ac-meet-h{transition:none;} }
@@ -592,17 +609,25 @@
   /* The AvatarPreview mount: whatever the adapter renders fills this box —
      the same-origin 3D iframe (/talk?preview=1) or the 2D portrait fallback. */
   .stage .preview{position:absolute;inset:0;display:grid;place-items:center;}
-  .stage .preview img{max-height:72%;max-width:60%;object-fit:cover;border-radius:14px;
-    border:1px solid var(--line);box-shadow:0 26px 60px -28px rgba(0,0,0,.75);z-index:1;}
+  /* Owner 2026-07-22: the portrait fills the WHOLE stage rectangle (full-bleed
+     cover) — the stage frame IS the border, no floating card. */
+  .stage .preview img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+    object-position:center 30%;z-index:1;}
   .stage .preview iframe{position:absolute;inset:0;width:100%;height:100%;border:0;z-index:1;}
   /* Legibility scrim under the stagemeta caption — only over the live 3D
      iframe (its office backdrop is bright); the 2D portrait keeps the old
      look, and light theme's dark caption text needs no scrim. */
-  .stage .preview:has(iframe)::after{content:"";position:absolute;left:0;right:0;bottom:0;height:36%;
+  .stage .preview:has(iframe)::after,.stage .preview:has(img)::after{content:"";position:absolute;left:0;right:0;bottom:0;height:36%;
     /* z-index:1 matches the iframe's — as the mount's last child the scrim
        then paints above it (equal z, later tree order), below stagemeta (z2). */
     pointer-events:none;background:linear-gradient(180deg,transparent,rgba(8,12,18,.60));z-index:1;}
   html[data-theme="light"] .stage .preview:has(iframe)::after{content:none;}
+  /* Full-bleed portrait: pedestal/stagelight would paint UNDER it — drop them;
+     captions go white-on-scrim in both themes (photos can be dark). */
+  .stage:has(.preview img) .pedestal,.stage:has(.preview img) .stagelight{display:none;}
+  .stage:has(.preview img) .stagemeta .sro{color:rgba(255,255,255,.78);}
+  html[data-theme="light"] .stage:has(.preview img) .stagemeta .snm{color:#fff;text-shadow:0 1px 10px rgba(0,0,0,.45);}
+  html[data-theme="light"] .stage:has(.preview img) .stagemeta .sro{color:rgba(255,255,255,.78);}
   .stage .preview .bigfallback{width:150px;height:150px;border-radius:50%;display:grid;place-items:center;
     color:#fff;font-size:3.2rem;font-weight:650;letter-spacing:-.04em;box-shadow:0 24px 60px -24px rgba(0,0,0,.7);}
   .stage .skel{position:absolute;inset:0;display:grid;place-items:center;color:var(--faint);
@@ -2842,7 +2867,7 @@
       var capN=a.family?CAPS[a.family]:null;
       var needsHTML=(bucketOf(a)==="attn"&&a.executable!==false&&!(capN&&capN.connected===false)&&(a.needed||[]).length)
         ?'<div class="ac-needs">\u26a0 Needs: '+((a.needed_labels&&a.needed_labels.length)?a.needed_labels:(a.needed||[]).map(function(k){return NEEDL[k]||k;})).map(esc).join(", ")+'</div>':'';
-      return '<article class="ac-card'+(a.source==="inferred"?" proposed":"")+'">'+
+      return '<article class="ac-card'+(a.source==="inferred"?" proposed":"")+'" data-bucket="'+bucketOf(a)+'">'+
         '<div class="ac-top">'+stateChipHTML(s)+
         '<div class="ac-what"><div class="ac-item" title="Heard: \u201c'+esc(a.item)+'\u201d">'+esc(a.title||a.item)+ownerChip(a)+'</div>'+prov+
         '<div class="ac-meta">'+avatarBadge(m.avatar_id,avNameOf(m.avatar_id))+'<span>'+esc(avNameOf(m.avatar_id))+'</span>'+
@@ -2869,14 +2894,20 @@
       // Latest meeting open, older ones collapsed behind a one-line summary
       // (owner 2026-07-22: the board must read at a glance).
       var open=(gi===0);
-      var needsMe=g.rows.filter(function(x){return bucketOf(x.a)==="attn";}).length;
-      var sum=g.rows.length+(g.rows.length===1?" action":" actions")+(needsMe?" · "+needsMe+" for you":"");
+      var nAttn=0,nProg=0,nDone=0;
+      g.rows.forEach(function(x){ var b=bucketOf(x.a); if(b==="attn")nAttn++; else if(b==="progress")nProg++; else nDone++; });
+      var pct=g.rows.length?Math.round(nDone*100/g.rows.length):0;
       html+='<div class="ac-meet-h'+(open?"":" collapsed")+'" data-acgroup="'+gi+'" role="button" tabindex="0" aria-expanded="'+(open?"true":"false")+'">'+
         avatarBadge(g.m.avatar_id,avNameOf(g.m.avatar_id))+
         '<b>'+esc(avNameOf(g.m.avatar_id))+'</b><span aria-hidden="true">·</span>'+
         '<span>'+esc(g.m.platform)+' meeting</span><span aria-hidden="true">·</span>'+
         '<span>'+fmtWhen(g.m.saved_at)+'</span>'+
-        '<span class="ac-meet-sum">'+esc(sum)+'</span>'+
+        '<span class="ac-chips" role="group" aria-label="Filter this meeting&#39;s actions">'+
+          '<span class="ac-meet-prog" title="'+nDone+' of '+g.rows.length+' settled" aria-hidden="true"><i style="--p:'+pct+'%"></i></span>'+
+          (nAttn?'<button type="button" class="ac-chip attn" data-acf="attn" aria-pressed="false">'+nAttn+' need you</button>':'')+
+          (nProg?'<button type="button" class="ac-chip prog" data-acf="progress" aria-pressed="false">'+nProg+' running</button>':'')+
+          (nDone?'<button type="button" class="ac-chip settled" data-acf="done" aria-pressed="false">'+nDone+' settled</button>':'')+
+        '</span>'+
         '<span class="ac-meet-caret" aria-hidden="true">'+(open?"▾":"▸")+'</span></div>';
       html+='<div class="ac-meet-body" data-acbody="'+gi+'"'+(open?"":" hidden")+'>';
       var defRows=g.rows.filter(function(x){return x.a.source!=="inferred";});
@@ -2898,7 +2929,22 @@
         var c=h.querySelector(".ac-meet-caret"); if(c) c.textContent=open?"▾":"▸";
       }
       h.addEventListener("click",tgl);
-      h.addEventListener("keydown",function(e){ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); tgl(); } });
+      h.addEventListener("keydown",function(e){ if((e.key==="Enter"||e.key===" ")&&e.target===h){ e.preventDefault(); tgl(); } });
+    });
+    // Chip filters: click a count chip to see just that state's cards inside
+    // the meeting; click again to clear. Chips never toggle the collapse.
+    $$("#ac-list [data-acf]").forEach(function(ch){
+      ch.addEventListener("click",function(e){
+        e.stopPropagation();
+        var h=ch.closest("[data-acgroup]"); if(!h) return;
+        var b=box.querySelector('[data-acbody="'+h.getAttribute("data-acgroup")+'"]'); if(!b) return;
+        if(b.hidden){ b.hidden=false; h.classList.remove("collapsed"); h.setAttribute("aria-expanded","true");
+          var c=h.querySelector(".ac-meet-caret"); if(c) c.textContent="\u25be"; }
+        var f=ch.getAttribute("data-acf"), cur=b.getAttribute("data-acfilter");
+        h.querySelectorAll(".ac-chip").forEach(function(x){ x.classList.remove("on"); x.setAttribute("aria-pressed","false"); });
+        if(cur===f){ b.removeAttribute("data-acfilter"); }
+        else{ b.setAttribute("data-acfilter",f); ch.classList.add("on"); ch.setAttribute("aria-pressed","true"); }
+      });
     });
     wireAvatarImages();
     $$("#ac-list [data-approve]").forEach(function(b){ b.addEventListener("click",function(){ reviewAction(b); }); });
