@@ -75,7 +75,11 @@ def test_specific_missing_portrait_is_explicitly_unavailable():
 def test_customer_avatars_publish_explicit_renderer_readiness():
     laura = avatars.load("laura").renderer_readiness
     cedric = avatars.load("cedric").renderer_readiness
-    assert laura["preferred"] == "photoreal"
+    # Photoreal shelved (owner 2026-07-22: Runpod credit parked at $1.67 and
+    # the pod stopped — an accidental wake would burn it). Laura runs the free
+    # 3D renderer; the photoreal ASSETS stay ready so `face: photoreal` in
+    # avatar.yaml re-enables Ultra-HD with zero other changes.
+    assert laura["preferred"] == "talk"
     assert laura["fallback"] == "talk"
     assert laura["photoreal"]["asset"] == "reference-laura.jpg"
     assert laura["talk"]["asset"] == "laura.glb"
