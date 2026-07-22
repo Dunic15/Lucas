@@ -33,6 +33,32 @@ def test_italian_search_intent(monkeypatch):
     assert not brain.wants_web_search("chi si occupa della sicurezza?")
 
 
+def test_personal_reads_and_asks_never_route_to_search(monkeypatch):
+    """Live 2026-07-22: freshness words ("this week", "right now") and the SFF
+    branch hijacked calendar/Asana reads and a dictated email address onto the
+    web-search path, whose model then declared "I don't have access to your
+    calendar/Asana". Personal-context reads answer from the grounded briefs;
+    imperative asks belong to the capture seam."""
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-key")
+    for q in (
+        "what's on my calendar this week?",
+        "cosa ho in calendario questa settimana?",
+        "what's open in Asana right now, Petra?",
+        "can you check my meetings today?",
+        "send an email to duccio at sff studio dot com with a recap",
+        "send an email to duccio@sffstudio.com today",
+        "schedule a follow-up for today at 3pm",
+    ):
+        assert not brain.wants_web_search(q), q
+    # …while genuine fresh-info queries keep searching (incl. the SFF branch).
+    for q in (
+        "what's the weather in Milan right now?",
+        "latest news about OpenAI",
+        "tell me about the SFF portfolio",
+    ):
+        assert brain.wants_web_search(q), q
+
+
 def test_italian_complex_intent(monkeypatch):
     monkeypatch.setattr(settings, "anthropic_api_key", "test-key")
     for q in (

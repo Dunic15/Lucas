@@ -393,16 +393,51 @@ _SEARCH_INTENT = re.compile(
     re.IGNORECASE,
 )
 
+# Personal/workspace reads and spoken instructions must NEVER route to web
+# search: the grounded stream holds the owner's calendar brief and the Asana
+# snapshot, while the search model knows nothing about them and honestly
+# declares "I don't have access to your calendar/Asana" (live 2026-07-22:
+# "what's on my calendar THIS WEEK?" and "what's open in Asana RIGHT NOW"
+# tripped the freshness triggers; "…at SFF studio dot com" tripped the SFF
+# branch inside a dictated EMAIL ADDRESS, so the email ask got a web answer).
+_SEARCH_EXCLUDE = re.compile(
+    # possessive + personal surface: my/our calendar, inbox, meetings, tasks…
+    r"\b(my|our|mio|mia|miei|mie|nostr[oaie])\b.{0,24}\b(calendar\w*|inbox|"
+    r"e-?mails?|mail|schedule|meetings?|appuntament\w+|tasks?|attivit\w+|"
+    r"impegn\w+)\b"
+    # the org's own work tools are never web queries
+    r"|\b(in|on|su)\s+(asana|jira|notion|slack|trello)\b"
+    r"|\b(asana|jira)\b.{0,24}\b(right now|now|open|tasks?|adesso|apert\w+)\b"
+    # "what's on the calendar / cosa c'è (or: cosa ho) in calendario"
+    r"|\b(what'?s|cosa c'?\xe8|che cosa c'?\xe8)\b.{0,12}\b(on|in|nel|sul)\b"
+    r".{0,16}\b(calendar\w*|board)\b"
+    r"|\b(in|sul) calendario\b"
+    # an imperative aimed at a concrete WORK ARTIFACT is an ask for the
+    # capture seam, not a query — narrow on purpose: "send me the latest
+    # news" (no artifact noun) must keep searching.
+    r"|\b(send|schedule|book|create|draft|manda|invia|crea|prenota|fissa)\b"
+    r".{0,40}\b(an?\s+)?(e-?mail|mail|task|event|invite|meeting|follow[- ]?up|"
+    r"riunione|invito|attivit\w+|promemoria)\b"
+    # a dictated email address ("duccio at sff studio dot com", or a literal @)
+    r"|@|\bat\s+\w+(\s+\w+)?\s+dot\s+(com|it|io|net|org|ch)\b",
+    re.IGNORECASE,
+)
+
 
 def _wants_search(question: str) -> bool:
     """True if this asks for fresh/current info we should look up on the web.
     Web search now runs on Claude (Anthropic's native web_search tool), so it's
-    gated on the Anthropic key, not Groq."""
-    return bool(
+    gated on the Anthropic key, not Groq. Personal-context reads and action
+    asks are excluded: search must never outrank the grounded briefs or the
+    capture seam."""
+    q = question or ""
+    if not (
         settings.live_search_enabled
         and settings.anthropic_api_key
-        and _SEARCH_INTENT.search(question or "")
-    )
+        and _SEARCH_INTENT.search(q)
+    ):
+        return False
+    return not _SEARCH_EXCLUDE.search(q)
 
 
 def _live_model(question: str) -> str:
