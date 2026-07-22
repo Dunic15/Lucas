@@ -751,6 +751,7 @@
       <button type="button" data-view="meetings"><span class="ic">▤</span> Meetings</button>
       <button type="button" data-view="actions"><span class="ic">✓</span> Action Center<span class="navbadge" id="nav-actions-badge" hidden aria-label="actions needing attention"></span></button>
       <button type="button" data-view="connections"><span class="ic">⇄</span> Connections</button>
+      <button type="button" data-view="syscheck"><span class="ic">♥</span> System Check</button>
       <button type="button" data-view="settings"><span class="ic">⚙</span> Settings</button>
     </nav>
     <div>
@@ -967,6 +968,16 @@
       <div class="foot">EACH TOOL NEEDS ITS OWN AUTHORIZATION. CONNECTED NEVER MEANS UNRESTRICTED ACCESS.</div>
     </section>
 
+    <!-- SYSTEM CHECK -->
+    <section class="view" id="view-syscheck" hidden>
+      <div class="head">
+        <div><h1>System Check</h1><div class="sub">Is Laura ready to work right now? Per-provider connection health, with a live read-only test that catches a connector that died silently between meetings.</div></div>
+        <div><button class="btn" id="sc-testall" type="button">Test all</button></div>
+      </div>
+      <div id="sc-body"><div class="empty" style="padding:14px">Loading…</div></div>
+      <div class="foot">STATUS IS READ-ONLY. A TEST MAKES ONE LIGHT READ CALL — IT NEVER WRITES, AND NO CREDENTIAL IS EVER SHOWN.</div>
+    </section>
+
     <!-- BRAIN -->
     <section class="view" id="view-brain" hidden>
       <div class="head"><div><h1>Brain</h1><div class="sub">Your company's knowledge — add it once, and your avatars answer from it with citations</div></div></div>
@@ -1179,7 +1190,7 @@
   // Meetings, Action Center, Connections, Settings. "usage" (Plan & billing,
   // reached from Settings) keeps its view + route but has no nav entry — it
   // highlights its nav owner instead.
-  var VIEWS=["overview","avatars","brain","meetings","actions","connections","settings","usage"];
+  var VIEWS=["overview","avatars","brain","meetings","actions","connections","syscheck","settings","usage"];
   var NAV_OWNER={usage:"settings"};
   function go(name){ if(VIEWS.indexOf(name)<0)name="overview";
     VIEWS.forEach(function(v){var el=$("#view-"+v); if(el) el.hidden=(v!==name);});
@@ -1190,6 +1201,7 @@
     try{ window.history.replaceState({},"",window.location.pathname+"#"+name); }catch(e){}
     if(name==="brain") loadBrain();
     if(name==="connections") loadPipedream();  // "More tools" section (no-op unless configured)
+    if(name==="syscheck") loadSyscheck();
     if(name==="actions") renderActions();
     // The avatar stage renders only once the view is opened (never preload).
     if(name==="avatars" && DATA) renderAvatars(DATA);
@@ -3555,6 +3567,64 @@
       })
       .catch(function(){ if(!append) grid.innerHTML='<div class="empty" style="padding:14px">Search failed. <button class="btn" id="pd-retry3" style="margin-left:8px;padding:6px 12px;font-size:.78rem">Try again</button></div>'; var rb=$("#pd-retry3"); if(rb) rb.addEventListener("click",function(){ _pdSearch(q,"",false); }); });
   }
+  // ── System Check ──────────────────────────────────────────────────────
+  var SC_COLOR={ok:"#1f9d55",warn:"#c98a00",off:"#8a8f98",error:"#d64545"};
+  var SC_LABEL={ok:"OK",warn:"Warn",off:"Off",error:"Error"};
+  var _scRows=[];
+  function scBadge(status){
+    var c=SC_COLOR[status]||SC_COLOR.off, t=SC_LABEL[status]||"—";
+    return '<span style="display:inline-block;min-width:52px;text-align:center;padding:3px 10px;border-radius:999px;font-size:.72rem;font-weight:600;color:#fff;background:'+c+'">'+esc(t)+'</span>';
+  }
+  function scRowHtml(row){
+    var acct=row.account?'<div class="muted" style="font-size:.8rem;margin-top:2px">'+esc(row.account)+'</div>':'';
+    var last=row.last_checked?'<div class="muted" style="font-size:.72rem;margin-top:2px">last checked '+esc(row.last_checked)+'</div>':'';
+    var testBtn=row.can_test?'<button class="btn" type="button" data-sc-test="'+esc(row.key)+'" style="padding:6px 12px;font-size:.78rem">Test connection</button>':'';
+    return '<div class="sc-row" data-sc-row="'+esc(row.key)+'" style="display:flex;align-items:flex-start;gap:14px;padding:14px 16px;border:1px solid rgba(128,128,128,.18);border-radius:12px;margin-bottom:10px">'
+      +'<div style="flex:1;min-width:0">'
+        +'<div style="font-weight:600">'+esc(row.label)+'</div>'
+        +'<div class="muted" style="font-size:.8rem;margin-top:2px" data-sc-detail>'+esc(row.detail||"")+'</div>'
+        +acct+last
+      +'</div>'
+      +'<div style="display:flex;align-items:center;gap:10px;flex:none">'
+        +'<span data-sc-badge>'+scBadge(row.status)+'</span>'
+        +testBtn
+      +'</div>'
+    +'</div>';
+  }
+  function scTest(key){
+    var rowEl=document.querySelector('[data-sc-row="'+CSS.escape(key)+'"]'); if(!rowEl) return Promise.resolve();
+    var btn=rowEl.querySelector('[data-sc-test]'); var detail=rowEl.querySelector('[data-sc-detail]'); var badge=rowEl.querySelector('[data-sc-badge]');
+    if(btn){ btn.disabled=true; btn.textContent="Testing…"; }
+    return fetch("/dashboard/syscheck/test",{method:"POST",headers:headers(),body:JSON.stringify({provider:key})})
+      .then(function(r){ return r.json().catch(function(){return {};}); })
+      .then(function(j){
+        if(j && j.status){ if(badge) badge.innerHTML=scBadge(j.status); }
+        if(detail){ var d=(j&&j.detail)||"probe failed"; if(j&&typeof j.latency_ms==="number") d+=" · "+j.latency_ms+"ms"; detail.textContent=d; }
+      })
+      .catch(function(){ if(detail) detail.textContent="probe failed"; })
+      .finally(function(){ if(btn){ btn.disabled=false; btn.textContent="Test connection"; } });
+  }
+  function loadSyscheck(){
+    var box=$("#sc-body"); if(!box) return;
+    box.innerHTML='<div class="empty" style="padding:14px">Loading…</div>';
+    fetch("/dashboard/syscheck",{headers:headers(),cache:"no-store"})
+      .then(function(r){ return r.json().catch(function(){return {};}); })
+      .then(function(j){
+        _scRows=(j&&j.rows)||[];
+        if(!_scRows.length){ box.innerHTML='<div class="empty" style="padding:14px">No providers to check.</div>'; return; }
+        box.innerHTML=_scRows.map(scRowHtml).join("");
+        box.querySelectorAll('[data-sc-test]').forEach(function(b){
+          b.addEventListener("click",function(){ scTest(b.getAttribute("data-sc-test")); });
+        });
+      })
+      .catch(function(){ box.innerHTML='<div class="empty" style="padding:14px">Couldn’t load system check. <button class="btn" id="sc-retry" style="margin-left:8px;padding:6px 12px;font-size:.78rem">Try again</button></div>'; var rb=$("#sc-retry"); if(rb) rb.addEventListener("click",loadSyscheck); });
+  }
+  (function(){ var ta=$("#sc-testall"); if(ta) ta.addEventListener("click",function(){
+    var keys=_scRows.filter(function(r){return r.can_test;}).map(function(r){return r.key;});
+    ta.disabled=true; ta.textContent="Testing…";
+    (function next(i){ if(i>=keys.length){ ta.disabled=false; ta.textContent="Test all"; return; } scTest(keys[i]).then(function(){ next(i+1); }); })(0);
+  }); })();
+
   function loadPipedream(){
     var box=$("#pdconns"); if(!box || _pdInflight) return;
     _pdInflight=true;
