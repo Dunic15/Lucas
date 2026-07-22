@@ -3610,8 +3610,15 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             and route == "manual"
             and family == "google"
         ):
+            # BOTH planes count (live repro 2026-07-22 evening, card
+            # 211d55ecbddf4a91): the org had Google connected in Pipedream —
+            # Petra read the calendar in-call — but this gate consulted only
+            # the NATIVE refresh token, so the card dead-ended tracked-only
+            # and the executor's Pipedream fallback below never even ran.
+            exec_type = str((exec_action or {}).get("type") or "")
             has_google = await run_in_threadpool(
                 lambda: bool((store.get_org_oauth(org) or {}).get("refresh_token"))
+                or executor._pipedream_google_connected(org, exec_type)
             )
             if not has_google:
                 connection_blocked = True
