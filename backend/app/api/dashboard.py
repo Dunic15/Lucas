@@ -2766,6 +2766,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     exec_action = _executor_action(typed)
     executed = False
     capability_blocked = False
+    connection_blocked = False
     new_status = "approved"
     # Browser guarded step (B0): route='browser' actions execute through the
     # browser operator behind the SAME exactly-once claim, from this surface
@@ -2876,9 +2877,37 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         blocked_by_overlay = not blocked_by_toggle and not await run_in_threadpool(
             avatar_resolver.family_allowed, org, acting_avatar, family
         )
+        # CONNECTION GATE (live repro 2026-07-22): the claim is the license to
+        # CALL a vendor, so claiming with no vendor connection can only mint a
+        # doomed "Couldn't complete" — the retype-on-approve rescue turned a
+        # 'manual'-routed card executable, this branch claimed it, and
+        # google_client failed it seconds later. Scoped to route='manual' (the
+        # rescue path): a card the org was TOLD runs through nobody must never
+        # convert into a failure — it gets an HONEST tracked-only approve with
+        # the reconnect hint, and re-approving after connecting executes.
+        # Native-routed actions keep their existing semantics (execute; the
+        # vendor client reports honestly if the connection is truly gone).
+        connection_blocked = False
+        if (
+            not (blocked_by_toggle or blocked_by_overlay)
+            and route == "manual"
+            and family == "google"
+        ):
+            has_google = await run_in_threadpool(
+                lambda: bool((store.get_org_oauth(org) or {}).get("refresh_token"))
+            )
+            if not has_google:
+                connection_blocked = True
+                await run_in_threadpool(
+                    ledger.set_action_status, aid, "approved",
+                    "approved · tracked only — Google isn't connected for "
+                    "this workspace (connect Google in the dashboard, then "
+                    "approve again)",
+                    org_id=org,
+                )
         if blocked_by_toggle or blocked_by_overlay:
             capability_blocked = True
-        else:
+        elif not connection_blocked:
             # EXECUTION CLAIM (canonical Action plane): the atomic CAS to
             # 'executing' is the only license to call a vendor — a concurrent
             # approve on another surface/instance loses the claim and reports
@@ -2908,7 +2937,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     dispatched = False
     execution_error = ""
     dispatch_reason = ""
-    if not executed and (
+    if not executed and not connection_blocked and (
         route == "manual"
         or (route in ("", "cedric")
             and not await run_in_threadpool(executor._cedric_linked, org))
@@ -2923,7 +2952,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             "approved · tracked only — no automatic executor for this item",
             org_id=org,
         )
-    elif not executed:
+    elif not executed and not connection_blocked:
         from ..cedric import callback as cedric_callback  # lazy, cycle-free
 
         dispatch = await run_in_threadpool(
@@ -2968,6 +2997,9 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             "executed": executed,
             "dispatched": dispatched,
             "capability_blocked": capability_blocked,
+            # The org lacks the vendor connection this action needs: approved
+            # + tracked only, with the reconnect hint in the status detail.
+            "connection_blocked": connection_blocked,
             "typed": bool(typed),
             "execution_mode": settings.execution_mode,
             # Populated only on a dead end (nothing ran, Cedric didn't accept):

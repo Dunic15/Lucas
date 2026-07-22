@@ -126,6 +126,7 @@ from .decision import (
     detect_leave_command,
     detect_leave_command_explicit,
     detect_stop_command,
+    fuzzy_name_match,
     in_locked_dyad,
     interjection_floor_open,
     is_capture_continuation,
@@ -1669,6 +1670,69 @@ def _followup_speaker_ok(session: "store.Session", speaker_id: str) -> bool:
     return bool(owner[0] == speaker_id)
 
 
+# Empty-room backstop (live repro 2026-07-22: the humans finished and hung
+# up expecting her to follow; nothing watched the roster, so the bot — and
+# the per-minute meter — sat in the dead room until a manual End). When the
+# LAST human leaves, wait a grace period (someone may rejoin after a drop),
+# re-check, then run the same idempotent finalize as POST /sessions/end.
+_EMPTY_ROOM_GRACE_S = 75.0
+
+
+def _schedule_empty_room_leave(session: "store.Session") -> None:
+    if getattr(session, "empty_room_task", None) is not None:
+        return  # one pending check per session is plenty
+
+    async def _check(bot_id: str) -> None:
+        try:
+            await asyncio.sleep(_EMPTY_ROOM_GRACE_S)
+            live = store.get(bot_id)
+            if live is None:
+                return  # already finalized elsewhere
+            live.empty_room_task = None
+            av = avatar_resolver.for_session(live)
+            if live.roster(av.name):
+                return  # someone rejoined during the grace window
+            print(
+                f"[leave] room empty for {_EMPTY_ROOM_GRACE_S:.0f}s — "
+                "auto-finalizing (meter safety)",
+                flush=True,
+            )
+            await _finalize_session(bot_id, source="empty_room")
+        except Exception as exc:  # noqa: BLE001 — a failed check must not crash the loop
+            print(f"[leave] empty-room check failed ({type(exc).__name__})", flush=True)
+
+    session.empty_room_task = asyncio.create_task(_check(session.bot_id))
+
+
+_LEADING_VOCATIVE = re.compile(r"^\s*([A-Za-zà-ù]+)\s*,\s+")
+_VOCATIVE_FILLERS = {
+    "ok", "okay", "yes", "yeah", "no", "hey", "hi", "hello", "ciao", "si",
+    "sì", "allora", "senti", "scusa", "grazie", "thanks", "so", "well",
+    "right", "sure", "perfetto", "bene",
+}
+
+
+def _addressed_elsewhere(
+    session: "store.Session", avatar: avatars.Avatar, text: str
+) -> bool:
+    """The line opens a NEW turn aimed at someone else — never glue it onto a
+    captured action or read it as the answer to her clarify question (live
+    repro 2026-07-22: '…please? Ducho, do you wanna discuss something else?'
+    was appended to the card, and 'Ducho' was mangled enough that the roster
+    fuzzy match alone missed it). Two nets: the roster vocative check, plus a
+    leading 'Name, …' whose name is NOT the avatar's — an ASR split of one
+    ask resumes mid-phrase, essentially never with a fresh vocative."""
+    if addressed_to_other(text, session.roster(avatar.name)):
+        return True
+    m = _LEADING_VOCATIVE.match(text or "")
+    if not m:
+        return False
+    tok = m.group(1).lower()
+    if tok in _VOCATIVE_FILLERS:
+        return False
+    return not any(fuzzy_name_match(tok, w) for w in avatar.wake_words)
+
+
 def _active_draft(session: "store.Session") -> tuple[dict | None, str]:
     """The action draft the room can still amend by voice, plus its asker:
     a capture parked in clarify, else the most recent capture inside the
@@ -3127,6 +3191,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
             )
             label = identity["name"]
             avatar = avatar_resolver.for_session(session)
+            if (
+                event == "participant_events.leave"
+                and not session.roster(avatar.name)
+            ):
+                # Last human gone → grace-checked auto-finalize (meter safety).
+                _schedule_empty_room_leave(session)
             if identity["kind"] != "agent":
                 # ── footing: greet a late joiner by name ──
                 # Only when the meeting is genuinely underway (start-of-call
@@ -3505,6 +3575,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
             )
         expired = time.time() - c_ts > _CLARIFY_WINDOW_S
         answered = (not called) and speaker_id == c_speaker and not expired
+        if answered and _addressed_elsewhere(session, avatar, text):
+            # The asker turned to ANOTHER participant ("Ducho, do you wanna
+            # discuss something else?") — that's a new turn for them, not the
+            # answer to her clarify question. Keep the clarify pending and let
+            # the line flow to the normal pipeline (addressed_to_other skips
+            # it there). Gluing it here is how the dead phrase reached the
+            # card (live repro 2026-07-22).
+            answered = False
         if answered and time.time() - c_ts < 4.0 and is_capture_continuation(text):
             # A late ASR fragment of the ORIGINAL ask, not an answer: extend
             # and re-check what is still missing before (re)asking anything.
@@ -3708,6 +3786,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # and silently swallowed the second one's confirmation (round-4
             # live repro 2026-07-21). It falls through to the capture branch.
             and not wants_action_capture(text)
+            # A line opening a turn aimed at another participant is never an
+            # ASR split of the ask (live repro 2026-07-22: "Ducho, do you
+            # wanna discuss something else?" glued onto the calendar card).
+            and not _addressed_elsewhere(session, avatar, text)
         ):
             try:
                 updated_item, extended = await run_in_threadpool(
