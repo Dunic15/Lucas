@@ -1,0 +1,259 @@
+[
+  {
+    "id": "one_to_one_room_question",
+    "component": "conversation_frame",
+    "avatar_names": ["Laura"],
+    "capabilities": {"Laura": ["meeting"]},
+    "events": [
+      {"kind": "participant_join", "participant_id": "human-1", "speaker_kind": "human"},
+      {"kind": "utterance", "participant_id": "human-1", "speaker_kind": "human", "text": "What should we do next?", "speaker_confidence": 0.98}
+    ],
+    "expected": {
+      "meeting_size": "one_to_one",
+      "participant_count": 1,
+      "addressed_to": "room",
+      "open_question": true,
+      "selected_avatar": "Laura",
+      "response_mode": "direct"
+    }
+  },
+  {
+    "id": "small_group_question_for_human",
+    "component": "conversation_frame",
+    "avatar_names": ["Laura"],
+    "capabilities": {"Laura": ["meeting"]},
+    "events": [
+      {"kind": "participant_join", "participant_id": "human-1", "speaker_kind": "human"},
+      {"kind": "participant_join", "participant_id": "human-2", "speaker_kind": "human"},
+      {"kind": "participant_join", "participant_id": "human-3", "speaker_kind": "human"},
+      {"kind": "utterance", "participant_id": "human-1", "speaker_kind": "human", "text": "Marco, can you confirm the deadline?", "addressed_participant_id": "human-2", "speaker_confidence": 0.99}
+    ],
+    "expected": {
+      "meeting_size": "small_group",
+      "participant_count": 3,
+      "addressed_to": "participant",
+      "open_question": true,
+      "selected_avatar": "none",
+      "response_mode": "silent"
+    }
+  },
+  {
+    "id": "large_group_named_avatar",
+    "component": "conversation_frame",
+    "avatar_names": ["Laura"],
+    "capabilities": {"Laura": ["meeting"]},
+    "events": [
+      {"kind": "participant_join", "participant_id": "human-1", "speaker_kind": "human"},
+      {"kind": "participant_join", "participant_id": "human-2", "speaker_kind": "human"},
+      {"kind": "participant_join", "participant_id": "human-3", "speaker_kind": "human"},
+      {"kind": "participant_join", "participant_id": "human-4", "speaker_kind": "human"},
+      {"kind": "participant_join", "participant_id": "human-5", "speaker_kind": "human"},
+      {"kind": "utterance", "participant_id": "human-1", "speaker_kind": "human", "text": "Laura, what is still missing?", "addressed_avatar": "Laura", "speaker_confidence": 0.97}
+    ],
+    "expected": {
+      "meeting_size": "large_group",
+      "participant_count": 5,
+      "addressed_to": "avatar",
+      "open_question": true,
+      "selected_avatar": "Laura",
+      "response_mode": "direct"
+    }
+  },
+  {
+    "id": "large_group_room_question_raises_hand",
+    "component": "conversation_frame",
+    "avatar_names": ["Laura"],
+    "capabilities": {"Laura": ["meeting"]},
+    "events": [
+      {"kind": "participant_join", "participant_id": "human-1", "speaker_kind": "human"},
+      {"kind": "participant_join", "participant_id": "human-2", "speaker_kind": "human"},
+      {"kind": "participant_join", "participant_id": "human-3", "speaker_kind": "human"},
+      {"kind": "participant_join", "participant_id": "human-4", "speaker_kind": "human"},
+      {"kind": "participant_join", "participant_id": "human-5", "speaker_kind": "human"},
+      {"kind": "participant_join", "participant_id": "human-6", "speaker_kind": "human"},
+      {"kind": "utterance", "participant_id": "human-1", "speaker_kind": "human", "text": "Does anyone know which approval is missing?", "topic": "meeting", "speaker_confidence": 0.96}
+    ],
+    "expected": {
+      "meeting_size": "large_group",
+      "participant_count": 6,
+      "addressed_to": "room",
+      "open_question": true,
+      "selected_avatar": "Laura",
+      "response_mode": "hand_raise"
+    }
+  },
+  {
+    "id": "target_switch_seals_action",
+    "component": "turn_separation",
+    "avatar_names": ["Laura"],
+    "capabilities": {"Laura": ["calendar"]},
+    "events": [
+      {"kind": "participant_join", "participant_id": "requester", "speaker_kind": "human"},
+      {"kind": "participant_join", "participant_id": "ducho", "speaker_kind": "human"},
+      {"kind": "utterance", "participant_id": "requester", "speaker_kind": "human", "text": "Laura, schedule the meeting with Ducho.", "addressed_avatar": "Laura", "action": {"verb": "schedule_meeting", "participants": ["requester", "ducho"]}, "speaker_confidence": 0.99},
+      {"kind": "utterance", "participant_id": "requester", "speaker_kind": "human", "text": "Ducho, do you want to discuss something else?", "addressed_participant_id": "ducho", "speaker_confidence": 0.99}
+    ],
+    "expected": {
+      "addressed_to": "participant",
+      "selected_avatar": "none",
+      "response_mode": "silent",
+      "action_boundary": "sealed_on_target_change",
+      "action_count": 1,
+      "action_requested_by": "requester",
+      "action_owner": "unassigned",
+      "action_approver": "requester",
+      "action_target_account": "requester"
+    }
+  },
+  {
+    "id": "generic_question_routes_by_capability",
+    "component": "multi_avatar_arbitration",
+    "avatar_names": ["Laura", "Petra", "Cedric"],
+    "capabilities": {"Laura": ["meeting"], "Petra": ["project"], "Cedric": ["calendar"]},
+    "events": [
+      {"kind": "participant_join", "participant_id": "human-1", "speaker_kind": "human"},
+      {"kind": "utterance", "participant_id": "human-1", "speaker_kind": "human", "text": "Can someone find a free slot tomorrow?", "topic": "calendar", "speaker_confidence": 0.99}
+    ],
+    "expected": {
+      "addressed_to": "room",
+      "selected_avatar": "Cedric",
+      "response_mode": "direct",
+      "duplicate_responses": 0
+    }
+  },
+  {
+    "id": "named_avatar_wins_over_capability",
+    "component": "multi_avatar_arbitration",
+    "avatar_names": ["Laura", "Cedric"],
+    "capabilities": {"Laura": ["meeting"], "Cedric": ["calendar"]},
+    "events": [
+      {"kind": "participant_join", "participant_id": "human-1", "speaker_kind": "human"},
+      {"kind": "utterance", "participant_id": "human-1", "speaker_kind": "human", "text": "Laura, can you find a free slot?", "topic": "calendar", "addressed_avatar": "Laura", "speaker_confidence": 0.99}
+    ],
+    "expected": {
+      "addressed_to": "avatar",
+      "selected_avatar": "Laura",
+      "response_mode": "direct",
+      "duplicate_responses": 0
+    }
+  },
+  {
+    "id": "capability_tie_is_deterministic",
+    "component": "multi_avatar_arbitration",
+    "avatar_names": ["Laura", "Petra"],
+    "capabilities": {"Laura": ["project"], "Petra": ["project"]},
+    "events": [
+      {"kind": "participant_join", "participant_id": "human-1", "speaker_kind": "human"},
+      {"kind": "utterance", "participant_id": "human-1", "speaker_kind": "human", "text": "Who can update the project?", "topic": "project", "speaker_confidence": 0.99}
+    ],
+    "expected": {
+      "addressed_to": "room",
+      "selected_avatar": "Laura",
+      "response_mode": "direct",
+      "duplicate_responses": 0
+    }
+  },
+  {
+    "id": "explicit_avatar_handoff",
+    "component": "multi_avatar_arbitration",
+    "avatar_names": ["Laura", "Petra"],
+    "capabilities": {"Laura": ["meeting"], "Petra": ["project"]},
+    "events": [
+      {"kind": "avatar_handoff", "from_avatar": "Laura", "to_avatar": "Petra", "topic": "project"}
+    ],
+    "expected": {
+      "addressed_to": "avatar",
+      "selected_avatar": "Petra",
+      "response_mode": "direct",
+      "handoff_status": "accepted",
+      "duplicate_responses": 0
+    }
+  },
+  {
+    "id": "interrupt_wait_cancels",
+    "component": "interruption_recovery",
+    "avatar_names": ["Laura"],
+    "capabilities": {"Laura": ["meeting"]},
+    "events": [
+      {"kind": "avatar_speech_started", "avatar": "Laura", "generation": 4},
+      {"kind": "utterance", "participant_id": "human-1", "speaker_kind": "human", "text": "Wait.", "control_intent": "stop", "speaker_confidence": 0.99}
+    ],
+    "expected": {
+      "selected_avatar": "none",
+      "response_mode": "silent",
+      "interruption_type": "stop",
+      "response_state": "cancelled",
+      "speech_generation": 5
+    }
+  },
+  {
+    "id": "interrupt_correction_revises",
+    "component": "interruption_recovery",
+    "avatar_names": ["Laura"],
+    "capabilities": {"Laura": ["meeting"]},
+    "events": [
+      {"kind": "avatar_speech_started", "avatar": "Laura", "generation": 7},
+      {"kind": "utterance", "participant_id": "human-1", "speaker_kind": "human", "text": "No, the deadline is Friday.", "control_intent": "correction", "speaker_confidence": 0.99}
+    ],
+    "expected": {
+      "selected_avatar": "Laura",
+      "response_mode": "direct",
+      "interruption_type": "correction",
+      "response_state": "revise",
+      "speech_generation": 8
+    }
+  },
+  {
+    "id": "interrupt_confirmation_resumes",
+    "component": "interruption_recovery",
+    "avatar_names": ["Laura"],
+    "capabilities": {"Laura": ["meeting"]},
+    "events": [
+      {"kind": "avatar_speech_started", "avatar": "Laura", "generation": 2},
+      {"kind": "utterance", "participant_id": "human-1", "speaker_kind": "human", "text": "Yes.", "control_intent": "confirmation", "speaker_confidence": 0.99}
+    ],
+    "expected": {
+      "selected_avatar": "Laura",
+      "response_mode": "resume",
+      "interruption_type": "confirmation",
+      "response_state": "resume",
+      "speech_generation": 2
+    }
+  },
+  {
+    "id": "interrupt_takeover_pauses",
+    "component": "interruption_recovery",
+    "avatar_names": ["Laura"],
+    "capabilities": {"Laura": ["meeting"]},
+    "events": [
+      {"kind": "avatar_speech_started", "avatar": "Laura", "generation": 10},
+      {"kind": "utterance", "participant_id": "human-2", "speaker_kind": "human", "text": "Let me explain the dependency first.", "control_intent": "takeover", "speaker_confidence": 0.99}
+    ],
+    "expected": {
+      "selected_avatar": "none",
+      "response_mode": "silent",
+      "interruption_type": "takeover",
+      "response_state": "paused",
+      "speech_generation": 11
+    }
+  },
+  {
+    "id": "low_speaker_confidence_uses_neutral_attribution",
+    "component": "conversation_frame",
+    "avatar_names": ["Laura"],
+    "capabilities": {"Laura": ["meeting"]},
+    "events": [
+      {"kind": "participant_join", "participant_id": "human-1", "speaker_kind": "human"},
+      {"kind": "utterance", "participant_id": "human-1", "speaker_kind": "human", "text": "We decided to ship on Friday.", "speaker_confidence": 0.42}
+    ],
+    "expected": {
+      "meeting_size": "one_to_one",
+      "participant_count": 1,
+      "addressed_to": "none",
+      "selected_avatar": "none",
+      "response_mode": "silent",
+      "speaker_confidence_band": "low",
+      "attribution_style": "neutral"
+    }
+  }
+]
