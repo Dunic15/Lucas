@@ -62,19 +62,7 @@ jobs:
             result="✅ VERIFIED LIVE"
           fi
 
-          body=$(cat <<EOF
-          ## Production deploy verification — PR #367
-
-          **$result**
-
-          - Target merge: \`$TARGET_SHA\`
-          - Backend image build: \`$build_status / $build_conclusion\`
-          - Build run: $build_url
-          - App Runner health: \`$health_ok\`
-          - New canonical-preview marker live: \`$marker_live\`
-          - Health response: \`$health_body\`
-          EOF
-          )
+          body=$(printf '## Production deploy verification — PR #367\n\n**%s**\n\n- Target merge: `%s`\n- Backend image build: `%s / %s`\n- Build run: %s\n- App Runner health: `%s`\n- New canonical-preview marker live: `%s`\n- Health response: `%s`\n' \
+            "$result" "$TARGET_SHA" "$build_status" "$build_conclusion" "$build_url" "$health_ok" "$marker_live" "$health_body")
           gh pr comment 367 --body "$body"
-
           [ "$result" = "✅ VERIFIED LIVE" ]
