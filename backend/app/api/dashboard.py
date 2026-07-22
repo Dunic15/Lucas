@@ -28,10 +28,12 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from .. import (
-    action_plane, asana_client, auth, avatars, executor, gemini_ears, jira_client,
-    ledger, outbox, pipedream_client, pipedream_executor, store,
+    action_plane, asana_client, auth, avatars, executor, gemini_ears,
+    graphiti_client, jira_client, knowledge, ledger, outbox, pipedream_client,
+    pipedream_executor, recall_client, store,
 )
 from ..config import settings
+from ..knowledge import dal
 
 router = APIRouter(tags=["dashboard"])
 
@@ -945,6 +947,469 @@ def dashboard_summary(request: Request) -> JSONResponse:
                 else None
             ),
         }),
+        headers=_NO_STORE,
+    )
+
+
+# ── System Check — "is Laura ready to work right now?" ──────────────────────
+# One page that turns the scattered per-provider signals the summary already
+# computes into a single readiness board, plus a LIVE read-only "Test
+# connection" probe per provider (the thing that catches a connector that died
+# silently between meetings — external users were just unblocked and must
+# reconnect their tools). Ops/admin surface: it never touches the live-meeting
+# path, runs no model calls, and never returns a credential.
+
+# Live read-only reads per Pipedream app (the app's OWN API, through the Connect
+# Proxy). Minimal GETs only — never run_action (that is plan-gated); this is a
+# pure auth/health probe.
+_PD_PROBE = {
+    "asana": ("asana", "https://app.asana.com/api/1.0/users/me"),
+    "gmail": ("gmail", "https://gmail.googleapis.com/gmail/v1/users/me/profile"),
+    "google_calendar": (
+        "google_calendar",
+        "https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1",
+    ),
+    "google_drive": (
+        "google_drive",
+        "https://www.googleapis.com/drive/v3/about?fields=user",
+    ),
+}
+
+# Server-side debounce for the live probe: a Google native probe force-refreshes
+# a token on every call, so "Test all" / a jittery click must not hammer the
+# upstream. Per-(org, provider) monotonic timestamps, in-process only (best-effort;
+# resets on restart — this guards cost, not correctness). Tests clear it.
+_SYSCHECK_COOLDOWN_S = 3.0
+_syscheck_last: dict[tuple[str, str], float] = {}
+
+
+def _iso(ts) -> str | None:
+    """Best-effort ISO string for a last_checked value (epoch/text/None)."""
+    if ts is None or ts == "":
+        return None
+    try:
+        if isinstance(ts, (int, float)):
+            return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+    except Exception:  # noqa: BLE001
+        return None
+    return str(ts)
+
+
+def _probe_account(j) -> str:
+    """Pull a non-secret account label (an email) out of a probe's JSON body.
+    Scans only known identity fields; NEVER returns a token or the raw body."""
+    if not isinstance(j, dict):
+        return ""
+    for path in (("emailAddress",), ("data", "email"), ("user", "emailAddress"),
+                 ("email",)):
+        cur = j
+        for k in path:
+            cur = cur.get(k) if isinstance(cur, dict) else None
+        if isinstance(cur, str) and "@" in cur:
+            return cur[:120]
+    return ""
+
+
+def _syscheck_rows(caller_org: str | None) -> list[dict]:
+    """Build the per-provider readiness rows from the SAME signals the summary
+    uses — no new DB access paths. Every branch is best-effort: a probe helper
+    that raises degrades that row to a benign state, never 500s the board."""
+    org = caller_org or settings.demo_org_id
+    org_rows = _org_connection_rows(caller_org) if caller_org else []
+
+    google_oauth = store.get_org_oauth(org) or {}
+    google_native = bool(google_oauth)
+    google_email = google_oauth.get("email") or ""
+    google_checked = _iso(google_oauth.get("updated_at"))
+
+    def _pd(slug: str) -> bool:
+        try:
+            return pipedream_executor.app_connected(org, slug)
+        except Exception:  # noqa: BLE001 — an unreachable Pipedream is not "on"
+            return False
+
+    def _cedric(provider: str) -> bool:
+        # Scoped caller: the org's connector rows. Unscoped/demo: fall back to
+        # the platform-global env flags the summary uses.
+        if caller_org is not None:
+            return _org_connected(org_rows, provider)
+        return False
+
+    rows: list[dict] = []
+
+    def add(key, label, category, status, account="", detail="", last_checked=None,
+            supports=None, can_test=False):
+        rows.append({
+            "key": key, "label": label, "category": category, "status": status,
+            "account": account, "detail": detail, "last_checked": last_checked,
+            "supports": supports or [], "can_test": bool(can_test),
+        })
+
+    # ── Google trio (native OAuth OR Pipedream OR Cedric connector) ──
+    for key, label, cedric_provider, pd_slug in (
+        ("google_calendar", "Google Calendar", "calendar", "google_calendar"),
+        ("gmail", "Gmail", "gmail", "gmail"),
+        ("google_drive", "Google Drive", "drive", "google_drive"),
+    ):
+        pd_on = _pd(pd_slug)
+        cedric_on = _cedric(cedric_provider)
+        native_on = google_native
+        # Drive "native" for the unscoped/global view = any avatar wired to a
+        # Drive folder (same signal the summary's drive card reads).
+        if key == "google_drive" and not native_on and caller_org is None:
+            try:
+                native_on = any(
+                    avatars.load(a).drive_folder_id
+                    for a in avatars.list_ids() if not _hidden(a)
+                )
+            except Exception:  # noqa: BLE001
+                native_on = False
+        connected = pd_on or cedric_on or native_on
+        if pd_on:
+            src = "Pipedream"
+        elif native_on:
+            src = "native Google OAuth"
+        else:
+            src = "connector"
+        status = "ok" if connected else "off"
+        detail = (f"Connected via {src}" if connected
+                  else "Not connected — connect to enable")
+        # Scope-aware downgrade: an older native Google grant reads 'ok' for
+        # Calendar (the base grant) but may predate the Gmail/Drive scopes and so
+        # cannot actually act on them — which is exactly what the live probe
+        # catches. Warn when the native grant lacks the relevant scope so the
+        # board agrees with the probe. Pipedream's per-app connection carries its
+        # own scopes, so a Pipedream-backed row is exempt. Unknown/empty scopes ⇒
+        # keep current behaviour (no false warning).
+        if connected and native_on and not pd_on and key in ("gmail", "google_drive"):
+            scopes = google_oauth.get("scopes") or ""
+            needed = "gmail." if key == "gmail" else "drive."
+            if scopes and needed not in scopes:
+                status = "warn"
+                detail = f"Connected, but reconnect to grant {label} access"
+        add(
+            key, label, "productivity",
+            status,
+            account=google_email if native_on else "",
+            detail=detail,
+            last_checked=google_checked if native_on else None,
+            supports=["read", "write"],
+            can_test=bool(pd_on or native_on),
+        )
+
+    # ── Asana (native PAT/OAuth OR Pipedream) ──
+    try:
+        asana_native = asana_client.connected(org)
+    except Exception:  # noqa: BLE001
+        asana_native = False
+    asana_pd = _pd("asana")
+    asana_on = asana_native or asana_pd
+    add(
+        "asana", "Asana", "productivity",
+        "ok" if asana_on else "off",
+        detail=("Connected via Pipedream" if asana_pd
+                else "Connected via token" if asana_native
+                else "Not connected"),
+        supports=["read", "write"],
+        can_test=asana_on,
+    )
+
+    # ── Slack (config only — a token is NEVER read here) ──
+    if caller_org is not None:
+        slack_on = _org_connected(org_rows, "slack") or _org_connected(
+            org_rows, "cedric-brain")
+    else:
+        slack_on = bool(settings.slack_webhook_url)
+    add(
+        "slack", "Slack", "messaging",
+        "ok" if slack_on else "off",
+        detail=("Connected" if slack_on else "Not connected"),
+        supports=["notify"], can_test=False,
+    )
+
+    # ── Meeting bot (Recall) ──
+    try:
+        recall_ready = recall_client.readiness().get("ready", False)
+    except Exception:  # noqa: BLE001
+        recall_ready = False
+    add(
+        "meeting_bot", "Meeting bot (Recall)", "meeting",
+        "ok" if recall_ready else ("warn" if settings.recall_api_key else "off"),
+        detail=("Recall configured" if recall_ready
+                else "Recall key set but not ready" if settings.recall_api_key
+                else "Recall not configured"),
+        supports=["join"],
+        can_test=bool(settings.recall_api_key.strip()),
+    )
+
+    # ── Voice (ElevenLabs → edge-tts fallback; 'ok' either way) ──
+    voice_el = bool(settings.elevenlabs_api_key.strip())
+    add(
+        "voice", "Voice", "media", "ok",
+        detail=("ElevenLabs configured" if voice_el
+                else "Using edge-tts fallback (no ElevenLabs key)"),
+        supports=["speak"], can_test=False,
+    )
+
+    # ── Company Brain (base-pack docs + durable published sources) ──
+    try:
+        roster = (avatars.list_for_org(caller_org) if caller_org
+                  else avatars.list_ids())
+        base_docs = sum(
+            _knowledge_docs(avatars.load(a)) for a in roster if not _hidden(a)
+        )
+    except Exception:  # noqa: BLE001
+        base_docs = 0
+    published = 0
+    brain_checked = None
+    if knowledge.enabled():
+        try:
+            for s in dal.list_sources(org):
+                published += int(s.get("published_documents") or 0)
+            jobs = dal.job_rows(org, limit=1)
+            if jobs:
+                brain_checked = _iso(jobs[0].get("updated_at"))
+        except Exception:  # noqa: BLE001 — durable plane hiccup: base pack still counts
+            pass
+    total_docs = base_docs + published
+    add(
+        "company_brain", "Company Brain", "knowledge",
+        "ok" if total_docs > 0 else "off",
+        detail=(f"{base_docs} base doc(s)"
+                + (f" + {published} published source doc(s)" if published else "")
+                if total_docs else "No knowledge docs indexed"),
+        last_checked=brain_checked,
+        supports=["ground"], can_test=False,
+    )
+
+    # ── Graphiti knowledge graph (enabled-but-unvalidated ⇒ warn) ──
+    g_enabled = bool(settings.graphiti_enabled)
+    g_configured = bool(settings.graphiti_enabled and settings.graphiti_uri.strip())
+    g_core = bool(_GRAPHITI_CORE_VERSION)
+    if not g_enabled:
+        g_status, g_detail = "off", "Disabled"
+    elif not (g_configured and g_core):
+        g_status = "warn"
+        g_detail = ("Enabled but not configured"
+                    if not g_configured else "Enabled but graphiti-core not installed")
+    else:
+        g_status = "warn"
+        g_detail = "Enabled — never validated (run a live test)"
+    add(
+        "graphiti", "Knowledge graph (Graphiti)", "knowledge",
+        g_status, detail=g_detail, supports=["ground"],
+        can_test=g_enabled,
+    )
+
+    return rows
+
+
+@router.get("/dashboard/syscheck")
+def dashboard_syscheck(request: Request) -> JSONResponse:
+    """Per-provider readiness board. Auth-gated EXACTLY like /dashboard/summary:
+    cookie user, per-org bearer, global bearer, or key-free demo. Distilled,
+    PII-safe status only — never a token, never transcript content."""
+    from .. import cedric  # local import, same reason as dashboard_summary
+
+    user = auth.current_user(request)
+    machine_org = None
+    if user is None:
+        machine_org = cedric.resolve_machine_org(request)
+        if machine_org is None:
+            if err := auth.gate(request):
+                return err
+    caller_org = user["org_id"] if user else machine_org
+
+    rows = _syscheck_rows(caller_org)
+    return JSONResponse(
+        _json_safe({
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "rows": rows,
+        }),
+        headers=_NO_STORE,
+    )
+
+
+# ── live read-only probes (module-level so tests can patch them) ────────────
+
+def _pd_account_id(org: str, slug: str) -> str:
+    """Resolve a Pipedream connected-account id for ``slug`` (with a ``google``
+    fallback for the Google apps), or "" when none/unreachable."""
+    candidates = [slug]
+    if slug in ("google_calendar", "gmail", "google_drive"):
+        candidates.append("google")
+    try:
+        accounts = pipedream_client.list_accounts(org)
+    except pipedream_client.PipedreamError:
+        return ""
+    by_app: dict[str, str] = {}
+    for a in accounts:
+        app = str(a.get("app") or "")
+        if app and a.get("id") and app not in by_app:
+            by_app[app] = str(a.get("id"))
+    for c in candidates:
+        if by_app.get(c):
+            return by_app[c]
+    return ""
+
+
+def _probe_pipedream(org: str, account_id: str, url: str) -> dict:
+    """One read-only proxy GET; map the downstream status to our vocabulary.
+    401/403 ⇒ 'error' (auth broken). Never raises, never returns a token."""
+    try:
+        resp = pipedream_client.proxy_request(org, account_id, "GET", url)
+    except pipedream_client.PipedreamError:
+        return {"status": "off", "detail": "not configured", "account": ""}
+    st = resp.get("status")
+    if st in (401, 403):
+        return {"status": "error", "detail": "auth broken — reconnect", "account": ""}
+    if resp.get("ok"):
+        return {"status": "ok", "detail": "Live read succeeded",
+                "account": _probe_account(resp.get("json"))}
+    return {"status": "error", "detail": f"HTTP {st}", "account": ""}
+
+
+def _probe_google_native(org: str, url: str) -> dict:
+    """Mint a fresh access token from the org's native Google grant (a live
+    read-only refresh) and do one cheap GET. No token is ever returned."""
+    from .. import google_client
+
+    tok, err = google_client._access_token(org, force_refresh=True)
+    if err or not tok:
+        return {"status": "error", "detail": "auth broken — reconnect", "account": ""}
+    try:
+        import httpx
+        resp = httpx.get(url, headers={"Authorization": f"Bearer {tok}"}, timeout=15.0)
+    except Exception:  # noqa: BLE001
+        return {"status": "error", "detail": "request failed", "account": ""}
+    if resp.status_code in (401, 403):
+        return {"status": "error", "detail": "auth broken — reconnect", "account": ""}
+    if resp.status_code < 400:
+        return {"status": "ok", "detail": "Live read succeeded",
+                "account": (store.get_org_oauth(org) or {}).get("email", "")}
+    return {"status": "error", "detail": f"HTTP {resp.status_code}", "account": ""}
+
+
+def _probe_asana_native(org: str) -> dict:
+    tok, err = asana_client._token(org)
+    if err or not tok:
+        return {"status": "off", "detail": "not configured", "account": ""}
+    info = asana_client.verify_token(tok)  # live GET /users/me — no token echoed
+    if info.get("ok"):
+        return {"status": "ok", "detail": "Live read succeeded",
+                "account": info.get("email", "")}
+    return {"status": "error", "detail": "auth broken — reconnect", "account": ""}
+
+
+def _probe_recall() -> dict:
+    from .. import recall_client
+
+    r = recall_client.auth_check()
+    auth_state = r.get("auth")
+    if auth_state == "valid":
+        return {"status": "ok", "detail": "Recall API reachable", "account": ""}
+    if auth_state == "skipped":
+        return {"status": "off", "detail": "not configured", "account": ""}
+    if auth_state == "invalid":
+        return {"status": "error", "detail": "auth broken — reconnect", "account": ""}
+    return {"status": "error", "detail": "Recall unreachable", "account": ""}
+
+
+async def _probe_graphiti() -> dict:
+    """Live ingest→recall smoke against a THROWAWAY ``__smoke__`` group — never a
+    real org's graph (mirrors GET /health/graphiti?run=1)."""
+    if not graphiti_client.enabled():
+        return {"status": "off", "detail": "not configured", "account": ""}
+    ready = await graphiti_client.ensure_ready()
+    if not ready:
+        return {"status": "error", "detail": "connect failed", "account": ""}
+    sample = (
+        "Smoke check: issue ENG-999 'Wire the payments webhook' is assigned to "
+        "Dana Lin and is blocked by ENG-1000."
+    )
+    await graphiti_client.ingest(
+        "__smoke__", sample, name="smoke", source_description="smoke")
+    facts = await graphiti_client.recall(
+        "__smoke__", "who is ENG-999 assigned to and what is blocking it",
+        timeout_s=20.0, num_results=8)
+    lines = [ln for ln in (facts or "").splitlines() if ln.strip()]
+    return {
+        "status": "ok" if lines else "warn",
+        "detail": (f"Live round-trip read {len(lines)} fact(s)" if lines
+                   else "Connected but recall returned nothing"),
+        "account": "",
+    }
+
+
+@router.post("/dashboard/syscheck/test")
+async def syscheck_test(request: Request) -> JSONResponse:
+    """Run a LIVE read-only probe for one provider. Login + same-origin gated
+    (the same door as approvals). Everything degrades gracefully: unconfigured
+    ⇒ 'off', broken auth ⇒ 'error', working ⇒ 'ok'. NEVER 500s, never returns a
+    credential."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    org = user["org_id"]
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    provider = str((body or {}).get("provider") or "").strip()
+
+    # Per-(org, provider) debounce: swallow rapid repeats (double-clicks, "Test
+    # all") before they re-run the probe / force-refresh a token upstream.
+    now = time.monotonic()
+    cd_key = (org, provider)
+    last = _syscheck_last.get(cd_key)
+    if last is not None and (now - last) < _SYSCHECK_COOLDOWN_S:
+        return JSONResponse(
+            {"provider": provider, "status": "warn",
+             "detail": "rate limited, try again shortly",
+             "account": "", "latency_ms": 0},
+            headers=_NO_STORE,
+        )
+    _syscheck_last[cd_key] = now
+
+    t0 = time.monotonic()
+    try:
+        if provider in _PD_PROBE:
+            slug, url = _PD_PROBE[provider]
+            result = None
+            if pipedream_client.enabled():
+                acct = await run_in_threadpool(_pd_account_id, org, slug)
+                if acct:
+                    result = await run_in_threadpool(_probe_pipedream, org, acct, url)
+            if result is None:
+                # Native fallback: Asana PAT/OAuth, or the org's Google grant.
+                if provider == "asana":
+                    result = await run_in_threadpool(_probe_asana_native, org)
+                elif store.get_org_oauth(org):
+                    result = await run_in_threadpool(_probe_google_native, org, url)
+                else:
+                    result = {"status": "off", "detail": "not configured",
+                              "account": ""}
+        elif provider == "graphiti":
+            result = await _probe_graphiti()
+        elif provider == "meeting_bot":
+            result = await run_in_threadpool(_probe_recall)
+        else:
+            result = {"status": "off", "detail": "no live probe for this provider",
+                      "account": ""}
+    except Exception:  # noqa: BLE001 — a probe must never 500 the board
+        result = {"status": "error", "detail": "probe failed", "account": ""}
+    latency_ms = round((time.monotonic() - t0) * 1000)
+
+    return JSONResponse(
+        {"provider": provider,
+         "status": result.get("status", "off"),
+         "detail": result.get("detail", ""),
+         "account": result.get("account", ""),
+         "latency_ms": latency_ms},
         headers=_NO_STORE,
     )
 
