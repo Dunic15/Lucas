@@ -179,14 +179,14 @@ def test_end_delivers_ended_callback(client, recall_stubbed, monkeypatch):
     # The wire artifact is distilled: transcripts are PII and stay home.
     assert "transcript" not in artifact
     assert "summary" in artifact
-    assert artifact["artifact_version"] == 1
+    assert artifact["artifact_version"] == 2
 
     assert len(delivered) == 1
     integration, delivered_bot, delivered_artifact = delivered[0]
     assert delivered_bot == bot_id
     assert integration["external_ref"]["meet_session_id"] == "ms_1"
     assert "transcript" not in delivered_artifact
-    assert delivered_artifact["artifact_version"] == 1
+    assert delivered_artifact["artifact_version"] == 2
     assert delivered_artifact["summary"] == artifact["summary"]
     # The full artifact (transcript included) is still served by the LOCAL
     # meetings archive — the PII boundary is the orchestrator API, not disk.
@@ -196,7 +196,7 @@ def test_end_delivers_ended_callback(client, recall_stubbed, monkeypatch):
     polled = client.get(f"/sessions/{bot_id}/artifact").json()
     assert polled["status"] == "done"
     assert "transcript" not in polled
-    assert polled["artifact_version"] == 1
+    assert polled["artifact_version"] == 2
 
 
 def test_redeliver_uses_saved_distilled_artifact(client, monkeypatch):

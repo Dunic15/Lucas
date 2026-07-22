@@ -829,6 +829,50 @@ def _event_line(item: dict) -> str:
     return f"- {when} — {title}{extra}" if when or title else ""
 
 
+def verify_calendar_event(org_id: str, event_id: str) -> bool:
+    """Read-back check: does the event we just wrote actually exist? Phase-1
+    evidence for the NATIVE plane (the Pipedream plane already verifies).
+    Best-effort — never raises, False on any doubt."""
+    eid = str(event_id or "").strip()
+    if not eid:
+        return False
+    token, err = _access_token(org_id)
+    if err or not token:
+        return False
+    try:
+        import httpx
+
+        resp = httpx.get(
+            f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{eid}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10.0,
+        )
+        return resp.status_code == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def verify_gmail_message(org_id: str, message_id: str) -> bool:
+    """Read-back check for a just-sent Gmail message. Best-effort."""
+    mid = str(message_id or "").strip()
+    if not mid:
+        return False
+    token, err = _access_token(org_id)
+    if err or not token:
+        return False
+    try:
+        import httpx
+
+        resp = httpx.get(
+            f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}?format=minimal",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10.0,
+        )
+        return resp.status_code == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def calendar_brief(org_id: str) -> str:
     """Markdown brief of the org's upcoming primary calendar; "" when the org
     has no Google connected or on any failure — the join proceeds without it."""

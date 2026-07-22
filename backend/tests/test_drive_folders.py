@@ -52,3 +52,29 @@ def test_transport_error_is_swallowed(monkeypatch):
     monkeypatch.setattr(ingest.httpx, "get", boom)
     folders, reason = ingest.list_folders("org1")
     assert folders == [] and "drive list failed" in reason  # never raises
+
+
+def test_picker_falls_back_to_pipedream_when_native_absent(monkeypatch):
+    """Native first, Pipedream second — the picker follows the same cutover
+    rule as sync_drive (live gap 2026-07-22: Connect-only org, empty list)."""
+    from app.knowledge import ingest
+    from app import google_client, drive_client, pipedream_client
+
+    monkeypatch.setattr(google_client, "_access_token",
+                        lambda org, *a, **k: (None, "no oauth"))
+    monkeypatch.setattr(drive_client, "_pd_drive_account", lambda org: "apn_z")
+    monkeypatch.setattr(
+        pipedream_client, "proxy_request",
+        lambda org, acct, method, url, **kw: {
+            "ok": True,
+            "json": {"files": [{"id": "fl1", "name": "Team Docs"},
+                                {"id": "fl2", "name": "Specs"}]},
+        },
+    )
+    folders, reason = ingest.list_folders("org-pd")
+    assert reason == "" and [f["name"] for f in folders] == ["Team Docs", "Specs"]
+
+    # No PD account either → the native reason survives.
+    monkeypatch.setattr(drive_client, "_pd_drive_account", lambda org: "")
+    folders2, reason2 = ingest.list_folders("org-none")
+    assert folders2 == [] and "not connected" in reason2

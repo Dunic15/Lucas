@@ -1152,10 +1152,22 @@ names, dates, tools, or amounts). Each goal needs a verbatim transcript \
 excerpt; if there is no supporting excerpt, do not emit the goal. A goal that \
 duplicates an actions[] entry must be omitted.
 
+For DECISIONS, emit BOTH: the existing "decisions" list of one-line strings \
+(unchanged), AND a parallel "decision_records" array with one object per \
+decision carrying its maker, reason, and the project it concerns — same \
+decisions, richer shape. If a decision explicitly OVERRIDES an earlier one \
+("supersedes", "instead of", "changed from", "no longer", "moved to"), keep \
+that wording in the decision text and name the related_project so the earlier \
+decision can be linked. Leave a field "" when the transcript does not state it \
+— never invent a maker, reason, or project.
+
 Return ONLY a JSON object:
 {
   "summary": "<3-6 sentences, action-oriented: what the speaker(s) said they want to do, what was decided, what is still open or uncertain, and the recommended next steps — a readout someone can act on, not minutes>",
   "decisions": ["<each decision the group actually reached, one short line>"],
+  "decision_records": [
+    {"decision": "<the same decision as one short line>", "decision_maker": "<who made or drove it, or ''>", "reason": "<why, in one clause, or ''>", "related_project": "<the project/workstream it concerns, or ''>"}
+  ],
   "actions": [
     {"item": "<action>", "owner": "<name or 'UNASSIGNED'>", "deadline": "<stated deadline or ''>", "gap_type": "<owner|deadline|approval|document|blocker|none>", "evidence": "<exact supporting excerpt from the meeting transcript>"}
   ],
@@ -1754,6 +1766,76 @@ def _derived_readiness(artifact: dict) -> int:
     return min(100, score)
 
 
+def _tracker_maker_for(decision_text: str, state: "meeting_state.MeetingState") -> str:
+    """Best-effort speaker attribution for a decision line, from the silent
+    tracker's {speaker, decision} captures. Matches on a shared content-word
+    (the model's phrasing rarely equals the tracker's raw excerpt verbatim).
+    Deterministic, no model call. Returns '' when nothing matches."""
+    toks = _ground_tokens(decision_text)
+    if not toks:
+        return ""
+    best_speaker, best_hits = "", 0
+    for d in state.decisions:
+        speaker = str(d.get("speaker") or "").strip()
+        if not speaker:
+            continue
+        cand = _ground_tokens(str(d.get("decision") or ""))
+        hits = len(toks & cand)
+        if hits > best_hits:
+            best_speaker, best_hits = speaker, hits
+    return best_speaker if best_hits >= 1 else ""
+
+
+def _build_decision_records(
+    model_records: object,
+    decisions: list[str],
+    state: "meeting_state.MeetingState",
+) -> list[dict]:
+    """Normalize decision_records to a clean list of objects.
+
+    Prefers the model's structured records (sanitized + maker backfilled from
+    the tracker); otherwise synthesizes one record per decision line so the
+    field is ALWAYS populated when there are decisions. The parallel
+    ``decisions`` list[str] is unchanged — this never replaces it."""
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(decision: str, maker: str, reason: str, project: str) -> None:
+        text = (decision or "").strip()
+        if not text or len(text) > _MAX_LINE_CHARS:
+            return
+        key = " ".join(text.split()).casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        if not maker:
+            maker = _tracker_maker_for(text, state)
+        out.append(
+            {
+                "decision": text,
+                "decision_maker": (maker or "").strip(),
+                "reason": (reason or "").strip(),
+                "related_project": (project or "").strip(),
+            }
+        )
+
+    if isinstance(model_records, (list, tuple)):
+        for rec in model_records:
+            if not isinstance(rec, dict):
+                continue
+            _add(
+                str(rec.get("decision") or ""),
+                str(rec.get("decision_maker") or ""),
+                str(rec.get("reason") or ""),
+                str(rec.get("related_project") or ""),
+            )
+    # Backfill any decision line the model didn't structure (or all of them, in
+    # stub/degraded mode) so every one-liner has a record.
+    for line in decisions:
+        _add(str(line or ""), "", "", "")
+    return out
+
+
 def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dict:
     """Normalize to the full artifact schema; state fills the deterministic
     fields and backfills anything the model left out.
@@ -1771,6 +1853,13 @@ def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dic
     artifact["decisions"] = _clean_lines(artifact.get("decisions")) or [
         d["decision"] for d in state.decisions
     ]
+    # First-class decision records (parallel to the list[str] above — which
+    # STAYS list[str] for every downstream consumer). Each record carries its
+    # maker, reason, and related_project. decision_maker is backfilled from the
+    # silent tracker's speaker attribution when the model left it blank.
+    artifact["decision_records"] = _build_decision_records(
+        artifact.get("decision_records"), artifact["decisions"], state
+    )
     artifact["risks"] = _clean_lines(artifact.get("risks")) or [
         r["risk"] for r in state.risks
     ]

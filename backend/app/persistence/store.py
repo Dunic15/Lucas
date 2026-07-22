@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -96,6 +98,9 @@ class Session:
     # by replaying the utterances rather than persisted (transcript is PII;
     # one copy in the DB is enough).
     meeting_state: Any = field(default=None, repr=False, compare=False)
+    # Social-turn state (meeting/conversation_frame.py). Shadow-only and
+    # in-memory: it never controls speaking and never persists utterance text.
+    conversation_frame: Any = field(default=None, repr=False, compare=False)
     # Cross-meeting carryover brief (ledger.carryover_brief). In-memory only:
     # None = not loaded yet (load lazily), "" = loaded, no history.
     memory_brief: Any = field(default=None, repr=False, compare=False)
@@ -723,6 +728,31 @@ def _init_db() -> None:
                 updated_at REAL NOT NULL,
                 PRIMARY KEY (user_id, provider)
             );
+
+            -- First-class Decision records (mirror of the durable
+            -- meeting_decisions table, migration 0017). A decision gets its
+            -- own identity, maker, reason, related_project and supersede link
+            -- so the archive can show "this decision supersedes the one from
+            -- July 15". source_ref holds a bot_id/meeting_key ONLY — never
+            -- transcript text (PII). status ∈ active|superseded|revisited; a
+            -- superseded decision keeps its row (history), never deleted.
+            -- Self-created at boot so a litestream-restored store gains it
+            -- without a data migration. Durable orgs route to Postgres.
+            CREATE TABLE IF NOT EXISTS meeting_decisions (
+                org_id TEXT NOT NULL DEFAULT '{demo}',
+                id TEXT NOT NULL,
+                bot_id TEXT NOT NULL DEFAULT '',
+                decision TEXT NOT NULL,
+                decision_maker TEXT NOT NULL DEFAULT '',
+                reason TEXT NOT NULL DEFAULT '',
+                related_project TEXT NOT NULL DEFAULT '',
+                supersedes TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                source_ref TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (org_id, id)
+            );
             """
         )
         # Migration for stores created before the Cedric integration column.
@@ -1096,6 +1126,23 @@ def save_artifact(bot_id: str, artifact: dict, *, org_id: str | None = None) -> 
         if not durable_enabled:
             _artifacts.pop(bot_id, None)
             raise
+
+    # First-class decision records (0017): persist alongside the artifact, with
+    # supersede linking. Best-effort + idempotent (skip if this meeting already
+    # has decision rows) so a finalize retry never double-inserts and a decision
+    # write failure never turns a saved artifact into a finalize loop. Never
+    # logs decision text.
+    records = artifact.get("decision_records")
+    if isinstance(records, list) and records:
+        try:
+            if not list_decisions(str(row_org), bot_id):
+                persist_decision_records(str(row_org), bot_id, records)
+        except Exception as exc:  # noqa: BLE001 — decision persistence is non-fatal
+            print(
+                f"[save_artifact] decision persistence skipped "
+                f"({type(exc).__name__})",
+                flush=True,
+            )
 
 
 def get_artifact(bot_id: str, org_id: str | None = None) -> dict | None:
@@ -2277,6 +2324,283 @@ def get_org_pref(org_id: str, key: str) -> str | None:
             "SELECT value FROM org_prefs WHERE org_id = ? AND key = ?", (org, k)
         ).fetchone()
     return row[0] if row else None
+
+
+# ── first-class decisions (0017 / meeting_decisions) ──────────────────────
+# A decision gets its own durable identity so the archive can answer "who
+# decided this, why, and does it supersede an earlier one?". Durable orgs route
+# to Postgres (RLS-scoped); the key-free/demo world persists in SQLite. Never
+# store transcript text here — source_ref is a bot_id/meeting_key ONLY.
+_VALID_DECISION_STATUS = ("active", "superseded", "revisited")
+
+# A new decision OVERRIDES an earlier one when its text carries an explicit
+# supersede cue. Deterministic regex (no model call) — the linker only fires
+# when the cue AND a shared related_project are both present.
+_DECISION_SUPERSEDE_CUE = re.compile(
+    r"\b(supersed\w+|instead of|changed from|no longer|moved to|replaces?\b|"
+    r"overrid\w+|rather than|in place of)\b",
+    re.IGNORECASE,
+)
+
+# The supersede linker only looks back over a recent window per project — a
+# newer decision overrides the MOST-RECENT earlier active one, so an unbounded
+# full-history scan is never needed.
+_SUPERSEDE_LOOKUP_LIMIT = 200
+
+_DECISION_FIELDS = (
+    "id", "bot_id", "decision", "decision_maker", "reason",
+    "related_project", "supersedes", "status", "source_ref",
+    "created_at", "updated_at",
+)
+
+
+def _decision_row_to_dict(row: "sqlite3.Row") -> dict:
+    d = {k: row[k] for k in _DECISION_FIELDS}
+    # Present empty strings as None for the optional link, so consumers can test
+    # `if d["supersedes"]` uniformly with the Postgres (nullable uuid) shape.
+    for k in ("supersedes", "decision_maker", "reason", "related_project"):
+        if d.get(k) == "":
+            d[k] = None
+    return d
+
+
+def _decision_durable(org_id: str) -> bool:
+    """Route this org's decisions to Postgres? (mirror of the artifact rule)."""
+    from . import control_plane
+
+    return durable_artifacts_enabled() and control_plane.is_durable_org(
+        str(org_id)
+    )
+
+
+def save_decision(
+    org_id: str,
+    bot_id: str,
+    record: dict,
+    *,
+    decision_id: str | None = None,
+) -> str | None:
+    """Persist one first-class decision record; returns its id.
+
+    ``record`` carries decision (required), decision_maker, reason,
+    related_project, supersedes, status, source_ref. ``source_ref`` must be a
+    bot_id / meeting_key — NEVER transcript text (PII). Durable orgs write to
+    Postgres under RLS; everything else writes SQLite."""
+    org = (org_id or "").strip() or DEMO_ORG_ID
+    decision_text = str(record.get("decision") or "").strip()
+    if not decision_text:
+        return None
+    did = decision_id or str(uuid.uuid4())
+    status = str(record.get("status") or "active")
+    if status not in _VALID_DECISION_STATUS:
+        status = "active"
+    now = time.time()
+    payload = {
+        "id": did,
+        "bot_id": str(bot_id or ""),
+        "decision": decision_text,
+        "decision_maker": str(record.get("decision_maker") or ""),
+        "reason": str(record.get("reason") or ""),
+        "related_project": str(record.get("related_project") or ""),
+        "supersedes": str(record.get("supersedes") or ""),
+        "status": status,
+        "source_ref": str(record.get("source_ref") or bot_id or ""),
+    }
+
+    if _decision_durable(org):
+        from . import control_plane
+
+        control_plane.save_decision(org, payload)
+        return did
+
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO meeting_decisions
+                (org_id, id, bot_id, decision, decision_maker, reason,
+                 related_project, supersedes, status, source_ref,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(org_id, id) DO UPDATE SET
+                bot_id=excluded.bot_id,
+                decision=excluded.decision,
+                decision_maker=excluded.decision_maker,
+                reason=excluded.reason,
+                related_project=excluded.related_project,
+                supersedes=excluded.supersedes,
+                status=excluded.status,
+                source_ref=excluded.source_ref,
+                updated_at=excluded.updated_at
+            """,
+            (
+                org, did, payload["bot_id"], payload["decision"],
+                payload["decision_maker"], payload["reason"],
+                payload["related_project"], payload["supersedes"],
+                payload["status"], payload["source_ref"], now, now,
+            ),
+        )
+    return did
+
+
+def list_decisions(
+    org_id: str,
+    bot_id: str | None = None,
+    *,
+    related_project: str | None = None,
+    limit: int | None = None,
+) -> list[dict]:
+    """Decision records for an org, newest first. When ``bot_id`` is given,
+    only that meeting's decisions; otherwise the org's decision history. The
+    supersede linker passes ``related_project`` + ``limit`` to bound the scan
+    to just the project(s) a finalize touches over a recent window, so the
+    lookup cost does not grow with the org's whole decision history."""
+    org = (org_id or "").strip() or DEMO_ORG_ID
+    if _decision_durable(org):
+        from . import control_plane
+
+        return (
+            control_plane.list_decisions(
+                org, bot_id, related_project=related_project, limit=limit
+            )
+            or []
+        )
+
+    clauses = ["org_id = ?"]
+    params: list = [org]
+    if bot_id is not None:
+        clauses.append("bot_id = ?")
+        params.append(str(bot_id))
+    if related_project is not None:
+        clauses.append("related_project = ? COLLATE NOCASE")
+        params.append(str(related_project))
+    sql = (
+        "SELECT * FROM meeting_decisions WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY created_at DESC, id DESC"
+    )
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [_decision_row_to_dict(r) for r in rows]
+
+
+def get_decision(org_id: str, decision_id: str) -> dict | None:
+    """One decision by id, tenant-scoped."""
+    org = (org_id or "").strip() or DEMO_ORG_ID
+    did = (decision_id or "").strip()
+    if not did:
+        return None
+    if _decision_durable(org):
+        from . import control_plane
+
+        return control_plane.get_decision(org, did)
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM meeting_decisions WHERE org_id = ? AND id = ?",
+            (org, did),
+        ).fetchone()
+    return _decision_row_to_dict(row) if row is not None else None
+
+
+def mark_superseded(org_id: str, decision_id: str, *, status: str = "superseded") -> bool:
+    """Flip an earlier decision's status (default 'superseded') when a newer
+    decision overrides it. The row is kept — decisions are history, never
+    deleted."""
+    org = (org_id or "").strip() or DEMO_ORG_ID
+    did = (decision_id or "").strip()
+    if not did or status not in _VALID_DECISION_STATUS:
+        return False
+    if _decision_durable(org):
+        from . import control_plane
+
+        return bool(control_plane.mark_superseded(org, did, status))
+    with _LOCK, _connect() as conn:
+        cur = conn.execute(
+            "UPDATE meeting_decisions SET status = ?, updated_at = ? "
+            "WHERE org_id = ? AND id = ?",
+            (status, time.time(), org, did),
+        )
+    return cur.rowcount > 0
+
+
+def persist_decision_records(
+    org_id: str, bot_id: str, records: list[dict]
+) -> list[str]:
+    """Save a finished meeting's decision_records and wire supersede links.
+
+    For each new record we save a row, then — deterministically, no model call
+    — check for an explicit supersede cue in the decision text. When the cue
+    fires AND the record names a related_project, the most recent EARLIER active
+    decision on that same project (from prior meetings or earlier in this batch)
+    is linked: the new row's ``supersedes`` points at it and the old row flips to
+    ``status='superseded'``. Both never stay 'active'. Returns the new ids.
+
+    Off the live path (finalize/threadpool). Best-effort at the call site —
+    persistence must never break the meter-stop. Never logs decision text."""
+    org = (org_id or "").strip() or DEMO_ORG_ID
+    saved_ids: list[str] = []
+    if not records:
+        return saved_ids
+    # Prior active decisions in this org, by project, most-recent-first. A
+    # supersede requires BOTH an explicit cue in the new decision AND a shared
+    # related_project, so the candidate scan only needs the project(s) THIS
+    # batch could supersede — bounded to a recent window per project instead of
+    # the org's entire decision history (which grew unbounded on every
+    # finalize). Built once; updated in-memory as this batch supersedes earlier
+    # ones.
+    candidate_projects: dict[str, str] = {}
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        proj = str(rec.get("related_project") or "").strip()
+        if proj and _DECISION_SUPERSEDE_CUE.search(str(rec.get("decision") or "")):
+            candidate_projects.setdefault(proj.casefold(), proj)
+    prior: list[dict] = []
+    for proj in candidate_projects.values():
+        prior.extend(
+            d
+            for d in list_decisions(
+                org, related_project=proj, limit=_SUPERSEDE_LOOKUP_LIMIT
+            )
+            if d.get("status") == "active"
+        )
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        text = str(rec.get("decision") or "").strip()
+        if not text:
+            continue
+        project = str(rec.get("related_project") or "").strip()
+        target = None
+        if project and _DECISION_SUPERSEDE_CUE.search(text):
+            key = project.casefold()
+            for cand in prior:
+                if (
+                    str(cand.get("related_project") or "").strip().casefold() == key
+                    and cand.get("status") == "active"
+                ):
+                    target = cand
+                    break
+        rec_to_save = dict(rec)
+        rec_to_save["source_ref"] = str(rec.get("source_ref") or bot_id or "")
+        if target is not None:
+            rec_to_save["supersedes"] = str(target.get("id") or "")
+        new_id = save_decision(org, bot_id, rec_to_save)
+        if new_id is None:
+            continue
+        saved_ids.append(new_id)
+        if target is not None:
+            mark_superseded(org, str(target.get("id")))
+            target["status"] = "superseded"  # keep the in-memory view honest
+        # This new decision becomes a supersede candidate for later records.
+        prior.insert(0, {
+            "id": new_id,
+            "related_project": project,
+            "status": "active",
+        })
+    return saved_ids
 
 
 def all_avatar_brain_modes() -> dict[str, str]:
