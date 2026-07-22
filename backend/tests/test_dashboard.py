@@ -285,3 +285,27 @@ def test_action_entry_untyped_is_executable_with_rescue(monkeypatch):
                 "meeting for tomorrow with Anant?",
     })
     assert stutter["title"] == "Book a meeting for tomorrow with Anant"
+
+
+def test_action_entry_exposes_needed_details():
+    """Owner ask 2026-07-22: an incomplete card must SAY what it still needs
+    up front. Typed specs expose their missing required params; untyped asks
+    expose the kind-aware conversational slots."""
+    from app.api.dashboard import _action_entry
+
+    email_untyped = _action_entry({
+        "action_id": "n1", "item": "Send an email to Anant",
+    })
+    assert "email_body" in email_untyped["needed"]  # no message text yet
+
+    cal_untyped = _action_entry({
+        "action_id": "n2", "item": "Schedule a meeting with Anant",
+    })
+    assert "invite_when" in cal_untyped["needed"]  # no time yet
+
+    complete_typed = _action_entry({
+        "action_id": "n3", "item": "Email the recap",
+        "typed": {"type": "email.send",
+                  "args": {"to": ["a@b.com"], "subject": "s", "body": "b"}},
+    })
+    assert complete_typed["needed"] == []

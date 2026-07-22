@@ -167,6 +167,26 @@ def _display_title(text: str) -> str:
     return (t[0].upper() + t[1:])[:300]
 
 
+def _action_needed(action: dict) -> list[str]:
+    """Missing-detail keys for one card: required typed params when a spec
+    exists, else the kind-aware conversational slots. Pure/cheap (regex +
+    schema walk) — safe on the summary path. Never raises."""
+    try:
+        typed = action.get("typed")
+        if isinstance(typed, dict) and typed.get("type"):
+            return action_plane.missing_params(typed)
+        from ..brain import tools as brain_tools
+
+        text = str(action.get("item") or action.get("action") or "")
+        if not text:
+            return []
+        return brain_tools.missing_action_details(
+            text, kind=brain_tools.ask_kind(text)
+        )
+    except Exception:  # noqa: BLE001 — a chip is never worth a 500
+        return []
+
+
 def _action_entry(action) -> dict:
     """Normalize an artifact action (dict or bare string) for the wire.
     action_id rides along so summary() can decorate each action with the
@@ -210,6 +230,12 @@ def _action_entry(action) -> dict:
             # failed receipt. Hiding Approve here blocked that rescue for a
             # whole evening of cards (live 2026-07-21).
             or settings.native_executor,
+            # What this card STILL NEEDS before it can really run (owner ask
+            # 2026-07-22: an incomplete card must ask for its details up
+            # front, never offer a blind Approve). Typed specs know their
+            # required params; untyped asks use the kind-aware detail slots
+            # (email→recipient/body, calendar→attendees/time, task→due…).
+            "needed": _action_needed(action),
             # Provenance (Petra's PM judgement, bounded): "explicit" = a stated
             # commitment; "inferred" = a PROPOSED step decomposed from a spoken
             # goal — rendered in the Action Centre's "Proposed" subsection with
@@ -222,6 +248,7 @@ def _action_entry(action) -> dict:
             "unassigned": False, "gap": "", "done": False, "typed": False,
             "title": _display_title(str(action)),
             "executable": settings.native_executor,
+            "needed": _action_needed({"item": str(action)}),
             "source": "explicit", "goal": "", "inferred_from": ""}
 
 
