@@ -194,7 +194,9 @@ def _routing(integration: dict | None) -> tuple[str, str, str, dict[str, str]]:
     return org_id, team, channel, ref
 
 
-def _slack_capability_off(avatar_id: str | None) -> bool:
+def _slack_capability_off(
+    avatar_id: str | None, org_id: str = ""
+) -> bool:
     """True ONLY when the acting avatar's ``slack`` switch is EXPLICITLY off.
 
     This is the capture-side twin of the direct Slack seams gated in #221
@@ -210,7 +212,7 @@ def _slack_capability_off(avatar_id: str | None) -> bool:
     if not aid:
         return False
     try:
-        return store.get_avatar_capabilities(aid).get("slack") is False
+        return store.get_avatar_capabilities(aid, org_id).get("slack") is False
     except Exception:  # noqa: BLE001 — fail-open: delivery beats a store blip
         return False
 
@@ -256,7 +258,9 @@ def _callback_record(session: Any, item: dict) -> tuple[str, dict | None]:
     if (
         action_id
         and str(integration.get("callback_url") or "").strip()
-        and not _slack_capability_off(getattr(session, "avatar_id", ""))
+        and not _slack_capability_off(
+            getattr(session, "avatar_id", ""), getattr(session, "org_id", "")
+        )
     ):
         payload = {
             "event": "action.requested", "bot_id": str(session.bot_id),
@@ -778,9 +782,9 @@ def _enqueue(
     # session. avatar_id is threaded from session.avatar_id; unset/absent →
     # deliver as before (fail-open). session.ended gates in enqueue_session_ended
     # (it must still index queued_actions), so it never passes avatar_id here.
-    if _slack_capability_off(avatar_id):
-        return None
     org_id, team, channel, ref = _routing(integration)
+    if _slack_capability_off(avatar_id, org_id):
+        return None
     if control_plane.enabled():
         return _pg_call(
             outbox_pg.enqueue_callback,
@@ -877,7 +881,10 @@ def enqueue_session_ended(
     # dashboard approval queue read them); only the deliverable callback row is
     # skipped, so no callback_outbox row / avatar_id column is needed. The SQLite
     # path never indexed from session.ended, so there is nothing extra to keep.
-    if _slack_capability_off(str((artifact or {}).get("avatar_id") or "")):
+    if _slack_capability_off(
+        str((artifact or {}).get("avatar_id") or ""),
+        str((artifact or {}).get("org_id") or ""),
+    ):
         if control_plane.enabled():
             _pg_call(
                 outbox_pg.index_session_ended_actions,
@@ -932,7 +939,10 @@ def checkpoint_session_ended(
         # is intentionally suppressed. No durable row was committed, so the wire
         # artifact passed in IS canonical — return it rather than failing
         # finalize. (A genuine store failure raises OutboxUnavailable upstream.)
-        if _slack_capability_off(str((artifact or {}).get("avatar_id") or "")):
+        if _slack_capability_off(
+        str((artifact or {}).get("avatar_id") or ""),
+        str((artifact or {}).get("org_id") or ""),
+    ):
             return dict(artifact)
         raise OutboxUnavailable("session ended callback was not checkpointed")
     return _session_ended_artifact(org_id, bot_id)

@@ -54,7 +54,7 @@ def test_historical_cedric_route_uses_laura_native_runtime(monkeypatch):
     monkeypatch.setattr(
         org_api.store,
         "get_avatar_capabilities",
-        lambda avatar_id: {},
+        lambda avatar_id, org_id="": {},
     )
     from app import avatar_resolver
 

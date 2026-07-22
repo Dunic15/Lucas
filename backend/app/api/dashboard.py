@@ -1719,8 +1719,13 @@ async def set_avatar_capability_endpoint(
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     capability = str((body or {}).get("capability") or "").strip().lower()
     enabled = bool((body or {}).get("enabled"))
+    # Scoped to the CALLER'S ORG (cross-tenant fix 2026-07-23): this used to
+    # write a row keyed by avatar_id alone, so one tenant flipping Laura's
+    # Google switch flipped it for every tenant on the deployment.
     ok = await run_in_threadpool(
-        store.set_avatar_capability, aid, capability, enabled
+        lambda: store.set_avatar_capability(
+            aid, capability, enabled, org_id=str(user.get("org_id") or "")
+        )
     )
     if not ok:
         return JSONResponse(
@@ -3580,7 +3585,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
 
         family = executor.capability_family(exec_action.get("type"))
         caps = await run_in_threadpool(
-            store.get_avatar_capabilities, acting_avatar
+            store.get_avatar_capabilities, acting_avatar, org
         )
         blocked_by_toggle = executor.capability_blocked(
             caps, exec_action.get("type")
