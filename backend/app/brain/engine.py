@@ -1861,10 +1861,39 @@ name that LITERALLY appears in the item's source text or the meeting summary), \
 subtasks (a short list of subtask titles, only when the item LITERALLY breaks \
 the work into steps), dependencies (task names the item LITERALLY says this \
 depends on), attachments (URLs that LITERALLY appear in the item's text).
+- Also supported when Asana is available: "asana.create_project" (args: \
+name, notes optional) and "asana.add_subtask" (args: task — the parent task \
+gid, only when it literally appears — and name).
 - Prefer calendar.create_event / email.send when an item maps to those; use \
 asana.create_task for every OTHER item that is a discrete piece of work \
 someone agreed to do. Do not create tasks for vague remarks, questions, or \
 things already done."""
+
+# The 20-action expansion (owner GO 2026-07-22): Gmail/Calendar/Drive extras,
+# same precision-over-recall contract. Drive types execute only when the org
+# connected google_drive in Pipedream — an unconnected org gets an honest
+# failed receipt, never a silent wrong route.
+TYPED_ACTION_EXTRAS = """
+
+Additional supported types — the SAME HARD RULES apply (emit ONLY when every \
+required value literally appears in the item's source text or the meeting \
+summary; if unsure, leave the item untyped):
+- "gmail.reply": reply to the LATEST email from a stated sender. args: to \
+(the sender's email address), body (the reply text).
+- "gmail.add_label": label the latest email from a sender. args: from_email, label.
+- "gmail.archive": archive the latest email from a sender. args: from_email.
+- "calendar.cancel_event": cancel an upcoming event BY TITLE. args: title, \
+date (YYYY-MM-DD, optional, only if stated).
+- "calendar.add_attendees": args: title (event title), attendees (emails that \
+literally appear).
+- "calendar.rsvp": accept/decline an invite. args: title, response \
+(accepted | declined | tentative).
+- "drive.share_file": args: file (the file name as stated), email, role \
+(reader | writer, only if stated).
+- "drive.create_folder": args: name, parent (folder name, only if stated).
+- "drive.create_doc": create an empty Google Doc. args: name, parent (optional).
+- "drive.rename_file": args: file, name (the new name).
+- "drive.move_file": args: file, folder (destination)."""
 
 # Regex for the generic Pipedream typed-action family (pd.<app>.run) — kept in
 # sync with pipedream_executor._GENERIC_TYPE_RE (the executor re-validates).
@@ -2138,6 +2167,7 @@ def _llm_type_actions(
             _pd_skills += f"\n\nIntegration guidance ({_slug}):\n{_body}"
     raw = llm.complete(
         TYPED_ACTION_SYSTEM
+        + TYPED_ACTION_EXTRAS
         + (TYPED_ACTION_ASANA if allow_asana else "")
         + _pd_typed_prompt(pd_apps)
         + _asana_skill

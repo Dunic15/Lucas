@@ -272,6 +272,336 @@ def _calendar_receipt(action_type: str, resp_json: dict) -> tuple:
 
 
 # action_type -> (app_slug, builder, receipt_fn)
+# ── the 20-action expansion (owner GO 2026-07-22) ────────────────────────────
+# 13 new deterministic builders modeled on Pipedream's most-used catalog
+# actions — via the Connect Proxy, no tool-calling tier. Name-based targets
+# resolve on the EXACTLY-ONE rule: zero or many matches raise ValueError with
+# the candidates listed, which becomes an honest failed/needs-details receipt.
+
+def _single(items: list, what: str, label_key: str = "name"):
+    if len(items) == 1:
+        return items[0]
+    if not items:
+        raise ValueError(f"couldn't find {what}")
+    names = ", ".join(str(i.get(label_key) or "?") for i in items[:5])
+    raise ValueError(f"{what} matches {len(items)} items ({names}) — be more specific")
+
+
+def _proxy_json(org: str, acct: str, method: str, url: str, body=None) -> dict:
+    resp = pipedream_client.proxy_request(org, acct, method, url, json_body=body)
+    if not resp.get("ok"):
+        raise ValueError(f"lookup failed (HTTP {resp.get('status')})")
+    return resp.get("json") or {}
+
+
+# — Asana extras —
+
+def _build_asana_create_project(org_id: str, account_id: str, args: dict) -> tuple:
+    name = str(args.get("name") or "").strip()
+    if not name:
+        raise ValueError("project needs a name")
+    ws = _asana_workspace(org_id, account_id)
+    if not ws:
+        raise ValueError("couldn't resolve the Asana workspace")
+    body: dict[str, Any] = {"name": name[:300], "workspace": ws}
+    if args.get("notes"):
+        body["notes"] = str(args["notes"])[:4000]
+    url = f"{_ASANA_API}/projects?opt_fields=gid,name,permalink_url"
+    return "POST", url, {"data": body}, None
+
+
+def _build_asana_add_subtask(org_id: str, account_id: str, args: dict) -> tuple:
+    gid = str(args.get("task") or "").strip()
+    name = str(args.get("name") or "").strip()
+    if not gid.isdigit():
+        raise ValueError("subtask needs the parent task gid")
+    if not name:
+        raise ValueError("subtask needs a name")
+    url = f"{_ASANA_API}/tasks/{gid}/subtasks?opt_fields=gid,name,permalink_url"
+    return "POST", url, {"data": {"name": name[:300]}}, None
+
+
+# — Gmail extras —
+
+def _gmail_latest_from(org: str, acct: str, sender: str) -> str:
+    """The id of the LATEST message from ``sender`` ('' when none)."""
+    q = f"from:{sender}"
+    data = _proxy_json(org, acct, "GET",
+                       f"{_GMAIL_API}/messages?q={q}&maxResults=1")
+    msgs = data.get("messages") or []
+    return str(msgs[0].get("id") or "") if msgs else ""
+
+
+def _build_gmail_reply(org_id: str, account_id: str, args: dict) -> tuple:
+    sender = _emails(args.get("to"))
+    body_text = str(args.get("body") or "").strip()
+    if not sender:
+        raise ValueError("reply needs the sender's email address")
+    if not body_text:
+        raise ValueError("reply needs the message text")
+    mid = _gmail_latest_from(org_id, account_id, sender[0])
+    if not mid:
+        raise ValueError(f"no email from {sender[0]} found to reply to")
+    meta = _proxy_json(
+        org_id, account_id, "GET",
+        f"{_GMAIL_API}/messages/{mid}?format=metadata"
+        "&metadataHeaders=Subject&metadataHeaders=Message-ID",
+    )
+    thread_id = str(meta.get("threadId") or "")
+    headers = {h.get("name", "").lower(): h.get("value", "")
+               for h in (meta.get("payload") or {}).get("headers", [])}
+    subject = headers.get("subject", "")
+    if subject and not subject.lower().startswith("re:"):
+        subject = "Re: " + subject
+    msg_id = headers.get("message-id", "")
+    mime = MIMEText(body_text, _charset="utf-8")
+    mime["To"] = sender[0]
+    mime["Subject"] = subject or "Re:"
+    if msg_id:
+        mime["In-Reply-To"] = msg_id
+        mime["References"] = msg_id
+    raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
+    body: dict[str, Any] = {"raw": raw}
+    if thread_id:
+        body["threadId"] = thread_id
+    return "POST", f"{_GMAIL_API}/messages/send", body, None
+
+
+def _gmail_label_id(org: str, acct: str, label: str) -> str:
+    data = _proxy_json(org, acct, "GET", f"{_GMAIL_API}/labels")
+    for lb in data.get("labels") or []:
+        if str(lb.get("name", "")).strip().lower() == label.strip().lower():
+            return str(lb.get("id") or "")
+    made = _proxy_json(org, acct, "POST", f"{_GMAIL_API}/labels",
+                       {"name": label.strip()[:80]})
+    return str(made.get("id") or "")
+
+
+def _build_gmail_add_label(org_id: str, account_id: str, args: dict) -> tuple:
+    sender = str(args.get("from_email") or "").strip()
+    label = str(args.get("label") or "").strip()
+    if not sender or "@" not in sender:
+        raise ValueError("labelling needs the sender's email address")
+    if not label:
+        raise ValueError("labelling needs the label name")
+    mid = _gmail_latest_from(org_id, account_id, sender)
+    if not mid:
+        raise ValueError(f"no email from {sender} found")
+    lid = _gmail_label_id(org_id, account_id, label)
+    if not lid:
+        raise ValueError(f"couldn't find or create the label {label!r}")
+    return ("POST", f"{_GMAIL_API}/messages/{mid}/modify",
+            {"addLabelIds": [lid]}, None)
+
+
+def _build_gmail_archive(org_id: str, account_id: str, args: dict) -> tuple:
+    sender = str(args.get("from_email") or "").strip()
+    if not sender or "@" not in sender:
+        raise ValueError("archiving needs the sender's email address")
+    mid = _gmail_latest_from(org_id, account_id, sender)
+    if not mid:
+        raise ValueError(f"no email from {sender} found")
+    return ("POST", f"{_GMAIL_API}/messages/{mid}/modify",
+            {"removeLabelIds": ["INBOX"]}, None)
+
+
+def _gmail_modify_receipt(action_type: str, resp_json: dict) -> tuple:
+    kind = {"gmail.reply": "gmail reply",
+            "gmail.add_label": "gmail label",
+            "gmail.archive": "gmail archive"}.get(action_type, "gmail")
+    mid = str((resp_json or {}).get("id") or "")
+    ref = f"https://mail.google.com/mail/u/0/#all/{mid}" if mid else ""
+    return kind, ref
+
+
+# — Calendar extras —
+
+def _cal_find_event(org: str, acct: str, title: str, date: str = "") -> dict:
+    """The single UPCOMING event whose summary contains ``title`` (ci)."""
+    from datetime import datetime, timezone as _tz
+
+    t = (title or "").strip()
+    if not t:
+        raise ValueError("event lookup needs a title")
+    now_iso = datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    data = _proxy_json(
+        org, acct, "GET",
+        f"{_CAL_API}/calendars/primary/events?q={t}&timeMin={now_iso}"
+        "&singleEvents=true&orderBy=startTime&maxResults=25",
+    )
+    items = [i for i in (data.get("items") or [])
+             if t.lower() in str(i.get("summary", "")).lower()]
+    if date:
+        items = [i for i in items
+                 if str((i.get("start") or {}).get("dateTime")
+                        or (i.get("start") or {}).get("date") or "")
+                 .startswith(date.strip()[:10])]
+    return _single(items, f"upcoming event {t!r}", "summary")
+
+
+def _build_calendar_cancel(org_id: str, account_id: str, args: dict) -> tuple:
+    ev = _cal_find_event(org_id, account_id,
+                         str(args.get("title") or ""),
+                         str(args.get("date") or ""))
+    eid = str(ev.get("id") or "")
+    if not eid:
+        raise ValueError("couldn't resolve the event id")
+    return ("DELETE",
+            f"{_CAL_API}/calendars/primary/events/{eid}?sendUpdates=all",
+            None, None)
+
+
+def _build_calendar_add_attendees(org_id: str, account_id: str, args: dict) -> tuple:
+    new = _emails(args.get("attendees"))
+    if not new:
+        raise ValueError("needs at least one attendee email")
+    ev = _cal_find_event(org_id, account_id, str(args.get("title") or ""))
+    eid = str(ev.get("id") or "")
+    have = {str(a.get("email", "")).lower(): a
+            for a in ev.get("attendees") or [] if a.get("email")}
+    for e in new:
+        have.setdefault(e.lower(), {"email": e})
+    return ("PATCH",
+            f"{_CAL_API}/calendars/primary/events/{eid}?sendUpdates=all",
+            {"attendees": list(have.values())}, None)
+
+
+def _build_calendar_rsvp(org_id: str, account_id: str, args: dict) -> tuple:
+    response = str(args.get("response") or "").strip().lower()
+    if response not in ("accepted", "declined", "tentative"):
+        raise ValueError("response must be accepted, declined or tentative")
+    me = str(_proxy_json(org_id, account_id, "GET",
+                         f"{_CAL_API}/calendars/primary").get("id") or "").lower()
+    if not me:
+        raise ValueError("couldn't resolve the calendar owner")
+    ev = _cal_find_event(org_id, account_id, str(args.get("title") or ""))
+    eid = str(ev.get("id") or "")
+    attendees = list(ev.get("attendees") or [])
+    hit = False
+    for a in attendees:
+        if str(a.get("email", "")).lower() == me:
+            a["responseStatus"] = response
+            hit = True
+    if not hit:
+        attendees.append({"email": me, "responseStatus": response, "self": True})
+    return ("PATCH",
+            f"{_CAL_API}/calendars/primary/events/{eid}?sendUpdates=none",
+            {"attendees": attendees}, None)
+
+
+# — Drive (all new; the org connects google_drive in Pipedream) —
+
+def _drive_find(org: str, acct: str, name: str, mime: str = "") -> dict:
+    n = (name or "").strip().replace("'", " ")
+    if not n:
+        raise ValueError("file lookup needs a name")
+    q = f"name contains '{n}' and trashed=false"
+    if mime:
+        q += f" and mimeType='{mime}'"
+    data = _proxy_json(
+        org, acct, "GET",
+        f"{_DRIVE_API}/files?q={q}&pageSize=10"
+        "&fields=files(id,name,parents,webViewLink)",
+    )
+    return _single(list(data.get("files") or []), f"file {name!r}")
+
+
+_FOLDER_MIME = "application/vnd.google-apps.folder"
+_DOC_MIME = "application/vnd.google-apps.document"
+
+
+def _drive_parent_id(org: str, acct: str, parent: str) -> str:
+    if not (parent or "").strip():
+        return ""
+    return str(_drive_find(org, acct, parent, _FOLDER_MIME).get("id") or "")
+
+
+def _build_drive_create_folder(org_id: str, account_id: str, args: dict) -> tuple:
+    name = str(args.get("name") or "").strip()
+    if not name:
+        raise ValueError("folder needs a name")
+    body: dict[str, Any] = {"name": name[:200], "mimeType": _FOLDER_MIME}
+    pid = _drive_parent_id(org_id, account_id, str(args.get("parent") or ""))
+    if pid:
+        body["parents"] = [pid]
+    return ("POST", f"{_DRIVE_API}/files?fields=id,name,webViewLink", body, None)
+
+
+def _build_drive_create_doc(org_id: str, account_id: str, args: dict) -> tuple:
+    name = str(args.get("name") or "").strip()
+    if not name:
+        raise ValueError("document needs a name")
+    body: dict[str, Any] = {"name": name[:200], "mimeType": _DOC_MIME}
+    pid = _drive_parent_id(org_id, account_id, str(args.get("parent") or ""))
+    if pid:
+        body["parents"] = [pid]
+    return ("POST", f"{_DRIVE_API}/files?fields=id,name,webViewLink", body, None)
+
+
+def _build_drive_share(org_id: str, account_id: str, args: dict) -> tuple:
+    email = str(args.get("email") or "").strip()
+    if "@" not in email:
+        raise ValueError("sharing needs the person's email address")
+    role = str(args.get("role") or "reader").strip().lower()
+    if role not in ("reader", "writer", "commenter"):
+        raise ValueError("permission must be reader, writer or commenter")
+    f = _drive_find(org_id, account_id, str(args.get("file") or ""))
+    fid = str(f.get("id") or "")
+    return ("POST",
+            f"{_DRIVE_API}/files/{fid}/permissions"
+            "?sendNotificationEmail=true&fields=id",
+            {"type": "user", "role": role, "emailAddress": email}, None)
+
+
+def _build_drive_rename(org_id: str, account_id: str, args: dict) -> tuple:
+    new_name = str(args.get("name") or "").strip()
+    if not new_name:
+        raise ValueError("rename needs the new name")
+    f = _drive_find(org_id, account_id, str(args.get("file") or ""))
+    fid = str(f.get("id") or "")
+    return ("PATCH", f"{_DRIVE_API}/files/{fid}?fields=id,name,webViewLink",
+            {"name": new_name[:200]}, None)
+
+
+def _build_drive_move(org_id: str, account_id: str, args: dict) -> tuple:
+    f = _drive_find(org_id, account_id, str(args.get("file") or ""))
+    fid = str(f.get("id") or "")
+    dest = _drive_find(org_id, account_id,
+                       str(args.get("folder") or ""), _FOLDER_MIME)
+    did = str(dest.get("id") or "")
+    old = ",".join(f.get("parents") or [])
+    url = (f"{_DRIVE_API}/files/{fid}?addParents={did}"
+           + (f"&removeParents={old}" if old else "")
+           + "&fields=id,name,webViewLink")
+    return ("PATCH", url, {}, None)
+
+
+def _drive_receipt(action_type: str, resp_json: dict) -> tuple:
+    kind = {
+        "drive.share_file": "drive share",
+        "drive.create_folder": "drive folder",
+        "drive.create_doc": "google doc",
+        "drive.rename_file": "drive rename",
+        "drive.move_file": "drive move",
+    }.get(action_type, "drive")
+    d = resp_json or {}
+    ref = str(d.get("webViewLink") or "")
+    if not ref and d.get("id"):
+        ref = f"https://drive.google.com/open?id={d['id']}"
+    return kind, ref
+
+
+def _cal_extra_receipt(action_type: str, resp_json: dict) -> tuple:
+    kind = {
+        "calendar.cancel_event": "calendar event cancelled",
+        "calendar.add_attendees": "calendar attendees added",
+        "calendar.rsvp": "calendar rsvp",
+    }.get(action_type, "calendar")
+    ref = str((resp_json or {}).get("htmlLink") or "")
+    return kind, ref
+
+
+
 _MAPPER: dict[str, tuple[str, Builder, ReceiptFn]] = {
     # Asana
     "asana.create_task": ("asana", _build_asana_create, _asana_receipt),
@@ -283,7 +613,22 @@ _MAPPER: dict[str, tuple[str, Builder, ReceiptFn]] = {
     # Google Calendar
     "calendar.create_event": ("google_calendar", _build_calendar_create, _calendar_receipt),
     "calendar.update_event": ("google_calendar", _build_calendar_update, _calendar_receipt),
+    # the 20-action expansion (2026-07-22)
+    "asana.create_project": ("asana", _build_asana_create_project, _asana_receipt),
+    "asana.add_subtask": ("asana", _build_asana_add_subtask, _asana_receipt),
+    "gmail.reply": ("gmail", _build_gmail_reply, _gmail_modify_receipt),
+    "gmail.add_label": ("gmail", _build_gmail_add_label, _gmail_modify_receipt),
+    "gmail.archive": ("gmail", _build_gmail_archive, _gmail_modify_receipt),
+    "calendar.cancel_event": ("google_calendar", _build_calendar_cancel, _cal_extra_receipt),
+    "calendar.add_attendees": ("google_calendar", _build_calendar_add_attendees, _cal_extra_receipt),
+    "calendar.rsvp": ("google_calendar", _build_calendar_rsvp, _cal_extra_receipt),
+    "drive.share_file": ("google_drive", _build_drive_share, _drive_receipt),
+    "drive.create_folder": ("google_drive", _build_drive_create_folder, _drive_receipt),
+    "drive.create_doc": ("google_drive", _build_drive_create_doc, _drive_receipt),
+    "drive.rename_file": ("google_drive", _build_drive_rename, _drive_receipt),
+    "drive.move_file": ("google_drive", _build_drive_move, _drive_receipt),
 }
+
 
 # The Google apps that ALSO have a native adapter — during the cutover these
 # route to Pipedream only once the org has actually connected them there, and
@@ -639,7 +984,8 @@ def _verify_written(org: str, account_id: str, action_type: str,
                 f"{_ASANA_API}/stories/{story_gid}?opt_fields=gid",
             )
             return bool(check.get("ok"))
-        if action_type in ("asana.create_task", "asana.update_task"):
+        if action_type in ("asana.create_task", "asana.update_task",
+                           "asana.add_subtask"):
             task_gid = str((data or {}).get("gid") or "")
             if not task_gid:
                 return False
@@ -648,7 +994,17 @@ def _verify_written(org: str, account_id: str, action_type: str,
                 f"{_ASANA_API}/tasks/{task_gid}?opt_fields=gid",
             )
             return bool(check.get("ok"))
-        if action_type in ("calendar.create_event", "calendar.update_event"):
+        if action_type == "asana.create_project":
+            pgid = str((data or {}).get("gid") or "")
+            if not pgid:
+                return False
+            check = pipedream_client.proxy_request(
+                org, account_id, "GET",
+                f"{_ASANA_API}/projects/{pgid}?opt_fields=gid",
+            )
+            return bool(check.get("ok"))
+        if action_type in ("calendar.create_event", "calendar.update_event",
+                           "calendar.add_attendees", "calendar.rsvp"):
             eid = str((data or {}).get("id") or "")
             if not eid:
                 return False
@@ -657,13 +1013,23 @@ def _verify_written(org: str, account_id: str, action_type: str,
                 f"{_CAL_API}/calendars/primary/events/{eid}",
             )
             return bool(check.get("ok"))
-        if action_type == "email.send":
+        if action_type in ("email.send", "gmail.reply",
+                           "gmail.add_label", "gmail.archive"):
             mid = str((data or {}).get("id") or "")
             if not mid:
                 return False
             check = pipedream_client.proxy_request(
                 org, account_id, "GET",
                 f"{_GMAIL_API}/messages/{mid}?format=minimal",
+            )
+            return bool(check.get("ok"))
+        if action_type.startswith("drive."):
+            fid = str((data or {}).get("id") or "")
+            if not fid:
+                return False
+            check = pipedream_client.proxy_request(
+                org, account_id, "GET",
+                f"{_DRIVE_API}/files/{fid}?fields=id",
             )
             return bool(check.get("ok"))
         if action_type == "gmail.create_draft":
