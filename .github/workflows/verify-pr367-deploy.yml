@@ -9,48 +9,46 @@ on:
 permissions:
   actions: read
   contents: read
-  pull-requests: write
+  id-token: write
 
 jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      GH_TOKEN: ${{ github.token }}
       TARGET_SHA: 733bb2d2b3f41a5b928902c22dd78c7710028dd9
       BASE_URL: https://dhfgfe6yw6.eu-central-1.awsapprunner.com
+      SERVICE_ARN: arn:aws:apprunner:eu-central-1:836739852304:service/laura-backend/f169c4a486cd47bfac9736ab01367a26
     steps:
-      - name: Snapshot image build and live service
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::836739852304:role/GitHubActionsEcrPush
+          aws-region: eu-central-1
+
+      - name: Snapshot ECR, App Runner and live service
         shell: bash
         run: |
           set +e
-          row=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build-backend-image.yml/runs?branch=main&per_page=30" \
-            --jq ".workflow_runs[] | select(.head_sha == \"$TARGET_SHA\") | [.status,(.conclusion // \"\"),.html_url] | @tsv" | head -1 || true)
-          build_status="not_found"
-          build_conclusion=""
-          build_url=""
-          if [ -n "$row" ]; then
-            build_status=$(printf '%s' "$row" | cut -f1)
-            build_conclusion=$(printf '%s' "$row" | cut -f2)
-            build_url=$(printf '%s' "$row" | cut -f3)
-          fi
-
-          health_body=$(curl -fsS --max-time 15 "$BASE_URL/health" 2>/dev/null || true)
-          health_ok=false
-          if printf '%s' "$health_body" | python -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("status")=="ok" else 1)' 2>/dev/null; then
-            health_ok=true
-          fi
+          echo "=== ECR target tag ==="
+          aws ecr describe-images --repository-name laura-backend \
+            --image-ids imageTag="$TARGET_SHA" \
+            --query 'imageDetails[0].{digest:imageDigest,pushed:imagePushedAt,tags:imageTags}' \
+            --output json
+          echo "=== App Runner service ==="
+          aws apprunner describe-service --service-arn "$SERVICE_ARN" \
+            --query 'Service.{status:Status,image:SourceConfiguration.ImageRepository.ImageIdentifier,auto:SourceConfiguration.AutoDeploymentsEnabled,updated:UpdatedAt,url:ServiceUrl}' \
+            --output json
+          echo "=== App Runner operations ==="
+          aws apprunner list-operations --service-arn "$SERVICE_ARN" --max-results 5 \
+            --query 'OperationSummaryList[].{id:Id,type:Type,status:Status,started:StartedAt,ended:EndedAt,updated:UpdatedAt}' \
+            --output json
+          echo "=== Live health ==="
+          curl -fsS --max-time 15 "$BASE_URL/health" || true
+          echo
+          echo "=== Live dashboard marker ==="
           page=$(curl -fsSL --max-time 20 "$BASE_URL/dashboard" 2>/dev/null || true)
-          marker_live=false
           if printf '%s' "$page" | grep -Fq "This is the canonical action saved on the server"; then
-            marker_live=true
+            echo "marker_live=true"
+          else
+            echo "marker_live=false"
           fi
-
-          result="⏳ DEPLOY IN PROGRESS / NOT YET VERIFIED"
-          if [ "$build_conclusion" = "success" ] && [ "$health_ok" = "true" ] && [ "$marker_live" = "true" ]; then
-            result="✅ VERIFIED LIVE"
-          fi
-          body=$(printf '## Production deploy snapshot — PR #367\n\n**%s**\n\n- Target merge: `%s`\n- Backend image build: `%s / %s`\n- Build run: %s\n- App Runner health: `%s`\n- New canonical-preview marker live: `%s`\n- Health response: `%s`\n' \
-            "$result" "$TARGET_SHA" "$build_status" "$build_conclusion" "$build_url" "$health_ok" "$marker_live" "$health_body")
-          echo "$body"
-          gh pr comment 367 --body "$body"
