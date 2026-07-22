@@ -225,10 +225,11 @@ def test_execute_approved_happy_writes_done_receipt(monkeypatch):
     _enable_pd(monkeypatch)
     monkeypatch.setattr(pipedream_client, "list_accounts",
                         lambda org, app="": [{"id": "apn_9", "app": "asana", "healthy": True}])
-    captured: dict = {}
+    calls: list = []
 
     def fake_proxy(org, acct, method, url, json_body=None, headers=None):
-        captured.update(org=org, acct=acct, method=method, url=url, body=json_body)
+        calls.append({"org": org, "acct": acct, "method": method,
+                      "url": url, "body": json_body})
         return {"ok": True, "status": 200,
                 "json": {"data": {"gid": "55", "permalink_url": "https://app.asana.com/0/0/55/f"}}}
 
@@ -236,8 +237,13 @@ def test_execute_approved_happy_writes_done_receipt(monkeypatch):
     seen = _cap_ledger(monkeypatch)
     out = pipedream_executor.execute_approved(
         "orgX", "act1", {"type": "asana.create_task", "task": {"name": "Ship", "project": "1"}})
-    assert out["ok"] is True and out["ref"].endswith("/55/f") and out["kind"] == "asana task"
-    assert captured["acct"] == "apn_9" and captured["method"] == "POST"
+    # Phase-1 read-back: the WRITE is followed by a verify GET of the created
+    # object, and the receipt carries the '· verified' evidence suffix.
+    assert out["ok"] is True and out["ref"].endswith("/55/f")
+    assert out["kind"] == "asana task · verified"
+    write = calls[0]
+    assert write["acct"] == "apn_9" and write["method"] == "POST"
+    assert any(c["method"] == "GET" and "/tasks/55" in c["url"] for c in calls[1:])
     assert seen["status"] == "done" and seen["receipt"]["route"] == "pipedream"
 
 

@@ -42,28 +42,38 @@ def normalize_status(status: str) -> str:
 
 _FIELD = dict
 
+# ── THE canonical vocabulary (Phase 1, owner 2026-07-22) ─────────────────────
+# One row per parameter: wire name (`name`), the VOICE clarify slot that maps
+# to it (`slot`, matching tools.missing_action_details' keys), and the human
+# labels both surfaces speak/render. Before this, the voice asked for
+# "quando" while the card said "start" — two vocabularies for one field.
 PARAMS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
     "calendar.create_event": [
-        _FIELD(name="title", type="string", required=True),
+        _FIELD(name="title", type="string", required=True,
+               label="title", label_it="titolo"),
         _FIELD(
             name="start",
             type="string",
             required=True,
             description="ISO 8601 start",
+            slot="invite_when", label="start time", label_it="orario",
         ),
         _FIELD(
             name="end",
             type="string",
             required=True,
             description="ISO 8601 end",
+            label="end time", label_it="orario di fine",
         ),
         _FIELD(
             name="attendees",
             type="array",
             required=False,
             description="attendee emails",
+            slot="invite_with", label="attendees", label_it="invitati",
         ),
-        _FIELD(name="description", type="string", required=False),
+        _FIELD(name="description", type="string", required=False,
+               label="description", label_it="descrizione"),
     ],
     "email.send": [
         _FIELD(
@@ -71,16 +81,24 @@ PARAMS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
             type="array",
             required=True,
             description="recipient emails",
+            slot="email_to", label="recipient", label_it="destinatario",
         ),
-        _FIELD(name="subject", type="string", required=True),
-        _FIELD(name="body", type="string", required=True),
+        _FIELD(name="subject", type="string", required=True,
+               label="subject", label_it="oggetto"),
+        _FIELD(name="body", type="string", required=True,
+               slot="email_body", label="message text", label_it="testo"),
     ],
     "asana.create_task": [
-        _FIELD(name="name", type="string", required=True),
-        _FIELD(name="notes", type="string", required=False),
-        _FIELD(name="project", type="string", required=False),
-        _FIELD(name="assignee", type="string", required=False),
-        _FIELD(name="due_on", type="string", required=False),
+        _FIELD(name="name", type="string", required=True,
+               label="task name", label_it="nome del task"),
+        _FIELD(name="notes", type="string", required=False,
+               slot="description", label="description", label_it="descrizione"),
+        _FIELD(name="project", type="string", required=False,
+               slot="project", label="project", label_it="progetto"),
+        _FIELD(name="assignee", type="string", required=False,
+               slot="owner", label="owner", label_it="assegnatario"),
+        _FIELD(name="due_on", type="string", required=False,
+               slot="due", label="due date", label_it="scadenza"),
         _FIELD(name="subtasks", type="array", required=False,
                description="subtask titles, one per entry"),
         _FIELD(name="dependencies", type="array", required=False,
@@ -125,6 +143,60 @@ RISK_BY_TYPE: dict[str, str] = {
     "asana.add_comment": "low",
     "slack.post_message": "medium",
 }
+
+
+# Voice-slot → human label, DERIVED from the canonical rows above (plus the
+# task-kind slots that exist only conversationally). Consumed by the live
+# clarify lines and by any surface that names a missing slot — one vocabulary.
+def _slot_labels(key: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for fields in PARAMS_SCHEMAS.values():
+        for f in fields:
+            if f.get("slot") and f.get(key):
+                out.setdefault(str(f["slot"]), str(f[key]))
+    return out
+
+
+SLOT_LABELS_EN: dict[str, str] = {
+    **_slot_labels("label"),
+    # conversational phrasings the clarify line speaks aloud
+    "owner": "who should own it",
+    "project": "which project it goes in",
+    "due": "when it's due",
+    "description": "anything the description should say",
+    "email_to": "who it should go to",
+    "email_body": "what it should say",
+    "invite_with": "who should be on it",
+    "invite_when": "when it should be",
+}
+SLOT_LABELS_IT: dict[str, str] = {
+    **_slot_labels("label_it"),
+    "owner": "chi la prende in carico",
+    "project": "in quale progetto va",
+    "due": "per quando serve",
+    "description": "cosa scrivere nella descrizione",
+    "email_to": "a chi va mandata",
+    "email_body": "cosa deve dire",
+    "invite_with": "chi va invitato",
+    "invite_when": "per quando fissarlo",
+}
+
+
+def needed_labels(keys: list[str], lang: str = "en") -> list[str]:
+    """Human labels for missing keys — accepts BOTH wire param names and voice
+    slots, so every surface (chips, forms, clarify) says the same words."""
+    param_labels: dict[str, str] = {}
+    lk = "label_it" if lang == "it" else "label"
+    for fields in PARAMS_SCHEMAS.values():
+        for f in fields:
+            if f.get(lk):
+                param_labels.setdefault(str(f["name"]), str(f[lk]))
+    slots = SLOT_LABELS_IT if lang == "it" else SLOT_LABELS_EN
+    out: list[str] = []
+    for k in keys or []:
+        k = str(k)
+        out.append(param_labels.get(k) or slots.get(k) or k)
+    return out
 
 
 def params_schema(typed: dict | None) -> list[dict[str, Any]]:

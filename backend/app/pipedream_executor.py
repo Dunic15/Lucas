@@ -610,7 +610,60 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
                        f"{app_slug} API returned {resp.get('status')}")
 
     kind, ref = receipt_fn(action_type, resp.get("json") or {})
-    return _settle(action_id, org, True, action_type, ref, "", kind=kind)
+    # Phase 1 read-back verify (owner 2026-07-22): re-read the object we just
+    # wrote so the receipt is EVIDENCE, not presumption. Best-effort — a
+    # verify hiccup never fails a succeeded action.
+    verified = _verify_written(org, account_id, action_type,
+                               resp.get("json") or {})
+    return _settle(action_id, org, True, action_type, ref, "",
+                   kind=(kind + " · verified") if verified else kind)
+
+
+# Read-back endpoints per family: GET the object by the id the CREATE/SEND
+# response returned. Any missing id / non-2xx / exception ⇒ not verified.
+def _verify_written(org: str, account_id: str, action_type: str,
+                    resp_json: dict) -> bool:
+    try:
+        data = resp_json.get("data") if isinstance(resp_json.get("data"), dict) \
+            else resp_json
+        if action_type.startswith("asana."):
+            gid = str((data or {}).get("gid") or "")
+            if not gid:
+                return False
+            check = pipedream_client.proxy_request(
+                org, account_id, "GET",
+                f"{_ASANA_API}/tasks/{gid}?opt_fields=gid",
+            )
+            return bool(check.get("ok"))
+        if action_type in ("calendar.create_event", "calendar.update_event"):
+            eid = str((data or {}).get("id") or "")
+            if not eid:
+                return False
+            check = pipedream_client.proxy_request(
+                org, account_id, "GET",
+                f"{_CAL_API}/calendars/primary/events/{eid}",
+            )
+            return bool(check.get("ok"))
+        if action_type == "email.send":
+            mid = str((data or {}).get("id") or "")
+            if not mid:
+                return False
+            check = pipedream_client.proxy_request(
+                org, account_id, "GET",
+                f"{_GMAIL_API}/messages/{mid}?format=minimal",
+            )
+            return bool(check.get("ok"))
+        if action_type == "gmail.create_draft":
+            did = str((data or {}).get("id") or "")
+            if not did:
+                return False
+            check = pipedream_client.proxy_request(
+                org, account_id, "GET", f"{_GMAIL_API}/drafts/{did}",
+            )
+            return bool(check.get("ok"))
+    except Exception:  # noqa: BLE001 — verification is optional evidence
+        return False
+    return False
 
 
 def dry_run(org_id: str, action: dict) -> dict:
