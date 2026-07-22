@@ -51,15 +51,19 @@ def _line(bot_id: str, speaker: str, pid, text: str) -> dict:
     }
 
 
-def _post(payload: dict) -> dict:
+async def _post_async(payload: dict) -> dict:
     class FakeRequest:
         headers: dict = {}
 
         async def body(self) -> bytes:
             return json.dumps(payload).encode()
 
-    resp = asyncio.run(main.recall_webhook(FakeRequest()))
+    resp = await main.recall_webhook(FakeRequest())
     return json.loads(resp.body)
+
+
+def _post(payload: dict) -> dict:
+    return asyncio.run(_post_async(payload))
 
 
 def _mute(monkeypatch) -> list:
@@ -233,12 +237,17 @@ def test_leave_webhook_schedules_empty_room_check(tmp_path, monkeypatch):
             },
         }
 
-    join = dict(leave_payload(1, "Kai"))
-    join["event"] = "participant_events.join"
-    _post(join)
-    assert getattr(s, "empty_room_task", None) is None
-    _post(leave_payload(1, "Kai"))
-    assert getattr(s, "empty_room_task", None) is not None
+    async def scenario():
+        join = dict(leave_payload(1, "Kai"))
+        join["event"] = "participant_events.join"
+        await _post_async(join)
+        assert getattr(s, "empty_room_task", None) is None
+
+        await _post_async(leave_payload(1, "Kai"))
+        assert getattr(s, "empty_room_task", None) is not None
+        main._invalidate_empty_room_leave(s)  # deterministic test cleanup
+
+    asyncio.run(scenario())
     store.remove(s.bot_id)
 
 
