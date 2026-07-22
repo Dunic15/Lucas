@@ -6,8 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import action_plane, executor, native_runtime  # noqa: E402
-from app.config import settings  # noqa: E402
+from app import action_plane, executor, native_runtime, store  # noqa: E402
 
 
 def test_runtime_supports_all_current_native_writes():
@@ -18,7 +17,6 @@ def test_runtime_supports_all_current_native_writes():
             "asana.create_task",
             "asana.update_task",
             "asana.add_comment",
-            "slack.post_message",
         }
     )
     assert executor.NATIVE_ACTION_TYPES == native_runtime.action_types()
@@ -28,39 +26,34 @@ def test_runtime_supports_all_current_native_writes():
 def test_from_typed_accepts_only_registered_adapters():
     assert native_runtime.from_typed(
         {"type": "slack.post_message", "args": {"text": "Recap"}}
-    ) == {"type": "slack.post_message", "args": {"text": "Recap"}}
+    ) is None
+    assert executor.from_typed(
+        {"type": "slack.post_message", "args": {"text": "Recap"}}
+    ) == {"type": "slack.post_message", "message": {"text": "Recap"}}
     assert native_runtime.from_typed(
         {"type": "notion.create_page", "args": {"title": "No adapter"}}
     ) is None
 
 
-def test_slack_executes_inside_laura(monkeypatch):
-    monkeypatch.setattr(settings, "slack_webhook_url", "https://hooks.slack.test/x")
-    calls: list[str] = []
+def test_slack_is_never_native_and_routes_per_org(monkeypatch):
+    typed = {"type": "slack.post_message", "args": {"text": "Meeting recap"}}
+    assert native_runtime.supports("slack.post_message") is False
 
-    def fake_post(text: str) -> dict:
-        calls.append(text)
-        return {"sent": True, "status_code": 200}
-
-    monkeypatch.setattr(native_runtime.workflow_actions, "post_to_slack", fake_post)
-    result = native_runtime.execute(
-        "org-a", {"type": "slack.post_message", "args": {"text": "Meeting recap"}}
+    monkeypatch.setattr(
+        store,
+        "connections_for_org",
+        lambda org: [{"provider": "cedric-brain", "status": "connected"}],
     )
+    assert executor.route_for_typed(typed, "org-a") == "cedric"
 
-    assert result["ok"] is True
-    assert result["kind"] == "slack message"
-    assert result["ref"] == "slack:webhook"
-    assert calls == ["Meeting recap"]
+    monkeypatch.setattr(store, "connections_for_org", lambda org: [])
+    assert executor.route_for_typed(typed, "org-a") == "manual"
 
-
-def test_disconnected_adapter_fails_truthfully(monkeypatch):
-    monkeypatch.setattr(settings, "slack_webhook_url", "")
     result = native_runtime.execute(
         "org-a", {"type": "slack.post_message", "args": {"text": "x"}}
     )
     assert result["ok"] is False
-    assert result["error"]
-    assert "SLACK_WEBHOOK_URL" in result["error"] or "connected" in result["error"]
+    assert "no native adapter" in result["error"]
 
 
 def test_unknown_tool_never_falls_back_to_external_executor():
