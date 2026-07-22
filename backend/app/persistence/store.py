@@ -96,6 +96,9 @@ class Session:
     # by replaying the utterances rather than persisted (transcript is PII;
     # one copy in the DB is enough).
     meeting_state: Any = field(default=None, repr=False, compare=False)
+    # Social-turn state (meeting/conversation_frame.py). Shadow-only and
+    # in-memory: it never controls speaking and never persists utterance text.
+    conversation_frame: Any = field(default=None, repr=False, compare=False)
     # Cross-meeting carryover brief (ledger.carryover_brief). In-memory only:
     # None = not loaded yet (load lazily), "" = loaded, no history.
     memory_brief: Any = field(default=None, repr=False, compare=False)
