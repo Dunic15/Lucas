@@ -3305,10 +3305,14 @@ def _workspace_overview(row: dict, session) -> dict:
     lines excluded), because finalize removes the live session before a meeting
     is drill-in-able, so store.get(bot_id) is None for every archived meeting.
     A still-live session (rare: viewing an in-progress meeting) is preferred
-    when present and carries live here-status; its participant dict is snapshot
-    under store._LOCK so a concurrent live mutation can't raise RuntimeError
-    (dict changed size) on the threadpool. duration and saved_at come from the
-    artifact. usage_sessions (in_call_at/closed_at) is a Postgres-only
+    when present and carries live here-status. The live writers
+    (Session.participant_event / resolve_participant) mutate the dict WITHOUT
+    holding store._LOCK, so the lock here does not truly serialise against them;
+    the surrounding try/except is the real guard — if a concurrent live mutation
+    races the snapshot and raises RuntimeError (dict changed size), we fall back
+    to the archived transcript roster rather than 500 the page. duration and
+    saved_at come from the artifact. usage_sessions (in_call_at/closed_at) is a
+    Postgres-only
     refinement — the SQLite/demo path derives start from saved_at − duration,
     so the shape is identical either way."""
     art = row.get("artifact") or {}
@@ -3316,7 +3320,7 @@ def _workspace_overview(row: dict, session) -> dict:
     seen: set[str] = set()
     if session is not None:
         try:
-            with store._LOCK:  # snapshot: no unlocked iteration on the live map
+            with store._LOCK:  # best-effort snapshot; try/except below is the real guard
                 live = list(getattr(session, "participants", {}).values())
         except Exception:  # noqa: BLE001 — a roster read never 500s the page
             live = []
