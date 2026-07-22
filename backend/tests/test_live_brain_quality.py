@@ -112,12 +112,18 @@ def test_recall_final_dedupe_is_sliding_and_pii_free():
     assert main_module._is_duplicate_recall_final(
         session, "event-c", "fingerprint-a", now=109.0
     )
+    # A different final breaks the consecutive replay run. The same phrase is
+    # then a meaningful A → B → A sequence, not a provider duplicate.
+    assert not main_module._is_duplicate_recall_final(
+        session, "event-x", "fingerprint-b", now=110.0
+    )
+    assert not main_module._is_duplicate_recall_final(
+        session, "event-d", "fingerprint-a", now=111.0
+    )
     # A real pause accepts the same spoken phrase again.
     assert not main_module._is_duplicate_recall_final(
-        session, "event-d", "fingerprint-a", now=118.0
+        session, "event-e", "fingerprint-a", now=120.0
     )
     seen = session._recall_final_dedupe
-    assert seen and all(
-        key.startswith(("e:", "f:")) for key in seen
-    )
-
+    assert seen and all(key.startswith("e:") for key in seen)
+    assert session._recall_final_last[0] == "fingerprint-a"
