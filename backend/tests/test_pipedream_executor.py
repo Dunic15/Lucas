@@ -245,6 +245,31 @@ def test_execute_approved_happy_writes_done_receipt(monkeypatch):
     assert write["acct"] == "apn_9" and write["method"] == "POST"
     assert any(c["method"] == "GET" and "/tasks/55" in c["url"] for c in calls[1:])
     assert seen["status"] == "done" and seen["receipt"]["route"] == "pipedream"
+    assert out["verified"] is True
+    assert seen["receipt"]["verified"] is True
+
+
+def test_asana_comment_verifies_the_story_not_a_task(monkeypatch):
+    _enable_pd(monkeypatch)
+    monkeypatch.setattr(pipedream_client, "list_accounts",
+                        lambda org, app="": [{"id": "apn_9", "app": "asana", "healthy": True}])
+    calls: list[tuple[str, str]] = []
+
+    def fake_proxy(org, acct, method, url, json_body=None, headers=None):
+        calls.append((method, url))
+        return {"ok": True, "status": 200, "json": {"data": {"gid": "story55"}}}
+
+    monkeypatch.setattr(pipedream_client, "proxy_request", fake_proxy)
+    seen = _cap_ledger(monkeypatch)
+    out = pipedream_executor.execute_approved(
+        "orgX", "act-comment",
+        {"type": "asana.add_comment", "task": {"task": "42", "text": "Ship it"}},
+    )
+    assert out["ok"] is True and out["verified"] is True
+    assert calls[0][0] == "POST"
+    assert calls[1][0] == "GET" and "/stories/story55" in calls[1][1]
+    assert "/tasks/story55" not in calls[1][1]
+    assert seen["receipt"]["verified"] is True
 
 
 def test_execute_approved_no_account_fails(monkeypatch):
