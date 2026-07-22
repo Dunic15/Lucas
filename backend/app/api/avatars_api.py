@@ -35,17 +35,20 @@ def list_avatars(request: Request) -> dict:
 
 
 class BrainModeRequest(BaseModel):
-    brain: str  # "gemini" | "cerebras"
+    brain: str  # "cerebras" (gemini retired from the UI, 2026-07-22)
 
 
 @router.post("/avatars/{avatar_id}/brain-mode")
 def set_avatar_brain(
     avatar_id: str, req: BrainModeRequest, request: Request
 ) -> JSONResponse:
-    """Owner sets an avatar's brain from the dashboard: "gemini" (tutto-Gemini
-    via the relay) or "cerebras" (the normal Deepgram + grounded brain). Takes
-    effect on the avatar's NEXT meeting — no redeploy. Not anonymous: a logged-in
-    owner (or the machine bearer) only, so the demo can't flip prod behavior."""
+    """Owner sets an avatar's brain from the dashboard. Only "cerebras" (the
+    normal Deepgram + grounded brain) is selectable: the Gemini relay bypasses
+    persona/tool-registry/playbooks and hijacked a live meeting on 2026-07-21
+    when a stale store row met the old global default — re-enabling it is a
+    deliberate operator env change (GEMINI_EARS_MODE), never a click. Takes
+    effect on the avatar's NEXT meeting — no redeploy. Not anonymous: a
+    logged-in owner (or the machine bearer) only."""
     if err := auth.gate(request):
         return err
     aid = (avatar_id or "").strip()
@@ -54,6 +57,8 @@ def set_avatar_brain(
     choice = (req.brain or "").strip().lower()
     if not store.set_avatar_brain_mode(aid, choice):
         return JSONResponse(
-            {"error": "brain must be 'gemini' or 'cerebras'"}, status_code=400
+            {"error": "brain must be 'cerebras' (gemini is env-gated, "
+                      "not selectable)"},
+            status_code=400,
         )
     return JSONResponse({"ok": True, "avatar_id": aid, "brain": choice})
