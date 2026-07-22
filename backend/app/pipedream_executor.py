@@ -615,8 +615,12 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
     # verify hiccup never fails a succeeded action.
     verified = _verify_written(org, account_id, action_type,
                                resp.get("json") or {})
-    return _settle(action_id, org, True, action_type, ref, "",
-                   kind=(kind + " · verified") if verified else kind)
+    return _settle(
+        action_id, org, True, action_type, ref, "",
+        kind=(kind + " · verified") if verified else kind,
+        verified=verified,
+        verification="provider readback" if verified else "provider readback unavailable",
+    )
 
 
 # Read-back endpoints per family: GET the object by the id the CREATE/SEND
@@ -626,13 +630,22 @@ def _verify_written(org: str, account_id: str, action_type: str,
     try:
         data = resp_json.get("data") if isinstance(resp_json.get("data"), dict) \
             else resp_json
-        if action_type.startswith("asana."):
-            gid = str((data or {}).get("gid") or "")
-            if not gid:
+        if action_type == "asana.add_comment":
+            story_gid = str((data or {}).get("gid") or "")
+            if not story_gid:
                 return False
             check = pipedream_client.proxy_request(
                 org, account_id, "GET",
-                f"{_ASANA_API}/tasks/{gid}?opt_fields=gid",
+                f"{_ASANA_API}/stories/{story_gid}?opt_fields=gid",
+            )
+            return bool(check.get("ok"))
+        if action_type in ("asana.create_task", "asana.update_task"):
+            task_gid = str((data or {}).get("gid") or "")
+            if not task_gid:
+                return False
+            check = pipedream_client.proxy_request(
+                org, account_id, "GET",
+                f"{_ASANA_API}/tasks/{task_gid}?opt_fields=gid",
             )
             return bool(check.get("ok"))
         if action_type in ("calendar.create_event", "calendar.update_event"):
@@ -711,12 +724,17 @@ def dry_run(org_id: str, action: dict) -> dict:
 
 
 def _settle(action_id: str, org: str, ok: bool, action_type: str, ref: str,
-            error: str, *, kind: str = "") -> dict:
+            error: str, *, kind: str = "", verified: bool = False,
+            verification: str = "") -> dict:
     """Write the canonical done/failed ledger receipt (route='pipedream') and
     mirror status to the Slack surface, exactly like executor.execute_approved.
     Returns the normalized result."""
     kind = kind or action_type or "action"
-    result: dict[str, Any] = {"ok": ok, "kind": kind, "ref": ref}
+    result: dict[str, Any] = {
+        "ok": ok, "kind": kind, "ref": ref,
+        "verified": bool(verified),
+        "verification": str(verification or ""),
+    }
     if not ok:
         result["error"] = error or "execution failed"
 
@@ -730,8 +748,11 @@ def _settle(action_id: str, org: str, ok: bool, action_type: str, ref: str,
             detail = " · ".join(p for p in ("Pipedream", kind, ref) if p)[:300]
             ledger.set_action_status(
                 aid, "done", detail, org_id=org,
-                receipt={"kind": kind, "ref": ref, "route": "pipedream",
-                         "runtime": "pipedream"},
+                receipt={
+                    "kind": kind, "ref": ref, "route": "pipedream",
+                    "runtime": "pipedream", "verified": bool(verified),
+                    "verification": str(verification or ""),
+                },
             )
         else:
             detail = f"Pipedream · {error or 'failed'}"[:300]
