@@ -50,6 +50,7 @@ from . import (
     store,
     recall_client,
     anam_client,
+    action_plane,
     asana_client,
     auth,
     billing,
@@ -1521,26 +1522,11 @@ _VOICE_LINES_IT = [
 # missing what a well-filed task needs, so the avatar asks ONCE — assembled
 # from per-field slots, spoken via the normal TTS cache — and holds the
 # approval until the asker replies (or the window lapses).
-_CLARIFY_SLOTS = {
-    "owner": "who should own it",
-    "project": "which project it goes in",
-    "due": "when it's due",
-    "description": "anything the description should say",
-    "email_to": "who it should go to",
-    "email_body": "what it should say",
-    "invite_with": "who should be on it",
-    "invite_when": "when it should be",
-}
-_CLARIFY_SLOTS_IT = {
-    "owner": "chi la prende in carico",
-    "project": "in quale progetto va",
-    "due": "per quando serve",
-    "description": "cosa scrivere nella descrizione",
-    "email_to": "a chi va mandata",
-    "email_body": "cosa deve dire",
-    "invite_with": "chi va invitato",
-    "invite_when": "per quando fissarlo",
-}
+# ONE vocabulary across every surface (Phase 1, owner 2026-07-22): the voice
+# clarify speaks the same canonical labels the dashboard chips/forms render —
+# action_plane owns them all (param ↔ slot ↔ label).
+_CLARIFY_SLOTS = action_plane.SLOT_LABELS_EN
+_CLARIFY_SLOTS_IT = action_plane.SLOT_LABELS_IT
 _CLARIFY_WINDOW_S = 45.0  # after this, resolve quietly with what we have
 _SAME_ASK_WINDOW_S = 90.0  # a retry of an ask captured this recently merges
 _ALREADY_LINES = [

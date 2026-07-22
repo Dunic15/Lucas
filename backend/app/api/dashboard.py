@@ -236,6 +236,9 @@ def _action_entry(action) -> dict:
             # required params; untyped asks use the kind-aware detail slots
             # (email→recipient/body, calendar→attendees/time, task→due…).
             "needed": _action_needed(action),
+            # …and the same words the VOICE uses for them (canonical
+            # vocabulary — action_plane, Phase 1).
+            "needed_labels": action_plane.needed_labels(_action_needed(action)),
             # Provenance (Petra's PM judgement, bounded): "explicit" = a stated
             # commitment; "inferred" = a PROPOSED step decomposed from a spoken
             # goal — rendered in the Action Centre's "Proposed" subsection with
