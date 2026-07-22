@@ -29,9 +29,24 @@ _TOPICS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("meeting", re.compile(r"\b(approval|decision|risk|missing|meeting|approvazione|decisione|rischio)\b", re.I)),
 )
 _STOP = re.compile(r"^\s*(?:wait|stop|pause|hold on|aspetta|fermati|basta)\b", re.I)
-_CORRECTION = re.compile(r"^\s*(?:no\b|actually\b|correction\b|anzi\b|in realt[aà]\b)", re.I)
+_CORRECTION = re.compile(
+    r"^\s*(?:no\b|actually\b|correction\b|anzi\b|in realt[aà]\b|"
+    r"sorry\b.*\b(?:not|instead)\b|scusa\b.*\b(?:non|invece)\b)",
+    re.I,
+)
 _CONFIRMATION = re.compile(
-    r"^\s*(?:yes|yeah|yep|correct|exactly|right|s[iì]|esatto|corretto|giusto)[.!\s]*$",
+    r"^\s*(?:"
+    r"(?:yes|yeah|yep|s[iì])(?:[,\s]+(?:exactly|correct|right|esatto|corretto|giusto))?|"
+    r"correct|exactly|right|esatto|corretto|giusto|"
+    r"m+m+[-\s]?h+m+|mhm|uh[-\s]?huh"
+    r")[.!\s]*$",
+    re.I,
+)
+_REQUEST_VERB = re.compile(
+    r"^(?:show|tell|read|check|find|open|create|send|schedule|update|add|share|"
+    r"move|rename|cancel|reply|archive|mostra|dimmi|leggi|controlla|trova|apri|"
+    r"crea|manda|programma|aggiorna|aggiungi|condividi|sposta|rinomina|annulla|"
+    r"rispondi|archivia)\b",
     re.I,
 )
 
@@ -63,6 +78,22 @@ def _looks_like_question(text: str) -> bool:
     return bool(normalized) and (
         normalized.endswith("?") or bool(_QUESTION.search(normalized))
     )
+
+
+def _looks_like_addressed_request(text: str, avatar: str) -> bool:
+    normalized = (text or "").strip()
+    name = (avatar or "").strip()
+    if name and normalized.lower().startswith(name.lower()):
+        normalized = normalized[len(name):].lstrip(" ,:;-")
+    return bool(_REQUEST_VERB.search(normalized))
+
+
+def _target_key(addressed_avatar: str, addressed_participant: str, addressed_to: str) -> str:
+    if addressed_avatar:
+        return f"avatar:{addressed_avatar.casefold()}"
+    if addressed_participant:
+        return f"participant:{addressed_participant}"
+    return addressed_to
 
 
 def _infer_topic(text: str) -> str:
@@ -168,7 +199,10 @@ class ConversationFrame:
 
         addressed_avatar = str(event.get("addressed_avatar") or "")
         addressed_participant = str(event.get("addressed_participant_id") or "")
-        self.open_question = bool(event.get("open_question", _looks_like_question(text)))
+        default_open = _looks_like_question(text) or bool(
+            addressed_avatar and _looks_like_addressed_request(text, addressed_avatar)
+        )
+        self.open_question = bool(event.get("open_question", default_open))
         if addressed_avatar:
             self.addressed_to = "avatar"
         elif addressed_participant:
@@ -178,7 +212,14 @@ class ConversationFrame:
         else:
             self.addressed_to = "none"
 
-        if self.active_action_target == "avatar" and self.addressed_to == "participant":
+        current_target = _target_key(
+            addressed_avatar, addressed_participant, self.addressed_to
+        )
+        if (
+            self.active_action_target.startswith("avatar:")
+            and current_target
+            and current_target != self.active_action_target
+        ):
             self.action_boundary = "sealed_on_target_change"
             self.active_action_target = ""
 
@@ -193,7 +234,7 @@ class ConversationFrame:
                     "target_account": str(action.get("target_account") or requester),
                 }
             )
-            self.active_action_target = "avatar" if addressed_avatar else self.addressed_to
+            self.active_action_target = current_target
 
         if self.addressed_to == "participant" or not self.open_question:
             self.selected_avatar = "none"
@@ -234,6 +275,14 @@ class ConversationFrame:
             return
         if kind == "avatar_handoff":
             target = str(event.get("to_avatar") or "")
+            handoff_target = f"avatar:{target.casefold()}" if target else ""
+            if (
+                self.active_action_target.startswith("avatar:")
+                and handoff_target
+                and handoff_target != self.active_action_target
+            ):
+                self.action_boundary = "sealed_on_target_change"
+                self.active_action_target = ""
             self.addressed_to = "avatar"
             self.selected_avatar = target if target in self.avatar_names else "none"
             self.response_mode = "direct" if self.selected_avatar != "none" else "silent"
