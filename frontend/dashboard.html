@@ -1227,7 +1227,9 @@
     // (instead of resetting to Overview). replaceState = no new history entry, no jump.
     try{ window.history.replaceState({},"",window.location.pathname+"#"+name); }catch(e){}
     if(name==="brain") loadBrain();
-    if(name==="connections") loadPipedream();  // "More tools" section (no-op unless configured)
+    // Capability verbs must be in hand before the tool cards paint, so each
+    // connected tool can list what it can actually run.
+    if(name==="connections") loadCapabilities().then(loadPipedream);
     if(name==="syscheck") loadSyscheck();
     if(name==="actions") renderActions();
     // The avatar stage renders only once the view is opened (never preload).
@@ -1265,7 +1267,14 @@
         if(r.status===401){ return r.json().catch(function(){return {};}).then(function(j){ showGate(true, !!j.auth_enabled); throw new Error("401"); }); }
         showGate(false,false); return r.json();
       })
-      .then(function(d){ DATA=d; renderAll(d); syncTxToggle(); if(d.user) loadBilling(); })
+      .then(function(d){
+        DATA=d; renderAll(d); syncTxToggle(); if(d.user) loadBilling();
+        // Capability hints arrive after the board paints — they only enrich
+        // (verb lists, "Reconnect X" CTAs), so nothing blocks on them.
+        loadCapabilities().then(function(){
+          if(!$("#view-connections").hidden||!$("#view-actions").hidden) renderAll(DATA);
+        });
+      })
       .catch(function(e){ if(String(e.message)!=="401") toast("Could not load: "+e.message,true); });
   }
   function loadBilling(){
@@ -2385,15 +2394,45 @@
 
   // Plain-language state labels — canonical values stay internal, the UI never
   // shows the raw vocabulary. Color NEVER carries the meaning alone.
-  var STATE_LABEL={needs_details:"Needs information",proposed:"Ready for approval",
+  // What each connected tool can actually DO, keyed by executor family slug
+  // (GET /dashboard/capabilities — verbs derived from the executor's own mapper,
+  // #377, never a hand-kept list). The Connections cards and System Check list
+  // them; the Action Center uses `connected` to offer "Reconnect <tool>" instead
+  // of an Approve that could only dead-end. Best-effort: an empty CAPS simply
+  // means no capability hints, never a broken board.
+  var CAPS={};
+  function loadCapabilities(){
+    return fetch("/dashboard/capabilities",{headers:headers(),cache:"no-store"})
+      .then(function(r){ return r.json().catch(function(){return {};}); })
+      .then(function(j){
+        var next={};
+        ((j&&j.apps)||[]).forEach(function(x){ if(x&&x.slug) next[x.slug]=x; });
+        CAPS=next; return CAPS;
+      })
+      .catch(function(){ return CAPS; });
+  }
+  function capVerbsHtml(slug){
+    var c=CAPS[slug]; if(!c||!(c.verbs||[]).length) return "";
+    return '<div class="cap-verbs" style="font-size:.74rem;color:var(--faint);margin-top:4px">'
+      +'Can: '+esc(c.verbs.join(" · "))+'</div>';
+  }
+  var STATE_LABEL={needs_details:"Needs details",ready_to_approve:"Ready for approval",
+    proposed:"Ready for approval",
     approved:"Approved",executing:"Running",done:"Completed",failed:"Couldn’t complete",
     rejected:"Rejected",execution_unknown:"Check connected account"};
-  var STATE_CLASS={needs_details:"attn",proposed:"ready",approved:"run",executing:"run",
+  var STATE_CLASS={needs_details:"attn",ready_to_approve:"ready",proposed:"ready",
+    approved:"run",executing:"run",
     done:"ok",failed:"bad",rejected:"bad",execution_unknown:"attn"};
+  // A card is NEVER a passive "captured — tracked for the record" row (owner ask
+  // 2026-07-22, live card aa2e74e86dbd4d38). The durable execution status wins
+  // once anything ran; before that the backend's derived card_state says whether
+  // the card still needs details or is ready for a decision. Rows saved before
+  // card_state existed migrate softly here on read.
   function stateOf(a){
     var s=(a.execution&&a.execution.status)||"";
-    if(!s&&a.typed) s="proposed";
-    return s;
+    if(s) return s;
+    if(a.card_state) return a.card_state;
+    return a.typed?"ready_to_approve":"needs_details";
   }
   function stateChipHTML(s){
     if(!s) return '<span class="st">Captured</span>';
@@ -2415,8 +2454,11 @@
     return out;
   }
   function attnActions(){
+    // Untyped cards count too now: they are no longer a passive "tracked"
+    // pile — the approve door types them at the click, so they are genuinely
+    // waiting on the human and belong in the badge.
     return actionIndex().filter(function(x){
-      return bucketOf(x.a)==="attn" && x.a.typed && x.a.action_id; });
+      return bucketOf(x.a)==="attn" && x.a.action_id; });
   }
   function updateActionsBadge(){
     var b=$("#nav-actions-badge"); if(!b) return;
@@ -2703,14 +2745,18 @@
   var acBucket="attn";
   function acTodoText(a){
     var s=stateOf(a);
-    if(s==="needs_details") return "Add the missing details, then approve.";
-    if(s==="proposed") return a.action_id?"Review and approve — nothing runs without you.":"Captured from the meeting — tracked here for the record.";
-    if(s==="approved") return "Approved — waiting to run.";
+    if(s==="needs_details"){
+      var cap=a.family?CAPS[a.family]:null;
+      if(cap&&cap.connected===false) return "Needs "+cap.label+" reconnected before it can run.";
+      return "Needs more details to approve.";
+    }
+    if(s==="ready_to_approve"||s==="proposed") return "Ready for your approval — nothing runs without you.";
+    if(s==="approved") return "Approved — starting now.";
     if(s==="executing") return "Running now.";
     if(s==="done") return "Completed — the receipt links to what was created.";
     if(s==="failed") return "It couldn’t complete — open details for the receipt.";
     if(s==="rejected") return "Rejected — it will not run.";
-    return "Captured from the meeting — tracked here for the record.";
+    return "Needs more details to approve.";
   }
   function renderActions(){
     var box=$("#ac-list"); if(!box) return;
@@ -2746,17 +2792,27 @@
       var a=x.a,m=x.m,s=stateOf(a);
       var ctl="";
       if(a.action_id&&bucketOf(a)==="attn"){
-        if(a.executable===false){
+        var capA=a.family?CAPS[a.family]:null;
+        if(capA&&capA.connected===false){
+          // The tool this card needs isn't connected. Approving could only
+          // dead-end, so the card asks for the ONE thing that unblocks it —
+          // a reconnect — instead of reporting a failure (owner ask 2026-07-22).
+          ctl='<button class="btn primary" data-goto="connections">Reconnect '+esc(capA.label)+'</button>'+
+              '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Dismiss</button>';
+        } else if(a.executable===false){
           // No connected tool can run this (free-form capture) — approving it
           // would dead-end in "Nothing ran". Say so instead of offering it.
           ctl='<span class="stchip" title="Heard as a free-form ask — no connected tool can run it automatically. It still appears in the follow-up email.">Can\u2019t auto-run</span>'+
               '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Dismiss</button>';
-        } else if((a.needed||[]).length){
+        } else if(s==="needs_details"||(a.needed||[]).length){
           // Incomplete card: NEVER a blind Approve (owner rule 2026-07-22).
           // The primary action collects exactly the missing fields — the
           // approve endpoint re-types, answers 422 with the schema, and the
-          // inline form runs the action once saved.
-          ctl='<button class="btn primary" data-approve="'+esc(a.action_id)+'">Complete details…</button>'+
+          // inline form runs the action once saved. An UNTYPED card takes this
+          // same door: the approve-door rescue (#351) types it at the click and
+          // answers 422 with the real schema, so the form asks for the fields
+          // of whatever it turned out to be.
+          ctl='<button class="btn primary" data-approve="'+esc(a.action_id)+'">Add details to approve…</button>'+
               (a.typed?'<button class="btn" data-acdetailsbtn="'+esc(a.action_id)+'">Edit fields</button>':'')+
               '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Reject</button>';
         } else {
@@ -2765,8 +2821,14 @@
               '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Reject</button>';
         }
       } else if(s==="done"&&a.execution){
-        var recUrl=((a.execution.detail||"").match(/https?:\/\/[^\s"'<>]+/)||[])[0]||"";
-        if(recUrl) ctl='<a class="btn" style="text-decoration:none" href="'+esc(recUrl)+'" target="_blank" rel="noopener">Open receipt ↗</a>';
+        var recDetail=a.execution.detail||"";
+        var recUrl=(recDetail.match(/https?:\/\/[^\s"'<>]+/)||[])[0]||"";
+        // The executor read the created object back and confirmed it exists
+        // (#387 stamps "· verified" on the receipt) — surface that, so "done"
+        // can be trusted rather than merely claimed.
+        if(/·\s*verified/.test(recDetail))
+          ctl='<span class="stchip" title="Laura read the created item back from the tool and confirmed it exists.">✓ verified</span>';
+        if(recUrl) ctl+='<a class="btn" style="text-decoration:none" href="'+esc(recUrl)+'" target="_blank" rel="noopener">Open receipt ↗</a>';
       }
       var prov=(a.source==="inferred")
         ?'<div class="ac-quote">Proposed by Petra'+(a.goal?' for goal: <b>'+esc(a.goal)+'</b>':'')+(a.inferred_from?' — inferred from: “'+esc(a.inferred_from)+'”':'')+'</div>'
@@ -2775,7 +2837,10 @@
         email_to:"recipient",email_body:"message text",invite_with:"attendees",invite_when:"time",
         to:"recipient",subject:"subject",body:"message text",start:"start time",end:"end time",
         title:"title",name:"task name",task:"task id",text:"comment text"};
-      var needsHTML=(bucketOf(a)==="attn"&&a.executable!==false&&(a.needed||[]).length)
+      // When the blocker is a missing CONNECTION, the card already says
+      // "Reconnect X" — listing field names on top of that is noise.
+      var capN=a.family?CAPS[a.family]:null;
+      var needsHTML=(bucketOf(a)==="attn"&&a.executable!==false&&!(capN&&capN.connected===false)&&(a.needed||[]).length)
         ?'<div class="ac-needs">\u26a0 Needs: '+((a.needed_labels&&a.needed_labels.length)?a.needed_labels:(a.needed||[]).map(function(k){return NEEDL[k]||k;})).map(esc).join(", ")+'</div>':'';
       return '<article class="ac-card'+(a.source==="inferred"?" proposed":"")+'">'+
         '<div class="ac-top">'+stateChipHTML(s)+
@@ -3688,6 +3753,12 @@
     var desc=a.description?esc(a.description):('Connect '+nm+' through Pipedream Connect — managed OAuth.');
     return '<div class="conn"><div class="nm">'+img+nm+' <span class="stchip" style="margin-left:6px">via Pipedream</span></div>'+
       '<div class="ds">'+desc+'</div>'+
+      // What LAURA can run against this tool, from the executor's own mapper
+      // (#377) — distinct from the "What can I do?" button below, which lists
+      // Pipedream's pre-built component catalog. Only the families the executor
+      // maps render a line here; everything else stays silent rather than
+      // claiming a capability that would dead-end.
+      capVerbsHtml(a.slug)+
       '<div class="foot"><span class="cstat'+(on?" on":"")+'"><b></b>'+(on?("Connected"+acctName):"Not connected")+'</span>'+
       '<a class="btn'+(on?"":" primary")+'" style="text-decoration:none" href="/dashboard/pipedream/connect?app='+slug+'">'+(on?"Reconnect":"Connect")+'</a>'+
       (on?('<button class="btn pd-disc" data-app="'+slug+'" style="margin-left:6px">Disconnect</button>'):'')+
@@ -3762,11 +3833,15 @@
     var acct=row.account?'<div class="muted" style="font-size:.8rem;margin-top:2px">'+esc(row.account)+'</div>':'';
     var last=row.last_checked?'<div class="muted" style="font-size:.72rem;margin-top:2px">last checked '+esc(row.last_checked)+'</div>':'';
     var testBtn=row.can_test?'<button class="btn" type="button" data-sc-test="'+esc(row.key)+'" style="padding:6px 12px;font-size:.78rem">Test connection</button>':'';
+    // What this tool can actually run, from the executor's own mapper (#377) —
+    // so the board says what it DOES, not just whether it is reachable.
+    var supports=(row.supports&&row.supports.length)
+      ?'<div class="muted" style="font-size:.74rem;margin-top:4px">Can: '+esc(row.supports.join(" · "))+'</div>':'';
     return '<div class="sc-row" data-sc-row="'+esc(row.key)+'" style="display:flex;align-items:flex-start;gap:14px;padding:14px 16px;border:1px solid rgba(128,128,128,.18);border-radius:12px;margin-bottom:10px">'
       +'<div style="flex:1;min-width:0">'
         +'<div style="font-weight:600">'+esc(row.label)+'</div>'
         +'<div class="muted" style="font-size:.8rem;margin-top:2px" data-sc-detail>'+esc(row.detail||"")+'</div>'
-        +acct+last
+        +acct+last+supports
       +'</div>'
       +'<div style="display:flex;align-items:center;gap:10px;flex:none">'
         +'<span data-sc-badge>'+scBadge(row.status)+'</span>'
