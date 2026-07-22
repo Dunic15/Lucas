@@ -210,6 +210,48 @@ def _action_needed(action: dict) -> list[str]:
         return []
 
 
+def _decision_entries(art: dict, db_records: list[dict] | None = None) -> list[dict]:
+    """Distilled first-class decision records for the wire. Distilled fields
+    only — decision text, maker, reason, project, supersede link, status —
+    never transcript.
+
+    Source of truth, in order:
+    1. ``db_records`` — the RECONCILED rows from store.list_decisions(org,
+       bot_id). These are the only records that carry the persisted supersede
+       link + flipped status (the artifact's ``decision_records`` never do:
+       engine._build_decision_records emits only decision/maker/reason/project),
+       so the "supersedes / (superseded)" pill can render ONLY from here.
+    2. the artifact's structured ``decision_records`` (0017+) — the fallback
+       when there are no DB rows yet (e.g. a fresh key-free demo meeting).
+    3. the legacy ``decisions`` list[str] so pre-0017 archives still render."""
+    out: list[dict] = []
+    records = db_records if db_records else art.get("decision_records")
+    if isinstance(records, list) and records:
+        for r in records[:20]:
+            if not isinstance(r, dict):
+                continue
+            text = str(r.get("decision") or "").strip()
+            if not text:
+                continue
+            out.append({
+                "decision": text[:240],
+                "decision_maker": str(r.get("decision_maker") or "")[:80],
+                "reason": str(r.get("reason") or "")[:240],
+                "related_project": str(r.get("related_project") or "")[:80],
+                "supersedes": str(r.get("supersedes") or ""),
+                "status": str(r.get("status") or "active")[:24],
+            })
+        return out
+    for line in (art.get("decisions") or [])[:20]:
+        text = str(line or "").strip()
+        if text:
+            out.append({
+                "decision": text[:240], "decision_maker": "", "reason": "",
+                "related_project": "", "supersedes": "", "status": "active",
+            })
+    return out
+
+
 def _action_entry(action) -> dict:
     """Normalize an artifact action (dict or bare string) for the wire.
     action_id rides along so summary() can decorate each action with the
@@ -310,6 +352,26 @@ def _meeting_row(row: dict, include_transcript: bool = False) -> dict:
     actions = [_action_entry(a) for a in (art.get("actions") or [])[:12]]
     readiness = int(art.get("readiness_score") or 0)
     decisions_count = len(art.get("decisions") or [])
+    # First-class decision records (distilled fields only — decision text,
+    # maker, reason, project, supersede link; NEVER transcript). Prefer the
+    # RECONCILED rows from the store — they carry the persisted supersedes +
+    # flipped status the artifact snapshot never does, so the dashboard pill
+    # renders — and fall back to the artifact's own records (fresh demo meeting
+    # with no DB rows), then the legacy list[str]. Best-effort: a decisions
+    # query hiccup must never 500 a dashboard read.
+    db_records: list[dict] = []
+    bot_id = row.get("bot_id")
+    # Only hit the decision store when this meeting actually produced decisions
+    # (persisted rows only ever come from a non-empty decision_records/decisions
+    # at finalize) — skips the per-row query for the decision-less common case.
+    if bot_id and (art.get("decision_records") or art.get("decisions")):
+        try:
+            db_records = store.list_decisions(
+                str(art.get("org_id") or ""), str(bot_id)
+            )
+        except Exception:  # noqa: BLE001 — projection is never worth a 500
+            db_records = []
+    decision_records = _decision_entries(art, db_records=db_records)
     extra = (
         {"transcript": str(art.get("transcript") or "")[:40000]}
         if include_transcript
@@ -329,6 +391,7 @@ def _meeting_row(row: dict, include_transcript: bool = False) -> dict:
         "actions": actions,
         "missing_steps": [str(s) for s in (art.get("missing_steps") or [])[:8]],
         "decisions_count": decisions_count,
+        "decisions": decision_records,
         "follow_up_subject": str(email.get("subject") or "")[:160],
         # Additive: what this meeting DELIVERED (captured→delivered), derived
         # purely from the fields above so it never leaks transcript or invents.
@@ -1433,6 +1496,44 @@ async def syscheck_test(request: Request) -> JSONResponse:
          "latency_ms": latency_ms},
         headers=_NO_STORE,
     )
+
+
+@router.get("/dashboard/meetings/{bot_id}/decisions")
+async def meeting_decisions(bot_id: str, request: Request) -> JSONResponse:
+    """First-class decision records for one meeting (0017/meeting_decisions).
+
+    Same auth + tenancy AND per-user archive scope as /dashboard/summary: a
+    cookie user or per-org bearer sees only their org's decisions, and — like
+    the summary/meetings archive (2026-07-21) — a cookie user may only read a
+    meeting they dispatched (principal_id) or audibly attended (transcript
+    speaker), even inside their own shared org. A meeting they can't see returns
+    404 (matching the summary/archive posture — absence, not a 403 that would
+    confirm the row exists). The unscoped worlds (global bearer / key-free demo)
+    fall back to the Demo org and keep the full org view. Decisions are
+    DISTILLED fields (decision, maker, reason, project, supersede link) — never
+    transcript text — so they are safe to serve here. Read-only, off the live
+    path."""
+    from .. import cedric  # local import, same reason as dashboard_summary
+
+    user = auth.current_user(request)
+    machine_org = None
+    if user is None:
+        machine_org = cedric.resolve_machine_org(request)
+        if machine_org is None:
+            if err := auth.gate(request):
+                return err
+    caller_org = user["org_id"] if user else machine_org
+    scope = caller_org or settings.demo_org_id
+    # Per-user archive gate: load the meeting artifact in this tenant and verify
+    # the caller attended/dispatched it before returning any decisions. Machine
+    # callers (user=None) keep the full org view. 404 (not 403) when invisible.
+    artifact = await run_in_threadpool(store.get_artifact, bot_id, str(scope))
+    if artifact is None or not _user_attended(user, artifact):
+        return JSONResponse(
+            {"error": "not found"}, status_code=404, headers=_NO_STORE
+        )
+    records = await run_in_threadpool(store.list_decisions, str(scope), bot_id)
+    return JSONResponse({"bot_id": bot_id, "decisions": records}, headers=_NO_STORE)
 
 
 @router.post("/dashboard/prefs/transcripts")
