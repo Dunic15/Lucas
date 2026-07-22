@@ -2999,10 +2999,9 @@
         pdRows+
         (a.id==="petra"?capRowHTML(a,"asana","Asana",LOGO_ASANA):"")+
         capRowHTML(a,"slack","Slack agent",LOGO_SLACK)+'</div>'+
-        '<div class="modelpick sm"><div class="sm-h">AI model</div><div class="mp-row">'+
-          '<button class="mp-opt'+(a.brain==="gemini"?" on":"")+'" data-brain-set="gemini" data-brain-av="'+esc(a.id)+'">Gemini</button>'+
-          '<button class="mp-opt'+(a.brain==="cerebras"?" on":"")+'" data-brain-set="cerebras" data-brain-av="'+esc(a.id)+'">Cerebras</button></div>'+
-        '</div></div>';
+        '</div>';
+        // AI-model picker removed (2026-07-22): Gemini is env-gated only after
+        // the 2026-07-21 relay hijack — one grounded brain, no per-avatar toggle.
   }
   function avatarDetailHTML(a){
     // Simplified (owner 2026-07-21): one compact identity card + ONE optional
@@ -3070,22 +3069,8 @@
       e.stopPropagation(); var v=b.getAttribute("data-copy");
       if(navigator.clipboard) navigator.clipboard.writeText(v);
       toast("Copied "+v+" — invite it to a meeting to summon this avatar."); }); });
-    // AI model per avatar: Gemini (relay) vs Cerebras (normal). Applies next meeting.
-    $$("#view-avatars [data-brain-set]").forEach(function(b){ b.addEventListener("click",function(e){
-      e.stopPropagation();
-      var av=b.getAttribute("data-brain-av"), br=b.getAttribute("data-brain-set");
-      fetch("/avatars/"+encodeURIComponent(av)+"/brain-mode",{method:"POST",
-        headers:{"content-type":"application/json"},body:JSON.stringify({brain:br})})
-      .then(function(r){return r.json();})
-      .then(function(j){
-        if(j&&j.ok){
-          var row=b.parentNode;
-          row.querySelectorAll(".mp-opt").forEach(function(o){
-            o.classList.toggle("on", o.getAttribute("data-brain-set")===br); });
-          toast(av+" → "+(br==="gemini"?"Gemini":"Cerebras")+" (from the next meeting)");
-        } else { toast((j&&j.error)||"Could not change the model"); }
-      }).catch(function(){ toast("Network error"); });
-    }); });
+    // AI-model picker removed (2026-07-22): one grounded brain; Gemini is
+    // env-gated (GEMINI_EARS_MODE), never a dashboard click.
     // Per-avatar capability switch (Slack/Google/Asana). Optimistic; reverts on failure.
     $$("#view-avatars [data-cap]").forEach(function(cb){ cb.addEventListener("change",function(e){
       e.stopPropagation();

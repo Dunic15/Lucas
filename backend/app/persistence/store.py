@@ -2207,12 +2207,18 @@ def register_recall_realtime_capability(bot_id: str, capability: str) -> bool:
     return True
 
 
-_VALID_BRAIN_MODES = {"gemini", "cerebras"}
+# "gemini" retired from the selectable set (owner ask 2026-07-22, after the
+# 2026-07-21 hijack: a store row lost across deploys let an avatar fall onto
+# the Gemini relay, which bypasses persona/registry/playbooks). Gemini stays
+# reachable ONLY via the global GEMINI_EARS_MODE env — a deliberate operator
+# choice, never a dashboard click or a stale row.
+_VALID_BRAIN_MODES = {"cerebras"}
 
 
 def set_avatar_brain_mode(avatar_id: str, brain_mode: str) -> bool:
-    """Set an avatar's brain: "gemini" (relay) or "cerebras" (normal). Persisted
-    (Litestream-replicated), read on the NEXT meeting — no redeploy."""
+    """Set an avatar's brain: "cerebras" (the normal Deepgram + grounded brain)
+    is the only selectable value. Persisted (Litestream-replicated), read on
+    the NEXT meeting — no redeploy."""
     aid = (avatar_id or "").strip()
     mode = (brain_mode or "").strip().lower()
     if not aid or mode not in _VALID_BRAIN_MODES:
@@ -2229,7 +2235,9 @@ def set_avatar_brain_mode(avatar_id: str, brain_mode: str) -> bool:
 
 def get_avatar_brain_mode(avatar_id: str) -> str | None:
     """The avatar's explicit brain choice, or None if it has never been set
-    (caller falls back to the global default)."""
+    (caller falls back to the global default). Values outside the selectable
+    set (legacy "gemini" rows) read as None — a stale row must never
+    resurrect the relay brain (the 2026-07-21 hijack)."""
     aid = (avatar_id or "").strip()
     if not aid:
         return None
@@ -2237,7 +2245,8 @@ def get_avatar_brain_mode(avatar_id: str) -> str | None:
         row = conn.execute(
             "SELECT brain_mode FROM avatar_brain_mode WHERE avatar_id = ?", (aid,)
         ).fetchone()
-    return row[0] if row else None
+    mode = row[0] if row else None
+    return mode if mode in _VALID_BRAIN_MODES else None
 
 
 def set_org_pref(org_id: str, key: str, value: str) -> bool:
