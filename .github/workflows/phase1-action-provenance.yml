@@ -36,16 +36,21 @@ jobs:
           echo "Phase 1 action provenance run" >> phase1-run.txt
           echo "commit=$(git rev-parse HEAD)" >> phase1-run.txt
 
-          sed -i "s/'       (opts\.approveAfter?/'      (opts.approveAfter?/g" scripts/phase1_apply.py
-          python scripts/phase1_apply.py > phase1-apply.log 2>&1
-          APPLY_RC=$?
+          if grep -q "def preview_for" backend/app/actions/action_plane.py && grep -q "function reviewAction" frontend/dashboard.html; then
+            APPLY_RC=0
+            echo "implementation already applied" > phase1-apply.log
+          else
+            sed -i "s/'       (opts\.approveAfter?/'      (opts.approveAfter?/g" scripts/phase1_apply.py
+            python scripts/phase1_apply.py > phase1-apply.log 2>&1
+            APPLY_RC=$?
+          fi
           echo "apply_exit=$APPLY_RC" >> phase1-run.txt
           cat phase1-apply.log >> phase1-run.txt
 
           INSTALL_RC=99
           TEST_RC=99
           if [ "$APPLY_RC" -eq 0 ]; then
-            python -m pip install -r backend/requirements.txt > phase1-install.log 2>&1
+            python -m pip install -r requirements.txt > phase1-install.log 2>&1
             INSTALL_RC=$?
             echo "install_exit=$INSTALL_RC" >> phase1-run.txt
             tail -80 phase1-install.log >> phase1-run.txt
