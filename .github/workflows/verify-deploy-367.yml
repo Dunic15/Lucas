@@ -1,0 +1,98 @@
+name: Verify deploy 367
+
+on:
+  push:
+    branches:
+      - chore/verify-deploy-367
+    paths:
+      - .github/workflows/verify-deploy-367.yml
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TARGET_SHA: 733bb2d2b3f41a5b928902c22dd78c7710028dd9
+      BASE_URL: https://dhfgfe6yw6.eu-central-1.awsapprunner.com
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chore/verify-deploy-367
+          fetch-depth: 0
+
+      - name: Wait for backend image build
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > deploy-367-status.txt
+          echo "target_sha=$TARGET_SHA" >> deploy-367-status.txt
+          found=""
+          for i in $(seq 1 60); do
+            row=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build-backend-image.yml/runs?branch=main&per_page=20" \
+              --jq ".workflow_runs[] | select(.head_sha == \"$TARGET_SHA\") | [.id,.status,(.conclusion // \"\"),.html_url] | @tsv" | head -1 || true)
+            if [ -n "$row" ]; then
+              found="$row"
+              run_id=$(printf '%s' "$row" | cut -f1)
+              status=$(printf '%s' "$row" | cut -f2)
+              conclusion=$(printf '%s' "$row" | cut -f3)
+              url=$(printf '%s' "$row" | cut -f4)
+              echo "build_run_id=$run_id" > /tmp/build.env
+              echo "build_url=$url" >> /tmp/build.env
+              echo "build_status=$status" >> /tmp/build.env
+              echo "build_conclusion=$conclusion" >> /tmp/build.env
+              if [ "$status" = "completed" ]; then break; fi
+            fi
+            sleep 10
+          done
+          if [ -z "$found" ]; then
+            echo "build_status=not_found" >> deploy-367-status.txt
+            exit 1
+          fi
+          cat /tmp/build.env >> deploy-367-status.txt
+          source /tmp/build.env
+          test "$build_status" = "completed"
+          test "$build_conclusion" = "success"
+
+      - name: Verify live service and deployed dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          live_marker=false
+          health_ok=false
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 15 "$BASE_URL/health" -o /tmp/health.json; then
+              if python - <<'PY'
+import json
+with open('/tmp/health.json', encoding='utf-8') as f:
+    d=json.load(f)
+raise SystemExit(0 if d.get('status') == 'ok' else 1)
+PY
+              then health_ok=true; fi
+            fi
+            curl -fsSL --max-time 20 "$BASE_URL/dashboard" -o /tmp/dashboard.html || true
+            if grep -Fq "This is the canonical action saved on the server" /tmp/dashboard.html 2>/dev/null; then
+              live_marker=true
+              break
+            fi
+            sleep 10
+          done
+          echo "health_ok=$health_ok" >> deploy-367-status.txt
+          echo "dashboard_marker_live=$live_marker" >> deploy-367-status.txt
+          echo "health_response=$(tr -d '\n' < /tmp/health.json 2>/dev/null || true)" >> deploy-367-status.txt
+          test "$health_ok" = "true"
+          test "$live_marker" = "true"
+
+      - name: Commit verification report
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy-367-status.txt
+          git commit -m "chore: record deploy verification for PR 367"
+          git push origin HEAD:chore/verify-deploy-367
