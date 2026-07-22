@@ -223,10 +223,24 @@ def embed(texts: list[str], *, input_type: str = "document") -> list[list[float]
         return _embed_hash(texts)
     if provider == "local":
         return _embed_local(texts)
-    if provider == "voyage":
-        return _embed_voyage(texts, input_type)
-    if provider == "openai":
-        return _embed_openai(texts)
-    if provider in ("vertex", "gemini"):
-        return _embed_vertex(texts, input_type)
-    raise RuntimeError(f"Unknown EMBEDDING_PROVIDER '{provider}'.")
+    if provider not in ("voyage", "openai", "vertex", "gemini"):
+        raise RuntimeError(f"Unknown EMBEDDING_PROVIDER '{provider}'.")
+    # HOSTED providers are FAIL-SOFT on the live path: a 429 / outage / missing
+    # key must NEVER raise — it would 500 the recall webhook and mute the avatar
+    # (live incident 2026-07-22: Vertex 429 → 500 → Petra silent). On any error
+    # fall back to the local model (itself hash-safe). Retrieval quality for that
+    # one call degrades; the avatar keeps talking. The index-signature rebuild
+    # path is unaffected (it stamps the configured provider).
+    try:
+        if provider == "voyage":
+            return _embed_voyage(texts, input_type)
+        if provider == "openai":
+            return _embed_openai(texts)
+        return _embed_vertex(texts, input_type)  # vertex | gemini
+    except Exception as e:  # noqa: BLE001 — live path must not raise
+        print(
+            f"[embeddings] provider {provider!r} failed ({type(e).__name__}) — "
+            "local fallback for this call",
+            flush=True,
+        )
+        return _embed_local(texts)

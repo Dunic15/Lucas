@@ -477,7 +477,9 @@ def retrieve(
     the org has never ingested anything, behavior is exactly the base pack.
     Isolation is structural: each org's index is its own file, so org A can
     never retrieve org B's documents."""
-    base = _rank(_load(avatar), query, k)
+    # Embed the query ONCE and reuse it for both indexes (base + org).
+    qv = np.array(embed([query], input_type="query")[0], dtype=np.float32)
+    base = _rank(_load(avatar), query, k, qv)
     org_store = _load_org(avatar, org_id) if org_id else None
     # M2 context scope: a resolved avatar may carry a per-source restriction
     # (avatar_resolver.ResolvedAvatar.context_scope). Applied BEFORE ranking,
@@ -488,7 +490,7 @@ def retrieve(
         org_store = _scoped_org_store(org_store, scope)
     if org_store is None:
         return base
-    merged = _rank(org_store, query, k) + base
+    merged = _rank(org_store, query, k, qv) + base
     merged.sort(key=lambda r: -r.score)
     return merged[:k]
 
@@ -661,8 +663,13 @@ def _load_org(avatar: Avatar, org_id: str) -> dict | None:
     return _ORG_CACHE[key]
 
 
-def _rank(store: dict, query: str, k: int) -> list[Retrieved]:
-    qv = np.array(embed([query], input_type="query")[0], dtype=np.float32)
+def _rank(store: dict, query: str, k: int, qv: "np.ndarray | None" = None) -> list[Retrieved]:
+    # Accept a PRE-COMPUTED query vector so a single retrieve() embeds the query
+    # ONCE and ranks every index (avatar base + org private) with it, instead of
+    # re-embedding per index — halves embedding calls (latency + provider rate
+    # limit). Callers that pass only the string keep working (embed here).
+    if qv is None:
+        qv = np.array(embed([query], input_type="query")[0], dtype=np.float32)
 
     matrix = store["matrix"]
     denom = np.linalg.norm(matrix, axis=1) * np.linalg.norm(qv) + 1e-9
