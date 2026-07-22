@@ -193,14 +193,23 @@ def _embed_vertex(texts: list[str], input_type: str) -> list[list[float]]:
 
     import httpx
 
+    # gemini-embedding-001 can emit a chosen dimension via parameters.
+    params: dict = {}
+    dim = int(getattr(settings, "embedding_dimension", 0) or 0)
+    if dim > 0:
+        params["outputDimensionality"] = dim
+
     out: list[list[float]] = []
     for i in range(0, len(texts), _VERTEX_EMBED_BATCH):
         batch = texts[i:i + _VERTEX_EMBED_BATCH]
+        body: dict = {"instances": [{"content": t, "task_type": task} for t in batch]}
+        if params:
+            body["parameters"] = params
         resp = httpx.post(
             url,
             headers={"Authorization": f"Bearer {token}",
                      "Content-Type": "application/json"},
-            json={"instances": [{"content": t, "task_type": task} for t in batch]},
+            json=body,
             timeout=60.0,
         )
         resp.raise_for_status()

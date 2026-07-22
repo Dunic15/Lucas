@@ -460,15 +460,32 @@ def _groq_messages(system: str, user: str) -> list[dict]:
     ]
 
 
+# Persistent HTTP client for the OpenAI-compatible provider (Cerebras/groq is
+# the LIVE spoken path). httpx.stream()/post() open+close a connection per call
+# — a fresh TLS handshake to Cerebras on EVERY utterance. A keep-alive pool
+# reuses the warm connection, shaving that handshake off live latency.
+_compat_http = None  # lazy singleton
+
+
+def _compat_client():
+    global _compat_http
+    if _compat_http is None:
+        import httpx
+
+        _compat_http = httpx.Client(
+            timeout=120.0,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+    return _compat_http
+
+
 def _complete_groq(
     system: str, user: str, max_tokens: int, model: str | None = None,
     provider: str = "groq",
 ) -> str:
     """Non-streaming OpenAI-compatible call (groq | cerebras). Post-meeting path."""
-    import httpx
-
     base, key = _compat_creds(provider)
-    resp = httpx.post(
+    resp = _compat_client().post(
         f"{base.rstrip('/')}/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
         json={
@@ -476,7 +493,6 @@ def _complete_groq(
             "max_tokens": max_tokens,
             "messages": _groq_messages(system, user),
         },
-        timeout=120.0,
     )
     resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"]
@@ -489,10 +505,8 @@ def _stream_groq(
     """Stream text deltas from an OpenAI-compatible provider (groq | cerebras)."""
     import json as _json
 
-    import httpx
-
     base, key = _compat_creds(provider)
-    with httpx.stream(
+    with _compat_client().stream(
         "POST",
         f"{base.rstrip('/')}/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
@@ -502,7 +516,6 @@ def _stream_groq(
             "stream": True,
             "messages": _groq_messages(system, user),
         },
-        timeout=120.0,
     ) as resp:
         resp.raise_for_status()
         for line in resp.iter_lines():

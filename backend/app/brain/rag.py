@@ -260,6 +260,7 @@ def _write_index(index_path: Path, chunks: list[Chunk], source_paths: list[Path]
                 # guarantees index/query vector agreement across restarts.
                 "provider": provider_signature(),
                 "model": settings.embedding_model,
+                "dim": settings.embedding_dimension,
                 "version": INDEX_VERSION,
                 "sources": _sources_signature(source_paths),
                 "chunks": [asdict(c) for c in chunks],
@@ -301,6 +302,7 @@ def _index_is_current(index_path: Path, source_paths: list[Path]) -> bool:
     return (
         raw.get("provider") == provider_signature()
         and raw.get("model") == settings.embedding_model
+        and raw.get("dim", 0) == settings.embedding_dimension
         and raw.get("version") == INDEX_VERSION
         and raw.get("sources") == _sources_signature(source_paths)
     )

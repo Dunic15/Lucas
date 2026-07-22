@@ -118,6 +118,10 @@ class Settings(BaseSettings):
     embedding_provider: str = "hash"
     voyage_api_key: str = ""
     embedding_model: str = "voyage-3"
+    # Optional output dimension for providers that support it (gemini-embedding-
+    # 001 can emit 768/1536/3072). 0 = the model's native default. Stamped into
+    # the index signature so a dimension change forces a clean re-index.
+    embedding_dimension: int = 0
 
     # Recall.ai (live meeting entry: ears + camera)
     recall_api_key: str = ""
