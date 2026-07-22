@@ -251,6 +251,50 @@ def test_leave_webhook_schedules_empty_room_check(tmp_path, monkeypatch):
     store.remove(s.bot_id)
 
 
+def test_agent_join_during_grace_keeps_meter_finalize_armed(tmp_path, monkeypatch):
+    """A bot/agent join must NOT cancel a pending empty-room finalize.
+
+    Empty-room grace is a HUMAN-presence property (roster() counts only humans).
+    A join never reschedules, so if an agent/bot join (bot reconnect, co-avatar)
+    were allowed to cancel the pending finalize, the room would sit human-empty
+    with NO timer and the per-minute meter would leak until the call actually
+    ends. The empty-room block is therefore gated on kind != agent.
+    """
+    s = _session(tmp_path, monkeypatch, bot_id="empty-room-agent-join")
+    _mute(monkeypatch)
+
+    def participant_payload(event, pid, name, extra=None):
+        p = {"id": pid, "name": name}
+        if extra:
+            p.update(extra)
+        return {
+            "event": event,
+            "data": {"bot": {"id": s.bot_id}, "data": {"participant": p}},
+        }
+
+    async def scenario():
+        # A human joins then leaves → the last-human leave arms the finalize.
+        await _post_async(participant_payload("participant_events.join", 1, "Kai"))
+        await _post_async(participant_payload("participant_events.leave", 1, "Kai"))
+        armed = getattr(s, "empty_room_task", None)
+        assert armed is not None and not armed.done()
+
+        # A bot/agent join lands during the grace window (is_agent → kind=agent).
+        await _post_async(
+            participant_payload(
+                "participant_events.join", 99, "Laura", {"is_agent": True}
+            )
+        )
+
+        # Meter-safety invariant: the pending finalize survives, untouched.
+        assert getattr(s, "empty_room_task", None) is armed
+        assert not armed.cancelled()
+        main._invalidate_empty_room_leave(s)  # deterministic cleanup
+
+    asyncio.run(scenario())
+    store.remove(s.bot_id)
+
+
 # ── 1. manual-routed card + no Google → tracked-only, never a doomed claim ──
 
 
