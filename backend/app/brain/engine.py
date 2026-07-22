@@ -1902,7 +1902,8 @@ def _build_decision_records(
     out: list[dict] = []
     seen: set[str] = set()
 
-    def _add(decision: str, maker: str, reason: str, project: str) -> None:
+    def _add(decision: str, maker: str, reason: str, project: str,
+             revises: str = "") -> None:
         text = (decision or "").strip()
         if not text or len(text) > _MAX_LINE_CHARS:
             return
@@ -1918,6 +1919,15 @@ def _build_decision_records(
                 "decision_maker": (maker or "").strip(),
                 "reason": (reason or "").strip(),
                 "related_project": (project or "").strip(),
+                # A HINT that this decision revises an earlier one — never the
+                # identity of the target. The model normalizes a decision into
+                # clean prose ("use construction as the niche"), so the spoken
+                # revision cue is often gone by the time the deterministic
+                # linker reads the text (live gap 2026-07-22: the supersede
+                # pill never appeared). Keeping the flag lets the linker know a
+                # revision happened; WHICH decision it supersedes stays
+                # resolved against real prior rows, never from the model.
+                "revises_earlier": bool(str(revises or "").strip()),
             }
         )
 
@@ -1930,6 +1940,7 @@ def _build_decision_records(
                 str(rec.get("decision_maker") or ""),
                 str(rec.get("reason") or ""),
                 str(rec.get("related_project") or ""),
+                str(rec.get("supersedes") or rec.get("revises") or ""),
             )
     # Backfill any decision line the model didn't structure (or all of them, in
     # stub/degraded mode) so every one-liner has a record.

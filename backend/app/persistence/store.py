@@ -2337,10 +2337,43 @@ _VALID_DECISION_STATUS = ("active", "superseded", "revisited")
 # supersede cue. Deterministic regex (no model call) — the linker only fires
 # when the cue AND a shared related_project are both present.
 _DECISION_SUPERSEDE_CUE = re.compile(
-    r"\b(supersed\w+|instead of|changed from|no longer|moved to|replaces?\b|"
-    r"overrid\w+|rather than|in place of)\b",
+    r"\b(supersed\w+|instead of|instead\b|changed from|no longer|moved to|"
+    r"replaces?\b|overrid\w+|rather than|in place of|"
+    # Live gap 2026-07-22: the owner revised a decision with "this substitutes
+    # the decision from before" and no link was drawn — the cue list only knew
+    # formal register. These are how people actually revise out loud.
+    r"substitut\w+|switch(?:ing|ed|es)?\s+to|revis\w+|reverse[sd]?\b|"
+    r"scrap\s+(?:that|this|the)|drop\s+(?:that|the earlier|the previous)|"
+    r"changed?\s+(?:our|my|his|her|their)\s+mind|in\s+favou?r\s+of|"
+    r"(?:earlier|previous|prior)\s+decision|"
+    # Italian: the owner's meetings switch language mid-call.
+    r"sostituis\w+|al\s+posto\s+di|invece\s+di|non\s+pi[uù]\b|"
+    r"cambi\w+\s+idea|decisione\s+precedente|annulla\s+la\s+decisione)\b",
     re.IGNORECASE,
 )
+
+def _revises_earlier(rec: dict) -> bool:
+    """Does this decision revise an earlier one on the same project?
+
+    Two independent signals, either is enough:
+      * an explicit cue in the decision text ("this supersedes...", "instead
+        of...", "sostituisce..."), and
+      * the summarizer's own ``revises_earlier`` flag — it saw the spoken
+        revision even when it normalized the wording into clean prose that no
+        longer carries the cue (live gap 2026-07-22: the owner said "this
+        substitutes the decision from before", the record read "use
+        construction as the primary niche", and no link was ever drawn).
+
+    The flag only says THAT a revision happened. WHICH decision is superseded
+    is always resolved against real prior rows below — never taken from the
+    model.
+    """
+    if not isinstance(rec, dict):
+        return False
+    if rec.get("revises_earlier") is True:
+        return True
+    return bool(_DECISION_SUPERSEDE_CUE.search(str(rec.get("decision") or "")))
+
 
 # The supersede linker only looks back over a recent window per project — a
 # newer decision overrides the MOST-RECENT earlier active one, so an unbounded
@@ -2555,7 +2588,7 @@ def persist_decision_records(
         if not isinstance(rec, dict):
             continue
         proj = str(rec.get("related_project") or "").strip()
-        if proj and _DECISION_SUPERSEDE_CUE.search(str(rec.get("decision") or "")):
+        if proj and _revises_earlier(rec):
             candidate_projects.setdefault(proj.casefold(), proj)
     prior: list[dict] = []
     for proj in candidate_projects.values():
@@ -2574,7 +2607,7 @@ def persist_decision_records(
             continue
         project = str(rec.get("related_project") or "").strip()
         target = None
-        if project and _DECISION_SUPERSEDE_CUE.search(text):
+        if project and _revises_earlier(rec):
             key = project.casefold()
             for cand in prior:
                 if (
