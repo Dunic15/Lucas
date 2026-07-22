@@ -1,0 +1,80 @@
+name: Verify PR 367 production deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/verify-pr367-deploy.yml"
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_SHA: 733bb2d2b3f41a5b928902c22dd78c7710028dd9
+      BASE_URL: https://dhfgfe6yw6.eu-central-1.awsapprunner.com
+    steps:
+      - name: Verify image build and live service
+        shell: bash
+        run: |
+          set +e
+          build_status="not_found"
+          build_conclusion=""
+          build_url=""
+          for i in $(seq 1 90); do
+            row=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build-backend-image.yml/runs?branch=main&per_page=30" \
+              --jq ".workflow_runs[] | select(.head_sha == \"$TARGET_SHA\") | [.status,(.conclusion // \"\"),.html_url] | @tsv" | head -1 || true)
+            if [ -n "$row" ]; then
+              build_status=$(printf '%s' "$row" | cut -f1)
+              build_conclusion=$(printf '%s' "$row" | cut -f2)
+              build_url=$(printf '%s' "$row" | cut -f3)
+              [ "$build_status" = "completed" ] && break
+            fi
+            sleep 10
+          done
+
+          health_ok=false
+          marker_live=false
+          health_body=""
+          if [ "$build_status" = "completed" ] && [ "$build_conclusion" = "success" ]; then
+            for i in $(seq 1 90); do
+              health_body=$(curl -fsS --max-time 15 "$BASE_URL/health" 2>/dev/null || true)
+              if printf '%s' "$health_body" | python -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("status")=="ok" else 1)' 2>/dev/null; then
+                health_ok=true
+              fi
+              page=$(curl -fsSL --max-time 20 "$BASE_URL/dashboard" 2>/dev/null || true)
+              if printf '%s' "$page" | grep -Fq "This is the canonical action saved on the server"; then
+                marker_live=true
+                break
+              fi
+              sleep 10
+            done
+          fi
+
+          result="❌ NOT VERIFIED"
+          if [ "$build_conclusion" = "success" ] && [ "$health_ok" = "true" ] && [ "$marker_live" = "true" ]; then
+            result="✅ VERIFIED LIVE"
+          fi
+
+          body=$(cat <<EOF
+          ## Production deploy verification — PR #367
+
+          **$result**
+
+          - Target merge: \`$TARGET_SHA\`
+          - Backend image build: \`$build_status / $build_conclusion\`
+          - Build run: $build_url
+          - App Runner health: \`$health_ok\`
+          - New canonical-preview marker live: \`$marker_live\`
+          - Health response: \`$health_body\`
+          EOF
+          )
+          gh pr comment 367 --body "$body"
+
+          [ "$result" = "✅ VERIFIED LIVE" ]
