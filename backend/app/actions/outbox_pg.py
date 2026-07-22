@@ -611,6 +611,216 @@ def extend_action_capture_once(
         }, True
 
 
+def rewrite_action_capture_once(
+    org_id: str,
+    bot_id: str,
+    action_id: str,
+    updates: dict[str, Any],
+    *,
+    source_event_key: str = "",
+    source_fingerprint: str = "",
+    dedupe_window_seconds: float = 30.0,
+) -> tuple[dict[str, str], bool]:
+    """REPLACE draft fields once (live correction) — PG twin of the sqlite
+    rewrite. Same advisory lock + idempotency ledger as the extend path; an
+    already-delivered action.requested is NOT an error here (the queued row
+    stays the durable truth for finalize and the approval doors)."""
+    event_key = str(source_event_key or "")[:128]
+    fingerprint = str(source_fingerprint or "")[:128]
+    window = max(1.0, min(float(dedupe_window_seconds), 300.0))
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        _capture_finalize_lock(conn, org_id, bot_id)
+        _require_capture_open(conn, org_id, bot_id)
+        conn.execute(
+            text(
+                "SELECT pg_catalog.pg_advisory_xact_lock("
+                "pg_catalog.hashtextextended(:lock_key, 0))"
+            ),
+            {"lock_key": f"{org_id}:{bot_id}:action:{action_id}"},
+        )
+        row = conn.execute(
+            text(
+                """
+                SELECT action_id, action, owner, due
+                FROM queued_actions
+                WHERE org_id=:org_id AND bot_id=:bot_id
+                  AND action_id=:action_id
+                FOR UPDATE
+                """
+            ),
+            {"org_id": org_id, "bot_id": bot_id, "action_id": action_id},
+        ).mappings().first()
+        if row is None:
+            raise RuntimeError("queued action missing during correction")
+
+        duplicate = None
+        if event_key:
+            duplicate = conn.execute(
+                text(
+                    """
+                    SELECT 1 FROM action_capture_events
+                    WHERE org_id=:org_id AND action_id=:action_id
+                      AND source_event_key=:source_event_key
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "org_id": org_id,
+                    "action_id": action_id,
+                    "source_event_key": event_key,
+                },
+            ).first()
+        elif fingerprint:
+            duplicate = conn.execute(
+                text(
+                    """
+                    SELECT 1 FROM action_capture_events
+                    WHERE org_id=:org_id AND action_id=:action_id
+                      AND source_fingerprint=:source_fingerprint
+                      AND created_at >= clock_timestamp()
+                        - (:window * interval '1 second')
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "org_id": org_id,
+                    "action_id": action_id,
+                    "source_fingerprint": fingerprint,
+                    "window": window,
+                },
+            ).first()
+        if duplicate is not None:
+            return _capture_item(row), False
+
+        new_action = str(updates.get("action", row["action"]) or "")[:300]
+        new_owner = str(updates.get("owner", row["owner"]) or "")[:100]
+        new_due = str(updates.get("due", row["due"]) or "")[:100]
+        conn.execute(
+            text(
+                """
+                INSERT INTO action_capture_events (
+                  org_id, action_id, source_event_key,
+                  source_fingerprint, created_at
+                ) VALUES (
+                  :org_id, :action_id, :source_event_key,
+                  :source_fingerprint, clock_timestamp()
+                )
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": action_id,
+                "source_event_key": event_key,
+                "source_fingerprint": fingerprint,
+            },
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE queued_actions
+                SET action=:action, owner=:owner, due=:due,
+                    updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND bot_id=:bot_id
+                  AND action_id=:action_id
+                """
+            ),
+            {
+                "org_id": org_id,
+                "bot_id": bot_id,
+                "action_id": action_id,
+                "action": new_action,
+                "owner": new_owner,
+                "due": new_due,
+            },
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE callback_outbox
+                SET payload_json=jsonb_set(jsonb_set(jsonb_set(
+                      payload_json,
+                      '{action}', to_jsonb(CAST(:action AS text)), true),
+                      '{owner}', to_jsonb(CAST(:owner AS text)), true),
+                      '{due}', to_jsonb(CAST(:due AS text)), true),
+                    next_attempt_at=GREATEST(
+                      next_attempt_at,
+                      clock_timestamp() + interval '1 second'
+                    ),
+                    updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND action_id=:action_id
+                  AND event='action.requested'
+                  AND status IN ('pending', 'failed')
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": action_id,
+                "action": new_action,
+                "owner": new_owner,
+                "due": new_due,
+            },
+        )
+        return {
+            "action_id": str(row["action_id"]),
+            "action": new_action,
+            "owner": new_owner,
+            "due": new_due,
+        }, True
+
+
+def withdraw_action_capture(org_id: str, bot_id: str, action_id: str) -> bool:
+    """Withdraw a cancelled draft — PG twin. Finalize-in-progress returns
+    False (the drain owns the rows); a retry of the cancel is a no-op."""
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        _capture_finalize_lock(conn, org_id, bot_id)
+        closed = conn.execute(
+            text(
+                """
+                SELECT state FROM action_finalize_state
+                WHERE org_id=:org_id AND bot_id=:bot_id
+                """
+            ),
+            {"org_id": org_id, "bot_id": bot_id},
+        ).first()
+        if closed is not None:
+            return False
+        conn.execute(
+            text(
+                "SELECT pg_catalog.pg_advisory_xact_lock("
+                "pg_catalog.hashtextextended(:lock_key, 0))"
+            ),
+            {"lock_key": f"{org_id}:{bot_id}:action:{action_id}"},
+        )
+        gone = conn.execute(
+            text(
+                """
+                DELETE FROM queued_actions
+                WHERE org_id=:org_id AND bot_id=:bot_id
+                  AND action_id=:action_id
+                RETURNING action_id
+                """
+            ),
+            {"org_id": org_id, "bot_id": bot_id, "action_id": action_id},
+        ).first()
+        conn.execute(
+            text(
+                """
+                UPDATE callback_outbox SET status='cancelled',
+                    updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND action_id=:action_id
+                  AND event='action.requested'
+                  AND status IN ('pending', 'failed')
+                """
+            ),
+            {"org_id": org_id, "action_id": action_id},
+        )
+        return gone is not None
+
+
 def update_queued_action(
     org_id: str, bot_id: str, item: dict[str, Any]
 ) -> None:

@@ -1538,6 +1538,19 @@ _ALREADY_LINES_IT = [
     "Ricevuto — quella è già in coda.",
 ]
 
+# Spoken when the asker cancels the action she just captured ("lascia
+# perdere", "never mind"): the draft card is withdrawn for real (spec M
+# 2026-07-22 — before this, the cancel phrase was APPENDED to the action text
+# and the dead card still reached the dashboard). Fixed lines ⇒ prewarmed TTS.
+_CANCEL_ACK_LINES = [
+    "Okay — scrapped it.",
+    "Done, I've dropped that one.",
+]
+_CANCEL_ACK_LINES_IT = [
+    "Ok, lascio perdere — annullata.",
+    "Va bene, la scarto.",
+]
+
 
 def _clarify_line(heard: str, missing: list[str]) -> str:
     # Always LEAD with a capture confirmation, THEN ask for the missing detail —
@@ -1629,6 +1642,44 @@ def _wake_required(avatar: avatars.Avatar,
     if session is not None and _human_count(session, avatar) <= 1:
         return False
     return base
+
+
+def _followup_shape_ok(text: str) -> bool:
+    """Does a bare (un-named) line within the follow-up window SOUND like a
+    follow-up to her answer? Questions always did ("e la deadline?"); direct
+    imperative asks now do too ("crea una task", "send him the doc") — live
+    repro 2026-07-22: the hard endswith('?') gate made every un-punctuated
+    imperative follow-up require re-saying her name, breaking the flow the
+    window exists for. wants_action_capture is the same ^-anchored regex the
+    capture seam trusts, so plain statements ("we should send X") stay out,
+    and the in-stream SKIP sentinel remains the backstop for misfires."""
+    t = (text or "").rstrip()
+    return t.endswith("?") or wants_action_capture(t)
+
+
+def _followup_speaker_ok(session: "store.Session", speaker_id: str) -> bool:
+    """Bind the follow-up window to the participant whose ask she just served
+    (multi-party etiquette): THEIR un-named follow-up rides the fast path;
+    a different participant addresses her by name. Turns with no recorded
+    interlocutor (proactive/closing speech) keep the historical any-speaker
+    behavior, as do sessions where the speaker id is unknown."""
+    owner = getattr(session, "followup_owner", None)
+    if not owner or not speaker_id:
+        return True
+    return bool(owner[0] == speaker_id)
+
+
+def _active_draft(session: "store.Session") -> tuple[dict | None, str]:
+    """The action draft the room can still amend by voice, plus its asker:
+    a capture parked in clarify, else the most recent capture inside the
+    same-ask horizon. (None, "") when nothing is amendable."""
+    clar = getattr(session, "pending_clarify", None)
+    if clar is not None:
+        return clar[0], str(clar[1] or "")
+    recent = getattr(session, "last_capture", None)
+    if recent is not None and (time.time() - recent[2]) < _SAME_ASK_WINDOW_S:
+        return recent[0], str(recent[1] or "")
+    return None, ""
 
 
 def _should_backchannel(
@@ -1795,6 +1846,8 @@ async def _prewarm_tts_cache() -> None:
         *_QUEUE_LINES_IT,
         *_QUEUE_LINES_TASK,
         *_QUEUE_LINES_TASK_IT,
+        *_CANCEL_ACK_LINES,
+        *_CANCEL_ACK_LINES_IT,
         *_BACKCHANNEL_LINES,
         *_BACKCHANNEL_LINES_IT,
         *_GOODBYE_LINES,
@@ -3351,6 +3404,87 @@ async def recall_webhook(request: Request) -> JSONResponse:
         session.hand_last_ignored = True
         await _lower_hand(session)
 
+    # ── live corrections on the ACTIVE draft (spec M, 2026-07-22) ──
+    # "No, non venerdì — lunedì" / "lascia perdere" right after a capture must
+    # MUTATE or WITHDRAW the one card she just queued — before this gate the
+    # clarify/extend seams APPENDED the correction to the action text and the
+    # wrong (or dead) card reached the dashboard. Runs BEFORE the clarify
+    # block so a correction is never mistaken for the answer to her detail
+    # question, and before the wake gates so a bare "no, not Anant — Marco"
+    # works without re-saying her name. Only the asker being served (or a
+    # by-name address) may amend the draft — cross-talk stays out.
+    d_item, d_speaker = _active_draft(session)
+    if d_item is not None and (called or (speaker_id and speaker_id == d_speaker)):
+        if tools.is_draft_cancel(text):
+            withdrawn = await run_in_threadpool(
+                tools.withdraw_action_once, session, d_item
+            )
+            session.pending_clarify = None
+            spoke = False
+            if withdrawn:
+                cancel_gen = store.bump_speech_generation(session)
+                line = _line_for(text, _CANCEL_ACK_LINES, _CANCEL_ACK_LINES_IT)
+                session.last_ack_at = time.time()
+                spoke = await _make_avatar_speak(
+                    session,
+                    line,
+                    force=True,
+                    generation=cancel_gen,
+                    audio=tts.cached_payload(line, _avatar_voice(session)),
+                )
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": bool(spoke),
+                    "action_cancelled": True,
+                    "duplicate": not withdrawn,
+                }
+            )
+        for corr_old, corr_new in tools.parse_corrections(text):
+            corr_updates = tools.apply_correction(d_item, corr_old, corr_new)
+            if corr_updates is None:
+                continue  # OLD isn't in this draft — not a correction of it
+            try:
+                _revised, applied = await run_in_threadpool(
+                    tools.revise_action_once,
+                    session,
+                    d_item,
+                    corr_updates,
+                    source_event_key=capture_event_key,
+                    source_fingerprint=capture_fingerprint,
+                )
+            except outbox.ActionCaptureClosed:
+                session.pending_clarify = None
+                return JSONResponse(
+                    {"ok": True, "spoke": False, "capture_rejected": "meeting_finalizing"}
+                )
+            # pending_clarify (if any) holds the SAME dict revise mutated in
+            # place, so the clarify flow keeps working on the corrected draft.
+            spoke = False
+            if applied:
+                corr_gen = store.bump_speech_generation(session)
+                line = (
+                    f"Ok — {corr_new}."
+                    if sounds_italian(text)
+                    else f"Got it — {corr_new}."
+                )
+                session.last_ack_at = time.time()
+                spoke = await _make_avatar_speak(
+                    session,
+                    line,
+                    force=True,
+                    generation=corr_gen,
+                    audio=tts.cached_payload(line, _avatar_voice(session)),
+                )
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": bool(spoke),
+                    "action_corrected": True,
+                    "duplicate": not applied,
+                }
+            )
+
     # ── clarify-before-create: the asker answers the avatar's question ──
     # A capture that was missing details parked here (session.pending_clarify)
     # while the avatar asked. The SAME speaker's next line resolves it: detail
@@ -4032,7 +4166,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
         followup_ok = (
             settings.followup_window_seconds > 0
             and (time.time() - session.last_spoke_at) < settings.followup_window_seconds
-            and text.rstrip().endswith("?")
+            and _followup_shape_ok(text)
+            and _followup_speaker_ok(session, speaker_id)
         )
         if not followup_ok:
             return JSONResponse({"ok": True, "spoke": False, "reason": "not called"})
@@ -4054,7 +4189,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
         not called
         and settings.followup_window_seconds > 0
         and (time.time() - session.last_spoke_at) < settings.followup_window_seconds
-        and text.rstrip().endswith("?")
+        and _followup_shape_ok(text)
+        # Window belongs to the participant she just answered: a DIFFERENT
+        # speaker's bare line is not a follow-up — it degrades to the normal
+        # room-open path below (deference + SKIP), never a fast-path reply.
+        and _followup_speaker_ok(session, speaker_id)
     )
 
     # Cooldown throttles UNPROMPTED interjections. Being addressed by name is a
@@ -4120,6 +4259,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # a previous answer was still generating).
     turn_gen = store.bump_speech_generation(session)
 
+    # This turn was admitted (called / follow-up / room-open past deference):
+    # the asker becomes the follow-up window's interlocutor — THEIR next bare
+    # line rides the window (_followup_speaker_ok). Runtime-only, like
+    # last_addressed: a 15s dialogue affinity, not persisted state.
+    session.followup_owner = (speaker_id, time.time())
+
     # ── action requests: capture, never execute (queue_action platform seam) ──
     # "Cedric, can you send the recap?" is a request to DO something. Capture is
     # DETERMINISTIC — no LLM call, no tool loop, nothing slower than an ack: the
@@ -4134,10 +4279,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # is unambiguously for her even without her name (same roster rule as the
     # _wake_required fluid relaxation; owner ask 2026-07-21, round-3 test: solo
     # instructions were never captured, so no confirmation ever spoke and every
-    # ask fell to the summarizer as a mere "goal"). Groups keep name-required
-    # capture: an unaddressed "someone should send X" stays the summarizer's
-    # job at finalize.
-    if ((called or _human_count(session, avatar) <= 1)
+    # ask fell to the summarizer as a mere "goal"), and EXCEPT a follow-up
+    # inside the window from the speaker she's serving ("crea una task" right
+    # after her answer IS for her — spec 2026-07-22; the window is already
+    # shape- and speaker-bound). Groups keep name-required capture otherwise:
+    # an unaddressed "someone should send X" stays the summarizer's job at
+    # finalize.
+    if ((called or followup or _human_count(session, avatar) <= 1)
             and wants_action_capture(question)
             and not wants_web_search(question)
             # A 'show me Asana / give me a tour' ask is a LIVE thing the
