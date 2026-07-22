@@ -2,7 +2,7 @@
 
 **Owner:** Product/engineering
 **Applies to:** Current Laura backend and live meeting workflow
-**Last reviewed:** 2026-07-21
+**Last reviewed:** 2026-07-22
 
 ## What Laura is
 
@@ -76,6 +76,32 @@ and English. The Recall region is EU: `RECALL_API_BASE=https://eu-central-1.reca
 7. At session end the Recall bot leaves (per-minute billing stops) and the
    post-meeting artifact is built: summary, decisions, actions, missing steps,
    readiness score, and a draft follow-up email.
+
+## Decision management
+
+Decisions are first-class records, not just a list of one-line strings. When
+Laura builds the post-meeting artifact she also emits a parallel
+`decision_records` array — one object per decision carrying its
+**decision_maker** (who made or drove it, backfilled from the silent tracker's
+speaker attribution when the model leaves it blank), a short **reason**, and
+the **related_project** it concerns. The plain `decisions` list of strings is
+kept unchanged for every existing consumer (dashboard counts, the orchestrator
+wire envelope, search), so the richer shape is purely additive.
+
+Decisions also link over time: when a new decision explicitly overrides an
+earlier one on the same project ("supersedes", "instead of", "changed from",
+"no longer", "moved to"), Laura points the new record's `supersedes` at the
+earlier one and flips the earlier record's status to `superseded` — so the
+archive can answer "this decision supersedes the one from July 15" and never
+shows two conflicting decisions as both active. The linking is deterministic
+(regex over the already-extracted text, no extra model call) and runs on the
+post-meeting/finalize path only, never on the live per-utterance path.
+
+Records persist to a tenant-isolated `meeting_decisions` table (Postgres with
+row-level security for durable orgs; SQLite for the key-free demo) and are read
+back through `GET /dashboard/meetings/{bot_id}/decisions`. Only the distilled
+fields (decision, maker, reason, project, supersede link) are stored or served
+— never the transcript, which stays PII in the private artifact store.
 
 ## Conversation behaviors
 

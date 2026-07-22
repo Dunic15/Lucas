@@ -1937,6 +1937,26 @@
     // the approve/reject doors now live at MODULE scope, shared with the
     // Action Center — one execution path for every surface (see above). The
     // module-scope approveAction folds in the "Approve → Cedric" dispatch path.
+    // First-class decisions: text + who decided, why, and the project — plus a
+    // "supersedes an earlier decision" note when this one overrides a prior one
+    // (the defensible differentiator). All fields distilled server-side; esc()
+    // everything. Falls back silently when a pre-0017 meeting has none.
+    function decisionsHTML(m){
+      var ds=(m.decisions||[]).filter(function(x){return x&&x.decision;});
+      if(!ds.length) return "";
+      return '<div class="sm-h" style="margin-top:12px">Decisions</div><div class="did">'+
+        ds.map(function(x){
+          var meta=[];
+          if(x.decision_maker) meta.push("by "+esc(x.decision_maker));
+          if(x.related_project) meta.push(esc(x.related_project));
+          var sup=x.supersedes?'<span class="pill" style="margin-left:6px;color:var(--dim)">supersedes an earlier decision</span>':'';
+          return '<div class="d"><span>'+esc(x.decision)+
+            (x.status&&x.status!=="active"?' <span style="color:var(--faint)">('+esc(x.status)+')</span>':'')+sup+
+            (meta.length?'<div class="cnote" style="margin-top:2px">'+meta.join(" · ")+'</div>':'')+
+            (x.reason?'<div class="cnote" style="margin-top:2px;color:var(--dim)">'+esc(x.reason)+'</div>':'')+
+            '</span></div>';
+        }).join("")+'</div>';
+    }
     function rowHTML(m,i){ var nm=avName(m.avatar_id);
       return '<tr class="row" data-i="'+i+'"><td><div class="cell-av">'+
         (m.avatar_id&&avById[m.avatar_id]?avatarBadge(m.avatar_id,nm):'<span class="av" style="background:var(--faint)">'+esc(nm[0]||"?")+'</span>')+'<span>'+esc(nm)+'</span></div></td>'+
@@ -1947,6 +1967,7 @@
         '<tr class="detail" data-d="'+i+'" hidden><td colspan="6"><div class="inner"'+(m.transcript?' style="grid-template-columns:1.2fr 1fr .7fr"':'')+'>'+
         (m.transcript?'<div><div class="sm-h">Transcript</div><div class="tsnote">Recording begins when the avatar joins the call.</div><div class="summary tscript">'+esc(m.transcript)+'</div></div>':'')+
         '<div><div class="sm-h">AI summary</div><div class="summary">'+(m.summary?esc(m.summary):'<span style="color:var(--faint)">No summary captured.</span>')+'</div>'+
+        decisionsHTML(m)+
         (m.follow_up_subject?'<div class="sm-h" style="margin-top:12px">Follow-up email</div><div class="summary">'+esc(m.follow_up_subject)+'</div>':'')+'</div>'+
         '<div><div class="sm-h">Actions</div><div class="did">'+
         (m.actions.length?'<div class="summary" style="margin-bottom:8px">'+m.actions.length+' action'+(m.actions.length>1?'s':'')+' from this meeting'+((m.actions.some(function(a){return a.source==="inferred";}))?' (incl. proposed plan steps)':'')+'</div><button class="btn primary" data-goto-actions="1">Open in Action Centre →</button>'

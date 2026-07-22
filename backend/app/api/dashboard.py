@@ -187,6 +187,40 @@ def _action_needed(action: dict) -> list[str]:
         return []
 
 
+def _decision_entries(art: dict) -> list[dict]:
+    """Distilled first-class decision records for the wire. Uses the artifact's
+    structured ``decision_records`` when present (0017+), else synthesizes them
+    from the legacy ``decisions`` list[str] so pre-0017 archives still render.
+    Distilled fields only — decision text, maker, reason, project, supersede
+    link — never transcript."""
+    out: list[dict] = []
+    records = art.get("decision_records")
+    if isinstance(records, list) and records:
+        for r in records[:20]:
+            if not isinstance(r, dict):
+                continue
+            text = str(r.get("decision") or "").strip()
+            if not text:
+                continue
+            out.append({
+                "decision": text[:240],
+                "decision_maker": str(r.get("decision_maker") or "")[:80],
+                "reason": str(r.get("reason") or "")[:240],
+                "related_project": str(r.get("related_project") or "")[:80],
+                "supersedes": str(r.get("supersedes") or ""),
+                "status": str(r.get("status") or "active")[:24],
+            })
+        return out
+    for line in (art.get("decisions") or [])[:20]:
+        text = str(line or "").strip()
+        if text:
+            out.append({
+                "decision": text[:240], "decision_maker": "", "reason": "",
+                "related_project": "", "supersedes": "", "status": "active",
+            })
+    return out
+
+
 def _action_entry(action) -> dict:
     """Normalize an artifact action (dict or bare string) for the wire.
     action_id rides along so summary() can decorate each action with the
@@ -287,6 +321,10 @@ def _meeting_row(row: dict, include_transcript: bool = False) -> dict:
     actions = [_action_entry(a) for a in (art.get("actions") or [])[:12]]
     readiness = int(art.get("readiness_score") or 0)
     decisions_count = len(art.get("decisions") or [])
+    # First-class decision records (distilled fields only — decision text,
+    # maker, reason, project; NEVER transcript). Falls back to the legacy
+    # list[str] shape so pre-0017 artifacts still render.
+    decision_records = _decision_entries(art)
     extra = (
         {"transcript": str(art.get("transcript") or "")[:40000]}
         if include_transcript
@@ -306,6 +344,7 @@ def _meeting_row(row: dict, include_transcript: bool = False) -> dict:
         "actions": actions,
         "missing_steps": [str(s) for s in (art.get("missing_steps") or [])[:8]],
         "decisions_count": decisions_count,
+        "decisions": decision_records,
         "follow_up_subject": str(email.get("subject") or "")[:160],
         # Additive: what this meeting DELIVERED (captured→delivered), derived
         # purely from the fields above so it never leaks transcript or invents.
@@ -947,6 +986,30 @@ def dashboard_summary(request: Request) -> JSONResponse:
         }),
         headers=_NO_STORE,
     )
+
+
+@router.get("/dashboard/meetings/{bot_id}/decisions")
+async def meeting_decisions(bot_id: str, request: Request) -> JSONResponse:
+    """First-class decision records for one meeting (0017/meeting_decisions).
+
+    Same gate + tenancy as /dashboard/summary: a cookie user or per-org bearer
+    sees only their org's decisions; the unscoped worlds (global bearer /
+    key-free demo) fall back to the Demo org. Decisions are DISTILLED fields
+    (decision, maker, reason, project, supersede link) — never transcript text —
+    so they are safe to serve here. Read-only, off the live path."""
+    from .. import cedric  # local import, same reason as dashboard_summary
+
+    user = auth.current_user(request)
+    machine_org = None
+    if user is None:
+        machine_org = cedric.resolve_machine_org(request)
+        if machine_org is None:
+            if err := auth.gate(request):
+                return err
+    caller_org = user["org_id"] if user else machine_org
+    scope = caller_org or settings.demo_org_id
+    records = await run_in_threadpool(store.list_decisions, str(scope), bot_id)
+    return JSONResponse({"bot_id": bot_id, "decisions": records}, headers=_NO_STORE)
 
 
 @router.post("/dashboard/prefs/transcripts")

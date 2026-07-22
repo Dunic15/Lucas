@@ -1124,6 +1124,177 @@ def list_artifacts(org_id: str) -> Optional[list[dict[str, Any]]]:
     ]
 
 
+# ── first-class decisions (migration 0017, meeting_decisions) ──────────
+# Durable twin of the SQLite decision DAL. RLS-scoped: every statement runs
+# inside a tenant-pinned transaction (_set_org). source_ref is a bot_id /
+# meeting_key ONLY — the private transcript never enters the control plane.
+_DECISION_STATUS = ("active", "superseded", "revisited")
+
+
+def _decision_row(row) -> dict:
+    return {
+        "id": str(row[0]),
+        "bot_id": (str(row[1]) if row[1] is not None else ""),
+        "decision": str(row[2]),
+        "decision_maker": row[3],
+        "reason": row[4],
+        "related_project": row[5],
+        "supersedes": (str(row[6]) if row[6] is not None else None),
+        "status": str(row[7]),
+        "source_ref": (str(row[8]) if row[8] is not None else ""),
+    }
+
+
+_DECISION_SELECT = (
+    "SELECT id, bot_id, decision, decision_maker, reason, related_project, "
+    "supersedes, status, source_ref FROM public.meeting_decisions"
+)
+
+
+def save_decision(org_id: str, record: dict) -> Optional[str]:
+    """Durably upsert one decision inside its tenant. ``record['id']`` is the
+    caller-generated uuid (so the SQLite and Postgres paths link supersedes the
+    same way). Returns the id."""
+    if not enabled():
+        return None
+    org = (org_id or "").strip()
+    did = str(record.get("id") or "").strip()
+    decision = str(record.get("decision") or "").strip()
+    if not org or not did or not decision:
+        raise ValueError("org_id, id and decision are required for a decision")
+    status = str(record.get("status") or "active")
+    if status not in _DECISION_STATUS:
+        status = "active"
+
+    def _nz(v):  # empty string → NULL for the nullable columns
+        s = str(v or "").strip()
+        return s or None
+
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        conn.execute(
+            text(
+                """
+                INSERT INTO public.meeting_decisions AS d
+                    (org_id, id, bot_id, decision, decision_maker, reason,
+                     related_project, supersedes, status, source_ref)
+                VALUES (
+                    CAST(:o AS uuid), CAST(:id AS uuid), :bot, :decision,
+                    :maker, :reason, :project,
+                    CAST(NULLIF(:supersedes, '') AS uuid), :status, :source
+                )
+                ON CONFLICT (org_id, id) DO UPDATE SET
+                    bot_id = excluded.bot_id,
+                    decision = excluded.decision,
+                    decision_maker = excluded.decision_maker,
+                    reason = excluded.reason,
+                    related_project = excluded.related_project,
+                    supersedes = excluded.supersedes,
+                    status = excluded.status,
+                    source_ref = excluded.source_ref,
+                    updated_at = now()
+                """
+            ),
+            {
+                "o": org,
+                "id": did,
+                "bot": _nz(record.get("bot_id")),
+                "decision": decision,
+                "maker": _nz(record.get("decision_maker")),
+                "reason": _nz(record.get("reason")),
+                "project": _nz(record.get("related_project")),
+                "supersedes": str(record.get("supersedes") or "").strip(),
+                "status": status,
+                "source": _nz(record.get("source_ref")),
+            },
+        )
+    return did
+
+
+def list_decisions(org_id: str, bot_id: str | None = None) -> Optional[list[dict]]:
+    """One tenant's decisions, newest first (optionally scoped to one meeting)."""
+    if not enabled():
+        return None
+    org = (org_id or "").strip()
+    if not org:
+        return []
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        if bot_id is None:
+            rows = conn.execute(
+                text(
+                    _DECISION_SELECT
+                    + " WHERE org_id = CAST(:o AS uuid) "
+                    "ORDER BY created_at DESC, id DESC"
+                ),
+                {"o": org},
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                text(
+                    _DECISION_SELECT
+                    + " WHERE org_id = CAST(:o AS uuid) AND bot_id = :b "
+                    "ORDER BY created_at DESC, id DESC"
+                ),
+                {"o": org, "b": str(bot_id)},
+            ).fetchall()
+    return [_decision_row(r) for r in rows]
+
+
+def get_decision(org_id: str, decision_id: str) -> Optional[dict]:
+    """One decision by id, tenant-scoped."""
+    if not enabled():
+        return None
+    org = (org_id or "").strip()
+    did = (decision_id or "").strip()
+    if not org or not did:
+        return None
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        row = conn.execute(
+            text(
+                _DECISION_SELECT
+                + " WHERE org_id = CAST(:o AS uuid) AND id = CAST(:id AS uuid)"
+            ),
+            {"o": org, "id": did},
+        ).fetchone()
+    return _decision_row(row) if row is not None else None
+
+
+def mark_superseded(
+    org_id: str, decision_id: str, status: str = "superseded"
+) -> Optional[bool]:
+    """Flip an earlier decision's status; the row is kept (history, no DELETE)."""
+    if not enabled():
+        return None
+    org = (org_id or "").strip()
+    did = (decision_id or "").strip()
+    if not org or not did or status not in _DECISION_STATUS:
+        return False
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        result = conn.execute(
+            text(
+                "UPDATE public.meeting_decisions SET status = :s, updated_at = now() "
+                "WHERE org_id = CAST(:o AS uuid) AND id = CAST(:id AS uuid)"
+            ),
+            {"s": status, "o": org, "id": did},
+        )
+    return (result.rowcount or 0) > 0
+
+
 def org_plan(org_id: str) -> Optional[dict]:
     """``{plan, included_seconds}`` for an org's billing account (PR B's trial
     enforcement reads this), or None when disabled / no billing row."""
