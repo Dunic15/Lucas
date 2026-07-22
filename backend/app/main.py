@@ -3229,14 +3229,19 @@ async def recall_webhook(request: Request) -> JSONResponse:
             )
             label = identity["name"]
             avatar = avatar_resolver.for_session(session)
-            if event == "participant_events.join":
-                # Any occupied-room transition invalidates the old deadline.
-                # A later last-human leave must receive a full fresh grace.
-                _invalidate_empty_room_leave(session)
-            elif not session.roster(avatar.name):
-                # Last human gone → grace-checked auto-finalize (meter safety).
-                _schedule_empty_room_leave(session)
             if identity["kind"] != "agent":
+                # Empty-room grace is a HUMAN-presence property: roster() counts
+                # only humans, so gate the whole block on kind != agent. An agent
+                # or bot join (bot reconnect, co-avatar) must NOT cancel a pending
+                # finalize — a join never reschedules, so the meter would leak
+                # until the call actually ends.
+                if event == "participant_events.join":
+                    # A human joined → invalidate the old deadline; a later
+                    # last-human leave receives a full fresh grace.
+                    _invalidate_empty_room_leave(session)
+                elif not session.roster(avatar.name):
+                    # Last human gone → grace-checked auto-finalize (meter safety).
+                    _schedule_empty_room_leave(session)
                 # ── footing: greet a late joiner by name ──
                 # Only when the meeting is genuinely underway (start-of-call
                 # joins greet each other anyway), only for NEW named humans,
