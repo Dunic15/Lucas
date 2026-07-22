@@ -233,6 +233,9 @@
   .detail .inner{padding:14px 18px 16px;display:grid;grid-template-columns:1.4fr 1fr;gap:20px;}
   .summary.tscript{max-height:260px;overflow-y:auto;white-space:pre-wrap;font-size:.8rem;color:var(--dim);padding-right:6px;}
   .ac-sub-h{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:18px 0 8px;}
+  .ac-meet-h{display:flex;align-items:center;gap:8px;margin:22px 0 6px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);font-size:.86rem;color:var(--fg);}
+  .ac-meet-h:first-child{margin-top:4px;}
+  .ac-needs{margin-top:6px;font-size:.8rem;color:var(--warn,#b45309);}
   .ac-sub-note{font-size:.78rem;color:var(--faint);margin:-4px 0 10px;}
   .ac-card.proposed{border-style:dashed;}
   .ac-quote{font-size:.76rem;color:var(--dim);font-style:italic;margin:2px 0 4px;}
@@ -2569,6 +2572,14 @@
           // would dead-end in "Nothing ran". Say so instead of offering it.
           ctl='<span class="stchip" title="Heard as a free-form ask — no connected tool can run it automatically. It still appears in the follow-up email.">Can\u2019t auto-run</span>'+
               '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Dismiss</button>';
+        } else if((a.needed||[]).length){
+          // Incomplete card: NEVER a blind Approve (owner rule 2026-07-22).
+          // The primary action collects exactly the missing fields — the
+          // approve endpoint re-types, answers 422 with the schema, and the
+          // inline form runs the action once saved.
+          ctl='<button class="btn primary" data-approve="'+esc(a.action_id)+'">Complete details…</button>'+
+              (a.typed?'<button class="btn" data-acdetailsbtn="'+esc(a.action_id)+'">Edit fields</button>':'')+
+              '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Reject</button>';
         } else {
           ctl='<button class="btn primary" data-approve="'+esc(a.action_id)+'">Approve</button>'+
               (a.typed?'<button class="btn" data-acdetailsbtn="'+esc(a.action_id)+'">Add details</button>':'')+
@@ -2581,25 +2592,47 @@
       var prov=(a.source==="inferred")
         ?'<div class="ac-quote">Proposed by Petra'+(a.goal?' for goal: <b>'+esc(a.goal)+'</b>':'')+(a.inferred_from?' — inferred from: “'+esc(a.inferred_from)+'”':'')+'</div>'
         :'';
+      var NEEDL={owner:"owner",project:"project",due:"due date",description:"description",
+        email_to:"recipient",email_body:"message text",invite_with:"attendees",invite_when:"time",
+        to:"recipient",subject:"subject",body:"message text",start:"start time",end:"end time",
+        title:"title",name:"task name",task:"task id",text:"comment text"};
+      var needsHTML=(bucketOf(a)==="attn"&&a.executable!==false&&(a.needed||[]).length)
+        ?'<div class="ac-needs">\u26a0 Needs: '+(a.needed||[]).map(function(k){return esc(NEEDL[k]||k);}).join(", ")+'</div>':'';
       return '<article class="ac-card'+(a.source==="inferred"?" proposed":"")+'">'+
         '<div class="ac-top">'+stateChipHTML(s)+
         '<div class="ac-what"><div class="ac-item" title="Heard: \u201c'+esc(a.item)+'\u201d">'+esc(a.title||a.item)+ownerChip(a)+'</div>'+prov+
         '<div class="ac-meta">'+avatarBadge(m.avatar_id,avNameOf(m.avatar_id))+'<span>'+esc(avNameOf(m.avatar_id))+'</span>'+
         '<span aria-hidden="true">·</span><span>'+esc(m.platform)+' meeting</span>'+
         '<span aria-hidden="true">·</span><span>'+fmtWhen(m.saved_at)+'</span></div>'+
-        '<div class="ac-todo">'+esc(acTodoText(a))+'</div></div>'+
+        '<div class="ac-todo">'+esc(acTodoText(a))+'</div>'+needsHTML+'</div>'+
         '<div class="ac-ctl">'+ctl+'</div></div>'+
         (a.action_id?('<button class="ac-open" data-acx="'+esc(a.action_id)+'" aria-expanded="false">View details ▾</button>'+
         '<div class="ac-details" data-acd="'+esc(a.action_id)+'" hidden></div>'):'')+
         '</article>';
     }
-    var defRows=rows.filter(function(x){return x.a.source!=="inferred";});
-    var propRows=rows.filter(function(x){return x.a.source==="inferred";});
+    // Group by MEETING (owner ask 2026-07-22): newest meeting first, one
+    // header per meeting, the Definitive/Proposed split kept inside each
+    // group so the board reads as a per-call story instead of a flat pile.
+    rows.sort(function(p,q){ return (q.m.saved_at||0)-(p.m.saved_at||0); });
+    var groups=[], byKey={};
+    rows.forEach(function(x){
+      var k=(x.m.bot_id||"")+"|"+(x.m.avatar_id||"")+"|"+(x.m.saved_at||0);
+      if(!byKey[k]){ byKey[k]={m:x.m,rows:[]}; groups.push(byKey[k]); }
+      byKey[k].rows.push(x);
+    });
     var html="";
-    if(defRows.length) html+='<div class="ac-sub-h">Definitive actions</div>'+defRows.map(acCard).join("");
-    if(propRows.length) html+='<div class="ac-sub-h">Proposed — goals &amp; intents</div>'+
-      '<div class="ac-sub-note">Steps Petra decomposed from goals you voiced. Nothing runs until you approve.</div>'+
-      propRows.map(acCard).join("");
+    groups.forEach(function(g){
+      html+='<div class="ac-meet-h">'+avatarBadge(g.m.avatar_id,avNameOf(g.m.avatar_id))+
+        '<b>'+esc(avNameOf(g.m.avatar_id))+'</b><span aria-hidden="true">·</span>'+
+        '<span>'+esc(g.m.platform)+' meeting</span><span aria-hidden="true">·</span>'+
+        '<span>'+fmtWhen(g.m.saved_at)+'</span></div>';
+      var defRows=g.rows.filter(function(x){return x.a.source!=="inferred";});
+      var propRows=g.rows.filter(function(x){return x.a.source==="inferred";});
+      if(defRows.length) html+='<div class="ac-sub-h">Definitive actions</div>'+defRows.map(acCard).join("");
+      if(propRows.length) html+='<div class="ac-sub-h">Proposed — goals &amp; intents</div>'+
+        '<div class="ac-sub-note">Steps decomposed from goals you voiced. Nothing runs until you approve.</div>'+
+        propRows.map(acCard).join("");
+    });
     box.innerHTML=html;
     wireAvatarImages();
     $$("#ac-list [data-approve]").forEach(function(b){ b.addEventListener("click",function(){ approveAction(b); }); });
