@@ -225,9 +225,10 @@ def test_execute_approved_happy_writes_done_receipt(monkeypatch):
     _enable_pd(monkeypatch)
     monkeypatch.setattr(pipedream_client, "list_accounts",
                         lambda org, app="": [{"id": "apn_9", "app": "asana", "healthy": True}])
-    captured: dict = {}
+    captured: dict = {"calls": []}
 
     def fake_proxy(org, acct, method, url, json_body=None, headers=None):
+        captured["calls"].append((method, url))
         captured.update(org=org, acct=acct, method=method, url=url, body=json_body)
         return {"ok": True, "status": 200,
                 "json": {"data": {"gid": "55", "permalink_url": "https://app.asana.com/0/0/55/f"}}}
@@ -237,8 +238,11 @@ def test_execute_approved_happy_writes_done_receipt(monkeypatch):
     out = pipedream_executor.execute_approved(
         "orgX", "act1", {"type": "asana.create_task", "task": {"name": "Ship", "project": "1"}})
     assert out["ok"] is True and out["ref"].endswith("/55/f") and out["kind"] == "asana task"
-    assert captured["acct"] == "apn_9" and captured["method"] == "POST"
+    assert captured["acct"] == "apn_9"
+    assert [method for method, _url in captured["calls"]] == ["POST", "GET"]
+    assert out["verified"] is True
     assert seen["status"] == "done" and seen["receipt"]["route"] == "pipedream"
+    assert seen["receipt"]["verified"] is True
 
 
 def test_execute_approved_no_account_fails(monkeypatch):
