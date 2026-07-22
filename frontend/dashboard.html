@@ -564,7 +564,7 @@
   .avstrip{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:12px;scrollbar-width:thin;}
   .avstrip .aitem{flex:0 0 auto;width:auto;min-width:190px;}
   .stage{position:relative;border-radius:18px;border:1px solid var(--line-soft);overflow:hidden;
-    min-height:240px;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:var(--glass);
+    min-height:190px;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:var(--glass);
     background:
       radial-gradient(60% 55% at 30% 18%, rgba(77,124,254,.16), transparent 65%),
       radial-gradient(50% 45% at 78% 30%, rgba(255,180,154,.12), transparent 70%),
@@ -573,7 +573,7 @@
       radial-gradient(60% 55% at 30% 18%, rgba(77,124,254,.10), transparent 65%),
       radial-gradient(50% 45% at 78% 30%, rgba(255,180,154,.12), transparent 70%),
       linear-gradient(180deg, #FFFFFF, #EEF1F6);}
-  @media (max-width:900px){ .stage{min-height:220px;} }
+  @media (max-width:900px){ .stage{min-height:170px;} }
   /* Pedestal: a soft lit ellipse the avatar "stands" on. */
   .stage .pedestal{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);
     width:min(62%,320px);height:30px;border-radius:50%;pointer-events:none;
@@ -586,7 +586,7 @@
   /* The AvatarPreview mount: whatever the adapter renders fills this box —
      the same-origin 3D iframe (/talk?preview=1) or the 2D portrait fallback. */
   .stage .preview{position:absolute;inset:0;display:grid;place-items:center;}
-  .stage .preview img{max-height:82%;max-width:74%;object-fit:cover;border-radius:16px;
+  .stage .preview img{max-height:72%;max-width:60%;object-fit:cover;border-radius:14px;
     border:1px solid var(--line);box-shadow:0 26px 60px -28px rgba(0,0,0,.75);z-index:1;}
   .stage .preview iframe{position:absolute;inset:0;width:100%;height:100%;border:0;z-index:1;}
   /* Legibility scrim under the stagemeta caption — only over the live 3D
@@ -3069,7 +3069,10 @@
       currentId=av.id;
       var letter=esc((av.name||av.id||"?")[0].toUpperCase());
       mountEl.innerHTML='<div class="skel">Loading '+esc(av.name||av.id)+'…</div>';
-      var ready3d=!!(av.renderer&&av.renderer.talk&&av.renderer.talk.ready);
+      // Owner 2026-07-22: the dashboard stage shows the curated portrait
+      // (Framer art direction), never the moving 3D iframe — calmer, lighter,
+      // and identical across themes. The 3D face still runs in meetings.
+      var ready3d=false;
       // The 3D idle animation can't see the parent page's reduced-motion
       // preference across the iframe boundary — honor it here by serving the
       // static portrait instead.

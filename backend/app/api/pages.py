@@ -98,12 +98,20 @@ def photoreal_reference(avatar_id: str = "") -> Response:
     elif not re.fullmatch(r"[a-z0-9_-]{1,64}", avatar_id.lower()):
         return JSONResponse({"error": "face_unavailable"}, status_code=404)
     else:
-        try:
-            avatar = avatars.load(avatar_id.lower())
-            name = avatar.photoreal_reference or f"reference-{avatar.id}.jpg"
-            path = assets / name if Path(name).name == name else assets / "__missing__"
-        except FileNotFoundError:
-            path = assets / "__missing__"
+        # Dashboard artwork override (owner 2026-07-22): a curated
+        # portrait-<id>.jpg wins over the photoreal identity reference —
+        # the Framer-site art direction on the cards, without touching the
+        # GPU identity assets.
+        curated = assets / f"portrait-{avatar_id.lower()}.jpg"
+        if curated.is_file():
+            path = curated
+        else:
+            try:
+                avatar = avatars.load(avatar_id.lower())
+                name = avatar.photoreal_reference or f"reference-{avatar.id}.jpg"
+                path = assets / name if Path(name).name == name else assets / "__missing__"
+            except FileNotFoundError:
+                path = assets / "__missing__"
     if not path.is_file():
         return JSONResponse(
             {"error": "face_unavailable", "avatar_id": avatar_id}, status_code=404
