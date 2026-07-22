@@ -516,13 +516,25 @@ def test_untyped_route_is_manual_without_cedric(monkeypatch):
     monkeypatch.setattr(store_mod, "connections_for_org", lambda org: [])
     assert executor.route_for_typed(None, "org-real") == "manual"
     assert executor.route_for_typed({"type": "weird.unknown"}, "org-real") == "manual"
+    # Even an explicit Slack ask stays manual when nothing is linked.
+    assert executor.route_for_typed(
+        None, "org-real", item_text="post the recap to Slack") == "manual"
     monkeypatch.setattr(
         store_mod, "connections_for_org",
         lambda org: [{"provider": "cedric-brain", "status": "connected"}],
     )
-    assert executor.route_for_typed(None, "org-real") == "cedric"
+    # Linked org: ONLY an explicit Slack ask reaches the Slack agent
+    # (owner rule 2026-07-22 part two — Cedric is never the catch-all).
+    assert executor.route_for_typed(
+        None, "org-real", item_text="post the recap to Slack") == "cedric"
+    assert executor.route_for_typed(
+        None, "org-real", item_text="share it in #general please") == "cedric"
+    assert executor.route_for_typed(
+        None, "org-real", item_text="sort out the vendor situation") == "manual"
+    assert executor.route_for_typed(None, "org-real") == "manual"
+    # Demo / no-org service scope keeps the legacy catch-all.
     assert executor.route_for_typed(None, settings.demo_org_id) == "cedric"
-    assert executor.route_for_typed(None) == "cedric"  # no org = legacy service scope
+    assert executor.route_for_typed(None) == "cedric"
 
 
 def test_read_calendar_events_via_proxy(monkeypatch):
