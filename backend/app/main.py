@@ -183,7 +183,31 @@ async def _lifespan(app: FastAPI):
         # migration-seeded default is personal-first, the safe direction.
         await run_in_threadpool(control_plane.sync_policy_flags)
 
-    _prebuild_indexes()
+    # Index warm-up runs in the BACKGROUND. On a fresh instance (ephemeral
+    # disk) it downloads the local embedding model — measured 3-5 minutes on
+    # 2026-07-22 — and running it synchronously here kept /health from
+    # binding until it finished, flipping deploys into health-check-rollback
+    # roulette (~50%: two ROLLBACK_SUCCEEDED out of four boots that day).
+    # The 2026-07-16 fail-soft covered HF being DOWN; this covers HF being
+    # SLOW. Deploys happen in no-meeting windows (sessions gate), so the
+    # warm-up finishes long before the first live question; a question racing
+    # it pays the old cold-start once — never a failed deploy.
+    async def _warm_indexes() -> None:
+        _t0 = time.perf_counter()
+        try:
+            await run_in_threadpool(_prebuild_indexes)
+            print(
+                f"[startup] index warm-up complete in "
+                f"{time.perf_counter() - _t0:.0f}s",
+                flush=True,
+            )
+        except Exception as exc:  # noqa: BLE001 — warm-up must never kill boot
+            print(
+                f"[startup] index warm-up failed: {type(exc).__name__}",
+                flush=True,
+            )
+
+    asyncio.create_task(_warm_indexes())
 
     if settings.autopilot_nudge:
         async def _nudge_loop() -> None:
