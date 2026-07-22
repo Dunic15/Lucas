@@ -69,9 +69,24 @@ def test_vertex_embed_batches_over_100(vertex_cfg):
     assert calls["n"] == 3  # 100 + 100 + 50
 
 
-def test_vertex_requires_project_and_token(monkeypatch):
-    monkeypatch.setattr(settings, "embedding_provider", "vertex")
+def test_vertex_builder_requires_project_and_token(monkeypatch):
+    # The low-level builder still raises on misconfig (surfaces config errors).
     monkeypatch.setattr(settings, "vertex_project", "")
     monkeypatch.setattr("app.brain.llm._vertex_token", lambda: "")
     with pytest.raises(RuntimeError):
-        E.embed(["x"])
+        E._embed_vertex(["x"], "document")
+
+
+def test_embed_failsoft_on_hosted_provider_error(monkeypatch):
+    """A hosted provider failure (429/outage/misconfig) must NOT raise from
+    embed() — it falls back to local so the live path never 500s (the mute-
+    Petra incident 2026-07-22)."""
+    monkeypatch.setattr(settings, "embedding_provider", "vertex")
+
+    def boom(*a, **k):
+        raise RuntimeError("429 Too Many Requests")
+
+    monkeypatch.setattr(E, "_embed_vertex", boom)
+    monkeypatch.setattr(E, "_embed_local", lambda texts: [[0.5] * 8 for _ in texts])
+    out = E.embed(["hello"])  # must not raise
+    assert out == [[0.5] * 8]

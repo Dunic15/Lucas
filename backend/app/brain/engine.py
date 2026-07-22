@@ -669,6 +669,31 @@ def _ungrounded_process_caveat(question: str, below_floor: bool) -> str:
     return _CAVEAT_UNGROUNDED_IT if sounds_italian(question) else _CAVEAT_UNGROUNDED_EN
 
 
+# Route BEFORE retrieval: an embedding per utterance (even "how are you?" or
+# "20×5") is wasted latency + provider load. Skip the RAG embedding ONLY for
+# clearly non-document turns — greetings, acks, bare arithmetic, or too-short
+# lines. Everything else retrieves (safe default: when unsure, ground). Action
+# requests and web-search questions are already routed out before this path.
+_GREETING_RE = re.compile(
+    r"^\s*(?:hi|hey|hello|yo|ciao|salve|buongiorno|buonasera|thanks?|thank\s+you|"
+    r"grazie|ok(?:ay)?|perfetto|perfect|great|nice|got\s+it|cool|"
+    r"come\s+stai|how\s+are\s+you|how'?s\s+it\s+going)\b[\s!.?,]*$",
+    re.IGNORECASE,
+)
+_MATH_ONLY_RE = re.compile(r"^\s*[\d\s()+\-*/×xX.,=%]+\s*\??\s*$")
+
+
+def _skip_retrieval(question: str) -> bool:
+    q = (question or "").strip()
+    if len(q) < 3:
+        return True
+    if _GREETING_RE.match(q):
+        return True
+    if _MATH_ONLY_RE.match(q) and any(ch.isdigit() for ch in q):
+        return True
+    return False
+
+
 def answer_question_stream(
     avatar: Avatar,
     question: str,
@@ -725,7 +750,13 @@ def answer_question_stream(
     for smooth prosody.
     """
     _t0 = time.perf_counter()
-    chunks = _retrieve_for(avatar, question, history, k, org_id=org_id)
+    # Route before RAG: a greeting/ack/bare-math turn needs no document context,
+    # so skip the query embedding + retrieval entirely (latency + provider load).
+    _rag_skipped = _skip_retrieval(question)
+    chunks = (
+        [] if _rag_skipped
+        else _retrieve_for(avatar, question, history, k, org_id=org_id)
+    )
     _retrieve_ms = (time.perf_counter() - _t0) * 1000
     # Only ground in the docs when they actually match the question —
     # irrelevant chunks bias the model into doc-quoting general answers.
@@ -810,10 +841,15 @@ def answer_question_stream(
 
     def _log_first() -> None:
         if not spoke_any:
+            # End-to-end live trace: rag=skip means route-before-RAG saved the
+            # query embedding this turn; else the retrieve (embed+rank) ms. model
+            # names the plane that answered (cerebras fast vs haiku complex).
             print(
-                f"[latency] answer_stream retrieve={_retrieve_ms:.0f}ms "
+                f"[latency] answer_stream "
+                f"rag={'skip' if _rag_skipped else f'{_retrieve_ms:.0f}ms'} "
                 f"first_token={_first_token_ms:.0f}ms "
-                f"first_sentence={(time.perf_counter() - _t0) * 1000:.0f}ms",
+                f"first_sentence={(time.perf_counter() - _t0) * 1000:.0f}ms "
+                f"model={_model}",
                 flush=True,
             )
 
@@ -840,6 +876,11 @@ def answer_question_stream(
         # silent.
         question = f"{question} (You could not search the web just now — answer from your knowledge and say it may not be current.)"
         _provider, _model = settings.brain_provider, settings.brain_model_fast
+    # A ceiling only as a runaway backstop — NOT to shorten a legitimately long
+    # answer. Conciseness is shaped by the system prompt ("1-3 short sentences"),
+    # which lets a reply END gracefully; a lower hard cap would just truncate a
+    # long answer mid-sentence, which reads worse than either a short or a
+    # complete long one. Kept at 400 (unchanged from production) on purpose.
     _max_tokens = 400
     for delta in llm.stream_complete(
         system, user, max_tokens=_max_tokens, model=_model, provider=_provider

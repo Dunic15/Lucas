@@ -42,7 +42,6 @@ class Settings(BaseSettings):
     # provider check falls back to the fast model. Haiku (not Sonnet) so the LIVE
     # spoken path stays low-latency; Sonnet is reserved for the post-meeting brain.
     brain_model_complex: str = "claude-haiku-4-5"
-
     # Ollama (only used when BRAIN_PROVIDER=ollama)
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
@@ -114,6 +113,10 @@ class Settings(BaseSettings):
     embedding_provider: str = "hash"
     voyage_api_key: str = ""
     embedding_model: str = "voyage-3"
+    # Optional output dimension for providers that support it (gemini-embedding-
+    # 001 can emit 768/1536/3072). 0 = the model's native default. Stamped into
+    # the index signature so a dimension change forces a clean re-index.
+    embedding_dimension: int = 0
 
     # Recall.ai (live meeting entry: ears + camera)
     recall_api_key: str = ""
