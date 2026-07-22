@@ -75,6 +75,18 @@ PARAMS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
         _FIELD(name="description", type="string", required=False,
                label="description", label_it="descrizione"),
     ],
+    "calendar.update_event": [
+        _FIELD(name="event_id", type="string", required=True,
+               label="event ID", label_it="ID evento"),
+        _FIELD(name="title", type="string", required=False,
+               label="title", label_it="titolo"),
+        _FIELD(name="start", type="string", required=False,
+               description="ISO 8601 start", label="start time", label_it="orario"),
+        _FIELD(name="end", type="string", required=False,
+               description="ISO 8601 end", label="end time", label_it="orario di fine"),
+        _FIELD(name="description", type="string", required=False,
+               label="description", label_it="descrizione"),
+    ],
     "email.send": [
         _FIELD(
             name="to",
@@ -83,6 +95,15 @@ PARAMS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
             description="recipient emails",
             slot="email_to", label="recipient", label_it="destinatario",
         ),
+        _FIELD(name="subject", type="string", required=True,
+               label="subject", label_it="oggetto"),
+        _FIELD(name="body", type="string", required=True,
+               slot="email_body", label="message text", label_it="testo"),
+    ],
+    "gmail.create_draft": [
+        _FIELD(name="to", type="array", required=True,
+               description="recipient emails", slot="email_to",
+               label="recipient", label_it="destinatario"),
         _FIELD(name="subject", type="string", required=True,
                label="subject", label_it="oggetto"),
         _FIELD(name="body", type="string", required=True,
@@ -100,11 +121,14 @@ PARAMS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
         _FIELD(name="due_on", type="string", required=False,
                slot="due", label="due date", label_it="scadenza"),
         _FIELD(name="subtasks", type="array", required=False,
-               description="subtask titles, one per entry"),
+               description="subtask titles, one per entry",
+               label="subtasks", label_it="sotto-attività"),
         _FIELD(name="dependencies", type="array", required=False,
-               description="tasks this depends on (name or gid)"),
+               description="tasks this depends on (name or gid)",
+               label="dependencies", label_it="dipendenze"),
         _FIELD(name="attachments", type="array", required=False,
-               description="attachment URLs"),
+               description="attachment URLs",
+               label="attachments", label_it="allegati"),
     ],
     "asana.update_task": [
         _FIELD(
@@ -112,9 +136,12 @@ PARAMS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
             type="string",
             required=True,
             description="task gid",
+            label="task ID", label_it="ID attività",
         ),
-        _FIELD(name="completed", type="boolean", required=False),
-        _FIELD(name="due_on", type="string", required=False),
+        _FIELD(name="completed", type="boolean", required=False,
+               label="completed", label_it="completata"),
+        _FIELD(name="due_on", type="string", required=False,
+               label="due date", label_it="scadenza"),
     ],
     "asana.add_comment": [
         _FIELD(
@@ -122,8 +149,10 @@ PARAMS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
             type="string",
             required=True,
             description="task gid",
+            label="task ID", label_it="ID attività",
         ),
-        _FIELD(name="text", type="string", required=True),
+        _FIELD(name="text", type="string", required=True,
+               label="comment text", label_it="testo commento"),
     ],
     "slack.post_message": [
         _FIELD(
@@ -131,13 +160,16 @@ PARAMS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
             type="string",
             required=True,
             description="message text to post to the connected Slack channel",
+            label="message text", label_it="testo messaggio",
         ),
     ],
 }
 
 RISK_BY_TYPE: dict[str, str] = {
     "calendar.create_event": "low",
+    "calendar.update_event": "medium",
     "email.send": "medium",
+    "gmail.create_draft": "low",
     "asana.create_task": "low",
     "asana.update_task": "low",
     "asana.add_comment": "low",

@@ -2396,6 +2396,7 @@
     if(Array.isArray(v)) return v.join(", ");
     if(v===true) return "Yes";
     if(v===false) return "No";
+    if(v&&typeof v==="object"){ try{return JSON.stringify(v,null,2);}catch(e){} }
     var shown=v==null?"":String(v);
     if(["start","end","due_on"].indexOf(String(name))>=0){
       try{ var d=new Date(shown); if(!isNaN(d.getTime())) return d.toLocaleString(undefined,{weekday:"short",year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}); }catch(e){}
@@ -2405,7 +2406,10 @@
   function openCanonicalPreview(act,btn){
     closeCanonicalPreview();
     var schema=act.params_schema||[], params=act.params||{};
-    var rows=schema.map(function(f){
+    var fields=schema.length?schema:Object.keys(params).map(function(k){
+      return {name:k,label:String(k).replace(/_/g," ")};
+    });
+    var rows=fields.map(function(f){
       var v=params[f.name];
       if(v==null||v===""||(Array.isArray(v)&&!v.length)) return "";
       return '<div class="prow"><span class="pk">'+esc(f.label||f.name)+'</span><span class="pv">'+esc(canonicalPreviewValue(f.name,v))+'</span></div>';
@@ -2416,7 +2420,9 @@
       :route==="cedric"?"Cedric — Slack agent"
       :route==="manual"?"Tracked only — no automatic execution"
       :route==="browser"?"Guarded browser session":route;
-    var title={"calendar.create_event":"Create calendar event","email.send":"Send email",
+    var title={"calendar.create_event":"Create calendar event",
+      "calendar.update_event":"Update calendar event",
+      "email.send":"Send email","gmail.create_draft":"Create email draft",
       "asana.create_task":"Create Asana task","asana.update_task":"Update Asana task",
       "asana.add_comment":"Add Asana comment","slack.post_message":"Post Slack message"}[act.tool]||act.action||"Review action";
     var s=document.createElement("div"); s.className="scrim"; s.id="canonical-preview-scrim";
@@ -2459,9 +2465,9 @@
           return;
         }
         // Legacy/untyped rescue still enters the approval door so it can be
-        // typed. Every core typed action (the seven current types) has a schema
-        // and therefore always passes through the canonical preview above.
-        if(!schema.length){ approveAction(btn,aid); return; }
+        // typed. Every action that already has a stored type — core or a
+        // generic pd.<app>.run action — must pass through this preview.
+        if(!act.tool){ approveAction(btn,aid); return; }
         openCanonicalPreview(act,btn);
       })
       .catch(function(e){ if(btn){ btn.disabled=false; btn.innerHTML=old; } toast("Could not load preview: "+e.message,true); });
