@@ -1,45 +1,42 @@
 Phase 1 action provenance run
-commit=8dc05f74aa63d220178df2cce56da7ffc4dcb15f
+commit=9f031ce8f8cf0798d6b8b60cf2636f49750063c5
 apply_exit=0
 implementation already applied
 install_exit=0
-Downloading click-8.4.2-py3-none-any.whl (119 kB)
-Downloading hf_xet-1.5.2-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (4.4 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.4/4.4 MB 79.9 MB/s  0:00:00
 Downloading loguru-0.7.3-py3-none-any.whl (61 kB)
 Downloading mmh3-5.2.1-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (103 kB)
 Downloading pillow-12.3.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (6.9 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6.9/6.9 MB 84.9 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6.9/6.9 MB 61.4 MB/s  0:00:00
 Downloading py_rust_stemmers-0.1.8-cp311-cp311-manylinux_2_28_x86_64.whl (320 kB)
 Downloading requests-2.34.2-py3-none-any.whl (73 kB)
 Downloading charset_normalizer-3.4.9-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (221 kB)
 Downloading idna-3.18-py3-none-any.whl (65 kB)
 Downloading tokenizers-0.23.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (3.3 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.3/3.3 MB 83.1 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.3/3.3 MB 51.4 MB/s  0:00:00
 Downloading tqdm-4.69.0-py3-none-any.whl (676 kB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 676.7/676.7 kB 42.4 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 676.7/676.7 kB 48.1 MB/s  0:00:00
 Downloading urllib3-2.7.0-py3-none-any.whl (131 kB)
 Downloading edge_tts-7.2.8-py3-none-any.whl (31 kB)
 Downloading aiohttp-3.14.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (1.8 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.8/1.8 MB 4.1 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.8/1.8 MB 61.7 MB/s  0:00:00
 Downloading multidict-6.7.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (246 kB)
 Downloading tabulate-0.10.0-py3-none-any.whl (39 kB)
 Downloading yarl-1.24.5-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (111 kB)
 Downloading boto3-1.43.53-py3-none-any.whl (140 kB)
 Downloading botocore-1.43.53-py3-none-any.whl (15.4 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 15.4/15.4 MB 77.8 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 15.4/15.4 MB 72.9 MB/s  0:00:00
 Downloading jmespath-1.1.0-py3-none-any.whl (20 kB)
 Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl (229 kB)
 Downloading s3transfer-0.19.1-py3-none-any.whl (90 kB)
 Downloading sqlalchemy-2.0.51-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (3.3 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.3/3.3 MB 78.4 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.3/3.3 MB 67.7 MB/s  0:00:00
 Downloading alembic-1.18.5-py3-none-any.whl (264 kB)
 Downloading psycopg-3.3.4-py3-none-any.whl (213 kB)
 Downloading tzdata-2026.3-py2.py3-none-any.whl (348 kB)
 Downloading playwright-1.61.0-py3-none-manylinux1_x86_64.whl (47.4 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 47.4/47.4 MB 88.6 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 47.4/47.4 MB 53.3 MB/s  0:00:00
 Downloading greenlet-3.5.3-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (617 kB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 617.4/617.4 kB 43.9 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 617.4/617.4 kB 687.1 kB/s  0:00:00
 Downloading pyee-13.0.1-py3-none-any.whl (15 kB)
 Downloading aiohappyeyeballs-2.7.1-py3-none-any.whl (15 kB)
 Downloading aiosignal-1.4.0-py3-none-any.whl (7.5 kB)
@@ -52,27 +49,30 @@ Downloading filelock-3.32.0-py3-none-any.whl (97 kB)
 Downloading frozenlist-1.8.0-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (231 kB)
 Downloading fsspec-2026.6.0-py3-none-any.whl (203 kB)
 Downloading h11-0.16.0-py3-none-any.whl (37 kB)
+Downloading iniconfig-2.3.0-py3-none-any.whl (7.5 kB)
 Downloading neo4j-6.2.0-py3-none-any.whl (327 kB)
 Downloading onnxruntime-1.27.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (18.6 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 18.6/18.6 MB 80.4 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 18.6/18.6 MB 79.3 MB/s  0:00:00
 Downloading openai-2.46.0-py3-none-any.whl (1.6 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.6/1.6 MB 70.4 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.6/1.6 MB 64.0 MB/s  0:00:00
 Downloading packaging-26.2-py3-none-any.whl (100 kB)
 Downloading posthog-7.28.0-py3-none-any.whl (425 kB)
 Downloading backoff-2.2.1-py3-none-any.whl (15 kB)
 Downloading propcache-0.5.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (58 kB)
 Downloading protobuf-7.35.1-cp310-abi3-manylinux2014_x86_64.whl (327 kB)
 Downloading psycopg_binary-3.3.4-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (5.2 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.2/5.2 MB 80.4 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.2/5.2 MB 72.4 MB/s  0:00:00
 Downloading pyasn1_modules-0.4.2-py3-none-any.whl (181 kB)
 Downloading pyasn1-0.6.4-py3-none-any.whl (84 kB)
+Downloading pygments-2.20.0-py3-none-any.whl (1.2 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.2/1.2 MB 66.7 MB/s  0:00:00
 Downloading six-1.17.0-py2.py3-none-any.whl (11 kB)
 Downloading starlette-1.3.1-py3-none-any.whl (73 kB)
 Downloading tenacity-9.1.4-py3-none-any.whl (28 kB)
 Downloading typing_inspection-0.4.2-py3-none-any.whl (14 kB)
 Downloading httptools-0.8.0-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (464 kB)
 Downloading uvloop-0.22.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (3.8 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.8/3.8 MB 74.7 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.8/3.8 MB 72.7 MB/s  0:00:00
 Downloading watchfiles-1.2.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (456 kB)
 Downloading flatbuffers-25.12.19-py2.py3-none-any.whl (26 kB)
 Downloading mako-1.3.12-py3-none-any.whl (78 kB)
@@ -80,8 +80,53 @@ Downloading markupsafe-3.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86
 Downloading pycparser-3.0-py3-none-any.whl (48 kB)
 Downloading pytz-2026.2-py2.py3-none-any.whl (510 kB)
 Downloading sniffio-1.3.1-py3-none-any.whl (10 kB)
-Installing collected packages: pytz, flatbuffers, websockets, uvloop, urllib3, tzdata, typing-extensions, tqdm, tenacity, tabulate, sniffio, six, pyyaml, python-dotenv, pypdf, pycparser, pyasn1, py-rust-stemmers, psycopg-binary, protobuf, propcache, pillow, packaging, numpy, neo4j, multidict, mmh3, MarkupSafe, loguru, jmespath, jiter, idna, httptools, hf-xet, h11, greenlet, fsspec, frozenlist, filelock, docstring-parser, distro, click, charset_normalizer, certifi, backoff, attrs, annotated-types, annotated-doc, aiohappyeyeballs, yarl, uvicorn, typing-inspection, sqlalchemy, requests, python-dateutil, pyee, pydantic-core, pyasn1-modules, psycopg, onnxruntime, Mako, httpcore, cffi, anyio, aiosignal, watchfiles, stripe, starlette, pydantic, posthog, playwright, httpx, cryptography, botocore, alembic, aiohttp, s3transfer, pydantic-settings, openai, huggingface-hub, google-auth, fastapi, edge-tts, anthropic, tokenizers, graphiti-core, boto3, fastembed
+Installing collected packages: pytz, flatbuffers, websockets, uvloop, urllib3, tzdata, typing-extensions, tqdm, tenacity, tabulate, sniffio, six, pyyaml, python-dotenv, pypdf, pygments, pycparser, pyasn1, py-rust-stemmers, psycopg-binary, protobuf, propcache, pluggy, pillow, packaging, numpy, neo4j, multidict, mmh3, MarkupSafe, loguru, jmespath, jiter, iniconfig, idna, httptools, hf-xet, h11, greenlet, fsspec, frozenlist, filelock, docstring-parser, distro, click, charset_normalizer, certifi, backoff, attrs, annotated-types, annotated-doc, aiohappyeyeballs, yarl, uvicorn, typing-inspection, sqlalchemy, requests, python-dateutil, pytest, pyee, pydantic-core, pyasn1-modules, psycopg, onnxruntime, Mako, httpcore, cffi, anyio, aiosignal, watchfiles, stripe, starlette, pydantic, posthog, playwright, httpx, cryptography, botocore, alembic, aiohttp, s3transfer, pydantic-settings, openai, huggingface-hub, google-auth, fastapi, edge-tts, anthropic, tokenizers, graphiti-core, boto3, fastembed
 
-Successfully installed Mako-1.3.12 MarkupSafe-3.0.3 aiohappyeyeballs-2.7.1 aiohttp-3.14.2 aiosignal-1.4.0 alembic-1.18.5 annotated-doc-0.0.4 annotated-types-0.7.0 anthropic-0.117.1 anyio-4.14.2 attrs-26.1.0 backoff-2.2.1 boto3-1.43.53 botocore-1.43.53 certifi-2026.7.22 cffi-2.1.0 charset_normalizer-3.4.9 click-8.4.2 cryptography-45.0.7 distro-1.9.0 docstring-parser-0.18.0 edge-tts-7.2.8 fastapi-0.139.2 fastembed-0.8.0 filelock-3.32.0 flatbuffers-25.12.19 frozenlist-1.8.0 fsspec-2026.6.0 google-auth-2.56.2 graphiti-core-0.29.2 greenlet-3.5.3 h11-0.16.0 hf-xet-1.5.2 httpcore-1.0.9 httptools-0.8.0 httpx-0.28.1 huggingface-hub-1.24.0 idna-3.18 jiter-0.16.0 jmespath-1.1.0 loguru-0.7.3 mmh3-5.2.1 multidict-6.7.1 neo4j-6.2.0 numpy-2.4.6 onnxruntime-1.27.0 openai-2.46.0 packaging-26.2 pillow-12.3.0 playwright-1.61.0 posthog-7.28.0 propcache-0.5.2 protobuf-7.35.1 psycopg-3.3.4 psycopg-binary-3.3.4 py-rust-stemmers-0.1.8 pyasn1-0.6.4 pyasn1-modules-0.4.2 pycparser-3.0 pydantic-2.13.4 pydantic-core-2.46.4 pydantic-settings-2.14.2 pyee-13.0.1 pypdf-6.14.2 python-dateutil-2.9.0.post0 python-dotenv-1.2.2 pytz-2026.2 pyyaml-6.0.3 requests-2.34.2 s3transfer-0.19.1 six-1.17.0 sniffio-1.3.1 sqlalchemy-2.0.51 starlette-1.3.1 stripe-15.3.1 tabulate-0.10.0 tenacity-9.1.4 tokenizers-0.23.1 tqdm-4.69.0 typing-extensions-4.16.0 typing-inspection-0.4.2 tzdata-2026.3 urllib3-2.7.0 uvicorn-0.51.0 uvloop-0.22.1 watchfiles-1.2.0 websockets-16.1.1 yarl-1.24.5
-test_exit=127
-/home/runner/work/_temp/4954e9b6-54f8-4e0c-90fc-79af0a91d52f.sh: line 28: pytest: command not found
+Successfully installed Mako-1.3.12 MarkupSafe-3.0.3 aiohappyeyeballs-2.7.1 aiohttp-3.14.2 aiosignal-1.4.0 alembic-1.18.5 annotated-doc-0.0.4 annotated-types-0.7.0 anthropic-0.117.1 anyio-4.14.2 attrs-26.1.0 backoff-2.2.1 boto3-1.43.53 botocore-1.43.53 certifi-2026.7.22 cffi-2.1.0 charset_normalizer-3.4.9 click-8.4.2 cryptography-45.0.7 distro-1.9.0 docstring-parser-0.18.0 edge-tts-7.2.8 fastapi-0.139.2 fastembed-0.8.0 filelock-3.32.0 flatbuffers-25.12.19 frozenlist-1.8.0 fsspec-2026.6.0 google-auth-2.56.2 graphiti-core-0.29.2 greenlet-3.5.3 h11-0.16.0 hf-xet-1.5.2 httpcore-1.0.9 httptools-0.8.0 httpx-0.28.1 huggingface-hub-1.24.0 idna-3.18 iniconfig-2.3.0 jiter-0.16.0 jmespath-1.1.0 loguru-0.7.3 mmh3-5.2.1 multidict-6.7.1 neo4j-6.2.0 numpy-2.4.6 onnxruntime-1.27.0 openai-2.46.0 packaging-26.2 pillow-12.3.0 playwright-1.61.0 pluggy-1.6.0 posthog-7.28.0 propcache-0.5.2 protobuf-7.35.1 psycopg-3.3.4 psycopg-binary-3.3.4 py-rust-stemmers-0.1.8 pyasn1-0.6.4 pyasn1-modules-0.4.2 pycparser-3.0 pydantic-2.13.4 pydantic-core-2.46.4 pydantic-settings-2.14.2 pyee-13.0.1 pygments-2.20.0 pypdf-6.14.2 pytest-9.1.1 python-dateutil-2.9.0.post0 python-dotenv-1.2.2 pytz-2026.2 pyyaml-6.0.3 requests-2.34.2 s3transfer-0.19.1 six-1.17.0 sniffio-1.3.1 sqlalchemy-2.0.51 starlette-1.3.1 stripe-15.3.1 tabulate-0.10.0 tenacity-9.1.4 tokenizers-0.23.1 tqdm-4.69.0 typing-extensions-4.16.0 typing-inspection-0.4.2 tzdata-2026.3 urllib3-2.7.0 uvicorn-0.51.0 uvloop-0.22.1 watchfiles-1.2.0 websockets-16.1.1 yarl-1.24.5
+test_exit=1
+.................F...................................................... [ 92%]
+......                                                                   [100%]
+=================================== FAILURES ===================================
+_______________ test_execute_approved_happy_writes_done_receipt ________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fbee7233350>
+
+    def test_execute_approved_happy_writes_done_receipt(monkeypatch):
+        _enable_pd(monkeypatch)
+        monkeypatch.setattr(pipedream_client, "list_accounts",
+                            lambda org, app="": [{"id": "apn_9", "app": "asana", "healthy": True}])
+        captured: dict = {}
+    
+        def fake_proxy(org, acct, method, url, json_body=None, headers=None):
+            captured.update(org=org, acct=acct, method=method, url=url, body=json_body)
+            return {"ok": True, "status": 200,
+                    "json": {"data": {"gid": "55", "permalink_url": "https://app.asana.com/0/0/55/f"}}}
+    
+        monkeypatch.setattr(pipedream_client, "proxy_request", fake_proxy)
+        seen = _cap_ledger(monkeypatch)
+        out = pipedream_executor.execute_approved(
+            "orgX", "act1", {"type": "asana.create_task", "task": {"name": "Ship", "project": "1"}})
+        assert out["ok"] is True and out["ref"].endswith("/55/f") and out["kind"] == "asana task"
+>       assert captured["acct"] == "apn_9" and captured["method"] == "POST"
+E       AssertionError: assert ('apn_9' == 'apn_9'
+E         
+E           apn_9 and 'GET' == 'POST'
+E         
+E         - POST
+E         + GET)
+
+tests/test_pipedream_executor.py:240: AssertionError
+=============================== warnings summary ===============================
+../../../../../../opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/fastapi/testclient.py:1
+  /opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_pipedream_executor.py::test_execute_approved_happy_writes_done_receipt - AssertionError: assert ('apn_9' == 'apn_9'
+  
+    apn_9 and 'GET' == 'POST'
+  
+  - POST
+  + GET)
+1 failed, 77 passed, 1 warning in 4.79s
