@@ -1142,12 +1142,17 @@ def _decision_row(row) -> dict:
         "supersedes": (str(row[6]) if row[6] is not None else None),
         "status": str(row[7]),
         "source_ref": (str(row[8]) if row[8] is not None else ""),
+        # Epoch floats (extract(epoch...) convention), so both backends return
+        # the SAME keys — the SQLite _decision_row_to_dict already carries these.
+        "created_at": (float(row[9]) if row[9] is not None else None),
+        "updated_at": (float(row[10]) if row[10] is not None else None),
     }
 
 
 _DECISION_SELECT = (
     "SELECT id, bot_id, decision, decision_maker, reason, related_project, "
-    "supersedes, status, source_ref FROM public.meeting_decisions"
+    "supersedes, status, source_ref, extract(epoch FROM created_at), "
+    "extract(epoch FROM updated_at) FROM public.meeting_decisions"
 )
 
 
@@ -1214,8 +1219,16 @@ def save_decision(org_id: str, record: dict) -> Optional[str]:
     return did
 
 
-def list_decisions(org_id: str, bot_id: str | None = None) -> Optional[list[dict]]:
-    """One tenant's decisions, newest first (optionally scoped to one meeting)."""
+def list_decisions(
+    org_id: str,
+    bot_id: str | None = None,
+    *,
+    related_project: str | None = None,
+    limit: int | None = None,
+) -> Optional[list[dict]]:
+    """One tenant's decisions, newest first (optionally scoped to one meeting).
+    ``related_project`` + ``limit`` bound the supersede linker's scan to a
+    single project over a recent window (see store.list_decisions)."""
     if not enabled():
         return None
     org = (org_id or "").strip()
@@ -1223,27 +1236,28 @@ def list_decisions(org_id: str, bot_id: str | None = None) -> Optional[list[dict
         return []
     from sqlalchemy import text
 
+    clauses = ["org_id = CAST(:o AS uuid)"]
+    params: dict = {"o": org}
+    if bot_id is not None:
+        clauses.append("bot_id = :b")
+        params["b"] = str(bot_id)
+    if related_project is not None:
+        clauses.append("LOWER(related_project) = LOWER(:proj)")
+        params["proj"] = str(related_project)
+    sql = (
+        _DECISION_SELECT
+        + " WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY created_at DESC, id DESC"
+    )
+    if limit is not None:
+        sql += " LIMIT :lim"
+        params["lim"] = int(limit)
+
     engine = _get_engine()
     with engine.begin() as conn:
         _set_org(conn, org)
-        if bot_id is None:
-            rows = conn.execute(
-                text(
-                    _DECISION_SELECT
-                    + " WHERE org_id = CAST(:o AS uuid) "
-                    "ORDER BY created_at DESC, id DESC"
-                ),
-                {"o": org},
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                text(
-                    _DECISION_SELECT
-                    + " WHERE org_id = CAST(:o AS uuid) AND bot_id = :b "
-                    "ORDER BY created_at DESC, id DESC"
-                ),
-                {"o": org, "b": str(bot_id)},
-            ).fetchall()
+        rows = conn.execute(text(sql), params).fetchall()
     return [_decision_row(r) for r in rows]
 
 

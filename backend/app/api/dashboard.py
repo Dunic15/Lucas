@@ -187,14 +187,22 @@ def _action_needed(action: dict) -> list[str]:
         return []
 
 
-def _decision_entries(art: dict) -> list[dict]:
-    """Distilled first-class decision records for the wire. Uses the artifact's
-    structured ``decision_records`` when present (0017+), else synthesizes them
-    from the legacy ``decisions`` list[str] so pre-0017 archives still render.
-    Distilled fields only — decision text, maker, reason, project, supersede
-    link — never transcript."""
+def _decision_entries(art: dict, db_records: list[dict] | None = None) -> list[dict]:
+    """Distilled first-class decision records for the wire. Distilled fields
+    only — decision text, maker, reason, project, supersede link, status —
+    never transcript.
+
+    Source of truth, in order:
+    1. ``db_records`` — the RECONCILED rows from store.list_decisions(org,
+       bot_id). These are the only records that carry the persisted supersede
+       link + flipped status (the artifact's ``decision_records`` never do:
+       engine._build_decision_records emits only decision/maker/reason/project),
+       so the "supersedes / (superseded)" pill can render ONLY from here.
+    2. the artifact's structured ``decision_records`` (0017+) — the fallback
+       when there are no DB rows yet (e.g. a fresh key-free demo meeting).
+    3. the legacy ``decisions`` list[str] so pre-0017 archives still render."""
     out: list[dict] = []
-    records = art.get("decision_records")
+    records = db_records if db_records else art.get("decision_records")
     if isinstance(records, list) and records:
         for r in records[:20]:
             if not isinstance(r, dict):
@@ -322,9 +330,25 @@ def _meeting_row(row: dict, include_transcript: bool = False) -> dict:
     readiness = int(art.get("readiness_score") or 0)
     decisions_count = len(art.get("decisions") or [])
     # First-class decision records (distilled fields only — decision text,
-    # maker, reason, project; NEVER transcript). Falls back to the legacy
-    # list[str] shape so pre-0017 artifacts still render.
-    decision_records = _decision_entries(art)
+    # maker, reason, project, supersede link; NEVER transcript). Prefer the
+    # RECONCILED rows from the store — they carry the persisted supersedes +
+    # flipped status the artifact snapshot never does, so the dashboard pill
+    # renders — and fall back to the artifact's own records (fresh demo meeting
+    # with no DB rows), then the legacy list[str]. Best-effort: a decisions
+    # query hiccup must never 500 a dashboard read.
+    db_records: list[dict] = []
+    bot_id = row.get("bot_id")
+    # Only hit the decision store when this meeting actually produced decisions
+    # (persisted rows only ever come from a non-empty decision_records/decisions
+    # at finalize) — skips the per-row query for the decision-less common case.
+    if bot_id and (art.get("decision_records") or art.get("decisions")):
+        try:
+            db_records = store.list_decisions(
+                str(art.get("org_id") or ""), str(bot_id)
+            )
+        except Exception:  # noqa: BLE001 — projection is never worth a 500
+            db_records = []
+    decision_records = _decision_entries(art, db_records=db_records)
     extra = (
         {"transcript": str(art.get("transcript") or "")[:40000]}
         if include_transcript
@@ -992,11 +1016,17 @@ def dashboard_summary(request: Request) -> JSONResponse:
 async def meeting_decisions(bot_id: str, request: Request) -> JSONResponse:
     """First-class decision records for one meeting (0017/meeting_decisions).
 
-    Same gate + tenancy as /dashboard/summary: a cookie user or per-org bearer
-    sees only their org's decisions; the unscoped worlds (global bearer /
-    key-free demo) fall back to the Demo org. Decisions are DISTILLED fields
-    (decision, maker, reason, project, supersede link) — never transcript text —
-    so they are safe to serve here. Read-only, off the live path."""
+    Same auth + tenancy AND per-user archive scope as /dashboard/summary: a
+    cookie user or per-org bearer sees only their org's decisions, and — like
+    the summary/meetings archive (2026-07-21) — a cookie user may only read a
+    meeting they dispatched (principal_id) or audibly attended (transcript
+    speaker), even inside their own shared org. A meeting they can't see returns
+    404 (matching the summary/archive posture — absence, not a 403 that would
+    confirm the row exists). The unscoped worlds (global bearer / key-free demo)
+    fall back to the Demo org and keep the full org view. Decisions are
+    DISTILLED fields (decision, maker, reason, project, supersede link) — never
+    transcript text — so they are safe to serve here. Read-only, off the live
+    path."""
     from .. import cedric  # local import, same reason as dashboard_summary
 
     user = auth.current_user(request)
@@ -1008,6 +1038,14 @@ async def meeting_decisions(bot_id: str, request: Request) -> JSONResponse:
                 return err
     caller_org = user["org_id"] if user else machine_org
     scope = caller_org or settings.demo_org_id
+    # Per-user archive gate: load the meeting artifact in this tenant and verify
+    # the caller attended/dispatched it before returning any decisions. Machine
+    # callers (user=None) keep the full org view. 404 (not 403) when invisible.
+    artifact = await run_in_threadpool(store.get_artifact, bot_id, str(scope))
+    if artifact is None or not _user_attended(user, artifact):
+        return JSONResponse(
+            {"error": "not found"}, status_code=404, headers=_NO_STORE
+        )
     records = await run_in_threadpool(store.list_decisions, str(scope), bot_id)
     return JSONResponse({"bot_id": bot_id, "decisions": records}, headers=_NO_STORE)
 

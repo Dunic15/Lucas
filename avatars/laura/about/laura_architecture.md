@@ -98,10 +98,17 @@ shows two conflicting decisions as both active. The linking is deterministic
 post-meeting/finalize path only, never on the live per-utterance path.
 
 Records persist to a tenant-isolated `meeting_decisions` table (Postgres with
-row-level security for durable orgs; SQLite for the key-free demo) and are read
-back through `GET /dashboard/meetings/{bot_id}/decisions`. Only the distilled
-fields (decision, maker, reason, project, supersede link) are stored or served
-— never the transcript, which stays PII in the private artifact store.
+row-level security for durable orgs; SQLite for the key-free demo). The
+supersede link and flipped status live only on those reconciled rows — the
+artifact snapshot carries just decision/maker/reason/project — so the dashboard
+reads the persisted rows back (via the meeting view and the dedicated `GET
+/dashboard/meetings/{bot_id}/decisions`) to render the "supersedes / superseded"
+pill, falling back to the artifact records only for a fresh meeting with no rows
+yet. Both read paths apply the same per-user archive scope as the dashboard
+summary: a signed-in teammate sees decisions only for meetings they dispatched
+or audibly attended, even inside a shared org. Only the distilled fields
+(decision, maker, reason, project, supersede link) are stored or served — never
+the transcript, which stays PII in the private artifact store.
 
 ## Conversation behaviors
 

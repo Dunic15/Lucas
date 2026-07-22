@@ -2339,6 +2339,11 @@ _DECISION_SUPERSEDE_CUE = re.compile(
     re.IGNORECASE,
 )
 
+# The supersede linker only looks back over a recent window per project — a
+# newer decision overrides the MOST-RECENT earlier active one, so an unbounded
+# full-history scan is never needed.
+_SUPERSEDE_LOOKUP_LIMIT = 200
+
 _DECISION_FIELDS = (
     "id", "bot_id", "decision", "decision_maker", "reason",
     "related_project", "supersedes", "status", "source_ref",
@@ -2434,29 +2439,47 @@ def save_decision(
     return did
 
 
-def list_decisions(org_id: str, bot_id: str | None = None) -> list[dict]:
+def list_decisions(
+    org_id: str,
+    bot_id: str | None = None,
+    *,
+    related_project: str | None = None,
+    limit: int | None = None,
+) -> list[dict]:
     """Decision records for an org, newest first. When ``bot_id`` is given,
-    only that meeting's decisions; otherwise the org's whole decision history
-    (used by the supersede linker to find earlier decisions to override)."""
+    only that meeting's decisions; otherwise the org's decision history. The
+    supersede linker passes ``related_project`` + ``limit`` to bound the scan
+    to just the project(s) a finalize touches over a recent window, so the
+    lookup cost does not grow with the org's whole decision history."""
     org = (org_id or "").strip() or DEMO_ORG_ID
     if _decision_durable(org):
         from . import control_plane
 
-        return control_plane.list_decisions(org, bot_id) or []
+        return (
+            control_plane.list_decisions(
+                org, bot_id, related_project=related_project, limit=limit
+            )
+            or []
+        )
 
+    clauses = ["org_id = ?"]
+    params: list = [org]
+    if bot_id is not None:
+        clauses.append("bot_id = ?")
+        params.append(str(bot_id))
+    if related_project is not None:
+        clauses.append("related_project = ? COLLATE NOCASE")
+        params.append(str(related_project))
+    sql = (
+        "SELECT * FROM meeting_decisions WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY created_at DESC, id DESC"
+    )
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(int(limit))
     with _LOCK, _connect() as conn:
-        if bot_id is None:
-            rows = conn.execute(
-                "SELECT * FROM meeting_decisions WHERE org_id = ? "
-                "ORDER BY created_at DESC, id DESC",
-                (org,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM meeting_decisions WHERE org_id = ? AND bot_id = ? "
-                "ORDER BY created_at DESC, id DESC",
-                (org, str(bot_id)),
-            ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return [_decision_row_to_dict(r) for r in rows]
 
 
@@ -2517,9 +2540,29 @@ def persist_decision_records(
     saved_ids: list[str] = []
     if not records:
         return saved_ids
-    # Prior active decisions in this org, by project, most-recent-first. Built
-    # once; updated in-memory as this batch supersedes earlier ones.
-    prior = [d for d in list_decisions(org) if (d.get("status") == "active")]
+    # Prior active decisions in this org, by project, most-recent-first. A
+    # supersede requires BOTH an explicit cue in the new decision AND a shared
+    # related_project, so the candidate scan only needs the project(s) THIS
+    # batch could supersede — bounded to a recent window per project instead of
+    # the org's entire decision history (which grew unbounded on every
+    # finalize). Built once; updated in-memory as this batch supersedes earlier
+    # ones.
+    candidate_projects: dict[str, str] = {}
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        proj = str(rec.get("related_project") or "").strip()
+        if proj and _DECISION_SUPERSEDE_CUE.search(str(rec.get("decision") or "")):
+            candidate_projects.setdefault(proj.casefold(), proj)
+    prior: list[dict] = []
+    for proj in candidate_projects.values():
+        prior.extend(
+            d
+            for d in list_decisions(
+                org, related_project=proj, limit=_SUPERSEDE_LOOKUP_LIMIT
+            )
+            if d.get("status") == "active"
+        )
     for rec in records:
         if not isinstance(rec, dict):
             continue

@@ -274,24 +274,80 @@ def test_save_artifact_without_records_is_noop(isolated_store):
 
 
 # ── dashboard projection: distilled, never transcript ─────────────────────
-def test_dashboard_decision_entries_projection():
+def test_dashboard_decision_entries_projection_pipeline_shaped():
+    """The CONSUMED path, exercised with a record shaped the way the REAL
+    pipeline emits it (engine._build_decision_records → decision/maker/reason/
+    project ONLY, never supersedes/status). The projection must still be clean:
+    status defaults to 'active', the supersede link is empty (the artifact
+    snapshot cannot carry one), and no transcript leaks."""
     from app.api import dashboard
 
-    art = {
-        "decision_records": [
-            {"decision": "Adopt Postgres", "decision_maker": "Priya",
-             "reason": "RLS", "related_project": "Data", "supersedes": "abc",
-             "status": "active"}
+    state = brain.meeting_state.MeetingState()
+    records = brain._build_decision_records(
+        [
+            {
+                "decision": "Adopt Postgres",
+                "decision_maker": "Priya",
+                "reason": "RLS",
+                "related_project": "Data",
+            }
         ],
+        ["Adopt Postgres"],
+        state,
+    )
+    # Guard the premise: the real pipeline shape has NO supersede/status keys.
+    assert "supersedes" not in records[0]
+    assert "status" not in records[0]
+
+    art = {
+        "decision_records": records,
         "decisions": ["Adopt Postgres"],
         "transcript": "SECRET TRANSCRIPT TEXT",
     }
     entries = dashboard._decision_entries(art)
     assert entries[0]["decision"] == "Adopt Postgres"
     assert entries[0]["decision_maker"] == "Priya"
-    assert entries[0]["supersedes"] == "abc"
+    assert entries[0]["related_project"] == "Data"
+    # defaulted by the projection — the artifact record never carried these
+    assert entries[0]["status"] == "active"
+    assert entries[0]["supersedes"] == ""
     # distilled only — no transcript leaks through the projection
     assert "SECRET" not in json.dumps(entries)
+
+
+def test_dashboard_decision_entries_reconciled_supersede_flows(isolated_store):
+    """The DEFENSIBLE differentiator — the flipped status + supersede link —
+    reaches the projection ONLY through the reconciled store rows
+    (store.list_decisions), which is exactly the path _meeting_row now feeds in
+    via ``db_records``. The artifact's own decision_records can never surface
+    the pill (previous test), so this proves the real end-to-end flow."""
+    store = isolated_store
+    from app.api import dashboard
+
+    old_id = store.save_decision(
+        ORG, "bot_meet",
+        {"decision": "Go with MySQL", "related_project": "DB choice"},
+    )
+    store.persist_decision_records(
+        ORG,
+        "bot_meet",
+        [
+            {
+                "decision": "We're superseding the MySQL call and moving to Postgres",
+                "decision_maker": "Priya",
+                "related_project": "DB choice",
+            }
+        ],
+    )
+    # The reconciled rows the dashboard actually fetches for this meeting.
+    db_records = store.list_decisions(ORG, "bot_meet")
+    entries = dashboard._decision_entries({"decisions": []}, db_records=db_records)
+
+    # the older decision flipped to 'superseded' (renders "(superseded)")
+    assert "superseded" in {e["status"] for e in entries}
+    # the newer decision carries the supersede LINK the pill renders from
+    superseding = [e for e in entries if e["supersedes"]]
+    assert superseding and superseding[0]["supersedes"] == old_id
 
 
 def test_dashboard_decision_entries_legacy_fallback():
@@ -302,3 +358,96 @@ def test_dashboard_decision_entries_legacy_fallback():
     assert len(entries) == 1
     assert entries[0]["decision"] == "Ship on Friday"
     assert entries[0]["decision_maker"] == ""
+
+
+# ── HTTP: the dedicated decisions endpoint (auth gate + per-user scope) ────
+@pytest.fixture
+def http_client(tmp_path, monkeypatch):
+    """A TestClient over a fresh key-free store — the same reload dance the
+    other dashboard HTTP suites use so ledger shares the sqlite file."""
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("LAURA_STORE_PATH", str(tmp_path / "http.sqlite3"))
+    import app.main as main_module
+    from app import ledger as ledger_mod
+    from app import store as store_mod
+
+    importlib.reload(store_mod)
+    importlib.reload(ledger_mod)
+    return TestClient(main_module.app), store_mod
+
+
+def _login(client, store_mod, email, name="Test User") -> dict:
+    from app import auth
+
+    user = store_mod.upsert_user(email=email, name=name)
+    client.cookies.set(auth.COOKIE_NAME, auth.make_cookie(user["user_id"]))
+    return user
+
+
+def _http_decision_artifact(org_id: str, summary: str, transcript: str) -> dict:
+    return {
+        "summary": summary,
+        "actions": [],
+        "readiness_score": 50,
+        "follow_up_email": {},
+        "avatar_id": "laura",
+        "org_id": org_id,
+        "meeting_url": "https://meet.google.com/x",
+        "transcript": transcript,
+        "decision_records": [
+            {"decision": "Adopt Postgres", "decision_maker": "Priya",
+             "reason": "RLS", "related_project": "Data"}
+        ],
+        "decisions": ["Adopt Postgres"],
+    }
+
+
+def test_decisions_endpoint_per_user_archive_scope(http_client):
+    """A cookie user reads decisions only for meetings they attended
+    (transcript speaker) or dispatched (principal_id) — even inside their own
+    shared org. A teammate-only meeting in the same org returns 404, exactly
+    like /dashboard/summary hides it."""
+    client, store_mod = http_client
+    alice = _login(client, store_mod, "alice@example.com", name="Ananth Iyer")
+    org = alice["org_id"]
+
+    store_mod.save_artifact(
+        "bot_att",
+        _http_decision_artifact(org, "attended", "Ananth Iyer: kickoff\nlaura: noted"),
+    )
+    dispatched = _http_decision_artifact(org, "dispatched", "Duccio Profeti: hi")
+    dispatched["principal_id"] = alice["user_id"]
+    store_mod.save_artifact("bot_disp", dispatched)
+    store_mod.save_artifact(
+        "bot_mate",
+        _http_decision_artifact(org, "teammate only", "Duccio Profeti: solo test"),
+    )
+
+    # attendee sees the reconciled records
+    r = client.get("/dashboard/meetings/bot_att/decisions")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["bot_id"] == "bot_att"
+    assert any(d["decision"] == "Adopt Postgres" for d in body["decisions"])
+
+    # dispatcher (principal_id) sees them too
+    assert client.get("/dashboard/meetings/bot_disp/decisions").status_code == 200
+
+    # same org, but Alice neither attended nor dispatched → 404 (absence)
+    r404 = client.get("/dashboard/meetings/bot_mate/decisions")
+    assert r404.status_code == 404
+    assert "Adopt Postgres" not in r404.text
+
+
+def test_decisions_endpoint_cross_org_isolation(http_client):
+    """A meeting in another tenant is invisible at the HTTP layer — 404, never
+    the records."""
+    client, store_mod = http_client
+    _login(client, store_mod, "alice@example.com", name="Alice")
+    bob = store_mod.upsert_user(email="bob@example.com", name="Bob")
+    store_mod.save_artifact(
+        "bot_bob",
+        _http_decision_artifact(bob["org_id"], "bob meeting", "Bob: hi"),
+    )
+    assert client.get("/dashboard/meetings/bot_bob/decisions").status_code == 404
