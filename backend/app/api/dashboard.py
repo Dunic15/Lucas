@@ -975,6 +975,13 @@ _PD_PROBE = {
     ),
 }
 
+# Server-side debounce for the live probe: a Google native probe force-refreshes
+# a token on every call, so "Test all" / a jittery click must not hammer the
+# upstream. Per-(org, provider) monotonic timestamps, in-process only (best-effort;
+# resets on restart — this guards cost, not correctness). Tests clear it.
+_SYSCHECK_COOLDOWN_S = 3.0
+_syscheck_last: dict[tuple[str, str], float] = {}
+
 
 def _iso(ts) -> str | None:
     """Best-effort ISO string for a last_checked value (epoch/text/None)."""
@@ -1064,16 +1071,30 @@ def _syscheck_rows(caller_org: str | None) -> list[dict]:
             src = "native Google OAuth"
         else:
             src = "connector"
+        status = "ok" if connected else "off"
+        detail = (f"Connected via {src}" if connected
+                  else "Not connected — connect to enable")
+        # Scope-aware downgrade: an older native Google grant reads 'ok' for
+        # Calendar (the base grant) but may predate the Gmail/Drive scopes and so
+        # cannot actually act on them — which is exactly what the live probe
+        # catches. Warn when the native grant lacks the relevant scope so the
+        # board agrees with the probe. Pipedream's per-app connection carries its
+        # own scopes, so a Pipedream-backed row is exempt. Unknown/empty scopes ⇒
+        # keep current behaviour (no false warning).
+        if connected and native_on and not pd_on and key in ("gmail", "google_drive"):
+            scopes = google_oauth.get("scopes") or ""
+            needed = "gmail." if key == "gmail" else "drive."
+            if scopes and needed not in scopes:
+                status = "warn"
+                detail = f"Connected, but reconnect to grant {label} access"
         add(
             key, label, "productivity",
-            "ok" if connected else "off",
+            status,
             account=google_email if native_on else "",
-            detail=(f"Connected via {src}" if connected
-                    else "Not connected — connect to enable"),
+            detail=detail,
             last_checked=google_checked if native_on else None,
             supports=["read", "write"],
-            can_test=bool(pd_on or (native_on and pd_slug != "google_drive") or
-                          (native_on and pd_slug == "google_drive")),
+            can_test=bool(pd_on or native_on),
         )
 
     # ── Asana (native PAT/OAuth OR Pipedream) ──
@@ -1339,6 +1360,20 @@ async def syscheck_test(request: Request) -> JSONResponse:
     except Exception:  # noqa: BLE001
         body = {}
     provider = str((body or {}).get("provider") or "").strip()
+
+    # Per-(org, provider) debounce: swallow rapid repeats (double-clicks, "Test
+    # all") before they re-run the probe / force-refresh a token upstream.
+    now = time.monotonic()
+    cd_key = (org, provider)
+    last = _syscheck_last.get(cd_key)
+    if last is not None and (now - last) < _SYSCHECK_COOLDOWN_S:
+        return JSONResponse(
+            {"provider": provider, "status": "warn",
+             "detail": "rate limited, try again shortly",
+             "account": "", "latency_ms": 0},
+            headers=_NO_STORE,
+        )
+    _syscheck_last[cd_key] = now
 
     t0 = time.monotonic()
     try:

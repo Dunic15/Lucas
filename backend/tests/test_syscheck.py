@@ -44,6 +44,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LAURA_STORE_PATH", str(tmp_path / "store.sqlite3"))
     importlib.reload(store)
     importlib.reload(ledger)
+    # In-process probe debounce is module-global; reset it per test so one test's
+    # probe doesn't cool down the next (they share the demo/owner org+provider).
+    dash._syscheck_last.clear()
     return TestClient(main_module.app)
 
 
@@ -151,6 +154,60 @@ def test_probe_requires_login_and_same_origin(client, monkeypatch):
     monkeypatch.setattr(settings, "google_calendar_client_secret", "gcs")
     resp = client.post("/dashboard/syscheck/test", json={"provider": "asana"})
     assert resp.status_code == 401
+
+    # Authenticated but CROSS-ORIGIN → 403 (the CSRF door, same as approvals).
+    # A foreign page carrying the session cookie must not drive a live probe.
+    _login(client)
+    resp = client.post(
+        "/dashboard/syscheck/test",
+        json={"provider": "asana"},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert resp.status_code == 403
+    assert resp.json().get("error") == "forbidden"
+
+
+def test_probe_debounces_rapid_repeat_calls(client, monkeypatch):
+    """A second immediate probe for the same provider is swallowed server-side —
+    it never re-hits the upstream (which for Google force-refreshes a token)."""
+    _login(client)
+    calls: list[str] = []
+    monkeypatch.setattr(dash.pipedream_client, "enabled", lambda: True)
+    monkeypatch.setattr(dash, "_pd_account_id", lambda org, slug: "acct_1")
+
+    def _proxy(org, acct, method, url, **kw):
+        calls.append(url)
+        return {"status": 200, "ok": True, "json": {"data": {"email": "a@x.com"}}}
+
+    monkeypatch.setattr(dash.pipedream_client, "proxy_request", _proxy)
+
+    first = client.post("/dashboard/syscheck/test", json={"provider": "asana"})
+    assert first.status_code == 200
+    assert first.json()["status"] == "ok"
+
+    second = client.post("/dashboard/syscheck/test", json={"provider": "asana"})
+    assert second.status_code == 200
+    assert second.json()["status"] == "warn"
+    assert "rate limited" in second.json()["detail"]
+    # The debounced call short-circuited BEFORE the probe ran.
+    assert len(calls) == 1
+
+
+def test_native_grant_without_gmail_scope_warns(client, monkeypatch):
+    """A native Google grant that predates the Gmail scope reads 'ok' for Calendar
+    (base grant) but 'warn' for Gmail/Drive — agreeing with the live probe."""
+    monkeypatch.setattr(settings, "session_secret", "test-enc-secret")
+    # Calendar-only scope string: no gmail.* / drive.* granted.
+    store.set_org_oauth(
+        settings.demo_org_id, SECRET_RT, email="acct@x.com",
+        scopes="https://www.googleapis.com/auth/calendar.readonly")
+    rows = {r["key"]: r for r in client.get("/dashboard/syscheck").json()["rows"]}
+    assert rows["google_calendar"]["status"] == "ok"
+    assert rows["gmail"]["status"] == "warn"
+    assert "reconnect" in rows["gmail"]["detail"].lower()
+    assert rows["google_drive"]["status"] == "warn"
+    # The probe stays the definitive catch — the row is still testable.
+    assert rows["gmail"]["can_test"] is True
 
 
 # ── (6) graphiti probe only ever touches the __smoke__ group ────────────────
