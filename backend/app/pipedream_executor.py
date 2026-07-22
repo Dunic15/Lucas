@@ -454,6 +454,47 @@ def app_connected(org_id: str, app_slug: str) -> bool:
     return ok
 
 
+def read_calendar_events(org_id: str, *, max_results: int = 8) -> dict:
+    """READ-ONLY upcoming events via the Connect proxy (google_calendar) — the
+    calendar-brief FALLBACK for orgs whose Google lives in Pipedream and who
+    never did the native OAuth. Native stays first in line (google_client);
+    this runs only when that path has no token. Same ``{"ok", "events"}``
+    contract as ``google_client.list_calendar_events`` (raw Google items);
+    never raises. Live gap 2026-07-22: the join-time brief was native-only,
+    so a Pipedream-Google org's avatar had NO calendar sight and improvised
+    'I'll check it' promises seven times in one call."""
+    if not (enabled() and pipedream_client.enabled()):
+        return {"ok": False, "error": "pipedream off"}
+    org = str(org_id or "").strip()
+    if not org:
+        return {"ok": False, "error": "no org"}
+    try:
+        accounts = pipedream_client.list_accounts(org, app="google_calendar")
+    except pipedream_client.PipedreamError as exc:
+        return {"ok": False, "error": f"pipedream accounts ({type(exc).__name__})"}
+    account = next(
+        (a for a in accounts if a.get("id") and a.get("healthy", True)), None
+    ) or next((a for a in accounts if a.get("id")), None)
+    if account is None:
+        return {"ok": False, "error": "google_calendar not connected in Pipedream"}
+    from datetime import datetime, timezone as _tz
+
+    now_iso = datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        n = max(1, min(int(max_results or 8), 50))
+    except (TypeError, ValueError):
+        n = 8
+    url = (
+        "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+        f"?timeMin={now_iso}&maxResults={n}&singleEvents=true&orderBy=startTime"
+    )
+    resp = pipedream_client.proxy_request(org, str(account["id"]), "GET", url)
+    if not resp.get("ok"):
+        return {"ok": False, "error": str(resp.get("error") or "proxy read failed")}
+    items = (resp.get("json") or {}).get("items") or []
+    return {"ok": True, "events": [i for i in items if isinstance(i, dict)]}
+
+
 def note_connections(org_id: str, connected_slugs: set[str] | frozenset[str]) -> None:
     """Write-through from a FRESH accounts listing (the Connections view):
     mark these slugs connected NOW so the avatar cards and route probes stop
