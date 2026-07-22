@@ -815,7 +815,38 @@ def apply_param_edits(org: str, action_id: str, args: dict) -> tuple[int, dict]:
     if merged is None:
         return 409, {"error": "not_editable", "action_id": aid}
     missing = action_plane.missing_params(merged)
-    new_status = "needs_details" if missing else "proposed"
+    invalid: list[dict] = []
+    if not missing:
+        # Semantic gate (owner rule 2026-07-22, card e44f90f7ee62497d): shape
+        # alone let project="jj"/assignee="hh" through to a vendor 400. Fields
+        # naming real workspace entities must RESOLVE before the card can
+        # become approvable; resolved names are rewritten to canonical ids so
+        # the executor acts on ids, never on guesses. Fails open when the
+        # workspace can't be listed at all.
+        from ..actions import param_resolve
+
+        rewrites, invalid = param_resolve.validate_typed_params(org, merged)
+        if rewrites and not invalid:
+            fixed = ledger.update_action_params(
+                aid, rewrites, org_id=org, artifact_typed=action.get("typed")
+            )
+            if fixed is not None:
+                merged = fixed
+    new_status = "needs_details" if (missing or invalid) else "proposed"
+    if invalid:
+        ledger.set_action_status(
+            aid, "needs_details",
+            "invalid: " + "; ".join(e["message"] for e in invalid)[:300],
+            org_id=org,
+        )
+        return 422, {
+            "error": "invalid_params",
+            "action_id": aid,
+            "details": [e["message"] for e in invalid][:10],
+            "invalid_fields": invalid[:10],
+            "params": dict(merged.get("args") or {}),
+            "status": "needs_details",
+        }
     if current in ("", "needs_details"):
         ledger.set_action_status(
             aid, new_status,

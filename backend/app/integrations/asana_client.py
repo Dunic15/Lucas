@@ -274,6 +274,34 @@ def list_projects(org_id: str, *, max_results: int = 30) -> dict:
     }
 
 
+def list_users(org_id: str, *, max_results: int = 50) -> dict:
+    """Workspace members: {"ok", "users": [{gid, name, email}]}. Same contract
+    as list_projects — never raises, {"ok": False, "error"} on any failure."""
+    pat, err = _token(org_id)
+    if err:
+        return {"ok": False, "error": err}
+    ws, err = _workspace_gid(pat)
+    if err:
+        return {"ok": False, "error": err}
+    data, err = _get(
+        pat, f"/workspaces/{ws}/users",
+        {"opt_fields": "name,email",
+         "limit": max(1, min(int(max_results or 50), 100))},
+    )
+    if err:
+        return {"ok": False, "error": err}
+    return {
+        "ok": True,
+        "users": [
+            {"gid": str(u.get("gid") or ""),
+             "name": str(u.get("name") or "")[:120],
+             "email": str(u.get("email") or "")[:200]}
+            for u in (data or [])
+            if isinstance(u, dict)
+        ],
+    }
+
+
 def _resolve_project(org_id: str, project: str) -> tuple[str, str]:
     """A project gid from a gid-or-name string; ("", err) when unresolvable."""
     project = (project or "").strip()

@@ -2621,10 +2621,17 @@
         // the backend stays authoritative) and retry once saved.
         if(res.status===422 && res.j.error==="needs_details"){
           if(btn){ btn.disabled=false; btn.innerHTML=old; }
+          // invalid_fields (semantic gate): the value doesn't resolve in the
+          // org's real workspace — offer the VALID options as a picker.
+          var om={}, errs=null, inv=res.j.invalid_fields||[];
+          inv.forEach(function(e){ if(e.field&&(e.options||[]).length) om[e.field]=e.options; });
+          if(inv.length) errs=inv.map(function(e){ return e.field+" — "+e.message; });
           openParamsForm({
             actionId:aid,
             schema:res.j.params_schema||[],
             missing:res.j.missing_params||[],
+            options:om,
+            errors:errs,
             approveAfter:true,
             onApproved:function(){ reviewAction(btn,aid); }
           });
@@ -2670,17 +2677,27 @@
   function openParamsForm(opts){
     closeParamsForm();
     var schema=opts.schema||[], missing=(opts.missing||[]).slice(), params=opts.params||{};
+    var optionsBy=opts.options||{};
     var s=document.createElement("div"); s.className="scrim"; s.id="params-scrim";
     var fields=schema.map(function(f,i){
       var name=String(f.name||""), required=!!f.required, type=String(f.type||"string");
       var raw=params[name];
       var val=raw==null?"":(type==="array"&&Array.isArray(raw)?raw.join(", "):String(raw));
       var long=(type==="string"&&["body","notes","description","text"].indexOf(name)>=0);
+      var opl=optionsBy[name]||[];
+      // Options from the org's REAL workspace (semantic gate): a picker of
+      // values that actually resolve beats a free-text guess that 400s.
+      var control=opl.length
+        ?'<select id="mf-'+i+'" data-mfin="'+esc(name)+'" data-mtype="string">'+
+          '<option value="">— choose —</option>'+
+          opl.map(function(o){ return '<option'+(String(val)===String(o)?' selected':'')+'>'+esc(String(o))+'</option>'; }).join("")+
+          '</select>'
+        :(long?'<textarea id="mf-'+i+'" rows="3" data-mfin="'+esc(name)+'" data-mtype="'+esc(type)+'">'+esc(val)+'</textarea>'
+             :'<input id="mf-'+i+'" type="text" value="'+esc(val)+'" data-mfin="'+esc(name)+'" data-mtype="'+esc(type)+'" />');
       return '<div class="mfield" data-mf="'+esc(name)+'">'+
         '<label for="mf-'+i+'">'+esc(f.label||name.replace(/_/g," "))+(required?'<span class="req">required</span>':'')+'</label>'+
         ((f.description||type==="array")?'<div class="fh">'+esc(f.description||"")+(type==="array"?(f.description?" — ":"")+"comma-separated":"")+'</div>':'')+
-        (long?'<textarea id="mf-'+i+'" rows="3" data-mfin="'+esc(name)+'" data-mtype="'+esc(type)+'">'+esc(val)+'</textarea>'
-             :'<input id="mf-'+i+'" type="text" value="'+esc(val)+'" data-mfin="'+esc(name)+'" data-mtype="'+esc(type)+'" />')+
+        control+
         '<div class="ferr" data-mferr="'+esc(name)+'" hidden></div></div>';
     }).join("");
     s.innerHTML='<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mdl-t">'+
@@ -2694,6 +2711,7 @@
     document.body.appendChild(s);
     var first=s.querySelector('[data-mfin="'+(missing[0]||"")+'"]')||s.querySelector("[data-mfin]");
     if(first) setTimeout(function(){ first.focus(); },0);
+    if(opts.errors&&opts.errors.length) setTimeout(function(){ showErrors(opts.errors); },0);
     function collect(){
       var args={};
       s.querySelectorAll("[data-mfin]").forEach(function(el){
@@ -2748,7 +2766,22 @@
         .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,j:j}; }); })
         .then(function(res){
           if(sb) sb.disabled=false;
-          if(!res.ok){ showErrors((res.j&&res.j.details)||[(res.j&&res.j.error)||"Could not save details"]); return; }
+          if(!res.ok){
+            // Semantic 422: the value doesn't exist in the org's workspace —
+            // reopen the form with the VALID options as pickers.
+            var inv=(res.j&&res.j.invalid_fields)||[];
+            var om={}; inv.forEach(function(e){ if(e.field&&(e.options||[]).length) om[e.field]=e.options; });
+            if(Object.keys(om).length){
+              closeParamsForm();
+              openParamsForm(Object.assign({},opts,{
+                params:Object.assign({},params,args),
+                options:Object.assign({},optionsBy,om),
+                errors:inv.map(function(e){ return e.field+" — "+e.message; })
+              }));
+              return;
+            }
+            showErrors((res.j&&res.j.details)||[(res.j&&res.j.error)||"Could not save details"]); return;
+          }
           var still=res.j.missing_params||[];
           if(still.length && thenApprove){ missing=still; showErrors(still); return; }
           if(thenApprove && !still.length){
