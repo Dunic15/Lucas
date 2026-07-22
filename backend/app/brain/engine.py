@@ -876,7 +876,12 @@ def answer_question_stream(
         # silent.
         question = f"{question} (You could not search the web just now — answer from your knowledge and say it may not be current.)"
         _provider, _model = settings.brain_provider, settings.brain_model_fast
-    _max_tokens = settings.live_max_tokens
+    # A ceiling only as a runaway backstop — NOT to shorten a legitimately long
+    # answer. Conciseness is shaped by the system prompt ("1-3 short sentences"),
+    # which lets a reply END gracefully; a lower hard cap would just truncate a
+    # long answer mid-sentence, which reads worse than either a short or a
+    # complete long one. Kept at 400 (unchanged from production) on purpose.
+    _max_tokens = 400
     for delta in llm.stream_complete(
         system, user, max_tokens=_max_tokens, model=_model, provider=_provider
     ):

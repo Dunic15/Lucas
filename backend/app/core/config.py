@@ -42,11 +42,6 @@ class Settings(BaseSettings):
     # provider check falls back to the fast model. Haiku (not Sonnet) so the LIVE
     # spoken path stays low-latency; Sonnet is reserved for the post-meeting brain.
     brain_model_complex: str = "claude-haiku-4-5"
-    # Live spoken answer length cap. A spoken 1-3 sentence reply doesn't need
-    # 400 tokens; a tighter cap cuts generation time (perceived latency) on the
-    # live path. Post-meeting/summary paths keep their own larger caps.
-    live_max_tokens: int = 200
-
     # Ollama (only used when BRAIN_PROVIDER=ollama)
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
