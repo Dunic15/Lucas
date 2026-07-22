@@ -32,6 +32,7 @@ from .. import (
     graphiti_client, jira_client, knowledge, ledger, outbox, pipedream_client,
     pipedream_executor, recall_client, store,
 )
+from ..brain import tool_registry
 from ..config import settings
 from ..knowledge import dal
 
@@ -210,6 +211,62 @@ def _action_needed(action: dict) -> list[str]:
         return []
 
 
+def _card_state(action: dict) -> str:
+    """Pre-execution resting state for one card: ``needs_details`` or
+    ``ready_to_approve``.
+
+    This replaces the old passive "captured — tracked here for the record"
+    reading (owner ask 2026-07-22, live card aa2e74e86dbd4d38): a card the
+    surface shows is always actionable. It is DERIVED, not stored — the
+    canonical ``execution_status`` vocabulary in action_plane is unchanged, so
+    there is no new enum value and no CHECK-constraint migration. Existing
+    tracked-only cards migrate softly on read: untyped or incomplete ones
+    become ``needs_details``, complete typed ones ``ready_to_approve``.
+    """
+    try:
+        typed = action.get("typed")
+        is_typed = isinstance(typed, dict) and bool(typed.get("type"))
+        if not is_typed or _action_needed(action):
+            return "needs_details"
+        return "ready_to_approve"
+    except Exception:  # noqa: BLE001 — never worth a 500
+        return "needs_details"
+
+
+_TYPED_FAMILY = {
+    "calendar": "google_calendar",
+    "email": "gmail",
+    "gmail": "gmail",
+    "drive": "google_drive",
+    "asana": "asana",
+}
+
+
+def _action_family(action: dict) -> str:
+    """Which executor app family this card would run against ("" = unknown).
+
+    The dashboard uses it for ONE purpose: when the family isn't connected, the
+    card offers "Reconnect <tool>" instead of an Approve that could only
+    dead-end. Typed specs name their family in the type prefix. For an UNTYPED
+    ask we map only the unambiguous kinds (email, calendar) — a generic "task"
+    must not tell a Google-only org to reconnect Asana. Pure/cheap, never
+    raises.
+    """
+    try:
+        typed = action.get("typed")
+        if isinstance(typed, dict) and typed.get("type"):
+            return _TYPED_FAMILY.get(str(typed["type"]).split(".", 1)[0], "")
+        from ..brain import tools as brain_tools
+
+        text = str(action.get("item") or action.get("action") or "")
+        if not text:
+            return ""
+        kind = brain_tools.ask_kind(text)
+        return {"email": "gmail", "calendar": "google_calendar"}.get(kind, "")
+    except Exception:  # noqa: BLE001 — a CTA hint is never worth a 500
+        return ""
+
+
 def _decision_entries(art: dict, db_records: list[dict] | None = None) -> list[dict]:
     """Distilled first-class decision records for the wire. Distilled fields
     only — decision text, maker, reason, project, supersede link, status —
@@ -311,13 +368,24 @@ def _action_entry(action) -> dict:
             "source": str(action.get("source") or "explicit")[:16],
             "goal": str(action.get("goal") or "")[:200],
             "inferred_from": str(action.get("inferred_from") or "")[:300],
+            # Where this card sits BEFORE anything ran (owner ask 2026-07-22:
+            # a card is never a passive "tracked for the record" dead end —
+            # it is always either asking for what it needs, or ready for a
+            # decision). Once execution starts, the durable execution_status
+            # is the truth and the surface renders that instead.
+            "card_state": _card_state(action),
+            # Executor family this would run against — lets the card offer
+            # "Reconnect <tool>" instead of an Approve that cannot land.
+            "family": _action_family(action),
         }
     return {"action_id": "", "item": str(action)[:300], "owner": "",
             "unassigned": False, "gap": "", "done": False, "typed": False,
             "title": _display_title(str(action)),
             "executable": settings.native_executor,
             "needed": _action_needed({"item": str(action)}),
-            "source": "explicit", "goal": "", "inferred_from": ""}
+            "source": "explicit", "goal": "", "inferred_from": "",
+            "card_state": _card_state({"item": str(action)}),
+            "family": _action_family({"item": str(action)})}
 
 
 def _delivered(
@@ -1177,7 +1245,9 @@ def _syscheck_rows(caller_org: str | None) -> list[dict]:
             account=google_email if native_on else "",
             detail=detail,
             last_checked=google_checked if native_on else None,
-            supports=["read", "write"],
+            # What this tool can actually DO, straight from the executor's own
+            # mapper (#377) — never a hand-kept list that can drift.
+            supports=tool_registry.family_verbs(pd_slug),
             can_test=bool(pd_on or native_on),
         )
 
@@ -1194,7 +1264,7 @@ def _syscheck_rows(caller_org: str | None) -> list[dict]:
         detail=("Connected via Pipedream" if asana_pd
                 else "Connected via token" if asana_native
                 else "Not connected"),
-        supports=["read", "write"],
+        supports=tool_registry.family_verbs("asana"),
         can_test=asana_on,
     )
 
@@ -1309,6 +1379,66 @@ def dashboard_syscheck(request: Request) -> JSONResponse:
         _json_safe({
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "rows": rows,
+        }),
+        headers=_NO_STORE,
+    )
+
+
+# App families the executor can act on. A family appears in the capability
+# list only when the executor actually maps verbs for it.
+_CAPABILITY_FAMILIES = ("google_calendar", "gmail", "google_drive", "asana")
+
+
+@router.get("/dashboard/capabilities")
+def dashboard_capabilities(request: Request) -> JSONResponse:
+    """What each connected tool can actually DO, per org.
+
+    Read-only and fully DERIVED — nothing here is hand-kept. Connection state
+    comes from the same rows the System Check board builds, and the verb list
+    comes from the executor's own mapper via ``tool_registry.family_verbs``
+    (#377). One catalog: what the Connections cards show, what the System Check
+    board lists, and what the avatar claims mid-meeting cannot drift apart.
+
+    Auth-gated exactly like /dashboard/summary. Distilled only — no token, no
+    account credential, no transcript.
+    """
+    from .. import cedric  # local import, same reason as dashboard_summary
+
+    user = auth.current_user(request)
+    machine_org = None
+    if user is None:
+        machine_org = cedric.resolve_machine_org(request)
+        if machine_org is None:
+            if err := auth.gate(request):
+                return err
+    caller_org = user["org_id"] if user else machine_org
+
+    try:
+        by_key = {str(r.get("key") or ""): r for r in _syscheck_rows(caller_org)}
+    except Exception:  # noqa: BLE001 — a capability list never 500s the page
+        by_key = {}
+
+    apps: list[dict] = []
+    for slug in _CAPABILITY_FAMILIES:
+        verbs = tool_registry.family_verbs(slug)
+        if not verbs:  # executor maps nothing for this family — say nothing
+            continue
+        row = by_key.get(slug) or {}
+        status = str(row.get("status") or "off")
+        apps.append({
+            "slug": slug,
+            "label": tool_registry.FAMILY_LABELS.get(slug, slug),
+            # 'warn' = connected but a scope/health caveat: still connected.
+            "connected": status in ("ok", "warn"),
+            "status": status,
+            "account": str(row.get("account") or ""),
+            "verbs": verbs,
+        })
+
+    return JSONResponse(
+        _json_safe({
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "apps": apps,
         }),
         headers=_NO_STORE,
     )

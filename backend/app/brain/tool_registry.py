@@ -43,6 +43,43 @@ _BUILTINS = [
      "kind": "native", "write": False, "approval": "auto"},
 ]
 
+# Human labels for the executor's app families — the one place a slug becomes
+# words, so the meeting brief, the Connections cards and the System Check board
+# all name a tool the same way.
+FAMILY_LABELS: dict[str, str] = {
+    "google_calendar": "Google Calendar",
+    "gmail": "Gmail",
+    "google_drive": "Google Drive",
+    "asana": "Asana",
+}
+
+
+def family_verbs(slug: str) -> list[str]:
+    """What the EXECUTOR can actually run for one app family, derived from
+    pipedream_executor._MAPPER — the single catalog.
+
+    This is the same derivation the in-meeting capability brief uses (#377):
+    the avatar's self-knowledge, the Connections cards and the System Check
+    board all read the execution plane itself, so none of them can ever claim
+    a verb the executor lost (or miss one it gained). Never raises — an
+    unavailable executor simply yields no verbs.
+    """
+    try:
+        from .. import pipedream_executor as _pe
+
+        return sorted(
+            t.split(".", 1)[1].replace("_", " ")
+            for t, spec in _pe._MAPPER.items()
+            if spec[0] == slug
+        )
+    except Exception:  # noqa: BLE001 — never block a join/board on this
+        return []
+
+
+def family_verbs_text(slug: str) -> str:
+    """`family_verbs` as the comma-joined phrase the spoken brief uses."""
+    return ", ".join(family_verbs(slug))
+
 
 def assemble(org_id: str, avatar: Any) -> dict | None:
     """Build the org-scoped registry. SYNC + network (one Cedric catalog GET) —
@@ -79,18 +116,7 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
         # Live capability awareness (owner ask 2026-07-22): the verb list for
         # each family is DERIVED from the executor's own registry — the
         # avatar's self-knowledge can never lag the execution plane again.
-        def _family_verbs(slug: str) -> str:
-            try:
-                from .. import pipedream_executor as _pe
-
-                verbs = sorted(
-                    t.split(".", 1)[1].replace("_", " ")
-                    for t, spec in _pe._MAPPER.items()
-                    if spec[0] == slug
-                )
-                return ", ".join(verbs)
-            except Exception:  # noqa: BLE001 — never block a join on this
-                return ""
+        _family_verbs = family_verbs_text
 
         reg["native"].append({
             "name": "google_calendar",
