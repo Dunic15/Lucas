@@ -1,4 +1,4 @@
-name: Diagnose PR 367 production deploy
+name: Roll out and verify PR 367
 
 on:
   push:
@@ -8,34 +8,55 @@ on:
 
 permissions:
   actions: read
-  contents: read
+  contents: write
   id-token: write
-  pull-requests: write
 
 jobs:
-  diagnose:
+  rollout:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     env:
-      GH_TOKEN: ${{ github.token }}
       TARGET_SHA: 733bb2d2b3f41a5b928902c22dd78c7710028dd9
       BASE_URL: https://dhfgfe6yw6.eu-central-1.awsapprunner.com
       SERVICE_ARN: arn:aws:apprunner:eu-central-1:836739852304:service/laura-backend/f169c4a486cd47bfac9736ab01367a26
+      RESULT_BRANCH: chore/deploy-result-367
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::836739852304:role/GitHubActionsEcrPush
           aws-region: eu-central-1
 
-      - name: Diagnose ECR and App Runner
+      - name: Start guarded rollout and verify live marker
         shell: bash
         run: |
           set +e
+          REPORT=deploy-367-report.txt
+          : > "$REPORT"
+          echo "PR 367 production rollout report" >> "$REPORT"
+          echo "generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$REPORT"
+          echo "target_sha=$TARGET_SHA" >> "$REPORT"
+
           ecr=$(aws ecr describe-images --repository-name laura-backend \
             --image-ids imageTag="$TARGET_SHA" \
             --query 'imageDetails[0].{digest:imageDigest,pushed:imagePushedAt,tags:imageTags}' \
             --output json 2>&1)
           ecr_rc=$?
+          echo "ecr_rc=$ecr_rc" >> "$REPORT"
+          echo "ecr=$ecr" >> "$REPORT"
+
+          health=$(curl -fsS --max-time 15 "$BASE_URL/health" 2>/dev/null || true)
+          active_sessions=$(printf '%s' "$health" | python -c 'import json,sys; print(json.load(sys.stdin).get("active_sessions",-1))' 2>/dev/null || echo -1)
+          marker=false
+          page=$(curl -fsSL --max-time 20 "$BASE_URL/dashboard" 2>/dev/null || true)
+          printf '%s' "$page" | grep -Fq "This is the canonical action saved on the server" && marker=true
+          echo "initial_health=$health" >> "$REPORT"
+          echo "initial_active_sessions=$active_sessions" >> "$REPORT"
+          echo "initial_marker_live=$marker" >> "$REPORT"
+
           service=$(aws apprunner describe-service --service-arn "$SERVICE_ARN" \
             --query 'Service.{status:Status,image:SourceConfiguration.ImageRepository.ImageIdentifier,auto:SourceConfiguration.AutoDeploymentsEnabled,updated:UpdatedAt,url:ServiceUrl}' \
             --output json 2>&1)
@@ -44,11 +65,75 @@ jobs:
             --query 'OperationSummaryList[].{id:Id,type:Type,status:Status,started:StartedAt,ended:EndedAt,updated:UpdatedAt}' \
             --output json 2>&1)
           operations_rc=$?
-          health=$(curl -fsS --max-time 15 "$BASE_URL/health" 2>/dev/null || true)
-          page=$(curl -fsSL --max-time 20 "$BASE_URL/dashboard" 2>/dev/null || true)
-          marker=false
-          printf '%s' "$page" | grep -Fq "This is the canonical action saved on the server" && marker=true
+          echo "service_rc=$service_rc" >> "$REPORT"
+          echo "service_before=$service" >> "$REPORT"
+          echo "operations_rc=$operations_rc" >> "$REPORT"
+          echo "operations_before=$operations" >> "$REPORT"
 
-          body=$(printf '## AWS deploy diagnosis — PR #367\n\n- Target image tag: `%s`\n- ECR command rc: `%s`\n```json\n%s\n```\n- App Runner describe rc: `%s`\n```json\n%s\n```\n- App Runner operations rc: `%s`\n```json\n%s\n```\n- Health: `%s`\n- Canonical-preview marker live: `%s`\n' \
-            "$TARGET_SHA" "$ecr_rc" "$ecr" "$service_rc" "$service" "$operations_rc" "$operations" "$health" "$marker")
-          gh pr comment 367 --body "$body"
+          outcome="not_started"
+          start_rc=-1
+          start_output=""
+          if [ "$marker" = "true" ]; then
+            outcome="already_live"
+          elif [ "$active_sessions" != "0" ]; then
+            outcome="blocked_active_sessions"
+          elif [ "$ecr_rc" != "0" ]; then
+            outcome="blocked_target_image_missing"
+          elif [ "$service_rc" != "0" ] || [ "$operations_rc" != "0" ]; then
+            outcome="blocked_apprunner_read_denied"
+          elif printf '%s' "$operations" | grep -q 'IN_PROGRESS'; then
+            outcome="waiting_existing_operation"
+          else
+            start_output=$(aws apprunner start-deployment --service-arn "$SERVICE_ARN" --output json 2>&1)
+            start_rc=$?
+            if [ "$start_rc" = "0" ]; then
+              outcome="rollout_started"
+            else
+              outcome="blocked_start_deployment_denied"
+            fi
+          fi
+          echo "start_rc=$start_rc" >> "$REPORT"
+          echo "start_output=$start_output" >> "$REPORT"
+          echo "outcome_after_start=$outcome" >> "$REPORT"
+
+          final_marker=$marker
+          final_health=$health
+          final_status=""
+          if [ "$outcome" = "rollout_started" ] || [ "$outcome" = "waiting_existing_operation" ]; then
+            for i in $(seq 1 60); do
+              final_health=$(curl -fsS --max-time 15 "$BASE_URL/health" 2>/dev/null || true)
+              final_page=$(curl -fsSL --max-time 20 "$BASE_URL/dashboard" 2>/dev/null || true)
+              final_marker=false
+              printf '%s' "$final_page" | grep -Fq "This is the canonical action saved on the server" && final_marker=true
+              final_status=$(aws apprunner describe-service --service-arn "$SERVICE_ARN" --query 'Service.Status' --output text 2>/dev/null || true)
+              if [ "$final_marker" = "true" ] && printf '%s' "$final_health" | grep -q '"status":"ok"'; then
+                outcome="verified_live"
+                break
+              fi
+              sleep 15
+            done
+          fi
+
+          final_service=$(aws apprunner describe-service --service-arn "$SERVICE_ARN" \
+            --query 'Service.{status:Status,image:SourceConfiguration.ImageRepository.ImageIdentifier,auto:SourceConfiguration.AutoDeploymentsEnabled,updated:UpdatedAt,url:ServiceUrl}' \
+            --output json 2>&1)
+          final_operations=$(aws apprunner list-operations --service-arn "$SERVICE_ARN" --max-results 5 \
+            --query 'OperationSummaryList[].{id:Id,type:Type,status:Status,started:StartedAt,ended:EndedAt,updated:UpdatedAt}' \
+            --output json 2>&1)
+          echo "final_outcome=$outcome" >> "$REPORT"
+          echo "final_status=$final_status" >> "$REPORT"
+          echo "final_health=$final_health" >> "$REPORT"
+          echo "final_marker_live=$final_marker" >> "$REPORT"
+          echo "service_after=$final_service" >> "$REPORT"
+          echo "operations_after=$final_operations" >> "$REPORT"
+          cat "$REPORT"
+
+      - name: Publish rollout report to diagnostic branch
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy-367-report.txt
+          git commit -m "chore: record PR 367 production rollout result"
+          git push origin HEAD:$RESULT_BRANCH
