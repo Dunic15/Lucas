@@ -79,7 +79,7 @@ def test_route_falls_back_to_native_until_connected_in_pipedream(monkeypatch):
     assert executor.route_for_typed({"type": "asana.update_task", "args": {"task": "1", "name": "y"}}) == "native"
     assert executor.route_for_typed({"type": "calendar.create_event", "args": {}}) == "native"
     assert executor.route_for_typed({"type": "email.send", "args": {}}) == "native"
-    assert executor.route_for_typed({"type": "slack.post_message", "args": {"text": "hi"}}) == "native"
+    assert executor.route_for_typed({"type": "slack.post_message", "args": {"text": "hi"}}) == "cedric"
     # Untyped / non-native → Cedric.
     assert executor.route_for_typed(None) == "cedric"
     assert executor.route_for_typed({"type": "weird.unknown"}) == "cedric"
