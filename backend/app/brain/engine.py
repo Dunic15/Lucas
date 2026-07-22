@@ -343,6 +343,10 @@ _ABOUT_INTENT = re.compile(
     r"(can|could|do)\s+(you|laura|petra)\b.{0,20}\b(read|access|see|hear)\b"
     r".{0,28}\b(my|our|me|calendar|drive|gmail|asana|slack|notion)\b|"
     r"(do|can)\s+(you|laura|petra)\s+have\s+access\s+to\b|"
+    # "are you connected to Slack?" — a roster question, not a yes/no for the
+    # model to improvise (live 2026-07-22: answered "No" while Slack WAS linked).
+    r"(are|is)\s+(you|laura|petra)\s+(connected|linked|hooked\s+up)\s+to\b|"
+    r"(sei|è)\s+(collegat\w+|conness\w+)\s+(a|con|al|alla)\b|"
     r"(puoi|riesci\s+a|sai)\b.{0,18}\b(legger\w*|acceder\w*|veder\w*|sentir\w*)\b"
     r".{0,24}\b(mi|mio|mia|nostr\w*|calendar\w*|drive|gmail|asana|slack|notion)\b|"
     r"\bmi\s+senti\b|"
@@ -515,8 +519,27 @@ _ACTION_VERBS = (
     # "create an Asana task", "create a new Jira ticket", "open the follow-up
     # event" match (the app/adjective in the middle used to break capture — the
     # #1 reason Petra never confirmed a task, live repro 2026-07-21).
-    r"(?:create|open)\s+(?:a\s+|an\s+|the\s+)?(?:[\w-]+\s+){0,2}(?:ticket|task|issue|doc(?:ument)?|event|meeting|invite)|"
-    r"add\s+(?:\w+\s+)?to\s+(?:the\s+|my\s+|our\s+)?(?:calendar|slack|notion|channel))"
+    r"(?:create|open|make)\s+(?:a\s+|an\s+|the\s+)?(?:[\w-]+\s+){0,2}"
+    r"(?:ticket|task|issue|doc(?:ument)?|event|meeting|invite|folder|project|subtask|draft)|"
+    # The 20-action expansion (#375) made Drive/Gmail/Calendar edits executable,
+    # but capture never learned to hear them — Laura could RUN
+    # drive.share_file / gmail.archive / calendar.cancel_event and still never
+    # turn the spoken ask into a card (harness 2026-07-22). Object-constrained
+    # so conversational uses ("let's move on", "share your screen") stay out.
+    r"archive\s+(?:the\s+|that\s+|those\s+|my\s+)?(?:email|message|thread|mail)s?|"
+    r"rename\s+(?:the\s+|that\s+|this\s+)?(?:file|doc(?:ument)?|folder|sheet|task)s?|"
+    r"move\s+(?:the\s+|that\s+|this\s+)?(?:file|doc(?:ument)?|folder|sheet)\s+(?:in)?to|"
+    r"share\s+(?:the\s+|that\s+|this\s+|my\s+)?(?:file|doc(?:ument)?|folder|sheet|deck)\s+with|"
+    r"label\s+(?:the\s+|that\s+|those\s+)?(?:email|message|thread|mail)s?|"
+    r"repl(?:y|ies)\s+to\s+(?:the\s+|that\s+|his\s+|her\s+|their\s+)?(?:email|message|thread|mail)|"
+    r"forward\s+(?:the\s+|that\s+|this\s+)?(?:email|message|thread|mail)s?|"
+    r"cancel\s+(?:the\s+|that\s+|this\s+|my\s+|our\s+)?(?:event|meeting|invite|call|booking)|"
+    r"rsvp\b|"
+    # "add Marco to that calendar invite" / "…to the event": the old branch
+    # accepted only a bare surface noun after the/my/our, so demonstratives and
+    # invite/event/thread targets were dropped.
+    r"add\s+(?:[\w@.+-]+\s+){0,3}to\s+(?:the\s+|my\s+|our\s+|that\s+|this\s+)?"
+    r"(?:[\w-]+\s+){0,2}(?:calendar|slack|notion|channel|invite|event|meeting|task|project|thread|doc(?:ument)?))"
 )
 # Optional leading fillers (EN + IT) so "Ok, schedule…", "So send…", "Allora
 # manda…" still read as bare imperatives (real speech rarely starts clean on the
@@ -571,6 +594,40 @@ _CAPTURE_STUTTERED_QUESTION = re.compile(
 )
 
 
+_ACTION_FILLER = {
+    "a", "an", "the", "to", "for", "with", "and", "then", "ok", "okay", "so",
+    "please", "my", "our", "your", "that", "this", "it", "them", "him", "her",
+    "up", "on", "in", "of", "e", "il", "la", "lo", "un", "una", "di", "da",
+}
+_OBJECT_NOUN = re.compile(
+    r"\b(?:ticket|task|issue|doc|document|event|meeting|invite|folder|project|"
+    r"subtask|draft|file|sheet|deck|calendar|slack|notion|channel|thread|"
+    r"email|message|mail|call|booking"
+    # Italian object nouns: the IT imperative branch often consumes the whole
+    # ask ("aggiungi la demo al calendario"), leaving no tail to inspect.
+    r"|calendario|riunione|evento|invito|mail|messaggio|cartella|documento"
+    r"|progetto|chiamata|promemoria)\w*\b",
+    re.IGNORECASE,
+)
+
+
+def _has_action_object(text: str, match: "re.Match") -> bool:
+    """Does the ask actually name WHAT to act on?
+
+    ASR truncation leaves dangling imperatives — "Okay. And then can you send,
+    an" (live card 64dcf5c0, which became the card "Send, an to"). The verb
+    alone is an intention, not an instruction: require either a content word
+    after the matched verb phrase, or an object noun inside it ("create a
+    task" carries its own object).
+    """
+    tail = re.sub(r"[^\w\s@.+-]", " ", text[match.end():])
+    for word in tail.split():
+        token = word.strip(".").lower()
+        if len(token) > 1 and token not in _ACTION_FILLER:
+            return True
+    return bool(_OBJECT_NOUN.search(match.group(0)))
+
+
 def wants_action_capture(question: str) -> bool:
     """True only for a coherent direct request to perform an action.
 
@@ -582,7 +639,10 @@ def wants_action_capture(question: str) -> bool:
     q = " ".join((question or "").split())
     if _CAPTURE_QUESTION_TAIL.search(q) or _CAPTURE_STUTTERED_QUESTION.search(q):
         return False
-    return bool(_ACTION_INTENT.search(q))
+    match = _ACTION_INTENT.search(q)
+    if match is None:
+        return False
+    return _has_action_object(q, match)
 
 
 def _live_route(question: str) -> tuple[str, str]:
