@@ -47,6 +47,23 @@ jobs:
           echo "apply_exit=$APPLY_RC" >> phase1-run.txt
           cat phase1-apply.log >> phase1-run.txt
 
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("backend/tests/test_pipedream_executor.py")
+          s = p.read_text(encoding="utf-8")
+          s = s.replace(
+              "    captured: dict = {}\n\n    def fake_proxy(org, acct, method, url, json_body=None, headers=None):\n        captured.update(org=org, acct=acct, method=method, url=url, body=json_body)\n",
+              "    captured: dict = {\"calls\": []}\n\n    def fake_proxy(org, acct, method, url, json_body=None, headers=None):\n        captured[\"calls\"].append((method, url))\n        captured.update(org=org, acct=acct, method=method, url=url, body=json_body)\n",
+              1,
+          )
+          s = s.replace(
+              "    assert captured[\"acct\"] == \"apn_9\" and captured[\"method\"] == \"POST\"\n    assert seen[\"status\"] == \"done\" and seen[\"receipt\"][\"route\"] == \"pipedream\"\n",
+              "    assert captured[\"acct\"] == \"apn_9\"\n    assert [method for method, _url in captured[\"calls\"]] == [\"POST\", \"GET\"]\n    assert out[\"verified\"] is True\n    assert seen[\"status\"] == \"done\" and seen[\"receipt\"][\"route\"] == \"pipedream\"\n    assert seen[\"receipt\"][\"verified\"] is True\n",
+              1,
+          )
+          p.write_text(s, encoding="utf-8")
+          PY
+
           INSTALL_RC=99
           TEST_RC=99
           if [ "$APPLY_RC" -eq 0 ]; then
