@@ -2449,6 +2449,31 @@ async def disconnect_brain_remote(request: Request) -> JSONResponse:
 
 # ─────────────── native approve → execute (the loop's last mile) ────────────
 
+def _artifact_brief_for_action(caller_org: str, action_id: str) -> str:
+    """The meeting summary of the artifact holding this action ('' if none).
+
+    Fed to the approve-door retype rescue: the CARD text alone often lacks the
+    grounding the typing contract demands (live 2026-07-22: 'schedule a
+    meeting for tomorrow with Anant' — the 3 PM and the email were said in the
+    clarify exchange, which lands in the SUMMARY, not the card), so typing
+    from the bare item yields nothing and an executable ask dies as a
+    tracked-only card. Same visibility scoping as _find_org_action."""
+    aid = (action_id or "").strip()
+    if not aid:
+        return ""
+    scope = None
+    if store.durable_artifacts_enabled():
+        scope = caller_org or settings.demo_org_id
+    for row in store.list_artifacts(scope):
+        art = row.get("artifact") or {}
+        if not _org_visible(caller_org, art.get("org_id", "")):
+            continue
+        for a in art.get("actions") or []:
+            if isinstance(a, dict) and str(a.get("action_id") or "") == aid:
+                return str(art.get("summary") or "")
+    return ""
+
+
 def _find_org_action(caller_org: str, action_id: str) -> tuple[dict, str] | None:
     """The stored artifact action with this ``action_id`` that is VISIBLE to
     ``caller_org`` (its own org, or a legacy unowned '' row), as
@@ -2599,6 +2624,12 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
                     return False
 
             _allow_asana = await run_in_threadpool(_org_asana)
+            # The meeting summary carries the grounding the card text lacks
+            # (times/emails given in the clarify exchange) — without it the
+            # no-invention typing contract correctly refuses to type.
+            _brief = await run_in_threadpool(
+                _artifact_brief_for_action, org, aid
+            )
             _retyped = await run_in_threadpool(
                 lambda: brain.type_actions(
                     [{
@@ -2606,6 +2637,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
                         "owner": str(action.get("owner") or ""),
                         "deadline": str(action.get("deadline") or ""),
                     }],
+                    _brief,
                     allow_asana=_allow_asana,
                 )
             )
