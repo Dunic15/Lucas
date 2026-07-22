@@ -225,7 +225,9 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
         reg["pd_org_available"] = pd_org_available[:6]
 
         # Cedric connectors — only when this org has a connected Slack agent.
-        cedric_reg: dict = {"connected": [], "available": [], "not_linked": False}
+        cedric_reg: dict = {
+            "connected": [], "available": [], "not_linked": False, "linked": False
+        }
         team_id = ""
         try:
             rows = store.connections_for_org(org_id)
@@ -246,6 +248,10 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
         # 2. a not_linked (or malformed) catalog yields NO claims at all —
         #    never fall back to whatever the stale row said.
         if team_id:
+            # Slack itself is connected to the org even when Cedric's connector
+            # catalog is empty. Preserve that distinction for self-questions:
+            # "connected to the org, runs through Cedric", never "not connected".
+            cedric_reg["linked"] = True
             data = cedric_callback.fetch_org_connectors(org_id, team_id)
             if isinstance(data, dict):
                 if data.get("not_linked"):
@@ -359,6 +365,11 @@ def brief(reg: dict | None) -> str:
             "it isn't toggled on for you; never pretend or work around it."
         )
     else:
+        if ced.get("linked"):
+            lines.append(
+                "Slack: connected to this org; it runs through Cedric after "
+                "owner approval."
+            )
         if connected:
             lines.append(
                 "Enabled via the Slack agent (captured, then run after owner "
@@ -447,9 +458,19 @@ def search(reg: dict | None, query: str) -> str:
             "Slack agent — toggled OFF for you by the owner; if asked, say you "
             "can't use Slack because it isn't toggled on"
         )
+    if (
+        not hits
+        and not blocked
+        and ced.get("linked")
+        and "slack" in q
+    ):
+        hits.append(
+            "Slack — connected to this org; runs through Cedric after owner approval"
+        )
     if not hits:
         return (
             f"no tool matches '{query}'. If asked to do this, capture it with "
             "queue_action and say it will need the owner to set the tool up."
         )
     return "; ".join(hits[:5])
+
