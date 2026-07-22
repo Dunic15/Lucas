@@ -10,6 +10,8 @@ and display status, but the vendor call and receipt are owned here inside Laura.
 """
 from __future__ import annotations
 
+import re
+
 # Re-export concrete clients for compatibility with existing tests and callers
 # that monkeypatch these seams. The runtime owns routing; these names are not a
 # second execution path.
@@ -130,7 +132,25 @@ def _brokered_route(org_id: str) -> str:
     return "cedric" if _cedric_linked(org_id) else "manual"
 
 
-def route_for_typed(typed: dict | None, org_id: str = "") -> str:
+# An UNTYPED capture goes to Cedric only when the humans literally asked for
+# Slack (owner rule 2026-07-22, part two: even a linked org must not use the
+# Slack agent as the catch-all for every unexecutable ask — "manda su Slack"
+# routes to him, "sort out the vendor situation" stays a tracked card).
+_SLACK_ASK = re.compile(r"(?:\bslack\b|(?:^|\s)#[a-z0-9][a-z0-9_-]{1,40}\b)", re.IGNORECASE)
+
+
+def _untyped_route(org_id: str, item_text: str) -> str:
+    if _cedric_linked(org_id) and _SLACK_ASK.search(item_text or ""):
+        return "cedric"
+    # Demo/no-org service scope keeps the legacy catch-all (Cedric's own
+    # demo flows depend on it).
+    org = str(org_id or "").strip()
+    if not org or org == settings.demo_org_id:
+        return "cedric"
+    return "manual"
+
+
+def route_for_typed(typed: dict | None, org_id: str = "", item_text: str = "") -> str:
     """Per-family execution route for one typed action (immutable once stamped).
 
     Per-org, connection-aware (multi-tenant safe). When Pipedream's executor is
@@ -162,7 +182,9 @@ def route_for_typed(typed: dict | None, org_id: str = "") -> str:
         # org hasn't connected it — never a silent wrong route).
         return "pipedream"
     if from_typed(typed) is None:
-        return _brokered_route(org_id)
+        # Untyped / unknown type: only an EXPLICIT Slack ask reaches the
+        # Slack agent; everything else is a tracked card (owner 2026-07-22).
+        return _untyped_route(org_id, item_text)
     return "native" if enabled() else _brokered_route(org_id)
 
 
