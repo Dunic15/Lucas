@@ -740,6 +740,32 @@ def queued_actions(org_id: str, bot_id: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def action_capture_times(org_id: str, bot_id: str) -> dict[str, float]:
+    """Earliest capture timestamp (epoch) per action for one meeting — the
+    "captured" anchor for the read-only meeting-workspace timeline. Reads the
+    per-source ``action_capture_events`` log, scoped to the meeting by joining
+    ``queued_actions`` (the events table has no bot_id). Distilled timestamps
+    only; no transcript/PII leaves through here."""
+    if control_plane.enabled():
+        return _pg_call(
+            outbox_pg.action_capture_times, org_id or settings.demo_org_id, bot_id
+        )
+    _ensure_schema()
+    with store._LOCK, store._connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT e.action_id AS action_id, MIN(e.created_at) AS captured_at
+            FROM action_capture_events e
+            JOIN queued_actions q
+              ON q.org_id = e.org_id AND q.action_id = e.action_id
+            WHERE e.org_id = ? AND q.bot_id = ?
+            GROUP BY e.action_id
+            """,
+            (org_id or settings.demo_org_id, bot_id),
+        ).fetchall()
+    return {str(row["action_id"]): float(row["captured_at"] or 0.0) for row in rows}
+
+
 def _enqueue(
     *, event: str, idempotency_key: str, integration: dict,
     bot_id: str, action_id: str, payload: dict, avatar_id: str = "",
