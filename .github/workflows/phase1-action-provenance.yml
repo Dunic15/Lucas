@@ -50,7 +50,7 @@ jobs:
           INSTALL_RC=99
           TEST_RC=99
           if [ "$APPLY_RC" -eq 0 ]; then
-            python -m pip install -r requirements.txt > phase1-install.log 2>&1
+            python -m pip install -r requirements.txt pytest > phase1-install.log 2>&1
             INSTALL_RC=$?
             echo "install_exit=$INSTALL_RC" >> phase1-run.txt
             tail -80 phase1-install.log >> phase1-run.txt
@@ -58,7 +58,7 @@ jobs:
 
           if [ "$APPLY_RC" -eq 0 ] && [ "$INSTALL_RC" -eq 0 ]; then
             (
-              cd backend && pytest -q \
+              cd backend && python -m pytest -q \
                 tests/test_phase1_action_provenance.py \
                 tests/test_pipedream_executor.py \
                 tests/test_native_executor.py \
