@@ -3448,11 +3448,32 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     restate_gen = store.bump_speech_generation(session)
                     line = _clarify_line(text, still_missing)
                     session.last_ack_at = time.time()
+                    session.last_clarify_nudge_at = time.time()
                     spoke = await _make_avatar_speak(
                         session,
                         line,
                         force=True,
                         generation=restate_gen,
+                        audio=tts.cached_payload(line, _avatar_voice(session)),
+                    )
+                elif (
+                    time.time()
+                    - getattr(session, "last_clarify_nudge_at", 0.0)
+                    > 20.0
+                ):
+                    # NEVER hold a clarify in silence (live 2026-07-21: a
+                    # repeated ask with unchanged gaps read as "she stopped
+                    # responding"). One rate-limited reminder of what's
+                    # still needed — a nudge, not a nag.
+                    nudge_gen = store.bump_speech_generation(session)
+                    line = _clarify_line(text, still_missing)
+                    session.last_ack_at = time.time()
+                    session.last_clarify_nudge_at = time.time()
+                    spoke = await _make_avatar_speak(
+                        session,
+                        line,
+                        force=True,
+                        generation=nudge_gen,
                         audio=tts.cached_payload(line, _avatar_voice(session)),
                     )
                 return JSONResponse(
@@ -3546,6 +3567,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
             not called
             and speaker_id == p_speaker
             and time.time() - p_ts < 4.0
+            # Absolute cap: every glued fragment used to refresh the 4s window,
+            # so continuous speech chained extensions forever and the avatar
+            # read as mute (live 2026-07-21 — "why did she stop talking").
+            # A real ASR split resolves within seconds; 8s from the FIRST
+            # capture is plenty, then the conversation goes back to normal.
+            and time.time() - getattr(session, "last_capture_first_ts", p_ts) < 8.0
             and is_capture_continuation(text)
             # A follow-up that is ITSELF a complete new ask ("Also create a
             # task to email Duccio…") is a NEW action, never a continuation —
@@ -4158,6 +4185,24 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 if still != pend[3]:
                     line = _clarify_line(question, still)
                     session.last_ack_at = time.time()
+                    session.last_clarify_nudge_at = time.time()
+                    spoke = await _make_avatar_speak(
+                        session,
+                        line,
+                        force=True,
+                        generation=turn_gen,
+                        audio=tts.cached_payload(line, _avatar_voice(session)),
+                    )
+                elif (
+                    time.time()
+                    - getattr(session, "last_clarify_nudge_at", 0.0)
+                    > 20.0
+                ):
+                    # Same no-silent-hold rule as the unaddressed-retry seam
+                    # above: remind what's still missing instead of muting.
+                    line = _clarify_line(question, still)
+                    session.last_ack_at = time.time()
+                    session.last_clarify_nudge_at = time.time()
                     spoke = await _make_avatar_speak(
                         session,
                         line,
@@ -4251,6 +4296,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # A restart may have dropped the in-memory continuation window.
             # Re-arm it from the canonical durable row so the next genuine ASR
             # fragment is not lost after this initial-final replay.
+            session.last_capture_first_ts = time.time()
             session.last_capture = (
                 item,
                 speaker_id,
@@ -4271,7 +4317,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # ASR often splits one ask across finals ("Cedric, can you send" +
         # "the recap by Friday"). Remember this capture so a same-speaker
         # follow-up within a few seconds extends its text (see the
-        # continuation check after wake detection).
+        # continuation check after wake detection). The FIRST-capture clock
+        # anchors the absolute glue cap — extensions never reset it.
+        session.last_capture_first_ts = time.time()
         session.last_capture = (
             item,
             speaker_id,
@@ -4305,6 +4353,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             )
             line = _clarify_line(question, missing)
             session.last_ack_at = time.time()
+            session.last_clarify_nudge_at = time.time()
             spoke = await _make_avatar_speak(
                 session,
                 line,

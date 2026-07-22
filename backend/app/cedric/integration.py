@@ -584,12 +584,40 @@ def apply_context_push(
     return JSONResponse({"ok": True, "brief_bytes": len(brief.encode())})
 
 
+def _cedric_brief_allowed(session: Any) -> bool:
+    """Whether THIS session may carry the orchestrator's Cedric-branded brief.
+
+    The brief opens with "You are Cedric's presence in this meeting" and
+    advertises Cedric's tool fleet — injected into a Petra/Laura session it
+    hijacks both identity and capabilities (live 2026-07-21: Petra introduced
+    Cedric's 3,000-app roster in a meeting whose org had no Slack agent at
+    all, because SURFACE_CONTEXT_URL is a global Model-A default). Allowed
+    when the acting avatar IS cedric, or the org explicitly connected the
+    cedric-brain on the dashboard."""
+    if str(getattr(session, "avatar_id", "") or "").strip().lower() == "cedric":
+        return True
+    try:
+        from .. import store
+
+        rows = store.connections_for_org(
+            str(getattr(session, "org_id", "") or "")
+        )
+        return any(
+            r.get("provider") == "cedric-brain"
+            and r.get("status") == "connected"
+            for r in rows
+        )
+    except Exception:  # noqa: BLE001 — no store, no claim
+        return False
+
+
 def inject_brief(session: Any, memory: str) -> str:
     """Fold the orchestrator's meeting brief (agenda, participants, open items)
     into the live-prompt memory channel, ahead of the cross-meeting carryover —
-    it's the most specific context this session has."""
+    it's the most specific context this session has. Cedric-branded content is
+    identity-gated (see _cedric_brief_allowed)."""
     brief = (session.integration or {}).get("brief", "")
-    if brief:
+    if brief and _cedric_brief_allowed(session):
         return (
             f"MEETING BRIEF (from the orchestrator):\n{brief}\n\n{memory}".strip()
         )

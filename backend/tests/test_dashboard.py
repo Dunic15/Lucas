@@ -227,14 +227,18 @@ def test_legacy_artifact_without_avatar_id(client):
     assert m["duration_seconds"] == 0
 
 
-def test_action_entry_executable_and_title():
-    """Untyped free-text captures route to the approval-blocked Cedric
-    dispatch — the dashboard must not offer an Approve that dead-ends in
+def test_action_entry_executable_and_title(monkeypatch):
+    """With NO executor that could run or rescue it (native flag off), an
+    untyped free-text capture must not offer an Approve that dead-ends in
     'Nothing ran' (live repro 2026-07-21). Typed actions stay approvable.
+    (With the native executor ON — the default — the approve-door retype
+    rescue makes untyped cards approvable: see the test below.)
     Cards also carry a cleaned display title; the verbatim ASR stays in
     'item' as evidence."""
     from app.api.dashboard import _action_entry
+    from app.config import settings
 
+    monkeypatch.setattr(settings, "native_executor", False)
     untyped = _action_entry({
         "action_id": "a1",
         "item": "Patrick, can you send an email to please?",
@@ -242,6 +246,24 @@ def test_action_entry_executable_and_title():
     assert untyped["executable"] is False
     assert untyped["title"] == "Send an email to please"
     assert untyped["item"] == "Patrick, can you send an email to please?"
+
+
+def test_action_entry_untyped_is_executable_with_rescue(monkeypatch):
+    """With the native executor ON, the approve door re-types untyped
+    captures at the click (#351 rescue) — so the card must stay approvable
+    instead of showing 'Can't auto-run' (that hid the rescue for a whole
+    evening of cards, live 2026-07-21)."""
+    from app.api.dashboard import _action_entry
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "native_executor", True)
+    untyped = _action_entry({
+        "action_id": "a1",
+        "item": "Patrick, can you send an email to please?",
+    })
+    assert untyped["executable"] is True
+    bare = _action_entry("free-form string action")
+    assert bare["executable"] is True
 
     typed = _action_entry({
         "action_id": "a2",
