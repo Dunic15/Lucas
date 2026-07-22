@@ -2463,8 +2463,15 @@
     if(!s) return '<span class="st">Captured</span>';
     return '<span class="st '+esc(STATE_CLASS[s]||"")+'">'+esc(STATE_LABEL[s]||s)+'</span>';
   }
+  function trackedOnly(a){
+    // Pre-#392 relic receipts: durably 'approved' with a tracked-only detail.
+    // Nothing is or ever will be running for them (owner 2026-07-22: they sat
+    // in "in progress" forever) — they are settled records, not activity.
+    return /tracked only/i.test((a.execution&&a.execution.detail)||"");
+  }
   function bucketOf(a){ var s=stateOf(a);
     if(s==="done"||s==="failed"||s==="rejected") return "done";
+    if(s==="approved"&&trackedOnly(a)) return "done";
     if(s==="approved"||s==="executing") return "progress";
     return "attn"; }
 
@@ -2776,6 +2783,7 @@
       return "Needs more details to approve.";
     }
     if(s==="ready_to_approve"||s==="proposed") return "Ready for your approval — nothing runs without you.";
+    if(s==="approved"&&trackedOnly(a)) return "Recorded — nothing runs for this one.";
     if(s==="approved") return "Approved — starting now.";
     if(s==="executing") return "Running now.";
     if(s==="done") return "Completed — the receipt links to what was created.";

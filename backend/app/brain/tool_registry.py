@@ -39,7 +39,7 @@ _BUILTINS = [
      "write": False, "approval": "auto"},
     {"name": "lookup_record", "does": "look up demo account records",
      "kind": "native", "write": False, "approval": "auto"},
-    {"name": "upcoming_meetings", "does": "the owner's upcoming calendar (read)",
+    {"name": "upcoming_meetings", "does": "this workspace's upcoming calendar (read)",
      "kind": "native", "write": False, "approval": "auto"},
 ]
 
@@ -120,14 +120,14 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
 
         reg["native"].append({
             "name": "google_calendar",
-            "does": ("on the owner's Google Calendar: "
+            "does": ("on this workspace's Google Calendar: "
                      + (_family_verbs("google_calendar") or "schedule meetings")),
             "kind": "native", "write": True, "approval": "approve", "connected": google_on,
             "verbs": _family_verbs("google_calendar"),
         })
         reg["native"].append({
             "name": "gmail_send",
-            "does": ("as the owner's Gmail: "
+            "does": ("as this workspace's Gmail: "
                      + (_family_verbs("gmail") or "send email")),
             "kind": "native", "write": True, "approval": "approve", "connected": google_on,
             "verbs": _family_verbs("gmail"),
