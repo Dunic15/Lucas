@@ -101,7 +101,7 @@ from .brain.engine import (
     semantic_action_duplicates,
     type_actions,
 )
-from .meeting import conversation_frame
+from .meeting import conversation_frame, turn_manager
 from .meeting.lifecycle import (  # noqa: E402  (hoisted lifecycle core; re-import = compat)
     _BOT_TERMINAL, _BOT_VARIANT_RANK, _LEAVE_GONE_STATUSES,
     _ACTION_STOP, _DEMO_BROWSE_RE, _finalizing, _graphiti_tasks, _recall_list_headers,
@@ -3514,7 +3514,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     _frame_addressed_elsewhere = (
         not called and _addressed_elsewhere(session, avatar, text)
     )
-    conversation_frame.observe_session_utterance(
+    _frame_snapshot = conversation_frame.observe_session_utterance(
         session,
         avatar_name=avatar.name,
         participant_id=speaker_id,
@@ -4383,6 +4383,32 @@ async def recall_webhook(request: Request) -> JSONResponse:
         and _followup_speaker_ok(session, speaker_id)
     )
 
+    # ConversationFrame-backed social policy. Shadow is the safe default: the
+    # plan is deterministic and PII-free, but only mode=on may alter timing or
+    # suppress an unprompted spoken interjection. Named asks and engaged
+    # follow-ups always win inside plan_turn.
+    _turn_manager_on = turn_manager.is_active(
+        settings.conversation_turn_manager_mode
+    )
+    _turn_locked_dyad = (
+        (settings.cross_talk_suppression_enabled or _turn_manager_on)
+        and in_locked_dyad(
+            session.human_transcript(),
+            avatar_name=avatar.name,
+            now=time.time(),
+            min_turns=settings.cross_talk_min_turns,
+            max_gap_seconds=settings.cross_talk_max_gap_seconds,
+            window=settings.cross_talk_window,
+        )
+    )
+    _turn_plan = turn_manager.plan_turn(
+        _frame_snapshot,
+        called=called,
+        followup=followup,
+        turn_completeness=end_of_turn.completeness(text),
+        locked_dyad=_turn_locked_dyad,
+    )
+
     # Cooldown throttles UNPROMPTED interjections. Being addressed by name is a
     # direct ask — follow-ups right after her answer are what a fluent
     # conversation is made of, so `called` (and `followup`) bypass it.
@@ -4400,7 +4426,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # humans get first right of reply. Wait briefly; if anyone starts talking
     # (a partial lands or the transcript grows), yield silently. Deliberately
     # AFTER the cheap gates — a line that would be skipped anyway never waits.
-    if not called and not followup and settings.deference_seconds > 0:
+    if (
+        not called
+        and not followup
+        and settings.deference_seconds > 0
+        and not (_turn_manager_on and _turn_plan.skip_deference)
+    ):
         _defer_mark = len(session.human_transcript())
         _defer_t0 = time.time()
         # Size ONLY the wait — the yield decision below is unchanged. Adaptation
@@ -4421,14 +4452,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # Cross-talk: if two humans are in a tight back-and-forth right now, they
         # own the floor — wait the MAX rather than the sized window so she never
         # clips their volley. Suppression-only (still just a wait).
-        if settings.cross_talk_suppression_enabled and in_locked_dyad(
-            session.human_transcript(),
-            avatar_name=avatar.name,
-            now=_defer_t0,
-            min_turns=settings.cross_talk_min_turns,
-            max_gap_seconds=settings.cross_talk_max_gap_seconds,
-            window=settings.cross_talk_window,
-        ):
+        if _turn_locked_dyad:
             _defer_wait = max(_defer_wait, settings.deference_max_seconds)
         await asyncio.sleep(_defer_wait)
         if (
@@ -4952,13 +4976,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # Cross-talk: a tight two-human back-and-forth closes the floor for an
             # UNPROMPTED interjection — she falls to the audio-silent raised hand
             # (waiting to be invited) instead of talking over their volley.
-            _dyad = settings.cross_talk_suppression_enabled and in_locked_dyad(
-                session.human_transcript(),
-                avatar_name=avatar.name,
-                now=time.time(),
-                min_turns=settings.cross_talk_min_turns,
-                max_gap_seconds=settings.cross_talk_max_gap_seconds,
-                window=settings.cross_talk_window,
+            _dyad = _turn_locked_dyad or (
+                _turn_manager_on and _turn_plan.suppress_interjection
             )
             if should_interject(
                 enabled=settings.hand_raise_interject_when_confident
