@@ -7,12 +7,19 @@ on:
     paths:
       - scripts/phase1_apply.py
       - .github/workflows/phase1-action-provenance.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/phase1_apply.py
+      - .github/workflows/phase1-action-provenance.yml
 
 permissions:
   contents: write
 
 jobs:
   apply-and-test:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
