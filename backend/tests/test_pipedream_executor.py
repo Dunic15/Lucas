@@ -699,3 +699,132 @@ def test_drive_routes_stay_pipedream(monkeypatch):
     monkeypatch.setattr(pipedream_executor, "app_connected", lambda o, a: False)
     assert executor.route_for_typed(
         {"type": "drive.create_doc", "args": {"name": "x"}}, "org1") == "pipedream"
+
+
+def test_every_mapped_builder_accepts_a_direct_valid_case(monkeypatch):
+    """Exercise every deterministic builder, not only the shared mapper."""
+    monkeypatch.setattr(pipedream_executor, "_asana_workspace", lambda *a: "ws-1")
+    monkeypatch.setattr(pipedream_executor, "_gmail_latest_from", lambda *a: "msg-1")
+    monkeypatch.setattr(pipedream_executor, "_gmail_label_id", lambda *a: "label-1")
+    monkeypatch.setattr(
+        pipedream_executor,
+        "_cal_find_event",
+        lambda *a, **k: {
+            "id": "event-1",
+            "summary": "Sync",
+            "attendees": [{"email": "owner@example.test"}],
+        },
+    )
+    monkeypatch.setattr(
+        pipedream_executor,
+        "_drive_find",
+        lambda org, acct, name, mime="": {
+            "id": "folder-1" if mime == pipedream_executor._FOLDER_MIME else "file-1",
+            "name": name,
+            "parents": ["old-parent"],
+        },
+    )
+    monkeypatch.setattr(
+        pipedream_executor,
+        "_drive_parent_id",
+        lambda org, acct, parent: "parent-1" if parent else "",
+    )
+
+    def fake_lookup(org, acct, method, url, body=None):
+        if "/messages/msg-1" in url:
+            return {
+                "threadId": "thread-1",
+                "payload": {
+                    "headers": [
+                        {"name": "Subject", "value": "Status"},
+                        {"name": "Message-ID", "value": "<msg-1@example.test>"},
+                    ]
+                },
+            }
+        if url.endswith("/calendars/primary"):
+            return {"id": "owner@example.test"}
+        return {}
+
+    monkeypatch.setattr(pipedream_executor, "_proxy_json", fake_lookup)
+
+    cases = {
+        "asana.create_task": {"name": "Ship", "project": "1"},
+        "asana.update_task": {"task": "42", "completed": True},
+        "asana.add_comment": {"task": "42", "text": "Done"},
+        "email.send": {"to": "a@example.test", "subject": "Hi", "body": "Hello"},
+        "gmail.create_draft": {
+            "to": "a@example.test", "subject": "Draft", "body": "Hello"
+        },
+        "calendar.create_event": {
+            "title": "Sync",
+            "start": "2026-08-01T10:00:00Z",
+            "end": "2026-08-01T10:30:00Z",
+        },
+        "calendar.update_event": {"event_id": "event-1", "title": "New sync"},
+        "asana.create_project": {"name": "Launch"},
+        "asana.add_subtask": {"task": "42", "name": "QA"},
+        "gmail.reply": {"to": "a@example.test", "body": "Thanks"},
+        "gmail.add_label": {"from_email": "a@example.test", "label": "Follow-up"},
+        "gmail.archive": {"from_email": "a@example.test"},
+        "calendar.cancel_event": {"title": "Sync"},
+        "calendar.add_attendees": {
+            "title": "Sync", "attendees": ["guest@example.test"]
+        },
+        "calendar.rsvp": {"title": "Sync", "response": "accepted"},
+        "drive.share_file": {
+            "file": "Recap", "email": "guest@example.test", "role": "reader"
+        },
+        "drive.create_folder": {"name": "Launch", "parent": "Projects"},
+        "drive.create_doc": {"name": "Recap", "parent": "Projects"},
+        "drive.rename_file": {"file": "Recap", "name": "Recap final"},
+        "drive.move_file": {"file": "Recap", "folder": "Archive"},
+    }
+    assert set(cases) == set(pipedream_executor._MAPPER)
+
+    for action_type, args in cases.items():
+        builder = pipedream_executor._MAPPER[action_type][1]
+        method, url, _body, _headers = builder("org-a", "acct-1", args)
+        assert method in {"POST", "PUT", "PATCH", "DELETE"}, action_type
+        assert url.startswith("https://"), action_type
+
+
+def test_drive_share_receipt_and_verify_use_file_id(monkeypatch):
+    _enable_pd(monkeypatch)
+    monkeypatch.setattr(
+        pipedream_client,
+        "list_accounts",
+        lambda org, app="": [{"id": "acct-1", "healthy": True}],
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fake_proxy(org, acct, method, url, json_body=None, headers=None):
+        calls.append((method, url))
+        if method == "GET" and "files?q=" in url:
+            return {"ok": True, "json": {"files": [{"id": "file-1", "name": "Recap"}]}}
+        if method == "POST" and "/files/file-1/permissions" in url:
+            return {"ok": True, "json": {"id": "permission-9"}}
+        if method == "GET" and "/files/file-1?fields=id" in url:
+            return {"ok": True, "json": {"id": "file-1"}}
+        raise AssertionError((method, url))
+
+    monkeypatch.setattr(pipedream_client, "proxy_request", fake_proxy)
+    seen = _cap_ledger(monkeypatch)
+    result = pipedream_executor.execute_approved(
+        "org-a",
+        "share-1",
+        {
+            "type": "drive.share_file",
+            "args": {
+                "file": "Recap",
+                "email": "guest@example.test",
+                "role": "reader",
+            },
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["verified"] is True
+    assert result["ref"] == "https://drive.google.com/open?id=file-1"
+    assert "permission-9" not in result["ref"]
+    assert ("GET", "https://www.googleapis.com/drive/v3/files/file-1?fields=id") in calls
+    assert seen["receipt"]["verified"] is True
