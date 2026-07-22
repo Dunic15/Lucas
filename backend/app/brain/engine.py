@@ -752,8 +752,9 @@ def answer_question_stream(
     _t0 = time.perf_counter()
     # Route before RAG: a greeting/ack/bare-math turn needs no document context,
     # so skip the query embedding + retrieval entirely (latency + provider load).
+    _rag_skipped = _skip_retrieval(question)
     chunks = (
-        [] if _skip_retrieval(question)
+        [] if _rag_skipped
         else _retrieve_for(avatar, question, history, k, org_id=org_id)
     )
     _retrieve_ms = (time.perf_counter() - _t0) * 1000
@@ -840,10 +841,15 @@ def answer_question_stream(
 
     def _log_first() -> None:
         if not spoke_any:
+            # End-to-end live trace: rag=skip means route-before-RAG saved the
+            # query embedding this turn; else the retrieve (embed+rank) ms. model
+            # names the plane that answered (cerebras fast vs haiku complex).
             print(
-                f"[latency] answer_stream retrieve={_retrieve_ms:.0f}ms "
+                f"[latency] answer_stream "
+                f"rag={'skip' if _rag_skipped else f'{_retrieve_ms:.0f}ms'} "
                 f"first_token={_first_token_ms:.0f}ms "
-                f"first_sentence={(time.perf_counter() - _t0) * 1000:.0f}ms",
+                f"first_sentence={(time.perf_counter() - _t0) * 1000:.0f}ms "
+                f"model={_model}",
                 flush=True,
             )
 
