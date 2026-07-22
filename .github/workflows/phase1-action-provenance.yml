@@ -7,19 +7,12 @@ on:
     paths:
       - scripts/phase1_apply.py
       - .github/workflows/phase1-action-provenance.yml
-  pull_request:
-    branches:
-      - main
-    paths:
-      - scripts/phase1_apply.py
-      - .github/workflows/phase1-action-provenance.yml
 
 permissions:
   contents: write
 
 jobs:
   apply-and-test:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -34,33 +27,64 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Apply Phase 1 patch
-        run: python scripts/phase1_apply.py
+      - name: Apply, test and capture result
+        id: phase1
+        shell: bash
+        run: |
+          set +e
+          : > phase1-run.txt
+          echo "Phase 1 action provenance run" >> phase1-run.txt
+          echo "commit=$(git rev-parse HEAD)" >> phase1-run.txt
 
-      - name: Install backend dependencies
-        run: python -m pip install -r backend/requirements.txt
+          python scripts/phase1_apply.py > phase1-apply.log 2>&1
+          APPLY_RC=$?
+          echo "apply_exit=$APPLY_RC" >> phase1-run.txt
+          cat phase1-apply.log >> phase1-run.txt
 
-      - name: Run focused regression suite
-        working-directory: backend
-        run: >-
-          pytest -q
-          tests/test_phase1_action_provenance.py
-          tests/test_pipedream_executor.py
-          tests/test_native_executor.py
-          tests/test_approve_door.py
-          tests/test_dashboard.py
+          INSTALL_RC=99
+          TEST_RC=99
+          if [ "$APPLY_RC" -eq 0 ]; then
+            python -m pip install -r backend/requirements.txt > phase1-install.log 2>&1
+            INSTALL_RC=$?
+            echo "install_exit=$INSTALL_RC" >> phase1-run.txt
+            tail -80 phase1-install.log >> phase1-run.txt
+          fi
 
-      - name: Commit generated implementation
+          if [ "$APPLY_RC" -eq 0 ] && [ "$INSTALL_RC" -eq 0 ]; then
+            (
+              cd backend && pytest -q \
+                tests/test_phase1_action_provenance.py \
+                tests/test_pipedream_executor.py \
+                tests/test_native_executor.py \
+                tests/test_approve_door.py \
+                tests/test_dashboard.py
+            ) > phase1-tests.log 2>&1
+            TEST_RC=$?
+            echo "test_exit=$TEST_RC" >> phase1-run.txt
+            cat phase1-tests.log >> phase1-run.txt
+          fi
+
+          echo "apply_rc=$APPLY_RC" >> "$GITHUB_OUTPUT"
+          echo "install_rc=$INSTALL_RC" >> "$GITHUB_OUTPUT"
+          echo "test_rc=$TEST_RC" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Commit implementation and diagnostic
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            backend/app/actions/action_plane.py \
-            backend/app/api/org_api.py \
-            frontend/dashboard.html \
-            backend/app/pipedream_executor.py \
-            backend/app/runtime/native_runtime.py \
-            backend/app/actions/executor.py \
-            backend/tests/test_phase1_action_provenance.py
-          git commit -m "feat(actions): canonical preview and verified receipts"
+          git add -A
+          if [ "${{ steps.phase1.outputs.apply_rc }}" = "0" ] && [ "${{ steps.phase1.outputs.install_rc }}" = "0" ] && [ "${{ steps.phase1.outputs.test_rc }}" = "0" ]; then
+            MSG="feat(actions): canonical preview and verified receipts"
+          else
+            MSG="chore(actions): capture Phase 1 workflow diagnostic"
+          fi
+          git commit -m "$MSG"
           git push origin HEAD:feat/phase1-action-provenance
+
+      - name: Fail when implementation or tests failed
+        if: steps.phase1.outputs.apply_rc != '0' || steps.phase1.outputs.install_rc != '0' || steps.phase1.outputs.test_rc != '0'
+        run: |
+          cat phase1-run.txt
+          exit 1
