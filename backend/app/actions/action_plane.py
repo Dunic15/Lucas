@@ -163,6 +163,101 @@ PARAMS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
             label="message text", label_it="testo messaggio",
         ),
     ],
+    # ── the 20-action expansion (owner GO 2026-07-22): 13 new types, all
+    # deterministic proxy builders — modeled on Pipedream's most-used catalog
+    # actions, no tool-calling tier required. Name-based targets (files,
+    # events) resolve on the EXACTLY-ONE rule: zero or many matches fail
+    # honestly with the candidates listed, never a guess. ──
+    "asana.create_project": [
+        _FIELD(name="name", type="string", required=True,
+               label="project name", label_it="nome del progetto"),
+        _FIELD(name="notes", type="string", required=False,
+               label="description", label_it="descrizione"),
+    ],
+    "asana.add_subtask": [
+        _FIELD(name="task", type="string", required=True,
+               description="parent task gid",
+               label="parent task ID", label_it="ID attività padre"),
+        _FIELD(name="name", type="string", required=True,
+               label="subtask name", label_it="nome sotto-attività"),
+    ],
+    "gmail.reply": [
+        _FIELD(name="to", type="string", required=True,
+               description="the sender whose LATEST email gets the reply",
+               slot="email_to", label="recipient", label_it="destinatario"),
+        _FIELD(name="body", type="string", required=True,
+               slot="email_body", label="message text", label_it="testo"),
+    ],
+    "gmail.add_label": [
+        _FIELD(name="from_email", type="string", required=True,
+               description="label the LATEST email from this sender",
+               label="sender", label_it="mittente"),
+        _FIELD(name="label", type="string", required=True,
+               label="label name", label_it="nome etichetta"),
+    ],
+    "gmail.archive": [
+        _FIELD(name="from_email", type="string", required=True,
+               description="archive the LATEST email from this sender",
+               label="sender", label_it="mittente"),
+    ],
+    "calendar.cancel_event": [
+        _FIELD(name="title", type="string", required=True,
+               description="upcoming event title (must match exactly one)",
+               label="event title", label_it="titolo evento"),
+        _FIELD(name="date", type="string", required=False,
+               description="YYYY-MM-DD, to disambiguate",
+               label="date", label_it="data"),
+    ],
+    "calendar.add_attendees": [
+        _FIELD(name="title", type="string", required=True,
+               label="event title", label_it="titolo evento"),
+        _FIELD(name="attendees", type="array", required=True,
+               description="attendee emails to add", slot="invite_with",
+               label="attendees", label_it="invitati"),
+    ],
+    "calendar.rsvp": [
+        _FIELD(name="title", type="string", required=True,
+               label="event title", label_it="titolo evento"),
+        _FIELD(name="response", type="string", required=True,
+               description="accepted | declined | tentative",
+               label="response", label_it="risposta"),
+    ],
+    "drive.share_file": [
+        _FIELD(name="file", type="string", required=True,
+               description="file name (must match exactly one)",
+               label="file name", label_it="nome file"),
+        _FIELD(name="email", type="string", required=True,
+               label="share with (email)", label_it="condividi con (email)"),
+        _FIELD(name="role", type="string", required=False,
+               description="reader (default) | writer",
+               label="permission", label_it="permesso"),
+    ],
+    "drive.create_folder": [
+        _FIELD(name="name", type="string", required=True,
+               label="folder name", label_it="nome cartella"),
+        _FIELD(name="parent", type="string", required=False,
+               description="parent folder name",
+               label="inside folder", label_it="dentro la cartella"),
+    ],
+    "drive.create_doc": [
+        _FIELD(name="name", type="string", required=True,
+               label="document name", label_it="nome documento"),
+        _FIELD(name="parent", type="string", required=False,
+               description="parent folder name",
+               label="inside folder", label_it="dentro la cartella"),
+    ],
+    "drive.rename_file": [
+        _FIELD(name="file", type="string", required=True,
+               label="file name", label_it="nome file"),
+        _FIELD(name="name", type="string", required=True,
+               label="new name", label_it="nuovo nome"),
+    ],
+    "drive.move_file": [
+        _FIELD(name="file", type="string", required=True,
+               label="file name", label_it="nome file"),
+        _FIELD(name="folder", type="string", required=True,
+               label="destination folder", label_it="cartella di destinazione"),
+    ],
 }
 
 RISK_BY_TYPE: dict[str, str] = {
@@ -174,6 +269,19 @@ RISK_BY_TYPE: dict[str, str] = {
     "asana.update_task": "low",
     "asana.add_comment": "low",
     "slack.post_message": "medium",
+    "asana.create_project": "low",
+    "asana.add_subtask": "low",
+    "gmail.reply": "medium",       # sends mail as the owner
+    "gmail.add_label": "low",
+    "gmail.archive": "low",
+    "calendar.cancel_event": "high",   # destructive + notifies attendees
+    "calendar.add_attendees": "medium",
+    "calendar.rsvp": "low",
+    "drive.share_file": "medium",  # grants access
+    "drive.create_folder": "low",
+    "drive.create_doc": "low",
+    "drive.rename_file": "low",
+    "drive.move_file": "low",
 }
 
 

@@ -595,3 +595,106 @@ def test_read_calendar_events_via_proxy(monkeypatch):
     monkeypatch.setattr(pipedream_client, "list_accounts", lambda org, app="": [])
     out = pipedream_executor.read_calendar_events("org9")
     assert not out["ok"] and "not connected" in out["error"]
+
+
+# ── the 20-action expansion (2026-07-22) ────────────────────────────────────
+
+def test_every_mapped_type_has_schema_risk_and_labels():
+    """The canonical contract: NO action type ships without its schema, its
+    risk class and human labels — the lesson of the 'manual' constraint
+    incident, applied to the whole registry."""
+    from app.actions import action_plane as ap
+
+    for t in pipedream_executor._MAPPER:
+        assert t in ap.PARAMS_SCHEMAS, f"{t} missing schema"
+        assert t in ap.RISK_BY_TYPE, f"{t} missing risk class"
+        for f in ap.PARAMS_SCHEMAS[t]:
+            assert f.get("label"), f"{t}.{f.get('name')} missing label"
+            assert f.get("label_it"), f"{t}.{f.get('name')} missing label_it"
+    assert len(pipedream_executor._MAPPER) == 20
+
+
+def test_asana_extra_builders():
+    with pytest.raises(ValueError):
+        pipedream_executor._build_asana_add_subtask("o", "a", {"task": "abc", "name": "x"})
+    m, u, b, _ = pipedream_executor._build_asana_add_subtask(
+        "o", "a", {"task": "42", "name": "step one"})
+    assert m == "POST" and "/tasks/42/subtasks" in u and b["data"]["name"] == "step one"
+
+
+def test_gmail_reply_builder_threads_correctly(monkeypatch):
+    calls = []
+
+    def fake_proxy(org, acct, method, url, json_body=None, headers=None):
+        calls.append(url)
+        if "/messages?q=" in url:
+            return {"ok": True, "json": {"messages": [{"id": "m77"}]}}
+        if "/messages/m77?format=metadata" in url:
+            return {"ok": True, "json": {
+                "threadId": "t9",
+                "payload": {"headers": [
+                    {"name": "Subject", "value": "Budget"},
+                    {"name": "Message-ID", "value": "<abc@mail>"}]}}}
+        return {"ok": True, "json": {}}
+
+    monkeypatch.setattr(pipedream_client, "proxy_request", fake_proxy)
+    m, u, b, _ = pipedream_executor._build_gmail_reply(
+        "o", "a", {"to": "anant@sff.com", "body": "Sounds good"})
+    assert m == "POST" and u.endswith("/messages/send")
+    assert b["threadId"] == "t9"
+    import base64 as b64
+
+    raw = b64.urlsafe_b64decode(b["raw"] + "==").decode()
+    assert "Re: Budget" in raw and "In-Reply-To: <abc@mail>" in raw
+    with pytest.raises(ValueError):
+        pipedream_executor._build_gmail_reply("o", "a", {"to": "x@y.z"})  # no body
+
+
+def test_calendar_cancel_resolves_single_upcoming_event(monkeypatch):
+    def fake_proxy(org, acct, method, url, json_body=None, headers=None):
+        return {"ok": True, "json": {"items": [
+            {"id": "ev1", "summary": "Pipedream sync",
+             "start": {"dateTime": "2026-07-24T15:00:00Z"}},
+            {"id": "ev2", "summary": "Team lunch",
+             "start": {"dateTime": "2026-07-25T12:00:00Z"}}]}}
+
+    monkeypatch.setattr(pipedream_client, "proxy_request", fake_proxy)
+    m, u, b, _ = pipedream_executor._build_calendar_cancel(
+        "o", "a", {"title": "Pipedream sync"})
+    assert m == "DELETE" and "/events/ev1" in u and "sendUpdates=all" in u
+    # ambiguous title → honest refusal listing candidates
+    with pytest.raises(ValueError) as e:
+        pipedream_executor._build_calendar_cancel("o", "a", {"title": "e"})
+    assert "matches 2" in str(e.value)
+
+
+def test_drive_share_and_move_builders(monkeypatch):
+    def fake_proxy(org, acct, method, url, json_body=None, headers=None):
+        if "files?q=name contains 'Recap" in url:
+            return {"ok": True, "json": {"files": [
+                {"id": "f1", "name": "Recap Q3", "parents": ["old1"]}]}}
+        if "mimeType='application/vnd.google-apps.folder'" in url:
+            return {"ok": True, "json": {"files": [
+                {"id": "d1", "name": "Archive"}]}}
+        return {"ok": True, "json": {"files": []}}
+
+    monkeypatch.setattr(pipedream_client, "proxy_request", fake_proxy)
+    m, u, b, _ = pipedream_executor._build_drive_share(
+        "o", "a", {"file": "Recap Q3", "email": "anant@sff.com", "role": "writer"})
+    assert m == "POST" and "/files/f1/permissions" in u
+    assert b["role"] == "writer" and b["emailAddress"] == "anant@sff.com"
+    with pytest.raises(ValueError):
+        pipedream_executor._build_drive_share(
+            "o", "a", {"file": "Recap Q3", "email": "not-an-email"})
+    m2, u2, _b2, _ = pipedream_executor._build_drive_move(
+        "o", "a", {"file": "Recap Q3", "folder": "Archive"})
+    assert m2 == "PATCH" and "addParents=d1" in u2 and "removeParents=old1" in u2
+
+
+def test_drive_routes_stay_pipedream(monkeypatch):
+    _enable_pd(monkeypatch)
+    # Drive has NO native plane: connected → pipedream; NOT connected → still
+    # pipedream (fails clean at execution), never a silent wrong route.
+    monkeypatch.setattr(pipedream_executor, "app_connected", lambda o, a: False)
+    assert executor.route_for_typed(
+        {"type": "drive.create_doc", "args": {"name": "x"}}, "org1") == "pipedream"
