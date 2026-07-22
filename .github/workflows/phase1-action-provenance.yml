@@ -36,6 +36,7 @@ jobs:
           echo "Phase 1 action provenance run" >> phase1-run.txt
           echo "commit=$(git rev-parse HEAD)" >> phase1-run.txt
 
+          sed -i "s/'       (opts\.approveAfter?/'      (opts.approveAfter?/g" scripts/phase1_apply.py
           python scripts/phase1_apply.py > phase1-apply.log 2>&1
           APPLY_RC=$?
           echo "apply_exit=$APPLY_RC" >> phase1-run.txt
