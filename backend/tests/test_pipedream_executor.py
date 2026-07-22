@@ -353,7 +353,7 @@ def test_dashboard_approve_routes_asana_to_pipedream(client, monkeypatch):
     _enable_pd(monkeypatch)
     user = _login(client)
     _seed_pipedream_action(user["org_id"])
-    monkeypatch.setattr(store, "get_avatar_capabilities", lambda a: {})
+    monkeypatch.setattr(store, "get_avatar_capabilities", lambda a, org="": {})
     monkeypatch.setattr(avatar_resolver, "family_allowed", lambda *a, **k: True)
     pd = {"n": 0}
     native = {"n": 0}
@@ -375,7 +375,7 @@ def test_dashboard_approve_capability_blocked_does_not_run_pipedream(client, mon
     user = _login(client)
     _seed_pipedream_action(user["org_id"])
     # The acting avatar's asana toggle is explicitly OFF ⇒ blocked, no execution.
-    monkeypatch.setattr(store, "get_avatar_capabilities", lambda a: {"asana": False})
+    monkeypatch.setattr(store, "get_avatar_capabilities", lambda a, org="": {"asana": False})
     pd = {"n": 0}
     monkeypatch.setattr(pipedream_executor, "execute_approved",
                         lambda o, aid, act: pd.update(n=pd["n"] + 1) or {"ok": True})
@@ -392,7 +392,7 @@ def test_dashboard_approve_capability_blocked_does_not_run_pipedream(client, mon
 def test_org_door_dispatches_asana_to_pipedream(monkeypatch):
     _enable_pd(monkeypatch)
     monkeypatch.setattr(settings, "action_dispatch_async", False)
-    monkeypatch.setattr(org_api.store, "get_avatar_capabilities", lambda a: {})
+    monkeypatch.setattr(org_api.store, "get_avatar_capabilities", lambda a, org="": {})
     monkeypatch.setattr(avatar_resolver, "family_allowed", lambda *a, **k: True)
     monkeypatch.setattr(org_api.ledger, "claim_action_execution", lambda *a, **k: True)
     pd = {"n": 0}
@@ -468,7 +468,7 @@ def test_avatar_asana_enabled_counts_pipedream_when_native_gone(monkeypatch):
 
     monkeypatch.setattr(avatars, "load", lambda aid: _Av())
     monkeypatch.setattr(store_mod, "capability_enabled",
-                        lambda aid, fam, connected=False: True)
+                        lambda aid, fam, connected=False, org_id="": True)
     assert main_module._avatar_asana_enabled("orgX", "petra") is True
     # Neither native nor Pipedream connected → not available.
     monkeypatch.setattr(pipedream_executor, "app_connected", lambda org, app: False)

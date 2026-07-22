@@ -437,6 +437,32 @@ def _add_column(conn: sqlite3.Connection, table: str, coldef: str) -> None:
         pass  # column already exists
 
 
+def _widen_pk_with_org(
+    conn: sqlite3.Connection, table: str, new_ddl: str, carry_columns: str
+) -> None:
+    """Rebuild ``table`` so its PRIMARY KEY includes org_id (idempotent).
+
+    SQLite cannot widen a PRIMARY KEY in place, and these tables were created
+    keyed by avatar_id alone — a deployment-global switch any tenant could
+    flip for every other tenant. Existing rows are carried over with
+    org_id '', which the readers treat as the deployment-wide default, so a
+    live database keeps behaving exactly as before this migration.
+    """
+    try:
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+        if not cols or "org_id" in cols:
+            return  # table absent (fresh install builds it) or already widened
+        conn.execute(f"ALTER TABLE {table} RENAME TO {table}_legacy")
+        conn.execute(f"CREATE TABLE {table} ({new_ddl})")
+        conn.execute(
+            f"INSERT INTO {table} (org_id, {carry_columns}) "
+            f"SELECT '', {carry_columns} FROM {table}_legacy"
+        )
+        conn.execute(f"DROP TABLE {table}_legacy")
+    except sqlite3.OperationalError:
+        pass  # never block boot on a schema nicety
+
+
 def _init_db() -> None:
     demo = DEMO_ORG_ID
     with _LOCK, _connect() as conn:
@@ -629,10 +655,17 @@ def _init_db() -> None:
             -- Read at bot-start and in the webhook; changes take effect on the
             -- NEXT meeting with no redeploy. Absent row = the global default
             -- (settings.gemini_ears_mode).
+            -- org_id is part of the key (cross-tenant fix 2026-07-23): the
+            -- table used to be keyed by avatar_id ALONE, so one org switching
+            -- Laura's brain switched it for every org on the deployment. A
+            -- legacy row (org_id '') is still honoured as the deployment-wide
+            -- default until that org sets its own.
             CREATE TABLE IF NOT EXISTS avatar_brain_mode (
-                avatar_id TEXT PRIMARY KEY,
+                org_id TEXT NOT NULL DEFAULT '',
+                avatar_id TEXT NOT NULL,
                 brain_mode TEXT NOT NULL,
-                updated_at REAL NOT NULL
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (org_id, avatar_id)
             );
 
             -- Small per-org preference switches (dashboard toggles), one row per
@@ -652,15 +685,15 @@ def _init_db() -> None:
             -- independently turn ON/OFF a capability the ORG connected once in
             -- the Connections view. Absent row = unset → the caller applies the
             -- default (ON when the org has that integration connected, else off).
-            -- Read at the execute/deliver seams; keyed by the avatar_id string
-            -- ONLY (no org, no ::uuid → split-brain safe). Litestream-replicated
-            -- like avatar_brain_mode.
+            -- Read at the execute/deliver seams, keyed by (org, avatar,
+            -- capability). Litestream-replicated like avatar_brain_mode.
             CREATE TABLE IF NOT EXISTS avatar_capabilities (
+                org_id TEXT NOT NULL DEFAULT '',
                 avatar_id TEXT NOT NULL,
                 capability TEXT NOT NULL,
                 enabled INTEGER NOT NULL,
                 updated_at REAL NOT NULL,
-                PRIMARY KEY (avatar_id, capability)
+                PRIMARY KEY (org_id, avatar_id, capability)
             );
 
             CREATE TABLE IF NOT EXISTS scheduled_events (
@@ -768,6 +801,28 @@ def _init_db() -> None:
         _add_column(conn, "sessions", "org_id TEXT NOT NULL DEFAULT ''")
         # org_id on the remaining persisted tables (idempotent; a new NOT NULL
         # column backfills existing rows to the Demo org).
+        # Cross-tenant fix 2026-07-23: these two were keyed by avatar_id alone,
+        # so ANY logged-in user could flip a capability or the brain mode for
+        # EVERY org on the deployment. ADD COLUMN cannot widen a SQLite PRIMARY
+        # KEY, so an existing database is rebuilt: old rows carry org_id '' and
+        # stay readable as the deployment-wide default (behaviour unchanged
+        # until an org sets its own value), while every new write is org-scoped.
+        _widen_pk_with_org(
+            conn,
+            "avatar_capabilities",
+            "org_id TEXT NOT NULL DEFAULT '', avatar_id TEXT NOT NULL, "
+            "capability TEXT NOT NULL, enabled INTEGER NOT NULL, "
+            "updated_at REAL NOT NULL, PRIMARY KEY (org_id, avatar_id, capability)",
+            "avatar_id, capability, enabled, updated_at",
+        )
+        _widen_pk_with_org(
+            conn,
+            "avatar_brain_mode",
+            "org_id TEXT NOT NULL DEFAULT '', avatar_id TEXT NOT NULL, "
+            "brain_mode TEXT NOT NULL, updated_at REAL NOT NULL, "
+            "PRIMARY KEY (org_id, avatar_id)",
+            "avatar_id, brain_mode, updated_at",
+        )
         _add_column(conn, "utterances", f"org_id TEXT NOT NULL DEFAULT '{demo}'")
         _add_column(conn, "utterances", "participant_id TEXT NOT NULL DEFAULT ''")
         _add_column(conn, "utterances", "speaker_kind TEXT NOT NULL DEFAULT 'human'")
@@ -2262,25 +2317,31 @@ def register_recall_realtime_capability(bot_id: str, capability: str) -> bool:
 _VALID_BRAIN_MODES = {"cerebras"}
 
 
-def set_avatar_brain_mode(avatar_id: str, brain_mode: str) -> bool:
+def set_avatar_brain_mode(
+    avatar_id: str, brain_mode: str, *, org_id: str = ""
+) -> bool:
     """Set an avatar's brain: "cerebras" (the normal Deepgram + grounded brain)
     is the only selectable value. Persisted (Litestream-replicated), read on
     the NEXT meeting — no redeploy."""
     aid = (avatar_id or "").strip()
     mode = (brain_mode or "").strip().lower()
+    org = (org_id or "").strip()
     if not aid or mode not in _VALID_BRAIN_MODES:
         return False
     with _LOCK, _connect() as conn:
         conn.execute(
-            "INSERT INTO avatar_brain_mode (avatar_id, brain_mode, updated_at) "
-            "VALUES (?, ?, ?) ON CONFLICT(avatar_id) DO UPDATE SET "
+            "INSERT INTO avatar_brain_mode "
+            "(org_id, avatar_id, brain_mode, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(org_id, avatar_id) DO UPDATE SET "
             "brain_mode = excluded.brain_mode, updated_at = excluded.updated_at",
-            (aid, mode, time.time()),
+            (org, aid, mode, time.time()),
         )
     return True
 
 
-def get_avatar_brain_mode(avatar_id: str) -> str | None:
+def get_avatar_brain_mode(
+    avatar_id: str, org_id: str = ""
+) -> str | None:
     """The avatar's explicit brain choice, or None if it has never been set
     (caller falls back to the global default). Values outside the selectable
     set (legacy "gemini" rows) read as None — a stale row must never
@@ -2290,7 +2351,10 @@ def get_avatar_brain_mode(avatar_id: str) -> str | None:
         return None
     with _LOCK, _connect() as conn:
         row = conn.execute(
-            "SELECT brain_mode FROM avatar_brain_mode WHERE avatar_id = ?", (aid,)
+            "SELECT brain_mode FROM avatar_brain_mode "
+            "WHERE avatar_id = ? AND org_id IN (?, '') "
+            "ORDER BY org_id DESC LIMIT 1",
+            (aid, (org_id or "").strip()),
         ).fetchone()
     mode = row[0] if row else None
     return mode if mode in _VALID_BRAIN_MODES else None
@@ -2659,26 +2723,36 @@ import re as _re
 _CAPABILITY_SLUG = _re.compile(r"^[a-z0-9_][a-z0-9_-]{0,59}$")
 
 
-def set_avatar_capability(avatar_id: str, capability: str, enabled: bool) -> bool:
-    """Turn one capability ON/OFF for one avatar (dashboard toggle). Persisted
-    (Litestream-replicated), read at the execute/deliver seams — no redeploy.
+def set_avatar_capability(
+    avatar_id: str, capability: str, enabled: bool, *, org_id: str = ""
+) -> bool:
+    """Turn one capability ON/OFF for one avatar IN ONE ORG (dashboard toggle).
+
+    org_id is required in practice: without it the write lands on the legacy
+    deployment-wide row, which is what let any tenant switch a capability off
+    for every other tenant (cross-tenant fix 2026-07-23). Callers pass the
+    authenticated user's org; only migration/back-compat paths omit it.
     False for a key that is neither a KNOWN capability nor slug-shaped."""
     aid = (avatar_id or "").strip()
     cap = (capability or "").strip().lower()
+    org = (org_id or "").strip()
     if not aid or (cap not in KNOWN_CAPABILITIES and not _CAPABILITY_SLUG.match(cap)):
         return False
     with _LOCK, _connect() as conn:
         conn.execute(
             "INSERT INTO avatar_capabilities "
-            "(avatar_id, capability, enabled, updated_at) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(avatar_id, capability) DO UPDATE SET "
+            "(org_id, avatar_id, capability, enabled, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(org_id, avatar_id, capability) DO UPDATE SET "
             "enabled = excluded.enabled, updated_at = excluded.updated_at",
-            (aid, cap, 1 if enabled else 0, time.time()),
+            (org, aid, cap, 1 if enabled else 0, time.time()),
         )
     return True
 
 
-def get_avatar_capabilities(avatar_id: str) -> dict[str, bool]:
+def get_avatar_capabilities(
+    avatar_id: str, org_id: str = ""
+) -> dict[str, bool]:
     """The avatar's EXPLICIT capability switches as ``{capability: bool}``.
 
     Only capabilities the owner has actually toggled appear. A capability
@@ -2689,19 +2763,34 @@ def get_avatar_capabilities(avatar_id: str) -> dict[str, bool]:
     aid = (avatar_id or "").strip()
     if not aid:
         return {}
+    org = (org_id or "").strip()
     with _LOCK, _connect() as conn:
-        rows = conn.execute(
-            "SELECT capability, enabled FROM avatar_capabilities WHERE avatar_id = ?",
+        # Legacy deployment-wide rows (org_id '') are the DEFAULT; this org's
+        # own rows override them key by key, so a live database keeps its
+        # current behaviour until the org sets its own switch.
+        legacy = conn.execute(
+            "SELECT capability, enabled FROM avatar_capabilities "
+            "WHERE avatar_id = ? AND org_id = ''",
             (aid,),
         ).fetchall()
-    return {r[0]: bool(r[1]) for r in rows}
+        mine = conn.execute(
+            "SELECT capability, enabled FROM avatar_capabilities "
+            "WHERE avatar_id = ? AND org_id = ?",
+            (aid, org),
+        ).fetchall() if org else []
+    caps = {r[0]: bool(r[1]) for r in legacy}
+    caps.update({r[0]: bool(r[1]) for r in mine})
+    return caps
 
 
-def capability_enabled(avatar_id: str, capability: str, *, connected: bool) -> bool:
-    """Resolve whether an avatar MAY use a capability: the explicit per-avatar
-    switch, defaulting to the org-level ``connected`` state when never toggled.
-    This is the "default ON when connected, else off" rule in one place."""
-    return get_avatar_capabilities(avatar_id).get(capability, connected)
+def capability_enabled(
+    avatar_id: str, capability: str, *, connected: bool, org_id: str = ""
+) -> bool:
+    """Resolve whether an avatar MAY use a capability IN THIS ORG: the explicit
+    per-org switch, then the legacy deployment-wide row, defaulting to the
+    org-level ``connected`` state when never toggled. This is the "default ON
+    when connected, else off" rule in one place."""
+    return get_avatar_capabilities(avatar_id, org_id).get(capability, connected)
 
 
 # ── canonical approval records (handshake operation: approve-action) ──

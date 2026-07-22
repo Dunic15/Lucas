@@ -192,7 +192,9 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
             from .. import pipedream_client, pipedream_executor
 
             if pipedream_executor.enabled():
-                caps = store.get_avatar_capabilities(getattr(avatar, "id", ""))
+                caps = store.get_avatar_capabilities(
+                    getattr(avatar, "id", ""), org_id
+                )
                 _skip = {"slack", "asana", "google",
                          "gmail", "google_calendar", "google_drive"}
                 for slug in sorted(
@@ -283,7 +285,9 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
         slack_blocked = False
         try:
             aid = str(getattr(avatar, "id", "") or "")
-            if aid and store.get_avatar_capabilities(aid).get("slack") is False:
+            if aid and store.get_avatar_capabilities(
+                aid, org_id
+            ).get("slack") is False:
                 slack_blocked = True
         except Exception:  # noqa: BLE001 — never block a join over the toggle
             slack_blocked = False

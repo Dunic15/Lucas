@@ -50,7 +50,8 @@ def maybe_deliver(avatar_name: str, artifact: dict[str, Any]) -> dict[str, Any]:
         # `slack` toggle is on. The avatar_id is stamped on the artifact at
         # finalize; skip on an explicit OFF, default on otherwise.
         avatar_id = str(artifact.get("avatar_id") or "")
-        if store.get_avatar_capabilities(avatar_id).get("slack") is False:
+        org_id = str(artifact.get("org_id") or "")
+        if store.get_avatar_capabilities(avatar_id, org_id).get("slack") is False:
             slack_res = {"sent": False, "reason": "slack capability off"}
         else:
             slack_res = actions.post_to_slack(
