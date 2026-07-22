@@ -952,7 +952,7 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
                        f"proxy call failed ({type(exc).__name__})")
     if not resp.get("ok"):
         return _settle(action_id, org, False, action_type, "",
-                       f"{app_slug} API returned {resp.get('status')}")
+                       _api_error_detail(app_slug, resp))
 
     kind, ref = receipt_fn(action_type, resp.get("json") or {})
     # Phase 1 read-back verify (owner 2026-07-22): re-read the object we just
@@ -1084,9 +1084,34 @@ def dry_run(org_id: str, action: dict) -> dict:
         return {"ok": False, "error": f"proxy call failed ({type(exc).__name__})"}
     if not resp.get("ok"):
         return {"ok": False, "status": resp.get("status"),
-                "error": f"{app_slug} API returned {resp.get('status')}"}
+                "error": _api_error_detail(app_slug, resp)}
     kind, ref = receipt_fn(action_type, resp.get("json") or {})
     return {"ok": True, "kind": kind, "ref": ref, "route": "pipedream"}
+
+
+def _api_error_detail(app_slug: str, resp: dict) -> str:
+    """Human receipt line for a non-2xx vendor response.
+
+    "asana API returned 400" told the owner nothing (live card
+    e44f90f7ee62497d) while the body carried the exact reason. Extract the
+    vendor's own message — Asana: {"errors":[{"message"}]}, Google:
+    {"error":{"message"}} — truncated, never tokens, never transcripts.
+    """
+    status = resp.get("status")
+    base = f"{app_slug} API returned {status}"
+    body = resp.get("json")
+    if not isinstance(body, dict):
+        return base
+    msg = ""
+    errors = body.get("errors")
+    if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+        msg = str(errors[0].get("message") or "")
+    if not msg and isinstance(body.get("error"), dict):
+        msg = str(body["error"].get("message") or "")
+    if not msg and isinstance(body.get("error"), str):
+        msg = body["error"]
+    msg = " ".join(msg.split())[:180]
+    return f"{base} — {msg}" if msg else base
 
 
 def _settle(action_id: str, org: str, ok: bool, action_type: str, ref: str,

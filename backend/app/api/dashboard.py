@@ -3421,6 +3421,39 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             status_code=422, headers=_NO_STORE,
         )
 
+    # Semantic gate (owner rule 2026-07-22, card e44f90f7ee62497d): fields
+    # naming real workspace entities must RESOLVE against the org's actual
+    # data BEFORE the claim — "you can't move if the parameters don't work".
+    # Resolved names are persisted as canonical ids; unresolvable ones send
+    # the card back to needs_details with the valid options for the form.
+    if typed:
+        from ..actions import param_resolve
+
+        rewrites, invalid = await run_in_threadpool(
+            param_resolve.validate_typed_params, org, typed
+        )
+        if invalid:
+            await run_in_threadpool(
+                ledger.set_action_status, aid, "needs_details",
+                "invalid: " + "; ".join(e["message"] for e in invalid)[:300],
+                org_id=org,
+            )
+            return JSONResponse(
+                {"error": "needs_details", "action_id": aid,
+                 "missing_params": [e["field"] for e in invalid],
+                 "invalid_fields": invalid,
+                 "params_schema": action_plane.params_schema(typed)},
+                status_code=422, headers=_NO_STORE,
+            )
+        if rewrites:
+            fixed = await run_in_threadpool(
+                lambda: ledger.update_action_params(
+                    aid, rewrites, org_id=org, artifact_typed=typed
+                )
+            )
+            if fixed is not None:
+                typed = fixed
+
     # Record THE canonical decision (first write wins across surfaces and
     # instances). A dashboard approve after a Slack decision — or a repeated
     # dashboard click racing itself — answers from the recorded row instead
