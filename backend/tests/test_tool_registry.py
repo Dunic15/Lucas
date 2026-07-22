@@ -196,3 +196,35 @@ def test_asana_toggle_override_still_works(fresh_store, monkeypatch):
     laura = tool_registry.assemble("org-x", avatars.load("laura"))
     assert "asana_tasks" not in [t["name"] for t in petra["native"]]
     assert "asana_tasks" in [t["name"] for t in laura["native"]]
+
+
+def test_capability_verbs_derive_from_the_executor_mapper(monkeypatch):
+    """Live capability awareness (owner 2026-07-22): the avatar's claimed
+    verbs come from pipedream_executor._MAPPER itself — add an action there
+    and the meeting brief knows it with ZERO other changes. The avatar's
+    self-knowledge can never lag the execution plane again."""
+    from app import pipedream_executor as pe
+    from app.brain import tool_registry as tr
+
+    fake_mapper = dict(pe._MAPPER)
+    fake_mapper["gmail.snooze"] = ("gmail", lambda *a: None, lambda *a: ("x", ""))
+    monkeypatch.setattr(pe, "_MAPPER", fake_mapper)
+    monkeypatch.setattr(pe, "enabled", lambda: True)
+    monkeypatch.setattr(pe, "app_connected", lambda org, app: True)
+
+    import app.store as store_mod
+    monkeypatch.setattr(store_mod, "get_org_oauth", lambda *a, **k: {"tok": "x"},
+                        raising=False)
+    monkeypatch.setattr(store_mod, "connections_for_org", lambda org: [])
+    monkeypatch.setattr(store_mod, "capability_enabled",
+                        lambda *a, **k: True, raising=False)
+
+    class _Av:
+        id = "petra"
+        def uses_native_tool(self, n): return n == "asana"
+
+    reg = tr.assemble("org-test", _Av())
+    assert reg is not None
+    gm = next(t for t in reg["native"] if t["name"] == "gmail_send")
+    assert "snooze" in gm["verbs"]          # the new mapper entry propagated
+    assert "snooze" in tr.brief(reg)        # …all the way into the prompt
