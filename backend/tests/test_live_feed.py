@@ -278,3 +278,23 @@ def test_push_requires_auth_when_token_set(client, fresh_store, monkeypatch):
         headers={"Authorization": "Bearer sekrit"},
     )
     assert ok.status_code == 200
+
+
+def test_cedric_brief_identity_gated(fresh_store):
+    """The orchestrator brief opens with "You are Cedric's presence…" — it
+    must reach ONLY a cedric session (or an org that connected the
+    cedric-brain), never hijack Petra/Laura's identity (live 2026-07-21:
+    Petra recited Cedric's 3,000-app roster in an org with no Slack agent)."""
+    s = _orchestrated(fresh_store, "bot_gate1")  # avatar_id="cedric"
+    assert "stale booking-time brief" in cedric.inject_brief(s, "")
+
+    p = fresh_store.create(
+        bot_id="bot_gate2",
+        meeting_url="https://meet.google.com/bot_gate2",
+        avatar_id="petra",
+        org_id="11111111-2222-3333-4444-555555555555",  # no cedric-brain row
+    )
+    p.integration = {**s.integration}
+    out = cedric.inject_brief(p, "prior memory")
+    assert "stale booking-time brief" not in out
+    assert out == "prior memory"

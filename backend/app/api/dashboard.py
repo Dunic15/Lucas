@@ -203,7 +203,13 @@ def _action_entry(action) -> dict:
                 and bool(action["typed"].get("type"))
             )
             or str(action.get("execution_route") or "")
-            in ("native", "pipedream", "browser"),
+            in ("native", "pipedream", "browser")
+            # Approve-door rescue (#351): with the native executor on, an
+            # untyped capture is re-typed AT THE CLICK — the door can always
+            # try, landing on a real run, a needs_details edit, or an honest
+            # failed receipt. Hiding Approve here blocked that rescue for a
+            # whole evening of cards (live 2026-07-21).
+            or settings.native_executor,
             # Provenance (Petra's PM judgement, bounded): "explicit" = a stated
             # commitment; "inferred" = a PROPOSED step decomposed from a spoken
             # goal — rendered in the Action Centre's "Proposed" subsection with
@@ -214,7 +220,8 @@ def _action_entry(action) -> dict:
         }
     return {"action_id": "", "item": str(action)[:300], "owner": "",
             "unassigned": False, "gap": "", "done": False, "typed": False,
-            "title": _display_title(str(action)), "executable": False,
+            "title": _display_title(str(action)),
+            "executable": settings.native_executor,
             "source": "explicit", "goal": "", "inferred_from": ""}
 
 
@@ -2566,14 +2573,32 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     if not (isinstance(typed, dict) and typed.get("type")):
         try:
             from ..brain import engine as brain
-            from ..meeting.lifecycle import _avatar_asana_enabled
+            # Aliased imports: a bare `import pipedream_executor` here would
+            # shadow the module name for THIS WHOLE function scope and blow
+            # up later references with UnboundLocalError on the typed path.
+            from .. import asana_client as _asana_cli
+            from .. import pipedream_executor as _pd_exec
 
-            _allow_asana = bool(
-                acting_avatar
-                and await run_in_threadpool(
-                    _avatar_asana_enabled, org, str(acting_avatar)
-                )
-            )
+            # ORG-level gate, deliberately wider than the avatar's own typing
+            # policy ("Petra owns Asana"): the human clicking Approve IS the
+            # authorization, so an Asana ask captured by ANY avatar can be
+            # rescued as long as the org actually has Asana connected
+            # (Ananth's cards 2026-07-21: asana asks to the Cedric avatar
+            # stayed untyped forever and stamped the dead cedric route).
+            def _org_asana() -> bool:
+                try:
+                    if _asana_cli.connected(org):
+                        return True
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    return _pd_exec.enabled() and (
+                        _pd_exec.app_connected(org, "asana")
+                    )
+                except Exception:  # noqa: BLE001
+                    return False
+
+            _allow_asana = await run_in_threadpool(_org_asana)
             _retyped = await run_in_threadpool(
                 lambda: brain.type_actions(
                     [{
