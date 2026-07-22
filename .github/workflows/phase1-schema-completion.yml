@@ -1,0 +1,37 @@
+name: Phase 1 schema completion
+
+on:
+  push:
+    branches:
+      - fix/phase1-canonical-preview-verification-v2
+    paths:
+      - scripts/phase1_schema_completion.py
+      - .github/workflows/phase1-schema-completion.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/phase1-canonical-preview-verification-v2
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Apply schema and generic preview completion
+        run: |
+          python scripts/phase1_schema_completion.py
+          python -m py_compile backend/app/actions/action_plane.py backend/tests/test_phase1_schema_coverage.py
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/actions/action_plane.py frontend/dashboard.html \
+            backend/tests/test_phase1_canonical_preview.py \
+            backend/tests/test_phase1_schema_coverage.py
+          git commit -m "fix(actions): cover every typed action in canonical preview"
+          git push origin HEAD:fix/phase1-canonical-preview-verification-v2
