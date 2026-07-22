@@ -184,6 +184,41 @@ def test_empty_room_rejoin_cancels_finalize(tmp_path, monkeypatch):
     store.remove(s.bot_id)
 
 
+def test_leave_rejoin_leave_gets_a_fresh_full_grace(tmp_path, monkeypatch):
+    """The second leave must not inherit the first leave's older deadline."""
+    s = _session(tmp_path, monkeypatch, bot_id="empty-room-renew")
+    s.participant_event("Kai", 1, here=True)
+
+    monkeypatch.setattr(main, "_EMPTY_ROOM_GRACE_S", 0.08)
+    finalized = []
+
+    async def fake_finalize(bot_id, source="", **kw):
+        finalized.append((bot_id, source))
+        return {}
+
+    monkeypatch.setattr(main, "_finalize_session", fake_finalize)
+
+    async def scenario():
+        s.participant_event("Kai", 1, here=False)
+        main._schedule_empty_room_leave(s)
+        await asyncio.sleep(0.03)
+
+        s.participant_event("Kai", 1, here=True)
+        main._invalidate_empty_room_leave(s)
+        s.participant_event("Kai", 1, here=False)
+        main._schedule_empty_room_leave(s)
+
+        # The original deadline has passed, but the renewed one has not.
+        await asyncio.sleep(0.06)
+        assert not finalized
+
+        await asyncio.sleep(0.04)
+
+    asyncio.run(scenario())
+    assert finalized == [(s.bot_id, "empty_room")]
+    store.remove(s.bot_id)
+
+
 def test_leave_webhook_schedules_empty_room_check(tmp_path, monkeypatch):
     """End-to-end through the webhook: the LAST leave event arms the check."""
     s = _session(tmp_path, monkeypatch, bot_id="empty-room-3")
