@@ -1700,7 +1700,9 @@ def _followup_speaker_ok(session: "store.Session", speaker_id: str) -> bool:
 # the per-minute meter — sat in the dead room until a manual End). When the
 # LAST human leaves, wait a grace period (someone may rejoin after a drop),
 # re-check, then run the same idempotent finalize as POST /sessions/end.
-_EMPTY_ROOM_GRACE_S = 75.0
+# Tunable via EMPTY_ROOM_GRACE_SECONDS (settings.empty_room_grace_seconds);
+# tests monkeypatch this module attribute directly.
+_EMPTY_ROOM_GRACE_S = settings.empty_room_grace_seconds
 
 
 def _invalidate_empty_room_leave(session: "store.Session") -> None:
