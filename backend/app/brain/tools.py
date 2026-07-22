@@ -494,6 +494,46 @@ def capture_action(session, action: str, owner: str = "", due: str = "") -> dict
     return item
 
 
+_DETAIL_FOLD_LABELS = {
+    "email_to": "Recipient",
+    "email_body": "Body",
+    "invite_with": "Attendees",
+    "invite_when": "When",
+    "owner": "Owner",
+    "project": "Project",
+    "due": "Due",
+    "description": "Description",
+}
+
+
+def fold_action_details(
+    item: dict, fragment: str, missing: list[str] | tuple[str, ...]
+) -> dict:
+    """Turn a clarify answer into explicit card fields instead of raw glue.
+
+    The old append-only path produced fragments such as "at PM" and "Send, an
+    to" after ASR repairs. A labelled fold preserves the original request and
+    states what the follow-up supplied, making both the card and the later
+    typing pass deterministic. Pure, bounded, and never logs the content.
+    """
+    base = " ".join(str((item or {}).get("action") or "").split()).strip(" .")
+    detail = " ".join(str(fragment or "").split()).strip(" .")
+    slots = [str(s) for s in (missing or ()) if str(s) in _DETAIL_FOLD_LABELS]
+    if not detail:
+        return {"action": base}
+    if len(slots) == 1:
+        label = _DETAIL_FOLD_LABELS[slots[0]]
+    else:
+        label = "Details"
+    action = f"{base}. {label}: {detail}" if base else f"{label}: {detail}"
+    updates: dict[str, str] = {"action": action[:300]}
+    if len(slots) == 1 and slots[0] == "owner":
+        updates["owner"] = detail[:100]
+    if len(slots) == 1 and slots[0] == "due":
+        updates["due"] = detail[:100]
+    return updates
+
+
 def extend_action_once(
     session,
     item: dict,
@@ -932,3 +972,4 @@ def dispatch_for(session, *, live: bool = True):
         return dispatch(name, args, session=session, live=live)
 
     return _dispatch
+

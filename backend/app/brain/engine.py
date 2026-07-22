@@ -204,6 +204,11 @@ it, give the useful part and say what you'd check.
 mention it's from a quick search.
 - Live transcripts are noisy — infer the likely intent and answer what the \
 person most likely meant.
+- The line introduced as what someone "just said" is the CURRENT live turn, \
+never a pasted transcript or an artifact to analyze. If they ask whether you \
+can hear/see/access something or ask "what happened?", answer directly in the \
+first person as the avatar; never describe the ongoing conversation in the \
+third person.
 - Reply in the language the person spoke to you in — an Italian question gets \
 an Italian answer. Follow the conversation if it switches language.
 - Meetings often have several people. When a roster and the speaker's name are \
@@ -328,6 +333,14 @@ _ABOUT_INTENT = re.compile(
     # required so task asks ("use the tool to file X") keep normal routing.
     r"(what|which)\b.{0,16}\b(tools?|integrations?|apps?|connectors?)\b.{0,24}\b(you|have|use|access)\b|"
     r"(quali|che)\b.{0,16}\b(tools?|strumenti|integrazioni|app)\b.{0,28}\b(puoi|usi|usare|hai)\b|"
+    # Self-referential capability checks from the live test. These must answer
+    # from the org-scoped roster, never from web search or generic Claude lore.
+    r"(can|could|do)\s+(you|laura|petra)\b.{0,20}\b(read|access|see|hear)\b"
+    r".{0,28}\b(my|our|me|calendar|drive|gmail|asana|slack|notion)\b|"
+    r"(do|can)\s+(you|laura|petra)\s+have\s+access\s+to\b|"
+    r"(puoi|riesci\s+a|sai)\b.{0,18}\b(legger\w*|acceder\w*|veder\w*|sentir\w*)\b"
+    r".{0,24}\b(mi|mio|mia|nostr\w*|calendar\w*|drive|gmail|asana|slack|notion)\b|"
+    r"\bmi\s+senti\b|"
     r"come funzioni\b|come sei fatt\w+|cosa (sai|puoi) fare|"
     r"che modell[oi]\b|su che (modello|tecnologia)|con che (modello|tecnologia)|"
     r"chi (sei|ti ha creat\w+|ti ha fatt\w+)|sei (un[ao]? )?(ai|robot|bot|uman\w+))\b",
@@ -431,6 +444,11 @@ def _wants_search(question: str) -> bool:
     asks are excluded: search must never outrank the grounded briefs or the
     capture seam."""
     q = question or ""
+    # Self-referential questions are answered from the real per-org tool roster.
+    # They are never public-web lookups, even when they contain words such as
+    # "current", "Google" or an app name.
+    if _is_about_avatar(q):
+        return False
     if not (
         settings.live_search_enabled
         and settings.anthropic_api_key
@@ -536,11 +554,30 @@ _ACTION_INTENT = re.compile(
 )
 
 
+_CAPTURE_QUESTION_TAIL = re.compile(
+    r"[?]\s*(?:what|which|when|where|who|why|how|cosa|che|quale|quando|"
+    r"dove|chi|perch[eé]|come)\b",
+    re.IGNORECASE,
+)
+_CAPTURE_STUTTERED_QUESTION = re.compile(
+    r"\b(what|which|when|where|who|why|how|cosa|che|quale|quando|dove|chi|come)"
+    r"\s+\1\b",
+    re.IGNORECASE,
+)
+
+
 def wants_action_capture(question: str) -> bool:
-    """True when the utterance directly asks the avatar to DO something after
-    the call — main.py's live loop captures it (queue_action seam) and speaks
-    a fixed confirmation instead of routing the turn to an answer path."""
-    return bool(_ACTION_INTENT.search(question or ""))
+    """True only for a coherent direct request to perform an action.
+
+    ASR can concatenate a tentative imperative with the room's interrogative
+    repair ("Schedule in my calendar? What schedule?"). Those fragments are
+    questions about the request, not approval-card content. Reject them while
+    keeping real polite requests such as "Can you schedule ...?".
+    """
+    q = " ".join((question or "").split())
+    if _CAPTURE_QUESTION_TAIL.search(q) or _CAPTURE_STUTTERED_QUESTION.search(q):
+        return False
+    return bool(_ACTION_INTENT.search(q))
 
 
 def _live_route(question: str) -> tuple[str, str]:
@@ -2451,3 +2488,4 @@ def _parse_json(text: str) -> dict:
         return json.loads(text)
     except json.JSONDecodeError:
         return {"answer": text, "confidence": 0.0, "sufficient_context": False}
+
