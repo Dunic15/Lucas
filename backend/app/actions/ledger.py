@@ -760,6 +760,18 @@ def get_durable_action(
     return None
 
 
+
+def persist_effective_route(
+    action_id: str, route: str, *, org_id: str = DEMO_ORG_ID
+) -> bool:
+    """Persist the route selected at approval time when a durable row exists."""
+    aid = str(action_id or "").strip()
+    if not aid or not _durable_actions(org_id):
+        return False
+    from . import outbox_pg
+
+    return outbox_pg.update_action_route(org_id, aid, route)
+
 def update_action_params(
     action_id: str, args: dict, *, org_id: str = DEMO_ORG_ID,
     artifact_typed: Any = None,
