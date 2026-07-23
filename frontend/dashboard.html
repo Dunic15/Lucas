@@ -4071,7 +4071,9 @@
       var docReady=mine.reduce(function(n,s){ return n+(s.published_documents|0); },0);
       var docPend=mine.reduce(function(n,s){ return n+(s.pending_documents|0); },0);
       var docList=mine.length? mine.map(function(s){
-          return '<div class="brdoc"><span class="brdoc-nm">'+esc(s.name)+'</span>'+
+          var isDrive=(s.kind==="drive");
+          return '<div class="brdoc"><span class="brdoc-nm">'+(isDrive?'📁 ':'')+esc(s.name)+'</span>'+
+            (isDrive?'<span class="brdoc-tag" title="Synced from a Google Drive folder">Google Drive folder</span>':'')+
             '<span class="brdoc-meta">'+(s.published_documents|0)+' ready'+((s.pending_documents|0)?' · '+(s.pending_documents|0)+' indexing':'')+((s.failed_documents|0)?' · '+(s.failed_documents|0)+' failed':'')+'</span>'+
             '<button class="brdoc-del" data-brdel="'+esc(s.id)+'" title="Remove this knowledge">✕</button></div>';
         }).join("") : '<div class="empty" style="padding:12px 2px">Nothing yet — drop a file above and '+esc(avName)+' will start citing it in meetings.</div>';
@@ -4096,6 +4098,10 @@
         '.brstat{font-size:.8rem;color:var(--faint);margin-left:auto}'+
         '.brpaste-box{margin-top:12px;display:flex;flex-direction:column;gap:8px}'+
         '.brpaste-box input,.brpaste-box textarea,.brpaste-box select{padding:10px 12px;border-radius:11px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font:inherit;box-sizing:border-box;width:100%}'+
+        '.brdrive-pick{display:flex;flex-direction:column;gap:11px}'+
+        '.brdrive-lbl{font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin:2px 0 -5px}'+
+        '.brdrive-btn{align-self:flex-start;margin-top:6px}'+
+        '.brdoc-tag{font-size:.67rem;color:var(--dim);padding:1px 8px;border:1px solid var(--line);border-radius:999px;white-space:nowrap}'+
         '.brdocs{margin-top:18px;display:flex;flex-direction:column;gap:8px}'+
         '.brdoc{display:flex;align-items:center;gap:10px;padding:11px 14px;border:1px solid var(--line-soft);border-radius:12px;background:var(--panel-2)}'+
         '.brdoc-nm{font-size:.88rem;color:var(--text);font-weight:600}'+
@@ -4244,20 +4250,29 @@
       var folders=(r.ok&&r.j.folders)||[];
       if(r.ok && r.j.connected && folders.length){
         var opts=folders.map(function(f){ return '<option value="'+esc(f.id)+'">'+esc(f.name)+'</option>'; }).join("");
-        body.innerHTML='<div class="brdrive-hint">Choose a folder from your Google Drive — '+esc(nm)+' reads up to 25 files from it and cites them in meetings.</div>'+
+        body.innerHTML='<div class="brdrive-pick">'+
+          '<div class="brdrive-hint">Pick a folder from your Google Drive. '+esc(nm)+' reads up to 25 files from it and cites them in meetings — the folder name is shown below once connected.</div>'+
+          '<label class="brdrive-lbl" for="brdrive-sel">Folder</label>'+
           '<select id="brdrive-sel" aria-label="Google Drive folder">'+opts+'</select>'+
-          '<button class="btn primary" id="brdrive-go">Connect &amp; sync to '+esc(nm)+'</button>';
-        $("#brdrive-go").addEventListener("click",function(){ _brainConnectDrive(avatarId,$("#brdrive-sel").value); });
+          '<button class="btn primary brdrive-btn" id="brdrive-go">Connect &amp; sync to '+esc(nm)+'</button>'+
+          '</div>';
+        $("#brdrive-go").addEventListener("click",function(){
+          var sel=$("#brdrive-sel");
+          var picked=sel.options[sel.selectedIndex]?sel.options[sel.selectedIndex].text:"";
+          _brainConnectDrive(avatarId,sel.value,picked);
+        });
       } else {
         var connected=(r.ok&&r.j.connected);
         var reason=(r.ok&&r.j.reason&&!connected)?(' ('+esc(r.j.reason)+')'):'';
-        body.innerHTML='<div class="brdrive-hint">'+(connected
+        body.innerHTML='<div class="brdrive-pick">'+
+          '<div class="brdrive-hint">'+(connected
             ?'No folders found in your Google Drive — '
             :'Connect Google with Drive access in the <b>Connections</b> tab'+reason+', then reopen this to pick a folder. Or ')+
           'paste a Google Drive <b>folder</b> link:</div>'+
           '<input type="text" id="brdrive-url" placeholder="https://drive.google.com/drive/folders/…" aria-label="Google Drive folder link" />'+
-          '<button class="btn primary" id="brdrive-go">Connect &amp; sync to '+esc(nm)+'</button>';
-        $("#brdrive-go").addEventListener("click",function(){ _brainConnectDrive(avatarId,$("#brdrive-url").value); });
+          '<button class="btn primary brdrive-btn" id="brdrive-go">Connect &amp; sync to '+esc(nm)+'</button>'+
+          '</div>';
+        $("#brdrive-go").addEventListener("click",function(){ _brainConnectDrive(avatarId,$("#brdrive-url").value,""); });
       }
     });
   }
@@ -4274,10 +4289,14 @@
   // a kind:"drive" source (reuse if the same folder is already connected here),
   // assign it to the avatar, then trigger the background sync_drive job. The
   // synced files land in the avatar's doc list and get cited like uploads.
-  function _brainConnectDrive(avatarId,link){
+  function _brainConnectDrive(avatarId,link,folderName){
     var fid=_brainDriveFolderId(link);
     if(!fid){ toast("Paste a Google Drive folder link (or its ID).",true); return; }
-    var nm=avNameOf(avatarId)+" — Google Drive";
+    // Name the source after the ACTUAL Drive folder the user picked, so the
+    // knowledge list says WHICH folder is connected — not a generic
+    // "<Avatar> — Google Drive". A pasted link carries no name, so fall back.
+    var fname=String(folderName||"").trim();
+    var nm=fname||(avNameOf(avatarId)+" — Google Drive");
     toast("Connecting Drive folder…");
     return bFetch("sources").then(function(r){
       var srcs=(r.ok&&r.j.sources)||[];
@@ -4291,7 +4310,7 @@
       return ensure.then(function(id){
         return bFetch("sources/"+id+"/sync",{method:"POST"}).then(function(sr){
           if(!sr.ok) throw new Error((sr.j&&sr.j.error)||"sync failed");
-          toast(avNameOf(avatarId)+"’s Drive folder connected — syncing now. Docs appear as they index.");
+          toast("Connected “"+nm+"” — syncing now. Docs appear below as they index.");
           loadBrain(true);
         });
       });
