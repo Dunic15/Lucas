@@ -120,3 +120,42 @@ def test_sanitize_rejects_calendar_without_iso_times():
 
 def test_sanitize_rejects_unknown_type():
     assert brain._sanitize_typed({"type": "slack.post", "args": {}}, {"item": "x"}) is None
+
+
+# ── clarify-fold binding (live 2026-07-23 bug ④) ──
+# A clarify answer is folded into the action TEXT as a canonical label
+# (tools.fold_action_details → "Email Sofia. Body: Hi"). The typing pass must
+# route that label to its real arg — not dump "Body: Hi" into the subject.
+
+def test_email_clarified_body_binds_to_body_not_subject():
+    typed = _typed(
+        {"item": "send an email to sofia@northwind.test. Body: Hi there team",
+         "owner": ""}
+    )
+    assert typed["type"] == "email.send"
+    assert typed["args"]["body"] == "Hi there team"
+    assert "Body:" not in typed["args"]["subject"]
+    assert typed["args"]["subject"] == "send an email to sofia@northwind.test"
+
+
+def test_email_clarified_recipient_grounds_the_send():
+    # The ask had no address; the recipient arrived via the clarify fold.
+    typed = _typed({"item": "email the recap. Recipient: marco@acme.com",
+                    "owner": ""})
+    assert typed is not None and typed["args"]["to"] == ["marco@acme.com"]
+
+
+def test_asana_clarified_description_binds_to_notes():
+    typed = brain.type_actions(
+        [{"item": "follow up with vendor. Description: chase the Q3 invoice",
+          "owner": ""}],
+        allow_asana=True,
+    )[0].get("typed")
+    assert typed["type"] == "asana.create_task"
+    assert typed["args"]["name"] == "follow up with vendor"
+    assert typed["args"]["notes"] == "chase the Q3 invoice"
+
+
+def test_fold_label_parser_is_idempotent_on_plain_text():
+    base, fields = brain._fold_label_fields("just a plain task, no labels here")
+    assert base == "just a plain task, no labels here" and fields == {}
