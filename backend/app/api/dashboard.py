@@ -2649,7 +2649,13 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
         booked = {
             s.meeting_url: s.avatar_id
             for s in store.all_sessions()
-            if s.meeting_url and s.org_id == org_id
+            # native_org is the enclosing scope's org; this builder never had an
+            # `org_id` (that name only exists as _load_native's parameter). The
+            # stray reference raised NameError on every Pipedream calendar read,
+            # which the outer handler reported as "not connected" → the owner
+            # was told to reconnect an already-connected calendar (live
+            # 2026-07-23, first Pipedream-Calendar org to exercise this path).
+            if s.meeting_url and s.org_id == native_org
         }
         invite_bases = [
             b for b in (settings.calendar_invite_emails or "").split(",") if b.strip()
@@ -2718,6 +2724,21 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
         if acct is None:
             return None
         cal_email = str(acct.get("name") or "")
+
+        # Past this point the org HAS connected Calendar via Pipedream. A read
+        # failure is "connected but temporarily unavailable" (the UI's retry
+        # state) — NEVER "go connect". Returning None here would fall through to
+        # the native/Recall paths, which for a Pipedream-only org resolve to
+        # connected:false and wrongly send the owner to reconnect.
+        def _pd_soft_error() -> dict:
+            return {
+                "calendar": {
+                    "connected": True, "source": "pipedream",
+                    "email": cal_email, "error": "calendar_unavailable",
+                },
+                "meetings": [],
+            }
+
         now = datetime.now(timezone.utc)
         params = {
             "singleEvents": "true",
@@ -2735,11 +2756,14 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
             resp = pipedream_client.proxy_request(
                 native_org, str(acct["id"]), "GET", url)
         except pipedream_client.PipedreamError:
-            return None
+            return _pd_soft_error()
         if not resp.get("ok"):
-            return None
-        items = (resp.get("json") or {}).get("items") or []
-        return _build_rows_pd(items, cal_email)
+            return _pd_soft_error()
+        try:
+            items = (resp.get("json") or {}).get("items") or []
+            return _build_rows_pd(items, cal_email)
+        except Exception:  # noqa: BLE001 — a malformed event must not blank the view
+            return _pd_soft_error()
 
     def _load() -> dict:
         # Cutover: prefer the org's Pipedream-connected Google Calendar; only
@@ -2797,11 +2821,36 @@ async def dashboard_upcoming(request: Request) -> JSONResponse:
             return _load_native(native_org, oauth)
         return _load_recall()
 
+    def _calendar_configured() -> bool:
+        """Cheap connection check (NO calendar read) for the error fallback:
+        is a Google Calendar wired up at all — via Pipedream, or a per-user /
+        org native token? Lets the error path say 'connected but unavailable'
+        (retry) instead of 'not connected' (reconnect)."""
+        try:
+            from .. import pipedream_executor
+            if (pipedream_executor.enabled()
+                    and pipedream_executor.app_connected(
+                        native_org, "google_calendar")):
+                return True
+        except Exception:  # noqa: BLE001 — a probe failure is not a disconnect
+            pass
+        try:
+            if user is not None and store.get_user_oauth(user["user_id"]):
+                return True
+            if store.get_org_oauth(native_org):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
     try:
         data = await run_in_threadpool(_load)
     except Exception:
+        # A read blew up somewhere. Don't claim "not connected" — that sends the
+        # owner to reconnect an already-connected calendar (live 2026-07-23).
+        connected = await run_in_threadpool(_calendar_configured)
         data = {
-            "calendar": {"connected": False, "error": "calendar_unavailable"},
+            "calendar": {"connected": connected, "error": "calendar_unavailable"},
             "meetings": [],
         }
     return JSONResponse(_json_safe(data), headers=_NO_STORE)
