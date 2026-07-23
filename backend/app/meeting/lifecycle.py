@@ -38,25 +38,26 @@ _BOT_VARIANT_RANK = {
 
 
 def _stamp_action_routing(actions: list, org_id: str = "") -> list:
-    """Routing-role stamps (agreed action-lifecycle contract
-    hsk_con_cnw4567mqj3p49dyn3dg): every canonical action carries an
-    IMMUTABLE execution_route decided here (native iff our executor will run
-    its typed spec; else cedric), a correlation_id (defaults to action_id —
-    the cross-log join), an execution_policy, and — when no owner was
-    resolved — the visible triage payload (unresolved_roles +
-    unassigned_reason) instead of a silent blank. Stamps are setdefault-only:
-    a route persisted earlier is never re-evaluated (contract re-route bounds)."""
+    """Stamp the current effective route and stable action metadata.
+
+    A legacy manual or native value is advisory only. Finalization normalizes
+    it from current connections; an explicit browser route remains fixed
+    because it represents a deliberately selected guarded step.
+    """
     out: list = []
     for a in actions or []:
         if not isinstance(a, dict):
             out.append(a)
             continue
         a = dict(a)
-        if not a.get("execution_route"):
-            a["execution_route"] = executor.route_for_typed(
-                a.get("typed"), org_id,
-                item_text=str(a.get("item") or a.get("action") or ""),
-            )
+        stored = str(a.get("execution_route") or "")
+        resolution = executor.resolve_effective_route(
+            a.get("typed"), org_id,
+            item_text=str(a.get("item") or a.get("action") or ""),
+            acting_avatar=str(a.get("origin_avatar") or ""),
+            explicit_route=stored if stored == "browser" else "",
+        )
+        a["execution_route"] = resolution["route"]
         a.setdefault("correlation_id", str(a.get("action_id") or ""))
         a.setdefault("execution_policy", "approval_required")
         owner = str(a.get("owner") or "").strip()
@@ -65,8 +66,6 @@ def _stamp_action_routing(actions: list, org_id: str = "") -> list:
             a.setdefault("unassigned_reason", "no_owner_rule_match")
         out.append(a)
     return out
-
-
 def _avatar_asana_enabled(org_id: str, avatar_id: str) -> bool:
     """Whether this avatar may use the org's Asana: the org is connected
     (per-org token or ASANA_TOKEN) AND this avatar is purpose-built for Asana
