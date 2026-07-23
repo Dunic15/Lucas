@@ -3230,7 +3230,9 @@ def _artifact_brief_for_action(caller_org: str, action_id: str) -> str:
     return ""
 
 
-def _find_org_action(caller_org: str, action_id: str) -> tuple[dict, str] | None:
+def _find_org_action(
+    caller_org: str, action_id: str, user: dict | None = None
+) -> tuple[dict, str] | None:
     """The stored artifact action with this ``action_id`` that is VISIBLE to
     ``caller_org`` (its own org, or a legacy unowned '' row), as
     ``(action, acting_avatar_id)``, or None.
@@ -3241,7 +3243,14 @@ def _find_org_action(caller_org: str, action_id: str) -> tuple[dict, str] | None
     approve seam can honour that avatar's per-avatar capability toggle. Scanning
     artifacts is O(meetings) but this is a dashboard action off the live path.
     Doubles as the org-scope check: a caller can only approve an action inside
-    an artifact its own org can see."""
+    an artifact its own org can see.
+
+    ``user`` adds the PER-PERSON scope the meeting surfaces already apply
+    (_user_attended): a colleague who never attended the meeting must not be
+    able to read — let alone approve and EXECUTE — its actions against the
+    org's connected accounts (security audit 2026-07-23, gap #3: the action
+    doors were org-scoped only, so any member could run anything). A machine
+    caller (user=None) keeps today's org-wide service scope."""
     aid = (action_id or "").strip()
     if not aid:
         return None
@@ -3255,6 +3264,8 @@ def _find_org_action(caller_org: str, action_id: str) -> tuple[dict, str] | None
             continue
         for a in art.get("actions") or []:
             if isinstance(a, dict) and str(a.get("action_id") or "") == aid:
+                if not _user_attended(user, art):
+                    return None  # same meeting scope as the workspace view
                 return a, str(art.get("avatar_id") or "")
     # Browser guarded steps (B0) are minted directly into the DURABLE
     # queued_actions index (route='browser'), not into a meeting artifact —
@@ -3333,7 +3344,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         return JSONResponse({"error": "action_id is required"}, status_code=400)
     org = user["org_id"]
 
-    found = await run_in_threadpool(_find_org_action, org, aid)
+    found = await run_in_threadpool(_find_org_action, org, aid, user)
     if found is None:
         return JSONResponse(
             {"error": "unknown action for this org"}, status_code=404,
@@ -3803,7 +3814,7 @@ async def reject_action(action_id: str, request: Request) -> JSONResponse:
         return JSONResponse({"error": "action_id is required"}, status_code=400)
     org = user["org_id"]
 
-    if await run_in_threadpool(_find_org_action, org, aid) is None:
+    if await run_in_threadpool(_find_org_action, org, aid, user) is None:
         return JSONResponse(
             {"error": "unknown action for this org"}, status_code=404,
             headers=_NO_STORE,
@@ -3869,7 +3880,7 @@ async def dashboard_chat_list(request: Request, after: int = 0) -> JSONResponse:
     today; the endpoint is retained as the transport for the planned Cedric
     bridge (docs/CEDRIC-DASHBOARD-BRIDGE.md). Decisions never live in chat
     rows; they converge on the canonical approval channel (Action Center)."""
-    org, _user = _chat_caller_org(request)
+    org, chat_user = _chat_caller_org(request)
     if isinstance(org, JSONResponse):
         return org
     messages = await run_in_threadpool(store.list_chat_messages, org, after)
@@ -3882,7 +3893,7 @@ async def dashboard_chat_list(request: Request, after: int = 0) -> JSONResponse:
             ledger.action_statuses, card_ids, org_id=org
         )
         for aid in card_ids:
-            found = await run_in_threadpool(_find_org_action, org, aid)
+            found = await run_in_threadpool(_find_org_action, org, aid, chat_user)
             ex = statuses.get(aid)
             actions[aid] = {
                 "known": found is not None,
@@ -3999,6 +4010,17 @@ async def dashboard_action_params(action_id: str, request: Request) -> JSONRespo
     except Exception:  # noqa: BLE001 — malformed JSON is a client error
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     args = (body or {}).get("args") if isinstance(body, dict) else None
+
+    # Editing an action's parameters is pre-execution tampering (redirect a
+    # recipient, change an amount), so it needs the SAME per-person scope as
+    # approving it — org scope alone let any member rewrite an action from a
+    # meeting they never attended (security audit 2026-07-23, gap #3).
+    if await run_in_threadpool(
+        _find_org_action, str(user["org_id"]), aid, user
+    ) is None:
+        return JSONResponse(
+            {"error": "unknown action for this org"}, status_code=404
+        )
 
     from . import org_api  # local import: org_api lazily imports dashboard
 
