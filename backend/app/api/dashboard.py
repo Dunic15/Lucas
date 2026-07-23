@@ -329,7 +329,11 @@ def _action_entry(action) -> dict:
             "done": bool(action.get("done") or action.get("status") == "done"),
             "typed": isinstance(action.get("typed"), dict)
             and bool(action["typed"].get("type")),
-            "title": _display_title(
+            # Prefer the finalize-time gist headline (engine.headline_actions);
+            # fall back to the deterministic cleanup for pre-headline artifacts
+            # or when the headline producer was skipped.
+            "title": str(action.get("title") or "").strip()
+            or _display_title(
                 str(action.get("item") or action.get("step") or "")
             ),
             # Whether approving can actually RUN something. Untyped free-text
@@ -377,7 +381,7 @@ def _action_entry(action) -> dict:
         }
     return {"action_id": "", "item": str(action)[:300], "owner": "",
             "unassigned": False, "gap": "", "done": False, "typed": False,
-            "title": _display_title(str(action)),
+            "title": _display_title(str(action)),  # bare string: no persisted title
             "executable": settings.native_executor,
             "needed": _action_needed({"item": str(action)}),
             "source": "explicit", "goal": "", "inferred_from": "",
