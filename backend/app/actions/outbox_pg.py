@@ -771,8 +771,7 @@ def rewrite_action_capture_once(
 
 
 def withdraw_action_capture(org_id: str, bot_id: str, action_id: str) -> bool:
-    """Withdraw a cancelled draft — PG twin. Finalize-in-progress returns
-    False (the drain owns the rows); a retry of the cancel is a no-op."""
+    """Soft-withdraw an active voice draft; preserve row, history and logs."""
     engine = _engine()
     with engine.begin() as conn:
         _set_org(conn, org_id)
@@ -795,16 +794,30 @@ def withdraw_action_capture(org_id: str, bot_id: str, action_id: str) -> bool:
             ),
             {"lock_key": f"{org_id}:{bot_id}:action:{action_id}"},
         )
-        gone = conn.execute(
+        changed = conn.execute(
             text(
-                """
-                DELETE FROM queued_actions
+                f"""
+                UPDATE queued_actions
+                SET execution_status='withdrawn',
+                    execution_detail='withdrawn via voice',
+                    execution_updated_at=clock_timestamp(),
+                    resolved_at=clock_timestamp(),
+                    execution_lease_until=NULL,
+                    {_APPEND_LOG_SQL},
+                    updated_at=clock_timestamp()
                 WHERE org_id=:org_id AND bot_id=:bot_id
                   AND action_id=:action_id
+                  AND execution_status IN
+                    ('', 'needs_details', 'proposed', 'approved')
                 RETURNING action_id
                 """
             ),
-            {"org_id": org_id, "bot_id": bot_id, "action_id": action_id},
+            {
+                "org_id": org_id,
+                "bot_id": bot_id,
+                "action_id": action_id,
+                "log_entry": _log_entry("status:withdrawn", "withdrawn via voice"),
+            },
         ).first()
         conn.execute(
             text(
@@ -818,7 +831,7 @@ def withdraw_action_capture(org_id: str, bot_id: str, action_id: str) -> bool:
             ),
             {"org_id": org_id, "action_id": action_id},
         )
-        return gone is not None
+        return changed is not None
 
 
 def update_queued_action(
@@ -1007,6 +1020,111 @@ def set_action_status(
             },
         )
     return True
+
+
+def withdraw_action(
+    org_id: str,
+    action_id: str,
+    *,
+    confirm_approved: bool = False,
+    detail: str = "withdrawn via dashboard",
+) -> str:
+    """Atomically soft-withdraw an idle action.
+
+    Returns withdrawn, replay, confirmation_required, conflict, or missing.
+    """
+    aid = str(action_id or "").strip()
+    if not aid:
+        return "missing"
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                """
+                SELECT execution_status FROM queued_actions
+                WHERE org_id=:org_id AND action_id=:action_id
+                FOR UPDATE
+                """
+            ),
+            {"org_id": org_id, "action_id": aid},
+        ).first()
+        if row is None:
+            return "missing"
+        current = str(row[0] or "")
+        if current == "withdrawn":
+            return "replay"
+        if current in ("executing", "done", "failed", "rejected"):
+            return "conflict"
+        if current == "approved" and not confirm_approved:
+            return "confirmation_required"
+        conn.execute(
+            text(
+                f"""
+                UPDATE queued_actions
+                SET execution_status='withdrawn',
+                    execution_detail=:detail,
+                    execution_updated_at=clock_timestamp(),
+                    execution_lease_until=NULL,
+                    resolved_at=clock_timestamp(),
+                    {_APPEND_LOG_SQL},
+                    updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND action_id=:action_id
+                  AND execution_status IN
+                    ('', 'needs_details', 'proposed', 'approved')
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": aid,
+                "detail": str(detail or "")[:300],
+                "log_entry": _log_entry("status:withdrawn", detail),
+            },
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE callback_outbox SET status='cancelled',
+                    updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND action_id=:action_id
+                  AND status IN ('pending', 'failed')
+                """
+            ),
+            {"org_id": org_id, "action_id": aid},
+        )
+    return "withdrawn"
+
+
+def set_action_route(org_id: str, action_id: str, route: str) -> bool:
+    """Persist the resolver's current effective route before a claim."""
+    aid = str(action_id or "").strip()
+    normalized = str(route or "").strip().lower()
+    if not aid or normalized not in ("native", "pipedream", "cedric", "browser", "manual"):
+        return False
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        changed = conn.execute(
+            text(
+                f"""
+                UPDATE queued_actions
+                SET execution_route=:route,
+                    {_APPEND_LOG_SQL},
+                    updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND action_id=:action_id
+                  AND execution_status NOT IN
+                    ('executing', 'withdrawn', 'rejected', 'done', 'failed')
+                RETURNING action_id
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": aid,
+                "route": normalized,
+                "log_entry": _log_entry("route:resolved", normalized),
+            },
+        ).first()
+    return changed is not None
 
 
 def claim_action_execution(
