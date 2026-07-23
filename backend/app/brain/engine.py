@@ -1789,7 +1789,9 @@ def post_meeting(
         raw = llm.complete(
             POSTMEETING_SYSTEM,
             user_prompt,
-            max_tokens=4000,
+            max_tokens=8000,  # 4000 truncated on long messy multiparty
+            # transcripts (evidence-per-action balloons the JSON) → _parse_json
+            # failed → degraded fallback. 8000 gives headroom (live 2026-07-23).
             provider=post_provider(),
         )
         artifact = _parse_json(raw)
@@ -1827,7 +1829,7 @@ def post_meeting(
                       "evidence excerpt EXACTLY, character-for-character, from "
                       "the MEETING TRANSCRIPT.",
                     user_prompt,
-                    max_tokens=4000,
+                    max_tokens=8000,  # match the initial call
                     provider=post_provider(),
                 )
                 retry = _parse_json(raw2)
