@@ -1609,6 +1609,28 @@ _HAND_CHAT_LINES_IT = [
     '✋ {name}: un appunto veloce su questo punto quando volete — dite "vai, {name}".',
 ]
 
+# A slow lookup is a small asynchronous job with an explicit ready state.
+# These follow-ups must consume its result, never launch an unrelated
+# Asana/docs answer for the same question.
+_SEARCH_RESULT_REQUEST = re.compile(
+    r"\b(?:did\s+you\s+(?:find|search|check|look)|have\s+you\s+found|"
+    r"what\s+did\s+you\s+find|any\s+results?|do\s+you\s+have\s+(?:it|the\s+result)|"
+    r"hai\s+trovato|cosa\s+hai\s+trovato|ci\s+sono\s+risultati|risultato)\b",
+    re.IGNORECASE,
+)
+_SEARCH_STILL_LINES = [
+    "I'm still checking — I'll raise my hand as soon as the result is ready.",
+    "Still searching. I'll signal the room the moment I have it.",
+]
+_SEARCH_STILL_LINES_IT = [
+    "Sto ancora cercando — alzo la mano appena ho il risultato.",
+    "Controllo ancora. Vi segnalo appena è pronto.",
+]
+
+
+def _is_search_result_request(text: str) -> bool:
+    return bool(_SEARCH_RESULT_REQUEST.search(text or ""))
+
 
 def _avatar_voice(session: "store.Session") -> str:
     """The session avatar's ElevenLabs voice for TTS. avatars.load is
@@ -2250,10 +2272,11 @@ async def _raise_hand(session: store.Session, avatar, heard: str = "") -> None:
 
 
 async def _lower_hand(session: store.Session) -> None:
-    """Put the hand down and drop the queued contribution (delivered, answered
-    another way, or the moment simply passed)."""
+    """Put the hand down and clear the queued contribution metadata."""
     session.hand_raised_at = 0.0
     session.pending_contribution = ""
+    session.pending_contribution_kind = ""
+    session.pending_contribution_query = ""
     await _send_avatar_control(session, {"type": "lower_hand"})
 
 
@@ -3865,12 +3888,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
         else:
             text_is_details = answered and not tools.is_detail_skip(text)
         if answered or expired:
-            session.pending_clarify = None
             if text_is_details:
                 try:
-                    # A clarify answer fills labelled slots on the SAME card.
-                    # Never raw-append a fragment: "Three pm" becomes
-                    # "When: Three pm", which survives typing and display.
+                    # A clarify answer fills ONE labelled required slot on the
+                    # same card. Revalidate below before any approval: one reply
+                    # must never make unrelated missing fields disappear.
                     updates = tools.fold_action_details(c_item, text, c_missing)
                     c_item, _ = await run_in_threadpool(
                         tools.revise_action_once,
@@ -3881,32 +3903,76 @@ async def recall_webhook(request: Request) -> JSONResponse:
                         source_fingerprint=capture_fingerprint,
                     )
                 except outbox.ActionCaptureClosed:
+                    session.pending_clarify = None
                     return JSONResponse(
                         {"ok": True, "spoke": False, "capture_rejected": "meeting_finalizing"}
                     )
-            if settings.voice_consent_writes:
-                asyncio.create_task(
-                    run_in_threadpool(cedric.voice_approve, session, c_item)
-                )
-            if answered:
-                clar_gen = store.bump_speech_generation(session)
-                line = (
-                    _line_for(text, _VOICE_LINES, _VOICE_LINES_IT)
-                    if settings.voice_consent_writes
-                    else _queue_line_for(text, c_item)
-                )
-                session.last_ack_at = time.time()
-                spoke = await _make_avatar_speak(
-                    session,
-                    line,
-                    force=True,
-                    generation=clar_gen,
-                    audio=tts.cached_payload(line, _avatar_voice(session)),
-                )
-                return JSONResponse(
-                    {"ok": True, "spoke": bool(spoke), "action_capture": True, "clarified": True}
-                )
-            # expired: resolved silently; the current line continues below.
+            remaining = tools.missing_action_details(
+                c_item.get("action") or "",
+                kind=tools.ask_kind(c_item.get("action") or ""),
+            )
+            if remaining:
+                if answered:
+                    # A skip such as "that's it" cannot waive a provider-
+                    # required field. Keep the one captured card open and ask
+                    # only the next required detail.
+                    session.pending_clarify = (
+                        c_item, c_speaker, time.time(), remaining,
+                        c_event_key, c_fingerprint,
+                    )
+                    clar_gen = store.bump_speech_generation(session)
+                    line = _clarify_line(text, remaining)
+                    session.last_ack_at = time.time()
+                    session.last_clarify_nudge_at = time.time()
+                    spoke = await _make_avatar_speak(
+                        session,
+                        line,
+                        force=True,
+                        generation=clar_gen,
+                        audio=tts.cached_payload(line, _avatar_voice(session)),
+                    )
+                    return JSONResponse(
+                        {
+                            "ok": True,
+                            "spoke": bool(spoke),
+                            "action_capture": True,
+                            "clarifying": remaining,
+                        }
+                    )
+                # Expiry releases the conversation but never auto-approves an
+                # invalid write. The captured card remains available for the
+                # dashboard's needs-details form.
+                session.pending_clarify = None
+            else:
+                session.pending_clarify = None
+                if settings.voice_consent_writes:
+                    asyncio.create_task(
+                        run_in_threadpool(cedric.voice_approve, session, c_item)
+                    )
+                if answered:
+                    clar_gen = store.bump_speech_generation(session)
+                    line = (
+                        _line_for(text, _VOICE_LINES, _VOICE_LINES_IT)
+                        if settings.voice_consent_writes
+                        else _queue_line_for(text, c_item)
+                    )
+                    session.last_ack_at = time.time()
+                    spoke = await _make_avatar_speak(
+                        session,
+                        line,
+                        force=True,
+                        generation=clar_gen,
+                        audio=tts.cached_payload(line, _avatar_voice(session)),
+                    )
+                    return JSONResponse(
+                        {
+                            "ok": True,
+                            "spoke": bool(spoke),
+                            "action_capture": True,
+                            "clarified": True,
+                        }
+                    )
+            # expired with missing fields: current line continues below.
 
     # ── action-capture continuation ──
     # A same-speaker follow-up right after a captured action (and NOT a new
@@ -4189,16 +4255,58 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # hand comes down now.
     if called and session.hand_raised_at:
         pending = session.pending_contribution
+        pending_kind = session.pending_contribution_kind
         session.hand_last_ignored = False  # the room engaged her: no back-off
-        await _lower_hand(session)
-        if pending and (detect_invite(question) or _address_is_bare(avatar, text)):
+        deliver_pending = bool(
+            pending
+            and (
+                detect_invite(question)
+                or _address_is_bare(avatar, text)
+                or (
+                    pending_kind == "search"
+                    and _is_search_result_request(question or text)
+                )
+            )
+        )
+        if deliver_pending:
+            await _lower_hand(session)
             turn_gen = store.bump_speech_generation(session)
             spoke = await _speak_with_audio(
                 session, pending, force=True, generation=turn_gen, prev=None
             )
             return JSONResponse(
-                {"ok": True, "spoke": bool(spoke), "hand_delivered": True}
+                {
+                    "ok": True,
+                    "spoke": bool(spoke),
+                    "hand_delivered": True,
+                    "search_result": pending_kind == "search",
+                }
             )
+        # A requested search result remains queued across an unrelated direct
+        # question; unsolicited hand points keep the historical drop behavior.
+        if pending_kind != "search":
+            await _lower_hand(session)
+
+    # The asker may check back while the provider call is still running. Say
+    # what is true and keep the original job alive; never answer the lookup from
+    # internal documents just because its web result is not ready yet.
+    if called and session.search_inflight_at and _is_search_result_request(
+        question or text
+    ):
+        if time.time() - session.search_inflight_at <= 120.0:
+            line = _line_for(
+                question or text, _SEARCH_STILL_LINES, _SEARCH_STILL_LINES_IT
+            )
+            gen = store.bump_speech_generation(session)
+            spoke = await _make_avatar_speak(
+                session, line, force=True, generation=gen,
+                audio=tts.cached_payload(line, _avatar_voice(session)),
+            )
+            return JSONResponse(
+                {"ok": True, "spoke": bool(spoke), "search_inflight": True}
+            )
+        session.search_inflight_at = 0.0
+        session.search_inflight_query = ""
 
     # ── in-meeting browser view (Sable B2/B3) ──
     # Addressed "open Asana and show me…" → open a live browser view on her
@@ -4855,6 +4963,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
     interrupted = False
     speak_tasks: list[asyncio.Task] = []
     prev_task: asyncio.Task | None = None
+    _search_turn = wants_web_search(question or text)
+    _search_announce_seen = False
+    _late_search_sentences: list[str] = []
+    if _search_turn:
+        session.search_inflight_at = time.time()
+        session.search_inflight_query = question or text
     # ── hand-raise mode ──
     # Nobody addressed her and the room is a multi-human conversation: whatever
     # grounded contribution the stream produces is QUEUED behind a raised hand
@@ -4913,10 +5027,17 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 org_id=session.org_id,  # org's private docs join retrieval
             )
         ):
-            # Interrupted (barge-in) or superseded by a newer turn while this
-            # sentence was generating: abandon the rest of the answer. The page
-            # already dropped the stale generation; don't keep paying for tokens.
+            # The first yielded search line is the immediate "looking it up"
+            # announcement. If the room continues while the provider works, keep
+            # collecting the eventual result instead of cancelling it with the
+            # ordinary speech-generation guard.
+            is_search_announce = _search_turn and not _search_announce_seen
+            if is_search_announce:
+                _search_announce_seen = True
             if session.speech_generation != turn_gen:
+                if _search_turn and not is_search_announce:
+                    _late_search_sentences.append(sentence)
+                    continue
                 interrupted = True
                 break
             if hand_mode:
@@ -4938,6 +5059,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
             )
             speak_tasks.append(prev_task)
     except Exception as e:  # noqa: BLE001 — a mid-stream provider drop must not 500
+        if _search_turn:
+            session.search_inflight_at = 0.0
+            session.search_inflight_query = ""
         # llm.stream_complete deliberately RE-RAISES a fast-provider error that
         # lands AFTER the first token (a pre-token failure is already covered by
         # its Haiku fallback), so a Cerebras/Groq blip mid-answer arrives here.
@@ -4978,6 +5102,40 @@ async def recall_webhook(request: Request) -> JSONResponse:
         return JSONResponse(
             {"ok": True, "spoke": spoke_any, "streamed": True, "recovered": True}
         )
+
+    if _search_turn:
+        session.search_inflight_at = 0.0
+        session.search_inflight_query = ""
+
+    if _late_search_sentences:
+        # The room moved on during the lookup. Finish the initial announce, then
+        # signal readiness instead of speaking over a multi-person discussion.
+        if speak_tasks:
+            results = await asyncio.gather(*speak_tasks, return_exceptions=True)
+            spoke_any = any(r is True for r in results)
+        contribution = " ".join(_late_search_sentences).strip()[:600]
+        if contribution and len(roster) >= 2:
+            session.pending_contribution = contribution
+            session.pending_contribution_kind = "search"
+            session.pending_contribution_query = question or text
+            await _raise_hand(session, avatar, heard=question or text)
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": spoke_any,
+                    "search_ready": True,
+                    "hand_raised": True,
+                }
+            )
+        if contribution:
+            current_gen = session.speech_generation
+            spoke = await _speak_with_audio(
+                session, contribution, force=True,
+                generation=current_gen, prev=None,
+            )
+            return JSONResponse(
+                {"ok": True, "spoke": bool(spoke), "search_ready": True}
+            )
 
     if hand_mode:
         if interrupted or session.speech_generation != turn_gen:
