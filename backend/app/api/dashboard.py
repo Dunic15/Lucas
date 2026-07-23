@@ -3702,7 +3702,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
 
         family = executor.capability_family(exec_action.get("type"))
         caps = await run_in_threadpool(
-            store.get_avatar_capabilities, acting_avatar
+            store.get_avatar_capabilities, acting_avatar, org
         )
         blocked_by_toggle = executor.capability_blocked(
             caps, exec_action.get("type")
