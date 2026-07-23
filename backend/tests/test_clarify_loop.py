@@ -335,9 +335,10 @@ def test_email_ask_missing_everything_asks_both(
 ):
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
     body = _say(client, bot_id, "Cedric, can you send an email")
-    assert body.get("clarifying") == ["email_to"]
+    # Combined single ask (restored 2026-07-22 feel), not slot-by-slot.
+    assert body.get("clarifying") == ["email_to", "email_body"]
     assert "who it should go to" in spoken[-1]
-    assert "what it should say" not in spoken[-1]
+    assert "what it should say" in spoken[-1]
 
 
 def test_calendar_ask_gets_calendar_questions(

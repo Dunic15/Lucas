@@ -49,10 +49,12 @@ def test_grounding_honesty_guards_are_in_the_spoken_system_prompt():
     prompt = engine.ANSWER_STREAM_SYSTEM.format(
         persona="Synthetic avatar", name="Petra"
     )
-    # entity-lookup honesty
-    assert "Looking something up by NAME" in prompt
-    assert "do NOT pad the answer with unrelated" in prompt
-    assert 'imply you searched or "have access"' in prompt
+    # containment lookups answer from the source only (anti-hallucination),
+    # but OPEN "what do you know about X?" stays general knowledge (restored
+    # 2026-07-22 feel — no more rigid database-miss on entity questions).
+    assert "CONTAINMENT question" in prompt
+    assert "don't pad with unrelated tasks" in prompt
+    assert "general knowledge: answer it naturally" in prompt
     # follow-up refinement (Contoso → "in my Asana?")
     assert "REFINES the previous question" in prompt
     assert "is Contoso in my Asana" in prompt
@@ -192,10 +194,11 @@ def test_required_action_details_follow_executor_schema():
     )
     assert typed["args"]["name"] == "prepare the pipeline connection"
 
-    # Calendar writes need a date AND a clock time, collected one slot at a time.
+    # Calendar writes need attendees AND a date+clock — asked in ONE combined
+    # question (restored 2026-07-22 feel), not slot-by-slot.
     assert tools.missing_action_details(
         "Schedule a meeting tomorrow", kind="calendar"
-    ) == ["invite_with"]
+    ) == ["invite_with", "invite_when"]
     attendee = tools.fold_action_details(
         {"action": "Schedule a meeting tomorrow"},
         "Anant at thirty PM",
