@@ -3593,7 +3593,20 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     # browser operator behind the SAME exactly-once claim, from this surface
     # too, so a dashboard approve and an org-door approve converge on one
     # execution and one receipt.
-    route = str(action.get("execution_route") or "")
+    stored_route = str(action.get("execution_route") or "")
+    resolution = await run_in_threadpool(
+        lambda: executor.resolve_effective_route(
+            typed, org,
+            item_text=str(action.get("item") or action.get("action") or ""),
+            acting_avatar=acting_avatar,
+            explicit_route=stored_route if stored_route == "browser" else "",
+        )
+    )
+    route = str(resolution["route"])
+    await run_in_threadpool(
+        ledger.persist_effective_route, aid, route, org_id=org
+    )
+    action = {**action, "execution_route": route}
     if route == "browser":
         from .. import browser
 
