@@ -110,7 +110,7 @@ class PendingAction:
         # to named canonical fields.
         yield self.item
         yield self.speaker_id
-        yield self.created_at
+        yield self.updated_at
         yield list(self.required_missing_parameters)
         yield self.source_event_key
         yield self.source_fingerprint
