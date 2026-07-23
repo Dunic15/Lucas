@@ -774,6 +774,14 @@ async def org_action_get(action_id: str, request: Request) -> JSONResponse:
         return JSONResponse(
             {"error": "unknown action for this org"}, status_code=404
         )
+    from ..persistence import audit_log
+
+    audit_log.record(
+        org,
+        actor_user_id=None,
+        action="action.read",
+        target=aid,
+    )
     return JSONResponse({"action": view})
 
 
@@ -895,4 +903,13 @@ async def org_action_params(action_id: str, request: Request) -> JSONResponse:
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     args = (body or {}).get("args") if isinstance(body, dict) else None
     code, payload = await run_in_threadpool(apply_param_edits, org, aid, args)
+    if code == 200:
+        from ..persistence import audit_log
+
+        audit_log.record(
+            org,
+            actor_user_id=None,
+            action="action.params_edit",
+            target=aid,
+        )
     return JSONResponse(payload, status_code=code)
