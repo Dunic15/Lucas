@@ -229,7 +229,7 @@ def test_missing_action_details_cases():
     assert "owner" not in m("Dana will own the recap task")
     assert "due" not in m("send it by tomorrow")
     assert "project" not in m("put it on the growth board")
-    assert m("") == ["owner", "project", "due", "description"]
+    assert m("") == ["task_name"]
 
 
 def test_is_detail_skip_cases():
@@ -335,8 +335,9 @@ def test_email_ask_missing_everything_asks_both(
 ):
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
     body = _say(client, bot_id, "Cedric, can you send an email")
-    assert body.get("clarifying") == ["email_to", "email_body"]
+    assert body.get("clarifying") == ["email_to"]
     assert "who it should go to" in spoken[-1]
+    assert "what it should say" not in spoken[-1]
 
 
 def test_calendar_ask_gets_calendar_questions(
