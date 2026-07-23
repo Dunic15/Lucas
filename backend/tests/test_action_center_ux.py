@@ -239,3 +239,17 @@ def test_summary_actions_carry_card_state_and_family(client, monkeypatch):
     assert by_id["a1"]["family"] == "gmail"
     assert by_id["a2"]["card_state"] == "ready_to_approve"
     assert by_id["a2"]["family"] == "google_calendar"
+
+
+def test_withdrawal_control_fixture_and_history_bucket():
+    """Fixture proof for the visible control and withdrawn-history projection."""
+    html = (
+        Path(__file__).resolve().parents[2] / "frontend" / "dashboard.html"
+    ).read_text(encoding="utf-8")
+    assert 'data-withdraw="' in html
+    assert ">Discard</button>" in html
+    assert ">Withdraw</button>" in html
+    assert 'withdrawn:"Withdrawn"' in html
+    assert 's==="withdrawn") return "done"' in html
+    assert '"/withdraw"' in html
+    assert "preserved in history" in html
