@@ -4027,6 +4027,15 @@ async def dashboard_action_params(action_id: str, request: Request) -> JSONRespo
     code, payload = await run_in_threadpool(
         org_api.apply_param_edits, user["org_id"], aid, args
     )
+    if code == 200:
+        from ..persistence import audit_log
+
+        audit_log.record(
+            str(user["org_id"]),
+            actor_user_id=str(user.get("user_id") or "") or None,
+            action="action.params_edit",
+            target=aid,
+        )
     return JSONResponse(payload, status_code=code, headers=_NO_STORE)
 
 
@@ -4369,6 +4378,22 @@ async def dashboard_meeting_workspace(
             {"error": "unknown meeting for this org"}, status_code=404,
             headers=_NO_STORE,
         )
+    from ..persistence import audit_log
+
+    actor_id = str(user.get("user_id") or "") if user else None
+    audit_log.record(
+        str(caller_org or settings.demo_org_id),
+        actor_user_id=actor_id,
+        action="meeting.read",
+        target=target,
+    )
+    if bool((payload.get("prefs") or {}).get("show_transcripts")):
+        audit_log.record(
+            str(caller_org or settings.demo_org_id),
+            actor_user_id=actor_id,
+            action="transcript.read",
+            target=target,
+        )
     return JSONResponse(_json_safe(payload), headers=_NO_STORE)
 
 
@@ -4394,6 +4419,14 @@ async def dashboard_action_get(action_id: str, request: Request) -> JSONResponse
             {"error": "unknown action for this org"}, status_code=404,
             headers=_NO_STORE,
         )
+    from ..persistence import audit_log
+
+    audit_log.record(
+        str(user["org_id"]),
+        actor_user_id=str(user.get("user_id") or "") or None,
+        action="action.read",
+        target=aid,
+    )
     # _json_safe coerces Decimal (usage/cost fields ride along in the canonical
     # view) into JSON numbers — a raw Decimal makes json.dumps 500 the row.
     return JSONResponse(_json_safe({"action": view}), headers=_NO_STORE)
