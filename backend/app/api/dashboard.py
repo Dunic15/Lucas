@@ -3440,10 +3440,17 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     # still RUN the action — refuse outright; un-rejecting isn't a thing.
     current = await run_in_threadpool(ledger.action_statuses, [aid], org_id=org)
     _cur_status = (current.get(aid) or {}).get("status") or ""
-    if _cur_status == "rejected":
+    if _cur_status in ("rejected", "withdrawn"):
         return JSONResponse(
-            {"error": "action was rejected", "action_id": aid,
-             "status": current.get(aid)},
+            {
+                "error": (
+                    "action was withdrawn"
+                    if _cur_status == "withdrawn"
+                    else "action was rejected"
+                ),
+                "action_id": aid,
+                "status": current.get(aid),
+            },
             status_code=409, headers=_NO_STORE,
         )
 
@@ -4052,6 +4059,61 @@ async def dashboard_chat_post(request: Request) -> JSONResponse:
         },
         headers=_NO_STORE,
     )
+
+
+@router.post("/dashboard/actions/{action_id}/withdraw")
+async def dashboard_action_withdraw(
+    action_id: str, request: Request
+) -> JSONResponse:
+    """Non-destructively withdraw a pre-execution action.
+
+    Same org, origin and per-attendee authorization as approve/edit. Executing
+    and completed work cannot be erased; approved idle work requires an
+    explicit acknowledgement that an external system may already have started.
+    """
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    aid = str(action_id or "").strip()
+    if not aid:
+        return JSONResponse({"error": "action_id is required"}, status_code=400)
+    found = await run_in_threadpool(
+        _find_org_action, str(user["org_id"]), aid, user
+    )
+    if found is None:
+        return JSONResponse(
+            {"error": "unknown action for this org"}, status_code=404
+        )
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — an empty body means no confirmation
+        body = {}
+    confirmed = bool(
+        isinstance(body, dict)
+        and body.get("confirm_possible_external_start") is True
+    )
+    result = await run_in_threadpool(
+        lambda: ledger.withdraw_action(
+            aid,
+            org_id=str(user["org_id"]),
+            detail="withdrawn via dashboard",
+            confirm_possible_external_start=confirmed,
+        )
+    )
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=409, headers=_NO_STORE)
+    latest = await run_in_threadpool(
+        ledger.action_statuses, [aid], org_id=str(user["org_id"])
+    )
+    result["action_id"] = aid
+    result["execution"] = latest.get(aid) or {
+        "status": "withdrawn", "detail": "withdrawn via dashboard"
+    }
+    return JSONResponse(result, headers=_NO_STORE)
 
 
 @router.post("/dashboard/actions/{action_id}/params")
