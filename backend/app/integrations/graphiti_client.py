@@ -54,6 +54,45 @@ _warm_task = None     # strong ref to the in-flight background warm-up
 _write_lock = asyncio.Lock()
 
 
+_core_version: str | None = None
+
+
+def core_installed() -> str:
+    """Version of graphiti-core if importable, else "".
+
+    graphiti-core lives in the ``_graphiti_libs`` SIDECAR, added to sys.path
+    only lazily (see ``_construct``). A boot-time ``importlib.metadata`` check
+    therefore reports it MISSING even though it is present and working — which
+    made the Brain card say "Blocked" and System Check say "graphiti-core not
+    installed" after every deploy (2026-07-23), while the live probe succeeded.
+    This adds the sidecar to sys.path (same as ``_construct``) and reads the
+    version via find_spec + metadata, without the heavy full import. Cached for
+    the process; never raises.
+    """
+    global _core_version
+    if _core_version is not None:
+        return _core_version
+    _core_version = ""
+    try:
+        import importlib.util
+        import sys
+        from importlib.metadata import version as _pkg_version
+
+        from ..config import REPO_ROOT
+
+        libs = str(REPO_ROOT / "_graphiti_libs")
+        if os.path.isdir(libs) and libs not in sys.path:
+            sys.path.append(libs)
+        if importlib.util.find_spec("graphiti_core") is not None:
+            try:
+                _core_version = _pkg_version("graphiti-core") or "installed"
+            except Exception:  # noqa: BLE001 — importable but metadata-less
+                _core_version = "installed"
+    except Exception:  # noqa: BLE001 — never raises; absent ⇒ ""
+        _core_version = ""
+    return _core_version
+
+
 def warm() -> None:
     """Kick a BACKGROUND graph-DB init if the client isn't ready and none is in
     flight. This is how the live path avoids ever awaiting init (connect +
