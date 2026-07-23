@@ -253,7 +253,7 @@ def missing_action_details(text: str, kind: str = "task") -> list[str]:
             missing.append("email_to")
         if not _DETAIL_EMAIL_BODY.search(t):
             missing.append("email_body")
-        return missing
+        return missing[:1]
     if kind == "calendar":
         if not _DETAIL_INVITE_WITH.search(t):
             missing.append("invite_with")
@@ -261,7 +261,7 @@ def missing_action_details(text: str, kind: str = "task") -> list[str]:
             _DETAIL_INVITE_DATE.search(t) and _DETAIL_INVITE_CLOCK.search(t)
         ):
             missing.append("invite_when")
-        return missing
+        return missing[:1]
     if kind == "other":
         # Free-form asks (Slack messages, "remind me to…") have no slot
         # schema — never interrogate, just confirm and queue.
