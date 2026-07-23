@@ -7,11 +7,12 @@ account", then "I can't access external applications at all", and web-searched
 capabilities every turn.
 
 This module assembles ONE capability snapshot from the SAME sources the
-dashboard and executors use — tool_registry.build (connection state + per-avatar
-enablement + verbs), executor.route_for_typed (execution route), and the
-session's join-cached asana_live flag (whether a workspace snapshot actually
-loaded). Live answers read it directly and speak a deterministic sentence; the
-model never sees or invents these values.
+dashboard and executors use — the join-cached tool_registry (connection state +
+per-avatar enablement + verbs, assembled once at session start),
+executor.route_for_typed (execution route), and the session's join-cached
+asana_live flag (whether a workspace snapshot actually loaded). Live answers
+read it directly and speak a deterministic sentence; the model never sees or
+invents these values.
 
 For every tool it separates FOUR states the model kept conflating:
   1. connected_for_org      — an org connector is active
@@ -169,10 +170,24 @@ def snapshot(avatar: Any, org_id: str, session: Any = None) -> dict:
     from . import tool_registry
     from ..actions import executor
 
-    try:
-        reg = tool_registry.build(avatar, org_id)
-    except Exception:  # noqa: BLE001 — a registry hiccup must never break the turn
+    # Reuse the registry assembled ONCE at join (session.tool_registry) — the
+    # SAME object tools.py reads. Re-assembling here per question would repeat a
+    # networked catalog GET on the hot path and, on a transient failure, flip the
+    # answer to "nothing connected" (live 2026-07-23). `ok` marks whether a
+    # registry was actually available, so cached_snapshot never caches/serves a
+    # void one. (An earlier build referenced a non-existent `tool_registry.build`
+    # and silently fell back to empty every call — fixed 2026-07-23.)
+    ok = True
+    reg = getattr(session, "tool_registry", None) if session is not None else None
+    if reg is None:
+        # No join-cached registry (stale/failed session): build once, best-effort.
+        try:
+            reg = tool_registry.assemble(org_id, avatar)
+        except Exception:  # noqa: BLE001 — a registry hiccup must never break the turn
+            reg = None
+    if not reg:
         reg = {"native": []}
+        ok = False
 
     asana_live = bool(getattr(session, "asana_live", False)) if session else False
     tools: dict[str, dict] = {}
@@ -217,7 +232,45 @@ def snapshot(avatar: Any, org_id: str, session: Any = None) -> dict:
             "supported_verbs": verbs,
             "unavailable_reason": reason,
         }
-    return {"generated_at": time.time(), "tools": tools}
+    return {"generated_at": time.time(), "tools": tools, "ok": ok}
+
+
+def cached_snapshot(avatar: Any, org_id: str, session: Any = None) -> dict:
+    """A per-session-stable capability snapshot.
+
+    Connection state, per-avatar enablement, routes and verbs don't change
+    within a meeting, yet the underlying reads (tool_registry, executor) can
+    transiently fail and momentarily report "nothing connected" — which the
+    live answer then speaks as fact. This memoises the FIRST good snapshot on
+    the session and reuses it for the rest of the meeting, so capability answers
+    stay consistent. It recomputes only when the snapshot-availability signal
+    (`asana_live`, which flips False→True once a workspace brief loads at join)
+    changes, and it NEVER overwrites a good cache with a failed/empty build.
+
+    Trade-off (accepted): a tool connected *mid-meeting* via the dashboard won't
+    surface until asana_live changes or the session ends — connections rarely
+    change mid-call, and killing the flip-flop is the priority. Falls back to a
+    live `snapshot()` when there is no session to cache on.
+    """
+    if session is None:
+        return snapshot(avatar, org_id, session)
+
+    live = bool(getattr(session, "asana_live", False))
+    cached = getattr(session, "_capability_snapshot", None)
+    cached_live = getattr(session, "_capability_snapshot_live", None)
+    if cached and cached.get("tools") and cached_live == live:
+        return cached
+
+    fresh = snapshot(avatar, org_id, session)
+    if fresh.get("ok") and fresh.get("tools"):
+        session._capability_snapshot = fresh
+        session._capability_snapshot_live = live
+        return fresh
+    # Build failed or came back empty: prefer the last good snapshot over
+    # speaking a false "nothing is connected".
+    if cached and cached.get("tools"):
+        return cached
+    return fresh
 
 
 # ── deterministic spoken answer ─────────────────────────────────────────

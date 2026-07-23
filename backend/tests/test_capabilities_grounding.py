@@ -132,3 +132,118 @@ def test_grounding_state_distinctions_are_in_the_prompt():
     assert 'never "I don\'t have access to Asana"' in prompt
     assert 'Never say "the meeting hasn\'t started"' in prompt
     assert "no phantom Jira" in prompt
+
+
+# ── A2: meta / self-STATE questions never web-search (421-bis) ───────────
+# Live 2026-07-23: "why are you slower than yesterday?" hit the 'yesterday'
+# search trigger and got a public web result; "what happened to you?" hit
+# 'happened'. These are first-person answers about HER, never a lookup.
+_SELF_STATE = [
+    "why are you slower than yesterday?",
+    "why are you so quiet today?",
+    "are you frozen?",
+    "are you still there?",
+    "what happened to you?",
+    "perché sei così lenta?",
+    "ci sei?",
+    "cosa ti è successo?",
+]
+
+
+@pytest.mark.parametrize("utter", _SELF_STATE)
+def test_self_state_is_about_avatar_and_never_searches(monkeypatch, utter):
+    monkeypatch.setattr(settings, "live_search_enabled", True)
+    monkeypatch.setattr(settings, "anthropic_api_key", "synthetic")
+    assert engine._is_about_avatar(utter), utter          # routed to about/, not web
+    assert engine.wants_web_search(utter) is False, utter  # NEVER a public search
+
+
+def test_self_state_does_not_break_ordinary_time_searches(monkeypatch):
+    """The self-state branch must not swallow a real 'what happened' news query."""
+    monkeypatch.setattr(settings, "live_search_enabled", True)
+    monkeypatch.setattr(settings, "anthropic_api_key", "synthetic")
+    # world question, not about her → still searches
+    assert engine.wants_web_search("what happened in the markets today?") is True
+
+
+# ── A1: capability snapshot is per-session stable (421-bis) ──────────────
+# Source of truth is the registry assembled ONCE at join and stored on
+# session.tool_registry (lifecycle.py) — the same object tools.py reads.
+class _Sess:
+    def __init__(self, asana_live=False, tool_registry=None):
+        self.asana_live = asana_live
+        if tool_registry is not None:
+            self.tool_registry = tool_registry
+
+
+def _good_registry():
+    return {"native": [
+        {"name": "asana_tasks", "connected": True, "write": True,
+         "verbs": ["create tasks"]},
+        {"name": "gmail_send", "connected": True, "write": True,
+         "verbs": ["send email"]},
+    ]}
+
+
+def test_cached_snapshot_is_stable_when_registry_goes_missing(monkeypatch):
+    """If the join registry is momentarily unavailable on a later turn, the
+    cached good snapshot must be served — never a false 'nothing connected'
+    (the exact flip-flop seen live 2026-07-23)."""
+    from app.brain import tool_registry
+    from app.actions import executor
+    monkeypatch.setattr(executor, "route_for_typed", lambda typed, org: "pipedream")
+    # A fresh re-assembly on the failing turn returns nothing (total failure).
+    monkeypatch.setattr(tool_registry, "assemble", lambda org, av: None)
+
+    sess = _Sess(tool_registry=_good_registry())
+    first = cap.cached_snapshot("petra", "org-x", sess)
+    assert first["tools"]["asana_tasks"]["connected_for_org"] is True
+    # Registry gone AND the snapshot signal flipped (forces a recompute): the
+    # fresh build is empty/failed, so the cached good snapshot is served.
+    sess.tool_registry = None
+    sess.asana_live = True
+    second = cap.cached_snapshot("petra", "org-x", sess)
+    assert second is first
+    assert second["tools"]["asana_tasks"]["connected_for_org"] is True
+
+
+def test_cached_snapshot_recomputes_when_snapshot_signal_flips(monkeypatch):
+    """asana_live flips False→True when a workspace brief loads at join — the
+    cache must refresh so the read state is honest."""
+    from app.actions import executor
+    monkeypatch.setattr(executor, "route_for_typed", lambda typed, org: "pipedream")
+    reg = {"native": [
+        {"name": "asana_tasks", "connected": True, "write": True,
+         "verbs": ["create tasks"]},
+    ]}
+    sess = _Sess(asana_live=False, tool_registry=reg)
+    s1 = cap.cached_snapshot("petra", "org-x", sess)
+    assert s1["tools"]["asana_tasks"]["snapshot_available_in_meeting"] is False
+    sess.asana_live = True
+    s2 = cap.cached_snapshot("petra", "org-x", sess)
+    assert s2 is not s1
+    assert s2["tools"]["asana_tasks"]["snapshot_available_in_meeting"] is True
+
+
+def test_snapshot_reports_ok_flag(monkeypatch):
+    from app.brain import tool_registry
+    from app.actions import executor
+    monkeypatch.setattr(executor, "route_for_typed", lambda typed, org: "native")
+    # A join-cached registry → ok True, real tools.
+    good = cap.snapshot("petra", "org-x", _Sess(tool_registry=_good_registry()))
+    assert good.get("ok") is True
+    assert good["tools"]["asana_tasks"]["connected_for_org"] is True
+    # No registry anywhere (session has none, assembly returns None) → ok False,
+    # empty tools — an honest 'unknown', never a confident 'nothing connected'.
+    monkeypatch.setattr(tool_registry, "assemble", lambda org, av: None)
+    failed = cap.snapshot("petra", "org-x", _Sess())
+    assert failed.get("ok") is False
+    assert failed.get("tools") == {}
+
+
+# ── A3: owner-refusal guard present in the spoken prompt (421-bis) ───────
+def test_owner_refusal_rule_is_in_the_prompt():
+    prompt = engine.ANSWER_STREAM_SYSTEM.format(persona="P", name="Petra")
+    assert "you aren't the owner" in prompt
+    assert "prove who they are" in prompt
+    assert "that's not your account" in prompt
