@@ -952,7 +952,6 @@
       <div class="acbar">
         <div class="tabs" id="ac-tabs" role="tablist">
           <button class="on" data-ab="attn" role="tab" aria-selected="true">Needs attention</button>
-          <button data-ab="progress" role="tab" aria-selected="false">In progress</button>
           <button data-ab="done" role="tab" aria-selected="false">Completed</button>
         </div>
         <div class="filters" style="width:auto">
@@ -2499,7 +2498,11 @@
   function bucketOf(a){ var s=stateOf(a);
     if(s==="done"||s==="failed"||s==="rejected"||s==="withdrawn") return "done";
     if(s==="approved"&&trackedOnly(a)) return "done";
-    if(s==="approved"||s==="executing") return "progress";
+    // "In progress" tab removed (owner 2026-07-24): approved/executing fold into
+    // Completed so the stale-"approved-forever" cards leave the actionable view.
+    // Genuinely running actions stay visible there with their honest chip; the
+    // per-meeting "N running" chip auto-hides because this bucket is now empty.
+    if(s==="approved"||s==="executing") return "done";
     return "attn"; }
 
   // Every action across every meeting in the already-loaded summary — the
