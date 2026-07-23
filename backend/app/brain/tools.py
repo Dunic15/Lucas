@@ -271,12 +271,12 @@ def missing_action_details(text: str, kind: str = "task") -> list[str]:
     t = " ".join((text or "").split())
     missing: list[str] = []
     if kind == "email":
-        if not _DETAIL_EMAIL_TO.search(t):
-            missing.append(
-                "email_to_confirm"
-                if _DETAIL_EMAIL_CANDIDATE.search(t)
-                else "email_to"
-            )
+        candidate = _DETAIL_EMAIL_CANDIDATE.search(t)
+        exact = re.search(_EMAIL_ADDR, t, re.IGNORECASE)
+        if candidate:
+            missing.append("email_to_confirm")
+        elif not exact:
+            missing.append("email_to")
         if not _DETAIL_EMAIL_BODY.search(t):
             missing.append("email_body")
         # Ask for the missing pieces in ONE combined question, not slot-by-slot
@@ -712,6 +712,14 @@ def fold_action_details(
         )
         if body:
             fields.append(("Body", next(x for x in body.groups() if x)))
+        elif (
+            "email_body" in slots
+            and set(slots) == {"email_body"}
+            and not exact
+        ):
+            # Once recipient confirmation is complete, a plain answer to
+            # "what should it say?" is the body even without repeating "body".
+            fields.append(("Body", detail))
         return {"action": _append_action_fields(base, fields)}
 
     if len(slots) == 1:
