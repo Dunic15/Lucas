@@ -12,6 +12,7 @@ Typed args are already-distilled execution parameters.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 ACTION_STATUSES = (
@@ -30,12 +31,12 @@ _TASK_NAME_PLACEHOLDERS = {
     "task", "new task", "create task", "create a task", "asana task",
     "create asana task", "create a new task", "new asana task",
 }
-_TASK_REQUEST_ONLY = __import__("re").compile(
+_TASK_REQUEST_ONLY = re.compile(
     r"^(?:(?:can|could|would|will) you |please )?"
     r"(?:create|make|add|open) (?:a |an |the )?(?:new )?"
     r"(?:(?:asana|jira) )?(?:task|ticket|issue)"
     r"(?: (?:in|on) (?:asana|jira))?$",
-    __import__("re").IGNORECASE,
+    re.IGNORECASE,
 )
 
 
@@ -45,7 +46,7 @@ def is_meaningful_task_name(value: Any) -> bool:
     if not raw:
         return False
     normalized = " ".join(
-        __import__("re").sub(r"[^a-z0-9]+", " ", raw.lower()).split()
+        re.sub(r"[^a-z0-9]+", " ", raw.lower()).split()
     )
     if normalized in _TASK_NAME_PLACEHOLDERS:
         return False
