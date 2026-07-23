@@ -386,7 +386,7 @@ def bind_pending_answer(session, state, text: str):
     updates = fold_action_details(
         state.item, text, state.required_missing_parameters
     )
-    return True, updates, [], ""
+    return True, updates, None, ""
 
 
 def is_orphan_action_fragment(text: str) -> bool:
