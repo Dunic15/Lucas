@@ -549,6 +549,7 @@ def withdraw_action_once(session, item: dict) -> bool:
     from .. import outbox
     from ..actions import ledger
 
+    state = getattr(session, "pending_clarify", None)
     changed = outbox.withdraw_action_capture(session, item)
     aid = str((item or {}).get("action_id") or "")
     org = str(getattr(session, "org_id", "") or "")
@@ -559,10 +560,7 @@ def withdraw_action_once(session, item: dict) -> bool:
         confirm_possible_external_start=False,
     )
     item["execution_status"] = "withdrawn"
-    state = (getattr(session, "pending_actions", None) or {}).get(
-        f"{getattr(session, 'bot_id', '')}:{getattr(session, 'followup_owner', ('',))[0]}:{aid}"
-    )
-    if state is not None:
+    if state is not None and str(state[0].get("action_id") or "") == aid:
         state.status = "withdrawn"
         state.updated_at = time.time()
         item["pending_action"] = state.to_dict()
