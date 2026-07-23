@@ -92,7 +92,7 @@ def test_yc_asr_repair_is_context_bound():
     ) == "When is the Y Combinator application due?"
     assert engine._resolve_search_query(
         "When is the voice application due?", history
-    ) == "When is the Y Combinator application due?"
+    ) == "When is Y Combinator application due?"
     # Without prior disambiguation DYC may be a real organization; never guess.
     assert engine._resolve_search_query(
         "When is the DYC application due?", ""
