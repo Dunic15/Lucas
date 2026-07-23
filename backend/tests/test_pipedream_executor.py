@@ -370,6 +370,88 @@ def test_dashboard_approve_routes_asana_to_pipedream(client, monkeypatch):
     assert pd["n"] == 1 and native["n"] == 0  # pipedream ran, native did NOT
 
 
+@pytest.mark.parametrize("legacy_route", ["manual", "native"])
+def test_legacy_asana_route_resolves_and_executes_only_pipedream(
+    client, monkeypatch, legacy_route
+):
+    """Regression: the card and both approval attempts use current Pipedream.
+
+    Native Asana is deliberately unavailable and the persisted route is stale.
+    One canonical view, one external task, one receipt, and no native call.
+    """
+    _enable_pd(monkeypatch)
+    user = _login(client)
+    org = user["org_id"]
+    aid = "legacy-asana-route"
+    action = {
+        "item": "QA TEST Pipedream routing",
+        "owner": "UNASSIGNED",
+        "action_id": aid,
+        "typed": {
+            "type": "asana.create_task",
+            "args": {"name": "QA TEST Pipedream routing"},
+        },
+        "execution_route": legacy_route,
+    }
+    store.save_artifact(
+        "bot_legacy_route",
+        {
+            "summary": "s", "actions": [action], "checklist": [action],
+            "org_id": org, "avatar_id": "laura",
+            "meeting_url": "https://meet.google.com/legacy-route",
+        },
+        org_id=org,
+    )
+    monkeypatch.setattr(
+        pipedream_executor, "app_connected",
+        lambda current_org, app: current_org == org and app == "asana",
+    )
+    monkeypatch.setattr(store, "get_avatar_capabilities", lambda *a, **k: {})
+    monkeypatch.setattr(avatar_resolver, "family_allowed", lambda *a, **k: True)
+
+    provider_calls: list[str] = []
+    receipts: list[dict] = []
+    native_calls: list[str] = []
+
+    def run_pd(current_org, action_id, _action):
+        provider_calls.append(action_id)
+        receipt = {
+            "kind": "asana task", "ref": "task_qa_1",
+            "route": "pipedream", "runtime": "pipedream",
+        }
+        receipts.append(receipt)
+        ledger.set_action_status(
+            action_id, "done", "Pipedream · Asana task · task_qa_1",
+            org_id=current_org, receipt=receipt,
+        )
+        return {"ok": True, "kind": "asana task", "ref": "task_qa_1"}
+
+    monkeypatch.setattr(pipedream_executor, "execute_approved", run_pd)
+    monkeypatch.setattr(
+        executor, "execute_approved",
+        lambda *a, **k: native_calls.append(a[1]) or {"ok": True},
+    )
+
+    view = org_api._canonical_action_view(org, aid)
+    assert view is not None and view["route"] == "pipedream"
+
+    first = client.post(
+        f"/dashboard/actions/{aid}/approve",
+        headers={"sec-fetch-site": "same-origin"},
+    )
+    second = client.post(
+        f"/dashboard/actions/{aid}/approve",
+        headers={"sec-fetch-site": "same-origin"},
+    )
+    assert first.status_code == second.status_code == 200
+    assert first.json()["executed"] is True
+    assert second.json()["idempotent_replay"] is True
+    assert provider_calls == [aid]
+    assert native_calls == []
+    assert len(receipts) == 1
+    assert receipts[0]["route"] == "pipedream"
+
+
 def test_dashboard_approve_capability_blocked_does_not_run_pipedream(client, monkeypatch):
     _enable_pd(monkeypatch)
     user = _login(client)
