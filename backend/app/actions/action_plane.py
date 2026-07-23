@@ -21,10 +21,11 @@ ACTION_STATUSES = (
     "approved",
     "executing",
     "rejected",
+    "withdrawn",
     "done",
     "failed",
 )
-TERMINAL_STATUSES = ("rejected", "done", "failed")
+TERMINAL_STATUSES = ("rejected", "withdrawn", "done", "failed")
 
 
 _TASK_NAME_PLACEHOLDERS = {
@@ -57,6 +58,8 @@ _STATUS_ALIASES = {
     "completed": "done",
     "complete": "done",
     "declined": "rejected",
+    "discarded": "withdrawn",
+    "cancelled": "withdrawn",
     "error": "failed",
 }
 
