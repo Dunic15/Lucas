@@ -1478,6 +1478,13 @@ def _absorb_goals(artifact: dict, transcript_text: str) -> None:
     for a in artifact.get("actions") or []:
         if isinstance(a, dict):
             a.setdefault("source", "explicit")
+    # Goal → proposed-steps decomposition is opt-out (owner 2026-07-23: "I don't
+    # want propose actions at the moment"). Off = keep the explicit-source
+    # tagging above but suppress the inferred "Proposed by Petra for goal: …"
+    # cards entirely. Explicitly-voiced actions are unaffected.
+    if not settings.propose_goal_actions:
+        artifact.pop("goals", None)
+        return
     transcript = " ".join((transcript_text or "").split()).casefold()
     ttokens = _ground_tokens(transcript_text)
     absorbed: list[dict] = []
