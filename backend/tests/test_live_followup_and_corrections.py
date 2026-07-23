@@ -223,7 +223,12 @@ def test_cancel_discards_the_pending_draft(tmp_path, monkeypatch):
 
     body = _post(_line(s.bot_id, "Duccio", 1, "lascia perdere"))
     queued = getattr(s, "queued_actions", None) or []
-    assert not queued, f"cancelled draft must not survive to the dashboard: {queued}"
+    assert len(queued) == 1, "withdrawal preserves the action for history"
+    assert queued[0].get("execution_status") == "withdrawn"
+    status = main.ledger.action_statuses(
+        [queued[0]["action_id"]], org_id=s.org_id
+    )[queued[0]["action_id"]]
+    assert status["status"] == "withdrawn"
     assert getattr(s, "pending_clarify", None) is None
     assert body.get("action_cancelled") is True, body
     store.remove(s.bot_id)
