@@ -200,7 +200,15 @@ def snapshot(avatar: Any, org_id: str, session: Any = None) -> dict:
         has_conn = "connected" in e
         connected = bool(e.get("connected", True))
         writeable = bool(e.get("write", False))
-        verbs = list(e.get("verbs") or [])
+        # The registry stores `verbs` as the comma-joined PHRASE (tool_registry
+        # uses family_verbs_text), so list() would split the string into single
+        # characters — the "I can a, d, d" bug heard live 2026-07-23. Split a
+        # string on commas; accept a real list unchanged.
+        _verbs_raw = e.get("verbs")
+        if isinstance(_verbs_raw, str):
+            verbs = [v.strip() for v in _verbs_raw.split(",") if v.strip()]
+        else:
+            verbs = [str(v).strip() for v in (_verbs_raw or []) if str(v).strip()]
         route = ""
         rep = _REP_TYPE.get(name)
         if rep and connected:

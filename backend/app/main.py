@@ -1521,13 +1521,15 @@ _QUEUE_LINES_TASK = [
 _QUEUE_LINES_TASK_IT = [
     "Ricevuto — lo approvi in dashboard a fine call; sottoattività, dipendenze o allegati li aggiungi direttamente sulla scheda.",
 ]
-_TASKISH_RE = re.compile(r"\b(create|task|attivit|crea(?:re)?|ticket)\b", re.IGNORECASE)
 
 
 def _queue_line_for(heard: str, item: dict | None) -> str:
-    """Confirmation for a capture: task-creating asks get the card pointer
-    (subtasks/dependencies/attachments), everything else the classic line."""
-    if _TASKISH_RE.search(str((item or {}).get("action") or "")):
+    """Confirmation for a capture: only genuine TASK creations get the card
+    pointer (subtasks/dependencies/attachments); a calendar meeting or email
+    gets the classic line. Uses ask_kind, not a bare "create" match — live
+    2026-07-23 "create a meeting" wrongly got the task line ("subtasks,
+    dependencies or attachments"), which is meaningless for a calendar event."""
+    if tools.ask_kind(str((item or {}).get("action") or "")) == "task":
         return _line_for(heard, _QUEUE_LINES_TASK, _QUEUE_LINES_TASK_IT)
     return _line_for(heard, _QUEUE_LINES, _QUEUE_LINES_IT)
 

@@ -239,6 +239,25 @@ def test_cached_snapshot_recomputes_when_snapshot_signal_flips(monkeypatch):
     assert s2["tools"]["asana_tasks"]["snapshot_available_in_meeting"] is True
 
 
+def test_verbs_string_is_not_split_into_characters(monkeypatch):
+    """Live 2026-07-23: 'I can a, d, d' — the registry stores `verbs` as a
+    comma-joined PHRASE (tool_registry.family_verbs_text), and list() split the
+    string into single characters. snapshot must keep whole verbs."""
+    from app.actions import executor
+    monkeypatch.setattr(executor, "route_for_typed", lambda typed, org: "pipedream")
+    reg = {"native": [
+        {"name": "asana_tasks", "connected": True, "write": True,
+         "verbs": "add attachment, create task, update task"},  # STRING, as prod
+    ]}
+    snap = cap.snapshot("petra", "org-x",
+                        _Sess(asana_live=False, tool_registry=reg))
+    assert snap["tools"]["asana_tasks"]["supported_verbs"] == [
+        "add attachment", "create task", "update task"]
+    a = cap.answer("do you see my asana dashboard?", snap).lower()
+    assert "create task" in a
+    assert "a, d, d" not in a and "a, d," not in a  # never per-character
+
+
 def test_snapshot_reports_ok_flag(monkeypatch):
     from app.brain import tool_registry
     from app.actions import executor

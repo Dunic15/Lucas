@@ -40,6 +40,18 @@ def test_queue_confirmation_points_taskish_asks_at_the_card():
     assert other in main._QUEUE_LINES + main._QUEUE_LINES_IT
 
 
+def test_meeting_capture_does_not_get_the_task_card_line():
+    """Live 2026-07-23: 'create a meeting' got the task confirmation
+    ('subtasks, dependencies or attachments') — meaningless for a calendar
+    event. A calendar/email capture must get the classic queue line."""
+    for action in ("create a meeting for tomorrow at five PM",
+                   "schedule a call with the team",
+                   "send an email to Marco"):
+        line = main._queue_line_for("go", {"action": action})
+        assert "subtask" not in line.lower() and "dependenc" not in line.lower(), action
+        assert line in main._QUEUE_LINES + main._QUEUE_LINES_IT, action
+
+
 def test_native_create_applies_extras(monkeypatch):
     calls = []
     monkeypatch.setattr(asana_client, "_token", lambda org: ("pat", ""))
