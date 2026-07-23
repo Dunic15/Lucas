@@ -589,6 +589,10 @@
   /* Horizontal roster strip above the stage. */
   .avstrip{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:12px;scrollbar-width:thin;}
   .avstrip .aitem{flex:0 0 auto;width:auto;min-width:190px;}
+  /* Coming-soon roster pill. The item stays clickable — you can still open the
+     avatar and read what it will do — it just can't be dispatched. */
+  .cspill{font-family:var(--mono);font-size:.56rem;font-weight:700;letter-spacing:.08em;
+    color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:2px 6px;}
   .stage{position:relative;border-radius:18px;border:1px solid var(--line-soft);overflow:hidden;
     min-height:190px;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:var(--glass);
     background:
@@ -1450,8 +1454,16 @@
         .catch(function(e){ toast("Could not end: "+e.message,true); b.disabled=false; b.textContent="End session"; }); }); });
 
     var prevAvatar=$("#dsp-avatar").value;
-    $("#dsp-avatar").innerHTML = d.avatars.map(function(a){return '<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>';}).join("");
-    if(prevAvatar) $("#dsp-avatar").value=prevAvatar;
+    // Coming-soon avatars stay in the list (the roadmap is the point) but can't
+    // be chosen. The server refuses them too — this is the courtesy, not the gate.
+    $("#dsp-avatar").innerHTML = d.avatars.map(function(a){
+      return '<option value="'+esc(a.id)+'"'+(a.coming_soon?' disabled':'')+'>'+
+        esc(a.name)+(a.coming_soon?' — coming soon':'')+'</option>';
+    }).join("");
+    // Never restore a selection onto a now-unselectable avatar: that would leave
+    // the dispatch button pointed at an id the server will reject.
+    if(prevAvatar && !d.avatars.some(function(a){return a.id===prevAvatar&&a.coming_soon;}))
+      $("#dsp-avatar").value=prevAvatar;
 
     renderChart(d.stats.weekly);
 
@@ -3548,8 +3560,11 @@
     var openSecs=$$("#av-detail details[open]").map(function(x){return x.getAttribute("data-avsec");});
     $("#av-roster").innerHTML=avs.map(function(a){
       return '<button type="button" class="aitem'+(a.id===sel.id?" on":"")+'" role="option" aria-selected="'+(a.id===sel.id?"true":"false")+'" data-sel="'+esc(a.id)+'">'+
-        avatarBadge(a.id,a.name)+'<div style="min-width:0"><div class="ainm">'+esc(a.name)+'</div><div class="airo">'+esc(a.role)+'</div></div>'+
-        '<span class="sdot'+(a.live_now?" live":"")+'" style="margin-left:auto"></span></button>';
+        avatarBadge(a.id,a.name)+'<div style="min-width:0"><div class="ainm">'+esc(a.name)+'</div><div class="airo">'+
+        (a.coming_soon?'Coming soon':esc(a.role))+'</div></div>'+
+        (a.coming_soon
+          ? '<span class="cspill" style="margin-left:auto">SOON</span>'
+          : '<span class="sdot'+(a.live_now?" live":"")+'" style="margin-left:auto"></span>')+'</button>';
     }).join("");
     $$("#av-roster [data-sel]").forEach(function(b){ b.addEventListener("click",function(){
       window._selAvatar=b.getAttribute("data-sel"); renderAvatars(DATA); }); });

@@ -858,6 +858,9 @@ def dashboard_summary(request: Request) -> JSONResponse:
                 "id": a.id,
                 "name": a.name,
                 "role": a.role,
+                # Announced but not bookable yet. The UI shows the card and
+                # refuses the dispatch; sessions.py refuses it again server-side.
+                "coming_soon": avatars.is_coming_soon(a.id),
                 "email": _avatar_email(a.id),
                 "persona": _description(a.id),
                 "wake_words": a.wake_words,
@@ -1041,6 +1044,11 @@ def dashboard_summary(request: Request) -> JSONResponse:
     callback_deliveries = outbox.delivery_rows(
         caller_org or settings.demo_org_id
     )
+
+    # Coming-soon avatars sort last so "third in the list" falls out of the
+    # data rather than being a position hardcoded in six render sites. Stable
+    # sort: the existing order is preserved within each group.
+    avatar_rows.sort(key=lambda r: bool(r.get("coming_soon")))
 
     return JSONResponse(
         _json_safe({
