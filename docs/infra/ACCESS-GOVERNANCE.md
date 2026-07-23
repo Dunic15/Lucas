@@ -25,11 +25,13 @@ plan of record — the sizing is honest, including where it is uncomfortable.
 | Knowledge access | **Org-level only** | Any member can read, upload, reassign and **delete** any source. Retrieval narrows per *avatar*, never per user |
 | Access is revocable | **No** | Access is *derived*, permanently, from artifact text |
 | Admin grant/revoke | **No such surface** | `memberships.role` is written only by auto-provisioning at login |
-| Audit log | **No writer** | `audit_log` exists in both schemas with append-only grants and zero INSERTs |
+| Audit log | **Writer implemented; admin reader pending** | Bounded metadata-only queue writes tenant-scoped action/meeting reads and canonical action decisions; runtime has INSERT only |
 
 ---
 
 ## 1. Audit log — make the table real
+
+**Implementation status:** the non-blocking writer and first sensitive call sites are implemented in the audit-security-events branch. The admin-only read/export surface remains coupled to the role helper in §3.
 
 **Why first:** it is the only item that is purely additive. Nothing changes
 behaviour, so it can ship without a migration window, and every later change
