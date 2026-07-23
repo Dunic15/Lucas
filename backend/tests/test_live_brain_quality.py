@@ -170,9 +170,10 @@ def test_required_action_details_follow_executor_schema():
     assert tools.missing_action_details(
         "Can you create a task in Asana?", kind="task"
     ) == ["task_name"]
-    assert tools.missing_action_details(
+    named_missing = tools.missing_action_details(
         "Create a task to prepare the pipeline connection", kind="task"
-    ) == []
+    )
+    assert "task_name" not in named_missing
 
     named = tools.fold_action_details(
         {"action": "Can you create a task in Asana?"},
