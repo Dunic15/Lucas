@@ -351,6 +351,10 @@ def _seed_pipedream_action(org: str, aid: str = "a1") -> None:
 
 def test_dashboard_approve_routes_asana_to_pipedream(client, monkeypatch):
     _enable_pd(monkeypatch)
+    monkeypatch.setattr(
+        pipedream_executor, "app_connected",
+        lambda org, app: app == "asana",
+    )
     user = _login(client)
     _seed_pipedream_action(user["org_id"])
     monkeypatch.setattr(store, "get_avatar_capabilities", lambda a, org="": {})
@@ -372,6 +376,10 @@ def test_dashboard_approve_routes_asana_to_pipedream(client, monkeypatch):
 
 def test_dashboard_approve_capability_blocked_does_not_run_pipedream(client, monkeypatch):
     _enable_pd(monkeypatch)
+    monkeypatch.setattr(
+        pipedream_executor, "app_connected",
+        lambda org, app: app == "asana",
+    )
     user = _login(client)
     _seed_pipedream_action(user["org_id"])
     # The acting avatar's asana toggle is explicitly OFF ⇒ blocked, no execution.
@@ -391,6 +399,10 @@ def test_dashboard_approve_capability_blocked_does_not_run_pipedream(client, mon
 
 def test_org_door_dispatches_asana_to_pipedream(monkeypatch):
     _enable_pd(monkeypatch)
+    monkeypatch.setattr(
+        pipedream_executor, "app_connected",
+        lambda org, app: app == "asana",
+    )
     monkeypatch.setattr(settings, "action_dispatch_async", False)
     monkeypatch.setattr(org_api.store, "get_avatar_capabilities", lambda a, org="": {})
     monkeypatch.setattr(avatar_resolver, "family_allowed", lambda *a, **k: True)
