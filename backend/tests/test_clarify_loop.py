@@ -136,43 +136,40 @@ def test_full_details_skip_clarify(client, recall_stubbed, spoken, approved):
 
 def test_missing_details_ask_then_answer(client, recall_stubbed, spoken, approved):
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
-    body = _say(client, bot_id, "Cedric, please create a task called help ducho")
-    assert body.get("clarifying") == ["owner", "project", "due", "description"]
+    body = _say(client, bot_id, "Cedric, please create a task in Asana")
+    assert body.get("clarifying") == ["task_name"]
     assert approved == []  # held — nothing approved yet
-    # The clarify line now LEADS with a capture confirmation, then asks.
     assert spoken[-1].startswith("Got it — I'll queue that for your approval.")
-    assert "who should own it" in spoken[-1] and "which project" in spoken[-1]
+    assert "call the task" in spoken[-1]
 
     session = store.get(bot_id)
     _age_clarify(session)
-    body = _say(
-        client, bot_id,
-        "Dana should take it, put it in the launch project, due Monday, "
-        "the description should say chase the update",
-    )
+    body = _say(client, bot_id, "Call the task help ducho")
     assert body.get("clarified") is True
     assert len(approved) == 1
     action_text = session.queued_actions[0]["action"].lower()
-    assert "help ducho" in action_text and "dana" in action_text
+    assert "task name: help ducho" in action_text
     assert spoken[-1] in main_module._VOICE_LINES + main_module._VOICE_LINES_IT
 
 
-def test_skip_answer_proceeds_as_is(client, recall_stubbed, spoken, approved):
+def test_skip_answer_cannot_waive_required_task_name(
+    client, recall_stubbed, spoken, approved
+):
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
-    _say(client, bot_id, "Cedric, create a task called triage the inbox")
+    _say(client, bot_id, "Cedric, create a task in Asana")
     session = store.get(bot_id)
     _age_clarify(session)
     original = session.queued_actions[0]["action"]
 
     body = _say(client, bot_id, "no one, just create it")
-    assert body.get("clarified") is True
-    assert len(approved) == 1
+    assert body.get("clarifying") == ["task_name"]
+    assert approved == []
     assert session.queued_actions[0]["action"] == original  # skip words not glued on
 
 
 def test_new_ask_resolves_stale_pending(client, recall_stubbed, spoken, approved):
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
-    _say(client, bot_id, "Cedric, create a task called first thing")
+    _say(client, bot_id, "Cedric, create a task in Asana")
     session = store.get(bot_id)
     # The asker never answers — they fire a NEW complete ask instead.
     _age_clarify(session, seconds=50.0)  # also past the answer window
@@ -183,10 +180,11 @@ def test_new_ask_resolves_stale_pending(client, recall_stubbed, spoken, approved
         "send the weekly update",
     )
     assert body.get("action_capture") is True
-    # BOTH resolved: the stale one quietly, the new one on its merits.
-    assert len(approved) == 2
-    texts = " | ".join(a["action"] for a in approved).lower()
-    assert "first thing" in texts and "email marco" in texts
+    # The stale incomplete card remains needs-details; only the complete new
+    # task reaches approval.
+    assert len(approved) == 1
+    assert "email marco" in approved[0]["action"].lower()
+    assert len(session.queued_actions) == 2
 
 
 def test_default_resolution_queues_for_approval(
@@ -200,10 +198,10 @@ def test_default_resolution_queues_for_approval(
         lambda *a: pytest.fail("default must not voice-approve"),
     )
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
-    _say(client, bot_id, "Cedric, please create a task called help ducho")
+    _say(client, bot_id, "Cedric, please create a task in Asana")
     session = store.get(bot_id)
     _age_clarify(session)
-    body = _say(client, bot_id, "Dana should take it, due Monday, description: chase ducho")
+    body = _say(client, bot_id, "Call the task help ducho")
     assert body.get("clarified") is True
     assert spoken[-1] in (main_module._QUEUE_LINES + main_module._QUEUE_LINES_IT
                           + main_module._QUEUE_LINES_TASK + main_module._QUEUE_LINES_TASK_IT)
@@ -223,12 +221,11 @@ def test_flag_off_keeps_immediate_confirmation(
 # ───────────────────────── the detail heuristics ─────────────────────────
 def test_missing_action_details_cases():
     m = tools.missing_action_details
-    assert m("create a task called help ducho") == ["owner", "project", "due", "description"]
+    assert m("create a task called help ducho") == []
     assert m("create a task, assigned to Dana, in the launch project, due Friday, "
              "the description should say prep the notes") == []
-    assert "owner" not in m("Dana will own the recap task")
-    assert "due" not in m("send it by tomorrow")
-    assert "project" not in m("put it on the growth board")
+    assert m("create a task in Asana") == ["task_name"]
+    assert m("create a task called basic task") == []
     assert m("") == ["task_name"]
 
 
@@ -323,7 +320,7 @@ def test_back_to_back_instructions_capture_separately(client, recall_stubbed, sp
 
 def test_email_ask_gets_email_questions(client, recall_stubbed, spoken, approved):
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
-    body = _say(client, bot_id, "Cedric, can you send an email to Duccio")
+    body = _say(client, bot_id, "Cedric, can you send an email to duccio@example.com")
     assert body.get("clarifying") == ["email_body"]
     assert "what it should say" in spoken[-1]
     assert "who should own it" not in spoken[-1]
@@ -368,20 +365,20 @@ def test_repeated_ask_merges_instead_of_multiplying(
     client, recall_stubbed, spoken, approved
 ):
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
-    body = _say(client, bot_id, "Cedric, can you send an email to Duccio")
+    body = _say(client, bot_id, "Cedric, can you send an email to duccio@example.com")
     assert body.get("clarifying") == ["email_body"]
     session = store.get(bot_id)
 
     # Unaddressed retry (louder, ASR-mangled) — a restatement, not an answer.
     _age_clarify(session)
-    body = _say(client, bot_id, "could you send an email to do choke please")
+    body = _say(client, bot_id, "could you send an email to duccio@example.com please")
     assert body.get("restated") is True
     assert approved == []
     assert session.pending_clarify is not None
 
     # Addressed retry — same damping through the capture gate.
     _age_clarify(session)
-    body = _say(client, bot_id, "Cedric, please send an email to Duccio")
+    body = _say(client, bot_id, "Cedric, please send an email to duccio@example.com")
     assert body.get("restated") is True
     assert approved == []
 
@@ -395,12 +392,12 @@ def test_repeated_ask_merges_instead_of_multiplying(
 
 def test_resolved_capture_retry_merges(client, recall_stubbed, spoken, approved):
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
-    body = _say(client, bot_id, "Cedric, send an email to Dana saying hi")
+    body = _say(client, bot_id, "Cedric, send an email to dana@example.com saying hi")
     assert body.get("action_capture") is True and "clarifying" not in body
     assert len(approved) == 1
     session = store.get(bot_id)
 
-    body = _say(client, bot_id, "Cedric, can you send an email to Dana")
+    body = _say(client, bot_id, "Cedric, can you send an email to dana@example.com")
     assert body.get("merged") is True
     assert len(approved) == 1  # no second approval
     assert len(session.queued_actions) == 1  # still ONE card
@@ -411,8 +408,8 @@ def test_different_recipient_is_a_new_action(
     client, recall_stubbed, spoken, approved
 ):
     bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
-    _say(client, bot_id, "Cedric, send an email to Dana saying hi")
-    body = _say(client, bot_id, "Cedric, send an email to Marco saying ciao")
+    _say(client, bot_id, "Cedric, send an email to dana@example.com saying hi")
+    body = _say(client, bot_id, "Cedric, send an email to marco@example.com saying ciao")
     assert body.get("merged") is None
     assert len(approved) == 2  # genuinely two emails
     session = store.get(bot_id)
