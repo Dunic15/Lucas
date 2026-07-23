@@ -208,3 +208,18 @@ def test_required_action_details_follow_executor_schema():
     assert tools.missing_action_details(
         attendee["action"] + ". When: 3 PM", kind="calendar"
     ) == []
+
+    email = tools.fold_action_details(
+        {"action": "Send an email"},
+        "sofia@example.com",
+        ["email_to"],
+    )
+    assert tools.missing_action_details(
+        email["action"], kind="email"
+    ) == ["email_body"]
+    email = tools.fold_action_details(
+        email,
+        "Share the launch recap",
+        ["email_body"],
+    )
+    assert tools.missing_action_details(email["action"], kind="email") == []
