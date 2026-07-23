@@ -811,6 +811,12 @@ class Settings(BaseSettings):
     # Same rule as any other kill-switch: a flag whose safe value depends on
     # which environment you are reading is one that gets read from the wrong one.
     coming_soon_avatar_ids: str = ""
+    # Roster display order (comma-separated ids). Ids listed here come first, in
+    # this order; anything unlisted follows in its existing order. Presentation
+    # only — it never changes who can be dispatched. Kept as config rather than
+    # a hardcoded array because the roster renders in six places in the
+    # dashboard and they must not be able to disagree.
+    avatar_display_order: str = "cedric,petra,laura"
     # Static bearer token for the session API (/sessions/*, /ledger). Empty =
     # open (preserves the zero-key local demo); set in any real deployment.
     laura_api_token: str = ""

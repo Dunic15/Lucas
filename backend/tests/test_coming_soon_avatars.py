@@ -67,23 +67,40 @@ def test_flag_marks_only_the_named_avatar(monkeypatch):
     assert not avatars.is_coming_soon("petra")
 
 
-def test_dispatch_is_refused_with_not_yet_not_not_found(
+def test_coming_soon_is_presentation_only_and_never_blocks_dispatch(
     client, recall_stubbed, monkeypatch
 ):
-    """409, not the internal persona's 404: the id is real and the caller is
-    meant to know it exists — it just isn't bookable yet."""
-    monkeypatch.setattr(settings, "coming_soon_avatar_ids", "cedric")
+    """The flag greys an avatar out in the dashboard. It must NOT gate the API.
+
+    default_avatar_id is "laura", and /sessions/start resolves an omitted
+    avatar_id to it — so a server-side refusal would 409 calendar auto-join,
+    the Gmail watcher, the key-free demo and Cedric's integration, i.e. stop
+    the product booking at all. Gating a coming-soon avatar needs a different
+    default first. This test exists to stop anyone "tightening" it back.
+    """
+    monkeypatch.setattr(settings, "coming_soon_avatar_ids", "laura")
     r = client.post(
         "/sessions/start",
         json={
             "meeting_url": "https://meet.google.com/aaa-bbbb-ccc",
-            "avatar_id": "cedric",
+            "avatar_id": "laura",
         },
     )
-    assert r.status_code == 409
-    assert r.json()["error"] == "avatar_not_available_yet"
-    # No bot was created — the refusal lands before anything costs money.
-    assert recall_stubbed == []
+    assert r.status_code == 200
+    assert len(recall_stubbed) == 1
+
+
+def test_the_default_avatar_still_dispatches_when_flagged(
+    client, recall_stubbed, monkeypatch
+):
+    """The specific breakage above, exercised through the path that hits it:
+    no avatar_id at all, resolving to the flagged default."""
+    monkeypatch.setattr(settings, "coming_soon_avatar_ids", "laura")
+    r = client.post(
+        "/sessions/start",
+        json={"meeting_url": "https://meet.google.com/ggg-hhhh-iii"},
+    )
+    assert r.status_code == 200
 
 
 def test_a_bookable_avatar_is_untouched(client, recall_stubbed, monkeypatch):

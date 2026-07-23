@@ -159,15 +159,15 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
     # folder still exists; see config.internal_avatar_ids).
     if avatars.is_internal(req.avatar_id or settings.default_avatar_id):
         return JSONResponse({"error": "unknown avatar_id"}, status_code=404)
-    # Coming-soon personas (COMING_SOON_AVATAR_IDS) are listed but not
-    # bookable. Distinct status from the internal 404: this id is real and the
-    # caller is meant to know it exists — it just isn't available yet, so say
-    # so rather than pretending it doesn't exist. Enforced here and not only in
-    # the UI: the dashboard's disabled option stops a human, not an API token.
-    if avatars.is_coming_soon(req.avatar_id or settings.default_avatar_id):
-        return JSONResponse(
-            {"error": "avatar_not_available_yet"}, status_code=409
-        )
+    # NOTE: coming-soon (COMING_SOON_AVATAR_IDS) is deliberately NOT enforced
+    # here. It is a presentation state only — the dashboard greys the avatar
+    # out, the API still books it. Owner's call 2026-07-23, and the right one:
+    # default_avatar_id is "laura", so a server-side refusal would 409 every
+    # dispatch that omits avatar_id — calendar auto-join, the Gmail watcher,
+    # the key-free demo and Cedric's integration all resolve to the default.
+    # Gating the default avatar server-side would stop the product booking at
+    # all. If a coming-soon avatar ever needs a real gate, it needs a different
+    # default first.
     # One live/scheduled booking per meeting URL: rebooking must cancel first
     # (otherwise two bots — and two per-minute meters — end up in one call).
     # Fast path: an obvious local-store clash needs no lock or Recall round-trip
