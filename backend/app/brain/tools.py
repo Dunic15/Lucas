@@ -545,18 +545,30 @@ def revise_action_once(
 
 
 def withdraw_action_once(session, item: dict) -> bool:
-    """Withdraw the captured draft everywhere the room can still see it:
-    durable row, queued list, continuation window. True = a card was removed."""
+    """Voice cancellation and dashboard withdrawal share one terminal state."""
     from .. import outbox
+    from ..actions import ledger
 
-    removed = outbox.withdraw_action_capture(session, item)
+    changed = outbox.withdraw_action_capture(session, item)
     aid = str((item or {}).get("action_id") or "")
-    queued = getattr(session, "queued_actions", None) or []
-    session.queued_actions = [
-        q for q in queued if str(q.get("action_id") or "") != aid
-    ]
+    org = str(getattr(session, "org_id", "") or "")
+    result = ledger.withdraw_action(
+        aid,
+        org_id=org or ledger.DEMO_ORG_ID,
+        detail="withdrawn by the requesting speaker",
+        confirm_possible_external_start=False,
+    )
+    item["execution_status"] = "withdrawn"
+    state = (getattr(session, "pending_actions", None) or {}).get(
+        f"{getattr(session, 'bot_id', '')}:{getattr(session, 'followup_owner', ('',))[0]}:{aid}"
+    )
+    if state is not None:
+        state.status = "withdrawn"
+        state.updated_at = time.time()
+        item["pending_action"] = state.to_dict()
     session.last_capture = None
-    return removed
+    session.pending_clarify = None
+    return bool(changed or result.get("ok"))
 
 
 def capture_action_once(
