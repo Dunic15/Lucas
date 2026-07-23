@@ -154,7 +154,8 @@ _DETAIL_DESCRIPTION = re.compile(
 )
 _DETAIL_SKIP = re.compile(
     r"\b(no\s*one|nobody|anyone|any\s*body|skip|doesn'?t\s+matter|whatever"
-    r"|just\s+(?:create|do|make)\s+it|no\s+project|none|nothing)\b",
+    r"|just\s+(?:create|do|make)\s+it|no\s+project|none|nothing"
+    r"|that(?:'s|\s+is)\s+it|no\s+more\s+details?)\b",
     re.IGNORECASE,
 )
 
@@ -176,25 +177,33 @@ _KIND_CALENDAR = re.compile(
 )
 _DETAIL_EMAIL_TO = re.compile(
     r"\b(?:to|for)\s+(?!me\b|us\b|please\b)[a-zà-ù]{3,}"
-    r"|\bsend\s+\w+\s+an?\s+e-?mail",
+    r"|\bsend\s+\w+\s+an?\s+e-?mail|\brecipient:\s*\S",
     re.IGNORECASE,
 )
 _DETAIL_EMAIL_BODY = re.compile(
-    r"\b(saying|that\s+says|should\s+say|tell(?:ing)?\s+(?:him|her|them)"
-    r"|subject|about\s+\w+|dicendo|che\s+dice)\b",
+    r"\b(?:saying|that\s+says|should\s+say|tell(?:ing)?\s+(?:him|her|them)"
+    r"|subject|about\s+\w+|dicendo|che\s+dice)\b|\bbody:\s*\S",
     re.IGNORECASE,
 )
 _DETAIL_INVITE_WITH = re.compile(
     r"\b(?:with|between\s+me\s+and|invite)\s+(?!me\b|us\b)[a-zà-ù]{3,}"
-    r"|\bcon\s+[a-zà-ù]{3,}",
+    r"|\bcon\s+[a-zà-ù]{3,}|\battendees?:\s*\S",
     re.IGNORECASE,
 )
-_DETAIL_INVITE_WHEN = re.compile(
-    r"\b(at\s+\d|\d{1,2}(?::\d{2})?\s*(?:am|pm)|alle\s+\d)"
-    r"|\b(today|tomorrow|tonight|domani|oggi|stasera"
+# A calendar write needs BOTH a day/date and a clock time. The previous single
+# regex accepted "tomorrow" or the dangling ASR fragment "it's due to" as a
+# complete schedule, which let an unusable event leave clarification.
+_DETAIL_INVITE_DATE = re.compile(
+    r"\b(today|tomorrow|tonight|domani|oggi|stasera"
     r"|monday|tuesday|wednesday|thursday|friday|saturday|sunday"
     r"|luned\w|marted\w|mercoled\w|gioved\w|venerd\w|sabato|domenica"
-    r"|next\s+week)\b",
+    r"|next\s+week|\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b",
+    re.IGNORECASE,
+)
+_DETAIL_INVITE_CLOCK = re.compile(
+    r"\b(?:at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?"
+    r"|\d{1,2}(?::\d{2})\s*(?:am|pm)?"
+    r"|\d{1,2}\s*(?:am|pm)|alle\s+\d{1,2}(?::\d{2})?)\b",
     re.IGNORECASE,
 )
 
@@ -211,9 +220,32 @@ def ask_kind(text: str) -> str:
     return "other"
 
 
+_TASK_NAME_SHELL = re.compile(
+    r"^\s*(?:(?:can|could|would|will)\s+you\s+|please\s+|"
+    r"(?:ok(?:ay)?|so|and|then)[,\s]+)*"
+    r"(?:create|make|add|open)\s+(?:(?:a|an|the)\s+)?(?:new\s+)?"
+    r"(?:(?:asana|jira)\s+)?(?:task|ticket|issue)"
+    r"(?:\s+(?:in|on)\s+(?:asana|jira))?\s*[?.!]*$",
+    re.IGNORECASE,
+)
+
+
+def _has_task_name(text: str) -> bool:
+    """True when a task ask contains work to name, not only the task shell."""
+    t = " ".join((text or "").split())
+    if re.search(r"\btask\s+name:\s*\S", t, re.IGNORECASE):
+        return True
+    return bool(t) and _TASK_NAME_SHELL.fullmatch(t) is None
+
+
 def missing_action_details(text: str, kind: str = "task") -> list[str]:
-    """The details a well-filed action of this kind still needs, in ask
-    order. Kind-blind callers keep the historical task slots."""
+    """Required execution details still missing, in ask order.
+
+    Optional task metadata belongs on the approval card; voice clarification
+    blocks only on the required task name. This keeps a generic "create a task"
+    from becoming the literal task title without interrogating the room for
+    owner/project/due/description fields that Asana does not require.
+    """
     t = " ".join((text or "").split())
     missing: list[str] = []
     if kind == "email":
@@ -221,17 +253,24 @@ def missing_action_details(text: str, kind: str = "task") -> list[str]:
             missing.append("email_to")
         if not _DETAIL_EMAIL_BODY.search(t):
             missing.append("email_body")
-        return missing
+        return missing[:1]
     if kind == "calendar":
         if not _DETAIL_INVITE_WITH.search(t):
             missing.append("invite_with")
-        if not _DETAIL_INVITE_WHEN.search(t):
+        if not (
+            _DETAIL_INVITE_DATE.search(t) and _DETAIL_INVITE_CLOCK.search(t)
+        ):
             missing.append("invite_when")
-        return missing
+        return missing[:1]
     if kind == "other":
         # Free-form asks (Slack messages, "remind me to…") have no slot
         # schema — never interrogate, just confirm and queue.
         return missing
+    if not _has_task_name(t):
+        # Ask only for the provider-required title first. Once supplied, the
+        # existing optional enrichment slots can be offered without ever using
+        # the generic shell as the task name.
+        return ["task_name"]
     if not _DETAIL_OWNER.search(t):
         missing.append("owner")
     if not _DETAIL_PROJECT.search(t):
@@ -500,6 +539,7 @@ def capture_action(session, action: str, owner: str = "", due: str = "") -> dict
 
 
 _DETAIL_FOLD_LABELS = {
+    "task_name": "Task name",
     "email_to": "Recipient",
     "email_body": "Body",
     "invite_with": "Attendees",
@@ -527,7 +567,25 @@ def fold_action_details(
     if not detail:
         return {"action": base}
     if len(slots) == 1:
-        label = _DETAIL_FOLD_LABELS[slots[0]]
+        slot = slots[0]
+        # People often answer the first question and continue into the next
+        # detail ("Anant at three"). Keep only the value for the slot we asked;
+        # the remaining required slot is re-asked by main after revalidation.
+        if slot == "invite_with":
+            detail = re.split(r"\s+(?:at|on|tomorrow|today|domani|oggi)\b",
+                              detail, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
+        elif slot == "email_to":
+            detail = re.split(r"\s+(?:saying|that\s+says|with\s+(?:subject|body))\b",
+                              detail, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
+        elif slot == "task_name":
+            detail = re.sub(
+                r"^(?:the\s+)?task\s+(?:name\s+)?(?:should\s+be|is)\s+|"
+                r"^(?:call|name)\s+it\s+",
+                "",
+                detail,
+                flags=re.IGNORECASE,
+            ).strip(" ,")
+        label = _DETAIL_FOLD_LABELS[slot]
     else:
         label = "Details"
     action = f"{base}. {label}: {detail}" if base else f"{label}: {detail}"

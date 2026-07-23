@@ -163,3 +163,63 @@ def test_never_invent_participant_count_rule_is_in_the_prompt():
     assert "NEVER invent a participant count" in prompt
     assert "NEVER refuse to name people" in prompt
     assert "never guess a number" in prompt
+
+def test_required_action_details_follow_executor_schema():
+    # A generic shell is not a valid task title. Optional Asana metadata must
+    # not turn into a four-question interrogation.
+    assert tools.missing_action_details(
+        "Can you create a task in Asana?", kind="task"
+    ) == ["task_name"]
+    named_missing = tools.missing_action_details(
+        "Create a task to prepare the pipeline connection", kind="task"
+    )
+    assert "task_name" not in named_missing
+
+    named = tools.fold_action_details(
+        {"action": "Can you create a task in Asana?"},
+        "The task should be prepare the pipeline connection",
+        ["task_name"],
+    )
+    assert named["action"].endswith(
+        "Task name: prepare the pipeline connection"
+    )
+    typed = engine._sanitize_typed(
+        {
+            "type": "asana.create_task",
+            "args": {"name": "Can you create a task in Asana?"},
+        },
+        {"item": named["action"]},
+    )
+    assert typed["args"]["name"] == "prepare the pipeline connection"
+
+    # Calendar writes need a date AND a clock time, collected one slot at a time.
+    assert tools.missing_action_details(
+        "Schedule a meeting tomorrow", kind="calendar"
+    ) == ["invite_with"]
+    attendee = tools.fold_action_details(
+        {"action": "Schedule a meeting tomorrow"},
+        "Anant at thirty PM",
+        ["invite_with"],
+    )
+    assert attendee["action"].endswith("Attendees: Anant")
+    assert tools.missing_action_details(
+        attendee["action"], kind="calendar"
+    ) == ["invite_when"]
+    assert tools.missing_action_details(
+        attendee["action"] + ". When: 3 PM", kind="calendar"
+    ) == []
+
+    email = tools.fold_action_details(
+        {"action": "Send an email"},
+        "sofia@example.com",
+        ["email_to"],
+    )
+    assert tools.missing_action_details(
+        email["action"], kind="email"
+    ) == ["email_body"]
+    email = tools.fold_action_details(
+        email,
+        "Share the launch recap",
+        ["email_body"],
+    )
+    assert tools.missing_action_details(email["action"], kind="email") == []
