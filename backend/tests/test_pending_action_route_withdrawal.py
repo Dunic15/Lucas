@@ -306,6 +306,7 @@ def test_action_centre_fixture_exposes_discard_and_history_bucket():
         Path(__file__).resolve().parents[2] / "frontend" / "dashboard.html"
     ).read_text(encoding="utf-8")
     assert 'data-withdraw="' in html
+    assert '$("#ac-list [data-withdraw]").forEach' in html
     assert '/withdraw"' in html
     assert 's==="withdrawn") return "done"' in html
     assert 'withdrawn:"Withdrawn"' in html
