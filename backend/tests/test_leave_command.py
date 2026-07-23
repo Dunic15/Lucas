@@ -641,3 +641,27 @@ def test_webhook_permission_leave_stays_name_gated_multiperson(monkeypatch, tmp_
     assert store.get(bot_id) is not None
     store.remove(bot_id)
 
+
+
+def test_repeated_leave_command_says_goodbye_once(monkeypatch, tmp_path):
+    """Live 2026-07-23: 'can you go out the meeting?' asked twice in a row got
+    TWO goodbyes ('Sure — bye everyone!' then 'Okay, leaving now. Bye!'). The
+    second command lands while the first goodbye's grace window is still open —
+    it must resolve quietly as a duplicate, never queue a second goodbye."""
+    bot_id = "leave-dup-1"
+    calls = {"leave": 0, "spoken": []}
+    _stub_vendors(monkeypatch, tmp_path, calls)
+    session = _make_session(bot_id)
+
+    async def fake_speak(s, line, citations=None, **kw):
+        calls["spoken"].append(line)
+        return True
+
+    monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)
+    # First leave is mid-goodbye (grace window open): the flag is set.
+    session.leaving_now = True
+    body = _post_line(bot_id, "Laura, can you go out of the meeting?")
+    assert body.get("left") is True
+    assert body.get("reason") == "leave_command_duplicate"
+    assert body.get("spoke") is False
+    assert not calls["spoken"], "no second goodbye"
