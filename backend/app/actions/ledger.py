@@ -464,7 +464,15 @@ EXECUTION_STATUSES = ACTION_STATUSES
 # own loop reports) and the closure channel (/resolve) can never disagree.
 # 'needs_details'/'proposed'/'approved'/'executing' are in-flight and must
 # NOT close anything.
-_TERMINAL_STATUS_OUTCOME = {"done": "done", "rejected": "rejected", "failed": "failed"}
+_TERMINAL_STATUS_OUTCOME = {
+    "done": "done",
+    "rejected": "rejected",
+    # The legacy ledger outcome vocabulary has no withdrawn value. Keep the
+    # canonical execution state withdrawn while closing the open ledger item
+    # as rejected so it cannot reappear in carryover.
+    "withdrawn": "rejected",
+    "failed": "failed",
+}
 
 # Statuses an execution claim may be taken from — everything pre-decision plus
 # 'approved' (the door records the decision first, then claims).
@@ -613,6 +621,63 @@ def claim_action_execution(
             (org_id, aid, "executing", detail[:300], time.time()),
         )
     return True
+
+
+def withdraw_action(
+    action_id: str,
+    *,
+    org_id: str = DEMO_ORG_ID,
+    detail: str = "",
+    confirm_possible_external_start: bool = False,
+) -> dict:
+    """Move a safe pre-execution action to the canonical withdrawn state."""
+    aid = str(action_id or "").strip()
+    if not aid:
+        return {"ok": False, "error": "action_id_required"}
+    current = (action_statuses([aid], org_id=org_id).get(aid) or {})
+    status = str(current.get("status") or "proposed").lower()
+    if status == "withdrawn":
+        return {"ok": True, "status": "withdrawn", "idempotent_replay": True}
+    if status in ("executing", "done", "failed", "rejected"):
+        return {
+            "ok": False,
+            "error": "withdrawal_conflict",
+            "status": status,
+            "detail": (
+                "Execution may already have started and cannot be erased."
+                if status == "executing"
+                else "Executing or completed actions remain in history and cannot be erased."
+            ),
+        }
+    decision = get_action_decision(aid, org_id=org_id)
+    may_have_started = status == "approved" or (
+        isinstance(decision, dict) and decision.get("decision") == "approve"
+    )
+    if may_have_started and not confirm_possible_external_start:
+        return {
+            "ok": False,
+            "error": "confirmation_required",
+            "status": status,
+            "detail": "This action was approved and external execution may already have started.",
+        }
+    note = (detail or "withdrawn by an authorized user").strip()[:300]
+    if not set_action_status(aid, "withdrawn", note, org_id=org_id):
+        return {"ok": False, "error": "withdrawal_not_recorded", "status": status}
+    try:
+        from ..persistence import audit_log
+
+        audit_log.record(
+            org_id, actor_user_id=None,
+            action="action.withdraw", target=aid,
+        )
+    except Exception:  # noqa: BLE001 — state transition already committed
+        pass
+    return {
+        "ok": True,
+        "status": "withdrawn",
+        "idempotent_replay": False,
+        "possible_external_start": may_have_started,
+    }
 
 
 def reopen_failed_action(
