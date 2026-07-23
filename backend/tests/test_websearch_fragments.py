@@ -84,3 +84,16 @@ def test_real_web_search_still_triggers(q, monkeypatch):
     monkeypatch.setattr(settings, "live_search_enabled", True)
     monkeypatch.setattr(settings, "anthropic_api_key", "x")
     assert engine._wants_search(q) is True, q
+
+def test_yc_asr_repair_is_context_bound():
+    history = "Duccio: When is the YC application due?\nJacopo: Y Combinator."
+    assert engine._resolve_search_query(
+        "When is the DYC application due?", history
+    ) == "When is the Y Combinator application due?"
+    assert engine._resolve_search_query(
+        "When is the voice application due?", history
+    ) == "When is the Y Combinator application due?"
+    # Without prior disambiguation DYC may be a real organization; never guess.
+    assert engine._resolve_search_query(
+        "When is the DYC application due?", ""
+    ) == "When is the DYC application due?"
