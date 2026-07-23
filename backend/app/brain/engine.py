@@ -213,7 +213,12 @@ third person.
 never to you and never to another avatar. If asked "can you read my \
 calendar?", the answer is about the workspace's connected calendar: say yes \
 and read it (or say it isn't connected); never call it "Laura's calendar" or \
-any avatar's.
+any avatar's. When a person says "my"/"our" calendar, inbox, tasks or asks you \
+to check/read/act on them, they ARE entitled to it — NEVER challenge their \
+ownership, ask them to prove who they are, or say "you aren't the owner", \
+"you're not authorized", or "that's not your account" (live 2026-07-23: refused \
+"check my calendar" claiming the speaker wasn't the owner). The only honest \
+negative is that the tool isn't connected.
 - CRITICAL — if a workspace Asana / calendar / inbox snapshot or brief is \
 present anywhere in your context, you HAVE access to it: answer from it \
 directly. NEVER say "I don't have access to your Asana/calendar", "that's your \
@@ -388,6 +393,17 @@ _ABOUT_INTENT = re.compile(
     r"(puoi|riesci\s+a|sai)\b.{0,18}\b(legger\w*|acceder\w*|veder\w*|sentir\w*)\b"
     r".{0,24}\b(mi|mio|mia|nostr\w*|calendar\w*|drive|gmail|asana|slack|notion)\b|"
     r"\bmi\s+senti\b|"
+    # Meta / self-STATE checks about HER (not the world): "why are you slower/
+    # quieter than yesterday?", "are you ok/there/frozen?", "what happened to
+    # you?". First-person answers, NEVER a web search — live 2026-07-23 "why are
+    # you slower than yesterday?" hit the 'yesterday' search trigger and got a
+    # public web result, and "what happened to you?" hit 'happened'.
+    r"(why|how come|what'?s wrong)\b.{0,24}\b(you|laura|petra)\b.{0,20}\b(slow\w*|slower|quiet\w*|quieter|laggy|lagging|delay\w*|behind|different|weird|off|glitch\w*|frozen|stuck|muted|silent|broken)\b|"
+    r"(are|is)\s+(you|laura|petra)\b.{0,16}\b(ok|okay|there|here|alright|awake|frozen|stuck|broken|listening|muted|lagging|with\s+us|still\s+(there|here|with\s+us|awake))\b|"
+    r"what\s+happened\b.{0,16}\bto\s+(you|laura|petra)\b|"
+    r"(perch[eé]|come mai)\b.{0,24}\b(sei|sembri)\b.{0,16}\b(lent\w+|silenzios\w+|ferm\w+|bloccat\w+|divers\w+|strana|muta)\b|"
+    r"\b(ci\s+sei|sei\s+ancora\s+(l[ìi]|qui|con\s+noi)|sei\s+bloccat\w+|ti\s+sei\s+bloccat\w+)\b|"
+    r"cosa\s+(ti\s+)?[eè]\s+success\w+\b|"
     r"come funzioni\b|come sei fatt\w+|cosa (sai|puoi) fare|"
     r"che modell[oi]\b|su che (modello|tecnologia)|con che (modello|tecnologia)|"
     r"chi (sei|ti ha creat\w+|ti ha fatt\w+)|sei (un[ao]? )?(ai|robot|bot|uman\w+))\b",

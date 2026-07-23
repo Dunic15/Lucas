@@ -5070,7 +5070,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     if capabilities.is_capability_question(question or text):
         _cap_t0 = time.perf_counter()
         _cap_snap = await run_in_threadpool(
-            capabilities.snapshot, avatar, session.org_id, session
+            capabilities.cached_snapshot, avatar, session.org_id, session
         )
         _cap_line = capabilities.answer(question or text, _cap_snap)
         _cap_gen = store.bump_speech_generation(session)
