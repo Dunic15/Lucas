@@ -1311,6 +1311,28 @@ def set_action_decision_result(
         )
 
 
+
+def update_action_route(org_id: str, action_id: str, route: str) -> bool:
+    """Persist the normalized effective route under the tenant RLS context."""
+    normalized = str(route or "").strip().lower()
+    if normalized not in ("native", "cedric", "browser", "pipedream", "manual"):
+        return False
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                """
+                UPDATE queued_actions
+                SET execution_route=:route, updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND action_id=:action_id
+                RETURNING action_id
+                """
+            ),
+            {"org_id": org_id, "action_id": action_id, "route": normalized},
+        ).first()
+    return row is not None
+
 def get_action(org_id: str, action_id: str) -> Optional[dict[str, Any]]:
     """The full durable canonical Action row for (org, action), or None."""
     aid = str(action_id or "").strip()
