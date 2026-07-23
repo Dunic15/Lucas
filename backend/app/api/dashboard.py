@@ -43,15 +43,12 @@ FRONTEND_DIR = Path(__file__).resolve().parents[3] / "frontend"
 _30D = 30 * 24 * 3600
 _WEEK = 7 * 24 * 3600
 
-# graphiti-core presence, probed ONCE per process (it can't change without a
-# redeploy, and summary is called on every dashboard load). "" = not installed
-# — on a Python <3.10 build runtime the requirements marker skips the dep
-# (#319/#330), and the Brain card uses this to say so.
-try:
-    from importlib.metadata import version as _pkg_version
-    _GRAPHITI_CORE_VERSION = _pkg_version("graphiti-core")
-except Exception:  # noqa: BLE001 — absent (or metadata-less) ⇒ not installed
-    _GRAPHITI_CORE_VERSION = ""
+# graphiti-core presence is resolved via graphiti_client.core_installed(),
+# which is SIDECAR-aware and cached per process. A plain module-load
+# importlib.metadata check reported it MISSING (the sidecar isn't on sys.path
+# until the first Graphiti use), so the Brain card said "Blocked" and System
+# Check said "graphiti-core not installed" even though the graph worked
+# (2026-07-23).
 
 
 def _org_visible(caller_org: str | None, row_org: str) -> bool:
@@ -1084,7 +1081,7 @@ def dashboard_summary(request: Request) -> JSONResponse:
                 # runtime's Python. On a <3.10 runtime the requirements marker
                 # deliberately skips the dep (#319/#330) — this is where a
                 # logged-in owner sees that without the API bearer.
-                "graphiti_core": _GRAPHITI_CORE_VERSION,
+                "graphiti_core": graphiti_client.core_installed(),
                 "runtime_python": platform.python_version(),
                 # Pipedream alternative-connections tab — surfaced only so the
                 # frontend can HIDE its nav tab when unconfigured, keeping the
@@ -1339,7 +1336,7 @@ def _syscheck_rows(caller_org: str | None) -> list[dict]:
     # ── Graphiti knowledge graph (enabled-but-unvalidated ⇒ warn) ──
     g_enabled = bool(settings.graphiti_enabled)
     g_configured = bool(settings.graphiti_enabled and settings.graphiti_uri.strip())
-    g_core = bool(_GRAPHITI_CORE_VERSION)
+    g_core = bool(graphiti_client.core_installed())
     if not g_enabled:
         g_status, g_detail = "off", "Disabled"
     elif not (g_configured and g_core):
