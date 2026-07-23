@@ -212,6 +212,26 @@ def route_for_typed(typed: dict | None, org_id: str = "", item_text: str = "") -
     return "native" if enabled() else _brokered_route(org_id)
 
 
+def effective_route(
+    typed: dict | None,
+    org_id: str = "",
+    *,
+    stored_route: str = "",
+    item_text: str = "",
+) -> str:
+    """Resolve the route from current capability and connection state.
+
+    ``execution_route`` is historical metadata, not authority. The only stored
+    route that remains authoritative is an explicit guarded-browser choice;
+    manual/native/cedric/pipedream stamps are recomputed so display, approval,
+    retry, system checks and receipts cannot diverge after connections change.
+    """
+    stored = str(stored_route or "").strip().lower()
+    if stored == "browser":
+        return "browser"
+    return route_for_typed(typed, org_id, item_text=item_text)
+
+
 def handles(action: dict | None) -> bool:
     """True when this approved action can execute inside Laura."""
     return enabled() and native_runtime.supports((action or {}).get("type"))
