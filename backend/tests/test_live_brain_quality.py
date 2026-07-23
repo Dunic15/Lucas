@@ -41,6 +41,23 @@ def test_live_frame_guard_is_in_the_spoken_system_prompt():
     assert "first person as the avatar" in prompt
 
 
+def test_grounding_honesty_guards_are_in_the_spoken_system_prompt():
+    """Bug ② (live 2026-07-23): entity lookups by name must answer from context
+    only ('I don't see Contoso in your Asana'), never pad with unrelated tasks
+    or imply access; a short source-named follow-up refines the prior question.
+    Guard the two clauses so they can't silently regress out of the prompt."""
+    prompt = engine.ANSWER_STREAM_SYSTEM.format(
+        persona="Synthetic avatar", name="Petra"
+    )
+    # entity-lookup honesty
+    assert "Looking something up by NAME" in prompt
+    assert "do NOT pad the answer with unrelated" in prompt
+    assert 'imply you searched or "have access"' in prompt
+    # follow-up refinement (Contoso → "in my Asana?")
+    assert "REFINES the previous question" in prompt
+    assert "is Contoso in my Asana" in prompt
+
+
 def test_capture_filter_rejects_question_fragments_but_keeps_real_asks():
     assert not engine.wants_action_capture(
         "Schedule in my calendar? What schedule?"
