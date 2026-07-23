@@ -82,10 +82,28 @@ def _token(org_id: str) -> tuple[str, str]:
         row = store.get_org_oauth(org, provider="asana")
     except Exception:  # noqa: BLE001
         row = None
-    pat = (row or {}).get("refresh_token", "") or settings.asana_token.strip()
+    pat = (row or {}).get("refresh_token", "")
+    if not pat and _env_pat_allowed(org):
+        # The ASANA_TOKEN env PAT is the DEPLOYMENT owner's own workspace. It
+        # may serve only the deployment's own (demo/key-free) org — never an
+        # arbitrary tenant, which would execute that tenant's approved actions
+        # against someone else's Asana (security audit 2026-07-23, gap #2).
+        pat = settings.asana_token.strip()
     if not pat:
         return "", "Asana is not connected for this org"
     return pat, ""
+
+
+def _env_pat_allowed(org_id: str) -> bool:
+    """May this org fall back to the deployment-wide ASANA_TOKEN?
+
+    Only the deployment's own org (the key-free demo tenant) may: the env PAT
+    authenticates the DEPLOYMENT OWNER's Asana workspace, so handing it to a
+    real tenant would run that tenant's approved writes inside the owner's
+    workspace — cross-tenant execution with a truthful-looking receipt.
+    """
+    org = (org_id or "").strip()
+    return not org or org == str(settings.demo_org_id or "").strip()
 
 
 def _oauth_access_token(org_id: str, row: dict) -> tuple[str, str]:
@@ -270,6 +288,34 @@ def list_projects(org_id: str, *, max_results: int = 30) -> dict:
             {"gid": str(p.get("gid") or ""), "name": str(p.get("name") or "")}
             for p in (data or [])
             if isinstance(p, dict)
+        ],
+    }
+
+
+def list_users(org_id: str, *, max_results: int = 50) -> dict:
+    """Workspace members: {"ok", "users": [{gid, name, email}]}. Same contract
+    as list_projects — never raises, {"ok": False, "error"} on any failure."""
+    pat, err = _token(org_id)
+    if err:
+        return {"ok": False, "error": err}
+    ws, err = _workspace_gid(pat)
+    if err:
+        return {"ok": False, "error": err}
+    data, err = _get(
+        pat, f"/workspaces/{ws}/users",
+        {"opt_fields": "name,email",
+         "limit": max(1, min(int(max_results or 50), 100))},
+    )
+    if err:
+        return {"ok": False, "error": err}
+    return {
+        "ok": True,
+        "users": [
+            {"gid": str(u.get("gid") or ""),
+             "name": str(u.get("name") or "")[:120],
+             "email": str(u.get("email") or "")[:200]}
+            for u in (data or [])
+            if isinstance(u, dict)
         ],
     }
 

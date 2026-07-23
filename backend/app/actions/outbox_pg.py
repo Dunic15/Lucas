@@ -1520,6 +1520,35 @@ def action_statuses(
     }
 
 
+def action_capture_times(org_id: str, bot_id: str) -> dict[str, float]:
+    """Earliest capture timestamp (epoch) per action for one meeting — the
+    "captured" anchor for the read-only meeting-workspace timeline. Joins the
+    per-source ``action_capture_events`` log to ``queued_actions`` to scope by
+    bot (the events table has no bot_id). Distilled timestamps only; no
+    transcript/PII leaves through here."""
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        rows = conn.execute(
+            text(
+                """
+                SELECT e.action_id AS action_id,
+                       extract(epoch from MIN(e.created_at)) AS captured_at
+                FROM action_capture_events e
+                JOIN queued_actions q
+                  ON q.org_id = e.org_id AND q.action_id = e.action_id
+                WHERE e.org_id = :org_id AND q.bot_id = :bot_id
+                GROUP BY e.action_id
+                """
+            ),
+            {"org_id": org_id, "bot_id": bot_id},
+        ).mappings().all()
+    return {
+        str(row["action_id"]): float(row["captured_at"] or 0.0)
+        for row in rows
+    }
+
+
 def enqueue_callback(callback: dict[str, Any]) -> Optional[int]:
     engine = _engine()
     with engine.begin() as conn:

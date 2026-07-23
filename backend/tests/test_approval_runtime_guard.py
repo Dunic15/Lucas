@@ -54,7 +54,7 @@ def test_historical_cedric_route_uses_laura_native_runtime(monkeypatch):
     monkeypatch.setattr(
         org_api.store,
         "get_avatar_capabilities",
-        lambda avatar_id: {},
+        lambda avatar_id, org_id="": {},
     )
     from app import avatar_resolver
 
@@ -95,3 +95,45 @@ def test_historical_cedric_route_uses_laura_native_runtime(monkeypatch):
     assert blocked is False
     assert len(calls) == 1
     assert calls[0][2]["type"] == "email.send"
+
+
+def test_approval_request_allows_org_scoped_slack_dispatch(monkeypatch):
+    app = FastAPI()
+    approval_runtime_guard.install(app)
+    captured: dict = {}
+
+    class _Response:
+        status_code = 202
+
+    @app.post("/org/actions/{action_id}/approve")
+    async def approve(action_id: str):
+        return await run_in_threadpool(
+            callback.dispatch_action,
+            "org-a",
+            {
+                "action_id": action_id,
+                "typed": {
+                    "type": "slack.post_message",
+                    "args": {"text": "Meeting recap"},
+                },
+            },
+        )
+
+    monkeypatch.setattr(
+        settings, "cedric_orgs_url", "https://cedric.invalid/api/laura/orgs"
+    )
+    monkeypatch.setattr(callback, "_team_id_for", lambda org: "T-ORG-A")
+    monkeypatch.setattr(
+        callback,
+        "_post",
+        lambda url, payload, **kwargs: captured.update(
+            url=url, payload=payload, kwargs=kwargs
+        )
+        or _Response(),
+    )
+
+    response = TestClient(app).post("/org/actions/slack-1/approve")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "accepted": True}
+    assert captured["payload"]["action"]["type"] == "slack.post_message"
+    assert captured["payload"]["action"]["tenant"]["team_id"] == "T-ORG-A"

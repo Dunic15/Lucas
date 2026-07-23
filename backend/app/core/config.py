@@ -612,6 +612,12 @@ class Settings(BaseSettings):
     # the instant she's first addressed by name; after it, normal proactive
     # behaviour resumes. 0 disables (revert to speaking from the first line).
     opening_grace_seconds: float = 45.0
+    # Empty-room grace: how long the bot waits after the LAST human leaves
+    # before the auto-finalize (meter stop). Long enough to survive a brief
+    # network drop → rejoin (a Meet page reload takes 15-40s); short enough
+    # not to burn the per-minute meter in a dead room. Owner call 2026-07-22:
+    # 30s. Env: EMPTY_ROOM_GRACE_SECONDS.
+    empty_room_grace_seconds: float = 30.0
     # First-call activation: the opening grace NEVER expires on its own — she
     # stays silent (no unprompted answers, greetings, backchannels, or wrap-up
     # interventions) until someone says her name once ("Laura, come stai?").
@@ -712,6 +718,13 @@ class Settings(BaseSettings):
     cross_talk_min_turns: int = 4
     cross_talk_max_gap_seconds: float = 8.0
     cross_talk_window: int = 6
+    # ConversationFrame-backed Turn Manager rollout:
+    #   off    = compute no live policy changes
+    #   shadow = build/test the deterministic plan, preserve current behaviour
+    #   on     = skip the deference sleep for clearly-finished 1:1 questions and
+    #            suppress unprompted spoken interjections in locked dyads / large groups.
+    # Unknown values fail closed to shadow in meeting.turn_manager.
+    conversation_turn_manager_mode: str = "shadow"
     # Talk-over guard for the interjection escape: in hand_mode the WHOLE
     # contribution is generated (deference sleep + full answer collected — several
     # seconds) BEFORE the floor-open check. `interjection_floor_open` judged the

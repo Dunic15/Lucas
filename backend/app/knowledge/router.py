@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 
 from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
@@ -296,10 +297,18 @@ async def dashboard_knowledge(tail: str, request: Request) -> JSONResponse:
     parts = [p for p in (tail or "").split("/") if p]
     body: dict = {}
     if request.method == "POST":
-        try:
-            body = await request.json()
-        except Exception:  # noqa: BLE001
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        # Body-less POSTs are legal: the dashboard fires sources/<id>/sync with
+        # no payload (live bug 2026-07-22: "Drive connect failed: invalid JSON
+        # body" broke the whole Drive-folder connect chain at its last step).
+        # Only parse when the client actually sent content.
+        raw = await request.body()
+        if raw.strip():
+            try:
+                body = json.loads(raw)
+            except Exception:  # noqa: BLE001
+                return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+            if not isinstance(body, dict):
+                return JSONResponse({"error": "invalid JSON body"}, status_code=400)
 
     def run() -> tuple[int, dict]:
         # Every branch checks the METHOD explicitly: a mutating route must

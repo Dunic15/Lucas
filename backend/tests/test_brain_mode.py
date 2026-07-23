@@ -42,8 +42,10 @@ def _seed_legacy_gemini_row(avatar_id: str) -> None:
 
     with store._LOCK, store._connect() as conn:
         conn.execute(
-            "INSERT INTO avatar_brain_mode (avatar_id, brain_mode, updated_at) "
-            "VALUES (?, 'gemini', ?) ON CONFLICT(avatar_id) DO UPDATE SET "
+            "INSERT INTO avatar_brain_mode "
+            "(org_id, avatar_id, brain_mode, updated_at) "
+            "VALUES ('', ?, 'gemini', ?) "
+            "ON CONFLICT(org_id, avatar_id) DO UPDATE SET "
             "brain_mode = 'gemini'",
             (avatar_id, _t.time()),
         )

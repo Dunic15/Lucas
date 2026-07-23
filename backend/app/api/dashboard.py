@@ -28,10 +28,13 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from .. import (
-    action_plane, asana_client, auth, avatars, executor, gemini_ears, jira_client,
-    ledger, outbox, pipedream_client, pipedream_executor, store,
+    action_plane, asana_client, auth, avatars, executor, gemini_ears,
+    graphiti_client, jira_client, knowledge, ledger, outbox, pipedream_client,
+    pipedream_executor, recall_client, store,
 )
+from ..brain import tool_registry
 from ..config import settings
+from ..knowledge import dal
 
 router = APIRouter(tags=["dashboard"])
 
@@ -74,6 +77,27 @@ def _transcript_speakers(artifact: dict) -> set[str]:
         name = name.strip().casefold()
         if sep and name and name != avatar_id:
             out.add(name)
+    return out
+
+
+def _transcript_speaker_names(artifact: dict) -> list[str]:
+    """Ordered, deduped DISPLAY names of the humans who spoke in the archived
+    transcript ('Name: text' lines), the avatar's own lines excluded. This is
+    the roster source once the meeting is finalized: finalize calls
+    store.remove(bot_id), which cascade-drops the live session (and its
+    session_participants rows), so for every drill-in-able meeting the live map
+    is already gone. Names only — never the transcript text, which stays PII
+    behind the show_transcripts pref."""
+    avatar_id = str(artifact.get("avatar_id") or "").casefold()
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in str(artifact.get("transcript") or "").splitlines():
+        name, sep, _ = line.partition(":")
+        name = name.strip()
+        key = name.casefold()
+        if sep and key and key != avatar_id and key not in seen:
+            seen.add(key)
+            out.append(name)
     return out
 
 
@@ -187,6 +211,104 @@ def _action_needed(action: dict) -> list[str]:
         return []
 
 
+def _card_state(action: dict) -> str:
+    """Pre-execution resting state for one card: ``needs_details`` or
+    ``ready_to_approve``.
+
+    This replaces the old passive "captured — tracked here for the record"
+    reading (owner ask 2026-07-22, live card aa2e74e86dbd4d38): a card the
+    surface shows is always actionable. It is DERIVED, not stored — the
+    canonical ``execution_status`` vocabulary in action_plane is unchanged, so
+    there is no new enum value and no CHECK-constraint migration. Existing
+    tracked-only cards migrate softly on read: untyped or incomplete ones
+    become ``needs_details``, complete typed ones ``ready_to_approve``.
+    """
+    try:
+        typed = action.get("typed")
+        is_typed = isinstance(typed, dict) and bool(typed.get("type"))
+        if not is_typed or _action_needed(action):
+            return "needs_details"
+        return "ready_to_approve"
+    except Exception:  # noqa: BLE001 — never worth a 500
+        return "needs_details"
+
+
+_TYPED_FAMILY = {
+    "calendar": "google_calendar",
+    "email": "gmail",
+    "gmail": "gmail",
+    "drive": "google_drive",
+    "asana": "asana",
+}
+
+
+def _action_family(action: dict) -> str:
+    """Which executor app family this card would run against ("" = unknown).
+
+    The dashboard uses it for ONE purpose: when the family isn't connected, the
+    card offers "Reconnect <tool>" instead of an Approve that could only
+    dead-end. Typed specs name their family in the type prefix. For an UNTYPED
+    ask we map only the unambiguous kinds (email, calendar) — a generic "task"
+    must not tell a Google-only org to reconnect Asana. Pure/cheap, never
+    raises.
+    """
+    try:
+        typed = action.get("typed")
+        if isinstance(typed, dict) and typed.get("type"):
+            return _TYPED_FAMILY.get(str(typed["type"]).split(".", 1)[0], "")
+        from ..brain import tools as brain_tools
+
+        text = str(action.get("item") or action.get("action") or "")
+        if not text:
+            return ""
+        kind = brain_tools.ask_kind(text)
+        return {"email": "gmail", "calendar": "google_calendar"}.get(kind, "")
+    except Exception:  # noqa: BLE001 — a CTA hint is never worth a 500
+        return ""
+
+
+def _decision_entries(art: dict, db_records: list[dict] | None = None) -> list[dict]:
+    """Distilled first-class decision records for the wire. Distilled fields
+    only — decision text, maker, reason, project, supersede link, status —
+    never transcript.
+
+    Source of truth, in order:
+    1. ``db_records`` — the RECONCILED rows from store.list_decisions(org,
+       bot_id). These are the only records that carry the persisted supersede
+       link + flipped status (the artifact's ``decision_records`` never do:
+       engine._build_decision_records emits only decision/maker/reason/project),
+       so the "supersedes / (superseded)" pill can render ONLY from here.
+    2. the artifact's structured ``decision_records`` (0017+) — the fallback
+       when there are no DB rows yet (e.g. a fresh key-free demo meeting).
+    3. the legacy ``decisions`` list[str] so pre-0017 archives still render."""
+    out: list[dict] = []
+    records = db_records if db_records else art.get("decision_records")
+    if isinstance(records, list) and records:
+        for r in records[:20]:
+            if not isinstance(r, dict):
+                continue
+            text = str(r.get("decision") or "").strip()
+            if not text:
+                continue
+            out.append({
+                "decision": text[:240],
+                "decision_maker": str(r.get("decision_maker") or "")[:80],
+                "reason": str(r.get("reason") or "")[:240],
+                "related_project": str(r.get("related_project") or "")[:80],
+                "supersedes": str(r.get("supersedes") or ""),
+                "status": str(r.get("status") or "active")[:24],
+            })
+        return out
+    for line in (art.get("decisions") or [])[:20]:
+        text = str(line or "").strip()
+        if text:
+            out.append({
+                "decision": text[:240], "decision_maker": "", "reason": "",
+                "related_project": "", "supersedes": "", "status": "active",
+            })
+    return out
+
+
 def _action_entry(action) -> dict:
     """Normalize an artifact action (dict or bare string) for the wire.
     action_id rides along so summary() can decorate each action with the
@@ -246,13 +368,24 @@ def _action_entry(action) -> dict:
             "source": str(action.get("source") or "explicit")[:16],
             "goal": str(action.get("goal") or "")[:200],
             "inferred_from": str(action.get("inferred_from") or "")[:300],
+            # Where this card sits BEFORE anything ran (owner ask 2026-07-22:
+            # a card is never a passive "tracked for the record" dead end —
+            # it is always either asking for what it needs, or ready for a
+            # decision). Once execution starts, the durable execution_status
+            # is the truth and the surface renders that instead.
+            "card_state": _card_state(action),
+            # Executor family this would run against — lets the card offer
+            # "Reconnect <tool>" instead of an Approve that cannot land.
+            "family": _action_family(action),
         }
     return {"action_id": "", "item": str(action)[:300], "owner": "",
             "unassigned": False, "gap": "", "done": False, "typed": False,
             "title": _display_title(str(action)),
             "executable": settings.native_executor,
             "needed": _action_needed({"item": str(action)}),
-            "source": "explicit", "goal": "", "inferred_from": ""}
+            "source": "explicit", "goal": "", "inferred_from": "",
+            "card_state": _card_state({"item": str(action)}),
+            "family": _action_family({"item": str(action)})}
 
 
 def _delivered(
@@ -287,6 +420,26 @@ def _meeting_row(row: dict, include_transcript: bool = False) -> dict:
     actions = [_action_entry(a) for a in (art.get("actions") or [])[:12]]
     readiness = int(art.get("readiness_score") or 0)
     decisions_count = len(art.get("decisions") or [])
+    # First-class decision records (distilled fields only — decision text,
+    # maker, reason, project, supersede link; NEVER transcript). Prefer the
+    # RECONCILED rows from the store — they carry the persisted supersedes +
+    # flipped status the artifact snapshot never does, so the dashboard pill
+    # renders — and fall back to the artifact's own records (fresh demo meeting
+    # with no DB rows), then the legacy list[str]. Best-effort: a decisions
+    # query hiccup must never 500 a dashboard read.
+    db_records: list[dict] = []
+    bot_id = row.get("bot_id")
+    # Only hit the decision store when this meeting actually produced decisions
+    # (persisted rows only ever come from a non-empty decision_records/decisions
+    # at finalize) — skips the per-row query for the decision-less common case.
+    if bot_id and (art.get("decision_records") or art.get("decisions")):
+        try:
+            db_records = store.list_decisions(
+                str(art.get("org_id") or ""), str(bot_id)
+            )
+        except Exception:  # noqa: BLE001 — projection is never worth a 500
+            db_records = []
+    decision_records = _decision_entries(art, db_records=db_records)
     extra = (
         {"transcript": str(art.get("transcript") or "")[:40000]}
         if include_transcript
@@ -306,6 +459,7 @@ def _meeting_row(row: dict, include_transcript: bool = False) -> dict:
         "actions": actions,
         "missing_steps": [str(s) for s in (art.get("missing_steps") or [])[:8]],
         "decisions_count": decisions_count,
+        "decisions": decision_records,
         "follow_up_subject": str(email.get("subject") or "")[:160],
         # Additive: what this meeting DELIVERED (captured→delivered), derived
         # purely from the fields above so it never leaks transcript or invents.
@@ -949,6 +1103,569 @@ def dashboard_summary(request: Request) -> JSONResponse:
     )
 
 
+# ── System Check — "is Laura ready to work right now?" ──────────────────────
+# One page that turns the scattered per-provider signals the summary already
+# computes into a single readiness board, plus a LIVE read-only "Test
+# connection" probe per provider (the thing that catches a connector that died
+# silently between meetings — external users were just unblocked and must
+# reconnect their tools). Ops/admin surface: it never touches the live-meeting
+# path, runs no model calls, and never returns a credential.
+
+# Live read-only reads per Pipedream app (the app's OWN API, through the Connect
+# Proxy). Minimal GETs only — never run_action (that is plan-gated); this is a
+# pure auth/health probe.
+_PD_PROBE = {
+    "asana": ("asana", "https://app.asana.com/api/1.0/users/me"),
+    "gmail": ("gmail", "https://gmail.googleapis.com/gmail/v1/users/me/profile"),
+    "google_calendar": (
+        "google_calendar",
+        "https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1",
+    ),
+    "google_drive": (
+        "google_drive",
+        "https://www.googleapis.com/drive/v3/about?fields=user",
+    ),
+}
+
+# Server-side debounce for the live probe: a Google native probe force-refreshes
+# a token on every call, so "Test all" / a jittery click must not hammer the
+# upstream. Per-(org, provider) monotonic timestamps, in-process only (best-effort;
+# resets on restart — this guards cost, not correctness). Tests clear it.
+_SYSCHECK_COOLDOWN_S = 3.0
+_syscheck_last: dict[tuple[str, str], float] = {}
+
+
+def _iso(ts) -> str | None:
+    """Best-effort ISO string for a last_checked value (epoch/text/None)."""
+    if ts is None or ts == "":
+        return None
+    try:
+        if isinstance(ts, (int, float)):
+            return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+    except Exception:  # noqa: BLE001
+        return None
+    return str(ts)
+
+
+def _probe_account(j) -> str:
+    """Pull a non-secret account label (an email) out of a probe's JSON body.
+    Scans only known identity fields; NEVER returns a token or the raw body."""
+    if not isinstance(j, dict):
+        return ""
+    for path in (("emailAddress",), ("data", "email"), ("user", "emailAddress"),
+                 ("email",)):
+        cur = j
+        for k in path:
+            cur = cur.get(k) if isinstance(cur, dict) else None
+        if isinstance(cur, str) and "@" in cur:
+            return cur[:120]
+    return ""
+
+
+def _syscheck_rows(caller_org: str | None) -> list[dict]:
+    """Build the per-provider readiness rows from the SAME signals the summary
+    uses — no new DB access paths. Every branch is best-effort: a probe helper
+    that raises degrades that row to a benign state, never 500s the board."""
+    org = caller_org or settings.demo_org_id
+    org_rows = _org_connection_rows(caller_org) if caller_org else []
+
+    google_oauth = store.get_org_oauth(org) or {}
+    google_native = bool(google_oauth)
+    google_email = google_oauth.get("email") or ""
+    google_checked = _iso(google_oauth.get("updated_at"))
+
+    def _pd(slug: str) -> bool:
+        try:
+            return pipedream_executor.app_connected(org, slug)
+        except Exception:  # noqa: BLE001 — an unreachable Pipedream is not "on"
+            return False
+
+    def _cedric(provider: str) -> bool:
+        # Scoped caller: the org's connector rows. Unscoped/demo: fall back to
+        # the platform-global env flags the summary uses.
+        if caller_org is not None:
+            return _org_connected(org_rows, provider)
+        return False
+
+    rows: list[dict] = []
+
+    def add(key, label, category, status, account="", detail="", last_checked=None,
+            supports=None, can_test=False):
+        rows.append({
+            "key": key, "label": label, "category": category, "status": status,
+            "account": account, "detail": detail, "last_checked": last_checked,
+            "supports": supports or [], "can_test": bool(can_test),
+        })
+
+    # ── Google trio (native OAuth OR Pipedream OR Cedric connector) ──
+    for key, label, cedric_provider, pd_slug in (
+        ("google_calendar", "Google Calendar", "calendar", "google_calendar"),
+        ("gmail", "Gmail", "gmail", "gmail"),
+        ("google_drive", "Google Drive", "drive", "google_drive"),
+    ):
+        pd_on = _pd(pd_slug)
+        cedric_on = _cedric(cedric_provider)
+        native_on = google_native
+        # Drive "native" for the unscoped/global view = any avatar wired to a
+        # Drive folder (same signal the summary's drive card reads).
+        if key == "google_drive" and not native_on and caller_org is None:
+            try:
+                native_on = any(
+                    avatars.load(a).drive_folder_id
+                    for a in avatars.list_ids() if not _hidden(a)
+                )
+            except Exception:  # noqa: BLE001
+                native_on = False
+        connected = pd_on or cedric_on or native_on
+        if pd_on:
+            src = "Pipedream"
+        elif native_on:
+            src = "native Google OAuth"
+        else:
+            src = "connector"
+        status = "ok" if connected else "off"
+        detail = (f"Connected via {src}" if connected
+                  else "Not connected — connect to enable")
+        # Scope-aware downgrade: an older native Google grant reads 'ok' for
+        # Calendar (the base grant) but may predate the Gmail/Drive scopes and so
+        # cannot actually act on them — which is exactly what the live probe
+        # catches. Warn when the native grant lacks the relevant scope so the
+        # board agrees with the probe. Pipedream's per-app connection carries its
+        # own scopes, so a Pipedream-backed row is exempt. Unknown/empty scopes ⇒
+        # keep current behaviour (no false warning).
+        if connected and native_on and not pd_on and key in ("gmail", "google_drive"):
+            scopes = google_oauth.get("scopes") or ""
+            needed = "gmail." if key == "gmail" else "drive."
+            if scopes and needed not in scopes:
+                status = "warn"
+                detail = f"Connected, but reconnect to grant {label} access"
+        add(
+            key, label, "productivity",
+            status,
+            account=google_email if native_on else "",
+            detail=detail,
+            last_checked=google_checked if native_on else None,
+            # What this tool can actually DO, straight from the executor's own
+            # mapper (#377) — never a hand-kept list that can drift.
+            supports=tool_registry.family_verbs(pd_slug),
+            can_test=bool(pd_on or native_on),
+        )
+
+    # ── Asana (native PAT/OAuth OR Pipedream) ──
+    try:
+        asana_native = asana_client.connected(org)
+    except Exception:  # noqa: BLE001
+        asana_native = False
+    asana_pd = _pd("asana")
+    asana_on = asana_native or asana_pd
+    add(
+        "asana", "Asana", "productivity",
+        "ok" if asana_on else "off",
+        detail=("Connected via Pipedream" if asana_pd
+                else "Connected via token" if asana_native
+                else "Not connected"),
+        supports=tool_registry.family_verbs("asana"),
+        can_test=asana_on,
+    )
+
+    # ── Slack (config only — a token is NEVER read here) ──
+    if caller_org is not None:
+        slack_on = _org_connected(org_rows, "slack") or _org_connected(
+            org_rows, "cedric-brain")
+    else:
+        slack_on = bool(settings.slack_webhook_url)
+    add(
+        "slack", "Slack", "messaging",
+        "ok" if slack_on else "off",
+        detail=("Connected" if slack_on else "Not connected"),
+        supports=["notify"], can_test=False,
+    )
+
+    # ── Meeting bot (Recall) ──
+    try:
+        recall_ready = recall_client.readiness().get("ready", False)
+    except Exception:  # noqa: BLE001
+        recall_ready = False
+    add(
+        "meeting_bot", "Meeting bot (Recall)", "meeting",
+        "ok" if recall_ready else ("warn" if settings.recall_api_key else "off"),
+        detail=("Recall configured" if recall_ready
+                else "Recall key set but not ready" if settings.recall_api_key
+                else "Recall not configured"),
+        supports=["join"],
+        can_test=bool(settings.recall_api_key.strip()),
+    )
+
+    # ── Voice (ElevenLabs → edge-tts fallback; 'ok' either way) ──
+    voice_el = bool(settings.elevenlabs_api_key.strip())
+    add(
+        "voice", "Voice", "media", "ok",
+        detail=("ElevenLabs configured" if voice_el
+                else "Using edge-tts fallback (no ElevenLabs key)"),
+        supports=["speak"], can_test=False,
+    )
+
+    # ── Company Brain (base-pack docs + durable published sources) ──
+    try:
+        roster = (avatars.list_for_org(caller_org) if caller_org
+                  else avatars.list_ids())
+        base_docs = sum(
+            _knowledge_docs(avatars.load(a)) for a in roster if not _hidden(a)
+        )
+    except Exception:  # noqa: BLE001
+        base_docs = 0
+    published = 0
+    brain_checked = None
+    if knowledge.enabled():
+        try:
+            for s in dal.list_sources(org):
+                published += int(s.get("published_documents") or 0)
+            jobs = dal.job_rows(org, limit=1)
+            if jobs:
+                brain_checked = _iso(jobs[0].get("updated_at"))
+        except Exception:  # noqa: BLE001 — durable plane hiccup: base pack still counts
+            pass
+    total_docs = base_docs + published
+    add(
+        "company_brain", "Company Brain", "knowledge",
+        "ok" if total_docs > 0 else "off",
+        detail=(f"{base_docs} base doc(s)"
+                + (f" + {published} published source doc(s)" if published else "")
+                if total_docs else "No knowledge docs indexed"),
+        last_checked=brain_checked,
+        supports=["ground"], can_test=False,
+    )
+
+    # ── Graphiti knowledge graph (enabled-but-unvalidated ⇒ warn) ──
+    g_enabled = bool(settings.graphiti_enabled)
+    g_configured = bool(settings.graphiti_enabled and settings.graphiti_uri.strip())
+    g_core = bool(_GRAPHITI_CORE_VERSION)
+    if not g_enabled:
+        g_status, g_detail = "off", "Disabled"
+    elif not (g_configured and g_core):
+        g_status = "warn"
+        g_detail = ("Enabled but not configured"
+                    if not g_configured else "Enabled but graphiti-core not installed")
+    else:
+        g_status = "warn"
+        g_detail = "Enabled — never validated (run a live test)"
+    add(
+        "graphiti", "Knowledge graph (Graphiti)", "knowledge",
+        g_status, detail=g_detail, supports=["ground"],
+        can_test=g_enabled,
+    )
+
+    return rows
+
+
+@router.get("/dashboard/syscheck")
+def dashboard_syscheck(request: Request) -> JSONResponse:
+    """Per-provider readiness board. Auth-gated EXACTLY like /dashboard/summary:
+    cookie user, per-org bearer, global bearer, or key-free demo. Distilled,
+    PII-safe status only — never a token, never transcript content."""
+    from .. import cedric  # local import, same reason as dashboard_summary
+
+    user = auth.current_user(request)
+    machine_org = None
+    if user is None:
+        machine_org = cedric.resolve_machine_org(request)
+        if machine_org is None:
+            if err := auth.gate(request):
+                return err
+    caller_org = user["org_id"] if user else machine_org
+
+    rows = _syscheck_rows(caller_org)
+    return JSONResponse(
+        _json_safe({
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "rows": rows,
+        }),
+        headers=_NO_STORE,
+    )
+
+
+# App families the executor can act on. A family appears in the capability
+# list only when the executor actually maps verbs for it.
+_CAPABILITY_FAMILIES = ("google_calendar", "gmail", "google_drive", "asana")
+
+
+@router.get("/dashboard/capabilities")
+def dashboard_capabilities(request: Request) -> JSONResponse:
+    """What each connected tool can actually DO, per org.
+
+    Read-only and fully DERIVED — nothing here is hand-kept. Connection state
+    comes from the same rows the System Check board builds, and the verb list
+    comes from the executor's own mapper via ``tool_registry.family_verbs``
+    (#377). One catalog: what the Connections cards show, what the System Check
+    board lists, and what the avatar claims mid-meeting cannot drift apart.
+
+    Auth-gated exactly like /dashboard/summary. Distilled only — no token, no
+    account credential, no transcript.
+    """
+    from .. import cedric  # local import, same reason as dashboard_summary
+
+    user = auth.current_user(request)
+    machine_org = None
+    if user is None:
+        machine_org = cedric.resolve_machine_org(request)
+        if machine_org is None:
+            if err := auth.gate(request):
+                return err
+    caller_org = user["org_id"] if user else machine_org
+
+    try:
+        by_key = {str(r.get("key") or ""): r for r in _syscheck_rows(caller_org)}
+    except Exception:  # noqa: BLE001 — a capability list never 500s the page
+        by_key = {}
+
+    apps: list[dict] = []
+    for slug in _CAPABILITY_FAMILIES:
+        verbs = tool_registry.family_verbs(slug)
+        if not verbs:  # executor maps nothing for this family — say nothing
+            continue
+        row = by_key.get(slug) or {}
+        status = str(row.get("status") or "off")
+        apps.append({
+            "slug": slug,
+            "label": tool_registry.FAMILY_LABELS.get(slug, slug),
+            # 'warn' = connected but a scope/health caveat: still connected.
+            "connected": status in ("ok", "warn"),
+            "status": status,
+            "account": str(row.get("account") or ""),
+            "verbs": verbs,
+        })
+
+    return JSONResponse(
+        _json_safe({
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "apps": apps,
+        }),
+        headers=_NO_STORE,
+    )
+
+
+# ── live read-only probes (module-level so tests can patch them) ────────────
+
+def _pd_account_id(org: str, slug: str) -> str:
+    """Resolve a Pipedream connected-account id for ``slug`` (with a ``google``
+    fallback for the Google apps), or "" when none/unreachable."""
+    candidates = [slug]
+    if slug in ("google_calendar", "gmail", "google_drive"):
+        candidates.append("google")
+    try:
+        accounts = pipedream_client.list_accounts(org)
+    except pipedream_client.PipedreamError:
+        return ""
+    by_app: dict[str, str] = {}
+    for a in accounts:
+        app = str(a.get("app") or "")
+        if app and a.get("id") and app not in by_app:
+            by_app[app] = str(a.get("id"))
+    for c in candidates:
+        if by_app.get(c):
+            return by_app[c]
+    return ""
+
+
+def _probe_pipedream(org: str, account_id: str, url: str) -> dict:
+    """One read-only proxy GET; map the downstream status to our vocabulary.
+    401/403 ⇒ 'error' (auth broken). Never raises, never returns a token."""
+    try:
+        resp = pipedream_client.proxy_request(org, account_id, "GET", url)
+    except pipedream_client.PipedreamError:
+        return {"status": "off", "detail": "not configured", "account": ""}
+    st = resp.get("status")
+    if st in (401, 403):
+        return {"status": "error", "detail": "auth broken — reconnect", "account": ""}
+    if resp.get("ok"):
+        return {"status": "ok", "detail": "Live read succeeded",
+                "account": _probe_account(resp.get("json"))}
+    return {"status": "error", "detail": f"HTTP {st}", "account": ""}
+
+
+def _probe_google_native(org: str, url: str) -> dict:
+    """Mint a fresh access token from the org's native Google grant (a live
+    read-only refresh) and do one cheap GET. No token is ever returned."""
+    from .. import google_client
+
+    tok, err = google_client._access_token(org, force_refresh=True)
+    if err or not tok:
+        return {"status": "error", "detail": "auth broken — reconnect", "account": ""}
+    try:
+        import httpx
+        resp = httpx.get(url, headers={"Authorization": f"Bearer {tok}"}, timeout=15.0)
+    except Exception:  # noqa: BLE001
+        return {"status": "error", "detail": "request failed", "account": ""}
+    if resp.status_code in (401, 403):
+        return {"status": "error", "detail": "auth broken — reconnect", "account": ""}
+    if resp.status_code < 400:
+        return {"status": "ok", "detail": "Live read succeeded",
+                "account": (store.get_org_oauth(org) or {}).get("email", "")}
+    return {"status": "error", "detail": f"HTTP {resp.status_code}", "account": ""}
+
+
+def _probe_asana_native(org: str) -> dict:
+    tok, err = asana_client._token(org)
+    if err or not tok:
+        return {"status": "off", "detail": "not configured", "account": ""}
+    info = asana_client.verify_token(tok)  # live GET /users/me — no token echoed
+    if info.get("ok"):
+        return {"status": "ok", "detail": "Live read succeeded",
+                "account": info.get("email", "")}
+    return {"status": "error", "detail": "auth broken — reconnect", "account": ""}
+
+
+def _probe_recall() -> dict:
+    from .. import recall_client
+
+    r = recall_client.auth_check()
+    auth_state = r.get("auth")
+    if auth_state == "valid":
+        return {"status": "ok", "detail": "Recall API reachable", "account": ""}
+    if auth_state == "skipped":
+        return {"status": "off", "detail": "not configured", "account": ""}
+    if auth_state == "invalid":
+        return {"status": "error", "detail": "auth broken — reconnect", "account": ""}
+    return {"status": "error", "detail": "Recall unreachable", "account": ""}
+
+
+async def _probe_graphiti() -> dict:
+    """Live ingest→recall smoke against a THROWAWAY ``__smoke__`` group — never a
+    real org's graph (mirrors GET /health/graphiti?run=1)."""
+    if not graphiti_client.enabled():
+        return {"status": "off", "detail": "not configured", "account": ""}
+    ready = await graphiti_client.ensure_ready()
+    if not ready:
+        return {"status": "error", "detail": "connect failed", "account": ""}
+    sample = (
+        "Smoke check: issue ENG-999 'Wire the payments webhook' is assigned to "
+        "Dana Lin and is blocked by ENG-1000."
+    )
+    await graphiti_client.ingest(
+        "__smoke__", sample, name="smoke", source_description="smoke")
+    facts = await graphiti_client.recall(
+        "__smoke__", "who is ENG-999 assigned to and what is blocking it",
+        timeout_s=20.0, num_results=8)
+    lines = [ln for ln in (facts or "").splitlines() if ln.strip()]
+    return {
+        "status": "ok" if lines else "warn",
+        "detail": (f"Live round-trip read {len(lines)} fact(s)" if lines
+                   else "Connected but recall returned nothing"),
+        "account": "",
+    }
+
+
+@router.post("/dashboard/syscheck/test")
+async def syscheck_test(request: Request) -> JSONResponse:
+    """Run a LIVE read-only probe for one provider. Login + same-origin gated
+    (the same door as approvals). Everything degrades gracefully: unconfigured
+    ⇒ 'off', broken auth ⇒ 'error', working ⇒ 'ok'. NEVER 500s, never returns a
+    credential."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    org = user["org_id"]
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    provider = str((body or {}).get("provider") or "").strip()
+
+    # Per-(org, provider) debounce: swallow rapid repeats (double-clicks, "Test
+    # all") before they re-run the probe / force-refresh a token upstream.
+    now = time.monotonic()
+    cd_key = (org, provider)
+    last = _syscheck_last.get(cd_key)
+    if last is not None and (now - last) < _SYSCHECK_COOLDOWN_S:
+        return JSONResponse(
+            {"provider": provider, "status": "warn",
+             "detail": "rate limited, try again shortly",
+             "account": "", "latency_ms": 0},
+            headers=_NO_STORE,
+        )
+    _syscheck_last[cd_key] = now
+
+    t0 = time.monotonic()
+    try:
+        if provider in _PD_PROBE:
+            slug, url = _PD_PROBE[provider]
+            result = None
+            if pipedream_client.enabled():
+                acct = await run_in_threadpool(_pd_account_id, org, slug)
+                if acct:
+                    result = await run_in_threadpool(_probe_pipedream, org, acct, url)
+            if result is None:
+                # Native fallback: Asana PAT/OAuth, or the org's Google grant.
+                if provider == "asana":
+                    result = await run_in_threadpool(_probe_asana_native, org)
+                elif store.get_org_oauth(org):
+                    result = await run_in_threadpool(_probe_google_native, org, url)
+                else:
+                    result = {"status": "off", "detail": "not configured",
+                              "account": ""}
+        elif provider == "graphiti":
+            result = await _probe_graphiti()
+        elif provider == "meeting_bot":
+            result = await run_in_threadpool(_probe_recall)
+        else:
+            result = {"status": "off", "detail": "no live probe for this provider",
+                      "account": ""}
+    except Exception:  # noqa: BLE001 — a probe must never 500 the board
+        result = {"status": "error", "detail": "probe failed", "account": ""}
+    latency_ms = round((time.monotonic() - t0) * 1000)
+
+    return JSONResponse(
+        {"provider": provider,
+         "status": result.get("status", "off"),
+         "detail": result.get("detail", ""),
+         "account": result.get("account", ""),
+         "latency_ms": latency_ms},
+        headers=_NO_STORE,
+    )
+
+
+@router.get("/dashboard/meetings/{bot_id}/decisions")
+async def meeting_decisions(bot_id: str, request: Request) -> JSONResponse:
+    """First-class decision records for one meeting (0017/meeting_decisions).
+
+    Same auth + tenancy AND per-user archive scope as /dashboard/summary: a
+    cookie user or per-org bearer sees only their org's decisions, and — like
+    the summary/meetings archive (2026-07-21) — a cookie user may only read a
+    meeting they dispatched (principal_id) or audibly attended (transcript
+    speaker), even inside their own shared org. A meeting they can't see returns
+    404 (matching the summary/archive posture — absence, not a 403 that would
+    confirm the row exists). The unscoped worlds (global bearer / key-free demo)
+    fall back to the Demo org and keep the full org view. Decisions are
+    DISTILLED fields (decision, maker, reason, project, supersede link) — never
+    transcript text — so they are safe to serve here. Read-only, off the live
+    path."""
+    from .. import cedric  # local import, same reason as dashboard_summary
+
+    user = auth.current_user(request)
+    machine_org = None
+    if user is None:
+        machine_org = cedric.resolve_machine_org(request)
+        if machine_org is None:
+            if err := auth.gate(request):
+                return err
+    caller_org = user["org_id"] if user else machine_org
+    scope = caller_org or settings.demo_org_id
+    # Per-user archive gate: load the meeting artifact in this tenant and verify
+    # the caller attended/dispatched it before returning any decisions. Machine
+    # callers (user=None) keep the full org view. 404 (not 403) when invisible.
+    artifact = await run_in_threadpool(store.get_artifact, bot_id, str(scope))
+    if artifact is None or not _user_attended(user, artifact):
+        return JSONResponse(
+            {"error": "not found"}, status_code=404, headers=_NO_STORE
+        )
+    records = await run_in_threadpool(store.list_decisions, str(scope), bot_id)
+    return JSONResponse({"bot_id": bot_id, "decisions": records}, headers=_NO_STORE)
+
+
 @router.post("/dashboard/prefs/transcripts")
 async def set_transcript_pref(request: Request) -> JSONResponse:
     """Owner toggles the meeting-view transcript pane for their org.
@@ -1002,8 +1719,13 @@ async def set_avatar_capability_endpoint(
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     capability = str((body or {}).get("capability") or "").strip().lower()
     enabled = bool((body or {}).get("enabled"))
+    # Scoped to the CALLER'S ORG (cross-tenant fix 2026-07-23): this used to
+    # write a row keyed by avatar_id alone, so one tenant flipping Laura's
+    # Google switch flipped it for every tenant on the deployment.
     ok = await run_in_threadpool(
-        store.set_avatar_capability, aid, capability, enabled
+        lambda: store.set_avatar_capability(
+            aid, capability, enabled, org_id=str(user.get("org_id") or "")
+        )
     )
     if not ok:
         return JSONResponse(
@@ -1099,7 +1821,11 @@ async def disconnect_asana(request: Request) -> JSONResponse:
     asana_client._reset_brief_cache()
     return JSONResponse(
         {"ok": True, "removed": bool(removed_oauth or removed_pat),
-         "still_connected_via_env": bool(settings.asana_token.strip())},
+         # The env PAT is the DEPLOYMENT owner's workspace and now serves only
+         # the deployment's own org, so a real tenant that disconnects really
+         # is disconnected — saying otherwise would be a false reassurance.
+         "still_connected_via_env": bool(settings.asana_token.strip())
+         and asana_client._env_pat_allowed(str(user["org_id"]))},
         headers=_NO_STORE,
     )
 
@@ -2504,7 +3230,9 @@ def _artifact_brief_for_action(caller_org: str, action_id: str) -> str:
     return ""
 
 
-def _find_org_action(caller_org: str, action_id: str) -> tuple[dict, str] | None:
+def _find_org_action(
+    caller_org: str, action_id: str, user: dict | None = None
+) -> tuple[dict, str] | None:
     """The stored artifact action with this ``action_id`` that is VISIBLE to
     ``caller_org`` (its own org, or a legacy unowned '' row), as
     ``(action, acting_avatar_id)``, or None.
@@ -2515,7 +3243,14 @@ def _find_org_action(caller_org: str, action_id: str) -> tuple[dict, str] | None
     approve seam can honour that avatar's per-avatar capability toggle. Scanning
     artifacts is O(meetings) but this is a dashboard action off the live path.
     Doubles as the org-scope check: a caller can only approve an action inside
-    an artifact its own org can see."""
+    an artifact its own org can see.
+
+    ``user`` adds the PER-PERSON scope the meeting surfaces already apply
+    (_user_attended): a colleague who never attended the meeting must not be
+    able to read — let alone approve and EXECUTE — its actions against the
+    org's connected accounts (security audit 2026-07-23, gap #3: the action
+    doors were org-scoped only, so any member could run anything). A machine
+    caller (user=None) keeps today's org-wide service scope."""
     aid = (action_id or "").strip()
     if not aid:
         return None
@@ -2529,6 +3264,8 @@ def _find_org_action(caller_org: str, action_id: str) -> tuple[dict, str] | None
             continue
         for a in art.get("actions") or []:
             if isinstance(a, dict) and str(a.get("action_id") or "") == aid:
+                if not _user_attended(user, art):
+                    return None  # same meeting scope as the workspace view
                 return a, str(art.get("avatar_id") or "")
     # Browser guarded steps (B0) are minted directly into the DURABLE
     # queued_actions index (route='browser'), not into a meeting artifact —
@@ -2607,7 +3344,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         return JSONResponse({"error": "action_id is required"}, status_code=400)
     org = user["org_id"]
 
-    found = await run_in_threadpool(_find_org_action, org, aid)
+    found = await run_in_threadpool(_find_org_action, org, aid, user)
     if found is None:
         return JSONResponse(
             {"error": "unknown action for this org"}, status_code=404,
@@ -2703,6 +3440,39 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
              "params_schema": action_plane.params_schema(typed)},
             status_code=422, headers=_NO_STORE,
         )
+
+    # Semantic gate (owner rule 2026-07-22, card e44f90f7ee62497d): fields
+    # naming real workspace entities must RESOLVE against the org's actual
+    # data BEFORE the claim — "you can't move if the parameters don't work".
+    # Resolved names are persisted as canonical ids; unresolvable ones send
+    # the card back to needs_details with the valid options for the form.
+    if typed:
+        from ..actions import param_resolve
+
+        rewrites, invalid = await run_in_threadpool(
+            param_resolve.validate_typed_params, org, typed
+        )
+        if invalid:
+            await run_in_threadpool(
+                ledger.set_action_status, aid, "needs_details",
+                "invalid: " + "; ".join(e["message"] for e in invalid)[:300],
+                org_id=org,
+            )
+            return JSONResponse(
+                {"error": "needs_details", "action_id": aid,
+                 "missing_params": [e["field"] for e in invalid],
+                 "invalid_fields": invalid,
+                 "params_schema": action_plane.params_schema(typed)},
+                status_code=422, headers=_NO_STORE,
+            )
+        if rewrites:
+            fixed = await run_in_threadpool(
+                lambda: ledger.update_action_params(
+                    aid, rewrites, org_id=org, artifact_typed=typed
+                )
+            )
+            if fixed is not None:
+                typed = fixed
 
     # Record THE canonical decision (first write wins across surfaces and
     # instances). A dashboard approve after a Slack decision — or a repeated
@@ -2830,7 +3600,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
 
         family = executor.capability_family(exec_action.get("type"))
         caps = await run_in_threadpool(
-            store.get_avatar_capabilities, acting_avatar
+            store.get_avatar_capabilities, acting_avatar, org
         )
         blocked_by_toggle = executor.capability_blocked(
             caps, exec_action.get("type")
@@ -2893,8 +3663,15 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             and route == "manual"
             and family == "google"
         ):
+            # BOTH planes count (live repro 2026-07-22 evening, card
+            # 211d55ecbddf4a91): the org had Google connected in Pipedream —
+            # Petra read the calendar in-call — but this gate consulted only
+            # the NATIVE refresh token, so the card dead-ended tracked-only
+            # and the executor's Pipedream fallback below never even ran.
+            exec_type = str((exec_action or {}).get("type") or "")
             has_google = await run_in_threadpool(
                 lambda: bool((store.get_org_oauth(org) or {}).get("refresh_token"))
+                or executor._pipedream_google_connected(org, exec_type)
             )
             if not has_google:
                 connection_blocked = True
@@ -3037,7 +3814,7 @@ async def reject_action(action_id: str, request: Request) -> JSONResponse:
         return JSONResponse({"error": "action_id is required"}, status_code=400)
     org = user["org_id"]
 
-    if await run_in_threadpool(_find_org_action, org, aid) is None:
+    if await run_in_threadpool(_find_org_action, org, aid, user) is None:
         return JSONResponse(
             {"error": "unknown action for this org"}, status_code=404,
             headers=_NO_STORE,
@@ -3103,7 +3880,7 @@ async def dashboard_chat_list(request: Request, after: int = 0) -> JSONResponse:
     today; the endpoint is retained as the transport for the planned Cedric
     bridge (docs/CEDRIC-DASHBOARD-BRIDGE.md). Decisions never live in chat
     rows; they converge on the canonical approval channel (Action Center)."""
-    org, _user = _chat_caller_org(request)
+    org, chat_user = _chat_caller_org(request)
     if isinstance(org, JSONResponse):
         return org
     messages = await run_in_threadpool(store.list_chat_messages, org, after)
@@ -3116,7 +3893,7 @@ async def dashboard_chat_list(request: Request, after: int = 0) -> JSONResponse:
             ledger.action_statuses, card_ids, org_id=org
         )
         for aid in card_ids:
-            found = await run_in_threadpool(_find_org_action, org, aid)
+            found = await run_in_threadpool(_find_org_action, org, aid, chat_user)
             ex = statuses.get(aid)
             actions[aid] = {
                 "known": found is not None,
@@ -3234,12 +4011,365 @@ async def dashboard_action_params(action_id: str, request: Request) -> JSONRespo
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     args = (body or {}).get("args") if isinstance(body, dict) else None
 
+    # Editing an action's parameters is pre-execution tampering (redirect a
+    # recipient, change an amount), so it needs the SAME per-person scope as
+    # approving it — org scope alone let any member rewrite an action from a
+    # meeting they never attended (security audit 2026-07-23, gap #3).
+    if await run_in_threadpool(
+        _find_org_action, str(user["org_id"]), aid, user
+    ) is None:
+        return JSONResponse(
+            {"error": "unknown action for this org"}, status_code=404
+        )
+
     from . import org_api  # local import: org_api lazily imports dashboard
 
     code, payload = await run_in_threadpool(
         org_api.apply_param_edits, user["org_id"], aid, args
     )
     return JSONResponse(payload, status_code=code, headers=_NO_STORE)
+
+
+# ── per-meeting workspace (read-only) ────────────────────────────────────────
+# One page tying a meeting's before/during/after together: overview + roster,
+# the DISTILLED summary, the canonical actions (captured→approved→executed with
+# provenance + receipts), a derived timeline, and the files it produced. Purely
+# a projection over data the pipeline already writes — it changes NO meeting
+# behaviour, adds NO model call, and is off the live path.
+
+
+def _visible_meeting_row(
+    caller_org: str | None, user: dict | None, bot_id: str
+) -> dict | None:
+    """The saved artifact row for ``bot_id`` this caller may see, or None.
+
+    Same tenancy + per-user attendance scoping as the summary listing
+    (_org_visible + _user_attended) and the approve door (_find_org_action):
+    a real org sees only its own rows (+ the legacy unowned '' for Demo), and
+    a cookie user only meetings they dispatched or audibly attended. None here
+    ⇒ the route answers 404 (never leak existence across the tenant boundary)."""
+    target = (bot_id or "").strip()
+    if not target:
+        return None
+    scope = None
+    if store.durable_artifacts_enabled():
+        scope = caller_org or settings.demo_org_id
+    for row in store.list_artifacts(scope):
+        if str(row.get("bot_id") or "") != target:
+            continue
+        art = row.get("artifact") or {}
+        if not _org_visible(caller_org, art.get("org_id", "")):
+            return None
+        if not _user_attended(user, art):
+            return None
+        return row
+    return None
+
+
+def _workspace_overview(row: dict, session) -> dict:
+    """Header facts: who/where/when + the human roster. The roster is sourced
+    from the ARCHIVED meeting (transcript speaker labels — the avatar's own
+    lines excluded), because finalize removes the live session before a meeting
+    is drill-in-able, so store.get(bot_id) is None for every archived meeting.
+    A still-live session (rare: viewing an in-progress meeting) is preferred
+    when present and carries live here-status. The live writers
+    (Session.participant_event / resolve_participant) mutate the dict WITHOUT
+    holding store._LOCK, so the lock here does not truly serialise against them;
+    the surrounding try/except is the real guard — if a concurrent live mutation
+    races the snapshot and raises RuntimeError (dict changed size), we fall back
+    to the archived transcript roster rather than 500 the page. duration and
+    saved_at come from the artifact. usage_sessions (in_call_at/closed_at) is a
+    Postgres-only
+    refinement — the SQLite/demo path derives start from saved_at − duration,
+    so the shape is identical either way."""
+    art = row.get("artifact") or {}
+    roster: list[dict] = []
+    seen: set[str] = set()
+    if session is not None:
+        try:
+            with store._LOCK:  # best-effort snapshot; try/except below is the real guard
+                live = list(getattr(session, "participants", {}).values())
+        except Exception:  # noqa: BLE001 — a roster read never 500s the page
+            live = []
+        for participant in live:
+            name = str(participant.get("name") or "").strip()
+            if not name or str(participant.get("kind") or "") == "avatar":
+                continue
+            key = name.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            roster.append({"name": name[:80], "here": bool(participant.get("here"))})
+    # Archived source: transcript speakers survive finalize (the live session
+    # does not). `here` is False — the meeting is over.
+    for name in _transcript_speaker_names(art):
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        roster.append({"name": name[:80], "here": False})
+    saved_at = row.get("saved_at")
+    duration = int(art.get("duration_seconds") or 0)
+    started_at = (
+        (saved_at - duration) if (saved_at and duration) else None
+    )
+    return {
+        "bot_id": row.get("bot_id"),
+        "avatar_id": art.get("avatar_id", ""),
+        "org_id": art.get("org_id", ""),
+        "platform": _platform(art.get("meeting_url", "")),
+        "meeting_type": art.get("meeting_type", ""),
+        "meeting_url": str(art.get("meeting_url") or ""),
+        "started_at": started_at,
+        "ended_at": saved_at,
+        "saved_at": saved_at,
+        "duration_seconds": duration,
+        "readiness_score": int(art.get("readiness_score") or 0),
+        "participants": roster,
+    }
+
+
+def _as_str_list(value, cap: int, item_cap: int) -> list[str]:
+    """Coerce an artifact list field (strings, or {text/step/...} dicts) into a
+    bounded list of plain strings for the wire — distilled, never transcript."""
+    out: list[str] = []
+    for entry in (value or [])[:cap]:
+        if isinstance(entry, dict):
+            text = str(
+                entry.get("text")
+                or entry.get("step")
+                or entry.get("title")
+                or entry.get("summary")
+                or entry.get("decision")
+                or ""
+            )
+        else:
+            text = str(entry)
+        text = text.strip()
+        if text:
+            out.append(text[:item_cap])
+    return out
+
+
+def _workspace_summary(art: dict, include_transcript: bool) -> dict:
+    """The DISTILLED recap: summary + risks + missing steps + goals. The
+    transcript rides ONLY when the org's show_transcripts pref is ON — the same
+    gate _meeting_row enforces (default OFF; PII stays in the store otherwise)."""
+    out = {
+        "summary": str(art.get("summary") or "")[:2000],
+        "risks": _as_str_list(art.get("risks"), 12, 300),
+        "missing_steps": _as_str_list(art.get("missing_steps"), 12, 200),
+        "goals": _as_str_list(art.get("goals"), 12, 300),
+        "decisions_count": len(art.get("decisions") or []),
+        "follow_up_subject": str(
+            (art.get("follow_up_email") or {}).get("subject") or ""
+        )[:200],
+    }
+    if include_transcript:
+        out["transcript"] = str(art.get("transcript") or "")[:40000]
+    return out
+
+
+def _timeline_event(
+    ts, event: str, detail: str = "", actor: str = "", action_id: str = ""
+) -> dict:
+    return {
+        "ts": float(ts or 0.0),
+        "event": str(event or ""),
+        "detail": str(detail or "")[:200],
+        "actor": str(actor or "")[:80],
+        "action_id": str(action_id or ""),
+    }
+
+
+def _workspace_timeline(
+    art: dict, saved_at, views: list[dict], capture_times: dict[str, float]
+) -> list[dict]:
+    """A single time-ordered story merged from the states the pipeline already
+    records: per-action CAPTURE (action_capture_events.created_at, else the
+    meeting finalize), the human DECISION (action_decisions.decided_at +
+    laura_user_id), the EXECUTION outcome (queued_actions execution stamp), and
+    the canonical log entries. NOTE: logs_json entries carry no per-entry
+    timestamp, so they anchor to the action's execution stamp (fallback: its
+    capture ts) to sort into place. Sorted ascending by ts."""
+    events: list[dict] = []
+    avatar = str(art.get("avatar_id") or "")
+    if saved_at:
+        events.append(
+            _timeline_event(saved_at, "meeting_finalized",
+                            "Meeting ended; recap saved", actor=avatar)
+        )
+    for view in views:
+        aid = str(view.get("action_id") or "")
+        cap_ts = capture_times.get(aid) or saved_at or 0.0
+        events.append(
+            _timeline_event(cap_ts, "action_captured", view.get("action", ""),
+                            actor=str(view.get("origin_avatar") or ""),
+                            action_id=aid)
+        )
+        decision = view.get("decision")
+        if isinstance(decision, dict) and decision.get("decision"):
+            verb = str(decision["decision"]).lower()
+            label = "action_approved" if verb.startswith("approve") else (
+                "action_rejected" if verb.startswith("reject") else "action_decided"
+            )
+            events.append(
+                _timeline_event(
+                    decision.get("decided_at"), label, view.get("action", ""),
+                    actor=str(decision.get("laura_user_id") or ""),
+                    action_id=aid,
+                )
+            )
+        status = str(view.get("status") or "")
+        exec_ts = view.get("updated_at") or cap_ts
+        if status in ("executing", "done", "failed"):
+            events.append(
+                _timeline_event(exec_ts, "action_" + status,
+                                view.get("detail", ""), action_id=aid)
+            )
+        for entry in (view.get("logs") or [])[-10:]:
+            if isinstance(entry, dict):
+                detail = " ".join(
+                    p for p in (str(entry.get("event") or ""),
+                                str(entry.get("detail") or "")) if p
+                ).strip(": ")
+            else:
+                detail = str(entry)
+            if detail:
+                events.append(
+                    _timeline_event(exec_ts, "action_log", detail, action_id=aid)
+                )
+    events.sort(key=lambda entry: entry["ts"])
+    return events
+
+
+def _workspace_files(art: dict, views: list[dict]) -> list[dict]:
+    """What the meeting produced, distilled: the drafted follow-up email and
+    every action RECEIPT ({kind, ref} — a link/id the executor returned, never
+    a raw storage secret; that's all the receipt_json ever carries)."""
+    files: list[dict] = []
+    subject = str((art.get("follow_up_email") or {}).get("subject") or "").strip()
+    if subject:
+        files.append({"kind": "follow_up_email", "label": subject[:160], "ref": ""})
+    for view in views:
+        receipt = view.get("receipt")
+        if isinstance(receipt, dict) and receipt.get("ref"):
+            kind = str(receipt.get("kind") or "receipt")[:40]
+            files.append({
+                "kind": kind,
+                "label": kind.replace("_", " "),
+                "ref": str(receipt.get("ref"))[:400],
+                "action_id": str(view.get("action_id") or ""),
+            })
+    return files
+
+
+def _meeting_workspace_payload(
+    caller_org: str | None, user: dict | None, bot_id: str
+) -> dict | None:
+    """Assemble the read-only workspace for one meeting, or None when the
+    bot_id is not visible to the caller (→ 404). Sync (threadpool caller);
+    every read goes through the DALs so Postgres RLS applies."""
+    row = _visible_meeting_row(caller_org, user, bot_id)
+    if row is None:
+        return None
+    art = row.get("artifact") or {}
+    scope = caller_org or settings.demo_org_id
+
+    # NOTE: no top-level maybe_reconcile here — org_api._canonical_action_view
+    # already runs the throttled stale-executing settle per action below, so a
+    # claim held by a process that died mid-call still surfaces as a truthful
+    # terminal receipt. A page with zero actions has nothing to settle for the
+    # display anyway.
+
+    show_transcripts = store.get_org_pref(scope, "show_transcripts") == "1"
+    session = store.get(bot_id)
+
+    # Canonical action ids: the artifact's captured actions plus any durable
+    # queued actions for this bot (browser B0 steps are minted straight into
+    # the durable index, never into the artifact). Order preserved, deduped.
+    action_ids: list[str] = []
+    seen: set[str] = set()
+    for action in (art.get("actions") or []):
+        if isinstance(action, dict):
+            aid = str(action.get("action_id") or "")
+            if aid and aid not in seen:
+                seen.add(aid)
+                action_ids.append(aid)
+    try:
+        for queued in outbox.queued_actions(scope, bot_id):
+            aid = str(queued.get("action_id") or "")
+            if aid and aid not in seen:
+                seen.add(aid)
+                action_ids.append(aid)
+    except Exception:  # noqa: BLE001 — a durable read blip never 500s the page
+        pass
+
+    from . import org_api  # local import: org_api lazily imports dashboard
+
+    views: list[dict] = []
+    for aid in action_ids:
+        try:
+            view = org_api._canonical_action_view(scope, aid)
+        except Exception:  # noqa: BLE001 — one bad row can't sink the workspace
+            view = None
+        if view is not None:
+            views.append(view)
+
+    try:
+        capture_times = outbox.action_capture_times(scope, bot_id)
+    except Exception:  # noqa: BLE001
+        capture_times = {}
+
+    return {
+        "overview": _workspace_overview(row, session),
+        "summary": _workspace_summary(art, show_transcripts),
+        "actions": views,
+        "timeline": _workspace_timeline(
+            art, row.get("saved_at"), views, capture_times
+        ),
+        "files": _workspace_files(art, views),
+        # Placeholder key for the sibling decisions PR — the artifact's decision
+        # count rides in summary.decisions_count until that lands.
+        "decisions": [],
+        "prefs": {"show_transcripts": show_transcripts},
+    }
+
+
+@router.get("/dashboard/meetings/{bot_id}")
+async def dashboard_meeting_workspace(
+    bot_id: str, request: Request
+) -> JSONResponse:
+    """Read-only per-meeting workspace: overview + roster, the distilled
+    summary, the canonical actions, a derived timeline, and files. Auth-gated
+    and tenant-scoped through the same four-world gate as /dashboard/summary;
+    404 when the meeting is not visible to the caller's org. no-store, and off
+    the live path (runs in the threadpool). DISTILLED only — the transcript
+    rides ONLY when the org's show_transcripts pref is ON."""
+    from .. import cedric  # local import, same reason as auth.gate's
+
+    user = auth.current_user(request)
+    machine_org = None
+    if user is None:
+        machine_org = cedric.resolve_machine_org(request)
+        if machine_org is None:
+            if err := auth.gate(request):
+                return err
+    caller_org = user["org_id"] if user else machine_org
+    target = (bot_id or "").strip()
+    if not target:
+        return JSONResponse(
+            {"error": "bot_id is required"}, status_code=400, headers=_NO_STORE
+        )
+    payload = await run_in_threadpool(
+        _meeting_workspace_payload, caller_org, user, target
+    )
+    if payload is None:
+        return JSONResponse(
+            {"error": "unknown meeting for this org"}, status_code=404,
+            headers=_NO_STORE,
+        )
+    return JSONResponse(_json_safe(payload), headers=_NO_STORE)
 
 
 @router.get("/dashboard/actions/{action_id}")

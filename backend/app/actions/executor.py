@@ -2,8 +2,8 @@
 
 The canonical approval doors and ledger execution claim remain the only license
 to perform a consequential write. Once claimed, this module asks Laura's own
-adapter registry to select and call the connected tool. It never brokers an
-action to an external executor.
+adapter registry to select and call the connected tool. Slack posts are the one brokered exception: they execute through the org-scoped
+Cedric connection. All other supported writes execute inside Laura.
 
 Slack and the dashboard are control surfaces only: they may approve, reject,
 and display status, but the vendor call and receipt are owned here inside Laura.
@@ -26,6 +26,10 @@ ASANA_UPDATE = "asana.update_task"
 ASANA_COMMENT = "asana.add_comment"
 SLACK_POST = "slack.post_message"
 ASANA_ACTION_TYPES = frozenset({ASANA_CREATE, ASANA_UPDATE, ASANA_COMMENT})
+# Gmail send and Calendar create exist on both planes. They deliberately route
+# through this executor first: native org OAuth wins; Pipedream Connect is the
+# fallback when native authentication is unavailable before any vendor write.
+_GOOGLE_FALLBACK_ACTION_TYPES = frozenset({CALENDAR_CREATE, EMAIL_SEND})
 NATIVE_ACTION_TYPES = native_runtime.action_types()
 
 
@@ -38,6 +42,8 @@ def capability_family(action_type: str | None) -> str:
     app = pipedream_executor.generic_app(action_type)
     if app:
         return app
+    if str(action_type or "").strip() == SLACK_POST:
+        return "slack"
     return native_runtime.family_for(action_type) or "google"
 
 
@@ -49,6 +55,11 @@ def from_typed(typed: dict | None) -> dict | None:
     Preserving it here makes the runtime an implementation detail rather than a
     breaking API change.
     """
+    action_type = str((typed or {}).get("type") or "").strip()
+    if action_type == SLACK_POST:
+        args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
+        return {"type": action_type, "message": dict(args)}
+
     normalized = native_runtime.from_typed(typed)
     if normalized is None:
         # Generic Pipedream actions (pd.<app>.run) aren't native, but they ARE
@@ -156,7 +167,7 @@ def route_for_typed(typed: dict | None, org_id: str = "", item_text: str = "") -
     Per-org, connection-aware (multi-tenant safe). When Pipedream's executor is
     on, a type it can map runs in Pipedream ONLY IF this org connected that app
     there. Otherwise it falls back to a native adapter when the type has one
-    (Asana / Gmail / Calendar / Slack all do) — so an org still on native, or a
+    (Asana / Gmail / Calendar do) — so an org still on native, or a
     brand-new external user who hasn't migrated to Pipedream yet, is NEVER
     broken (this is the Ananth incident 2026-07-21: his native Asana worked but
     the old unconditional Pipedream route failed his tasks with 'asana isn't
@@ -168,6 +179,19 @@ def route_for_typed(typed: dict | None, org_id: str = "", item_text: str = "") -
     from .. import pipedream_executor  # lazy: keep module load order decoupled
 
     action_type = str((typed or {}).get("type") or "").strip()
+    # Slack is org-scoped through Cedric. Never fall back to Laura's historical
+    # deployment-global webhook, which could post into the wrong workspace.
+    if action_type == SLACK_POST:
+        return _brokered_route(org_id)
+    # One stable route for the two dual-plane Google writes. The executor below
+    # owns native-first selection at execution time, so a stale connection probe
+    # at capture time can no longer strand an otherwise executable action.
+    if (
+        action_type in _GOOGLE_FALLBACK_ACTION_TYPES
+        and native_runtime.supports(action_type)
+        and enabled()
+    ):
+        return "native"
     if pipedream_executor.handles({"type": action_type}):
         # Run in Pipedream when the org actually connected the app there.
         if pipedream_executor.app_connected(
@@ -216,6 +240,51 @@ def _normalized(action: dict | None) -> dict:
     return {"type": action_type, "args": dict(args)}
 
 
+def _native_google_auth_unavailable(result: dict) -> bool:
+    """True only when the native attempt failed before a Google write.
+
+    Fallback is intentionally narrow: vendor/API write errors are never retried
+    on another plane because the first write may have landed despite the error.
+    """
+
+    error = str((result or {}).get("error") or "").lower()
+    return any(
+        marker in error
+        for marker in (
+            "google is not connected",
+            "oauth client is not configured",
+            "token request failed",
+            "token refresh rejected",
+            "no access token returned",
+        )
+    )
+
+
+def _pipedream_google_connected(org_id: str, action_type: str) -> bool:
+    """Best-effort availability probe for the matching Pipedream Google app."""
+
+    try:
+        from .. import pipedream_executor
+
+        return pipedream_executor.app_connected(
+            org_id, pipedream_executor.app_for_type(action_type)
+        )
+    except Exception:  # noqa: BLE001 — native remains the truthful fallback
+        return False
+
+
+def _execute_pipedream_fallback(
+    org_id: str, action_id: str, normalized: dict
+) -> dict:
+    """Execute on Pipedream; its own executor writes the canonical receipt."""
+
+    from .. import pipedream_executor
+
+    return pipedream_executor.execute_approved(
+        org_id, action_id, normalized
+    )
+
+
 def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
     """Execute one approved action and settle its canonical ledger receipt.
 
@@ -232,7 +301,38 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
     if not org:
         return {"ok": False, "error": "missing org"}
 
+    # Native first for the two Google writes. If the org has no native OAuth,
+    # avoid a doomed call and use its matching Connect account. If neither plan
+    # exists, keep the existing native reconnect hint. A native auth failure may
+    # also fall back, but a vendor/write error never does (no duplicate writes).
+    if action_type in _GOOGLE_FALLBACK_ACTION_TYPES:
+        try:
+            from .. import store
+
+            native_connected = bool(
+                store.get_org_oauth(org, provider="google")
+            )
+        except Exception:  # noqa: BLE001 — concrete client remains authoritative
+            native_connected = True
+        if (
+            not native_connected
+            and _pipedream_google_connected(org, action_type)
+        ):
+            return _execute_pipedream_fallback(
+                org, action_id, normalized
+            )
+
     result = native_runtime.execute(org, normalized)
+    if (
+        action_type in _GOOGLE_FALLBACK_ACTION_TYPES
+        and not result.get("ok")
+        and _native_google_auth_unavailable(result)
+        and _pipedream_google_connected(org, action_type)
+    ):
+        return _execute_pipedream_fallback(
+            org, action_id, normalized
+        )
+
     what = str(result.get("kind") or action_type or "action")
     receipt = str(result.get("ref") or "")
     # Phase-1 read-back on the NATIVE plane too (the Pipedream executor
@@ -325,3 +425,4 @@ def auto_execute_asana(org_id: str, actions: list) -> int:
         except Exception:  # noqa: BLE001 - finalize must never be blocked
             continue
     return attempted
+

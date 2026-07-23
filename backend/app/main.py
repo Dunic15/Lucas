@@ -101,7 +101,7 @@ from .brain.engine import (
     semantic_action_duplicates,
     type_actions,
 )
-from .meeting import conversation_frame
+from .meeting import conversation_frame, turn_manager
 from .meeting.lifecycle import (  # noqa: E402  (hoisted lifecycle core; re-import = compat)
     _BOT_TERMINAL, _BOT_VARIANT_RANK, _LEAVE_GONE_STATUSES,
     _ACTION_STOP, _DEMO_BROWSE_RE, _finalizing, _graphiti_tasks, _recall_list_headers,
@@ -1700,7 +1700,9 @@ def _followup_speaker_ok(session: "store.Session", speaker_id: str) -> bool:
 # the per-minute meter — sat in the dead room until a manual End). When the
 # LAST human leaves, wait a grace period (someone may rejoin after a drop),
 # re-check, then run the same idempotent finalize as POST /sessions/end.
-_EMPTY_ROOM_GRACE_S = 75.0
+# Tunable via EMPTY_ROOM_GRACE_SECONDS (settings.empty_room_grace_seconds);
+# tests monkeypatch this module attribute directly.
+_EMPTY_ROOM_GRACE_S = settings.empty_room_grace_seconds
 
 
 def _invalidate_empty_room_leave(session: "store.Session") -> None:
@@ -2998,6 +3000,60 @@ def _recall_capture_identity(
     return event_key, fingerprint
 
 
+_FINAL_DEDUPE_WINDOW_S = 8.0
+_FINAL_DEDUPE_MAX = 256
+
+
+def _is_duplicate_recall_final(
+    session: store.Session,
+    event_key: str,
+    fingerprint: str,
+    *,
+    now: float | None = None,
+) -> bool:
+    """Sliding, in-memory dedupe for repeated Recall final transcriptions.
+
+    Keys are SHA-256 digests only: no transcript text is stored or logged. The
+    fingerprint window refreshes on every consecutive duplicate, so a provider
+    replay loop stays suppressed until it stops. An intervening distinct final
+    is meaningful conversation and resets phrase dedupe; exact event identities
+    remain suppressed across the whole bounded window.
+    """
+
+    stamp = time.monotonic() if now is None else float(now)
+    seen = getattr(session, "_recall_final_dedupe", None)
+    if not isinstance(seen, dict):
+        seen = {}
+        session._recall_final_dedupe = seen
+    expired = [key for key, until in seen.items() if float(until) <= stamp]
+    for key in expired:
+        seen.pop(key, None)
+    until = stamp + _FINAL_DEDUPE_WINDOW_S
+    event_key_hashed = "e:" + event_key if event_key else ""
+    event_duplicate = bool(event_key_hashed and event_key_hashed in seen)
+    last = getattr(session, "_recall_final_last", None)
+    fingerprint_duplicate = bool(
+        fingerprint
+        and isinstance(last, tuple)
+        and len(last) == 2
+        and last[0] == fingerprint
+        and float(last[1]) > stamp
+    )
+    if event_key_hashed:
+        seen[event_key_hashed] = until
+    if fingerprint:
+        # Hashed fingerprint only — never transcript text. Updating this on
+        # every final makes A → B → A a real sequence, while A → A → A is a
+        # provider replay loop whose sliding window keeps refreshing.
+        session._recall_final_last = (fingerprint, until)
+    if len(seen) > _FINAL_DEDUPE_MAX:
+        for key, _until in sorted(seen.items(), key=lambda pair: pair[1])[
+            : len(seen) - _FINAL_DEDUPE_MAX
+        ]:
+            seen.pop(key, None)
+    return event_duplicate or fingerprint_duplicate
+
+
 # ───────────────────────── recall webhook ──────────────────────────
 @app.websocket("/realtime/recall-audio")
 @app.websocket("/realtime/recall-audio/{cap_path}")
@@ -3447,6 +3503,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
     avatar = avatar_resolver.for_session(session)
     if _is_own_speech(avatar.name, speaker, speaker_kind):
         return JSONResponse({"ok": True, "spoke": False, "reason": "own speech"})
+    if _is_duplicate_recall_final(
+        session, capture_event_key, capture_fingerprint
+    ):
+        # Provider re-transcription/retry: do not archive it, reason over it,
+        # capture it, or pay the response latency again.
+        return JSONResponse(
+            {"ok": True, "spoke": False, "reason": "duplicate final"}
+        )
     session.add_utterance(
         speaker,
         text,
@@ -3514,7 +3578,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     _frame_addressed_elsewhere = (
         not called and _addressed_elsewhere(session, avatar, text)
     )
-    conversation_frame.observe_session_utterance(
+    _frame_snapshot = conversation_frame.observe_session_utterance(
         session,
         avatar_name=avatar.name,
         participant_id=speaker_id,
@@ -3804,11 +3868,15 @@ async def recall_webhook(request: Request) -> JSONResponse:
             session.pending_clarify = None
             if text_is_details:
                 try:
+                    # A clarify answer fills labelled slots on the SAME card.
+                    # Never raw-append a fragment: "Three pm" becomes
+                    # "When: Three pm", which survives typing and display.
+                    updates = tools.fold_action_details(c_item, text, c_missing)
                     c_item, _ = await run_in_threadpool(
-                        tools.extend_action_once,
+                        tools.revise_action_once,
                         session,
                         c_item,
-                        text,
+                        updates,
                         source_event_key=capture_event_key,
                         source_fingerprint=capture_fingerprint,
                     )
@@ -4383,6 +4451,32 @@ async def recall_webhook(request: Request) -> JSONResponse:
         and _followup_speaker_ok(session, speaker_id)
     )
 
+    # ConversationFrame-backed social policy. Shadow is the safe default: the
+    # plan is deterministic and PII-free, but only mode=on may alter timing or
+    # suppress an unprompted spoken interjection. Named asks and engaged
+    # follow-ups always win inside plan_turn.
+    _turn_manager_on = turn_manager.is_active(
+        settings.conversation_turn_manager_mode
+    )
+    _turn_locked_dyad = (
+        (settings.cross_talk_suppression_enabled or _turn_manager_on)
+        and in_locked_dyad(
+            session.human_transcript(),
+            avatar_name=avatar.name,
+            now=time.time(),
+            min_turns=settings.cross_talk_min_turns,
+            max_gap_seconds=settings.cross_talk_max_gap_seconds,
+            window=settings.cross_talk_window,
+        )
+    )
+    _turn_plan = turn_manager.plan_turn(
+        _frame_snapshot,
+        called=called,
+        followup=followup,
+        turn_completeness=end_of_turn.completeness(text),
+        locked_dyad=_turn_locked_dyad,
+    )
+
     # Cooldown throttles UNPROMPTED interjections. Being addressed by name is a
     # direct ask — follow-ups right after her answer are what a fluent
     # conversation is made of, so `called` (and `followup`) bypass it.
@@ -4400,7 +4494,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # humans get first right of reply. Wait briefly; if anyone starts talking
     # (a partial lands or the transcript grows), yield silently. Deliberately
     # AFTER the cheap gates — a line that would be skipped anyway never waits.
-    if not called and not followup and settings.deference_seconds > 0:
+    if (
+        not called
+        and not followup
+        and settings.deference_seconds > 0
+        and not (_turn_manager_on and _turn_plan.skip_deference)
+    ):
         _defer_mark = len(session.human_transcript())
         _defer_t0 = time.time()
         # Size ONLY the wait — the yield decision below is unchanged. Adaptation
@@ -4421,14 +4520,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # Cross-talk: if two humans are in a tight back-and-forth right now, they
         # own the floor — wait the MAX rather than the sized window so she never
         # clips their volley. Suppression-only (still just a wait).
-        if settings.cross_talk_suppression_enabled and in_locked_dyad(
-            session.human_transcript(),
-            avatar_name=avatar.name,
-            now=_defer_t0,
-            min_turns=settings.cross_talk_min_turns,
-            max_gap_seconds=settings.cross_talk_max_gap_seconds,
-            window=settings.cross_talk_window,
-        ):
+        if _turn_locked_dyad:
             _defer_wait = max(_defer_wait, settings.deference_max_seconds)
         await asyncio.sleep(_defer_wait)
         if (
@@ -4952,13 +5044,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # Cross-talk: a tight two-human back-and-forth closes the floor for an
             # UNPROMPTED interjection — she falls to the audio-silent raised hand
             # (waiting to be invited) instead of talking over their volley.
-            _dyad = settings.cross_talk_suppression_enabled and in_locked_dyad(
-                session.human_transcript(),
-                avatar_name=avatar.name,
-                now=time.time(),
-                min_turns=settings.cross_talk_min_turns,
-                max_gap_seconds=settings.cross_talk_max_gap_seconds,
-                window=settings.cross_talk_window,
+            _dyad = _turn_locked_dyad or (
+                _turn_manager_on and _turn_plan.suppress_interjection
             )
             if should_interject(
                 enabled=settings.hand_raise_interject_when_confident
