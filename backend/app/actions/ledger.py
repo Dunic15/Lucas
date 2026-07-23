@@ -822,12 +822,17 @@ def withdraw_action(
                WHERE org_id=? AND action_id=? AND status='open'""",
             (time.time(), note, org_id, aid),
         )
-        conn.execute(
-            """UPDATE callback_outbox SET status='cancelled'
-               WHERE org_id=? AND action_id=?
-                 AND status IN ('pending', 'failed')""",
-            (org_id, aid),
-        )
+        callback_table = conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='callback_outbox'"
+        ).fetchone()
+        if callback_table is not None:
+            conn.execute(
+                """UPDATE callback_outbox SET status='cancelled'
+                   WHERE org_id=? AND action_id=?
+                     AND status IN ('pending', 'failed')""",
+                (org_id, aid),
+            )
     return "withdrawn"
 
 
