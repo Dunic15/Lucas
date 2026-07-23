@@ -20,7 +20,7 @@ from .. import (anam_client, asana_client, autopilot, avatar_resolver, avatars,
 from . import meeting_state
 from ..meeting_state import build_from_utterances
 from ..brain.engine import (post_meeting, degraded_post_meeting, type_actions,
-                            semantic_action_duplicates)
+                            headline_actions, semantic_action_duplicates)
 from ..decision import detect_browse_intent
 
 
@@ -1105,6 +1105,26 @@ async def _finalize_session_locked(
                 f"({type(e).__name__})",
                 flush=True,
             )
+
+    # Gist headlines — a short imperative `title` per action so the Action
+    # Centre reads as a task list, not raw transcript. Runs over the FINAL
+    # merged list (live captures + model-extracted + goal-inferred) so every
+    # card gets one. Best-effort + off the live path; a failure leaves titles
+    # to the dashboard's deterministic _display_title fallback. Uses the
+    # post-meeting provider (the quality model), never the fast live one.
+    try:
+        artifact["actions"] = await run_in_threadpool(
+            lambda: headline_actions(
+                artifact.get("actions") or [], artifact.get("summary") or ""
+            )
+        )
+        artifact["checklist"] = artifact["actions"]
+    except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
+        print(
+            f"[finalize] bot={bot_id} headline producer skipped "
+            f"({type(e).__name__})",
+            flush=True,
+        )
 
     # Routing-role stamps — UNCONDITIONAL (executor on or off): finalize is
     # the contract's first decision point, and the route persisted here is

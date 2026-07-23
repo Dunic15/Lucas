@@ -2492,6 +2492,88 @@ def _llm_type_actions(
     return out
 
 
+HEADLINE_SYSTEM = """You turn raw meeting action items into short task headlines.
+
+The input items are lifted straight from a live transcript, so they are messy: \
+false starts, repeated words, filler ("Still talking", "Hello?"), and speech-\
+to-text noise. For EACH numbered item, write ONE concise imperative headline \
+that captures the gist — what to do, and for whom or what.
+
+Rules:
+- Start with a verb (Email, Send, Schedule, Book, Create, Draft, Review, Share…).
+- Keep the essential object and any clearly-named person, recipient, or project.
+- Max ~8 words. No trailing punctuation. Title case not required.
+- Drop filler, false starts, repetition, and transcription noise.
+- NEVER invent details — no dates, names, amounts, or tools not present in the item.
+- If a name is clearly garbled ("do choke", "Ducho") keep it ONLY if the intended \
+person is obvious from context; otherwise leave the recipient out rather than guess.
+- If an item is too vague to headline, summarize its intent in a few words — never copy the raw line.
+
+Return ONLY a JSON object mapping each item's index (as a string) to its headline:
+{"0": "Email Duccio the meeting recap", "1": "Schedule a follow-up with Marco"}"""
+
+
+def headline_actions(
+    actions: list, brief: str = "", *, provider: str | None = None,
+) -> list:
+    """Add a short imperative ``title`` to each action, distilled from its raw
+    ``item`` text so the Action Centre reads as a task list, not a transcript
+    dump. Covers every action the same way — live captures (kept verbatim
+    upstream), model-extracted explicit actions, and goal-inferred proposals.
+
+    Finalize-only, off the live path (the meter is already stopped). One
+    batched model call for the whole list. Best-effort: any failure returns the
+    actions unchanged, so it can never break finalize — the dashboard then
+    falls back to its deterministic ``_display_title`` cleanup. Under the stub
+    provider no model runs (the key-free demo keeps the deterministic title),
+    so tests stay offline unless they inject a provider.
+
+    Returns a NEW list; ``item`` (the verbatim evidence) is never modified —
+    only an additive ``title`` field is set."""
+    src = list(actions or [])
+    indexed = [
+        (i, a)
+        for i, a in enumerate(src)
+        if isinstance(a, dict) and str(a.get("item") or a.get("step") or "").strip()
+    ]
+    if not indexed:
+        return src
+    prov = (provider or post_provider()).lower()
+    if prov == "stub":
+        # No model: leave title unset; dashboard _display_title handles it.
+        return src
+    try:
+        lines = [
+            f"[{i}] {str(a.get('item') or a.get('step') or '')}"[:300]
+            for i, a in indexed
+        ]
+        raw = llm.complete(
+            HEADLINE_SYSTEM,
+            "ACTION ITEMS (0-based index in brackets):\n"
+            + "\n".join(lines)
+            + "\n\nRespond with the JSON object only.",
+            max_tokens=800,
+            provider=prov,
+        )
+        parsed = _parse_json(raw)
+    except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
+        print(f"[headline_actions] skipped ({type(e).__name__})", flush=True)
+        return src
+    if not isinstance(parsed, dict) or not parsed:
+        return src
+    by_idx = {i for i, _ in indexed}
+    out: list = []
+    for i, a in enumerate(src):
+        val = parsed.get(str(i), parsed.get(i))
+        if i in by_idx and isinstance(a, dict) and isinstance(val, str):
+            title = " ".join(val.split()).strip().rstrip(".!?").strip()[:120]
+            if title:
+                a = dict(a)
+                a["title"] = title
+        out.append(a)
+    return out
+
+
 def type_actions(
     actions: list, brief: str = "", *, provider: str | None = None,
     allow_asana: bool = False, pd_apps: dict | None = None,

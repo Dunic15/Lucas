@@ -3180,7 +3180,7 @@
     else { actHTML+=acts.map(function(a){
       // Canonical Action view carries `status` directly (not `.execution`).
       return '<article class="ac-card" style="margin-top:10px"><div class="ac-top">'+stateChipHTML(a.status||"")+
-        '<div class="ac-what"><div class="ac-item">'+esc(a.action||a.item||"")+'</div>'+
+        '<div class="ac-what"><div class="ac-item">'+esc(a.title||a.action||a.item||"")+'</div>'+
         '<div class="ac-meta"><span>'+esc(a.tool||a.route||"tracked")+'</span>'+
         (a.risk?'<span aria-hidden="true">·</span><span>risk '+esc(a.risk)+'</span>':'')+'</div></div></div>'+
         '<div class="ac-details" style="display:block;margin-top:8px">'+actionDetailHTML(a)+'</div></article>'; }).join(""); }
