@@ -1045,10 +1045,22 @@ def dashboard_summary(request: Request) -> JSONResponse:
         caller_org or settings.demo_org_id
     )
 
-    # Coming-soon avatars sort last so "third in the list" falls out of the
-    # data rather than being a position hardcoded in six render sites. Stable
-    # sort: the existing order is preserved within each group.
-    avatar_rows.sort(key=lambda r: bool(r.get("coming_soon")))
+    # Roster order comes from the data, not from six render sites that could
+    # drift apart. AVATAR_DISPLAY_ORDER pins the leading ids; anything unlisted
+    # keeps its existing position after them. Stable sort, so ties hold.
+    _order = [
+        a.strip().lower()
+        for a in settings.avatar_display_order.split(",")
+        if a.strip()
+    ]
+
+    def _rank(row: dict) -> int:
+        try:
+            return _order.index(str(row.get("id", "")).lower())
+        except ValueError:
+            return len(_order)
+
+    avatar_rows.sort(key=_rank)
 
     return JSONResponse(
         _json_safe({
