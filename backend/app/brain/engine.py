@@ -403,7 +403,14 @@ def sounds_italian(text: str) -> bool:
 # meetings are bilingual, and an intent regex that only speaks English silently
 # disables the feature (and its spoken announce) for Italian speakers.
 _SEARCH_INTENT = re.compile(
-    r"\b(search|look up|google|on the internet|online|web|latest|news|"
+    # "online"/"web"/"internet" only count next to a search VERB. Bare
+    # "online"/"web" used to be sufficient, so a broken ASR fragment ("no, I'm
+    # not online, not online, just…") launched a web search for an internal-docs
+    # question (live 2026-07-23). "look it up online", "search the web",
+    # "find it on the internet" still match here; a bare "not online" does not.
+    r"(?:search|look|find|check|browse|cerc\w+)\w*\b(?:\W+\w+){0,4}\W+"
+    r"(?:online|web|internet)\b|"
+    r"\b(search|look up|google|on the internet|latest|news|"
     r"today|tonight|yesterday|currently|right now|this (week|month|year)|"
     r"price of|stock|weather|score|who won|happened|202[5-9]|"
     # Italian
