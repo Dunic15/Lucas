@@ -649,14 +649,7 @@ def rewrite_action_capture_once(
 
 
 def withdraw_action_capture(session: Any, item: dict) -> bool:
-    """Withdraw a captured draft the asker cancelled ("lascia perdere").
-
-    Deletes the queued action and cancels any not-yet-delivered
-    action.requested callback. True = the card existed and was removed;
-    False = already gone (a Recall retry of the cancel — nothing to redo).
-    Finalize-in-progress reports False rather than raising: the drain already
-    owns the rows at that point.
-    """
+    """Soft-withdraw a captured draft and cancel only undelivered callbacks."""
     org_id = str(getattr(session, "org_id", "") or settings.demo_org_id)
     action_id = str((item or {}).get("action_id") or "")
     if not action_id:
@@ -678,22 +671,36 @@ def withdraw_action_capture(session: Any, item: dict) -> bool:
         ).fetchone()
         if closed is not None:
             return False
-        gone = conn.execute(
-            """
-            DELETE FROM queued_actions
-            WHERE org_id=? AND bot_id=? AND action_id=?
-            """,
+        row = conn.execute(
+            "SELECT 1 FROM queued_actions "
+            "WHERE org_id=? AND bot_id=? AND action_id=?",
             (org_id, str(session.bot_id), action_id),
+        ).fetchone()
+        if row is None:
+            return False
+        current = conn.execute(
+            "SELECT status FROM action_status WHERE org_id=? AND action_id=?",
+            (org_id, action_id),
+        ).fetchone()
+        if current and str(current["status"] or "") == "withdrawn":
+            return False
+        now = time.time()
+        conn.execute(
+            """INSERT INTO action_status
+                   (org_id, action_id, status, detail, updated_at)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(org_id, action_id) DO UPDATE SET
+                 status=excluded.status, detail=excluded.detail,
+                 updated_at=excluded.updated_at""",
+            (org_id, action_id, "withdrawn", "withdrawn via voice", now),
         )
         conn.execute(
-            """
-            UPDATE callback_outbox SET status='cancelled'
-            WHERE org_id=? AND action_id=? AND event='action.requested'
-              AND status IN ('pending', 'failed')
-            """,
+            """UPDATE callback_outbox SET status='cancelled'
+               WHERE org_id=? AND action_id=? AND event='action.requested'
+                 AND status IN ('pending', 'failed')""",
             (org_id, action_id),
         )
-        return bool(gone.rowcount)
+        return True
 
 
 def begin_action_finalize(org_id: str, bot_id: str) -> list[dict]:
