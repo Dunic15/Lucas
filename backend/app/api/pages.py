@@ -147,6 +147,26 @@ def talk_avatar_model(avatar_id: str) -> Response:
     )
 
 
+@router.get("/brand-mark.jpg")
+def brand_mark() -> Response:
+    """The product's own mark, for the dashboard's top-left lockup.
+
+    Deliberately NOT served through /laura-reference.jpg with a made-up
+    avatar_id: that endpoint's contract is "only the requested avatar's
+    portrait, never another identity", and feeding it an id that isn't an
+    avatar would blur an invariant worth keeping sharp. A brand mark is not
+    an identity, so it gets its own route.
+    """
+    path = REPO_ROOT_DIR / "gpu" / "assets" / "brand-mark.jpg"
+    if not path.is_file():
+        return JSONResponse({"error": "brand_mark_unavailable"}, status_code=404)
+    return FileResponse(
+        path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @router.get("/avatar")
 def avatar_page() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "avatar.html")
