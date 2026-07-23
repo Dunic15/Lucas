@@ -325,6 +325,76 @@ def _ask_recipient(text: str) -> str:
     return "" if (w in _ASK_STOP or w in _ASK_BOILER or len(w) < 3) else w
 
 
+def make_pending_action(
+    session,
+    item: dict,
+    speaker_id: str,
+    missing: list[str],
+    *,
+    source_event_key: str = "",
+    source_fingerprint: str = "",
+    question: str = "",
+):
+    """Create and register the one pending state for this meeting/speaker/action."""
+    from ..actions import pending
+
+    state = pending.create(
+        str(getattr(session, "bot_id", "") or ""),
+        speaker_id,
+        item,
+        missing,
+        source_event_key=source_event_key,
+        source_fingerprint=source_fingerprint,
+        question=question,
+        kind=ask_kind(item.get("action") or ""),
+    )
+    states = getattr(session, "pending_actions", None)
+    if not isinstance(states, dict):
+        states = {}
+        session.pending_actions = states
+    states[state.key] = state
+    item["pending_action"] = state.to_dict()
+    return state
+
+
+def refresh_pending_action(
+    session, state, item: dict, missing: list[str], question: str = ""
+):
+    """Refresh the existing canonical state; never mint a second action id."""
+    state.refresh(item, missing, question)
+    states = getattr(session, "pending_actions", None)
+    if not isinstance(states, dict):
+        states = {}
+        session.pending_actions = states
+    states[state.key] = state
+    item["pending_action"] = state.to_dict()
+    return state
+
+
+def bind_pending_answer(session, state, text: str):
+    """Bind an answer before the utterance can become chat or a new action."""
+    from ..actions import pending
+
+    kind = str(state.collected_parameters.get("kind") or "")
+    if kind in ("email", "task"):
+        bound, updates, missing, question = pending.bind(state, text)
+        if bound:
+            refresh_pending_action(session, state, state.item, missing, question)
+        return bound, updates, missing, question
+    # Calendar retains its existing deterministic labelled fold. Its two
+    # required fields are still revalidated by missing_action_details.
+    updates = fold_action_details(
+        state.item, text, state.required_missing_parameters
+    )
+    return True, updates, [], ""
+
+
+def is_orphan_action_fragment(text: str) -> bool:
+    from ..actions import pending
+
+    return pending.is_orphan_fragment(text)
+
+
 def same_ask(a: str, b: str) -> bool:
     """Whether two heard asks are retries of ONE intent.
 
