@@ -2662,6 +2662,17 @@
           patchActionState(aid,st||{status:"approved"});
           return;
         }
+        // Executor not connected (calendar/email needs Google, Asana task
+        // needs Asana): NOT a dead end — the approval stands, we point the user
+        // at reconnect, and approving again runs it. Explicit reconnect, never
+        // a silent "tracked only" limbo (owner rule 2026-07-23).
+        if(!j.executed&&j.connection_blocked){
+          var chint=(j.status&&j.status.detail)||j.execution_error||"Connect the tool in the Connections tab, then approve again.";
+          if(btn) btn.outerHTML='<span class="exec approved" title="'+esc(chint)+'">connect &amp; re-approve ↗</span>';
+          toast(chint,true);
+          patchActionState(aid,st||{status:"approved",detail:chint});
+          return;
+        }
         // Dead end: approved, but nothing ran AND Cedric didn't accept it.
         // Show WHAT happened (the server's one-line reason) instead of a
         // misleading "captured" — the row goes to "failed" so it's visible.
