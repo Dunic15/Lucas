@@ -75,6 +75,7 @@ def _ensure_schema() -> None:
                 due TEXT NOT NULL DEFAULT '',
                 source_event_key TEXT NOT NULL DEFAULT '',
                 source_fingerprint TEXT NOT NULL DEFAULT '',
+                execution_status TEXT NOT NULL DEFAULT '',
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 PRIMARY KEY (org_id, action_id)
@@ -149,6 +150,11 @@ def _ensure_schema() -> None:
             conn.execute(
                 "ALTER TABLE queued_actions "
                 "ADD COLUMN source_fingerprint TEXT NOT NULL DEFAULT ''"
+            )
+        if "execution_status" not in columns:
+            conn.execute(
+                "ALTER TABLE queued_actions "
+                "ADD COLUMN execution_status TEXT NOT NULL DEFAULT ''"
             )
         conn.executescript(
             """
@@ -649,14 +655,7 @@ def rewrite_action_capture_once(
 
 
 def withdraw_action_capture(session: Any, item: dict) -> bool:
-    """Withdraw a captured draft the asker cancelled ("lascia perdere").
-
-    Deletes the queued action and cancels any not-yet-delivered
-    action.requested callback. True = the card existed and was removed;
-    False = already gone (a Recall retry of the cancel — nothing to redo).
-    Finalize-in-progress reports False rather than raising: the drain already
-    owns the rows at that point.
-    """
+    """Soft-withdraw a captured draft and cancel only pending delivery."""
     org_id = str(getattr(session, "org_id", "") or settings.demo_org_id)
     action_id = str((item or {}).get("action_id") or "")
     if not action_id:
@@ -678,12 +677,14 @@ def withdraw_action_capture(session: Any, item: dict) -> bool:
         ).fetchone()
         if closed is not None:
             return False
-        gone = conn.execute(
+        changed = conn.execute(
             """
-            DELETE FROM queued_actions
+            UPDATE queued_actions
+            SET execution_status='withdrawn', updated_at=?
             WHERE org_id=? AND bot_id=? AND action_id=?
+              AND execution_status <> 'withdrawn'
             """,
-            (org_id, str(session.bot_id), action_id),
+            (time.time(), org_id, str(session.bot_id), action_id),
         )
         conn.execute(
             """
@@ -693,9 +694,7 @@ def withdraw_action_capture(session: Any, item: dict) -> bool:
             """,
             (org_id, action_id),
         )
-        return bool(gone.rowcount)
-
-
+        return bool(changed.rowcount)
 def begin_action_finalize(org_id: str, bot_id: str) -> list[dict]:
     """Drain active captures and atomically reject every later capture."""
     org = org_id or settings.demo_org_id
