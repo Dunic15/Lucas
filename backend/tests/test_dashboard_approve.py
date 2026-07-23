@@ -463,3 +463,51 @@ def test_native_receipt_carries_verified_on_readback(client, monkeypatch):
     st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
     assert st["status"] == "done"
     assert "· verified" in st["detail"] and "m-777" in st["detail"]
+
+
+def test_untyped_but_already_done_action_replays_idempotently(
+    client, monkeypatch
+):
+    """Adversarial review 2026-07-23: an action decided/executed through ANOTHER
+    door (Cedric webhook) can be untyped here yet already 'done'. Re-approve
+    (double-click, stale tab) must replay idempotently — NOT trip the untyped
+    synthesis into a bogus 422 'add details' form for work that already ran."""
+    monkeypatch.setattr(settings, "native_executor", True)
+    user = _login(client)
+    action = {"item": "Schedule a follow-up call with the client next Tuesday",
+              "owner": "Ben", "action_id": "a1"}
+    store.save_artifact(
+        "bot_a1",
+        {"summary": "Kickoff.", "actions": [action], "checklist": [action],
+         "org_id": user["org_id"], "avatar_id": "laura",
+         "meeting_url": "https://meet.google.com/appr-test",
+         "transcript": "PII must never leak"},
+        org_id=user["org_id"],
+    )
+    ledger.set_action_status("a1", "done", "done via cedric",
+                             org_id=user["org_id"])
+    r = client.post("/dashboard/actions/a1/approve")
+    assert r.status_code != 422, r.json()  # never a needs_details form on done
+    st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
+    assert st["status"] == "done"  # monotonic status untouched
+
+
+def test_untyped_failed_action_keeps_its_retry_path(client, monkeypatch):
+    """Same guard for 'failed': the documented failed→reopen-and-retry flow
+    (2026-07-20) must not be pre-empted by the untyped synthesis."""
+    monkeypatch.setattr(settings, "native_executor", True)
+    user = _login(client)
+    action = {"item": "Schedule a follow-up call with the client next Tuesday",
+              "owner": "Ben", "action_id": "a1"}
+    store.save_artifact(
+        "bot_a1",
+        {"summary": "Kickoff.", "actions": [action], "checklist": [action],
+         "org_id": user["org_id"], "avatar_id": "laura",
+         "meeting_url": "https://meet.google.com/appr-test",
+         "transcript": "PII must never leak"},
+        org_id=user["org_id"],
+    )
+    ledger.set_action_status("a1", "failed", "vendor 500",
+                             org_id=user["org_id"])
+    r = client.post("/dashboard/actions/a1/approve")
+    assert r.status_code != 422, r.json()  # retry path, not an edit form

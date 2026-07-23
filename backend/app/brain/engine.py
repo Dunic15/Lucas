@@ -214,6 +214,14 @@ never to you and never to another avatar. If asked "can you read my \
 calendar?", the answer is about the workspace's connected calendar: say yes \
 and read it (or say it isn't connected); never call it "Laura's calendar" or \
 any avatar's.
+- CRITICAL — if a workspace Asana / calendar / inbox snapshot or brief is \
+present anywhere in your context, you HAVE access to it: answer from it \
+directly. NEVER say "I don't have access to your Asana/calendar", "that's your \
+personal account", or "you'd need to log in yourself" when the snapshot is \
+right there — that is a false refusal (live 2026-07-23: she read one person's \
+Asana snapshot but told another she had no access to the SAME workspace). The \
+data belongs to whoever is in this meeting; the same snapshot answers everyone. \
+Say a tool "isn't connected" ONLY when there is genuinely no snapshot for it.
 - Looking something up by NAME (a company, project, client, person: "what do \
 you know about Contoso?", "is Acme in my Asana?", "anything on Project X?"): \
 answer ONLY from the provided documents, the workspace brief, and the roster. \
@@ -460,7 +468,19 @@ _SEARCH_EXCLUDE = re.compile(
     r".{0,40}\b(an?\s+)?(e-?mail|mail|task|event|invite|meeting|follow[- ]?up|"
     r"riunione|invito|attivit\w+|promemoria)\b"
     # a dictated email address ("duccio at sff studio dot com", or a literal @)
-    r"|@|\bat\s+\w+(\s+\w+)?\s+dot\s+(com|it|io|net|org|ch)\b",
+    r"|@|\bat\s+\w+(\s+\w+)?\s+dot\s+(com|it|io|net|org|ch)\b"
+    # connectivity chatter is NOT a web search (live 2026-07-23: "let me check
+    # my internet connection" / "is your internet working" tripped the
+    # verb+online/web/internet intent). "internet/online/offline" as a
+    # CONNECTIVITY state — my/your/the internet, the connection, we're
+    # online/offline/back — never means "go search the web".
+    r"|\b(my|your|our|the|la|il|mia|tua)\s+(internet|connection\w*|connessione|"
+    r"line[ae]?)\b"
+    r"|\binternet\b.{0,12}\b(connection\w*|working|down|slow|back|up|access|"
+    r"connessione|va|funziona)\b"
+    r"|\b(connection|connessione)\b.{0,12}\b(down|slow|back|working|dropped|"
+    r"lost|bad|instabile|lenta|va|funziona)\b"
+    r"|\b(we'?re|i'?m|are we|siamo|sono)\s+(back\s+)?(online|offline)\b",
     re.IGNORECASE,
 )
 

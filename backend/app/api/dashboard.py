@@ -3431,6 +3431,18 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         except Exception:  # noqa: BLE001 — typing is opportunistic, never a gate
             pass
 
+    # A rejected action is CLOSED. The monotonic status guard would keep the
+    # chip 'rejected' anyway, but without this check the executor below would
+    # still RUN the action — refuse outright; un-rejecting isn't a thing.
+    current = await run_in_threadpool(ledger.action_statuses, [aid], org_id=org)
+    _cur_status = (current.get(aid) or {}).get("status") or ""
+    if _cur_status == "rejected":
+        return JSONResponse(
+            {"error": "action was rejected", "action_id": aid,
+             "status": current.get(aid)},
+            status_code=409, headers=_NO_STORE,
+        )
+
     # Still untyped after the retype rescue? If the ask is CLEARLY a calendar /
     # email / task action, synthesise a minimal typed spec AND PERSIST it, so
     # the flow goes to NEEDS-DETAILS (the form collects the missing fields)
@@ -3439,7 +3451,13 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     # what lets the params form save against it afterwards — apply_param_edits
     # refuses an untyped action. A genuinely free-form ask ('other', e.g. a
     # Slack note) stays tracked-only, which is the honest state for it.
-    if not (isinstance(typed, dict) and typed.get("type")):
+    # NEVER for an action already done/failed/executing (adversarial review
+    # 2026-07-23): a done action's re-approve must replay idempotently and a
+    # failed one must keep its documented reopen-and-retry path — a fabricated
+    # empty-args spec here would hijack both into a bogus needs_details 422.
+    if not (isinstance(typed, dict) and typed.get("type")) and _cur_status not in (
+        "done", "failed", "executing"
+    ):
         from ..brain import tools as _brain_tools
 
         _kind = _brain_tools.ask_kind(
@@ -3453,17 +3471,6 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             await run_in_threadpool(
                 lambda: store.set_action_typed_override(org, aid, typed)
             )
-
-    # A rejected action is CLOSED. The monotonic status guard would keep the
-    # chip 'rejected' anyway, but without this check the executor below would
-    # still RUN the action — refuse outright; un-rejecting isn't a thing.
-    current = await run_in_threadpool(ledger.action_statuses, [aid], org_id=org)
-    if (current.get(aid) or {}).get("status") == "rejected":
-        return JSONResponse(
-            {"error": "action was rejected", "action_id": aid,
-             "status": current.get(aid)},
-            status_code=409, headers=_NO_STORE,
-        )
 
     # needs_details gate: approving a typed spec with missing REQUIRED fields
     # would execute a broken call or silently no-op ('approved but nothing

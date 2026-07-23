@@ -58,3 +58,29 @@ def test_web_search_intent(text: str, want: bool) -> None:
 def test_bare_online_no_longer_triggers_but_the_phrase_does():
     assert engine._wants_search("not online anyway") is False
     assert engine._wants_search("search online for it") is True
+
+
+# ── connectivity chatter is NOT a web search (live 2026-07-23) ──
+@pytest.mark.parametrize("q", [
+    "let me check my internet connection",
+    "can you check if your internet is working",
+    "is your internet working",
+    "my connection is slow",
+    "we are back online",
+    "sorry, my internet is down",
+])
+def test_connectivity_chatter_never_web_searches(q, monkeypatch):
+    monkeypatch.setattr(settings, "live_search_enabled", True)
+    monkeypatch.setattr(settings, "anthropic_api_key", "x")
+    assert engine._wants_search(q) is False, q
+
+
+@pytest.mark.parametrize("q", [
+    "search online for the latest funding news",
+    "look it up on the web",
+    "can you check online for the price of X",
+])
+def test_real_web_search_still_triggers(q, monkeypatch):
+    monkeypatch.setattr(settings, "live_search_enabled", True)
+    monkeypatch.setattr(settings, "anthropic_api_key", "x")
+    assert engine._wants_search(q) is True, q
