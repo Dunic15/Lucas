@@ -84,6 +84,7 @@ from . import (
     tts,
     vendor_health,
 )
+from .brain import capabilities  # deterministic org-scoped capability truth
 from .brain.engine import (
     SEARCH_ANNOUNCE_LINES,
     answer_question,
@@ -4958,6 +4959,44 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # context is insufficient the generator yields nothing and the avatar stays
     # silent (the streaming equivalent of the old confidence gate).
     history = session.recent_transcript(n=8)
+
+    # Context-bound ASR repair for mis-heard app names ("what's in my zone?" →
+    # "what's in my Asana?" ONLY when Asana was just discussed). Scoped to the
+    # ANSWER text; the capture path (text) is deliberately left untouched.
+    if question:
+        question = capabilities.repair_asr(question, history)
+
+    # ── deterministic capability answer (grounding, never the language model) ──
+    # "which tools can you use / are you connected to Asana / what actions can
+    # you do in Gmail / do you have a snapshot of my Asana" are answered from the
+    # SAME connection state the dashboard + executors use (capabilities.snapshot),
+    # not from web search or a gemma-improvised roster. Live 2026-07-23: within
+    # one meeting Petra claimed Asana connected, then 'no access', then 'can't
+    # access external apps', and web-searched her own Gmail actions. Runs BEFORE
+    # the web-search and ears branches so a capability/workspace question can
+    # NEVER take an ungrounded path — even when reply mode is enabled.
+    if capabilities.is_capability_question(question or text):
+        _cap_t0 = time.perf_counter()
+        _cap_snap = await run_in_threadpool(
+            capabilities.snapshot, avatar, session.org_id, session
+        )
+        _cap_line = capabilities.answer(question or text, _cap_snap)
+        _cap_gen = store.bump_speech_generation(session)
+        session.last_ack_at = time.time()
+        _cap_spoke = await _make_avatar_speak(
+            session, _cap_line, force=True, generation=_cap_gen,
+            audio=tts.cached_payload(_cap_line, _avatar_voice(session)),
+        )
+        print(
+            f"[latency] capability answer total="
+            f"{int((time.perf_counter() - _cap_t0) * 1000)}ms web_search=no",
+            flush=True,
+        )
+        return JSONResponse(
+            {"ok": True, "spoke": bool(_cap_spoke), "capability_answer": True,
+             "web_search": False}
+        )
+
     # ── tutto-Gemini (GEMINI_EARS_MODE=reply) ──
     # The ears session already DRAFTED the spoken reply from the live audio
     # (same Live model that closed the turn — the draft streamed while the
@@ -5027,6 +5066,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 avatar,
                 question or text,
                 history=history,
+                own_recent=session.recent_agent_lines(n=3),
                 memory=memory,
                 state=state,
                 summary=session.rolling_summary,

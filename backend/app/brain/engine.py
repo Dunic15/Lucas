@@ -222,6 +222,17 @@ right there — that is a false refusal (live 2026-07-23: she read one person's 
 Asana snapshot but told another she had no access to the SAME workspace). The \
 data belongs to whoever is in this meeting; the same snapshot answers everyone. \
 Say a tool "isn't connected" ONLY when there is genuinely no snapshot for it.
+- Keep FOUR states separate and never collapse them into "I can't access it": \
+(1) the integration is connected for this workspace; (2) you're permitted to \
+use it; (3) a snapshot/retrieved result is actually loaded in this context; \
+(4) a write can be executed. If a tool is connected but no snapshot loaded, say \
+exactly that — "Asana is connected and I can create tasks, but I don't have a \
+workspace snapshot loaded to read existing tasks right now" — and offer the \
+next step; never "I don't have access to Asana" and never "I can't access \
+external applications" when a connector is active. Never claim "I can see your \
+Drive/Asana" (an inventory) unless a retrieval result is actually present. \
+Never say "the meeting hasn't started" — you are speaking inside a live meeting. \
+Don't invent a tool you aren't connected to (no phantom Jira).
 - A CONTAINMENT question — is this name IN a specific source? ("is Acme in my \
 Asana?", "is Project X in the docs?", "do we have anything on Contoso in \
 here?") — is answered from that source, the workspace brief and the roster \
@@ -363,8 +374,8 @@ _ABOUT_INTENT = re.compile(
     # usare?") are self-questions too — they must hit the about/ playbooks,
     # not the process docs. The tool-noun AND a you/usage anchor are both
     # required so task asks ("use the tool to file X") keep normal routing.
-    r"(what|which)\b.{0,16}\b(tools?|integrations?|apps?|connectors?)\b.{0,24}\b(you|have|use|access)\b|"
-    r"(quali|che)\b.{0,16}\b(tools?|strumenti|integrazioni|app)\b.{0,28}\b(puoi|usi|usare|hai)\b|"
+    r"(what|which)\b.{0,16}\b(tools?|integrations?|apps?|connectors?|actions?|capabilit\w+|functions?|connections?)\b.{0,24}\b(you|have|use|access|do|perform)\b|"
+    r"(quali|che)\b.{0,16}\b(tools?|strumenti|integrazioni|app|azioni|funzion\w+|capacit\w+)\b.{0,28}\b(puoi|usi|usare|hai)\b|"
     # Self-referential capability checks from the live test. These must answer
     # from the org-scoped roster, never from web search or generic Claude lore.
     r"(can|could|do)\s+(you|laura|petra)\b.{0,20}\b(read|access|see|hear)\b"
@@ -869,6 +880,7 @@ def answer_question_stream(
     question: str,
     *,
     history: str = "",
+    own_recent: str = "",
     memory: str = "",
     state: "meeting_state.MeetingState | None" = None,
     summary: str = "",
@@ -980,6 +992,16 @@ def answer_question_stream(
     # Live roster (Recall participant events): includes people who never spoke,
     # which the transcript alone can't see. One short line — latency-neutral.
     roster_block = _roster_block(avatar, roster, state)
+    # Your OWN recent turns — context so she stays consistent and never replays
+    # the same answer verbatim (live 2026-07-23: gemma repeated one explanation
+    # twice). Explicitly NOT evidence: don't quote it as a source, just don't
+    # contradict or repeat it.
+    own_block = (
+        "Your own last turns (do NOT repeat these and stay consistent with "
+        f"them — they are context, not a source):\n{own_recent}\n\n"
+        if own_recent.strip()
+        else ""
+    )
     asker = (speaker or "").strip() or "Someone"
     # {name} parameterizes the previously hardcoded "You are Laura" — for the
     # avatar actually speaking (byte-identical when that avatar IS Laura), and
@@ -993,6 +1015,7 @@ def answer_question_stream(
         f"{summary_block}"
         f"{remembered}"
         f"{roster_block}"
+        f"{own_block}"
         f"{convo}"
         f"{asker} in the meeting just said:\n{question}\n\n"
         f"Answer in spoken style. Reply SKIP only if this was clearly not directed at {avatar.name}."
