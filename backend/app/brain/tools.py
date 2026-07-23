@@ -253,7 +253,10 @@ def missing_action_details(text: str, kind: str = "task") -> list[str]:
             missing.append("email_to")
         if not _DETAIL_EMAIL_BODY.search(t):
             missing.append("email_body")
-        return missing[:1]
+        # Ask for the missing pieces in ONE combined question, not slot-by-slot
+        # (restore 2026-07-22 feel: "who's it to, and what should it say?" in a
+        # single ask; the clarify loop re-asks only what a partial answer leaves).
+        return missing
     if kind == "calendar":
         if not _DETAIL_INVITE_WITH.search(t):
             missing.append("invite_with")
@@ -261,7 +264,7 @@ def missing_action_details(text: str, kind: str = "task") -> list[str]:
             _DETAIL_INVITE_DATE.search(t) and _DETAIL_INVITE_CLOCK.search(t)
         ):
             missing.append("invite_when")
-        return missing[:1]
+        return missing  # one combined ask, not slot-by-slot (2026-07-22 feel)
     if kind == "other":
         # Free-form asks (Slack messages, "remind me to…") have no slot
         # schema — never interrogate, just confirm and queue.
