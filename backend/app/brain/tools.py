@@ -181,8 +181,8 @@ _DETAIL_EMAIL_TO = re.compile(
     re.IGNORECASE,
 )
 _DETAIL_EMAIL_BODY = re.compile(
-    r"\b(saying|that\s+says|should\s+say|tell(?:ing)?\s+(?:him|her|them)"
-    r"|subject|about\s+\w+|dicendo|che\s+dice|body:\s*\S)\b",
+    r"\b(?:saying|that\s+says|should\s+say|tell(?:ing)?\s+(?:him|her|them)"
+    r"|subject|about\s+\w+|dicendo|che\s+dice)\b|\bbody:\s*\S",
     re.IGNORECASE,
 )
 _DETAIL_INVITE_WITH = re.compile(
