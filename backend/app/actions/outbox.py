@@ -111,6 +111,15 @@ def _ensure_schema() -> None:
                 )
                 WHERE source_fingerprint <> '';
 
+            CREATE TABLE IF NOT EXISTS action_status (
+                org_id TEXT NOT NULL,
+                action_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                detail TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (org_id, action_id)
+            );
+
             CREATE TABLE IF NOT EXISTS callback_outbox (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 idempotency_key TEXT NOT NULL UNIQUE,
