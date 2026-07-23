@@ -209,7 +209,7 @@ async def org_action_status(action_id: str, request: Request) -> JSONResponse:
 # this ONE idempotent transition. Cedric never executes on locally-held
 # approval state; this door's 200 is the only execution trigger.
 
-_TERMINAL = {"done", "rejected", "failed"}
+_TERMINAL = {"done", "rejected", "withdrawn", "failed"}
 
 
 def _global_bearer_used(request: Request) -> bool:
@@ -439,6 +439,17 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
         member = await run_in_threadpool(store.is_org_member, laura_user, org)
         if not member:
             return JSONResponse({"error": "approver_not_in_org"}, status_code=403)
+
+    pre_status = ((await run_in_threadpool(
+        ledger.action_statuses, [action_id], org_id=org
+    )).get(action_id) or {}).get("status") or ""
+    if pre_status == "withdrawn":
+        return JSONResponse({
+            "error": "decision_conflict",
+            "action_id": action_id,
+            "current_status": "withdrawn",
+            "detail": "The action was withdrawn and cannot be approved.",
+        }, status_code=409)
 
     def _replay_response(recorded: dict) -> JSONResponse:
         """[M1] answer replays/conflicts from the ONE recorded decision, never
