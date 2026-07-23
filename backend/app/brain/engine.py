@@ -214,6 +214,18 @@ never to you and never to another avatar. If asked "can you read my \
 calendar?", the answer is about the workspace's connected calendar: say yes \
 and read it (or say it isn't connected); never call it "Laura's calendar" or \
 any avatar's.
+- Looking something up by NAME (a company, project, client, person: "what do \
+you know about Contoso?", "is Acme in my Asana?", "anything on Project X?"): \
+answer ONLY from the provided documents, the workspace brief, and the roster. \
+If that name does not actually appear there, say plainly you don't see it in \
+what you have — do NOT pad the answer with unrelated tasks or items, and do NOT \
+imply you searched or "have access" to something you didn't read. Better to say \
+"I don't see Contoso in your Asana or your docs" than to list everything else.
+- A short follow-up that names a source ("in my Asana?", "in the docs?", "on \
+the calendar?", "nei documenti?") REFINES the previous question — answer that \
+combined question specifically. "What do you know about Contoso?" then "in my \
+Asana?" means "is Contoso in my Asana?": check and answer yes/no with what you \
+found, never restart or dump the whole source.
 - Reply in the language the person spoke to you in — an Italian question gets \
 an Italian answer. Follow the conversation if it switches language.
 - Meetings often have several people. When a roster and the speaker's name are \
@@ -403,7 +415,14 @@ def sounds_italian(text: str) -> bool:
 # meetings are bilingual, and an intent regex that only speaks English silently
 # disables the feature (and its spoken announce) for Italian speakers.
 _SEARCH_INTENT = re.compile(
-    r"\b(search|look up|google|on the internet|online|web|latest|news|"
+    # "online"/"web"/"internet" only count next to a search VERB. Bare
+    # "online"/"web" used to be sufficient, so a broken ASR fragment ("no, I'm
+    # not online, not online, just…") launched a web search for an internal-docs
+    # question (live 2026-07-23). "look it up online", "search the web",
+    # "find it on the internet" still match here; a bare "not online" does not.
+    r"(?:search|look|find|check|browse|cerc\w+)\w*\b(?:\W+\w+){0,4}\W+"
+    r"(?:online|web|internet)\b|"
+    r"\b(search|look up|google|on the internet|latest|news|"
     r"today|tonight|yesterday|currently|right now|this (week|month|year)|"
     r"price of|stock|weather|score|who won|happened|202[5-9]|"
     # Italian
@@ -2174,6 +2193,38 @@ def _is_isoish(value: object) -> bool:
     return bool(_ISO_DT_RE.search(str(value or "")))
 
 
+# Clarify answers are folded into the action TEXT as canonical labels by
+# tools.fold_action_details ("Email Sofia. Body: Hi"). These MUST match the
+# values in tools._DETAIL_FOLD_LABELS so the typing pass can route each answer
+# back to its real arg instead of dumping "Body: Hi" into the email subject
+# (live 2026-07-23 bug ④ — the clarified body was lost).
+_FOLD_LABEL_NAMES = (
+    "Recipient|Body|Attendees|When|Owner|Project|Due|Description|Details"
+)
+_FOLD_SEG_RE = re.compile(
+    rf"(?:^|\.\s+)(?P<label>{_FOLD_LABEL_NAMES}):\s*(?P<val>.+?)"
+    rf"(?=\.\s+(?:{_FOLD_LABEL_NAMES}):|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _fold_label_fields(text: str) -> tuple[str, dict[str, str]]:
+    """Split a clarify-folded action into its base text and the {label: value}
+    the fold appended. Idempotent on unlabelled text (returns it as the base
+    with an empty dict). Pure — never touches the transcript."""
+    s = str(text or "")
+    fields: dict[str, str] = {}
+    first: int | None = None
+    for m in _FOLD_SEG_RE.finditer(s):
+        if first is None:
+            first = m.start()
+        fields[m.group("label").lower()] = " ".join(
+            m.group("val").split()
+        ).strip(" .")
+    base = (s[:first] if first is not None else s).strip(" .")
+    return base, fields
+
+
 def _action_source(action: dict, brief: str = "") -> str:
     """The distilled text a typed spec's args may draw from — never the raw
     transcript, only fields already extracted into the artifact."""
@@ -2221,34 +2272,47 @@ def _sanitize_typed(typed: object, action: dict, brief: str = "",
         summary = str(args.get("summary") or action.get("item") or "").strip()[:200]
         return {"type": t, "args": {"action_key": action_key, "props": props,
                                     "summary": summary}}
+    # A clarify answer was folded into the action text ("… Body: Hi"); split it
+    # out so each label routes to its real arg and the base text stays clean.
+    item_base, item_fold = _fold_label_fields(str(action.get("item") or ""))
     if t == EMAIL_SEND:
         to = _grounded_emails(args.get("to"), source)
+        if not to:  # the recipient may have arrived via a clarify fold
+            to = _grounded_emails(item_fold.get("recipient"), source)
         if not to:
             return None  # no grounded recipient → never send
-        subject = str(args.get("subject") or "").strip()[:200]
+        subject = _fold_label_fields(str(args.get("subject") or ""))[0][:200]
         body = str(args.get("body") or "").strip()[:4000]
+        if not body and item_fold.get("body"):
+            body = item_fold["body"][:4000]  # the clarified body — bug ④
         if not subject and not body:
-            subject = str(action.get("item") or "").strip()[:200]
+            subject = item_base[:200]
         return {"type": t, "args": {"to": to, "subject": subject, "body": body}}
     if t == CALENDAR_CREATE:
-        title = str(
+        title = _fold_label_fields(str(
             args.get("title") or args.get("summary") or action.get("item") or ""
-        ).strip()[:200]
+        ))[0][:200]
         start = str(args.get("start") or "").strip()
         end = str(args.get("end") or "").strip()
         if not title or not _is_isoish(start) or not _is_isoish(end):
             return None
         spec_args = {"title": title, "start": start, "end": end}
         attendees = _grounded_emails(args.get("attendees"), source)
+        if not attendees and item_fold.get("attendees"):
+            attendees = _grounded_emails(item_fold.get("attendees"), source)
         if attendees:
             spec_args["attendees"] = attendees
         return {"type": t, "args": spec_args}
     if t == ASANA_CREATE:
-        name = str(args.get("name") or action.get("item") or "").strip()[:200]
+        name = _fold_label_fields(
+            str(args.get("name") or action.get("item") or "")
+        )[0][:200]
         if not name:
             return None
         spec_args: dict = {"name": name}
         notes = str(args.get("notes") or "").strip()[:1000]
+        if not notes and item_fold.get("description"):
+            notes = item_fold["description"][:1000]
         if notes:
             spec_args["notes"] = notes
         # Assignee: a grounded email only — a bare first name can't be safely
