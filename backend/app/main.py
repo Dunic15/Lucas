@@ -3911,6 +3911,18 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 c_item.get("action") or "",
                 kind=tools.ask_kind(c_item.get("action") or ""),
             )
+            # Owner/project/due/description improve an Asana card but are not
+            # provider-required. After the asker replies once, explicitly skips,
+            # or lets the window expire, those optional enrichments cannot hold
+            # or auto-invalidate the captured task. task_name, email and calendar
+            # slots remain hard requirements and are re-asked below.
+            _optional_task_slots = {"owner", "project", "due", "description"}
+            if (
+                remaining
+                and set(remaining).issubset(_optional_task_slots)
+                and (answered or expired)
+            ):
+                remaining = []
             if remaining:
                 if answered:
                     # A skip such as "that's it" cannot waive a provider-
