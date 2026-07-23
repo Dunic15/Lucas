@@ -910,3 +910,119 @@ def test_drive_share_receipt_and_verify_use_file_id(monkeypatch):
     assert "permission-9" not in result["ref"]
     assert ("GET", "https://www.googleapis.com/drive/v3/files/file-1?fields=id") in calls
     assert seen["receipt"]["verified"] is True
+
+
+def test_dashboard_discard_preserves_history_and_blocks_approval(
+    client, monkeypatch
+):
+    user = _login(client)
+    org = user["org_id"]
+    aid = "withdraw-incomplete-email"
+    action = {
+        "action_id": aid,
+        "item": "Create an email",
+        "typed": {"type": "email.send", "args": {}},
+        "execution_route": "manual",
+    }
+    store.save_artifact(
+        "bot_withdraw",
+        {
+            "summary": "s", "actions": [action], "checklist": [action],
+            "org_id": org, "avatar_id": "laura",
+            "meeting_url": "https://meet.google.com/withdraw-test",
+        },
+        org_id=org,
+    )
+    writes: list[str] = []
+    monkeypatch.setattr(
+        executor, "execute_approved",
+        lambda *a, **k: writes.append("native") or {"ok": True},
+    )
+    monkeypatch.setattr(
+        pipedream_executor, "execute_approved",
+        lambda *a, **k: writes.append("pipedream") or {"ok": True},
+    )
+
+    withdrawn = client.post(
+        f"/dashboard/actions/{aid}/withdraw",
+        headers={"sec-fetch-site": "same-origin"},
+        json={},
+    )
+    assert withdrawn.status_code == 200
+    assert withdrawn.json()["execution"]["status"] == "withdrawn"
+
+    # Refresh/read: absent from active work by the UI bucket contract, but the
+    # canonical action and saved artifact remain available as history.
+    view = client.get(
+        f"/dashboard/actions/{aid}",
+        headers={"sec-fetch-site": "same-origin"},
+    )
+    assert view.status_code == 200
+    assert view.json()["action"]["status"] == "withdrawn"
+    rows = store.list_artifacts(org)
+    assert any(
+        a.get("action_id") == aid
+        for row in rows
+        for a in ((row.get("artifact") or {}).get("actions") or [])
+    )
+
+    refused = client.post(
+        f"/dashboard/actions/{aid}/approve",
+        headers={"sec-fetch-site": "same-origin"},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["status"]["status"] == "withdrawn"
+    assert writes == []
+
+
+def test_approved_withdrawal_requires_confirmation_and_executing_is_immutable(
+    client
+):
+    user = _login(client)
+    org = user["org_id"]
+    for aid in ("approved-withdraw", "executing-withdraw"):
+        action = {
+            "action_id": aid, "item": "Follow up",
+            "typed": {
+                "type": "asana.create_task",
+                "args": {"name": "Follow up"},
+            },
+        }
+        store.save_artifact(
+            "bot_" + aid,
+            {
+                "summary": "s", "actions": [action], "checklist": [action],
+                "org_id": org, "avatar_id": "laura",
+                "meeting_url": "https://meet.google.com/" + aid,
+            },
+            org_id=org,
+        )
+    ledger.set_action_status(
+        "approved-withdraw", "approved", "approved", org_id=org
+    )
+    need_confirm = client.post(
+        "/dashboard/actions/approved-withdraw/withdraw",
+        headers={"sec-fetch-site": "same-origin"},
+        json={},
+    )
+    assert need_confirm.status_code == 409
+    assert need_confirm.json()["error"] == "confirmation_required"
+    confirmed = client.post(
+        "/dashboard/actions/approved-withdraw/withdraw",
+        headers={"sec-fetch-site": "same-origin"},
+        json={"confirm_possible_external_start": True},
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.json()["execution"]["status"] == "withdrawn"
+
+    ledger.set_action_status(
+        "executing-withdraw", "executing", "vendor call started", org_id=org
+    )
+    conflict = client.post(
+        "/dashboard/actions/executing-withdraw/withdraw",
+        headers={"sec-fetch-site": "same-origin"},
+        json={"confirm_possible_external_start": True},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["status"] == "executing"
+    assert "cannot be erased" in conflict.json()["detail"]
