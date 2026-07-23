@@ -209,7 +209,7 @@ async def org_action_status(action_id: str, request: Request) -> JSONResponse:
 # this ONE idempotent transition. Cedric never executes on locally-held
 # approval state; this door's 200 is the only execution trigger.
 
-_TERMINAL = {"done", "rejected", "failed"}
+_TERMINAL = {"done", "rejected", "withdrawn", "failed"}
 
 
 def _global_bearer_used(request: Request) -> bool:
@@ -246,15 +246,16 @@ def _execute_route(
 ) -> tuple[str | None, str, bool]:
     """Run the approved action per its persisted execution_route [B2].
     Returns (execution_job_id | None, new_status, capability_blocked)."""
-    route = str(action.get("execution_route") or "").strip() or (
-        # Legacy actions (pre routing-fields) derive the route the same per-family
-        # way finalize now stamps it (Pipedream for Asana + long tail when on,
-        # else native for Google/Slack, else Cedric).
-        executor.route_for_typed(
-            action.get("typed"), org,
-            item_text=str(action.get("item") or action.get("action") or ""),
-        )
+    route = executor.effective_route(
+        action.get("typed"), org,
+        stored_route=str(action.get("execution_route") or ""),
+        item_text=str(action.get("item") or action.get("action") or ""),
     )
+    # The same normalized route drives display, approval, retry and receipts.
+    # Persistence is best-effort for legacy rows; execution still uses this
+    # in-memory value even when no durable row exists.
+    ledger.set_action_route(action_id, route, org_id=org)
+    action = {**action, "execution_route": route}
     if route == "cedric":
         # handshake B2: hand the approved action to Cedric for execution
         # through its connectors (dispatch-action, pre_approved). Terminal
@@ -462,6 +463,16 @@ async def org_action_approve(action_id: str, request: Request) -> JSONResponse:
             "current_status": recorded["new_status"],
             "decided_via": recorded["decided_via"],
             "decided_at": recorded["decided_at"],
+        }, status_code=409)
+
+    _pre_status = ((await run_in_threadpool(
+        ledger.action_statuses, [action_id], org_id=org
+    )).get(action_id) or {}).get("status") or ""
+    if _pre_status == "withdrawn":
+        return JSONResponse({
+            "error": "decision_conflict", "action_id": action_id,
+            "current_status": "withdrawn", "decided_via": "withdrawal",
+            "decided_at": None,
         }, status_code=409)
 
     recorded = await run_in_threadpool(
@@ -726,17 +737,15 @@ def _canonical_action_view(org: str, action_id: str) -> dict | None:
         (durable or {}).get("execution_route")
         or action.get("execution_route") or ""
     )
-    _display_route = _stored_route
-    if _stored_route in ("", "manual") and isinstance(typed, dict) and typed.get("type"):
-        try:
-            _rt = executor.route_for_typed(
-                typed, org,
-                item_text=str((durable or {}).get("action") or action.get("item") or ""),
-            )
-            if _rt in ("pipedream", "native"):
-                _display_route = _rt
-        except Exception:  # noqa: BLE001 — display only, never fatal
-            pass
+    try:
+        _display_route = executor.effective_route(
+            typed, org, stored_route=_stored_route,
+            item_text=str(
+                (durable or {}).get("action") or action.get("item") or ""
+            ),
+        )
+    except Exception:  # noqa: BLE001 — display only, never fatal
+        _display_route = _stored_route
     return {
         "action_id": action_id,
         "org_id": org,
