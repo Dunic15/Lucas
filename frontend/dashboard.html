@@ -616,10 +616,14 @@
   /* The AvatarPreview mount: whatever the adapter renders fills this box —
      the same-origin 3D iframe (/talk?preview=1) or the 2D portrait fallback. */
   .stage .preview{position:absolute;inset:0;display:grid;place-items:center;}
-  /* Owner 2026-07-22: the portrait fills the WHOLE stage rectangle (full-bleed
-     cover) — the stage frame IS the border, no floating card. */
-  .stage .preview img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
-    object-position:center 30%;z-index:1;}
+  /* Owner 2026-07-22 asked for full-bleed cover here; owner 2026-07-23 asked
+     for the portraits to stop being cut. Those two cannot both hold: the stage
+     is a RECTANGLE and the portraits are SQUARE, so `cover` fills the frame by
+     cropping the image — which is why resizing the files changed nothing.
+     `contain` fits the whole portrait, so nothing is lost; the artwork's own
+     background sits behind it rather than the stage bleeding to the edge. */
+  .stage .preview img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
+    object-position:center center;z-index:1;}
   .stage .preview iframe{position:absolute;inset:0;width:100%;height:100%;border:0;z-index:1;}
   /* Legibility scrim under the stagemeta caption — only over the live 3D
      iframe (its office backdrop is bright); the 2D portrait keeps the old
