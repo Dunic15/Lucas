@@ -163,6 +163,7 @@ def test_stale_asana_route_displays_and_executes_only_pipedream(
 
     monkeypatch.setattr(settings, "pipedream_executor", True)
     monkeypatch.setattr(settings, "pipedream_project_id", "proj-test")
+    monkeypatch.setattr(settings, "pipedream_client_id", "client-test")
     monkeypatch.setattr(settings, "pipedream_client_secret", "secret-test")
     monkeypatch.setattr(settings, "native_executor", True)
     monkeypatch.setattr(settings, "action_dispatch_async", False)
