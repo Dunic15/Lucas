@@ -223,3 +223,24 @@ def test_required_action_details_follow_executor_schema():
         ["email_body"],
     )
     assert tools.missing_action_details(email["action"], kind="email") == []
+
+
+def test_conversation_fragments_are_not_captured_as_actions():
+    """Live 2026-07-23 investor demo: the dashboard filled with junk cards whose
+    title was raw conversation. Those came from the DEGRADED recap keyword
+    scrape (fixed in _stub_post_meeting), NOT live capture — this guards that
+    the live capture stays precise and never mistakes commentary for a task."""
+    for frag in (
+        "This is the petrol one, so it should be it is the one that we tailor a bit",
+        "The project manager. So that you should have more the",
+        "Maybe, Pedro, do you know when the the deadline is for the YC application",
+        "we told that when there are multiple people she should not talk except she is called",
+        "You do with the same account more meetings, she should learn",
+    ):
+        assert not engine.wants_action_capture(frag), frag
+    for real in (
+        "Petra, can you schedule a meeting for tomorrow with Anant at three PM",
+        "can you create a task in Asana saying pipedream connection",
+        "send an email to Sofia saying hi",
+    ):
+        assert engine.wants_action_capture(real), real

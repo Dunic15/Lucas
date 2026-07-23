@@ -716,6 +716,27 @@ def _canonical_action_view(org: str, action_id: str) -> dict | None:
         status = "needs_details" if (typed and missing) else "proposed"
     receipt = (durable or {}).get("receipt_json")
     logs = (durable or {}).get("logs_json")
+    # The card's "Runs through" label must match what actually executes. A card
+    # stamped 'manual' (native executor absent at capture) still runs through
+    # Pipedream when the org has that tool connected there — showing "Nobody —
+    # nothing runs automatically" while the receipt says "Pipedream · 400" is a
+    # credibility hit in a demo (live 2026-07-23). Prefer the real executor for
+    # a typed, executable card.
+    _stored_route = str(
+        (durable or {}).get("execution_route")
+        or action.get("execution_route") or ""
+    )
+    _display_route = _stored_route
+    if _stored_route in ("", "manual") and isinstance(typed, dict) and typed.get("type"):
+        try:
+            _rt = executor.route_for_typed(
+                typed, org,
+                item_text=str((durable or {}).get("action") or action.get("item") or ""),
+            )
+            if _rt in ("pipedream", "native"):
+                _display_route = _rt
+        except Exception:  # noqa: BLE001 — display only, never fatal
+            pass
     return {
         "action_id": action_id,
         "org_id": org,
@@ -729,10 +750,7 @@ def _canonical_action_view(org: str, action_id: str) -> dict | None:
         "owner": str(action.get("owner") or (durable or {}).get("owner") or ""),
         "due": str(action.get("deadline") or (durable or {}).get("due") or ""),
         "tool": str((typed or {}).get("type") or ""),
-        "route": str(
-            (durable or {}).get("execution_route")
-            or action.get("execution_route") or ""
-        ),
+        "route": _display_route,
         "params": dict((typed or {}).get("args") or {}),
         "params_schema": schema,
         "missing_params": missing,

@@ -239,7 +239,10 @@ def test_finalize_degrades_when_post_meeting_raises(fresh_store, monkeypatch, ca
 
     # Degraded (not lost): a non-empty deterministic recap is built …
     assert artifact is not None and artifact.get("summary")
-    assert "tracker" in artifact["summary"].lower()  # the degraded recap wording
+    # …and the degraded recap is HONEST + clean — no keyword-scraped "action
+    # items", which turned a messy transcript into garbage cards (2026-07-23).
+    assert "wasn't available" in artifact["summary"].lower()
+    assert not artifact.get("checklist"), "degraded recap must not keyword-scrape"
     assert store.get_artifact("bot_x") is not None    # … saved …
     assert delivered and delivered[0][0] == "bot_x"   # … and delivered.
     # The meter-stop / leave path still ran and the session was removed on 200.
@@ -405,3 +408,32 @@ def test_demo_sample_unknown_avatar_returns_404():
     assert body["error"] == "unknown avatar_id"
     assert isinstance(body["available"], list) and "laura" in body["available"]
 
+
+
+def test_degraded_recap_never_keyword_scrapes_garbage_actions():
+    """Live 2026-07-23 investor demo: a 298-line multiparty transcript degraded
+    the post model → _stub_post_meeting keyword-scraped 22 conversation
+    fragments ('Maybe Pedro, do you know the deadline…') into 'action items'.
+    Degraded mode must produce ZERO scraped actions; the real actions are the
+    live captures merged at finalize. Offline-stub (short scripted demo) still
+    extracts."""
+    from app.brain import engine
+    from app.meeting import meeting_state
+    from app import avatars
+
+    av = avatars.load("petra")
+    messy = "\n".join([
+        "Duccio: Maybe Pedro, do you know when the deadline is for the YC application",
+        "Ananth: we should assign this to someone who owns the process",
+        "Christian: the document needs approval before the deadline",
+        "Duccio: this is the petrol one so we tailor it a bit",
+        "Jacopo: we could do a spider chart with owners and stakeholders",
+    ])
+    st = meeting_state.MeetingState()
+
+    degraded = engine._stub_post_meeting(av, messy, st, degraded=True)
+    assert degraded["checklist"] == [], "degraded must not scrape conversation"
+    assert "keyword" not in degraded["summary"].lower()
+
+    offline = engine._stub_post_meeting(av, messy, st, degraded=False)
+    assert offline["checklist"], "offline stub demo still extracts (short scripts)"
