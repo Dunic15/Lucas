@@ -464,7 +464,10 @@ EXECUTION_STATUSES = ACTION_STATUSES
 # own loop reports) and the closure channel (/resolve) can never disagree.
 # 'needs_details'/'proposed'/'approved'/'executing' are in-flight and must
 # NOT close anything.
-_TERMINAL_STATUS_OUTCOME = {"done": "done", "rejected": "rejected", "failed": "failed"}
+_TERMINAL_STATUS_OUTCOME = {
+    "done": "done", "rejected": "rejected", "withdrawn": "rejected",
+    "failed": "failed",
+}
 
 # Statuses an execution claim may be taken from — everything pre-decision plus
 # 'approved' (the door records the decision first, then claims).
@@ -746,6 +749,86 @@ def set_action_decision_result(
         org_id, action_id, new_status=new_status,
         execution_job_id=execution_job_id,
     )
+
+
+def set_action_route(
+    action_id: str, route: str, *, org_id: str = DEMO_ORG_ID
+) -> bool:
+    """Persist the normalized current route when a durable action row exists.
+
+    Key-free/local actions have no canonical route column; their read and
+    execution paths still call executor.effective_route on every use.
+    """
+    aid = (action_id or "").strip()
+    normalized = (route or "").strip().lower()
+    if not aid or normalized not in (
+        "native", "pipedream", "cedric", "browser", "manual"
+    ):
+        return False
+    if _durable_actions(org_id):
+        from . import outbox_pg
+
+        return outbox_pg.set_action_route(org_id, aid, normalized)
+    return True
+
+
+def withdraw_action(
+    action_id: str, *, org_id: str = DEMO_ORG_ID,
+    confirm_approved: bool = False, detail: str = "withdrawn via dashboard",
+) -> str:
+    """Atomically soft-withdraw an action without deleting its history.
+
+    Returns withdrawn, replay, confirmation_required, conflict or missing.
+    Durable orgs use the Postgres row lock; key-free/demo uses the same
+    transition in SQLite. Executing and settled work is immutable.
+    """
+    aid = (action_id or "").strip()
+    if not aid:
+        return "missing"
+    if _durable_actions(org_id):
+        from . import outbox_pg
+
+        verdict = outbox_pg.withdraw_action(
+            org_id, aid, confirm_approved=confirm_approved, detail=detail
+        )
+        if verdict != "missing":
+            return verdict
+
+    note = (detail or "withdrawn via dashboard").strip()[:300]
+    with store._LOCK, store._connect() as conn:
+        row = conn.execute(
+            "SELECT status FROM action_status WHERE org_id=? AND action_id=?",
+            (org_id, aid),
+        ).fetchone()
+        current = str(row["status"] or "") if row else ""
+        if current == "withdrawn":
+            return "replay"
+        if current in ("executing", "done", "failed", "rejected"):
+            return "conflict"
+        if current == "approved" and not confirm_approved:
+            return "confirmation_required"
+        conn.execute(
+            """INSERT INTO action_status
+                   (org_id, action_id, status, detail, updated_at)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(org_id, action_id) DO UPDATE SET
+                 status=excluded.status, detail=excluded.detail,
+                 updated_at=excluded.updated_at""",
+            (org_id, aid, "withdrawn", note, time.time()),
+        )
+        conn.execute(
+            """UPDATE ledger_items
+               SET status='rejected', resolved_at=?, resolution_detail=?
+               WHERE org_id=? AND action_id=? AND status='open'""",
+            (time.time(), note, org_id, aid),
+        )
+        conn.execute(
+            """UPDATE callback_outbox SET status='cancelled'
+               WHERE org_id=? AND action_id=?
+                 AND status IN ('pending', 'failed')""",
+            (org_id, aid),
+        )
+    return "withdrawn"
 
 
 def get_durable_action(
