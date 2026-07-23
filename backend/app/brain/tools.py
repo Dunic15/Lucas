@@ -175,9 +175,13 @@ _KIND_CALENDAR = re.compile(
     r"|calendar|calendario|event[oi]?)\b",
     re.IGNORECASE,
 )
-_DETAIL_EMAIL_TO = re.compile(
-    r"\b(?:to|for)\s+(?!me\b|us\b|please\b)[a-zà-ù]{3,}"
-    r"|\bsend\s+\w+\s+an?\s+e-?mail|\brecipient:\s*\S",
+_EMAIL_ADDR = r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"
+_DETAIL_EMAIL_TO = re.compile(rf"\brecipient:\s*{_EMAIL_ADDR}\b", re.IGNORECASE)
+_DETAIL_EMAIL_CANDIDATE = re.compile(
+    rf"\brecipient candidate:\s*(?P<email>{_EMAIL_ADDR})\b", re.IGNORECASE
+)
+_DETAIL_EMAIL_NAME = re.compile(
+    r"\brecipient name:\s*(?P<name>[A-ZÀ-Ù][A-ZÀ-Ù'.-]{1,80})\b",
     re.IGNORECASE,
 )
 _DETAIL_EMAIL_BODY = re.compile(
@@ -230,12 +234,30 @@ _TASK_NAME_SHELL = re.compile(
 )
 
 
+_TASK_NAME_PLACEHOLDERS = {
+    "task", "new task", "create task", "create a task", "asana task",
+    "new asana task", "create asana task", "create a new task",
+}
+
+
+def _meaningful_task_name(value: str) -> bool:
+    name = " ".join((value or "").split()).strip(" .?!").lower()
+    return bool(name) and name not in _TASK_NAME_PLACEHOLDERS and (
+        _TASK_NAME_SHELL.fullmatch(name) is None
+    )
+
+
 def _has_task_name(text: str) -> bool:
-    """True when a task ask contains work to name, not only the task shell."""
+    """True when a task ask names real work, not merely the task shell."""
     t = " ".join((text or "").split())
-    if re.search(r"\btask\s+name:\s*\S", t, re.IGNORECASE):
-        return True
-    return bool(t) and _TASK_NAME_SHELL.fullmatch(t) is None
+    labelled = re.findall(
+        r"\btask\s+name:\s*(.+?)(?=\.\s+[A-Z][A-Za-z ]+:|$)",
+        t,
+        re.IGNORECASE,
+    )
+    if labelled:
+        return _meaningful_task_name(labelled[-1])
+    return _meaningful_task_name(t)
 
 
 def missing_action_details(text: str, kind: str = "task") -> list[str]:
@@ -250,7 +272,11 @@ def missing_action_details(text: str, kind: str = "task") -> list[str]:
     missing: list[str] = []
     if kind == "email":
         if not _DETAIL_EMAIL_TO.search(t):
-            missing.append("email_to")
+            missing.append(
+                "email_to_confirm"
+                if _DETAIL_EMAIL_CANDIDATE.search(t)
+                else "email_to"
+            )
         if not _DETAIL_EMAIL_BODY.search(t):
             missing.append("email_body")
         # Ask for the missing pieces in ONE combined question, not slot-by-slot
@@ -283,6 +309,34 @@ def missing_action_details(text: str, kind: str = "task") -> list[str]:
     if not _DETAIL_DESCRIPTION.search(t):
         missing.append("description")
     return missing
+
+
+def collected_action_parameters(text: str) -> dict[str, str]:
+    """Distilled fields already bound to a pending action (never raw transcript)."""
+    t = str(text or "")
+    labels = {
+        "task_name": "Task name",
+        "recipient": "Recipient",
+        "recipient_name": "Recipient name",
+        "recipient_candidate": "Recipient candidate",
+        "body": "Body",
+        "attendees": "Attendees",
+        "when": "When",
+        "owner": "Owner",
+        "project": "Project",
+        "due": "Due",
+        "description": "Description",
+    }
+    out: dict[str, str] = {}
+    for key, label in labels.items():
+        matches = re.findall(
+            rf"(?:^|\.\s+){re.escape(label)}:\s*(.+?)(?=\.\s+[A-Z][A-Za-z ]+:|$)",
+            t,
+            re.IGNORECASE,
+        )
+        if matches:
+            out[key] = " ".join(matches[-1].split())[:300]
+    return out
 
 
 # ── same-intent retry damping (live repro 2026-07-21: four cards for one
@@ -478,18 +532,16 @@ def revise_action_once(
 
 
 def withdraw_action_once(session, item: dict) -> bool:
-    """Withdraw the captured draft everywhere the room can still see it:
-    durable row, queued list, continuation window. True = a card was removed."""
+    """Soft-withdraw one draft; preserve its row for history and audit."""
     from .. import outbox
 
-    removed = outbox.withdraw_action_capture(session, item)
-    aid = str((item or {}).get("action_id") or "")
-    queued = getattr(session, "queued_actions", None) or []
-    session.queued_actions = [
-        q for q in queued if str(q.get("action_id") or "") != aid
-    ]
+    withdrawn = outbox.withdraw_action_capture(session, item)
+    if withdrawn and isinstance(item, dict):
+        item["status"] = "withdrawn"
+    # The draft is no longer active, but it deliberately remains in
+    # queued_actions so finalize/history can render the withdrawn record.
     session.last_capture = None
-    return removed
+    return withdrawn
 
 
 def capture_action_once(
@@ -544,6 +596,7 @@ def capture_action(session, action: str, owner: str = "", due: str = "") -> dict
 _DETAIL_FOLD_LABELS = {
     "task_name": "Task name",
     "email_to": "Recipient",
+    "email_to_confirm": "Recipient",
     "email_body": "Body",
     "invite_with": "Attendees",
     "invite_when": "When",
@@ -554,36 +607,132 @@ _DETAIL_FOLD_LABELS = {
 }
 
 
+def _append_action_fields(base: str, fields: list[tuple[str, str]]) -> str:
+    action = base
+    for label, value in fields:
+        clean = " ".join(str(value or "").split()).strip(" .")
+        if clean:
+            action = f"{action}. {label}: {clean}" if action else f"{label}: {clean}"
+    return action[:300]
+
+
+def _spoken_domain(fragment: str) -> str:
+    """Normalize 's f f studio dot com' into a candidate domain."""
+    raw = (fragment or "").lower().strip(" .")
+    raw = re.sub(r"^(?:at|@)\s+", "", raw)
+    if " dot " not in raw and "." not in raw:
+        return ""
+    raw = re.sub(r"\s+(?:dot|punto)\s+", ".", raw)
+    raw = re.sub(r"\s+", "", raw)
+    return raw if re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", raw) else ""
+
+
+def _exact_email(fragment: str) -> str:
+    raw = " ".join((fragment or "").split())
+    direct = re.search(_EMAIL_ADDR, raw, re.IGNORECASE)
+    if direct:
+        return direct.group(0).lower()
+    spoken = re.sub(r"\s+(?:dot|punto)\s+", ".", raw.lower())
+    spoken = re.sub(r"\s+(?:at|chiocciola)\s+", "@", spoken)
+    spoken = re.sub(r"\s+", "", spoken)
+    return spoken if re.fullmatch(_EMAIL_ADDR, spoken, re.IGNORECASE) else ""
+
+
+def clarification_fragment_matches(
+    text: str, kind: str, missing: list[str] | tuple[str, ...]
+) -> bool:
+    """Whether a same-speaker utterance can fill the active clarification."""
+    t = " ".join((text or "").split()).strip()
+    slots = set(str(x) for x in (missing or ()))
+    if not t:
+        return False
+    if kind == "task" and "task_name" in slots:
+        if re.match(r"^(?:what|do|does|did|can|could|have|has|is|are)\b", t, re.I):
+            return bool(re.search(r"\b(?:call|name)\s+(?:the\s+)?task\b|\btask\s+name\b", t, re.I))
+        return True
+    if kind == "email":
+        return bool(
+            _exact_email(t)
+            or _spoken_domain(t)
+            or re.search(r"\b(?:send\s+it\s+to|recipient|body|should\s+say|saying)\b", t, re.I)
+            or (("email_to_confirm" in slots) and re.fullmatch(r"(?:yes|correct|confirm|that'?s right)", t, re.I))
+        )
+    return True
+
+
+_ORPHAN_ACTION_FRAGMENT = re.compile(
+    r"^\s*(?:and\s+)?(?:"
+    r"send\s+it\s+to\s+\S+|"
+    r"(?:at|@)\s+[a-z0-9. ]+\s+(?:dot|punto)\s+[a-z]{2,}|"
+    r"due\s+(?:on\s+)?\S+|"
+    r"in\s+the\s+[\w .'-]+\s+project"
+    r")\s*[.!?]*$",
+    re.IGNORECASE,
+)
+
+
+def is_orphan_action_fragment(text: str) -> bool:
+    """A field-only fragment must bind to a compatible parent or ask what it means."""
+    return bool(_ORPHAN_ACTION_FRAGMENT.fullmatch(text or ""))
+
+
 def fold_action_details(
     item: dict, fragment: str, missing: list[str] | tuple[str, ...]
 ) -> dict:
-    """Turn a clarify answer into explicit card fields instead of raw glue.
-
-    The old append-only path produced fragments such as "at PM" and "Send, an
-    to" after ASR repairs. A labelled fold preserves the original request and
-    states what the follow-up supplied, making both the card and the later
-    typing pass deterministic. Pure, bounded, and never logs the content.
-    """
+    """Bind a clarification fragment to explicit fields on the same action."""
     base = " ".join(str((item or {}).get("action") or "").split()).strip(" .")
     detail = " ".join(str(fragment or "").split()).strip(" .")
     slots = [str(s) for s in (missing or ()) if str(s) in _DETAIL_FOLD_LABELS]
     if not detail:
         return {"action": base}
+
+    fields: list[tuple[str, str]] = []
+    if any(s.startswith("email_") for s in slots):
+        exact = _exact_email(detail)
+        candidate_match = _DETAIL_EMAIL_CANDIDATE.search(base)
+        if "email_to_confirm" in slots and candidate_match and re.fullmatch(
+            r"(?:yes|correct|confirm|that'?s right)", detail, re.IGNORECASE
+        ):
+            fields.append(("Recipient", candidate_match.group("email").lower()))
+        elif exact:
+            fields.append(("Recipient", exact))
+        else:
+            domain = _spoken_domain(detail)
+            name_match = _DETAIL_EMAIL_NAME.search(base)
+            if domain and name_match:
+                local = re.sub(r"[^a-z0-9._-]", "", name_match.group("name").lower())
+                if local:
+                    fields.append(("Recipient candidate", f"{local}@{domain}"))
+            else:
+                name = re.search(
+                    r"\b(?:send\s+it\s+to|send\s+the\s+email\s+to|recipient(?:\s+is)?)\s+"
+                    r"([A-Za-zÀ-Ù][A-Za-zÀ-Ù'.-]{1,80})\b",
+                    detail,
+                    re.IGNORECASE,
+                )
+                if name:
+                    fields.append(("Recipient name", name.group(1)))
+        body = re.search(
+            r"\b(?:the\s+)?body\s+(?:should\s+say|is)\s+(.+)$|"
+            r"\b(?:it\s+)?should\s+say\s+(.+)$|\bsaying\s+(.+)$",
+            detail,
+            re.IGNORECASE,
+        )
+        if body:
+            fields.append(("Body", next(x for x in body.groups() if x)))
+        return {"action": _append_action_fields(base, fields)}
+
     if len(slots) == 1:
         slot = slots[0]
-        # People often answer the first question and continue into the next
-        # detail ("Anant at three"). Keep only the value for the slot we asked;
-        # the remaining required slot is re-asked by main after revalidation.
         if slot == "invite_with":
-            detail = re.split(r"\s+(?:at|on|tomorrow|today|domani|oggi)\b",
-                              detail, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
-        elif slot == "email_to":
-            detail = re.split(r"\s+(?:saying|that\s+says|with\s+(?:subject|body))\b",
-                              detail, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
+            detail = re.split(
+                r"\s+(?:at|on|tomorrow|today|domani|oggi)\b",
+                detail, maxsplit=1, flags=re.IGNORECASE,
+            )[0].strip(" ,")
         elif slot == "task_name":
             detail = re.sub(
                 r"^(?:the\s+)?task\s+(?:name\s+)?(?:should\s+be|is)\s+|"
-                r"^(?:call|name)\s+it\s+",
+                r"^(?:call|name)\s+(?:the\s+)?task\s+",
                 "",
                 detail,
                 flags=re.IGNORECASE,
@@ -591,8 +740,8 @@ def fold_action_details(
         label = _DETAIL_FOLD_LABELS[slot]
     else:
         label = "Details"
-    action = f"{base}. {label}: {detail}" if base else f"{label}: {detail}"
-    updates: dict[str, str] = {"action": action[:300]}
+    action = _append_action_fields(base, [(label, detail)])
+    updates: dict[str, str] = {"action": action}
     if len(slots) == 1 and slots[0] == "owner":
         updates["owner"] = detail[:100]
     if len(slots) == 1 and slots[0] == "due":
