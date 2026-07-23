@@ -4075,7 +4075,7 @@
           return '<div class="brdoc"><span class="brdoc-nm">'+(isDrive?'📁 ':'')+esc(s.name)+'</span>'+
             (isDrive?'<span class="brdoc-tag" title="Synced from a Google Drive folder">Google Drive folder</span>':'')+
             '<span class="brdoc-meta">'+(s.published_documents|0)+' ready'+((s.pending_documents|0)?' · '+(s.pending_documents|0)+' indexing':'')+((s.failed_documents|0)?' · '+(s.failed_documents|0)+' failed':'')+'</span>'+
-            '<button class="brdoc-del" data-brdel="'+esc(s.id)+'" title="Remove this knowledge">✕</button></div>';
+            '<button class="brdoc-del" data-brdel="'+esc(s.id)+'" data-brav="'+esc(sel)+'" data-brshared="'+(((s.avatars||[]).length>1)?"1":"")+'" title="'+(((s.avatars||[]).length>1)?"Remove from "+esc(avName)+" (other avatars keep it)":"Remove this knowledge")+'">✕</button></div>';
         }).join("") : '<div class="empty" style="padding:12px 2px">Nothing yet — drop a file above and '+esc(avName)+' will start citing it in meetings.</div>';
       var css='<style>'+
         '.brwrap{max-width:none}'+
@@ -4229,10 +4229,20 @@
       });
       $("#brconnect").addEventListener("click",function(){ var db=$("#brdrive-box"); if(db){ db.hidden=!db.hidden; if(!db.hidden) _brainDriveOpen(sel); } });
       box.querySelectorAll("[data-brdel]").forEach(function(b){ b.addEventListener("click",function(){
-        if(!window.confirm("Remove this knowledge? "+avName+" stops citing it.")) return;
-        bFetch("sources/"+b.getAttribute("data-brdel"),{method:"DELETE"}).then(function(r){
+        var id=b.getAttribute("data-brdel"), av=b.getAttribute("data-brav");
+        var shared=b.getAttribute("data-brshared")==="1";
+        // The ✕ used to DELETE the whole source for EVERY avatar, even though it
+        // said "<avatar> stops citing it". When a source is shared with other
+        // avatars, unassign from THIS one only and leave it for the rest; only a
+        // source assigned to nobody else is deleted outright.
+        var msg=shared?("Remove from "+avName+"? Other avatars keep this knowledge.")
+                      :("Remove this knowledge? "+avName+" stops citing it.");
+        if(!window.confirm(msg)) return;
+        var req=shared?bFetch("sources/"+id+"/assign/"+encodeURIComponent(av),{method:"DELETE"})
+                      :bFetch("sources/"+id,{method:"DELETE"});
+        req.then(function(r){
           if(!r.ok){ toast("Could not remove: "+(r.j.error||r.status),true); return; }
-          toast("Removed."); loadBrain(true); });
+          toast(shared?("Removed from "+avName+"."):"Removed."); loadBrain(true); });
       }); });
       // Keep refreshing while any source still has a doc indexing.
       _brainSchedulePoll(srcs.some(function(s){ return (s.pending_documents|0)>0; }));
