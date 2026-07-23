@@ -771,8 +771,7 @@ def rewrite_action_capture_once(
 
 
 def withdraw_action_capture(org_id: str, bot_id: str, action_id: str) -> bool:
-    """Withdraw a cancelled draft — PG twin. Finalize-in-progress returns
-    False (the drain owns the rows); a retry of the cancel is a no-op."""
+    """Soft-withdraw a cancelled draft under the capture/finalize fence."""
     engine = _engine()
     with engine.begin() as conn:
         _set_org(conn, org_id)
@@ -795,12 +794,25 @@ def withdraw_action_capture(org_id: str, bot_id: str, action_id: str) -> bool:
             ),
             {"lock_key": f"{org_id}:{bot_id}:action:{action_id}"},
         )
-        gone = conn.execute(
+        changed = conn.execute(
             text(
                 """
-                DELETE FROM queued_actions
+                UPDATE queued_actions
+                SET execution_status='withdrawn',
+                    execution_detail='withdrawn by voice',
+                    logs_json=CASE
+                      WHEN jsonb_array_length(logs_json) >= 50
+                      THEN (logs_json - 0) || jsonb_build_object(
+                        'event', 'withdrawn', 'detail', 'withdrawn by voice')
+                      ELSE logs_json || jsonb_build_object(
+                        'event', 'withdrawn', 'detail', 'withdrawn by voice')
+                    END,
+                    updated_at=clock_timestamp()
                 WHERE org_id=:org_id AND bot_id=:bot_id
                   AND action_id=:action_id
+                  AND execution_status NOT IN (
+                    'withdrawn', 'executing', 'done', 'failed', 'rejected'
+                  )
                 RETURNING action_id
                 """
             ),
@@ -818,9 +830,7 @@ def withdraw_action_capture(org_id: str, bot_id: str, action_id: str) -> bool:
             ),
             {"org_id": org_id, "action_id": action_id},
         )
-        return gone is not None
-
-
+        return changed is not None
 def update_queued_action(
     org_id: str, bot_id: str, item: dict[str, Any]
 ) -> None:
