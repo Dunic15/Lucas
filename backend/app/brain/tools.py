@@ -267,7 +267,18 @@ def missing_action_details(text: str, kind: str = "task") -> list[str]:
         # schema — never interrogate, just confirm and queue.
         return missing
     if not _has_task_name(t):
-        missing.append("task_name")
+        # Ask only for the provider-required title first. Once supplied, the
+        # existing optional enrichment slots can be offered without ever using
+        # the generic shell as the task name.
+        return ["task_name"]
+    if not _DETAIL_OWNER.search(t):
+        missing.append("owner")
+    if not _DETAIL_PROJECT.search(t):
+        missing.append("project")
+    if not _DETAIL_DUE.search(t):
+        missing.append("due")
+    if not _DETAIL_DESCRIPTION.search(t):
+        missing.append("description")
     return missing
 
 
