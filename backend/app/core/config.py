@@ -796,6 +796,21 @@ class Settings(BaseSettings):
     # (its removal is a separate track), the internal persona can never be
     # listed or dispatched. Empty = no internal avatars.
     internal_avatar_ids: str = "duccio"
+    # COMING-SOON avatar folders (comma-separated ids): personas that ARE a
+    # product surface but are not bookable yet. Unlike internal_avatar_ids they
+    # stay LISTED in every roster — showing what's next is the point — but they
+    # sort last, render un-selectable, and are REFUSED by session dispatch for
+    # every caller. The dispatch refusal is not decoration: a disabled dropdown
+    # stops a human, not an API token. Empty = every listed avatar is bookable.
+    #
+    # DEFAULT EMPTY, deliberately. Defaulting this to "cedric" in code broke 38
+    # tests across the clarify loop, the action bridge, the Cedric integration,
+    # voice consent and Drive — cedric is a genuinely dispatchable avatar
+    # throughout this codebase, so hiding it is a deployment's decision, not the
+    # code's. The prod dashboard arms it with COMING_SOON_AVATAR_IDS=cedric.
+    # Same rule as any other kill-switch: a flag whose safe value depends on
+    # which environment you are reading is one that gets read from the wrong one.
+    coming_soon_avatar_ids: str = ""
     # Static bearer token for the session API (/sessions/*, /ledger). Empty =
     # open (preserves the zero-key local demo); set in any real deployment.
     laura_api_token: str = ""
@@ -994,6 +1009,16 @@ class Settings(BaseSettings):
         return {
             a.strip().lower()
             for a in self.internal_avatar_ids.split(",")
+            if a.strip()
+        }
+
+    @property
+    def coming_soon_avatar_id_set(self) -> set[str]:
+        """Parsed COMING_SOON_AVATAR_IDS — folder ids shown in every roster but
+        un-selectable and refused by dispatch (see the field's comment above)."""
+        return {
+            a.strip().lower()
+            for a in self.coming_soon_avatar_ids.split(",")
             if a.strip()
         }
 

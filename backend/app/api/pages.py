@@ -119,7 +119,15 @@ def photoreal_reference(avatar_id: str = "") -> Response:
     return FileResponse(
         path,
         media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=86400"},
+        # Short max-age + revalidation, NOT a day. These files change whenever
+        # the art direction does, and at 24h every user who opened the dashboard
+        # that day kept the old faces with no way to know they were stale — the
+        # deploy looked broken. FileResponse emits a strong ETag, so a
+        # revalidation is a 304 with no body; stale-while-revalidate keeps the
+        # render instant while the check happens in the background.
+        headers={
+            "Cache-Control": "public, max-age=300, stale-while-revalidate=86400"
+        },
     )
 
 

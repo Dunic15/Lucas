@@ -283,6 +283,18 @@ def is_internal(avatar_id: str) -> bool:
     return (avatar_id or "").strip().lower() in settings.internal_avatar_id_set
 
 
+def is_coming_soon(avatar_id: str) -> bool:
+    """Whether this id is announced but not yet bookable
+    (settings.coming_soon_avatar_ids).
+
+    Deliberately NOT the same thing as internal: an internal persona is hidden
+    from every roster, a coming-soon one is SHOWN — that's the point, the
+    roadmap is the message — but cannot be dispatched. Enforced server-side as
+    well as in the UI, because a disabled dropdown is not a control: without
+    this the avatar stays bookable to anyone holding an API token."""
+    return (avatar_id or "").strip().lower() in settings.coming_soon_avatar_id_set
+
+
 def list_ids() -> list[str]:
     """Installed, LISTABLE avatar folders. Internal personas
     (settings.internal_avatar_ids) are excluded here — the single choke point
