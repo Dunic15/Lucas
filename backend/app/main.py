@@ -1592,6 +1592,46 @@ def _clarify_line(heard: str, missing: list[str]) -> str:
     joined = slots[0] if len(slots) == 1 else ", ".join(slots[:-1]) + ", and " + slots[-1]
     return f"Got it — I'll queue that for your approval. First though: {joined}?"
 
+
+def _bind_pending_action(
+    session: store.Session,
+    item: dict,
+    speaker_id: str,
+    created_at: float,
+    missing: list[str],
+    source_event_key: str,
+    source_fingerprint: str,
+    heard: str,
+) -> str:
+    """Mirror the legacy live tuple into one typed canonical pending record."""
+    line = _clarify_line(heard, missing)
+    store.bind_pending_action(
+        session,
+        item,
+        speaker_id,
+        tools.ask_kind(item.get("action") or ""),
+        missing,
+        collected_parameters=tools.collected_action_parameters(
+            item.get("action") or ""
+        ),
+        question=line,
+        source_event_key=source_event_key,
+        source_fingerprint=source_fingerprint,
+    )
+    session.pending_clarify = (
+        item, speaker_id, created_at, missing,
+        source_event_key, source_fingerprint,
+    )
+    return line
+
+
+def _settle_pending_action(
+    session: store.Session, item: dict, speaker_id: str, status: str
+) -> None:
+    store.settle_pending_action(session, item, speaker_id, status)
+    session.pending_clarify = None
+
+
 # Listening cues spoken WHILE a human is mid-monologue (backchanneling, the
 # thing that makes a listener feel present). Two syllables max — anything
 # longer becomes an interruption instead of a nod.
@@ -3682,6 +3722,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
             withdrawn = await run_in_threadpool(
                 tools.withdraw_action_once, session, d_item
             )
+            if withdrawn:
+                store.settle_pending_action(
+                    session, d_item, d_speaker, "withdrawn"
+                )
             session.pending_clarify = None
             spoke = False
             if withdrawn:
@@ -3769,12 +3813,15 @@ async def recall_webhook(request: Request) -> JSONResponse:
         expired = time.time() - c_ts > _CLARIFY_WINDOW_S
         answered = (not called) and speaker_id == c_speaker and not expired
         if answered and _addressed_elsewhere(session, avatar, text):
-            # The asker turned to ANOTHER participant ("Ducho, do you wanna
-            # discuss something else?") — that's a new turn for them, not the
-            # answer to her clarify question. Keep the clarify pending and let
-            # the line flow to the normal pipeline (addressed_to_other skips
-            # it there). Gluing it here is how the dead phrase reached the
-            # card (live repro 2026-07-22).
+            # The asker turned to another participant; never bind that turn.
+            answered = False
+        if answered and not tools.clarification_fragment_matches(
+            text,
+            tools.ask_kind(c_item.get("action") or ""),
+            c_missing,
+        ):
+            # An unrelated question (for example an Asana snapshot lookup)
+            # cannot become the pending task's title or description.
             answered = False
         if answered and time.time() - c_ts < 4.0 and is_capture_continuation(text):
             # A late ASR fragment of the ORIGINAL ask, not an answer: extend
@@ -3912,6 +3959,19 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 c_item.get("action") or "",
                 kind=tools.ask_kind(c_item.get("action") or ""),
             )
+            store.bind_pending_action(
+                session,
+                c_item,
+                c_speaker,
+                tools.ask_kind(c_item.get("action") or ""),
+                remaining,
+                collected_parameters=tools.collected_action_parameters(
+                    c_item.get("action") or ""
+                ),
+                question=_clarify_line(text, remaining) if remaining else "",
+                source_event_key=c_event_key,
+                source_fingerprint=c_fingerprint,
+            )
             # Owner/project/due/description improve an Asana card but are not
             # provider-required. After the asker replies once, explicitly skips,
             # or lets the window expire, those optional enrichments cannot hold
@@ -3957,7 +4017,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 # dashboard's needs-details form.
                 session.pending_clarify = None
             else:
-                session.pending_clarify = None
+                _settle_pending_action(session, c_item, c_speaker, "proposed")
                 if settings.voice_consent_writes:
                     asyncio.create_task(
                         run_in_threadpool(cedric.voice_approve, session, c_item)
@@ -4678,6 +4738,29 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # avatar does now (browser walkthrough) — never a post-meeting
             # to-do. Keep it off the capture seam.
             and not detect_browse_intent(question)[0]):
+        if tools.is_orphan_action_fragment(question):
+            # A field-only fragment without a compatible pending parent is not
+            # an action and cannot become a tracked-only approval card.
+            line = (
+                "Which action should that update?"
+                if not sounds_italian(question)
+                else "A quale azione si riferisce?"
+            )
+            spoke = await _make_avatar_speak(
+                session,
+                line,
+                force=True,
+                generation=turn_gen,
+                audio=tts.cached_payload(line, _avatar_voice(session)),
+            )
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "spoke": bool(spoke),
+                    "action_capture": False,
+                    "needs_details": True,
+                }
+            )
         # Same-intent retry damping (live repro 2026-07-21: four cards for
         # one email). A re-ask of the capture she is still CLARIFYING extends
         # that one item and keeps the clarify pending — reachable here when
@@ -4857,16 +4940,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
         )
         if session.speech_generation != turn_gen:  # barge-in since the final landed
             return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
-        # A NEW addressed ask while an older clarify was still pending:
-        # resolve the old capture as-is first (approve quietly with what it
-        # has) so it is never lost, then handle this one on its own merits.
+        # A new ask releases the old conversational slot, but an incomplete
+        # action remains needs_details and is NEVER auto-approved.
         stale = getattr(session, "pending_clarify", None)
         if stale is not None:
+            store.settle_pending_action(session, stale[0], stale[1], "needs_details")
             session.pending_clarify = None
-            if settings.voice_consent_writes:
-                asyncio.create_task(
-                    run_in_threadpool(cedric.voice_approve, session, stale[0])
-                )
         missing = tools.missing_action_details(
             item.get("action") or "",
             kind=tools.ask_kind(item.get("action") or ""),
@@ -4875,11 +4954,16 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # The ask lacks what a well-filed task needs — Petra ASKS instead
             # of filing an orphan. The approval is held until the asker's
             # reply resolves it (clarify block above), or the window lapses.
-            session.pending_clarify = (
-                item, speaker_id, time.time(), missing,
-                capture_event_key, capture_fingerprint,
+            line = _bind_pending_action(
+                session,
+                item,
+                speaker_id,
+                time.time(),
+                missing,
+                capture_event_key,
+                capture_fingerprint,
+                question,
             )
-            line = _clarify_line(question, missing)
             session.last_ack_at = time.time()
             session.last_clarify_nudge_at = time.time()
             spoke = await _make_avatar_speak(
@@ -4959,7 +5043,6 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # context is insufficient the generator yields nothing and the avatar stays
     # silent (the streaming equivalent of the old confidence gate).
     history = session.recent_transcript(n=8)
-
     # Context-bound ASR repair for mis-heard app names ("what's in my zone?" →
     # "what's in my Asana?" ONLY when Asana was just discussed). Scoped to the
     # ANSWER text; the capture path (text) is deliberately left untouched.
