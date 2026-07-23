@@ -232,10 +232,15 @@ _TASK_NAME_SHELL = re.compile(
 
 def _has_task_name(text: str) -> bool:
     """True when a task ask contains work to name, not only the task shell."""
+    from ..actions import action_plane
+
     t = " ".join((text or "").split())
-    if re.search(r"\btask\s+name:\s*\S", t, re.IGNORECASE):
-        return True
-    return bool(t) and _TASK_NAME_SHELL.fullmatch(t) is None
+    named = re.search(r"\btask\s+name:\s*(.+)$", t, re.IGNORECASE)
+    if named:
+        return action_plane.is_meaningful_task_name(named.group(1))
+    if _TASK_NAME_SHELL.fullmatch(t):
+        return False
+    return action_plane.is_meaningful_task_name(t)
 
 
 def missing_action_details(text: str, kind: str = "task") -> list[str]:
@@ -270,19 +275,11 @@ def missing_action_details(text: str, kind: str = "task") -> list[str]:
         # schema — never interrogate, just confirm and queue.
         return missing
     if not _has_task_name(t):
-        # Ask only for the provider-required title first. Once supplied, the
-        # existing optional enrichment slots can be offered without ever using
-        # the generic shell as the task name.
         return ["task_name"]
-    if not _DETAIL_OWNER.search(t):
-        missing.append("owner")
-    if not _DETAIL_PROJECT.search(t):
-        missing.append("project")
-    if not _DETAIL_DUE.search(t):
-        missing.append("due")
-    if not _DETAIL_DESCRIPTION.search(t):
-        missing.append("description")
-    return missing
+    # Asana requires only a meaningful title. Owner, project, due date and
+    # description remain editable but never block a basic task unless the
+    # human explicitly requested those attributes.
+    return []
 
 
 # ── same-intent retry damping (live repro 2026-07-21: four cards for one
