@@ -682,8 +682,26 @@ def record_action_decision(
     if _durable_actions(org_id):
         from . import outbox_pg
 
-        return outbox_pg.record_action_decision(org_id, action_id, fields)
-    return store.record_action_approval(org_id, action_id, **fields)
+        recorded = outbox_pg.record_action_decision(org_id, action_id, fields)
+    else:
+        recorded = store.record_action_approval(org_id, action_id, **fields)
+
+    # Audit only the first-write winner. Replays and racing surfaces resolve to
+    # the canonical row above and must not manufacture duplicate security
+    # events. The writer is bounded/best-effort and never blocks this decision.
+    if recorded:
+        try:
+            from ..persistence import audit_log
+
+            audit_log.record(
+                org_id,
+                actor_user_id=laura_user_id or None,
+                action=f"action.{decision}",
+                target=action_id,
+            )
+        except Exception:  # noqa: BLE001 - audit never breaks an approval
+            pass
+    return recorded
 
 
 def get_action_decision(
