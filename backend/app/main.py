@@ -4958,7 +4958,15 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # Grounding is enforced by the SKIP sentinel inside the stream: if the
     # context is insufficient the generator yields nothing and the avatar stays
     # silent (the streaming equivalent of the old confidence gate).
+    # Final received → begin building the answer. Anchors the per-stage latency
+    # line emitted after the stream (durations only — never transcript text).
+    _t_turn0 = time.perf_counter()
     history = session.recent_transcript(n=8)
+    # Compact questions-only recap so "what did I ask you before?" reaches past
+    # the 8-line window (live 2026-07-23: recalled only the last two). Short by
+    # construction — a few tokens — and paired with a smaller own_recent below,
+    # so the prompt does not grow net.
+    _user_questions = session.recent_user_questions(6)
 
     # Context-bound ASR repair for mis-heard app names ("what's in my zone?" →
     # "what's in my Asana?" ONLY when Asana was just discussed). Scoped to the
@@ -5012,6 +5020,20 @@ async def recall_webhook(request: Request) -> JSONResponse:
     spoke_any = False
     suppressed_any = False
     interrupted = False
+    # Repeat guard: a short follow-up fragment ("e prima?", "and before?") must
+    # not make her re-speak the previous multi-sentence answer verbatim. The
+    # speak layer already dedupes an UNADDRESSED repeat, but a follow-up is
+    # `called`/`followup` → force=True → it bypasses that. So on a short
+    # follow-up we compare each sentence to her last turn and drop near-verbatim
+    # replays (reusing similar_contribution). Dropped == suppressed → the
+    # existing "duplicate answer suppressed" terminal handles the silence.
+    _dropped_dup = False
+    _last_agent_line = session.last_agent_line()
+    _repeat_guard = (
+        bool(_last_agent_line)
+        and (called or followup)
+        and len((question or text).split()) <= 4
+    )
     speak_tasks: list[asyncio.Task] = []
     prev_task: asyncio.Task | None = None
     _search_turn = wants_web_search(question or text)
@@ -5066,7 +5088,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 avatar,
                 question or text,
                 history=history,
-                own_recent=session.recent_agent_lines(n=3),
+                # Bounded: the gist of her last 2 turns, clipped — not 3 full
+                # multi-sentence answers. #421 added this block unclipped, which
+                # is the input-token cost that shows up as first-token latency
+                # (see the [latency] turn line). The clip keeps the anti-repeat
+                # signal without the tokens.
+                own_recent=session.recent_agent_lines(n=2, max_chars=140),
+                questions="\n".join(_user_questions),
                 memory=memory,
                 state=state,
                 summary=session.rolling_summary,
@@ -5094,6 +5122,19 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 break
             if hand_mode:
                 hand_sentences.append(sentence)
+                continue
+            # Repeat guard (short follow-up only): drop a sentence that re-speaks
+            # her last turn near-verbatim, rather than letting `force=called`
+            # push it through the speak-layer dedupe. A search-announce line is
+            # never a replay, so it is exempt. All sentences dropping → nothing
+            # spoken + suppressed_any → the "duplicate answer suppressed" branch.
+            if (
+                _repeat_guard
+                and not is_search_announce
+                and similar_contribution(sentence, _last_agent_line, threshold=0.8)
+            ):
+                _dropped_dup = True
+                suppressed_any = True
                 continue
             # Called by name -> answer even if it repeats a recent line; an
             # unaddressed duplicate is suppressed (and reported honestly below).
@@ -5154,6 +5195,28 @@ async def recall_webhook(request: Request) -> JSONResponse:
         return JSONResponse(
             {"ok": True, "spoke": spoke_any, "streamed": True, "recovered": True}
         )
+
+    # ── per-stage latency telemetry (durations + sizes + flags only; NO text) ──
+    # The normal-path breakdown #421 lacked. Read off _answer_meta after the
+    # stream: retrieve (route→retrieval), first_token (retrieval→first token),
+    # plus prompt-size fields so the own_recent token cost is directly visible.
+    # asr_route = the main-side overhead before the model (history/questions
+    # build, ASR repair, capability-miss, roster, graphiti). Capability turns
+    # log their own line and return earlier, so this is the ordinary path only.
+    print(
+        f"[latency] turn total={int((time.perf_counter() - _t_turn0) * 1000)}ms "
+        f"asr_route={int((_t_wake - _t_turn0) * 1000)}ms "
+        f"retrieve={'skip' if _answer_meta.get('rag_skipped') else str(int(_answer_meta.get('retrieve_ms', 0)))+'ms'} "
+        f"first_token={int(_answer_meta.get('first_token_ms', 0))}ms "
+        f"web_search={'yes' if _answer_meta.get('web_search') else 'no'} "
+        f"cancelled={'yes' if interrupted else 'no'} "
+        f"duplicated={'yes' if _dropped_dup else 'no'} "
+        f"hist_chars={_answer_meta.get('hist_chars', 0)} "
+        f"own_chars={_answer_meta.get('own_chars', 0)} "
+        f"q_chars={_answer_meta.get('questions_chars', 0)} "
+        f"model={_answer_meta.get('model', '')}",
+        flush=True,
+    )
 
     if _search_turn:
         session.search_inflight_at = 0.0

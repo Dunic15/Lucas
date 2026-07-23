@@ -881,6 +881,7 @@ def answer_question_stream(
     *,
     history: str = "",
     own_recent: str = "",
+    questions: str = "",
     memory: str = "",
     state: "meeting_state.MeetingState | None" = None,
     summary: str = "",
@@ -954,8 +955,20 @@ def answer_question_stream(
     # on it — set BEFORE the first yield so it is populated once iteration ends.
     if meta is not None:
         meta["top_score"] = float(chunks[0].score) if chunks else 0.0
+        # Per-stage latency + prompt-size telemetry (durations and lengths only —
+        # never any transcript text). The caller reads these off `meta` after the
+        # generator is exhausted, exactly like top_score, and emits one line.
+        meta["rag_skipped"] = _rag_skipped
+        meta["retrieve_ms"] = 0.0 if _rag_skipped else _retrieve_ms
+        meta["own_chars"] = len(own_recent)
+        meta["hist_chars"] = len(history)
+        meta["questions_chars"] = len(questions)
 
     if _is_stub():
+        if meta is not None:
+            meta["web_search"] = False
+            meta["model"] = "stub"
+            meta["first_token_ms"] = (time.perf_counter() - _t0) * 1000
         r = _stub_answer(chunks)
         if r.get("sufficient_context"):
             yield r["answer"]
@@ -1002,6 +1015,17 @@ def answer_question_stream(
         if own_recent.strip()
         else ""
     )
+    # A compact, questions-only recap so "what did I ask you before?" reaches
+    # past the recent-line window. Short by construction (just the questions),
+    # so it costs a handful of tokens — and it is what actually fixes the recall
+    # the narrow history window missed. Human questions only; never agent lines.
+    questions_block = (
+        f"Questions {(speaker or 'they').strip() or 'they'} asked you earlier "
+        f"in this meeting, oldest first (use these to answer 'what did I ask "
+        f"before?'):\n{questions}\n\n"
+        if questions.strip()
+        else ""
+    )
     asker = (speaker or "").strip() or "Someone"
     # {name} parameterizes the previously hardcoded "You are Laura" — for the
     # avatar actually speaking (byte-identical when that avatar IS Laura), and
@@ -1016,6 +1040,7 @@ def answer_question_stream(
         f"{remembered}"
         f"{roster_block}"
         f"{own_block}"
+        f"{questions_block}"
         f"{convo}"
         f"{asker} in the meeting just said:\n{question}\n\n"
         f"Answer in spoken style. Reply SKIP only if this was clearly not directed at {avatar.name}."
@@ -1047,6 +1072,9 @@ def answer_question_stream(
             )
 
     _provider, _model = _live_route(question)
+    if meta is not None:
+        meta["web_search"] = _provider == "search"
+        meta["model"] = _model
     if _provider == "search":
         # No ungrounded-process caveat here: this branch answers from a live web
         # search, and the announce line ("let me look that up") already discloses
@@ -1069,6 +1097,8 @@ def answer_question_stream(
         # silent.
         question = f"{question} (You could not search the web just now — answer from your knowledge and say it may not be current.)"
         _provider, _model = settings.brain_provider, settings.brain_model_fast
+        if meta is not None:
+            meta["model"] = _model  # search flaked → fell through to the fast plane
     # A ceiling only as a runaway backstop — NOT to shorten a legitimately long
     # answer. Conciseness is shaped by the system prompt ("1-3 short sentences"),
     # which lets a reply END gracefully; a lower hard cap would just truncate a
@@ -1080,6 +1110,8 @@ def answer_question_stream(
     ):
         if _first_token_ms is None:
             _first_token_ms = (time.perf_counter() - _t0) * 1000
+            if meta is not None:
+                meta["first_token_ms"] = _first_token_ms
         pending += delta
         if not decided:
             head = pending.lstrip()

@@ -26,6 +26,16 @@ from ..config import settings
 # tenant so the single-tenant demo stays byte-identical.
 DEMO_ORG_ID = settings.demo_org_id
 
+# Opening words that mark a human turn as a question when ASR dropped the '?'.
+# EN + IT (the two live languages). Matched case-folded against the first word.
+_QUESTION_OPENERS = frozenset({
+    "what", "why", "how", "when", "where", "who", "whom", "whose", "which",
+    "can", "could", "do", "does", "did", "are", "is", "am", "was", "were",
+    "will", "would", "should", "shall", "may", "might", "have", "has", "had",
+    "cosa", "che", "come", "quando", "dove", "chi", "quale", "quali", "perche",
+    "perché", "puoi", "potresti", "sai", "hai", "posso", "mi",
+})
+
 
 def _default_store_path() -> Path:
     persistent_mount = Path("/var/data")
@@ -403,21 +413,62 @@ class Session:
         """Human-only evidence for every live and post-meeting decision path."""
         return [u for u in self.transcript if u.speaker_kind != "agent"]
 
-    def recent_agent_lines(self, n: int = 3) -> str:
+    def recent_agent_lines(self, n: int = 3, max_chars: int = 0) -> str:
         """The avatar's OWN last few spoken turns — for conversational continuity
         so she doesn't repeat herself verbatim or contradict what she just said
         (live 2026-07-23: gemma-4-31b replayed the same access explanation twice
         because its own turns are stripped from every grounding channel). Kept
         SEPARATE from recent_transcript on purpose: this is context, never
-        evidence — grounding still reads only human_transcript."""
+        evidence — grounding still reads only human_transcript.
+
+        max_chars>0 clips each turn (whole words) so this prompt block cannot
+        balloon: a full multi-sentence answer per turn is exactly the input-token
+        cost that shows up as first-token latency on the live path, and the model
+        only needs the GIST of what it just said to avoid repeating it."""
         agent = [u for u in self.transcript if u.speaker_kind == "agent"]
-        return "\n".join(f"You said: {u.text}" for u in agent[-n:])
+
+        def _clip(t: str) -> str:
+            t = (t or "").strip()
+            if max_chars and len(t) > max_chars:
+                t = t[:max_chars].rsplit(" ", 1)[0] + "…"
+            return t
+
+        return "\n".join(f"You said: {_clip(u.text)}" for u in agent[-n:])
+
+    def last_agent_line(self) -> str:
+        """The single most recent thing the avatar said — the anchor a
+        deterministic repeat-guard compares a new answer against. '' if she has
+        not spoken yet. Never logged (PII discipline is the caller's)."""
+        for u in reversed(self.transcript):
+            if u.speaker_kind == "agent":
+                return (u.text or "").strip()
+        return ""
 
     def recent_transcript(self, n: int = 8) -> str:
         """Recent HUMAN turns; agent output is never evidence for a new answer."""
         return "\n".join(
             f"{u.speaker}: {u.text}" for u in self.human_transcript()[-n:]
         )
+
+    def recent_user_questions(self, n: int = 6) -> list[str]:
+        """The last few things a HUMAN actually ASKED — a compact, questions-only
+        view so 'what did I ask you before?' can be answered past the narrow
+        recent-line window (live 2026-07-23: she recalled only the last two and
+        then replayed her previous answer verbatim). Human-only — a question is
+        evidence of what was asked — and it exposes nothing recent_transcript
+        doesn't already surface, so it carries no new PII risk.
+
+        Interrogative = ends with '?' or opens with a question word (EN + IT);
+        ASR frequently drops the '?', so the word list is the real workhorse."""
+        out: list[str] = []
+        for u in self.human_transcript():
+            t = (u.text or "").strip()
+            if not t:
+                continue
+            first = t.split()[0].lower().strip(",.!¿?") if t.split() else ""
+            if t.endswith("?") or first in _QUESTION_OPENERS:
+                out.append(t)
+        return out[-n:]
 
     def in_cooldown(self, cooldown_seconds: float) -> bool:
         return (time.time() - self.last_spoke_at) < cooldown_seconds
