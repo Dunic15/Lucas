@@ -1238,9 +1238,17 @@ def _syscheck_rows(caller_org: str | None) -> list[dict]:
             except Exception:  # noqa: BLE001
                 native_on = False
         connected = pd_on or cedric_on or native_on
-        if pd_on:
+        representative = {
+            "google_calendar": "calendar.create_event",
+            "gmail": "email.send",
+            "google_drive": "drive.create_doc",
+        }[key]
+        resolved = executor.resolve_effective_route(
+            {"type": representative, "args": {}}, org
+        )["route"]
+        if resolved == "pipedream" and pd_on:
             src = "Pipedream"
-        elif native_on:
+        elif resolved == "native" and native_on:
             src = "native Google OAuth"
         else:
             src = "connector"
@@ -1279,10 +1287,14 @@ def _syscheck_rows(caller_org: str | None) -> list[dict]:
         asana_native = False
     asana_pd = _pd("asana")
     asana_on = asana_native or asana_pd
+    asana_route = executor.resolve_effective_route(
+        {"type": "asana.create_task", "args": {"name": "system check"}}, org
+    )["route"]
     add(
         "asana", "Asana", "productivity",
         "ok" if asana_on else "off",
-        detail=("Connected via Pipedream" if asana_pd
+        detail=("Connected via Pipedream"
+                if asana_on and asana_route == "pipedream"
                 else "Connected via token" if asana_native
                 else "Not connected"),
         supports=tool_registry.family_verbs("asana"),
