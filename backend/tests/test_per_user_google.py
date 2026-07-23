@@ -255,6 +255,61 @@ def test_upcoming_prefers_pipedream_calendar_when_connected(client, monkeypatch)
     assert m["event_ref"] == ""  # read-only: no signed native write ref
 
 
+def test_upcoming_pipedream_read_survives_a_live_session(client, monkeypatch):
+    """Regression (live 2026-07-23): _build_rows_pd referenced an undefined
+    `org_id` (only native's parameter), which raised NameError while mapping
+    booked sessions → the endpoint reported the connected calendar as NOT
+    connected. It only fires when store.all_sessions() is non-empty (the booked
+    comprehension body runs), which is why the earlier test missed it."""
+    from app import pipedream_client, pipedream_executor
+
+    # A live session must exist so the `booked` comprehension actually evaluates
+    # `s.org_id == <org>` (the line that used the wrong name).
+    store.create("bot_live", "https://meet.google.com/live-1", "petra",
+                 org_id=settings.demo_org_id)
+    try:
+        monkeypatch.setattr(pipedream_executor, "enabled", lambda: True)
+        monkeypatch.setattr(pipedream_executor, "app_connected",
+                            lambda org, app: app == "google_calendar")
+        monkeypatch.setattr(pipedream_client, "list_accounts",
+                            lambda org, app=None: [{"id": "apn_cal", "name": "me@ex.com"}])
+        ev = {
+            "id": "e1", "summary": "Proxy standup", "status": "confirmed",
+            "start": {"dateTime": _future_iso()}, "end": {"dateTime": _future_iso(3)},
+            "hangoutLink": "https://meet.google.com/xyz-1234-abc",
+        }
+        monkeypatch.setattr(
+            pipedream_client, "proxy_request",
+            lambda *a, **k: {"ok": True, "status": 200, "json": {"items": [ev]}})
+
+        j = client.get("/dashboard/upcoming").json()
+        # Was: {"connected": false, "error": "calendar_unavailable"} (NameError).
+        assert j["calendar"]["connected"] is True
+        assert j["calendar"]["source"] == "pipedream"
+        assert j["meetings"][0]["title"] == "Proxy standup"
+    finally:
+        store.remove("bot_live")
+
+
+def test_upcoming_pipedream_read_failure_stays_connected(client, monkeypatch):
+    """A read failure on a Pipedream-connected calendar is 'connected but
+    temporarily unavailable' (retry), never 'not connected' (reconnect an
+    already-connected calendar)."""
+    from app import pipedream_client, pipedream_executor
+
+    monkeypatch.setattr(pipedream_executor, "enabled", lambda: True)
+    monkeypatch.setattr(pipedream_executor, "app_connected",
+                        lambda org, app: app == "google_calendar")
+    monkeypatch.setattr(pipedream_client, "list_accounts",
+                        lambda org, app=None: [{"id": "apn_cal", "name": "me@ex.com"}])
+    monkeypatch.setattr(pipedream_client, "proxy_request",
+                        lambda *a, **k: {"ok": False, "status": 500})
+
+    j = client.get("/dashboard/upcoming").json()
+    assert j["calendar"]["connected"] is True
+    assert j["calendar"]["error"] == "calendar_unavailable"
+
+
 def test_upcoming_prefers_native_google_calendar(client, monkeypatch):
     """When the caller's org has a native token, Upcoming is built from THEIR own
     Google calendar (source=google) with the meeting URL for dispatch."""

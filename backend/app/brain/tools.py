@@ -191,7 +191,15 @@ _DETAIL_EMAIL_BODY = re.compile(
 )
 _DETAIL_INVITE_WITH = re.compile(
     r"\b(?:with|between\s+me\s+and|invite)\s+(?!me\b|us\b)[a-zà-ù]{3,}"
-    r"|\bcon\s+[a-zà-ù]{3,}|\battendees?:\s*\S",
+    r"|\bcon\s+[a-zà-ù]{3,}|\battendees?:\s*\S"
+    # Natural attendee phrasing the rigid forms above missed (live 2026-07-23:
+    # "me and duccio at SFF studio dot com" looped clarification forever
+    # because it is neither "with X" nor "between me and X").
+    r"|\bme\s+and\s+[a-zà-ù]{2,}|\b[a-zà-ù]{2,}\s+and\s+(?:me|i)\b"
+    # A recipient/attendee given as a real or spoken-out email address
+    # ("duccio@sffstudio.com", "duccio at sff studio dot com").
+    r"|[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}"
+    r"|\bat\s+[a-z0-9][a-z0-9 ]*\bdot\b\s*(?:com|org|net|io|co|edu|ai|dev)\b",
     re.IGNORECASE,
 )
 # A calendar write needs BOTH a day/date and a clock time. The previous single
@@ -207,7 +215,12 @@ _DETAIL_INVITE_DATE = re.compile(
 _DETAIL_INVITE_CLOCK = re.compile(
     r"\b(?:at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?"
     r"|\d{1,2}(?::\d{2})\s*(?:am|pm)?"
-    r"|\d{1,2}\s*(?:am|pm)|alle\s+\d{1,2}(?::\d{2})?)\b",
+    r"|\d{1,2}\s*(?:am|pm)|alle\s+\d{1,2}(?::\d{2})?"
+    # Spoken word-numbers with a meridiem/o'clock (live 2026-07-23: "five PM",
+    # "seven p m" never matched the digit-only forms, so "when" never filled).
+    r"|(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+    r"\s*(?:o'?clock|[ap]\.?\s*m\.?)"
+    r"|\bnoon\b|\bmidday\b|\bmidnight\b|\bmezzogiorno\b)\b",
     re.IGNORECASE,
 )
 
