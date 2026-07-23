@@ -111,7 +111,7 @@ PARAMS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
     ],
     "asana.create_task": [
         _FIELD(name="name", type="string", required=True,
-               label="task name", label_it="nome del task"),
+               slot="task_name", label="task name", label_it="nome del task"),
         _FIELD(name="notes", type="string", required=False,
                slot="description", label="description", label_it="descrizione"),
         _FIELD(name="project", type="string", required=False,
