@@ -283,3 +283,59 @@ def test_correction_retry_is_idempotent(tmp_path, monkeypatch):
     action = queued[0].get("action") or ""
     assert action.count("Marco") == 1, f"retry must not re-apply: {action}"
     store.remove(s.bot_id)
+
+def test_late_search_result_raises_and_is_delivered(tmp_path, monkeypatch):
+    """A requested web result survives ordinary multiparty chatter.
+
+    The search announce speaks immediately. A newer human turn advances the
+    normal speech generation while search runs; the answer must be queued behind
+    a raised hand, then delivered when the asker says "did you find it?".
+    """
+    s = _session(tmp_path, monkeypatch, bot_id="late-search-result-1")
+    s.memory_brief = ""
+    _group(s)
+    spoken: list[str] = []
+    _mute(monkeypatch, spoken)
+    monkeypatch.setattr(settings, "recall_api_key", "")
+    monkeypatch.setattr(main, "wants_web_search", lambda _text: True)
+
+    def search_stream(*args, **kwargs):
+        yield "One moment — let me look that up online."
+        # A human spoke while the provider was working.
+        store.bump_speech_generation(s)
+        yield "From a quick search, the Y Combinator deadline is August 4."
+
+    monkeypatch.setattr(main, "answer_question_stream", search_stream)
+
+    body = _post(_line(
+        s.bot_id, "Duccio", 1,
+        "Laura, search online for the Y Combinator application deadline",
+    ))
+    assert body.get("search_ready") is True, body
+    assert body.get("hand_raised") is True, body
+    assert s.pending_contribution_kind == "search"
+    assert "August 4" in s.pending_contribution
+
+    delivered = _post(_line(
+        s.bot_id, "Duccio", 1,
+        "Laura, did you find the Y Combinator application deadline?",
+    ))
+    assert delivered.get("hand_delivered") is True, delivered
+    assert delivered.get("search_result") is True, delivered
+    assert any("August 4" in line for line in spoken)
+    assert not s.hand_raised_at
+    assert not s.pending_contribution
+    store.remove(s.bot_id)
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "did you find it?",
+        "what did you find?",
+        "any results?",
+        "hai trovato qualcosa?",
+    ],
+)
+def test_search_result_followups_are_recognised(phrase):
+    assert main._is_search_result_request(phrase)
