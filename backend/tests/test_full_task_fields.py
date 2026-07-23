@@ -13,14 +13,13 @@ from app.integrations import asana_client  # noqa: E402
 from app import pipedream_executor  # noqa: E402
 
 
-def test_description_joins_the_clarify_slots():
-    missing = tools.missing_action_details("create a task called kickoff")
-    assert missing == ["owner", "project", "due", "description"]
-    missing = tools.missing_action_details(
+def test_optional_task_metadata_never_blocks_a_named_task():
+    assert tools.missing_action_details("create a task in Asana") == ["task_name"]
+    assert tools.missing_action_details("create a task called kickoff") == []
+    assert tools.missing_action_details(
         "create a task called kickoff, assigned to Dana, in the launch "
         "project, due Friday, the description should say prep the deck"
-    )
-    assert missing == []
+    ) == []
 
 
 def test_clarify_line_asks_for_description():
