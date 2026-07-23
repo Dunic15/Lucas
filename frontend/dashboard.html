@@ -1453,7 +1453,15 @@
     $$("#livewrap [data-end]").forEach(function(b){ b.addEventListener("click",function(){
       b.disabled=true; b.textContent="Ending…";
       fetch("/sessions/"+encodeURIComponent(b.getAttribute("data-end"))+"/end",{method:"POST",headers:headers()})
-        .then(function(r){ if(!r.ok&&r.status!==202) throw new Error("HTTP "+r.status);
+        .then(function(r){
+          // 202: a finalize is already in flight (bot may have ALREADY left the
+          // call — the card just hasn't cleared). 404: the meeting already
+          // ended and the card is stale. Neither is an error the user can act
+          // on (live 2026-07-23: nine "Could not end: HTTP 404/202" reds while
+          // the bot was long gone) — say what's true and refresh the list.
+          if(r.status===202){ toast("She's already wrapping up — the card clears itself in a moment."); setTimeout(load,4000); return; }
+          if(r.status===404){ toast("That meeting already ended — refreshing the list."); setTimeout(load,800); return; }
+          if(!r.ok) throw new Error("HTTP "+r.status);
           toast("Session ended — meter stopped. Artifact will appear in Meetings."); setTimeout(load,1200); })
         .catch(function(e){ toast("Could not end: "+e.message,true); b.disabled=false; b.textContent="End session"; }); }); });
 
