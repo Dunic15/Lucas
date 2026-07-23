@@ -733,6 +733,27 @@ _SEARCH_FAIL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Recall's meeting ASR can turn a short spoken acronym into a neighbouring
+# phrase ("YC" -> "DYC", "the voice", or "IC"). Only repair the phrase when
+# recent meeting context already established YC / Y Combinator, so a genuine
+# Detroit Yacht Club or other DYC query is never silently rewritten.
+_YC_CONTEXT_RE = re.compile(r"\b(?:y\s*combinator|y\s*c)\b", re.IGNORECASE)
+_YC_APPLICATION_ASR_RE = re.compile(
+    r"\b(?:d\s*y\s*c|the\s+voice|voice|i\s*c|why\s+see|y\s*c)"
+    r"\s+(application|batch)\b",
+    re.IGNORECASE,
+)
+
+
+def _resolve_search_query(question: str, convo: str = "") -> str:
+    """Repair a search entity only when recent conversation disambiguates it."""
+    q = " ".join(str(question or "").split())
+    if not q or not _YC_CONTEXT_RE.search(convo or ""):
+        return q
+    return _YC_APPLICATION_ASR_RE.sub(
+        lambda match: f"Y Combinator {match.group(1)}", q
+    )
+
 
 def _web_search_answer(question: str, convo: str = "") -> str:
     """One web-search answer via Claude's native web_search tool (live_search_model,
@@ -742,11 +763,12 @@ def _web_search_answer(question: str, convo: str = "") -> str:
     nothing — so the caller can fall back to normal reasoning instead of going
     silent. Shared by the meeting path and the interactive /live/act path.
     """
+    resolved_question = _resolve_search_query(question, convo)
     try:
         raw = llm.web_search(
             "You answer in 1-3 short spoken sentences, no markdown. Use web search "
             "for current information and mention it's from a quick search.",
-            f"{convo}Use web search, then answer briefly:\n{question}",
+            f"{convo}Use web search, then answer briefly:\n{resolved_question}",
             model=settings.live_search_model,
         )
     except Exception as e:  # noqa: BLE001
@@ -2224,7 +2246,7 @@ def _is_isoish(value: object) -> bool:
 # back to its real arg instead of dumping "Body: Hi" into the email subject
 # (live 2026-07-23 bug ④ — the clarified body was lost).
 _FOLD_LABEL_NAMES = (
-    "Recipient|Body|Attendees|When|Owner|Project|Due|Description|Details"
+    "Task name|Recipient|Body|Attendees|When|Owner|Project|Due|Description|Details"
 )
 _FOLD_SEG_RE = re.compile(
     rf"(?:^|\.\s+)(?P<label>{_FOLD_LABEL_NAMES}):\s*(?P<val>.+?)"
@@ -2329,9 +2351,14 @@ def _sanitize_typed(typed: object, action: dict, brief: str = "",
             spec_args["attendees"] = attendees
         return {"type": t, "args": spec_args}
     if t == ASANA_CREATE:
-        name = _fold_label_fields(
-            str(args.get("name") or action.get("item") or "")
-        )[0][:200]
+        # A generic ask ("create a task in Asana") is not a usable task title.
+        # When voice clarification supplied the required Task name, it owns the
+        # execution arg even if the typing model echoed the generic base ask.
+        name = str(item_fold.get("task name") or "").strip()[:200]
+        if not name:
+            name = _fold_label_fields(
+                str(args.get("name") or action.get("item") or "")
+            )[0][:200]
         if not name:
             return None
         spec_args: dict = {"name": name}
