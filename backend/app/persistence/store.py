@@ -62,6 +62,88 @@ _PERSISTED_SESSION_FIELDS = {
 
 
 @dataclass
+class PendingActionState:
+    """One canonical in-meeting clarification, keyed by speaker + action id."""
+
+    action_id: str
+    action_type: str
+    collected_parameters: dict[str, Any] = field(default_factory=dict)
+    required_missing_parameters: list[str] = field(default_factory=list)
+    last_clarification_question: str = ""
+    expected_answer_field: str = ""
+    updated_at: float = field(default_factory=time.time)
+    status: str = "needs_details"
+    speaker_id: str = ""
+    item: dict[str, Any] = field(default_factory=dict, repr=False)
+    source_event_key: str = ""
+    source_fingerprint: str = ""
+    created_at: float = field(default_factory=time.time)
+
+    @property
+    def key(self) -> str:
+        return f"{self.speaker_id}:{self.action_id}"
+
+
+def bind_pending_action(
+    session: Any,
+    item: dict[str, Any],
+    speaker_id: str,
+    action_type: str,
+    missing: list[str],
+    *,
+    collected_parameters: dict[str, Any] | None = None,
+    question: str = "",
+    source_event_key: str = "",
+    source_fingerprint: str = "",
+) -> PendingActionState:
+    """Create/update the single active clarification for this speaker/action."""
+    aid = str((item or {}).get("action_id") or "")
+    key = f"{speaker_id}:{aid}"
+    states = getattr(session, "pending_actions", None)
+    if states is None:
+        states = {}
+        session.pending_actions = states
+    state = states.get(key)
+    if state is None:
+        state = PendingActionState(
+            action_id=aid,
+            action_type=action_type,
+            speaker_id=speaker_id,
+            item=item,
+            source_event_key=source_event_key,
+            source_fingerprint=source_fingerprint,
+        )
+        states[key] = state
+    state.item = item
+    state.action_type = action_type
+    state.collected_parameters = dict(collected_parameters or {})
+    state.required_missing_parameters = [str(x) for x in missing]
+    state.last_clarification_question = str(question or "")
+    state.expected_answer_field = state.required_missing_parameters[0] if state.required_missing_parameters else ""
+    state.updated_at = time.time()
+    state.status = "needs_details" if state.required_missing_parameters else "proposed"
+    session.active_pending_action_by_speaker[speaker_id] = aid
+    return state
+
+
+def settle_pending_action(
+    session: Any, item: dict[str, Any], speaker_id: str, status: str
+) -> None:
+    """Close the active binding without erasing its auditable in-session state."""
+    aid = str((item or {}).get("action_id") or "")
+    key = f"{speaker_id}:{aid}"
+    state = getattr(session, "pending_actions", {}).get(key)
+    if state is not None:
+        state.status = str(status or "proposed")
+        if state.status != "needs_details":
+            state.required_missing_parameters = []
+            state.expected_answer_field = ""
+        state.updated_at = time.time()
+    if getattr(session, "active_pending_action_by_speaker", {}).get(speaker_id) == aid:
+        session.active_pending_action_by_speaker.pop(speaker_id, None)
+
+
+@dataclass
 class Session:
     bot_id: str
     meeting_url: str
@@ -93,6 +175,16 @@ class Session:
     integration: dict | None = None
     ws: WebSocket | None = None
     pending_messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    # Canonical pending-action bindings. The session already keys the meeting;
+    # these maps add speaker + action_id and keep clarification fragments on one
+    # durable action instead of minting tracked-only cards.
+    pending_actions: dict[str, PendingActionState] = field(
+        default_factory=dict, repr=False, compare=False
+    )
+    active_pending_action_by_speaker: dict[str, str] = field(
+        default_factory=dict, repr=False, compare=False
+    )
+    pending_clarify: Any = field(default=None, repr=False, compare=False)
     # Live MeetingState (see meeting_state.py). In-memory only — it is derived
     # entirely from the persisted transcript, so after a restart it is rebuilt
     # by replaying the utterances rather than persisted (transcript is PII;
