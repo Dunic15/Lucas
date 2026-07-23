@@ -1,8 +1,8 @@
 """Compatibility guard for Laura-owned action execution.
 
-Cedric remains the Slack conversation and status surface. Approved writes must
-execute inside Laura, so the two legacy approval seams are fenced without
-changing Slack OAuth, inbound relay, or status projection.
+Cedric remains the Slack conversation, execution, and status surface. Non-Slack
+approved writes execute inside Laura, so the legacy approval seams are fenced
+without changing Slack OAuth, inbound relay, or status projection.
 """
 from __future__ import annotations
 
@@ -44,7 +44,10 @@ def _patch_runtime() -> None:
     original_dispatch = cedric_callback.dispatch_action
 
     def _approval_safe_dispatch(*args, **kwargs):
-        if _APPROVAL_REQUEST.get():
+        action = args[1] if len(args) > 1 else kwargs.get("action")
+        typed = action.get("typed") if isinstance(action, dict) else {}
+        action_type = str((typed or {}).get("type") or "").strip()
+        if _APPROVAL_REQUEST.get() and action_type != executor.SLACK_POST:
             reason = "laura_native_only" if settings.native_executor else "not_configured"
             return {"ok": False, "reason": reason}
         return original_dispatch(*args, **kwargs)
@@ -70,7 +73,7 @@ def _patch_runtime() -> None:
         # Historical direct approvals may still carry execution_route=cedric.
         # Supported typed actions are migrated into their per-family plane:
         # Pipedream-owned families (Asana + long tail, when the executor is on)
-        # → 'pipedream'; the Google block + Slack → 'native'. A route already
+        # → 'pipedream'; the Google block → 'native'; Slack → org-scoped Cedric. A route already
         # stamped 'pipedream' (or 'browser') is left untouched. Dependency-release
         # rows retain their existing compatibility behavior.
         if route not in ("browser", "pipedream") and via != "dependency-release":

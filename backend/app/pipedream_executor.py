@@ -576,6 +576,13 @@ def _build_drive_move(org_id: str, account_id: str, args: dict) -> tuple:
     return ("PATCH", url, {}, None)
 
 
+def _drive_file_id_from_permissions_url(url: str) -> str:
+    marker = "/files/"
+    if marker not in url or "/permissions" not in url:
+        return ""
+    return url.split(marker, 1)[1].split("/permissions", 1)[0].split("?", 1)[0]
+
+
 def _drive_receipt(action_type: str, resp_json: dict) -> tuple:
     kind = {
         "drive.share_file": "drive share",
@@ -586,8 +593,13 @@ def _drive_receipt(action_type: str, resp_json: dict) -> tuple:
     }.get(action_type, "drive")
     d = resp_json or {}
     ref = str(d.get("webViewLink") or "")
-    if not ref and d.get("id"):
-        ref = f"https://drive.google.com/open?id={d['id']}"
+    object_id = (
+        d.get("_drive_file_id")
+        if action_type == "drive.share_file"
+        else d.get("id")
+    )
+    if not ref and object_id:
+        ref = f"https://drive.google.com/open?id={object_id}"
     return kind, ref
 
 
@@ -952,14 +964,19 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
                        f"proxy call failed ({type(exc).__name__})")
     if not resp.get("ok"):
         return _settle(action_id, org, False, action_type, "",
-                       f"{app_slug} API returned {resp.get('status')}")
+                       _api_error_detail(app_slug, resp))
 
-    kind, ref = receipt_fn(action_type, resp.get("json") or {})
+    response_json = resp.get("json") or {}
+    if action_type == "drive.share_file":
+        response_json = dict(response_json)
+        file_id = _drive_file_id_from_permissions_url(url)
+        if file_id:
+            response_json["_drive_file_id"] = file_id
+    kind, ref = receipt_fn(action_type, response_json)
     # Phase 1 read-back verify (owner 2026-07-22): re-read the object we just
     # wrote so the receipt is EVIDENCE, not presumption. Best-effort — a
     # verify hiccup never fails a succeeded action.
-    verified = _verify_written(org, account_id, action_type,
-                               resp.get("json") or {})
+    verified = _verify_written(org, account_id, action_type, response_json)
     return _settle(
         action_id, org, True, action_type, ref, "",
         kind=(kind + " · verified") if verified else kind,
@@ -1024,7 +1041,14 @@ def _verify_written(org: str, account_id: str, action_type: str,
             )
             return bool(check.get("ok"))
         if action_type.startswith("drive."):
-            fid = str((data or {}).get("id") or "")
+            fid = str(
+                (
+                    (data or {}).get("_drive_file_id")
+                    if action_type == "drive.share_file"
+                    else (data or {}).get("id")
+                )
+                or ""
+            )
             if not fid:
                 return False
             check = pipedream_client.proxy_request(
@@ -1084,9 +1108,34 @@ def dry_run(org_id: str, action: dict) -> dict:
         return {"ok": False, "error": f"proxy call failed ({type(exc).__name__})"}
     if not resp.get("ok"):
         return {"ok": False, "status": resp.get("status"),
-                "error": f"{app_slug} API returned {resp.get('status')}"}
+                "error": _api_error_detail(app_slug, resp)}
     kind, ref = receipt_fn(action_type, resp.get("json") or {})
     return {"ok": True, "kind": kind, "ref": ref, "route": "pipedream"}
+
+
+def _api_error_detail(app_slug: str, resp: dict) -> str:
+    """Human receipt line for a non-2xx vendor response.
+
+    "asana API returned 400" told the owner nothing (live card
+    e44f90f7ee62497d) while the body carried the exact reason. Extract the
+    vendor's own message — Asana: {"errors":[{"message"}]}, Google:
+    {"error":{"message"}} — truncated, never tokens, never transcripts.
+    """
+    status = resp.get("status")
+    base = f"{app_slug} API returned {status}"
+    body = resp.get("json")
+    if not isinstance(body, dict):
+        return base
+    msg = ""
+    errors = body.get("errors")
+    if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+        msg = str(errors[0].get("message") or "")
+    if not msg and isinstance(body.get("error"), dict):
+        msg = str(body["error"].get("message") or "")
+    if not msg and isinstance(body.get("error"), str):
+        msg = body["error"]
+    msg = " ".join(msg.split())[:180]
+    return f"{base} — {msg}" if msg else base
 
 
 def _settle(action_id: str, org: str, ok: bool, action_type: str, ref: str,

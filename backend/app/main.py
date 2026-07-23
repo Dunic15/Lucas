@@ -1700,7 +1700,9 @@ def _followup_speaker_ok(session: "store.Session", speaker_id: str) -> bool:
 # the per-minute meter — sat in the dead room until a manual End). When the
 # LAST human leaves, wait a grace period (someone may rejoin after a drop),
 # re-check, then run the same idempotent finalize as POST /sessions/end.
-_EMPTY_ROOM_GRACE_S = 75.0
+# Tunable via EMPTY_ROOM_GRACE_SECONDS (settings.empty_room_grace_seconds);
+# tests monkeypatch this module attribute directly.
+_EMPTY_ROOM_GRACE_S = settings.empty_room_grace_seconds
 
 
 def _invalidate_empty_room_leave(session: "store.Session") -> None:
@@ -2998,6 +3000,60 @@ def _recall_capture_identity(
     return event_key, fingerprint
 
 
+_FINAL_DEDUPE_WINDOW_S = 8.0
+_FINAL_DEDUPE_MAX = 256
+
+
+def _is_duplicate_recall_final(
+    session: store.Session,
+    event_key: str,
+    fingerprint: str,
+    *,
+    now: float | None = None,
+) -> bool:
+    """Sliding, in-memory dedupe for repeated Recall final transcriptions.
+
+    Keys are SHA-256 digests only: no transcript text is stored or logged. The
+    fingerprint window refreshes on every consecutive duplicate, so a provider
+    replay loop stays suppressed until it stops. An intervening distinct final
+    is meaningful conversation and resets phrase dedupe; exact event identities
+    remain suppressed across the whole bounded window.
+    """
+
+    stamp = time.monotonic() if now is None else float(now)
+    seen = getattr(session, "_recall_final_dedupe", None)
+    if not isinstance(seen, dict):
+        seen = {}
+        session._recall_final_dedupe = seen
+    expired = [key for key, until in seen.items() if float(until) <= stamp]
+    for key in expired:
+        seen.pop(key, None)
+    until = stamp + _FINAL_DEDUPE_WINDOW_S
+    event_key_hashed = "e:" + event_key if event_key else ""
+    event_duplicate = bool(event_key_hashed and event_key_hashed in seen)
+    last = getattr(session, "_recall_final_last", None)
+    fingerprint_duplicate = bool(
+        fingerprint
+        and isinstance(last, tuple)
+        and len(last) == 2
+        and last[0] == fingerprint
+        and float(last[1]) > stamp
+    )
+    if event_key_hashed:
+        seen[event_key_hashed] = until
+    if fingerprint:
+        # Hashed fingerprint only — never transcript text. Updating this on
+        # every final makes A → B → A a real sequence, while A → A → A is a
+        # provider replay loop whose sliding window keeps refreshing.
+        session._recall_final_last = (fingerprint, until)
+    if len(seen) > _FINAL_DEDUPE_MAX:
+        for key, _until in sorted(seen.items(), key=lambda pair: pair[1])[
+            : len(seen) - _FINAL_DEDUPE_MAX
+        ]:
+            seen.pop(key, None)
+    return event_duplicate or fingerprint_duplicate
+
+
 # ───────────────────────── recall webhook ──────────────────────────
 @app.websocket("/realtime/recall-audio")
 @app.websocket("/realtime/recall-audio/{cap_path}")
@@ -3447,6 +3503,14 @@ async def recall_webhook(request: Request) -> JSONResponse:
     avatar = avatar_resolver.for_session(session)
     if _is_own_speech(avatar.name, speaker, speaker_kind):
         return JSONResponse({"ok": True, "spoke": False, "reason": "own speech"})
+    if _is_duplicate_recall_final(
+        session, capture_event_key, capture_fingerprint
+    ):
+        # Provider re-transcription/retry: do not archive it, reason over it,
+        # capture it, or pay the response latency again.
+        return JSONResponse(
+            {"ok": True, "spoke": False, "reason": "duplicate final"}
+        )
     session.add_utterance(
         speaker,
         text,
@@ -3804,11 +3868,15 @@ async def recall_webhook(request: Request) -> JSONResponse:
             session.pending_clarify = None
             if text_is_details:
                 try:
+                    # A clarify answer fills labelled slots on the SAME card.
+                    # Never raw-append a fragment: "Three pm" becomes
+                    # "When: Three pm", which survives typing and display.
+                    updates = tools.fold_action_details(c_item, text, c_missing)
                     c_item, _ = await run_in_threadpool(
-                        tools.extend_action_once,
+                        tools.revise_action_once,
                         session,
                         c_item,
-                        text,
+                        updates,
                         source_event_key=capture_event_key,
                         source_fingerprint=capture_fingerprint,
                     )

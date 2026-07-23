@@ -367,3 +367,69 @@ def test_manual_route_without_google_is_tracked_only(app_client, monkeypatch):
     st = ledger.action_statuses(["r2a1"], org_id=user["org_id"]).get("r2a1")
     assert st and st["status"] == "approved", st
     assert "Google isn't connected" in st["detail"], st
+
+
+def test_manual_route_with_pipedream_google_executes_via_fallback(
+    app_client, monkeypatch
+):
+    """Mirror of the tracked-only case above (live card 211d55ecbddf4a91):
+    the SAME manual-routed calendar card, org has NO native Google — but
+    google_calendar IS connected in Pipedream (Petra read the calendar
+    in-call). The approve gate must count BOTH planes: the claim goes
+    through and the executor's Pipedream fallback actually runs it, instead
+    of dead-ending "tracked only — Google isn't connected"."""
+    from app import executor, ledger
+
+    user = _login(app_client)
+    action = {
+        "item": "Schedule another meeting for tomorrow at 3 PM",
+        "owner": "Kai",
+        "action_id": "r2a2",
+        "execution_route": "manual",
+        "typed": {
+            "type": "calendar.create_event",
+            "args": {"title": "Follow-up", "start": "2026-07-23T15:00:00",
+                     "end": "2026-07-23T15:30:00",
+                     "attendees": ["kai@example.com"]},
+        },
+    }
+    store.save_artifact(
+        "bot_r2a2",
+        {
+            "summary": "Test.",
+            "actions": [action],
+            "checklist": [action],
+            "org_id": user["org_id"],
+            "avatar_id": "laura",
+            "meeting_url": "https://meet.google.com/r2b-test",
+        },
+        org_id=user["org_id"],
+    )
+    assert not (store.get_org_oauth(user["org_id"]) or {}).get("refresh_token")
+
+    monkeypatch.setattr(
+        executor, "_pipedream_google_connected", lambda org, t: True
+    )
+    native_calls: list = []
+    monkeypatch.setattr(
+        executor.google_client, "create_calendar_event",
+        lambda org, event: native_calls.append(org) or {"ok": True},
+    )
+    fallback_calls: list = []
+    monkeypatch.setattr(
+        executor, "_execute_pipedream_fallback",
+        lambda org, aid, act: fallback_calls.append((org, aid)) or {
+            "ok": True, "kind": "calendar.create_event",
+            "ref": "evt-pd-1", "route": "pipedream",
+        },
+    )
+
+    r = app_client.post("/dashboard/actions/r2a2/approve")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["connection_blocked"] is False, body
+    assert body["executed"] is True, body
+    assert fallback_calls, "the Pipedream plane must actually run it"
+    assert not native_calls, "no native token → the native client must not run"
+    st = ledger.action_statuses(["r2a2"], org_id=user["org_id"]).get("r2a2")
+    assert st and "Google isn't connected" not in (st.get("detail") or ""), st

@@ -293,12 +293,16 @@ def default_integration() -> Optional[dict]:
 # the local /meetings archive) and NEVER cross the orchestrator API — webhooks
 # and the session endpoints get the distilled artifact. The version marker lets
 # clients parse additively as fields are added.
-ARTIFACT_VERSION = 1
+# v2 adds the additive ``decision_records`` field (first-class decisions:
+# maker/reason/related_project/supersede link) alongside the unchanged
+# ``decisions`` list[str]. Old clients keep reading ``decisions``.
+ARTIFACT_VERSION = 2
 
 
 _WIRE_ARTIFACT_KEYS = {
     "summary",
     "decisions",
+    "decision_records",
     "actions",
     "checklist",
     "missing_steps",

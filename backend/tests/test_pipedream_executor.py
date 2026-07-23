@@ -79,7 +79,7 @@ def test_route_falls_back_to_native_until_connected_in_pipedream(monkeypatch):
     assert executor.route_for_typed({"type": "asana.update_task", "args": {"task": "1", "name": "y"}}) == "native"
     assert executor.route_for_typed({"type": "calendar.create_event", "args": {}}) == "native"
     assert executor.route_for_typed({"type": "email.send", "args": {}}) == "native"
-    assert executor.route_for_typed({"type": "slack.post_message", "args": {"text": "hi"}}) == "native"
+    assert executor.route_for_typed({"type": "slack.post_message", "args": {"text": "hi"}}) == "cedric"
     # Untyped / non-native → Cedric.
     assert executor.route_for_typed(None) == "cedric"
     assert executor.route_for_typed({"type": "weird.unknown"}) == "cedric"
@@ -87,12 +87,13 @@ def test_route_falls_back_to_native_until_connected_in_pipedream(monkeypatch):
 
 def test_route_to_pipedream_once_connected_there(monkeypatch):
     _enable_pd(monkeypatch)
-    # Org connected Gmail + Calendar + Asana in Pipedream → those route there;
-    # a type NOT connected in Pipedream still falls back to native.
+    # Google writes now stamp the native coordinator even when Pipedream is
+    # connected: execution-time native-first selection owns the cutover.
+    # Asana keeps its existing direct-to-Pipedream route.
     monkeypatch.setattr(pipedream_executor, "app_connected",
                         lambda org, app: org == "org7" and app in {"gmail", "google_calendar", "asana"})
-    assert executor.route_for_typed({"type": "email.send", "args": {}}, "org7") == "pipedream"
-    assert executor.route_for_typed({"type": "calendar.create_event", "args": {}}, "org7") == "pipedream"
+    assert executor.route_for_typed({"type": "email.send", "args": {}}, "org7") == "native"
+    assert executor.route_for_typed({"type": "calendar.create_event", "args": {}}, "org7") == "native"
     assert executor.route_for_typed({"type": "asana.create_task", "args": {"name": "x"}}, "org7") == "pipedream"
     # Different org (nothing connected in Pipedream) → native fallback, not a failure.
     assert executor.route_for_typed({"type": "asana.create_task", "args": {"name": "x"}}, "orgX") == "native"
@@ -352,7 +353,7 @@ def test_dashboard_approve_routes_asana_to_pipedream(client, monkeypatch):
     _enable_pd(monkeypatch)
     user = _login(client)
     _seed_pipedream_action(user["org_id"])
-    monkeypatch.setattr(store, "get_avatar_capabilities", lambda a: {})
+    monkeypatch.setattr(store, "get_avatar_capabilities", lambda a, org="": {})
     monkeypatch.setattr(avatar_resolver, "family_allowed", lambda *a, **k: True)
     pd = {"n": 0}
     native = {"n": 0}
@@ -374,7 +375,7 @@ def test_dashboard_approve_capability_blocked_does_not_run_pipedream(client, mon
     user = _login(client)
     _seed_pipedream_action(user["org_id"])
     # The acting avatar's asana toggle is explicitly OFF ⇒ blocked, no execution.
-    monkeypatch.setattr(store, "get_avatar_capabilities", lambda a: {"asana": False})
+    monkeypatch.setattr(store, "get_avatar_capabilities", lambda a, org="": {"asana": False})
     pd = {"n": 0}
     monkeypatch.setattr(pipedream_executor, "execute_approved",
                         lambda o, aid, act: pd.update(n=pd["n"] + 1) or {"ok": True})
@@ -391,7 +392,7 @@ def test_dashboard_approve_capability_blocked_does_not_run_pipedream(client, mon
 def test_org_door_dispatches_asana_to_pipedream(monkeypatch):
     _enable_pd(monkeypatch)
     monkeypatch.setattr(settings, "action_dispatch_async", False)
-    monkeypatch.setattr(org_api.store, "get_avatar_capabilities", lambda a: {})
+    monkeypatch.setattr(org_api.store, "get_avatar_capabilities", lambda a, org="": {})
     monkeypatch.setattr(avatar_resolver, "family_allowed", lambda *a, **k: True)
     monkeypatch.setattr(org_api.ledger, "claim_action_execution", lambda *a, **k: True)
     pd = {"n": 0}
@@ -467,7 +468,7 @@ def test_avatar_asana_enabled_counts_pipedream_when_native_gone(monkeypatch):
 
     monkeypatch.setattr(avatars, "load", lambda aid: _Av())
     monkeypatch.setattr(store_mod, "capability_enabled",
-                        lambda aid, fam, connected=False: True)
+                        lambda aid, fam, connected=False, org_id="": True)
     assert main_module._avatar_asana_enabled("orgX", "petra") is True
     # Neither native nor Pipedream connected → not available.
     monkeypatch.setattr(pipedream_executor, "app_connected", lambda org, app: False)
@@ -698,3 +699,132 @@ def test_drive_routes_stay_pipedream(monkeypatch):
     monkeypatch.setattr(pipedream_executor, "app_connected", lambda o, a: False)
     assert executor.route_for_typed(
         {"type": "drive.create_doc", "args": {"name": "x"}}, "org1") == "pipedream"
+
+
+def test_every_mapped_builder_accepts_a_direct_valid_case(monkeypatch):
+    """Exercise every deterministic builder, not only the shared mapper."""
+    monkeypatch.setattr(pipedream_executor, "_asana_workspace", lambda *a: "ws-1")
+    monkeypatch.setattr(pipedream_executor, "_gmail_latest_from", lambda *a: "msg-1")
+    monkeypatch.setattr(pipedream_executor, "_gmail_label_id", lambda *a: "label-1")
+    monkeypatch.setattr(
+        pipedream_executor,
+        "_cal_find_event",
+        lambda *a, **k: {
+            "id": "event-1",
+            "summary": "Sync",
+            "attendees": [{"email": "owner@example.test"}],
+        },
+    )
+    monkeypatch.setattr(
+        pipedream_executor,
+        "_drive_find",
+        lambda org, acct, name, mime="": {
+            "id": "folder-1" if mime == pipedream_executor._FOLDER_MIME else "file-1",
+            "name": name,
+            "parents": ["old-parent"],
+        },
+    )
+    monkeypatch.setattr(
+        pipedream_executor,
+        "_drive_parent_id",
+        lambda org, acct, parent: "parent-1" if parent else "",
+    )
+
+    def fake_lookup(org, acct, method, url, body=None):
+        if "/messages/msg-1" in url:
+            return {
+                "threadId": "thread-1",
+                "payload": {
+                    "headers": [
+                        {"name": "Subject", "value": "Status"},
+                        {"name": "Message-ID", "value": "<msg-1@example.test>"},
+                    ]
+                },
+            }
+        if url.endswith("/calendars/primary"):
+            return {"id": "owner@example.test"}
+        return {}
+
+    monkeypatch.setattr(pipedream_executor, "_proxy_json", fake_lookup)
+
+    cases = {
+        "asana.create_task": {"name": "Ship", "project": "1"},
+        "asana.update_task": {"task": "42", "completed": True},
+        "asana.add_comment": {"task": "42", "text": "Done"},
+        "email.send": {"to": "a@example.test", "subject": "Hi", "body": "Hello"},
+        "gmail.create_draft": {
+            "to": "a@example.test", "subject": "Draft", "body": "Hello"
+        },
+        "calendar.create_event": {
+            "title": "Sync",
+            "start": "2026-08-01T10:00:00Z",
+            "end": "2026-08-01T10:30:00Z",
+        },
+        "calendar.update_event": {"event_id": "event-1", "title": "New sync"},
+        "asana.create_project": {"name": "Launch"},
+        "asana.add_subtask": {"task": "42", "name": "QA"},
+        "gmail.reply": {"to": "a@example.test", "body": "Thanks"},
+        "gmail.add_label": {"from_email": "a@example.test", "label": "Follow-up"},
+        "gmail.archive": {"from_email": "a@example.test"},
+        "calendar.cancel_event": {"title": "Sync"},
+        "calendar.add_attendees": {
+            "title": "Sync", "attendees": ["guest@example.test"]
+        },
+        "calendar.rsvp": {"title": "Sync", "response": "accepted"},
+        "drive.share_file": {
+            "file": "Recap", "email": "guest@example.test", "role": "reader"
+        },
+        "drive.create_folder": {"name": "Launch", "parent": "Projects"},
+        "drive.create_doc": {"name": "Recap", "parent": "Projects"},
+        "drive.rename_file": {"file": "Recap", "name": "Recap final"},
+        "drive.move_file": {"file": "Recap", "folder": "Archive"},
+    }
+    assert set(cases) == set(pipedream_executor._MAPPER)
+
+    for action_type, args in cases.items():
+        builder = pipedream_executor._MAPPER[action_type][1]
+        method, url, _body, _headers = builder("org-a", "acct-1", args)
+        assert method in {"POST", "PUT", "PATCH", "DELETE"}, action_type
+        assert url.startswith("https://"), action_type
+
+
+def test_drive_share_receipt_and_verify_use_file_id(monkeypatch):
+    _enable_pd(monkeypatch)
+    monkeypatch.setattr(
+        pipedream_client,
+        "list_accounts",
+        lambda org, app="": [{"id": "acct-1", "healthy": True}],
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fake_proxy(org, acct, method, url, json_body=None, headers=None):
+        calls.append((method, url))
+        if method == "GET" and "files?q=" in url:
+            return {"ok": True, "json": {"files": [{"id": "file-1", "name": "Recap"}]}}
+        if method == "POST" and "/files/file-1/permissions" in url:
+            return {"ok": True, "json": {"id": "permission-9"}}
+        if method == "GET" and "/files/file-1?fields=id" in url:
+            return {"ok": True, "json": {"id": "file-1"}}
+        raise AssertionError((method, url))
+
+    monkeypatch.setattr(pipedream_client, "proxy_request", fake_proxy)
+    seen = _cap_ledger(monkeypatch)
+    result = pipedream_executor.execute_approved(
+        "org-a",
+        "share-1",
+        {
+            "type": "drive.share_file",
+            "args": {
+                "file": "Recap",
+                "email": "guest@example.test",
+                "role": "reader",
+            },
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["verified"] is True
+    assert result["ref"] == "https://drive.google.com/open?id=file-1"
+    assert "permission-9" not in result["ref"]
+    assert ("GET", "https://www.googleapis.com/drive/v3/files/file-1?fields=id") in calls
+    assert seen["receipt"]["verified"] is True

@@ -204,6 +204,16 @@ it, give the useful part and say what you'd check.
 mention it's from a quick search.
 - Live transcripts are noisy — infer the likely intent and answer what the \
 person most likely meant.
+- The line introduced as what someone "just said" is the CURRENT live turn, \
+never a pasted transcript or an artifact to analyze. If they ask whether you \
+can hear/see/access something or ask "what happened?", answer directly in the \
+first person as the avatar; never describe the ongoing conversation in the \
+third person.
+- Connected tools, calendars and inboxes belong to THIS workspace's humans — \
+never to you and never to another avatar. If asked "can you read my \
+calendar?", the answer is about the workspace's connected calendar: say yes \
+and read it (or say it isn't connected); never call it "Laura's calendar" or \
+any avatar's.
 - Reply in the language the person spoke to you in — an Italian question gets \
 an Italian answer. Follow the conversation if it switches language.
 - Meetings often have several people. When a roster and the speaker's name are \
@@ -328,6 +338,18 @@ _ABOUT_INTENT = re.compile(
     # required so task asks ("use the tool to file X") keep normal routing.
     r"(what|which)\b.{0,16}\b(tools?|integrations?|apps?|connectors?)\b.{0,24}\b(you|have|use|access)\b|"
     r"(quali|che)\b.{0,16}\b(tools?|strumenti|integrazioni|app)\b.{0,28}\b(puoi|usi|usare|hai)\b|"
+    # Self-referential capability checks from the live test. These must answer
+    # from the org-scoped roster, never from web search or generic Claude lore.
+    r"(can|could|do)\s+(you|laura|petra)\b.{0,20}\b(read|access|see|hear)\b"
+    r".{0,28}\b(my|our|me|calendar|drive|gmail|asana|slack|notion)\b|"
+    r"(do|can)\s+(you|laura|petra)\s+have\s+access\s+to\b|"
+    # "are you connected to Slack?" — a roster question, not a yes/no for the
+    # model to improvise (live 2026-07-22: answered "No" while Slack WAS linked).
+    r"(are|is)\s+(you|laura|petra)\s+(connected|linked|hooked\s+up)\s+to\b|"
+    r"(sei|è)\s+(collegat\w+|conness\w+)\s+(a|con|al|alla)\b|"
+    r"(puoi|riesci\s+a|sai)\b.{0,18}\b(legger\w*|acceder\w*|veder\w*|sentir\w*)\b"
+    r".{0,24}\b(mi|mio|mia|nostr\w*|calendar\w*|drive|gmail|asana|slack|notion)\b|"
+    r"\bmi\s+senti\b|"
     r"come funzioni\b|come sei fatt\w+|cosa (sai|puoi) fare|"
     r"che modell[oi]\b|su che (modello|tecnologia)|con che (modello|tecnologia)|"
     r"chi (sei|ti ha creat\w+|ti ha fatt\w+)|sei (un[ao]? )?(ai|robot|bot|uman\w+))\b",
@@ -431,6 +453,11 @@ def _wants_search(question: str) -> bool:
     asks are excluded: search must never outrank the grounded briefs or the
     capture seam."""
     q = question or ""
+    # Self-referential questions are answered from the real per-org tool roster.
+    # They are never public-web lookups, even when they contain words such as
+    # "current", "Google" or an app name.
+    if _is_about_avatar(q):
+        return False
     if not (
         settings.live_search_enabled
         and settings.anthropic_api_key
@@ -492,8 +519,27 @@ _ACTION_VERBS = (
     # "create an Asana task", "create a new Jira ticket", "open the follow-up
     # event" match (the app/adjective in the middle used to break capture — the
     # #1 reason Petra never confirmed a task, live repro 2026-07-21).
-    r"(?:create|open)\s+(?:a\s+|an\s+|the\s+)?(?:[\w-]+\s+){0,2}(?:ticket|task|issue|doc(?:ument)?|event|meeting|invite)|"
-    r"add\s+(?:\w+\s+)?to\s+(?:the\s+|my\s+|our\s+)?(?:calendar|slack|notion|channel))"
+    r"(?:create|open|make)\s+(?:a\s+|an\s+|the\s+)?(?:[\w-]+\s+){0,2}"
+    r"(?:ticket|task|issue|doc(?:ument)?|event|meeting|invite|folder|project|subtask|draft)|"
+    # The 20-action expansion (#375) made Drive/Gmail/Calendar edits executable,
+    # but capture never learned to hear them — Laura could RUN
+    # drive.share_file / gmail.archive / calendar.cancel_event and still never
+    # turn the spoken ask into a card (harness 2026-07-22). Object-constrained
+    # so conversational uses ("let's move on", "share your screen") stay out.
+    r"archive\s+(?:the\s+|that\s+|those\s+|my\s+)?(?:email|message|thread|mail)s?|"
+    r"rename\s+(?:the\s+|that\s+|this\s+)?(?:file|doc(?:ument)?|folder|sheet|task)s?|"
+    r"move\s+(?:the\s+|that\s+|this\s+)?(?:file|doc(?:ument)?|folder|sheet)\s+(?:in)?to|"
+    r"share\s+(?:the\s+|that\s+|this\s+|my\s+)?(?:file|doc(?:ument)?|folder|sheet|deck)\s+with|"
+    r"label\s+(?:the\s+|that\s+|those\s+)?(?:email|message|thread|mail)s?|"
+    r"repl(?:y|ies)\s+to\s+(?:the\s+|that\s+|his\s+|her\s+|their\s+)?(?:email|message|thread|mail)|"
+    r"forward\s+(?:the\s+|that\s+|this\s+)?(?:email|message|thread|mail)s?|"
+    r"cancel\s+(?:the\s+|that\s+|this\s+|my\s+|our\s+)?(?:event|meeting|invite|call|booking)|"
+    r"rsvp\b|"
+    # "add Marco to that calendar invite" / "…to the event": the old branch
+    # accepted only a bare surface noun after the/my/our, so demonstratives and
+    # invite/event/thread targets were dropped.
+    r"add\s+(?:[\w@.+-]+\s+){0,3}to\s+(?:the\s+|my\s+|our\s+|that\s+|this\s+)?"
+    r"(?:[\w-]+\s+){0,2}(?:calendar|slack|notion|channel|invite|event|meeting|task|project|thread|doc(?:ument)?))"
 )
 # Optional leading fillers (EN + IT) so "Ok, schedule…", "So send…", "Allora
 # manda…" still read as bare imperatives (real speech rarely starts clean on the
@@ -536,11 +582,67 @@ _ACTION_INTENT = re.compile(
 )
 
 
+_CAPTURE_QUESTION_TAIL = re.compile(
+    r"[?]\s*(?:what|which|when|where|who|why|how|cosa|che|quale|quando|"
+    r"dove|chi|perch[eé]|come)\b",
+    re.IGNORECASE,
+)
+_CAPTURE_STUTTERED_QUESTION = re.compile(
+    r"\b(what|which|when|where|who|why|how|cosa|che|quale|quando|dove|chi|come)"
+    r"\s+\1\b",
+    re.IGNORECASE,
+)
+
+
+_ACTION_FILLER = {
+    "a", "an", "the", "to", "for", "with", "and", "then", "ok", "okay", "so",
+    "please", "my", "our", "your", "that", "this", "it", "them", "him", "her",
+    "up", "on", "in", "of", "e", "il", "la", "lo", "un", "una", "di", "da",
+}
+_OBJECT_NOUN = re.compile(
+    r"\b(?:ticket|task|issue|doc|document|event|meeting|invite|folder|project|"
+    r"subtask|draft|file|sheet|deck|calendar|slack|notion|channel|thread|"
+    r"email|message|mail|call|booking"
+    # Italian object nouns: the IT imperative branch often consumes the whole
+    # ask ("aggiungi la demo al calendario"), leaving no tail to inspect.
+    r"|calendario|riunione|evento|invito|mail|messaggio|cartella|documento"
+    r"|progetto|chiamata|promemoria)\w*\b",
+    re.IGNORECASE,
+)
+
+
+def _has_action_object(text: str, match: "re.Match") -> bool:
+    """Does the ask actually name WHAT to act on?
+
+    ASR truncation leaves dangling imperatives — "Okay. And then can you send,
+    an" (live card 64dcf5c0, which became the card "Send, an to"). The verb
+    alone is an intention, not an instruction: require either a content word
+    after the matched verb phrase, or an object noun inside it ("create a
+    task" carries its own object).
+    """
+    tail = re.sub(r"[^\w\s@.+-]", " ", text[match.end():])
+    for word in tail.split():
+        token = word.strip(".").lower()
+        if len(token) > 1 and token not in _ACTION_FILLER:
+            return True
+    return bool(_OBJECT_NOUN.search(match.group(0)))
+
+
 def wants_action_capture(question: str) -> bool:
-    """True when the utterance directly asks the avatar to DO something after
-    the call — main.py's live loop captures it (queue_action seam) and speaks
-    a fixed confirmation instead of routing the turn to an answer path."""
-    return bool(_ACTION_INTENT.search(question or ""))
+    """True only for a coherent direct request to perform an action.
+
+    ASR can concatenate a tentative imperative with the room's interrogative
+    repair ("Schedule in my calendar? What schedule?"). Those fragments are
+    questions about the request, not approval-card content. Reject them while
+    keeping real polite requests such as "Can you schedule ...?".
+    """
+    q = " ".join((question or "").split())
+    if _CAPTURE_QUESTION_TAIL.search(q) or _CAPTURE_STUTTERED_QUESTION.search(q):
+        return False
+    match = _ACTION_INTENT.search(q)
+    if match is None:
+        return False
+    return _has_action_object(q, match)
 
 
 def _live_route(question: str) -> tuple[str, str]:
@@ -1152,10 +1254,22 @@ names, dates, tools, or amounts). Each goal needs a verbatim transcript \
 excerpt; if there is no supporting excerpt, do not emit the goal. A goal that \
 duplicates an actions[] entry must be omitted.
 
+For DECISIONS, emit BOTH: the existing "decisions" list of one-line strings \
+(unchanged), AND a parallel "decision_records" array with one object per \
+decision carrying its maker, reason, and the project it concerns — same \
+decisions, richer shape. If a decision explicitly OVERRIDES an earlier one \
+("supersedes", "instead of", "changed from", "no longer", "moved to"), keep \
+that wording in the decision text and name the related_project so the earlier \
+decision can be linked. Leave a field "" when the transcript does not state it \
+— never invent a maker, reason, or project.
+
 Return ONLY a JSON object:
 {
   "summary": "<3-6 sentences, action-oriented: what the speaker(s) said they want to do, what was decided, what is still open or uncertain, and the recommended next steps — a readout someone can act on, not minutes>",
   "decisions": ["<each decision the group actually reached, one short line>"],
+  "decision_records": [
+    {"decision": "<the same decision as one short line>", "decision_maker": "<who made or drove it, or ''>", "reason": "<why, in one clause, or ''>", "related_project": "<the project/workstream it concerns, or ''>"}
+  ],
   "actions": [
     {"item": "<action>", "owner": "<name or 'UNASSIGNED'>", "deadline": "<stated deadline or ''>", "gap_type": "<owner|deadline|approval|document|blocker|none>", "evidence": "<exact supporting excerpt from the meeting transcript>"}
   ],
@@ -1754,6 +1868,87 @@ def _derived_readiness(artifact: dict) -> int:
     return min(100, score)
 
 
+def _tracker_maker_for(decision_text: str, state: "meeting_state.MeetingState") -> str:
+    """Best-effort speaker attribution for a decision line, from the silent
+    tracker's {speaker, decision} captures. Matches on a shared content-word
+    (the model's phrasing rarely equals the tracker's raw excerpt verbatim).
+    Deterministic, no model call. Returns '' when nothing matches."""
+    toks = _ground_tokens(decision_text)
+    if not toks:
+        return ""
+    best_speaker, best_hits = "", 0
+    for d in state.decisions:
+        speaker = str(d.get("speaker") or "").strip()
+        if not speaker:
+            continue
+        cand = _ground_tokens(str(d.get("decision") or ""))
+        hits = len(toks & cand)
+        if hits > best_hits:
+            best_speaker, best_hits = speaker, hits
+    return best_speaker if best_hits >= 1 else ""
+
+
+def _build_decision_records(
+    model_records: object,
+    decisions: list[str],
+    state: "meeting_state.MeetingState",
+) -> list[dict]:
+    """Normalize decision_records to a clean list of objects.
+
+    Prefers the model's structured records (sanitized + maker backfilled from
+    the tracker); otherwise synthesizes one record per decision line so the
+    field is ALWAYS populated when there are decisions. The parallel
+    ``decisions`` list[str] is unchanged — this never replaces it."""
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(decision: str, maker: str, reason: str, project: str,
+             revises: str = "") -> None:
+        text = (decision or "").strip()
+        if not text or len(text) > _MAX_LINE_CHARS:
+            return
+        key = " ".join(text.split()).casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        if not maker:
+            maker = _tracker_maker_for(text, state)
+        out.append(
+            {
+                "decision": text,
+                "decision_maker": (maker or "").strip(),
+                "reason": (reason or "").strip(),
+                "related_project": (project or "").strip(),
+                # A HINT that this decision revises an earlier one — never the
+                # identity of the target. The model normalizes a decision into
+                # clean prose ("use construction as the niche"), so the spoken
+                # revision cue is often gone by the time the deterministic
+                # linker reads the text (live gap 2026-07-22: the supersede
+                # pill never appeared). Keeping the flag lets the linker know a
+                # revision happened; WHICH decision it supersedes stays
+                # resolved against real prior rows, never from the model.
+                "revises_earlier": bool(str(revises or "").strip()),
+            }
+        )
+
+    if isinstance(model_records, (list, tuple)):
+        for rec in model_records:
+            if not isinstance(rec, dict):
+                continue
+            _add(
+                str(rec.get("decision") or ""),
+                str(rec.get("decision_maker") or ""),
+                str(rec.get("reason") or ""),
+                str(rec.get("related_project") or ""),
+                str(rec.get("supersedes") or rec.get("revises") or ""),
+            )
+    # Backfill any decision line the model didn't structure (or all of them, in
+    # stub/degraded mode) so every one-liner has a record.
+    for line in decisions:
+        _add(str(line or ""), "", "", "")
+    return out
+
+
 def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dict:
     """Normalize to the full artifact schema; state fills the deterministic
     fields and backfills anything the model left out.
@@ -1771,6 +1966,13 @@ def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dic
     artifact["decisions"] = _clean_lines(artifact.get("decisions")) or [
         d["decision"] for d in state.decisions
     ]
+    # First-class decision records (parallel to the list[str] above — which
+    # STAYS list[str] for every downstream consumer). Each record carries its
+    # maker, reason, and related_project. decision_maker is backfilled from the
+    # silent tracker's speaker attribution when the model left it blank.
+    artifact["decision_records"] = _build_decision_records(
+        artifact.get("decision_records"), artifact["decisions"], state
+    )
     artifact["risks"] = _clean_lines(artifact.get("risks")) or [
         r["risk"] for r in state.risks
     ]
@@ -2362,3 +2564,4 @@ def _parse_json(text: str) -> dict:
         return json.loads(text)
     except json.JSONDecodeError:
         return {"answer": text, "confidence": 0.0, "sufficient_context": False}
+

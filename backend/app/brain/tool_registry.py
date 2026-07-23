@@ -39,9 +39,46 @@ _BUILTINS = [
      "write": False, "approval": "auto"},
     {"name": "lookup_record", "does": "look up demo account records",
      "kind": "native", "write": False, "approval": "auto"},
-    {"name": "upcoming_meetings", "does": "the owner's upcoming calendar (read)",
+    {"name": "upcoming_meetings", "does": "this workspace's upcoming calendar (read)",
      "kind": "native", "write": False, "approval": "auto"},
 ]
+
+# Human labels for the executor's app families — the one place a slug becomes
+# words, so the meeting brief, the Connections cards and the System Check board
+# all name a tool the same way.
+FAMILY_LABELS: dict[str, str] = {
+    "google_calendar": "Google Calendar",
+    "gmail": "Gmail",
+    "google_drive": "Google Drive",
+    "asana": "Asana",
+}
+
+
+def family_verbs(slug: str) -> list[str]:
+    """What the EXECUTOR can actually run for one app family, derived from
+    pipedream_executor._MAPPER — the single catalog.
+
+    This is the same derivation the in-meeting capability brief uses (#377):
+    the avatar's self-knowledge, the Connections cards and the System Check
+    board all read the execution plane itself, so none of them can ever claim
+    a verb the executor lost (or miss one it gained). Never raises — an
+    unavailable executor simply yields no verbs.
+    """
+    try:
+        from .. import pipedream_executor as _pe
+
+        return sorted(
+            t.split(".", 1)[1].replace("_", " ")
+            for t, spec in _pe._MAPPER.items()
+            if spec[0] == slug
+        )
+    except Exception:  # noqa: BLE001 — never block a join/board on this
+        return []
+
+
+def family_verbs_text(slug: str) -> str:
+    """`family_verbs` as the comma-joined phrase the spoken brief uses."""
+    return ", ".join(family_verbs(slug))
 
 
 def assemble(org_id: str, avatar: Any) -> dict | None:
@@ -79,29 +116,18 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
         # Live capability awareness (owner ask 2026-07-22): the verb list for
         # each family is DERIVED from the executor's own registry — the
         # avatar's self-knowledge can never lag the execution plane again.
-        def _family_verbs(slug: str) -> str:
-            try:
-                from .. import pipedream_executor as _pe
-
-                verbs = sorted(
-                    t.split(".", 1)[1].replace("_", " ")
-                    for t, spec in _pe._MAPPER.items()
-                    if spec[0] == slug
-                )
-                return ", ".join(verbs)
-            except Exception:  # noqa: BLE001 — never block a join on this
-                return ""
+        _family_verbs = family_verbs_text
 
         reg["native"].append({
             "name": "google_calendar",
-            "does": ("on the owner's Google Calendar: "
+            "does": ("on this workspace's Google Calendar: "
                      + (_family_verbs("google_calendar") or "schedule meetings")),
             "kind": "native", "write": True, "approval": "approve", "connected": google_on,
             "verbs": _family_verbs("google_calendar"),
         })
         reg["native"].append({
             "name": "gmail_send",
-            "does": ("as the owner's Gmail: "
+            "does": ("as this workspace's Gmail: "
                      + (_family_verbs("gmail") or "send email")),
             "kind": "native", "write": True, "approval": "approve", "connected": google_on,
             "verbs": _family_verbs("gmail"),
@@ -166,7 +192,9 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
             from .. import pipedream_client, pipedream_executor
 
             if pipedream_executor.enabled():
-                caps = store.get_avatar_capabilities(getattr(avatar, "id", ""))
+                caps = store.get_avatar_capabilities(
+                    getattr(avatar, "id", ""), org_id
+                )
                 _skip = {"slack", "asana", "google",
                          "gmail", "google_calendar", "google_drive"}
                 for slug in sorted(
@@ -199,7 +227,9 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
         reg["pd_org_available"] = pd_org_available[:6]
 
         # Cedric connectors — only when this org has a connected Slack agent.
-        cedric_reg: dict = {"connected": [], "available": [], "not_linked": False}
+        cedric_reg: dict = {
+            "connected": [], "available": [], "not_linked": False, "linked": False
+        }
         team_id = ""
         try:
             rows = store.connections_for_org(org_id)
@@ -220,6 +250,10 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
         # 2. a not_linked (or malformed) catalog yields NO claims at all —
         #    never fall back to whatever the stale row said.
         if team_id:
+            # Slack itself is connected to the org even when Cedric's connector
+            # catalog is empty. Preserve that distinction for self-questions:
+            # "connected to the org, runs through Cedric", never "not connected".
+            cedric_reg["linked"] = True
             data = cedric_callback.fetch_org_connectors(org_id, team_id)
             if isinstance(data, dict):
                 if data.get("not_linked"):
@@ -251,7 +285,9 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
         slack_blocked = False
         try:
             aid = str(getattr(avatar, "id", "") or "")
-            if aid and store.get_avatar_capabilities(aid).get("slack") is False:
+            if aid and store.get_avatar_capabilities(
+                aid, org_id
+            ).get("slack") is False:
                 slack_blocked = True
         except Exception:  # noqa: BLE001 — never block a join over the toggle
             slack_blocked = False
@@ -333,6 +369,11 @@ def brief(reg: dict | None) -> str:
             "it isn't toggled on for you; never pretend or work around it."
         )
     else:
+        if ced.get("linked"):
+            lines.append(
+                "Slack: connected to this org; it runs through Cedric after "
+                "owner approval."
+            )
         if connected:
             lines.append(
                 "Enabled via the Slack agent (captured, then run after owner "
@@ -421,9 +462,19 @@ def search(reg: dict | None, query: str) -> str:
             "Slack agent — toggled OFF for you by the owner; if asked, say you "
             "can't use Slack because it isn't toggled on"
         )
+    if (
+        not hits
+        and not blocked
+        and ced.get("linked")
+        and "slack" in q
+    ):
+        hits.append(
+            "Slack — connected to this org; runs through Cedric after owner approval"
+        )
     if not hits:
         return (
             f"no tool matches '{query}'. If asked to do this, capture it with "
             "queue_action and say it will need the owner to set the tool up."
         )
     return "; ".join(hits[:5])
+

@@ -118,27 +118,33 @@ def test_capability_endpoint_requires_login(client):
 
 
 def test_capability_endpoint_owner_sets_flag(client):
-    _login(client)
+    """The switch lands on the CALLER'S ORG, not on the whole deployment
+    (cross-tenant fix 2026-07-23): reading it back without an org — the legacy
+    deployment-wide row — must therefore stay empty."""
+    user = _login(client)
     r = client.post("/dashboard/avatar/laura/capability",
                     json={"capability": "google", "enabled": False})
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] and body["capability"] == "google" and body["enabled"] is False
-    assert store.get_avatar_capabilities("laura") == {"google": False}
+    org = str(user["org_id"])
+    assert store.get_avatar_capabilities("laura", org) == {"google": False}
+    assert store.get_avatar_capabilities("laura") == {}
+    assert store.get_avatar_capabilities("laura", "another-org") == {}
 
 
 def test_capability_endpoint_rejects_unknown_capability(client):
-    _login(client)
+    org = str(_login(client)["org_id"])
     # Junk-shaped keys are rejected; slug-shaped app keys are accepted (the
     # dashboard only offers slugs the org actually connected via Pipedream).
     r = client.post("/dashboard/avatar/laura/capability",
                     json={"capability": "Not A Slug!", "enabled": True})
     assert r.status_code == 400
-    assert store.get_avatar_capabilities("laura") == {}
+    assert store.get_avatar_capabilities("laura", org) == {}
     r = client.post("/dashboard/avatar/laura/capability",
                     json={"capability": "dropbox", "enabled": True})
     assert r.status_code == 200
-    assert store.get_avatar_capabilities("laura") == {"dropbox": True}
+    assert store.get_avatar_capabilities("laura", org) == {"dropbox": True}
 
 
 def test_capability_endpoint_unknown_avatar_404(client):
@@ -208,7 +214,7 @@ def test_slack_delivery_skipped_when_capability_off(monkeypatch):
                         lambda name, art: "txt")
     posted: list = []
     monkeypatch.setattr(autopilot.actions, "post_to_slack",
-                        lambda text: posted.append(text) or {"sent": True})
+                        lambda text, org="": posted.append(text) or {"sent": True})
 
     store.set_avatar_capability("laura", "slack", False)
     res = autopilot.maybe_deliver("Laura", {"avatar_id": "laura", "follow_up_email": {}})

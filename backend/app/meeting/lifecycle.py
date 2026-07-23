@@ -86,12 +86,14 @@ def _avatar_asana_enabled(org_id: str, avatar_id: str) -> bool:
                 or pipedream_executor.app_connected(org_id, "asana")):
             return False
         declares = avatars.load(avatar_id).uses_native_tool("asana")
-        return store.capability_enabled(avatar_id, "asana", connected=declares)
+        return store.capability_enabled(
+            avatar_id, "asana", connected=declares, org_id=org_id
+        )
     except Exception:  # noqa: BLE001
         return False
 
 
-def _avatar_pd_apps(avatar_id: str) -> dict:
+def _avatar_pd_apps(avatar_id: str, org_id: str = "") -> dict:
     """The generic Pipedream apps this avatar may use, with each app's
     pre-built action catalog: {slug: [{key, name}]} — the offer type_actions
     presents to the model. An app qualifies only when the OWNER explicitly
@@ -104,7 +106,7 @@ def _avatar_pd_apps(avatar_id: str) -> dict:
 
         if not pipedream_executor.enabled():
             return {}
-        caps = store.get_avatar_capabilities(avatar_id)
+        caps = store.get_avatar_capabilities(avatar_id, org_id)
         slugs = sorted(
             k for k, v in caps.items()
             if v and k not in ("google", "slack", "asana")

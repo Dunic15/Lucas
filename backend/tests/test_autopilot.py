@@ -45,7 +45,7 @@ def outbox(monkeypatch):
     )
     monkeypatch.setattr(
         autopilot.actions, "post_to_slack",
-        lambda text: (sent["slack"].append(text) or {"sent": True}),
+        lambda text, org="": (sent["slack"].append(text) or {"sent": True}),
     )
     return sent
 

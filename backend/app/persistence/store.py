@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -435,6 +437,32 @@ def _add_column(conn: sqlite3.Connection, table: str, coldef: str) -> None:
         pass  # column already exists
 
 
+def _widen_pk_with_org(
+    conn: sqlite3.Connection, table: str, new_ddl: str, carry_columns: str
+) -> None:
+    """Rebuild ``table`` so its PRIMARY KEY includes org_id (idempotent).
+
+    SQLite cannot widen a PRIMARY KEY in place, and these tables were created
+    keyed by avatar_id alone — a deployment-global switch any tenant could
+    flip for every other tenant. Existing rows are carried over with
+    org_id '', which the readers treat as the deployment-wide default, so a
+    live database keeps behaving exactly as before this migration.
+    """
+    try:
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+        if not cols or "org_id" in cols:
+            return  # table absent (fresh install builds it) or already widened
+        conn.execute(f"ALTER TABLE {table} RENAME TO {table}_legacy")
+        conn.execute(f"CREATE TABLE {table} ({new_ddl})")
+        conn.execute(
+            f"INSERT INTO {table} (org_id, {carry_columns}) "
+            f"SELECT '', {carry_columns} FROM {table}_legacy"
+        )
+        conn.execute(f"DROP TABLE {table}_legacy")
+    except sqlite3.OperationalError:
+        pass  # never block boot on a schema nicety
+
+
 def _init_db() -> None:
     demo = DEMO_ORG_ID
     with _LOCK, _connect() as conn:
@@ -627,10 +655,17 @@ def _init_db() -> None:
             -- Read at bot-start and in the webhook; changes take effect on the
             -- NEXT meeting with no redeploy. Absent row = the global default
             -- (settings.gemini_ears_mode).
+            -- org_id is part of the key (cross-tenant fix 2026-07-23): the
+            -- table used to be keyed by avatar_id ALONE, so one org switching
+            -- Laura's brain switched it for every org on the deployment. A
+            -- legacy row (org_id '') is still honoured as the deployment-wide
+            -- default until that org sets its own.
             CREATE TABLE IF NOT EXISTS avatar_brain_mode (
-                avatar_id TEXT PRIMARY KEY,
+                org_id TEXT NOT NULL DEFAULT '',
+                avatar_id TEXT NOT NULL,
                 brain_mode TEXT NOT NULL,
-                updated_at REAL NOT NULL
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (org_id, avatar_id)
             );
 
             -- Small per-org preference switches (dashboard toggles), one row per
@@ -650,15 +685,15 @@ def _init_db() -> None:
             -- independently turn ON/OFF a capability the ORG connected once in
             -- the Connections view. Absent row = unset → the caller applies the
             -- default (ON when the org has that integration connected, else off).
-            -- Read at the execute/deliver seams; keyed by the avatar_id string
-            -- ONLY (no org, no ::uuid → split-brain safe). Litestream-replicated
-            -- like avatar_brain_mode.
+            -- Read at the execute/deliver seams, keyed by (org, avatar,
+            -- capability). Litestream-replicated like avatar_brain_mode.
             CREATE TABLE IF NOT EXISTS avatar_capabilities (
+                org_id TEXT NOT NULL DEFAULT '',
                 avatar_id TEXT NOT NULL,
                 capability TEXT NOT NULL,
                 enabled INTEGER NOT NULL,
                 updated_at REAL NOT NULL,
-                PRIMARY KEY (avatar_id, capability)
+                PRIMARY KEY (org_id, avatar_id, capability)
             );
 
             CREATE TABLE IF NOT EXISTS scheduled_events (
@@ -726,6 +761,31 @@ def _init_db() -> None:
                 updated_at REAL NOT NULL,
                 PRIMARY KEY (user_id, provider)
             );
+
+            -- First-class Decision records (mirror of the durable
+            -- meeting_decisions table, migration 0017). A decision gets its
+            -- own identity, maker, reason, related_project and supersede link
+            -- so the archive can show "this decision supersedes the one from
+            -- July 15". source_ref holds a bot_id/meeting_key ONLY — never
+            -- transcript text (PII). status ∈ active|superseded|revisited; a
+            -- superseded decision keeps its row (history), never deleted.
+            -- Self-created at boot so a litestream-restored store gains it
+            -- without a data migration. Durable orgs route to Postgres.
+            CREATE TABLE IF NOT EXISTS meeting_decisions (
+                org_id TEXT NOT NULL DEFAULT '{demo}',
+                id TEXT NOT NULL,
+                bot_id TEXT NOT NULL DEFAULT '',
+                decision TEXT NOT NULL,
+                decision_maker TEXT NOT NULL DEFAULT '',
+                reason TEXT NOT NULL DEFAULT '',
+                related_project TEXT NOT NULL DEFAULT '',
+                supersedes TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                source_ref TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (org_id, id)
+            );
             """
         )
         # Migration for stores created before the Cedric integration column.
@@ -741,6 +801,28 @@ def _init_db() -> None:
         _add_column(conn, "sessions", "org_id TEXT NOT NULL DEFAULT ''")
         # org_id on the remaining persisted tables (idempotent; a new NOT NULL
         # column backfills existing rows to the Demo org).
+        # Cross-tenant fix 2026-07-23: these two were keyed by avatar_id alone,
+        # so ANY logged-in user could flip a capability or the brain mode for
+        # EVERY org on the deployment. ADD COLUMN cannot widen a SQLite PRIMARY
+        # KEY, so an existing database is rebuilt: old rows carry org_id '' and
+        # stay readable as the deployment-wide default (behaviour unchanged
+        # until an org sets its own value), while every new write is org-scoped.
+        _widen_pk_with_org(
+            conn,
+            "avatar_capabilities",
+            "org_id TEXT NOT NULL DEFAULT '', avatar_id TEXT NOT NULL, "
+            "capability TEXT NOT NULL, enabled INTEGER NOT NULL, "
+            "updated_at REAL NOT NULL, PRIMARY KEY (org_id, avatar_id, capability)",
+            "avatar_id, capability, enabled, updated_at",
+        )
+        _widen_pk_with_org(
+            conn,
+            "avatar_brain_mode",
+            "org_id TEXT NOT NULL DEFAULT '', avatar_id TEXT NOT NULL, "
+            "brain_mode TEXT NOT NULL, updated_at REAL NOT NULL, "
+            "PRIMARY KEY (org_id, avatar_id)",
+            "avatar_id, brain_mode, updated_at",
+        )
         _add_column(conn, "utterances", f"org_id TEXT NOT NULL DEFAULT '{demo}'")
         _add_column(conn, "utterances", "participant_id TEXT NOT NULL DEFAULT ''")
         _add_column(conn, "utterances", "speaker_kind TEXT NOT NULL DEFAULT 'human'")
@@ -1099,6 +1181,23 @@ def save_artifact(bot_id: str, artifact: dict, *, org_id: str | None = None) -> 
         if not durable_enabled:
             _artifacts.pop(bot_id, None)
             raise
+
+    # First-class decision records (0017): persist alongside the artifact, with
+    # supersede linking. Best-effort + idempotent (skip if this meeting already
+    # has decision rows) so a finalize retry never double-inserts and a decision
+    # write failure never turns a saved artifact into a finalize loop. Never
+    # logs decision text.
+    records = artifact.get("decision_records")
+    if isinstance(records, list) and records:
+        try:
+            if not list_decisions(str(row_org), bot_id):
+                persist_decision_records(str(row_org), bot_id, records)
+        except Exception as exc:  # noqa: BLE001 — decision persistence is non-fatal
+            print(
+                f"[save_artifact] decision persistence skipped "
+                f"({type(exc).__name__})",
+                flush=True,
+            )
 
 
 def get_artifact(bot_id: str, org_id: str | None = None) -> dict | None:
@@ -2218,25 +2317,31 @@ def register_recall_realtime_capability(bot_id: str, capability: str) -> bool:
 _VALID_BRAIN_MODES = {"cerebras"}
 
 
-def set_avatar_brain_mode(avatar_id: str, brain_mode: str) -> bool:
+def set_avatar_brain_mode(
+    avatar_id: str, brain_mode: str, *, org_id: str = ""
+) -> bool:
     """Set an avatar's brain: "cerebras" (the normal Deepgram + grounded brain)
     is the only selectable value. Persisted (Litestream-replicated), read on
     the NEXT meeting — no redeploy."""
     aid = (avatar_id or "").strip()
     mode = (brain_mode or "").strip().lower()
+    org = (org_id or "").strip()
     if not aid or mode not in _VALID_BRAIN_MODES:
         return False
     with _LOCK, _connect() as conn:
         conn.execute(
-            "INSERT INTO avatar_brain_mode (avatar_id, brain_mode, updated_at) "
-            "VALUES (?, ?, ?) ON CONFLICT(avatar_id) DO UPDATE SET "
+            "INSERT INTO avatar_brain_mode "
+            "(org_id, avatar_id, brain_mode, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(org_id, avatar_id) DO UPDATE SET "
             "brain_mode = excluded.brain_mode, updated_at = excluded.updated_at",
-            (aid, mode, time.time()),
+            (org, aid, mode, time.time()),
         )
     return True
 
 
-def get_avatar_brain_mode(avatar_id: str) -> str | None:
+def get_avatar_brain_mode(
+    avatar_id: str, org_id: str = ""
+) -> str | None:
     """The avatar's explicit brain choice, or None if it has never been set
     (caller falls back to the global default). Values outside the selectable
     set (legacy "gemini" rows) read as None — a stale row must never
@@ -2246,7 +2351,10 @@ def get_avatar_brain_mode(avatar_id: str) -> str | None:
         return None
     with _LOCK, _connect() as conn:
         row = conn.execute(
-            "SELECT brain_mode FROM avatar_brain_mode WHERE avatar_id = ?", (aid,)
+            "SELECT brain_mode FROM avatar_brain_mode "
+            "WHERE avatar_id = ? AND org_id IN (?, '') "
+            "ORDER BY org_id DESC LIMIT 1",
+            (aid, (org_id or "").strip()),
         ).fetchone()
     mode = row[0] if row else None
     return mode if mode in _VALID_BRAIN_MODES else None
@@ -2282,6 +2390,316 @@ def get_org_pref(org_id: str, key: str) -> str | None:
     return row[0] if row else None
 
 
+# ── first-class decisions (0017 / meeting_decisions) ──────────────────────
+# A decision gets its own durable identity so the archive can answer "who
+# decided this, why, and does it supersede an earlier one?". Durable orgs route
+# to Postgres (RLS-scoped); the key-free/demo world persists in SQLite. Never
+# store transcript text here — source_ref is a bot_id/meeting_key ONLY.
+_VALID_DECISION_STATUS = ("active", "superseded", "revisited")
+
+# A new decision OVERRIDES an earlier one when its text carries an explicit
+# supersede cue. Deterministic regex (no model call) — the linker only fires
+# when the cue AND a shared related_project are both present.
+_DECISION_SUPERSEDE_CUE = re.compile(
+    r"\b(supersed\w+|instead of|instead\b|changed from|no longer|moved to|"
+    r"replaces?\b|overrid\w+|rather than|in place of|"
+    # Live gap 2026-07-22: the owner revised a decision with "this substitutes
+    # the decision from before" and no link was drawn — the cue list only knew
+    # formal register. These are how people actually revise out loud.
+    r"substitut\w+|switch(?:ing|ed|es)?\s+to|revis\w+|reverse[sd]?\b|"
+    r"scrap\s+(?:that|this|the)|drop\s+(?:that|the earlier|the previous)|"
+    r"changed?\s+(?:our|my|his|her|their)\s+mind|in\s+favou?r\s+of|"
+    r"(?:earlier|previous|prior)\s+decision|"
+    # Italian: the owner's meetings switch language mid-call.
+    r"sostituis\w+|al\s+posto\s+di|invece\s+di|non\s+pi[uù]\b|"
+    r"cambi\w+\s+idea|decisione\s+precedente|annulla\s+la\s+decisione)\b",
+    re.IGNORECASE,
+)
+
+def _revises_earlier(rec: dict) -> bool:
+    """Does this decision revise an earlier one on the same project?
+
+    Two independent signals, either is enough:
+      * an explicit cue in the decision text ("this supersedes...", "instead
+        of...", "sostituisce..."), and
+      * the summarizer's own ``revises_earlier`` flag — it saw the spoken
+        revision even when it normalized the wording into clean prose that no
+        longer carries the cue (live gap 2026-07-22: the owner said "this
+        substitutes the decision from before", the record read "use
+        construction as the primary niche", and no link was ever drawn).
+
+    The flag only says THAT a revision happened. WHICH decision is superseded
+    is always resolved against real prior rows below — never taken from the
+    model.
+    """
+    if not isinstance(rec, dict):
+        return False
+    if rec.get("revises_earlier") is True:
+        return True
+    return bool(_DECISION_SUPERSEDE_CUE.search(str(rec.get("decision") or "")))
+
+
+# The supersede linker only looks back over a recent window per project — a
+# newer decision overrides the MOST-RECENT earlier active one, so an unbounded
+# full-history scan is never needed.
+_SUPERSEDE_LOOKUP_LIMIT = 200
+
+_DECISION_FIELDS = (
+    "id", "bot_id", "decision", "decision_maker", "reason",
+    "related_project", "supersedes", "status", "source_ref",
+    "created_at", "updated_at",
+)
+
+
+def _decision_row_to_dict(row: "sqlite3.Row") -> dict:
+    d = {k: row[k] for k in _DECISION_FIELDS}
+    # Present empty strings as None for the optional link, so consumers can test
+    # `if d["supersedes"]` uniformly with the Postgres (nullable uuid) shape.
+    for k in ("supersedes", "decision_maker", "reason", "related_project"):
+        if d.get(k) == "":
+            d[k] = None
+    return d
+
+
+def _decision_durable(org_id: str) -> bool:
+    """Route this org's decisions to Postgres? (mirror of the artifact rule)."""
+    from . import control_plane
+
+    return durable_artifacts_enabled() and control_plane.is_durable_org(
+        str(org_id)
+    )
+
+
+def save_decision(
+    org_id: str,
+    bot_id: str,
+    record: dict,
+    *,
+    decision_id: str | None = None,
+) -> str | None:
+    """Persist one first-class decision record; returns its id.
+
+    ``record`` carries decision (required), decision_maker, reason,
+    related_project, supersedes, status, source_ref. ``source_ref`` must be a
+    bot_id / meeting_key — NEVER transcript text (PII). Durable orgs write to
+    Postgres under RLS; everything else writes SQLite."""
+    org = (org_id or "").strip() or DEMO_ORG_ID
+    decision_text = str(record.get("decision") or "").strip()
+    if not decision_text:
+        return None
+    did = decision_id or str(uuid.uuid4())
+    status = str(record.get("status") or "active")
+    if status not in _VALID_DECISION_STATUS:
+        status = "active"
+    now = time.time()
+    payload = {
+        "id": did,
+        "bot_id": str(bot_id or ""),
+        "decision": decision_text,
+        "decision_maker": str(record.get("decision_maker") or ""),
+        "reason": str(record.get("reason") or ""),
+        "related_project": str(record.get("related_project") or ""),
+        "supersedes": str(record.get("supersedes") or ""),
+        "status": status,
+        "source_ref": str(record.get("source_ref") or bot_id or ""),
+    }
+
+    if _decision_durable(org):
+        from . import control_plane
+
+        control_plane.save_decision(org, payload)
+        return did
+
+    with _LOCK, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO meeting_decisions
+                (org_id, id, bot_id, decision, decision_maker, reason,
+                 related_project, supersedes, status, source_ref,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(org_id, id) DO UPDATE SET
+                bot_id=excluded.bot_id,
+                decision=excluded.decision,
+                decision_maker=excluded.decision_maker,
+                reason=excluded.reason,
+                related_project=excluded.related_project,
+                supersedes=excluded.supersedes,
+                status=excluded.status,
+                source_ref=excluded.source_ref,
+                updated_at=excluded.updated_at
+            """,
+            (
+                org, did, payload["bot_id"], payload["decision"],
+                payload["decision_maker"], payload["reason"],
+                payload["related_project"], payload["supersedes"],
+                payload["status"], payload["source_ref"], now, now,
+            ),
+        )
+    return did
+
+
+def list_decisions(
+    org_id: str,
+    bot_id: str | None = None,
+    *,
+    related_project: str | None = None,
+    limit: int | None = None,
+) -> list[dict]:
+    """Decision records for an org, newest first. When ``bot_id`` is given,
+    only that meeting's decisions; otherwise the org's decision history. The
+    supersede linker passes ``related_project`` + ``limit`` to bound the scan
+    to just the project(s) a finalize touches over a recent window, so the
+    lookup cost does not grow with the org's whole decision history."""
+    org = (org_id or "").strip() or DEMO_ORG_ID
+    if _decision_durable(org):
+        from . import control_plane
+
+        return (
+            control_plane.list_decisions(
+                org, bot_id, related_project=related_project, limit=limit
+            )
+            or []
+        )
+
+    clauses = ["org_id = ?"]
+    params: list = [org]
+    if bot_id is not None:
+        clauses.append("bot_id = ?")
+        params.append(str(bot_id))
+    if related_project is not None:
+        clauses.append("related_project = ? COLLATE NOCASE")
+        params.append(str(related_project))
+    sql = (
+        "SELECT * FROM meeting_decisions WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY created_at DESC, id DESC"
+    )
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [_decision_row_to_dict(r) for r in rows]
+
+
+def get_decision(org_id: str, decision_id: str) -> dict | None:
+    """One decision by id, tenant-scoped."""
+    org = (org_id or "").strip() or DEMO_ORG_ID
+    did = (decision_id or "").strip()
+    if not did:
+        return None
+    if _decision_durable(org):
+        from . import control_plane
+
+        return control_plane.get_decision(org, did)
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM meeting_decisions WHERE org_id = ? AND id = ?",
+            (org, did),
+        ).fetchone()
+    return _decision_row_to_dict(row) if row is not None else None
+
+
+def mark_superseded(org_id: str, decision_id: str, *, status: str = "superseded") -> bool:
+    """Flip an earlier decision's status (default 'superseded') when a newer
+    decision overrides it. The row is kept — decisions are history, never
+    deleted."""
+    org = (org_id or "").strip() or DEMO_ORG_ID
+    did = (decision_id or "").strip()
+    if not did or status not in _VALID_DECISION_STATUS:
+        return False
+    if _decision_durable(org):
+        from . import control_plane
+
+        return bool(control_plane.mark_superseded(org, did, status))
+    with _LOCK, _connect() as conn:
+        cur = conn.execute(
+            "UPDATE meeting_decisions SET status = ?, updated_at = ? "
+            "WHERE org_id = ? AND id = ?",
+            (status, time.time(), org, did),
+        )
+    return cur.rowcount > 0
+
+
+def persist_decision_records(
+    org_id: str, bot_id: str, records: list[dict]
+) -> list[str]:
+    """Save a finished meeting's decision_records and wire supersede links.
+
+    For each new record we save a row, then — deterministically, no model call
+    — check for an explicit supersede cue in the decision text. When the cue
+    fires AND the record names a related_project, the most recent EARLIER active
+    decision on that same project (from prior meetings or earlier in this batch)
+    is linked: the new row's ``supersedes`` points at it and the old row flips to
+    ``status='superseded'``. Both never stay 'active'. Returns the new ids.
+
+    Off the live path (finalize/threadpool). Best-effort at the call site —
+    persistence must never break the meter-stop. Never logs decision text."""
+    org = (org_id or "").strip() or DEMO_ORG_ID
+    saved_ids: list[str] = []
+    if not records:
+        return saved_ids
+    # Prior active decisions in this org, by project, most-recent-first. A
+    # supersede requires BOTH an explicit cue in the new decision AND a shared
+    # related_project, so the candidate scan only needs the project(s) THIS
+    # batch could supersede — bounded to a recent window per project instead of
+    # the org's entire decision history (which grew unbounded on every
+    # finalize). Built once; updated in-memory as this batch supersedes earlier
+    # ones.
+    candidate_projects: dict[str, str] = {}
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        proj = str(rec.get("related_project") or "").strip()
+        if proj and _revises_earlier(rec):
+            candidate_projects.setdefault(proj.casefold(), proj)
+    prior: list[dict] = []
+    for proj in candidate_projects.values():
+        prior.extend(
+            d
+            for d in list_decisions(
+                org, related_project=proj, limit=_SUPERSEDE_LOOKUP_LIMIT
+            )
+            if d.get("status") == "active"
+        )
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        text = str(rec.get("decision") or "").strip()
+        if not text:
+            continue
+        project = str(rec.get("related_project") or "").strip()
+        target = None
+        if project and _revises_earlier(rec):
+            key = project.casefold()
+            for cand in prior:
+                if (
+                    str(cand.get("related_project") or "").strip().casefold() == key
+                    and cand.get("status") == "active"
+                ):
+                    target = cand
+                    break
+        rec_to_save = dict(rec)
+        rec_to_save["source_ref"] = str(rec.get("source_ref") or bot_id or "")
+        if target is not None:
+            rec_to_save["supersedes"] = str(target.get("id") or "")
+        new_id = save_decision(org, bot_id, rec_to_save)
+        if new_id is None:
+            continue
+        saved_ids.append(new_id)
+        if target is not None:
+            mark_superseded(org, str(target.get("id")))
+            target["status"] = "superseded"  # keep the in-memory view honest
+        # This new decision becomes a supersede candidate for later records.
+        prior.insert(0, {
+            "id": new_id,
+            "related_project": project,
+            "status": "active",
+        })
+    return saved_ids
+
+
 def all_avatar_brain_modes() -> dict[str, str]:
     """{avatar_id: brain_mode} for every avatar with an explicit choice."""
     with _LOCK, _connect() as conn:
@@ -2305,26 +2723,36 @@ import re as _re
 _CAPABILITY_SLUG = _re.compile(r"^[a-z0-9_][a-z0-9_-]{0,59}$")
 
 
-def set_avatar_capability(avatar_id: str, capability: str, enabled: bool) -> bool:
-    """Turn one capability ON/OFF for one avatar (dashboard toggle). Persisted
-    (Litestream-replicated), read at the execute/deliver seams — no redeploy.
+def set_avatar_capability(
+    avatar_id: str, capability: str, enabled: bool, *, org_id: str = ""
+) -> bool:
+    """Turn one capability ON/OFF for one avatar IN ONE ORG (dashboard toggle).
+
+    org_id is required in practice: without it the write lands on the legacy
+    deployment-wide row, which is what let any tenant switch a capability off
+    for every other tenant (cross-tenant fix 2026-07-23). Callers pass the
+    authenticated user's org; only migration/back-compat paths omit it.
     False for a key that is neither a KNOWN capability nor slug-shaped."""
     aid = (avatar_id or "").strip()
     cap = (capability or "").strip().lower()
+    org = (org_id or "").strip()
     if not aid or (cap not in KNOWN_CAPABILITIES and not _CAPABILITY_SLUG.match(cap)):
         return False
     with _LOCK, _connect() as conn:
         conn.execute(
             "INSERT INTO avatar_capabilities "
-            "(avatar_id, capability, enabled, updated_at) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(avatar_id, capability) DO UPDATE SET "
+            "(org_id, avatar_id, capability, enabled, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(org_id, avatar_id, capability) DO UPDATE SET "
             "enabled = excluded.enabled, updated_at = excluded.updated_at",
-            (aid, cap, 1 if enabled else 0, time.time()),
+            (org, aid, cap, 1 if enabled else 0, time.time()),
         )
     return True
 
 
-def get_avatar_capabilities(avatar_id: str) -> dict[str, bool]:
+def get_avatar_capabilities(
+    avatar_id: str, org_id: str = ""
+) -> dict[str, bool]:
     """The avatar's EXPLICIT capability switches as ``{capability: bool}``.
 
     Only capabilities the owner has actually toggled appear. A capability
@@ -2335,19 +2763,34 @@ def get_avatar_capabilities(avatar_id: str) -> dict[str, bool]:
     aid = (avatar_id or "").strip()
     if not aid:
         return {}
+    org = (org_id or "").strip()
     with _LOCK, _connect() as conn:
-        rows = conn.execute(
-            "SELECT capability, enabled FROM avatar_capabilities WHERE avatar_id = ?",
+        # Legacy deployment-wide rows (org_id '') are the DEFAULT; this org's
+        # own rows override them key by key, so a live database keeps its
+        # current behaviour until the org sets its own switch.
+        legacy = conn.execute(
+            "SELECT capability, enabled FROM avatar_capabilities "
+            "WHERE avatar_id = ? AND org_id = ''",
             (aid,),
         ).fetchall()
-    return {r[0]: bool(r[1]) for r in rows}
+        mine = conn.execute(
+            "SELECT capability, enabled FROM avatar_capabilities "
+            "WHERE avatar_id = ? AND org_id = ?",
+            (aid, org),
+        ).fetchall() if org else []
+    caps = {r[0]: bool(r[1]) for r in legacy}
+    caps.update({r[0]: bool(r[1]) for r in mine})
+    return caps
 
 
-def capability_enabled(avatar_id: str, capability: str, *, connected: bool) -> bool:
-    """Resolve whether an avatar MAY use a capability: the explicit per-avatar
-    switch, defaulting to the org-level ``connected`` state when never toggled.
-    This is the "default ON when connected, else off" rule in one place."""
-    return get_avatar_capabilities(avatar_id).get(capability, connected)
+def capability_enabled(
+    avatar_id: str, capability: str, *, connected: bool, org_id: str = ""
+) -> bool:
+    """Resolve whether an avatar MAY use a capability IN THIS ORG: the explicit
+    per-org switch, then the legacy deployment-wide row, defaulting to the
+    org-level ``connected`` state when never toggled. This is the "default ON
+    when connected, else off" rule in one place."""
+    return get_avatar_capabilities(avatar_id, org_id).get(capability, connected)
 
 
 # ── canonical approval records (handshake operation: approve-action) ──

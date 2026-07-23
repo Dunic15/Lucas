@@ -14,8 +14,7 @@ Every adapter follows the same contract:
 * returns a normalized result that the executor persists as a receipt.
 
 Adding a tool is one registration, not another approval system. The built-in
-adapters cover the connections Laura owns today: Google Calendar, Gmail, Asana,
-and Slack webhook delivery. Browser execution remains on its separately
+adapters cover the connections Laura owns today: Google Calendar, Gmail, and Asana. Browser execution remains on its separately
 hardened route because it has additional ownership and visual-verification
 checks.
 """
@@ -24,9 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from .. import actions as workflow_actions
 from .. import asana_client, google_client, store
-from ..config import settings
 
 ExecuteFn = Callable[[str, dict], dict]
 ConnectedFn = Callable[[str], bool]
@@ -148,12 +145,6 @@ def _asana_connected(org_id: str) -> bool:
     return bool(asana_client.connected(org_id))
 
 
-def _slack_connected(_org_id: str) -> bool:
-    # The current native Slack write uses Laura's configured incoming webhook.
-    # A future per-org Slack OAuth adapter can replace this registration without
-    # changing the approval or execution lifecycle.
-    return bool(settings.slack_webhook_url.strip())
-
 
 def _calendar_create(org_id: str, args: dict) -> dict:
     result = google_client.create_calendar_event(org_id, args)
@@ -200,22 +191,6 @@ def _asana_comment(org_id: str, args: dict) -> dict:
     }
 
 
-def _slack_post(_org_id: str, args: dict) -> dict:
-    text = str(args.get("text") or args.get("message") or "").strip()
-    if not text:
-        return {"ok": False, "error": "Slack message text is required"}
-    raw = workflow_actions.post_to_slack(text)
-    ok = bool(raw.get("sent"))
-    return {
-        "ok": ok,
-        "kind": "slack message",
-        "ref": "slack:webhook" if ok else "",
-        "error": ""
-        if ok
-        else str(raw.get("reason") or raw.get("error") or "Slack post failed"),
-        "status_code": raw.get("status_code"),
-    }
-
 
 register(
     Adapter(
@@ -230,4 +205,3 @@ register(Adapter("email.send", "google", "Gmail", _email_send, _google_connected
 register(Adapter("asana.create_task", "asana", "Asana", _asana_create, _asana_connected))
 register(Adapter("asana.update_task", "asana", "Asana", _asana_update, _asana_connected))
 register(Adapter("asana.add_comment", "asana", "Asana", _asana_comment, _asana_connected))
-register(Adapter("slack.post_message", "slack", "Slack", _slack_post, _slack_connected))

@@ -813,7 +813,7 @@ def test_wire_artifact_still_transcript_free(client, recall_stubbed, monkeypatch
     resp = client.post(f"/sessions/{bot_id}/end")
     wire = resp.json()
     assert "transcript" not in wire
-    assert wire["artifact_version"] == 1
+    assert wire["artifact_version"] == 2
     assert any(a.get("requested_live") for a in wire["actions"])
 
     assert len(delivered) == 1
