@@ -250,6 +250,38 @@ def test_flag_on_untypeable_action_tracked_only_without_cedric(
     assert "tracked only" in st["detail"]
 
 
+def test_untyped_calendar_ask_goes_to_needs_details_not_tracked(
+    client, monkeypatch
+):
+    """Live 2026-07-23 bug ③: an org WITHOUT Asana connected captured a calendar
+    ask. type_actions(allow_asana=False) returns None, so the old flow dropped
+    it to 'approved · tracked only — no executor'. Now the approve door
+    SYNTHESISES calendar.create_event and lands on needs_details (collect
+    time/attendees) — never a tracked-only dead end for a supported action type.
+    The synthesised type is PERSISTED so the params form can save against it."""
+    monkeypatch.setattr(settings, "native_executor", True)
+    user = _login(client)
+    action = {"item": "Schedule a follow-up call with the client next Tuesday",
+              "owner": "Ben", "action_id": "a1"}
+    store.save_artifact(
+        "bot_a1",
+        {"summary": "Kickoff.", "actions": [action], "checklist": [action],
+         "org_id": user["org_id"], "avatar_id": "laura",
+         "meeting_url": "https://meet.google.com/appr-test",
+         "transcript": "PII must never leak"},
+        org_id=user["org_id"],
+    )
+    r = client.post("/dashboard/actions/a1/approve")
+    assert r.status_code == 422  # needs_details, NOT a tracked-only dead end
+    body = r.json()
+    assert body["error"] == "needs_details" and body["missing_params"]
+    st = ledger.action_statuses(["a1"], org_id=user["org_id"]).get("a1")
+    assert st["status"] == "needs_details"
+    # the synthesised type was PERSISTED — the params form saves against it
+    typed = ledger.effective_typed("a1", None, org_id=user["org_id"])
+    assert typed and typed["type"] == "calendar.create_event"
+
+
 def test_flag_on_soft_failure_records_failed_receipt(client, monkeypatch):
     monkeypatch.setattr(settings, "native_executor", True)
     user = _login(client)
@@ -407,7 +439,10 @@ def test_rescue_typing_receives_the_meeting_brief(client, monkeypatch):
 
     monkeypatch.setattr(brain_engine, "type_actions", fake_type_actions)
     r = client.post("/dashboard/actions/a1/approve")
-    assert r.status_code == 200
+    # The retype still saw the brief; and now that the retype declined, the
+    # synthesised calendar spec routes this to needs_details (bug ③ fix) instead
+    # of the old tracked-only dead end this test used to assert.
+    assert r.status_code == 422 and r.json()["error"] == "needs_details"
     assert "3 PM with anant@sffstudio.com" in seen["brief"]
     assert "schedule a meeting" in seen["item"].lower()
 

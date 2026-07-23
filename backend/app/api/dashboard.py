@@ -3411,6 +3411,29 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         except Exception:  # noqa: BLE001 — typing is opportunistic, never a gate
             pass
 
+    # Still untyped after the retype rescue? If the ask is CLEARLY a calendar /
+    # email / task action, synthesise a minimal typed spec AND PERSIST it, so
+    # the flow goes to NEEDS-DETAILS (the form collects the missing fields)
+    # instead of a tracked-only dead end (live 2026-07-23: 'schedule a call with
+    # someone tomorrow' → 'tracked only, no executor'). Persisting the type is
+    # what lets the params form save against it afterwards — apply_param_edits
+    # refuses an untyped action. A genuinely free-form ask ('other', e.g. a
+    # Slack note) stays tracked-only, which is the honest state for it.
+    if not (isinstance(typed, dict) and typed.get("type")):
+        from ..brain import tools as _brain_tools
+
+        _kind = _brain_tools.ask_kind(
+            str(action.get("action") or action.get("item") or "")
+        )
+        _synth = {"task": "asana.create_task", "email": "email.send",
+                  "calendar": "calendar.create_event"}.get(_kind)
+        if _synth:
+            typed = {"type": _synth, "args": dict(
+                (action.get("typed") or {}).get("args") or {})}
+            await run_in_threadpool(
+                lambda: store.set_action_typed_override(org, aid, typed)
+            )
+
     # A rejected action is CLOSED. The monotonic status guard would keep the
     # chip 'rejected' anyway, but without this check the executor below would
     # still RUN the action — refuse outright; un-rejecting isn't a thing.
