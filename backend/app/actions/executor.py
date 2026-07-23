@@ -219,16 +219,51 @@ def effective_route(
     stored_route: str = "",
     item_text: str = "",
 ) -> str:
-    """Resolve the route from current capability and connection state.
+    """Resolve one current route for display, approval, retry and receipts.
 
-    ``execution_route`` is historical metadata, not authority. The only stored
-    route that remains authoritative is an explicit guarded-browser choice;
-    manual/native/cedric/pipedream stamps are recomputed so display, approval,
-    retry, system checks and receipts cannot diverge after connections change.
+    Browser is an explicit guarded choice. A currently connected Pipedream
+    Asana account supersedes stale manual/native metadata. Cedric stays an
+    explicit broker choice when no Pipedream Asana connection supersedes it.
+    Manual Google/Asana cards remain manual while neither execution account is
+    connected, preventing a display-time rewrite from manufacturing a vendor
+    call the organization did not authorize.
     """
+    from .. import pipedream_executor  # lazy: keep module load order decoupled
+
     stored = str(stored_route or "").strip().lower()
+    action_type = str((typed or {}).get("type") or "").strip()
     if stored == "browser":
         return "browser"
+
+    if action_type in ASANA_ACTION_TYPES and pipedream_executor.handles(
+        {"type": action_type}
+    ) and pipedream_executor.app_connected(
+        org_id, pipedream_executor.app_for_type(action_type)
+    ):
+        return "pipedream"
+
+    if stored == "cedric":
+        return "cedric"
+
+    if stored == "manual" and action_type in _GOOGLE_FALLBACK_ACTION_TYPES:
+        from .. import store
+
+        native_connected = bool((store.get_org_oauth(org_id) or {}).get(
+            "refresh_token"
+        ))
+        if not native_connected and not _pipedream_google_connected(
+            org_id, action_type
+        ):
+            return "manual"
+
+    if stored == "manual" and action_type in ASANA_ACTION_TYPES:
+        try:
+            native_connected = asana_client.connected(org_id)
+        except Exception:  # noqa: BLE001 — routing probe is best-effort
+            native_connected = False
+        if not native_connected:
+            return "manual"
+
     return route_for_typed(typed, org_id, item_text=item_text)
 
 
