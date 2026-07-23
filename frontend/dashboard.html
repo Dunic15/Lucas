@@ -2435,12 +2435,12 @@
   // (POST /dashboard/actions/{id}/approve).
   function apprBtn(a){
     if(!a.typed||!a.action_id) return "";
-    if(a.execution&&(a.execution.status==="done"||a.execution.status==="rejected")) return "";  // terminal → pill shows
+    if(a.execution&&(a.execution.status==="done"||a.execution.status==="rejected"||a.execution.status==="withdrawn")) return "";  // terminal → pill shows
     return '<button class="btn-appr" data-approve="'+esc(a.action_id)+'">Review &amp; approve</button>';
   }
   function rejBtn(a){
     if(!a.typed||!a.action_id) return "";
-    if(a.execution&&(a.execution.status==="done"||a.execution.status==="rejected")) return "";
+    if(a.execution&&(a.execution.status==="done"||a.execution.status==="rejected"||a.execution.status==="withdrawn")) return "";
     return '<button class="btn-rej" data-reject="'+esc(a.action_id)+'">Reject</button>';
   }
 
@@ -2471,10 +2471,10 @@
   var STATE_LABEL={needs_details:"Needs details",ready_to_approve:"Ready for approval",
     proposed:"Ready for approval",
     approved:"Approved",executing:"Running",done:"Completed",failed:"Couldn’t complete",
-    rejected:"Rejected",execution_unknown:"Check connected account"};
+    rejected:"Rejected",withdrawn:"Withdrawn",execution_unknown:"Check connected account"};
   var STATE_CLASS={needs_details:"attn",ready_to_approve:"ready",proposed:"ready",
     approved:"run",executing:"run",
-    done:"ok",failed:"bad",rejected:"bad",execution_unknown:"attn"};
+    done:"ok",failed:"bad",rejected:"bad",withdrawn:"bad",execution_unknown:"attn"};
   // A card is NEVER a passive "captured — tracked for the record" row (owner ask
   // 2026-07-22, live card aa2e74e86dbd4d38). The durable execution status wins
   // once anything ran; before that the backend's derived card_state says whether
@@ -2497,7 +2497,7 @@
     return /tracked only/i.test((a.execution&&a.execution.detail)||"");
   }
   function bucketOf(a){ var s=stateOf(a);
-    if(s==="done"||s==="failed"||s==="rejected") return "done";
+    if(s==="done"||s==="failed"||s==="rejected"||s==="withdrawn") return "done";
     if(s==="approved"&&trackedOnly(a)) return "done";
     if(s==="approved"||s==="executing") return "progress";
     return "attn"; }
@@ -2533,6 +2533,32 @@
     updateActionsBadge();
     if(DATA) renderAttention(DATA);
     var v=$("#view-actions"); if(v&&!v.hidden) renderActions();
+  }
+
+  function withdrawAction(btn){
+    var aid=btn.getAttribute("data-withdraw"); if(!aid) return;
+    var found=null;
+    actionIndex().some(function(x){ if(x.a.action_id===aid){ found=x.a; return true; } return false; });
+    var approved=found&&stateOf(found)==="approved";
+    var prompt=approved
+      ?"Withdraw this approved action? External execution may already have started. The record stays in history."
+      :"Discard this action? It will be withdrawn, not deleted, and will remain in history.";
+    if(!window.confirm(prompt)) return;
+    var old=btn.innerHTML; btn.disabled=true; btn.textContent=approved?"Withdrawing…":"Discarding…";
+    fetch("/dashboard/actions/"+encodeURIComponent(aid)+"/withdraw",{
+      method:"POST",headers:headers(),
+      body:JSON.stringify({confirm_possible_external_start:!!approved})
+    })
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,status:r.status,j:j};}); })
+      .then(function(res){
+        if(!res.ok){
+          var why=(res.j&&res.j.detail)||(res.j&&res.j.error)||("HTTP "+res.status);
+          throw new Error(why);
+        }
+        toast("Action withdrawn — preserved in history and blocked from approval.");
+        patchActionState(aid,res.j.execution||{status:"withdrawn",detail:"withdrawn via dashboard"});
+      })
+      .catch(function(e){ btn.disabled=false; btn.innerHTML=old; toast("Could not withdraw: "+e.message,true); });
   }
 
   function rejectAction(btn){
@@ -2860,6 +2886,7 @@
     if(s==="done") return "Completed — the receipt links to what was created.";
     if(s==="failed") return "It couldn’t complete — open details for the receipt.";
     if(s==="rejected") return "Rejected — it will not run.";
+    if(s==="withdrawn") return "Withdrawn — preserved in history; it cannot run.";
     return "Needs more details to approve.";
   }
   function renderActions(){
@@ -2902,11 +2929,13 @@
           // dead-end, so the card asks for the ONE thing that unblocks it —
           // a reconnect — instead of reporting a failure (owner ask 2026-07-22).
           ctl='<button class="btn primary" data-goto="connections">Reconnect '+esc(capA.label)+'</button>'+
+              '<button class="btn" data-withdraw="'+esc(a.action_id)+'">Discard</button>'+
               '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Dismiss</button>';
         } else if(a.executable===false){
           // No connected tool can run this (free-form capture) — approving it
           // would dead-end in "Nothing ran". Say so instead of offering it.
           ctl='<span class="stchip" title="Heard as a free-form ask — no connected tool can run it automatically. It still appears in the follow-up email.">Can\u2019t auto-run</span>'+
+              '<button class="btn" data-withdraw="'+esc(a.action_id)+'">Discard</button>'+
               '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Dismiss</button>';
         } else if(s==="needs_details"||(a.needed||[]).length){
           // Incomplete card: NEVER a blind Approve (owner rule 2026-07-22).
@@ -2918,12 +2947,16 @@
           // of whatever it turned out to be.
           ctl='<button class="btn primary" data-approve="'+esc(a.action_id)+'">Add details to approve…</button>'+
               (a.typed?'<button class="btn" data-acdetailsbtn="'+esc(a.action_id)+'">Edit fields</button>':'')+
+              '<button class="btn" data-withdraw="'+esc(a.action_id)+'">Discard</button>'+
               '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Reject</button>';
         } else {
           ctl='<button class="btn primary" data-approve="'+esc(a.action_id)+'">Review &amp; approve</button>'+
               (a.typed?'<button class="btn" data-acdetailsbtn="'+esc(a.action_id)+'">Add details</button>':'')+
+              '<button class="btn" data-withdraw="'+esc(a.action_id)+'">Discard</button>'+
               '<button class="btn danger" data-reject="'+esc(a.action_id)+'">Reject</button>';
         }
+      } else if(s==="approved"){
+        ctl='<button class="btn danger" data-withdraw="'+esc(a.action_id)+'">Withdraw</button>';
       } else if(s==="done"&&a.execution){
         var recDetail=a.execution.detail||"";
         var recUrl=(recDetail.match(/https?:\/\/[^\s"'<>]+/)||[])[0]||"";
@@ -3027,7 +3060,8 @@
     });
     wireAvatarImages();
     $$("#ac-list [data-approve]").forEach(function(b){ b.addEventListener("click",function(){ reviewAction(b); }); });
-    $$("#ac-list [data-reject]").forEach(function(b){ b.addEventListener("click",function(){ rejectAction(b); }); });
+    $("#ac-list [data-reject]").forEach(function(b){ b.addEventListener("click",function(){ rejectAction(b); }); });
+    $("#ac-list [data-withdraw]").forEach(function(b){ b.addEventListener("click",function(){ withdrawAction(b); }); });
     $$("#ac-list [data-acdetailsbtn]").forEach(function(b){ b.addEventListener("click",function(){ openDetailsFor(b.getAttribute("data-acdetailsbtn"),b); }); });
     $$("#ac-list [data-acx]").forEach(function(b){ b.addEventListener("click",function(){ toggleActionDetails(b); }); });
   }
