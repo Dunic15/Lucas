@@ -3766,7 +3766,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 {"ok": True, "spoke": False, "action_capture": True, "duplicate": True}
             )
         expired = time.time() - c_ts > _CLARIFY_WINDOW_S
-        answered = (not called) and speaker_id == c_speaker and not expired
+        # Clarification binding outranks wake/casual/new-action interpretation.
+        # The same speaker may naturally say Laura's name again; only an
+        # utterance addressed to somebody else bypasses the pending action.
+        answered = speaker_id == c_speaker and not expired
         if answered and _addressed_elsewhere(session, avatar, text):
             # The asker turned to ANOTHER participant ("Ducho, do you wanna
             # discuss something else?") — that's a new turn for them, not the
@@ -3775,7 +3778,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # it there). Gluing it here is how the dead phrase reached the
             # card (live repro 2026-07-22).
             answered = False
-        if answered and time.time() - c_ts < 4.0 and is_capture_continuation(text):
+        if (
+            answered
+            and time.time() - c_ts < 4.0
+            and is_capture_continuation(text)
+            and not tools.is_orphan_action_fragment(text)
+        ):
             # A late ASR fragment of the ORIGINAL ask, not an answer: extend
             # and re-check what is still missing before (re)asking anything.
             try:
@@ -3797,8 +3805,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 kind=tools.ask_kind(c_item.get("action") or ""),
             )
             if still_missing:
-                session.pending_clarify = (
-                    c_item, c_speaker, c_ts, still_missing, c_event_key, c_fingerprint,
+                session.pending_clarify = tools.refresh_pending_action(
+                    session, clarify, c_item, still_missing
                 )
                 return JSONResponse(
                     {
@@ -3836,9 +3844,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 kind=tools.ask_kind(c_item.get("action") or ""),
             )
             if still_missing:
-                session.pending_clarify = (
-                    c_item, c_speaker, time.time(), still_missing,
-                    c_event_key, c_fingerprint,
+                session.pending_clarify = tools.refresh_pending_action(
+                    session, clarify, c_item, still_missing
                 )
                 spoke = False
                 if still_missing != c_missing:
@@ -3887,13 +3894,31 @@ async def recall_webhook(request: Request) -> JSONResponse:
             text_is_details = False
         else:
             text_is_details = answered and not tools.is_detail_skip(text)
+
+        bound_updates = None
+        bound_remaining = None
+        bound_question = ""
+        if text_is_details:
+            (
+                bound,
+                bound_updates,
+                bound_remaining,
+                bound_question,
+            ) = tools.bind_pending_answer(session, clarify, text)
+            if not bound:
+                # An unrelated question (for example an Asana snapshot lookup)
+                # is ordinary conversation. Keep the pending action intact.
+                answered = False
+                text_is_details = False
         if answered or expired:
             if text_is_details:
                 try:
                     # A clarify answer fills ONE labelled required slot on the
                     # same card. Revalidate below before any approval: one reply
                     # must never make unrelated missing fields disappear.
-                    updates = tools.fold_action_details(c_item, text, c_missing)
+                    updates = bound_updates or tools.fold_action_details(
+                        c_item, text, c_missing
+                    )
                     c_item, _ = await run_in_threadpool(
                         tools.revise_action_once,
                         session,
@@ -3907,9 +3932,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     return JSONResponse(
                         {"ok": True, "spoke": False, "capture_rejected": "meeting_finalizing"}
                     )
-            remaining = tools.missing_action_details(
-                c_item.get("action") or "",
-                kind=tools.ask_kind(c_item.get("action") or ""),
+            remaining = (
+                list(bound_remaining)
+                if bound_remaining is not None
+                else tools.missing_action_details(
+                    c_item.get("action") or "",
+                    kind=tools.ask_kind(c_item.get("action") or ""),
+                )
             )
             # Owner/project/due/description improve an Asana card but are not
             # provider-required. After the asker replies once, explicitly skips,
@@ -3928,12 +3957,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     # A skip such as "that's it" cannot waive a provider-
                     # required field. Keep the one captured card open and ask
                     # only the next required detail.
-                    session.pending_clarify = (
-                        c_item, c_speaker, time.time(), remaining,
-                        c_event_key, c_fingerprint,
+                    session.pending_clarify = tools.refresh_pending_action(
+                        session, clarify, c_item, remaining, bound_question
                     )
                     clar_gen = store.bump_speech_generation(session)
-                    line = _clarify_line(text, remaining)
+                    line = bound_question or _clarify_line(text, remaining)
                     session.last_ack_at = time.time()
                     session.last_clarify_nudge_at = time.time()
                     spoke = await _make_avatar_speak(
@@ -3956,6 +3984,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 # dashboard's needs-details form.
                 session.pending_clarify = None
             else:
+                tools.refresh_pending_action(session, clarify, c_item, [])
                 session.pending_clarify = None
                 if settings.voice_consent_writes:
                     asyncio.create_task(
@@ -4677,6 +4706,33 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # avatar does now (browser walkthrough) — never a post-meeting
             # to-do. Keep it off the capture seam.
             and not detect_browse_intent(question)[0]):
+        # A clarification fragment without a compatible parent is not a
+        # commitment and must never become a tracked-only approvable card.
+        if (
+            tools.is_orphan_action_fragment(question)
+            and getattr(session, "pending_clarify", None) is None
+        ):
+            line = (
+                "What should that detail apply to?"
+                if not sounds_italian(question)
+                else "A quale azione si riferisce questo dettaglio?"
+            )
+            session.last_ack_at = time.time()
+            spoke = await _make_avatar_speak(
+                session,
+                line,
+                force=True,
+                generation=turn_gen,
+                audio=tts.cached_payload(line, _avatar_voice(session)),
+            )
+            return JSONResponse({
+                "ok": True,
+                "spoke": bool(spoke),
+                "action_capture": False,
+                "needs_details": True,
+                "orphan_fragment": True,
+            })
+
         # Same-intent retry damping (live repro 2026-07-21: four cards for
         # one email). A re-ask of the capture she is still CLARIFYING extends
         # that one item and keeps the clarify pending — reachable here when
@@ -4705,8 +4761,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 kind=tools.ask_kind(p_item.get("action") or ""),
             )
             if still:
-                session.pending_clarify = (
-                    p_item, pend[1], time.time(), still, pend[4], pend[5],
+                session.pending_clarify = tools.refresh_pending_action(
+                    session, pend, p_item, still
                 )
                 spoke = False
                 if still != pend[3]:
@@ -4856,16 +4912,15 @@ async def recall_webhook(request: Request) -> JSONResponse:
         )
         if session.speech_generation != turn_gen:  # barge-in since the final landed
             return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
-        # A NEW addressed ask while an older clarify was still pending:
-        # resolve the old capture as-is first (approve quietly with what it
-        # has) so it is never lost, then handle this one on its own merits.
+        # A genuinely new ask may replace the active clarification pointer,
+        # but it must never auto-approve the incomplete parent. The old action
+        # remains needs_details in history.
         stale = getattr(session, "pending_clarify", None)
         if stale is not None:
+            tools.refresh_pending_action(
+                session, stale, stale[0], list(stale[3])
+            )
             session.pending_clarify = None
-            if settings.voice_consent_writes:
-                asyncio.create_task(
-                    run_in_threadpool(cedric.voice_approve, session, stale[0])
-                )
         missing = tools.missing_action_details(
             item.get("action") or "",
             kind=tools.ask_kind(item.get("action") or ""),
@@ -4874,11 +4929,16 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # The ask lacks what a well-filed task needs — Petra ASKS instead
             # of filing an orphan. The approval is held until the asker's
             # reply resolves it (clarify block above), or the window lapses.
-            session.pending_clarify = (
-                item, speaker_id, time.time(), missing,
-                capture_event_key, capture_fingerprint,
-            )
             line = _clarify_line(question, missing)
+            session.pending_clarify = tools.make_pending_action(
+                session,
+                item,
+                speaker_id,
+                missing,
+                source_event_key=capture_event_key,
+                source_fingerprint=capture_fingerprint,
+                question=line,
+            )
             session.last_ack_at = time.time()
             session.last_clarify_nudge_at = time.time()
             spoke = await _make_avatar_speak(
