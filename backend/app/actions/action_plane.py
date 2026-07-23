@@ -25,6 +25,32 @@ ACTION_STATUSES = (
 )
 TERMINAL_STATUSES = ("rejected", "done", "failed")
 
+
+_TASK_NAME_PLACEHOLDERS = {
+    "task", "new task", "create task", "create a task", "asana task",
+    "create asana task", "create a new task", "new asana task",
+}
+_TASK_REQUEST_ONLY = __import__("re").compile(
+    r"^(?:(?:can|could|would|will) you |please )?"
+    r"(?:create|make|add|open) (?:a |an |the )?(?:new )?"
+    r"(?:(?:asana|jira) )?(?:task|ticket|issue)"
+    r"(?: (?:in|on) (?:asana|jira))?$",
+    __import__("re").IGNORECASE,
+)
+
+
+def is_meaningful_task_name(value: Any) -> bool:
+    """Whether a provider task title identifies work rather than its request."""
+    raw = " ".join(str(value or "").split()).strip(" .!?")
+    if not raw:
+        return False
+    normalized = " ".join(
+        __import__("re").sub(r"[^a-z0-9]+", " ", raw.lower()).split()
+    )
+    if normalized in _TASK_NAME_PLACEHOLDERS:
+        return False
+    return _TASK_REQUEST_ONLY.fullmatch(normalized) is None
+
 _STATUS_ALIASES = {
     "executed": "done",
     "completed": "done",
@@ -367,16 +393,23 @@ def _empty(value: Any) -> bool:
 
 
 def missing_params(typed: dict | None) -> list[str]:
-    """Required fields still missing from a typed action."""
+    """Required or semantically invalid fields in a typed action."""
     schema = params_schema(typed)
     if not schema:
         return []
     args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
-    return [
+    missing = [
         str(field["name"])
         for field in schema
         if field.get("required") and _empty(args.get(field["name"]))
     ]
+    if (
+        str(typed.get("type") or "") == "asana.create_task"
+        and "name" not in missing
+        and not is_meaningful_task_name(args.get("name"))
+    ):
+        missing.insert(0, "name")
+    return missing
 
 
 _PARAM_TYPES = {"string": str, "boolean": bool, "array": list}
