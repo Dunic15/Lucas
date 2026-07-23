@@ -177,12 +177,12 @@ _KIND_CALENDAR = re.compile(
 )
 _DETAIL_EMAIL_TO = re.compile(
     r"\b(?:to|for)\s+(?!me\b|us\b|please\b)[a-zà-ù]{3,}"
-    r"|\bsend\s+\w+\s+an?\s+e-?mail",
+    r"|\bsend\s+\w+\s+an?\s+e-?mail|\brecipient:\s*\S",
     re.IGNORECASE,
 )
 _DETAIL_EMAIL_BODY = re.compile(
     r"\b(saying|that\s+says|should\s+say|tell(?:ing)?\s+(?:him|her|them)"
-    r"|subject|about\s+\w+|dicendo|che\s+dice)\b",
+    r"|subject|about\s+\w+|dicendo|che\s+dice|body:\s*\S)\b",
     re.IGNORECASE,
 )
 _DETAIL_INVITE_WITH = re.compile(
