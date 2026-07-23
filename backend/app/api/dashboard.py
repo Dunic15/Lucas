@@ -3440,9 +3440,9 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     # still RUN the action — refuse outright; un-rejecting isn't a thing.
     current = await run_in_threadpool(ledger.action_statuses, [aid], org_id=org)
     _cur_status = (current.get(aid) or {}).get("status") or ""
-    if _cur_status == "rejected":
+    if _cur_status in ("rejected", "withdrawn"):
         return JSONResponse(
-            {"error": "action was rejected", "action_id": aid,
+            {"error": f"action was {_cur_status}", "action_id": aid,
              "status": current.get(aid)},
             status_code=409, headers=_NO_STORE,
         )
@@ -3525,6 +3525,20 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             if fixed is not None:
                 typed = fixed
 
+    # Resolve from CURRENT org connections at approval time. The artifact's
+    # stored route is historical metadata (except an explicit browser route).
+    # Persist the normalized value before the claim so the card, retry and
+    # receipt cannot disagree about which executor owns the write.
+    route = executor.effective_route(
+        typed, org,
+        stored_route=str(action.get("execution_route") or ""),
+        item_text=str(action.get("item") or action.get("action") or ""),
+    )
+    action = {**action, "execution_route": route}
+    await run_in_threadpool(
+        ledger.set_action_route, aid, route, org_id=org
+    )
+
     # Record THE canonical decision (first write wins across surfaces and
     # instances). A dashboard approve after a Slack decision — or a repeated
     # dashboard click racing itself — answers from the recorded row instead
@@ -3593,7 +3607,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     # browser operator behind the SAME exactly-once claim, from this surface
     # too, so a dashboard approve and an org-door approve converge on one
     # execution and one receipt.
-    route = str(action.get("execution_route") or "")
+    route = str(action.get("execution_route") or "")  # normalized above
     if route == "browser":
         from .. import browser
 
@@ -3899,6 +3913,78 @@ async def reject_action(action_id: str, request: Request) -> JSONResponse:
         },
         headers=_NO_STORE,
     )
+
+
+@router.post("/dashboard/actions/{action_id}/withdraw")
+async def withdraw_action(action_id: str, request: Request) -> JSONResponse:
+    """Soft-withdraw an idle action; preserve its row, receipt log and audit."""
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    aid = (action_id or "").strip()
+    if not aid:
+        return JSONResponse({"error": "action_id is required"}, status_code=400)
+    org = str(user["org_id"])
+    if await run_in_threadpool(_find_org_action, org, aid, user) is None:
+        return JSONResponse(
+            {"error": "unknown action for this org"}, status_code=404,
+            headers=_NO_STORE,
+        )
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — an empty body is valid
+        body = {}
+    confirm = bool((body or {}).get("confirm_approved")) if isinstance(body, dict) else False
+    verdict = await run_in_threadpool(
+        lambda: ledger.withdraw_action(
+            aid, org_id=org, confirm_approved=confirm,
+            detail="withdrawn via dashboard",
+        )
+    )
+    if verdict == "confirmation_required":
+        return JSONResponse({
+            "error": "confirmation_required", "action_id": aid,
+            "message": (
+                "This action is approved and may already have started. "
+                "Confirm withdrawal to continue."
+            ),
+        }, status_code=409, headers=_NO_STORE)
+    if verdict == "conflict":
+        latest = await run_in_threadpool(
+            ledger.action_statuses, [aid], org_id=org
+        )
+        return JSONResponse({
+            "error": "action_cannot_be_withdrawn", "action_id": aid,
+            "status": latest.get(aid),
+            "message": "Executing or completed actions cannot be erased.",
+        }, status_code=409, headers=_NO_STORE)
+    if verdict == "missing":
+        return JSONResponse(
+            {"error": "unknown action for this org"}, status_code=404,
+            headers=_NO_STORE,
+        )
+    from ..persistence import audit_log
+
+    audit_log.record(
+        org,
+        actor_user_id=str(user.get("user_id") or "") or None,
+        action="action.withdraw",
+        target=aid,
+    )
+    latest = await run_in_threadpool(
+        ledger.action_statuses, [aid], org_id=org
+    )
+    return JSONResponse({
+        "ok": True, "action_id": aid, "withdrawn": True,
+        "idempotent_replay": verdict == "replay",
+        "status": latest.get(aid) or {
+            "status": "withdrawn", "detail": "withdrawn via dashboard"
+        },
+    }, headers=_NO_STORE)
 
 
 # ── chat channel (org ↔ Cedric — approvals happen HERE, not in Slack) ──
