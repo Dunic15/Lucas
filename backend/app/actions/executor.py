@@ -185,6 +185,15 @@ def resolve_effective_route(
         route = "browser"
     elif action_type == SLACK_POST:
         route = _brokered_route(org_id)
+    elif (
+        action_type in _GOOGLE_FALLBACK_ACTION_TYPES
+        and native_runtime.supports(action_type)
+        and enabled()
+    ):
+        # The native Google coordinator owns native-first with a narrowly safe
+        # pre-write Pipedream fallback. Keeping that coordinator as the route
+        # makes display, receipt ownership and retries agree.
+        route = "native"
     elif pipedream_executor.handles({"type": action_type}):
         app = pipedream_executor.app_for_type(action_type)
         if pipedream_executor.app_connected(org_id, app):
