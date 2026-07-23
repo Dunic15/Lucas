@@ -170,6 +170,16 @@ class Session:
     # In-memory only: after a restart the hand is simply down again.
     hand_raised_at: float = field(default=0.0, repr=False, compare=False)
     pending_contribution: str = field(default="", repr=False, compare=False)
+    # Why a contribution is pending. Search results are different from an
+    # unsolicited insight: if the asker says "did you find it?", deliver the
+    # queued result instead of dropping it and launching an internal-doc lookup.
+    pending_contribution_kind: str = field(default="", repr=False, compare=False)
+    pending_contribution_query: str = field(default="", repr=False, compare=False)
+    # A slow web search survives ambient conversation. Follow-ups while it is
+    # running get an honest "still checking" response; once ready it either
+    # speaks in a 1:1 or raises the avatar hand in a multi-human room.
+    search_inflight_at: float = field(default=0.0, repr=False, compare=False)
+    search_inflight_query: str = field(default="", repr=False, compare=False)
     # Motivation-gate state (decision.should_raise_hand): raises so far, when
     # the last one happened, whether the room ignored it (timeout), and the
     # last queued point (near-dup guard). In-memory only, like the hand itself.
