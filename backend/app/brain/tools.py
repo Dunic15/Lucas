@@ -330,9 +330,14 @@ def is_detail_skip(text: str) -> bool:
 _CANCEL_DRAFT = re.compile(
     r"^\s*(?:[\w'à-ù]+[,.]?\s+){0,2}?(?:"
     r"lascia\s+(?:perdere|stare)|annulla(?:l[ao])?|cancella(?:l[ao])?|"
+    r"elimina(?:l[ao])?|rimuovil[ao]|toglil[ao]|"
     r"non\s+(?:serve|importa)(?:\s+pi[uù])?|niente\s+pi[uù]|"
     r"never\s*mind|forget\s+(?:it|that|about\s+it)|scratch\s+that|"
-    r"drop\s+(?:it|that)|cancel\s+(?:it|that)|don.?t\s+bother"
+    r"drop\s+(?:it|that)|cancel\s+(?:it|that)|don.?t\s+bother|"
+    # "remove/delete/discard that (task/action)" — the trailing noun is
+    # optional; the draft gate (asker + active window) keeps normal
+    # meeting talk ("remove that line") from tripping it.
+    r"(?:remove|delete|discard)\s+(?:it|that|this)"
     r")\b",
     re.IGNORECASE,
 )

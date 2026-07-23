@@ -19,6 +19,8 @@ import sys
 import time as _time
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import main, store  # noqa: E402
@@ -225,6 +227,28 @@ def test_cancel_discards_the_pending_draft(tmp_path, monkeypatch):
     assert getattr(s, "pending_clarify", None) is None
     assert body.get("action_cancelled") is True, body
     store.remove(s.bot_id)
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    ["remove that task", "delete that action", "discard that", "elimina",
+     "eliminala", "rimuovila", "toglila", "cancel that", "never mind",
+     "lascia perdere"],
+)
+def test_cancel_phrases_are_recognised(phrase):
+    from app.brain import tools
+    assert tools.is_draft_cancel(phrase), phrase
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    ["remove the blocker from the doc", "delete the old file please",
+     "let us discuss the roadmap", "send an email to Sofia",
+     "schedule a call tomorrow"],
+)
+def test_normal_talk_is_not_a_cancel(phrase):
+    from app.brain import tools
+    assert not tools.is_draft_cancel(phrase), phrase
 
 
 def test_correction_from_unrelated_speaker_is_ignored(tmp_path, monkeypatch):
