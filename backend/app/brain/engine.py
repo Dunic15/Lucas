@@ -1789,7 +1789,9 @@ def post_meeting(
         raw = llm.complete(
             POSTMEETING_SYSTEM,
             user_prompt,
-            max_tokens=4000,
+            max_tokens=8000,  # 4000 truncated on long messy multiparty
+            # transcripts (evidence-per-action balloons the JSON) → _parse_json
+            # failed → degraded fallback. 8000 gives headroom (live 2026-07-23).
             provider=post_provider(),
         )
         artifact = _parse_json(raw)
@@ -1827,7 +1829,7 @@ def post_meeting(
                       "evidence excerpt EXACTLY, character-for-character, from "
                       "the MEETING TRANSCRIPT.",
                     user_prompt,
-                    max_tokens=4000,
+                    max_tokens=8000,  # match the initial call
                     provider=post_provider(),
                 )
                 retry = _parse_json(raw2)
@@ -2343,6 +2345,20 @@ def _sanitize_typed(typed: object, action: dict, brief: str = "",
         end = str(args.get("end") or "").strip()
         if not title or not _is_isoish(start) or not _is_isoish(end):
             return None
+        # Coherence guard (live 2026-07-23 demo: start 28 Jul, end 22 Jul →
+        # Google 400 "The specified time range is empty"). A non-positive range
+        # is a parse error, never a bookable event — snap the end to start +
+        # 30 min so it books and the human fixes the exact time on the card,
+        # instead of a hard failure in front of the room.
+        try:
+            from datetime import datetime as _dt, timedelta as _td
+
+            _s = _dt.fromisoformat(start.replace("Z", "+00:00"))
+            _e = _dt.fromisoformat(end.replace("Z", "+00:00"))
+            if _e <= _s:
+                end = (_s + _td(minutes=30)).isoformat()
+        except Exception:  # noqa: BLE001 — shape already checked; never fatal
+            pass
         spec_args = {"title": title, "start": start, "end": end}
         attendees = _grounded_emails(args.get("attendees"), source)
         if not attendees and item_fold.get("attendees"):
@@ -2608,44 +2624,74 @@ def _stub_post_meeting(
         if who and who not in speakers:
             speakers.append(who)
 
+    # Keyword line-scraping turns a long, messy multiparty transcript into
+    # dozens of "action items" that are really just conversation (live
+    # 2026-07-23: 22 fragments like "Maybe Pedro, do you know the deadline…"
+    # became tasks). Only the OFFLINE demo — no brain at all, short scripted
+    # transcripts — uses it. A DEGRADED real model NEVER scrapes: a hiccup on a
+    # long real call must not spew garbage. The meeting's real actions are the
+    # live-captured cards, merged into actions[] at finalize; the tracker's
+    # decisions/risks below carry the rest.
     checklist = []
-    for ln in lines:
-        body = ln.split(":", 1)[1].strip() if ":" in ln else ln
-        if _ACTION_HINTS.search(body):
-            gap = "none"
-            low = body.lower()
-            if "approv" in low:
-                gap = "approval"
-            elif "owner" in low or "assign" in low or "who" in low:
-                gap = "owner"
-            elif "deadline" in low or "by " in low:
-                gap = "deadline"
-            elif "document" in low or "doc " in low or "form" in low:
-                gap = "document"
-            elif "block" in low or "waiting" in low or "pending" in low:
-                gap = "blocker"
-            checklist.append(
-                {"item": body[:160], "owner": "UNASSIGNED", "gap_type": gap}
-            )
+    if not degraded:
+        for ln in lines:
+            body = ln.split(":", 1)[1].strip() if ":" in ln else ln
+            if _ACTION_HINTS.search(body):
+                gap = "none"
+                low = body.lower()
+                if "approv" in low:
+                    gap = "approval"
+                elif "owner" in low or "assign" in low or "who" in low:
+                    gap = "owner"
+                elif "deadline" in low or "by " in low:
+                    gap = "deadline"
+                elif "document" in low or "doc " in low or "form" in low:
+                    gap = "document"
+                elif "block" in low or "waiting" in low or "pending" in low:
+                    gap = "blocker"
+                checklist.append(
+                    {"item": body[:160], "owner": "UNASSIGNED", "gap_type": gap}
+                )
 
-    mode_note = (
-        "auto-generated from the meeting tracker after the summary model "
-        "returned an incomplete result"
-        if degraded
-        else "offline stub mode — enable a real brain for a true summary"
-    )
-    summary = (
-        f"{avatar.name} sat in on a meeting with {len(speakers)} participant(s) "
-        f"({', '.join(speakers) or 'unknown'}) across {len(lines)} lines. "
-        f"{len(checklist)} potential action item(s)/process gap(s) were detected "
-        f"by keyword heuristics ({mode_note})."
-    )
+    if degraded:
+        # Honest, clean recap from the deterministic tracker — no keyword noise,
+        # no "N items detected by heuristics" language on a real customer call.
+        bits = [
+            f"{avatar.name} joined a meeting with {len(speakers)} "
+            f"participant(s) ({', '.join(speakers) or 'unknown'})."
+        ]
+        if state.decisions:
+            bits.append(f"{len(state.decisions)} decision(s) were tracked.")
+        if state.risks:
+            bits.append(f"{len(state.risks)} risk(s) were noted.")
+        bits.append(
+            "A full AI summary wasn't available for this session; the action "
+            "items shown are the ones captured live during the meeting."
+        )
+        summary = " ".join(bits)
+    else:
+        summary = (
+            f"{avatar.name} sat in on a meeting with {len(speakers)} "
+            f"participant(s) ({', '.join(speakers) or 'unknown'}) across "
+            f"{len(lines)} lines. {len(checklist)} potential action item(s)/"
+            "process gap(s) were detected by keyword heuristics (offline stub "
+            "mode — enable a real brain for a true summary)."
+        )
     if state.meeting_type:
         summary += (
             f" Detected a {state.meeting_type.replace('_', ' ')} meeting: "
             f"{len(state.completed_steps)}/{len(state.required_steps)} required "
             "process steps covered."
         )
+    _email_items = (
+        "\n".join(f"- {c['item']} (owner: {c['owner']})" for c in checklist[:12])
+        or (
+            "- The action items captured during the meeting are in the "
+            "dashboard for your review."
+            if degraded
+            else "- No explicit action items detected."
+        )
+    )
     return {
         "summary": summary,
         "decisions": [d["decision"] for d in state.decisions],
@@ -2656,10 +2702,7 @@ def _stub_post_meeting(
             "body": (
                 "Hi team,\n\nThanks for the discussion. Below are the open items "
                 "and possible process gaps flagged during the meeting:\n\n"
-                + (
-                    "\n".join(f"- {c['item']} (owner: {c['owner']})" for c in checklist[:12])
-                    or "- No explicit action items detected."
-                )
+                + _email_items
                 + f"\n\nBest,\n{avatar.name}"
             ),
         },

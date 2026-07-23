@@ -159,3 +159,28 @@ def test_asana_clarified_description_binds_to_notes():
 def test_fold_label_parser_is_idempotent_on_plain_text():
     base, fields = brain._fold_label_fields("just a plain task, no labels here")
     assert base == "just a plain task, no labels here" and fields == {}
+
+
+# ── calendar coherence guard (live 2026-07-23 demo: Google 400 empty range) ──
+def test_calendar_inverted_range_is_snapped_not_sent_empty():
+    spec = brain._sanitize_typed(
+        {"type": "calendar.create_event",
+         "args": {"title": "Meeting with Anant",
+                  "start": "2026-07-28T15:00:00", "end": "2026-07-22T15:30:00"}},
+        {"item": "schedule meeting"},
+    )
+    from datetime import datetime as _dt
+    s = _dt.fromisoformat(spec["args"]["start"])
+    e = _dt.fromisoformat(spec["args"]["end"])
+    assert e > s, "an inverted range must be repaired, never sent (Google 400s it)"
+
+
+def test_calendar_valid_range_is_left_untouched():
+    spec = brain._sanitize_typed(
+        {"type": "calendar.create_event",
+         "args": {"title": "Sync", "start": "2026-07-24T15:00:00",
+                  "end": "2026-07-24T16:00:00"}},
+        {"item": "schedule"},
+    )
+    assert spec["args"]["start"] == "2026-07-24T15:00:00"
+    assert spec["args"]["end"] == "2026-07-24T16:00:00"

@@ -91,7 +91,9 @@ def test_post_meeting_degraded_model_yields_real_summary(monkeypatch):
     art = brain.post_meeting(avatar, transcript)
 
     assert art["summary"].strip()  # NEVER empty — this is the whole point
-    assert "incomplete result" in art["summary"]  # degrade mode note, not stub note
+    # degrade-mode note (honest, no keyword-scraping) — not the offline-stub note
+    assert "wasn't available" in art["summary"]
+    assert "keyword" not in art["summary"].lower()  # never the garbage-scrape line
     assert art["follow_up_email"].get("body")  # email is populated too
     # Participation still comes from the tracker (unchanged behaviour).
     assert isinstance(art["participation"], list)
