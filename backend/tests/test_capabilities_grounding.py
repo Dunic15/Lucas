@@ -57,6 +57,20 @@ def test_which_action_in_gmail_is_a_self_question(monkeypatch):
     assert engine.wants_web_search(q) is False  # never a web search
 
 
+def test_connection_check_never_web_searches(monkeypatch):
+    """Live 2026-07-23 (Ananth): 'What tools are you connected to?' → 'let me
+    look that up online.' A connection/self-knowledge question must resolve to
+    the deterministic capability answer, never a public web search."""
+    monkeypatch.setattr(settings, "live_search_enabled", True)
+    monkeypatch.setattr(settings, "anthropic_api_key", "synthetic")
+    for q in ("What tools are you connected to?",
+              "which apps are you connected to?",
+              "are you connected to Gmail?"):
+        assert cap.is_capability_question(q), q
+        assert engine._is_about_avatar(q), q
+        assert engine.wants_web_search(q) is False, q
+
+
 def test_ordinary_web_search_still_works(monkeypatch):
     monkeypatch.setattr(settings, "live_search_enabled", True)
     monkeypatch.setattr(settings, "anthropic_api_key", "synthetic")
