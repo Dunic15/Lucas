@@ -12,6 +12,8 @@ Typed args are already-distilled execution parameters.
 """
 from __future__ import annotations
 
+import re
+
 from typing import Any
 
 ACTION_STATUSES = (
@@ -20,16 +22,20 @@ ACTION_STATUSES = (
     "approved",
     "executing",
     "rejected",
+    "withdrawn",
     "done",
     "failed",
 )
-TERMINAL_STATUSES = ("rejected", "done", "failed")
+TERMINAL_STATUSES = ("rejected", "withdrawn", "done", "failed")
 
 _STATUS_ALIASES = {
     "executed": "done",
     "completed": "done",
     "complete": "done",
     "declined": "rejected",
+    "cancelled": "withdrawn",
+    "canceled": "withdrawn",
+    "discarded": "withdrawn",
     "error": "failed",
 }
 
@@ -305,6 +311,7 @@ SLOT_LABELS_EN: dict[str, str] = {
     "due": "when it's due",
     "description": "anything the description should say",
     "email_to": "who it should go to",
+    "email_to_confirm": "please confirm the proposed email address",
     "email_body": "what it should say",
     "invite_with": "who should be on it",
     "invite_when": "when it should be",
@@ -316,6 +323,7 @@ SLOT_LABELS_IT: dict[str, str] = {
     "due": "per quando serve",
     "description": "cosa scrivere nella descrizione",
     "email_to": "a chi va mandata",
+    "email_to_confirm": "conferma l’indirizzo email proposto",
     "email_body": "cosa deve dire",
     "invite_with": "chi va invitato",
     "invite_when": "per quando fissarlo",
@@ -366,17 +374,44 @@ def _empty(value: Any) -> bool:
     return False
 
 
+_TASK_NAME_PLACEHOLDERS = {
+    "task", "new task", "create task", "create a task", "asana task",
+    "new asana task", "create asana task", "create a new task",
+}
+
+
+def meaningful_task_name(value: Any) -> bool:
+    """A provider-required task title must name the work, not the UI shell."""
+    name = " ".join(str(value or "").split()).strip(" .?!").lower()
+    if not name or name in _TASK_NAME_PLACEHOLDERS:
+        return False
+    # Model echoes of the request itself are placeholders too.
+    return not bool(re.fullmatch(
+        r"(?:please\s+)?(?:can\s+you\s+)?(?:create|make|add|open)\s+"
+        r"(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:asana\s+)?task"
+        r"(?:\s+(?:in|on)\s+asana)?", name
+    ))
+
+
 def missing_params(typed: dict | None) -> list[str]:
-    """Required fields still missing from a typed action."""
+    """Required fields still missing or semantically placeholder-only."""
     schema = params_schema(typed)
     if not schema:
         return []
     args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
-    return [
+    action_type = str(typed.get("type") or "")
+    missing = [
         str(field["name"])
         for field in schema
         if field.get("required") and _empty(args.get(field["name"]))
     ]
+    if (
+        action_type == "asana.create_task"
+        and "name" not in missing
+        and not meaningful_task_name(args.get("name"))
+    ):
+        missing.insert(0, "name")
+    return missing
 
 
 _PARAM_TYPES = {"string": str, "boolean": bool, "array": list}
