@@ -499,6 +499,11 @@ class Settings(BaseSettings):
     # meeting wraps up. Conservative — needs a higher confidence bar, fires once.
     proactive_enabled: bool = True
     proactive_min_confidence: float = 0.7
+    # Propose actions from voiced GOALS: fold model-detected goals into the
+    # Action Centre as inferred "Proposed by Petra for goal: …" steps. Off =
+    # only explicitly-voiced actions ("create a task…") are captured; the
+    # goal-decomposition cards are suppressed. Env: PROPOSE_GOAL_ACTIONS.
+    propose_goal_actions: bool = True
     # Closing fallback (DEMO-READY-ROADMAP §5 item 12): the proactive wrap-up AND
     # the quiet-participant nudge fire only when detect_closing()'s regex matches
     # an exact wrap-up phrase. This ADDS a second trigger (never replaces the

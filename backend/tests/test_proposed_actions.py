@@ -170,3 +170,25 @@ def test_no_retry_when_actions_survive(monkeypatch):
     artifact = brain.post_meeting(avatars.load("petra"), transcript)
     assert len(calls) == 1  # fuzzy grounding accepted the light paraphrase
     assert [a["item"] for a in artifact["actions"]] == ["Create a task in Asana"]
+
+
+def test_propose_goal_actions_toggle_suppresses_goals(monkeypatch):
+    """PROPOSE_GOAL_ACTIONS=off (owner 2026-07-23 'don't propose actions at the
+    moment'): the inferred goal-decomposition cards are suppressed, but the
+    explicitly-voiced actions and their source tagging are untouched."""
+    monkeypatch.setattr(settings, "propose_goal_actions", False)
+    art = _goal_artifact()
+    engine._absorb_goals(art, TRANSCRIPT)
+    # No inferred goal steps at all.
+    assert not any(a.get("source") == "inferred" for a in art["actions"])
+    assert "goals" not in art
+    # The explicit action survives and is tagged explicit.
+    explicit = [a for a in art["actions"] if a["item"] == "apply to internships"]
+    assert explicit and explicit[0].get("source") == "explicit"
+
+
+def test_propose_goal_actions_on_by_default(monkeypatch):
+    monkeypatch.setattr(settings, "propose_goal_actions", True)
+    art = _goal_artifact()
+    engine._absorb_goals(art, TRANSCRIPT)
+    assert any(a.get("source") == "inferred" for a in art["actions"])  # grounded steps kept
