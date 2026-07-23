@@ -144,3 +144,13 @@ def test_recall_final_dedupe_is_sliding_and_pii_free():
     seen = session._recall_final_dedupe
     assert seen and all(key.startswith("e:") for key in seen)
     assert session._recall_final_last[0] == "fingerprint-a"
+
+
+def test_no_false_refusal_when_snapshot_present():
+    """Bug (live 2026-07-23): Petra read one person's Asana snapshot but told
+    another she had 'no access' to the same workspace. The prompt must forbid
+    that false refusal when a snapshot/brief is in context."""
+    prompt = engine.ANSWER_STREAM_SYSTEM.format(persona="P", name="Petra")
+    assert "you HAVE access to it" in prompt
+    assert "false refusal" in prompt
+    assert "isn't connected" in prompt  # the ONLY honest no-access wording
