@@ -161,57 +161,67 @@ def _untyped_route(org_id: str, item_text: str) -> str:
     return "manual"
 
 
-def route_for_typed(typed: dict | None, org_id: str = "", item_text: str = "") -> str:
-    """Per-family execution route for one typed action (immutable once stamped).
+def resolve_effective_route(
+    typed: dict | None,
+    org_id: str = "",
+    item_text: str = "",
+    *,
+    acting_avatar: str = "",
+    explicit_route: str = "",
+) -> dict:
+    """Resolve the route from current organization state.
 
-    Per-org, connection-aware (multi-tenant safe). When Pipedream's executor is
-    on, a type it can map runs in Pipedream ONLY IF this org connected that app
-    there. Otherwise it falls back to a native adapter when the type has one
-    (Asana / Gmail / Calendar do) — so an org still on native, or a
-    brand-new external user who hasn't migrated to Pipedream yet, is NEVER
-    broken (this is the Ananth incident 2026-07-21: his native Asana worked but
-    the old unconditional Pipedream route failed his tasks with 'asana isn't
-    connected in Pipedream'). Types with NO native plane (the Notion/GitHub/…
-    long tail) stay on Pipedream and fail cleanly when unconnected rather than
-    silently mis-routing. ``org_id`` is required for the connection probe. With
-    PIPEDREAM_EXECUTOR off, ``handles`` is False so everything stamps as
-    before."""
+    Stored legacy routes are deliberately not inputs: connections and the
+    Pipedream plane can change between capture and approval. The sole explicit
+    override is browser, whose guarded step was intentionally chosen by a
+    human. The returned capability flag lets every approval surface apply the
+    same avatar policy without changing the truthful provider label.
+    """
     from .. import pipedream_executor  # lazy: keep module load order decoupled
 
     action_type = str((typed or {}).get("type") or "").strip()
-    # Slack is org-scoped through Cedric. Never fall back to Laura's historical
-    # deployment-global webhook, which could post into the wrong workspace.
-    if action_type == SLACK_POST:
-        return _brokered_route(org_id)
-    # One stable route for the two dual-plane Google writes. The executor below
-    # owns native-first selection at execution time, so a stale connection probe
-    # at capture time can no longer strand an otherwise executable action.
-    if (
-        action_type in _GOOGLE_FALLBACK_ACTION_TYPES
-        and native_runtime.supports(action_type)
-        and enabled()
-    ):
-        return "native"
-    if pipedream_executor.handles({"type": action_type}):
-        # Run in Pipedream when the org actually connected the app there.
-        if pipedream_executor.app_connected(
-            org_id, pipedream_executor.app_for_type(action_type)
-        ):
-            return "pipedream"
-        # Not connected in Pipedream — prefer a native adapter if one exists,
-        # so native-era orgs and un-migrated external users keep working.
-        if native_runtime.supports(action_type):
-            return "native" if enabled() else _brokered_route(org_id)
-        # Long tail with no native plane: stays Pipedream (fails cleanly if the
-        # org hasn't connected it — never a silent wrong route).
-        return "pipedream"
-    if from_typed(typed) is None:
-        # Untyped / unknown type: only an EXPLICIT Slack ask reaches the
-        # Slack agent; everything else is a tracked card (owner 2026-07-22).
-        return _untyped_route(org_id, item_text)
-    return "native" if enabled() else _brokered_route(org_id)
+    explicit = str(explicit_route or "").strip().lower()
+    if explicit == "browser":
+        route = "browser"
+    elif action_type == SLACK_POST:
+        route = _brokered_route(org_id)
+    elif pipedream_executor.handles({"type": action_type}):
+        app = pipedream_executor.app_for_type(action_type)
+        if pipedream_executor.app_connected(org_id, app):
+            route = "pipedream"
+        elif native_runtime.supports(action_type):
+            route = "native" if enabled() else _brokered_route(org_id)
+        else:
+            # Long-tail actions have no native adapter. Keep the truthful
+            # Pipedream route so approval reports a missing connection instead
+            # of silently falling into a different executor.
+            route = "pipedream"
+    elif from_typed(typed) is None:
+        route = _untyped_route(org_id, item_text)
+    else:
+        route = "native" if enabled() else _brokered_route(org_id)
+
+    blocked = False
+    if action_type and acting_avatar:
+        try:
+            from .. import avatar_resolver, store
+
+            caps = store.get_avatar_capabilities(acting_avatar, org_id)
+            blocked = capability_blocked(caps, action_type) or not (
+                avatar_resolver.family_allowed(
+                    org_id, acting_avatar, capability_family(action_type)
+                )
+            )
+        except Exception:  # noqa: BLE001 — approval re-checks fail safely
+            blocked = False
+    return {"route": route, "capability_blocked": blocked}
 
 
+def route_for_typed(typed: dict | None, org_id: str = "", item_text: str = "") -> str:
+    """Compatibility wrapper around the one current-state route resolver."""
+    return str(resolve_effective_route(
+        typed, org_id, item_text=item_text
+    )["route"])
 def handles(action: dict | None) -> bool:
     """True when this approved action can execute inside Laura."""
     return enabled() and native_runtime.supports((action or {}).get("type"))
