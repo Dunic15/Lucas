@@ -44,6 +44,8 @@ _QUESTION = re.compile(
 )
 _ORPHAN_FRAGMENT = re.compile(
     r"^\s*(?:(?:and\s+)?send\s+(?:it\s+)?to\b|at\s+(?:[a-z]\s+){2,}"
+    r"|(?:the\s+)?body\s+(?:should\s+say|says|is)\b"
+    r"|(?:call|name)\s+(?:the\s+)?task\b"
     r"|due\s+\w+\b|in\s+the\s+.+\s+(?:project|board|backlog)\b)",
     re.I,
 )
