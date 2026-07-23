@@ -305,7 +305,9 @@ def _slot_labels(key: str) -> dict[str, str]:
 
 SLOT_LABELS_EN: dict[str, str] = {
     **_slot_labels("label"),
-    # conversational phrasings the clarify line speaks aloud
+    # conversational phrasings the clarify line speaks aloud (chips/forms keep
+    # the bare schema label — see slot_labels() preferring param_labels).
+    "task_name": "what to call the task",
     "owner": "who should own it",
     "project": "which project it goes in",
     "due": "when it's due",
@@ -318,6 +320,7 @@ SLOT_LABELS_EN: dict[str, str] = {
 }
 SLOT_LABELS_IT: dict[str, str] = {
     **_slot_labels("label_it"),
+    "task_name": "come chiamare il task",
     "owner": "chi la prende in carico",
     "project": "in quale progetto va",
     "due": "per quando serve",

@@ -2005,7 +2005,11 @@ async def test_integrations(request: Request) -> JSONResponse:
     # connected the app there (the cutover path), else the native fallback. So
     # the button proves whatever plane the meeting will actually use.
     def _smoke(typed: dict, native_fn, native_args: dict) -> dict:
-        if executor.route_for_typed(typed, org) == "pipedream":
+        # Resolve through the SAME resolver approval/retry/receipts use, so the
+        # smoke proves the real plane rather than a parallel guess. These smokes
+        # carry no stored route (they are synthesized here, not from an
+        # artifact), so effective_route reduces to the live connection probe.
+        if executor.effective_route(typed, org, stored_route="") == "pipedream":
             return pipedream_executor.dry_run(org, typed)
         return native_fn(org, native_args)
 
@@ -3779,20 +3783,30 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     dispatched = False
     execution_error = ""
     dispatch_reason = ""
+    cedric_linked = await run_in_threadpool(executor._cedric_linked, org)
     if not executed and not connection_blocked and (
         route == "manual"
-        or (route in ("", "cedric")
-            and not await run_in_threadpool(executor._cedric_linked, org))
+        or (route in ("", "cedric") and not cedric_linked)
+        # A capability-blocked action is the sanctioned native→Cedric re-route,
+        # but ONLY when a Slack agent exists to run it. With no Cedric linked,
+        # dispatching would dead-end as a doomed "couldn't complete" (regression
+        # after effective_route began stamping these google cards 'native'):
+        # honour the 2026-07-22 rule and track it instead of failing it.
+        or (capability_blocked and not cedric_linked)
     ):
         # Track-only (owner rule 2026-07-22: Cedric lives inside Slack). This
         # org has no Slack agent and the item has no executable spec even
         # after the retype rescue — approving RECORDS the decision for the
         # humans; nothing dispatches, nothing pretends to run, no doomed
         # "couldn't complete".
+        detail = (
+            "approved · tracked only — this capability is turned off for "
+            "the avatar and no Slack agent is linked to run it"
+            if capability_blocked
+            else "approved · tracked only — no automatic executor for this item"
+        )
         await run_in_threadpool(
-            ledger.set_action_status, aid, "approved",
-            "approved · tracked only — no automatic executor for this item",
-            org_id=org,
+            ledger.set_action_status, aid, "approved", detail, org_id=org,
         )
     elif not executed and not connection_blocked:
         from ..cedric import callback as cedric_callback  # lazy, cycle-free

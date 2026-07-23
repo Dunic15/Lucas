@@ -214,7 +214,7 @@ def test_date_correction_replaces_in_italian(tmp_path, monkeypatch):
     store.remove(s.bot_id)
 
 
-def test_cancel_discards_the_pending_draft(tmp_path, monkeypatch):
+def test_cancel_soft_withdraws_the_pending_draft(tmp_path, monkeypatch):
     s = _session(tmp_path, monkeypatch, bot_id="flu-cancel-1")
     s.memory_brief = ""
     _group(s)
@@ -223,7 +223,12 @@ def test_cancel_discards_the_pending_draft(tmp_path, monkeypatch):
 
     body = _post(_line(s.bot_id, "Duccio", 1, "lascia perdere"))
     queued = getattr(s, "queued_actions", None) or []
-    assert not queued, f"cancelled draft must not survive to the dashboard: {queued}"
+    # Soft withdrawal (spec M 2026-07-22): a cancel no longer DELETES the draft —
+    # it survives as a terminal `withdrawn` row so history stays auditable and
+    # the action can never silently re-run. The dashboard renders it in the
+    # withdrawn bucket, not the active queue.
+    assert len(queued) == 1, queued
+    assert queued[0].get("status") == "withdrawn", queued[0]
     assert getattr(s, "pending_clarify", None) is None
     assert body.get("action_cancelled") is True, body
     store.remove(s.bot_id)

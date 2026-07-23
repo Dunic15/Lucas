@@ -416,6 +416,60 @@ def test_different_recipient_is_a_new_action(
     assert len(session.queued_actions) == 2
 
 
+def test_email_clarify_binds_one_action_through_a_live_session(
+    client, recall_stubbed, spoken, approved
+):
+    """End-to-end through the webhook: the four-utterance email clarify
+    ("send an email" → recipient name → spoken domain → body → "yes") binds to
+    ONE action the whole way. The proposed address stays a non-executable
+    candidate, the body attaches to the same card, and nothing is approved
+    until the recipient is confirmed."""
+    bot_id = client.post("/sessions/start", json=START_BODY).json()["bot_id"]
+    session = store.get(bot_id)
+
+    # 1) Bare ask → held, asking who + what (single combined ask).
+    body = _say(client, bot_id, "Cedric, can you send an email?")
+    assert body.get("clarifying") == ["email_to", "email_body"]
+    assert approved == []
+    assert len(session.queued_actions) == 1
+    aid = session.queued_actions[0]["action_id"]
+
+    # 2) Recipient NAME only — a name is not an address, so still held.
+    _age_clarify(session)
+    body = _say(client, bot_id, "Send it to Anant.")
+    assert body.get("clarifying") == ["email_to", "email_body"]
+    assert approved == []
+
+    # 3) Spoken domain → a Recipient CANDIDATE: the slot advances from a raw
+    #    address to email_to_confirm, and the card is STILL held (unapproved).
+    _age_clarify(session)
+    body = _say(client, bot_id, "At s f f studio dot com.")
+    assert body.get("clarifying") == ["email_to_confirm", "email_body"]
+    assert approved == []
+
+    # 4) Body attaches to the SAME card; recipient still needs confirmation.
+    _age_clarify(session)
+    body = _say(client, bot_id, "The body should say the demo is ready.")
+    assert body.get("clarifying") == ["email_to_confirm"]  # body bound, confirm left
+    assert approved == []  # approval BLOCKED until the address is confirmed
+
+    # 5) "Yes" confirms the candidate → exactly one approved action, with the
+    #    address promoted to a real Recipient and the body bound to it.
+    _age_clarify(session)
+    body = _say(client, bot_id, "Yes")
+    assert body.get("clarified") is True
+    assert len(approved) == 1
+    assert len(session.queued_actions) == 1  # ONE card the whole way
+    final = approved[-1]
+    assert final["action_id"] == aid  # ONE action ID throughout
+    params = tools.collected_action_parameters(final["action"])
+    assert params.get("recipient") == "anant@sffstudio.com"
+    assert params.get("body") == "the demo is ready"
+    # Confirmed, not a leftover candidate, and never a tracked-only dead card.
+    assert "recipient candidate" not in final["action"].lower()
+    assert "tracked only" not in final["action"].lower()
+
+
 def test_ask_kind_and_same_ask_units():
     assert tools.ask_kind("send an email to Duccio") == "email"
     assert tools.ask_kind("create a new meeting between me and Ducho") == "calendar"

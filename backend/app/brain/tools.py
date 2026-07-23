@@ -608,6 +608,22 @@ def _append_action_fields(base: str, fields: list[tuple[str, str]]) -> str:
     return action[:300]
 
 
+def _strip_action_field(base: str, label: str) -> str:
+    """Remove one '. Label: value' segment from an action string.
+
+    Used when a field is superseded (e.g. a confirmed ``Recipient`` replaces the
+    earlier ``Recipient candidate`` — leaving the candidate behind would keep
+    ``missing_action_details`` reporting ``email_to_confirm`` forever)."""
+    cleaned = re.sub(
+        rf"(?:^|\.\s+){re.escape(label)}:\s*.+?(?=(?:\.\s+[A-Z][A-Za-z ]+:)|$)",
+        "",
+        base,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    return " ".join(cleaned.split()).strip(" .")
+
+
 def _spoken_domain(fragment: str) -> str:
     """Normalize 's f f studio dot com' into a candidate domain."""
     raw = (fragment or "").lower().strip(" .")
@@ -685,6 +701,10 @@ def fold_action_details(
         if "email_to_confirm" in slots and candidate_match and re.fullmatch(
             r"(?:yes|correct|confirm|that'?s right)", detail, re.IGNORECASE
         ):
+            # The candidate is now confirmed: drop the "Recipient candidate: …"
+            # fragment so it can't keep re-triggering email_to_confirm, and
+            # promote it to a plain, executable "Recipient: …".
+            base = _strip_action_field(base, "Recipient candidate")
             fields.append(("Recipient", candidate_match.group("email").lower()))
         elif exact:
             fields.append(("Recipient", exact))

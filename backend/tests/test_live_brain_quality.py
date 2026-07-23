@@ -89,7 +89,9 @@ def test_clarify_detail_is_folded_into_an_explicit_slot():
         "Saying hi",
         ["email_body"],
     )
-    assert email["action"].endswith("Body: Saying hi")
+    # "Saying" is the filler verb introducing the body, not part of the message:
+    # the canonical folded body is the content itself.
+    assert email["action"].endswith("Body: hi")
 
 
 def test_slack_linked_wording_names_cedric_even_without_connectors():

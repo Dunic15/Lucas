@@ -302,12 +302,70 @@ def test_discard_soft_withdraws_preserves_history_and_blocks_approval(
     assert replay.json()["idempotent_replay"] is True
 
 
+def test_approved_action_withdrawal_requires_confirmation(client, monkeypatch):
+    """An APPROVED-but-idle action may already have started downstream, so
+    withdrawing it takes a confirmation gate: the first call is a 409, the row
+    stays approved, and only a confirmed call transitions it to withdrawn —
+    never running an executor on the way."""
+    user = _login(client)
+    aid = "approvedwithdraw1"
+    _seed_action(
+        user["org_id"],
+        {
+            "action_id": aid,
+            "item": "Send the launch recap",
+            "typed": {"type": "email.send", "args": {"subject": "Recap"}},
+            "execution_route": "manual",
+        },
+        bot_id="bot-approved-withdraw",
+    )
+    # Put the action in the idle 'approved' state (tracked, not executing).
+    ledger.set_action_status(aid, "approved", "approved via dashboard",
+                             org_id=user["org_id"])
+
+    ran = {"pipedream": 0, "native": 0}
+    monkeypatch.setattr(
+        pipedream_executor, "execute_approved",
+        lambda *a, **k: ran.update(pipedream=ran["pipedream"] + 1),
+    )
+    monkeypatch.setattr(
+        executor, "execute_approved",
+        lambda *a, **k: ran.update(native=ran["native"] + 1),
+    )
+
+    # 1) Unconfirmed withdrawal of an approved action is refused (409), and the
+    #    row is left exactly as it was.
+    unconfirmed = client.post(
+        f"/dashboard/actions/{aid}/withdraw",
+        headers={"sec-fetch-site": "same-origin"},
+        json={"confirm_approved": False},
+    )
+    assert unconfirmed.status_code == 409
+    assert unconfirmed.json()["error"] == "confirmation_required"
+    assert ledger.action_statuses([aid], org_id=user["org_id"])[aid]["status"] == "approved"
+
+    # 2) Confirmed withdrawal transitions to the terminal withdrawn state.
+    confirmed = client.post(
+        f"/dashboard/actions/{aid}/withdraw",
+        headers={"sec-fetch-site": "same-origin"},
+        json={"confirm_approved": True},
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.json()["status"]["status"] == "withdrawn"
+
+    # No executor ever ran on the withdrawal path.
+    assert ran == {"pipedream": 0, "native": 0}
+
+
 def test_action_centre_fixture_exposes_discard_and_history_bucket():
     html = (
         Path(__file__).resolve().parents[2] / "frontend" / "dashboard.html"
     ).read_text(encoding="utf-8")
     assert 'data-withdraw="' in html
-    assert '$("#ac-list [data-withdraw]").forEach' in html
+    # Assert the ACTUAL runtime selector ($$ = querySelectorAll) so every
+    # rendered withdraw control is bound — not the loose $( substring, which a
+    # single-element $() helper would also satisfy.
+    assert '$$("#ac-list [data-withdraw]").forEach' in html
     assert '/withdraw"' in html
     assert 's==="withdrawn") return "done"' in html
     assert 'withdrawn:"Withdrawn"' in html
