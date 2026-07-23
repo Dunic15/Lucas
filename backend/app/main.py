@@ -4153,6 +4153,16 @@ async def recall_webhook(request: Request) -> JSONResponse:
         session.last_addressed = None
 
     if settings.leave_on_command and leave_now:
+        # A REPEATED "can you leave?" landing during the goodbye grace must not
+        # queue a second goodbye (live 2026-07-23: asked twice → "Sure — bye
+        # everyone!" then "Okay, leaving now. Bye!"). First command owns the
+        # exit; retries answer quietly while it finishes.
+        if getattr(session, "leaving_now", False):
+            return JSONResponse(
+                {"ok": True, "spoke": False, "left": True,
+                 "reason": "leave_command_duplicate"}
+            )
+        session.leaving_now = True
         session.last_addressed = None
         try:
             goodbye = _line_for(question or text, _GOODBYE_LINES, _GOODBYE_LINES_IT)

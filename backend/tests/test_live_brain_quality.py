@@ -154,3 +154,12 @@ def test_no_false_refusal_when_snapshot_present():
     assert "you HAVE access to it" in prompt
     assert "false refusal" in prompt
     assert "isn't connected" in prompt  # the ONLY honest no-access wording
+
+
+def test_never_invent_participant_count_rule_is_in_the_prompt():
+    """Live 2026-07-23: 'I can see twenty-two people' in a 2-person call, then
+    a made-up 'privacy reasons' refusal to name them. Guard the prompt rule."""
+    prompt = engine.ANSWER_STREAM_SYSTEM.format(persona="P", name="Petra")
+    assert "NEVER invent a participant count" in prompt
+    assert "NEVER refuse to name people" in prompt
+    assert "never guess a number" in prompt
