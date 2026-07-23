@@ -403,6 +403,16 @@ class Session:
         """Human-only evidence for every live and post-meeting decision path."""
         return [u for u in self.transcript if u.speaker_kind != "agent"]
 
+    def recent_agent_lines(self, n: int = 3) -> str:
+        """The avatar's OWN last few spoken turns — for conversational continuity
+        so she doesn't repeat herself verbatim or contradict what she just said
+        (live 2026-07-23: gemma-4-31b replayed the same access explanation twice
+        because its own turns are stripped from every grounding channel). Kept
+        SEPARATE from recent_transcript on purpose: this is context, never
+        evidence — grounding still reads only human_transcript."""
+        agent = [u for u in self.transcript if u.speaker_kind == "agent"]
+        return "\n".join(f"You said: {u.text}" for u in agent[-n:])
+
     def recent_transcript(self, n: int = 8) -> str:
         """Recent HUMAN turns; agent output is never evidence for a new answer."""
         return "\n".join(

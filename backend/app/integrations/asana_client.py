@@ -475,9 +475,32 @@ def workspace_brief(org_id: str) -> str:
             return cached[1]
 
     acct, pc = _pd_asana_account(org_id)
-    text = _build_brief_pd(org_id, acct, pc) if acct else _build_brief(org_id)
+    if acct:
+        text = _build_brief_pd(org_id, acct, pc)
+    else:
+        # Pipedream-connected but the account didn't resolve THIS instant is a
+        # transient proxy hiccup, not "no Asana" — return "" UNCACHED so the next
+        # join retries, instead of masking it with the guaranteed-empty native
+        # path (which would then get negative-cached below).
+        try:
+            from .. import pipedream_executor
+
+            if pipedream_executor.enabled() and pipedream_executor.app_connected(
+                org_id, "asana"
+            ):
+                return ""
+        except Exception:  # noqa: BLE001 — Pipedream absence is not an error
+            pass
+        text = _build_brief(org_id)
     with _brief_lock:
-        _brief_cache[key] = (now, text)
+        # NEVER negative-cache. One empty/transient read must not poison the
+        # per-org snapshot for the whole 10-min TTL (live 2026-07-23: Petra said
+        # "no snapshot for this meeting" for minutes after a single empty read).
+        # Only a real snapshot is cached; an empty result is retried next join.
+        if text:
+            _brief_cache[key] = (now, text)
+        else:
+            _brief_cache.pop(key, None)
     return text
 
 
