@@ -14,17 +14,30 @@ other avatar stay on the legacy pipeline, untouched, for the whole pilot.
 
 ### Agent settings as created (see the script for the full source of truth)
 
-| Setting | Value |
-|---|---|
-| LLM | `gemini-2.5-flash`, temperature 0.4 |
-| Voice / TTS | `cjVigY5qzO86Huf0OWal` (Eric), `eleven_flash_v2`, out `pcm_16000` |
-| ASR input | `pcm_16000` (Recall's exact stream format — no transcoding) |
-| Languages | `en` default + `it` preset (API rejects multilingual models on en-default agents; the platform swaps models per-language at runtime) |
-| Turn-taking | eagerness `patient`, timeout 7 s |
-| First message | disabled — the legacy join self-intro stays the ONE greeting |
-| Access | private, `auth.enable_auth: true` → signed-URL-only (key stays server-side, SSM `/laura/prod/ELEVENLABS_API_KEY`) |
-| Tools | none yet (pilot 1 is conversation-only; client tools land in PR 4) |
-| Prompt | yaml `persona_prompt` verbatim + MEETING PILOT RULES block (multiparty discipline, no bare-yes approvals, never claim "done", grounding honesty, EN/IT, short answers) |
+Aligned 2026-07-24 with **SFF-Studio/UnderHeard-Voice** — the in-house
+production ElevenLabs agent (its `docs/features/voice-agent.md` records the
+battle-tested "why" per knob). Verified persisted via GET after PATCH.
+
+| Setting | Value | Why |
+|---|---|---|
+| LLM | `claude-sonnet-4-6`, temperature 0.4, **max_tokens 200** | Underheard prod pick; uncapped tokens measurably slowed responses. (They trial Qwen; it "sometimes gets lost" — not for the pilot.) |
+| Voice / TTS | `cjVigY5qzO86Huf0OWal` (Eric), **`eleven_v3_conversational`**, out `pcm_16000`, `optimize_streaming_latency: 2` | v3 conversational = multilingual + best quality, and the one multilingual model the API accepts on en-default agents (flash/turbo v2_5 are rejected: "English Agents must use turbo or flash v2"). Latency dial 3 caused audible breakup on first words. |
+| ASR input | `pcm_16000` | Recall's exact stream format — no transcoding |
+| Languages | `en` default + `it` preset | Team code-switches EN/IT; per-call `language` override must match a preset |
+| Turn-taking | eagerness `patient`, timeout 7 s, `interruption_ignore_terms` (16 EN+IT backchannels), `transcribe_on_disabled_interruptions: true` | Backchannels ("yeah", "sì") must not cut Cedric off; real barge-in still interrupts. Patient (not Underheard's `normal`): a meeting avatar waits its turn. |
+| First message | disabled | The legacy join self-intro stays the ONE greeting |
+| Access | private, `auth.enable_auth: true` → signed-URL-only | Key stays server-side (SSM `/laura/prod/ELEVENLABS_API_KEY`) |
+| **Overrides** | client may override **only** `prompt.prompt`, `first_message`, `language` | The Underheard per-call pattern PR 2 uses: the relay injects the per-meeting prompt/context via `conversation_initiation_client_data`; LLM/tools/knowledge are locked server-side |
+| Tools | none yet | Pilot 1 is conversation-only; client tools land in PR 4 |
+| Prompt | yaml `persona_prompt` verbatim + MEETING PILOT RULES (multiparty discipline, no bare-yes approvals, never claim "done", grounding honesty, untrusted-data rule for injected context, EN/IT, short answers) | Untrusted-data framing adopted from Underheard's prompt-injection defense |
+
+**PR 2 must follow the Underheard bootstrap shape:** signed URL + overrides
+returned by the backend, session started with
+`conversation_initiation_client_data: {conversation_config_override: {agent:
+{prompt, first_message, language}}, dynamic_variables: {...}}`. Two of their
+hard-won lessons: any `{{var}}` referenced anywhere must be present in
+`dynamic_variables` (a missing one kills the conversation at second zero),
+and wrap every injected value in explicit BEGIN/END UNTRUSTED DATA blocks.
 
 ## What this is
 
