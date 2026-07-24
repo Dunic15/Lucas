@@ -242,21 +242,24 @@ def build_payload() -> dict:
             },
             "turn": {
                 "turn_timeout": 7,
-                # Fluidity pass 2026-07-24: patient maximized not-interrupting
-                # at the cost of dead air after the speaker stops; with wake
-                # discipline in the prompt (and the Director coming), normal
-                # is the snappier right default for 1:1 pilots.
-                "turn_eagerness": "normal",
+                # Owner feedback 2026-07-24 ("deve essere più veloce"): eager
+                # jumps in at the earliest opportunity. Fine for 1:1 pilots
+                # with wake discipline; the Director owns multiparty later.
+                # If he starts cutting people off: eager -> normal is the
+                # first rollback, speculative_turn the second.
+                "turn_eagerness": "eager",
                 # Trial (changelog 2026-02-02, semantics undocumented): the
                 # name implies generation starts before the turn is fully
                 # confirmed — a first-audio win. Remove if replies get jumpy.
                 "speculative_turn": True,
-                # Perceived-latency mask: a tiny filler while a slow LLM turn
-                # is still generating (Underheard-documented pattern).
+                # Filler only on genuinely SLOW turns (tool calls): 2.6s so a
+                # normal reply never hums, and a spoken bridge instead of
+                # "Mmh…" (owner: "meno mmm, di' let me think o simile").
                 "soft_timeout_config": {
-                    "timeout_seconds": 1.6,
-                    "message": "Mmh…",
+                    "timeout_seconds": 2.6,
+                    "message": "Let me think…",
                     "use_llm_generated_message": False,
+                    "randomize_fillers": True,
                     "max_soft_timeouts_per_generation": 1,
                 },
                 # Backchannels must not cut Cedric off mid-answer; a real
