@@ -882,8 +882,12 @@
       // EL streams faster than realtime, so segment buffering costs far less
       // wall-clock than its audio length (~300-500ms to first word).
       let segPcm = [], segChars = [], segMs = 0, segTimer = 0;
+      // First segment of each RESPONSE flushes early (~0.4s): time-to-first-
+      // word is the perceived latency; later segments take the full ~1s for
+      // smoother viseme runs. Reset on interrupt and on end-of-response.
+      let segFirst = true;
       const clearSegment = () => {
-        segPcm = []; segChars = []; segMs = 0;
+        segPcm = []; segChars = []; segMs = 0; segFirst = true;
         if (segTimer) { clearTimeout(segTimer); segTimer = 0; }
       };
       const flushSegment = () => {
@@ -934,9 +938,10 @@
         if (segTimer) clearTimeout(segTimer);
         const lastChar = chars[chars.length - 1] || "";
         const atBoundary = /[\s.,!?;:]/.test(lastChar);
-        if (segMs >= 2600) flushSegment();                    // hard cap
-        else if (segMs >= 1000 && atBoundary) flushSegment(); // natural cut
-        else segTimer = setTimeout(flushSegment, 280);        // stream went quiet
+        const target = segFirst ? 420 : 1000; // first words out FAST
+        if (segMs >= 2600) { segFirst = false; flushSegment(); } // hard cap
+        else if (segMs >= target && atBoundary) { segFirst = false; flushSegment(); }
+        else segTimer = setTimeout(() => { segFirst = true; flushSegment(); }, 280);
       };
       // A legacy stop ({type:"stop"} from barge-in / "Cedric stop") must also
       // silence the AGENT queue: while he speaks the half-duplex gate mutes

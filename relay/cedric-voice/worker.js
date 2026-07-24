@@ -61,6 +61,8 @@ export class VoiceSession {
     this.playheadMs = 0; // when the agent's queued audio finishes playing
     this.frames = 0;
     this.chunks = 0;
+    this.lastUserChunkAt = 0; // last time we forwarded user audio to EL
+    this.inResponse = false; // between first audio chunk and next user audio
   }
 
   async fetch(req) {
@@ -118,7 +120,11 @@ export class VoiceSession {
     // playback ends later than this byte-clock estimate.
     if (Date.now() < this.playheadMs + 800) return;
     if (this.el && this.elReady) {
-      try { this.el.send(JSON.stringify({ user_audio_chunk: buf })); } catch (_) {}
+      try {
+        this.el.send(JSON.stringify({ user_audio_chunk: buf }));
+        this.lastUserChunkAt = Date.now();
+        this.inResponse = false; // the human has the floor again
+      } catch (_) {}
     } else {
       // EL still connecting: keep the tail so his first addressed sentence
       // isn't clipped; drop oldest beyond ~3s.
@@ -207,6 +213,14 @@ export class VoiceSession {
       if (!b64) return;
       this.chunks++;
       if (this.chunks === 1) console.log("first agent audio chunk");
+      // Per-turn latency: last forwarded user audio -> first audio chunk of
+      // the reply. The single number that says who is slow (EL vs our hops).
+      if (!this.inResponse) {
+        this.inResponse = true;
+        if (this.lastUserChunkAt) {
+          console.log("turn_latency_ms=" + (Date.now() - this.lastUserChunkAt));
+        }
+      }
       // pcm_16000 s16le: 32 bytes/ms. Track when playback will END so the
       // half-duplex gate re-opens right after he goes quiet.
       const ms = Math.floor((b64.length * 3) / 4 / 32);
