@@ -370,6 +370,12 @@ def test_tool_queue_action_complete_is_idempotent(client, bearer):
     r2 = _tool(client, "cap-bot_tq", "queue_action", params, bearer, call_id="tc_2").json()
     assert r2["result"]["status"] == "already_queued"
     assert r2["result"]["action_id"] == action_id
+    # Live simulation 2026-07-24: the agent may OMIT request_id and a retry
+    # mints a new tool_call_id — identical content must still dedupe.
+    no_id = {k: v for k, v in params.items() if k != "request_id"}
+    r3 = _tool(client, "cap-bot_tq", "queue_action", no_id, bearer, call_id="tc_3").json()
+    assert r3["result"]["status"] == "already_queued"
+    assert r3["result"]["action_id"] == action_id
     store.remove("bot_tq")
 
 
