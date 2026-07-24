@@ -100,7 +100,11 @@ require_wake_word: true
 # pipeline exactly like every other avatar. Laura/Petra: leave these fields
 # out entirely (absent = legacy). docs/product/CEDRIC-ELEVENLABS-PILOT.md.
 conversation_runtime: elevenlabs_agent
-elevenlabs_agent_id: ""
+# "Cedric Meeting Pilot" — created/updated by backend/scripts/create_cedric_agent.py
+# (config-as-code: persona from this file + pilot rules; private, signed-URL-only;
+# pcm_16000 both ways; turn eagerness patient; no first message — the legacy
+# self-intro stays the one greeting). Not a secret; useless without the API key.
+elevenlabs_agent_id: "agent_0801ky9qgd9cfk8aw3fgj8keytgp"
 # Audio reaches the agent only after Cedric's wake word opens the gate
 # (reuses wake_words above — the ASR variants keep working).
 voice_multiparty_mode: wake_word_gate

@@ -1,9 +1,30 @@
 # Cedric × ElevenLabs Agents — conversation-runtime pilot
 
-**Status:** PR 1 (config + isolation) shipped, inert. Everything else planned.
+**Status:** PR 1 (config + isolation) shipped. The **ElevenLabs agent EXISTS**:
+"Cedric Meeting Pilot" (`agent_0801ky9qgd9cfk8aw3fgj8keytgp`), created
+2026-07-24 by `backend/scripts/create_cedric_agent.py` (config-as-code,
+idempotent re-runs update in place; signed-URL mint verified 200). Its id is
+wired into `avatars/cedric/avatar.yaml`, so **three of the four dispatch
+conditions are true in-repo — the env flag alone is the go-live switch** (off
+everywhere today). Audio bridge (PR 2) not built yet: the agent is reachable
+but no meeting audio flows to it.
 **Owner decision:** Cedric is the ONLY pilot avatar. Laura, Petra and every
 other avatar stay on the legacy pipeline, untouched, for the whole pilot.
 **Last reviewed:** 2026-07-24
+
+### Agent settings as created (see the script for the full source of truth)
+
+| Setting | Value |
+|---|---|
+| LLM | `gemini-2.5-flash`, temperature 0.4 |
+| Voice / TTS | `cjVigY5qzO86Huf0OWal` (Eric), `eleven_flash_v2`, out `pcm_16000` |
+| ASR input | `pcm_16000` (Recall's exact stream format — no transcoding) |
+| Languages | `en` default + `it` preset (API rejects multilingual models on en-default agents; the platform swaps models per-language at runtime) |
+| Turn-taking | eagerness `patient`, timeout 7 s |
+| First message | disabled — the legacy join self-intro stays the ONE greeting |
+| Access | private, `auth.enable_auth: true` → signed-URL-only (key stays server-side, SSM `/laura/prod/ELEVENLABS_API_KEY`) |
+| Tools | none yet (pilot 1 is conversation-only; client tools land in PR 4) |
+| Prompt | yaml `persona_prompt` verbatim + MEETING PILOT RULES block (multiparty discipline, no bare-yes approvals, never claim "done", grounding honesty, EN/IT, short answers) |
 
 ## What this is
 

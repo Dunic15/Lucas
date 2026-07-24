@@ -66,13 +66,31 @@ def _write_avatar_yaml(root: Path, avatar_id: str, body: str) -> None:
 
 
 def test_cedric_yaml_opts_in_but_stays_inert():
-    """Cedric's shipped yaml selects the runtime — with an EMPTY agent id, so
-    even a flipped global flag alone cannot dispatch ElevenLabs yet."""
+    """Cedric's shipped yaml selects the runtime and carries the real pilot
+    agent id ("Cedric Meeting Pilot", created 2026-07-24 by
+    scripts/create_cedric_agent.py). Three of the four dispatch conditions are
+    therefore TRUE in the repo — the shipped-default env flag alone must keep
+    him legacy, and flipping it is the single deliberate go-live act."""
     cedric = avatars.load("cedric")
     assert cedric.conversation_runtime == "elevenlabs_agent"
-    assert cedric.elevenlabs_agent_id == ""
+    assert cedric.elevenlabs_agent_id.startswith("agent_")
     assert cedric.voice_multiparty_mode == "wake_word_gate"
     assert cedric.voice_actions_mode == "prepare_only"
+    # The end-to-end shipped state: legacy today, ElevenLabs on one flag.
+    assert settings.elevenlabs_agent_runtime_enabled is False
+    assert elevenlabs_agent.runtime_for_avatar(cedric) == "legacy"
+
+
+def test_cedric_goes_live_on_the_flag_alone(monkeypatch):
+    """The go-live rehearsal: with the shipped yaml, flipping ONLY the env
+    flag moves Cedric (and nobody else) onto the ElevenLabs runtime."""
+    monkeypatch.setattr(settings, "elevenlabs_agent_runtime_enabled", True)
+    assert (
+        elevenlabs_agent.runtime_for_avatar(avatars.load("cedric"))
+        == "elevenlabs_agent"
+    )
+    for aid in ("laura", "petra"):
+        assert elevenlabs_agent.runtime_for_avatar(avatars.load(aid)) == "legacy", aid
 
 
 def test_laura_and_petra_yaml_stay_legacy():
