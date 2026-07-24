@@ -299,9 +299,17 @@ def missing_action_details(text: str, kind: str = "task") -> list[str]:
     if kind == "calendar":
         if not _DETAIL_INVITE_WITH.search(t):
             missing.append("invite_with")
-        if not (
-            _DETAIL_INVITE_DATE.search(t) and _DETAIL_INVITE_CLOCK.search(t)
-        ):
+        has_date = bool(_DETAIL_INVITE_DATE.search(t))
+        has_clock = bool(_DETAIL_INVITE_CLOCK.search(t))
+        # Refined slots so a partial answer narrows the NEXT ask instead of
+        # re-asking the identical question (live 2026-07-24: "today." → she
+        # re-asked "when it should be?" verbatim; the honest follow-up is
+        # "what time?"). Day known → ask the time; time known → ask the day.
+        if has_date and not has_clock:
+            missing.append("invite_clock")
+        elif has_clock and not has_date:
+            missing.append("invite_date")
+        elif not (has_date and has_clock):
             missing.append("invite_when")
         return missing  # one combined ask, not slot-by-slot (2026-07-22 feel)
     if kind == "other":
@@ -605,11 +613,36 @@ _DETAIL_FOLD_LABELS = {
     "email_body": "Body",
     "invite_with": "Attendees",
     "invite_when": "When",
+    # Partial-answer refinements: the clock/date fold into the same When field
+    # so the completed action text reads as one schedule.
+    "invite_clock": "When",
+    "invite_date": "When",
     "owner": "Owner",
     "project": "Project",
     "due": "Due",
     "description": "Description",
 }
+
+
+# "Add X as a collaborator/member" is a PROJECT-membership ask — there is no
+# executor support for it today, so it must never be disguised as a task
+# ("Add details to approve" showed a create-task form for it, live 2026-07-24).
+# Typing and the approve-door synth both consult this: the honest state is an
+# untracked note, not a bogus asana.create_task.
+_COLLABORATOR_ASK = re.compile(
+    r"\b(?:collaborator|collaborators|"
+    r"add\s+[\w@. ]{1,40}?\s+(?:as\s+(?:a\s+)?(?:member|collaborator)|"
+    r"to\s+the\s+(?:project|workspace|team))|"
+    r"invite\s+[\w@. ]{1,40}?\s+to\s+the\s+(?:project|workspace|board)|"
+    r"aggiungi\s+[\w@. ]{1,40}?\s+come\s+collaborator\w*)\b",
+    re.IGNORECASE,
+)
+
+
+def is_collaborator_ask(text: str) -> bool:
+    """True for project-membership asks (add X as collaborator/member) — no
+    executor supports them yet, so they stay honest untyped notes."""
+    return bool(_COLLABORATOR_ASK.search(text or ""))
 
 
 def _append_action_fields(base: str, fields: list[tuple[str, str]]) -> str:
@@ -653,10 +686,29 @@ def _exact_email(fragment: str) -> str:
     direct = re.search(_EMAIL_ADDR, raw, re.IGNORECASE)
     if direct:
         return direct.group(0).lower()
-    spoken = re.sub(r"\s+(?:dot|punto)\s+", ".", raw.lower())
-    spoken = re.sub(r"\s+(?:at|chiocciola)\s+", "@", spoken)
-    spoken = re.sub(r"\s+", "", spoken)
-    return spoken if re.fullmatch(_EMAIL_ADDR, spoken, re.IGNORECASE) else ""
+    # Spoken form ANCHORED to "<local> at <domain words> dot <tld>": only the
+    # last word before "at" is the local part. The old whole-string collapse
+    # glued every leading word into the address — "It should go to duccio at
+    # SFF studio dot com" became itshouldgotoduccio@sffstudio.com on the card
+    # (live 2026-07-24).
+    m = re.search(
+        r"\b((?:[a-z0-9_+-]+\s+(?:dot|punto)\s+)*[a-z0-9._+-]+)\s+"
+        r"(?:at|chiocciola)\s+"
+        r"((?:[a-z0-9][a-z0-9 .-]*?\s+(?:dot|punto)\s+[a-z]{2,})"
+        r"|(?:[a-z0-9.-]+\.[a-z]{2,}))\b",
+        raw,
+        re.IGNORECASE,
+    )
+    if m:
+        # "duccio dot profeti at gmail dot com" → local "duccio.profeti".
+        local = re.sub(r"\s+(?:dot|punto)\s+", ".", m.group(1).lower())
+        domain = _spoken_domain(m.group(2))
+        if local not in ("to", "it", "go", "goes", "send", "email", "mail",
+                         "at") and domain:
+            cand = f"{local}@{domain}"
+            if re.fullmatch(_EMAIL_ADDR, cand, re.IGNORECASE):
+                return cand
+    return ""
 
 
 def clarification_fragment_matches(

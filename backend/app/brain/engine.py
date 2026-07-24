@@ -519,7 +519,14 @@ _SEARCH_EXCLUDE = re.compile(
     r"connessione|va|funziona)\b"
     r"|\b(connection|connessione)\b.{0,12}\b(down|slow|back|working|dropped|"
     r"lost|bad|instabile|lenta|va|funziona)\b"
-    r"|\b(we'?re|i'?m|are we|siamo|sono)\s+(back\s+)?(online|offline)\b",
+    r"|\b(we'?re|i'?m|are we|siamo|sono)\s+(back\s+)?(online|offline)\b"
+    # scheduling fragments answering a who/when clarify — "Between me and
+    # Duccio today?" tripped the 'today' freshness trigger and got a public
+    # web answer mid-scheduling (live 2026-07-24). An attendee/day fragment
+    # is meeting logistics, never a web query.
+    r"|\bbetween\s+me\s+and\b"
+    r"|^\s*(?:me\s+and\s+[\w@. ]+|[\w@. ]+\s+and\s+me)\s*"
+    r"(?:today|tomorrow|tonight|oggi|domani)?\s*[?.!]*\s*$",
     re.IGNORECASE,
 )
 
@@ -2247,7 +2254,13 @@ asana.create_task ONLY when the item explicitly asks for a task/ticket to be \
 created or names Asana (or the team's board/backlog) — NEVER as a default for \
 other work items (owner rule 2026-07-24: "Asana only when they say so"). An \
 item that names neither a task nor Asana stays untyped. Do not create tasks \
-for vague remarks, questions, information requests, or things already done."""
+for vague remarks, questions, information requests, or things already done.
+- A "create a project / portfolio" ask is "asana.create_project" (args: name \
+— the project's name, e.g. "crypto startup" from "a project called crypto \
+startup"; notes optional) — NEVER asana.create_task.
+- There is NO supported type for adding a collaborator/member to a project or \
+workspace ("add Duccio as a collaborator") — leave those items untyped; do \
+not disguise them as create_task."""
 
 # The 20-action expansion (owner GO 2026-07-22): Gmail/Calendar/Drive extras,
 # same precision-over-recall contract. Drive types execute only when the org
@@ -2364,6 +2377,16 @@ _EXPLICIT_TASK_CUE = re.compile(
     r"|attivit\w+)\b",
     re.IGNORECASE,
 )
+# 3. A project/portfolio ask is asana.create_project, never a task: a create
+#    verb near "project/portfolio", or the bare "new project" / "project
+#    called X" shapes ("one more project to add to Asana", live 2026-07-24).
+_PROJECT_CUE = re.compile(
+    r"\b(?:create|make|set\s+up|open|start|add|crea\w*)\b.{0,28}"
+    r"\b(?:project|portfolio|progetto)\b"
+    r"|\bnew\s+project\b|\bproject\s+(?:called|named)\b"
+    r"|\bproject\s+to\s+add\b|\bnuovo\s+progetto\b",
+    re.IGNORECASE,
+)
 
 
 def _typeable(item: str) -> bool:
@@ -2402,7 +2425,8 @@ def _is_isoish(value: object) -> bool:
 # back to its real arg instead of dumping "Body: Hi" into the email subject
 # (live 2026-07-23 bug ④ — the clarified body was lost).
 _FOLD_LABEL_NAMES = (
-    "Task name|Recipient|Body|Attendees|When|Owner|Project|Due|Description|Details"
+    "Task name|Recipient|Subject|Body|Attendees|When|Owner|Project|Due|"
+    "Description|Details"
 )
 _FOLD_SEG_RE = re.compile(
     rf"(?:^|\.\s+)(?P<label>{_FOLD_LABEL_NAMES}):\s*(?P<val>.+?)"
@@ -2485,6 +2509,12 @@ def _sanitize_typed(typed: object, action: dict, brief: str = "",
         if not to:
             return None  # no grounded recipient → never send
         subject = _fold_label_fields(str(args.get("subject") or ""))[0][:200]
+        # A folded Subject wins over an args subject that merely echoes the
+        # ask (the stub sets subject=item) — e.g. the summary prefill.
+        if item_fold.get("subject") and (
+            not subject or subject == item_base[:200]
+        ):
+            subject = item_fold["subject"][:200]
         body = str(args.get("body") or "").strip()[:4000]
         if not body and item_fold.get("body"):
             body = item_fold["body"][:4000]  # the clarified body — bug ④
@@ -2554,6 +2584,41 @@ def _sanitize_typed(typed: object, action: dict, brief: str = "",
         if project and project.lower() in source.lower():
             spec_args["project"] = project
         return {"type": t, "args": spec_args}
+    if t == "asana.create_project":
+        # "Create a new project called crypto startup" was silently DROPPED
+        # here (no sanitize branch) → the approve-door synth re-typed it as a
+        # create_task form (live 2026-07-24). The executor has supported
+        # asana.create_project since #375 — sanitize just never let it through.
+        name = _fold_label_fields(
+            str(args.get("name") or action.get("item") or "")
+        )[0][:200]
+        # "… a new project called crypto startup" → the stated name, wherever
+        # the phrase sits in the ask (live asks carry preamble: "So on Asana,
+        # I need you to create a new project called crypto startup").
+        called = re.search(
+            r"\b(?:project|portfolio|progetto)\s+"
+            r"(?:called|named|chiamat[oa])\s+(.{2,80}?)\s*(?:[.?!]|$)",
+            name, re.IGNORECASE,
+        )
+        if called:
+            name = called.group(1).strip(" .'\"")
+        else:
+            stripped = re.sub(
+                r"^(?:please\s+)?(?:can\s+you\s+|could\s+you\s+)?"
+                r"(?:create|make|set\s+up|open|start|add|crea(?:re)?)\s+"
+                r"(?:a\s+|the\s+|un\s+|una\s+)?(?:new\s+|nuov[oa]\s+)?"
+                r"(?:asana\s+)?(?:project|portfolio|progetto)\s*"
+                r"(?:called|named|chiamat[oa]|:)?\s*",
+                "", name, flags=re.IGNORECASE,
+            ).strip(" .'\"")
+            name = stripped or name
+        if not name:
+            return None
+        spec_args = {"name": name}
+        notes = str(args.get("notes") or "").strip()[:1000]
+        if notes:
+            spec_args["notes"] = notes
+        return {"type": t, "args": spec_args}
     return None
 
 
@@ -2594,12 +2659,31 @@ def _stub_type_actions(
                 if spec:
                     out[i] = spec
                     continue
+        # A project/portfolio ask is a PROJECT, never a task (live 2026-07-24:
+        # "create a new project called crypto startup" reached approval as a
+        # create-task form). Checked before the task cue — project asks often
+        # also mention "Asana".
+        if (
+            allow_asana and i not in out and item.strip()
+            and _PROJECT_CUE.search(item)
+            and not tools.is_collaborator_ask(item)
+        ):
+            spec = _sanitize_typed(
+                {"type": "asana.create_project", "args": {"name": item}},
+                a, brief,
+            )
+            if spec:
+                out[i] = spec
+                continue
         # Asana ONLY on an explicit task/Asana cue (owner 2026-07-24) — the old
         # "every leftover becomes an Asana task" default filed questions, web
-        # lookups and Drive/Slack asks onto the team's real board.
+        # lookups and Drive/Slack asks onto the team's real board. Membership
+        # asks ("add X as a collaborator") have NO executor support: never
+        # disguise them as a create-task.
         if (
             allow_asana and i not in out and item.strip()
             and _EXPLICIT_TASK_CUE.search(item)
+            and not tools.is_collaborator_ask(item)
         ):
             emails = _grounded_emails(source, source)
             dates = _ISO_DATE_RE.findall(source)
@@ -2774,6 +2858,49 @@ def headline_actions(
             if title:
                 a = dict(a)
                 a["title"] = title
+        out.append(a)
+    return out
+
+
+# "Email X the summary/recap of this meeting" — the body IS the meeting
+# summary the artifact just produced, and the subject is obvious. Asking the
+# human to dictate both on the card (live 2026-07-24) is busy-work; prefill
+# them at finalize so the typed email.send arrives ready to approve.
+_SUMMARY_EMAIL_RE = re.compile(
+    r"\b(?:e-?mail|send|manda|invia)\b.{0,60}?"
+    r"\b(?:full\s+)?(?:summary|recap|riassunto|resoconto)\b"
+    r".{0,30}\b(?:meeting|call|incontro|riunione)\b"
+    r"|\b(?:summary|recap)\s+of\s+(?:this|the)\s+(?:meeting|call)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def prefill_summary_emails(actions: list, summary: str) -> list:
+    """Fold Subject/Body onto email-the-meeting-summary asks (finalize-only).
+
+    Only when the ask clearly names the meeting summary/recap AND no Body was
+    already clarified by voice — the fold labels then bind through the normal
+    typing path (never the raw transcript; `summary` is the artifact's own
+    distilled text)."""
+    text = " ".join((summary or "").split()).strip()
+    if not text:
+        return list(actions or [])
+    out: list = []
+    for a in actions or []:
+        if isinstance(a, dict):
+            item = str(a.get("item") or a.get("action") or "")
+            base, fold = _fold_label_fields(item)
+            if (
+                _SUMMARY_EMAIL_RE.search(base)
+                and not fold.get("body")
+                and _typeable(base)
+            ):
+                a = dict(a)
+                key = "item" if a.get("item") else "action"
+                a[key] = (
+                    f"{item.rstrip(' .')}. Subject: Meeting summary. "
+                    f"Body: {text[:1500]}"
+                )
         out.append(a)
     return out
 

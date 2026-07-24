@@ -20,7 +20,8 @@ from .. import (anam_client, asana_client, autopilot, avatar_resolver, avatars,
 from . import meeting_state
 from ..meeting_state import build_from_utterances
 from ..brain.engine import (post_meeting, degraded_post_meeting, type_actions,
-                            headline_actions, semantic_action_duplicates)
+                            prefill_summary_emails, headline_actions,
+                            semantic_action_duplicates)
 from ..decision import detect_browse_intent
 
 
@@ -582,6 +583,12 @@ async def _start_avatar_session(
         _quiet(run_in_threadpool(_jira_brief_sync)),
     )
     session.asana_live = bool(asana_live)
+    # Distinct from asana_live (live READ TOOLS = native token + enablement):
+    # whether a workspace brief actually loaded into her grounding. A
+    # Pipedream-only org gets the brief but no live tools, and the capability
+    # answer kept saying "no snapshot loaded" while she was reading tasks from
+    # it (live 2026-07-24) — capabilities.py keys on THIS flag now.
+    session.asana_brief_loaded = bool(asana_snapshot)
     session.memory_brief = carryover or ""
     if folder:
         session.memory_brief = (
@@ -1049,9 +1056,14 @@ async def _finalize_session_locked(
                 _avatar_pd_apps, session.avatar_id
             )
             summary_brief = artifact.get("summary") or ""
+            # "Email X the summary of this meeting" → Subject/Body prefilled
+            # from the artifact's own summary BEFORE typing, so the email.send
+            # card arrives ready instead of interrogating the human for a body
+            # that already exists (live 2026-07-24).
             artifact["actions"] = await run_in_threadpool(
                 lambda: type_actions(
-                    artifact["actions"], summary_brief,
+                    prefill_summary_emails(artifact["actions"], summary_brief),
+                    summary_brief,
                     allow_asana=allow_asana, pd_apps=pd_apps,
                 )
             )

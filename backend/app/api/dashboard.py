@@ -3516,12 +3516,20 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         "done", "failed", "executing"
     ):
         from ..brain import tools as _brain_tools
+        from ..brain import engine as _brain_engine
 
-        _kind = _brain_tools.ask_kind(
-            str(action.get("action") or action.get("item") or "")
-        )
+        _ask_text = str(action.get("action") or action.get("item") or "")
+        _kind = _brain_tools.ask_kind(_ask_text)
         _synth = {"task": "asana.create_task", "email": "email.send",
                   "calendar": "calendar.create_event"}.get(_kind)
+        # Granularity guards (live 2026-07-24): a "create a project/portfolio"
+        # ask synthesises create_project, never a create-task form; a
+        # collaborator/membership ask has NO executor — stays tracked-only
+        # rather than opening a bogus task form at the approve door.
+        if _brain_tools.is_collaborator_ask(_ask_text):
+            _synth = None
+        elif _brain_engine._PROJECT_CUE.search(_ask_text):
+            _synth = "asana.create_project"
         if _synth:
             typed = {"type": _synth, "args": dict(
                 (action.get("typed") or {}).get("args") or {})}

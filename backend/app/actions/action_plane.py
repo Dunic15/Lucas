@@ -317,6 +317,11 @@ SLOT_LABELS_EN: dict[str, str] = {
     "email_body": "what it should say",
     "invite_with": "who should be on it",
     "invite_when": "when it should be",
+    # partial-schedule refinements: the day (or time) is already known, so the
+    # follow-up asks ONLY the missing half instead of repeating the whole ask
+    # (live 2026-07-24: "today." → identical "when it should be?" re-ask).
+    "invite_clock": "what time",
+    "invite_date": "which day",
 }
 SLOT_LABELS_IT: dict[str, str] = {
     **_slot_labels("label_it"),
@@ -330,6 +335,8 @@ SLOT_LABELS_IT: dict[str, str] = {
     "email_body": "cosa deve dire",
     "invite_with": "chi va invitato",
     "invite_when": "per quando fissarlo",
+    "invite_clock": "a che ora",
+    "invite_date": "per che giorno",
 }
 
 

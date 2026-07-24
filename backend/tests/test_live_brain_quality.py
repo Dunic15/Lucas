@@ -197,10 +197,12 @@ def test_required_action_details_follow_executor_schema():
     assert typed["args"]["name"] == "prepare the pipeline connection"
 
     # Calendar writes need attendees AND a date+clock — asked in ONE combined
-    # question (restored 2026-07-22 feel), not slot-by-slot.
+    # question (restored 2026-07-22 feel), not slot-by-slot. The day is
+    # already stated here, so the time half narrows to invite_clock
+    # ("what time") instead of the generic invite_when (2026-07-24).
     assert tools.missing_action_details(
         "Schedule a meeting tomorrow", kind="calendar"
-    ) == ["invite_with", "invite_when"]
+    ) == ["invite_with", "invite_clock"]
     attendee = tools.fold_action_details(
         {"action": "Schedule a meeting tomorrow"},
         "Anant at thirty PM",
@@ -209,7 +211,7 @@ def test_required_action_details_follow_executor_schema():
     assert attendee["action"].endswith("Attendees: Anant")
     assert tools.missing_action_details(
         attendee["action"], kind="calendar"
-    ) == ["invite_when"]
+    ) == ["invite_clock"]  # day known ("tomorrow") → only the time is asked
     assert tools.missing_action_details(
         attendee["action"] + ". When: 3 PM", kind="calendar"
     ) == []

@@ -5123,6 +5123,13 @@ async def recall_webhook(request: Request) -> JSONResponse:
     speak_tasks: list[asyncio.Task] = []
     prev_task: asyncio.Task | None = None
     _search_turn = wants_web_search(question or text)
+    # A clarify is pending → this turn is almost certainly the ANSWER to it
+    # ("Between me and Duccio today?" hit the 'today' freshness trigger and
+    # web-searched, then the search model honestly declared it had no calendar
+    # access — live 2026-07-24). While a capture waits on details, fragments
+    # never route to the public web; the grounded path (and the fold) own them.
+    if _search_turn and getattr(session, "pending_clarify", None) is not None:
+        _search_turn = False
     _search_announce_seen = False
     _late_search_sentences: list[str] = []
     if _search_turn:

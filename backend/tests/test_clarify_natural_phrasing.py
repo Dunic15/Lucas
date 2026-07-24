@@ -84,5 +84,7 @@ def test_bare_ask_still_prompts(bare):
 
 
 def test_date_without_time_still_incomplete():
-    # A day alone is not a scheduleable time — "when" stays missing.
-    assert "invite_when" in _missing("schedule a meeting with duccio tomorrow")
+    # A day alone is not a scheduleable time — but the follow-up now narrows
+    # to the missing HALF (invite_clock = "what time") instead of re-asking
+    # the identical "when it should be?" (live 2026-07-24).
+    assert "invite_clock" in _missing("schedule a meeting with duccio tomorrow")

@@ -190,6 +190,14 @@ def snapshot(avatar: Any, org_id: str, session: Any = None) -> dict:
         ok = False
 
     asana_live = bool(getattr(session, "asana_live", False)) if session else False
+    # The honest "can I read it?" signal is the BRIEF, not asana_live:
+    # asana_live means the live read TOOLS are on (native token + enablement),
+    # while a Pipedream-only org loads the workspace brief WITHOUT live tools —
+    # she was reading 6 tasks from it while this answer said "no snapshot
+    # loaded" (live 2026-07-24). Fall back to asana_live for old sessions.
+    brief_loaded = (
+        bool(getattr(session, "asana_brief_loaded", False)) if session else False
+    ) or asana_live
     tools: dict[str, dict] = {}
     for e in reg.get("native", []):
         name = str(e.get("name") or "")
@@ -218,13 +226,13 @@ def snapshot(avatar: Any, org_id: str, session: Any = None) -> dict:
                 route = ""
         # snapshot state: only families that carry a per-meeting inventory
         if name in _SNAPSHOT_FAMILIES:
-            snap: bool | None = asana_live
+            snap: bool | None = brief_loaded
         else:
             snap = None  # no in-room snapshot concept (reads on demand / live)
         reason = ""
         if has_conn and not connected:
             reason = "not connected for this org"
-        elif name in _SNAPSHOT_FAMILIES and connected and not asana_live:
+        elif name in _SNAPSHOT_FAMILIES and connected and not brief_loaded:
             reason = "connected, but no workspace snapshot loaded for this meeting"
         tools[name] = {
             "connected_for_org": connected,
@@ -263,7 +271,13 @@ def cached_snapshot(avatar: Any, org_id: str, session: Any = None) -> dict:
     if session is None:
         return snapshot(avatar, org_id, session)
 
-    live = bool(getattr(session, "asana_live", False))
+    # Recompute key covers BOTH read signals: live tools (asana_live) and the
+    # loaded workspace brief (asana_brief_loaded) — either flipping means the
+    # honest read-state changed.
+    live = (
+        bool(getattr(session, "asana_live", False)),
+        bool(getattr(session, "asana_brief_loaded", False)),
+    )
     cached = getattr(session, "_capability_snapshot", None)
     cached_live = getattr(session, "_capability_snapshot_live", None)
     if cached and cached.get("tools") and cached_live == live:
