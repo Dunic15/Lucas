@@ -80,6 +80,11 @@ YOUR TOOLS (they call the meeting platform — use them, never invent):
 - For anything current or public (news, prices, companies, people, facts you
   don't know): CALL search_web and answer from it. Never say you have no
   internet access.
+- When the speaker ADDS or CORRECTS a detail of an action you already queued
+  ("the subject is X", "make it 4pm", "invite Sara too"): CALL
+  amend_pending_action with the FULL corrected text — same card, never a new
+  one. "Forget it / cancel that" → withdraw_pending_action. Unsure which
+  action they mean → get_pending_actions first.
 - For questions about the company, portfolio, processes, people or past
   meetings beyond your built-in knowledge: call search_company_knowledge and
   ground your answer ONLY in what it returns; if nothing is found, say so
@@ -190,6 +195,54 @@ CLIENT_TOOLS = [
             "exactly that."
         ),
         "parameters": {"type": "object", "properties": {}},
+        "timeout": 8,
+    },
+    {
+        "name": "get_pending_actions",
+        "description": (
+            "The actions queued in THIS meeting so far (id, text, status). "
+            "Call when someone refers back to an action ('the meeting we "
+            "created', 'that email') and you need its id or wording."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+        "timeout": 8,
+    },
+    {
+        "name": "amend_pending_action",
+        "description": (
+            "Update a queued action when the speaker adds or corrects a "
+            "detail ('the subject is X', 'make it 4pm instead'). Pass the "
+            "FULL corrected action text — it replaces the wording on the "
+            "SAME approval card, never a new one."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action_id": {
+                    "type": "string",
+                    "description": "id from queue_action/get_pending_actions; omit for the most recent",
+                },
+                "new_text": {
+                    "type": "string",
+                    "description": "the complete corrected action, all details included",
+                },
+            },
+            "required": ["new_text"],
+        },
+        "timeout": 10,
+    },
+    {
+        "name": "withdraw_pending_action",
+        "description": (
+            "Cancel a queued action ('actually, forget that email'). Omit "
+            "action_id to withdraw the most recent one."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action_id": {"type": "string", "description": "omit for the most recent"}
+            },
+        },
         "timeout": 8,
     },
     {

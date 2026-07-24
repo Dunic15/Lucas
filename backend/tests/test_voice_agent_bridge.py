@@ -512,6 +512,49 @@ def test_tool_capabilities_returns_structured_truth(client, bearer):
     store.remove("bot_capst")
 
 
+def test_tool_action_continuity_amend_and_withdraw(client, bearer):
+    """Live 2026-07-24 ('got the meeting subject' had nowhere to land): a
+    correction must update the SAME card; 'cancel that' must withdraw it."""
+    _el_session("bot_cont")
+    q = _tool(
+        client, "cap-bot_cont", "queue_action",
+        {"summary": "create a meeting",
+         "details": "meeting tomorrow at 3pm with Ananth",
+         "request_id": "req-cont"},
+        bearer,
+    ).json()
+    action_id = q["result"]["action_id"]
+
+    listed = _tool(client, "cap-bot_cont", "get_pending_actions", {}, bearer).json()
+    assert any(a["action_id"] == action_id for a in listed["result"]["actions"])
+
+    amended = _tool(
+        client, "cap-bot_cont", "amend_pending_action",
+        {"new_text": "meeting tomorrow at 3pm with Ananth, subject: Alpina review"},
+        bearer, "tc_am",
+    ).json()
+    assert amended["result"]["status"] == "amended"
+    assert amended["result"]["action_id"] == action_id  # SAME card
+    assert "Alpina review" in amended["result"]["action"]
+
+    gone = _tool(client, "cap-bot_cont", "withdraw_pending_action", {}, bearer).json()
+    assert gone["result"]["status"] == "withdrawn"
+    assert gone["result"]["action_id"] == action_id
+    store.remove("bot_cont")
+
+
+def test_bootstrap_language_knob_localizes_greeting(client, bearer, monkeypatch):
+    monkeypatch.setattr(settings, "elevenlabs_api_key", "k")
+    monkeypatch.setattr(voice_agent_api.httpx, "Client", _FakeMintClient)
+    monkeypatch.setattr(settings, "voice_agent_language", "it")
+    _el_session("bot_it")
+    r = client.get("/internal/voice-agent/bootstrap/cap-bot_it", headers=bearer)
+    agent_over = r.json()["init"]["conversation_config_override"]["agent"]
+    assert agent_over["language"] == "it"
+    assert "Ciao a tutti" in agent_over["first_message"]
+    store.remove("bot_it")
+
+
 def test_tool_crash_returns_502_not_traceback(client, bearer, monkeypatch):
     from app.brain import rag
 
