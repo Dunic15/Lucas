@@ -247,6 +247,10 @@ def build_payload() -> dict:
                 # discipline in the prompt (and the Director coming), normal
                 # is the snappier right default for 1:1 pilots.
                 "turn_eagerness": "normal",
+                # Trial (changelog 2026-02-02, semantics undocumented): the
+                # name implies generation starts before the turn is fully
+                # confirmed — a first-audio win. Remove if replies get jumpy.
+                "speculative_turn": True,
                 # Perceived-latency mask: a tiny filler while a slow LLM turn
                 # is still generating (Underheard-documented pattern).
                 "soft_timeout_config": {
