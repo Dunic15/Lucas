@@ -50,7 +50,11 @@ export class VoiceSession {
   constructor(state, env) {
     this.env = env;
     this.cap = "";
-    this.recall = null; // WS from Recall (audio ingress)
+    // Audio ingress: with audio_separate_raw Recall opens ONE WS PER
+    // PARTICIPANT (born on unmute, torn down on mute) — a Set, never a
+    // single socket. The mixed-audio fallback rung is just a Set of one.
+    this.recallSockets = new Set();
+    this.botName = ""; // from bootstrap: defensive self-stream filter
     this.page = null; // WS to the avatar page (audio egress)
     this.el = null; // WS to ElevenLabs
     this.elReady = false; // conversation_initiation_metadata seen
@@ -81,8 +85,17 @@ export class VoiceSession {
   attachPage(ws) {
     try { this.page?.close(1000, "replaced"); } catch (_) {}
     this.page = ws;
-    ws.addEventListener("close", () => { if (this.page === ws) this.page = null; });
-    ws.addEventListener("error", () => { if (this.page === ws) this.page = null; });
+    const bye = () => {
+      if (this.page !== ws) return;
+      this.page = null;
+      // The page lives exactly as long as the bot's browser: page gone AND
+      // no ingress sockets = the meeting is over. (Sockets-empty alone is a
+      // silent/all-muted room — stay alive; a transient page drop reconnects
+      // with backoff and re-attaches.)
+      if (this.recallSockets.size === 0) this.teardown("closed");
+    };
+    ws.addEventListener("close", bye);
+    ws.addEventListener("error", bye);
   }
 
   sendPage(obj) {
@@ -91,13 +104,13 @@ export class VoiceSession {
 
   // ── Recall (audio ingress) ──────────────────────────────────────────
   attachRecall(ws) {
-    try { this.recall?.close(1000, "replaced"); } catch (_) {}
-    this.recall = ws;
+    this.recallSockets.add(ws);
     ws.addEventListener("message", (e) => this.onRecallMessage(e));
     const bye = () => {
-      if (this.recall !== ws) return;
-      this.recall = null;
-      this.teardown("closed"); // meeting over (or Recall re-dialing)
+      this.recallSockets.delete(ws);
+      // Separate streams churn per unmute — a socket closing is routine.
+      // Meeting-over is "no ingress AND no page".
+      if (this.recallSockets.size === 0 && !this.page) this.teardown("closed");
     };
     ws.addEventListener("close", bye);
     ws.addEventListener("error", bye);
@@ -109,16 +122,30 @@ export class VoiceSession {
     try {
       ev = JSON.parse(typeof e.data === "string" ? e.data : new TextDecoder().decode(e.data));
     } catch (_) { return; }
-    if (ev.event !== "audio_mixed_raw.data") return;
-    const buf = ev.data && ev.data.data && ev.data.data.buffer;
+    const separate = ev.event === "audio_separate_raw.data";
+    if (!separate && ev.event !== "audio_mixed_raw.data") return;
+    const inner = (ev.data && ev.data.data) || {};
+    const buf = inner.buffer;
     if (!buf) return;
+    if (separate) {
+      // Per-participant mic stream: the bot's own output is not a stream, so
+      // no self-hearing — NO half-duplex gate, and voice barge-in just works
+      // (audio keeps flowing while he speaks; EL interruption handles it).
+      // Defensive self-filter anyway, by the bot's display name.
+      const p = inner.participant || (ev.data && ev.data.participant) || {};
+      const pname = String(p.name || "").trim().toLowerCase();
+      if (p.is_bot === true) return;
+      if (this.botName && pname && pname === this.botName.toLowerCase()) return;
+    } else {
+      // Mixed fallback rung (workspace flag off): the room mix contains his
+      // own voice while the answer plays — half-duplex gate stays. 800ms
+      // grace covers the page's viseme segment buffering.
+      if (Date.now() < this.playheadMs + 800) return;
+    }
     this.frames++;
-    if (this.frames === 1) console.log("first recall frame");
-    // Half-duplex: the room's mixed audio contains Cedric's own voice while
-    // his answer plays — never let the agent hear itself. 800ms grace (was
-    // 300): the page now buffers ~1s segments for viseme lip-sync, so real
-    // playback ends later than this byte-clock estimate.
-    if (Date.now() < this.playheadMs + 800) return;
+    if (this.frames === 1) {
+      console.log("first recall frame (" + (separate ? "separate" : "mixed") + ")");
+    }
     if (this.el && this.elReady) {
       try {
         this.el.send(JSON.stringify({ user_audio_chunk: buf }));
@@ -170,6 +197,7 @@ export class VoiceSession {
     }
     this.el = el;
     this.connecting = false;
+    this.botName = String(cfg.bot_name || "");
     try { el.send(JSON.stringify(cfg.init)); } catch (_) {}
     el.addEventListener("message", (e) => this.onELMessage(e));
     const dead = async () => {
@@ -178,7 +206,7 @@ export class VoiceSession {
       this.elReady = false;
       // EL dying while the meeting is still live = mid-meeting failure →
       // the backend flips the voice back to the legacy brain.
-      if (this.recall) await this.postEvent("failed");
+      if (this.recallSockets.size > 0 || this.page) await this.postEvent("failed");
       this.sendPage({ type: "interrupt" });
     };
     el.addEventListener("close", dead);
@@ -346,8 +374,10 @@ export class VoiceSession {
     this.elReady = false;
     try { this.el?.close(1000, "session over"); } catch (_) {}
     this.el = null;
-    try { this.recall?.close(1000, "session over"); } catch (_) {}
-    this.recall = null;
+    for (const ws of this.recallSockets) {
+      try { ws.close(1000, "session over"); } catch (_) {}
+    }
+    this.recallSockets.clear();
     this.sendPage({ type: "interrupt" });
     this.preBuffer = [];
     this.preBufferB64 = 0;

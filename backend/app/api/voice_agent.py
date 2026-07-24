@@ -194,6 +194,11 @@ async def voice_agent_bootstrap(capability: str, request: Request) -> JSONRespon
         {
             "enabled": True,
             "bot_id": session.bot_id,
+            # The bot joins Recall under this display name; on separate
+            # per-participant streams the DO drops any stream whose
+            # participant matches it (defensive self-filter — the bot's
+            # output should not appear as a stream at all).
+            "bot_name": avatar.name,
             "signed_url": signed_url,
             "init": build_init_payload(session, avatar),
         }

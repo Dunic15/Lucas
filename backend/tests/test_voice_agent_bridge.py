@@ -455,18 +455,23 @@ def test_attempts_gain_voice_endpoint_first_with_fallbacks():
         attach_voice_agent_url="wss://cedric-voice.example/voice/cap123",
     )
     labels = [label for label, _ in attempts]
-    assert labels[0].endswith("+voice-agent")
-    assert any(not l.endswith("+voice-agent") for l in labels)  # fallbacks kept
-    voiced = attempts[0][1]["recording_config"]
-    assert "audio_mixed_raw" in voiced
+    # Ladder: separate-participant streams first (no echo, true barge-in),
+    # mixed half-duplex as the flag-off fallback, untouched originals last.
+    assert labels[0].endswith("+voice-sep")
+    assert any(l.endswith("+voice-agent") for l in labels)
+    assert any("+voice" not in l for l in labels)  # plain fallbacks kept
+    sep = attempts[0][1]["recording_config"]
+    assert "audio_separate_raw" in sep and "audio_mixed_raw" not in sep
     assert any(
         ep.get("url") == "wss://cedric-voice.example/voice/cap123"
-        and ep.get("events") == ["audio_mixed_raw.data"]
-        for ep in voiced["realtime_endpoints"]
+        and ep.get("events") == ["audio_separate_raw.data"]
+        for ep in sep["realtime_endpoints"]
     )
+    mixed = next(b for l, b in attempts if l.endswith("+voice-agent"))["recording_config"]
+    assert "audio_mixed_raw" in mixed and "audio_separate_raw" not in mixed
     # Plain fallback attempts must NOT stream audio anywhere.
     plain = attempts[-1][1]["recording_config"]
-    assert "audio_mixed_raw" not in plain
+    assert "audio_mixed_raw" not in plain and "audio_separate_raw" not in plain
 
 
 def test_create_bot_appends_voice_params_and_skips_ears(monkeypatch, tmp_path):
