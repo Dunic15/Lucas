@@ -196,6 +196,13 @@ async def _lifespan(app: FastAPI):
     # it pays the old cold-start once — never a failed deploy.
     async def _warm_indexes() -> None:
         _t0 = time.perf_counter()
+        # While this runs, the LIVE answer path skips retrieval entirely
+        # (rag.is_warming) — 2026-07-24 the warm-up took 1480s after a docs
+        # change and a meeting inside that window went MUTE: every retrieve
+        # queued behind the rebuild (106-121s), every answer was cancelled.
+        from .brain import rag as _rag
+
+        _rag.set_warming(True)
         try:
             await run_in_threadpool(_prebuild_indexes)
             print(
@@ -208,6 +215,8 @@ async def _lifespan(app: FastAPI):
                 f"[startup] index warm-up failed: {type(exc).__name__}",
                 flush=True,
             )
+        finally:
+            _rag.set_warming(False)
 
     asyncio.create_task(_warm_indexes())
 

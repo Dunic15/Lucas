@@ -441,6 +441,15 @@ def _retrieve_for(
     real knowledge docs (plus the org's private index when org_id is given).
     Self-questions retrieve on the bare ask (they're direct), process questions
     keep the history-augmented query."""
+    # Boot warm-up still running → skip retrieval outright (live 2026-07-24:
+    # a meeting inside the 1480s warm-up window queued every retrieve behind
+    # the rebuild for ~2 minutes and the avatar sat MUTE). The stream answers
+    # from the briefs + general knowledge; grounding returns next turn.
+    from . import rag as _rag
+
+    if _rag.is_warming():
+        print("[latency] retrieve skipped (index warm-up running)", flush=True)
+        return []
     if _is_about_avatar(question):
         return retrieve_about(avatar, question, k=k)
     query = _retrieval_query(question, history)
