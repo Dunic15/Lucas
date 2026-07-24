@@ -248,8 +248,32 @@ export class VoiceSession {
       this.handleToolCall(msg.client_tool_call || {});
       return;
     }
-    // user_transcript / agent_response / vad_score …: transcripts stay on the
+    if (t === "agent_response") {
+      // The agent's SPOKEN words never pass through the backend under this
+      // runtime (no _make_avatar_speak dispatch), so without this the meeting
+      // transcript/artifact loses everything HE said (live bug 2026-07-24:
+      // owner saw only the human lines). Forward the text to the transcript
+      // recorder — content goes to the designed PII store, never to logs.
+      const said =
+        (msg.agent_response_event && msg.agent_response_event.agent_response) || "";
+      if (said) this.postEventBody({ type: "agent_said", text: String(said) });
+      return;
+    }
+    // user_transcript / vad_score …: user transcripts stay on the
     // Recall→backend path (speaker labels live there); nothing is logged here.
+  }
+
+  async postEventBody(body) {
+    try {
+      await fetch(`${this.env.BACKEND_URL}/internal/voice-agent/event/${this.cap}`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + this.env.BACKEND_BEARER,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (_) {}
   }
 
   async handleToolCall(call) {

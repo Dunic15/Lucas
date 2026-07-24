@@ -248,15 +248,19 @@ def build_payload() -> dict:
                 # If he starts cutting people off: eager -> normal is the
                 # first rollback, speculative_turn the second.
                 "turn_eagerness": "eager",
-                # Trial (changelog 2026-02-02, semantics undocumented): the
-                # name implies generation starts before the turn is fully
-                # confirmed — a first-audio win. Remove if replies get jumpy.
-                "speculative_turn": True,
-                # Filler only on genuinely SLOW turns (tool calls): 2.6s so a
-                # normal reply never hums, and a spoken bridge instead of
-                # "Mmh…" (owner: "meno mmm, di' let me think o simile").
+                # speculative_turn OFF — explicit False, NOT removed: the
+                # agents PATCH merges config, so an absent key keeps the old
+                # value (bit us 2026-07-24). Trialled and rolled back the
+                # same day: undocumented, and the one knob flipped between
+                # the fast call and the slow one — every turn regressed past
+                # the filler threshold with it on. Do not re-enable blind.
+                "speculative_turn": False,
+                # Filler only on genuinely SLOW turns (tool calls): high
+                # threshold so a normal reply NEVER gets "let me think"
+                # (owner heard it on every turn — that was the regression
+                # above tripping the old 2.6s bar).
                 "soft_timeout_config": {
-                    "timeout_seconds": 2.6,
+                    "timeout_seconds": 3.5,
                     "message": "Let me think…",
                     "use_llm_generated_message": False,
                     "randomize_fillers": True,
