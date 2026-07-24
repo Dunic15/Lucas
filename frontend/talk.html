@@ -780,14 +780,63 @@
     const voiceCap = params.get("voice_cap");
     if (voiceWsBase && voiceCap) {
       let agentCtx = null, agentNextAt = 0, agentLive = [];
+      let agentGain = null, agentAnalyser = null, agentMouthRAF = 0;
       const agentAudioCtx = () => {
-        if (!agentCtx) agentCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (!agentCtx) {
+          agentCtx = new (window.AudioContext || window.webkitAudioContext)();
+          agentGain = agentCtx.createGain();
+          agentGain.connect(agentCtx.destination);
+          // Amplitude tap for the lip driver below: every agent chunk plays
+          // through this gain, so ONE analyser hears his whole voice.
+          agentAnalyser = agentCtx.createAnalyser();
+          agentAnalyser.fftSize = 512;
+          agentAnalyser.smoothingTimeConstant = 0.5;
+          agentGain.connect(agentAnalyser);
+        }
         if (agentCtx.state === "suspended") agentCtx.resume().catch(() => {});
         return agentCtx;
+      };
+      // ── amplitude lip-sync (pilot) ──
+      // The streamed agent audio carries no word timings, so the full viseme
+      // pipeline (head.speakAudio) can't run — instead the mouth follows the
+      // VOICE ENERGY frame-by-frame via TalkingHead's setFixedValue override
+      // (hasOwnProperty-guarded in the lib: a missing morph is a safe no-op).
+      // viseme_aa is the Oculus open-mouth shape, jawOpen the ARKit twin —
+      // driving both covers RPM and MetaPerson rigs. Released (null) the
+      // moment he goes quiet so idle/mood animations take the face back.
+      // Real phoneme visemes (agent_response text + estimated timings) are
+      // the PR 3 upgrade.
+      const releaseMouth = () => {
+        if (agentMouthRAF) { cancelAnimationFrame(agentMouthRAF); agentMouthRAF = 0; }
+        try { head.setFixedValue("viseme_aa", null); } catch (_) {}
+        try { head.setFixedValue("jawOpen", null); } catch (_) {}
+      };
+      const driveMouth = () => {
+        if (agentMouthRAF) return; // already running
+        const buf = new Uint8Array(agentAnalyser.frequencyBinCount);
+        let level = 0;
+        const tick = () => {
+          const speaking = performance.now() < speakingUntil;
+          if (!speaking) { releaseMouth(); return; }
+          agentMouthRAF = requestAnimationFrame(tick);
+          agentAnalyser.getByteTimeDomainData(buf);
+          let sum = 0;
+          for (let i = 0; i < buf.length; i++) {
+            const d = (buf[i] - 128) / 128; sum += d * d;
+          }
+          const rms = Math.sqrt(sum / buf.length);
+          // 5.5x gain saturates on normal speech peaks; the 60/40 blend keeps
+          // the jaw from fluttering at frame rate.
+          level = level * 0.6 + Math.min(1, rms * 5.5) * 0.4;
+          try { head.setFixedValue("viseme_aa", Math.min(0.85, level * 0.8)); } catch (_) {}
+          try { head.setFixedValue("jawOpen", Math.min(0.5, level * 0.45)); } catch (_) {}
+        };
+        tick();
       };
       const flushAgentAudio = () => {
         for (const s of agentLive) { try { s.stop(); } catch (_) {} }
         agentLive = []; agentNextAt = 0; speakingUntil = 0;
+        releaseMouth();
       };
       const playAgentChunk = (b64) => {
         const ctx = agentAudioCtx();
@@ -803,7 +852,7 @@
         const buf = ctx.createBuffer(1, n, 16000); // ctx resamples on play
         buf.getChannelData(0).set(f32);
         const src = ctx.createBufferSource();
-        src.buffer = buf; src.connect(ctx.destination);
+        src.buffer = buf; src.connect(agentGain);
         const t = Math.max(ctx.currentTime + 0.05, agentNextAt);
         src.start(t); agentNextAt = t + buf.duration;
         agentLive.push(src);
@@ -814,6 +863,7 @@
           speakingUntil,
           performance.now() + (agentNextAt - ctx.currentTime) * 1000 + 300
         );
+        driveMouth();
       };
       // A legacy stop ({type:"stop"} from barge-in / "Cedric stop") must also
       // silence the AGENT queue: while he speaks the half-duplex gate mutes
