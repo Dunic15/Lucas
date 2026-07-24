@@ -115,8 +115,11 @@ def build_init_payload(session, avatar) -> dict:
         "conversation_config_override": {
             "agent": {
                 "prompt": {"prompt": prompt},
-                # The legacy join self-introduction is the ONE greeting.
-                "first_message": "",
+                # first_message deliberately NOT overridden: the AGENT owns
+                # the greeting now (its static first_message fires when the
+                # bridge connects) and the legacy self-intro is skipped for
+                # EL-runtime sessions (main.maybe_self_introduce) — exactly
+                # one greeter, in the same voice that answers.
                 "language": "en",
             }
         },

@@ -97,14 +97,28 @@ def build_payload() -> dict:
             "agent": {
                 "prompt": {
                     "prompt": f"{persona}\n\n{PILOT_RULES}",
-                    # Underheard's proven prod pick; the 200-token cap keeps
-                    # spoken answers short AND responses fast.
-                    "llm": "claude-sonnet-4-6",
+                    # Fluidity pass 2026-07-24: EL's own speed tier (Gemini
+                    # Flash / Haiku class) — the LLM was the biggest TTFT
+                    # line-item; sonnet-4-6 was a quality pick, not a speed
+                    # one. The 200-token cap keeps spoken answers short.
+                    "llm": "gemini-2.5-flash",
                     "temperature": 0.4,
                     "max_tokens": 200,
+                    # Native knowledge base (avatar packs, synthetic-only by
+                    # policy): RAG retrieval happens INSIDE the turn (+~250ms)
+                    # instead of a client-tool round-trip + second generation.
+                    # Org-private Company Brain / Drive / transcripts NEVER go
+                    # here — those stay in Laura behind tools.
+                    "knowledge_base": [],  # filled by ensure_knowledge_docs()
+                    "rag": {"enabled": True},
                 },
-                # One greeter only: the legacy join self-introduction.
-                "first_message": "",
+                # The agent owns the ONE greeting (fires when the bridge
+                # connects = join time); the legacy self-intro is skipped for
+                # EL-runtime sessions backend-side.
+                "first_message": (
+                    "Hi everyone — Cedric here. Just say my name whenever "
+                    "you need me."
+                ),
                 "language": "en",
             },
             # Italian as an additional language (the team code-switches EN/IT);
@@ -130,7 +144,19 @@ def build_payload() -> dict:
             },
             "turn": {
                 "turn_timeout": 7,
-                "turn_eagerness": "patient",
+                # Fluidity pass 2026-07-24: patient maximized not-interrupting
+                # at the cost of dead air after the speaker stops; with wake
+                # discipline in the prompt (and the Director coming), normal
+                # is the snappier right default for 1:1 pilots.
+                "turn_eagerness": "normal",
+                # Perceived-latency mask: a tiny filler while a slow LLM turn
+                # is still generating (Underheard-documented pattern).
+                "soft_timeout_config": {
+                    "timeout_seconds": 1.6,
+                    "message": "Mmh…",
+                    "use_llm_generated_message": False,
+                    "max_soft_timeouts_per_generation": 1,
+                },
                 # Backchannels must not cut Cedric off mid-answer; a real
                 # barge-in (anything beyond these) still interrupts him.
                 "interruption_ignore_terms": [
@@ -185,6 +211,69 @@ def _headers() -> dict:
     return {"xi-api-key": key, "Content-Type": "application/json"}
 
 
+def ensure_knowledge_docs(client: httpx.Client) -> list[dict]:
+    """Sync Cedric's knowledge packs into the EL native knowledge base.
+
+    Content-aware idempotency: each doc's KB name embeds a short content hash
+    ("cedric-kb:<file>@<hash>"), so an edited file gets a NEW doc on the next
+    run and the agent attach list always points at current content (stale
+    hashes stay orphaned in the KB, harmless and unattached). Synthetic
+    avatar-pack markdown ONLY — never org data, transcripts, or PII.
+    """
+    import hashlib
+
+    docs: list[tuple[str, str]] = []  # (kb_name, text)
+    cedric_cfg = _load_cedric()
+    pack_ids = ["cedric"] + [str(p) for p in (cedric_cfg.get("knowledge_packs") or [])]
+    for pack in pack_ids:
+        kdir = REPO_ROOT / "avatars" / pack / "knowledge"
+        if not kdir.is_dir():
+            continue
+        for md in sorted(kdir.glob("*.md")):
+            text = md.read_text().strip()
+            if not text:
+                continue
+            digest = hashlib.sha256(text.encode()).hexdigest()[:10]
+            docs.append((f"cedric-kb:{pack}/{md.name}@{digest}", text))
+    if not docs:
+        return []
+
+    existing: dict[str, str] = {}  # name -> id
+    cursor = None
+    while True:
+        params = {"page_size": 100}
+        if cursor:
+            params["cursor"] = cursor
+        resp = client.get(f"{API_BASE}/v1/convai/knowledge-base", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        for d in data.get("documents", []) or []:
+            existing[d.get("name", "")] = d.get("id", "")
+        cursor = data.get("next_cursor")
+        if not data.get("has_more") or not cursor:
+            break
+
+    entries: list[dict] = []
+    created = 0
+    for name, text in docs:
+        doc_id = existing.get(name)
+        if not doc_id:
+            resp = client.post(
+                f"{API_BASE}/v1/convai/knowledge-base/text",
+                json={"name": name, "text": text},
+            )
+            if resp.status_code >= 400:
+                sys.exit(f"KB create failed for {name}: {resp.status_code} {resp.text[:500]}")
+            doc_id = resp.json().get("id", "")
+            created += 1
+        if doc_id:
+            entries.append(
+                {"type": "text", "name": name, "id": doc_id, "usage_mode": "auto"}
+            )
+    print(f"kb: {len(entries)} docs attached ({created} created)")
+    return entries
+
+
 def find_existing(client: httpx.Client) -> str | None:
     """agent_id of an existing agent with AGENT_NAME, else None (paginated)."""
     cursor = None
@@ -213,7 +302,10 @@ def main() -> None:
         print(json.dumps(payload, indent=2))
         return
 
-    with httpx.Client(headers=_headers(), timeout=30) as client:
+    with httpx.Client(headers=_headers(), timeout=60) as client:
+        payload["conversation_config"]["agent"]["prompt"]["knowledge_base"] = (
+            ensure_knowledge_docs(client)
+        )
         agent_id = find_existing(client)
         if agent_id:
             resp = client.patch(

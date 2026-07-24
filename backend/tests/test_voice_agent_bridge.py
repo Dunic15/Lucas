@@ -122,8 +122,9 @@ def test_bootstrap_mints_signed_url_and_init(client, bearer, monkeypatch):
     init = body["init"]
     assert init["type"] == "conversation_initiation_client_data"
     agent_over = init["conversation_config_override"]["agent"]
-    # The ONE greeting is the legacy self-intro: the agent must not greet.
-    assert agent_over["first_message"] == ""
+    # The AGENT owns the greeting: its static first_message must NOT be
+    # overridden away (and the legacy self-intro is skipped for EL sessions).
+    assert "first_message" not in agent_over
     prompt = agent_over["prompt"]["prompt"]
     # Persona + pilot rules + the meeting context in an UNTRUSTED block.
     assert "BEGIN UNTRUSTED MEETING DATA" in prompt
@@ -245,6 +246,65 @@ def test_stop_command_survives_suppression(client, monkeypatch):
     assert r.get("voice_owner") != "elevenlabs"  # fell through to control path
     assert stops  # the stop actually fired
     store.remove("bot_stop")
+
+
+def test_self_intro_skipped_for_el_runtime(client, monkeypatch):
+    monkeypatch.setattr(settings, "self_introduce_on_join", True)
+    s = _el_session("bot_intro")
+    assert main_module.maybe_self_introduce(s) is False  # the agent greets
+    store.remove("bot_intro")
+
+
+def test_explicit_leave_falls_through_suppression(client, monkeypatch):
+    """'Leave the meeting' with NO name must still reach the legacy leave
+    guards while the agent owns the voice — meter safety (audit 2026-07-24:
+    all unaddressed leave variants were dead under suppression)."""
+    monkeypatch.setattr(main_module.recall_client, "leave_call", lambda b: None)
+    monkeypatch.setattr(main_module.recall_client, "delete_bot", lambda b: None)
+    monkeypatch.setattr(
+        main_module.anam_client, "end_conversation", lambda c: None
+    )
+    s = _el_session("bot_xleave")
+    s.voice_agent_active = True
+    r = _final(client, "bot_xleave", "please leave the meeting now")
+    assert r.get("voice_owner") != "elevenlabs"  # fell through to legacy guards
+    store.remove("bot_xleave")
+
+
+def test_ack_and_backchannel_gated_when_agent_owns_voice(client, monkeypatch):
+    """The partial path must not speak legacy acks/backchannels over the
+    agent's voice (audit 2026-07-24: live double-voice in a 1:1)."""
+    lines: list[str] = []
+
+    async def fake_speak(session, line, **kwargs):
+        lines.append(line)
+        return True
+
+    monkeypatch.setattr(main_module, "_make_avatar_speak", fake_speak)
+    monkeypatch.setattr(main_module, "_should_backchannel", lambda *a, **k: True)
+    monkeypatch.setattr(main_module, "_in_opening_grace", lambda s: False)
+    monkeypatch.setattr(settings, "backchannel_enabled", True)
+    s = _el_session("bot_bc")
+    s.voice_agent_active = True
+    r = client.post(
+        "/webhooks/recall",
+        json={
+            "event": "transcript.partial_data",
+            "data": {
+                "bot": {"id": "bot_bc"},
+                "data": {
+                    "words": [
+                        {"text": w}
+                        for w in "so the plan for next quarter is quite long".split()
+                    ],
+                    "participant": {"name": "Duccio", "id": 1},
+                },
+            },
+        },
+    ).json()
+    assert r.get("partial") is True
+    assert lines == []  # no legacy voice while the agent owns the floor
+    store.remove("bot_bc")
 
 
 def test_suppression_lifts_when_bridge_dies(client, monkeypatch):

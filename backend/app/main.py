@@ -2425,6 +2425,15 @@ def _self_intro_floor_busy(session: store.Session) -> bool:
     ) < settings.interject_min_pause_seconds
 
 
+def _el_voice_owned(session: store.Session) -> bool:
+    """True while the ElevenLabs agent owns this session's voice: the legacy
+    path may listen, archive and act — but never speak (except stop/leave)."""
+    return (
+        session.conversation_runtime == elevenlabs_agent.RUNTIME_ELEVENLABS_AGENT
+        and session.voice_agent_active
+    )
+
+
 def maybe_self_introduce(session: store.Session) -> bool:
     """One-time self-introduction on join (settings.self_introduce_on_join).
 
@@ -2442,6 +2451,13 @@ def maybe_self_introduce(session: store.Session) -> bool:
     webhooks on the same event loop cannot double-launch. Returns True when a
     self-intro task was scheduled."""
     if not settings.self_introduce_on_join:
+        return False
+    # ElevenLabs-runtime sessions: the AGENT owns the greeting (its
+    # first_message fires when the bridge connects — one greeter, and it is
+    # the same voice that will answer). The legacy line here would either
+    # double-greet or greet in the WRONG voice. Snapshot-based on purpose:
+    # even if the bridge later fails, the fallback line covers the seam.
+    if session.conversation_runtime == elevenlabs_agent.RUNTIME_ELEVENLABS_AGENT:
         return False
     # Wake-word avatars enter SILENT — no self-introduction on join (owner ask
     # 2026-07-20): they just listen and transcribe until someone says their
@@ -3342,6 +3358,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if (
             settings.ack_enabled
             and called
+            # ElevenLabs runtime: the agent owns the voice — a legacy "Sure —"
+            # would talk OVER his reply (audit 2026-07-24: the partial path
+            # wasn't gated, double-voice). Barge-in/stop above stay live.
+            and not _el_voice_owned(session)
             # Wake-word mode: stay SILENT until the actual answer — no "Sure —"
             # ack over a still-talking speaker (owner ask 2026-07-20). KEEP THIS
             # — a merge has reverted it 3x; the answer already waits for the
@@ -3379,6 +3399,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if (
             not called
             and not acked
+            # ElevenLabs runtime: no legacy "Mm-hm." over (or between) the
+            # agent's own turns — the 1:1 wake-word relaxation made this a
+            # live double-voice bug (audit 2026-07-24).
+            and not _el_voice_owned(session)
             and not _in_opening_grace(session)
             and _should_backchannel(session, text, avatar)
         ):
@@ -3698,13 +3722,16 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # "Cedric, leave the meeting" MUST keep working (meter safety), so a
     # called stop/leave falls through to the handlers below. The moment the
     # bridge dies, voice_agent_active flips False and this gate opens again.
-    if (
-        session.conversation_runtime == elevenlabs_agent.RUNTIME_ELEVENLABS_AGENT
-        and session.voice_agent_active
-    ):
-        _ctrl = called and (
-            detect_stop_command(question) or detect_leave_command(question)
-        )
+    if _el_voice_owned(session):
+        # Control carve-outs: by-name stop/leave, PLUS the imperative explicit
+        # leave ("leave the meeting" with no name — meter safety; audit
+        # 2026-07-24 found all unaddressed leave variants dead). The explicit
+        # detector is imperative-only, so human chatter can't slip through;
+        # the downstream leave guards still decide whether to actually go.
+        _ctrl = (
+            called
+            and (detect_stop_command(question) or detect_leave_command(question))
+        ) or detect_leave_command_explicit(text)
         if not _ctrl:
             return JSONResponse(
                 {"ok": True, "spoke": False, "voice_owner": "elevenlabs"}
