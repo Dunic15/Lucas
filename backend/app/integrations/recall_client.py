@@ -28,6 +28,14 @@ class AvatarBusyError(RuntimeError):
     """Recall has no avatar bot capacity available for a new dispatch."""
 
 
+# Transient-507 dispatch retry (2026-07-24: Recall's shared avatar pool ran
+# dry twice with zero of our bots active — it clears in a minute or two, and
+# a hard bounce mid-demo is worse than a short spinner).
+_BUSY_RETRIES = 3
+_BUSY_BACKOFF_S = (10, 15, 20)
+_BUSY_SLEEP = time.sleep  # test seam: patched so suites never really wait
+
+
 _TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 _CLIENT = httpx.Client(
     timeout=_TIMEOUT,
@@ -551,49 +559,72 @@ def create_bot(
         attach_voice_agent_url=voice_agent_url,
     )
     last_error: httpx.HTTPStatusError | None = None
+    _busy_round = 0
+    while True:
+        _busy_retry = False
 
-    for idx, (label, body) in enumerate(attempts):
-        resp = _request(
-            "POST",
-            f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/",
-            headers=_headers(),
-            json=body,
-            retry=True,
-        )
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 401:
-                raise RuntimeError(
-                    "Recall rejected RECALL_API_KEY with 401. Make sure it is the "
-                    "API Key, not a whsec_ workspace/webhook secret, and that "
-                    "RECALL_API_BASE matches the key's region."
-                ) from e
-            if e.response.status_code == 507:
-                # Do not bubble Recall's raw response body to the product UI.
-                raise AvatarBusyError(
-                    "All avatars are busy right now — retry in a minute."
-                ) from e
-            if e.response.status_code == 400 and idx < len(attempts) - 1:
-                last_error = e
-                print(
-                    f"[recall] create_bot rejected {label}; trying fallback",
-                    flush=True,
-                )
-                continue
-            raise
-        result = resp.json()
-        # Which attempt won matters operationally (did the bot get the ears
-        # audio endpoint, or a fallback?) — label only, no meeting content.
-        print(f"[recall] bot created via {label}", flush=True)
-        # Private hand-off to main.py. This key is removed before any API
-        # response is built and the raw capability is never persisted/logged.
-        result["_laura_realtime_capability"] = realtime_capability
-        return result
+        for idx, (label, body) in enumerate(attempts):
+            resp = _request(
+                "POST",
+                f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/",
+                headers=_headers(),
+                json=body,
+                retry=True,
+            )
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 401:
+                    raise RuntimeError(
+                        "Recall rejected RECALL_API_KEY with 401. Make sure it is the "
+                        "API Key, not a whsec_ workspace/webhook secret, and that "
+                        "RECALL_API_BASE matches the key's region."
+                    ) from e
+                if e.response.status_code == 507:
+                    # Recall's shared avatar pool is momentarily out of capacity
+                    # (hit twice on 2026-07-24 with ZERO of our bots active — it's
+                    # their side and usually clears in a minute or two). Retry the
+                    # SAME dispatch a few times with a short backoff before giving
+                    # up, so a transient blip never bounces a live demo. Sync sleep
+                    # is fine: create_bot runs in the threadpool, off the loop.
+                    if _busy_round < _BUSY_RETRIES:
+                        wait = _BUSY_BACKOFF_S[min(_busy_round,
+                                                   len(_BUSY_BACKOFF_S) - 1)]
+                        print(
+                            f"[recall] avatar capacity busy (507) — retry "
+                            f"{_busy_round + 1}/{_BUSY_RETRIES} in {wait}s",
+                            flush=True,
+                        )
+                        _BUSY_SLEEP(wait)
+                        _busy_round += 1
+                        _busy_retry = True
+                        break  # restart the attempts loop from the first config
+                    # Do not bubble Recall's raw response body to the product UI.
+                    raise AvatarBusyError(
+                        "All avatars are busy right now — retry in a minute."
+                    ) from e
+                if e.response.status_code == 400 and idx < len(attempts) - 1:
+                    last_error = e
+                    print(
+                        f"[recall] create_bot rejected {label}; trying fallback",
+                        flush=True,
+                    )
+                    continue
+                raise
+            result = resp.json()
+            # Which attempt won matters operationally (did the bot get the ears
+            # audio endpoint, or a fallback?) — label only, no meeting content.
+            print(f"[recall] bot created via {label}", flush=True)
+            # Private hand-off to main.py. This key is removed before any API
+            # response is built and the raw capability is never persisted/logged.
+            result["_laura_realtime_capability"] = realtime_capability
+            return result
 
-    if last_error:
-        raise last_error
-    raise RuntimeError("Recall create_bot failed without a response.")
+        if _busy_retry:
+            continue  # transient 507 — run the attempts again
+        if last_error:
+            raise last_error
+        raise RuntimeError("Recall create_bot failed without a response.")
 
 
 def create_calendar(

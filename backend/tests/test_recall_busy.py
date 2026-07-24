@@ -16,6 +16,9 @@ from app import recall_client
 
 def test_create_bot_maps_recall_507_to_avatar_busy(monkeypatch):
     monkeypatch.setattr(recall_client, "_headers", lambda: {"Authorization": "test"})
+    # retry seam: exhaust the busy-retry budget instantly (no real waits)
+    _sleeps = []
+    monkeypatch.setattr(recall_client, "_BUSY_SLEEP", _sleeps.append)
 
     def fake_request(method, url, **kwargs):
         request = httpx.Request(method, url)
@@ -32,6 +35,32 @@ def test_create_bot_maps_recall_507_to_avatar_busy(monkeypatch):
         assert "vendor-internal" not in str(exc)
     else:
         raise AssertionError("Recall 507 was not mapped to AvatarBusyError")
+    # the transient-507 retry ran its full budget before giving up
+    assert len(_sleeps) == recall_client._BUSY_RETRIES
+
+
+def test_create_bot_busy_retry_recovers_when_capacity_frees(monkeypatch):
+    """2026-07-24: Recall's shared avatar pool 507'd twice mid-demo with zero
+    of our bots active, then cleared within minutes. A transient 507 must
+    retry with backoff and succeed — never bounce the demo."""
+    monkeypatch.setattr(recall_client, "_headers", lambda: {"Authorization": "test"})
+    waits = []
+    monkeypatch.setattr(recall_client, "_BUSY_SLEEP", waits.append)
+    calls = {"n": 0}
+
+    def fake_request(method, url, **kwargs):
+        request = httpx.Request(method, url)
+        calls["n"] += 1
+        if calls["n"] <= 2:  # two rounds of full capacity exhaustion
+            return httpx.Response(507, json={"detail": "busy"}, request=request)
+        return httpx.Response(201, json={"id": "bot-777"}, request=request)
+
+    monkeypatch.setattr(recall_client, "_request", fake_request)
+    result = recall_client.create_bot(
+        "https://meet.google.com/abc-defg-hij", "https://example.test/avatar"
+    )
+    assert result["id"] == "bot-777"
+    assert waits == [10, 15]  # backoff schedule, then success
 
 
 def test_sessions_start_returns_friendly_avatar_busy_payload(monkeypatch):
