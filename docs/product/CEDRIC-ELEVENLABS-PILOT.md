@@ -182,12 +182,25 @@ What was actually built (deltas from the original sketch in *italics*):
   turn.
 - **Bare "yes" never approves anything** — approvals stay in the dashboard.
 
-### PR 4 — `spike/cedric-elevenlabs-tools` (client tools, ~1.5 days)
-Client tools over the agent WS, relayed to the backend: `get_meeting_context`,
-`search_company_knowledge`, `get_available_actions`, `queue_action` (creates a
-canonical action, `approval_required: true`, never executes). Org+session
-bound; duplicate tool calls must not mint duplicate actions; a tool timeout
-must surface as "I'll check" — never a false "done".
+### PR 4 — client tools — **SHIPPED 2026-07-24**
+Four client tools registered in the EL tools registry (create-or-reuse by
+name, attached via `prompt.tool_ids`; definitions in
+`create_cedric_agent.py::CLIENT_TOOLS` — the contract with
+`api/voice_agent.voice_agent_tool`, change them together):
+`get_meeting_context` (roster + brief + purpose + tracked decisions/owners),
+`search_company_knowledge` (`rag.retrieve` org-scoped: base pack + org's
+private index), `get_available_actions` (`capabilities.cached_snapshot` +
+honest spoken summary), `queue_action` (→ `capture_action_once` with
+**idempotency key** `elagent:{bot_id}:{request_id}`, 15-min dedupe window —
+the tool-callable path used to mint duplicates on retry; `needs_details`
+returns the missing slots so the AGENT runs the clarify loop
+conversationally, then re-calls with the same request_id; always
+`approval_required: true`, execution stays in the dashboard/executor).
+The DO relays `client_tool_call` → `POST /internal/voice-agent/tool/{cap}`
+(same bearer+capability auth) → `client_tool_result`; 12 s abort; a timeout
+returns an explicit error, never a fabricated success. Tool crashes return
+typed errors (502), never tracebacks. Prompt (static + bootstrap override)
+rewritten with the tool rules.
 
 ### PR 5 — `spike/cedric-elevenlabs-hardening` (~1.5 days)
 Fallback (any bridge failure → drain audio queue, `voice_owner=legacy`,
