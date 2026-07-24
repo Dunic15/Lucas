@@ -222,19 +222,24 @@ def test_auto_execute_asana_gated_and_selective(monkeypatch, tmp_path):
 
 # ── typed-action producer: grounding ──
 
-def test_stub_producer_maps_leftovers_to_asana_only_when_allowed():
+def test_stub_producer_types_asana_only_on_an_explicit_cue():
+    """Owner rule 2026-07-24 ("Asana solo quando lo dice"): a leftover work
+    item WITHOUT a task/Asana cue stays untyped even with allow_asana — the
+    old catch-all filed every leftover onto the team's real board."""
     from app.brain.engine import type_actions
 
     actions = [
         {"item": "Update the roadmap deck before Friday", "action_id": "x1"},
         {"item": "Email the recap to dana@acme.com", "action_id": "x2"},
+        {"item": "Create an Asana task for the onboarding checklist",
+         "action_id": "x3"},
     ]
     plain = type_actions(actions, provider="stub")
     assert "typed" not in plain[0]  # no asana without the flag
     typed = type_actions(actions, provider="stub", allow_asana=True)
-    assert typed[0]["typed"]["type"] == "asana.create_task"
-    assert typed[0]["typed"]["args"]["name"] == actions[0]["item"]
+    assert "typed" not in typed[0]  # no cue → stays untyped (NOT asana)
     assert typed[1]["typed"]["type"] == "email.send"  # email intent still wins
+    assert typed[2]["typed"]["type"] == "asana.create_task"  # explicit cue
 
 
 def test_sanitize_asana_grounding_rules():

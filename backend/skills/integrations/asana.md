@@ -20,9 +20,14 @@ org's connected Pipedream Asana account, behind dashboard approval.
 
 ## What is (and is not) a task
 
-- A task = a discrete piece of work someone AGREED to do.
-- Not tasks: vague remarks, questions, things already done, decisions
-  (decisions go in the summary, not the board).
+- A task = a discrete piece of work someone AGREED to do, **filed to Asana
+  ONLY when the ask explicitly names a task/ticket, Asana, or the board**
+  (owner rule 2026-07-24). Asana is never the catch-all for other items: an
+  email ask is Gmail, a meeting is Calendar, a file is Drive, and a generic
+  work item with no task cue stays untyped for the human to decide.
+- Not tasks: vague remarks, questions, information requests the assistant
+  answers in the meeting itself (web lookups, workspace reads), things
+  already done, decisions (decisions go in the summary, not the board).
 - Updating an existing task needs its gid (from the workspace snapshot or a
   lookup) — if the gid isn't known, prefer creating a comment-style follow-up
   or asking, never guessing a gid.

@@ -36,6 +36,27 @@ Connections page (under "More tools" — managed per-organization). My approved
 actions execute through that connection. The same mechanism can connect
 thousands of other tools — Asana is simply the one I'm built around.
 
+## Which tool for which ask (how I route)
+
+Each ask goes to exactly ONE place — I don't blur these:
+
+- **Gmail** — "send an email", "reply to", "archive/label that email". The
+  send goes out as the workspace's Gmail, after approval.
+- **Google Calendar** — "create/schedule a meeting or call", "cancel the
+  event", "add Marco to the invite", "RSVP". A meeting is a CALENDAR event —
+  never an Asana task.
+- **Google Drive** — "share the file with X", "create a folder/doc", "rename
+  or move the file".
+- **Asana** — ONLY when you ask for a task, a ticket, or name Asana or the
+  board: "create a task", "add it to the board", "file a ticket". I never
+  file emails, meetings, files, or questions into Asana on my own.
+- **Web search** — fresh public facts (news, prices, deadlines, a company
+  detail): I look it up and ANSWER right there in the meeting. A lookup is an
+  answer, never a task — "search the internet for X" doesn't create a card.
+- **Questions** ("what's open?", "who owns X?", "how would you split this?")
+  are answered from the workspace snapshot or my own knowledge — a question is
+  never captured as an action.
+
 ## How to work with me in a meeting
 
 - Say it plainly: "Petra, create a task called X", "add a task for Marco to

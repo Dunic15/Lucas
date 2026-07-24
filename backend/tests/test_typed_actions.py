@@ -146,13 +146,15 @@ def test_email_clarified_recipient_grounds_the_send():
 
 
 def test_asana_clarified_description_binds_to_notes():
+    # The ask names a task explicitly (Asana is opt-in per item, 2026-07-24).
     typed = brain.type_actions(
-        [{"item": "follow up with vendor. Description: chase the Q3 invoice",
+        [{"item": "create a task to follow up with vendor. "
+                  "Description: chase the Q3 invoice",
           "owner": ""}],
         allow_asana=True,
     )[0].get("typed")
     assert typed["type"] == "asana.create_task"
-    assert typed["args"]["name"] == "follow up with vendor"
+    assert typed["args"]["name"] == "create a task to follow up with vendor"
     assert typed["args"]["notes"] == "chase the Q3 invoice"
 
 

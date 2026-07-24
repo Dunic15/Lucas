@@ -1367,7 +1367,13 @@ Capture EVERY action anyone asked for or committed to as an actions[] entry — 
 including short, in-passing requests ("send the recap", "schedule a follow-up \
 with Marco", "post it to Slack", "email Priya") — even when no owner or deadline \
 was stated (use "UNASSIGNED"/"" and gap_type accordingly). Do not drop an action \
-just because it was said casually. For each extracted action, include a short, \
+just because it was said casually. But an INFORMATION REQUEST the assistant \
+answers in the meeting itself is NOT an action: looking something up online \
+("search the internet for X"), reading the workspace/calendar/Asana ("check \
+what's on my board"), or a plain question ("how would you organize who does \
+what?") gets answered live and must NEVER appear in actions[] — only real work \
+someone must DO after the meeting belongs there. For each extracted action, \
+include a short, \
 verbatim evidence excerpt copied from the MEETING TRANSCRIPT — copy it \
 EXACTLY, character-for-character; never paraphrase, shorten, translate, or \
 re-punctuate it. If there is no supporting transcript excerpt, do not emit \
@@ -2214,10 +2220,12 @@ depends on), attachments (URLs that LITERALLY appear in the item's text).
 - Also supported when Asana is available: "asana.create_project" (args: \
 name, notes optional) and "asana.add_subtask" (args: task — the parent task \
 gid, only when it literally appears — and name).
-- Prefer calendar.create_event / email.send when an item maps to those; use \
-asana.create_task for every OTHER item that is a discrete piece of work \
-someone agreed to do. Do not create tasks for vague remarks, questions, or \
-things already done."""
+- Prefer calendar.create_event / email.send when an item maps to those. Emit \
+asana.create_task ONLY when the item explicitly asks for a task/ticket to be \
+created or names Asana (or the team's board/backlog) — NEVER as a default for \
+other work items (owner rule 2026-07-24: "Asana only when they say so"). An \
+item that names neither a task nor Asana stays untyped. Do not create tasks \
+for vague remarks, questions, information requests, or things already done."""
 
 # The 20-action expansion (owner GO 2026-07-22): Gmail/Calendar/Drive extras,
 # same precision-over-recall contract. Drive types execute only when the org
@@ -2296,6 +2304,42 @@ CALENDAR_CREATE = "calendar.create_event"
 EMAIL_SEND = "email.send"
 ASANA_CREATE = "asana.create_task"
 _ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+
+# ── typing discipline (owner 2026-07-24: "non tornare sempre ad Asana") ──
+# 1. Questions and information requests are ANSWERS, not work items: they are
+#    handled in the meeting (web search, workspace read) and must never become
+#    executable cards ("Search the internet for the YC deadline" and "How
+#    would you organize who does what?" both sat in prod as approved Asana
+#    tasks). Interrogative leads deliberately EXCLUDE can/could/will/would —
+#    "Can you send the recap…" is a polite request, not a question about one.
+_UNTYPEABLE_ITEM = re.compile(
+    r"^\s*(?:what|what'?s|how|why|who|whose|when|where|which"
+    r"|cosa|cos'?\xe8|come|perch[e\xe9]|chi|quando|dove|quale|che\s+cosa)\b"
+    # info-request verbs leading the item: she answers these live, they are
+    # not post-meeting work ("search the internet for X", "look up Y").
+    # "check" only in its interrogative form — "check what/if/who…" is a read,
+    # while "check in with the vendor" stays a (typeable) work item.
+    r"|^\s*(?:search|google|look\s+up|find\s+out|research|read\s+up"
+    r"|check\s+(?:what|if|whether|who|how|when|where)"
+    r"|cerca|cercami|controlla|verifica|guarda)\b"
+    # "… the internet/web/online" anywhere marks a lookup, wherever the verb is
+    r"|\b(?:the\s+internet|the\s+web|online)\b.{0,40}$"
+    r"|\?\s*$",
+    re.IGNORECASE,
+)
+# 2. Asana is opt-in per item: only when the ask explicitly names a task/
+#    ticket/Asana/board — never the catch-all family everything falls into.
+_EXPLICIT_TASK_CUE = re.compile(
+    r"\b(?:tasks?|ticket|issue|subtasks?|to-?do|asana|backlog|board"
+    r"|attivit\w+)\b",
+    re.IGNORECASE,
+)
+
+
+def _typeable(item: str) -> bool:
+    """False for questions / info-requests — they are answered in the meeting,
+    never typed into an executable action (read-vs-write discipline)."""
+    return not _UNTYPEABLE_ITEM.search(item or "")
 
 
 def _grounded_emails(value: object, source: str) -> list[str]:
@@ -2489,9 +2533,10 @@ def _stub_type_actions(
     """Deterministic, key-free mapping for the offline demo + tests: map the
     obvious cases from literal values only (an email address / ISO datetimes
     that actually appear). Precision over recall — anything ambiguous is left
-    untyped, exactly like the model path. With ``allow_asana``, every item
-    that didn't map to email/calendar becomes an asana.create_task (the item
-    text IS the task name, so it is grounded by construction)."""
+    untyped, exactly like the model path. With ``allow_asana``, an item that
+    didn't map to email/calendar becomes an asana.create_task ONLY when it
+    carries an explicit task/Asana cue (owner 2026-07-24: Asana is opt-in per
+    item, never the family everything else falls into)."""
     out: dict[int, dict] = {}
     for i, a in indexed:
         item = str(a.get("item") or "")
@@ -2519,7 +2564,13 @@ def _stub_type_actions(
                 if spec:
                     out[i] = spec
                     continue
-        if allow_asana and i not in out and item.strip():
+        # Asana ONLY on an explicit task/Asana cue (owner 2026-07-24) — the old
+        # "every leftover becomes an Asana task" default filed questions, web
+        # lookups and Drive/Slack asks onto the team's real board.
+        if (
+            allow_asana and i not in out and item.strip()
+            and _EXPLICIT_TASK_CUE.search(item)
+        ):
             emails = _grounded_emails(source, source)
             dates = _ISO_DATE_RE.findall(source)
             spec = _sanitize_typed(
@@ -2714,7 +2765,16 @@ def type_actions(
     demo still types the obvious cases). Best-effort: any failure returns the
     actions unchanged, so it can never break finalize."""
     src = list(actions or [])
-    indexed = [(i, a) for i, a in enumerate(src) if isinstance(a, dict)]
+    indexed = [
+        (i, a)
+        for i, a in enumerate(src)
+        if isinstance(a, dict)
+        # Read-vs-write gate: a question or info-request is answered in the
+        # meeting, never typed into an executable card (both model paths — the
+        # LLM would otherwise dutifully file "search the internet for X" as a
+        # task; live cards f10730e9/c5e589e3 were exactly that).
+        and _typeable(str(a.get("item") or ""))
+    ]
     if not indexed:
         return src
     prov = (provider or post_provider()).lower()
