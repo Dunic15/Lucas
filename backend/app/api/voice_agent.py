@@ -261,7 +261,7 @@ def _tool_queue_action(session, params: dict, tool_call_id: str) -> dict:
 
     summary = str(params.get("summary") or "").strip()
     details = str(params.get("details") or "").strip()
-    request_id = str(params.get("request_id") or "").strip() or tool_call_id
+    request_id = str(params.get("request_id") or "").strip()
     text = " ".join(f"{summary}. {details}".split()).strip(". ")
     if not text:
         return {"status": "needs_details", "missing": ["summary"]}
@@ -271,14 +271,24 @@ def _tool_queue_action(session, params: dict, tool_call_id: str) -> dict:
         # The agent asks the speaker for exactly these, then calls again with
         # the SAME request_id — the deterministic clarify loop, agent-side.
         return {"status": "needs_details", "kind": kind, "missing": missing}
+    import hashlib
+
+    # Dedupe semantics (outbox.persist_action_capture_once): the event key has
+    # PRECEDENCE and the content fingerprint is only consulted when the event
+    # key is EMPTY. The live simulation showed the agent may omit request_id
+    # (and a retry mints a new tool_call_id), so: with a request_id we use it
+    # as the exact idempotency key; without one we send NO event key and let
+    # the content hash dedupe identical asks within the window.
+    content_fp = hashlib.sha256(text.lower().encode()).hexdigest()[:16]
     try:
         item, created = brain_tools.capture_action_once(
             session,
             text,
-            source_event_key=f"elagent:{session.bot_id}:{request_id}",
-            source_fingerprint=f"elagent:{session.bot_id}:{request_id}",
-            # An agent retry minutes later is still the same ask.
-            dedupe_window_seconds=900.0,
+            source_event_key=(
+                f"elagent:{session.bot_id}:{request_id}" if request_id else ""
+            ),
+            source_fingerprint=f"elagent:{session.bot_id}:{content_fp}",
+            dedupe_window_seconds=300.0,  # outbox clamps to 300 anyway
         )
     except Exception as e:  # noqa: BLE001 — includes post-finalize capture-closed
         return {"status": "error", "note": type(e).__name__}
