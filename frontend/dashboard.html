@@ -581,7 +581,7 @@
   /* ── Avatars: game-like chooser (stage left, roster right; stacks on mobile) ── */
   /* Simplified layout (owner 2026-07-21): a SMALL stage with the Capabilities
      panel right beside it — the video is a portrait, not the hero. */
-  .avpage{display:grid;grid-template-columns:minmax(240px,340px) 1fr;gap:16px;align-items:stretch;margin-bottom:16px;}
+  .avpage{display:grid;grid-template-columns:minmax(240px,340px) 1fr;gap:16px;align-items:start;margin-bottom:16px;}
   .avpage>*{min-width:0;}
   @media (max-width:900px){ .avpage{grid-template-columns:1fr;} }
   .avside{display:flex;flex-direction:column;gap:0;min-width:0;}
@@ -594,7 +594,7 @@
   .cspill{font-family:var(--mono);font-size:.56rem;font-weight:700;letter-spacing:.08em;
     color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:2px 6px;}
   .stage{position:relative;border-radius:18px;border:1px solid var(--line-soft);overflow:hidden;
-    min-height:190px;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:var(--glass);
+    aspect-ratio:4/5;min-height:190px;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:var(--glass);
     background:
       radial-gradient(60% 55% at 30% 18%, rgba(77,124,254,.16), transparent 65%),
       radial-gradient(50% 45% at 78% 30%, rgba(255,180,154,.12), transparent 70%),
@@ -603,7 +603,7 @@
       radial-gradient(60% 55% at 30% 18%, rgba(77,124,254,.10), transparent 65%),
       radial-gradient(50% 45% at 78% 30%, rgba(255,180,154,.12), transparent 70%),
       linear-gradient(180deg, #FFFFFF, #EEF1F6);}
-  @media (max-width:900px){ .stage{min-height:170px;} }
+  @media (max-width:900px){ .stage{min-height:170px;max-width:340px;margin-left:auto;margin-right:auto;width:100%;} }
   /* Pedestal: a soft lit ellipse the avatar "stands" on. */
   .stage .pedestal{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);
     width:min(62%,320px);height:30px;border-radius:50%;pointer-events:none;
@@ -616,14 +616,15 @@
   /* The AvatarPreview mount: whatever the adapter renders fills this box —
      the same-origin 3D iframe (/talk?preview=1) or the 2D portrait fallback. */
   .stage .preview{position:absolute;inset:0;display:grid;place-items:center;}
-  /* Owner 2026-07-22 asked for full-bleed cover here; owner 2026-07-23 asked
-     for the portraits to stop being cut. Those two cannot both hold: the stage
-     is a RECTANGLE and the portraits are SQUARE, so `cover` fills the frame by
-     cropping the image — which is why resizing the files changed nothing.
-     `contain` fits the whole portrait, so nothing is lost; the artwork's own
-     background sits behind it rather than the stage bleeding to the edge. */
-  .stage .preview img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
-    object-position:center center;z-index:1;}
+  /* Owner 2026-07-22 wanted full-bleed cover; owner 2026-07-23 wanted the
+     portraits to stop being cut. With SQUARE art those two couldn't both hold.
+     Resolved 2026-07-24: the curated portrait-<id>.jpg art is now 4:5, and the
+     stage itself is pinned to `aspect-ratio:4/5` (and no longer stretches to
+     the caps panel — .avpage is align-items:start). Frame and art share one
+     ratio, so `cover` fills the stage edge-to-edge with nothing cropped and no
+     letterbox gaps — full-bleed AND uncut at once. */
+  .stage .preview img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+    object-position:center 35%;z-index:1;}
   .stage .preview iframe{position:absolute;inset:0;width:100%;height:100%;border:0;z-index:1;}
   /* Legibility scrim under the stagemeta caption — only over the live 3D
      iframe (its office backdrop is bright); the 2D portrait keeps the old
