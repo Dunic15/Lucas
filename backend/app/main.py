@@ -3330,7 +3330,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
         if not text:
             return JSONResponse({"ok": True})
         avatar = avatar_resolver.for_session(session)
-        if _should_barge_in(
+        # ElevenLabs runtime: interruption belongs to the AGENT (its native
+        # barge-in hears the separate streams while he talks). The legacy stop
+        # here flushed the page's audio while EL kept streaming the reply —
+        # fragments and dead air mid-answer (live 2026-07-24). Explicit
+        # "Cedric, stop" below still works.
+        if not _el_voice_owned(session) and _should_barge_in(
             session,
             avatar.name,
             speaker,
@@ -3637,7 +3642,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
     )
 
     # ── barge-in: never talk over a human ──
-    if _should_barge_in(
+    # EL runtime: the agent owns interruption natively (see the partial-path
+    # comment) — a legacy stop here would orphan the still-streaming reply.
+    if not _el_voice_owned(session) and _should_barge_in(
         session,
         avatar.name,
         speaker,
