@@ -506,9 +506,14 @@ _SEARCH_EXCLUDE = re.compile(
     # connectivity chatter is NOT a web search (live 2026-07-23: "let me check
     # my internet connection" / "is your internet working" tripped the
     # verb+online/web/internet intent). "internet/online/offline" as a
-    # CONNECTIVITY state — my/your/the internet, the connection, we're
-    # online/offline/back — never means "go search the web".
-    r"|\b(my|your|our|the|la|il|mia|tua)\s+(internet|connection\w*|connessione|"
+    # CONNECTIVITY state — my/your internet, the connection, we're
+    # online/offline/back — never means "go search the web". "THE internet"
+    # pairs only with connection-nouns here: bare "the internet" is the search
+    # TARGET ("search the internet for the latest AI news" silently stopped
+    # searching, adversarial battery 2026-07-24); "the internet is slow/down"
+    # stays excluded via the internet+state branch below.
+    r"|\b(my|your|our|mia|tua)\s+internet\b"
+    r"|\b(my|your|our|the|la|il|mia|tua)\s+(connection\w*|connessione|"
     r"line[ae]?)\b"
     r"|\binternet\b.{0,12}\b(connection\w*|working|down|slow|back|up|access|"
     r"connessione|va|funziona)\b"
@@ -660,6 +665,19 @@ _CAPTURE_QUESTION_TAIL = re.compile(
     r"dove|chi|perch[eé]|come)\b",
     re.IGNORECASE,
 )
+# An interrogative lead followed by a MODAL is a question about hypothetical
+# work, not a request to do it — "How would you organize who does what?" was
+# captured live as an action card (prod f10730e9, 2026-07-24). The modal
+# requirement keeps polite openers capturable ("When you get a chance, can you
+# send…" — 'when you' has no modal, so it still captures).
+_CAPTURE_QUESTION_LEAD = re.compile(
+    r"^\s*(?:(?:ok(?:ay)?|so|and|but|allora|ma)[,\s]+)*"
+    r"(?:what|which|when|where|who|whose|why|how|cosa|che|quale|quando|dove|"
+    r"chi|perch[eé]|come)\s+"
+    r"(?:would|should|could|can|will|do|does|did|are|is|might|"
+    r"dovre\w+|potre\w+|puoi|possiamo|si\s+pu[oò])\b",
+    re.IGNORECASE,
+)
 _CAPTURE_STUTTERED_QUESTION = re.compile(
     r"\b(what|which|when|where|who|why|how|cosa|che|quale|quando|dove|chi|come)"
     r"\s+\1\b",
@@ -710,7 +728,11 @@ def wants_action_capture(question: str) -> bool:
     keeping real polite requests such as "Can you schedule ...?".
     """
     q = " ".join((question or "").split())
-    if _CAPTURE_QUESTION_TAIL.search(q) or _CAPTURE_STUTTERED_QUESTION.search(q):
+    if (
+        _CAPTURE_QUESTION_TAIL.search(q)
+        or _CAPTURE_STUTTERED_QUESTION.search(q)
+        or _CAPTURE_QUESTION_LEAD.search(q)
+    ):
         return False
     match = _ACTION_INTENT.search(q)
     if match is None:
@@ -2291,7 +2313,11 @@ def _pd_typed_prompt(pd_apps: dict | None) -> str:
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 _ISO_DT_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?")
 _EMAIL_INTENT_RE = re.compile(
-    r"\b(e-?mail|send (?:an? )?(?:email|note|recap|the recap)|reply to|write to)\b",
+    r"\b(e-?mail|send (?:an? )?(?:email|note|recap|the recap)|reply to|write to"
+    # Italian email intent so the key-free stub types "manda una mail a X" like
+    # the model path would (adversarial battery 2026-07-24).
+    r"|(?:manda|invia|inoltra|spedisci)\w*\b.{0,16}\b(?:mail|e-?mail)"
+    r"|rispondi\s+a)\b",
     re.IGNORECASE,
 )
 _CAL_INTENT_RE = re.compile(
@@ -2329,8 +2355,12 @@ _UNTYPEABLE_ITEM = re.compile(
 )
 # 2. Asana is opt-in per item: only when the ask explicitly names a task/
 #    ticket/Asana/board — never the catch-all family everything falls into.
+#    "board" counts only as a DESTINATION ("add it to the board", "put it on
+#    the board") — the "on board" idiom ("get everyone on board", "bring the
+#    new hire on board") is not a task ask (adversarial battery 2026-07-24).
 _EXPLICIT_TASK_CUE = re.compile(
-    r"\b(?:tasks?|ticket|issue|subtasks?|to-?do|asana|backlog|board"
+    r"\b(?:tasks?|ticket|issue|subtasks?|to-?do|asana|backlog"
+    r"|(?:to|on|onto)\s+the\s+board"
     r"|attivit\w+)\b",
     re.IGNORECASE,
 )
