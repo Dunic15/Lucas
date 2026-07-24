@@ -149,8 +149,13 @@ export class VoiceSession {
     if (this.el && this.elReady) {
       try {
         this.el.send(JSON.stringify({ user_audio_chunk: buf }));
-        this.lastUserChunkAt = Date.now();
-        this.inResponse = false; // the human has the floor again
+        // Streams flow CONTINUOUSLY (silence included), so "last chunk" is
+        // meaningless for turn timing — anchor to frames that carry VOICE.
+        // Cheap energy probe: mean |amplitude| over every 16th sample.
+        if (this.frameHasVoice(buf)) {
+          this.lastUserChunkAt = Date.now();
+          this.inResponse = false; // the human has the floor again
+        }
       } catch (_) {}
     } else {
       // EL still connecting: keep the tail so his first addressed sentence
@@ -353,6 +358,23 @@ export class VoiceSession {
         })
       );
     } catch (_) {}
+  }
+
+  frameHasVoice(b64) {
+    // Mean |amplitude| over every 16th s16le sample — enough to tell speech
+    // from comfort noise without decoding cost mattering (~200 samples/frame).
+    let raw;
+    try { raw = atob(b64); } catch (_) { return false; }
+    const n = raw.length >> 1;
+    if (!n) return false;
+    let sum = 0, count = 0;
+    for (let i = 0; i < n; i += 16) {
+      let v = raw.charCodeAt(2 * i) | (raw.charCodeAt(2 * i + 1) << 8);
+      if (v >= 0x8000) v -= 0x10000;
+      sum += v < 0 ? -v : v;
+      count++;
+    }
+    return count > 0 && sum / count > 260; // ~-40dBFS: speech, not room hiss
   }
 
   async postEvent(type) {
