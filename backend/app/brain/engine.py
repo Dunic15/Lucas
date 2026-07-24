@@ -202,6 +202,13 @@ owners, or approvals that aren't there; if the context only partly covers \
 it, give the useful part and say what you'd check.
 - If you were given web search results or used search, answer from them and \
 mention it's from a quick search.
+- You CANNOT start a search yourself mid-answer. NEVER say "I'll search", \
+"I'll look it up", "I'll verify with a quick search", or "give me a second to \
+check" unless search results are already in front of you — that promise never \
+resolves and the person is left waiting (they had to ask "did you look it \
+up?"). Without results, give your best answer from what you know and, if \
+fresh data would genuinely change it, add that they can ask you to "search \
+the web for …".
 - Live transcripts are noisy — infer the likely intent and answer what the \
 person most likely meant.
 - The line introduced as what someone "just said" is the CURRENT live turn, \
@@ -371,10 +378,22 @@ _ABOUT_INTENT = re.compile(
     r"(you|laura) (built|made|powered|based) (on|with|by)\b|"
     r"what (model|llm|models)\b.{0,24}\b(you|use|using|run)|"
     # Capability questions about web browsing ("CAN you browse the web?")
-    # are self-questions; bare tasks ("search the web for X") are not —
-    # the modal + you is required so task asks keep normal routing.
-    r"((can|could|do|will) (you|laura)|are (you|laura) able to)\b.{0,24}\b(browse|search|surf|navigate|look\w*)\b.{0,20}\b(web|internet|online|browser|websites?)\b|"
-    r"(puoi|sai|riesci a?)\b.{0,20}\b(navigar\w+|cercar\w+|browsar\w+)\b.{0,20}\b(web|internet|online|sit[oi])\b|"
+    # are self-questions; bare tasks ("search the web for X") are not.
+    # ANCHORED both sides (2026-07-24): the web-noun must be the DIRECT object
+    # and the utterance must end there — "Can you search THAT UP on the
+    # Internet?" is a search REQUEST with an object, but the old {0,24} gap
+    # swallowed it as a capability question, so gemma promised a lookup and
+    # never ran one (live: Ananth had to re-ask "did you look it up?").
+    r"((can|could|do|will) (you|laura|petra)|are (you|laura|petra) able to)\s+"
+    r"(?:actually\s+|really\s+)?(browse|search|surf|navigate)\s+"
+    r"(?:the\s+|on\s+the\s+)?(web|internet|online|browser|websites?)(?=[\s?.!]*$)|"
+    # "are you able to look THINGS up on the internet?" — generic object =
+    # capability; a concrete object ("look it/that/X up") is a request.
+    r"((can|could|do|will) (you|laura|petra)|are (you|laura|petra) able to)\s+"
+    r"look\s+(?:things|stuff|anything)\s+up\s+"
+    r"(?:on\s+the\s+|on\s+)?(web|internet|online)(?=[\s?.!]*$)|"
+    r"(puoi|sai|riesci\s+a?)\s+(navigar\w+|cercar\w+|browsar\w+)\s+"
+    r"(?:su[l]?\s+|in\s+)?(web|internet|online|sit[oi])(?=[\s?.!]*$)|"
     # Tool-roster questions ("what tools can you use?", "quali tool puoi
     # usare?") are self-questions too — they must hit the about/ playbooks,
     # not the process docs. The tool-noun AND a you/usage anchor are both

@@ -24,8 +24,17 @@ EMAIL_SEND = "email.send"
 ASANA_CREATE = "asana.create_task"
 ASANA_UPDATE = "asana.update_task"
 ASANA_COMMENT = "asana.add_comment"
+ASANA_PROJECT = "asana.create_project"
+ASANA_SUBTASK = "asana.add_subtask"
 SLACK_POST = "slack.post_message"
-ASANA_ACTION_TYPES = frozenset({ASANA_CREATE, ASANA_UPDATE, ASANA_COMMENT})
+# ALL the Asana types the Pipedream plane executes (_MAPPER). create_project
+# and add_subtask were typed and offered since #375 but never added here, so
+# every dispatch gate skipped them → they fell through to the Cedric dispatch
+# and the approval guard killed them ("Couldn't complete. Nothing ran." on an
+# APPROVED create_project, live card 1dca3647, 2026-07-24).
+ASANA_ACTION_TYPES = frozenset({
+    ASANA_CREATE, ASANA_UPDATE, ASANA_COMMENT, ASANA_PROJECT, ASANA_SUBTASK,
+})
 # Gmail send and Calendar create exist on both planes. They deliberately route
 # through this executor first: native org OAuth wins; Pipedream Connect is the
 # fallback when native authentication is unavailable before any vendor write.
@@ -44,6 +53,11 @@ def capability_family(action_type: str | None) -> str:
         return app
     if str(action_type or "").strip() == SLACK_POST:
         return "slack"
+    # Pipedream-only Asana types (create_project / add_subtask) have no native
+    # adapter, so the native_runtime lookup came back empty and they fell into
+    # the "google" default — the WRONG toggle governed them (2026-07-24).
+    if str(action_type or "").strip() in ASANA_ACTION_TYPES:
+        return "asana"
     return native_runtime.family_for(action_type) or "google"
 
 
@@ -72,6 +86,15 @@ def from_typed(typed: dict | None) -> dict | None:
         if pipedream_executor.generic_app(t) and pipedream_executor.enabled():
             args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
             return {"type": t, "args": dict(args)}
+        # Pipedream-only Asana types (create_project / add_subtask): no native
+        # adapter exists, but the Pipedream plane executes them (_MAPPER since
+        # #375). Returning None here is what sank an APPROVED create_project
+        # into the Cedric fallback → "Couldn't complete. Nothing ran." (live
+        # card 1dca3647, 2026-07-24). Same nested "task" shape as the other
+        # Asana types so every approve door sees one consistent boundary.
+        if t in ASANA_ACTION_TYPES and pipedream_executor.handles({"type": t}):
+            args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
+            return {"type": t, "task": dict(args)}
         return None
     action_type = normalized["type"]
     args = normalized["args"]
