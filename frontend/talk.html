@@ -837,19 +837,25 @@
         for (const s of agentLive) { try { s.stop(); } catch (_) {} }
         agentLive = []; agentNextAt = 0; speakingUntil = 0;
         releaseMouth();
+        clearSegment(); // drop any half-built viseme segment (defined below)
       };
-      const playAgentChunk = (b64) => {
-        const ctx = agentAudioCtx();
+      const b64ToF32 = (b64) => {
         const raw = atob(b64);
         const n = raw.length >> 1;               // s16le mono @16k
-        if (!n) return;
         const f32 = new Float32Array(n);
         for (let i = 0; i < n; i++) {
           let v = raw.charCodeAt(2 * i) | (raw.charCodeAt(2 * i + 1) << 8);
           if (v >= 0x8000) v -= 0x10000;
           f32[i] = v / 32768;
         }
-        const buf = ctx.createBuffer(1, n, 16000); // ctx resamples on play
+        return f32;
+      };
+      // RAW path (fallback, only when a chunk carries no alignment): schedule
+      // the PCM gaplessly and flap the mouth from amplitude.
+      const scheduleRawF32 = (f32) => {
+        if (!f32.length) return;
+        const ctx = agentAudioCtx();
+        const buf = ctx.createBuffer(1, f32.length, 16000); // ctx resamples
         buf.getChannelData(0).set(f32);
         const src = ctx.createBufferSource();
         src.buffer = buf; src.connect(agentGain);
@@ -864,6 +870,73 @@
           performance.now() + (agentNextAt - ctx.currentTime) * 1000 + 300
         );
         driveMouth();
+      };
+      // ── REAL viseme lip-sync from ElevenLabs character alignment ──
+      // Each audio chunk arrives with {chars, char_start_times_ms,
+      // char_durations_ms} (times relative to ITS chunk). Chunks accumulate
+      // into ~1s segments cut at word boundaries; each segment becomes the
+      // exact {audio, words, wtimes, wdurations} payload head.speakAudio
+      // already consumes on the legacy path — same phoneme pipeline, same
+      // mouth quality. TalkingHead queues segments in arrival order, and its
+      // isSpeaking state feeds the speaking reporter (no manual bookkeeping).
+      // EL streams faster than realtime, so segment buffering costs far less
+      // wall-clock than its audio length (~300-500ms to first word).
+      let segPcm = [], segChars = [], segMs = 0, segTimer = 0;
+      const clearSegment = () => {
+        segPcm = []; segChars = []; segMs = 0;
+        if (segTimer) { clearTimeout(segTimer); segTimer = 0; }
+      };
+      const flushSegment = () => {
+        if (segTimer) { clearTimeout(segTimer); segTimer = 0; }
+        if (!segPcm.length) return;
+        const total = segPcm.reduce((a, p) => a + p.length, 0);
+        const f32 = new Float32Array(total);
+        let off = 0;
+        for (const p of segPcm) { f32.set(p, off); off += p.length; }
+        const words = [], wtimes = [], wdurations = [];
+        let w = "", wt = 0, wend = 0;
+        for (const ch of segChars) {
+          if (/\s/.test(ch.c)) {
+            if (w) { words.push(w); wtimes.push(wt); wdurations.push(Math.max(10, wend - wt)); w = ""; }
+          } else {
+            if (!w) wt = ch.t;
+            w += ch.c; wend = ch.t + ch.d;
+          }
+        }
+        if (w) { words.push(w); wtimes.push(wt); wdurations.push(Math.max(10, wend - wt)); }
+        clearSegment();
+        if (!words.length) { scheduleRawF32(f32); return; } // silence/pad: audio only
+        const buf = decodeCtx().createBuffer(1, total, 16000);
+        buf.getChannelData(0).set(f32);
+        unlockAudio();
+        try { head.speakAudio({ audio: buf, words, wtimes, wdurations }); }
+        catch (_) { scheduleRawF32(f32); }
+      };
+      const playAgentChunk = (b64, align) => {
+        const f32 = b64ToF32(b64);
+        if (!f32.length) return;
+        const chars = align && align.chars;
+        if (!chars || !chars.length) {
+          // No alignment on this chunk: if a segment is open, ride along as
+          // tail audio (mouth quiets); else pure raw fallback.
+          if (segPcm.length) { segPcm.push(f32); segMs += f32.length / 16; }
+          else scheduleRawF32(f32);
+          return;
+        }
+        const baseMs = segMs;
+        const starts = align.char_start_times_ms || [];
+        const durs = align.char_durations_ms || [];
+        for (let i = 0; i < chars.length; i++) {
+          segChars.push({ c: chars[i], t: baseMs + (starts[i] || 0), d: durs[i] || 0 });
+        }
+        segPcm.push(f32);
+        segMs += f32.length / 16; // 16 samples per ms
+        if (segTimer) clearTimeout(segTimer);
+        const lastChar = chars[chars.length - 1] || "";
+        const atBoundary = /[\s.,!?;:]/.test(lastChar);
+        if (segMs >= 2600) flushSegment();                    // hard cap
+        else if (segMs >= 1000 && atBoundary) flushSegment(); // natural cut
+        else segTimer = setTimeout(flushSegment, 280);        // stream went quiet
       };
       // A legacy stop ({type:"stop"} from barge-in / "Cedric stop") must also
       // silence the AGENT queue: while he speaks the half-duplex gate mutes
@@ -884,8 +957,10 @@
         agentWs.onopen = () => { agentRetry = 500; };
         agentWs.onmessage = (ev) => {
           let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
-          if (m.type === "audio" && m.data) { unlockAudio(); playAgentChunk(m.data); }
-          else if (m.type === "interrupt") flushAgentAudio();
+          if (m.type === "audio" && m.data) { unlockAudio(); playAgentChunk(m.data, m.align); }
+          // interruptSpeech is the WRAPPED version: stops TalkingHead's
+          // queued viseme segments AND flushes the raw agent queue.
+          else if (m.type === "interrupt") { try { interruptSpeech(); } catch (_) { flushAgentAudio(); } }
         };
         agentWs.onclose = () => setTimeout(connectAgentVoice, agentRetry = Math.min(agentRetry * 2, 8000));
         agentWs.onerror = () => { try { agentWs.close(); } catch (_) {} };
