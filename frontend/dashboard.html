@@ -3683,10 +3683,26 @@
   }
 
   $("#dsp-go").addEventListener("click",function(){
-    var url=$("#dsp-url").value.trim(), avatar=$("#dsp-avatar").value;
+    var avatar=$("#dsp-avatar").value;
+    // Normalize the paste before validating (live 2026-07-24: a valid link was
+    // rejected as "paste a link"). Strip zero-width / BOM / bidi control chars
+    // that survive .trim() and break the ^https anchor — the usual reason a
+    // perfectly good pasted link fails. Then trim.
+    var url=($("#dsp-url").value||"")
+      .replace(/[\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g,"").trim();
+    // A wrapped link (Outlook SafeLinks, calendar redirect) hides the real
+    // meeting URL in a ?url=/q=/target= param — unwrap it so the avatar joins
+    // the actual call, not the wrapper host.
+    var wrapped=url.match(/[?&](?:url|q|target)=(https?[^&\s]+)/i);
+    if(wrapped){ try{ url=decodeURIComponent(wrapped[1]); }catch(e){} }
     if(!url){ $("#dsp-url").focus(); return; }
-    if(!/^https:\/\/(meet\.google\.com|([a-z0-9-]+\.)*zoom\.us|teams\.(microsoft\.com|live\.com))\//i.test(url)){
+    // Accept any http(s) link whose host is a supported provider — lenient on
+    // scheme, subdomain, path and query so a real link is never rejected
+    // (Recall does the authoritative validation server-side). \b (not a
+    // required "/") lets a bare host or a ?query directly after it through.
+    if(!/^https?:\/\/([a-z0-9-]+\.)*(meet\.google\.com|zoom\.us|teams\.(microsoft|live)\.com)\b/i.test(url)){
       toast("Paste a Google Meet, Zoom or Microsoft Teams meeting link.",true); $("#dsp-url").focus(); return; }
+    $("#dsp-url").value=url;  // reflect the cleaned URL back into the field
     var b=this; b.disabled=true; b.textContent="Sending…";
     // Optional brief → the live-session contract: context.meeting carries
     // title/attendees, context.brief_markdown carries the narrative the avatar
