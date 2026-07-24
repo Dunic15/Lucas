@@ -113,9 +113,20 @@ def build_init_payload(session, avatar) -> dict:
             "- get_meeting_context refreshes the meeting goal, the brief and who",
             "  is in the room right now.",
             "",
-            "- Asked to LEAVE/EXIT the meeting, or told goodbye: reply with a",
-            "  SHORT goodbye only — the platform removes you automatically.",
-            "  NEVER queue an action for it, ask details, or claim you must stay.",
+            "- Asked to LEAVE/EXIT the meeting, or told goodbye (your name is",
+            "  also mis-heard as Sajrik/Sadic/Sedrick): say a SHORT goodbye,",
+            "  then CALL the leave_meeting tool — that is what disconnects you.",
+            "  NEVER queue leaving as an action, refuse, or claim you must stay.",
+            "- 'What are my next meetings': CALL get_upcoming_meetings, answer",
+            "  immediately from it. You CANNOT live-read inboxes/drives/tasks:",
+            "  say so plainly, offer a QUEUED alternative and if accepted CALL",
+            "  queue_action right away. Never promise unqueued follow-ups.",
+            "- Actions run ONCE APPROVED on the dashboard: say 'it's in the",
+            "  approval queue; it runs as soon as you approve it' — never",
+            "  'after the meeting', never that it is scheduled/sent/done.",
+            "- BREVITY: 1-2 sentences, at most ONE clarifying question, stop.",
+            "  No 'anything else?', no unprompted capability lists, no extra",
+            "  action proposals nobody asked for.",
             "- Long silences are normal in meetings: never ask 'are you still",
             "  there?' — stay quiet until addressed.",
             "- Ground answers in the meeting context below and in tool results;",
@@ -306,8 +317,32 @@ def _tool_queue_action(session, params: dict, tool_call_id: str) -> dict:
         "status": "queued" if created else "already_queued",
         "action_id": item.get("action_id", ""),
         "approval_required": True,
-        "note": "queued for approval on the dashboard; it will run after the meeting",
+        # Execution is gated on APPROVAL, not on the meeting ending — the
+        # spoken line must say so (live 2026-07-24: "it'll go out after the
+        # call" misstates the contract).
+        "note": "in the approval queue; it runs as soon as it is approved",
     }
+
+
+def _schedule_leave(session) -> None:
+    """Disconnect the bot AFTER the agent's goodbye audio has played out.
+
+    The agent says goodbye through the bridge (~2-4s of audio in flight);
+    finalize immediately and the room hears him cut himself off mid-word.
+    Fire-and-forget: finalize is idempotent and the empty-room/reconcile
+    backstops still guarantee the meter stops even if this task dies."""
+    import asyncio
+
+    from .. import main as _main  # lazy: routers must not import main at load
+
+    async def _later() -> None:
+        try:
+            await asyncio.sleep(4.0)
+            await _main._finalize_session(session.bot_id, source="agent_leave")
+        except Exception:  # noqa: BLE001 — backstops own the guarantee
+            pass
+
+    asyncio.create_task(_later())
 
 
 @router.post("/internal/voice-agent/tool/{capability}")
@@ -352,6 +387,26 @@ async def voice_agent_tool(capability: str, request: Request) -> JSONResponse:
             result = await run_in_threadpool(
                 _tool_queue_action, session, params, tool_call_id
             )
+        elif tool_name == "get_upcoming_meetings":
+            # Runtime tool-parity (live 2026-07-24: he claimed "no access to
+            # your calendar" while the LEGACY runtime had this all along):
+            # the owner's calendar snapshot, assembled at session start —
+            # zero network, answer immediately.
+            from ..brain import tools as brain_tools
+
+            result = {
+                "summary": await run_in_threadpool(
+                    brain_tools.upcoming_meetings, session
+                )
+            }
+        elif tool_name == "leave_meeting":
+            # Semantic leave: the agent understood the dismissal (works for
+            # "go out the meeting, Saj" and every ASR mangling the legacy
+            # regex can't) — the platform actually disconnects, delayed past
+            # his goodbye. Live 2026-07-24: he SAID "I'll step out" but the
+            # bot stayed until a manual end; this closes that gap.
+            _schedule_leave(session)
+            result = {"status": "leaving", "note": "disconnecting in a few seconds"}
         else:
             return JSONResponse(
                 {"ok": False, "error": f"unknown tool '{tool_name}'"}, status_code=400

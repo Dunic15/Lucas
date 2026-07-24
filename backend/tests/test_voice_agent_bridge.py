@@ -428,6 +428,42 @@ def test_tool_knowledge_search_formats_chunks(client, bearer, monkeypatch):
     store.remove("bot_tk")
 
 
+def test_tool_upcoming_meetings_reads_session_snapshot(client, bearer):
+    """Runtime tool-parity (live 2026-07-24: 'I don't have access to your
+    calendar' while the legacy runtime had the snapshot all along)."""
+    s = _el_session("bot_cal")
+    s.calendar_brief = "Tomorrow 15:00 — Pilot review with Ananth."
+    r = _tool(client, "cap-bot_cal", "get_upcoming_meetings", {}, bearer).json()
+    assert "Pilot review" in r["result"]["summary"]
+    store.remove("bot_cal")
+
+
+def test_tool_leave_meeting_schedules_disconnect(client, bearer, monkeypatch):
+    """Live 2026-07-24: he SAID 'I'll step out now' but the bot stayed until
+    a manual end — leaving must be a deterministic tool, not a hope."""
+    left: list[str] = []
+    monkeypatch.setattr(
+        voice_agent_api, "_schedule_leave", lambda session: left.append(session.bot_id)
+    )
+    _el_session("bot_bye")
+    r = _tool(client, "cap-bot_bye", "leave_meeting", {}, bearer).json()
+    assert r["result"]["status"] == "leaving"
+    assert left == ["bot_bye"]
+    store.remove("bot_bye")
+
+
+def test_tool_queue_action_note_names_approval_not_meeting_end(client, bearer):
+    _el_session("bot_note")
+    r = _tool(
+        client, "cap-bot_note", "queue_action",
+        {"summary": "create a task", "details": "task called Ship the pilot report"},
+        bearer,
+    ).json()
+    assert "approv" in r["result"]["note"]
+    assert "after the meeting" not in r["result"]["note"]
+    store.remove("bot_note")
+
+
 def test_tool_crash_returns_502_not_traceback(client, bearer, monkeypatch):
     from app.brain import rag
 

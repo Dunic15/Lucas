@@ -44,7 +44,10 @@ export default {
   },
 };
 
-const PREBUFFER_MAX_B64 = 130_000; // ~3s of 16k s16le pre-EL-connect audio
+// ~1.2s of pre-EL-connect audio. Was ~3s: replaying a long tail of startup
+// room chatter made the agent answer conversations that predated him
+// (live 2026-07-24, unsolicited "scheduling challenges" reply).
+const PREBUFFER_MAX_B64 = 52_000;
 
 export class VoiceSession {
   constructor(state, env) {
@@ -280,6 +283,10 @@ export class VoiceSession {
         if (this.tAgentResponse) {
           console.log("stage_response_to_audio_ms=" + (now - this.tAgentResponse));
         }
+        // Consume-once: stale anchors from a previous turn were summing the
+        // whole conversation pause into the next reading (first live run).
+        this.tUserTranscript = 0;
+        this.tAgentResponse = 0;
       }
       // pcm_16000 s16le: 32 bytes/ms. Track when playback will END so the
       // half-duplex gate re-opens right after he goes quiet.
