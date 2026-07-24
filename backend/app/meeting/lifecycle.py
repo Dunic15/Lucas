@@ -711,7 +711,9 @@ def _is_live_browse_item(text: str) -> bool:
     return bool(_DEMO_BROWSE_RE.search(t))
 
 
-def _merge_action_items(queued: list, extracted: list) -> list:
+def _merge_action_items(
+    queued: list, extracted: list, avatar_name: str = ""
+) -> list:
     """Artifact actions[] = live-captured queue_action items first, then the
     summarizer's extraction, deduped on normalized item text. A live capture
     wins a collision — it is the wording the room actually asked for — and
@@ -768,6 +770,14 @@ def _merge_action_items(queued: list, extracted: list) -> list:
             seen.add(key)
         a = dict(a) if isinstance(a, dict) else {"item": text}
         a.setdefault("action_id", ledger.new_action_id())
+        # Assistant-request vs human commitment (owner 2026-07-24: "Send
+        # Cedric the demo" — participants talking to EACH OTHER — surfaced as
+        # a Needs-details email card). A summarizer-extracted action that was
+        # NOT a direct request to the avatar is a team follow-up: kept for the
+        # record, never typed/executed/interrogated. Live captures are
+        # assistant-requests by definition and never carry this flag.
+        if not _assistant_request(a, avatar_name):
+            a["human_followup"] = True
         merged.append(a)
         extras.append(a)
     # Cross-language net: word overlap can't see that the summarizer restated an
@@ -791,6 +801,31 @@ def _merge_action_items(queued: list, extracted: list) -> list:
         if drop:
             merged = [m for m in merged if id(m) not in drop]
     return merged
+
+
+def _assistant_request(a: dict, avatar_name: str = "") -> bool:
+    """Was this summarizer-extracted action a DIRECT request to the avatar?
+
+    Trust the model's per-action "assistant" flag when present (the prompt
+    asks for it); otherwise fall back deterministically on the EVIDENCE — the
+    verbatim spoken excerpt — never the distilled item: items are always
+    imperatives ("Send Cedric the demo"), so they'd all read as asks. The
+    avatar-name check uses THIS meeting's avatar only ("Send Cedric the link"
+    named a human participant called Cédric, not the Cedric avatar,
+    live 2026-07-24). No evidence of a direct ask → a human commitment,
+    captured for the record only."""
+    flag = a.get("assistant")
+    if isinstance(flag, bool):
+        return flag
+    evidence = str(a.get("evidence") or "")
+    name = (avatar_name or "").strip()
+    if name and re.search(rf"\b{re.escape(name)}\b", evidence, re.IGNORECASE):
+        return True
+    if not evidence:
+        return False  # no spoken proof of a direct ask → note, not a card
+    from ..brain.engine import wants_action_capture
+
+    return wants_action_capture(evidence)
 
 
 def _fold_into_live(live: dict, extracted: object) -> None:
@@ -1047,8 +1082,17 @@ async def _finalize_session_locked(
     # summarizer-only actions get one here too. Threadpool because the merge's
     # cross-language net may make one model call: finalize is off the live path,
     # but the event loop (other meetings' live turns) must never wait on it.
+    # Avatar display name for the assistant-vs-human classifier. `avatar` is
+    # only bound above when there was analysis transcript — resolve defensively
+    # (an empty-transcript finalize still merges live captures).
+    _avatar_name = ""
+    try:
+        _avatar_name = avatar_resolver.for_session(session).name
+    except Exception:  # noqa: BLE001 — classification degrades, finalize never breaks
+        _avatar_name = str(getattr(session, "avatar_id", "") or "")
     artifact["actions"] = await run_in_threadpool(
-        _merge_action_items, queued_actions, artifact.get("actions") or []
+        _merge_action_items, queued_actions, artifact.get("actions") or [],
+        _avatar_name,
     )
     artifact["checklist"] = artifact["actions"]  # legacy alias, same list
 

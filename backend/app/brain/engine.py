@@ -202,6 +202,13 @@ owners, or approvals that aren't there; if the context only partly covers \
 it, give the useful part and say what you'd check.
 - If you were given web search results or used search, answer from them and \
 mention it's from a quick search.
+- You CANNOT start a search yourself mid-answer. NEVER say "I'll search", \
+"I'll look it up", "I'll verify with a quick search", or "give me a second to \
+check" unless search results are already in front of you — that promise never \
+resolves and the person is left waiting (they had to ask "did you look it \
+up?"). Without results, give your best answer from what you know and, if \
+fresh data would genuinely change it, add that they can ask you to "search \
+the web for …".
 - Live transcripts are noisy — infer the likely intent and answer what the \
 person most likely meant.
 - The line introduced as what someone "just said" is the CURRENT live turn, \
@@ -371,10 +378,22 @@ _ABOUT_INTENT = re.compile(
     r"(you|laura) (built|made|powered|based) (on|with|by)\b|"
     r"what (model|llm|models)\b.{0,24}\b(you|use|using|run)|"
     # Capability questions about web browsing ("CAN you browse the web?")
-    # are self-questions; bare tasks ("search the web for X") are not —
-    # the modal + you is required so task asks keep normal routing.
-    r"((can|could|do|will) (you|laura)|are (you|laura) able to)\b.{0,24}\b(browse|search|surf|navigate|look\w*)\b.{0,20}\b(web|internet|online|browser|websites?)\b|"
-    r"(puoi|sai|riesci a?)\b.{0,20}\b(navigar\w+|cercar\w+|browsar\w+)\b.{0,20}\b(web|internet|online|sit[oi])\b|"
+    # are self-questions; bare tasks ("search the web for X") are not.
+    # ANCHORED both sides (2026-07-24): the web-noun must be the DIRECT object
+    # and the utterance must end there — "Can you search THAT UP on the
+    # Internet?" is a search REQUEST with an object, but the old {0,24} gap
+    # swallowed it as a capability question, so gemma promised a lookup and
+    # never ran one (live: Ananth had to re-ask "did you look it up?").
+    r"((can|could|do|will) (you|laura|petra)|are (you|laura|petra) able to)\s+"
+    r"(?:actually\s+|really\s+)?(browse|search|surf|navigate)\s+"
+    r"(?:the\s+|on\s+the\s+)?(web|internet|online|browser|websites?)(?=[\s?.!]*$)|"
+    # "are you able to look THINGS up on the internet?" — generic object =
+    # capability; a concrete object ("look it/that/X up") is a request.
+    r"((can|could|do|will) (you|laura|petra)|are (you|laura|petra) able to)\s+"
+    r"look\s+(?:things|stuff|anything)\s+up\s+"
+    r"(?:on\s+the\s+|on\s+)?(web|internet|online)(?=[\s?.!]*$)|"
+    r"(puoi|sai|riesci\s+a?)\s+(navigar\w+|cercar\w+|browsar\w+)\s+"
+    r"(?:su[l]?\s+|in\s+)?(web|internet|online|sit[oi])(?=[\s?.!]*$)|"
     # Tool-roster questions ("what tools can you use?", "quali tool puoi
     # usare?") are self-questions too — they must hit the about/ playbooks,
     # not the process docs. The tool-noun AND a you/usage anchor are both
@@ -422,6 +441,15 @@ def _retrieve_for(
     real knowledge docs (plus the org's private index when org_id is given).
     Self-questions retrieve on the bare ask (they're direct), process questions
     keep the history-augmented query."""
+    # Boot warm-up still running → skip retrieval outright (live 2026-07-24:
+    # a meeting inside the 1480s warm-up window queued every retrieve behind
+    # the rebuild for ~2 minutes and the avatar sat MUTE). The stream answers
+    # from the briefs + general knowledge; grounding returns next turn.
+    from . import rag as _rag
+
+    if _rag.is_warming():
+        print("[latency] retrieve skipped (index warm-up running)", flush=True)
+        return []
     if _is_about_avatar(question):
         return retrieve_about(avatar, question, k=k)
     query = _retrieval_query(question, history)
@@ -520,6 +548,13 @@ _SEARCH_EXCLUDE = re.compile(
     r"|\b(connection|connessione)\b.{0,12}\b(down|slow|back|working|dropped|"
     r"lost|bad|instabile|lenta|va|funziona)\b"
     r"|\b(we'?re|i'?m|are we|siamo|sono)\s+(back\s+)?(online|offline)\b"
+    # workspace SNAPSHOT asks are reads of OUR state, never public queries —
+    # "It's meant to get the snapshot… when I tested it this week… can you get
+    # the snapshot now?" (ASR-fused turn) tripped the 'this week' freshness
+    # trigger and the search model lectured the room about "a private meeting
+    # transcript" (live 2026-07-24, 3-person call).
+    r"|\b(?:get|pull|grab|load|fetch|refresh|update)\b.{0,24}\bsnapshot\b"
+    r"|\bsnapshot\b.{0,24}\b(?:asana|workspace|inbox|gmail|tasks?|board)\b"
     # scheduling fragments answering a who/when clarify — "Between me and
     # Duccio today?" tripped the 'today' freshness trigger and got a public
     # web answer mid-scheduling (live 2026-07-24). An attendee/day fragment
@@ -724,6 +759,31 @@ def _has_action_object(text: str, match: "re.Match") -> bool:
         if len(token) > 1 and token not in _ACTION_FILLER:
             return True
     return bool(_OBJECT_NOUN.search(match.group(0)))
+
+
+# ── tool-domain addressing (multiparty fluidity, owner 2026-07-24) ──────
+# In a 3-person call "can you check my calendar and my next meeting?" was
+# IGNORED because the speaker didn't say "Petra" (wake-word gating is blind to
+# content). Nobody asks another HUMAN to check their own calendar/Asana/inbox:
+# a personal-workspace read or a schedule/send/create ask can only be aimed at
+# the assistant, so it counts as addressed even without the name.
+_TOOL_DOMAIN_READ = re.compile(
+    r"\b(?:my|our|mio|mia|nostr[oa])\s+(?:next\s+)?"
+    r"(?:calendar|calendario|asana|inbox|e-?mails?|gmail|board|tasks?|"
+    r"schedule|meetings?|appuntament\w+|attivit\w+)\b"
+    r"|\bwhat(?:'s| is)\s+(?:on|in)\s+the\s+(?:calendar|board|inbox)\b"
+    r"|\b(?:get|pull|load|refresh)\b.{0,20}\bsnapshot\b"
+    r"|\bcheck\s+(?:the\s+)?(?:asana|calendar|inbox|gmail)\b",
+    re.IGNORECASE,
+)
+
+
+def is_tool_domain_ask(text: str) -> bool:
+    """True when this utterance can only be aimed at the assistant — a
+    personal-workspace read or a direct action ask — so multiparty wake-word
+    gating treats it as addressed even without the avatar's name."""
+    t = text or ""
+    return bool(_TOOL_DOMAIN_READ.search(t)) or wants_action_capture(t)
 
 
 def wants_action_capture(question: str) -> bool:
@@ -1401,7 +1461,13 @@ answers in the meeting itself is NOT an action: looking something up online \
 ("search the internet for X"), reading the workspace/calendar/Asana ("check \
 what's on my board"), or a plain question ("how would you organize who does \
 what?") gets answered live and must NEVER appear in actions[] — only real work \
-someone must DO after the meeting belongs there. For each extracted action, \
+someone must DO after the meeting belongs there. Mark each action with \
+"assistant": a request aimed at the MEETING ASSISTANT ("Petra, send the \
+recap", "can you schedule…?") is assistant=true; a participant's own \
+commitment to other HUMANS ("we'll send you the link", "I'll share the demo \
+video with you") is assistant=false — it is captured for the record, never \
+something the assistant should execute or ask details for. For each extracted \
+action, \
 include a short, \
 verbatim evidence excerpt copied from the MEETING TRANSCRIPT — copy it \
 EXACTLY, character-for-character; never paraphrase, shorten, translate, or \
@@ -1445,7 +1511,7 @@ Return ONLY a JSON object:
     {"decision": "<the same decision as one short line>", "decision_maker": "<who made or drove it, or ''>", "reason": "<why, in one clause, or ''>", "related_project": "<the project/workstream it concerns, or ''>"}
   ],
   "actions": [
-    {"item": "<action>", "owner": "<name or 'UNASSIGNED'>", "deadline": "<stated deadline or ''>", "gap_type": "<owner|deadline|approval|document|blocker|none>", "evidence": "<exact supporting excerpt from the meeting transcript>"}
+    {"item": "<action>", "owner": "<name or 'UNASSIGNED'>", "deadline": "<stated deadline or ''>", "gap_type": "<owner|deadline|approval|document|blocker|none>", "evidence": "<exact supporting excerpt from the meeting transcript>", "assistant": <true ONLY when this was a DIRECT request to the meeting assistant to do it; false for a participant's own commitment to another human>}
   ],
   "goals": [
     {"goal": "<the intent in the speaker's own terms>", "evidence": "<exact supporting excerpt from the meeting transcript>",
@@ -2931,6 +2997,10 @@ def type_actions(
         # LLM would otherwise dutifully file "search the internet for X" as a
         # task; live cards f10730e9/c5e589e3 were exactly that).
         and _typeable(str(a.get("item") or ""))
+        # Human-to-human commitments ("we'll send you the link") are notes for
+        # the record — never typed into something the avatar would execute
+        # (owner 2026-07-24: three of them surfaced as Needs-details emails).
+        and not a.get("human_followup")
     ]
     if not indexed:
         return src

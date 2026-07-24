@@ -91,6 +91,7 @@ from .brain.engine import (
     answer_question,
     answer_question_stream,
     answer_with_tools,
+    is_tool_domain_ask,
     rolling_summary,
     sounds_italian,
     wants_action_capture,
@@ -197,6 +198,13 @@ async def _lifespan(app: FastAPI):
     # it pays the old cold-start once — never a failed deploy.
     async def _warm_indexes() -> None:
         _t0 = time.perf_counter()
+        # While this runs, the LIVE answer path skips retrieval entirely
+        # (rag.is_warming) — 2026-07-24 the warm-up took 1480s after a docs
+        # change and a meeting inside that window went MUTE: every retrieve
+        # queued behind the rebuild (106-121s), every answer was cancelled.
+        from .brain import rag as _rag
+
+        _rag.set_warming(True)
         try:
             await run_in_threadpool(_prebuild_indexes)
             print(
@@ -209,6 +217,8 @@ async def _lifespan(app: FastAPI):
                 f"[startup] index warm-up failed: {type(exc).__name__}",
                 flush=True,
             )
+        finally:
+            _rag.set_warming(False)
 
     asyncio.create_task(_warm_indexes())
 
@@ -1447,6 +1457,21 @@ async def _refresh_rolling_summary(
     finally:
         session.summarizing = False
 
+
+# On-demand snapshot pull (owner 2026-07-24): "get/pull/refresh the snapshot",
+# "check Asana and get a snapshot", "pull my inbox". Deliberately explicit
+# verbs — a mere MENTION of "snapshot" in conversation never triggers a fetch,
+# and "do you HAVE a snapshot?" (no pull verb) stays with the deterministic
+# capability answer.
+_SNAPSHOT_PULL = re.compile(
+    r"\b(?:get|pull|grab|load|fetch|refresh|update|scarica|aggiorna|prendi)\b"
+    r".{0,28}\bsnapshot\b"
+    r"|\bsnapshot\b.{0,20}\b(?:now|adesso|ora)\b"
+    r"|\bcheck\s+(?:my\s+)?asana\b.{0,30}\b(?:get|snapshot)\b"
+    r"|\b(?:pull|refresh|reload|ricarica)\b.{0,16}\b(?:my|our|mio|mia)\s+"
+    r"(?:asana|inbox|gmail|board)\b",
+    re.IGNORECASE,
+)
 
 # Fixed spoken furniture, in TWO languages: an English "let me think" in the
 # middle of an Italian meeting breaks the illusion instantly. _line_for picks
@@ -4633,6 +4658,17 @@ async def recall_webhook(request: Request) -> JSONResponse:
             await _make_avatar_speak(session, nudge, force=True)
             return JSONResponse({"ok": True, "spoke": True, "quiet_nudge": True})
 
+    # Tool-domain addressing (owner 2026-07-24, 3-person call): "can you check
+    # my calendar and my next meeting?" was IGNORED because the speaker didn't
+    # say her name. A personal-workspace read, an action ask, or a capability
+    # question can only be aimed at the assistant — treat it as addressed even
+    # without the name, in every gating decision below (wake, hand-raise,
+    # cooldown). Human-to-human chatter never matches these shapes.
+    if not called and (
+        is_tool_domain_ask(text) or capabilities.is_capability_question(text)
+    ):
+        called = True
+
     if _wake_required(avatar, session) and not called:
         # Per-avatar wake-word mode (falls back to the global flag): she was
         # not addressed by name — stay silent, UNLESS this is a follow-up
@@ -5085,6 +5121,68 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # ANSWER text; the capture path (text) is deliberately left untouched.
     if question:
         question = capabilities.repair_asr(question, history)
+
+    # ── on-demand snapshot pull (owner 2026-07-24) ──
+    # "Petra, can you get the snapshot now?" — the capability answer promised
+    # "I can pull one" but NO pull existed: the brief only ever loaded at join,
+    # so a failed join-fetch left her snapshotless all meeting (3-person call:
+    # she refused Asana reads for ten minutes while claiming she could pull).
+    # Deterministic: ack, fetch the brief in the threadpool (1-3s), fold it
+    # into memory_brief, flip the flag (the capability cache recomputes on it),
+    # and confirm. Never the language model, never a web search.
+    if _SNAPSHOT_PULL.search(question or text):
+        _pull_q = question or text
+        _is_mail = bool(re.search(r"\b(inbox|gmail|e-?mail|posta)\b", _pull_q, re.I))
+        _noun = "Gmail inbox" if _is_mail else "Asana workspace"
+        _pull_gen = store.bump_speech_generation(session)
+        session.last_ack_at = time.time()
+        _ack = f"One sec — pulling your {_noun} snapshot."
+        await _make_avatar_speak(
+            session, _ack, force=True, generation=_pull_gen,
+            audio=tts.cached_payload(_ack, _avatar_voice(session)),
+        )
+        if _is_mail:
+            _pulled = await run_in_threadpool(
+                google_client.gmail_inbox_brief, session.org_id
+            )
+            _label = "[Gmail inbox — snapshot pulled mid-meeting (headers only)]"
+        else:
+            _pulled = await run_in_threadpool(
+                asana_client.workspace_brief, session.org_id
+            )
+            _label = "[Asana workspace — snapshot pulled mid-meeting]"
+        if _pulled:
+            # Replace any earlier section of the same family (join-time or a
+            # previous pull) so repeated pulls never bloat the prompt.
+            _mem = re.sub(
+                rf"\[{'Gmail inbox' if _is_mail else 'Asana workspace'}[^\]]*\]\n.*?(?:\n\n|\Z)",
+                "", session.memory_brief or "", flags=re.S,
+            )
+            session.memory_brief = f"{_label}\n{_pulled}\n\n{_mem}"
+            if _is_mail:
+                session.gmail_brief_loaded = True
+            else:
+                session.asana_brief_loaded = True
+            _done = (
+                f"Done — I've got your {_noun} now. Ask away."
+            )
+        else:
+            _done = (
+                f"I couldn't reach your {_noun} right now — the connection "
+                "may need a look on the dashboard. I can still capture items "
+                "for approval."
+            )
+        _spoke_pull = await _make_avatar_speak(
+            session, _done, force=True,
+            generation=store.bump_speech_generation(session),
+        )
+        print(f"[latency] snapshot pull family="
+              f"{'gmail' if _is_mail else 'asana'} ok={bool(_pulled)}",
+              flush=True)
+        return JSONResponse(
+            {"ok": True, "spoke": bool(_spoke_pull), "snapshot_pull": True,
+             "loaded": bool(_pulled)}
+        )
 
     # ── deterministic capability answer (grounding, never the language model) ──
     # "which tools can you use / are you connected to Asana / what actions can

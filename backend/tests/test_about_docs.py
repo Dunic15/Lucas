@@ -32,7 +32,6 @@ def test_about_intent_detection():
         "su che tecnologia sei fatta?",
         "chi sei?",
         "can you browse the web?",
-        "Can you browse the web and look something up online for us?",
         "are you able to look things up on the internet?",
         "could you search the web?",
         "puoi navigare sul web?",
@@ -56,6 +55,10 @@ def test_about_intent_detection():
         "come funziona l'onboarding?",  # about OUR process, not about her
         "search the web for the latest Acme funding news",  # task, not self-Q
         "look up the vendor pricing online and summarize it",  # task
+        # a REQUEST with an object is a search, not a capability question
+        # (2026-07-24: "can you search that up?" got a promise, never a search)
+        "Can you browse the web and look something up online for us?",
+        "Can you search that up on the Internet?",
         "can you check the onboarding checklist?",  # no web word
         "use the tool to file the ticket",  # task with a tool word, not self-Q
         "usa il tool per creare il task",  # task (IT), not self-Q

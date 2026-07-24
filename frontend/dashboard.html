@@ -2469,10 +2469,12 @@
       +'Can: '+esc(c.verbs.join(" · "))+'</div>';
   }
   var STATE_LABEL={needs_details:"Needs details",ready_to_approve:"Ready for approval",
+    team_followup:"Team follow-up",
     proposed:"Ready for approval",
     approved:"Approved",executing:"Running",done:"Completed",failed:"Couldn’t complete",
     rejected:"Rejected",withdrawn:"Withdrawn",execution_unknown:"Check connected account"};
   var STATE_CLASS={needs_details:"attn",ready_to_approve:"ready",proposed:"ready",
+    team_followup:"",
     approved:"run",executing:"run",
     done:"ok",failed:"bad",rejected:"bad",withdrawn:"bad",execution_unknown:"attn"};
   // A card is NEVER a passive "captured — tracked for the record" row (owner ask
@@ -2497,6 +2499,8 @@
     return /tracked only/i.test((a.execution&&a.execution.detail)||"");
   }
   function bucketOf(a){ var s=stateOf(a);
+    // A teammate's own commitment: a record, never something to approve.
+    if(s==="team_followup") return "done";
     if(s==="done"||s==="failed"||s==="rejected"||s==="withdrawn") return "done";
     if(s==="approved"&&trackedOnly(a)) return "done";
     // "In progress" tab removed (owner 2026-07-24): approved/executing fold into
@@ -2881,6 +2885,7 @@
   var acBucket="attn";
   function acTodoText(a){
     var s=stateOf(a);
+    if(s==="team_followup") return "A teammate's own follow-up — recorded here; nothing for the avatar to run.";
     if(s==="needs_details"){
       var cap=a.family?CAPS[a.family]:null;
       if(cap&&cap.connected===false) return "Needs "+cap.label+" reconnected before it can run.";

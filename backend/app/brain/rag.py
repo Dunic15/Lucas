@@ -286,6 +286,27 @@ def build_index(avatar: Avatar) -> int:
 # avatar.id -> loaded store
 _CACHE: dict[str, dict] = {}
 
+# ── boot warm-up visibility (live incident 2026-07-24) ───────────────────
+# The post-deploy index warm-up took 1480s (model download + full re-embed
+# after a docs change) and a meeting started INSIDE that window: every live
+# retrieve queued behind the rebuild for 106-121s, every answer got cancelled,
+# and the avatar sat mute. The live path checks is_warming() and SKIPS
+# retrieval while the warm-up runs — an answer grounded only in the briefs
+# beats two minutes of silence, every time.
+_WARMING = False
+
+
+def set_warming(value: bool) -> None:
+    """Flipped by the startup warm-up task (main._lifespan) around
+    _prebuild_indexes. Plain bool — read on the hot path, no lock needed."""
+    global _WARMING
+    _WARMING = bool(value)
+
+
+def is_warming() -> bool:
+    """True while the boot index warm-up is still running."""
+    return _WARMING
+
 
 def _index_is_current(index_path: Path, source_paths: list[Path]) -> bool:
     """True when the on-disk index matches the configured embedder + format AND

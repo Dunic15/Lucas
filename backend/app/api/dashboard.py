@@ -193,6 +193,11 @@ def _action_needed(action: dict) -> list[str]:
     exists, else the kind-aware conversational slots. Pure/cheap (regex +
     schema walk) — safe on the summary path. Never raises."""
     try:
+        # A human-to-human commitment is a note for the record — it has no
+        # missing details because there is nothing for the avatar to execute
+        # (owner 2026-07-24: "Send Cedric the demo" asked for email details).
+        if action.get("human_followup"):
+            return []
         typed = action.get("typed")
         if isinstance(typed, dict) and typed.get("type"):
             return action_plane.missing_params(typed)
@@ -221,6 +226,10 @@ def _card_state(action: dict) -> str:
     become ``needs_details``, complete typed ones ``ready_to_approve``.
     """
     try:
+        # Team follow-up: a participant's own commitment, kept for the record.
+        # Not the avatar's to execute → never needs details, never approvable.
+        if action.get("human_followup"):
+            return "team_followup"
         typed = action.get("typed")
         is_typed = isinstance(typed, dict) and bool(typed.get("type"))
         if not is_typed or _action_needed(action):
@@ -378,6 +387,10 @@ def _action_entry(action) -> dict:
             # Executor family this would run against — lets the card offer
             # "Reconnect <tool>" instead of an Approve that cannot land.
             "family": _action_family(action),
+            # Team follow-up: a human's own commitment ("we'll send you the
+            # link"), kept for the record — the UI renders it as a note with
+            # no approve/details affordances (owner 2026-07-24).
+            "human_followup": bool(action.get("human_followup")),
         }
     return {"action_id": "", "item": str(action)[:300], "owner": "",
             "unassigned": False, "gap": "", "done": False, "typed": False,

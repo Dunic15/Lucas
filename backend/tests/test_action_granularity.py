@@ -206,3 +206,55 @@ def test_prefill_ignores_unrelated_emails():
         "Summary text.",
     )
     assert "Subject:" not in acts[0]["item"]
+
+
+# ── T8: create_project/add_subtask actually DISPATCH (live card 1dca3647:
+# an APPROVED create_project fell to the Cedric fallback and died with
+# "Couldn't complete. Nothing ran." — the types were typed and offered since
+# #375 but never added to ASANA_ACTION_TYPES, so every gate skipped them) ──
+def test_pipedream_only_asana_types_flow_through_executor(monkeypatch):
+    from unittest.mock import patch
+    from app.actions import executor
+    from app import pipedream_executor as pe
+
+    assert "asana.create_project" in executor.ASANA_ACTION_TYPES
+    assert "asana.add_subtask" in executor.ASANA_ACTION_TYPES
+    with patch.object(pe, "handles", return_value=True), \
+         patch.object(pe, "app_connected", return_value=True), \
+         patch.object(pe, "app_for_type", return_value="asana"), \
+         patch.object(pe, "enabled", return_value=True):
+        assert executor.from_typed(
+            {"type": "asana.create_project", "args": {"name": "crypto startup"}}
+        ) == {"type": "asana.create_project", "task": {"name": "crypto startup"}}
+        assert executor.route_for_typed(
+            {"type": "asana.create_project"}, "org-x") == "pipedream"
+    # the asana toggle governs them — not the google default
+    assert executor.capability_family("asana.create_project") == "asana"
+    assert executor.capability_family("asana.add_subtask") == "asana"
+
+
+# ── T9: "can you search that up?" is a REQUEST, not a capability question
+# (live: gemma answered "give me one second to look it up" and never searched
+# — Ananth had to ask "did you look it up?") ─────────────────────────────
+def test_search_requests_route_to_search_not_about(monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "live_search_enabled", True)
+    monkeypatch.setattr(settings, "anthropic_api_key", "synthetic")
+    # capability checks (bare, end there) stay self-questions
+    for q in ("Can you browse the web?", "Can you search the internet?",
+              "puoi cercare su internet?"):
+        assert engine._is_about_avatar(q) is True, q
+        assert engine.wants_web_search(q) is False, q
+    # requests WITH an object go to the real search
+    for q in ("Can you search that up on the Internet?",
+              "can you look it up online?",
+              "can you search the web for the latest news",
+              "puoi cercare su internet le ultime notizie?"):
+        assert engine._is_about_avatar(q) is False, q
+        assert engine.wants_web_search(q) is True, q
+
+
+def test_prompt_forbids_phantom_search_promises():
+    p = engine.ANSWER_STREAM_SYSTEM
+    assert "You CANNOT start a search yourself mid-answer" in p
+    assert 'NEVER say "I\'ll search"' in p

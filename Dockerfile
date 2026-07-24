@@ -27,6 +27,16 @@ COPY scripts/ scripts/
 COPY etc/ etc/
 COPY gpu/assets/ gpu/assets/
 
+# Bake the semantic embedding model AND every avatar's RAG index into the
+# image (live 2026-07-24: the post-deploy warm-up took 1480s — HF model
+# download + full re-embed after a docs change — and a meeting inside that
+# window went MUTE; the boot warm-up then finds everything current and is a
+# fast no-op). FASTEMBED_CACHE_PATH pins the model inside the image so the
+# runtime never re-downloads; EMBEDDING_PROVIDER must match prod (health
+# reports embedding_provider=local) or the signature check would rebuild.
+ENV EMBEDDING_PROVIDER=local FASTEMBED_CACHE_PATH=/app/.fastembed
+RUN python backend/scripts/ingest.py
+
 ENV HOST=0.0.0.0 PORT=8000 PYTHON=python3
 EXPOSE 8000
 
