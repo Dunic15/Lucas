@@ -315,6 +315,111 @@ def test_suppression_lifts_when_bridge_dies(client, monkeypatch):
     store.remove("bot_lift")
 
 
+# ── client tools relay ────────────────────────────────────────────────
+
+
+def _tool(client, cap: str, name: str, params: dict, headers, call_id="tc_1"):
+    return client.post(
+        f"/internal/voice-agent/tool/{cap}",
+        headers=headers,
+        json={"tool_name": name, "parameters": params, "tool_call_id": call_id},
+    )
+
+
+def test_tool_requires_bearer_and_el_runtime(client, bearer):
+    r = _tool(client, "nope", "get_meeting_context", {}, {})
+    assert r.status_code == 401
+    store.create("bot_tleg", "https://meet.example/tleg", "laura")
+    store.register_recall_realtime_capability("bot_tleg", "cap-tleg")
+    r = _tool(client, "cap-tleg", "get_meeting_context", {}, bearer)
+    assert r.status_code == 403  # legacy sessions never serve agent tools
+    store.remove("bot_tleg")
+
+
+def test_tool_unknown_name_is_explicit_error(client, bearer):
+    _el_session("bot_tun")
+    r = _tool(client, "cap-bot_tun", "rm_rf_everything", {}, bearer)
+    assert r.status_code == 400
+    assert "unknown tool" in r.json()["error"]
+    store.remove("bot_tun")
+
+
+def test_tool_meeting_context_returns_roster_and_brief(client, bearer):
+    s = _el_session("bot_tctx")
+    s.integration = {"brief": "Alpina deck due Friday.", "meeting": {"purpose": "Weekly"}}
+    r = _tool(client, "cap-bot_tctx", "get_meeting_context", {}, bearer)
+    body = r.json()
+    assert body["ok"] is True
+    assert body["result"]["purpose"] == "Weekly"
+    assert "Alpina" in body["result"]["meeting_brief"]
+    store.remove("bot_tctx")
+
+
+def test_tool_queue_action_complete_is_idempotent(client, bearer):
+    _el_session("bot_tq")
+    params = {
+        "summary": "create a task",
+        "details": "task called Finish the Alpina deck for Ananth by Friday",
+        "request_id": "req-1",
+    }
+    r1 = _tool(client, "cap-bot_tq", "queue_action", params, bearer).json()
+    assert r1["ok"] is True and r1["result"]["status"] == "queued"
+    assert r1["result"]["approval_required"] is True
+    action_id = r1["result"]["action_id"]
+    # The agent retrying the SAME request must not mint a second action.
+    r2 = _tool(client, "cap-bot_tq", "queue_action", params, bearer, call_id="tc_2").json()
+    assert r2["result"]["status"] == "already_queued"
+    assert r2["result"]["action_id"] == action_id
+    store.remove("bot_tq")
+
+
+def test_tool_queue_action_vague_asks_for_details(client, bearer):
+    _el_session("bot_tv")
+    r = _tool(
+        client, "cap-bot_tv", "queue_action",
+        {"summary": "send an email", "request_id": "req-2"}, bearer,
+    ).json()
+    assert r["result"]["status"] == "needs_details"
+    assert "email_to" in r["result"]["missing"]
+    store.remove("bot_tv")
+
+
+def test_tool_knowledge_search_formats_chunks(client, bearer, monkeypatch):
+    from app.api import voice_agent as va
+
+    class _Hit:
+        text = "SFF Studio runs a venture studio model with 41 companies."
+        source = "sff_overview.md"
+        section = "Fund"
+        score = 0.9
+
+    from app.brain import rag
+
+    monkeypatch.setattr(rag, "retrieve", lambda *a, **k: [_Hit()])
+    _el_session("bot_tk")
+    r = _tool(
+        client, "cap-bot_tk", "search_company_knowledge",
+        {"query": "how many companies"}, bearer,
+    ).json()
+    assert r["result"]["found"] is True
+    assert "41 companies" in r["result"]["chunks"][0]["text"]
+    store.remove("bot_tk")
+
+
+def test_tool_crash_returns_502_not_traceback(client, bearer, monkeypatch):
+    from app.brain import rag
+
+    def _boom(*a, **k):
+        raise RuntimeError("index exploded")
+
+    monkeypatch.setattr(rag, "retrieve", _boom)
+    _el_session("bot_tc")
+    r = _tool(client, "cap-bot_tc", "search_company_knowledge", {"query": "x"}, bearer)
+    assert r.status_code == 502
+    assert r.json() == {"ok": False, "error": "RuntimeError"}
+    store.remove("bot_tc")
+
+
 # ── Recall attach + page params ───────────────────────────────────────
 
 

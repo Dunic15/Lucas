@@ -227,8 +227,66 @@ export class VoiceSession {
       this.sendPage({ type: "interrupt" });
       return;
     }
+    if (t === "client_tool_call") {
+      // Laura owns knowledge + actions: relay the call to the backend and
+      // hand the JSON back as the tool result. Fire-and-forget so the audio
+      // pumps never wait on a tool.
+      this.handleToolCall(msg.client_tool_call || {});
+      return;
+    }
     // user_transcript / agent_response / vad_score …: transcripts stay on the
     // Recall→backend path (speaker labels live there); nothing is logged here.
+  }
+
+  async handleToolCall(call) {
+    const id = call.tool_call_id || "";
+    const name = call.tool_name || "";
+    console.log("tool call: " + name); // name only — parameters are meeting content
+    let result = "";
+    let isError = false;
+    try {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 12000);
+      const r = await fetch(
+        `${this.env.BACKEND_URL}/internal/voice-agent/tool/${this.cap}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + this.env.BACKEND_BEARER,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            tool_name: name,
+            parameters: call.parameters || {},
+            tool_call_id: id,
+          }),
+          signal: ctl.signal,
+        }
+      );
+      clearTimeout(timer);
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok || !body.ok) {
+        isError = true;
+        result = JSON.stringify({ error: (body && body.error) || "tool failed" });
+      } else {
+        result = JSON.stringify(body.result);
+      }
+    } catch (_) {
+      // Timeout/unreachable: an honest error beats a silent hang — the agent
+      // says "I'll check" instead of fabricating a result.
+      isError = true;
+      result = JSON.stringify({ error: "tool timeout" });
+    }
+    try {
+      this.el?.send(
+        JSON.stringify({
+          type: "client_tool_result",
+          tool_call_id: id,
+          result,
+          is_error: isError,
+        })
+      );
+    } catch (_) {}
   }
 
   async postEvent(type) {
