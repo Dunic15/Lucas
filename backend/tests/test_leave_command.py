@@ -665,3 +665,17 @@ def test_repeated_leave_command_says_goodbye_once(monkeypatch, tmp_path):
     assert body.get("reason") == "leave_command_duplicate"
     assert body.get("spoke") is False
     assert not calls["spoken"], "no second goodbye"
+
+
+def test_leave_request_tolerates_spoken_comma():
+    """Live 2026-07-24: 'Cedric, can you leave the call, please?' did not match
+    (the trailing-politeness group required plain whitespace) and the avatar
+    stayed in the meeting. The spoken comma must be tolerated."""
+    from app.decision import detect_leave_command, detect_leave_command_explicit
+
+    assert detect_leave_command("can you leave the call, please?") is True
+    assert detect_leave_command_explicit("can you leave the call, please?") is True
+    assert detect_leave_command("leave the meeting, please") is True
+    # Politeness commas must not loosen the guards:
+    assert detect_leave_command("can you leave time for questions") is False
+    assert detect_leave_command("before you leave the call") is False

@@ -651,7 +651,11 @@ _LEAVE_IMPERATIVE = re.compile(
     r"^(?:please\s+|now\s+|just\s+|kindly\s+|go ahead and\s+)*"
     r"(?:leave|exit|go out|get out|go away|drop (?:off|out)|hop off|hang up|disconnect|log (?:off|out)|sign (?:off|out))"
     r"(?:\s+(?:(?:of|from|off)\s+)?(?:the|this|our)\s+(?:meeting|meet|call|room))?"
-    r"(?:\s+(?:now|please|thanks|thank you))*"
+    # Trailing politeness tolerates the SPOKEN COMMA — live 2026-07-24:
+    # "can you leave the call, please?" did not match (the Italian pattern
+    # already allowed ",", these required plain whitespace) and the avatar
+    # stayed in the meeting arguing about calendar actions.
+    r"(?:\s*,?\s*(?:now|please|thanks|thank you))*"
     r"[.!?\s]*$",
     re.IGNORECASE,
 )
@@ -664,7 +668,11 @@ _LEAVE_REQUEST = re.compile(
     r"(?:can|could|would|will) you (?:please\s+)?"
     r"(?:leave|exit|go out|get out|go away|drop (?:off|out)|hop off|hang up|disconnect|log (?:off|out)|sign (?:off|out))"
     r"(?:\s+(?:(?:of|from|off)\s+)?(?:the|this|our)\s+(?:meeting|meet|call|room))?"
-    r"(?:\s+(?:now|please|thanks|thank you))*"
+    # Trailing politeness tolerates the SPOKEN COMMA — live 2026-07-24:
+    # "can you leave the call, please?" did not match (the Italian pattern
+    # already allowed ",", these required plain whitespace) and the avatar
+    # stayed in the meeting arguing about calendar actions.
+    r"(?:\s*,?\s*(?:now|please|thanks|thank you))*"
     r"[.!?\s]*$",
     re.IGNORECASE,
 )
