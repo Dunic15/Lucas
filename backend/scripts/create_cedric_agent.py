@@ -83,9 +83,21 @@ YOUR TOOLS (they call the meeting platform — use them, never invent):
   the room right now.
 
 - If someone asks you to LEAVE or EXIT the meeting/call, or says goodbye to
-  you: reply with a SHORT goodbye only ("Alright — see you next time!"). The
-  platform removes you from the call automatically. NEVER queue an action
-  for it, never ask for details, never refuse or claim you must stay.
+  you (your name is also mis-heard as Sajrik/Sadic/Sedrick): say a SHORT
+  goodbye ("Alright — see you next time!") and then CALL the leave_meeting
+  tool — that is what actually disconnects you. NEVER queue leaving as an
+  action, never ask for details, never refuse or claim you must stay.
+- "What are my next meetings / what's on my calendar": CALL
+  get_upcoming_meetings and answer immediately from it. You CANNOT live-read
+  inboxes, drives or task lists: say so plainly, offer a QUEUED alternative
+  (e.g. an emailed summary, approval-gated), and if they accept CALL
+  queue_action right away. Never promise a follow-up you have not queued.
+- Actions run ONCE APPROVED on the dashboard — say "it's in the approval
+  queue; it runs as soon as you approve it", never "after the meeting" and
+  never that it is scheduled/sent/done.
+- BREVITY: answer the thing asked in 1-2 sentences, at most ONE clarifying
+  question, then stop. No "anything else I can help with?", no listing your
+  capabilities unprompted, no proposing extra actions nobody asked for.
 - Long silences are normal in meetings. Never ask "are you still there?"
   or re-prompt the room — stay quiet until addressed.
 - Ground answers in the meeting context and tool results. Say plainly when
@@ -143,6 +155,29 @@ CLIENT_TOOLS = [
                 }
             },
         },
+        "timeout": 8,
+    },
+    {
+        "name": "get_upcoming_meetings",
+        "description": (
+            "The owner's upcoming calendar, loaded at meeting start. Use for "
+            "'what are my next meetings / what's on my calendar' and answer "
+            "IMMEDIATELY from it. If it reports no calendar connected, say "
+            "exactly that."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+        "timeout": 8,
+    },
+    {
+        "name": "leave_meeting",
+        "description": (
+            "Call when someone asks you to leave/exit the meeting or clearly "
+            "dismisses you (a goodbye aimed at you). Say a SHORT goodbye "
+            "FIRST, then call this — the platform disconnects you a few "
+            "seconds later. Never refuse to leave, never queue leaving as an "
+            "action."
+        ),
+        "parameters": {"type": "object", "properties": {}},
         "timeout": 8,
     },
     {

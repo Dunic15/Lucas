@@ -28,6 +28,10 @@ wake_words:
   - sedric
   - sedrik
   - sedrick
+  # Live 2026-07-24 (Scribe ASR renditions): "Sajrik, leave the meeting" and
+  # "Sadic" reached neither the wake path nor the leave carve-outs.
+  - sajrik
+  - sadic
 
 # Who the avatar is and what it knows. Spoken aloud, so keep it tight.
 persona_prompt: >
