@@ -125,23 +125,46 @@ New avatar.yaml fields (unknown values normalize to safe defaults):
 
 Branches stack; each is draft-PR-only (owner merges — PR-only rule).
 
-### PR 2 — `spike/cedric-elevenlabs-audio` (audio bridge, ~2 days)
-- `POST /internal/voice-agent/bootstrap`: capability-checked, Cedric-only,
-  resolves the session, calls ElevenLabs **get signed URL** server-side,
-  returns `{signed_url, conversation_id, runtime}`. Key never leaves the
-  backend.
-- Relay route `/realtime/cedric-elevenlabs/{capability}` on
-  `relay/laura-ears/worker.js` — per-session Durable Object bridging three
-  sockets: Recall audio in, ElevenLabs WS, browser audio out. 2 s PCM ring
-  buffer (wake word arrives *after* the phrase started; replay the buffer on
-  gate-open so the agent hears the whole sentence).
-- `/talk` streaming-audio branch (`voice_runtime=elevenlabs_agent`): decode
-  chunks, jitter buffer, play, drive the speaking animation; flush instantly
-  on `interruption`. Lip-sync precision is explicitly NOT a goal yet.
-- A script (`backend/scripts/create_cedric_agent.py`) that creates/updates
-  the "Cedric Meeting Pilot" agent from avatar.yaml persona + pilot rules,
-  voice `cjVigY5qzO86Huf0OWal` — the agent config lives in code review, not
-  in a dashboard.
+### PR 2 — audio bridge — **SHIPPED 2026-07-24 (same branch as PR 1, #430)**
+
+What was actually built (deltas from the original sketch in *italics*):
+
+- `GET /internal/voice-agent/bootstrap/{capability}` (`api/voice_agent.py`):
+  Bearer `LAURA_API_TOKEN` + capability (mirrors `/internal/ears-config`),
+  honors the FROZEN session snapshot, mints the signed URL server-side and
+  returns the full `conversation_initiation_client_data` (per-meeting prompt
+  override with the brief in an UNTRUSTED block + dynamic variables — the
+  Underheard pattern). `POST /internal/voice-agent/event/{capability}`:
+  started/failed/closed beacons flip `session.voice_agent_active` (failed
+  while live also speaks one fallback line through the legacy voice).
+- *A NEW dedicated worker* **`relay/cedric-voice/`** (not a route on
+  laura-ears — the Gemini path stays byte-identical): Durable Object
+  `VoiceSession` per capability bridging Recall audio in (`/voice/{cap}`),
+  the ElevenLabs WS, and the avatar page audio out (`/voice-out/{cap}`).
+  ~3 s pre-connect tail buffer; ping/pong; interruption→page flush.
+  **DEPLOYED: `https://cedric-voice.lauravatar.workers.dev`** (secret
+  BACKEND_BEARER set; health OK).
+- *HALF-DUPLEX echo gate (pilot 1)*: Recall streams the room's MIXED audio —
+  Cedric's own voice included — so while agent audio is playing (+300 ms) the
+  DO drops ingress; the agent can never hear itself. Cost: no VOICE barge-in
+  while he speaks; the transcript-driven legacy stop ("Cedric stop", barge-in
+  partials) still cuts him instantly (page wraps `interruptSpeech` to flush
+  the agent queue too). PR 3 revisits with speaker-labeled gating.
+- `/talk` page: `voice_ws`+`voice_cap` URL params (appended by `create_bot`)
+  → WS to the bridge, s16le→WebAudio scheduled playback, reconnect w/
+  backoff, and it feeds the EXISTING `speakingUntil` reporter so the
+  backend's barge-in machinery sees his real voice window. Lip-sync deferred.
+- `recall_client.create_bot`: EL-runtime sessions attach the audio endpoint
+  to cedric-voice (voiced attempts first, plain fallbacks kept — a Recall 4xx
+  can never keep him out of the meeting) and NEVER attach Gemini ears
+  (exactly one audio owner). New env `VOICE_AGENT_RELAY_WS_BASE` ("" = off,
+  a fifth independent condition).
+- Live-path suppression (`main.py`, after ingestion, before any speak gate):
+  runtime==elevenlabs_agent AND voice_agent_active → no legacy spoken answer;
+  transcript/MeetingState/actions/artifact continue; called stop/leave
+  commands fall through (meter safety). Bridge dies → gate lifts itself.
+- The agent creation script (PR 1) already shipped; agent settings aligned
+  with UnderHeard-Voice prod.
 
 ### PR 3 — `spike/cedric-elevenlabs-multiparty` (Meeting Director, ~2 days)
 - Gate state machine per session: `closed` by default; opens on Cedric wake
@@ -212,3 +235,43 @@ calls create canonical actions, 0 direct writes, 0 false "done", 0 duplicates.
 **Extend beyond Cedric only after all three pilot gates pass:** (1) measurably
 better conversation, (2) no answers when humans talk to each other, (3) a
 canonical action queued end-to-end without direct execution.
+
+## RUNBOOK — first live meeting test
+
+Everything is built and the bridge worker is already deployed; the backend
+side ships on merge. In order:
+
+1. **Confirm the ElevenLabs plan covers Agents minutes** (30-second test chat
+   with "Cedric Meeting Pilot" in the EL dashboard). The account 402'd once
+   on a voice tier; creation+signed-URL worked but no conversation minute has
+   been billed yet.
+2. **Guard: no active sessions** (`/check-sessions`), then **merge #430** in
+   the merging session → auto-deploy; wait for the post-merge
+   `START_DEPLOYMENT` to finish (never trust the generic watcher).
+3. **Flip the two prod envs** on App Runner (merge the FULL env map, never a
+   partial — update-service replaces it):
+   `ELEVENLABS_AGENT_RUNTIME_ENABLED=true`
+   `VOICE_AGENT_RELAY_WS_BASE=wss://cedric-voice.lauravatar.workers.dev`
+   (this triggers a second deploy — wait for it too).
+4. **Dispatch Cedric** from the dashboard into a Google Meet, 1:1
+   (config A: you + Cedric). Expected sequence:
+   - He joins; the ONE greeting is the legacy self-intro (legacy TTS voice).
+   - Say **"Cedric, how are you doing?"** → the reply comes back in the
+     ElevenLabs voice, noticeably faster and more conversational.
+   - Follow-up without his name → he should still answer (agent-native).
+   - Say "yeah / mm-hm" while he talks → must NOT cut him off.
+   - **"Cedric, stop"** while he talks → cuts him instantly (legacy stop
+     path — this is also the barge-in mechanism in pilot 1).
+   - **"Cedric, leave the meeting"** → he leaves (meter safety intact).
+5. **Kill switch / rollback**: set `ELEVENLABS_AGENT_RUNTIME_ENABLED=false`
+   (or empty `VOICE_AGENT_RELAY_WS_BASE`) and redeploy — next session is
+   fully legacy. Mid-meeting bridge failures fall back to legacy by
+   themselves (he says one hiccup line and the old brain resumes).
+6. **Watch**: `npx wrangler tail cedric-voice` (counters only, no content) —
+   look for `bootstrap: legacy (…reason)` when something is misconfigured;
+   `/gemini-ears/status` should stay quiet (ears must not attach for him).
+
+Known pilot-1 limits to not be surprised by: no voice barge-in while he is
+mid-answer (half-duplex echo gate; "Cedric stop" covers it), no live action
+CAPTURE dialog (actions still extracted post-meeting from the transcript),
+multiparty discipline is prompt-level only until PR 3's Meeting Director.

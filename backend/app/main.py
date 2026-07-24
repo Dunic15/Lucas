@@ -85,6 +85,7 @@ from . import (
     vendor_health,
 )
 from .brain import capabilities  # deterministic org-scoped capability truth
+from .integrations import elevenlabs_agent  # Cedric EL-runtime voice ownership
 from .brain.engine import (
     SEARCH_ANNOUNCE_LINES,
     answer_question,
@@ -354,6 +355,8 @@ from . import pipedream_api  # noqa: E402
 app.include_router(pipedream_api.router)
 from .api import pages  # noqa: E402
 app.include_router(pages.router)  # static pages + avatar assets
+from .api import voice_agent as voice_agent_api  # noqa: E402
+app.include_router(voice_agent_api.router)  # /internal/voice-agent/* (Cedric EL pilot)
 from .api import granola  # noqa: E402
 app.include_router(granola.router)  # /granola/*
 from .api import oauth  # noqa: E402
@@ -3658,6 +3661,29 @@ async def recall_webhook(request: Request) -> JSONResponse:
             else None
         ),
     )
+
+    # ── ElevenLabs Agent runtime: the agent owns the voice ──
+    # While the Cedric pilot's relay bridge is LIVE for this session, the
+    # legacy path must not produce ANY spoken answer — the agent hears the
+    # meeting audio directly and replies itself; a second brain answering the
+    # same sentence is the pilot's worst failure mode. Everything ABOVE this
+    # gate (transcript archive, MeetingState, rolling notes, roster, frame)
+    # already ran, so the artifact/actions pipeline stays whole. Control
+    # commands stay live through the legacy path — "Cedric, stop" and
+    # "Cedric, leave the meeting" MUST keep working (meter safety), so a
+    # called stop/leave falls through to the handlers below. The moment the
+    # bridge dies, voice_agent_active flips False and this gate opens again.
+    if (
+        session.conversation_runtime == elevenlabs_agent.RUNTIME_ELEVENLABS_AGENT
+        and session.voice_agent_active
+    ):
+        _ctrl = called and (
+            detect_stop_command(question) or detect_leave_command(question)
+        )
+        if not _ctrl:
+            return JSONResponse(
+                {"ok": True, "spoke": False, "voice_owner": "elevenlabs"}
+            )
 
     # ── proactive intervention (fires once, as the meeting wraps up) ──
     if (

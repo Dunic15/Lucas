@@ -1,0 +1,28 @@
+# cedric-voice — the ElevenLabs Agent bridge for the Cedric pilot.
+#
+# A Durable Object per meeting session ties together THREE sockets that can
+# never meet in a plain stateless Worker:
+#   Recall audio ingress  (WS in:  /voice/{capability})
+#   ElevenLabs Agent      (WS out: signed URL from the backend)
+#   Avatar page audio out (WS in:  /voice-out/{capability})
+#
+# Deliberately a SEPARATE worker from laura-ears: the Gemini path stays
+# byte-identical and un-deployed while this pilot iterates.
+#
+# Secrets (set via `wrangler secret put`, never in this file):
+#   BACKEND_BEARER — the backend's LAURA_API_TOKEN (auths /internal/voice-agent/*)
+name = "cedric-voice"
+main = "worker.js"
+compatibility_date = "2026-07-01"
+
+[vars]
+# Laura backend (App Runner). Override per-env if staging ever exists.
+BACKEND_URL = "https://dhfgfe6yw6.eu-central-1.awsapprunner.com"
+
+[[durable_objects.bindings]]
+name = "VOICE_SESSION"
+class_name = "VoiceSession"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["VoiceSession"]

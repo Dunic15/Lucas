@@ -192,6 +192,14 @@ class Session:
     # correct (and only working) runtime — persisting this would be a bug.
     conversation_runtime: str = field(default="legacy", repr=False, compare=False)
     elevenlabs_agent_id: str = field(default="", repr=False, compare=False)
+    # Whether the ElevenLabs relay bridge is LIVE for this session right now —
+    # set True by the relay's "started" event, False on "failed"/close. This is
+    # the voice-ownership switch: while True the legacy path keeps ingesting
+    # transcripts (MeetingState, actions, artifact) but produces NO spoken
+    # answer; the moment it flips False the legacy brain answers again
+    # (automatic fallback). In-memory like the runtime snapshot: a restart
+    # means the bridge is gone, so False (legacy speaks) is the true state.
+    voice_agent_active: bool = field(default=False, repr=False, compare=False)
     ws: WebSocket | None = None
     pending_messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
     # Canonical pending-action bindings. The session already keys the meeting;

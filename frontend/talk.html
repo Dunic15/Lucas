@@ -770,6 +770,79 @@
     };
     poll();
 
+    // ── ElevenLabs Agent voice (Cedric pilot) ──
+    // When the backend dispatched this session on the agent runtime, the page
+    // URL carries the cedric-voice bridge coordinates: stream the agent's
+    // pcm_16000 chunks straight into WebAudio. The {type:"speak"} path above
+    // stays fully live (self-intro + fallback lines ride it) — this is an
+    // ADDITIVE channel, and pages without the params are byte-identical.
+    const voiceWsBase = params.get("voice_ws");
+    const voiceCap = params.get("voice_cap");
+    if (voiceWsBase && voiceCap) {
+      let agentCtx = null, agentNextAt = 0, agentLive = [];
+      const agentAudioCtx = () => {
+        if (!agentCtx) agentCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (agentCtx.state === "suspended") agentCtx.resume().catch(() => {});
+        return agentCtx;
+      };
+      const flushAgentAudio = () => {
+        for (const s of agentLive) { try { s.stop(); } catch (_) {} }
+        agentLive = []; agentNextAt = 0; speakingUntil = 0;
+      };
+      const playAgentChunk = (b64) => {
+        const ctx = agentAudioCtx();
+        const raw = atob(b64);
+        const n = raw.length >> 1;               // s16le mono @16k
+        if (!n) return;
+        const f32 = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+          let v = raw.charCodeAt(2 * i) | (raw.charCodeAt(2 * i + 1) << 8);
+          if (v >= 0x8000) v -= 0x10000;
+          f32[i] = v / 32768;
+        }
+        const buf = ctx.createBuffer(1, n, 16000); // ctx resamples on play
+        buf.getChannelData(0).set(f32);
+        const src = ctx.createBufferSource();
+        src.buffer = buf; src.connect(ctx.destination);
+        const t = Math.max(ctx.currentTime + 0.05, agentNextAt);
+        src.start(t); agentNextAt = t + buf.duration;
+        agentLive.push(src);
+        src.onended = () => { const i = agentLive.indexOf(src); if (i >= 0) agentLive.splice(i, 1); };
+        // Feed the EXISTING speaking-state report loop below: the backend's
+        // barge-in machinery sees his real voice window, unchanged.
+        speakingUntil = Math.max(
+          speakingUntil,
+          performance.now() + (agentNextAt - ctx.currentTime) * 1000 + 300
+        );
+      };
+      // A legacy stop ({type:"stop"} from barge-in / "Cedric stop") must also
+      // silence the AGENT queue: while he speaks the half-duplex gate mutes
+      // the bridge's ingress, so ElevenLabs can't hear the interruption — the
+      // backend's transcript-driven stop is the one that reaches us. The
+      // function binding is writable (function declaration); wrap it so every
+      // existing call site flushes both pipelines.
+      const _baseInterrupt = interruptSpeech;
+      interruptSpeech = function () { _baseInterrupt(); flushAgentAudio(); };
+      window.interruptSpeech = interruptSpeech;
+      let agentWs = null, agentRetry = 500;
+      const connectAgentVoice = () => {
+        let target;
+        try { target = voiceWsBase.replace(/^http/, "ws") + "/voice-out/" + encodeURIComponent(voiceCap); }
+        catch (_) { return; }
+        try { agentWs = new WebSocket(target); }
+        catch (_) { setTimeout(connectAgentVoice, agentRetry = Math.min(agentRetry * 2, 8000)); return; }
+        agentWs.onopen = () => { agentRetry = 500; };
+        agentWs.onmessage = (ev) => {
+          let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
+          if (m.type === "audio" && m.data) { unlockAudio(); playAgentChunk(m.data); }
+          else if (m.type === "interrupt") flushAgentAudio();
+        };
+        agentWs.onclose = () => setTimeout(connectAgentVoice, agentRetry = Math.min(agentRetry * 2, 8000));
+        agentWs.onerror = () => { try { agentWs.close(); } catch (_) {} };
+      };
+      connectAgentVoice();
+    }
+
     // Report the REAL speaking state to the backend: its barge-in window is
     // otherwise a words-per-second estimate that drifts both ways on long
     // answers. True = heartbeat while anything is playing or queued (the
