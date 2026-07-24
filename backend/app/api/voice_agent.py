@@ -488,7 +488,11 @@ def _schedule_leave(session) -> None:
 
     async def _later() -> None:
         try:
-            await asyncio.sleep(4.0)
+            # 2.0s: the goodbye is SPOKEN BEFORE the tool call (prompt order),
+            # so its audio is already streaming when we get here — 4s made the
+            # exit feel laggy (owner, live 2026-07-24). finalize leaves Recall
+            # FIRST and builds the artifact after, so this is the whole wait.
+            await asyncio.sleep(2.0)
             await _main._finalize_session(session.bot_id, source="agent_leave")
         except Exception:  # noqa: BLE001 — backstops own the guarantee
             pass
