@@ -817,7 +817,9 @@
         let level = 0;
         const tick = () => {
           const speaking = performance.now() < speakingUntil;
-          if (!speaking) { releaseMouth(); return; }
+          // Hand over: once TalkingHead animates the lips for this reply, the
+          // amplitude fixed-values must vanish or they OVERRIDE the animation.
+          if (!speaking || mouthAnimated) { releaseMouth(); return; }
           agentMouthRAF = requestAnimationFrame(tick);
           agentAnalyser.getByteTimeDomainData(buf);
           let sum = 0;
@@ -871,71 +873,70 @@
         );
         return t; // scheduled start (ctx clock) — the viseme engine's anchor
       };
-      // ── Gapless audio + char-timed viseme engine ──
-      // v1 queued ~1s pieces through head.speakAudio and every seam cost a
-      // hiccup ("a lag every 2 seconds" — live 2026-07-24). Now the AUDIO
-      // always rides the sample-accurate raw scheduler (zero seams, zero
-      // added start latency) and the MOUTH is driven separately: ElevenLabs'
-      // char alignment maps char→Oculus viseme, applied on the AUDIO CLOCK
-      // via setFixedValue (missing morphs are lib-guarded no-ops). Chunks
-      // without alignment fall back to the amplitude driver.
-      const V_MAP = {
-        a: "viseme_aa", "à": "viseme_aa", e: "viseme_E", "è": "viseme_E",
-        "é": "viseme_E", i: "viseme_I", "ì": "viseme_I", y: "viseme_I",
-        j: "viseme_CH", o: "viseme_O", "ò": "viseme_O", u: "viseme_U",
-        "ù": "viseme_U", w: "viseme_U", p: "viseme_PP", b: "viseme_PP",
-        m: "viseme_PP", f: "viseme_FF", v: "viseme_FF", t: "viseme_DD",
-        d: "viseme_DD", k: "viseme_kk", g: "viseme_kk", c: "viseme_kk",
-        q: "viseme_kk", s: "viseme_SS", z: "viseme_SS", x: "viseme_SS",
-        n: "viseme_nn", l: "viseme_nn", r: "viseme_RR",
+      // ── Sound: gapless raw scheduler. Mouth: TalkingHead on SILENT audio ──
+      // v1 (speakAudio with the real audio) hiccuped at every segment seam;
+      // v2 (raw setFixedValue char engine) had no easing and read as a still
+      // mouth. v3 keeps the PROVEN look of TalkingHead's viseme animation by
+      // feeding speakAudio the word timings with a SILENT buffer of the same
+      // duration — its seams are inaudible — while the REAL audio rides the
+      // sample-accurate scheduler untouched. Until the first mouth segment
+      // lands, the amplitude driver covers the lips; it hands over cleanly.
+      let segChars = [], segMs = 0, segTimer = 0, segFirstM = true;
+      let mouthAnimated = false; // TalkingHead owns the lips for this reply
+      const clearSegment = () => {
+        segChars = []; segMs = 0; segFirstM = true; mouthAnimated = false;
+        if (segTimer) { clearTimeout(segTimer); segTimer = 0; }
       };
-      let visemeQueue = [];   // {at, end, v} — agent ctx clock, seconds
-      let visemeRAF = 0, visemeCurrent = null;
-      const releaseVisemes = () => {
-        if (visemeRAF) { cancelAnimationFrame(visemeRAF); visemeRAF = 0; }
-        if (visemeCurrent) { try { head.setFixedValue(visemeCurrent, null); } catch (_) {} }
-        try { head.setFixedValue("jawOpen", null); } catch (_) {}
-        visemeCurrent = null; visemeQueue = [];
-      };
-      const clearSegment = releaseVisemes; // name kept: flushAgentAudio calls it
-      const visemeTick = () => {
-        if (!agentCtx || !visemeQueue.length) { releaseVisemes(); return; }
-        visemeRAF = requestAnimationFrame(visemeTick);
-        const now = agentCtx.currentTime;
-        while (visemeQueue.length && visemeQueue[0].end < now) visemeQueue.shift();
-        const cur =
-          visemeQueue.length && visemeQueue[0].at <= now ? visemeQueue[0].v : null;
-        if (cur !== visemeCurrent) {
-          if (visemeCurrent) { try { head.setFixedValue(visemeCurrent, null); } catch (_) {} }
-          if (cur) {
-            try { head.setFixedValue(cur, 0.55); } catch (_) {}
-            const open = cur === "viseme_aa" || cur === "viseme_O" || cur === "viseme_E";
-            try { head.setFixedValue("jawOpen", open ? 0.25 : 0.08); } catch (_) {}
+      const flushMouthSegment = (endOfResponse) => {
+        if (segTimer) { clearTimeout(segTimer); segTimer = 0; }
+        const durMs = segMs;
+        const chs = segChars;
+        segChars = []; segMs = 0;
+        if (endOfResponse) { segFirstM = true; mouthAnimated = false; }
+        if (!chs.length || durMs <= 0) return;
+        const words = [], wtimes = [], wdurations = [];
+        let w = "", wt = 0, wend = 0;
+        for (const ch of chs) {
+          if (/\s/.test(ch.c)) {
+            if (w) { words.push(w); wtimes.push(wt); wdurations.push(Math.max(10, wend - wt)); w = ""; }
           } else {
-            try { head.setFixedValue("jawOpen", 0.04); } catch (_) {}
+            if (!w) wt = ch.t;
+            w += ch.c; wend = ch.t + ch.d;
           }
-          visemeCurrent = cur;
         }
+        if (w) { words.push(w); wtimes.push(wt); wdurations.push(Math.max(10, wend - wt)); }
+        if (!words.length) return;
+        mouthAnimated = true;
+        releaseMouth(); // amplitude fixed-values would override the animation
+        const silent = decodeCtx().createBuffer(1, Math.max(1, Math.round(durMs * 16)), 16000);
+        try { head.speakAudio({ audio: silent, words, wtimes, wdurations }); } catch (_) {}
       };
       const playAgentChunk = (b64, align) => {
         const f32 = b64ToF32(b64);
         if (!f32.length) return;
-        const startAt = scheduleRawF32(f32); // gapless, plays immediately
+        scheduleRawF32(f32); // the REAL sound: gapless, immediate
         const chars = align && align.chars;
-        if (!chars || !chars.length || startAt == null) {
-          driveMouth(); // no timing data: amplitude flap covers the mouth
+        if (!chars || !chars.length) {
+          if (!mouthAnimated) driveMouth(); // no timing data: amplitude flap
           return;
         }
+        const baseMs = segMs;
         const starts = align.char_start_times_ms || [];
         const durs = align.char_durations_ms || [];
         for (let i = 0; i < chars.length; i++) {
-          const v = V_MAP[String(chars[i] || "").toLowerCase()];
-          if (!v) continue; // spaces/punct/h: mouth relaxes between events
-          const at = startAt + (starts[i] || 0) / 1000;
-          visemeQueue.push({ at, end: at + Math.max(0.03, (durs[i] || 40) / 1000), v });
+          segChars.push({ c: chars[i], t: baseMs + (starts[i] || 0), d: durs[i] || 0 });
         }
-        if (!visemeRAF && visemeQueue.length) {
-          visemeRAF = requestAnimationFrame(visemeTick);
+        segMs += f32.length / 16;
+        if (!mouthAnimated) driveMouth(); // lips alive until the first segment
+        if (segTimer) clearTimeout(segTimer);
+        const lastChar = chars[chars.length - 1] || "";
+        const atBoundary = /[\s.,!?;:]/.test(lastChar);
+        const target = segFirstM ? 500 : 1500;
+        if (segMs >= 2600 || (segMs >= target && atBoundary)) {
+          segFirstM = false;
+          flushMouthSegment(false);
+        } else {
+          segTimer = setTimeout(() => flushMouthSegment(true), 300);
         }
       };
       // A legacy stop ({type:"stop"} from barge-in / "Cedric stop") must also

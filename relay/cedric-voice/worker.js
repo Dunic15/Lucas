@@ -65,8 +65,11 @@ export class VoiceSession {
     this.playheadMs = 0; // when the agent's queued audio finishes playing
     this.frames = 0;
     this.chunks = 0;
-    this.lastUserChunkAt = 0; // last time we forwarded user audio to EL
+    this.lastUserChunkAt = 0; // last time we forwarded VOICED user audio
     this.inResponse = false; // between first audio chunk and next user audio
+    this.tUserTranscript = 0; // EL finalized the user's utterance
+    this.tAgentResponse = 0; // EL produced the reply text (pre-TTS)
+    this.tFirstChunk = 0; // first audio chunk of the current reply
   }
 
   async fetch(req) {
@@ -241,17 +244,41 @@ export class VoiceSession {
       try { this.el.send(JSON.stringify({ type: "pong", event_id: id })); } catch (_) {}
       return;
     }
+    if (t === "user_transcript") {
+      // Timestamp only (the transcript CONTENT stays on the Recall path):
+      // this is EL's own "the user finished saying something" moment — the
+      // clean anchor the energy probe can't give (far-field echo through the
+      // speaker's mic keeps re-stamping it).
+      this.tUserTranscript = Date.now();
+      return;
+    }
+    if (t === "agent_response_complete") {
+      if (this.tFirstChunk) {
+        console.log("stage_response_stream_ms=" + (Date.now() - this.tFirstChunk));
+      }
+      return;
+    }
     if (t === "audio") {
       const b64 = msg.audio_event && msg.audio_event.audio_base_64;
       if (!b64) return;
       this.chunks++;
       if (this.chunks === 1) console.log("first agent audio chunk");
-      // Per-turn latency: last forwarded user audio -> first audio chunk of
-      // the reply. The single number that says who is slow (EL vs our hops).
+      // Per-turn stage decomposition (numbers only, never content):
+      //   stage_transcript_to_audio_ms = EL turn-close + LLM + TTS
+      //   stage_response_to_audio_ms   = TTS share (text ready -> first audio)
+      //   turn_latency_ms              = voiced-frame anchor (echo-noisy)
       if (!this.inResponse) {
         this.inResponse = true;
+        const now = Date.now();
+        this.tFirstChunk = now;
         if (this.lastUserChunkAt) {
-          console.log("turn_latency_ms=" + (Date.now() - this.lastUserChunkAt));
+          console.log("turn_latency_ms=" + (now - this.lastUserChunkAt));
+        }
+        if (this.tUserTranscript) {
+          console.log("stage_transcript_to_audio_ms=" + (now - this.tUserTranscript));
+        }
+        if (this.tAgentResponse) {
+          console.log("stage_response_to_audio_ms=" + (now - this.tAgentResponse));
         }
       }
       // pcm_16000 s16le: 32 bytes/ms. Track when playback will END so the
@@ -282,6 +309,7 @@ export class VoiceSession {
       return;
     }
     if (t === "agent_response") {
+      this.tAgentResponse = Date.now(); // reply TEXT ready (pre-TTS anchor)
       // The agent's SPOKEN words never pass through the backend under this
       // runtime (no _make_avatar_speak dispatch), so without this the meeting
       // transcript/artifact loses everything HE said (live bug 2026-07-24:
