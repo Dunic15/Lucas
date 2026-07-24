@@ -20,7 +20,10 @@ battle-tested "why" per knob). Verified persisted via GET after PATCH.
 
 | Setting | Value | Why |
 |---|---|---|
-| LLM | `claude-sonnet-4-6`, temperature 0.4, **max_tokens 200** | Underheard prod pick; uncapped tokens measurably slowed responses. (They trial Qwen; it "sometimes gets lost" — not for the pilot.) |
+| LLM | **`gemini-2.5-flash`** (fluidity pass 2026-07-24; was claude-sonnet-4-6), temperature 0.4, **max_tokens 200** | EL's own speed tier — the LLM was the biggest TTFT line-item; Sonnet was a quality pick, not a speed one |
+| Knowledge | **native EL KB, 10 docs** (cedric + sff packs, content-hashed names, `usage_mode: auto`, RAG enabled) | In-turn retrieval (+~250ms) beats a client-tool round-trip + second generation; synthetic packs only — org data/transcripts NEVER go here |
+| Greeting | **agent `first_message`** fires on bridge connect; legacy self-intro skipped for EL sessions | One greeter, in the voice that answers |
+| Turn feel | eagerness **`normal`** (was patient) + `soft_timeout_config` filler 1.6s | Patient = dead air after the speaker stops; the filler masks slow LLM turns |
 | Voice / TTS | `cjVigY5qzO86Huf0OWal` (Eric), **`eleven_v3_conversational`**, out `pcm_16000`, `optimize_streaming_latency: 2` | v3 conversational = multilingual + best quality, and the one multilingual model the API accepts on en-default agents (flash/turbo v2_5 are rejected: "English Agents must use turbo or flash v2"). Latency dial 3 caused audible breakup on first words. |
 | ASR input | `pcm_16000` | Recall's exact stream format — no transcoding |
 | Languages | `en` default + `it` preset | Team code-switches EN/IT; per-call `language` override must match a preset |
