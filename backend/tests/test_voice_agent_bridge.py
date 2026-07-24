@@ -563,3 +563,26 @@ def test_create_bot_without_relay_base_stays_plain(monkeypatch, tmp_path):
         "/voice/" in str(e.get("url", ""))
         for e in body["recording_config"]["realtime_endpoints"]
     )
+
+
+def test_legacy_barge_in_disabled_while_agent_owns_voice(client, monkeypatch):
+    """EL runtime: interruption is the agent's (native, on separate streams).
+    The legacy stop flushed the page while EL kept streaming — fragments and
+    dead air mid-answer (live 2026-07-24)."""
+    stops: list[str] = []
+
+    async def fake_stop(session, *a, **k):
+        stops.append(session.bot_id)
+
+    monkeypatch.setattr(main_module, "_make_avatar_stop", fake_stop)
+    monkeypatch.setattr(main_module, "_should_barge_in", lambda *a, **k: True)
+    s = _el_session("bot_nobarge")
+    s.voice_agent_active = True
+    _final(client, "bot_nobarge", "so about the quarterly plan we should")
+    assert stops == []  # no legacy stop while the agent owns the voice
+    s.voice_agent_active = False
+    # Different words: an identical repeated final would hit the duplicate-
+    # final dedupe and exit before the barge-in block.
+    _final(client, "bot_nobarge", "and the budget review is another thing")
+    assert stops  # legacy sessions keep the protection
+    store.remove("bot_nobarge")

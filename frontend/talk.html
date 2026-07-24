@@ -863,85 +863,80 @@
         src.start(t); agentNextAt = t + buf.duration;
         agentLive.push(src);
         src.onended = () => { const i = agentLive.indexOf(src); if (i >= 0) agentLive.splice(i, 1); };
-        // Feed the EXISTING speaking-state report loop below: the backend's
-        // barge-in machinery sees his real voice window, unchanged.
+        // Feed the EXISTING speaking-state report loop below: the backend
+        // sees his real voice window, unchanged.
         speakingUntil = Math.max(
           speakingUntil,
           performance.now() + (agentNextAt - ctx.currentTime) * 1000 + 300
         );
-        driveMouth();
+        return t; // scheduled start (ctx clock) — the viseme engine's anchor
       };
-      // ── REAL viseme lip-sync from ElevenLabs character alignment ──
-      // Each audio chunk arrives with {chars, char_start_times_ms,
-      // char_durations_ms} (times relative to ITS chunk). Chunks accumulate
-      // into ~1s segments cut at word boundaries; each segment becomes the
-      // exact {audio, words, wtimes, wdurations} payload head.speakAudio
-      // already consumes on the legacy path — same phoneme pipeline, same
-      // mouth quality. TalkingHead queues segments in arrival order, and its
-      // isSpeaking state feeds the speaking reporter (no manual bookkeeping).
-      // EL streams faster than realtime, so segment buffering costs far less
-      // wall-clock than its audio length (~300-500ms to first word).
-      let segPcm = [], segChars = [], segMs = 0, segTimer = 0;
-      // First segment of each RESPONSE flushes early (~0.4s): time-to-first-
-      // word is the perceived latency; later segments take the full ~1s for
-      // smoother viseme runs. Reset on interrupt and on end-of-response.
-      let segFirst = true;
-      const clearSegment = () => {
-        segPcm = []; segChars = []; segMs = 0; segFirst = true;
-        if (segTimer) { clearTimeout(segTimer); segTimer = 0; }
+      // ── Gapless audio + char-timed viseme engine ──
+      // v1 queued ~1s pieces through head.speakAudio and every seam cost a
+      // hiccup ("a lag every 2 seconds" — live 2026-07-24). Now the AUDIO
+      // always rides the sample-accurate raw scheduler (zero seams, zero
+      // added start latency) and the MOUTH is driven separately: ElevenLabs'
+      // char alignment maps char→Oculus viseme, applied on the AUDIO CLOCK
+      // via setFixedValue (missing morphs are lib-guarded no-ops). Chunks
+      // without alignment fall back to the amplitude driver.
+      const V_MAP = {
+        a: "viseme_aa", "à": "viseme_aa", e: "viseme_E", "è": "viseme_E",
+        "é": "viseme_E", i: "viseme_I", "ì": "viseme_I", y: "viseme_I",
+        j: "viseme_CH", o: "viseme_O", "ò": "viseme_O", u: "viseme_U",
+        "ù": "viseme_U", w: "viseme_U", p: "viseme_PP", b: "viseme_PP",
+        m: "viseme_PP", f: "viseme_FF", v: "viseme_FF", t: "viseme_DD",
+        d: "viseme_DD", k: "viseme_kk", g: "viseme_kk", c: "viseme_kk",
+        q: "viseme_kk", s: "viseme_SS", z: "viseme_SS", x: "viseme_SS",
+        n: "viseme_nn", l: "viseme_nn", r: "viseme_RR",
       };
-      const flushSegment = () => {
-        if (segTimer) { clearTimeout(segTimer); segTimer = 0; }
-        if (!segPcm.length) return;
-        const total = segPcm.reduce((a, p) => a + p.length, 0);
-        const f32 = new Float32Array(total);
-        let off = 0;
-        for (const p of segPcm) { f32.set(p, off); off += p.length; }
-        const words = [], wtimes = [], wdurations = [];
-        let w = "", wt = 0, wend = 0;
-        for (const ch of segChars) {
-          if (/\s/.test(ch.c)) {
-            if (w) { words.push(w); wtimes.push(wt); wdurations.push(Math.max(10, wend - wt)); w = ""; }
+      let visemeQueue = [];   // {at, end, v} — agent ctx clock, seconds
+      let visemeRAF = 0, visemeCurrent = null;
+      const releaseVisemes = () => {
+        if (visemeRAF) { cancelAnimationFrame(visemeRAF); visemeRAF = 0; }
+        if (visemeCurrent) { try { head.setFixedValue(visemeCurrent, null); } catch (_) {} }
+        try { head.setFixedValue("jawOpen", null); } catch (_) {}
+        visemeCurrent = null; visemeQueue = [];
+      };
+      const clearSegment = releaseVisemes; // name kept: flushAgentAudio calls it
+      const visemeTick = () => {
+        if (!agentCtx || !visemeQueue.length) { releaseVisemes(); return; }
+        visemeRAF = requestAnimationFrame(visemeTick);
+        const now = agentCtx.currentTime;
+        while (visemeQueue.length && visemeQueue[0].end < now) visemeQueue.shift();
+        const cur =
+          visemeQueue.length && visemeQueue[0].at <= now ? visemeQueue[0].v : null;
+        if (cur !== visemeCurrent) {
+          if (visemeCurrent) { try { head.setFixedValue(visemeCurrent, null); } catch (_) {} }
+          if (cur) {
+            try { head.setFixedValue(cur, 0.55); } catch (_) {}
+            const open = cur === "viseme_aa" || cur === "viseme_O" || cur === "viseme_E";
+            try { head.setFixedValue("jawOpen", open ? 0.25 : 0.08); } catch (_) {}
           } else {
-            if (!w) wt = ch.t;
-            w += ch.c; wend = ch.t + ch.d;
+            try { head.setFixedValue("jawOpen", 0.04); } catch (_) {}
           }
+          visemeCurrent = cur;
         }
-        if (w) { words.push(w); wtimes.push(wt); wdurations.push(Math.max(10, wend - wt)); }
-        clearSegment();
-        if (!words.length) { scheduleRawF32(f32); return; } // silence/pad: audio only
-        const buf = decodeCtx().createBuffer(1, total, 16000);
-        buf.getChannelData(0).set(f32);
-        unlockAudio();
-        try { head.speakAudio({ audio: buf, words, wtimes, wdurations }); }
-        catch (_) { scheduleRawF32(f32); }
       };
       const playAgentChunk = (b64, align) => {
         const f32 = b64ToF32(b64);
         if (!f32.length) return;
+        const startAt = scheduleRawF32(f32); // gapless, plays immediately
         const chars = align && align.chars;
-        if (!chars || !chars.length) {
-          // No alignment on this chunk: if a segment is open, ride along as
-          // tail audio (mouth quiets); else pure raw fallback.
-          if (segPcm.length) { segPcm.push(f32); segMs += f32.length / 16; }
-          else scheduleRawF32(f32);
+        if (!chars || !chars.length || startAt == null) {
+          driveMouth(); // no timing data: amplitude flap covers the mouth
           return;
         }
-        const baseMs = segMs;
         const starts = align.char_start_times_ms || [];
         const durs = align.char_durations_ms || [];
         for (let i = 0; i < chars.length; i++) {
-          segChars.push({ c: chars[i], t: baseMs + (starts[i] || 0), d: durs[i] || 0 });
+          const v = V_MAP[String(chars[i] || "").toLowerCase()];
+          if (!v) continue; // spaces/punct/h: mouth relaxes between events
+          const at = startAt + (starts[i] || 0) / 1000;
+          visemeQueue.push({ at, end: at + Math.max(0.03, (durs[i] || 40) / 1000), v });
         }
-        segPcm.push(f32);
-        segMs += f32.length / 16; // 16 samples per ms
-        if (segTimer) clearTimeout(segTimer);
-        const lastChar = chars[chars.length - 1] || "";
-        const atBoundary = /[\s.,!?;:]/.test(lastChar);
-        const target = segFirst ? 260 : 1000; // first words out FAST
-        if (segMs >= 2600) { segFirst = false; flushSegment(); } // hard cap
-        else if (segMs >= target && atBoundary) { segFirst = false; flushSegment(); }
-        else segTimer = setTimeout(() => { segFirst = true; flushSegment(); }, 280);
+        if (!visemeRAF && visemeQueue.length) {
+          visemeRAF = requestAnimationFrame(visemeTick);
+        }
       };
       // A legacy stop ({type:"stop"} from barge-in / "Cedric stop") must also
       // silence the AGENT queue: while he speaks the half-duplex gate mutes
