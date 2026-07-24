@@ -113,8 +113,10 @@ export class VoiceSession {
     this.frames++;
     if (this.frames === 1) console.log("first recall frame");
     // Half-duplex: the room's mixed audio contains Cedric's own voice while
-    // his answer plays — never let the agent hear itself.
-    if (Date.now() < this.playheadMs + 300) return;
+    // his answer plays — never let the agent hear itself. 800ms grace (was
+    // 300): the page now buffers ~1s segments for viseme lip-sync, so real
+    // playback ends later than this byte-clock estimate.
+    if (Date.now() < this.playheadMs + 800) return;
     if (this.el && this.elReady) {
       try { this.el.send(JSON.stringify({ user_audio_chunk: buf })); } catch (_) {}
     } else {
@@ -210,7 +212,14 @@ export class VoiceSession {
       const ms = Math.floor((b64.length * 3) / 4 / 32);
       const now = Date.now();
       this.playheadMs = Math.max(this.playheadMs, now) + ms;
-      this.sendPage({ type: "audio", data: b64 });
+      // Character-level alignment rides along: the page rebuilds word timings
+      // from it and runs the REAL TalkingHead viseme pipeline (same one the
+      // legacy voice uses) instead of the amplitude fallback. Never logged.
+      this.sendPage({
+        type: "audio",
+        data: b64,
+        align: (msg.audio_event && msg.audio_event.alignment) || null,
+      });
       return;
     }
     if (t === "interruption") {
