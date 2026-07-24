@@ -91,6 +91,23 @@ talk_body: M
 # how the room learns the name), and follow-ups to her own answers stay.
 require_wake_word: true
 
+# ── ElevenLabs Agents pilot (Cedric is the ONLY pilot avatar) ────────────
+# Hand the live conversation (STT, turn-taking, interruption, spoken reply)
+# to a private ElevenLabs Agent; knowledge + actions stay in the Laura
+# backend via client tools. INERT until BOTH the deploy flips
+# ELEVENLABS_AGENT_RUNTIME_ENABLED=true AND elevenlabs_agent_id below is
+# filled with the created agent's id — until then Cedric runs the legacy
+# pipeline exactly like every other avatar. Laura/Petra: leave these fields
+# out entirely (absent = legacy). docs/product/CEDRIC-ELEVENLABS-PILOT.md.
+conversation_runtime: elevenlabs_agent
+elevenlabs_agent_id: ""
+# Audio reaches the agent only after Cedric's wake word opens the gate
+# (reuses wake_words above — the ASR variants keep working).
+voice_multiparty_mode: wake_word_gate
+# The agent may read context and QUEUE actions (approval flow); it can
+# never write to external tools directly.
+voice_actions_mode: prepare_only
+
 # When-to-speak tuning. Leave blank to use the global .env defaults.
 # (min_confidence is legacy — dead on the live path; SKIP gate rules.)
 min_confidence:
