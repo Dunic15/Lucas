@@ -569,7 +569,7 @@ async def _start_avatar_session(
         return jira_client.workspace_brief(org_id) or ""
 
     (carryover, folder, asana_snapshot, reg, cal_brief, asana_live,
-     jira_snapshot) = await asyncio.gather(
+     jira_snapshot, inbox_snapshot) = await asyncio.gather(
         _quiet(run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org_id)),
         _quiet(
             run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id, org_id)
@@ -581,6 +581,11 @@ async def _start_avatar_session(
         _quiet(run_in_threadpool(google_client.calendar_brief, org_id)),
         _quiet(run_in_threadpool(_asana_live_sync)),
         _quiet(run_in_threadpool(_jira_brief_sync)),
+        # Inbox headers (from/subject/unread — never bodies): "what's on my
+        # inbox?" had NO read path at all (owner 2026-07-24). Same contract as
+        # the other briefs: TTL-cached, best-effort, the join never waits
+        # beyond the slowest gather leg.
+        _quiet(run_in_threadpool(google_client.gmail_inbox_brief, org_id)),
     )
     session.asana_live = bool(asana_live)
     # Distinct from asana_live (live READ TOOLS = native token + enablement):
@@ -612,6 +617,14 @@ async def _start_avatar_session(
         session.memory_brief = (
             "[Jira — open issues snapshot from meeting start]\n"
             f"{jira_snapshot}\n\n" + (session.memory_brief or "")
+        )
+    # Gmail inbox headers (never bodies) — "what's on my inbox?" answers from
+    # this snapshot; the flag drives the deterministic capability answer.
+    session.gmail_brief_loaded = bool(inbox_snapshot)
+    if inbox_snapshot:
+        session.memory_brief = (
+            "[Gmail inbox — snapshot from meeting start (headers only)]\n"
+            f"{inbox_snapshot}\n\n" + (session.memory_brief or "")
         )
     # Feed the workspace snapshot(s) into the org's knowledge graph (graphiti,
     # optional/off by default). Off the hot path, best-effort; strong-ref'd task.

@@ -38,11 +38,16 @@ _REP_TYPE: dict[str, str] = {
     "asana_tasks": "asana.create_task",
 }
 
-# Which families currently carry a per-MEETING readable snapshot. Only Asana
-# does today (workspace_brief cached at join → session.asana_live); Calendar
-# reads live and Drive/Gmail have no in-room inventory, so their "read" state is
-# "on demand", never a fabricated snapshot.
-_SNAPSHOT_FAMILIES = {"asana_tasks"}
+# Which families carry a per-MEETING readable snapshot, and the session flag
+# + spoken noun for each: Asana (workspace brief) and, since 2026-07-24, Gmail
+# (inbox headers brief). Calendar reads live at join and Drive has no in-room
+# inventory, so their "read" state is "on demand", never a fabricated snapshot.
+_SNAPSHOT_FAMILIES = {"asana_tasks", "gmail_send"}
+_SNAPSHOT_FLAG = {
+    "asana_tasks": "asana_brief_loaded",
+    "gmail_send": "gmail_brief_loaded",
+}
+_SNAPSHOT_NOUN = {"asana_tasks": "workspace", "gmail_send": "inbox"}
 
 # Spoken display names — never a raw registry key.
 _DISPLAY = {
@@ -94,8 +99,8 @@ _CAPABILITY_Q = re.compile(
     r"\b(?:read|see|access|search|use|write|create|hear)\b[\w\s'’,]{0,24}?"
     r"\b(?:" + _APPS + r")\b"
     r"|"
-    # "do you have a snapshot of my Asana / workspace"
-    r"\bsnapshot\b[\w\s'’,]{0,20}?\b(?:" + _APPS + r"|workspace)\b"
+    # "do you have a snapshot of my Asana / workspace / inbox"
+    r"\bsnapshot\b[\w\s'’,]{0,20}?\b(?:" + _APPS + r"|workspace|inbox)\b"
     r"|"
     # Italian connection check
     r"\b(?:sei|siete)\s+(?:collegat\w+|conness\w+)\b"
@@ -108,7 +113,7 @@ _CAPABILITY_Q = re.compile(
 _FOCUS = [
     ("asana_tasks", re.compile(r"\basana\b", re.I)),
     ("google_drive", re.compile(r"\b(google\s+)?drive\b", re.I)),
-    ("gmail_send", re.compile(r"\b(gmail|e-?mail|mail)\b", re.I)),
+    ("gmail_send", re.compile(r"\b(gmail|e-?mail|mail|inbox|posta)\b", re.I)),
     ("google_calendar", re.compile(r"\bcalendar\b|\bcalendario\b", re.I)),
 ]
 
@@ -195,9 +200,11 @@ def snapshot(avatar: Any, org_id: str, session: Any = None) -> dict:
     # while a Pipedream-only org loads the workspace brief WITHOUT live tools —
     # she was reading 6 tasks from it while this answer said "no snapshot
     # loaded" (live 2026-07-24). Fall back to asana_live for old sessions.
-    brief_loaded = (
-        bool(getattr(session, "asana_brief_loaded", False)) if session else False
-    ) or asana_live
+    brief_flags = {
+        name: bool(getattr(session, attr, False)) if session else False
+        for name, attr in _SNAPSHOT_FLAG.items()
+    }
+    brief_flags["asana_tasks"] = brief_flags.get("asana_tasks", False) or asana_live
     tools: dict[str, dict] = {}
     for e in reg.get("native", []):
         name = str(e.get("name") or "")
@@ -226,14 +233,15 @@ def snapshot(avatar: Any, org_id: str, session: Any = None) -> dict:
                 route = ""
         # snapshot state: only families that carry a per-meeting inventory
         if name in _SNAPSHOT_FAMILIES:
-            snap: bool | None = brief_loaded
+            snap: bool | None = brief_flags.get(name, False)
         else:
             snap = None  # no in-room snapshot concept (reads on demand / live)
         reason = ""
         if has_conn and not connected:
             reason = "not connected for this org"
-        elif name in _SNAPSHOT_FAMILIES and connected and not brief_loaded:
-            reason = "connected, but no workspace snapshot loaded for this meeting"
+        elif name in _SNAPSHOT_FAMILIES and connected and not snap:
+            noun = _SNAPSHOT_NOUN.get(name, "workspace")
+            reason = f"connected, but no {noun} snapshot loaded for this meeting"
         tools[name] = {
             "connected_for_org": connected,
             # tool_registry already folds the per-avatar toggle into 'connected'
@@ -271,12 +279,13 @@ def cached_snapshot(avatar: Any, org_id: str, session: Any = None) -> dict:
     if session is None:
         return snapshot(avatar, org_id, session)
 
-    # Recompute key covers BOTH read signals: live tools (asana_live) and the
-    # loaded workspace brief (asana_brief_loaded) — either flipping means the
+    # Recompute key covers EVERY read signal: live tools (asana_live) and the
+    # loaded briefs (asana workspace, gmail inbox) — any flipping means the
     # honest read-state changed.
     live = (
         bool(getattr(session, "asana_live", False)),
         bool(getattr(session, "asana_brief_loaded", False)),
+        bool(getattr(session, "gmail_brief_loaded", False)),
     )
     cached = getattr(session, "_capability_snapshot", None)
     cached_live = getattr(session, "_capability_snapshot_live", None)
@@ -312,10 +321,17 @@ def _one_tool_line(name: str, s: dict) -> str:
     # The read/snapshot distinction is the honest part the model kept getting
     # wrong: connected ≠ a loaded snapshot to read from.
     if s["snapshot_available_in_meeting"] is False:
+        noun = _SNAPSHOT_NOUN.get(name, "workspace")
         line += (
-            f" I don't have a snapshot of your {disp} workspace loaded for this "
+            f" I don't have a snapshot of your {disp} {noun} loaded for this "
             "meeting yet, so I can't read the existing items right now — I can pull "
             "one or capture a new item for approval."
+        )
+    elif s["snapshot_available_in_meeting"] is True:
+        noun = _SNAPSHOT_NOUN.get(name, "workspace")
+        line += (
+            f" I have a snapshot of your {disp} {noun} from the start of this "
+            "meeting, so ask away."
         )
     return line
 
@@ -358,8 +374,9 @@ def answer(text: str, snap: dict) -> str:
         for n, s in tools.items():
             if s["connected_for_org"] and s["snapshot_available_in_meeting"] is False:
                 tail = (
-                    f" I don't have a snapshot of your {_DISPLAY.get(n, n)} workspace "
-                    "loaded for this meeting yet, so I can't read existing items now."
+                    f" I don't have a snapshot of your {_DISPLAY.get(n, n)} "
+                    f"{_SNAPSHOT_NOUN.get(n, 'workspace')} loaded for this "
+                    "meeting yet, so I can't read existing items now."
                 )
                 break
         return (

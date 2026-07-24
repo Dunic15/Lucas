@@ -852,6 +852,68 @@ def read_calendar_events(org_id: str, *, max_results: int = 8) -> dict:
     return {"ok": True, "events": [i for i in items if isinstance(i, dict)]}
 
 
+def read_gmail_inbox(org_id: str, *, max_results: int = 8) -> dict:
+    """READ-ONLY inbox headers via the Connect proxy (gmail) — the inbox-brief
+    FALLBACK for orgs whose Google lives in Pipedream. Mirrors
+    ``read_calendar_events``: native OAuth stays first in line
+    (google_client.list_inbox_messages); this runs only when that path has no
+    token. Returns ``{"ok": True, "messages": [{from, subject, unread}]}`` —
+    HEADERS ONLY, never bodies — or ``{"ok": False, "error": str}``. Never
+    raises; bounded to one list call + ≤``max_results`` metadata reads
+    (join-time only, TTL-cached by the caller)."""
+    if not (enabled() and pipedream_client.enabled()):
+        return {"ok": False, "error": "pipedream off"}
+    org = str(org_id or "").strip()
+    if not org:
+        return {"ok": False, "error": "no org"}
+    try:
+        accounts = pipedream_client.list_accounts(org, app="gmail")
+    except pipedream_client.PipedreamError as exc:
+        return {"ok": False, "error": f"pipedream accounts ({type(exc).__name__})"}
+    account = next(
+        (a for a in accounts if a.get("id") and a.get("healthy", True)), None
+    ) or next((a for a in accounts if a.get("id")), None)
+    if account is None:
+        return {"ok": False, "error": "gmail not connected in Pipedream"}
+    acct = str(account["id"])
+    try:
+        n = max(1, min(int(max_results or 8), 15))
+    except (TypeError, ValueError):
+        n = 8
+    base = "https://gmail.googleapis.com/gmail/v1/users/me"
+    listing = pipedream_client.proxy_request(
+        org, acct, "GET", f"{base}/messages?maxResults={n}&labelIds=INBOX"
+    )
+    if not listing.get("ok"):
+        return {"ok": False, "error": str(listing.get("error") or "proxy read failed")}
+    ids = [
+        str(m.get("id") or "")
+        for m in (listing.get("json") or {}).get("messages") or []
+        if isinstance(m, dict) and m.get("id")
+    ][:n]
+    messages: list[dict] = []
+    for mid in ids:
+        one = pipedream_client.proxy_request(
+            org, acct, "GET",
+            f"{base}/messages/{mid}?format=metadata"
+            "&metadataHeaders=From&metadataHeaders=Subject",
+        )
+        if not one.get("ok"):
+            continue  # best-effort: a single flaky read never sinks the brief
+        payload = (one.get("json") or {})
+        headers = {
+            str(h.get("name") or "").lower(): str(h.get("value") or "")
+            for h in ((payload.get("payload") or {}).get("headers") or [])
+            if isinstance(h, dict)
+        }
+        messages.append({
+            "from": headers.get("from", ""),
+            "subject": headers.get("subject", ""),
+            "unread": "UNREAD" in (payload.get("labelIds") or []),
+        })
+    return {"ok": True, "messages": messages}
+
+
 def note_connections(org_id: str, connected_slugs: set[str] | frozenset[str]) -> None:
     """Write-through from a FRESH accounts listing (the Connections view):
     mark these slugs connected NOW so the avatar cards and route probes stop

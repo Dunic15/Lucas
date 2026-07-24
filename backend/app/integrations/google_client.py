@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 from concurrent.futures import ThreadPoolExecutor
+import re
 import threading
 import time
 import uuid
@@ -911,6 +912,126 @@ def calendar_brief(org_id: str) -> str:
             text = text[:_BRIEF_MAX_CHARS].rsplit("\n", 1)[0]
         brief = text
     _brief_cache[org] = (now, brief)
+    return brief
+
+
+# ── Gmail inbox brief (owner ask 2026-07-24: "what's on my inbox?" had NO
+# read path at all — neither at join nor live). Same shape as calendar_brief:
+# a join-time snapshot riding memory_brief, HEADERS ONLY (from/subject/unread,
+# never bodies), TTL-cached, never negative-cached, and the join never fails
+# on it. Native OAuth first (gmail.readonly is in the connect scopes,
+# api/oauth.py), Pipedream Connect proxy second. ──────────────────────────
+_INBOX_BRIEF_MAX = 8
+_inbox_brief_cache: dict[str, tuple[float, str]] = {}
+
+
+def list_inbox_messages(org_id: str, *, max_results: int = 8) -> dict:
+    """Latest INBOX message headers via the org's native Google OAuth.
+    Returns {"ok": True, "messages": [{from, subject, unread}]} or
+    {"ok": False, "error": str}. Never raises; logs status only — no sender,
+    subject or token ever reaches a log line (transcript-grade PII rules)."""
+    org = (org_id or "").strip()
+    token, err = _access_token(org)
+    if err:
+        return {"ok": False, "error": err}
+    try:
+        n = max(1, min(int(max_results or 8), 15))
+    except (TypeError, ValueError):
+        n = 8
+    headers = {"Authorization": f"Bearer {token}"}
+    base = "https://gmail.googleapis.com/gmail/v1/users/me"
+    try:
+        listing = httpx.get(
+            f"{base}/messages",
+            params={"maxResults": n, "labelIds": "INBOX"},
+            headers=headers, timeout=_TIMEOUT,
+        )
+        if listing.status_code != 200:
+            # 403 = pre-scope-change grant without gmail.readonly — the caller
+            # falls through to the Pipedream read, exactly like calendar.
+            print(f"[gmail] inbox read blocked: HTTP {listing.status_code}",
+                  flush=True)
+            return {"ok": False, "error": f"HTTP {listing.status_code}"}
+        ids = [
+            str(m.get("id") or "")
+            for m in (listing.json() or {}).get("messages") or []
+            if isinstance(m, dict) and m.get("id")
+        ][:n]
+        messages: list[dict] = []
+        for mid in ids:
+            one = httpx.get(
+                f"{base}/messages/{mid}",
+                params={"format": "metadata",
+                        "metadataHeaders": ["From", "Subject"]},
+                headers=headers, timeout=_TIMEOUT,
+            )
+            if one.status_code != 200:
+                continue  # best-effort per message
+            payload = one.json() or {}
+            hmap = {
+                str(h.get("name") or "").lower(): str(h.get("value") or "")
+                for h in ((payload.get("payload") or {}).get("headers") or [])
+                if isinstance(h, dict)
+            }
+            messages.append({
+                "from": hmap.get("from", ""),
+                "subject": hmap.get("subject", ""),
+                "unread": "UNREAD" in (payload.get("labelIds") or []),
+            })
+        return {"ok": True, "messages": messages}
+    except Exception as exc:  # noqa: BLE001 — a read must degrade, never raise
+        return {"ok": False, "error": type(exc).__name__}
+
+
+def _inbox_line(m: dict) -> str:
+    """One distilled, size-capped brief line: sender display + subject."""
+    sender = str(m.get("from") or "")
+    # keep the display name, drop the <addr> part when a name exists
+    disp = re.sub(r"\s*<[^>]*>", "", sender).strip().strip('"') or sender
+    subject = str(m.get("subject") or "(no subject)")
+    flag = " [unread]" if m.get("unread") else ""
+    return f"• {disp[:40]} — {subject[:70]}{flag}"
+
+
+def gmail_inbox_brief(org_id: str) -> str:
+    """Markdown snapshot of the org inbox for the meeting brief; "" when Gmail
+    is unavailable. Sync (network) — call via run_in_threadpool at session
+    start only. TTL-cached per org; an empty/transient read is NEVER cached
+    (the asana_client lesson: one hiccup must not poison the whole TTL)."""
+    org = (org_id or "").strip()
+    if not org:
+        return ""
+    now = time.time()
+    cached = _inbox_brief_cache.get(org)
+    if cached and now - cached[0] < _BRIEF_TTL:
+        return cached[1]
+    res = list_inbox_messages(org, max_results=_INBOX_BRIEF_MAX)
+    if not res.get("ok"):
+        try:
+            from .. import pipedream_executor
+
+            pd = pipedream_executor.read_gmail_inbox(
+                org, max_results=_INBOX_BRIEF_MAX
+            )
+            if pd.get("ok"):
+                res = pd
+        except Exception:  # noqa: BLE001 — the join never fails on a brief
+            pass
+    brief = ""
+    if res.get("ok"):
+        msgs = [m for m in (res.get("messages") or []) if isinstance(m, dict)]
+        if msgs:
+            unread = sum(1 for m in msgs if m.get("unread"))
+            lines = [f"(latest {len(msgs)}, {unread} unread — as of meeting start)"]
+            lines += [_inbox_line(m) for m in msgs]
+            text = "\n".join(lines)
+            if len(text) > _BRIEF_MAX_CHARS:
+                text = text[:_BRIEF_MAX_CHARS].rsplit("\n", 1)[0]
+            brief = text
+    if brief:
+        _inbox_brief_cache[org] = (now, brief)
+    else:
+        _inbox_brief_cache.pop(org, None)
     return brief
 
 
