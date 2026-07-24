@@ -238,16 +238,25 @@ def _source_paths(dirs: list[Path]) -> list[Path]:
 
 
 def _sources_signature(paths: list[Path]) -> list[dict]:
-    """Cheap freshness fingerprint of the source docs (no content read):
-    path + size + mtime. Any edit, add, delete, or rename changes it — that's
-    what lets _index_is_current spot a silently stale index."""
+    """Freshness fingerprint of the source docs: path + size + content sha1.
+
+    Was path+size+mtime — but mtimes are NOT build-stable: the CI image export
+    (BuildKit) normalizes layer timestamps, so indexes BAKED at build (with
+    signatures recording build-time mtimes) read as stale at boot and the
+    whole warm-up re-embedded anyway (1925s on 2026-07-24, defeating the bake).
+    Content hashing is deterministic across builds and still catches every
+    edit/add/delete/rename. Docs are small (a few hundred KB total) — hashing
+    them once per ensure_index is milliseconds, not a hot-path cost."""
+    import hashlib
+
     sig = []
     for p in paths:
         try:
             st = p.stat()
+            digest = hashlib.sha1(p.read_bytes()).hexdigest()  # noqa: S324 — freshness, not crypto
         except OSError:
             continue  # racing delete: the file is gone, so it's not a source
-        sig.append({"path": str(p), "size": st.st_size, "mtime_ns": st.st_mtime_ns})
+        sig.append({"path": str(p), "size": st.st_size, "sha1": digest})
     return sig
 
 
@@ -340,6 +349,10 @@ def ensure_index(avatar: Avatar) -> None:
     """
     if _index_is_current(avatar.index_path, _source_paths(avatar.knowledge_dirs)):
         return
+    # Diagnosis line (no content): WHICH avatar re-embeds and that it happened
+    # at all — the 2026-07-24 mute took a log archaeology session to trace
+    # because rebuilds were silent.
+    print(f"[rag] index stale for {avatar.id} — rebuilding", flush=True)
     build_index(avatar)
 
 
