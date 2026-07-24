@@ -938,7 +938,7 @@
         if (segTimer) clearTimeout(segTimer);
         const lastChar = chars[chars.length - 1] || "";
         const atBoundary = /[\s.,!?;:]/.test(lastChar);
-        const target = segFirst ? 420 : 1000; // first words out FAST
+        const target = segFirst ? 260 : 1000; // first words out FAST
         if (segMs >= 2600) { segFirst = false; flushSegment(); } // hard cap
         else if (segMs >= target && atBoundary) { segFirst = false; flushSegment(); }
         else segTimer = setTimeout(() => { segFirst = true; flushSegment(); }, 280);

@@ -431,27 +431,43 @@ def _create_bot_attempts(
         attempts = eared + attempts
 
     if attach_voice_agent_url:
-        # ElevenLabs Agent runtime (Cedric pilot): stream the meeting's mixed
-        # raw audio to the cedric-voice bridge. Same shape as the ears attach
-        # above — voiced copies FIRST, untouched originals as fallback, so a
-        # Recall 4xx on the audio config can never keep the avatar out of the
-        # meeting (it would just join on the legacy path).
+        # ElevenLabs Agent runtime: stream the meeting audio to the
+        # cedric-voice bridge. SEPARATE per-participant streams first (each
+        # participant's mic on its own WS — the bot's output is NOT a stream,
+        # so no self-hearing and no half-duplex deaf window, and true voice
+        # barge-in works). Recall gates the feature behind a workspace flag,
+        # so MIXED-audio copies ride as the next rung ("+voice-agent" = the
+        # proven half-duplex path), then the untouched originals — a Recall
+        # 4xx can never keep the avatar out of the meeting. The created-with
+        # label in the backend log says which rung won.
         import copy
 
-        voice_endpoint = {
+        sep_endpoint = {
+            "type": "websocket",
+            "url": attach_voice_agent_url,
+            "events": ["audio_separate_raw.data"],
+        }
+        mixed_endpoint = {
             "type": "websocket",
             "url": attach_voice_agent_url,
             "events": ["audio_mixed_raw.data"],
         }
-        voiced: list[tuple[str, dict]] = []
+        voiced_sep: list[tuple[str, dict]] = []
+        voiced_mixed: list[tuple[str, dict]] = []
         for label, plain_body in attempts:
+            body = copy.deepcopy(plain_body)
+            body["recording_config"]["audio_separate_raw"] = {}
+            body["recording_config"]["realtime_endpoints"] = list(
+                body["recording_config"]["realtime_endpoints"]
+            ) + [sep_endpoint]
+            voiced_sep.append((f"{label}+voice-sep", body))
             body = copy.deepcopy(plain_body)
             body["recording_config"]["audio_mixed_raw"] = {}
             body["recording_config"]["realtime_endpoints"] = list(
                 body["recording_config"]["realtime_endpoints"]
-            ) + [voice_endpoint]
-            voiced.append((f"{label}+voice-agent", body))
-        attempts = voiced + attempts
+            ) + [mixed_endpoint]
+            voiced_mixed.append((f"{label}+voice-agent", body))
+        attempts = voiced_sep + voiced_mixed + attempts
 
     return attempts
 
