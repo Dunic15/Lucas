@@ -209,6 +209,10 @@ class Settings(BaseSettings):
     # Default OFF: zero behavior change until deliberately enabled per-deploy.
     elevenlabs_agent_runtime_enabled: bool = False
     elevenlabs_agent_avatar_allowlist: str = "cedric"
+    # Spoken language for EL-runtime sessions: "en" (default) or "it". Drives
+    # the per-meeting override (agent language + localized greeting); the
+    # agent still answers in whatever language the speaker uses.
+    voice_agent_language: str = "en"
     # wss:// base of the cedric-voice Cloudflare Worker (the Durable Object
     # bridge: Recall audio in -> ElevenLabs Agent -> browser audio out). Like
     # ears_relay_ws_base for Gemini: App Runner can't accept inbound WS, so the

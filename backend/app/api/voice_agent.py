@@ -110,6 +110,10 @@ def build_init_payload(session, avatar) -> dict:
             "  approval card, and MOVE ON. Never ask a third time.",
             "- Anything current/public (news, prices, companies, people): CALL",
             "  search_web and answer from it — never claim you lack internet.",
+            "- Speaker adds/corrects a detail of a queued action ('the subject",
+            "  is X', 'make it 4pm'): amend_pending_action with the FULL",
+            "  corrected text — same card, never a new one. 'Cancel that' ->",
+            "  withdraw_pending_action; unsure which -> get_pending_actions.",
             "- Company/portfolio/process/past-meeting questions beyond your",
             "  built-in knowledge: call search_company_knowledge and answer ONLY",
             "  from what it returns; if nothing is found, say so plainly.",
@@ -147,19 +151,20 @@ def build_init_payload(session, avatar) -> dict:
             "END UNTRUSTED MEETING DATA",
         ]
     )
+    lang = (settings.voice_agent_language or "en").strip().lower()
+    agent_override: dict = {
+        "prompt": {"prompt": prompt},
+        # first_message stays the agent's own for EN (one greeter, in the
+        # voice that answers); for IT the greeting is localized here.
+        "language": "it" if lang == "it" else "en",
+    }
+    if lang == "it":
+        agent_override["first_message"] = (
+            "Ciao a tutti — sono Cedric. Fate il mio nome quando vi servo."
+        )
     return {
         "type": "conversation_initiation_client_data",
-        "conversation_config_override": {
-            "agent": {
-                "prompt": {"prompt": prompt},
-                # first_message deliberately NOT overridden: the AGENT owns
-                # the greeting now (its static first_message fires when the
-                # bridge connects) and the legacy self-intro is skipped for
-                # EL-runtime sessions (main.maybe_self_introduce) — exactly
-                # one greeter, in the same voice that answers.
-                "language": "en",
-            }
-        },
+        "conversation_config_override": {"agent": agent_override},
         # Every {{var}} the prompt/first_message could reference MUST be here —
         # a referenced-but-missing dynamic variable kills the conversation at
         # second zero (Underheard, the hard way).
@@ -297,6 +302,83 @@ def _tool_capabilities(session, avatar, question: str) -> dict:
         for name, state in (snap.get("tools") or {}).items()
     }
     return {"summary": spoken, "tools": tools_truth}
+
+
+def _pending_items(session) -> list:
+    return [
+        i for i in (getattr(session, "queued_actions", None) or [])
+        if isinstance(i, dict)
+    ]
+
+
+def _find_pending(session, action_id: str):
+    """The queued item to continue: by id when given, else the most recent
+    non-withdrawn one (the card the conversation is naturally about)."""
+    items = _pending_items(session)
+    if action_id:
+        for i in items:
+            if i.get("action_id") == action_id:
+                return i
+        return None
+    live = [i for i in items if i.get("status") != "withdrawn"]
+    return live[-1] if live else None
+
+
+def _tool_pending_actions(session) -> dict:
+    items = _pending_items(session)[-5:]
+    return {
+        "actions": [
+            {
+                "action_id": i.get("action_id", ""),
+                "action": str(i.get("action", ""))[:200],
+                "status": i.get("status") or "proposed",
+            }
+            for i in items
+        ]
+    }
+
+
+def _tool_amend_pending(session, params: dict, tool_call_id: str) -> dict:
+    """Replace the queued action's text with the corrected full version —
+    live 2026-07-24: 'got the meeting subject' had nowhere to land and the
+    conversation detached from the card it had just created."""
+    from ..brain import tools as brain_tools
+
+    new_text = " ".join(str(params.get("new_text") or "").split())[:300]
+    if not new_text:
+        return {"status": "error", "note": "new_text is required"}
+    item = _find_pending(session, str(params.get("action_id") or "").strip())
+    if item is None:
+        return {"status": "not_found", "note": "no pending action to amend"}
+    try:
+        canonical, applied = brain_tools.revise_action_once(
+            session,
+            item,
+            {"action": new_text},
+            source_event_key=f"elagent-amend:{session.bot_id}:{tool_call_id}",
+            source_fingerprint=f"elagent-amend:{session.bot_id}:{tool_call_id}",
+        )
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "note": type(e).__name__}
+    return {
+        "status": "amended" if applied else "unchanged",
+        "action_id": canonical.get("action_id", ""),
+        "action": str(canonical.get("action", ""))[:200],
+        "note": "updated on the same approval card",
+    }
+
+
+def _tool_withdraw_pending(session, params: dict) -> dict:
+    from ..brain import tools as brain_tools
+
+    item = _find_pending(session, str(params.get("action_id") or "").strip())
+    if item is None:
+        return {"status": "not_found", "note": "no pending action to withdraw"}
+    ok = brain_tools.withdraw_action_once(session, item)
+    return {
+        "status": "withdrawn" if ok else "error",
+        "action_id": item.get("action_id", ""),
+    }
 
 
 def _tool_search_web(query: str) -> dict:
@@ -469,6 +551,14 @@ async def voice_agent_tool(capability: str, request: Request) -> JSONResponse:
                     brain_tools.upcoming_meetings, session
                 )
             }
+        elif tool_name == "get_pending_actions":
+            result = _tool_pending_actions(session)
+        elif tool_name == "amend_pending_action":
+            result = await run_in_threadpool(
+                _tool_amend_pending, session, params, tool_call_id
+            )
+        elif tool_name == "withdraw_pending_action":
+            result = await run_in_threadpool(_tool_withdraw_pending, session, params)
         elif tool_name == "leave_meeting":
             # Semantic leave: the agent understood the dismissal (works for
             # "go out the meeting, Saj" and every ASR mangling the legacy
