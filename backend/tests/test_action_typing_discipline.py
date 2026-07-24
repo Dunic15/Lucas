@@ -76,10 +76,68 @@ def test_generic_work_items_stay_untyped():
 def test_explicit_task_cues_still_type_asana():
     for item in ("Create an Asana task for the onboarding checklist",
                  "Add a task to the board for the Q3 review",
-                 "Open a ticket for the login bug"):
+                 "Add it to the board for next sprint",
+                 "Open a ticket for the login bug",
+                 "crea un task per il report settimanale"):
         out = engine.type_actions([{"item": item}], provider="stub",
                                   allow_asana=True)
         assert out[0].get("typed", {}).get("type") == "asana.create_task", item
+
+
+def test_on_board_idiom_is_not_a_task_cue():
+    """'get everyone on board' / 'bring the new hire on board' are idioms, not
+    board asks (adversarial battery 2026-07-24) — they must stay untyped."""
+    for item in ("Get everyone on board with the plan",
+                 "Bring the new hire on board by Monday"):
+        out = engine.type_actions([{"item": item}], provider="stub",
+                                  allow_asana=True)
+        assert "typed" not in out[0], item
+
+
+def test_stub_types_italian_email_intent():
+    out = engine.type_actions(
+        [{"item": "manda una mail a dana@acme.com col recap della call"}],
+        provider="stub",
+    )
+    assert out[0]["typed"]["type"] == "email.send"
+    assert out[0]["typed"]["args"]["to"] == ["dana@acme.com"]
+
+
+# ── live capture: hypothetical questions never become cards ──────────────
+def test_interrogative_modal_lead_is_not_captured():
+    """'How would you organize who does what?' was captured LIVE as an action
+    (prod card f10730e9) — 'would you organize' matched the polite-request
+    branch. An interrogative+modal lead is a question, never a capture."""
+    for q in ("How would you organize who does what?",
+              "What should we do about the budget",
+              "Okay, how could we split the work",
+              "come possiamo organizzare il lavoro"):
+        assert engine.wants_action_capture(q) is False, q
+
+
+def test_polite_openers_still_capture():
+    """'When you get a chance, can you…' has no interrogative+MODAL lead — the
+    guard must not swallow real requests."""
+    for q in ("When you get a chance, can you send the recap to marco@acme.com",
+              "Can you send the recap to marco@acme.com",
+              "Please schedule a follow-up with Marco"):
+        assert engine.wants_action_capture(q) is True, q
+
+
+# ── web search: 'the internet' as TARGET still searches ──────────────────
+def test_search_the_internet_still_searches(monkeypatch):
+    """The connectivity exclusion ('is the internet working') must not kill
+    'search the internet for X' — the target form silently stopped searching
+    (adversarial battery 2026-07-24)."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "live_search_enabled", True)
+    monkeypatch.setattr(settings, "anthropic_api_key", "synthetic")
+    assert engine.wants_web_search(
+        "search the internet for the latest AI news") is True
+    # connectivity chatter stays excluded
+    for q in ("is the internet working", "the internet is slow today",
+              "is my internet down?", "check my internet connection"):
+        assert engine.wants_web_search(q) is False, q
 
 
 def test_email_and_calendar_families_unaffected():
