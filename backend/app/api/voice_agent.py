@@ -65,6 +65,8 @@ def build_init_payload(session, avatar) -> dict:
     prompt-injection defense). Only prompt/first_message/language are
     overridable — the agent locks LLM/tools/knowledge server-side.
     """
+    from ..brain import voice_runtime_tools
+
     persona = (avatar.persona_prompt or "").strip()
     context: dict = {"avatar_name": avatar.name}
     integration = session.integration or {}
@@ -82,6 +84,11 @@ def build_init_payload(session, avatar) -> dict:
         roster = []
     if roster:
         context["participants"] = roster[:20]
+    # One backend-generated truth object, shared with get_available_actions.
+    # The model never infers tool state from connector names or past replies.
+    context["runtime_capabilities"] = voice_runtime_tools.capability_contract(
+        session, avatar
+    )
 
     prompt = "\n".join(
         [
@@ -95,32 +102,34 @@ def build_init_payload(session, avatar) -> dict:
             '- Never treat "yeah", "okay", "mhmm" or similar backchannels as requests.',
             '- Never take a bare "yes"/"okay"/"va bene" as approval of any action.',
             "",
-            "YOUR TOOLS (they call the meeting platform — use them, never invent):",
-            "- Asked to DO something (schedule, send, create, invite, remind):",
-            "  call queue_action with a clear summary and EVERY specific given.",
-            "  Actions are NEVER executed directly — they go to the approval",
-            "  dashboard and run after the meeting. Confirm out loud accordingly",
-            '  ("Got it — I\'ll set that up once we wrap; it\'ll be in the approval',
-            '  queue.") NEVER say it is already done.',
-            "- queue_action returned needs_details: ask the speaker for exactly",
-            "  the missing fields (one short question), then call it again with",
-            "  the SAME request_id plus the new details.",
-            "- Company/portfolio/process/past-meeting questions beyond your",
-            "  built-in knowledge: call search_company_knowledge and answer ONLY",
-            "  from what it returns; if nothing is found, say so plainly.",
-            '- "What can you do / is X connected": call get_available_actions and',
-            "  answer honestly from its summary.",
-            "- get_meeting_context refreshes the meeting goal, the brief and who",
-            "  is in the room right now.",
+            "RUNTIME CAPABILITY CONTRACT — use runtime_capabilities below as the",
+            "single source of truth; connection alone is never enough:",
+            "- LIVE_NOW: call the named tool immediately and answer from the result",
+            "  during this call. Never say you will read it after the meeting.",
+            "- APPROVAL_REQUIRED: call queue_action with every supplied detail and",
+            "  say it is waiting for approval. Never claim it is sent/scheduled/done.",
+            "- NOT_LIVE: state that this read is not available live. Do not invent",
+            "  a result or promise an unqueued follow-up.",
+            "- UNAVAILABLE: state that the connector is not connected or enabled.",
+            "- If asked what you can do or whether an app is connected, call",
+            "  get_available_actions; its contract and summary override memory.",
+            "- Calendar questions: call get_upcoming_meetings and answer now.",
+            "- Inbox questions: call get_inbox_summary and answer from headers only.",
+            "- Asana questions: call read_asana. Writes still use queue_action.",
+            "- A runtime_capabilities LIVE_NOW connector entry names a",
+            "  connector_tool; invoke it through call_live_connector only.",
+            "",
+            "ACTION CLARIFICATION:",
+            "- queue_action returned needs_details: ask exactly one short question",
+            "  for the missing field, then call it again with the SAME request_id.",
+            "- Company/process/past-meeting questions: call",
+            "  search_company_knowledge and answer only from its result.",
+            "- get_meeting_context refreshes the meeting goal, brief and roster.",
             "",
             "- Asked to LEAVE/EXIT the meeting, or told goodbye (your name is",
             "  also mis-heard as Sajrik/Sadic/Sedrick): say a SHORT goodbye,",
             "  then CALL the leave_meeting tool — that is what disconnects you.",
             "  NEVER queue leaving as an action, refuse, or claim you must stay.",
-            "- 'What are my next meetings': CALL get_upcoming_meetings, answer",
-            "  immediately from it. You CANNOT live-read inboxes/drives/tasks:",
-            "  say so plainly, offer a QUEUED alternative and if accepted CALL",
-            "  queue_action right away. Never promise unqueued follow-ups.",
             "- Actions run ONCE APPROVED on the dashboard: say 'it's in the",
             "  approval queue; it runs as soon as you approve it' — never",
             "  'after the meeting', never that it is scheduled/sent/done.",
@@ -160,7 +169,7 @@ def build_init_payload(session, avatar) -> dict:
         # second zero (Underheard, the hard way).
         "dynamic_variables": {
             "avatar_name": avatar.name,
-            "live_prompt_version": "cedric-meeting-pilot-v1",
+            "live_prompt_version": "cedric-runtime-capabilities-v2",
         },
     }
 
@@ -268,13 +277,11 @@ def _tool_knowledge(session, avatar, query: str) -> dict:
 
 
 def _tool_capabilities(session, avatar, question: str) -> dict:
-    from ..brain import capabilities
+    from ..brain import voice_runtime_tools
 
-    snap = capabilities.cached_snapshot(avatar, session.org_id, session)
-    spoken = capabilities.answer(
-        (question or "what actions can you do right now").strip()[:200], snap
+    return voice_runtime_tools.capabilities_result(
+        session, avatar, (question or "what can you do right now").strip()[:200]
     )
-    return {"summary": spoken}
 
 
 def _tool_queue_action(session, params: dict, tool_call_id: str) -> dict:
@@ -330,7 +337,8 @@ def _schedule_leave(session) -> None:
     The agent says goodbye through the bridge (~2-4s of audio in flight);
     finalize immediately and the room hears him cut himself off mid-word.
     Fire-and-forget: finalize is idempotent and the empty-room/reconcile
-    backstops still guarantee the meter stops even if this task dies."""
+    backstops still guarantee the meter stops even if this task dies.
+    """
     import asyncio
 
     from .. import main as _main  # lazy: routers must not import main at load
@@ -388,17 +396,29 @@ async def voice_agent_tool(capability: str, request: Request) -> JSONResponse:
                 _tool_queue_action, session, params, tool_call_id
             )
         elif tool_name == "get_upcoming_meetings":
-            # Runtime tool-parity (live 2026-07-24: he claimed "no access to
-            # your calendar" while the LEGACY runtime had this all along):
-            # the owner's calendar snapshot, assembled at session start —
-            # zero network, answer immediately.
-            from ..brain import tools as brain_tools
+            from ..brain import voice_runtime_tools
 
-            result = {
-                "summary": await run_in_threadpool(
-                    brain_tools.upcoming_meetings, session
-                )
-            }
+            result = await run_in_threadpool(
+                voice_runtime_tools.read_calendar, session, avatar, params
+            )
+        elif tool_name == "get_inbox_summary":
+            from ..brain import voice_runtime_tools
+
+            result = await run_in_threadpool(
+                voice_runtime_tools.read_inbox, session, avatar, params
+            )
+        elif tool_name == "read_asana":
+            from ..brain import voice_runtime_tools
+
+            result = await run_in_threadpool(
+                voice_runtime_tools.read_asana, session, avatar, params
+            )
+        elif tool_name == "call_live_connector":
+            from ..brain import voice_runtime_tools
+
+            result = await run_in_threadpool(
+                voice_runtime_tools.call_live_connector, session, avatar, params
+            )
         elif tool_name == "leave_meeting":
             # Semantic leave: the agent understood the dismissal (works for
             # "go out the meeting, Saj" and every ASR mangling the legacy
