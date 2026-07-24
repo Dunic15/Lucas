@@ -548,6 +548,13 @@ _SEARCH_EXCLUDE = re.compile(
     r"|\b(connection|connessione)\b.{0,12}\b(down|slow|back|working|dropped|"
     r"lost|bad|instabile|lenta|va|funziona)\b"
     r"|\b(we'?re|i'?m|are we|siamo|sono)\s+(back\s+)?(online|offline)\b"
+    # workspace SNAPSHOT asks are reads of OUR state, never public queries —
+    # "It's meant to get the snapshot… when I tested it this week… can you get
+    # the snapshot now?" (ASR-fused turn) tripped the 'this week' freshness
+    # trigger and the search model lectured the room about "a private meeting
+    # transcript" (live 2026-07-24, 3-person call).
+    r"|\b(?:get|pull|grab|load|fetch|refresh|update)\b.{0,24}\bsnapshot\b"
+    r"|\bsnapshot\b.{0,24}\b(?:asana|workspace|inbox|gmail|tasks?|board)\b"
     # scheduling fragments answering a who/when clarify — "Between me and
     # Duccio today?" tripped the 'today' freshness trigger and got a public
     # web answer mid-scheduling (live 2026-07-24). An attendee/day fragment
@@ -752,6 +759,31 @@ def _has_action_object(text: str, match: "re.Match") -> bool:
         if len(token) > 1 and token not in _ACTION_FILLER:
             return True
     return bool(_OBJECT_NOUN.search(match.group(0)))
+
+
+# ── tool-domain addressing (multiparty fluidity, owner 2026-07-24) ──────
+# In a 3-person call "can you check my calendar and my next meeting?" was
+# IGNORED because the speaker didn't say "Petra" (wake-word gating is blind to
+# content). Nobody asks another HUMAN to check their own calendar/Asana/inbox:
+# a personal-workspace read or a schedule/send/create ask can only be aimed at
+# the assistant, so it counts as addressed even without the name.
+_TOOL_DOMAIN_READ = re.compile(
+    r"\b(?:my|our|mio|mia|nostr[oa])\s+(?:next\s+)?"
+    r"(?:calendar|calendario|asana|inbox|e-?mails?|gmail|board|tasks?|"
+    r"schedule|meetings?|appuntament\w+|attivit\w+)\b"
+    r"|\bwhat(?:'s| is)\s+(?:on|in)\s+the\s+(?:calendar|board|inbox)\b"
+    r"|\b(?:get|pull|load|refresh)\b.{0,20}\bsnapshot\b"
+    r"|\bcheck\s+(?:the\s+)?(?:asana|calendar|inbox|gmail)\b",
+    re.IGNORECASE,
+)
+
+
+def is_tool_domain_ask(text: str) -> bool:
+    """True when this utterance can only be aimed at the assistant — a
+    personal-workspace read or a direct action ask — so multiparty wake-word
+    gating treats it as addressed even without the avatar's name."""
+    t = text or ""
+    return bool(_TOOL_DOMAIN_READ.search(t)) or wants_action_capture(t)
 
 
 def wants_action_capture(question: str) -> bool:
@@ -1429,7 +1461,13 @@ answers in the meeting itself is NOT an action: looking something up online \
 ("search the internet for X"), reading the workspace/calendar/Asana ("check \
 what's on my board"), or a plain question ("how would you organize who does \
 what?") gets answered live and must NEVER appear in actions[] — only real work \
-someone must DO after the meeting belongs there. For each extracted action, \
+someone must DO after the meeting belongs there. Mark each action with \
+"assistant": a request aimed at the MEETING ASSISTANT ("Petra, send the \
+recap", "can you schedule…?") is assistant=true; a participant's own \
+commitment to other HUMANS ("we'll send you the link", "I'll share the demo \
+video with you") is assistant=false — it is captured for the record, never \
+something the assistant should execute or ask details for. For each extracted \
+action, \
 include a short, \
 verbatim evidence excerpt copied from the MEETING TRANSCRIPT — copy it \
 EXACTLY, character-for-character; never paraphrase, shorten, translate, or \
@@ -1473,7 +1511,7 @@ Return ONLY a JSON object:
     {"decision": "<the same decision as one short line>", "decision_maker": "<who made or drove it, or ''>", "reason": "<why, in one clause, or ''>", "related_project": "<the project/workstream it concerns, or ''>"}
   ],
   "actions": [
-    {"item": "<action>", "owner": "<name or 'UNASSIGNED'>", "deadline": "<stated deadline or ''>", "gap_type": "<owner|deadline|approval|document|blocker|none>", "evidence": "<exact supporting excerpt from the meeting transcript>"}
+    {"item": "<action>", "owner": "<name or 'UNASSIGNED'>", "deadline": "<stated deadline or ''>", "gap_type": "<owner|deadline|approval|document|blocker|none>", "evidence": "<exact supporting excerpt from the meeting transcript>", "assistant": <true ONLY when this was a DIRECT request to the meeting assistant to do it; false for a participant's own commitment to another human>}
   ],
   "goals": [
     {"goal": "<the intent in the speaker's own terms>", "evidence": "<exact supporting excerpt from the meeting transcript>",
@@ -2959,6 +2997,10 @@ def type_actions(
         # LLM would otherwise dutifully file "search the internet for X" as a
         # task; live cards f10730e9/c5e589e3 were exactly that).
         and _typeable(str(a.get("item") or ""))
+        # Human-to-human commitments ("we'll send you the link") are notes for
+        # the record — never typed into something the avatar would execute
+        # (owner 2026-07-24: three of them surfaced as Needs-details emails).
+        and not a.get("human_followup")
     ]
     if not indexed:
         return src
