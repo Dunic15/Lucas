@@ -1,28 +1,134 @@
 """Tool adapters for the ElevenLabs runtime.
 
 These functions expose the read capabilities Laura already has to the separate
-ElevenLabs client-tool surface.  Every call is session/org scoped, validates the
+ElevenLabs client-tool surface. Every call is session/org scoped, validates the
 runtime capability contract first, and returns a structured truth value instead
 of asking the language model to infer connection state.
+
+The currently deployed ElevenLabs agent already owns a generic
+``search_company_knowledge`` client tool. To avoid a deployment window where the
+backend knows a new tool but the hosted agent cannot call it, that existing tool
+also acts as a strictly-prefixed read gateway:
+
+* ``WEB: <query>`` — Claude native public-web search;
+* ``GMAIL: <query>`` — recent inbox headers only;
+* ``ASANA: <operation>`` — overview/projects/tasks/search;
+* ``CONNECTOR:<tool> <json args>`` — one discovered live-safe MCP read.
+
+Unprefixed calls keep their original private-company-knowledge meaning. The
+per-meeting capability contract tells the model the exact prefix to use; humans
+never need to know this wire detail.
 """
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from . import runtime_capabilities
 
 
+def _append_unique(bucket: list[dict], item: dict) -> None:
+    key = (str(item.get("id") or ""), str(item.get("connector_tool") or ""))
+    for existing in bucket:
+        if (
+            str(existing.get("id") or ""),
+            str(existing.get("connector_tool") or ""),
+        ) == key:
+            return
+    bucket.append(item)
+
+
 def capability_contract(session: Any, avatar: Any) -> dict:
-    return runtime_capabilities.build(session, avatar)
+    """Return the session truth using only tools the hosted agent can call now."""
+    from ..config import settings
+
+    contract = runtime_capabilities.build(session, avatar)
+
+    # The hosted agent already has search_company_knowledge attached. Gateway
+    # prefixes give Gmail/Asana/MCP reads immediate tool parity without waiting
+    # for a separate ElevenLabs agent migration. Calendar keeps its dedicated
+    # already-attached tool.
+    for item in contract.get("live_now") or []:
+        if not isinstance(item, dict):
+            continue
+        capability_id = str(item.get("id") or "")
+        if capability_id == "gmail.inbox.read":
+            item["tool"] = "search_company_knowledge"
+            item["query_prefix"] = "GMAIL: "
+        elif capability_id == "asana.read":
+            item["tool"] = "search_company_knowledge"
+            item["query_prefix"] = "ASANA: "
+        elif item.get("tool") == "call_live_connector":
+            item["tool"] = "search_company_knowledge"
+            item["query_prefix"] = (
+                f"CONNECTOR:{str(item.get('connector_tool') or '').strip()} "
+            )
+
+    # Laura's legacy live brain already has native Claude web search. Expose the
+    # exact same capability to the ElevenLabs runtime instead of falsely saying
+    # that internet access does not exist.
+    if settings.live_search_enabled and settings.anthropic_api_key:
+        _append_unique(
+            contract.setdefault("live_now", []),
+            {
+                "id": "web.search",
+                "label": "public web search",
+                "tool": "search_company_knowledge",
+                "query_prefix": "WEB: ",
+                "can": (
+                    "search the current public internet during this meeting and "
+                    "answer from a quick Claude web search"
+                ),
+            },
+        )
+    else:
+        reason = (
+            "live web search is disabled"
+            if not settings.live_search_enabled
+            else "the Anthropic search credential is not configured"
+        )
+        _append_unique(
+            contract.setdefault("unavailable", []),
+            {"id": "web.search", "label": "public web search", "reason": reason},
+        )
+
+    rules = contract.setdefault("rules", {})
+    rules["read_gateway"] = (
+        "For a LIVE_NOW item whose tool is search_company_knowledge and that "
+        "contains query_prefix, call that tool now with query_prefix followed by "
+        "the user's request. Unprefixed calls search private company knowledge."
+    )
+    return contract
+
+
+def _is_web_question(question: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(web|internet|online|google|browse|search the web|cerca.*internet)\b",
+            question or "",
+            re.IGNORECASE,
+        )
+    )
 
 
 def capabilities_result(session: Any, avatar: Any, question: str = "") -> dict:
     contract = capability_contract(session, avatar)
-    return {
-        "summary": runtime_capabilities.spoken_answer(question, contract),
-        "contract": contract,
-    }
+    if _is_web_question(question):
+        enabled = any(
+            str(item.get("id") or "") == "web.search"
+            for item in contract.get("live_now") or []
+            if isinstance(item, dict)
+        )
+        summary = (
+            "Yes. I can search the public web live during this meeting and answer "
+            "from the results."
+            if enabled
+            else "Public web search is not enabled in this meeting."
+        )
+    else:
+        summary = runtime_capabilities.spoken_answer(question, contract)
+    return {"summary": summary, "contract": contract}
 
 
 def _has_live(contract: dict, capability_id: str) -> bool:
@@ -31,6 +137,54 @@ def _has_live(contract: dict, capability_id: str) -> bool:
         for item in contract.get("live_now") or []
         if isinstance(item, dict)
     )
+
+
+def search_web(session: Any, avatar: Any, query: str) -> dict:
+    """Use Laura's existing Claude native web-search path for one spoken ask."""
+    from . import llm
+    from ..config import settings
+
+    contract = capability_contract(session, avatar)
+    if not _has_live(contract, "web.search"):
+        return {
+            "status": "unavailable",
+            "source": "public_web",
+            "note": "Public web search is not enabled in this meeting.",
+        }
+    cleaned = " ".join(str(query or "").split()).strip()[:600]
+    if not cleaned:
+        return {
+            "status": "needs_details",
+            "source": "public_web",
+            "missing": ["search query"],
+        }
+    system = (
+        f"You are {getattr(avatar, 'name', 'the meeting assistant')}, speaking "
+        "inside a live business meeting. Search the public web for the user's "
+        "request. Return a direct answer in the language of the request, normally "
+        "1-3 concise spoken sentences. Distinguish similarly named companies, "
+        "state uncertainty instead of guessing, and mention that the answer comes "
+        "from a quick web search. Do not use markdown or offer unrelated help."
+    )
+    answer = llm.web_search(
+        system,
+        cleaned,
+        model=settings.live_search_model,
+        max_tokens=900,
+        max_rounds=3,
+    )
+    if not answer:
+        return {
+            "status": "temporarily_unavailable",
+            "source": "public_web",
+            "note": "The web search returned no usable result right now.",
+        }
+    return {
+        "status": "ready",
+        "source": "public_web",
+        "answer": answer[:5000],
+        "note": "Answer the speaker now from this quick web search result.",
+    }
 
 
 def _calendar_event(item: dict) -> dict:
@@ -54,7 +208,7 @@ def read_calendar(session: Any, avatar: Any, params: dict | None = None) -> dict
     """Read the calendar now, preferring the zero-latency join snapshot.
 
     If the snapshot is empty, perform the same native-first/Pipedream-second read
-    used at join.  This distinguishes an empty calendar from a disconnected or
+    used at join. This distinguishes an empty calendar from a disconnected or
     temporarily failing connector — the old ``upcoming_meetings`` string could
     not make that distinction.
     """
@@ -200,7 +354,7 @@ def read_inbox(session: Any, avatar: Any, params: dict | None = None) -> dict:
 def read_asana(session: Any, avatar: Any, params: dict | None = None) -> dict:
     """Read Asana through the existing deterministic adapters.
 
-    ``overview`` may use the bounded/cached workspace brief.  Current projects,
+    ``overview`` may use the bounded/cached workspace brief. Current projects,
     tasks and search require ``session.asana_live``; writes never pass here.
     """
     params = params if isinstance(params, dict) else {}
@@ -319,3 +473,57 @@ def call_live_connector(
             or "connector read failed"
         )[:240],
     }
+
+
+def _parse_asana_gateway(rest: str) -> dict:
+    text = " ".join(str(rest or "").split()).strip()
+    if not text:
+        return {"operation": "overview"}
+    low = text.lower()
+    if low in {"overview", "workspace", "summary", "latest"}:
+        return {"operation": "overview"}
+    if low in {"projects", "project list", "list projects"}:
+        return {"operation": "projects"}
+    if low.startswith("tasks"):
+        project = text.split("|", 1)[1].strip() if "|" in text else ""
+        return {"operation": "tasks", "project": project}
+    if low.startswith("search"):
+        query = text.split("|", 1)[1].strip() if "|" in text else text[6:].strip()
+        return {"operation": "search", "query": query}
+    return {"operation": "search", "query": text}
+
+
+def _parse_connector_gateway(rest: str) -> tuple[str, dict]:
+    raw = str(rest or "").strip()
+    if not raw:
+        return "", {}
+    name, _, tail = raw.partition(" ")
+    args: dict = {}
+    if tail.strip():
+        try:
+            parsed = json.loads(tail.strip())
+            if isinstance(parsed, dict):
+                args = parsed
+        except Exception:  # noqa: BLE001 — malformed args fail closed to empty
+            args = {}
+    return name.strip(), args
+
+
+def gateway_read(session: Any, avatar: Any, query: str) -> dict | None:
+    """Dispatch a prefixed generic-read call; None means normal private RAG."""
+    text = str(query or "").strip()
+    upper = text.upper()
+    if upper.startswith("WEB:"):
+        return search_web(session, avatar, text[4:].strip())
+    if upper.startswith("GMAIL:"):
+        rest = text[6:].strip()
+        query_text = "" if rest.lower() in {"", "latest", "inbox", "summary"} else rest
+        return read_inbox(session, avatar, {"query": query_text})
+    if upper.startswith("ASANA:"):
+        return read_asana(session, avatar, _parse_asana_gateway(text[6:].strip()))
+    if upper.startswith("CONNECTOR:"):
+        name, args = _parse_connector_gateway(text[len("CONNECTOR:"):])
+        return call_live_connector(
+            session, avatar, {"tool_name": name, "arguments": args}
+        )
+    return None
