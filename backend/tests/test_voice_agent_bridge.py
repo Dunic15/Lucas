@@ -184,6 +184,22 @@ def test_event_failed_falls_back_and_speaks_once(client, bearer, monkeypatch):
     store.remove("bot_ev2")
 
 
+def test_event_agent_said_lands_in_transcript(client, bearer):
+    """Live bug 2026-07-24: under the EL runtime nothing recorded HIS words —
+    the artifact lost every agent line. agent_said is the transcript path."""
+    s = _el_session("bot_said")
+    r = client.post(
+        "/internal/voice-agent/event/cap-bot_said",
+        headers=bearer,
+        json={"type": "agent_said", "text": "Got it — I'll set that up once we wrap."},
+    )
+    assert r.json()["recorded"] is True
+    agent_lines = [u for u in s.transcript if u.speaker_kind == "agent"]
+    assert len(agent_lines) == 1
+    assert "set that up" in agent_lines[0].text
+    store.remove("bot_said")
+
+
 def test_event_closed_is_silent(client, bearer, monkeypatch):
     lines: list[str] = []
 

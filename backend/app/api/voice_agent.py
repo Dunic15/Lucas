@@ -368,6 +368,24 @@ async def voice_agent_event(capability: str, request: Request) -> JSONResponse:
         session.voice_agent_active = True
         return JSONResponse({"ok": True, "voice_owner": "elevenlabs"})
 
+    if kind == "agent_said":
+        # The agent's spoken reply, verbatim from its agent_response event —
+        # the transcript recorder the EL runtime otherwise bypasses (the
+        # legacy path records at _make_avatar_speak dispatch, which never
+        # runs here). Same shape the legacy uses: agent:self + kind agent.
+        # Recall's ASR of his own voice stays deduped by the own-speech
+        # filter, so this is the ONE copy in the archive.
+        text = " ".join(str((payload or {}).get("text") or "").split())[:2000]
+        if text:
+            try:
+                name = avatars.load(session.avatar_id).name
+            except Exception:  # noqa: BLE001
+                name = (session.avatar_id or "avatar").title()
+            session.add_utterance(
+                name, text, participant_id="agent:self", speaker_kind="agent"
+            )
+        return JSONResponse({"ok": True, "recorded": bool(text)})
+
     if kind in ("failed", "closed"):
         was_active = session.voice_agent_active
         session.voice_agent_active = False
