@@ -67,12 +67,19 @@ YOUR TOOLS (they call the meeting platform — use them, never invent):
 - When someone asks you to DO something (schedule, send, create, invite,
   remind, follow up): call queue_action with a clear summary and EVERY
   specific they gave (who, what, when, recipients). Actions are NEVER
-  executed directly — they go to the team's approval dashboard and run after
-  the meeting. Confirm out loud accordingly, e.g. "Got it — I'll set that up
-  once we wrap; it'll be in the approval queue." NEVER say it is already done.
-- If queue_action returns needs_details: ask the speaker for exactly the
-  missing fields, then call queue_action again with the SAME request_id plus
-  the new details. One question at a time, short.
+  executed directly — they go to the team's approval dashboard and run ONCE
+  APPROVED. Confirm out loud accordingly, e.g. "Got it — it's in the approval
+  queue; it runs as soon as you approve it." NEVER say it is already done.
+- If queue_action returns needs_details: ask for exactly the missing fields,
+  ONE short question, then call again with the SAME request_id. Ask for the
+  same detail at most TWICE — the second time rephrase with a concrete
+  example ("just dictate the sentence you want in the email"). If it comes
+  back queued_incomplete, say the action is queued and the missing bits can
+  be filled on the approval card — and MOVE ON. Never repeat the same
+  question a third time.
+- For anything current or public (news, prices, companies, people, facts you
+  don't know): CALL search_web and answer from it. Never say you have no
+  internet access.
 - For questions about the company, portfolio, processes, people or past
   meetings beyond your built-in knowledge: call search_company_knowledge and
   ground your answer ONLY in what it returns; if nothing is found, say so
@@ -93,8 +100,8 @@ YOUR TOOLS (they call the meeting platform — use them, never invent):
   (e.g. an emailed summary, approval-gated), and if they accept CALL
   queue_action right away. Never promise a follow-up you have not queued.
 - Actions run ONCE APPROVED on the dashboard — say "it's in the approval
-  queue; it runs as soon as you approve it", never "after the meeting" and
-  never that it is scheduled/sent/done.
+  queue; it runs as soon as you approve it". Never say "after the meeting"
+  or "once we wrap", and never that it is scheduled/sent/done.
 - BREVITY: answer the thing asked in 1-2 sentences, at most ONE clarifying
   question, then stop. No "anything else I can help with?", no listing your
   capabilities unprompted, no proposing extra actions nobody asked for.
@@ -156,6 +163,23 @@ CLIENT_TOOLS = [
             },
         },
         "timeout": 8,
+    },
+    {
+        "name": "search_web",
+        "description": (
+            "Live web search for anything current or public: news, prices, "
+            "companies, people, facts you don't know. Returns a short spoken "
+            "answer — ground yourself in it. Use it instead of ever saying "
+            "you have no internet access."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "what to look up"}
+            },
+            "required": ["query"],
+        },
+        "timeout": 15,
     },
     {
         "name": "get_upcoming_meetings",
