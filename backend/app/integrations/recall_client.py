@@ -17,7 +17,7 @@ import hmac
 import secrets
 import time
 from collections.abc import Mapping
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -328,6 +328,7 @@ def _create_bot_attempts(
     bot_name: str = "Laura",
     realtime_capability: str = "",
     attach_ears: bool = False,
+    attach_voice_agent_url: str = "",
 ) -> list[tuple[str, dict]]:
     configured_provider = _transcript_provider_config()
     attempts: list[tuple[str, dict]] = []
@@ -421,6 +422,29 @@ def _create_bot_attempts(
             eared.append((f"{label}+gemini-ears", body))
         attempts = eared + attempts
 
+    if attach_voice_agent_url:
+        # ElevenLabs Agent runtime (Cedric pilot): stream the meeting's mixed
+        # raw audio to the cedric-voice bridge. Same shape as the ears attach
+        # above — voiced copies FIRST, untouched originals as fallback, so a
+        # Recall 4xx on the audio config can never keep the avatar out of the
+        # meeting (it would just join on the legacy path).
+        import copy
+
+        voice_endpoint = {
+            "type": "websocket",
+            "url": attach_voice_agent_url,
+            "events": ["audio_mixed_raw.data"],
+        }
+        voiced: list[tuple[str, dict]] = []
+        for label, plain_body in attempts:
+            body = copy.deepcopy(plain_body)
+            body["recording_config"]["audio_mixed_raw"] = {}
+            body["recording_config"]["realtime_endpoints"] = list(
+                body["recording_config"]["realtime_endpoints"]
+            ) + [voice_endpoint]
+            voiced.append((f"{label}+voice-agent", body))
+        attempts = voiced + attempts
+
     return attempts
 
 
@@ -494,12 +518,29 @@ def create_bot(
     Whether the bot streams audio to the Gemini ears relay is decided PER AVATAR
     (dashboard brain choice), resolved here from `avatar_id`.
     """
-    from . import gemini_ears
+    from . import elevenlabs_agent, gemini_ears
 
     realtime_capability = secrets.token_urlsafe(32)
-    attach_ears = gemini_ears.mode_enabled(
-        gemini_ears.mode_for_avatar(avatar_id)
-    ) and bool(settings.ears_relay_ws_base.strip())
+    # ElevenLabs Agent runtime (Cedric pilot): when this avatar resolves to the
+    # agent runtime AND the cedric-voice bridge is configured, the bot streams
+    # its audio THERE — and Gemini ears must not attach (exactly one system may
+    # own the meeting audio). The page URL gains the voice-out coordinates so
+    # the avatar's browser can play the agent's streamed voice.
+    voice_agent_url = ""
+    voice_base = settings.voice_agent_relay_ws_base.strip().rstrip("/")
+    el_runtime, _el_agent_id = elevenlabs_agent.runtime_for_avatar_id(avatar_id)
+    if el_runtime == elevenlabs_agent.RUNTIME_ELEVENLABS_AGENT and voice_base:
+        voice_agent_url = f"{voice_base}/voice/{realtime_capability}"
+        sep = "&" if "?" in avatar_page_url else "?"
+        avatar_page_url = (
+            f"{avatar_page_url}{sep}voice_ws={quote(voice_base, safe='')}"
+            f"&voice_cap={realtime_capability}"
+        )
+    attach_ears = (
+        not voice_agent_url
+        and gemini_ears.mode_enabled(gemini_ears.mode_for_avatar(avatar_id))
+        and bool(settings.ears_relay_ws_base.strip())
+    )
     attempts = _create_bot_attempts(
         meeting_url,
         avatar_page_url,
@@ -507,6 +548,7 @@ def create_bot(
         bot_name,
         realtime_capability,
         attach_ears=attach_ears,
+        attach_voice_agent_url=voice_agent_url,
     )
     last_error: httpx.HTTPStatusError | None = None
 

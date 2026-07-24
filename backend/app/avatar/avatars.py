@@ -92,6 +92,29 @@ class Avatar:
     # Calendar + Gmail are NOT listed here: they are BASELINE for every avatar.
     # [] = only the baseline tools.
     native_tools: list[str] = None  # type: ignore[assignment]
+    # Which CONVERSATION RUNTIME drives this avatar's live-meeting turns:
+    #   "legacy"           -> today's pipeline (Deepgram/Recall transcripts ->
+    #                         gates -> brain -> ElevenLabs TTS). The default.
+    #   "elevenlabs_agent" -> the ElevenLabs Agents pilot: STT, turn detection,
+    #                         interruption and the spoken reply run in a private
+    #                         ElevenLabs Agent; knowledge + actions stay in this
+    #                         backend via client tools. Selecting it here is
+    #                         NECESSARY but not sufficient — the global flag,
+    #                         the allowlist and a non-empty agent id must all
+    #                         agree (integrations/elevenlabs_agent.py), so this
+    #                         field alone can never flip an avatar's runtime.
+    conversation_runtime: str = "legacy"
+    # The private ElevenLabs Agent bound to THIS avatar ("" = none). Never a
+    # secret (the API key stays server-side); an empty id blocks dispatch.
+    elevenlabs_agent_id: str = ""
+    # Multiparty gating for the agent runtime ("off" | "wake_word_gate"):
+    # wake_word_gate = audio reaches the agent only after this avatar's wake
+    # word opened the gate (Meeting Director), reusing wake_words above.
+    voice_multiparty_mode: str = "off"
+    # What the agent runtime may DO ("off" | "read_only" | "prepare_only"):
+    # read_only = context/knowledge tools; prepare_only = + queue_action into
+    # the approval flow. Direct writes are not a mode by design.
+    voice_actions_mode: str = "off"
 
     def uses_native_tool(self, name: str) -> bool:
         """Whether this avatar is purpose-built for a gated native tool."""
@@ -264,6 +287,19 @@ def load(avatar_id: str) -> Avatar:
         native_tools=[
             str(t).strip().lower() for t in (raw.get("native_tools") or []) if str(t).strip()
         ],
+        # Runtime fields: unknown/blank values normalize to the SAFE default
+        # (legacy pipeline, everything off) — a yaml typo can never select a
+        # runtime or a mode that doesn't exist.
+        conversation_runtime=(
+            lambda r: r if r in ("legacy", "elevenlabs_agent") else "legacy"
+        )(str(_coalesce(raw.get("conversation_runtime"), "legacy")).strip().lower()),
+        elevenlabs_agent_id=str(_coalesce(raw.get("elevenlabs_agent_id"), "")).strip(),
+        voice_multiparty_mode=(
+            lambda m: m if m in ("off", "wake_word_gate") else "off"
+        )(str(_coalesce(raw.get("voice_multiparty_mode"), "off")).strip().lower()),
+        voice_actions_mode=(
+            lambda m: m if m in ("off", "read_only", "prepare_only") else "off"
+        )(str(_coalesce(raw.get("voice_actions_mode"), "off")).strip().lower()),
         dir=folder,
         knowledge_packs=[str(k) for k in (raw.get("knowledge_packs") or [])],
     )

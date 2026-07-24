@@ -183,6 +183,23 @@ class Session:
     # None = plain session with no orchestrator attached. Persisted as JSON so a
     # mid-meeting restart still knows where to deliver the artifact.
     integration: dict | None = None
+    # Conversation runtime SNAPSHOT, frozen at session creation from
+    # integrations/elevenlabs_agent.runtime_for_avatar_id: "legacy" (default)
+    # or "elevenlabs_agent" (Cedric pilot). Frozen so a yaml/flag edit during a
+    # live call can never migrate the running meeting between runtimes.
+    # In-memory ON PURPOSE: after a mid-meeting backend restart the ElevenLabs
+    # relay bridge is gone with the process, so falling back to "legacy" is the
+    # correct (and only working) runtime — persisting this would be a bug.
+    conversation_runtime: str = field(default="legacy", repr=False, compare=False)
+    elevenlabs_agent_id: str = field(default="", repr=False, compare=False)
+    # Whether the ElevenLabs relay bridge is LIVE for this session right now —
+    # set True by the relay's "started" event, False on "failed"/close. This is
+    # the voice-ownership switch: while True the legacy path keeps ingesting
+    # transcripts (MeetingState, actions, artifact) but produces NO spoken
+    # answer; the moment it flips False the legacy brain answers again
+    # (automatic fallback). In-memory like the runtime snapshot: a restart
+    # means the bridge is gone, so False (legacy speaks) is the true state.
+    voice_agent_active: bool = field(default=False, repr=False, compare=False)
     ws: WebSocket | None = None
     pending_messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
     # Canonical pending-action bindings. The session already keys the meeting;
@@ -1440,9 +1457,16 @@ def create(
     bot_id: str, meeting_url: str, avatar_id: str = "laura", org_id: str = DEMO_ORG_ID,
     principal_id: str = "",
 ) -> Session:
+    # Freeze the conversation runtime NOW (see the Session field comment): the
+    # single choke point both dispatch paths (api/sessions, meeting/lifecycle)
+    # flow through. Resolution is fail-closed to "legacy" and never raises.
+    from ..integrations import elevenlabs_agent as _el_agent  # lazy: no cycle
+
+    runtime, agent_id = _el_agent.runtime_for_avatar_id(avatar_id)
     s = Session(
         bot_id=bot_id, meeting_url=meeting_url, avatar_id=avatar_id, org_id=org_id,
         principal_id=principal_id,
+        conversation_runtime=runtime, elevenlabs_agent_id=agent_id,
     )
     _sessions[bot_id] = s
     _persist_session(s)

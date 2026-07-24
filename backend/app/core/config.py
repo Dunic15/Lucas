@@ -198,6 +198,25 @@ class Settings(BaseSettings):
     # tier / licensing / deleted). Default: ElevenLabs stock "Laura".
     elevenlabs_fallback_voice_id: str = "FGY2WhTYpPnrIDTdsKH5"
 
+    # ElevenLabs AGENTS conversation runtime (Cedric-only pilot). A per-avatar
+    # alternative to the legacy live path: the avatar's conversation (STT, turn
+    # detection, interruption, LLM, streaming voice) runs in an ElevenLabs Agent
+    # behind the relay, while knowledge/actions stay in this backend via client
+    # tools. Dispatch requires ALL of: this global switch ON, the avatar id in
+    # the allowlist, avatar.yaml conversation_runtime: elevenlabs_agent, AND a
+    # non-empty elevenlabs_agent_id — so a single config mistake can never move
+    # an avatar off the legacy path (see integrations/elevenlabs_agent.py).
+    # Default OFF: zero behavior change until deliberately enabled per-deploy.
+    elevenlabs_agent_runtime_enabled: bool = False
+    elevenlabs_agent_avatar_allowlist: str = "cedric"
+    # wss:// base of the cedric-voice Cloudflare Worker (the Durable Object
+    # bridge: Recall audio in -> ElevenLabs Agent -> browser audio out). Like
+    # ears_relay_ws_base for Gemini: App Runner can't accept inbound WS, so the
+    # bridge lives on Cloudflare. Empty = no audio endpoint is attached even
+    # with the runtime enabled (the bot joins on the legacy path) — a fifth
+    # independent condition on the pilot.
+    voice_agent_relay_ws_base: str = ""
+
     # Public URL of this server (Recall must reach our webhook + avatar page)
     public_base_url: str = "http://127.0.0.1:8000"
 
@@ -1020,6 +1039,16 @@ class Settings(BaseSettings):
         return {
             a.strip().lower()
             for a in self.internal_avatar_ids.split(",")
+            if a.strip()
+        }
+
+    @property
+    def elevenlabs_agent_avatar_allowlist_set(self) -> set[str]:
+        """Parsed ELEVENLABS_AGENT_AVATAR_ALLOWLIST — the only avatar ids the
+        ElevenLabs Agents runtime may ever dispatch for (see the field above)."""
+        return {
+            a.strip().lower()
+            for a in self.elevenlabs_agent_avatar_allowlist.split(",")
             if a.strip()
         }
 
