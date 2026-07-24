@@ -464,6 +464,54 @@ def test_tool_queue_action_note_names_approval_not_meeting_end(client, bearer):
     store.remove("bot_note")
 
 
+def test_tool_search_web_uses_native_search(client, bearer, monkeypatch):
+    """Live 2026-07-24: 'I don't have direct internet access' while the
+    legacy runtime had Claude native web search all along."""
+    from app.brain import llm
+
+    monkeypatch.setattr(settings, "live_search_enabled", True)
+    monkeypatch.setattr(settings, "anthropic_api_key", "k")
+    monkeypatch.setattr(
+        llm, "web_search", lambda *a, **k: "Recall.ai cut prices to $0.50/hr in 2026."
+    )
+    _el_session("bot_web")
+    r = _tool(client, "cap-bot_web", "search_web", {"query": "recall pricing"}, bearer).json()
+    assert r["result"]["found"] is True
+    assert "0.50" in r["result"]["answer"]
+    store.remove("bot_web")
+
+
+def test_tool_search_web_honest_when_disabled(client, bearer, monkeypatch):
+    monkeypatch.setattr(settings, "live_search_enabled", False)
+    _el_session("bot_noweb")
+    r = _tool(client, "cap-bot_noweb", "search_web", {"query": "x"}, bearer).json()
+    assert r["result"]["available"] is False
+    store.remove("bot_noweb")
+
+
+def test_tool_queue_action_clarify_caps_at_two_then_queues(client, bearer):
+    """Live 2026-07-24: 'I need the full email body' repeated four times
+    verbatim. Third attempt must queue what we have instead of looping."""
+    _el_session("bot_loop")
+    vague = {"summary": "send an email", "request_id": "req-loop"}
+    r1 = _tool(client, "cap-bot_loop", "queue_action", vague, bearer, "t1").json()
+    r2 = _tool(client, "cap-bot_loop", "queue_action", vague, bearer, "t2").json()
+    assert r1["result"]["status"] == r2["result"]["status"] == "needs_details"
+    r3 = _tool(client, "cap-bot_loop", "queue_action", vague, bearer, "t3").json()
+    assert r3["result"]["status"] == "queued_incomplete"
+    assert r3["result"]["action_id"]
+    assert "approval card" in r3["result"]["note"]
+    store.remove("bot_loop")
+
+
+def test_tool_capabilities_returns_structured_truth(client, bearer):
+    _el_session("bot_capst")
+    r = _tool(client, "cap-bot_capst", "get_available_actions", {}, bearer).json()
+    assert "summary" in r["result"]
+    assert isinstance(r["result"]["tools"], dict)
+    store.remove("bot_capst")
+
+
 def test_tool_crash_returns_502_not_traceback(client, bearer, monkeypatch):
     from app.brain import rag
 

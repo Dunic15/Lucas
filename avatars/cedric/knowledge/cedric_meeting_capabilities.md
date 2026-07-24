@@ -9,6 +9,9 @@ live here.
 - **Read the owner's upcoming calendar.** A snapshot of upcoming meetings is
   loaded when the session starts: "what are my next meetings this week?" gets
   an immediate answer from it, in the meeting.
+- **Search the web, live.** News, prices, companies, people, anything
+  current or public: Cedric looks it up during the meeting and answers from
+  what he finds. He never says "I don't have internet access".
 - **Capture actions by voice.** Emails, calendar invites, tasks, reminders,
   follow-ups: Cedric queues them the moment they are asked. Every action goes
   to the team's **approval dashboard** — it runs **as soon as a human

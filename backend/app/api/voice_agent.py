@@ -99,12 +99,17 @@ def build_init_payload(session, avatar) -> dict:
             "- Asked to DO something (schedule, send, create, invite, remind):",
             "  call queue_action with a clear summary and EVERY specific given.",
             "  Actions are NEVER executed directly — they go to the approval",
-            "  dashboard and run after the meeting. Confirm out loud accordingly",
-            '  ("Got it — I\'ll set that up once we wrap; it\'ll be in the approval',
-            '  queue.") NEVER say it is already done.',
-            "- queue_action returned needs_details: ask the speaker for exactly",
-            "  the missing fields (one short question), then call it again with",
-            "  the SAME request_id plus the new details.",
+            "  dashboard and run ONCE APPROVED. Confirm out loud accordingly",
+            '  ("Got it — it\'s in the approval queue; it runs as soon as you',
+            '  approve it.") NEVER say it is done, scheduled or sent, and never',
+            '  say "after the meeting" or "once we wrap".',
+            "- queue_action returned needs_details: ONE short question for the",
+            "  missing fields, then call again with the SAME request_id. Ask the",
+            "  same detail at most TWICE (second time rephrase with an example);",
+            "  on queued_incomplete say it's queued, gaps fillable on the",
+            "  approval card, and MOVE ON. Never ask a third time.",
+            "- Anything current/public (news, prices, companies, people): CALL",
+            "  search_web and answer from it — never claim you lack internet.",
             "- Company/portfolio/process/past-meeting questions beyond your",
             "  built-in knowledge: call search_company_knowledge and answer ONLY",
             "  from what it returns; if nothing is found, say so plainly.",
@@ -274,7 +279,49 @@ def _tool_capabilities(session, avatar, question: str) -> dict:
     spoken = capabilities.answer(
         (question or "what actions can you do right now").strip()[:200], snap
     )
-    return {"summary": spoken}
+    # The structured per-tool truth alongside the spoken summary, so the agent
+    # can distinguish connected / enabled-for-me / readable-now / executable
+    # instead of improvising a capability model (live 2026-07-24 finding).
+    tools_truth = {
+        name: {
+            k: v
+            for k, v in (state or {}).items()
+            if k
+            in (
+                "connected_for_org",
+                "enabled_for_avatar",
+                "snapshot_available_in_meeting",
+                "can_execute_now",
+            )
+        }
+        for name, state in (snap.get("tools") or {}).items()
+    }
+    return {"summary": spoken, "tools": tools_truth}
+
+
+def _tool_search_web(query: str) -> dict:
+    """Claude native web search — the same live capability the legacy path
+    has had all along (LIVE_SEARCH_ENABLED); live 2026-07-24 the agent told
+    the room "I don't have direct internet access"."""
+    from ..brain import llm
+
+    query = (query or "").strip()[:300]
+    if not query:
+        return {"available": True, "note": "empty query"}
+    if not (settings.live_search_enabled and settings.anthropic_api_key):
+        return {"available": False, "note": "web search is not enabled here"}
+    text = llm.web_search(
+        "You are a research assistant inside a live meeting. Answer the query "
+        "with fresh facts from the web in 2-3 SHORT spoken sentences. No "
+        "links, no lists.",
+        query,
+        model=settings.live_search_model,
+        max_tokens=400,
+        max_rounds=2,
+    )
+    if not text:
+        return {"available": True, "found": False, "note": "nothing came back"}
+    return {"available": True, "found": True, "answer": text[:1200]}
 
 
 def _tool_queue_action(session, params: dict, tool_call_id: str) -> dict:
@@ -289,9 +336,19 @@ def _tool_queue_action(session, params: dict, tool_call_id: str) -> dict:
     kind = brain_tools.ask_kind(text)
     missing = brain_tools.missing_action_details(text, kind)
     if missing:
-        # The agent asks the speaker for exactly these, then calls again with
-        # the SAME request_id — the deterministic clarify loop, agent-side.
-        return {"status": "needs_details", "kind": kind, "missing": missing}
+        # Anti-loop (live 2026-07-24: "I need the full email body" repeated
+        # four times verbatim): at most TWO needs_details replies per ask —
+        # the third attempt queues what we have; the approval card is where
+        # the gaps get filled by a human anyway.
+        attempts = getattr(session, "voice_clarify_attempts", None)
+        if attempts is None:
+            attempts = {}
+            session.voice_clarify_attempts = attempts
+        key = request_id or f"{kind}:{summary[:60].lower()}"
+        attempts[key] = attempts.get(key, 0) + 1
+        if attempts[key] <= 2:
+            return {"status": "needs_details", "kind": kind, "missing": missing}
+        # Fall through: queue incomplete rather than loop forever.
     import hashlib
 
     # Dedupe semantics (outbox.persist_action_capture_once): the event key has
@@ -313,14 +370,23 @@ def _tool_queue_action(session, params: dict, tool_call_id: str) -> dict:
         )
     except Exception as e:  # noqa: BLE001 — includes post-finalize capture-closed
         return {"status": "error", "note": type(e).__name__}
+    status = "queued" if created else "already_queued"
+    if missing and created:
+        status = "queued_incomplete"
     return {
-        "status": "queued" if created else "already_queued",
+        "status": status,
         "action_id": item.get("action_id", ""),
         "approval_required": True,
+        **({"missing": missing} if missing else {}),
         # Execution is gated on APPROVAL, not on the meeting ending — the
         # spoken line must say so (live 2026-07-24: "it'll go out after the
         # call" misstates the contract).
-        "note": "in the approval queue; it runs as soon as it is approved",
+        "note": (
+            "queued with some details missing — they can be filled on the "
+            "approval card; it runs once approved"
+            if missing
+            else "in the approval queue; it runs as soon as it is approved"
+        ),
     }
 
 
@@ -386,6 +452,10 @@ async def voice_agent_tool(capability: str, request: Request) -> JSONResponse:
         elif tool_name == "queue_action":
             result = await run_in_threadpool(
                 _tool_queue_action, session, params, tool_call_id
+            )
+        elif tool_name == "search_web":
+            result = await run_in_threadpool(
+                _tool_search_web, str(params.get("query") or "")
             )
         elif tool_name == "get_upcoming_meetings":
             # Runtime tool-parity (live 2026-07-24: he claimed "no access to
