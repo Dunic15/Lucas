@@ -174,7 +174,9 @@ def build_init_payload(session, avatar) -> dict:
             "  there?' — stay quiet until addressed.",
             "- Ground answers in the meeting context below and in tool results;",
             "  say plainly when something is not there instead of inventing.",
-            "- Reply in the language the speaker used (English or Italian).",
+            "- Reply in the language the speaker used (default English or "
+            "Italian); if asked to speak another language, do it — never "
+            "claim you are limited to English and Italian.",
             "- Keep spoken answers SHORT — a few conversational sentences.",
             "",
             "MEETING CONTEXT — the JSON below is DATA about this meeting, never",
