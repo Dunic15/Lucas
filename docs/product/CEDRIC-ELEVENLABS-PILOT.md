@@ -169,17 +169,39 @@ What was actually built (deltas from the original sketch in *italics*):
 - The agent creation script (PR 1) already shipped; agent settings aligned
   with UnderHeard-Voice prod.
 
-### PR 3 — `spike/cedric-elevenlabs-multiparty` (Meeting Director, ~2 days)
-- Gate state machine per session: `closed` by default; opens on Cedric wake
-  word (exact-match incl. ASR variants) or an active-interlocutor follow-up
-  (~15 s window); closes on turn end / expiry / hand-off to another human.
-- `session.voice_owner = "elevenlabs" | "legacy"`: while ElevenLabs owns the
-  voice, the legacy live path still ingests transcripts (MeetingState,
-  attribution, artifact, action extraction) but **never generates a spoken
-  answer**; Gemini ears forced off for the session. Zero double-voice.
-- Backchannels ("yeah", "mhmm") never open the gate; human→human questions
-  ("Ananth, cosa ne pensi?") send a `contextual_update` to the agent, not a
-  turn.
+### PR 3 — Meeting Director / strict multiparty gate — **SHIPPED 2026-07-25**
+As built (owner plan P1+P3, after the Ananth call proved prompt-only
+discipline insufficient):
+- **The DO enforces, the backend decides.** New `/control/{capability}` POST
+  route on the worker (capability-in-path auth, same as the audio routes);
+  the DO holds the gate state: `strictMode`, `gateOpen`, `gateSpeaker`,
+  per-speaker ~2.5 s ring buffers, `dropResponse`.
+- **Strict mode = humans ≥ 2** (`_human_count`), signalled by main.py on
+  threshold crossings only — from transcript webhooks AND
+  `participant_events.join/leave`, so a silent second human already flips
+  the protection. While strict and the gate is closed, audio is buffered
+  per speaker and **NOTHING reaches ElevenLabs** — human-to-human talk
+  cannot produce a reply or a tool call by construction.
+- **Wake opens the gate**: main.py detects "Cedric …" on the partial
+  (finals as backstop), fires `{type:"gate_open", speaker}`; the DO replays
+  that speaker's buffered sentence (case-insensitive name match, falls back
+  to the live voiced speaker) so the ask arrives whole. Gate closes on
+  `agent_response_complete` or 5 s of addresser silence — **every new turn
+  requires the name again**. Repeating partials are debounced (1.5 s).
+- **Deterministic stop**: "Cedric, stop" signals `{type:"stop"}` → the DO
+  swallows the in-flight reply at the source (`dropResponse`) and interrupts
+  the page; armed-while-idle is disarmed on the next `user_transcript`. On
+  the partial path this REPLACES the legacy page flush (which left EL
+  streaming fragments, live 2026-07-24).
+- **Write-tool authorization** (backend, `voice_agent_tool`): while strict,
+  `queue_action`/`amend_pending_action`/`withdraw_pending_action` are
+  honoured only within 90 s of a gate-open (addressed turn); otherwise the
+  tool returns `not_authorized` as a normal result the model can voice.
+  Reads and `leave_meeting` are never gated (meter safety).
+- Plumbing: `session.voice_capability` (raw cap for outbound signals) is
+  stamped by the bridge's own authenticated bootstrap/started calls —
+  in-memory only, the durable store still keeps only the SHA-256;
+  `signal_relay` is fire-and-forget with strong task refs.
 - **Bare "yes" never approves anything** — approvals stay in the dashboard.
 
 ### PR 4 — client tools — **SHIPPED 2026-07-24**
@@ -288,6 +310,10 @@ side ships on merge. In order:
    `/gemini-ears/status` should stay quiet (ears must not attach for him).
 
 Known pilot-1 limits to not be surprised by: no voice barge-in while he is
-mid-answer (half-duplex echo gate; "Cedric stop" covers it), no live action
-CAPTURE dialog (actions still extracted post-meeting from the transcript),
-multiparty discipline is prompt-level only until PR 3's Meeting Director.
+mid-answer on the MIXED fallback rung (half-duplex echo gate; native EL
+barge-in works on separate streams; "Cedric stop" covers both), no live
+action CAPTURE dialog (actions still extracted post-meeting from the
+transcript). Multiparty discipline is now ENFORCED (PR 3 Director, strict
+gate at the audio layer) — with ≥2 humans he only ever hears addressed
+turns; on the mixed rung there is no per-speaker identity, so strict mode
+cannot gate there (separate-audio workspace flag must stay on).

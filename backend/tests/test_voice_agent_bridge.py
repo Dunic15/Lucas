@@ -779,3 +779,237 @@ def test_legacy_barge_in_disabled_while_agent_owns_voice(client, monkeypatch):
     _final(client, "bot_nobarge", "and the budget review is another thing")
     assert stops  # legacy sessions keep the protection
     store.remove("bot_nobarge")
+
+
+# ── Meeting Director: strict multiparty gate (owner plan P1/P3, 2026-07-25) ──
+
+
+def _final_from(client, bot_id: str, text: str, name: str, pid: int) -> dict:
+    return client.post(
+        "/webhooks/recall",
+        json={
+            "event": "transcript.data",
+            "data": {
+                "bot": {"id": bot_id},
+                "data": {
+                    "words": [{"text": w} for w in text.split()],
+                    "participant": {"name": name, "id": pid},
+                },
+            },
+        },
+    ).json()
+
+
+def _partial_from(client, bot_id: str, text: str, name: str = "Duccio", pid: int = 1) -> dict:
+    return client.post(
+        "/webhooks/recall",
+        json={
+            "event": "transcript.partial_data",
+            "data": {
+                "bot": {"id": bot_id},
+                "data": {
+                    "words": [{"text": w} for w in text.split()],
+                    "participant": {"name": name, "id": pid},
+                },
+            },
+        },
+    ).json()
+
+
+def _signals(monkeypatch) -> list[dict]:
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        voice_agent_api, "signal_relay", lambda session, payload: sent.append(payload)
+    )
+    return sent
+
+
+def test_started_event_stamps_voice_capability(client, bearer):
+    """Director signals need the raw capability; the bridge's own
+    authenticated calls are where it legitimately appears."""
+    s = _el_session("bot_capst")
+    client.post(
+        "/internal/voice-agent/event/cap-bot_capst",
+        headers=bearer,
+        json={"type": "started"},
+    )
+    assert s.voice_capability == "cap-bot_capst"
+    store.remove("bot_capst")
+
+
+def test_director_strict_mode_flips_on_second_human(client, monkeypatch):
+    """1 human → open; a SECOND human (even via transcript) crosses the
+    threshold and the bridge is told exactly once per crossing."""
+    sent = _signals(monkeypatch)
+    s = _el_session("bot_dm")
+    s.voice_agent_active = True
+    s.voice_capability = "cap-bot_dm"
+    _final_from(client, "bot_dm", "hello everyone how are we", "Duccio", 1)
+    assert not any(p.get("type") == "mode" and p.get("strict") for p in sent)
+    assert s.voice_strict_mode is False
+    _final_from(client, "bot_dm", "hi all sorry I am late", "Ananth", 2)
+    assert {"type": "mode", "strict": True} in sent
+    assert s.voice_strict_mode is True
+    # No re-send while the count stays put.
+    n = sum(1 for p in sent if p.get("type") == "mode")
+    _final_from(client, "bot_dm", "so where were we on this", "Ananth", 2)
+    assert sum(1 for p in sent if p.get("type") == "mode") == n
+    store.remove("bot_dm")
+
+
+def test_director_gate_opens_when_called_and_stamps_window(client, monkeypatch):
+    sent = _signals(monkeypatch)
+    s = _el_session("bot_gate")
+    s.voice_agent_active = True
+    s.voice_capability = "cap-bot_gate"
+    _final(client, "bot_gate", "Cedric what do you think about this")
+    opens = [p for p in sent if p.get("type") == "gate_open"]
+    assert opens and opens[0]["speaker"] == "Duccio"
+    assert s.voice_gate_opened_at > 0
+    store.remove("bot_gate")
+
+
+def test_director_gate_open_debounced_on_repeating_partials(client, monkeypatch):
+    """Partials repeat the same growing text — the bridge must not be spammed
+    (each gate_open replays the buffer)."""
+    sent = _signals(monkeypatch)
+    s = _el_session("bot_deb")
+    s.voice_agent_active = True
+    s.voice_capability = "cap-bot_deb"
+    _partial_from(client, "bot_deb", "Cedric can you check")
+    _partial_from(client, "bot_deb", "Cedric can you check the tasks")
+    opens = [p for p in sent if p.get("type") == "gate_open"]
+    assert len(opens) == 1  # second landed inside the debounce window
+    assert s.voice_gate_opened_at > 0
+    store.remove("bot_deb")
+
+
+def test_director_partial_stop_signals_bridge_not_page_flush(client, monkeypatch):
+    """'Cedric stop' on a partial: the kill goes to the bridge (dropResponse +
+    page interrupt) — the legacy page flush alone left EL streaming fragments
+    (live 2026-07-24)."""
+    sent = _signals(monkeypatch)
+    stops: list[str] = []
+
+    async def fake_stop(session, *a, **k):
+        stops.append(session.bot_id)
+
+    monkeypatch.setattr(main_module, "_make_avatar_stop", fake_stop)
+    s = _el_session("bot_pstop")
+    s.voice_agent_active = True
+    s.voice_capability = "cap-bot_pstop"
+    r = _partial_from(client, "bot_pstop", "Cedric stop")
+    assert r.get("stopped") is True
+    assert {"type": "stop"} in sent
+    assert stops == []  # no legacy flush while the agent owns the voice
+    store.remove("bot_pstop")
+
+
+def test_write_tools_locked_in_strict_mode_without_addressed_turn(client, bearer):
+    """Owner spec: with ≥2 humans, no action from turns not addressed to him.
+    Reads and leave_meeting stay open (leave is meter safety)."""
+    s = _el_session("bot_lock")
+    s.voice_strict_mode = True
+    s.voice_gate_opened_at = 0.0
+    r = _tool(
+        client, "cap-bot_lock", "queue_action",
+        {"summary": "send an email", "details": "email test to X"}, bearer,
+    ).json()
+    assert r["result"]["status"] == "not_authorized"
+    r = _tool(client, "cap-bot_lock", "get_pending_actions", {}, bearer).json()
+    assert "status" not in r["result"] or r["result"].get("status") != "not_authorized"
+    store.remove("bot_lock")
+
+
+def test_write_tools_flow_with_recent_addressed_turn(client, bearer):
+    import time as _time
+
+    s = _el_session("bot_auth")
+    s.voice_strict_mode = True
+    s.voice_gate_opened_at = _time.time()
+    r = _tool(
+        client, "cap-bot_auth", "queue_action",
+        {"summary": "create a task", "details": "task called Follow up with Ananth"},
+        bearer,
+    ).json()
+    assert r["result"]["status"] != "not_authorized"
+    store.remove("bot_auth")
+
+
+def test_leave_meeting_never_gated_by_strict_mode(client, bearer, monkeypatch):
+    left: list[str] = []
+    monkeypatch.setattr(
+        voice_agent_api, "_schedule_leave", lambda session: left.append(session.bot_id)
+    )
+    s = _el_session("bot_lgate")
+    s.voice_strict_mode = True
+    s.voice_gate_opened_at = 0.0
+    r = _tool(client, "cap-bot_lgate", "leave_meeting", {}, bearer).json()
+    assert r["result"]["status"] == "leaving"
+    assert left == ["bot_lgate"]
+    store.remove("bot_lgate")
+
+
+def test_signal_relay_posts_control_url_and_holds_task_ref(monkeypatch):
+    """wss base → https /control/{cap}; fire-and-forget with a strong task
+    reference (same GC pitfall as _leave_tasks)."""
+    import asyncio
+
+    posted: list[tuple[str, dict]] = []
+
+    class _FakeAsyncClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):
+            posted.append((url, json))
+
+    monkeypatch.setattr(voice_agent_api.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(
+        settings, "voice_agent_relay_ws_base",
+        "wss://cedric-voice.example.workers.dev",
+    )
+
+    class _S:
+        voice_capability = "cap-xyz"
+        voice_agent_active = True
+
+    async def scenario():
+        voice_agent_api.signal_relay(_S(), {"type": "mode", "strict": True})
+        assert voice_agent_api._control_tasks  # strong reference held
+        await asyncio.gather(*list(voice_agent_api._control_tasks))
+
+    asyncio.run(scenario())
+    assert posted == [
+        (
+            "https://cedric-voice.example.workers.dev/control/cap-xyz",
+            {"type": "mode", "strict": True},
+        )
+    ]
+    assert not voice_agent_api._control_tasks
+
+
+def test_signal_relay_noop_without_capability_or_ownership(monkeypatch):
+    calls: list = []
+    monkeypatch.setattr(
+        voice_agent_api.httpx, "AsyncClient",
+        lambda *a, **k: calls.append(1),
+    )
+
+    class _NoCap:
+        voice_capability = ""
+        voice_agent_active = True
+
+    class _NotActive:
+        voice_capability = "cap-1"
+        voice_agent_active = False
+
+    voice_agent_api.signal_relay(_NoCap(), {"type": "stop"})
+    voice_agent_api.signal_relay(_NotActive(), {"type": "stop"})
+    assert calls == []

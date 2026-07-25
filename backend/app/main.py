@@ -2434,6 +2434,36 @@ def _el_voice_owned(session: store.Session) -> bool:
     )
 
 
+def _director_sync_mode(session: store.Session, avatar: avatars.Avatar) -> None:
+    """Keep the relay bridge's strict-multiparty mode in step with the roster.
+
+    Owner spec 2026-07-25: with ≥2 humans in the call the agent speaks ONLY
+    when addressed by name — the bridge enforces it on the audio frames, the
+    backend owns the decision (it has the roster). Signalled only on
+    threshold CROSSINGS, on the same webhook stream the roster rides."""
+    if not _el_voice_owned(session) or not getattr(session, "voice_capability", ""):
+        return
+    strict = _human_count(session, avatar) >= 2
+    if strict != session.voice_strict_mode:
+        session.voice_strict_mode = strict
+        voice_agent_api.signal_relay(session, {"type": "mode", "strict": strict})
+
+
+def _director_gate_open(session: store.Session, speaker: str) -> None:
+    """Someone addressed the agent by name: open the bridge's strict gate for
+    that speaker (it replays their buffered sentence, so the wake word being
+    detected mid-phrase loses nothing) and stamp the write-tool authorization
+    window. Debounced — partials repeat the same growing text; the bridge
+    refresh on re-open is wanted (keeps the gate alive through a long ask),
+    the request spam is not."""
+    now = time.time()
+    if now - session.voice_gate_opened_at > 1.5:
+        voice_agent_api.signal_relay(
+            session, {"type": "gate_open", "speaker": speaker}
+        )
+    session.voice_gate_opened_at = now
+
+
 def maybe_self_introduce(session: store.Session) -> bool:
     """One-time self-introduction on join (settings.self_introduce_on_join).
 
@@ -3353,12 +3383,25 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # on the final-transcript path sees this and yields to them.
         session.last_human_partial_at = time.time()
         called, question = detect_wake(avatar, text, session.present_names(avatar.name))
+        # Director (EL runtime): strict-mode threshold rides every webhook.
+        _director_sync_mode(session, avatar)
         # "Laura, stop / aspetta / basta" — obey on the PARTIAL, before the
         # sentence even finalizes. Complements barge-in (which needs 3+ words):
         # a two-word "Laura stop" must cut her off instantly, not get answered.
         if called and detect_stop_command(question):
-            await _make_avatar_stop(session)
+            if _el_voice_owned(session):
+                # Kill the reply at the SOURCE: the bridge drops EL's stream
+                # and interrupts the page. A legacy page-flush alone left EL
+                # streaming the rest — fragments (live 2026-07-24).
+                voice_agent_api.signal_relay(session, {"type": "stop"})
+            else:
+                await _make_avatar_stop(session)
             return JSONResponse({"ok": True, "partial": True, "stopped": True})
+        if called and _el_voice_owned(session):
+            # Addressed by name: open the strict gate NOW — the partial beats
+            # the final by ~a second, and the bridge replays the addresser's
+            # buffered sentence so the agent hears the whole ask.
+            _director_gate_open(session, speaker)
         acked = False
         if (
             settings.ack_enabled
@@ -3449,6 +3492,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 speaker_kind=identity["kind"],
                 here=(event == "participant_events.join"),
             )
+            # Director: a joiner/leaver flips the strict-multiparty threshold
+            # even if they never speak — sync on the roster event itself, not
+            # only on transcripts (a silent second human must already be
+            # protected by name-gating).
+            _director_sync_mode(session, avatar)
             if identity["kind"] != "agent":
                 # Empty-room grace is a HUMAN-presence property: roster() counts
                 # only humans, so gate the whole block on kind != agent. An agent
@@ -3730,6 +3778,15 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # called stop/leave falls through to the handlers below. The moment the
     # bridge dies, voice_agent_active flips False and this gate opens again.
     if _el_voice_owned(session):
+        # Director: keep strict mode current, and mirror the partial-path
+        # gate/stop signals here — finals are the backstop when a partial
+        # never carried the detectable wake word (short bursty ASR).
+        _director_sync_mode(session, avatar)
+        if called:
+            if detect_stop_command(question):
+                voice_agent_api.signal_relay(session, {"type": "stop"})
+            else:
+                _director_gate_open(session, speaker)
         # Control carve-outs: by-name stop/leave, PLUS the imperative explicit
         # leave ("leave the meeting" with no name — meter safety; audit
         # 2026-07-24 found all unaddressed leave variants dead). The explicit

@@ -25,6 +25,10 @@
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
+    const ctrl = url.pathname.match(/^\/control\/([^/]+)$/);
+    if (ctrl && req.method === "POST") {
+      return handleControl(req, env, ctrl[1]);
+    }
     if (req.headers.get("Upgrade") !== "websocket") {
       return new Response("cedric-voice bridge up", { status: 200 });
     }
@@ -43,6 +47,17 @@ export default {
     return stub.fetch(fwd.toString(), req);
   },
 };
+
+// Meeting-Director control plane (backend -> DO, plain POST — the backend
+// owns wake detection on its transcript stream; the DO enforces). The
+// unguessable capability in the path is the auth, same as the audio routes.
+async function handleControl(req, env, cap) {
+  const id = env.VOICE_SESSION.idFromName(cap);
+  const stub = env.VOICE_SESSION.get(id);
+  const fwd = new URL("https://do/control");
+  fwd.searchParams.set("cap", cap);
+  return stub.fetch(fwd.toString(), req);
+}
 
 // ~1.2s of pre-EL-connect audio. Was ~3s: replaying a long tail of startup
 // room chatter made the agent answer conversations that predated him
@@ -74,18 +89,100 @@ export class VoiceSession {
     this.tAgentResponse = 0; // EL produced the reply text (pre-TTS)
     this.tFirstChunk = 0; // first audio chunk of the current reply
     this.currentSpeaker = ""; // last VOICED participant (separate streams)
+    // ── Meeting Director gate (owner plan P1) ──
+    // strictMode: humans >= 2 (backend tells us via /control). While strict,
+    // audio reaches ElevenLabs ONLY during an addressed turn: the backend
+    // detects the wake word on its transcript stream and opens the gate;
+    // the DO replays the addresser's buffered sentence and forwards their
+    // frames until the turn ends. Human-to-human talk NEVER reaches the
+    // model — silence is enforced, not requested.
+    this.strictMode = false;
+    this.gateOpen = false;
+    this.gateSpeaker = "";
+    this.gateVoiceAt = 0; // last voiced frame of the gate speaker
+    this.dropResponse = false; // stop command: swallow the in-flight reply
+    this.speakerBuffers = new Map(); // name -> [{b64, at}] last ~2.5s each
   }
 
   async fetch(req) {
     const url = new URL(req.url);
-    const role = url.searchParams.get("role");
     this.cap = url.searchParams.get("cap") || this.cap;
+    if (url.pathname === "/control") {
+      let body = {};
+      try { body = await req.json(); } catch (_) {}
+      this.handleControl(body || {});
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+    const role = url.searchParams.get("role");
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     server.accept();
     if (role === "page") this.attachPage(server);
     else this.attachRecall(server);
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  handleControl(body) {
+    const t = body.type;
+    if (t === "mode") {
+      this.strictMode = body.strict === true;
+      if (!this.strictMode) { this.gateOpen = false; this.speakerBuffers.clear(); }
+      console.log("director mode: " + (this.strictMode ? "strict" : "open"));
+      return;
+    }
+    if (t === "gate_open") {
+      // The backend heard the wake word. The addresser is whoever the
+      // backend attributed (fall back to the currently voiced speaker).
+      let speaker = String(body.speaker || "") || this.currentSpeaker;
+      // The backend's resolved identity can spell the name differently from
+      // Recall's frame label (relabels, "Guest 2" merges). Match buffers
+      // case-insensitively; if still unknown, trust the live voiced speaker
+      // — dropping an addressed turn is the one failure strict mode must
+      // never have.
+      if (speaker && !this.speakerBuffers.has(speaker)) {
+        const lower = speaker.toLowerCase();
+        for (const k of this.speakerBuffers.keys()) {
+          if (k.toLowerCase() === lower) { speaker = k; break; }
+        }
+        if (!this.speakerBuffers.has(speaker) && this.currentSpeaker) {
+          speaker = this.currentSpeaker;
+        }
+      }
+      this.gateOpen = true;
+      this.gateSpeaker = speaker;
+      this.gateVoiceAt = Date.now();
+      console.log("gate open");
+      // Replay the addresser's buffered sentence: the wake word is detected
+      // AFTER the phrase started — without this the agent hears half an ask.
+      const buf = this.speakerBuffers.get(speaker) || [];
+      this.speakerBuffers.delete(speaker);
+      if (this.el && this.elReady) {
+        for (const fr of buf) {
+          try { this.el.send(JSON.stringify({ user_audio_chunk: fr.b64 })); } catch (_) {}
+        }
+      }
+      return;
+    }
+    if (t === "stop") {
+      // "Cedric, stop/shut up": kill the in-flight reply at the SOURCE —
+      // the page flush alone left EL streaming the rest (fragments).
+      this.dropResponse = true;
+      this.gateOpen = false;
+      this.sendPage({ type: "interrupt" });
+      return;
+    }
+  }
+
+  gateTick() {
+    // Turn end: the addresser has been silent long enough, or the reply
+    // finished (closed in onELMessage). Every NEW turn re-requires the name
+    // (owner spec); sentence fragments keep the gate open via gateVoiceAt.
+    if (this.gateOpen && Date.now() - this.gateVoiceAt > 5000) {
+      this.gateOpen = false;
+      console.log("gate closed (silence)");
+    }
   }
 
   // ── avatar page (audio egress) ──────────────────────────────────────
@@ -148,7 +245,8 @@ export class VoiceSession {
       // wrong participant): the stream itself tells us WHO this voice is —
       // tell the agent whenever the voiced speaker changes. Names only, no
       // transcript content.
-      if (rawName && this.el && this.elReady && this.frameHasVoice(buf)) {
+      const voiced = this.frameHasVoice(buf);
+      if (rawName && this.el && this.elReady && voiced) {
         if (rawName !== this.currentSpeaker) {
           this.currentSpeaker = rawName;
           try {
@@ -158,6 +256,32 @@ export class VoiceSession {
             }));
           } catch (_) {}
         }
+      }
+      // ── STRICT GATE (owner plan P1) ──
+      if (this.strictMode) {
+        this.gateTick();
+        if (!this.gateOpen) {
+          // Not an addressed turn: buffer ~2.5s per speaker (so the wake
+          // sentence can be replayed whole when the backend opens the gate)
+          // and forward NOTHING. Human-to-human talk dies here.
+          if (rawName) {
+            const q = this.speakerBuffers.get(rawName) || [];
+            q.push({ b64: buf, at: Date.now() });
+            while (q.length && Date.now() - q[0].at > 2500) q.shift();
+            this.speakerBuffers.set(rawName, q);
+          }
+          return;
+        }
+        // Gate open: this turn belongs to the addresser — only their voice
+        // flows; others keep buffering for their own (future) turn.
+        if (this.gateSpeaker && rawName && rawName !== this.gateSpeaker) {
+          const q = this.speakerBuffers.get(rawName) || [];
+          q.push({ b64: buf, at: Date.now() });
+          while (q.length && Date.now() - q[0].at > 2500) q.shift();
+          this.speakerBuffers.set(rawName, q);
+          return;
+        }
+        if (voiced) this.gateVoiceAt = Date.now();
       }
     } else {
       // Mixed fallback rung (workspace flag off): the room mix contains his
@@ -270,6 +394,10 @@ export class VoiceSession {
       // clean anchor the energy probe can't give (far-field echo through the
       // speaker's mic keeps re-stamping it).
       this.tUserTranscript = Date.now();
+      // A NEW user utterance closed: any stop applied to the PREVIOUS reply.
+      // Without this, a stop fired while the agent was already quiet leaves
+      // dropResponse armed and silently swallows the next legit answer.
+      this.dropResponse = false;
       return;
     }
     if (t === "agent_response_complete") {
@@ -280,11 +408,16 @@ export class VoiceSession {
       // trailing padding chunks after the reply is over (live 2026-07-25:
       // "he continues moving the mouth after it finishes").
       this.sendPage({ type: "response_end" });
+      // Turn over: in strict mode the NEXT turn must say the name again
+      // (owner spec — no lingering follow-up window in multiparty).
+      if (this.strictMode) { this.gateOpen = false; console.log("gate closed (turn done)"); }
+      this.dropResponse = false;
       return;
     }
     if (t === "audio") {
       const b64 = msg.audio_event && msg.audio_event.audio_base_64;
       if (!b64) return;
+      if (this.dropResponse) return; // stop command swallowed this reply
       this.chunks++;
       if (this.chunks === 1) console.log("first agent audio chunk");
       // Per-turn stage decomposition (numbers only, never content):
