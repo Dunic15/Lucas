@@ -438,6 +438,36 @@ def test_tool_upcoming_meetings_reads_session_snapshot(client, bearer):
     store.remove("bot_cal")
 
 
+def test_schedule_leave_actually_finalizes(monkeypatch):
+    """Live 2026-07-25: three leave_meeting tool calls, ZERO finalizes — the
+    unreferenced asyncio task was garbage-collected mid-sleep. The task must
+    be strongly held and must really reach _finalize_session."""
+    import asyncio
+
+    finalized: list[tuple] = []
+
+    async def fake_finalize(bot_id, **kw):
+        finalized.append((bot_id, kw.get("source")))
+
+    async def fake_sleep(_):
+        return None
+
+    monkeypatch.setattr(main_module, "_finalize_session", fake_finalize)
+
+    class _S:
+        bot_id = "bot_gc"
+
+    async def scenario():
+        monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+        voice_agent_api._schedule_leave(_S())
+        assert voice_agent_api._leave_tasks  # strong reference held
+        await asyncio.gather(*list(voice_agent_api._leave_tasks))
+
+    asyncio.run(scenario())
+    assert finalized == [("bot_gc", "agent_leave")]
+    assert not voice_agent_api._leave_tasks  # done-callback cleaned up
+
+
 def test_tool_leave_meeting_schedules_disconnect(client, bearer, monkeypatch):
     """Live 2026-07-24: he SAID 'I'll step out now' but the bot stayed until
     a manual end — leaving must be a deterministic tool, not a hope."""
