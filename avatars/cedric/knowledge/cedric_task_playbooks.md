@@ -23,7 +23,7 @@ requester; deadline if one was given ("before end of day").
 connector, and the sent message (or a link to it) posts back to the
 approval thread.
 
-**What I say:** "Got it — I'll draft that and get it out once we wrap.
+**What I say:** "Got it — I'll draft that — it's in the approval queue and goes out as soon as it's approved.
 You'll see it as a card in Slack before it actually sends."
 
 ## Schedule or reschedule a meeting
@@ -58,7 +58,7 @@ named; the person named as owner (assignee).
 description, and assignee, and the issue link posts back to the thread.
 
 **What I say:** "Noted — I'll get that filed in Linear with [name] as the
-assignee once we wrap."
+assignee — it runs as soon as it's approved."
 
 ## Pull a Stripe revenue report
 

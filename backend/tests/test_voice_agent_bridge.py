@@ -585,6 +585,42 @@ def test_bootstrap_language_knob_localizes_greeting(client, bearer, monkeypatch)
     store.remove("bot_it")
 
 
+def test_tool_queue_action_stamps_requesting_speaker(client, bearer):
+    """Owner plan P2: every action records WHO asked for it — the bridge
+    sends the voiced speaker, the card carries the provenance."""
+    _el_session("bot_prov")
+    r = client.post(
+        "/internal/voice-agent/tool/cap-bot_prov",
+        headers=bearer,
+        json={
+            "tool_name": "queue_action",
+            "parameters": {
+                "summary": "create a task",
+                "details": "task called Review provenance due Monday",
+                "request_id": "req-prov",
+            },
+            "tool_call_id": "tc_p1",
+            "speaker": "Duccio Profeti",
+        },
+    ).json()
+    assert r["result"]["status"] == "queued"
+    s = store.get("bot_prov")
+    item = next(i for i in s.queued_actions if i["action_id"] == r["result"]["action_id"])
+    assert "requested by Duccio Profeti" in item["action"]
+    store.remove("bot_prov")
+
+
+def test_bootstrap_context_includes_meeting_link(client, bearer, monkeypatch):
+    monkeypatch.setattr(settings, "elevenlabs_api_key", "k")
+    monkeypatch.setattr(voice_agent_api.httpx, "Client", _FakeMintClient)
+    _el_session("bot_link")
+    r = client.get("/internal/voice-agent/bootstrap/cap-bot_link", headers=bearer)
+    prompt = r.json()["init"]["conversation_config_override"]["agent"]["prompt"]["prompt"]
+    assert "meeting_link" in prompt
+    assert "https://meet.example/va" in prompt
+    store.remove("bot_link")
+
+
 def test_tool_crash_returns_502_not_traceback(client, bearer, monkeypatch):
     from app.brain import rag
 

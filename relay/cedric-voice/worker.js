@@ -73,6 +73,7 @@ export class VoiceSession {
     this.tUserTranscript = 0; // EL finalized the user's utterance
     this.tAgentResponse = 0; // EL produced the reply text (pre-TTS)
     this.tFirstChunk = 0; // first audio chunk of the current reply
+    this.currentSpeaker = ""; // last VOICED participant (separate streams)
   }
 
   async fetch(req) {
@@ -139,9 +140,25 @@ export class VoiceSession {
       // (audio keeps flowing while he speaks; EL interruption handles it).
       // Defensive self-filter anyway, by the bot's display name.
       const p = inner.participant || (ev.data && ev.data.participant) || {};
-      const pname = String(p.name || "").trim().toLowerCase();
+      const rawName = String(p.name || "").trim();
+      const pname = rawName.toLowerCase();
       if (p.is_bot === true) return;
       if (this.botName && pname && pname === this.botName.toLowerCase()) return;
+      // SPEAKER IDENTITY (owner plan P2, live bug: "what's my name?" got the
+      // wrong participant): the stream itself tells us WHO this voice is —
+      // tell the agent whenever the voiced speaker changes. Names only, no
+      // transcript content.
+      if (rawName && this.el && this.elReady && this.frameHasVoice(buf)) {
+        if (rawName !== this.currentSpeaker) {
+          this.currentSpeaker = rawName;
+          try {
+            this.el.send(JSON.stringify({
+              type: "contextual_update",
+              text: "Speaker now talking: " + rawName,
+            }));
+          } catch (_) {}
+        }
+      }
     } else {
       // Mixed fallback rung (workspace flag off): the room mix contains his
       // own voice while the answer plays — half-duplex gate stays. 800ms
@@ -369,6 +386,9 @@ export class VoiceSession {
             tool_name: name,
             parameters: call.parameters || {},
             tool_call_id: id,
+            // Action provenance (owner plan P2): who was speaking when the
+            // agent decided to act — stamped onto queued actions backend-side.
+            speaker: this.currentSpeaker || "",
           }),
           signal: ctl.signal,
         }
