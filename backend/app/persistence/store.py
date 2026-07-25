@@ -200,6 +200,21 @@ class Session:
     # (automatic fallback). In-memory like the runtime snapshot: a restart
     # means the bridge is gone, so False (legacy speaks) is the true state.
     voice_agent_active: bool = field(default=False, repr=False, compare=False)
+    # Raw Recall realtime capability, kept ONLY to address OUTBOUND Director
+    # control signals to the relay bridge (/control/{capability}): strict-gate
+    # open/close, mode flips, stop. Stamped by the bridge's own authenticated
+    # bootstrap/started calls (the raw token already arrives there in the URL
+    # path). In-memory on purpose and never logged — the durable store keeps
+    # only the SHA-256 for inbound auth, and after a restart the bridge this
+    # token addresses is gone anyway.
+    voice_capability: str = field(default="", repr=False, compare=False)
+    # Director shadow state: the strict-multiparty mode last signalled to the
+    # bridge (≥2 humans → speak only when called by name), and when the wake
+    # gate last opened — the authorization window write tools check while
+    # strict (a queue/amend/withdraw with no recently addressed turn is
+    # refused; owner spec 2026-07-25).
+    voice_strict_mode: bool = field(default=False, repr=False, compare=False)
+    voice_gate_opened_at: float = field(default=0.0, repr=False, compare=False)
     ws: WebSocket | None = None
     pending_messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
     # Canonical pending-action bindings. The session already keys the meeting;

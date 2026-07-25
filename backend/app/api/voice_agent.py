@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import time
 
 import httpx
 from fastapi import APIRouter, Request
@@ -40,6 +41,12 @@ _EL_API = "https://api.elevenlabs.io"
 # Spoken once when the bridge dies MID-meeting and the legacy brain takes
 # back the voice — the room should hear the seam, not wonder about a silence.
 _FALLBACK_LINE = "Sorry — I had a small hiccup with my voice connection. I'm still here."
+
+# Write tools gated by the strict-multiparty authorization window; reads and
+# leave_meeting are never gated. 90s covers a full addressed turn (ask →
+# clarify → tool call) without leaving a stale grant lying around.
+_WRITE_TOOLS = {"queue_action", "amend_pending_action", "withdraw_pending_action"}
+_WRITE_AUTH_WINDOW_S = 90.0
 
 
 def _authorized(request: Request) -> bool:
@@ -219,6 +226,11 @@ async def voice_agent_bootstrap(capability: str, request: Request) -> JSONRespon
     api_key = settings.elevenlabs_api_key.strip()
     if not api_key:
         return JSONResponse({"enabled": False, "reason": "no api key"})
+    # Stamp the raw capability for OUTBOUND Director signals (main.py →
+    # /control/{cap} on the bridge). The token already arrived here in the
+    # authenticated URL path, so this adds zero new exposure; the Session
+    # field is in-memory only.
+    session.voice_capability = capability
     try:
         avatar = avatars.load(session.avatar_id)
     except Exception:  # noqa: BLE001
@@ -503,6 +515,48 @@ def _tool_queue_action(session, params: dict, tool_call_id: str) -> dict:
     }
 
 
+# ── Director control signals (backend → relay bridge) ─────────────────
+# The strict multiparty gate lives in the cedric-voice DO (it owns the audio
+# frames); the BACKEND owns the decisions (wake detection, roster, stop) and
+# signals them here. Fire-and-forget: a lost signal degrades to today's
+# behaviour (prompt-only discipline), never blocks the live path.
+_control_tasks: set = set()
+
+
+def signal_relay(session, payload: dict) -> None:
+    """POST a Director control signal to the bridge's /control/{capability}.
+
+    No-op unless the ElevenLabs bridge is live for this session and the raw
+    capability was stamped by its authenticated bootstrap. Strong task refs
+    (same GC pitfall as _leave_tasks)."""
+    import asyncio
+
+    cap = str(getattr(session, "voice_capability", "") or "")
+    if not cap or not getattr(session, "voice_agent_active", False):
+        return
+    base = settings.voice_agent_relay_ws_base.strip().rstrip("/")
+    if not base:
+        return
+    url = (
+        base.replace("wss://", "https://", 1).replace("ws://", "http://", 1)
+        + f"/control/{cap}"
+    )
+
+    async def _post() -> None:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(url, json=payload)
+        except Exception as e:  # noqa: BLE001 — a lost signal must never block
+            print(
+                f"[voice-agent] control signal failed: {type(e).__name__}",
+                flush=True,
+            )
+
+    task = asyncio.create_task(_post())
+    _control_tasks.add(task)
+    task.add_done_callback(_control_tasks.discard)
+
+
 # Strong references to in-flight leave tasks: asyncio.create_task results
 # with no reference can be GARBAGE-COLLECTED mid-sleep and silently never run
 # (live 2026-07-25: three leave_meeting calls, zero agent_leave finalizes —
@@ -569,6 +623,31 @@ async def voice_agent_tool(capability: str, request: Request) -> JSONResponse:
         avatar = avatars.load(session.avatar_id)
     except Exception:  # noqa: BLE001
         return JSONResponse({"error": "avatar load failed"}, status_code=500)
+
+    # Strict-multiparty write authorization (owner spec 2026-07-25: "nessuna
+    # azione da turni non rivolti a lui"). With ≥2 humans in the call, a
+    # write tool is honoured only when someone addressed Cedric by name
+    # recently (the Director stamps voice_gate_opened_at on wake detection).
+    # The refusal is a normal tool RESULT — the model explains itself instead
+    # of the platform erroring — and read tools + leave_meeting stay open
+    # (leave is meter safety, never gated).
+    if tool_name in _WRITE_TOOLS and getattr(session, "voice_strict_mode", False):
+        opened = float(getattr(session, "voice_gate_opened_at", 0.0) or 0.0)
+        if time.time() - opened > _WRITE_AUTH_WINDOW_S:
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "result": {
+                        "status": "not_authorized",
+                        "note": (
+                            "Multiparty guard: nobody addressed you by name "
+                            "for this turn, so write actions are locked. Do "
+                            "not retry; if asked, say you only take actions "
+                            "when a participant calls you by name."
+                        ),
+                    },
+                }
+            )
 
     try:
         if tool_name == "get_meeting_context":
@@ -641,6 +720,9 @@ async def voice_agent_event(capability: str, request: Request) -> JSONResponse:
 
     if kind == "started":
         session.voice_agent_active = True
+        # Belt-and-braces stamp (bootstrap already did): Director signals
+        # must be addressable the moment the bridge goes live.
+        session.voice_capability = capability
         return JSONResponse({"ok": True, "voice_owner": "elevenlabs"})
 
     if kind == "agent_said":
