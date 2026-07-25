@@ -482,13 +482,21 @@ def _tool_queue_action(session, params: dict, tool_call_id: str) -> dict:
     }
 
 
+# Strong references to in-flight leave tasks: asyncio.create_task results
+# with no reference can be GARBAGE-COLLECTED mid-sleep and silently never run
+# (live 2026-07-25: three leave_meeting calls, zero agent_leave finalizes —
+# the bot lingered until the reconcile backstop). Python docs warn exactly
+# about this. done_callback removes the reference when finished.
+_leave_tasks: set = set()
+
+
 def _schedule_leave(session) -> None:
     """Disconnect the bot AFTER the agent's goodbye audio has played out.
 
-    The agent says goodbye through the bridge (~2-4s of audio in flight);
+    The agent says goodbye through the bridge (~2s of audio in flight);
     finalize immediately and the room hears him cut himself off mid-word.
-    Fire-and-forget: finalize is idempotent and the empty-room/reconcile
-    backstops still guarantee the meter stops even if this task dies."""
+    finalize is idempotent and the empty-room/reconcile backstops still
+    guarantee the meter stops even if this task dies."""
     import asyncio
 
     from .. import main as _main  # lazy: routers must not import main at load
@@ -496,15 +504,17 @@ def _schedule_leave(session) -> None:
     async def _later() -> None:
         try:
             # 2.0s: the goodbye is SPOKEN BEFORE the tool call (prompt order),
-            # so its audio is already streaming when we get here — 4s made the
-            # exit feel laggy (owner, live 2026-07-24). finalize leaves Recall
-            # FIRST and builds the artifact after, so this is the whole wait.
+            # so its audio is already streaming when we get here. finalize
+            # leaves Recall FIRST and builds the artifact after.
             await asyncio.sleep(2.0)
             await _main._finalize_session(session.bot_id, source="agent_leave")
-        except Exception:  # noqa: BLE001 — backstops own the guarantee
-            pass
+        except Exception as e:  # noqa: BLE001 — backstops own the guarantee
+            # Names only, never content — a silent swallow hid the GC bug.
+            print(f"[voice-agent] leave finalize failed: {type(e).__name__}", flush=True)
 
-    asyncio.create_task(_later())
+    task = asyncio.create_task(_later())
+    _leave_tasks.add(task)
+    task.add_done_callback(_leave_tasks.discard)
 
 
 @router.post("/internal/voice-agent/tool/{capability}")
