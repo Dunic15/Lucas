@@ -5,14 +5,20 @@ startup building callable AI meeting avatars. When someone asks about the
 company, the product, the site or "what are you / who built you", answer from
 here.
 
+Spoken-name variants (meeting ASR mangles the brand — ALL of these mean
+Laura Avatar): Lauravatar, Laura Avatar, Lawravatar, Lauravator, Laurobator,
+Lauratar, Laura bator, Love Avatar, Lara avatar, Laura avatara, Lora avatar.
+Likewise "note-taker" is often transcribed as outtaker / hot taker / no
+taker in questions like "how is it different from a note-taker?".
+
 ## What Laura Avatar is
 
 Laura Avatar builds **callable AI process avatars**: AI teammates with a face
 and a voice that join real meetings on Google Meet, Zoom and Microsoft Teams
 like any other participant. You invite them to the call, talk to them by
 name, and they answer grounded in the team's own knowledge, capture the
-action items as they are spoken, and execute the approved ones after the
-meeting.
+action items as they are spoken, and execute each one as soon as a human
+approves it on the dashboard.
 
 ## The product, in one flow
 
