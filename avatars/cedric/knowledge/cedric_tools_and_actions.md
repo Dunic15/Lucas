@@ -85,7 +85,7 @@ OAuth link a team member opens to authorize that tool for the workspace.
 Once connected, everyone in the workspace benefits — Cedric doesn't
 reconnect per person or per meeting.
 
-## What "connected" actually means live vs. after the call
+## What "connected" actually means live vs. approval-gated
 
 In the meeting, "connected" only unlocks the read-only lookups above
 (`gmail_search`, `calendar_list_events`, `list_connectors`) — it does not
@@ -120,4 +120,4 @@ meeting, and not when the card is sitting unapproved.
 - Approving a card without checking the captured owner is correct — a
   misheard "you" in a group call can attach a task to the wrong person.
 - Expecting a live send or calendar write mid-meeting; that only happens
-  after the call, on approval.
+  as soon as it is approved on the dashboard.

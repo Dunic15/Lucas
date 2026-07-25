@@ -67,6 +67,10 @@ def build_init_payload(session, avatar) -> dict:
     """
     persona = (avatar.persona_prompt or "").strip()
     context: dict = {"avatar_name": avatar.name}
+    # The join link of THIS meeting — "email the link to X" was impossible
+    # without it (live 2026-07-25).
+    if getattr(session, "meeting_url", ""):
+        context["meeting_link"] = str(session.meeting_url)[:300]
     integration = session.integration or {}
     brief = integration.get("brief")
     if isinstance(brief, str) and brief.strip():
@@ -146,6 +150,19 @@ def build_init_payload(session, avatar) -> dict:
             "- BREVITY: 1-2 sentences, at most ONE clarifying question, stop.",
             "  No 'anything else?', no unprompted capability lists, no extra",
             "  action proposals nobody asked for.",
+            "- SPEAKER IDENTITY: 'Speaker now talking: NAME' updates tell you",
+            "  WHO is speaking — trust them. 'What's my name?' = the current",
+            "  speaker, never a guess from the participant list. Actions",
+            "  belong to the speaker who asked.",
+            "- Calendar answers: mention AT MOST the next 3 meetings unless",
+            "  asked for more.",
+            "- Before asking for someone's email, check the meeting context",
+            "  participants — the person may be in the room.",
+            "- 'Shut up' or 'stop' means STOP INSTANTLY: no reply, no",
+            "  acknowledgment, just silence until addressed again.",
+            "- NEVER claim abilities you don't have (no Slack posting, no",
+            "  'feature requests to the dev team') — your tools are the whole",
+            "  truth.",
             "- Long silences are normal in meetings: never ask 'are you still",
             "  there?' — stay quiet until addressed.",
             "- Ground answers in the meeting context below and in tool results;",
@@ -422,7 +439,11 @@ def _tool_queue_action(session, params: dict, tool_call_id: str) -> dict:
     summary = str(params.get("summary") or "").strip()
     details = str(params.get("details") or "").strip()
     request_id = str(params.get("request_id") or "").strip()
+    requested_by = str(params.get("_speaker") or "").strip()
     text = " ".join(f"{summary}. {details}".split()).strip(". ")
+    if text and requested_by:
+        # Provenance on the card: which participant's voice asked for this.
+        text = f"{text} (requested by {requested_by})"
     if not text:
         return {"status": "needs_details", "missing": ["summary"]}
     kind = brain_tools.ask_kind(text)
@@ -539,6 +560,11 @@ async def voice_agent_tool(capability: str, request: Request) -> JSONResponse:
     if not isinstance(params, dict):
         params = {}
     tool_call_id = str((payload or {}).get("tool_call_id") or "").strip()
+    # Who was speaking when the agent acted (separate-stream identity from
+    # the bridge) — provenance for queued actions (owner plan P2).
+    speaker = " ".join(str((payload or {}).get("speaker") or "").split())[:80]
+    if speaker:
+        params = {**params, "_speaker": speaker}
     try:
         avatar = avatars.load(session.avatar_id)
     except Exception:  # noqa: BLE001

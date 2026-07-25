@@ -15,12 +15,12 @@ follow-ups.
 - During the call, Cedric answers when addressed ("Cedric, ...") or when a
   question clearly matches what he was briefed on. He stays silent otherwise.
 - Cedric takes no actions during the call. Requests like "Cedric, set up a
-  follow-up on Friday" are noted and queued: right after the call, the team
+  follow-up on Friday" are noted and queued: once approved on the dashboard, the team
   sees each proposed action in Slack and approves or rejects it there.
 - After the call, Cedric posts a summary to the originating Slack channel with
   a link to the full transcript, plus the proposed follow-up actions.
 
-## What Cedric can do after the call (via Slack approval)
+## What Cedric can do once actions are approved
 
 - Schedule or update Google Calendar events (with Google Meet links).
 - Send the drafted follow-up email.

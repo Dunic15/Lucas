@@ -2,7 +2,7 @@
 
 **Process owner:** Ben (Cedric agent) / Duccio (product)
 **Applies to:** The full lifecycle of a meeting Cedric joins, from pre-brief
-to the Slack approval loop after the call
+to the approval dashboard (and Slack, when connected)
 **Last reviewed:** 2026-07-13
 
 ## Pre-brief (before Cedric joins)
