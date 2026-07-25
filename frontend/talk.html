@@ -869,7 +869,7 @@
         // sees his real voice window, unchanged.
         speakingUntil = Math.max(
           speakingUntil,
-          performance.now() + (agentNextAt - ctx.currentTime) * 1000 + 300
+          performance.now() + (agentNextAt - ctx.currentTime) * 1000 + 150
         );
         return t; // scheduled start (ctx clock) — the viseme engine's anchor
       };
@@ -883,6 +883,7 @@
       // lands, the amplitude driver covers the lips; it hands over cleanly.
       let segChars = [], segMs = 0, segTimer = 0, segFirstM = true;
       let mouthAnimated = false; // TalkingHead owns the lips for this reply
+      let responseEnded = false; // agent_response_complete seen: lips CLOSED
       let segStartCtx = 0;       // audio-clock start of this segment's sound
       let mouthTimers = [];      // pending time-aligned speakAudio dispatches
       const clearSegment = () => {
@@ -935,9 +936,12 @@
         const startAt = scheduleRawF32(f32); // the REAL sound: gapless
         const chars = align && align.chars;
         if (!chars || !chars.length) {
-          if (!mouthAnimated) driveMouth(); // no timing data: amplitude flap
+          // Trailing padding chunks after response_end must NOT flap the
+          // mouth (live 2026-07-25: lips kept moving after he finished).
+          if (!mouthAnimated && !responseEnded) driveMouth();
           return;
         }
+        responseEnded = false; // real words: a new reply is starting
         if (segMs === 0 && startAt != null) segStartCtx = startAt;
         const baseMs = segMs;
         const starts = align.char_start_times_ms || [];
@@ -981,6 +985,13 @@
           // interruptSpeech is the WRAPPED version: stops TalkingHead's
           // queued viseme segments AND flushes the raw agent queue.
           else if (m.type === "interrupt") { try { interruptSpeech(); } catch (_) { flushAgentAudio(); } }
+          else if (m.type === "response_end") {
+            // Reply over: dispatch any residual mouth segment (time-aligned),
+            // stop the amplitude driver, and refuse flaps on padding chunks.
+            flushMouthSegment(true);
+            responseEnded = true;
+            releaseMouth();
+          }
         };
         agentWs.onclose = () => setTimeout(connectAgentVoice, agentRetry = Math.min(agentRetry * 2, 8000));
         agentWs.onerror = () => { try { agentWs.close(); } catch (_) {} };

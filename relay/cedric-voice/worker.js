@@ -259,6 +259,10 @@ export class VoiceSession {
       if (this.tFirstChunk) {
         console.log("stage_response_stream_ms=" + (Date.now() - this.tFirstChunk));
       }
+      // The page uses this to close the mouth cleanly: no amplitude flap on
+      // trailing padding chunks after the reply is over (live 2026-07-25:
+      // "he continues moving the mouth after it finishes").
+      this.sendPage({ type: "response_end" });
       return;
     }
     if (t === "audio") {
