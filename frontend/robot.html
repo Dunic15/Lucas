@@ -1,83 +1,65 @@
 <!--
-  Hologram — futuristic avatar page (face tier "robot"): the avatar as an
-  OBSIDIAN bust — a near-black form drawn by light (owner refs 2026-07-26:
-  dark face, luminous rim, glowing eyes, hair as strands of light, digital
-  code rain crawling over the surface). One style for every avatar; only the
-  GLB head differs.
+  ANDROID — futuristic avatar page (face tier "robot"): the avatar as a
+  studio-lit ANDROID bust (owner refs 2026-07-26, second round — a full
+  concept switch away from the light-hologram):
+    cedric  -> monochrome android: sculptural gray face inside a transparent
+               glass dome with a glowing white crown panel and white SCHEMATIC
+               diagrams etched on the glass; glossy black suit and neck.
+    default -> (Laura, the PM avatar) white-techwear android: pale sculptural
+               face, silver-gray hair, glossy white jacket, transparent VISOR
+               carrying glowing orange-red HUD circuitry — a translucent band
+               at eye level, an orange arc below the chin, blocks cascading
+               down the neck line.
+  One renderer, one THEMES table — an avatar picks its dressing by id, and
+  every element is built from the avatar's own GLB (identity-safe).
 
   Same wire contract as /talk (the {type:"speak",text} messages, /tts payloads,
   stop / raise_hand, SSE + poll, speaking reporter, mic barge-in) — only the
   RENDERER differs.
 
-  FOUR LAYERS (the design brief's structure):
-    1. CORE MESH — the avatar's real GLB head+shoulders, clipped to a bust by a
-       clipping plane, wearing a near-opaque obsidian material (the EYES stay
-       additive light; the HAIR is edge-lit). depthWrite via a prepass: it is
-       also the OCCLUDER, so nothing behind it shines through the face.
-    2. CONTOUR — Fresnel rim glow (the drawing of the dark form) + CODE RAIN:
-       sparse glyph cells drifting down the surface in world space, injected
-       into the material's shader (onBeforeCompile, so skinning + morphs
-       survive). This is what reads "digital being" rather than "dark person".
-    3. PARTICLE SHELL — dots ONLY where a hologram would sparkle: the silhouette
-       (sampled by rim normal), plus free motes drifting off the edges. Never
-       used as skin — dot-skin reads cheap and illegible at meeting distance.
-    4. EMITTER — faint ring + cone under the bust; a grounding accessory only,
-       the refs float the bust in a black void.
+  LAYERS:
+    1. CORE MESH — the avatar's real GLB head+shoulders, clipped to a bust,
+       wearing sculptural PBR materials (matte skin, glossy suit/jacket,
+       themed hair). Morphs and skinning untouched — the jaw/blink still work.
+    2. DOME/VISOR — a transparent ellipsoid around the head. Additive glass:
+       Fresnel edge + a broad curved reflection streak, plus the theme's
+       procedural TECH LAYER etched on it (schematic traces, blocks, dash-rows
+       that read as text at meeting distance; band/arc/cascade on the visor).
+    3. STUDIO — black void, one key light, two cool rims, soft environment
+       reflections (RoomEnvironment) so the glossy surfaces read expensive.
 
-  MOUTH — deliberately minimal (no teeth, no realistic lips): the jaw opens at
-  most ~0.14, so nobody reads it as failed lip-sync. It is still driven by the
-  /tts WORD TIMINGS rather than raw amplitude — same data, no extra cost, and a
-  mouth that opens on words instead of buzzing on volume. Amplitude drives the
-  glow, particles and emitter pulse — the "his hologram activates when he
-  speaks" reading the design calls for.
+  MOUTH — unchanged from the hologram brief: jaw opens at most ~0.14, driven
+  by the /tts WORD TIMINGS; amplitude drives the tech-layer glow instead.
 
   STATES (calm by default — movement must MEAN something):
-    idle/listening — stable, slow breath glow, rare blink, tiny head drift.
-    thinking       — eyes drift down, ring spins up, energy climbs the neck.
-    speaking       — minimal jaw + glow/particle/emitter reaction to volume.
-    interrupted    — audio + mouth stop instantly, shell contracts, back to calm.
-    raise_hand     — one strong violet pulse until the backend lowers it.
-  Emotion tints ACCENTS (rim, shell, emitter), never the whole face.
+    idle/listening — stable, rare blink, tiny head drift, faint tech shimmer.
+    thinking       — eyes drift down, the schematics scroll and flicker.
+    speaking       — minimal jaw + the tech layer brightens with the voice.
+    interrupted    — audio + mouth stop instantly, tech layer dips, back calm.
+    raise_hand     — the tech layer pulses violet until the backend lowers it.
 
   TESTING (run through the backend — python3 -m http.server can't serve /tts
   or /live/act):  uvicorn app.main:app  →  http://localhost:8000/robot
-    1. Hologram renders idle.        2. Type + "Speak" → he activates.
-    3. "Ask" → grounded answer.      4. 🎤 → talk to him, barge-in included.
+    1. Android renders idle.         2. Type + "Speak" → the visor lights up.
+    3. "Ask" → grounded answer.      4. 🎤 → talk, barge-in included.
 -->
 <meta charset="utf-8">
 <style>
-  html, body { margin: 0; height: 100%; background: #010409; }
-  /* Obsidian look (owner refs 2026-07-26): the bust floats in a near-black
-     void with one soft cool halo behind the head — no bright room gradients,
-     the light comes from the avatar itself. */
+  html, body { margin: 0; height: 100%; background: #030405; }
+  /* Studio black: both refs sit in a photo-studio void — a barely-there cool
+     wash behind the head, a vignette, nothing else. */
   #stage {
     position: fixed; inset: 0;
     opacity: 0; transition: opacity .45s ease;
     background:
-      radial-gradient(46% 40% at 50% 36%, rgba(96,210,255,.11) 0%, rgba(96,210,255,0) 72%),
-      radial-gradient(70% 26% at 50% 97%, rgba(70,170,225,.07) 0%, rgba(70,170,225,0) 100%),
-      linear-gradient(180deg, #010409 0%, #020714 48%, #010409 100%);
+      radial-gradient(48% 42% at 50% 34%, rgba(120,150,170,.10) 0%, rgba(120,150,170,0) 72%),
+      linear-gradient(180deg, #030405 0%, #06080a 46%, #030405 100%);
   }
   #stage.live { opacity: 1; }
   #stage::after {
     content: ""; position: absolute; inset: 0; pointer-events: none;
-    background: radial-gradient(120% 90% at 50% 42%, rgba(0,0,0,0) 55%, rgba(3,6,14,.55) 100%);
+    background: radial-gradient(120% 90% at 50% 42%, rgba(0,0,0,0) 52%, rgba(0,0,0,.6) 100%);
   }
-  /* Screen-space scanlines + a slow sweeping band — the cheap half of the
-     hologram look; the mesh carries its own contour lines in-shader. */
-  #scan {
-    position: fixed; inset: 0; pointer-events: none; z-index: 5;
-    background: repeating-linear-gradient(180deg,
-      rgba(140,225,255,.035) 0 1px, rgba(140,225,255,0) 1px 5px);
-    mix-blend-mode: screen;
-  }
-  #scan::after {
-    content: ""; position: absolute; left: 0; right: 0; height: 16%;
-    background: linear-gradient(180deg, rgba(140,225,255,0) 0%,
-      rgba(140,225,255,.05) 50%, rgba(140,225,255,0) 100%);
-    animation: sweep 11s linear infinite;
-  }
-  @keyframes sweep { from { top: -18%; } to { top: 100%; } }
   body.meeting #hud, body.meeting #status { display: none; }
   #hud {
     position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
@@ -101,7 +83,6 @@
 </style>
 
 <div id="stage"></div>
-<div id="scan"></div>
 <div id="status">loading…</div>
 <div id="hud">
   <input id="q" placeholder="Type something for the avatar to say…" />
@@ -122,7 +103,7 @@
 <script type="module">
   import * as THREE from "three";
   import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-  import { MeshSurfaceSampler } from "three/addons/math/MeshSurfaceSampler.js";
+  import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 
   const params = new URLSearchParams(location.search);
   const avatarId = params.get("avatar_id") || "cedric";
@@ -144,13 +125,27 @@
     camera.updateProjectionMatrix();          // invariant, so composition holds
     renderer.setSize(innerWidth, innerHeight);
   });
-  // Obsidian look: barely-lit form. The face stays near-black — its shape is
-  // told by the Fresnel rim, not by diffuse light; just enough key remains to
-  // keep the dark surface from collapsing into a flat silhouette.
-  scene.add(new THREE.AmbientLight(0x8fd0ff, 0.22));
-  const key = new THREE.DirectionalLight(0xcfeaff, 0.45);
-  key.position.set(0.4, 1.0, 2.0);
+  // STUDIO lighting (both refs are studio photographs): one soft key from
+  // front-above, two cool rim lights that draw the glossy edges, a low fill,
+  // and a room environment so PBR gloss has something real to reflect.
+  scene.add(new THREE.AmbientLight(0xdfe8f0, 0.08));
+  // Key from steeply above — the refs' faces are modelled by top light:
+  // bright brow/nose/cheekbones, shadowed eye sockets and jaw.
+  const key = new THREE.DirectionalLight(0xffffff, 1.1);
+  key.position.set(0.1, 2.4, 1.1);
   scene.add(key);
+  const rimL = new THREE.DirectionalLight(0xcfe0ee, 0.85);
+  rimL.position.set(-2.2, 0.7, -1.2);
+  const rimR = new THREE.DirectionalLight(0xcfe0ee, 0.85);
+  rimR.position.set(2.2, 0.7, -1.2);
+  scene.add(rimL, rimR);
+  const fill = new THREE.DirectionalLight(0xaebecb, 0.2);
+  fill.position.set(0, -1.4, 1.4);
+  scene.add(fill);
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  pmrem.dispose();   // env texture stays alive; the generator's targets don't
+  scene.environmentIntensity = 0.3;
 
   // BUST CUT: three planes, AND-ed by three.js — chest height plus a left and
   // right cut that remove the GLB's T-posed arms (a full-body rig has arms
@@ -162,163 +157,167 @@
   const armPlaneR = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);
   const BUST_CLIP = [bustPlane, armPlaneL, armPlaneR];
 
-  // ── shared hologram uniforms (one object, every material references it) ──
-  const holoU = {
-    uTime: { value: 0 },
-    uHoloColor: { value: new THREE.Color(0x5fd8ff) },
-    uRim: { value: 1.15 },   // Fresnel edge glow
-    uScan: { value: 0.5 },   // horizontal contour lines
+  // ── THEMES: per-avatar android dressing (owner refs 2026-07-26 round 2) ──
+  // cedric  = the monochrome "Robot Body" pin: gray sculpture, glass dome,
+  //           white schematics, glowing crown, glossy black suit.
+  // default = the white-techwear pin (Laura): pale sculpture, silver hair,
+  //           glossy white jacket, orange-red HUD visor.
+  const THEMES = {
+    cedric: {
+      mode: 0,                     // dome shader branch: white schematics
+      skin: 0x565c64, skinRough: 0.62,
+      hair: 0x14171b, hairRough: 0.45, hairMetal: 0.25,
+      outfit: 0x0a0c0f, outfitRough: 0.2, outfitMetal: 0.7,
+      bodyAsSuit: true,            // ref: the neck IS the black suit collar
+      tech: 0xe6eef6,              // schematic ink: white
+      accent: 0xbfd9ff,
+      // A snug helmet: wider than the skull, barely taller, centred so the
+      // glass ends at the jaw — the ref's dome, not an egg.
+      dome: { sx: 1.48, sy: 0.9, sz: 1.48, cy: 0.16 },
+    },
+    default: {
+      mode: 1,                     // dome shader branch: orange HUD visor
+      skin: 0xe6dbd2, skinRough: 0.5,
+      hair: 0xb6bac1, hairRough: 0.55, hairMetal: 0.1,   // silver-gray
+      outfit: 0xdfe6ea, outfitRough: 0.32, outfitMetal: 0.05, // white jacket
+      bodyAsSuit: false,           // her neck stays skin, per the ref
+      hideGlasses: true,           // the ref wears no glasses — the red HUD
+                                   // band across the eyes IS the eyewear
+      tech: 0xff5a1c,              // HUD circuitry: orange-red
+      accent: 0xff8446,
+      // Her visor: a rounded shield around the face reaching below the chin
+      // (the ref's cascade needs glass under the jaw), not a full egg.
+      dome: { sx: 1.42, sy: 1.12, sz: 1.42, cy: -0.04 },
+    },
   };
-  const ACCENT = { cyan: 0x35d6ff, violet: 0xa86eff, amber: 0xffb347, ice: 0xbcd4ff };
+  // Own-property lookup on a lowercased id: the query string could carry
+  // "constructor" (prototype pollution -> theme is a function) or "Cedric"
+  // (case-sensitive miss -> silently the wrong dressing).
+  const themeId = avatarId.toLowerCase();
+  const theme = Object.hasOwn(THEMES, themeId) ? THEMES[themeId] : THEMES.default;
+  const VIOLET = new THREE.Color(0xa86eff);   // hand-raise pulse tint
+  const _tint = new THREE.Color();            // per-frame scratch (no GC churn)
 
-  // CORE MESH material — OBSIDIAN (owner refs 2026-07-26): a near-black,
-  // near-opaque surface whose form is told by the Fresnel rim and the code
-  // rain, not by lit skin. Normal blending (the old additive glass made the
-  // whole face translucent light); `additive: true` remains for the meshes
-  // that ARE light — the eyes. The shader patch still rides onBeforeCompile,
-  // so skinning and the 66 face morphs keep working untouched.
-  function ghostMaterial({ opacity = 0.97, color = 0x05090f, emissive = 0x0d2334,
-                           emissiveIntensity = 0.3, rim = 1.0, scan = 1.0,
-                           additive = false } = {}) {
+  // Live uniforms the state machine drives every frame.
+  const techU = {
+    uTime: { value: 0 },
+    uBoost: { value: 0.7 },                       // tech-layer brightness
+    uTech: { value: new THREE.Color(theme.tech) },// current ink colour
+    uMode: { value: theme.mode },
+    uEyeV: { value: 0.0 },                        // eye line in dome-local V
+  };
+
+  // Sculptural PBR — the refs are studio renders, not glowing holograms.
+  function surfaceMaterial({ color, roughness = 0.5, metalness = 0.0,
+                             envMapIntensity = 0.6, map = null,
+                             emissive = 0x000000, emissiveIntensity = 0 } = {}) {
     const m = new THREE.MeshStandardMaterial({
-      color, emissive, emissiveIntensity, metalness: 0, roughness: 0.65,
-      transparent: true, opacity,
-      blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
-      // depthWrite OFF + a depth PREPASS (see depthOnlyMat): additive blending
-      // ignores occlusion, so without a prepass every interior surface — the
-      // inside of the mouth, the eye sockets, the back of the skull — adds its
-      // own glow and the face grows bright patches. The prepass writes the
-      // nearest surface's depth first; here depthTest then rejects everything
-      // behind it, so only the visible skin adds light.
-      depthWrite: false, depthTest: true,
+      color, roughness, metalness, emissive, emissiveIntensity,
       clippingPlanes: BUST_CLIP, clipShadows: false,
     });
-    m.onBeforeCompile = (shader) => {
-      shader.uniforms.uTime = holoU.uTime;
-      shader.uniforms.uHoloColor = holoU.uHoloColor;
-      shader.uniforms.uRimK = { value: rim };
-      shader.uniforms.uScanK = { value: scan };
-      shader.uniforms.uRim = holoU.uRim;
-      shader.uniforms.uScan = holoU.uScan;
-      shader.vertexShader = "varying vec3 vWorldP;\n" + shader.vertexShader.replace(
-        "#include <project_vertex>",
-        "#include <project_vertex>\n  vWorldP = (modelMatrix * vec4(transformed, 1.0)).xyz;"
-      );
-      shader.fragmentShader =
-        "uniform float uTime, uRim, uScan, uRimK, uScanK;\nuniform vec3 uHoloColor;\nvarying vec3 vWorldP;\n" +
-        shader.fragmentShader.replace("#include <dithering_fragment>", `#include <dithering_fragment>
-        // Fresnel: on the obsidian surface the rim IS the drawing — a bright
-        // edge of light around a dark form (both owner refs).
-        vec3 nrm = normalize(vNormal);
-        vec3 vdir = normalize(vViewPosition);
-        float fres = pow(1.0 - abs(dot(nrm, vdir)), 2.2);
-        float rimA = fres * uRim * uRimK;
-        // CODE RAIN (replaces the scanlines): sparse rectangular glyph cells
-        // fixed to the surface in WORLD space, drifting downward. Cells sit in
-        // column groups (only some x-columns ever rain) and flicker on/off at
-        // per-cell rates, so it reads as data crawling over her, not a texture.
-        vec2 cell = vec2(vWorldP.x * 300.0 + floor(vWorldP.z * 9.0) * 13.7,
-                         vWorldP.y * 190.0 + uTime * 3.2);
-        vec2 cid = floor(cell);
-        float h = fract(sin(dot(cid, vec2(127.1, 311.7))) * 43758.5453);
-        vec2 cf = fract(cell);
-        float box = step(0.22, cf.x) * step(cf.x, 0.78) * step(0.16, cf.y) * step(cf.y, 0.68);
-        float col = step(0.5, fract(sin(cid.x * 91.17) * 4353.32));
-        float on = step(0.86, fract(h + floor(uTime * (1.5 + h * 5.0)) * 0.618034));
-        float glyph = box * col * on;
-        float scanA = glyph * uScan * uScanK;
-        gl_FragColor.rgb += uHoloColor * rimA * 0.95
-          + mix(uHoloColor, vec3(0.72, 1.0, 0.94), 0.4) * scanA * 1.05;
-        gl_FragColor.a = clamp(gl_FragColor.a + rimA * 0.4 + scanA * 0.45, 0.0, 1.0);
-      `);
-    };
+    m.envMapIntensity = envMapIntensity;
+    if (map) m.map = map;
     return m;
   }
 
-  // PARTICLE material — shell dots only (silhouette + free motes + emitter
-  // sparks). aKind: 0 = contour (stable), 2 = free/energetic.
-  const partU = {
-    uTime: holoU.uTime,
-    uAmp: { value: 0.0018 },
-    uSize: { value: 3.4 },
-    uOpacity: { value: 0.7 },
-    uColor: { value: new THREE.Color(ACCENT.cyan) },
-    uColor2: { value: new THREE.Color(0x3f8bff) },
-  };
-  const particleMat = new THREE.ShaderMaterial({
-    uniforms: partU,
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    clipping: true, clippingPlanes: BUST_CLIP,
-    vertexShader: `
-      #include <clipping_planes_pars_vertex>
-      uniform float uTime, uAmp, uSize;
-      attribute float aKind;
-      varying float vTw, vKind;
-      void main() {
-        float h1 = fract(sin(dot(position, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
-        float h2 = fract(h1 * 941.7);
-        float h3 = fract(h2 * 613.3);
-        vTw = h1; vKind = aKind;
-        float freedom = aKind < 0.5 ? 0.5 : 2.4;
-        vec3 p = position
-          + (vec3(h1, h2, h3) - 0.5) * uAmp * freedom
-            * (0.5 + 0.5 * sin(uTime * (0.8 + h2 * 2.0) + h1 * 6.28));
-        // NAME MATTERS: the clipping_planes_vertex chunk reads mvPosition.
-        vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
-        gl_PointSize = uSize * (aKind < 0.5 ? 1.0 : 0.85) * (1.0 / -mvPosition.z) * (0.7 + 0.6 * h3);
-        gl_Position = projectionMatrix * mvPosition;
-        #include <clipping_planes_vertex>
-      }`,
-    fragmentShader: `
-      #include <clipping_planes_pars_fragment>
-      uniform float uTime, uOpacity;
-      uniform vec3 uColor, uColor2;
-      varying float vTw, vKind;
-      void main() {
-        #include <clipping_planes_fragment>
-        float d = length(gl_PointCoord - 0.5);
-        float a = smoothstep(0.5, 0.1, d);
-        float twAmp = vKind < 0.5 ? 0.22 : 0.45;
-        float twinkle = (1.0 - twAmp) + twAmp * sin(uTime * (1.6 + vTw * 4.0) + vTw * 40.0);
-        vec3 c = mix(uColor, uColor2, step(0.85, vTw));
-        gl_FragColor = vec4(c * twinkle, a * uOpacity * twinkle);
-      }`,
-  });
+  // GLASS DOME / VISOR — additive, so it always reads as light ON glass and
+  // never darkens the face behind it. Local coords are the unit sphere; the
+  // front hemisphere is projected to a plane for the tech layer.
+  function domeMaterial() {
+    return new THREE.ShaderMaterial({
+      uniforms: techU,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      side: THREE.FrontSide,
+      vertexShader: `
+        varying vec3 vP;      // unit-sphere local position
+        varying vec3 vN, vV;
+        void main() {
+          vP = position;
+          vN = normalize(normalMatrix * normal);
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          vV = normalize(-mv.xyz);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `
+        uniform float uTime, uBoost, uMode, uEyeV;
+        uniform vec3 uTech;
+        varying vec3 vP; varying vec3 vN, vV;
+        float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        // One schematic cell: per-cell hash picks trace / block / text-dashes
+        // / node dot. At meeting distance this reads as engineering etchings.
+        float schem(vec2 uv, float t) {
+          vec2 g = uv * vec2(26.0, 34.0);
+          vec2 id = floor(g); vec2 f = fract(g);
+          float h = h21(id);
+          float flick = 0.8 + 0.2 * sin(t * (0.4 + h * 2.6) + h * 40.0);
+          float a = 0.0;
+          if (h > 0.93) {                       // rectangle block, hollow
+            float outer = step(0.12, f.x) * step(f.x, 0.88) * step(0.18, f.y) * step(f.y, 0.82);
+            float inner = step(0.3, f.x) * step(f.x, 0.7) * step(0.34, f.y) * step(f.y, 0.66);
+            a = outer - inner * 0.75;
+          } else if (h > 0.84) {                // horizontal trace + node
+            a = step(abs(f.y - 0.5), 0.055) * step(0.06, f.x) * step(f.x, 0.94);
+            a += smoothstep(0.13, 0.04, length(f - vec2(0.88, 0.5)));
+          } else if (h > 0.76) {                // vertical trace
+            a = step(abs(f.x - 0.5), 0.055) * step(0.08, f.y) * step(f.y, 0.92);
+          } else if (h > 0.62) {                // text: a row of ragged dashes
+            float seg = floor(f.x * 6.0);
+            float hs = h21(id + seg + 7.0);
+            a = step(abs(f.y - 0.5), 0.1) * step(0.12, fract(f.x * 6.0))
+              * step(fract(f.x * 6.0), 0.82) * step(0.3, hs);
+          } else if (h > 0.56) {                // lone node dot
+            a = smoothstep(0.09, 0.03, length(f - 0.5));
+          }
+          return a * flick;
+        }
+        void main() {
+          vec3 n = normalize(vN); vec3 v = normalize(vV);
+          float fres = pow(1.0 - abs(dot(n, v)), 3.0);
+          // Broad curved reflection streak, upper-left — the studio softbox.
+          float streak = pow(max(dot(normalize(vP), normalize(vec3(-0.45, 0.85, 0.5))), 0.0), 5.0);
+          // Front-hemisphere planar projection for the tech layer.
+          vec3 p = normalize(vP);
+          vec2 uv = p.xy / (p.z + 1.15);
+          float tech = 0.0; float techFill = 0.0;
+          if (uMode < 0.5) {
+            // CEDRIC: schematic side-panels left+right of the face centre
+            // (the ref keeps the nose line clean), plus the white CROWN cap.
+            float sides = smoothstep(0.08, 0.16, abs(uv.x)) * smoothstep(0.72, 0.5, abs(uv.x));
+            float band = smoothstep(-0.5, -0.36, uv.y) * smoothstep(0.5, 0.34, uv.y);
+            float front = smoothstep(0.05, 0.35, p.z);
+            tech = schem(uv * vec2(1.6, 1.9), uTime * 0.4) * sides * band * front * 1.25;
+            float crown = smoothstep(0.4, 0.62, p.y) * smoothstep(-0.45, 0.05, p.z);
+            techFill = crown * 1.6;             // the glowing crown panel
+          } else {
+            // LAURA: red-orange HUD — translucent eye band, orange arc under
+            // the chin, dense blocks cascading down the neck line.
+            float front = smoothstep(0.1, 0.4, p.z);
+            float bandM = smoothstep(0.13, 0.05, abs(p.y - uEyeV)) * front;
+            techFill += bandM * 0.85;                        // translucent mask
+            tech += schem(uv * vec2(2.2, 2.8) + 31.7, uTime * 0.5) * bandM * 2.3;
+            float arcY = uEyeV - 0.4;
+            float r = length(vec2(uv.x * 1.35, (p.y - arcY) * 1.45));
+            float arc = smoothstep(0.05, 0.015, abs(r - 0.4)) * step(p.y, arcY + 0.08) * front;
+            tech += arc * 1.6;                               // the orange arc
+            float cascade = smoothstep(0.26, 0.1, abs(uv.x)) * smoothstep(uEyeV - 0.16, uEyeV - 0.5, p.y) * front;
+            tech += schem(uv * vec2(2.6, 3.2) + vec2(0.0, uTime * 0.045) + 57.3, uTime * 0.5) * cascade * 1.9;
+            float sparse = smoothstep(0.2, 0.5, abs(uv.x)) * front;
+            tech += schem(uv * vec2(1.4, 1.8) + 11.9, uTime * 0.3) * sparse * 0.35;
+          }
+          vec3 glass = vec3(0.75, 0.85, 0.95) * (fres * 0.32 + streak * 0.16);
+          vec3 ink = uTech * (tech * 0.95 + techFill) * uBoost;
+          float alpha = clamp(fres * 0.5 + streak * 0.3 + (tech + techFill) * 0.85, 0.0, 1.0);
+          gl_FragColor = vec4(glass + ink, alpha);
+        }`,
+    });
+  }
 
-  // ── the hologram ─────────────────────────────────────────────────────────
+
+  // ── the android ──────────────────────────────────────────────────────────
   const holo = new THREE.Group();
   scene.add(holo);
 
-  // EMITTER: ring + light cone + soft vertical beam. Small — it sells the
-  // projection, it is not the subject (sized on load, ~12% of frame).
-  // Obsidian look: the refs float the bust in a dark void, so the emitter is
-  // demoted to a faint grounding accessory — visible if you look, never a
-  // second subject.
-  const emitterMat = new THREE.MeshBasicMaterial({
-    color: ACCENT.cyan, transparent: true, opacity: 0.22,
-    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
-  });
-  const ring = new THREE.Mesh(new THREE.RingGeometry(0.72, 1, 56), emitterMat);
-  ring.rotation.x = -Math.PI / 2;
-  const ringInner = new THREE.Mesh(new THREE.CircleGeometry(0.7, 48),
-    new THREE.MeshBasicMaterial({ color: ACCENT.cyan, transparent: true, opacity: 0.05,
-      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
-  ringInner.rotation.x = -Math.PI / 2;
-  const coneMat = new THREE.MeshBasicMaterial({
-    color: ACCENT.cyan, transparent: true, opacity: 0.025,
-    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
-  });
-  const cone = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 1, 1, 44, 1, true), coneMat);
-  holo.add(ring, ringInner, cone);
-
-  // Depth-only prepass material: writes depth, draws no colour, renders in the
-  // OPAQUE pass (transparent:false) so it lands before every additive layer.
-  const depthOnlyMat = new THREE.MeshBasicMaterial({
-    colorWrite: false, depthWrite: true, transparent: false,
-    clippingPlanes: BUST_CLIP,
-  });
-
-  let model = null, energyShell = null, emitterSparks = null;
+  let model = null, dome = null;
   const morphMeshes = [];
   const morphKey = (dict, names) => names.find((n) => dict[n] !== undefined);
   (async () => {
@@ -335,52 +334,56 @@
       // and Ready Player Me / Wolf3D exports (EyeLeft/EyeRight, petra.glb).
       // The lookahead keeps eyelash/eyebrow meshes out of the bright-eye branch.
       const EYE = /eyeball|cornea|iris|eye(?!lash|brow)/i;
-      // Hair split out of HEAD: in the obsidian look the hair is the
-      // brightest layer — strands of light over a dark face (both refs).
+      // Hair classified separately so each theme can dress it (silver on
+      // her, near-black gloss on him).
       const HAIR = /hair|beard/i;
       const HEAD = /head|eyelash|brow/i;
       const meshes = [];
       model.traverse((o) => { if (o.isMesh || o.isSkinnedMesh) meshes.push(o); });
       const kept = [];
       for (const o of meshes) {
-        if (DROP.test(o.name)) { o.visible = false; continue; }
+        if (DROP.test(o.name)
+            || (theme.hideGlasses && /glass|spectacle|eyewear/i.test(o.name))) {
+          o.visible = false; continue;
+        }
         o.visible = true;
         o.frustumCulled = false;
         o.renderOrder = 0; // core mesh draws first and writes depth
         const origMap = o.material && o.material.map;
+        // Underscores are stripped BEFORE the test, so the pattern must not
+        // contain one ("Wolf3D_Body" -> "Wolf3DBody"); the fallback uses
+        // (^|_) boundaries because _ is a word character and defeats \b.
+        const isBodySkin = /^(wolf3d)?(avatar)?body$/i.test(o.name.replace(/_/g, ""))
+          || /(^|_)body(_|$)/i.test(o.name);
         if (EYE.test(o.name)) {
-          // EYES: the most important feature — clean, bright, readable, with no
-          // scanlines crawling over them. Keep the GLB's own eye TEXTURE: it
-          // carries the iris and pupil at the rig's real UVs, so he gets
-          // readable eyes instead of two blown-out white ovals (no procedural
-          // iris can guess this mesh's UV layout).
-          // On the dark face the glowing eyes are the anchor feature (the
-          // female ref's lit gaze) — additive, so they read as light sources.
-          o.material = ghostMaterial({ opacity: 0.95, color: 0xffffff,
-            emissive: 0x7fd0ff, emissiveIntensity: origMap ? 0.5 : 1.2,
-            rim: 0.35, scan: 0, additive: true });
-          if (origMap) o.material.map = origMap;
+          // EYES: keep the GLB's own texture (iris + pupil at the rig's real
+          // UVs) with a whisper of emissive so they stay alive under studio
+          // light — natural, not glowing: both refs have human eyes.
+          o.material = surfaceMaterial({ color: 0xffffff, roughness: 0.25,
+            envMapIntensity: 0.8, map: origMap,
+            emissive: 0x202830, emissiveIntensity: origMap ? 0.35 : 0.0 });
           o.renderOrder = 1;
         } else if (/eyelash/i.test(o.name)) {
-          // Lashes: barely there. At full opacity they read as closed lids and
-          // swallow the eyes — the one feature that must stay legible.
-          o.material = ghostMaterial({ opacity: 0.12, emissiveIntensity: 0.25,
-            rim: 0.5, scan: 0, additive: true });
+          o.material = surfaceMaterial({ color: 0x14161a, roughness: 0.8,
+            envMapIntensity: 0.1 });
         } else if (HAIR.test(o.name)) {
-          // HAIR = light. Additive luminous strands over the dark face, the
-          // strongest rim on the model — both refs draw the hair as energy.
-          o.material = ghostMaterial({ opacity: 0.3, color: 0x0d2836,
-            emissive: 0x36b3dd, emissiveIntensity: 0.55,
-            rim: 2.3, scan: 0.45, additive: true });
-        } else if (HEAD.test(o.name)) {
-          // FACE: near-black obsidian; rim + code rain do the drawing.
-          o.material = ghostMaterial({ opacity: 0.97, rim: 1.25, scan: 0.9 });
+          // Theme hair: silver-gray on her (the ref's bangs), near-black
+          // gloss on him (the ref is helmeted — dark keeps it quiet).
+          o.material = surfaceMaterial({ color: theme.hair,
+            roughness: theme.hairRough, metalness: theme.hairMetal,
+            envMapIntensity: 0.7 });
+        } else if (HEAD.test(o.name) || (isBodySkin && !theme.bodyAsSuit)) {
+          // FACE (and, on her, the neck): sculptural monochrome skin — no
+          // texture map on purpose; both refs are desaturated sculpture, and
+          // the studio lights do the modelling.
+          o.material = surfaceMaterial({ color: theme.skin,
+            roughness: theme.skinRough, envMapIntensity: 0.12 });
         } else {
-          // Body / clothing: same obsidian, slightly stronger rim so the
-          // shoulder line reads as flowing light (the male ref's filaments);
-          // less rain than the face.
-          o.material = ghostMaterial({ opacity: 0.97, emissiveIntensity: 0.2,
-            rim: 1.45, scan: 0.45 });
+          // Suit / jacket (and, on him, the neck: the ref's black collar
+          // rises to the jaw): glossy themed shell.
+          o.material = surfaceMaterial({ color: theme.outfit,
+            roughness: theme.outfitRough, metalness: theme.outfitMetal,
+            envMapIntensity: 0.9 });
         }
         kept.push(o);
         const dict = o.morphTargetDictionary;
@@ -424,34 +427,34 @@
       holo.add(model);
       model.updateMatrixWorld(true);
 
-      // Depth prepass twins: same geometry, same skeleton, same morph array
-      // (shared by reference, so the jaw/blink values we write drive both).
-      for (const o of kept) {
-        let pre;
-        if (o.isSkinnedMesh) {
-          pre = new THREE.SkinnedMesh(o.geometry, depthOnlyMat);
-          pre.bind(o.skeleton, o.bindMatrix);
-        } else {
-          pre = new THREE.Mesh(o.geometry, depthOnlyMat);
-        }
-        pre.morphTargetInfluences = o.morphTargetInfluences;
-        pre.morphTargetDictionary = o.morphTargetDictionary;
-        pre.position.copy(o.position);
-        pre.quaternion.copy(o.quaternion);
-        pre.scale.copy(o.scale);
-        pre.frustumCulled = false;
-        pre.renderOrder = -1;
-        o.parent.add(pre);                   // same parent → same world matrix
+      // ── GLASS DOME / VISOR: an ellipsoid around the measured head ────────
+      // Sized from the head's real bounds so any humanoid GLB gets the same
+      // composition. Cedric's dome envelops the skull (helmet); Laura's visor
+      // is taller and sits lower, reaching below the chin for the cascade.
+      {
+        const hw = (headBox.max.x - headBox.min.x) / 2;
+        const hh = (headBox.max.y - headBox.min.y) / 2;
+        const hd = (headBox.max.z - headBox.min.z) / 2;
+        // headBox was measured pre-shift; the model moved by (-center.x,
+        // -eyeWorldY), so the head centre lands at:
+        const hcY = center.y - eyeWorldY + theme.dome.cy * faceH;
+        const hcZ = center.z;
+        dome = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 72), domeMaterial());
+        dome.scale.set(hw * theme.dome.sx, hh * theme.dome.sy, hd * theme.dome.sz);
+        dome.position.set(0, hcY, hcZ);
+        dome.renderOrder = 6;                // after every opaque surface
+        dome.frustumCulled = false;
+        holo.add(dome);
+        // Eye line (world y = 0) in the dome's local unit-sphere V. The
+        // -0.12 nudge accounts for the stereographic projection reading a
+        // touch high on the sphere's front face (calibrated on render).
+        techU.uEyeV.value = (0 - hcY) / (hh * theme.dome.sy) - 0.12;
       }
 
-      // Face fills ~62% of frame height; the eye line sits above centre.
-      // Composition, in fractions of the visible frame height: face 62%, eyes
-      // above centre, bust cut at ~59% down, emitter ring below it — so head,
-      // shoulders and projector all fit without the emitter falling off-frame.
-      // 0.75 of the ESTIMATED face height ≈ 62% of real on-screen face: the
-      // crown-to-eye ratio slightly over-estimates faceH on a bald/high-
-      // forehead rig, and this is calibrated against the rendered result.
-      const FILL = 0.75;
+      // Face fills ~62% of frame height; the eye line sits above centre. The
+      // dome adds visual height, so FILL is a touch looser than /talk's so
+      // the glass crown stays in frame.
+      const FILL = 0.55;
       const visibleH = faceH / FILL;
       const lookY = -visibleH * 0.21;        // aim low → subject sits high
       const dist = visibleH / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
@@ -465,94 +468,17 @@
       const halfW = faceH * 0.8;             // keep |x| < halfW (arms gone)
       armPlaneL.constant = halfW;
       armPlaneR.constant = halfW;
-      const ringR = visibleH * 0.115;
-      const ringY = cutY - visibleH * 0.045;
-      for (const r of [ring, ringInner]) { r.scale.setScalar(ringR); r.position.y = ringY; }
-      cone.scale.set(ringR, Math.max(0.04, cutY - ringY), ringR);
-      cone.position.y = (ringY + cutY) / 2;
 
-      // ── PARTICLE SHELL: silhouette contour, never skin ───────────────────
-      // Keep only points whose normal is near-perpendicular to the camera —
-      // the rim. On a frontal camera that traces the outline of the head,
-      // jaw, nose, brow and shoulders: "energy contours", not dot-skin.
-      const contour = [], contourKind = [];
-      const p = new THREE.Vector3(), n = new THREE.Vector3();
-      const nrmMat = new THREE.Matrix3();
-      for (const o of kept) {
-        if (EYE.test(o.name) || !o.geometry?.attributes?.position) continue;
-        if (!o.geometry.attributes.normal) continue;
-        try {
-          const sampler = new MeshSurfaceSampler(o).build();
-          nrmMat.getNormalMatrix(o.matrixWorld);
-          const budget = /eyelash|brow/i.test(o.name) ? 220 : 2200;
-          let got = 0;
-          for (let i = 0; i < budget * 14 && got < budget; i++) {
-            sampler.sample(p, n);
-            p.applyMatrix4(o.matrixWorld);
-            if (p.y < cutY || Math.abs(p.x) > halfW) continue; // outside the bust
-            n.applyMatrix3(nrmMat).normalize();
-            // STRICT rim test: only the true silhouette. A loose threshold
-            // catches every lip and nostril curve and reads as a dotted beard.
-            if (Math.abs(n.z) > 0.22) continue;
-            contour.push(p.x, p.y, p.z);
-            contourKind.push(0);
-            got++;
-          }
-        } catch (_) { /* a mesh that can't sample contributes no dots */ }
-      }
-      const contourGeo = new THREE.BufferGeometry();
-      contourGeo.setAttribute("position", new THREE.Float32BufferAttribute(contour, 3));
-      contourGeo.setAttribute("aKind", new THREE.Float32BufferAttribute(contourKind, 1));
-      const contourPts = new THREE.Points(contourGeo, particleMat);
-      contourPts.renderOrder = 2;   // after the core mesh → depth-occluded
-      contourPts.frustumCulled = false;
-      holo.add(contourPts);
-
-      // Free motes drifting just off the silhouette + sparks over the emitter.
-      const shellPos = [], shellKind = [];
-      const t3 = new THREE.Vector3();
-      for (let i = 0; i < contour.length && shellPos.length < 2400; i += 21) {
-        t3.set(contour[i], contour[i + 1], contour[i + 2]);
-        const r = 1.04 + Math.random() * 0.14;
-        shellPos.push(t3.x * r, t3.y + (Math.random() - 0.5) * 0.04, t3.z * r);
-        shellKind.push(2);
-      }
-      const shellGeo = new THREE.BufferGeometry();
-      shellGeo.setAttribute("position", new THREE.Float32BufferAttribute(shellPos, 3));
-      shellGeo.setAttribute("aKind", new THREE.Float32BufferAttribute(shellKind, 1));
-      energyShell = new THREE.Points(shellGeo, particleMat);
-      energyShell.renderOrder = 3;
-      energyShell.frustumCulled = false;
-      holo.add(energyShell);
-
-      // Emitter sparks: motes rising between the ring and the bust cut.
-      const sparkPos = [], sparkKind = [];
-      for (let i = 0; i < 260; i++) {
-        const a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * ringR;
-        sparkPos.push(Math.cos(a) * rr, ringY + Math.random() * (cutY - ringY), Math.sin(a) * rr);
-        sparkKind.push(2);
-      }
-      const sparkGeo = new THREE.BufferGeometry();
-      sparkGeo.setAttribute("position", new THREE.Float32BufferAttribute(sparkPos, 3));
-      sparkGeo.setAttribute("aKind", new THREE.Float32BufferAttribute(sparkKind, 1));
-      // Sparks live BELOW the bust cut, so they use an unclipped clone.
-      const sparkMat = particleMat.clone();
-      sparkMat.clippingPlanes = [];
-      sparkMat.uniforms = particleMat.uniforms; // share the live uniforms
-      emitterSparks = new THREE.Points(sparkGeo, sparkMat);
-      emitterSparks.frustumCulled = false;
-      holo.add(emitterSparks);
-
-      status("live — hologram rendering ✅ (type + Speak, or 🎤 Talk)");
+      status("live — android rendering ✅ (type + Speak, or 🎤 Talk)");
     } catch (e) {
-      status("hologram: model unavailable (" + (e?.message || e) + ")");
+      status("android: model unavailable (" + (e?.message || e) + ")");
       console.error(e);
     }
   })();
 
   // ── visual state machine — calm is the default ───────────────────────────
   let handRaised = false;
-  let interruptedAt = -10;
+  let interruptedAt = -1e9;   // ms domain (performance.now()); never "just interrupted" at boot
   // Speech state — declared BEFORE animate() starts, which reads it per frame.
   let _sayChain = Promise.resolve();
   let _sayGen = 0;
@@ -563,11 +489,14 @@
   let _askController = null;
   let _thinking = false;
 
-  const MOOD_ACCENT = { neutral: ACCENT.cyan, happy: ACCENT.cyan, excited: ACCENT.cyan,
-                        serious: ACCENT.ice, concerned: ACCENT.amber };
-  let accent = new THREE.Color(ACCENT.cyan);
+  // Mood tints the TECH INK only (never the face): the theme colour is the
+  // baseline; concerned warms it, serious cools it.
+  const MOOD_ACCENT = { neutral: theme.tech, happy: theme.tech,
+                        excited: theme.accent, serious: 0xbcd4ff,
+                        concerned: 0xffb347 };
+  let accent = new THREE.Color(theme.tech);
   function setMood(label) {
-    accent = new THREE.Color(MOOD_ACCENT[label || "neutral"] ?? ACCENT.cyan);
+    accent = new THREE.Color(MOOD_ACCENT[label || "neutral"] ?? theme.tech);
   }
 
   // Mouth: word-timing track set by playAudio, read by animate().
@@ -647,35 +576,23 @@
       if (p >= 1) nodT = -1;
     }
 
-    // ── energy: hierarchy, not a music visualizer ────────────────────────
+    // ── energy: the tech layer reacts, the face never does ───────────────
     const pulse = handRaised ? 0.5 + 0.5 * Math.sin(t * 6) : 0;
-    const tint = new THREE.Color(ACCENT.cyan).lerp(accent, 0.65)
-      .lerp(new THREE.Color(ACCENT.violet), pulse);
-    holoU.uTime.value = t;
-    holoU.uHoloColor.value.copy(tint);
-    // Glow breathes slowly at rest, lifts with the voice, dips on interrupt.
-    const breath = 0.5 + 0.06 * Math.sin(t * 0.9);
-    holoU.uRim.value = (justInterrupted ? 0.6 : 1.0) * (0.95 + breath * 0.5 + level * 0.85 + pulse * 0.4);
-    // uScan now drives the CODE RAIN: steady drizzle at rest, denser while
-    // thinking (data moving) and with the voice.
-    holoU.uScan.value = 0.8 + (_thinking ? 0.5 : 0) + level * 0.45;
-    partU.uAmp.value = justInterrupted ? 0.0008 : 0.0016 + level * 0.006;
-    partU.uSize.value = 3.4 + level * 1.3;
-    partU.uOpacity.value = justInterrupted ? 0.25 : 0.62 + level * 0.28;
-    partU.uColor.value.copy(tint);
-    if (energyShell) energyShell.rotation.y += _thinking ? 0.004 : 0.0009;
-    if (emitterSparks) emitterSparks.rotation.y -= _thinking ? 0.006 : 0.0015;
-    emitterMat.color.copy(tint);
-    emitterMat.opacity = 0.16 + 0.05 * Math.sin(t * (_thinking ? 3.0 : 1.0)) + level * 0.14 + pulse * 0.18;
-    ring.rotation.z += _thinking ? 0.018 : 0.003;
-    coneMat.color.copy(tint);
-    coneMat.opacity = 0.02 + level * 0.02 + pulse * 0.025;
+    _tint.set(theme.tech).lerp(accent, 0.65).lerp(VIOLET, pulse);
+    techU.uTime.value = t;
+    techU.uTech.value.copy(_tint);
+    // The etchings breathe at rest, brighten with the voice and while
+    // thinking, dip on interrupt, and pulse on hand-raise.
+    const breath = 0.06 * Math.sin(t * 0.9);
+    techU.uBoost.value = (justInterrupted ? 0.35 : 1.0)
+      * (0.72 + breath + level * 0.75 + (_thinking ? 0.35 : 0) + pulse * 0.5);
 
     renderer.render(scene, camera);
     if (!revealed) { revealed = true; stage.classList.add("live"); }
   }
   animate();
-  window.__robot = { holo, get model() { return model; }, morphMeshes, holoU, partU,
+  window.__robot = { holo, get model() { return model; }, morphMeshes, techU, theme,
+                     get dome() { return dome; },
                      ctx: () => ctx(), get analyser() { return analyser; } };
 
   // ── audio: same /tts contract as talk.html, played through an analyser ───
