@@ -1,0 +1,925 @@
+<!--
+  Hologram — futuristic avatar page (face tier "robot"): Cedric as a suspended
+  holographic BUST projected from a small emitter. A digital presence made of
+  light, not a photoreal face and not a cloud of dots.
+
+  Same wire contract as /talk (the {type:"speak",text} messages, /tts payloads,
+  stop / raise_hand, SSE + poll, speaking reporter, mic barge-in) — only the
+  RENDERER differs.
+
+  FOUR LAYERS (the design brief's structure):
+    1. CORE MESH — the avatar's real GLB head+shoulders, clipped to a bust by a
+       clipping plane, wearing a translucent light material. depthWrite ON: it
+       is also the OCCLUDER, so nothing behind it shines through the face.
+    2. CONTOUR — Fresnel rim glow + slow horizontal scanlines, injected into
+       that material's shader (onBeforeCompile, so skinning + morphs survive).
+       This is what makes it read "hologram" rather than "translucent person".
+    3. PARTICLE SHELL — dots ONLY where a hologram would sparkle: the silhouette
+       (sampled by rim normal), plus free motes drifting off the edges. Never
+       used as skin — dot-skin reads cheap and illegible at meeting distance.
+    4. EMITTER — ring + light cone + soft vertical beam under the bust.
+
+  MOUTH — deliberately minimal (no teeth, no realistic lips): the jaw opens at
+  most ~0.14, so nobody reads it as failed lip-sync. It is still driven by the
+  /tts WORD TIMINGS rather than raw amplitude — same data, no extra cost, and a
+  mouth that opens on words instead of buzzing on volume. Amplitude drives the
+  glow, particles and emitter pulse — the "his hologram activates when he
+  speaks" reading the design calls for.
+
+  STATES (calm by default — movement must MEAN something):
+    idle/listening — stable, slow breath glow, rare blink, tiny head drift.
+    thinking       — eyes drift down, ring spins up, energy climbs the neck.
+    speaking       — minimal jaw + glow/particle/emitter reaction to volume.
+    interrupted    — audio + mouth stop instantly, shell contracts, back to calm.
+    raise_hand     — one strong violet pulse until the backend lowers it.
+  Emotion tints ACCENTS (rim, shell, emitter), never the whole face.
+
+  TESTING (run through the backend — python3 -m http.server can't serve /tts
+  or /live/act):  uvicorn app.main:app  →  http://localhost:8000/robot
+    1. Hologram renders idle.        2. Type + "Speak" → he activates.
+    3. "Ask" → grounded answer.      4. 🎤 → talk to him, barge-in included.
+-->
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; background: #060a14; }
+  #stage {
+    position: fixed; inset: 0;
+    opacity: 0; transition: opacity .45s ease;
+    background:
+      radial-gradient(40% 50% at 18% 32%, rgba(64,224,255,.16) 0%, rgba(64,224,255,0) 70%),
+      radial-gradient(36% 44% at 82% 30%, rgba(168,110,255,.13) 0%, rgba(168,110,255,0) 70%),
+      radial-gradient(70% 30% at 50% 92%, rgba(96,205,255,.20) 0%, rgba(96,205,255,0) 100%),
+      linear-gradient(180deg, #060a14 0%, #0a1122 45%, #0d1729 70%, #080e1c 100%);
+  }
+  #stage.live { opacity: 1; }
+  #stage::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(120% 90% at 50% 42%, rgba(0,0,0,0) 55%, rgba(3,6,14,.55) 100%);
+  }
+  /* Screen-space scanlines + a slow sweeping band — the cheap half of the
+     hologram look; the mesh carries its own contour lines in-shader. */
+  #scan {
+    position: fixed; inset: 0; pointer-events: none; z-index: 5;
+    background: repeating-linear-gradient(180deg,
+      rgba(140,225,255,.035) 0 1px, rgba(140,225,255,0) 1px 5px);
+    mix-blend-mode: screen;
+  }
+  #scan::after {
+    content: ""; position: absolute; left: 0; right: 0; height: 16%;
+    background: linear-gradient(180deg, rgba(140,225,255,0) 0%,
+      rgba(140,225,255,.05) 50%, rgba(140,225,255,0) 100%);
+    animation: sweep 11s linear infinite;
+  }
+  @keyframes sweep { from { top: -18%; } to { top: 100%; } }
+  body.meeting #hud, body.meeting #status { display: none; }
+  #hud {
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+    display: flex; gap: 8px; align-items: center; z-index: 10;
+    font: 14px/1.4 system-ui, sans-serif;
+  }
+  #hud input {
+    width: 320px; max-width: 60vw; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid #2a2f37; background: #171b21; color: #e8ecf1;
+  }
+  #hud button {
+    padding: 10px 14px; border-radius: 10px; border: 0; cursor: pointer;
+    background: #2f6df6; color: #fff; font-weight: 600;
+  }
+  #hud button.alt { background: #2a2f37; }
+  #status {
+    position: fixed; left: 14px; top: 12px; z-index: 10; color: #9aa4b1;
+    font: 12px/1.4 ui-monospace, monospace; background: #131720cc;
+    padding: 6px 10px; border-radius: 8px; max-width: 70vw;
+  }
+</style>
+
+<div id="stage"></div>
+<div id="scan"></div>
+<div id="status">loading…</div>
+<div id="hud">
+  <input id="q" placeholder="Type something for Cedric to say…" />
+  <button id="speakBtn">Speak</button>
+  <button id="askBtn" class="alt">Ask (grounded + acts)</button>
+  <button id="micBtn" class="alt" title="Talk to him by voice">🎤 Talk</button>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js/+esm",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+  import * as THREE from "three";
+  import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+  import { MeshSurfaceSampler } from "three/addons/math/MeshSurfaceSampler.js";
+
+  const params = new URLSearchParams(location.search);
+  const avatarId = params.get("avatar_id") || "cedric";
+  const status = (t) => (document.getElementById("status").textContent = t);
+
+  // ── scene ────────────────────────────────────────────────────────────────
+  const stage = document.getElementById("stage");
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, params.get("conversation_id") ? 1.5 : 2));
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.localClippingEnabled = true; // the bust cut (see bustPlane)
+  stage.appendChild(renderer.domElement);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.1, 20);
+  camera.position.set(0, 0.1, 1.4); // provisional — real framing is computed
+  camera.lookAt(0, 0.1, 0);         // from the head's bounding box on load
+  addEventListener("resize", () => {
+    camera.aspect = innerWidth / innerHeight; // vertical framing is aspect-
+    camera.updateProjectionMatrix();          // invariant, so composition holds
+    renderer.setSize(innerWidth, innerHeight);
+  });
+  // Cool, soft light: enough to model the face's form, never enough to make it
+  // look like lit skin.
+  scene.add(new THREE.AmbientLight(0x8fd0ff, 0.85));
+  const key = new THREE.DirectionalLight(0xcfeaff, 1.5);
+  key.position.set(0.4, 1.0, 2.0);
+  scene.add(key);
+
+  // BUST CUT: three planes, AND-ed by three.js — chest height plus a left and
+  // right cut that remove the GLB's T-posed arms (a full-body rig has arms
+  // stretched across the frame; a hologram bust must end at the shoulders).
+  // Positioned once the model's real bounds are known; shared by every
+  // hologram material.
+  const bustPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const armPlaneL = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0);
+  const armPlaneR = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);
+  const BUST_CLIP = [bustPlane, armPlaneL, armPlaneR];
+
+  // ── shared hologram uniforms (one object, every material references it) ──
+  const holoU = {
+    uTime: { value: 0 },
+    uHoloColor: { value: new THREE.Color(0x5fd8ff) },
+    uRim: { value: 1.15 },   // Fresnel edge glow
+    uScan: { value: 0.5 },   // horizontal contour lines
+  };
+  const ACCENT = { cyan: 0x35d6ff, violet: 0xa86eff, amber: 0xffb347, ice: 0xbcd4ff };
+
+  // CORE MESH material: translucent light. Additive over the dark stage, with
+  // depthWrite so it occludes the particles behind it. The shader patch adds
+  // the Fresnel rim + scanline contours WITHOUT replacing the material, so
+  // skinning and the 66 face morphs keep working untouched.
+  function ghostMaterial({ opacity = 0.26, color = 0x14384a, emissive = 0x2fa9d6,
+                           emissiveIntensity = 0.35, rim = 1.0, scan = 1.0 } = {}) {
+    const m = new THREE.MeshStandardMaterial({
+      color, emissive, emissiveIntensity, metalness: 0, roughness: 0.65,
+      transparent: true, opacity, blending: THREE.AdditiveBlending,
+      // depthWrite OFF + a depth PREPASS (see depthOnlyMat): additive blending
+      // ignores occlusion, so without a prepass every interior surface — the
+      // inside of the mouth, the eye sockets, the back of the skull — adds its
+      // own glow and the face grows bright patches. The prepass writes the
+      // nearest surface's depth first; here depthTest then rejects everything
+      // behind it, so only the visible skin adds light.
+      depthWrite: false, depthTest: true,
+      clippingPlanes: BUST_CLIP, clipShadows: false,
+    });
+    m.onBeforeCompile = (shader) => {
+      shader.uniforms.uTime = holoU.uTime;
+      shader.uniforms.uHoloColor = holoU.uHoloColor;
+      shader.uniforms.uRimK = { value: rim };
+      shader.uniforms.uScanK = { value: scan };
+      shader.uniforms.uRim = holoU.uRim;
+      shader.uniforms.uScan = holoU.uScan;
+      shader.vertexShader = "varying float vWorldY;\n" + shader.vertexShader.replace(
+        "#include <project_vertex>",
+        "#include <project_vertex>\n  vWorldY = (modelMatrix * vec4(transformed, 1.0)).y;"
+      );
+      shader.fragmentShader =
+        "uniform float uTime, uRim, uScan, uRimK, uScanK;\nuniform vec3 uHoloColor;\nvarying float vWorldY;\n" +
+        shader.fragmentShader.replace("#include <dithering_fragment>", `#include <dithering_fragment>
+        // Fresnel: bright at grazing angles = a body made of light with a
+        // luminous edge, dim across flat surfaces.
+        vec3 nrm = normalize(vNormal);
+        vec3 vdir = normalize(vViewPosition);
+        float fres = pow(1.0 - abs(dot(nrm, vdir)), 2.2);
+        // Contour scanlines drifting slowly upward in WORLD space, so they
+        // stay horizontal however the head turns.
+        float bands = sin(vWorldY * 85.0 - uTime * 1.4);
+        float scan = smoothstep(0.93, 1.0, bands);
+        float rimA = fres * uRim * uRimK;
+        float scanA = scan * uScan * uScanK;
+        gl_FragColor.rgb += uHoloColor * (rimA * 0.9 + scanA * 0.5);
+        gl_FragColor.a = clamp(gl_FragColor.a + rimA * 0.5 + scanA * 0.35, 0.0, 1.0);
+      `);
+    };
+    return m;
+  }
+
+  // PARTICLE material — shell dots only (silhouette + free motes + emitter
+  // sparks). aKind: 0 = contour (stable), 2 = free/energetic.
+  const partU = {
+    uTime: holoU.uTime,
+    uAmp: { value: 0.0018 },
+    uSize: { value: 3.4 },
+    uOpacity: { value: 0.7 },
+    uColor: { value: new THREE.Color(ACCENT.cyan) },
+    uColor2: { value: new THREE.Color(0x3f8bff) },
+  };
+  const particleMat = new THREE.ShaderMaterial({
+    uniforms: partU,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    clipping: true, clippingPlanes: BUST_CLIP,
+    vertexShader: `
+      #include <clipping_planes_pars_vertex>
+      uniform float uTime, uAmp, uSize;
+      attribute float aKind;
+      varying float vTw, vKind;
+      void main() {
+        float h1 = fract(sin(dot(position, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+        float h2 = fract(h1 * 941.7);
+        float h3 = fract(h2 * 613.3);
+        vTw = h1; vKind = aKind;
+        float freedom = aKind < 0.5 ? 0.5 : 2.4;
+        vec3 p = position
+          + (vec3(h1, h2, h3) - 0.5) * uAmp * freedom
+            * (0.5 + 0.5 * sin(uTime * (0.8 + h2 * 2.0) + h1 * 6.28));
+        // NAME MATTERS: the clipping_planes_vertex chunk reads mvPosition.
+        vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
+        gl_PointSize = uSize * (aKind < 0.5 ? 1.0 : 0.85) * (1.0 / -mvPosition.z) * (0.7 + 0.6 * h3);
+        gl_Position = projectionMatrix * mvPosition;
+        #include <clipping_planes_vertex>
+      }`,
+    fragmentShader: `
+      #include <clipping_planes_pars_fragment>
+      uniform float uTime, uOpacity;
+      uniform vec3 uColor, uColor2;
+      varying float vTw, vKind;
+      void main() {
+        #include <clipping_planes_fragment>
+        float d = length(gl_PointCoord - 0.5);
+        float a = smoothstep(0.5, 0.1, d);
+        float twAmp = vKind < 0.5 ? 0.22 : 0.45;
+        float twinkle = (1.0 - twAmp) + twAmp * sin(uTime * (1.6 + vTw * 4.0) + vTw * 40.0);
+        vec3 c = mix(uColor, uColor2, step(0.85, vTw));
+        gl_FragColor = vec4(c * twinkle, a * uOpacity * twinkle);
+      }`,
+  });
+
+  // ── the hologram ─────────────────────────────────────────────────────────
+  const holo = new THREE.Group();
+  scene.add(holo);
+
+  // EMITTER: ring + light cone + soft vertical beam. Small — it sells the
+  // projection, it is not the subject (sized on load, ~12% of frame).
+  const emitterMat = new THREE.MeshBasicMaterial({
+    color: ACCENT.cyan, transparent: true, opacity: 0.55,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+  });
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.72, 1, 56), emitterMat);
+  ring.rotation.x = -Math.PI / 2;
+  const ringInner = new THREE.Mesh(new THREE.CircleGeometry(0.7, 48),
+    new THREE.MeshBasicMaterial({ color: ACCENT.cyan, transparent: true, opacity: 0.1,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+  ringInner.rotation.x = -Math.PI / 2;
+  const coneMat = new THREE.MeshBasicMaterial({
+    color: ACCENT.cyan, transparent: true, opacity: 0.05,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+  });
+  const cone = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 1, 1, 44, 1, true), coneMat);
+  holo.add(ring, ringInner, cone);
+
+  // Depth-only prepass material: writes depth, draws no colour, renders in the
+  // OPAQUE pass (transparent:false) so it lands before every additive layer.
+  const depthOnlyMat = new THREE.MeshBasicMaterial({
+    colorWrite: false, depthWrite: true, transparent: false,
+    clippingPlanes: BUST_CLIP,
+  });
+
+  let model = null, energyShell = null, emitterSparks = null;
+  const morphMeshes = [];
+  const morphKey = (dict, names) => names.find((n) => dict[n] !== undefined);
+  (async () => {
+    try {
+      if (!/^[a-z0-9_-]+$/i.test(avatarId)) throw new Error("bad avatar id");
+      const gltf = await new GLTFLoader().loadAsync(`/${avatarId}.glb`);
+      model = gltf.scene;
+
+      // Which meshes make the BUST. Teeth/tongue are dropped outright (the
+      // brief's "no visible teeth" — and additive teeth glow through lips).
+      // The body + top give real shoulders; the clipping plane cuts the chest.
+      const DROP = /teeth|tooth|tongue|shoe|bottom|pant|trouser/i;
+      const EYE = /eyeball|cornea|iris/i;
+      const HEAD = /head|eyelash|brow|hair|beard/i;
+      const meshes = [];
+      model.traverse((o) => { if (o.isMesh || o.isSkinnedMesh) meshes.push(o); });
+      const kept = [];
+      for (const o of meshes) {
+        if (DROP.test(o.name)) { o.visible = false; continue; }
+        o.visible = true;
+        o.frustumCulled = false;
+        o.renderOrder = 0; // core mesh draws first and writes depth
+        const origMap = o.material && o.material.map;
+        if (EYE.test(o.name)) {
+          // EYES: the most important feature — clean, bright, readable, with no
+          // scanlines crawling over them. Keep the GLB's own eye TEXTURE: it
+          // carries the iris and pupil at the rig's real UVs, so he gets
+          // readable eyes instead of two blown-out white ovals (no procedural
+          // iris can guess this mesh's UV layout).
+          o.material = ghostMaterial({ opacity: 0.92, color: 0xffffff,
+            emissive: 0x7fd0ff, emissiveIntensity: origMap ? 0.7 : 1.1,
+            rim: 0.35, scan: 0 });
+          if (origMap) o.material.map = origMap;
+          o.renderOrder = 1;
+        } else if (/eyelash/i.test(o.name)) {
+          // Lashes: barely there. At full opacity they read as closed lids and
+          // swallow the eyes — the one feature that must stay legible.
+          o.material = ghostMaterial({ opacity: 0.1, emissiveIntensity: 0.2,
+            rim: 0.5, scan: 0 });
+        } else if (HEAD.test(o.name)) {
+          o.material = ghostMaterial({ opacity: 0.34, rim: 1.05, scan: 0.85 });
+        } else {
+          // Body / clothing: dimmer, so the FACE is what the eye lands on.
+          o.material = ghostMaterial({ opacity: 0.14, emissiveIntensity: 0.22,
+            rim: 0.9, scan: 0.6 });
+        }
+        kept.push(o);
+        const dict = o.morphTargetDictionary;
+        if (dict && o.morphTargetInfluences) {
+          const grab = (names) => { const k = morphKey(dict, names); return k === undefined ? null : dict[k]; };
+          const rec = {
+            infl: o.morphTargetInfluences,
+            jaw: grab(["jawOpen", "JawOpen", "mouthOpen"]),
+            funnel: grab(["mouthFunnel", "mouthPucker"]),
+            blinkL: grab(["eyeBlinkLeft", "EyeBlinkLeft", "eyesClosed"]),
+            blinkR: grab(["eyeBlinkRight", "EyeBlinkRight"]),
+            lookDnL: grab(["eyeLookDownLeft"]),
+            lookDnR: grab(["eyeLookDownRight"]),
+          };
+          if (rec.jaw !== null || rec.blinkL !== null) morphMeshes.push(rec);
+        }
+      }
+
+      // ── auto-framing from the HEAD's real bounds (no magic cam_z) ────────
+      // Face ≈ 62% of viewport height, eye line above centre, emitter visible
+      // below the bust. ?cam_z/?cam_y/?cam_ty remain A/B overrides.
+      model.updateMatrixWorld(true);
+      // Measure the FACE, not the head mesh: on this rig AvatarHead includes
+      // the neck, so its bbox height would under-scale the face on screen.
+      // The eyeballs give a true eye line; crown-to-eyes is ~45% of a human
+      // face, which yields the real face height on any humanoid GLB.
+      const headBox = new THREE.Box3();
+      for (const o of kept) if (HEAD.test(o.name) || EYE.test(o.name)) headBox.expandByObject(o);
+      if (headBox.isEmpty()) for (const o of kept) headBox.expandByObject(o);
+      const eyeMeshes = kept.filter((o) => EYE.test(o.name));
+      const eyeBox = new THREE.Box3();
+      for (const o of eyeMeshes) eyeBox.expandByObject(o);
+      const crownY = headBox.max.y;
+      const eyeWorldY = eyeBox.isEmpty()
+        ? crownY - (headBox.max.y - headBox.min.y) * 0.34
+        : eyeBox.getCenter(new THREE.Vector3()).y;
+      const faceH = Math.max(1e-4, (crownY - eyeWorldY) / 0.45);
+      const center = headBox.getCenter(new THREE.Vector3());
+      model.position.x -= center.x;
+      model.position.y -= eyeWorldY;         // EYE LINE at y = 0
+      holo.add(model);
+      model.updateMatrixWorld(true);
+
+      // Depth prepass twins: same geometry, same skeleton, same morph array
+      // (shared by reference, so the jaw/blink values we write drive both).
+      for (const o of kept) {
+        let pre;
+        if (o.isSkinnedMesh) {
+          pre = new THREE.SkinnedMesh(o.geometry, depthOnlyMat);
+          pre.bind(o.skeleton, o.bindMatrix);
+        } else {
+          pre = new THREE.Mesh(o.geometry, depthOnlyMat);
+        }
+        pre.morphTargetInfluences = o.morphTargetInfluences;
+        pre.morphTargetDictionary = o.morphTargetDictionary;
+        pre.position.copy(o.position);
+        pre.quaternion.copy(o.quaternion);
+        pre.scale.copy(o.scale);
+        pre.frustumCulled = false;
+        pre.renderOrder = -1;
+        o.parent.add(pre);                   // same parent → same world matrix
+      }
+
+      // Face fills ~62% of frame height; the eye line sits above centre.
+      // Composition, in fractions of the visible frame height: face 62%, eyes
+      // above centre, bust cut at ~59% down, emitter ring below it — so head,
+      // shoulders and projector all fit without the emitter falling off-frame.
+      // 0.75 of the ESTIMATED face height ≈ 62% of real on-screen face: the
+      // crown-to-eye ratio slightly over-estimates faceH on a bald/high-
+      // forehead rig, and this is calibrated against the rendered result.
+      const FILL = 0.75;
+      const visibleH = faceH / FILL;
+      const lookY = -visibleH * 0.21;        // aim low → subject sits high
+      const dist = visibleH / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
+      const camP = (k, d) => { const v = parseFloat(params.get(k)); return Number.isNaN(v) ? d : v; };
+      camera.position.set(0, camP("cam_y", 0), camP("cam_z", dist));
+      camera.lookAt(0, camP("cam_ty", lookY), 0);
+
+      // Bust cut at the shoulder line; arms cut just outside the shoulders.
+      const cutY = -visibleH * 0.55;
+      bustPlane.constant = -cutY;            // keep y > cutY
+      const halfW = faceH * 0.8;             // keep |x| < halfW (arms gone)
+      armPlaneL.constant = halfW;
+      armPlaneR.constant = halfW;
+      const ringR = visibleH * 0.115;
+      const ringY = cutY - visibleH * 0.045;
+      for (const r of [ring, ringInner]) { r.scale.setScalar(ringR); r.position.y = ringY; }
+      cone.scale.set(ringR, Math.max(0.04, cutY - ringY), ringR);
+      cone.position.y = (ringY + cutY) / 2;
+
+      // ── PARTICLE SHELL: silhouette contour, never skin ───────────────────
+      // Keep only points whose normal is near-perpendicular to the camera —
+      // the rim. On a frontal camera that traces the outline of the head,
+      // jaw, nose, brow and shoulders: "energy contours", not dot-skin.
+      const contour = [], contourKind = [];
+      const p = new THREE.Vector3(), n = new THREE.Vector3();
+      const nrmMat = new THREE.Matrix3();
+      for (const o of kept) {
+        if (EYE.test(o.name) || !o.geometry?.attributes?.position) continue;
+        if (!o.geometry.attributes.normal) continue;
+        try {
+          const sampler = new MeshSurfaceSampler(o).build();
+          nrmMat.getNormalMatrix(o.matrixWorld);
+          const budget = /eyelash|brow/i.test(o.name) ? 220 : 2200;
+          let got = 0;
+          for (let i = 0; i < budget * 14 && got < budget; i++) {
+            sampler.sample(p, n);
+            p.applyMatrix4(o.matrixWorld);
+            if (p.y < cutY || Math.abs(p.x) > halfW) continue; // outside the bust
+            n.applyMatrix3(nrmMat).normalize();
+            // STRICT rim test: only the true silhouette. A loose threshold
+            // catches every lip and nostril curve and reads as a dotted beard.
+            if (Math.abs(n.z) > 0.22) continue;
+            contour.push(p.x, p.y, p.z);
+            contourKind.push(0);
+            got++;
+          }
+        } catch (_) { /* a mesh that can't sample contributes no dots */ }
+      }
+      const contourGeo = new THREE.BufferGeometry();
+      contourGeo.setAttribute("position", new THREE.Float32BufferAttribute(contour, 3));
+      contourGeo.setAttribute("aKind", new THREE.Float32BufferAttribute(contourKind, 1));
+      const contourPts = new THREE.Points(contourGeo, particleMat);
+      contourPts.renderOrder = 2;   // after the core mesh → depth-occluded
+      contourPts.frustumCulled = false;
+      holo.add(contourPts);
+
+      // Free motes drifting just off the silhouette + sparks over the emitter.
+      const shellPos = [], shellKind = [];
+      const t3 = new THREE.Vector3();
+      for (let i = 0; i < contour.length && shellPos.length < 2400; i += 21) {
+        t3.set(contour[i], contour[i + 1], contour[i + 2]);
+        const r = 1.04 + Math.random() * 0.14;
+        shellPos.push(t3.x * r, t3.y + (Math.random() - 0.5) * 0.04, t3.z * r);
+        shellKind.push(2);
+      }
+      const shellGeo = new THREE.BufferGeometry();
+      shellGeo.setAttribute("position", new THREE.Float32BufferAttribute(shellPos, 3));
+      shellGeo.setAttribute("aKind", new THREE.Float32BufferAttribute(shellKind, 1));
+      energyShell = new THREE.Points(shellGeo, particleMat);
+      energyShell.renderOrder = 3;
+      energyShell.frustumCulled = false;
+      holo.add(energyShell);
+
+      // Emitter sparks: motes rising between the ring and the bust cut.
+      const sparkPos = [], sparkKind = [];
+      for (let i = 0; i < 260; i++) {
+        const a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * ringR;
+        sparkPos.push(Math.cos(a) * rr, ringY + Math.random() * (cutY - ringY), Math.sin(a) * rr);
+        sparkKind.push(2);
+      }
+      const sparkGeo = new THREE.BufferGeometry();
+      sparkGeo.setAttribute("position", new THREE.Float32BufferAttribute(sparkPos, 3));
+      sparkGeo.setAttribute("aKind", new THREE.Float32BufferAttribute(sparkKind, 1));
+      // Sparks live BELOW the bust cut, so they use an unclipped clone.
+      const sparkMat = particleMat.clone();
+      sparkMat.clippingPlanes = [];
+      sparkMat.uniforms = particleMat.uniforms; // share the live uniforms
+      emitterSparks = new THREE.Points(sparkGeo, sparkMat);
+      emitterSparks.frustumCulled = false;
+      holo.add(emitterSparks);
+
+      status("live — hologram rendering ✅ (type + Speak, or 🎤 Talk)");
+    } catch (e) {
+      status("hologram: model unavailable (" + (e?.message || e) + ")");
+      console.error(e);
+    }
+  })();
+
+  // ── visual state machine — calm is the default ───────────────────────────
+  let handRaised = false;
+  let interruptedAt = -10;
+  // Speech state — declared BEFORE animate() starts, which reads it per frame.
+  let _sayChain = Promise.resolve();
+  let _sayGen = 0;
+  let _pendingSay = 0;
+  let activeSource = null;
+  let speakingUntil = 0;
+  let herText = "";       // normalized words he's currently saying (echo filter)
+  let _askController = null;
+  let _thinking = false;
+
+  const MOOD_ACCENT = { neutral: ACCENT.cyan, happy: ACCENT.cyan, excited: ACCENT.cyan,
+                        serious: ACCENT.ice, concerned: ACCENT.amber };
+  let accent = new THREE.Color(ACCENT.cyan);
+  function setMood(label) {
+    accent = new THREE.Color(MOOD_ACCENT[label || "neutral"] ?? ACCENT.cyan);
+  }
+
+  // Mouth: word-timing track set by playAudio, read by animate().
+  let mouthTrack = null;
+  let jawLevel = 0, funnelLevel = 0, eyesDown = 0;
+  let nextBlink = 1.5, blinkT = -1;
+  let nextNod = 7, nodT = -1;
+  const wordHash = (w) => { let h = 0; for (const c of w) h = (h * 31 + c.charCodeAt(0)) | 0; return (h >>> 0) / 4294967295; };
+  // Mouth stays MINIMAL on purpose: enough to read as speech, never enough to
+  // read as broken lip-sync.
+  const JAW_MAX = 0.14;
+
+  let analyser = null, freq = null;
+  const clock = new THREE.Clock();
+  let revealed = false;
+  function animate() {
+    requestAnimationFrame(animate);
+    const t = clock.getElapsedTime();
+    const nowMs = performance.now();
+    const speakingNow = !!activeSource || _pendingSay > 0;
+    const justInterrupted = (nowMs - interruptedAt) < 450;
+
+    // Voice energy 0..1 — drives glow/particles/emitter, never mouth shape.
+    let level = 0;
+    if (analyser && speakingNow) {
+      analyser.getByteFrequencyData(freq);
+      for (let i = 1; i < 8; i++) level = Math.max(level, (freq[i] || 0) / 255);
+    }
+
+    // Presence: a slow float and a barely-there drift. Calm is the baseline.
+    holo.position.y = Math.sin(t * 0.8) * 0.010;
+    if (model) model.rotation.y = Math.sin(t * 0.22) * 0.035;
+
+    // ── minimal mouth, driven by word timings when we have them ──────────
+    let jawTarget = 0, funnelTarget = 0;
+    if (mouthTrack && speakingNow) {
+      const e = nowMs - mouthTrack.t0;
+      const { words, wtimes, wdurations } = mouthTrack;
+      for (let i = 0; i < wtimes.length; i++) {
+        const s = wtimes[i], d = Math.max(wdurations?.[i] || 120, 60);
+        if (e >= s && e <= s + d) {
+          const env = Math.sin(Math.PI * Math.min((e - s) / d, 1));
+          jawTarget = env * JAW_MAX * (0.75 + 0.5 * level);
+          funnelTarget = env * wordHash(words?.[i] || "") * 0.22;
+          break;
+        }
+      }
+    } else if (speakingNow) {
+      jawTarget = level * JAW_MAX;            // fallback: amplitude only
+    }
+    jawLevel += (jawTarget - jawLevel) * 0.35;
+    funnelLevel += (funnelTarget - funnelLevel) * 0.25;
+
+    // Blinks: always independent of speech.
+    let blink = 0;
+    if (blinkT < 0 && t > nextBlink) { blinkT = t; nextBlink = t + 2.6 + Math.random() * 3.6; }
+    if (blinkT >= 0) {
+      const p = (t - blinkT) / 0.15;
+      blink = p >= 1 ? 0 : 1 - Math.abs(1 - 2 * Math.min(p, 1));
+      if (p >= 1) blinkT = -1;
+    }
+    // Thinking: the eyes drift down while a request is in flight.
+    eyesDown += ((_thinking ? 0.32 : 0) - eyesDown) * 0.07;
+    for (const m of morphMeshes) {
+      if (m.jaw !== null) m.infl[m.jaw] = jawLevel;
+      if (m.funnel !== null) m.infl[m.funnel] = funnelLevel;
+      if (m.blinkL !== null) m.infl[m.blinkL] = blink;
+      if (m.blinkR !== null) m.infl[m.blinkR] = blink;
+      if (m.lookDnL !== null) m.infl[m.lookDnL] = eyesDown;
+      if (m.lookDnR !== null) m.infl[m.lookDnR] = eyesDown;
+    }
+    // A rare idle nod — presence, not fidgeting.
+    if (nodT < 0 && !speakingNow && t > nextNod) { nodT = t; nextNod = t + 11 + Math.random() * 9; }
+    if (nodT >= 0 && model) {
+      const p = (t - nodT) / 0.75;
+      model.rotation.x = p >= 1 ? 0 : Math.sin(Math.PI * Math.min(p, 1)) * 0.04;
+      if (p >= 1) nodT = -1;
+    }
+
+    // ── energy: hierarchy, not a music visualizer ────────────────────────
+    const pulse = handRaised ? 0.5 + 0.5 * Math.sin(t * 6) : 0;
+    const tint = new THREE.Color(ACCENT.cyan).lerp(accent, 0.65)
+      .lerp(new THREE.Color(ACCENT.violet), pulse);
+    holoU.uTime.value = t;
+    holoU.uHoloColor.value.copy(tint);
+    // Glow breathes slowly at rest, lifts with the voice, dips on interrupt.
+    const breath = 0.5 + 0.06 * Math.sin(t * 0.9);
+    holoU.uRim.value = (justInterrupted ? 0.6 : 1.0) * (0.95 + breath * 0.5 + level * 0.85 + pulse * 0.4);
+    holoU.uScan.value = 0.45 + (_thinking ? 0.25 : 0) + level * 0.25;
+    partU.uAmp.value = justInterrupted ? 0.0008 : 0.0016 + level * 0.006;
+    partU.uSize.value = 3.4 + level * 1.3;
+    partU.uOpacity.value = justInterrupted ? 0.25 : 0.62 + level * 0.28;
+    partU.uColor.value.copy(tint);
+    if (energyShell) energyShell.rotation.y += _thinking ? 0.004 : 0.0009;
+    if (emitterSparks) emitterSparks.rotation.y -= _thinking ? 0.006 : 0.0015;
+    emitterMat.color.copy(tint);
+    emitterMat.opacity = 0.4 + 0.1 * Math.sin(t * (_thinking ? 3.0 : 1.0)) + level * 0.25 + pulse * 0.3;
+    ring.rotation.z += _thinking ? 0.018 : 0.003;
+    coneMat.color.copy(tint);
+    coneMat.opacity = 0.04 + level * 0.035 + pulse * 0.04;
+
+    renderer.render(scene, camera);
+    if (!revealed) { revealed = true; stage.classList.add("live"); }
+  }
+  animate();
+  window.__robot = { holo, get model() { return model; }, morphMeshes, holoU, partU,
+                     ctx: () => ctx(), get analyser() { return analyser; } };
+
+  // ── audio: same /tts contract as talk.html, played through an analyser ───
+  let _ctx = null;
+  function ctx() {
+    if (!_ctx) {
+      _ctx = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = _ctx.createAnalyser();
+      analyser.fftSize = 64;
+      analyser.smoothingTimeConstant = 0.5;
+      freq = new Uint8Array(analyser.frequencyBinCount);
+      analyser.connect(_ctx.destination);
+    }
+    return _ctx;
+  }
+  const unlockAudio = () => { try { ctx().resume(); } catch (_) {} };
+  document.addEventListener("pointerdown", unlockAudio, { once: true });
+  document.addEventListener("keydown", unlockAudio, { once: true });
+
+  // Decode a TTS payload keeping the WORD TIMINGS — they drive the mouth.
+  async function payloadToAudio(j, text) {
+    const bin = Uint8Array.from(atob(j.audio), (c) => c.charCodeAt(0));
+    const buffer = await ctx().decodeAudioData(bin.buffer);
+    let { words, wtimes, wdurations } = j;
+    if (!words || !words.length) {
+      // No alignment (fallback TTS): spread words evenly — approximate, but
+      // the mouth still moves per word instead of buzzing on amplitude.
+      words = (text || "").trim().split(/\s+/).filter(Boolean);
+      const per = (buffer.duration * 1000) / Math.max(words.length, 1);
+      wtimes = words.map((_, i) => Math.round(i * per));
+      wdurations = words.map(() => Math.round(per * 0.85));
+    }
+    return { buffer, words, wtimes, wdurations };
+  }
+  async function synthesize(text) {
+    const r = await fetch("/tts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, avatar_id: avatarId }),
+    });
+    if (!r.ok) throw new Error("/tts not available yet (" + r.status + ")");
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    return payloadToAudio(j, text);
+  }
+
+  // Pipelined speech, same scheme as talk.html: synthesis starts the moment a
+  // sentence arrives, playback stays strictly in arrival order, and a bumped
+  // generation drops anything queued before an interrupt.
+  const _norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  function playAudio(a, text) {
+    return new Promise((resolve) => {
+      const src = ctx().createBufferSource();
+      src.buffer = a.buffer;
+      src.connect(analyser);
+      activeSource = src;
+      mouthTrack = { t0: performance.now(), words: a.words, wtimes: a.wtimes, wdurations: a.wdurations };
+      speakingUntil = Math.max(speakingUntil, performance.now()) + a.buffer.duration * 1000 + 300;
+      herText = _norm(text);
+      src.onended = () => { if (activeSource === src) { activeSource = null; mouthTrack = null; } resolve(); };
+      src.start();
+    });
+  }
+  function interruptSpeech() {
+    _sayGen++;
+    _sayChain = Promise.resolve();
+    if (activeSource) { try { activeSource.stop(); } catch (_) {} activeSource = null; }
+    if (_askController) { try { _askController.abort(); } catch (_) {} }
+    _thinking = false;
+    mouthTrack = null;                 // mouth to neutral NOW, no trailing words
+    interruptedAt = performance.now(); // shell contracts (see animate)
+    speakingUntil = 0;
+    herText = "";
+    status("(interrupted — listening)");
+  }
+  window.interruptSpeech = interruptSpeech;
+  function say(text, pre) {
+    if (!text || !text.trim()) return _sayChain;
+    unlockAudio();
+    const synth = pre && pre.audio ? payloadToAudio(pre, text) : synthesize(text);
+    const mood = (pre && pre.emotion) || "neutral";
+    const gen = _sayGen;
+    _pendingSay++;
+    _sayChain = _sayChain.then(async () => {
+      try {
+        const a = await synth;
+        if (gen !== _sayGen) return; // interrupted while synthesizing — drop it
+        setMood(mood);
+        status("speaking: " + text.slice(0, 60));
+        await playAudio(a, text);
+      } catch (e) {
+        status("speak failed: " + (e?.message || e));
+        console.error(e);
+      } finally {
+        _pendingSay = Math.max(0, _pendingSay - 1);
+      }
+    });
+    return _sayChain;
+  }
+  window.speak = say;
+
+  // ── grounded answer that can ACT: /live/act SSE, spoken chunk by chunk ───
+  async function ask(question) {
+    interruptSpeech();
+    status("thinking…");
+    const ctrl = new AbortController();
+    _askController = ctrl;
+    _thinking = true;
+    const genAtStart = _sayGen;
+    let r;
+    try {
+      r = await fetch("/live/act", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ avatar_id: avatarId, question }),
+        signal: ctrl.signal,
+      });
+    } catch (e) {
+      if (ctrl === _askController) _thinking = false;
+      if (e && e.name === "AbortError") return;
+      status("ask failed: " + (e?.message || e));
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "", saidAny = false;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done || ctrl.signal.aborted || _sayGen !== genAtStart) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n\n")) >= 0) {
+          const evt = buf.slice(0, nl); buf = buf.slice(nl + 2);
+          const m = evt.match(/^data: (\{.*\})$/m);
+          if (!m) continue;
+          let content; try { content = JSON.parse(m[1]).content; } catch { continue; }
+          if (content && !ctrl.signal.aborted && _sayGen === genAtStart) { say(content); saidAny = true; }
+        }
+      }
+    } catch (e) { if (!(e && e.name === "AbortError")) console.error(e); }
+    if (ctrl === _askController) _thinking = false;
+    if (!saidAny && !ctrl.signal.aborted) status("(stayed silent)");
+  }
+
+  document.getElementById("speakBtn").onclick = () => say(document.getElementById("q").value);
+  document.getElementById("askBtn").onclick = () => ask(document.getElementById("q").value);
+
+  // ── voice input: same mic/echo/stop-word engine as talk.html ─────────────
+  const micBtn = document.getElementById("micBtn");
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let micOn = false, rec = null;
+  function looksLikeEcho(heard) {
+    const words = _norm(heard).split(" ").filter(Boolean);
+    if (!words.length) return true;
+    const his = new Set(herText.split(" ").filter(Boolean));
+    if (!his.size) return false;
+    return words.filter((w) => his.has(w)).length / words.length >= 0.5;
+  }
+  const STOP_PHRASES = ["give me a second", "give me a moment", "give me a minute", "give me a sec", "that s enough", "stop talking", "one second", "one moment", "one minute", "never mind", "nevermind", "forget it", "be quiet", "hold on", "hang on", "shut up", "stop it", "one sec",
+    "lascia stare", "lascia perdere", "non importa", "basta cos", "un attimo", "un secondo", "un momento"].sort((a, b) => b.length - a.length);
+  const STOP_WORDS = new Set(["stop", "wait", "pause", "quiet", "silence", "enough", "hush", "shush",
+    "aspetta", "fermati", "ferma", "zitto", "zitta", "basta", "taci", "silenzio", "smettila"]);
+  const POLITE_WORDS = new Set(["ok", "okay", "no", "hey", "please", "cedric", "now", "just", "a", "one", "sec", "second", "moment", "minute", "thanks", "thank", "you",
+    "per", "favore", "grazie", "un", "attimo", "secondo", "momento", "ora", "adesso", "ehi", "dai"]);
+  function stopWordIn(h) {
+    for (const p of STOP_PHRASES) if (h.includes(p)) return p;
+    for (const w of h.split(" ")) if (STOP_WORDS.has(w)) return w;
+    return null;
+  }
+  function containsStopWord(heard) {
+    const w = stopWordIn(_norm(heard));
+    return !!w && !herText.includes(w);
+  }
+  function isStopCommand(heard) {
+    let h = _norm(heard);
+    if (!h || !containsStopWord(heard)) return false;
+    for (const p of STOP_PHRASES) h = h.split(p).join(" ");
+    return h.split(" ").filter(Boolean).every((w) => STOP_WORDS.has(w) || POLITE_WORDS.has(w));
+  }
+  if (!SR) {
+    micBtn.disabled = true;
+    micBtn.title = "Voice input needs Chrome/Edge (Web Speech API)";
+  } else {
+    rec = new SR();
+    rec.lang = "en-US";
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.onresult = (ev) => {
+      const res = ev.results[ev.results.length - 1];
+      const heard = (res[0] && res[0].transcript || "").trim();
+      if (!heard) return;
+      const heSpeaking = performance.now() < speakingUntil || !!activeSource;
+      if ((heSpeaking || _thinking) && isStopCommand(heard)) {
+        interruptSpeech();
+        status("(stopped — listening)");
+        return;
+      }
+      if (heSpeaking && looksLikeEcho(heard)) {
+        if (containsStopWord(heard)) interruptSpeech();
+        return;
+      }
+      if (heSpeaking) interruptSpeech();
+      if (!res.isFinal) { status("hearing: " + heard); return; }
+      if (isStopCommand(heard)) { status("(listening)"); return; }
+      document.getElementById("q").value = heard;
+      status("heard: " + heard);
+      ask(heard);
+    };
+    rec.onend = () => { if (micOn) { try { rec.start(); } catch (_) {} } };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed") { micOn = false; micBtn.textContent = "🎤 Talk"; status("mic blocked — allow microphone access"); }
+    };
+    micBtn.onclick = () => {
+      micOn = !micOn;
+      if (micOn) {
+        try { rec.start(); } catch (_) {}
+        micBtn.textContent = "🔴 Listening…";
+        micBtn.style.background = "#c0392b";
+        status("listening — talk to him (say 'wait' to cut him off)");
+      } else {
+        try { rec.stop(); } catch (_) {}
+        micBtn.textContent = "🎤 Talk";
+        micBtn.style.background = "";
+        status("mic off");
+      }
+    };
+  }
+
+  // ── Meeting mode: byte-compatible with talk.html's backend contract ──────
+  const conversationId = params.get("conversation_id");
+  if (conversationId) {
+    document.body.classList.add("meeting");
+    unlockAudio(); // the Recall bot browser never clicks
+
+    let staleBefore = -Infinity;
+    const genOf = (msg) => {
+      const g = msg.generation_id ?? msg.speech_generation_id ?? msg.generation;
+      return typeof g === "number" ? g : null;
+    };
+    const handleBackendMessage = (msg) => {
+      if (!msg) return;
+      if (msg.type === "speak" && msg.text) {
+        const g = genOf(msg);
+        if (g !== null && g <= staleBefore) return; // superseded by a stop
+        unlockAudio(); say(msg.text, msg);
+      } else if (msg.type === "stop") {
+        const g = genOf(msg);
+        if (g !== null) staleBefore = Math.max(staleBefore, g);
+        interruptSpeech();
+      } else if (msg.type === "raise_hand") {
+        handRaised = true;
+      } else if (msg.type === "lower_hand") {
+        handRaised = false;
+      }
+    };
+
+    // Path 1: SSE push (App Runner 403s WebSockets, streams SSE fine).
+    const es = new EventSource(`/avatar/stream/${encodeURIComponent(conversationId)}`);
+    es.onmessage = (ev) => {
+      try { handleBackendMessage(JSON.parse(ev.data)); } catch (_) { /* non-JSON */ }
+    };
+    // Path 2: slow poll as belt-and-braces; both drain the same queue.
+    const poll = async () => {
+      try {
+        const r = await fetch(`/avatar/messages/${encodeURIComponent(conversationId)}`,
+                              { cache: "no-store" });
+        if (r.ok) {
+          const data = await r.json();
+          for (const msg of data.messages || []) handleBackendMessage(msg);
+        }
+      } catch (_) { /* keep polling */ }
+      setTimeout(poll, 2000);
+    };
+    poll();
+
+    // Report the REAL speaking state (same scheme as talk.html): heartbeat
+    // while anything is playing or queued, one false on the transition.
+    let reportedSpeaking = false;
+    setInterval(() => {
+      const speaking = _pendingSay > 0 || !!activeSource || performance.now() < speakingUntil;
+      if (!speaking && !reportedSpeaking) return;
+      reportedSpeaking = speaking;
+      fetch(`/avatar/speaking/${encodeURIComponent(conversationId)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ speaking }),
+      }).catch(() => {});
+    }, 700);
+  }
+</script>

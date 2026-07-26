@@ -57,6 +57,19 @@ def talk_page() -> FileResponse:
     )
 
 
+@router.get("/robot")
+def robot_page() -> FileResponse:
+    """Hologram avatar page (face tier "robot"): the avatar's own GLB head
+    rendered as a translucent light projection — same speak/stop/raise_hand
+    contract as /talk, no GPU and no viseme lip-sync dependency. Opt an avatar
+    in with `face: robot` in its avatar.yaml.
+
+    no-store for the same reason as /talk: the page's JS changes often."""
+    return FileResponse(
+        FRONTEND_DIR / "robot.html", headers={"Cache-Control": "no-store"}
+    )
+
+
 @router.get("/photoreal")
 def photoreal_page() -> FileResponse:
     """Photoreal avatar page (Stage 2): GPU-streamed MuseTalk face. Same speak
