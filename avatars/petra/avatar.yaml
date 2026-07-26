@@ -69,5 +69,12 @@ require_wake_word: true
 min_confidence:
 speak_cooldown_seconds: 5
 
+# Face tier (owner 2026-07-26, matching Cedric): the hologram — /robot
+# projects her own petra.glb as a translucent light bust. Revert to the 3D
+# human head by changing this one line to `face: talk` (or deleting it).
+# Fallback stays `talk` (default): her petra.glb is always on disk, and the
+# photoreal tier is down anyway (RunPod pods terminated 2026-07-26).
+face: robot
+
 # Knowledge lives in:  avatars/petra/knowledge/*.md  (original PM reference
 # docs — drop your own methodology/process docs in and re-run ingest).

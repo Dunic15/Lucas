@@ -97,10 +97,10 @@
 <div id="scan"></div>
 <div id="status">loading…</div>
 <div id="hud">
-  <input id="q" placeholder="Type something for Cedric to say…" />
+  <input id="q" placeholder="Type something for the avatar to say…" />
   <button id="speakBtn">Speak</button>
   <button id="askBtn" class="alt">Ask (grounded + acts)</button>
-  <button id="micBtn" class="alt" title="Talk to him by voice">🎤 Talk</button>
+  <button id="micBtn" class="alt" title="Talk to the avatar by voice">🎤 Talk</button>
 </div>
 
 <script type="importmap">
@@ -305,8 +305,11 @@
       // Which meshes make the BUST. Teeth/tongue are dropped outright (the
       // brief's "no visible teeth" — and additive teeth glow through lips).
       // The body + top give real shoulders; the clipping plane cuts the chest.
-      const DROP = /teeth|tooth|tongue|shoe|bottom|pant|trouser/i;
-      const EYE = /eyeball|cornea|iris/i;
+      const DROP = /teeth|tooth|tongue|shoe|footwear|bottom|pant|trouser/i;
+      // Both GLB naming conventions in this repo: cedric.glb (Avatar*Eyeball)
+      // and Ready Player Me / Wolf3D exports (EyeLeft/EyeRight, petra.glb).
+      // The lookahead keeps eyelash/eyebrow meshes out of the bright-eye branch.
+      const EYE = /eyeball|cornea|iris|eye(?!lash|brow)/i;
       const HEAD = /head|eyelash|brow|hair|beard/i;
       const meshes = [];
       model.traverse((o) => { if (o.isMesh || o.isSkinnedMesh) meshes.push(o); });
@@ -795,8 +798,13 @@
     "lascia stare", "lascia perdere", "non importa", "basta cos", "un attimo", "un secondo", "un momento"].sort((a, b) => b.length - a.length);
   const STOP_WORDS = new Set(["stop", "wait", "pause", "quiet", "silence", "enough", "hush", "shush",
     "aspetta", "fermati", "ferma", "zitto", "zitta", "basta", "taci", "silenzio", "smettila"]);
-  const POLITE_WORDS = new Set(["ok", "okay", "no", "hey", "please", "cedric", "now", "just", "a", "one", "sec", "second", "moment", "minute", "thanks", "thank", "you",
+  // Avatar names (and their common ASR misspellings, mirroring the wake_words
+  // in the avatar.yaml files) count as polite filler in a stop command, so
+  // "Laura, stop" or "ok Cedric, hold on" barge in for EVERY robot-tier avatar.
+  const POLITE_WORDS = new Set(["ok", "okay", "no", "hey", "please", "now", "just", "a", "one", "sec", "second", "moment", "minute", "thanks", "thank", "you",
+    "cedric", "cedrick", "sedric", "sedrik", "sedrick", "laura", "lara", "lora", "petra",
     "per", "favore", "grazie", "un", "attimo", "secondo", "momento", "ora", "adesso", "ehi", "dai"]);
+  POLITE_WORDS.add(avatarId.toLowerCase());
   function stopWordIn(h) {
     for (const p of STOP_PHRASES) if (h.includes(p)) return p;
     for (const w of h.split(" ")) if (STOP_WORDS.has(w)) return w;
