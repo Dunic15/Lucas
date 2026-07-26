@@ -105,7 +105,7 @@ require_wake_word: true
 # pipeline exactly like every other avatar. Laura/Petra: leave these fields
 # out entirely (absent = legacy). docs/product/CEDRIC-ELEVENLABS-PILOT.md.
 conversation_runtime: elevenlabs_agent
-# "Cedric Meeting Pilot" — created/updated by backend/scripts/create_cedric_agent.py
+# "Cedric Meeting Pilot" — created/updated by backend/scripts/create_meeting_agent.py --avatar cedric
 # (config-as-code: persona from this file + pilot rules; private, signed-URL-only;
 # pcm_16000 both ways; turn eagerness patient; no first message — the legacy
 # self-intro stays the one greeting). Not a secret; useless without the API key.

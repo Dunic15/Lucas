@@ -69,12 +69,35 @@ require_wake_word: true
 min_confidence:
 speak_cooldown_seconds: 5
 
-# Face tier (owner 2026-07-26, matching Cedric): the hologram — /robot
-# projects her own petra.glb as a translucent light bust. Revert to the 3D
-# human head by changing this one line to `face: talk` (or deleting it).
-# Fallback stays `talk` (default): her petra.glb is always on disk, and the
-# photoreal tier is down anyway (RunPod pods terminated 2026-07-26).
-face: robot
+# Face tier (owner 2026-07-26): the 3D human head — /talk renders her own
+# petra.glb. This is NOT just a look preference: /talk is the only renderer
+# that opens the /voice-out/{cap} socket, which is how an ElevenLabs-Agent
+# avatar's voice reaches the meeting at all (see conversation_runtime below).
+# The hologram tier (`face: robot`) stays available for LEGACY avatars; do not
+# set it here until robot.html carries that socket too (PR #460).
+# The photoreal tier is down regardless (RunPod pods terminated 2026-07-26).
+face: talk
+
+# ── Conversation runtime: ElevenLabs Agent ────────────────────────────────
+# Hand the live conversation (STT, turn-taking, interruption, spoken reply) to
+# a private ElevenLabs Agent; knowledge + actions stay in the Laura backend via
+# client tools. INERT until ELEVENLABS_AGENT_RUNTIME_ENABLED=true (already on
+# in prod) AND this avatar id is in ELEVENLABS_AGENT_AVATAR_ALLOWLIST — which
+# defaults to "cedric" only, so this is still dormant until that env var is
+# widened to `cedric,petra`.
+#
+# WHAT THIS TURNS OFF: every legacy multiparty knob below (require_wake_word,
+# speak_cooldown_seconds, deference, opening grace, hand-raise, the 15s
+# un-named follow-up window) sits under an early return for agent-runtime
+# sessions in main.py — they keep parsing and stop applying. The gate becomes
+# ElevenLabs': audio simply isn't forwarded unless she was addressed.
+# Full rollback recipe: docs/product/LEGACY-CONVERSATION-STACK.md
+conversation_runtime: elevenlabs_agent
+# "Laura Meeting Pilot" — created/updated by
+# backend/scripts/create_meeting_agent.py --avatar petra
+# (config-as-code: persona from this file + the shared pilot rules; private,
+# signed-URL-only; pcm_16000 both ways). Not a secret; useless without the key.
+elevenlabs_agent_id: "agent_9601kyg7v5q7fy7aawjv0x1sdjve"
 
 # Knowledge lives in:  avatars/petra/knowledge/*.md  (original PM reference
 # docs — drop your own methodology/process docs in and re-run ingest).

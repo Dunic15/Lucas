@@ -49,6 +49,20 @@ _WRITE_TOOLS = {"queue_action", "amend_pending_action", "withdraw_pending_action
 _WRITE_AUTH_WINDOW_S = 90.0
 
 
+def _brief_allowed(session) -> bool:
+    """Reuse the legacy identity gate rather than re-deriving it here.
+
+    Fail-closed: if the check itself raises (no store, odd session), the brief
+    is withheld — a missing brief degrades an answer, a leaked one impersonates
+    another product."""
+    try:
+        from ..cedric.integration import _cedric_brief_allowed
+
+        return bool(_cedric_brief_allowed(session))
+    except Exception:  # noqa: BLE001 — no gate, no brief
+        return False
+
+
 def _authorized(request: Request) -> bool:
     expected = settings.laura_api_token.strip()
     got = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
@@ -65,7 +79,7 @@ def _session_for_capability(capability: str):
 def build_init_payload(session, avatar) -> dict:
     """conversation_initiation_client_data for THIS meeting.
 
-    The static agent (create_cedric_agent.py) is the fallback persona; this
+    The static agent (create_meeting_agent.py --avatar cedric) is the fallback persona; this
     override layers the live meeting context on top. Every injected value
     rides inside an explicit UNTRUSTED-data block — meeting briefs quote
     humans, and quoted humans must never become instructions (the Underheard
@@ -80,7 +94,15 @@ def build_init_payload(session, avatar) -> dict:
         context["meeting_link"] = str(session.meeting_url)[:300]
     integration = session.integration or {}
     brief = integration.get("brief")
-    if isinstance(brief, str) and brief.strip():
+    # IDENTITY GATE — the same one the legacy path applies (cedric.integration.
+    # _cedric_brief_allowed). The orchestrator's brief opens with "You are
+    # Cedric's presence in this meeting" and advertises Cedric's tool fleet;
+    # SURFACE_CONTEXT_URL is a GLOBAL default, so without this gate that brief
+    # lands in any avatar's session and hijacks both identity and capabilities
+    # (live 2026-07-21: Laura introduced Cedric's 3,000-app roster to an org
+    # with no Slack agent). This was latent while Cedric was the only avatar on
+    # this runtime; it stops being latent the moment a second one joins.
+    if isinstance(brief, str) and brief.strip() and _brief_allowed(session):
         context["meeting_brief"] = brief.strip()[:4000]
     meeting = integration.get("meeting")
     if isinstance(meeting, dict):
@@ -277,7 +299,11 @@ def _tool_meeting_context(session) -> dict:
     in-memory, all content the agent already hears — never logged."""
     out: dict = {}
     integration = session.integration or {}
-    if isinstance(integration.get("brief"), str) and integration["brief"].strip():
+    if (
+        isinstance(integration.get("brief"), str)
+        and integration["brief"].strip()
+        and _brief_allowed(session)          # same gate as the bootstrap above
+    ):
         out["meeting_brief"] = integration["brief"].strip()[:3000]
     meeting = integration.get("meeting")
     if isinstance(meeting, dict):

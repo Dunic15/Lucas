@@ -68,7 +68,7 @@ def _write_avatar_yaml(root: Path, avatar_id: str, body: str) -> None:
 def test_cedric_yaml_opts_in_but_stays_inert():
     """Cedric's shipped yaml selects the runtime and carries the real pilot
     agent id ("Cedric Meeting Pilot", created 2026-07-24 by
-    scripts/create_cedric_agent.py). Three of the four dispatch conditions are
+    scripts/create_meeting_agent.py --avatar cedric). Three of the four dispatch conditions are
     therefore TRUE in the repo — the shipped-default env flag alone must keep
     him legacy, and flipping it is the single deliberate go-live act."""
     cedric = avatars.load("cedric")
@@ -83,28 +83,61 @@ def test_cedric_yaml_opts_in_but_stays_inert():
 
 def test_cedric_goes_live_on_the_flag_alone(monkeypatch):
     """The go-live rehearsal: with the shipped yaml, flipping ONLY the env
-    flag moves Cedric (and nobody else) onto the ElevenLabs runtime."""
+    flag moves Cedric onto the ElevenLabs runtime."""
     monkeypatch.setattr(settings, "elevenlabs_agent_runtime_enabled", True)
     assert (
         elevenlabs_agent.runtime_for_avatar(avatars.load("cedric"))
         == "elevenlabs_agent"
     )
-    for aid in ("laura", "petra"):
-        assert elevenlabs_agent.runtime_for_avatar(avatars.load(aid)) == "legacy", aid
 
 
-def test_laura_and_petra_yaml_stay_legacy():
-    for aid in ("laura", "petra"):
-        a = avatars.load(aid)
-        assert a.conversation_runtime == "legacy", aid
-        assert a.elevenlabs_agent_id == "", aid
-        assert a.voice_multiparty_mode == "off", aid
-        assert a.voice_actions_mode == "off", aid
+def test_petra_declares_the_runtime_but_the_allowlist_still_gates_her():
+    """Laura (folder `petra`) opted into the agent runtime in her yaml
+    (2026-07-26). The ALLOWLIST is what actually moves her — with the code
+    default ("cedric") she stays legacy no matter what her yaml says. That is
+    the fail-closed property; losing it would let a yaml edit alone reroute a
+    live avatar."""
+    a = avatars.load("petra")
+    assert a.conversation_runtime == "elevenlabs_agent"
+    assert a.elevenlabs_agent_id.startswith("agent_")
+    assert settings.elevenlabs_agent_avatar_allowlist.strip() == "cedric"
+    assert elevenlabs_agent.runtime_for_avatar(a) == "legacy"
 
 
-def test_every_installed_avatar_except_cedric_is_legacy():
+def test_petra_goes_live_once_the_allowlist_names_her(monkeypatch):
+    monkeypatch.setattr(settings, "elevenlabs_agent_runtime_enabled", True)
+    monkeypatch.setattr(settings, "elevenlabs_agent_avatar_allowlist", "cedric,petra")
+    assert (
+        elevenlabs_agent.runtime_for_avatar(avatars.load("petra"))
+        == "elevenlabs_agent"
+    )
+
+
+def test_agent_runtime_avatars_render_a_page_that_can_speak():
+    """An avatar on the agent runtime MUST render a page that opens the
+    /voice-out socket — that socket is the only way the agent's audio reaches
+    the meeting. Miss it and the bot joins, meters Recall + ElevenLabs, and is
+    silently MUTE: the legacy speak path is suppressed for these sessions, so
+    nothing errors anywhere (incident 2026-07-26, `face: robot` on Cedric).
+
+    Checks the renderer FILE rather than a hard-coded page list, so the next
+    face tier is covered the day it is added instead of the day it breaks."""
+    frontend = Path(__file__).resolve().parents[2] / "frontend"
     for aid in avatars.list_ids():
-        if aid == "cedric":
+        a = avatars.load(aid)
+        if a.conversation_runtime != "elevenlabs_agent":
+            continue
+        page = frontend / f"{a.page}.html"
+        assert page.is_file(), f"{aid} renders /{a.page} but {page.name} is missing"
+        assert "/voice-out/" in page.read_text(), (
+            f"{aid} is on the agent runtime but {page.name} never opens the "
+            "/voice-out socket — the agent's voice would never be heard"
+        )
+
+
+def test_every_other_installed_avatar_is_legacy():
+    for aid in avatars.list_ids():
+        if aid in ("cedric", "petra"):
             continue
         assert avatars.load(aid).conversation_runtime == "legacy", aid
 
@@ -167,10 +200,12 @@ def test_all_four_conditions_met_resolves_elevenlabs(monkeypatch):
 
 
 def test_avatar_outside_allowlist_stays_legacy(monkeypatch):
-    """A copy-pasted yaml block on Petra still resolves legacy: not allowlisted."""
+    """A copy-pasted yaml block on a non-allowlisted avatar still resolves
+    legacy. (Uses `sff`, not `petra`: petra is allowlisted in prod now, so
+    she would stop being a meaningful negative case.)"""
     monkeypatch.setattr(settings, "elevenlabs_agent_runtime_enabled", True)
-    petra = _cedric_like(id="petra")
-    assert elevenlabs_agent.runtime_for_avatar(petra) == "legacy"
+    other = _cedric_like(id="sff")
+    assert elevenlabs_agent.runtime_for_avatar(other) == "legacy"
 
 
 def test_empty_agent_id_blocks_dispatch(monkeypatch):
