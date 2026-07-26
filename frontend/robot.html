@@ -488,6 +488,10 @@
   let herText = "";       // normalized words he's currently saying (echo filter)
   let _askController = null;
   let _thinking = false;
+  // ElevenLabs Agent voice: chunks scheduled on the audio clock. Declared here
+  // (not inside the meeting block) because animate() reads agentLive.length
+  // every frame to know he is speaking.
+  let agentLive = [];
 
   // Mood tints the TECH INK only (never the face): the theme colour is the
   // baseline; concerned warms it, serious cools it.
@@ -516,7 +520,10 @@
     requestAnimationFrame(animate);
     const t = clock.getElapsedTime();
     const nowMs = performance.now();
-    const speakingNow = !!activeSource || _pendingSay > 0;
+    // agentLive: the ElevenLabs Agent runtime streams raw voice with no
+    // {type:"speak"} message, so it has no activeSource — without it in this
+    // test the whole face would sit idle through every agent reply.
+    const speakingNow = !!activeSource || _pendingSay > 0 || agentLive.length > 0;
     const justInterrupted = (nowMs - interruptedAt) < 450;
 
     // Voice energy 0..1 — drives glow/particles/emitter, never mouth shape.
@@ -873,6 +880,97 @@
       setTimeout(poll, 2000);
     };
     poll();
+
+    // ── ElevenLabs Agent voice ────────────────────────────────────────────
+    // When the backend dispatches this session on the agent runtime, it appends
+    // the bridge coordinates to this page's URL and streams the meeting audio to
+    // ElevenLabs; the agent's reply comes back HERE as pcm_16000 chunks over
+    // /voice-out/{cap}. Without this block an agent-runtime avatar rendering
+    // /robot joins, meters Recall + ElevenLabs, and is completely MUTE — the
+    // legacy {type:"speak"} path above is suppressed for these sessions
+    // (backend `_el_voice_owned`), so there is no fallback. Pages without the
+    // params are byte-identical to before.
+    //
+    // Simpler than talk.html's twin block by construction: this face has no
+    // visemes to drive — its mouth, glow, particles and emitter all follow the
+    // analyser — so routing the agent's audio through the SAME analyser makes
+    // the whole hologram react with zero extra machinery, and no lips-ahead-of-
+    // voice drift is possible. (Using the chunks' char alignment for a truer
+    // mouth is a later upgrade; amplitude is exactly what this face wants.)
+    const voiceWsBase = params.get("voice_ws");
+    const voiceCap = params.get("voice_cap");
+    if (voiceWsBase && voiceCap) {
+      let agentNextAt = 0;
+      const b64ToF32 = (b64) => {
+        const raw = atob(b64);
+        const n = raw.length >> 1;                 // s16le mono @16k
+        const f32 = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+          let v = raw.charCodeAt(2 * i) | (raw.charCodeAt(2 * i + 1) << 8);
+          if (v >= 0x8000) v -= 0x10000;
+          f32[i] = v / 32768;
+        }
+        return f32;
+      };
+      const flushAgentAudio = () => {
+        for (const s of agentLive) { try { s.stop(); } catch (_) {} }
+        agentLive = [];
+        agentNextAt = 0;
+      };
+      const playAgentChunk = (b64) => {
+        const f32 = b64ToF32(b64);
+        if (!f32.length) return;
+        const c = ctx();
+        const buf = c.createBuffer(1, f32.length, 16000); // the ctx resamples
+        buf.getChannelData(0).set(f32);
+        const src = c.createBufferSource();
+        src.buffer = buf;
+        src.connect(analyser);            // analyser -> destination, as /tts does
+        // Gapless: each chunk starts where the previous one ends, never before
+        // a small safety margin ahead of "now".
+        const t = Math.max(c.currentTime + 0.05, agentNextAt);
+        src.start(t);
+        agentNextAt = t + buf.duration;
+        agentLive.push(src);
+        src.onended = () => {
+          const i = agentLive.indexOf(src);
+          if (i >= 0) agentLive.splice(i, 1);
+        };
+        // Feeds the speaking reporter below, so the backend's barge-in window
+        // tracks his REAL voice exactly as it does on the legacy path.
+        speakingUntil = Math.max(
+          speakingUntil,
+          performance.now() + (agentNextAt - c.currentTime) * 1000 + 150,
+        );
+      };
+      // A legacy stop (barge-in, "Cedric stop") must silence the AGENT queue
+      // too: while he speaks the bridge mutes its ingress, so ElevenLabs cannot
+      // hear the interruption — the backend's transcript-driven stop is the one
+      // that reaches us. Wrap the binding so every existing call site flushes
+      // both pipelines (and still contracts the particle shell).
+      const _baseInterrupt = interruptSpeech;
+      interruptSpeech = function () { _baseInterrupt(); flushAgentAudio(); };
+      window.interruptSpeech = interruptSpeech;
+
+      let agentWs = null, agentRetry = 500;
+      const connectAgentVoice = () => {
+        let target;
+        try { target = voiceWsBase.replace(/^http/, "ws") + "/voice-out/" + encodeURIComponent(voiceCap); }
+        catch (_) { return; }
+        try { agentWs = new WebSocket(target); }
+        catch (_) { setTimeout(connectAgentVoice, agentRetry = Math.min(agentRetry * 2, 8000)); return; }
+        agentWs.onopen = () => { agentRetry = 500; };
+        agentWs.onmessage = (ev) => {
+          let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
+          if (m.type === "audio" && m.data) { unlockAudio(); playAgentChunk(m.data); }
+          else if (m.type === "interrupt") { try { interruptSpeech(); } catch (_) { flushAgentAudio(); } }
+          else if (m.type === "response_end") { /* audio already queued; let it finish */ }
+        };
+        agentWs.onclose = () => setTimeout(connectAgentVoice, agentRetry = Math.min(agentRetry * 2, 8000));
+        agentWs.onerror = () => { try { agentWs.close(); } catch (_) {} };
+      };
+      connectAgentVoice();
+    }
 
     // Report the REAL speaking state (same scheme as talk.html): heartbeat
     // while anything is playing or queued, one false on the transition.
