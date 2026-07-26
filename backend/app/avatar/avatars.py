@@ -143,7 +143,9 @@ class Avatar:
         )
         preferred_ready = (
             photoreal_ready if self.page == "photoreal"
-            else talk_ready if self.page == "talk"
+            # "robot" projects the same GLB head /talk renders — its readiness
+            # IS the talk asset's readiness (no extra asset of its own).
+            else talk_ready if self.page in ("talk", "robot")
             else bool(self.anam_avatar_id)
         )
         return {
