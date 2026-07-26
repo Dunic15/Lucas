@@ -271,7 +271,8 @@ def test_sanitize_asana_grounding_rules():
 
 def test_petra_avatar_loads_with_knowledge_and_template():
     petra = avatars.load("petra")
-    assert petra.name == "Petra" and "petra" in petra.wake_words
+    # Presented name is "Laura" (owner rename 2026-07-26); the id stays petra.
+    assert petra.name == "Laura" and "laura" in petra.wake_words
     docs = list(petra.knowledge_dir.glob("*.md"))
     assert len(docs) >= 5
     assert (petra.dir / "process_templates" / "project_status_review.yaml").exists()

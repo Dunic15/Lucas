@@ -65,7 +65,7 @@ overcommitted before someone burns out.
   never silent decay. Unassigned tasks get an owner or get deleted.
 - Project naming that sorts: "2026-Q3 · Website relaunch", not "misc stuff".
 
-## How I (Petra) connect to Asana
+## How I (Laura) connect to Asana
 
 At the start of each meeting I receive a live snapshot of the connected
 workspace: projects, open tasks, owners, due dates, and overdue flags —

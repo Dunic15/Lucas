@@ -1,7 +1,7 @@
 # Process template: a project status review must actually review the project —
 # progress vs plan, blockers with owners, risks, and concrete next steps with
 # dates. MeetingState tracks these silently; critical_gaps still open at
-# wrap-up trigger Petra's one polite closing intervention ("we never assigned
+# wrap-up trigger Laura's one polite closing intervention ("we never assigned
 # an owner to the blocker…").
 id: project_status_review
 name: Project Status Review
