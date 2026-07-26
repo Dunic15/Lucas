@@ -65,9 +65,10 @@ def test_summary_shape_and_attribution(client):
 
     assert {"avatars", "live", "meetings", "stats", "connections"} <= set(data)
 
-    # Installed avatars come from the registry (laura, cedric, sff, …).
+    # Installed avatars come from the registry; hidden ones (laura, sff)
+    # don't surface as dashboard cards.
     ids = {a["id"] for a in data["avatars"]}
-    assert "laura" in ids and "cedric" in ids
+    assert "cedric" in ids and "laura" not in ids
 
     m = data["meetings"][0]
     assert m["avatar_id"] == "laura"
@@ -77,10 +78,8 @@ def test_summary_shape_and_attribution(client):
     assert m["missing_steps"] == ["security_approval"]
     assert m["follow_up_subject"] == "ACME kickoff follow-up"
 
-    # The rollup attributes the meeting to laura, not cedric.
-    laura = next(a for a in data["avatars"] if a["id"] == "laura")
+    # The rollup attributes the meeting to laura (hidden card), not cedric.
     cedric = next(a for a in data["avatars"] if a["id"] == "cedric")
-    assert laura["meetings_total"] == 1
     assert cedric["meetings_total"] == 0
 
     stats = data["stats"]
@@ -174,32 +173,35 @@ def test_summary_respects_bearer_gate(client, monkeypatch):
 
 
 def test_hidden_avatar_excluded_and_enriched(client):
-    """sff is a knowledge pack (hidden: true) — not a callable avatar, so it must
-    NOT appear in the dashboard list; Laura/Cedric must, with capabilities."""
+    """Avatars flagged hidden: true (sff the knowledge pack, laura by owner
+    choice) must NOT appear in the dashboard list; Cedric must, with
+    capabilities."""
     _seed_artifact()
     data = client.get("/dashboard/summary").json()
     ids = {a["id"] for a in data["avatars"]}
     assert "sff" not in ids
-    assert {"laura", "cedric"} <= ids
+    assert "laura" not in ids
+    assert "cedric" in ids
 
-    laura = next(a for a in data["avatars"] if a["id"] == "laura")
-    assert isinstance(laura["capabilities"], list) and laura["capabilities"]
-    assert "knowledge_topics" in laura and "process_templates" in laura
-    assert "minutes_total" in laura
+    cedric = next(a for a in data["avatars"] if a["id"] == "cedric")
+    assert isinstance(cedric["capabilities"], list) and cedric["capabilities"]
+    assert "knowledge_topics" in cedric and "process_templates" in cedric
+    assert "minutes_total" in cedric
 
 
 def test_avatar_email_default_bare_others_tagged(client):
     """The watched inbox IS the default avatar's address (bare); every other
-    avatar is a +tag alias of it. An untagged invite falls back to the default
-    avatar, so the bare address genuinely summons it."""
+    avatar is a +tag alias of it. The default avatar (laura) is hidden from the
+    dashboard, so every visible card shows its +tag alias — the bare address
+    still summons the default avatar via the untagged-invite fallback."""
     data = client.get("/dashboard/summary").json()
     by_id = {a["id"]: a for a in data["avatars"]}
     raw = settings.calendar_invite_emails.split(",")[0].strip()
     local, _, domain = raw.partition("@")
     base = local.split("+")[0]
-    assert by_id[settings.default_avatar_id]["email"] == f"{base}@{domain}"
-    other = next(i for i in by_id if i != settings.default_avatar_id)
-    assert by_id[other]["email"] == f"{base}+{other}@{domain}"
+    assert settings.default_avatar_id not in by_id  # hidden from the dashboard
+    for aid, card in by_id.items():
+        assert card["email"] == f"{base}+{aid}@{domain}"
 
 
 def test_billing_block_real_minutes(client):
