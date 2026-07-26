@@ -95,6 +95,13 @@ def test_customer_avatars_publish_explicit_renderer_readiness():
     assert cedric["photoreal"]["ready"] is True
     assert laura["ready"] is True
     assert cedric["ready"] is True
+    # Petra (presented as "Laura", the PM avatar) wears the hologram too
+    # (owner 2026-07-26): /robot projects her own petra.glb.
+    petra = avatars.load("petra").renderer_readiness
+    assert petra["preferred"] == "robot"
+    assert petra["fallback"] == "talk"
+    assert petra["talk"] == {"ready": True, "asset": "petra.glb"}
+    assert petra["ready"] is True
 
 
 def test_internal_duccio_avatar_stays_off_the_product_roster():
