@@ -122,9 +122,11 @@ voice_actions_mode: prepare_only
 min_confidence:
 speak_cooldown_seconds:
 
-# Identity-safe renderer assets. Cedric uses his own 3D model for the public
-# product; if unavailable, only his own photoreal portrait may be attempted.
-face: talk
+# Identity-safe renderer assets. Cedric wears the HOLOGRAM face (/robot): his
+# own cedric.glb head rendered as a light projection. To put the plain 3D
+# Cedric back exactly as before, change this one line to `face: talk` — the
+# model, the /talk page and the fallbacks are untouched.
+face: robot
 face_fallback: photoreal
 talk_model: cedric.glb
 photoreal_reference: reference-cedric.jpg
