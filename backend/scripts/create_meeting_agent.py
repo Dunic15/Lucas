@@ -1,16 +1,21 @@
-"""Create or update the "Cedric Meeting Pilot" ElevenLabs Agent from repo config.
+"""Create or update an avatar's ElevenLabs Meeting Agent from repo config.
 
-The agent's entire configuration lives HERE (persona from avatars/cedric/
+The agent's entire configuration lives HERE (persona from avatars/<avatar>/
 avatar.yaml + the pilot conversation rules below) so it is code-reviewed and
 reproducible — never hand-edited in the ElevenLabs dashboard. Re-running is
 idempotent: an existing agent with the same name is updated in place.
 
 Usage:
-    ELEVENLABS_API_KEY=... python3 backend/scripts/create_cedric_agent.py
-    ELEVENLABS_API_KEY=... python3 backend/scripts/create_cedric_agent.py --dry-run
+    ELEVENLABS_API_KEY=... python3 backend/scripts/create_meeting_agent.py --avatar cedric
+    ELEVENLABS_API_KEY=... python3 backend/scripts/create_meeting_agent.py --avatar petra --dry-run
+
+--avatar is REQUIRED: this script PATCHES an existing agent that matches the
+computed name, so a wrong/defaulted value would silently rewrite another
+avatar's live agent. It also refuses to patch an agent id that a DIFFERENT
+avatar.yaml already claims (see _assert_not_another_avatars_agent).
 
 Prints the agent id (and the config on --dry-run). NEVER prints the key.
-After creation, paste the id into avatars/cedric/avatar.yaml
+After creation, paste the id into avatars/<avatar>/avatar.yaml
 (elevenlabs_agent_id) — dispatch stays off until the env flag flips too
 (see docs/product/CEDRIC-ELEVENLABS-PILOT.md).
 
@@ -23,7 +28,7 @@ see its docs/features/voice-agent.md for the battle-tested "why" per knob):
     (Underheard runs "normal" for 1:1 phone interviews it DRIVES; a meeting
     avatar waits its turn, so patient stays right here.)
   - interruption_ignore_terms — backchannels ("yeah", "mm-hmm", "sì") must
-    not cut Cedric off mid-answer; real barge-in still interrupts.
+    not cut {NAME} off mid-answer; real barge-in still interrupts.
   - LLM claude-sonnet-4-6 with max_tokens 200 — Underheard's prod pick;
     uncapped tokens + a bloated prompt measurably slowed responses. (They
     are trialling Qwen; it "sometimes gets lost" — not for this pilot.)
@@ -47,18 +52,21 @@ import httpx
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-AGENT_NAME = "Cedric Meeting Pilot"
+def agent_name_for(avatar_id: str, display_name: str) -> str:
+    """The EL-side agent name. Idempotency key AND the safety key: it must be
+    unique per avatar, or a re-run would patch someone else's agent."""
+    return f"{display_name or avatar_id.title()} Meeting Pilot"
 API_BASE = "https://api.elevenlabs.io"
 
 # Multiparty + honesty rules appended to the yaml persona. They port the
 # capability-grounding discipline the legacy pipeline enforces (never claim
 # "done", no bare-yes approvals, say plainly what you don't know) into the
-# agent's prompt — without them live Cedric would regress.
+# agent's prompt — without them a live avatar would regress.
 PILOT_RULES = """
-MEETING PILOT RULES — you are Cedric in a LIVE multiparty business meeting.
+MEETING PILOT RULES — you are {NAME} in a LIVE multiparty business meeting.
 Audio reaches you only when the Meeting Director routed an utterance to you:
-it was addressed to you by name (Cedric — sometimes mis-transcribed as
-Cedrick/Sedric/Sedrik), or it is a follow-up from the person you are already
+it was addressed to you by name ({NAME} — sometimes mis-transcribed as
+{ALIASES}), or it is a follow-up from the person you are already
 talking with. Behave accordingly:
 - Never treat "yeah", "okay", "mhmm" or similar backchannels as requests.
 - Never take a bare "yes"/"okay"/"va bene" as approval of any action.
@@ -115,7 +123,7 @@ YOUR TOOLS (they call the meeting platform — use them, never invent):
 
 - If someone asks you to LEAVE or EXIT the meeting/call — any phrasing:
   "leave the call(s)", "go out the call/meeting", "you can go", "drop off"
-  (your name is also mis-heard as Sajrik/Sadic/Sedrick): say ONE short
+  (your name is also mis-heard — see the aliases above): say ONE short
   goodbye ("Alright — see you next time!") and CALL the leave_meeting tool.
   After calling it, say NOTHING more — not even replying to "bye" — you are
   disconnecting. NEVER queue leaving as an action, never refuse, never say
@@ -332,24 +340,64 @@ CLIENT_TOOLS = [
 ]
 
 
-def _load_cedric() -> dict:
-    cfg = REPO_ROOT / "avatars" / "cedric" / "avatar.yaml"
+def _load_avatar(avatar_id: str) -> dict:
+    cfg = REPO_ROOT / "avatars" / avatar_id / "avatar.yaml"
+    if not cfg.is_file():
+        sys.exit(f"no such avatar: avatars/{avatar_id}/avatar.yaml")
     return yaml.safe_load(cfg.read_text()) or {}
 
 
-def build_payload() -> dict:
-    cedric = _load_cedric()
-    persona = (cedric.get("persona_prompt") or "").strip()
-    voice_id = (cedric.get("elevenlabs_voice_id") or "").strip()
+def _assert_not_another_avatars_agent(avatar_id: str, agent_id: str) -> None:
+    """Refuse to PATCH an agent that another avatar.yaml already claims.
+
+    The idempotency path matches agents BY NAME, so a copy-paste slip (running
+    with the wrong --avatar, or two avatars whose display names collide) would
+    silently rewrite a live agent's prompt, voice, tools and knowledge base.
+    This is the backstop: the repo is the source of truth for which agent
+    belongs to whom, so a mismatch is a hard stop, never a warning."""
+    if not agent_id:
+        return
+    for other in sorted((REPO_ROOT / "avatars").iterdir()):
+        if not other.is_dir() or other.name == avatar_id:
+            continue
+        cfg = other / "avatar.yaml"
+        if not cfg.is_file():
+            continue
+        data = yaml.safe_load(cfg.read_text()) or {}
+        claimed = str(data.get("elevenlabs_agent_id") or "").strip()
+        if claimed and claimed == agent_id:
+            sys.exit(
+                f"REFUSING to patch {agent_id}: it is claimed by "
+                f"avatars/{other.name}/avatar.yaml. Check --avatar."
+            )
+
+
+def build_payload(avatar_id: str) -> dict:
+    cfg = _load_avatar(avatar_id)
+    persona = (cfg.get("persona_prompt") or "").strip()
+    voice_id = (cfg.get("elevenlabs_voice_id") or "").strip()
     if not persona or not voice_id:
-        sys.exit("avatars/cedric/avatar.yaml is missing persona_prompt or voice id")
+        sys.exit(
+            f"avatars/{avatar_id}/avatar.yaml is missing persona_prompt or "
+            "elevenlabs_voice_id (the voice is frozen server-side into the "
+            "agent — it cannot be left to the global default)"
+        )
+    display = str(cfg.get("name") or avatar_id).strip()
+    # ASR aliases: the wake_words ARE the mis-hearings the team already
+    # curated for this avatar (petra: laura/lara/lora), so the prompt teaches
+    # the agent the same set the legacy wake detector tolerates.
+    aliases = [str(w).strip() for w in (cfg.get("wake_words") or []) if str(w).strip()]
+    alias_txt = "/".join(a.title() for a in aliases if a.lower() != display.lower())
+    rules = PILOT_RULES.replace("{NAME}", display).replace(
+        "{ALIASES}", alias_txt or "occasional ASR variants of the name"
+    )
     return {
-        "name": AGENT_NAME,
+        "name": agent_name_for(avatar_id, display),
         "tags": ["laura-pilot"],
         "conversation_config": {
             "agent": {
                 "prompt": {
-                    "prompt": f"{persona}\n\n{PILOT_RULES}",
+                    "prompt": f"{persona}\n\n{rules}",
                     # Owner call 2026-07-24 after two slow live tests: EL's
                     # COLOCATED Qwen (runs inside their infra, no external
                     # LLM hop — the platform's own latency thesis). The
@@ -370,7 +418,7 @@ def build_payload() -> dict:
                 # connects = join time); the legacy self-intro is skipped for
                 # EL-runtime sessions backend-side.
                 "first_message": (
-                    "Hi everyone — Cedric here. Just say my name whenever "
+                    f"Hi everyone — {display} here. Just say my name whenever "
                     "you need me."
                 ),
                 "language": "en",
@@ -416,7 +464,7 @@ def build_payload() -> dict:
                 "soft_timeout_config": {
                     "timeout_seconds": -1,
                 },
-                # Backchannels must not cut Cedric off mid-answer; a real
+                # Backchannels must not cut {NAME} off mid-answer; a real
                 # barge-in (anything beyond these) still interrupts him.
                 "interruption_ignore_terms": [
                     "yeah", "yes", "ok", "okay", "mm-hmm", "mhmm", "uh-huh",
@@ -515,11 +563,11 @@ def ensure_client_tools(client: httpx.Client) -> list[str]:
     return ids
 
 
-def ensure_knowledge_docs(client: httpx.Client) -> list[dict]:
-    """Sync Cedric's knowledge packs into the EL native knowledge base.
+def ensure_knowledge_docs(client: httpx.Client, avatar_id: str) -> list[dict]:
+    """Sync THIS avatar's knowledge packs into the EL native knowledge base.
 
     Content-aware idempotency: each doc's KB name embeds a short content hash
-    ("cedric-kb:<file>@<hash>"), so an edited file gets a NEW doc on the next
+    ("<avatar>-kb:<file>@<hash>"), so an edited file gets a NEW doc on the next
     run and the agent attach list always points at current content (stale
     hashes stay orphaned in the KB, harmless and unattached). Synthetic
     avatar-pack markdown ONLY — never org data, transcripts, or PII.
@@ -527,18 +575,28 @@ def ensure_knowledge_docs(client: httpx.Client) -> list[dict]:
     import hashlib
 
     docs: list[tuple[str, str]] = []  # (kb_name, text)
-    cedric_cfg = _load_cedric()
-    pack_ids = ["cedric"] + [str(p) for p in (cedric_cfg.get("knowledge_packs") or [])]
+    cfg = _load_avatar(avatar_id)
+    pack_ids = [avatar_id] + [str(p) for p in (cfg.get("knowledge_packs") or [])]
+    # BOTH knowledge/ and about/. about/ is this avatar's SELF-knowledge ("how
+    # were you built", "what can you actually do") and on the legacy pipeline it
+    # is reachable only through rag.retrieve_about — which the agent runtime
+    # never calls. Without it here, moving an avatar to ElevenLabs makes her
+    # forget herself and answer capability questions from prompt text alone,
+    # which is exactly the honesty regression the pilot was supposed to avoid.
+    # Same content class as knowledge/: synthetic avatar-pack markdown only.
     for pack in pack_ids:
-        kdir = REPO_ROOT / "avatars" / pack / "knowledge"
-        if not kdir.is_dir():
-            continue
-        for md in sorted(kdir.glob("*.md")):
-            text = md.read_text().strip()
-            if not text:
+        for sub in ("knowledge", "about"):
+            kdir = REPO_ROOT / "avatars" / pack / sub
+            if not kdir.is_dir():
                 continue
-            digest = hashlib.sha256(text.encode()).hexdigest()[:10]
-            docs.append((f"cedric-kb:{pack}/{md.name}@{digest}", text))
+            for md in sorted(kdir.glob("*.md")):
+                text = md.read_text().strip()
+                if not text:
+                    continue
+                digest = hashlib.sha256(text.encode()).hexdigest()[:10]
+                docs.append(
+                    (f"{avatar_id}-kb:{pack}/{sub}/{md.name}@{digest}", text)
+                )
     if not docs:
         return []
 
@@ -578,8 +636,8 @@ def ensure_knowledge_docs(client: httpx.Client) -> list[dict]:
     return entries
 
 
-def find_existing(client: httpx.Client) -> str | None:
-    """agent_id of an existing agent with AGENT_NAME, else None (paginated)."""
+def find_existing(client: httpx.Client, agent_name: str) -> str | None:
+    """agent_id of an existing agent with this exact name, else None."""
     cursor = None
     while True:
         params = {"page_size": 100}
@@ -589,7 +647,7 @@ def find_existing(client: httpx.Client) -> str | None:
         resp.raise_for_status()
         data = resp.json()
         for agent in data.get("agents", []):
-            if agent.get("name") == AGENT_NAME:
+            if agent.get("name") == agent_name:
                 return agent.get("agent_id")
         cursor = data.get("next_cursor")
         if not data.get("has_more") or not cursor:
@@ -598,20 +656,26 @@ def find_existing(client: httpx.Client) -> str | None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--avatar",
+        required=True,
+        help="avatar id (folder under avatars/), e.g. cedric or petra",
+    )
     ap.add_argument("--dry-run", action="store_true", help="print config, no API call")
     args = ap.parse_args()
 
-    payload = build_payload()
+    payload = build_payload(args.avatar)
     if args.dry_run:
         print(json.dumps(payload, indent=2))
         return
 
     with httpx.Client(headers=_headers(), timeout=60) as client:
         prompt_cfg = payload["conversation_config"]["agent"]["prompt"]
-        prompt_cfg["knowledge_base"] = ensure_knowledge_docs(client)
+        prompt_cfg["knowledge_base"] = ensure_knowledge_docs(client, args.avatar)
         prompt_cfg["tool_ids"] = ensure_client_tools(client)
-        agent_id = find_existing(client)
+        agent_id = find_existing(client, payload["name"])
         if agent_id:
+            _assert_not_another_avatars_agent(args.avatar, agent_id)
             resp = client.patch(
                 f"{API_BASE}/v1/convai/agents/{agent_id}", json=payload
             )
@@ -624,7 +688,7 @@ def main() -> None:
             sys.exit(f"ElevenLabs {resp.status_code}: {resp.text[:2000]}")
         agent_id = agent_id or resp.json().get("agent_id", "")
         print(f"{action}: {agent_id}")
-        print("next: set elevenlabs_agent_id in avatars/cedric/avatar.yaml")
+        print(f"next: set elevenlabs_agent_id in avatars/{args.avatar}/avatar.yaml")
 
 
 if __name__ == "__main__":

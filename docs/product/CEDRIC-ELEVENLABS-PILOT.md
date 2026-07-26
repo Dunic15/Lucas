@@ -2,7 +2,7 @@
 
 **Status:** PR 1 (config + isolation) shipped. The **ElevenLabs agent EXISTS**:
 "Cedric Meeting Pilot" (`agent_0801ky9qgd9cfk8aw3fgj8keytgp`), created
-2026-07-24 by `backend/scripts/create_cedric_agent.py` (config-as-code,
+2026-07-24 by `backend/scripts/create_meeting_agent.py --avatar cedric` (config-as-code,
 idempotent re-runs update in place; signed-URL mint verified 200). Its id is
 wired into `avatars/cedric/avatar.yaml`, so **three of the four dispatch
 conditions are true in-repo — the env flag alone is the go-live switch** (off
@@ -207,7 +207,7 @@ discipline insufficient):
 ### PR 4 — client tools — **SHIPPED 2026-07-24**
 Four client tools registered in the EL tools registry (create-or-reuse by
 name, attached via `prompt.tool_ids`; definitions in
-`create_cedric_agent.py::CLIENT_TOOLS` — the contract with
+`create_meeting_agent.py --avatar cedric::CLIENT_TOOLS` — the contract with
 `api/voice_agent.voice_agent_tool`, change them together):
 `get_meeting_context` (roster + brief + purpose + tracked decisions/owners),
 `search_company_knowledge` (`rag.retrieve` org-scoped: base pack + org's

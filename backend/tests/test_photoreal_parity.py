@@ -95,10 +95,13 @@ def test_customer_avatars_publish_explicit_renderer_readiness():
     assert cedric["photoreal"]["ready"] is True
     assert laura["ready"] is True
     assert cedric["ready"] is True
-    # Petra (presented as "Laura", the PM avatar) wears the hologram too
-    # (owner 2026-07-26): /robot projects her own petra.glb.
+    # Petra (presented as "Laura", the PM avatar) is back on the 3D human head
+    # (owner 2026-07-26, later the same day): /talk renders her own petra.glb.
+    # This is load-bearing, not cosmetic — she moved to the ElevenLabs Agent
+    # runtime, and /talk is the renderer that carries the agent voice socket.
+    # test_conversation_runtime enforces that coupling directly.
     petra = avatars.load("petra").renderer_readiness
-    assert petra["preferred"] == "robot"
+    assert petra["preferred"] == "talk"
     assert petra["fallback"] == "talk"
     assert petra["talk"] == {"ready": True, "asset": "petra.glb"}
     assert petra["ready"] is True
