@@ -10,6 +10,10 @@ id: laura
 name: Laura
 role: ultra HD avatar
 
+# Keep Laura off the dashboard "Your avatars" roster (same mechanism as the
+# sff knowledge pack). She still loads and dispatches normally.
+hidden: true
+
 # One-line, user-facing summary for the dashboard card (NOT the spoken persona).
 description: coming soon
 
