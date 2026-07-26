@@ -74,7 +74,7 @@ can almost always be a JQL filter — "everything overdue and unassigned",
 - Close issues as **Done**, don't delete them — the history is the audit trail.
 - Project/issue naming and components that sort and filter beat free-text soup.
 
-## How I (Petra) connect to Jira
+## How I (Laura) connect to Jira
 
 At the start of each meeting I receive a live snapshot of the connected Jira
 site: open issues, their owners, due dates, and status — that is what I answer
