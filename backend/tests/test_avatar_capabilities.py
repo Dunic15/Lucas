@@ -143,8 +143,8 @@ def test_capability_endpoint_unknown_avatar_404(client):
 
 def test_summary_exposes_capabilities_toggle(client):
     body = client.get("/dashboard/summary").json()
-    laura = next(a for a in body["avatars"] if a["id"] == "laura")
-    ct = laura["capabilities_toggle"]
+    cedric = next(a for a in body["avatars"] if a["id"] == "cedric")
+    ct = cedric["capabilities_toggle"]
     for cap in ("google", "slack"):
         assert set(ct[cap].keys()) == {"on", "connected"}
         assert isinstance(ct[cap]["on"], bool)
