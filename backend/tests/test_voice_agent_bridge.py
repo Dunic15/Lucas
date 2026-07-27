@@ -1077,3 +1077,18 @@ def test_board_is_capped_like_every_other_context_value():
 
     longest = max(len(m) for m in re.findall(r"x+", _board_prompt("x" * 9000)))
     assert longest <= 2400, "an unbounded board would blow the prompt"
+
+
+def test_italian_greeting_uses_the_avatars_own_name(monkeypatch):
+    """An Italian call had Laura opening with "sono Cedric" — the greeting was
+    hardcoded while Cedric was the only avatar on this runtime. The first
+    sentence an avatar says must be her own name."""
+    monkeypatch.setattr(settings, "voice_agent_language", "it")
+    s = _el_session("bot_it")
+    try:
+        payload = voice_agent_api.build_init_payload(s, avatars.load("petra"))
+        greeting = payload["conversation_config_override"]["agent"]["first_message"]
+    finally:
+        store.remove("bot_it")
+    assert "Laura" in greeting
+    assert "Cedric" not in greeting
