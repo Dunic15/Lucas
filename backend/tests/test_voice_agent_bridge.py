@@ -1013,3 +1013,67 @@ def test_signal_relay_noop_without_capability_or_ownership(monkeypatch):
     voice_agent_api.signal_relay(_NoCap(), {"type": "stop"})
     voice_agent_api.signal_relay(_NotActive(), {"type": "stop"})
     assert calls == []
+
+
+# ── the Asana board in the per-call prompt (live incident 2026-07-27) ──────
+# On this runtime the board never reached the avatar: it rides session.
+# memory_brief, whose only consumer is the legacy brain, which an EL session
+# returns long before. She did not go quiet about it — her persona, her
+# knowledge pack and the capability tool all say she has a snapshot — so the
+# model filled the gap from a knowledge document describing an EXAMPLE company.
+# These tests pin the two halves: the board reaches the prompt, and the prompt
+# states exactly one rule about it.
+
+
+def _board_prompt(snapshot: str | None) -> str:
+    """The agent prompt build_init_payload would ship for this board."""
+    s = _el_session("bot_board")
+    if snapshot is not None:
+        s.asana_snapshot = snapshot
+    try:
+        payload = voice_agent_api.build_init_payload(s, avatars.load("petra"))
+        prompt = payload["conversation_config_override"]["agent"]["prompt"]["prompt"]
+    finally:
+        store.remove("bot_board")
+    # The prompt is hand-wrapped, so assert on content, not on line breaks.
+    return " ".join(prompt.split())
+
+
+BOARD = (
+    "(as of 2026-07-27)\n"
+    "• YC Demo — Fall 2026 — 2 open task(s)\n"
+    "   - Finalize dashboard animation · owner: Ananth · due 2026-07-27\n"
+)
+
+
+def test_board_snapshot_reaches_the_agent_prompt():
+    prompt = _board_prompt(BOARD)
+    assert "YC Demo — Fall 2026" in prompt, "the board never reached the agent"
+    assert "Finalize dashboard animation" in prompt
+    assert "owner: Ananth" in prompt
+
+
+def test_with_a_board_the_prompt_forbids_answering_from_knowledge_docs():
+    prompt = _board_prompt(BOARD)
+    assert "asana_board_at_meeting_start" in prompt
+    assert "NEVER answer them from your knowledge documents" in prompt
+    # The contradictory blanket denial must be GONE: keeping both in one prompt
+    # is what let the model pick the knowledge document.
+    assert "CANNOT live-read inboxes, drives or task boards" not in prompt
+
+
+def test_without_a_board_the_prompt_keeps_the_honest_denial():
+    prompt = _board_prompt("")
+    assert "asana_board_at_meeting_start" not in prompt
+    assert "CANNOT live-read inboxes, drives or task boards" in prompt
+    assert "NEVER answer them from your knowledge documents" not in prompt
+
+
+def test_board_is_capped_like_every_other_context_value():
+    # Measure the injected RUN, not a total count: the prompt's own prose
+    # contains a few x characters and the two rule branches differ by one, so
+    # counting every x would be a brittle assertion.
+    import re
+
+    longest = max(len(m) for m in re.findall(r"x+", _board_prompt("x" * 9000)))
+    assert longest <= 2400, "an unbounded board would blow the prompt"
