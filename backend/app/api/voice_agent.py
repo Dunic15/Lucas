@@ -243,8 +243,13 @@ def build_init_payload(session, avatar) -> dict:
         "language": "it" if lang == "it" else "en",
     }
     if lang == "it":
+        # The avatar's OWN name. This was hardcoded to "Cedric" while he was the
+        # only avatar on this runtime; with a second one live, an Italian call
+        # had Laura introducing herself as Cedric — the same identity confusion
+        # the brief gate exists to prevent, in the very first sentence she says.
+        _name = str(getattr(avatar, "name", "") or "").strip() or "Laura"
         agent_override["first_message"] = (
-            "Ciao a tutti — sono Cedric. Fate il mio nome quando vi servo."
+            f"Ciao a tutti — sono {_name}. Fate il mio nome quando vi servo."
         )
     return {
         "type": "conversation_initiation_client_data",
