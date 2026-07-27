@@ -83,6 +83,13 @@ def _token(org_id: str) -> tuple[str, str]:
     except Exception:  # noqa: BLE001
         row = None
     pat = (row or {}).get("refresh_token", "")
+    if not pat:
+        # An org that connected Asana through Pipedream Connect has no native
+        # row, but Pipedream can mint a short-lived access token for the org's
+        # OWN connected account — same per-org isolation as a native grant.
+        tok = _pipedream_token(org)
+        if tok:
+            return tok, ""
     if not pat and _env_pat_allowed(org):
         # The ASANA_TOKEN env PAT is the DEPLOYMENT owner's own workspace. It
         # may serve only the deployment's own (demo/key-free) org — never an
@@ -92,6 +99,32 @@ def _token(org_id: str) -> tuple[str, str]:
     if not pat:
         return "", "Asana is not connected for this org"
     return pat, ""
+
+
+# Pipedream-minted access tokens are short-lived; cache briefly so a join +
+# brief + live tools within one meeting reuse one mint. In-process, never
+# logged — same contract as _OAUTH_CACHE.
+_PD_TTL_SECONDS = 600.0
+_pd_lock = threading.Lock()
+_PD_CACHE: dict[str, tuple[str, float]] = {}  # org_id -> (token, expires_at)
+
+
+def _pipedream_token(org_id: str) -> str:
+    """The org's own Asana access token via Pipedream Connect, or ""."""
+    now = time.time()
+    with _pd_lock:
+        cached = _PD_CACHE.get(org_id)
+        if cached and cached[1] > now:
+            return cached[0]
+    try:
+        from .. import pipedream_client
+        tok = pipedream_client.account_access_token(org_id, "asana")
+    except Exception:  # noqa: BLE001 — a broker hiccup reads as not connected
+        tok = ""
+    if tok:
+        with _pd_lock:
+            _PD_CACHE[org_id] = (tok, now + _PD_TTL_SECONDS)
+    return tok
 
 
 def _env_pat_allowed(org_id: str) -> bool:
