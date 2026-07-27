@@ -115,6 +115,16 @@ def build_init_payload(session, avatar) -> dict:
         roster = []
     if roster:
         context["participants"] = roster[:20]
+    # THE BOARD. On the legacy pipeline this rides memory_brief, which an
+    # ElevenLabs-Agent session never reaches — so without this she has no
+    # project data at all while her persona, her knowledge pack and the
+    # capability tool all tell the room she has a snapshot. That gap does not
+    # produce silence, it produces a confident invented status (live
+    # 2026-07-27). Capped like every other context value; workspace facts only
+    # (project + open task names, owners, due dates), never transcripts.
+    board = str(getattr(session, "asana_snapshot", "") or "").strip()
+    if board:
+        context["asana_board_at_meeting_start"] = board[:2400]
 
     prompt = "\n".join(
         [
@@ -170,9 +180,25 @@ def build_init_payload(session, avatar) -> dict:
             "- NEVER invent a recipient, attendee, name, email, date or time",
             "  that was not said out loud — ask for it instead of filling it in.",
             "- 'What are my next meetings': CALL get_upcoming_meetings, answer",
-            "  immediately from it. You CANNOT live-read inboxes/drives/tasks:",
-            "  say so plainly, offer a QUEUED alternative and if accepted CALL",
-            "  queue_action right away. Never promise unqueued follow-ups.",
+            "  immediately from it.",
+            # One rule about the board, chosen by whether we actually have one.
+            # Both branches are honest; the failure this replaces was having
+            # BOTH in the prompt at once.
+            *(
+                [
+                    "- PROJECT/BOARD/TASK questions: answer ONLY from",
+                    "  asana_board_at_meeting_start below, and say it is the state",
+                    "  as of the start of this call. NEVER answer them from your",
+                    "  knowledge documents — those describe example companies, not",
+                    "  this workspace. You cannot live-read inboxes or drives.",
+                ]
+                if context.get("asana_board_at_meeting_start")
+                else [
+                    "- You CANNOT live-read inboxes, drives or task boards: say so",
+                    "  plainly, offer a QUEUED alternative and if accepted CALL",
+                    "  queue_action right away. Never promise unqueued follow-ups.",
+                ]
+            ),
             "- Actions run ONCE APPROVED on the dashboard: say 'it's in the",
             "  approval queue; it runs as soon as you approve it' — never",
             "  'after the meeting', never that it is scheduled/sent/done.",
@@ -259,6 +285,30 @@ async def voice_agent_bootstrap(capability: str, request: Request) -> JSONRespon
         avatar = avatars.load(session.avatar_id)
     except Exception:  # noqa: BLE001
         return JSONResponse({"enabled": False, "reason": "avatar load failed"})
+
+    # The board, if the join-time gather has not landed it yet. The realtime
+    # capability is registered BEFORE that gather runs, so the relay can
+    # bootstrap first and the prompt would ship without a board on exactly the
+    # meetings where it matters most. workspace_brief is TTL-cached per org, so
+    # the normal path costs nothing and this only ever pays on the race.
+    if not str(getattr(session, "asana_snapshot", "") or "").strip():
+        try:
+            from ..integrations import asana_client
+            from ..meeting.lifecycle import _avatar_asana_enabled
+
+            if await run_in_threadpool(
+                _avatar_asana_enabled, session.org_id, session.avatar_id
+            ):
+                session.asana_snapshot = await run_in_threadpool(
+                    asana_client.workspace_brief, session.org_id
+                ) or ""
+                print(
+                    f"[asana] brief late-read cap={capability[:6]} "
+                    f"chars={len(session.asana_snapshot)}",
+                    flush=True,
+                )
+        except Exception as e:  # noqa: BLE001 — no board is worse, never fatal
+            print(f"[asana] brief late-read failed: {e}", flush=True)
 
     def _mint() -> str:
         with httpx.Client(timeout=15) as client:

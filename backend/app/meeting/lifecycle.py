@@ -594,6 +594,21 @@ async def _start_avatar_session(
     # answer kept saying "no snapshot loaded" while she was reading tasks from
     # it (live 2026-07-24) — capabilities.py keys on THIS flag now.
     session.asana_brief_loaded = bool(asana_snapshot)
+    # Keep the RAW board text on the session. memory_brief (below) is consumed
+    # only by the legacy brain — an ElevenLabs-Agent session returns long before
+    # it (main.py `_el_voice_owned`), so without this the avatar on that runtime
+    # has no board at all while three other surfaces still tell her she has one.
+    # api/voice_agent.build_init_payload reads this into the per-call prompt.
+    session.asana_snapshot = asana_snapshot or ""
+    # Diagnostic: an empty board is silent today — the avatar simply says "no
+    # snapshot loaded" mid-meeting and nobody can tell which of the three gates
+    # (org connected / avatar declares asana / per-avatar toggle) dropped it.
+    # Counts only: the board itself rides the prompt, never the log.
+    print(
+        f"[asana] brief avatar={avatar.id} loaded={bool(asana_snapshot)} "
+        f"chars={len(asana_snapshot or '')} live_tools={bool(asana_live)}",
+        flush=True,
+    )
     session.memory_brief = carryover or ""
     if folder:
         session.memory_brief = (

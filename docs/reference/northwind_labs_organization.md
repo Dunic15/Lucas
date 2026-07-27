@@ -1,7 +1,14 @@
 # Northwind Labs — company organization
 
-*Synthetic reference company used for demos and evaluation. Every person, team
-and project below is fictional. Nothing here is real customer or employee data.*
+*Synthetic reference company. Every person, team and project below is fictional.*
+
+**NOT in any avatar's knowledge pack, deliberately.** It lived in
+`avatars/petra/knowledge/` for one day and had to be pulled: on the ElevenLabs
+runtime the avatar had no real Asana board in her prompt, and this document gave
+her a fluent, plausible project status to invent instead ("Project Harbor, owner
+Priya Raghavan"). Kept here as a writing reference for org-knowledge docs; put it
+back in a knowledge pack only for an avatar with no live workspace to confuse it
+with.
 
 ## What Northwind Labs is
 
