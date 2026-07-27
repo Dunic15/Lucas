@@ -229,6 +229,43 @@ def list_accounts(external_user_id: str, *, app: str = "") -> list[dict]:
     return out
 
 
+def account_access_token(external_user_id: str, app: str) -> str:
+    """The org's OAuth access token for ONE connected app, or "".
+
+    The single sanctioned credential read: Pipedream Connect refreshes the
+    grant server-side and returns a short-lived access token, scoped to this
+    org's own connected account (external_user_id == org_id everywhere in this
+    codebase). Used by native READ paths (e.g. the Asana meeting brief) when
+    the org connected through Pipedream instead of a native grant — the same
+    per-org isolation as a native row, so it does NOT reopen the cross-tenant
+    env-token hole closed by the 2026-07-23 audit. The token is returned to
+    the caller only; it is never logged, stored, or shipped to a browser."""
+    if not enabled():
+        return ""
+    params: dict[str, Any] = {
+        "external_user_id": str(external_user_id),
+        "app": str(app or ""),
+        "include_credentials": "true",
+    }
+    try:
+        data = _request("GET", "accounts", params=params)
+    except PipedreamError:
+        return ""
+    accounts = data.get("data") if isinstance(data.get("data"), list) else data.get("accounts")
+    if not isinstance(accounts, list):
+        return ""
+    for a in accounts:
+        if not isinstance(a, dict) or a.get("healthy") is False:
+            continue
+        creds = a.get("credentials")
+        if not isinstance(creds, dict):
+            continue
+        tok = str(creds.get("oauth_access_token") or creds.get("access_token") or "")
+        if tok:
+            return tok
+    return ""
+
+
 # ── run a pre-built action (the "pre-configured actions" surface) ────────────
 
 def run_action(
