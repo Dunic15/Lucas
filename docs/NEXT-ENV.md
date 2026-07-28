@@ -1,5 +1,42 @@
 # Two environments: frozen for customers, `next` for you
 
+## The two links
+
+**Customers — send them this, it is unchanged:**
+```
+https://app.lauravatar.com
+```
+
+**You — never share this one:**
+```
+https://48zmdue8kg.eu-central-1.awsapprunner.com
+```
+
+> ⚠️ The address ends in **`.com`**, not `.co`. Dropping the final `m` gives
+> `DNS_PROBE_FINISHED_NXDOMAIN` and looks exactly like the service being down —
+> it isn't. Copy-paste it, don't retype it. (If you want to stop worrying about
+> this, attach a custom domain such as `next.lauravatar.com`; see the end of
+> this file.)
+
+**Before the `next` link will let you in**, its two OAuth redirect URIs must be
+authorised in Google Cloud Console → Credentials → the Laura OAuth client →
+*Authorized redirect URIs*:
+```
+https://48zmdue8kg.eu-central-1.awsapprunner.com/auth/google/callback
+https://48zmdue8kg.eu-central-1.awsapprunner.com/oauth/google/callback
+```
+The first is sign-in (`{PUBLIC_BASE_URL}/auth/google/callback`, `core/auth.py:73`);
+the second is connecting Calendar/Gmail (`GOOGLE_CALENDAR_REDIRECT_URI`). Until
+they are added, login fails with `redirect_uri_mismatch`.
+
+**Is it just paused?** `next` is billed even when idle, so it may have been
+paused deliberately:
+```bash
+aws apprunner describe-service --region eu-central-1 --service-arn <next-arn> \
+  --query 'Service.Status'      # RUNNING | PAUSED
+aws apprunner resume-service   --region eu-central-1 --service-arn <next-arn>
+```
+
 Set up 2026-07-28, the day v1 was frozen. The freeze alone protects customers
 but also blocks *you* — with one service pinned to `frozen/v1`, a push to `main`
 reaches nobody, including the person who wrote it. This is the second half.
@@ -129,3 +166,19 @@ recipe in `docs/FREEZE-V1.md`. At that moment the customers' avatars start using
 the v2 agents (the ids are on `main`), which is correct: `main` is then the
 product. Cut a fresh `frozen/*` tag first, so the version you are leaving stays
 reachable.
+
+## Optional: a nicer URL
+
+`48zmdue8kg…` is machine-generated and changes if the service is ever recreated
+— which would also invalidate the Google redirect URIs you authorised. Attaching
+a custom domain fixes both:
+
+```bash
+aws apprunner associate-custom-domain --region eu-central-1 \
+  --service-arn <next-arn> --domain-name next.lauravatar.com
+```
+
+It returns the DNS records to add. `lauravatar.com` is on the
+`Duccioprofeti@gmail.com` Cloudflare account — the same one that owns the
+`cedric-voice` workers. Then authorise `https://next.lauravatar.com/...` in
+Google once, and the URL never changes again.
