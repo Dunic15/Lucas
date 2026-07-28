@@ -122,11 +122,13 @@ voice_actions_mode: prepare_only
 min_confidence:
 speak_cooldown_seconds:
 
-# Identity-safe renderer assets. Cedric wears the HOLOGRAM face (/robot): his
-# own cedric.glb head rendered as a light projection. To put the plain 3D
-# Cedric back exactly as before, change this one line to `face: talk` — the
-# model, the /talk page and the fallbacks are untouched.
-face: robot
+# Identity-safe renderer assets. Cedric is back on the PLAIN 3D head (/talk),
+# rendering the same cedric.glb without the hologram treatment — owner call
+# 2026-07-28 after seeing the projection in a real meeting grid: next to tiles
+# of actual faces, a glowing head reads as a gimmick, and the dome on top of it
+# read as a ball. `face: robot` puts the hologram back (the /robot page, its
+# shader and its white studio are all still there, untouched).
+face: talk
 face_fallback: photoreal
 talk_model: cedric.glb
 photoreal_reference: reference-cedric.jpg

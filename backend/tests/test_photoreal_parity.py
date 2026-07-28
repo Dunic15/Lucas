@@ -83,9 +83,11 @@ def test_customer_avatars_publish_explicit_renderer_readiness():
     assert laura["fallback"] == "talk"
     assert laura["photoreal"]["asset"] == "reference-laura.jpg"
     assert laura["talk"]["asset"] == "laura.glb"
-    # Cedric wears the hologram tier (owner 2026-07-26): /robot projects his
-    # own cedric.glb, so his readiness rides on the same talk asset.
-    assert cedric["preferred"] == "robot"
+    # Cedric is back on the plain 3D head (owner 2026-07-28, after seeing the
+    # hologram in a real meeting grid: next to tiles of actual faces a glowing
+    # head reads as a gimmick). The /robot tier is untouched and one line in
+    # avatar.yaml away — his readiness rides on the same talk asset either way.
+    assert cedric["preferred"] == "talk"
     assert cedric["fallback"] == "photoreal"
     assert cedric["talk"]["asset"] == "cedric.glb"
     assert cedric["photoreal"]["asset"] == "reference-cedric.jpg"
