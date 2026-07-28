@@ -4,7 +4,18 @@
 platform. This version stays a **working product**, not an archive — the team
 keeps using and demoing it until the other one is finished.
 
-**Frozen ref:** tag `v1-frozen-2026-07-28` = branch `frozen/v1` = `23c43dd`.
+**Frozen ref:** tag `v1-frozen-2026-07-28b` = branch `frozen/v1` = `433a4fb`.
+
+> **APPLIED 2026-07-28 16:09 CEST.** App Runner `laura-backend` is pinned to
+> `frozen/v1` (UpdateService `e6bb761ae6f944369c2fd790b0f286a1`, SUCCEEDED,
+> service RUNNING). The change was one field out of 114 — `SourceCodeVersion.Value`
+> `main` → `frozen/v1` — with all **71 env vars and 32 secrets** verified intact
+> before and after. Auto-deploy stays ON so a deliberate hotfix pushed to
+> `frozen/v1` still ships; nothing else pushes there.
+>
+> Users are now served `frozen/v1` and only that. `main` is free for the next
+> platform. The commit that added this note is itself the proof: it landed on
+> `main` and produced no deployment.
 
 ---
 
