@@ -28,11 +28,26 @@ class AvatarBusyError(RuntimeError):
     """Recall has no avatar bot capacity available for a new dispatch."""
 
 
+# Shown to the user verbatim when the pool never frees. Kept here (not inlined
+# at the API layer) so recall_client and sessions.py can never drift apart.
+# 2026-07-28: the old copy promised "retry in a minute" — that outage lasted
+# 17+ minutes, so the message now refuses to name a duration it cannot honour.
+AVATAR_BUSY_MESSAGE = (
+    "Every avatar slot at our meeting provider is busy right now. This usually "
+    "clears in a couple of minutes, but it can last longer — please retry."
+)
+
 # Transient-507 dispatch retry (2026-07-24: Recall's shared avatar pool ran
 # dry twice with zero of our bots active — it clears in a minute or two, and
 # a hard bounce mid-demo is worse than a short spinner).
-_BUSY_RETRIES = 3
-_BUSY_BACKOFF_S = (10, 15, 20)
+#
+# The budget is deliberately bounded: create_bot is called INSIDE the
+# /sessions/start request, so every second here is a second the dashboard
+# spins. ~65s of sleep is the ceiling before we risk the edge request timeout.
+# A pool that stays dry longer than that is not a blip and needs the caller
+# (or a human) to retry — see docs/infra/RECALL-CAPACITY.md.
+_BUSY_RETRIES = 4
+_BUSY_BACKOFF_S = (5, 10, 20, 30)
 _BUSY_SLEEP = time.sleep  # test seam: patched so suites never really wait
 
 
@@ -251,6 +266,25 @@ def _variant_payload(variant: str | None) -> dict[str, str] | None:
         "google_meet": variant,
         "microsoft_teams": variant,
     }
+
+
+def _attempt_variant(body: dict) -> str | None:
+    """The browser flavour a create_bot body asks for ("web_gpu", "web_4_core",
+    or None for Recall's default).
+
+    This is the axis a 507 is believed to be keyed to: every rung of the
+    attempt ladder renders our avatar page via ``output_media``, so they all
+    draw on Recall's avatar-browser capacity, but a bigger flavour can run dry
+    while a smaller one still has slots. Rungs that differ only in transcription
+    provider or audio endpoints share a flavour and will 507 identically —
+    so create_bot tries each DISTINCT flavour once per round instead of
+    replaying the whole ladder into a pool it already knows is empty.
+    """
+    variant = body.get("variant")
+    if not isinstance(variant, dict):
+        return None
+    # _variant_payload writes the same value to every platform key.
+    return variant.get("zoom")
 
 
 def _ears_ws_url(realtime_capability: str) -> str:
@@ -575,11 +609,17 @@ def create_bot(
         attach_voice_agent_url=voice_agent_url,
     )
     last_error: httpx.HTTPStatusError | None = None
+    last_busy: httpx.HTTPStatusError | None = None
     _busy_round = 0
     while True:
-        _busy_retry = False
+        # Flavours that already answered 507 THIS round. Retrying a rung whose
+        # pool we just watched run dry only burns the budget, so we skip it and
+        # spend the round reaching a flavour we have not tried yet.
+        busy_variants: set[str | None] = set()
 
         for idx, (label, body) in enumerate(attempts):
+            if _attempt_variant(body) in busy_variants:
+                continue
             resp = _request(
                 "POST",
                 f"{settings.recall_api_base.rstrip('/')}/api/v1/bot/",
@@ -597,28 +637,24 @@ def create_bot(
                         "RECALL_API_BASE matches the key's region."
                     ) from e
                 if e.response.status_code == 507:
-                    # Recall's shared avatar pool is momentarily out of capacity
-                    # (hit twice on 2026-07-24 with ZERO of our bots active — it's
-                    # their side and usually clears in a minute or two). Retry the
-                    # SAME dispatch a few times with a short backoff before giving
-                    # up, so a transient blip never bounces a live demo. Sync sleep
-                    # is fine: create_bot runs in the threadpool, off the loop.
-                    if _busy_round < _BUSY_RETRIES:
-                        wait = _BUSY_BACKOFF_S[min(_busy_round,
-                                                   len(_BUSY_BACKOFF_S) - 1)]
-                        print(
-                            f"[recall] avatar capacity busy (507) — retry "
-                            f"{_busy_round + 1}/{_BUSY_RETRIES} in {wait}s",
-                            flush=True,
-                        )
-                        _BUSY_SLEEP(wait)
-                        _busy_round += 1
-                        _busy_retry = True
-                        break  # restart the attempts loop from the first config
-                    # Do not bubble Recall's raw response body to the product UI.
-                    raise AvatarBusyError(
-                        "All avatars are busy right now — retry in a minute."
-                    ) from e
+                    # Recall's shared avatar pool is out of capacity (hit on
+                    # 2026-07-24 and again for 17+ minutes on 2026-07-28, both
+                    # times with ZERO of our bots active — it is their side).
+                    #
+                    # 2026-07-28 fix: this used to `break` and replay the ladder
+                    # from rung 0, so every retry re-asked the SAME flavour
+                    # (web_gpu) and web_4_core was never reached — a 507 was
+                    # effectively unrecoverable. Now a busy flavour is recorded
+                    # and we fall through to the next DISTINCT one; only when
+                    # every flavour is dry does the round sleep and start over.
+                    last_busy = e
+                    busy_variants.add(_attempt_variant(body))
+                    print(
+                        f"[recall] avatar capacity busy (507) on {label}; "
+                        f"trying next flavour",
+                        flush=True,
+                    )
+                    continue
                 if e.response.status_code == 400 and idx < len(attempts) - 1:
                     last_error = e
                     print(
@@ -636,8 +672,22 @@ def create_bot(
             result["_laura_realtime_capability"] = realtime_capability
             return result
 
-        if _busy_retry:
-            continue  # transient 507 — run the attempts again
+        # Every distinct flavour has now been asked once this round.
+        if busy_variants:
+            if _busy_round < _BUSY_RETRIES:
+                wait = _BUSY_BACKOFF_S[min(_busy_round,
+                                           len(_BUSY_BACKOFF_S) - 1)]
+                print(
+                    f"[recall] all {len(busy_variants)} avatar flavour(s) busy "
+                    f"(507) — retry {_busy_round + 1}/{_BUSY_RETRIES} in {wait}s",
+                    flush=True,
+                )
+                # Sync sleep is fine: create_bot runs in the threadpool.
+                _BUSY_SLEEP(wait)
+                _busy_round += 1
+                continue
+            # Do not bubble Recall's raw response body to the product UI.
+            raise AvatarBusyError(AVATAR_BUSY_MESSAGE) from last_busy
         if last_error:
             raise last_error
         raise RuntimeError("Recall create_bot failed without a response.")

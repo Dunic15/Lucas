@@ -211,7 +211,7 @@ async def start_session(req: StartRequest, request: Request) -> JSONResponse:
             return JSONResponse(
                 {
                     "error": "avatar_busy",
-                    "detail": "All avatars are busy right now — retry in a minute.",
+                    "detail": recall_client.AVATAR_BUSY_MESSAGE,
                 },
                 status_code=503,
                 headers={"Retry-After": "60"},
