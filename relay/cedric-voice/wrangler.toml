@@ -18,6 +18,10 @@ compatibility_date = "2026-07-01"
 [vars]
 # Laura backend (App Runner). Override per-env if staging ever exists.
 BACKEND_URL = "https://dhfgfe6yw6.eu-central-1.awsapprunner.com"
+# How long the floor stays open for the person she just answered, so their
+# follow-up needs no wake word ("…and who's on it?"). Editable in the
+# Cloudflare dashboard without a code deploy; 0/unset falls back to 12s.
+FOLLOWUP_WINDOW_MS = "12000"
 
 [[durable_objects.bindings]]
 name = "VOICE_SESSION"

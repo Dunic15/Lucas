@@ -213,6 +213,74 @@ def test_fuzzy_wake_does_not_fire_on_lookalike_words():
         assert not called, f"must NOT wake: {utterance!r}"
 
 
+def test_fuzzy_wake_does_not_fire_on_italian_words_for_the_live_avatar():
+    """The avatar actually in production ships the aliases "lara"/"lora" for
+    ASR corruption of "Laura". Those are FOUR letters, so edit-distance-1 pulls
+    in ordinary Italian vocabulary — "loro" ("they") is one substitution from
+    "lora" and turns up several times a minute in an Italian call.
+
+    A false wake here is not a harmless extra answer: it opens the multiparty
+    Director gate and streams a private human-to-human exchange straight into
+    ElevenLabs. The `laura`-avatar test above misses this entirely — its only
+    wake word is the full "laura", which "loro" is three edits away from."""
+    avatar = avatars.load("petra")
+    assert "lora" in avatar.wake_words, "guard: the collision-prone alias is live"
+    for utterance in [
+        "loro hanno già firmato il contratto",
+        "secondo loro la deadline è venerdì",
+        "the lord of the rings marathon is on saturday",
+        "la lana e la lava sono materiali diversi",
+        "questa finestra è troppo larga per lo schermo",
+    ]:
+        called, _ = detect_wake(avatar, utterance)
+        assert not called, f"must NOT wake: {utterance!r}"
+
+
+def test_genuine_asr_corruptions_still_wake_the_live_avatar():
+    """The exclusions must not cost her the corruptions they exist for."""
+    avatar = avatars.load("petra")
+    for utterance in [
+        "Lara, what's the next step?",
+        "hey Lora can you help us",
+        "Loura what do you think?",
+        "Laura, quando è la deadline?",
+    ]:
+        called, _ = detect_wake(avatar, utterance)
+        assert called, f"corrupted name should wake: {utterance!r}"
+
+
+def test_question_to_her_survives_a_dropped_vocative_comma():
+    """Prod transcribes with Deepgram in prioritize_low_latency, which routinely
+    drops the comma in "Laura, was that in the contract?". Bare "laura was" then
+    looked like reported speech ("Laura was right") and she stayed silent
+    through a question aimed straight at her — in multiparty that also means the
+    Director gate never opened, so the ask never even reached the model."""
+    avatar = avatars.load("petra")
+    for utterance in [
+        "Laura was that in the contract",
+        "Laura were we supposed to ship friday",
+        "Laura had we agreed on this already",
+        "Laura was it three or four",
+        "Laura was there a decision on hiring",
+    ]:
+        called, _ = detect_wake(avatar, utterance)
+        assert called, f"a question to her must wake: {utterance!r}"
+
+
+def test_talking_about_her_is_still_not_addressing_her():
+    """The inversion carve-out must not swallow genuine third-person talk."""
+    avatar = avatars.load("petra")
+    for utterance in [
+        "Laura was right about the risk",
+        "Laura had a good point there",
+        "Laura was the one who flagged it",
+        "Laura mentioned the deadline",
+        "what did Laura mean by handoff",
+    ]:
+        called, _ = detect_wake(avatar, utterance)
+        assert not called, f"talk ABOUT her must not wake: {utterance!r}"
+
+
 def test_fuzzy_wake_reported_speech_still_suppressed():
     avatar = avatars.load("laura")
     called, _ = detect_wake(avatar, "as Lara said earlier, we should ship")

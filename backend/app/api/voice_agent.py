@@ -135,6 +135,12 @@ def build_init_payload(session, avatar) -> dict:
             "- Only respond to speech clearly addressed to you (your name, possibly",
             "  mis-transcribed) or a direct follow-up to your own last answer.",
             "  When people talk to EACH OTHER, stay silent.",
+            "- A conversation ALREADY UNDER WAY does not need your name again.",
+            "  Right after you answer someone, their next question is yours to",
+            '  take even un-named ("And who is on it?", "Since when?") — answer',
+            "  it directly, never ask them to address you first. A meeting",
+            "  director decides what audio reaches you at all, so what you hear",
+            "  is nearly always meant for you; judge the SENTENCE, not the name.",
             '- Never treat "yeah", "okay", "mhmm" or similar backchannels as requests.',
             '- Never take a bare "yes"/"okay"/"va bene" as approval of any action.',
             "",
@@ -334,9 +340,23 @@ async def voice_agent_bootstrap(capability: str, request: Request) -> JSONRespon
         )
     if not signed_url:
         return JSONResponse({"enabled": False, "reason": "empty signed url"}, status_code=502)
+    # The bridge's strict mode used to arrive ONLY as a threshold-crossing
+    # signal on a later transcript webhook, so a Durable Object always started
+    # OPEN: the first seconds of every multiparty meeting reached the agent
+    # unfiltered, and a DO that restarted mid-meeting (or a single lost signal
+    # — these are fire-and-forget) stayed open for the rest of it. Handing the
+    # mode back on the bridge's own bootstrap makes the state self-healing:
+    # whenever the DO re-bootstraps it re-learns the truth.
+    try:
+        from ..main import _human_count
+
+        session.voice_strict_mode = _human_count(session, avatar) >= 2
+    except Exception:  # noqa: BLE001 — never fail a bootstrap over the roster
+        pass
     return JSONResponse(
         {
             "enabled": True,
+            "strict": bool(session.voice_strict_mode),
             "bot_id": session.bot_id,
             # The bot joins Recall under this display name; on separate
             # per-participant streams the DO drops any stream whose
@@ -605,6 +625,22 @@ def _tool_queue_action(session, params: dict, tool_call_id: str) -> dict:
 # behaviour (prompt-only discipline), never blocks the live path.
 _control_tasks: set = set()
 
+# One keep-alive client for every Director signal. gate_open sits on the most
+# latency-sensitive path in the product — it is what decides whether her first
+# syllable lands a beat after the question or a beat too late — and a per-call
+# AsyncClient paid a fresh TCP+TLS handshake to Cloudflare on every single one.
+# Built lazily so importing this module never touches the event loop.
+_control_client: "httpx.AsyncClient | None" = None
+
+
+def _relay_client() -> "httpx.AsyncClient":
+    global _control_client
+    if _control_client is None or _control_client.is_closed:
+        _control_client = httpx.AsyncClient(
+            timeout=5.0, limits=httpx.Limits(max_keepalive_connections=4)
+        )
+    return _control_client
+
 
 def signal_relay(session, payload: dict) -> None:
     """POST a Director control signal to the bridge's /control/{capability}.
@@ -627,8 +663,7 @@ def signal_relay(session, payload: dict) -> None:
 
     async def _post() -> None:
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.post(url, json=payload)
+            await _relay_client().post(url, json=payload)
         except Exception as e:  # noqa: BLE001 — a lost signal must never block
             print(
                 f"[voice-agent] control signal failed: {type(e).__name__}",
@@ -824,6 +859,11 @@ async def voice_agent_event(capability: str, request: Request) -> JSONResponse:
             session.add_utterance(
                 name, text, participant_id="agent:self", speaker_kind="agent"
             )
+            # Arm the echo guard. Rooms without headphones send her own voice
+            # back through every open mic; Recall transcribes it as that HUMAN
+            # speaking. Her greeting contains her own name, so an un-armed echo
+            # guard let her wake herself and answer her own sentence.
+            session.note_spoken_line(text)
         return JSONResponse({"ok": True, "recorded": bool(text)})
 
     if kind in ("failed", "closed"):

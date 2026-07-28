@@ -2444,8 +2444,24 @@ def _director_sync_mode(session: store.Session, avatar: avatars.Avatar) -> None:
     if not _el_voice_owned(session) or not getattr(session, "voice_capability", ""):
         return
     strict = _human_count(session, avatar) >= 2
-    if strict != session.voice_strict_mode:
+    now = time.time()
+    # Crossings are the signal; the periodic re-assert is the SAFETY NET.
+    # signal_relay is fire-and-forget over the network, and the bridge's state
+    # is in-memory in a Durable Object — so one dropped POST or one DO restart
+    # used to desync the gate for the WHOLE meeting, in the direction that
+    # matters most (bridge open while the backend believes it is enforcing =
+    # she answers talk between two humans). Re-stating the mode every 30s
+    # costs one tiny POST and bounds any desync to 30 seconds.
+    # The re-assert only keeps alive a mode we have ALREADY stated: a 1:1 that
+    # never crosses stays silent (the bridge's own default is open, so there is
+    # nothing to keep alive and no reason to add traffic).
+    stale = (
+        session.voice_mode_signalled_at > 0
+        and now - session.voice_mode_signalled_at > 30.0
+    )
+    if strict != session.voice_strict_mode or stale:
         session.voice_strict_mode = strict
+        session.voice_mode_signalled_at = now
         voice_agent_api.signal_relay(session, {"type": "mode", "strict": strict})
 
 
@@ -2457,11 +2473,58 @@ def _director_gate_open(session: store.Session, speaker: str) -> None:
     refresh on re-open is wanted (keeps the gate alive through a long ask),
     the request spam is not."""
     now = time.time()
-    if now - session.voice_gate_opened_at > 1.5:
+    # A NEW addresser always gets the signal through, debounce or not: the
+    # bridge only forwards the gate speaker's voice, so a suppressed handover
+    # leaves the second person talking into a gate opened for the first.
+    if now - session.voice_gate_opened_at > 1.5 or speaker != session.voice_gate_speaker:
         voice_agent_api.signal_relay(
             session, {"type": "gate_open", "speaker": speaker}
         )
     session.voice_gate_opened_at = now
+    session.voice_gate_speaker = speaker
+
+
+def _director_gate_close(session: store.Session) -> None:
+    """The conversation stopped being with her — close the bridge's gate now.
+
+    The follow-up window (bridge-side) keeps the floor open for the person she
+    just answered, which is what makes a real dialogue possible:
+
+        "Laura, when is the deadline?"  "Friday."  "And who's on it?"
+
+    But the same person turning to a colleague — "Ananth, can you take two?" —
+    must drop her out of the conversation on THAT sentence, not 12 seconds
+    later. The bridge can hear WHO is speaking; only the backend, which has the
+    transcript and the roster, can tell WHO THEY ARE SPEAKING TO. So the
+    addressee half of the Director lives here and is signalled down."""
+    if not session.voice_gate_speaker and session.voice_gate_opened_at <= 0:
+        return
+    session.voice_gate_opened_at = 0.0
+    session.voice_gate_speaker = ""
+    voice_agent_api.signal_relay(session, {"type": "gate_close"})
+
+
+def _director_turn(
+    session: store.Session,
+    avatar: avatars.Avatar,
+    speaker: str,
+    text: str,
+    called: bool,
+) -> None:
+    """Addressee tracking for the ElevenLabs runtime — the half of the Meeting
+    Director the bridge cannot do on its own.
+
+    - named  → open the gate for that speaker (a fresh ask).
+    - vocative at another human → close it immediately; her partner has moved
+      on to talking with someone else.
+    Anything else is left alone: while the gate is closed the bridge already
+    forwards nothing, and while a follow-up window is live the bridge owns the
+    turn (same speaker keeps talking, a new speaker closes it there)."""
+    if called:
+        _director_gate_open(session, speaker)
+        return
+    if addressed_to_other(text, session.roster(avatar.name)):
+        _director_gate_close(session)
 
 
 def maybe_self_introduce(session: store.Session) -> bool:
@@ -3397,11 +3460,12 @@ async def recall_webhook(request: Request) -> JSONResponse:
             else:
                 await _make_avatar_stop(session)
             return JSONResponse({"ok": True, "partial": True, "stopped": True})
-        if called and _el_voice_owned(session):
+        if _el_voice_owned(session):
             # Addressed by name: open the strict gate NOW — the partial beats
             # the final by ~a second, and the bridge replays the addresser's
-            # buffered sentence so the agent hears the whole ask.
-            _director_gate_open(session, speaker)
+            # buffered sentence so the agent hears the whole ask. A vocative
+            # aimed at someone else closes it just as fast, on the partial.
+            _director_turn(session, avatar, speaker, text, called)
         acked = False
         if (
             settings.ack_enabled
@@ -3782,11 +3846,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # gate/stop signals here — finals are the backstop when a partial
         # never carried the detectable wake word (short bursty ASR).
         _director_sync_mode(session, avatar)
-        if called:
-            if detect_stop_command(question):
-                voice_agent_api.signal_relay(session, {"type": "stop"})
-            else:
-                _director_gate_open(session, speaker)
+        if called and detect_stop_command(question):
+            voice_agent_api.signal_relay(session, {"type": "stop"})
+        else:
+            _director_turn(session, avatar, speaker, text, called)
         # Control carve-outs: by-name stop/leave, PLUS the imperative explicit
         # leave ("leave the meeting" with no name — meter safety; audit
         # 2026-07-24 found all unaddressed leave variants dead). The explicit

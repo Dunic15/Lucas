@@ -905,6 +905,145 @@ def test_director_partial_stop_signals_bridge_not_page_flush(client, monkeypatch
     store.remove("bot_pstop")
 
 
+def test_director_closes_the_gate_when_the_room_turns_to_someone_else(
+    client, monkeypatch
+):
+    """The conversational lock keeps the floor open for the person she just
+    answered — but the moment THEY turn to a colleague, she must drop out of
+    the conversation on that sentence:
+
+        "Cedric, which tasks are overdue?"   -> "Three."
+        "Ananth, can you take two?"          -> gate_close
+
+    Without this the follow-up window would leave her listening to (and able to
+    answer) a question aimed squarely at another human."""
+    sent = _signals(monkeypatch)
+    s = _el_session("bot_gc")
+    s.voice_agent_active = True
+    s.voice_capability = "cap-bot_gc"
+    _final_from(client, "bot_gc", "hi all sorry I am late", "Ananth", 2)
+    _final(client, "bot_gc", "Cedric which tasks are overdue")
+    assert any(p.get("type") == "gate_open" for p in sent)
+    sent.clear()
+    _final(client, "bot_gc", "Ananth can you take two of them")
+    assert {"type": "gate_close"} in sent
+    assert s.voice_gate_speaker == ""
+    store.remove("bot_gc")
+
+
+def test_director_gate_close_fires_on_the_partial_too(client, monkeypatch):
+    """Same as above but a beat earlier — the partial beats the final by ~a
+    second, and a second of her listening to someone else's turn is a second
+    she can answer it in."""
+    sent = _signals(monkeypatch)
+    s = _el_session("bot_gcp")
+    s.voice_agent_active = True
+    s.voice_capability = "cap-bot_gcp"
+    _final_from(client, "bot_gcp", "hi all sorry I am late", "Ananth", 2)
+    _final(client, "bot_gcp", "Cedric which tasks are overdue")
+    sent.clear()
+    _partial_from(client, "bot_gcp", "Ananth can you take two of them")
+    assert {"type": "gate_close"} in sent
+    store.remove("bot_gcp")
+
+
+def test_director_ordinary_chatter_does_not_close_the_gate(client, monkeypatch):
+    """Only a clear VOCATIVE ends her turn. Merely mentioning a colleague
+    ("Ananth will own the rollout") is normal meeting talk — closing on that
+    would make the follow-up window unusable."""
+    sent = _signals(monkeypatch)
+    s = _el_session("bot_gcn")
+    s.voice_agent_active = True
+    s.voice_capability = "cap-bot_gcn"
+    _final_from(client, "bot_gcn", "hi all sorry I am late", "Ananth", 2)
+    _final(client, "bot_gcn", "Cedric which tasks are overdue")
+    sent.clear()
+    _final(client, "bot_gcn", "Ananth will own the rollout next week")
+    assert not any(p.get("type") == "gate_close" for p in sent)
+    store.remove("bot_gcn")
+
+
+def test_director_gate_close_does_not_spam_the_bridge(client, monkeypatch):
+    """Repeating partials of the same aside must not become a control storm."""
+    sent = _signals(monkeypatch)
+    s = _el_session("bot_gcs")
+    s.voice_agent_active = True
+    s.voice_capability = "cap-bot_gcs"
+    _final_from(client, "bot_gcs", "hi all sorry I am late", "Ananth", 2)
+    _final(client, "bot_gcs", "Cedric which tasks are overdue")
+    sent.clear()
+    _partial_from(client, "bot_gcs", "Ananth can you take")
+    _partial_from(client, "bot_gcs", "Ananth can you take two")
+    _final_from(client, "bot_gcs", "Ananth can you take two of them", "Duccio", 1)
+    assert len([p for p in sent if p.get("type") == "gate_close"]) == 1
+    store.remove("bot_gcs")
+
+
+def test_director_handover_to_a_new_addresser_is_never_debounced(client, monkeypatch):
+    """The bridge forwards only the GATE SPEAKER's voice. If a second person
+    names her inside the 1.5s debounce, suppressing that signal would leave
+    them talking into a gate opened for the first — an addressed turn dropped,
+    which is the one failure strict mode must never have."""
+    sent = _signals(monkeypatch)
+    s = _el_session("bot_ho")
+    s.voice_agent_active = True
+    s.voice_capability = "cap-bot_ho"
+    _partial_from(client, "bot_ho", "Cedric can you check the tasks", "Duccio", 1)
+    _partial_from(client, "bot_ho", "Cedric what about the deadline", "Ananth", 2)
+    opens = [p for p in sent if p.get("type") == "gate_open"]
+    assert [p["speaker"] for p in opens] == ["Duccio", "Ananth"]
+    assert s.voice_gate_speaker == "Ananth"
+    store.remove("bot_ho")
+
+
+def test_agent_speech_arms_the_echo_guard(client, bearer):
+    """Rooms without headphones send her own voice back through every open mic,
+    and Recall transcribes it as THAT PERSON talking. The echo guard keys off
+    lines she is known to have spoken — which the legacy path stamps inside
+    `_make_avatar_speak`, a function this runtime never calls. Un-armed, her
+    own greeting (which says her name out loud) could wake her, open the
+    Director gate on the echo, and have her answer herself."""
+    from app import main as main_mod
+
+    s = _el_session("bot_echo")
+    said = "The deadline is Friday and Ananth owns the migration"
+    client.post(
+        "/internal/voice-agent/event/cap-bot_echo",
+        headers=bearer,
+        json={"type": "agent_said", "text": said},
+    )
+    assert main_mod._is_echo(s, said) is True
+    assert main_mod._is_echo(s, "and Ananth owns the migration") is True
+    assert main_mod._is_echo(s, "so what did we decide about hiring") is False
+    store.remove("bot_echo")
+
+
+def test_director_mode_is_re_asserted_so_a_lost_signal_heals(client, monkeypatch):
+    """signal_relay is fire-and-forget over the network and the bridge's state
+    lives in a Durable Object's memory. One dropped POST or one DO restart used
+    to desync the gate for the WHOLE meeting, in the worst direction: the
+    bridge open while the backend believes it is enforcing. The periodic
+    re-assert bounds that to 30s."""
+    import time as _time
+
+    sent = _signals(monkeypatch)
+    s = _el_session("bot_reassert")
+    s.voice_agent_active = True
+    s.voice_capability = "cap-bot_reassert"
+    _final_from(client, "bot_reassert", "hello everyone how are we", "Duccio", 1)
+    _final_from(client, "bot_reassert", "hi all sorry I am late", "Ananth", 2)
+    assert {"type": "mode", "strict": True} in sent
+    sent.clear()
+    # Nothing changed: no spam.
+    _final_from(client, "bot_reassert", "so where were we", "Ananth", 2)
+    assert not any(p.get("type") == "mode" for p in sent)
+    # …but a stale statement is restated.
+    s.voice_mode_signalled_at = _time.time() - 31.0
+    _final_from(client, "bot_reassert", "ok lets keep going", "Ananth", 2)
+    assert {"type": "mode", "strict": True} in sent
+    store.remove("bot_reassert")
+
+
 def test_write_tools_locked_in_strict_mode_without_addressed_turn(client, bearer):
     """Owner spec: with ≥2 humans, no action from turns not addressed to him.
     Reads and leave_meeting stay open (leave is meter safety)."""
