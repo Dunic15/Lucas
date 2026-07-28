@@ -15,6 +15,37 @@ avatar is adding a folder** (`avatars/<id>/`), no code. Laura ships a
 
 ---
 
+## ⚠️ Two live environments (since 2026-07-28)
+
+v1 is **frozen** for customers while development continues. Two deployments,
+same codebase, different branches:
+
+| | **Customers** | **You (development)** |
+|---|---|---|
+| Link | `https://app.lauravatar.com/dashboard` | `https://48zmdue8kg.eu-central-1.awsapprunner.com/dashboard` |
+| Branch | `frozen/v1` — never moves | `main` — deploys on every push |
+| Service | `laura-backend` | `laura-backend-next` |
+
+**Where to modify:** everything happens on `main`. Push → your environment
+updates in ~7 min → customers see nothing until you deliberately flip them.
+
+Three deploys are separate — this is the thing that confuses people:
+
+| Change | How it ships |
+|---|---|
+| Backend, personas, dashboard, actions | `git push` (automatic) |
+| Turn-taking / barge-in / follow-up window | `cd relay/cedric-voice-v2 && npx wrangler deploy` |
+| Agent tools, knowledge, voice, LLM | `EL_AGENT_NAME_SUFFIX=" (v2)"` + `create_meeting_agent.py` |
+
+**Never touch** `relay/cedric-voice/` (customers' bridge), and **never** run
+`create_meeting_agent.py` without the suffix — it is idempotent by agent *name*
+and will silently rewrite the agents your customers are talking to.
+
+Full runbooks: **[`docs/NEXT-ENV.md`](docs/NEXT-ENV.md)** (develop + test) ·
+**[`docs/FREEZE-V1.md`](docs/FREEZE-V1.md)** (freeze, hotfix, ship to customers).
+
+---
+
 ## What an avatar does
 
 | Phase | In the meeting | Output |
