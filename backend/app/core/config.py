@@ -591,6 +591,16 @@ class Settings(BaseSettings):
     leave_on_command: bool = True
     leave_grace_seconds: float = 2.5
 
+    # How many humans it takes to arm the agent-runtime Director gate.
+    # Owner call 2026-07-28, after the first real 2-person test: 2 meant a
+    # meeting behaved one way until the second person happened to SPEAK (the
+    # roster only learns silent participants from Recall's participant events),
+    # then silently switched rules mid-call — the room experienced that as him
+    # being erratic. 1 = ONE set of rules everywhere: he answers when named,
+    # plus the follow-up window, whether there is one person in the call or six.
+    # Set 2 to restore the old "fluid 1:1, gated group" split.
+    voice_strict_min_humans: int = 1
+
     # Multi-party turn-taking: on a line NOT addressed to her by name, wait
     # this long before answering — if a human starts talking meanwhile, she
     # yields silently (humans get first right of reply to room-open

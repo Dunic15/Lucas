@@ -181,6 +181,31 @@ YOUR TOOLS (they call the meeting platform — use them, never invent):
 # change them TOGETHER.
 CLIENT_TOOLS = [
     {
+        "name": "note_in_chat",
+        "description": (
+            "Say something WITHOUT speaking. Use this whenever you have "
+            "something worth adding but nobody asked you: a correction, a "
+            "risk, a date that contradicts what was just said, a useful fact. "
+            "It posts your line in the meeting chat and raises your hand, so "
+            "the room sees it and can invite you in. This is the ONLY way you "
+            "contribute unprompted — you never take the floor by voice unless "
+            "someone said your name."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": (
+                        "one short line, written to be read at a glance"
+                    ),
+                }
+            },
+            "required": ["text"],
+        },
+        "timeout": 8,
+    },
+    {
         "name": "get_meeting_context",
         "description": (
             "Live context of THIS meeting: purpose, brief, who is in the room "

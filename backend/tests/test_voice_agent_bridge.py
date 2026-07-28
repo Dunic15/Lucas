@@ -896,23 +896,27 @@ def test_started_event_stamps_voice_capability(client, bearer):
     store.remove("bot_capst")
 
 
-def test_director_strict_mode_flips_on_second_human(client, monkeypatch):
-    """1 human → open; a SECOND human (even via transcript) crosses the
-    threshold and the bridge is told exactly once per crossing."""
+def test_director_is_armed_from_the_first_human(client, monkeypatch):
+    """The gate arms on the FIRST human and never changes rules mid-call.
+
+    It used to arm at 2, which sounds right and is not: the roster only learns
+    a silent participant from Recall's participant events, so a genuine
+    2-person meeting ran ungated until the second person happened to speak,
+    then switched behaviour mid-conversation (live 2026-07-28, ~2 minutes in).
+    A second human must therefore change NOTHING — no crossing, no re-signal."""
     sent = _signals(monkeypatch)
     s = _el_session("bot_dm")
     s.voice_agent_active = True
     s.voice_capability = "cap-bot_dm"
     _final_from(client, "bot_dm", "hello everyone how are we", "Duccio", 1)
-    assert not any(p.get("type") == "mode" and p.get("strict") for p in sent)
-    assert s.voice_strict_mode is False
-    _final_from(client, "bot_dm", "hi all sorry I am late", "Ananth", 2)
     assert {"type": "mode", "strict": True} in sent
     assert s.voice_strict_mode is True
-    # No re-send while the count stays put.
+    # A second human is not a crossing any more — nothing is re-sent.
     n = sum(1 for p in sent if p.get("type") == "mode")
+    _final_from(client, "bot_dm", "hi all sorry I am late", "Ananth", 2)
     _final_from(client, "bot_dm", "so where were we on this", "Ananth", 2)
     assert sum(1 for p in sent if p.get("type") == "mode") == n
+    assert s.voice_strict_mode is True
     store.remove("bot_dm")
 
 
@@ -1101,6 +1105,54 @@ def test_director_mode_is_re_asserted_so_a_lost_signal_heals(client, monkeypatch
     _final_from(client, "bot_reassert", "ok lets keep going", "Ananth", 2)
     assert {"type": "mode", "strict": True} in sent
     store.remove("bot_reassert")
+
+
+def test_note_in_chat_posts_and_raises_the_hand_without_speaking(
+    client, bearer, monkeypatch
+):
+    """His only unprompted channel. The voice gate is absolute, but staying
+    mute also throws away the reason he is in the room — so an unasked-for
+    contribution goes to the meeting chat + the hand-raise gesture, which the
+    room can ignore for free. It must NEVER produce speech."""
+    posted: list[tuple] = []
+    controls: list[dict] = []
+    spoke: list[str] = []
+
+    monkeypatch.setattr(settings, "recall_api_key", "k")
+    monkeypatch.setattr(
+        recall_client, "send_chat_message", lambda bot, msg: posted.append((bot, msg))
+    )
+
+    async def fake_control(session, payload):
+        controls.append(payload)
+
+    async def fake_speak(session, line, **kw):
+        spoke.append(line)
+        return True
+
+    monkeypatch.setattr(main_module, "_send_avatar_control", fake_control)
+    monkeypatch.setattr(main_module, "_make_avatar_speak", fake_speak)
+
+    s = _el_session("bot_chat")
+    r = _tool(
+        client, "cap-bot_chat", "note_in_chat",
+        {"text": "That deadline is Friday the 14th, not the 4th."}, bearer,
+    ).json()
+    assert r["result"]["status"] == "posted"
+    assert {"type": "raise_hand"} in controls
+    assert spoke == [], "a chat note must never become speech"
+    # Recorded as a contribution so the artifact shows it.
+    chat_lines = [u for u in s.transcript if u.text.startswith("[chat]")]
+    assert len(chat_lines) == 1 and "Friday the 14th" in chat_lines[0].text
+    store.remove("bot_chat")
+
+
+def test_note_in_chat_ignores_an_empty_line(client, bearer):
+    s = _el_session("bot_chat0")
+    r = _tool(client, "cap-bot_chat0", "note_in_chat", {"text": "   "}, bearer).json()
+    assert r["result"]["status"] == "empty"
+    assert not [u for u in s.transcript if u.text.startswith("[chat]")]
+    store.remove("bot_chat0")
 
 
 def test_write_tools_locked_in_strict_mode_without_addressed_turn(client, bearer):
