@@ -54,8 +54,22 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 def agent_name_for(avatar_id: str, display_name: str) -> str:
     """The EL-side agent name. Idempotency key AND the safety key: it must be
-    unique per avatar, or a re-run would patch someone else's agent."""
-    return f"{display_name or avatar_id.title()} Meeting Pilot"
+    unique per avatar, or a re-run would patch someone else's agent.
+
+    `EL_AGENT_NAME_SUFFIX` extends that safety across ENVIRONMENTS. The live
+    agents are shared state that git cannot protect: their tools, knowledge
+    base, LLM, voice and turn settings live in ElevenLabs, and none of them is
+    overridable per-connection (verified 2026-07-28 against
+    `platform_settings.overrides` — they are all explicitly `false`). So a
+    second platform running this script with the same avatar display names does
+    not create its own agents, it REWRITES the frozen ones, silently, and the
+    breakage only surfaces in a live meeting.
+
+    Empty by default: the frozen deployment keeps exactly the names it has.
+    A new platform sets e.g. EL_AGENT_NAME_SUFFIX=" (v2)" and gets its own.
+    """
+    suffix = os.environ.get("EL_AGENT_NAME_SUFFIX", "").rstrip()
+    return f"{display_name or avatar_id.title()} Meeting Pilot{suffix}"
 API_BASE = "https://api.elevenlabs.io"
 
 # Multiparty + honesty rules appended to the yaml persona. They port the
