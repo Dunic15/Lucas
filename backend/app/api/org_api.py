@@ -256,6 +256,11 @@ def _execute_route(
     # in-memory value even when no durable row exists.
     ledger.set_action_route(action_id, route, org_id=org)
     action = {**action, "execution_route": route}
+    if route == "openclaw":
+        # OpenClaw-active orgs are owned by the experiment runner. Approval
+        # records still land in the canonical ledger, but this door must not
+        # hand the same action to any legacy executor.
+        return None, "approved", False
     if route == "cedric":
         # handshake B2: hand the approved action to Cedric for execution
         # through its connectors (dispatch-action, pre_approved). Terminal

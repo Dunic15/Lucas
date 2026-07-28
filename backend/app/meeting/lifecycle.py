@@ -23,6 +23,8 @@ from ..brain.engine import (post_meeting, degraded_post_meeting, type_actions,
                             prefill_summary_emails, headline_actions,
                             semantic_action_duplicates)
 from ..decision import detect_browse_intent
+from ..openclaw import gates as openclaw_gates
+from ..openclaw import runtime as openclaw_runtime
 
 
 _BOT_TERMINAL = {"call_ended", "done", "fatal"}
@@ -1008,6 +1010,7 @@ async def _finalize_session_locked(
         "follow_up_email": {},
     }
     integration = dict(session.integration) if session.integration else None  # CEDRIC
+    openclaw_active = openclaw_gates.experiment_enabled_for_org(session.org_id)
     # Live-captured action requests (tools.queue_action) — read once, used twice:
     # shown to the summarizer as "already captured, do not re-extract" (dedup
     # prevention at the source, cross-language included) and then merged into
@@ -1171,7 +1174,7 @@ async def _finalize_session_locked(
             # approval; receipts (task URLs) go through the same provenance
             # channel as approved runs. Best-effort — finalize (the meter
             # stop) is already safe above and must never wait on Asana.
-            if allow_asana and settings.asana_auto_execute:
+            if allow_asana and settings.asana_auto_execute and not openclaw_active:
                 pushed = await run_in_threadpool(
                     executor.auto_execute_asana,
                     session.org_id,
@@ -1245,7 +1248,9 @@ async def _finalize_session_locked(
     # configured but unavailable, OutboxUnavailable propagates and the local
     # session remains available for a retry; we never claim completion while
     # the only customer delivery record could still be lost.
-    orchestrated = cedric.deliver_ended(integration, bot_id, artifact)  # CEDRIC
+    orchestrated = False
+    if not openclaw_active:
+        orchestrated = cedric.deliver_ended(integration, bot_id, artifact)  # CEDRIC
 
     await run_in_threadpool(
         store.save_artifact, bot_id, artifact, org_id=session.org_id
@@ -1272,8 +1277,24 @@ async def _finalize_session_locked(
         )
     except Exception:
         pass
-    if orchestrated:
-        pass  # orchestrated session: the orchestrator owns delivery, skip autopilot
+    openclaw_started = False
+    if openclaw_active:
+        try:
+            result = await run_in_threadpool(
+                openclaw_runtime.create_meeting_run,
+                bot_id,
+                artifact,
+                session.org_id,
+            )
+            openclaw_started = bool((result or {}).get("ok"))
+        except Exception as e:  # noqa: BLE001 — OpenClaw never blocks cleanup
+            print(
+                f"[finalize] bot={bot_id} OpenClaw start skipped "
+                f"({type(e).__name__})",
+                flush=True,
+            )
+    if orchestrated or openclaw_active:
+        pass  # external owner owns post-meeting delivery/execution
     elif settings.autopilot_deliver:
         # Autopilot: send the drafted follow-up + Slack summary now, without
         # holding up the finalize response (meter is already stopped above).
@@ -1291,7 +1312,8 @@ async def _finalize_session_locked(
     had_content = bool(transcript_text.strip())
     print(
         f"[finalize] bot={bot_id} source={source} lines={n_lines} "
-        f"orchestrated={orchestrated} content={had_content}",
+        f"orchestrated={orchestrated} openclaw={openclaw_started} "
+        f"content={had_content}",
         flush=True,
     )
     if leave_verified:

@@ -1099,7 +1099,9 @@ def set_action_route(org_id: str, action_id: str, route: str) -> bool:
     """Persist the resolver's current effective route before a claim."""
     aid = str(action_id or "").strip()
     normalized = str(route or "").strip().lower()
-    if not aid or normalized not in ("native", "pipedream", "cedric", "browser", "manual"):
+    if not aid or normalized not in (
+        "native", "pipedream", "cedric", "browser", "manual", "openclaw"
+    ):
         return False
     engine = _engine()
     with engine.begin() as conn:

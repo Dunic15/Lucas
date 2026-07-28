@@ -363,6 +363,9 @@ app.include_router(demo_router.router)  # /org/demo + dashboard twin (Northstar 
 from . import pipedream_api  # noqa: E402
 
 app.include_router(pipedream_api.router)
+from .openclaw import router as openclaw_router  # noqa: E402
+
+app.include_router(openclaw_router.router)  # /dashboard/openclaw + /openclaw/tools/*
 from .api import pages  # noqa: E402
 app.include_router(pages.router)  # static pages + avatar assets
 from .api import voice_agent as voice_agent_api  # noqa: E402

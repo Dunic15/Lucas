@@ -762,7 +762,7 @@ def set_action_route(
     aid = (action_id or "").strip()
     normalized = (route or "").strip().lower()
     if not aid or normalized not in (
-        "native", "pipedream", "cedric", "browser", "manual"
+        "native", "pipedream", "cedric", "browser", "manual", "openclaw"
     ):
         return False
     if _durable_actions(org_id):

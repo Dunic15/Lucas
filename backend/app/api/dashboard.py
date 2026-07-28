@@ -35,6 +35,7 @@ from .. import (
 from ..brain import tool_registry
 from ..config import settings
 from ..knowledge import dal
+from ..openclaw import gates as openclaw_gates
 
 router = APIRouter(tags=["dashboard"])
 
@@ -355,7 +356,7 @@ def _action_entry(action) -> dict:
                 and bool(action["typed"].get("type"))
             )
             or str(action.get("execution_route") or "")
-            in ("native", "pipedream", "browser")
+            in ("native", "pipedream", "browser", "openclaw")
             # Approve-door rescue (#351): with the native executor on, an
             # untyped capture is re-typed AT THE CLICK — the door can always
             # try, landing on a real run, a needs_details edit, or an honest
@@ -1125,6 +1126,14 @@ def dashboard_summary(request: Request) -> JSONResponse:
                 # key-free demo and un-configured prod byte-identical (the tab
                 # is inert either way; this just avoids showing a dead surface).
                 "pipedream_configured": pipedream_client.enabled(),
+                "openclaw_experiment_enabled": bool(settings.openclaw_experiment_enabled),
+                "openclaw_experiment_active": openclaw_gates.experiment_enabled_for_org(
+                    caller_org or ""
+                ),
+                "openclaw_auto_run": bool(settings.openclaw_auto_run),
+                "openclaw_gateway_configured": bool(
+                    (settings.openclaw_gateway_url or "").strip()
+                ),
             },
             "auth_enabled": auth.enabled(),
             "user": (
@@ -3663,6 +3672,39 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
                 headers=_NO_STORE,
             )
         # Reopened: fall through to the normal execution/dispatch pipeline.
+
+    if route == "openclaw":
+        if _cur_status not in ("approved", "executing", "done", "failed"):
+            await run_in_threadpool(
+                ledger.set_action_status, aid, "approved",
+                "approved via dashboard · OpenClaw owns execution",
+                org_id=org,
+            )
+        await run_in_threadpool(
+            lambda: ledger.set_action_decision_result(
+                aid, org_id=org,
+                new_status=_cur_status or "approved",
+                execution_job_id=None,
+            )
+        )
+        latest = await run_in_threadpool(
+            ledger.action_statuses, [aid], org_id=org
+        )
+        return JSONResponse(
+            {
+                "ok": True,
+                "action_id": aid,
+                "approved": True,
+                "executed": False,
+                "dispatched": False,
+                "openclaw": True,
+                "capability_blocked": False,
+                "typed": bool(typed),
+                "execution_mode": "openclaw",
+                "status": latest.get(aid),
+            },
+            headers=_NO_STORE,
+        )
 
     # Mark approved (non-terminal, monotonic) in the shared provenance channel.
     # Best-effort: a durable-org no-op here (a native action has no Cedric

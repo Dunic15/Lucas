@@ -977,6 +977,23 @@ def _args_of(action: dict | None) -> dict:
 
 
 def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
+    """Execute one approved action unless OpenClaw owns this org."""
+    try:
+        from .openclaw import gates as openclaw_gates
+
+        if openclaw_gates.experiment_enabled_for_org(org_id):
+            return {"ok": False, "skipped": "openclaw owns this org"}
+    except Exception:  # noqa: BLE001 — execution guard must never raise
+        pass
+    return _execute_approved(org_id, action_id, action)
+
+
+def execute_for_openclaw(org_id: str, action_id: str, action: dict) -> dict:
+    """OpenClaw's tool bridge may reuse the low-level Connect executor."""
+    return _execute_approved(org_id, action_id, action)
+
+
+def _execute_approved(org_id: str, action_id: str, action: dict) -> dict:
     """Execute one approved action through the Connect Proxy and settle its
     canonical ledger receipt. Never raises."""
     if not enabled():

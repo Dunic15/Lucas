@@ -178,6 +178,15 @@ the transcript, which stays PII in the private artifact store.
   missing fields (which can be filled right there) instead of silently doing
   nothing; and approving the same action twice — or from the dashboard and
   Slack at the same time — executes it exactly once, with one receipt.
+- **OpenClaw executor experiment:** OpenClaw is an isolated post-meeting action
+  executor for allowlisted test workspaces. It is off unless both the global
+  OpenClaw flag and the workspace allowlist match. When active, finalized
+  meeting actions are stamped `execution_route="openclaw"`, the dashboard gets
+  a dedicated "OpenClaw Actions or Agents" view for runs and receipts, and the
+  older native/Pipedream/Cedric/browser execution paths are suppressed for that
+  workspace so no duplicate writes happen. OpenClaw receives the meeting
+  summary, decisions, canonical action ids, participants, deadlines, company
+  context and a tool catalog — not the raw transcript by default.
 - **Actions that wait on other actions:** an action can depend on another one.
   Approving it records the approval but does not run it while a dependency is
   still outstanding; the moment the last one completes, Laura runs it herself —

@@ -488,6 +488,20 @@ class Settings(BaseSettings):
     # (calendar/gmail/drive) always stays native; Slack always stays on Cedric.
     pipedream_executor: bool = False
 
+    # ── OpenClaw full executor experiment (POC M0-M7) ─────────────────────
+    # OFF by default and tenant-allowlisted. An org is active only when BOTH
+    # OPENCLAW_EXPERIMENT_ENABLED=true AND its org_id appears in
+    # OPENCLAW_EXPERIMENT_ORGS. Active orgs route post-meeting actions to the
+    # OpenClaw runner and suppress Laura's legacy native/Pipedream/Cedric/browser
+    # auto-execution so the experiment cannot double-write.
+    openclaw_experiment_enabled: bool = False
+    openclaw_experiment_orgs: str = ""
+    openclaw_auto_run: bool = False
+    openclaw_gateway_url: str = ""
+    openclaw_gateway_token: str = ""
+    openclaw_agent_id: str = "laura-executor-test"
+    openclaw_browser_enabled: bool = True
+
     # ── Knowledge-graph grounding (graphiti, OPTIONAL) ────────────────────
     # RESTORED 2026-07-20: a merge dropped these fields while dashboard.py still
     # reads settings.graphiti_enabled/_configured (Brain-view card) and

@@ -25,6 +25,7 @@ packages + main.py decomposition, moves-only, contract untouched"). This is the
 | `app/knowledge/` | Company Brain: `dal.py`, `ingest.py`, `storage.py`, `router.py` (`/org/knowledge` + dashboard twin). |
 | `app/browser/` | Browser Operator (B0): `operator.py` (canonical state machine), `browserbase_provider.py`, `fake_provider.py`, `policy.py`, `coordinator.py`, `planner.py`, `recipes.py`, `router.py`. |
 | `app/cedric/` | Cedric×Laura Slack-orchestrator glue (own `README.md`): `callback.py`, `integration.py`, `mcp.py`, `secret_registry.py`, `chat_responder.py`, `install_state.py`. Upstream seams in `main.py` are single lines tagged `# CEDRIC`. |
+| `app/openclaw/` | OpenClaw full-executor experiment: tenant gate, run ledger, dashboard/API router, and tool bridge. Flag-gated; active orgs stamp `execution_route=="openclaw"` and suppress legacy executors. |
 | `app/integrations/` | Vendor clients: `recall_client.py`, `google_client.py`, `asana_client.py`, `jira_client.py`, `gemini_ears.py`, `graphiti_client.py`, `anam_client.py`, `tts.py`, `gmail_watcher.py`, `granola_client.py`, `drive_client.py`. |
 | `app/persistence/` | Data layer: `store.py` (SQLite dev store), `control_plane.py` (Postgres control plane, RLS), `billing.py` (Stripe), `org_avatars_pg.py`. |
 | `app/core/` | Cross-cutting: `config.py` (all env/flags), `auth.py`, `entitlements.py`, `security.py`, `crypto.py`. |
@@ -34,7 +35,7 @@ packages + main.py decomposition, moves-only, contract untouched"). This is the
 | `app/demo_mvp/` | Northstar demo MVP: `northstar_provider.py`, `execute.py`, `ingest.py`, `narration.py`, `router.py` (`/org/demo`). |
 | `app/pipedream_client.py`, `app/pipedream_executor.py` | **Real top-level modules** (not shims): Pipedream Connect — managed-auth connections + the Connect-Proxy execution path (flag-gated, `execution_route=="pipedream"`). |
 | `app/browser_meeting.py` | **Real top-level module:** browser-based meeting join path. |
-| `alembic/` | Postgres control-plane migrations, `0001_org_id_spine` → `0014_browser_identities`. `backend/alembic.ini`. |
+| `alembic/` | Postgres control-plane migrations, `0001_org_id_spine` → `0021_openclaw_experiment`. `backend/alembic.ini`. |
 | `scripts/` | Dev/ops CLIs: `ask.py`, `simulate.py`, `ingest.py`, `recall_check.py`, `browser_b1_smoke.py`. |
 | `tests/` | ~140 `test_*.py` files, ~1,575 tests. Runs **key-free** in CI (`BRAIN_PROVIDER=stub`, `EMBEDDING_PROVIDER=hash`, embedded Postgres for RLS). |
 | `spikes/` | Throwaway prototypes (`vertex_live*`), **not wired into the app**. |

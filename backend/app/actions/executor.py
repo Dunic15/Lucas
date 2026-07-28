@@ -199,6 +199,14 @@ def route_for_typed(typed: dict | None, org_id: str = "", item_text: str = "") -
     silently mis-routing. ``org_id`` is required for the connection probe. With
     PIPEDREAM_EXECUTOR off, ``handles`` is False so everything stamps as
     before."""
+    try:
+        from ..openclaw import gates as openclaw_gates
+
+        if openclaw_gates.experiment_enabled_for_org(org_id):
+            return "openclaw"
+    except Exception:  # noqa: BLE001 — routing must stay fail-closed to legacy
+        pass
+
     from .. import pipedream_executor  # lazy: keep module load order decoupled
 
     action_type = str((typed or {}).get("type") or "").strip()
@@ -255,6 +263,13 @@ def effective_route(
 
     stored = str(stored_route or "").strip().lower()
     action_type = str((typed or {}).get("type") or "").strip()
+    try:
+        from ..openclaw import gates as openclaw_gates
+
+        if openclaw_gates.experiment_enabled_for_org(org_id):
+            return "openclaw"
+    except Exception:  # noqa: BLE001 — display/approval routing stays available
+        pass
     if stored == "browser":
         return "browser"
 
@@ -369,6 +384,23 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
     This function never raises. Missing connections, unsupported action types,
     and vendor failures all become truthful ``failed`` receipts.
     """
+    try:
+        from ..openclaw import gates as openclaw_gates
+
+        if openclaw_gates.experiment_enabled_for_org(org_id):
+            return {"ok": False, "skipped": "openclaw owns this org"}
+    except Exception:  # noqa: BLE001 — execution guard must never raise
+        pass
+    return _execute_approved(org_id, action_id, action)
+
+
+def execute_for_openclaw(org_id: str, action_id: str, action: dict) -> dict:
+    """OpenClaw's tool bridge may reuse Laura's low-level native executor."""
+    return _execute_approved(org_id, action_id, action)
+
+
+def _execute_approved(org_id: str, action_id: str, action: dict) -> dict:
+    """Execute one approved action and settle its canonical ledger receipt."""
     if not enabled():
         return {"ok": False, "skipped": "native_executor off"}
     normalized = _normalized(action)
@@ -482,6 +514,13 @@ def auto_execute_asana(org_id: str, actions: list) -> int:
     """Optional finalize-time Asana push, using the same Laura runtime."""
     if not (enabled() and settings.asana_auto_execute):
         return 0
+    try:
+        from ..openclaw import gates as openclaw_gates
+
+        if openclaw_gates.experiment_enabled_for_org(org_id):
+            return 0
+    except Exception:  # noqa: BLE001 — finalize must never be blocked
+        pass
     attempted = 0
     for item in actions or []:
         if not isinstance(item, dict):
@@ -503,4 +542,3 @@ def auto_execute_asana(org_id: str, actions: list) -> int:
         except Exception:  # noqa: BLE001 - finalize must never be blocked
             continue
     return attempted
-

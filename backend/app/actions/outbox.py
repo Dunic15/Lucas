@@ -260,6 +260,12 @@ def _callback_record(session: Any, item: dict) -> tuple[str, dict | None]:
     )
     action_id = str((item or {}).get("action_id") or "").strip()
     callback_record = None
+    try:
+        from ..openclaw import gates as openclaw_gates
+
+        openclaw_active = openclaw_gates.experiment_enabled_for_org(org_id)
+    except Exception:  # noqa: BLE001 — capture must keep working
+        openclaw_active = False
     # Capability gate (migration-free): suppress the Cedric callback when the
     # acting avatar's Slack switch is explicitly OFF. session.avatar_id is known
     # here, so both backends stay ungated of avatar_id — the queued_action still
@@ -267,6 +273,7 @@ def _callback_record(session: Any, item: dict) -> tuple[str, dict | None]:
     if (
         action_id
         and str(integration.get("callback_url") or "").strip()
+        and not openclaw_active
         and not _slack_capability_off(
             getattr(session, "avatar_id", ""), getattr(session, "org_id", "")
         )
