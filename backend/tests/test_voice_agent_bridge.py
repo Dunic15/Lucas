@@ -625,6 +625,32 @@ def test_avatar_language_rejects_an_unprovisioned_code(tmp_path, monkeypatch):
         assert avatars.load("tester").voice_agent_language == expected
 
 
+def test_agent_name_suffix_keeps_a_second_platform_off_these_agents(monkeypatch):
+    """The live ElevenLabs agents are shared state git cannot protect: tools,
+    knowledge base, LLM, voice and turn settings live in ElevenLabs and NONE of
+    them is overridable per-connection. This script is idempotent by agent NAME,
+    so a second platform running it with the same display names rewrites the
+    frozen agents instead of creating its own — silently, surfacing only in a
+    live meeting. The suffix is what makes environments disjoint."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "create_meeting_agent.py"
+    spec = importlib.util.spec_from_file_location("_cma_suffix", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    monkeypatch.delenv("EL_AGENT_NAME_SUFFIX", raising=False)
+    frozen = mod.agent_name_for("cedric", "Cedric")
+    assert frozen == "Cedric Meeting Pilot", "the frozen deployment keeps its name"
+
+    monkeypatch.setenv("EL_AGENT_NAME_SUFFIX", " (v2)")
+    assert mod.agent_name_for("cedric", "Cedric") == "Cedric Meeting Pilot (v2)"
+    assert mod.agent_name_for("petra", "Laura") == "Laura Meeting Pilot (v2)"
+    # Disjoint from the frozen names — that is the whole point.
+    assert mod.agent_name_for("cedric", "Cedric") != frozen
+
+
 def test_agent_config_enables_language_detection():
     """The agent already ships an Italian preset, but a preset is unreachable
     until the CONVERSATION language is Italian. The system tool is what makes
