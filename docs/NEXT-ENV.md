@@ -9,8 +9,14 @@ https://app.lauravatar.com
 
 **You — never share this one:**
 ```
-https://48zmdue8kg.eu-central-1.awsapprunner.com
+https://48zmdue8kg.eu-central-1.awsapprunner.com/dashboard
 ```
+
+> ⚠️ **Include `/dashboard`.** The site root `/` is the old *Demo Console* (ask
+> an avatar, paste a transcript) — it is served identically by BOTH
+> environments, you just never land on it via the customer link. Opening the
+> bare host and seeing the Demo Console is the single most convincing way to
+> conclude "this is a different site". It is the same site, one path up.
 
 > ⚠️ The address ends in **`.com`**, not `.co`. Dropping the final `m` gives
 > `DNS_PROBE_FINISHED_NXDOMAIN` and looks exactly like the service being down —
