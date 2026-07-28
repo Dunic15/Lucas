@@ -53,6 +53,41 @@ After creating the v2 pair the customers' agents were re-read: tools 11, KB
 knowledge, LLM, voice and turn settings are server-side on the agent and are
 *not* overridable per connection.
 
+## The data: seeded once, then it diverges
+
+`next` started with an EMPTY database, and that made it look like a different
+product — same HTML byte for byte, but no meetings, no avatars configured, no
+connections. So on 2026-07-28 the replica was **seeded from a copy of the
+customers' one**: 212 objects, 9.8 MB, both environments then reporting the same
+20 meetings.
+
+How it was done (repeat this whenever `next` has drifted too far and you want a
+fresh copy of reality):
+
+```bash
+aws apprunner pause-service --region eu-central-1 --service-arn <next-arn>
+# wait for PAUSED — otherwise litestream is still writing while you copy
+aws s3 rm   s3://laura-org-memory/store-v2/ --recursive
+aws s3 sync s3://laura-org-memory/store/ s3://laura-org-memory/store-v2/
+aws apprunner resume-service --region eu-central-1 --service-arn <next-arn>
+```
+
+The boot wrapper (`scripts/start-with-litestream.sh`) restores from the replica,
+so `next` comes back up holding that snapshot.
+
+Three things to know:
+
+- **They diverge from that moment.** Anything you do in `next` never reaches the
+  customers, and anything the customers do never reaches `next`. Re-seed when
+  the gap starts to matter.
+- **`store/` is read-only in this procedure.** The sync only ever writes to
+  `store-v2/`. Never invert the arguments — `store-corrupt-20260722/` in that
+  bucket is what a bad day here looks like.
+- **It is real data**, including org credentials (the Google token encryption key
+  is the same secret in both services, so connections carry over and work). Same
+  AWS account, same company — but treat `next` with the same care as production,
+  because the contents are production's.
+
 ## How to use it
 
 **Iterate:** push to `main` → `laura-backend-next` redeploys itself (~7 min) →
