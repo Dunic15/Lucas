@@ -115,7 +115,10 @@ conversation_runtime: elevenlabs_agent
 # backend/scripts/create_meeting_agent.py --avatar petra
 # (config-as-code: persona from this file + the shared pilot rules; private,
 # signed-URL-only; pcm_16000 both ways). Not a secret; useless without the key.
-elevenlabs_agent_id: "agent_9601kyg7v5q7fy7aawjv0x1sdjve"
+# NEXT-ENV: this is the "(v2)" agent, used by the laura-backend-next
+# service (branch main). The FROZEN deployment keeps its own agent on
+# branch frozen/v1 — see docs/NEXT-ENV.md. Never point both at one id.
+elevenlabs_agent_id: "agent_8301kymj4a6efq9r9hsdjzr29mg9"
 
 # Knowledge lives in:  avatars/petra/knowledge/*.md  (original PM reference
 # docs — drop your own methodology/process docs in and re-run ingest).

@@ -1,0 +1,37 @@
+# cedric-voice-v2 — the bridge for the NEXT environment (branch main).
+# Byte-identical worker code to cedric-voice; only the name and BACKEND_URL
+# differ. The frozen deployment keeps `cedric-voice` untouched, so iterating
+# on turn-taking here can never reach the customers. See docs/NEXT-ENV.md.
+
+# cedric-voice — the ElevenLabs Agent bridge for the Cedric pilot.
+#
+# A Durable Object per meeting session ties together THREE sockets that can
+# never meet in a plain stateless Worker:
+#   Recall audio ingress  (WS in:  /voice/{capability})
+#   ElevenLabs Agent      (WS out: signed URL from the backend)
+#   Avatar page audio out (WS in:  /voice-out/{capability})
+#
+# Deliberately a SEPARATE worker from laura-ears: the Gemini path stays
+# byte-identical and un-deployed while this pilot iterates.
+#
+# Secrets (set via `wrangler secret put`, never in this file):
+#   BACKEND_BEARER — the backend's LAURA_API_TOKEN (auths /internal/voice-agent/*)
+name = "cedric-voice-v2"
+main = "worker.js"
+compatibility_date = "2026-07-01"
+
+[vars]
+# Laura backend (App Runner). Override per-env if staging ever exists.
+BACKEND_URL = "https://48zmdue8kg.eu-central-1.awsapprunner.com"
+# How long the floor stays open for the person she just answered, so their
+# follow-up needs no wake word ("…and who's on it?"). Editable in the
+# Cloudflare dashboard without a code deploy; 0/unset falls back to 10s.
+FOLLOWUP_WINDOW_MS = "10000"
+
+[[durable_objects.bindings]]
+name = "VOICE_SESSION"
+class_name = "VoiceSession"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["VoiceSession"]
