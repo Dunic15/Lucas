@@ -237,6 +237,55 @@ class TestOneOnOneMeeting:
         assert r.get("voice_owner") != "elevenlabs"  # fell through the gate
         store.remove("bot_regA3")
 
+    def test_unnamed_leave_works_in_a_room_that_never_activated_him(
+        self, client, monkeypatch
+    ):
+        """LIVE CUSTOMER DEMO 2026-07-28, verbatim:
+
+            Jacopo: "Go out the meeting."                    -> nothing
+            Jacopo: "Cedric, you can leave the meeting now." -> "Sure — bye!"
+
+        The detector was never the problem — `detect_leave_command_explicit`
+        matches "Go out the meeting." fine. The line never reached it: on this
+        runtime every non-control utterance returns early, so `addressed_once`
+        (set by the legacy path further down) stayed False all meeting, and the
+        opening-grace gate swallowed the un-named dismissal.
+
+        A dismissal is meter safety, not "unaddressed speech" — grace exists to
+        stop him TALKING before the room settles, never to stop him LEAVING."""
+        finalized: list[str] = []
+
+        async def fake_finalize(bot_id, **kw):
+            finalized.append(bot_id)
+            return None
+
+        monkeypatch.setattr(main_module, "_finalize_session", fake_finalize)
+        monkeypatch.setattr(main_module.recall_client, "leave_call", lambda b: None)
+        monkeypatch.setattr(settings, "first_call_required", True)
+        _signals(monkeypatch)
+        s = _el_session("bot_regLeave")
+        # A room of three that has NEVER said his name: addressed_once False.
+        _say(client, "bot_regLeave", "so where were we on the deck", "Jacopo", 1)
+        _say(client, "bot_regLeave", "yeah I think that is right", "Clarice", 2)
+        _say(client, "bot_regLeave", "one more thing before we wrap", "Ananth", 3)
+        assert s.addressed_once is False
+        r = _say(client, "bot_regLeave", "Go out the meeting.", "Jacopo", 1)
+        assert r.get("reason") != "opening grace", "grace must not eat a dismissal"
+        store.remove("bot_regLeave")
+
+    def test_being_named_activates_him_on_the_agent_runtime(self, client, monkeypatch):
+        """The other half: naming him has to LIFT the grace, or every later
+        un-named control command keeps hitting the same wall."""
+        monkeypatch.setattr(settings, "first_call_required", True)
+        _signals(monkeypatch)
+        s = _el_session("bot_regAct")
+        _say(client, "bot_regAct", "hello everyone", "Jacopo", 1)
+        _say(client, "bot_regAct", "hi all", "Clarice", 2)
+        assert s.addressed_once is False
+        _say(client, "bot_regAct", "Cedric what do you think about this", "Jacopo", 1)
+        assert s.addressed_once is True
+        store.remove("bot_regAct")
+
     def test_stop_on_partial_kills_at_the_bridge(self, client, monkeypatch):
         sent = _signals(monkeypatch)
         stops: list[str] = []

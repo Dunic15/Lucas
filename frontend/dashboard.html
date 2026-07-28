@@ -2469,12 +2469,12 @@
       +'Can: '+esc(c.verbs.join(" · "))+'</div>';
   }
   var STATE_LABEL={needs_details:"Needs details",ready_to_approve:"Ready for approval",
-    team_followup:"Team follow-up",
+    team_followup:"Discussed · you close it",
     proposed:"Ready for approval",
     approved:"Approved",executing:"Running",done:"Completed",failed:"Couldn’t complete",
     rejected:"Rejected",withdrawn:"Withdrawn",execution_unknown:"Check connected account"};
   var STATE_CLASS={needs_details:"attn",ready_to_approve:"ready",proposed:"ready",
-    team_followup:"",
+    team_followup:"attn",
     approved:"run",executing:"run",
     done:"ok",failed:"bad",rejected:"bad",withdrawn:"bad",execution_unknown:"attn"};
   // A card is NEVER a passive "captured — tracked for the record" row (owner ask
@@ -2499,8 +2499,11 @@
     return /tracked only/i.test((a.execution&&a.execution.detail)||"");
   }
   function bucketOf(a){ var s=stateOf(a);
-    // A teammate's own commitment: a record, never something to approve.
-    if(s==="team_followup") return "done";
+    // A discussed item is NOT completed (owner 2026-07-28: "Contact companies
+    // for design partners", "Improve product packaging" landed straight in
+    // Completed and nobody had done them). It is real work with no tool behind
+    // it, so it waits in Needs attention until a human closes it.
+    if(s==="team_followup") return "attn";
     if(s==="done"||s==="failed"||s==="rejected"||s==="withdrawn") return "done";
     if(s==="approved"&&trackedOnly(a)) return "done";
     // "In progress" tab removed (owner 2026-07-24): approved/executing fold into
@@ -2559,6 +2562,23 @@
         patchActionState(aid,res.j.status||{status:"rejected"});
       })
       .catch(function(e){ btn.disabled=false; btn.innerHTML=old; toast("Could not reject: "+e.message,true); });
+  }
+  function closeAction(btn){
+    // "Mark done" on a DISCUSSED item — the human's own completion. No
+    // executor, no receipt: nothing ran, someone just handled it.
+    var aid=btn.getAttribute("data-close"); if(!aid) return;
+    var old=btn.innerHTML;
+    btn.disabled=true; btn.textContent="Marking…";
+    fetch("/dashboard/actions/"+encodeURIComponent(aid)+"/close",{
+      method:"POST",headers:headers()
+    })
+      .then(function(r){ return r.json().catch(function(){return {};})
+        .then(function(j){ if(!r.ok) throw new Error(j.error||("HTTP "+r.status)); return j; }); })
+      .then(function(j){
+        toast("Marked done.");
+        patchActionState(aid,j.status||{status:"done"});
+      })
+      .catch(function(e){ btn.disabled=false; btn.innerHTML=old; toast("Could not mark done: "+e.message,true); });
   }
   function withdrawAction(btn){
     var aid=btn.getAttribute("data-withdraw"); if(!aid) return;
@@ -2885,7 +2905,7 @@
   var acBucket="attn";
   function acTodoText(a){
     var s=stateOf(a);
-    if(s==="team_followup") return "A teammate's own follow-up — recorded here; nothing for the avatar to run.";
+    if(s==="team_followup") return "Agreed in the meeting, with no tool behind it — a person owns this one. Mark it done once it's handled.";
     if(s==="needs_details"){
       var cap=a.family?CAPS[a.family]:null;
       if(cap&&cap.connected===false) return "Needs "+cap.label+" reconnected before it can run.";
@@ -2934,7 +2954,14 @@
     function acCard(x){
       var a=x.a,m=x.m,s=stateOf(a);
       var ctl="";
-      if(a.action_id&&bucketOf(a)==="attn"){
+      if(a.action_id&&s==="team_followup"){
+        // A DISCUSSED item: no tool, nothing to approve, nothing to execute.
+        // The only honest control is a human saying it is handled — which is
+        // why this is "Mark done" and not "Approve" (approve implies the
+        // avatar then runs something, and here it never will).
+        ctl='<button class="btn primary" data-close="'+esc(a.action_id)+'">Mark done</button>'+
+            '<button class="btn danger" data-withdraw="'+esc(a.action_id)+'">Discard</button>';
+      } else if(a.action_id&&bucketOf(a)==="attn"){
         var capA=a.family?CAPS[a.family]:null;
         if(capA&&capA.connected===false){
           // The tool this card needs isn't connected. Approving could only
@@ -3070,6 +3097,7 @@
     $$("#ac-list [data-approve]").forEach(function(b){ b.addEventListener("click",function(){ reviewAction(b); }); });
     $$("#ac-list [data-reject]").forEach(function(b){ b.addEventListener("click",function(){ rejectAction(b); }); });
     $$("#ac-list [data-withdraw]").forEach(function(b){ b.addEventListener("click",function(){ withdrawAction(b); }); });
+    $$("#ac-list [data-close]").forEach(function(b){ b.addEventListener("click",function(){ closeAction(b); }); });
     $$("#ac-list [data-acdetailsbtn]").forEach(function(b){ b.addEventListener("click",function(){ openDetailsFor(b.getAttribute("data-acdetailsbtn"),b); }); });
     $$("#ac-list [data-acx]").forEach(function(b){ b.addEventListener("click",function(){ toggleActionDetails(b); }); });
   }
