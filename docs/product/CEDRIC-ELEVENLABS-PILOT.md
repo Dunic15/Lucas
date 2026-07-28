@@ -267,11 +267,18 @@ transcription means the wake word often does not survive, and in a group call a
 wake word that does not survive means the Director gate never opens — she is
 simply deaf for the whole meeting.
 
-- **`language_detection` system tool enabled** on the agent
-  (`conversation_config.agent.prompt.tools`, inline — client tools keep riding
-  `tool_ids`; the two coexist). It is **off by default** on the platform. She
-  now switches voice, ASR and replies the first time someone speaks another
-  language, or when asked to.
+- **`language_detection` system tool enabled** on the agent. It is **off by
+  default** on the platform. She now switches voice, ASR and replies the first
+  time someone speaks another language, or when asked to.
+  > It lives in `conversation_config.agent.prompt.built_in_tools` — a MAP keyed
+  > by system-tool name, `null` = disabled. **The public docs still show the
+  > older `prompt.tools: [{type: "system", …}]` array. Do not follow them.** On
+  > this account `tools` is the READ-BACK expansion of `tool_ids`, so writing a
+  > system tool into it replaces all ten CLIENT tools (queue_action,
+  > leave_meeting, search_web…) with that single entry. Shape verified against
+  > the live API on a throwaway agent: a bare `{}` is rejected
+  > (`Field required`); `{name, description, type: "system", params:
+  > {system_tool_type: "language_detection"}}` is accepted.
 - **Starting language is per-avatar**: `voice_agent_language` in `avatar.yaml`,
   falling back to the global env. One global var meant "Italian for Laura" was
   also "Italian for Cedric, in every org on this runtime" — so in practice
@@ -279,10 +286,12 @@ simply deaf for the whole meeting.
   the agent is provisioned for: `en`, `it`); an unsupported code is not a
   degraded call, it is a dead one at second zero.
 
-> **Needs an agent re-provision** (a PROD mutation, separate from both deploys):
-> `python backend/scripts/create_meeting_agent.py --avatar petra` (and
-> `--avatar cedric`). Check it first with `--dry-run`. Until it is re-run the
-> tool is absent and behaviour is unchanged.
+> **APPLIED IN PROD 2026-07-28** on both `petra` and `cedric`, via a MINIMAL
+> targeted PATCH of `built_in_tools.language_detection` only — not a full
+> `create_meeting_agent.py` run, which rewrites the whole `conversation_config`
+> and would overwrite any dashboard drift. Verified before/after: `tool_ids`
+> 10 → 10, knowledge 20/12 → 20/12, prompt 8322/8362 chars unchanged.
+> Rollback: PATCH the same key back to `null`.
 
 **Still English-only: the transcript path.** `RECALL_TRANSCRIPTION_LANGUAGE_CODE=en`
 drives Deepgram, and Deepgram is what the *backend* hears — wake detection,

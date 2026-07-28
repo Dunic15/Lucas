@@ -417,12 +417,25 @@ def build_payload(avatar_id: str) -> dict:
                     # call that means the Director gate never opens and she is
                     # simply deaf. With this tool she switches — voice, ASR and
                     # replies — the first time someone speaks another language,
-                    # or when asked to. Client tools ride `tool_ids` (attached
-                    # at runtime in main()); system tools are inline here, and
-                    # the two coexist.
-                    "tools": [
-                        {"type": "system", "name": "language_detection", "description": ""},
-                    ],
+                    # or when asked to.
+                    #
+                    # It goes in `built_in_tools` — a MAP keyed by system-tool
+                    # name, null = disabled — NOT in `tools`. The public docs
+                    # still show the older `tools: [{type: "system"}]` array;
+                    # do not follow them. On this account `tools` is the
+                    # READ-BACK expansion of `tool_ids`, so writing a system
+                    # tool into it REPLACES all ten CLIENT tools (queue_action,
+                    # leave_meeting, search_web…) with that single entry.
+                    # Shape verified against the live API on a throwaway agent:
+                    # a bare {} is rejected ("Field required"); this is accepted.
+                    "built_in_tools": {
+                        "language_detection": {
+                            "name": "language_detection",
+                            "description": "",
+                            "type": "system",
+                            "params": {"system_tool_type": "language_detection"},
+                        },
+                    },
                     # Owner call 2026-07-24 after two slow live tests: EL's
                     # COLOCATED Qwen (runs inside their infra, no external
                     # LLM hop — the platform's own latency thesis). The
