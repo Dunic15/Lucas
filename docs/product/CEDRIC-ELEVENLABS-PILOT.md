@@ -257,6 +257,40 @@ every turn.
 > crossing signals. Either order is safe; worker-first is fluid sooner. Do it
 > with `active_sessions == 0` (`/check-sessions`).
 
+### PR 6 — she follows the room's language — **2026-07-28**
+The agent was already provisioned bilingual (`language_presets: {it}`,
+`eleven_v3_conversational` TTS) — but a preset is only reachable once the
+CONVERSATION language is that language, and that was pinned per-connection from
+a single global `VOICE_AGENT_LANGUAGE` (default `en`). So an Italian meeting ran
+**English ASR on Italian speech**. That is not just a wrong accent: mangled
+transcription means the wake word often does not survive, and in a group call a
+wake word that does not survive means the Director gate never opens — she is
+simply deaf for the whole meeting.
+
+- **`language_detection` system tool enabled** on the agent
+  (`conversation_config.agent.prompt.tools`, inline — client tools keep riding
+  `tool_ids`; the two coexist). It is **off by default** on the platform. She
+  now switches voice, ASR and replies the first time someone speaks another
+  language, or when asked to.
+- **Starting language is per-avatar**: `voice_agent_language` in `avatar.yaml`,
+  falling back to the global env. One global var meant "Italian for Laura" was
+  also "Italian for Cedric, in every org on this runtime" — so in practice
+  nobody could set it. Unknown codes are dropped by the loader (only languages
+  the agent is provisioned for: `en`, `it`); an unsupported code is not a
+  degraded call, it is a dead one at second zero.
+
+> **Needs an agent re-provision** (a PROD mutation, separate from both deploys):
+> `python backend/scripts/create_meeting_agent.py --avatar petra` (and
+> `--avatar cedric`). Check it first with `--dry-run`. Until it is re-run the
+> tool is absent and behaviour is unchanged.
+
+**Still English-only: the transcript path.** `RECALL_TRANSCRIPTION_LANGUAGE_CODE=en`
+drives Deepgram, and Deepgram is what the *backend* hears — wake detection,
+`addressed_to_other`, stop/leave. So even with the agent following the room,
+the Director still reasons over English ASR of Italian speech. Fixing that is a
+config/cost decision (`RECALL_TRANSCRIPTION_PROVIDER=elevenlabs`, or a Deepgram
+multilingual model), not a code change — left to the owner.
+
 ### PR 4 — client tools — **SHIPPED 2026-07-24**
 Four client tools registered in the EL tools registry (create-or-reuse by
 name, attached via `prompt.tool_ids`; definitions in

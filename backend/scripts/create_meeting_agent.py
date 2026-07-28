@@ -407,6 +407,22 @@ def build_payload(avatar_id: str) -> dict:
             "agent": {
                 "prompt": {
                     "prompt": f"{persona}\n\n{rules}",
+                    # LANGUAGE DETECTION (system tool — NOT on by default).
+                    # `language_presets` below already provisions Italian, but
+                    # a preset is only reachable once the CONVERSATION language
+                    # is Italian, and that was pinned per-connection from one
+                    # global env var (default "en"). So an Italian meeting ran
+                    # English ASR on Italian speech: mangled transcription, a
+                    # wake word that often did not survive it, and in a group
+                    # call that means the Director gate never opens and she is
+                    # simply deaf. With this tool she switches — voice, ASR and
+                    # replies — the first time someone speaks another language,
+                    # or when asked to. Client tools ride `tool_ids` (attached
+                    # at runtime in main()); system tools are inline here, and
+                    # the two coexist.
+                    "tools": [
+                        {"type": "system", "name": "language_detection", "description": ""},
+                    ],
                     # Owner call 2026-07-24 after two slow live tests: EL's
                     # COLOCATED Qwen (runs inside their infra, no external
                     # LLM hop — the platform's own latency thesis). The

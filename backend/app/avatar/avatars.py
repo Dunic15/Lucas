@@ -109,6 +109,14 @@ class Avatar:
     # The private ElevenLabs Agent bound to THIS avatar ("" = none). Never a
     # secret (the API key stays server-side); an empty id blocks dispatch.
     elevenlabs_agent_id: str = ""
+    # Language this avatar OPENS a call in ("" = inherit VOICE_AGENT_LANGUAGE).
+    # Only the starting language: with the language_detection system tool on the
+    # agent, she follows the room from the first sentence someone speaks in
+    # another language. Setting it right for a team that always meets in one
+    # language just saves that first switch — and the greeting is in their
+    # language. Was a single GLOBAL env var, which meant "Italian for Laura"
+    # was also "Italian for Cedric, for every org".
+    voice_agent_language: str = ""
     # Multiparty gating for the agent runtime ("off" | "wake_word_gate"):
     # wake_word_gate = audio reaches the agent only after this avatar's wake
     # word opened the gate (Meeting Director), reusing wake_words above.
@@ -299,6 +307,11 @@ def load(avatar_id: str) -> Avatar:
             lambda r: r if r in ("legacy", "elevenlabs_agent") else "legacy"
         )(str(_coalesce(raw.get("conversation_runtime"), "legacy")).strip().lower()),
         elevenlabs_agent_id=str(_coalesce(raw.get("elevenlabs_agent_id"), "")).strip(),
+        # Only languages the agent is actually provisioned for: an unsupported
+        # code is not a degraded call, it is a dead one at second zero.
+        voice_agent_language=(
+            lambda c: c if c in ("en", "it") else ""
+        )(str(_coalesce(raw.get("voice_agent_language"), "")).strip().lower()),
         voice_multiparty_mode=(
             lambda m: m if m in ("off", "wake_word_gate") else "off"
         )(str(_coalesce(raw.get("voice_multiparty_mode"), "off")).strip().lower()),

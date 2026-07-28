@@ -585,6 +585,63 @@ def test_bootstrap_language_knob_localizes_greeting(client, bearer, monkeypatch)
     store.remove("bot_it")
 
 
+def test_avatar_language_overrides_the_global_knob(monkeypatch):
+    """One global env var meant "Italian for Laura" was also "Italian for
+    Cedric, in every org on the runtime" — so nobody could set it, and an
+    Italian room ran English ASR."""
+    from dataclasses import replace
+
+    monkeypatch.setattr(settings, "voice_agent_language", "en")
+    s = _el_session("bot_avlang")
+    av = avatars.load("petra")
+    payload = voice_agent_api.build_init_payload(s, replace(av, voice_agent_language="it"))
+    agent_over = payload["conversation_config_override"]["agent"]
+    assert agent_over["language"] == "it"
+    assert "Ciao a tutti" in agent_over["first_message"]
+    # Unset on the avatar → the global still decides (Cedric is unaffected).
+    payload = voice_agent_api.build_init_payload(s, replace(av, voice_agent_language=""))
+    assert payload["conversation_config_override"]["agent"]["language"] == "en"
+    store.remove("bot_avlang")
+
+
+def test_avatar_language_rejects_an_unprovisioned_code(tmp_path, monkeypatch):
+    """An unsupported language code is not a degraded call, it is a dead one at
+    second zero — so the loader drops anything the agent is not built for."""
+    # settings.avatars_dir is a read-only computed property — repoint REPO_ROOT
+    # (same trick as test_mission_and_tasks._point_avatars_dir).
+    from app import config as _config
+
+    monkeypatch.setattr(_config, "REPO_ROOT", tmp_path)
+    root = tmp_path / "avatars"
+    root.mkdir(exist_ok=True)
+    for code, expected in (("klingon", ""), ("IT", "it"), ("", "")):
+        folder = root / "tester"
+        folder.mkdir(exist_ok=True)
+        (folder / "avatar.yaml").write_text(
+            "id: tester\nname: Tester\nrole: r\npersona_prompt: p\n"
+            f"voice_agent_language: '{code}'\n"
+        )
+        avatars._load_cache.clear()
+        assert avatars.load("tester").voice_agent_language == expected
+
+
+def test_agent_config_enables_language_detection():
+    """The agent already ships an Italian preset, but a preset is unreachable
+    until the CONVERSATION language is Italian. The system tool is what makes
+    her follow a room that code-switches — and it is off by default."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "create_meeting_agent.py"
+    spec = importlib.util.spec_from_file_location("_cma", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    prompt = mod.build_payload("petra")["conversation_config"]["agent"]["prompt"]
+    assert {"type": "system", "name": "language_detection", "description": ""} in (
+        prompt.get("tools") or []
+    )
+
+
 def test_tool_queue_action_stamps_requesting_speaker(client, bearer):
     """Owner plan P2: every action records WHO asked for it — the bridge
     sends the voiced speaker, the card carries the provenance."""

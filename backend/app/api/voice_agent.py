@@ -241,7 +241,15 @@ def build_init_payload(session, avatar) -> dict:
             "END UNTRUSTED MEETING DATA",
         ]
     )
-    lang = (settings.voice_agent_language or "en").strip().lower()
+    # Per-avatar first, global env as the fallback. One global var meant the
+    # only way to give an Italian team an Italian Laura was to make Cedric
+    # Italian too, for every org on the runtime. This picks the language she
+    # OPENS in; the language_detection system tool follows the room from there.
+    lang = (
+        getattr(avatar, "voice_agent_language", "")
+        or settings.voice_agent_language
+        or "en"
+    ).strip().lower()
     agent_override: dict = {
         "prompt": {"prompt": prompt},
         # first_message stays the agent's own for EN (one greeter, in the
