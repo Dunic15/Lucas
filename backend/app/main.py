@@ -2434,6 +2434,17 @@ def _el_voice_owned(session: store.Session) -> bool:
     )
 
 
+def _leave_intent(text: str) -> bool:
+    """Cheap "this line is trying to dismiss the bot" probe, used only to stop
+    a suppression gate from swallowing a dismissal. Never decides the leave
+    itself — the real guards (addressee check, roster, explicit-imperative
+    shape) all still run downstream."""
+    try:
+        return bool(detect_leave_command_explicit(text) or detect_leave_command(text))
+    except Exception:  # noqa: BLE001 — a probe must never break the webhook
+        return False
+
+
 def director_strict_for(session: store.Session, avatar: avatars.Avatar) -> bool:
     """Whether the Director gate is armed for this session.
 
@@ -3872,6 +3883,15 @@ async def recall_webhook(request: Request) -> JSONResponse:
             called
             and (detect_stop_command(question) or detect_leave_command(question))
         ) or detect_leave_command_explicit(text)
+        # Being named counts as activation on THIS runtime too. Every non-control
+        # line returns just below, so `addressed_once` — which the legacy path
+        # sets further down — was never reached and stayed False for the whole
+        # meeting. Opening grace then ate the un-named leave carve-out: live
+        # customer demo 2026-07-28, "Go out the meeting." did nothing and it took
+        # "Cedric, you can leave the meeting now" to get him out. The detector
+        # was fine; the command never reached it.
+        if called:
+            session.addressed_once = True
         if not _ctrl:
             return JSONResponse(
                 {"ok": True, "spoke": False, "voice_owner": "elevenlabs"}
@@ -3912,7 +3932,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # they still work during the grace — this only suppresses UNADDRESSED speech.
     if called:
         session.addressed_once = True
-    elif _in_opening_grace(session):
+    elif _in_opening_grace(session) and not _leave_intent(text):
+        # A dismissal is NEVER "unaddressed speech to suppress" — it is meter
+        # safety, and the bot ignoring "go out the meeting" in front of a
+        # customer is the worst version of this failure. Grace exists to stop
+        # her TALKING before the room has settled; it must not stop her LEAVING.
         return JSONResponse({"ok": True, "spoke": False, "reason": "opening grace"})
 
     # ── hand-raise timeout ──

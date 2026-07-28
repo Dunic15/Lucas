@@ -3999,6 +3999,69 @@ async def reject_action(action_id: str, request: Request) -> JSONResponse:
     )
 
 
+@router.post("/dashboard/actions/{action_id}/close")
+async def close_action(action_id: str, request: Request) -> JSONResponse:
+    """Mark a DISCUSSED item handled — the human's own "done".
+
+    Owner ask 2026-07-28. Items the meeting agreed on that no tool can run
+    ("contact companies for design partners", "improve the packaging") were
+    filed as team follow-ups and then bucketed straight into **Completed**,
+    which is a lie: nobody had done them. They are work, they just are not the
+    avatar's work. They now sit in Needs attention until a person closes them
+    here, which is what this door is.
+
+    Deliberately NOT the approve/reject vocabulary: nothing executes, nothing
+    is being judged. It is a human saying "handled".
+
+    Restricted to discussion items on purpose — a tool-backed action must earn
+    "done" from its executor and its receipt, never from a button, or the
+    receipt trail stops meaning anything.
+    """
+    user = auth.current_user(request)
+    if user is None:
+        if err := auth.gate(request):
+            return err
+        return JSONResponse({"error": "login required"}, status_code=401)
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    aid = (action_id or "").strip()
+    if not aid:
+        return JSONResponse({"error": "action_id is required"}, status_code=400)
+    org = user["org_id"]
+
+    found = await run_in_threadpool(_find_org_action, org, aid, user)
+    if found is None:
+        return JSONResponse(
+            {"error": "unknown action for this org"}, status_code=404,
+            headers=_NO_STORE,
+        )
+    action = found[0] if isinstance(found, tuple) else found
+    if not (isinstance(action, dict) and action.get("human_followup")):
+        return JSONResponse(
+            {"error": "only discussed items can be closed by hand"},
+            status_code=409,
+            headers=_NO_STORE,
+        )
+
+    who = str(user.get("email") or user.get("user_id") or "").strip()
+    await run_in_threadpool(
+        ledger.set_action_status, aid, "done",
+        ("closed on the dashboard" + (f" by {who}" if who else "")),
+        org_id=org,
+    )
+    latest = await run_in_threadpool(ledger.action_statuses, [aid], org_id=org)
+    status = latest.get(aid)
+    return JSONResponse(
+        {
+            "ok": True,
+            "action_id": aid,
+            "closed": bool(status and status.get("status") == "done"),
+            "status": status,
+        },
+        headers=_NO_STORE,
+    )
+
+
 @router.post("/dashboard/actions/{action_id}/withdraw")
 async def withdraw_action(action_id: str, request: Request) -> JSONResponse:
     """Soft-withdraw an idle action; preserve its row, receipt log and audit."""

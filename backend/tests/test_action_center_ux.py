@@ -163,6 +163,32 @@ def test_untyped_card_needs_details_never_tracked_only():
     assert dash._card_state({"item": "follow up with the vendor"}) == "needs_details"
 
 
+def test_discussed_item_is_its_own_card_state_not_a_tool_action():
+    """Two KINDS of action, not one (owner 2026-07-28). A thing the meeting
+    agreed on that no tool can run ("contact companies for design partners")
+    is real work — it just is not the avatar's work. It gets its own state so
+    the UI can file it apart from the tool-backed cards, and so it can never
+    be mistaken for something with an executor behind it."""
+    assert dash._card_state({
+        "item": "contact companies for design partners",
+        "human_followup": True,
+    }) == "team_followup"
+    # The same sentence WITHOUT the flag is an ordinary capture.
+    assert dash._card_state({
+        "item": "contact companies for design partners",
+    }) == "needs_details"
+
+
+def test_close_door_is_authenticated_and_never_silently_succeeds(client):
+    """"Mark done" is the human's completion for a DISCUSSED item. A tool-backed
+    action must earn `done` from its executor and its receipt — if a button
+    could grant it, the receipt trail stops meaning anything. Unauthenticated
+    or unknown must never come back ok."""
+    r = client.post("/dashboard/actions/does-not-exist/close")
+    assert r.status_code in (401, 403, 404)
+    assert r.json().get("ok") is not True
+
+
 def test_action_entry_exposes_card_state_and_family_both_branches():
     entry = dash._action_entry({
         "item": "send the recap",
