@@ -637,9 +637,11 @@ def test_agent_config_enables_language_detection():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     prompt = mod.build_payload("petra")["conversation_config"]["agent"]["prompt"]
-    assert {"type": "system", "name": "language_detection", "description": ""} in (
-        prompt.get("tools") or []
-    )
+    ld = (prompt.get("built_in_tools") or {}).get("language_detection")
+    assert ld and ld["params"]["system_tool_type"] == "language_detection"
+    # And NOT in `tools`: on this account `tools` is the read-back expansion of
+    # `tool_ids`, so writing a system tool there replaces every CLIENT tool.
+    assert not prompt.get("tools"), "system tools must never be written to `tools`"
 
 
 def test_tool_queue_action_stamps_requesting_speaker(client, bearer):
