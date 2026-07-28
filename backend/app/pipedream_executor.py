@@ -679,31 +679,43 @@ def generic_app(action_type: str | None) -> str:
     return m.group(1) if m else ""
 
 
-def _execute_generic(org: str, action_id: str, action_type: str,
-                     app: str, args: dict) -> dict:
+def _execute_generic(
+    org: str,
+    action_id: str,
+    action_type: str,
+    app: str,
+    args: dict,
+    *,
+    receipt_route: str = "pipedream",
+    mirror_surface: bool = True,
+) -> dict:
     """Run one pre-built Pipedream action with schema-gated props."""
     action_key = str(args.get("action_key") or "").strip()
     props = args.get("props") if isinstance(args.get("props"), dict) else {}
     if not action_key:
         return _settle(action_id, org, False, action_type, "",
-                       "missing the Pipedream action key")
+                       "missing the Pipedream action key",
+                       route=receipt_route, mirror_surface=mirror_surface)
     # The component key embeds its app (github-create-issue) — a key from a
     # DIFFERENT app than the typed family would dodge the capability gate.
     if not action_key.startswith(app.replace("_", "-")) and not action_key.startswith(app):
         return _settle(action_id, org, False, action_type, "",
-                       f"action {action_key!r} doesn't belong to {app}")
+                       f"action {action_key!r} doesn't belong to {app}",
+                       route=receipt_route, mirror_surface=mirror_surface)
 
     try:
         accounts = pipedream_client.list_accounts(org, app=app)
     except pipedream_client.PipedreamError as exc:
         return _settle(action_id, org, False, action_type, "",
-                       f"couldn't reach Pipedream ({type(exc).__name__})")
+                       f"couldn't reach Pipedream ({type(exc).__name__})",
+                       route=receipt_route, mirror_surface=mirror_surface)
     account = next((a for a in accounts if a.get("id") and a.get("healthy", True)), None)
     if account is None:
         account = next((a for a in accounts if a.get("id")), None)
     if account is None:
         return _settle(action_id, org, False, action_type, "",
-                       f"{app} isn't connected in Pipedream")
+                       f"{app} isn't connected in Pipedream",
+                       route=receipt_route, mirror_surface=mirror_surface)
     account_id = str(account["id"])
 
     component = pipedream_client.get_component(action_key)
@@ -712,7 +724,8 @@ def _execute_generic(org: str, action_id: str, action_type: str,
         # No schema ⇒ we can't validate what would run. Refuse rather than
         # fire a write we can't describe on the approval card.
         return _settle(action_id, org, False, action_type, "",
-                       f"couldn't load the definition of {action_key}")
+                       f"couldn't load the definition of {action_key}",
+                       route=receipt_route, mirror_surface=mirror_surface)
 
     auth_prop = ""
     allowed: dict[str, dict] = {}
@@ -727,7 +740,8 @@ def _execute_generic(org: str, action_id: str, action_type: str,
         allowed[name] = p
     if not auth_prop:
         return _settle(action_id, org, False, action_type, "",
-                       f"{action_key} has no account slot to fill")
+                       f"{action_key} has no account slot to fill",
+                       route=receipt_route, mirror_surface=mirror_surface)
 
     # Schema gate: keep only props the component declares; the model can never
     # smuggle an extra field (least of all the auth prop) into the run.
@@ -742,7 +756,8 @@ def _execute_generic(org: str, action_id: str, action_type: str,
     ]
     if missing:
         return _settle(action_id, org, False, action_type, "",
-                       "missing required fields: " + ", ".join(sorted(missing)[:6]))
+                       "missing required fields: " + ", ".join(sorted(missing)[:6]),
+                       route=receipt_route, mirror_surface=mirror_surface)
     configured[auth_prop] = {"authProvisionId": account_id}
 
     try:
@@ -757,13 +772,18 @@ def _execute_generic(org: str, action_id: str, action_type: str,
                 f"{app} pre-built actions need Pipedream's tool-calling tier "
                 "(pipedream.com/pricing). Core Asana/Gmail/Calendar actions "
                 "run via the Connect proxy and are unaffected.",
+                route=receipt_route, mirror_surface=mirror_surface,
             )
         return _settle(action_id, org, False, action_type, "",
-                       f"{app} action failed ({type(exc).__name__})")
+                       f"{app} action failed ({type(exc).__name__})",
+                       route=receipt_route, mirror_surface=mirror_surface)
     exports = result.get("exports") if isinstance(result.get("exports"), dict) else {}
     ref = str(exports.get("$summary") or "").strip()[:300]
     kind = f"{app} · {component.get('name') or action_key}"[:120]
-    return _settle(action_id, org, True, action_type, ref, "", kind=kind)
+    return _settle(
+        action_id, org, True, action_type, ref, "", kind=kind,
+        route=receipt_route, mirror_surface=mirror_surface,
+    )
 
 # ── public surface (mirrors executor.py) ────────────────────────────────────
 
@@ -990,10 +1010,20 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
 
 def execute_for_openclaw(org_id: str, action_id: str, action: dict) -> dict:
     """OpenClaw's tool bridge may reuse the low-level Connect executor."""
-    return _execute_approved(org_id, action_id, action)
+    return _execute_approved(
+        org_id, action_id, action,
+        receipt_route="openclaw", mirror_surface=False,
+    )
 
 
-def _execute_approved(org_id: str, action_id: str, action: dict) -> dict:
+def _execute_approved(
+    org_id: str,
+    action_id: str,
+    action: dict,
+    *,
+    receipt_route: str = "pipedream",
+    mirror_surface: bool = True,
+) -> dict:
     """Execute one approved action through the Connect Proxy and settle its
     canonical ledger receipt. Never raises."""
     if not enabled():
@@ -1004,7 +1034,10 @@ def _execute_approved(org_id: str, action_id: str, action: dict) -> dict:
         return {"ok": False, "error": "missing org"}
     app = generic_app(action_type)
     if app and action_type not in _MAPPER:
-        return _execute_generic(org, action_id, action_type, app, _args_of(action))
+        return _execute_generic(
+            org, action_id, action_type, app, _args_of(action),
+            receipt_route=receipt_route, mirror_surface=mirror_surface,
+        )
     spec = _MAPPER.get(action_type)
     if spec is None:
         return {"ok": False, "skipped": f"unhandled action type {action_type!r}"}
@@ -1017,22 +1050,28 @@ def _execute_approved(org_id: str, action_id: str, action: dict) -> dict:
         accounts = pipedream_client.list_accounts(org, app=app_slug)
     except pipedream_client.PipedreamError as exc:
         return _settle(action_id, org, False, action_type, "",
-                       f"couldn't reach Pipedream ({type(exc).__name__})")
+                       f"couldn't reach Pipedream ({type(exc).__name__})",
+                       route=receipt_route, mirror_surface=mirror_surface)
     account = next((a for a in accounts if a.get("id") and a.get("healthy", True)), None)
     if account is None:
         account = next((a for a in accounts if a.get("id")), None)
     if account is None:
         return _settle(action_id, org, False, action_type, "",
-                       f"{app_slug} isn't connected in Pipedream")
+                       f"{app_slug} isn't connected in Pipedream",
+                       route=receipt_route, mirror_surface=mirror_surface)
     account_id = str(account["id"])
 
     try:
         method, url, body, headers = builder(org, account_id, args)
     except ValueError as exc:
-        return _settle(action_id, org, False, action_type, "", str(exc))
+        return _settle(
+            action_id, org, False, action_type, "", str(exc),
+            route=receipt_route, mirror_surface=mirror_surface,
+        )
     except Exception as exc:  # noqa: BLE001 — any builder fault ⇒ failed receipt
         return _settle(action_id, org, False, action_type, "",
-                       f"bad arguments ({type(exc).__name__})")
+                       f"bad arguments ({type(exc).__name__})",
+                       route=receipt_route, mirror_surface=mirror_surface)
 
     try:
         resp = pipedream_client.proxy_request(
@@ -1040,10 +1079,12 @@ def _execute_approved(org_id: str, action_id: str, action: dict) -> dict:
         )
     except pipedream_client.PipedreamError as exc:
         return _settle(action_id, org, False, action_type, "",
-                       f"proxy call failed ({type(exc).__name__})")
+                       f"proxy call failed ({type(exc).__name__})",
+                       route=receipt_route, mirror_surface=mirror_surface)
     if not resp.get("ok"):
         return _settle(action_id, org, False, action_type, "",
-                       _api_error_detail(app_slug, resp))
+                       _api_error_detail(app_slug, resp),
+                       route=receipt_route, mirror_surface=mirror_surface)
 
     response_json = resp.get("json") or {}
     if action_type == "drive.share_file":
@@ -1061,6 +1102,8 @@ def _execute_approved(org_id: str, action_id: str, action: dict) -> dict:
         kind=(kind + " · verified") if verified else kind,
         verified=verified,
         verification="provider readback" if verified else "provider readback unavailable",
+        route=receipt_route,
+        mirror_surface=mirror_surface,
     )
 
 
@@ -1219,15 +1262,16 @@ def _api_error_detail(app_slug: str, resp: dict) -> str:
 
 def _settle(action_id: str, org: str, ok: bool, action_type: str, ref: str,
             error: str, *, kind: str = "", verified: bool = False,
-            verification: str = "") -> dict:
-    """Write the canonical done/failed ledger receipt (route='pipedream') and
-    mirror status to the Slack surface, exactly like executor.execute_approved.
-    Returns the normalized result."""
+            verification: str = "", route: str = "pipedream",
+            mirror_surface: bool = True) -> dict:
+    """Write the canonical receipt for the owning route and optionally mirror it."""
     kind = kind or action_type or "action"
     result: dict[str, Any] = {
         "ok": ok, "kind": kind, "ref": ref,
         "verified": bool(verified),
         "verification": str(verification or ""),
+        "route": route,
+        "runtime": "pipedream",
     }
     if not ok:
         result["error"] = error or "execution failed"
@@ -1239,18 +1283,31 @@ def _settle(action_id: str, org: str, ok: bool, action_type: str, ref: str,
     detail = ""
     try:
         if ok:
-            detail = " · ".join(p for p in ("Pipedream", kind, ref) if p)[:300]
+            owner = "OpenClaw via Pipedream" if route == "openclaw" else "Pipedream"
+            detail = " · ".join(p for p in (owner, kind, ref) if p)[:300]
             ledger.set_action_status(
                 aid, "done", detail, org_id=org,
                 receipt={
-                    "kind": kind, "ref": ref, "route": "pipedream",
+                    "kind": kind, "ref": ref, "route": route,
                     "runtime": "pipedream", "verified": bool(verified),
                     "verification": str(verification or ""),
                 },
             )
         else:
-            detail = f"Pipedream · {error or 'failed'}"[:300]
-            ledger.set_action_status(aid, "failed", detail, org_id=org)
+            owner = "OpenClaw via Pipedream" if route == "openclaw" else "Pipedream"
+            detail = f"{owner} · {error or 'failed'}"[:300]
+            ledger.set_action_status(
+                aid,
+                "failed",
+                detail,
+                org_id=org,
+                receipt={
+                    "kind": kind,
+                    "route": route,
+                    "runtime": "pipedream",
+                    "error": error or "execution failed",
+                },
+            )
     except Exception as exc:  # noqa: BLE001 — result still returns
         print(
             f"[pipedream_executor] status write skipped ({type(exc).__name__})",
@@ -1258,14 +1315,15 @@ def _settle(action_id: str, org: str, ok: bool, action_type: str, ref: str,
         )
 
     # Best-effort status projection to the Slack surface (never executes/routes).
-    try:
-        from .cedric import callback as slack_surface
+    if mirror_surface:
+        try:
+            from .cedric import callback as slack_surface
 
-        slack_surface.send_action_event(
-            org, "action.status",
-            {"action_id": aid, "status": "done" if ok else "failed",
-             "detail": detail[:300], "receipt_url": ref if ok else ""},
-        )
-    except Exception:  # noqa: BLE001 — a UI mirror never breaks execution
-        pass
+            slack_surface.send_action_event(
+                org, "action.status",
+                {"action_id": aid, "status": "done" if ok else "failed",
+                 "detail": detail[:300], "receipt_url": ref if ok else ""},
+            )
+        except Exception:  # noqa: BLE001 — a UI mirror never breaks execution
+            pass
     return result

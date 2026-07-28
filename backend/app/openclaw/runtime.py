@@ -42,6 +42,15 @@ READ_TOOLS = {
     "pipedream_list_app_actions",
 }
 ALL_TOOLS = tuple(sorted(SIDE_EFFECT_TOOLS | READ_TOOLS))
+_ACTION_TOOL_BY_TYPE = {
+    "email.send": "gmail_send",
+    "calendar.create_event": "calendar_create_event",
+    "asana.create_task": "asana_create_task",
+    "asana.update_task": "asana_update_task",
+    "asana.add_comment": "asana_add_comment",
+    "browser.manual": "browser_fallback",
+}
+_MAX_OPENRESPONSES_TURNS = 32
 _SCHEMA_READY = False
 _SCHEMA_LOCK = threading.Lock()
 
@@ -161,6 +170,13 @@ def _ensure_sqlite_schema() -> None:
                     updated_at REAL NOT NULL,
                     UNIQUE (org_id, run_id, action_id, step_id)
                 )
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS
+                  openclaw_tool_calls_action_once
+                ON openclaw_tool_calls(org_id, run_id, action_id)
                 """
             )
         _SCHEMA_READY = True
@@ -445,14 +461,14 @@ def _run_input(bot_id: str, artifact: dict, org_id: str) -> dict:
     }
 
 
-def _insert_run(org_id: str, meeting_id: str, payload: dict) -> dict:
+def _insert_run(org_id: str, meeting_id: str, payload: dict) -> tuple[dict, bool]:
     run_id = "oc_" + uuid.uuid4().hex
     now = _now()
     if _pg(org_id):
         engine = control_plane._get_engine()
         with engine.begin() as conn:
             control_plane._set_org(conn, org_id)
-            conn.execute(
+            inserted = conn.execute(
                 _text(
                     """
                     INSERT INTO openclaw_runs
@@ -480,10 +496,10 @@ def _insert_run(org_id: str, meeting_id: str, payload: dict) -> dict:
                 """,
                 {"org_id": org_id, "meeting_id": meeting_id},
             )
-        return _run_row(row) or {}
+        return _run_row(row) or {}, inserted.rowcount == 1
     _ensure_sqlite_schema()
     with store._LOCK, store._connect() as conn:
-        conn.execute(
+        inserted = conn.execute(
             """
             INSERT OR IGNORE INTO openclaw_runs
               (org_id, run_id, meeting_id, status, input_json, metrics_json,
@@ -496,7 +512,7 @@ def _insert_run(org_id: str, meeting_id: str, payload: dict) -> dict:
             "SELECT * FROM openclaw_runs WHERE org_id=? AND meeting_id=?",
             (org_id, meeting_id),
         ).fetchone()
-    return _run_row(dict(row) if row else None) or {}
+    return _run_row(dict(row) if row else None) or {}, inserted.rowcount == 1
 
 
 def _insert_action_runs(org_id: str, run_id: str, actions: list[dict]) -> None:
@@ -897,10 +913,16 @@ def create_meeting_run(bot_id: str, artifact: dict, org_id: str,
     if not meeting_id:
         return {"ok": False, "error": "missing meeting_id"}
     payload = _run_input(meeting_id, artifact or {}, org)
-    run = _insert_run(org, meeting_id, payload)
+    run, created = _insert_run(org, meeting_id, payload)
     run_id = str(run.get("run_id") or "")
     if not run_id:
         return {"ok": False, "error": "could not create run"}
+    if not created:
+        return {
+            "ok": True,
+            "run": run_detail(org, run_id) or run,
+            "replay": True,
+        }
     _insert_action_runs(org, run_id, payload["actions"])
     _event(
         org, run_id, "run_created", "OpenClaw run created",
@@ -990,82 +1012,391 @@ def verify_capability(token: str) -> dict | None:
     return payload
 
 
+def _tool_for_action_type(action_type: str) -> str:
+    typed = str(action_type or "").strip()
+    if pipedream_executor.generic_app(typed):
+        return "pipedream_run_app_action"
+    if typed in pipedream_executor.action_types() and not native_runtime.supports(
+        typed
+    ):
+        return "pipedream_run_app_action"
+    return _ACTION_TOOL_BY_TYPE.get(typed, "")
+
+
+def _action_for_run(org_id: str, run_id: str, action_id: str) -> dict | None:
+    run = get_run(org_id, run_id) or {}
+    payload = run.get("input") if isinstance(run.get("input"), dict) else {}
+    for action in payload.get("actions") or []:
+        if (
+            isinstance(action, dict)
+            and str(action.get("action_id") or "") == action_id
+        ):
+            return action
+    return None
+
+
+def _openresponses_tools(run: dict) -> list[dict]:
+    payload = run.get("input") if isinstance(run.get("input"), dict) else {}
+    ids_by_tool: dict[str, list[str]] = {}
+    for action in payload.get("actions") or []:
+        if not isinstance(action, dict) or action.get("missing_params"):
+            continue
+        typed = action.get("typed") if isinstance(action.get("typed"), dict) else {}
+        tool = _tool_for_action_type(str(typed.get("type") or ""))
+        aid = str(action.get("action_id") or "")
+        if tool and aid:
+            ids_by_tool.setdefault(tool, []).append(aid)
+
+    descriptions = {
+        "gmail_send": "Send the canonical approved email action.",
+        "calendar_create_event": "Create the canonical approved calendar event.",
+        "asana_create_task": "Create the canonical approved Asana task.",
+        "asana_update_task": "Update the canonical approved Asana task.",
+        "asana_add_comment": "Add the canonical approved Asana comment.",
+        "pipedream_run_app_action": (
+            "Run the canonical approved connected-app action through Pipedream."
+        ),
+        "browser_fallback": "Request manual browser attention for this action.",
+    }
+    tools: list[dict] = []
+    for tool, action_ids in sorted(ids_by_tool.items()):
+        tools.append(
+            {
+                "type": "function",
+                "name": tool,
+                "description": descriptions[tool],
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action_id": {
+                            "type": "string",
+                            "enum": sorted(set(action_ids)),
+                            "description": "Canonical action ID from the plan.",
+                        },
+                        "step_id": {
+                            "type": "string",
+                            "description": (
+                                "Stable idempotency step ID for this one action."
+                            ),
+                        },
+                    },
+                    "required": ["action_id", "step_id"],
+                    "additionalProperties": False,
+                },
+            }
+        )
+    return tools
+
+
+def _openresponses_calls(data: dict) -> list[dict]:
+    calls: list[dict] = []
+    for item in data.get("output") or []:
+        if not isinstance(item, dict) or item.get("type") != "function_call":
+            continue
+        arguments = item.get("arguments")
+        if isinstance(arguments, str):
+            arguments = _json_loads(arguments, {})
+        if not isinstance(arguments, dict):
+            arguments = {}
+        calls.append(
+            {
+                "call_id": str(item.get("call_id") or item.get("id") or ""),
+                "name": str(item.get("name") or ""),
+                "arguments": arguments,
+            }
+        )
+    return calls
+
+
+def _settle_gateway_failure(
+    org_id: str,
+    run_id: str,
+    error: str,
+    *,
+    run_status: str = "failed",
+    code: str = "gateway_failed",
+) -> None:
+    detail = run_detail(org_id, run_id) or {}
+    for action in detail.get("actions") or []:
+        aid = str(action.get("action_id") or "")
+        if not aid or str(action.get("status") or "") in TERMINAL_RUN_STATUSES:
+            continue
+        _set_action_run(
+            org_id,
+            run_id,
+            aid,
+            "needs_attention" if run_status == "needs_attention" else "failed",
+            summary="OpenClaw execution did not complete",
+            error=code,
+        )
+        ledger.set_action_status(
+            aid,
+            "failed",
+            error,
+            org_id=org_id,
+            receipt={
+                "kind": "OpenClaw",
+                "route": "openclaw",
+                "error": code,
+            },
+        )
+    _update_run(org_id, run_id, run_status, error=error)
+    _event(
+        org_id,
+        run_id,
+        run_status,
+        error,
+        status=run_status,
+        safe={"error_code": code},
+    )
+
+
+def _finish_openresponses_run(
+    org_id: str,
+    run_id: str,
+    *,
+    responses: int,
+    tool_calls: int,
+) -> None:
+    detail = run_detail(org_id, run_id) or {}
+    statuses = [
+        str(action.get("status") or "")
+        for action in detail.get("actions") or []
+    ]
+    metrics = {"responses": responses, "tool_calls": tool_calls}
+    if statuses and all(status == "done" for status in statuses):
+        _update_run(org_id, run_id, "done", metrics=metrics)
+        _event(
+            org_id,
+            run_id,
+            "run_done",
+            "OpenClaw completed all actions",
+            status="done",
+            safe=metrics,
+        )
+        return
+    reason = (
+        "OpenClaw finished without completing every canonical action; "
+        "no legacy fallback ran."
+    )
+    _update_run(
+        org_id,
+        run_id,
+        "needs_attention",
+        metrics=metrics,
+        error=reason,
+    )
+    _event(
+        org_id,
+        run_id,
+        "needs_attention",
+        reason,
+        status="needs_attention",
+        safe=metrics,
+    )
+
+
 def run_openclaw(org_id: str, run_id: str) -> None:
-    """Start the external OpenClaw gateway or deterministic local seam."""
+    """Execute a finalized meeting through OpenClaw's OpenResponses API."""
     run = get_run(org_id, run_id)
     if not run or run.get("status") == "cancelled":
         return
     _update_run(org_id, run_id, "planning")
-    _event(org_id, run_id, "planning", "Preparing OpenClaw execution plan",
-           status="planning")
+    _event(
+        org_id,
+        run_id,
+        "planning",
+        "Preparing OpenClaw execution plan",
+        status="planning",
+    )
     gateway = (settings.openclaw_gateway_url or "").strip().rstrip("/")
     if not gateway:
-        reason = "OpenClaw gateway is not configured; no legacy fallback ran."
-        for aid in _action_ids_for_run(org_id, run_id):
-            _set_action_run(
-                org_id, run_id, aid, "needs_attention",
-                summary="Gateway configuration required",
-                error="gateway_not_configured",
-            )
-            ledger.set_action_status(
-                aid,
-                "failed",
-                reason,
-                org_id=org_id,
-                receipt={
-                    "kind": "OpenClaw",
-                    "route": "openclaw",
-                    "error": "gateway_not_configured",
-                },
-            )
-        _update_run(org_id, run_id, "needs_attention", error=reason)
-        _event(
-            org_id, run_id, "needs_attention", reason,
-            status="needs_attention", safe={"gateway_configured": False},
+        _settle_gateway_failure(
+            org_id,
+            run_id,
+            "OpenClaw gateway is not configured; no legacy fallback ran.",
+            run_status="needs_attention",
+            code="gateway_not_configured",
         )
         return
+
+    tools = _openresponses_tools(run)
+    if not tools:
+        _settle_gateway_failure(
+            org_id,
+            run_id,
+            "OpenClaw found no executable canonical tools; no fallback ran.",
+            run_status="needs_attention",
+            code="no_executable_tools",
+        )
+        return
+
     _update_run(org_id, run_id, "running")
-    token = mint_capability(org_id, run_id)
-    base = (settings.public_base_url or settings.self_base_url or "").rstrip("/")
-    payload = {
-        "agent_id": settings.openclaw_agent_id or "laura-executor-test",
-        "run_id": run_id,
-        "meeting_id": run.get("meeting_id"),
-        "input": run.get("input") or {},
-        "tool_bridge": {
-            "tools": list(ALL_TOOLS),
-            "tool_url": f"{base}/openclaw/tools/{{tool_name}}" if base else "",
-            "event_url": f"{base}/openclaw/runs/{run_id}/events" if base else "",
-            "authorization": "Bearer <run capability>",
-            "capability_token": token,
-        },
+    capability = mint_capability(org_id, run_id)
+    response_url = (
+        gateway
+        if gateway.endswith("/v1/responses")
+        else f"{gateway}/v1/responses"
+    )
+    headers = {
+        "Content-Type": "application/json",
+        "x-openclaw-session-key": f"laura-openclaw-{run_id}",
     }
-    headers = {"Content-Type": "application/json"}
+    agent_id = str(settings.openclaw_agent_id or "main").strip()
+    if agent_id:
+        headers["x-openclaw-agent-id"] = agent_id
     if settings.openclaw_gateway_token:
         headers["Authorization"] = f"Bearer {settings.openclaw_gateway_token}"
-    try:
-        import httpx
 
-        resp = httpx.post(f"{gateway}/runs", json=payload, headers=headers,
-                          timeout=30)
-        data = resp.json() if resp.headers.get("content-type", "").startswith(
-            "application/json"
-        ) else {}
-    except Exception as exc:  # noqa: BLE001
-        err = f"OpenClaw gateway request failed ({type(exc).__name__})"
-        _update_run(org_id, run_id, "failed", error=err)
-        _event(org_id, run_id, "failed", err, status="failed")
-        return
-    if resp.status_code >= 400:
-        err = f"OpenClaw gateway returned HTTP {resp.status_code}"
-        _update_run(org_id, run_id, "failed", error=err)
-        _event(org_id, run_id, "failed", err, status="failed")
-        return
-    gateway_run_id = str(data.get("run_id") or data.get("id") or "")
-    _update_run(org_id, run_id, "running", gateway_run_id=gateway_run_id)
-    _event(
-        org_id, run_id, "gateway_started", "OpenClaw gateway accepted run",
-        status="running", safe={"gateway_run_id": gateway_run_id},
+    instructions = (
+        "You are Laura's post-meeting action executor. The JSON plan contains "
+        "actions that Laura has already approved and claimed. Execute every "
+        "action exactly once using its matching client function tool. Pass the "
+        "canonical action_id unchanged and choose one stable step_id. Laura "
+        "will load the authoritative stored arguments, so never invent or "
+        "modify recipients, times, task fields, or app parameters. Do not call "
+        "a side-effect tool twice for the same action. When all actions have "
+        "tool results, respond with a concise completion summary."
+    )
+    request: dict = {
+        "model": "openclaw",
+        "instructions": instructions,
+        "input": (
+            "Execute this finalized meeting action plan:\n"
+            + _json_dumps(run.get("input") or {})
+        ),
+        "tools": tools,
+        "tool_choice": "required",
+        "stream": False,
+        "user": f"laura-openclaw-{run_id}",
+        "max_output_tokens": 1200,
+    }
+
+    responses = 0
+    tool_calls = 0
+    gateway_run_id = ""
+    for _turn in range(_MAX_OPENRESPONSES_TURNS):
+        current = get_run(org_id, run_id) or {}
+        if current.get("status") == "cancelled":
+            return
+        try:
+            import httpx
+
+            resp = httpx.post(
+                response_url,
+                json=request,
+                headers=headers,
+                timeout=90,
+            )
+            data = (
+                resp.json()
+                if resp.headers.get("content-type", "").startswith(
+                    "application/json"
+                )
+                else {}
+            )
+        except Exception as exc:  # noqa: BLE001
+            _settle_gateway_failure(
+                org_id,
+                run_id,
+                f"OpenClaw gateway request failed ({type(exc).__name__})",
+                code="gateway_request_failed",
+            )
+            return
+        if resp.status_code >= 400:
+            _settle_gateway_failure(
+                org_id,
+                run_id,
+                f"OpenClaw gateway returned HTTP {resp.status_code}",
+                code=f"gateway_http_{resp.status_code}",
+            )
+            return
+
+        responses += 1
+        response_id = str(data.get("id") or "")
+        if not gateway_run_id:
+            gateway_run_id = response_id
+            _update_run(
+                org_id,
+                run_id,
+                "running",
+                gateway_run_id=gateway_run_id,
+            )
+            _event(
+                org_id,
+                run_id,
+                "gateway_started",
+                "OpenClaw accepted the run",
+                status="running",
+                safe={"gateway_run_id": gateway_run_id},
+            )
+
+        calls = _openresponses_calls(data)
+        if not calls:
+            _finish_openresponses_run(
+                org_id,
+                run_id,
+                responses=responses,
+                tool_calls=tool_calls,
+            )
+            return
+        if not response_id:
+            _settle_gateway_failure(
+                org_id,
+                run_id,
+                "OpenClaw returned tool calls without a response ID.",
+                code="missing_response_id",
+            )
+            return
+
+        outputs: list[dict] = []
+        for call in calls:
+            call_id = call["call_id"]
+            if not call_id:
+                _settle_gateway_failure(
+                    org_id,
+                    run_id,
+                    "OpenClaw returned a tool call without a call ID.",
+                    code="missing_call_id",
+                )
+                return
+            result = run_tool(
+                f"Bearer {capability}",
+                call["name"],
+                call["arguments"],
+            )
+            tool_calls += 1
+            outputs.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": _json_dumps(result),
+                }
+            )
+
+        detail = run_detail(org_id, run_id) or {}
+        unfinished = any(
+            str(action.get("status") or "")
+            not in TERMINAL_RUN_STATUSES
+            for action in detail.get("actions") or []
+        )
+        request = {
+            "model": "openclaw",
+            "instructions": instructions,
+            "input": outputs,
+            "previous_response_id": response_id,
+            "tools": tools,
+            "tool_choice": "required" if unfinished else "none",
+            "stream": False,
+            "user": f"laura-openclaw-{run_id}",
+            "max_output_tokens": 1200,
+        }
+
+    _settle_gateway_failure(
+        org_id,
+        run_id,
+        "OpenClaw exceeded the bounded tool-call loop.",
+        code="turn_limit_exceeded",
     )
 
 
@@ -1100,15 +1431,52 @@ def _tool_existing(org_id: str, run_id: str, action_id: str,
     return dict(row) if row else None
 
 
+def _tool_existing_for_action(
+    org_id: str, run_id: str, action_id: str
+) -> dict | None:
+    if _pg(org_id):
+        engine = control_plane._get_engine()
+        with engine.begin() as conn:
+            control_plane._set_org(conn, org_id)
+            row = _pg_fetchone(
+                conn,
+                """
+                SELECT * FROM openclaw_tool_calls
+                WHERE org_id=:org_id AND run_id=:run_id
+                  AND action_id=:action_id
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                {
+                    "org_id": org_id,
+                    "run_id": run_id,
+                    "action_id": action_id,
+                },
+            )
+        return row
+    _ensure_sqlite_schema()
+    with store._LOCK, store._connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM openclaw_tool_calls
+            WHERE org_id=? AND run_id=? AND action_id=?
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            (org_id, run_id, action_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def _insert_tool_call(org_id: str, run_id: str, action_id: str, step_id: str,
-                      tool: str, request: dict) -> None:
+                      tool: str, request: dict) -> bool:
     now = _now()
     idem = str(request.get("idempotency_key") or "")[:160]
     if _pg(org_id):
         engine = control_plane._get_engine()
         with engine.begin() as conn:
             control_plane._set_org(conn, org_id)
-            conn.execute(
+            inserted = conn.execute(
                 _text(
                     """
                     INSERT INTO openclaw_tool_calls
@@ -1118,7 +1486,7 @@ def _insert_tool_call(org_id: str, run_id: str, action_id: str, step_id: str,
                       (:org_id, :run_id, :action_id, :step_id, :idempotency_key,
                        :tool, 'running', CAST(:request_json AS jsonb),
                        '{}'::jsonb, clock_timestamp(), clock_timestamp())
-                    ON CONFLICT (org_id, run_id, action_id, step_id) DO NOTHING
+                    ON CONFLICT DO NOTHING
                     """
                 ),
                 {
@@ -1127,10 +1495,10 @@ def _insert_tool_call(org_id: str, run_id: str, action_id: str, step_id: str,
                     "request_json": _json_dumps(request),
                 },
             )
-        return
+        return inserted.rowcount == 1
     _ensure_sqlite_schema()
     with store._LOCK, store._connect() as conn:
-        conn.execute(
+        inserted = conn.execute(
             """
             INSERT OR IGNORE INTO openclaw_tool_calls
               (org_id, run_id, action_id, step_id, idempotency_key, tool, status,
@@ -1142,6 +1510,7 @@ def _insert_tool_call(org_id: str, run_id: str, action_id: str, step_id: str,
                 _json_dumps(request), now, now,
             ),
         )
+    return inserted.rowcount == 1
 
 
 def _finish_tool_call(org_id: str, run_id: str, action_id: str, step_id: str,
@@ -1218,8 +1587,13 @@ def _tool_action(tool_name: str, args: dict) -> dict | None:
     return None
 
 
-def _execute_side_effect(org_id: str, action_id: str, tool_name: str,
-                         args: dict) -> dict:
+def _execute_side_effect(
+    org_id: str,
+    action_id: str,
+    tool_name: str,
+    action_type: str,
+    args: dict,
+) -> dict:
     if tool_name == "browser_fallback":
         if not settings.openclaw_browser_enabled:
             return {"ok": False, "error": "browser fallback is disabled"}
@@ -1230,10 +1604,9 @@ def _execute_side_effect(org_id: str, action_id: str, tool_name: str,
             "kind": "browser fallback",
             "route": "openclaw",
         }
-    action = _tool_action(tool_name, args)
-    if action is None:
+    if not action_type:
         return {"ok": False, "error": f"unsupported OpenClaw tool {tool_name!r}"}
-    action_type = str(action.get("type") or "")
+    action = {"type": action_type, "args": dict(args)}
     if pipedream_executor.generic_app(action_type) or (
         pipedream_executor.handles(action)
         and not native_runtime.supports(action_type)
@@ -1280,14 +1653,47 @@ def run_tool(capability_token: str, tool_name: str, request: dict) -> dict:
             "status": 400,
             "error": "side-effect tools require action_id and step_id",
         }
-    existing = _tool_existing(org_id, run_id, action_id, step_id)
+    canonical = _action_for_run(org_id, run_id, action_id)
+    if canonical is None:
+        return {
+            "ok": False,
+            "status": 403,
+            "error": "action does not belong to this OpenClaw run",
+        }
+    typed = (
+        canonical.get("typed")
+        if isinstance(canonical.get("typed"), dict)
+        else {}
+    )
+    action_type = str(typed.get("type") or "").strip()
+    expected_tool = _tool_for_action_type(action_type)
+    if not expected_tool or tool != expected_tool:
+        return {
+            "ok": False,
+            "status": 403,
+            "error": "tool does not match the canonical action type",
+        }
+    canonical_args = (
+        typed.get("args") if isinstance(typed.get("args"), dict) else {}
+    )
+    existing = _tool_existing_for_action(org_id, run_id, action_id)
     if existing is not None:
         return _shape_tool_row(existing)
-    _insert_tool_call(org_id, run_id, action_id, step_id, tool, body)
-    args = body.get("args") if isinstance(body.get("args"), dict) else {}
+    inserted = _insert_tool_call(
+        org_id, run_id, action_id, step_id, tool, body
+    )
+    if not inserted:
+        existing = _tool_existing_for_action(org_id, run_id, action_id)
+        return _shape_tool_row(existing or {})
     _event(org_id, run_id, "tool_started", "OpenClaw tool call started",
            action_id=action_id, tool=tool, status="running")
-    result = _execute_side_effect(org_id, action_id, tool, dict(args))
+    result = _execute_side_effect(
+        org_id,
+        action_id,
+        tool,
+        action_type,
+        dict(canonical_args),
+    )
     ok = bool(result.get("ok"))
     status = "done" if ok else str(result.get("status") or "failed")
     if status not in ACTION_RUN_STATUSES:

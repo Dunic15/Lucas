@@ -367,12 +367,16 @@ def _pipedream_google_connected(org_id: str, action_type: str) -> bool:
 
 
 def _execute_pipedream_fallback(
-    org_id: str, action_id: str, normalized: dict
+    org_id: str, action_id: str, normalized: dict, *, for_openclaw: bool = False
 ) -> dict:
     """Execute on Pipedream; its own executor writes the canonical receipt."""
 
     from .. import pipedream_executor
 
+    if for_openclaw:
+        return pipedream_executor.execute_for_openclaw(
+            org_id, action_id, normalized
+        )
     return pipedream_executor.execute_approved(
         org_id, action_id, normalized
     )
@@ -396,10 +400,20 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
 
 def execute_for_openclaw(org_id: str, action_id: str, action: dict) -> dict:
     """OpenClaw's tool bridge may reuse Laura's low-level native executor."""
-    return _execute_approved(org_id, action_id, action)
+    return _execute_approved(
+        org_id, action_id, action,
+        receipt_route="openclaw", mirror_surface=False,
+    )
 
 
-def _execute_approved(org_id: str, action_id: str, action: dict) -> dict:
+def _execute_approved(
+    org_id: str,
+    action_id: str,
+    action: dict,
+    *,
+    receipt_route: str = "native",
+    mirror_surface: bool = True,
+) -> dict:
     """Execute one approved action and settle its canonical ledger receipt."""
     if not enabled():
         return {"ok": False, "skipped": "native_executor off"}
@@ -428,6 +442,10 @@ def _execute_approved(org_id: str, action_id: str, action: dict) -> dict:
             not native_connected
             and _pipedream_google_connected(org, action_type)
         ):
+            if receipt_route == "openclaw":
+                return _execute_pipedream_fallback(
+                    org, action_id, normalized, for_openclaw=True
+                )
             return _execute_pipedream_fallback(
                 org, action_id, normalized
             )
@@ -439,10 +457,20 @@ def _execute_approved(org_id: str, action_id: str, action: dict) -> dict:
         and _native_google_auth_unavailable(result)
         and _pipedream_google_connected(org, action_type)
     ):
+        if receipt_route == "openclaw":
+            return _execute_pipedream_fallback(
+                org, action_id, normalized, for_openclaw=True
+            )
         return _execute_pipedream_fallback(
             org, action_id, normalized
         )
 
+    if receipt_route == "openclaw":
+        result = {
+            **result,
+            "route": "openclaw",
+            "runtime": "laura",
+        }
     what = str(result.get("kind") or action_type or "action")
     receipt = str(result.get("ref") or "")
     # Phase-1 read-back on the NATIVE plane too (the Pipedream executor
@@ -465,7 +493,14 @@ def _execute_approved(org_id: str, action_id: str, action: dict) -> dict:
         try:
             if result.get("ok"):
                 detail = " · ".join(
-                    part for part in ("Laura native", what, receipt) if part
+                    part for part in (
+                        "OpenClaw via Laura native"
+                        if receipt_route == "openclaw"
+                        else "Laura native",
+                        what,
+                        receipt,
+                    )
+                    if part
                 )[:300]
                 ledger.set_action_status(
                     aid,
@@ -475,15 +510,35 @@ def _execute_approved(org_id: str, action_id: str, action: dict) -> dict:
                     receipt={
                         "kind": what,
                         "ref": receipt,
-                        "route": "native",
+                        "route": receipt_route,
                         "runtime": "laura",
                     },
                 )
             else:
                 detail = (
-                    f"Laura native · {result.get('error') or result.get('skipped') or 'failed'}"
+                    (
+                        "OpenClaw via Laura native"
+                        if receipt_route == "openclaw"
+                        else "Laura native"
+                    )
+                    + f" · {result.get('error') or result.get('skipped') or 'failed'}"
                 )[:300]
-                ledger.set_action_status(aid, "failed", detail, org_id=org)
+                ledger.set_action_status(
+                    aid,
+                    "failed",
+                    detail,
+                    org_id=org,
+                    receipt={
+                        "kind": what,
+                        "route": receipt_route,
+                        "runtime": "laura",
+                        "error": str(
+                            result.get("error")
+                            or result.get("skipped")
+                            or "failed"
+                        ),
+                    },
+                )
         except Exception as exc:  # noqa: BLE001 - execution result still returns
             print(
                 f"[executor] status write skipped ({type(exc).__name__})",
@@ -492,21 +547,22 @@ def _execute_approved(org_id: str, action_id: str, action: dict) -> dict:
 
         # Best-effort status projection to the Slack surface. This does not
         # execute or route the action; Laura already performed the vendor call.
-        try:
-            from ..cedric import callback as slack_surface
+        if mirror_surface:
+            try:
+                from ..cedric import callback as slack_surface
 
-            slack_surface.send_action_event(
-                org,
-                "action.status",
-                {
-                    "action_id": aid,
-                    "status": "done" if result.get("ok") else "failed",
-                    "detail": detail[:300],
-                    "receipt_url": receipt if result.get("ok") else "",
-                },
-            )
-        except Exception:  # noqa: BLE001 - a UI mirror never breaks execution
-            pass
+                slack_surface.send_action_event(
+                    org,
+                    "action.status",
+                    {
+                        "action_id": aid,
+                        "status": "done" if result.get("ok") else "failed",
+                        "detail": detail[:300],
+                        "receipt_url": receipt if result.get("ok") else "",
+                    },
+                )
+            except Exception:  # noqa: BLE001 - a UI mirror never breaks execution
+                pass
     return result
 
 
