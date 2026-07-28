@@ -2,7 +2,7 @@
 
 **Owner:** Product/engineering
 **Applies to:** Current Laura backend and live meeting workflow
-**Last reviewed:** 2026-07-22
+**Last reviewed:** 2026-07-28
 
 ## What Laura is
 
@@ -113,9 +113,21 @@ the transcript, which stays PII in the private artifact store.
 ## Conversation behaviors
 
 - **Interrupting her works:** if a human talks over her, she stops immediately
-  and abandons the rest of that answer.
+  and abandons the rest of that answer. A listening noise is not an
+  interruption: "mm-hm", "sì", "ok" while she is mid-sentence let her finish —
+  only speech that keeps going for about half a second takes the floor.
 - **Follow-ups work:** being addressed by name always gets an answer, even
   seconds after her previous one.
+- **Turn-taking in a group call:** with two or more people in the room, her
+  name is how you *start* a conversation with her, not something you repeat
+  every sentence. Once she has answered someone, the floor stays open to that
+  person for about twelve seconds, so "and who is on it?" lands without saying
+  her name again. She steps back out the moment the conversation stops being
+  with her — someone else takes the floor, that person turns to a colleague by
+  name ("Ananth, can you take two?"), or the window passes in silence. Until
+  someone names her again she hears nothing: in a group call the audio of
+  people talking to each other never reaches her at all, so she cannot answer
+  a question that was not meant for her.
 - **Presence:** during long monologues she occasionally gives a small
   listening cue ("Mm-hm."); when addressed she acknowledges instantly while
   the answer generates.

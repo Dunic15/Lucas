@@ -14,12 +14,21 @@
 // live here beyond the backend bearer; the ElevenLabs API key never reaches
 // this worker.
 //
-// HALF-DUPLEX (pilot 1): while the agent's audio is playing in the meeting,
-// Recall ingress is DROPPED — Recall streams the room's MIXED audio, which
-// includes Cedric's own voice, and an agent that hears itself self-interrupts
-// forever. Cost: no voice barge-in while he speaks (answers are ≤200 tokens,
-// so windows are short). PR 3 revisits with speaker-labeled gating.
+// TURN-TAKING lives here, and it is the whole product on a group call:
+//   * strict mode (≥2 humans) — nothing reaches the model unless the room is
+//     talking TO her; human-to-human talk dies in this file, by construction.
+//   * the conversational lock — being named is how you ENTER the conversation;
+//     the person she just answered can keep talking to her without the name
+//     until someone else takes the floor, they turn to a colleague, or the
+//     follow-up window elapses.
+//   * backchannel-safe barge-in — "mhmm" does not cut her off, a real
+//     turn-grab does.
+// HALF-DUPLEX applies only to the MIXED-audio fallback rung, where Recall
+// sends the room mix (her own voice included) and an agent that hears itself
+// self-interrupts forever; on per-participant streams her output is not a
+// stream, so barge-in works.
 //
+// Tests: relay/cedric-voice/test/  (node --test "relay/cedric-voice/test/*.test.mjs")
 // PII: audio and transcripts NEVER appear in logs — counters only.
 
 export default {
@@ -64,6 +73,46 @@ async function handleControl(req, env, cap) {
 // (live 2026-07-24, unsolicited "scheduling challenges" reply).
 const PREBUFFER_MAX_B64 = 52_000;
 
+// ── conversational lock (owner spec 2026-07-28) ──────────────────────────
+// The strict gate is how she ENTERS a conversation, not a toll she charges on
+// every sentence. Before this, `agent_response_complete` slammed the gate shut,
+// so the natural second beat of a dialogue —
+//     "Laura, when is the deadline?"  "Friday."  "And who's on it?"
+// — never reached her: the room had to re-say her name for every single line,
+// which is exactly what made her read as a voice assistant instead of a
+// participant. After an answer the gate now stays open for the person she was
+// talking to, and to them only. It shuts the moment the conversation stops
+// being with her: someone else takes the floor, she is silent past the window,
+// or the backend hears a vocative aimed at another human ("Ananth, can you
+// take two?" → /control gate_close).
+const FOLLOWUP_WINDOW_MS = 12_000;
+// Turn end WITHIN an ask (she has not answered yet): the addresser trailing off
+// for this long ends their turn.
+const GATE_SILENCE_MS = 5000;
+// Per-speaker ring buffer: what gets replayed when the gate opens. It has to
+// cover the WHOLE ask, because the name is often at the END of it ("what's the
+// status on the API, Laura?") and the wake round trip (Deepgram endpointing →
+// webhook → control POST) spends most of a second on top of that. At 2.5s a
+// normal-length question reached the agent with its opening missing, which
+// sounds like her answering something nobody asked. 4s of s16le@16k base64 is
+// ~170 KB per speaker — nothing against the DO's memory.
+const SPEAKER_BUFFER_MS = 4000;
+// ── backchannel-safe barge-in ────────────────────────────────────────────
+// "Mhmm", "sì", "ok" while she is answering are the room LISTENING, not
+// interrupting — cutting her off there is the classic voice-assistant tell.
+// A real interruption is longer, so while her audio is playing a voiced burst
+// is HELD: past BARGE_MIN_VOICED_MS it is a genuine turn-grab and the whole
+// held burst is flushed (nothing is lost, it just lands ~0.5s later); if the
+// burst dies inside BARGE_GAP_MS of silence first, it was a backchannel and is
+// dropped so she keeps talking.
+const BARGE_MIN_VOICED_MS = 500;
+const BARGE_GAP_MS = 400;
+// s16le @ 16 kHz = 32 bytes per millisecond; base64 is 4 chars per 3 bytes.
+const b64Ms = (b64) => Math.floor((b64.length * 3) / 4 / 32);
+// Speaker key for the mixed-audio fallback rung, which carries no participant
+// labels. Never collides with a display name.
+const MIXED_KEY = "\u0000mixed";
+
 export class VoiceSession {
   constructor(state, env) {
     this.env = env;
@@ -98,10 +147,23 @@ export class VoiceSession {
     // model — silence is enforced, not requested.
     this.strictMode = false;
     this.gateOpen = false;
-    this.gateSpeaker = "";
+    this.gateSpeaker = ""; // WHO she is in conversation with (the partner)
     this.gateVoiceAt = 0; // last voiced frame of the gate speaker
+    this.followupUntil = 0; // >0 = she answered; partner may follow up un-named
+    // Tunable live from the Cloudflare dashboard (Settings → Variables) without
+    // a code deploy — this is the one number the room's feel is most sensitive
+    // to, and it wants a real meeting to settle.
+    this.followupWindowMs =
+      Number(env && env.FOLLOWUP_WINDOW_MS) > 0
+        ? Number(env.FOLLOWUP_WINDOW_MS)
+        : FOLLOWUP_WINDOW_MS;
     this.dropResponse = false; // stop command: swallow the in-flight reply
     this.speakerBuffers = new Map(); // name -> [{b64, at}] last ~2.5s each
+    // Backchannel-safe barge-in state (see BARGE_MIN_VOICED_MS).
+    this.bargeHold = [];
+    this.bargeVoicedMs = 0;
+    this.bargeSilentMs = 0;
+    this.bargeThrough = false; // this burst already qualified as a real barge-in
   }
 
   async fetch(req) {
@@ -128,7 +190,7 @@ export class VoiceSession {
     const t = body.type;
     if (t === "mode") {
       this.strictMode = body.strict === true;
-      if (!this.strictMode) { this.gateOpen = false; this.speakerBuffers.clear(); }
+      if (!this.strictMode) { this.closeGate("open mode"); this.speakerBuffers.clear(); }
       console.log("director mode: " + (this.strictMode ? "strict" : "open"));
       return;
     }
@@ -153,36 +215,126 @@ export class VoiceSession {
       this.gateOpen = true;
       this.gateSpeaker = speaker;
       this.gateVoiceAt = Date.now();
+      // A fresh addressed turn: this is an ASK, not the follow-up beat.
+      this.followupUntil = 0;
+      // Re-arm her voice. A "Laura, stop" in strict mode leaves dropResponse
+      // set, and the usual disarm (EL's next user_transcript) can never fire
+      // because the closed gate forwards no audio — so without this she stayed
+      // mute for the REST of the meeting, answering internally and having every
+      // reply swallowed here.
+      this.dropResponse = false;
       console.log("gate open");
       // Replay the addresser's buffered sentence: the wake word is detected
       // AFTER the phrase started — without this the agent hears half an ask.
-      const buf = this.speakerBuffers.get(speaker) || [];
-      this.speakerBuffers.delete(speaker);
+      // On the mixed rung there are no per-speaker labels, so the room buffer
+      // is the only thing there is to replay.
+      const key = this.speakerBuffers.has(speaker) ? speaker : MIXED_KEY;
+      const buf = this.speakerBuffers.get(key) || [];
+      this.speakerBuffers.delete(key);
       if (this.el && this.elReady) {
-        for (const fr of buf) {
-          try { this.el.send(JSON.stringify({ user_audio_chunk: fr.b64 })); } catch (_) {}
-        }
+        for (const fr of buf) this.sendEL({ user_audio_chunk: fr.b64 });
       }
+      return;
+    }
+    if (t === "gate_close") {
+      // The backend heard the conversation leave her: a vocative aimed at
+      // another human ("Ananth, can you take two?"). She must drop out of the
+      // dialogue THAT sentence, not 12 seconds later.
+      this.closeGate("addressed elsewhere");
       return;
     }
     if (t === "stop") {
       // "Cedric, stop/shut up": kill the in-flight reply at the SOURCE —
       // the page flush alone left EL streaming the rest (fragments).
       this.dropResponse = true;
-      this.gateOpen = false;
+      this.closeGate("stop");
       this.sendPage({ type: "interrupt" });
       return;
     }
   }
 
+  closeGate(why) {
+    if (!this.gateOpen && !this.followupUntil) return;
+    this.gateOpen = false;
+    this.followupUntil = 0;
+    this.gateSpeaker = "";
+    this.resetBarge();
+    console.log("gate closed (" + why + ")");
+  }
+
   gateTick() {
-    // Turn end: the addresser has been silent long enough, or the reply
-    // finished (closed in onELMessage). Every NEW turn re-requires the name
-    // (owner spec); sentence fragments keep the gate open via gateVoiceAt.
-    if (this.gateOpen && Date.now() - this.gateVoiceAt > 5000) {
-      this.gateOpen = false;
-      console.log("gate closed (silence)");
+    if (!this.gateOpen) return;
+    const now = Date.now();
+    if (this.followupUntil) {
+      // She has answered and holds the floor open for her partner. Silence is
+      // EXPECTED here (they are thinking), so the mid-ask silence rule must not
+      // apply — only the window itself ends it.
+      if (now > this.followupUntil) this.closeGate("follow-up expired");
+      return;
     }
+    // While SHE is talking, the addresser being silent is them listening, not
+    // their turn ending — closing here dropped their audio and made her
+    // uninterruptible for any answer longer than GATE_SILENCE_MS, which is
+    // exactly when a human most wants to cut in.
+    if (now < this.playheadMs) return;
+    // Mid-ask: the addresser trailed off and never finished. Sentence
+    // fragments keep the gate alive via gateVoiceAt.
+    if (now - this.gateVoiceAt > GATE_SILENCE_MS) this.closeGate("silence");
+  }
+
+  /** Keep the last SPEAKER_BUFFER_MS of a speaker so their ask can be replayed
+   *  whole once the backend detects the name buried mid-sentence. */
+  bufferFrame(name, b64) {
+    if (!name) return;
+    const q = this.speakerBuffers.get(name) || [];
+    q.push({ b64, at: Date.now() });
+    while (q.length && Date.now() - q[0].at > SPEAKER_BUFFER_MS) q.shift();
+    this.speakerBuffers.set(name, q);
+  }
+
+  // ── backchannel-safe barge-in ───────────────────────────────────────
+  /** True when the frame was withheld from ElevenLabs (caller must return). */
+  holdBarge(b64, voiced) {
+    if (Date.now() >= this.playheadMs) {
+      // She is not speaking: normal conversation, nothing to protect.
+      this.resetBarge();
+      return false;
+    }
+    if (this.bargeThrough) return false; // already a confirmed interruption
+    if (voiced) {
+      this.bargeVoicedMs += b64Ms(b64);
+      this.bargeSilentMs = 0;
+      this.bargeHold.push(b64);
+      if (this.bargeVoicedMs >= BARGE_MIN_VOICED_MS) {
+        // A real turn-grab: hand over everything we held so the interruption
+        // carries its own first words, then go back to live forwarding.
+        this.bargeThrough = true;
+        for (const b of this.bargeHold.splice(0)) this.sendEL({ user_audio_chunk: b });
+        this.bargeVoicedMs = 0;
+        return true;
+      }
+      return true;
+    }
+    if (!this.bargeHold.length) return true; // her own answer, room quiet
+    this.bargeSilentMs += b64Ms(b64);
+    this.bargeHold.push(b64);
+    if (this.bargeSilentMs > BARGE_GAP_MS) {
+      // The burst ended before it became a sentence: "mhmm" / "sì" / "ok".
+      // Drop it — she keeps her turn.
+      this.resetBarge();
+    }
+    return true;
+  }
+
+  resetBarge() {
+    this.bargeHold = [];
+    this.bargeVoicedMs = 0;
+    this.bargeSilentMs = 0;
+    this.bargeThrough = false;
+  }
+
+  sendEL(obj) {
+    try { this.el?.send(JSON.stringify(obj)); } catch (_) {}
   }
 
   // ── avatar page (audio egress) ──────────────────────────────────────
@@ -246,17 +398,12 @@ export class VoiceSession {
       // tell the agent whenever the voiced speaker changes. Names only, no
       // transcript content.
       const voiced = this.frameHasVoice(buf);
-      if (rawName && this.el && this.elReady && voiced) {
-        if (rawName !== this.currentSpeaker) {
-          this.currentSpeaker = rawName;
-          try {
-            this.el.send(JSON.stringify({
-              type: "contextual_update",
-              text: "Speaker now talking: " + rawName,
-            }));
-          } catch (_) {}
-        }
-      }
+      // WHO is speaking — tracked ALWAYS, announced only when she is in the
+      // conversation (below). The gate_open fallback leans on this to rescue a
+      // turn whose speaker label the backend spelled differently, so it has to
+      // stay current even while she is shut out of the room's own talk.
+      const speakerChanged = voiced && rawName && rawName !== this.currentSpeaker;
+      if (speakerChanged) this.currentSpeaker = rawName;
       // ── STRICT GATE (owner plan P1) ──
       if (this.strictMode) {
         this.gateTick();
@@ -264,30 +411,64 @@ export class VoiceSession {
           // Not an addressed turn: buffer ~2.5s per speaker (so the wake
           // sentence can be replayed whole when the backend opens the gate)
           // and forward NOTHING. Human-to-human talk dies here.
-          if (rawName) {
-            const q = this.speakerBuffers.get(rawName) || [];
-            q.push({ b64: buf, at: Date.now() });
-            while (q.length && Date.now() - q[0].at > 2500) q.shift();
-            this.speakerBuffers.set(rawName, q);
-          }
+          this.bufferFrame(rawName, buf);
           return;
         }
-        // Gate open: this turn belongs to the addresser — only their voice
-        // flows; others keep buffering for their own (future) turn.
         if (this.gateSpeaker && rawName && rawName !== this.gateSpeaker) {
-          const q = this.speakerBuffers.get(rawName) || [];
-          q.push({ b64: buf, at: Date.now() });
-          while (q.length && Date.now() - q[0].at > 2500) q.shift();
-          this.speakerBuffers.set(rawName, q);
+          if (voiced && this.followupUntil) {
+            // Her partner answered and SOMEONE ELSE took the floor — the
+            // conversation is no longer with her. Drop out of it now instead
+            // of holding the follow-up window open over the room's own talk.
+            this.closeGate("new speaker");
+            this.bufferFrame(rawName, buf);
+            return;
+          }
+          // Mid-ask: this turn belongs to the addresser — others keep
+          // buffering for their own (future) turn.
+          this.bufferFrame(rawName, buf);
           return;
         }
-        if (voiced) this.gateVoiceAt = Date.now();
+        if (voiced) {
+          this.gateVoiceAt = Date.now();
+          // The partner spoke inside the follow-up window: this is a real
+          // follow-up turn, so it is governed by the mid-ask silence rule
+          // again, not by the window's clock.
+          this.followupUntil = 0;
+        }
       }
+      // SPEAKER IDENTITY (owner plan P2, live bug: "what's my name?" got the
+      // wrong participant): tell the agent whenever the voiced speaker changes.
+      // Names only, no transcript content. Announced only from HERE, past the
+      // gate: while she is shut out of the room's own talk those speaker
+      // changes are none of her business, and announcing every one of them
+      // both leaked who-was-talking-to-whom into her context and grew that
+      // context unboundedly over a long meeting.
+      if (speakerChanged && this.el && this.elReady) {
+        this.sendEL({ type: "contextual_update", text: "Speaker now talking: " + rawName });
+      }
+      // Backchannel-safe barge-in: "mhmm" while she answers must not cut her off.
+      if (this.holdBarge(buf, voiced)) return;
     } else {
       // Mixed fallback rung (workspace flag off): the room mix contains his
       // own voice while the answer plays — half-duplex gate stays. 800ms
       // grace covers the page's viseme segment buffering.
       if (Date.now() < this.playheadMs + 800) return;
+      // The strict gate has to hold on this rung too. It used to live entirely
+      // under `if (separate)`, so a workspace without per-participant streams
+      // silently ran with NO multiparty gate at all — every word the room said
+      // reached the model. Without speaker labels the room is one speaker: the
+      // gate is all-or-nothing, and the replay buffer is the room's.
+      if (this.strictMode) {
+        this.gateTick();
+        if (!this.gateOpen) {
+          this.bufferFrame(MIXED_KEY, buf);
+          return;
+        }
+        if (this.frameHasVoice(buf)) {
+          this.gateVoiceAt = Date.now();
+          this.followupUntil = 0;
+        }
+      }
     }
     this.frames++;
     if (this.frames === 1) {
@@ -350,6 +531,11 @@ export class VoiceSession {
     this.el = el;
     this.connecting = false;
     this.botName = String(cfg.bot_name || "");
+    // Learn the multiparty mode HERE, not from a later crossing signal. A DO
+    // starting (or restarting) OPEN in a room that is already strict lets the
+    // room's own conversation reach the agent until the next threshold change
+    // — which, if the count never changes again, is never.
+    if (typeof cfg.strict === "boolean") this.strictMode = cfg.strict;
     try { el.send(JSON.stringify(cfg.init)); } catch (_) {}
     el.addEventListener("message", (e) => this.onELMessage(e));
     const dead = async () => {
@@ -372,15 +558,19 @@ export class VoiceSession {
     } catch (_) { return; }
     const t = msg.type;
     if (t === "conversation_initiation_metadata") {
+      // ORDER MATTERS. The tail must go out BEFORE elReady is set and before
+      // the awaited POST: flipping elReady first let live frames arriving
+      // during that await jump ahead of the buffered ones, so the agent heard
+      // the opening of the meeting's first sentence AFTER its end — garbled
+      // audio on exactly the utterance that decides whether she answers.
+      for (const b of this.preBuffer.splice(0)) {
+        try { this.el?.send(JSON.stringify({ user_audio_chunk: b })); } catch (_) {}
+      }
+      this.preBufferB64 = 0;
       this.elReady = true;
       console.log("el ready");
       await this.postEvent("started");
       this.started = true;
-      // Flush the pre-connect tail so an early "Cedric, …" isn't clipped.
-      for (const b of this.preBuffer.splice(0)) {
-        try { this.el.send(JSON.stringify({ user_audio_chunk: b })); } catch (_) {}
-      }
-      this.preBufferB64 = 0;
       return;
     }
     if (t === "ping") {
@@ -408,9 +598,22 @@ export class VoiceSession {
       // trailing padding chunks after the reply is over (live 2026-07-25:
       // "he continues moving the mouth after it finishes").
       this.sendPage({ type: "response_end" });
-      // Turn over: in strict mode the NEXT turn must say the name again
-      // (owner spec — no lingering follow-up window in multiparty).
-      if (this.strictMode) { this.gateOpen = false; console.log("gate closed (turn done)"); }
+      // She has answered. Instead of slamming the gate (which forced the room
+      // to re-say her name for every single sentence), hand her partner a
+      // follow-up window: for the next FOLLOWUP_WINDOW_MS *they* — and nobody
+      // else — can keep talking to her without the wake word. It ends early on
+      // a new speaker (above) or a vocative aimed at another human
+      // (/control gate_close).
+      if (this.strictMode) {
+        if (this.gateOpen && this.gateSpeaker) {
+          this.followupUntil = Date.now() + this.followupWindowMs;
+          this.gateVoiceAt = Date.now();
+          console.log("follow-up open");
+        } else {
+          this.closeGate("turn done");
+        }
+      }
+      this.resetBarge();
       this.dropResponse = false;
       return;
     }
@@ -426,6 +629,7 @@ export class VoiceSession {
       //   turn_latency_ms              = voiced-frame anchor (echo-noisy)
       if (!this.inResponse) {
         this.inResponse = true;
+        this.resetBarge(); // a new reply: the previous turn's burst is over
         const now = Date.now();
         this.tFirstChunk = now;
         if (this.lastUserChunkAt) {
@@ -459,6 +663,7 @@ export class VoiceSession {
     }
     if (t === "interruption") {
       this.playheadMs = 0; // gate open immediately; the human has the floor
+      this.resetBarge(); // she is no longer speaking: nothing left to protect
       this.sendPage({ type: "interrupt" });
       return;
     }

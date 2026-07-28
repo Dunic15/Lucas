@@ -215,6 +215,12 @@ class Session:
     # refused; owner spec 2026-07-25).
     voice_strict_mode: bool = field(default=False, repr=False, compare=False)
     voice_gate_opened_at: float = field(default=0.0, repr=False, compare=False)
+    # Who she is currently in conversation with (Recall's speaker label). Drives
+    # the gate handover: a DIFFERENT addresser must never be debounced away.
+    voice_gate_speaker: str = field(default="", repr=False, compare=False)
+    # Last time the strict/open mode was actually stated to the bridge (not
+    # just changed) — drives the periodic re-assert that heals a lost signal.
+    voice_mode_signalled_at: float = field(default=0.0, repr=False, compare=False)
     ws: WebSocket | None = None
     pending_messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
     # Canonical pending-action bindings. The session already keys the meeting;
@@ -491,6 +497,25 @@ class Session:
                 names.append(u.speaker)
                 seen_ids.add(pid)
         return names
+
+    def note_spoken_line(self, text: str) -> None:
+        """Record a line SHE spoke, so the echo guard can recognise it coming
+        back through a participant's open mic.
+
+        The legacy path stamps this as a side effect of `_is_repeat` inside
+        `_make_avatar_speak`. An ElevenLabs-Agent session never goes through
+        that function — the agent speaks straight into the meeting — so this
+        dict stayed empty and `_is_echo` was inert for the entire runtime: her
+        own voice came back as a HUMAN line, was archived as one, and (her
+        greeting says her own name) could open the Director gate on itself.
+        """
+        norm = re.sub(r"\W+", " ", (text or "").lower()).strip()
+        if not norm:
+            return
+        now = time.time()
+        for k in [k for k, ts in self._recent_lines.items() if now - ts > 120.0]:
+            self._recent_lines.pop(k, None)
+        self._recent_lines[norm] = now
 
     def add_utterance(
         self,

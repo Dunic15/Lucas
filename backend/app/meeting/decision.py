@@ -35,6 +35,19 @@ _REPORTED_LEADING = (
 )
 
 
+# Subject-auxiliary inversion immediately after the name is a QUESTION TO her,
+# never talk about her: "Laura, was that in the contract?", "Laura, were we
+# supposed to ship Friday?". Prod runs Deepgram in prioritize_low_latency, which
+# routinely drops the vocative comma — and without it "laura was" / "laura were"
+# hit _REPORTED_TRAILING and she stayed silent through a question aimed straight
+# at her. Only real subject pronouns and demonstratives count, so the reported
+# readings ("Laura was right", "Laura had a point", "Laura was the one who…")
+# are untouched.
+_INVERTED_QUESTION = (
+    r"(?:was|were|had|has|'s)\s+(?:that|this|it|there|we|you|they|he|she|i)\b"
+)
+
+
 def _is_reported_reference(lower: str, wake: str) -> bool:
     """True when the wake word appears ONLY as a third-person reference to the
     avatar (talking about it), with no vocative signal that it's being addressed.
@@ -57,6 +70,7 @@ def _is_reported_reference(lower: str, wake: str) -> bool:
         re.search(rf"\b(?:hey|hi|hello|ok|okay|yo|ehi|ciao|senti|scusa)\s+{w}\b", lower)
         or re.search(rf"(?:^|[,.;:!?]\s*){w}\s*[,:]", lower)   # "Laura, …" / "Laura:"
         or re.search(rf",\s*{w}\b[^a-z]*$", lower)             # "…, Laura?" (end)
+        or re.search(rf"\b{w}\s+{_INVERTED_QUESTION}", lower)  # "Laura was that…?"
     )
     return not vocative
 
@@ -74,7 +88,16 @@ _VOWELS = set("aeiou")
 # Real dictionary words that sit within fuzzy range of a wake word but are
 # never a name. "laurea/lauree" (Italian: degree) is edit distance 1 from
 # "laura" — without this, every graduation mention would wake her.
-_FUZZY_EXCLUDE = {"laurea", "lauree", "lauro"}
+# Tokens the fuzzy path must never treat as a corrupted wake word. Laura's
+# aliases ("lara"/"lora") are four letters, so edit-distance-1 pulls in ordinary
+# vocabulary — and every false positive is worse than a missed one here: it
+# opens the multiparty Director gate and streams a private human-to-human
+# exchange into the agent. "loro" (Italian "they/them") is the expensive one —
+# it turns up several times a minute in an Italian call.
+_FUZZY_EXCLUDE = {
+    "laurea", "lauree", "lauro",
+    "loro", "lore", "lord", "lava", "lana", "larga", "lars",
+}
 
 # Soft-C / sibilant initials ASR confuses: spoken "Cedric" is transcribed
 # "Sedric"/"Kedric"/"Zedric" (soft C ≈ /s/, hard C ≈ /k/). Treating c/s/k/z as

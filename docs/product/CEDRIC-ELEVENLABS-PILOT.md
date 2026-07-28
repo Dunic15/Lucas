@@ -186,8 +186,9 @@ discipline insufficient):
   (finals as backstop), fires `{type:"gate_open", speaker}`; the DO replays
   that speaker's buffered sentence (case-insensitive name match, falls back
   to the live voiced speaker) so the ask arrives whole. Gate closes on
-  `agent_response_complete` or 5 s of addresser silence — **every new turn
-  requires the name again**. Repeating partials are debounced (1.5 s).
+  5 s of addresser silence. Repeating partials are debounced (1.5 s), but a
+  DIFFERENT addresser is never debounced away — the bridge forwards only the
+  gate speaker's voice, so a suppressed handover would drop an addressed turn.
 - **Deterministic stop**: "Cedric, stop" signals `{type:"stop"}` → the DO
   swallows the in-flight reply at the source (`dropResponse`) and interrupts
   the page; armed-while-idle is disarmed on the next `user_transcript`. On
@@ -203,6 +204,92 @@ discipline insufficient):
   in-memory only, the durable store still keeps only the SHA-256;
   `signal_relay` is fire-and-forget with strong task refs.
 - **Bare "yes" never approves anything** — approvals stay in the dashboard.
+
+### PR 5 — the conversational lock — **2026-07-28**
+PR 3's gate closed on `agent_response_complete`, so **every** sentence needed
+the wake word. Owner verdict after live multiparty use: that single line is
+what makes her read as a voice assistant you re-summon rather than someone in
+the room. The wake word is now how you ENTER a conversation, not a toll on
+every turn.
+
+- **`agent_response_complete` → follow-up, not close.** When she finishes an
+  answer the floor stays open for `FOLLOWUP_WINDOW_MS` (12 s, a `[vars]` entry
+  so it is tunable from the Cloudflare dashboard with no code deploy) — for
+  the person she was talking to, and nobody else. So this works:
+  *"Laura, when is the deadline?" → "Friday." → "And who's on it?"*
+- **It ends the instant the conversation stops being with her**, three ways:
+  (1) a DIFFERENT speaker takes the floor → the DO closes on the frame itself;
+  (2) the backend hears a vocative aimed at another human
+  (`addressed_to_other` → `{type:"gate_close"}`) — *"Ananth, can you take
+  two?"* drops her out on that sentence, on the partial; (3) the window
+  elapses. Re-entering then needs her name again.
+- **Backchannel-safe barge-in.** While her audio is playing, a voiced burst
+  from the room is HELD: past 500 ms it is a real turn-grab and the whole held
+  burst is flushed through (nothing lost, it just lands ~0.5 s later); if it
+  dies inside 400 ms of silence first it was *"mhmm" / "sì" / "ok"* and is
+  dropped, so she keeps her turn. The legacy path had `_FILLER_ONLY` for this;
+  the EL runtime had nothing.
+- **Strict mode now holds on the mixed rung too.** The whole gate lived under
+  `if (separate)`, so a workspace without the per-participant-audio flag ran
+  with *no multiparty gate at all*. Without speaker labels the room is one
+  speaker: all-or-nothing, with the room's own replay buffer.
+- **`gate_open` re-arms her voice.** A `"Laura, stop"` in strict mode set
+  `dropResponse` with no way to disarm it (the disarm is EL's next
+  `user_transcript`, which a closed gate makes impossible) — she stayed mute
+  for the rest of the meeting, answering internally into a swallowed stream.
+- **Speaker announcements moved past the gate.** `contextual_update` fired on
+  every speaker change even while she was excluded, leaking who-was-talking-to
+  -whom into her context and growing it unboundedly over a long meeting. WHO
+  is speaking is still tracked continuously (the `gate_open` fallback needs
+  it); only the announcement is gated.
+- **Coverage:** `relay/cedric-voice/test/` — the first automated tests this
+  worker has ever had (`node --test "relay/cedric-voice/test/*.test.mjs"`),
+  plus Director tests in `backend/tests/test_voice_agent_bridge.py`.
+
+> **Deploying this is TWO steps.** Merging to `main` auto-deploys the backend
+> to App Runner; it does **not** touch Cloudflare. `relay/cedric-voice/worker.js`
+> must be pushed separately (`npx wrangler deploy` from `relay/cedric-voice/`,
+> or `worker_put` via the Cloudflare MCP — see
+> [[laura-latency-architecture]] for the laura-ears precedent, including
+> re-asserting secrets afterwards). Deploy the **worker first**: the backend's
+> new `gate_close` signal is simply ignored by an old worker, whereas a new
+> worker missing the backend's `strict` bootstrap field just falls back to
+> crossing signals. Either order is safe; worker-first is fluid sooner. Do it
+> with `active_sessions == 0` (`/check-sessions`).
+
+### PR 6 — she follows the room's language — **2026-07-28**
+The agent was already provisioned bilingual (`language_presets: {it}`,
+`eleven_v3_conversational` TTS) — but a preset is only reachable once the
+CONVERSATION language is that language, and that was pinned per-connection from
+a single global `VOICE_AGENT_LANGUAGE` (default `en`). So an Italian meeting ran
+**English ASR on Italian speech**. That is not just a wrong accent: mangled
+transcription means the wake word often does not survive, and in a group call a
+wake word that does not survive means the Director gate never opens — she is
+simply deaf for the whole meeting.
+
+- **`language_detection` system tool enabled** on the agent
+  (`conversation_config.agent.prompt.tools`, inline — client tools keep riding
+  `tool_ids`; the two coexist). It is **off by default** on the platform. She
+  now switches voice, ASR and replies the first time someone speaks another
+  language, or when asked to.
+- **Starting language is per-avatar**: `voice_agent_language` in `avatar.yaml`,
+  falling back to the global env. One global var meant "Italian for Laura" was
+  also "Italian for Cedric, in every org on this runtime" — so in practice
+  nobody could set it. Unknown codes are dropped by the loader (only languages
+  the agent is provisioned for: `en`, `it`); an unsupported code is not a
+  degraded call, it is a dead one at second zero.
+
+> **Needs an agent re-provision** (a PROD mutation, separate from both deploys):
+> `python backend/scripts/create_meeting_agent.py --avatar petra` (and
+> `--avatar cedric`). Check it first with `--dry-run`. Until it is re-run the
+> tool is absent and behaviour is unchanged.
+
+**Still English-only: the transcript path.** `RECALL_TRANSCRIPTION_LANGUAGE_CODE=en`
+drives Deepgram, and Deepgram is what the *backend* hears — wake detection,
+`addressed_to_other`, stop/leave. So even with the agent following the room,
+the Director still reasons over English ASR of Italian speech. Fixing that is a
+config/cost decision (`RECALL_TRANSCRIPTION_PROVIDER=elevenlabs`, or a Deepgram
+multilingual model), not a code change — left to the owner.
 
 ### PR 4 — client tools — **SHIPPED 2026-07-24**
 Four client tools registered in the EL tools registry (create-or-reuse by
@@ -314,6 +401,8 @@ mid-answer on the MIXED fallback rung (half-duplex echo gate; native EL
 barge-in works on separate streams; "Cedric stop" covers both), no live
 action CAPTURE dialog (actions still extracted post-meeting from the
 transcript). Multiparty discipline is now ENFORCED (PR 3 Director, strict
-gate at the audio layer) — with ≥2 humans he only ever hears addressed
-turns; on the mixed rung there is no per-speaker identity, so strict mode
-cannot gate there (separate-audio workspace flag must stay on).
+gate at the audio layer) — with ≥2 humans he only ever hears addressed turns
+and their follow-ups (PR 5). On the mixed rung there is no per-speaker
+identity, so the gate there is all-or-nothing: it still blocks unaddressed
+talk, but it cannot tell the addresser from anyone else, so the
+separate-audio workspace flag should stay on.
