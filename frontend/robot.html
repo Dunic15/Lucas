@@ -45,21 +45,31 @@
 -->
 <meta charset="utf-8">
 <style>
-  html, body { margin: 0; height: 100%; background: #030405; }
-  /* Studio black: both refs sit in a photo-studio void — a barely-there cool
-     wash behind the head, a vignette, nothing else. */
+  html, body { margin: 0; height: 100%; background: #ffffff; }
+  /* White studio (owner call 2026-07-28): in a meeting grid every other tile is
+     a lit room, so the black void read as a dead/disconnected panel. A clean
+     white cyc with a whisper of floor shadow sits next to real webcams instead
+     of fighting them. The old studio-black is the commented block below. */
   #stage {
     position: fixed; inset: 0;
     opacity: 0; transition: opacity .45s ease;
     background:
-      radial-gradient(48% 42% at 50% 34%, rgba(120,150,170,.10) 0%, rgba(120,150,170,0) 72%),
-      linear-gradient(180deg, #030405 0%, #06080a 46%, #030405 100%);
+      radial-gradient(52% 46% at 50% 36%, rgba(255,255,255,1) 0%, rgba(255,255,255,0) 74%),
+      linear-gradient(180deg, #ffffff 0%, #f7f8fa 58%, #eceef1 100%);
   }
   #stage.live { opacity: 1; }
+  /* Soft contact shadow so the head doesn't float on pure white. */
   #stage::after {
     content: ""; position: absolute; inset: 0; pointer-events: none;
-    background: radial-gradient(120% 90% at 50% 42%, rgba(0,0,0,0) 52%, rgba(0,0,0,.6) 100%);
+    background: radial-gradient(120% 90% at 50% 42%, rgba(0,0,0,0) 62%, rgba(120,132,148,.13) 100%);
   }
+  /* Studio black (previous look) — restore together with SHOW_DOME = true:
+     html, body { background: #030405; }
+     #stage { background:
+       radial-gradient(48% 42% at 50% 34%, rgba(120,150,170,.10) 0%, rgba(120,150,170,0) 72%),
+       linear-gradient(180deg, #030405 0%, #06080a 46%, #030405 100%); }
+     #stage::after { background:
+       radial-gradient(120% 90% at 50% 42%, rgba(0,0,0,0) 52%, rgba(0,0,0,.6) 100%); } */
   body.meeting #hud, body.meeting #status { display: none; }
   #hud {
     position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
@@ -128,7 +138,12 @@
   // STUDIO lighting (both refs are studio photographs): one soft key from
   // front-above, two cool rim lights that draw the glossy edges, a low fill,
   // and a room environment so PBR gloss has something real to reflect.
-  scene.add(new THREE.AmbientLight(0xdfe8f0, 0.08));
+  // Ambient was 0.08 for the black void, where the rim lights did all the
+  // shaping. On the white cyc that reads as a silhouette — a dark cut-out on a
+  // bright card. Lifting ambient puts light back in the shadow side so he sits
+  // ON the white instead of being punched out of it. (Restore 0.08 with the
+  // studio-black palette.)
+  scene.add(new THREE.AmbientLight(0xdfe8f0, 0.55));
   // Key from steeply above — the refs' faces are modelled by top light:
   // bright brow/nose/cheekbones, shadowed eye sockets and jaw.
   const key = new THREE.DirectionalLight(0xffffff, 1.1);
@@ -317,6 +332,12 @@
   const holo = new THREE.Group();
   scene.add(holo);
 
+  // The glass dome enveloping the skull. Owner call 2026-07-28 after the live
+  // 2-person test: on a real meeting grid it reads as a ball stuck on his head,
+  // not as a hologram. Flip to true (with the dark palette below) to get the
+  // studio-render look back — the shader and the whole eye-line calibration are
+  // left intact so this is a one-word revert, not an archaeology exercise.
+  const SHOW_DOME = false;
   let model = null, dome = null;
   const morphMeshes = [];
   const morphKey = (dict, names) => names.find((n) => dict[n] !== undefined);
@@ -439,12 +460,14 @@
         // -eyeWorldY), so the head centre lands at:
         const hcY = center.y - eyeWorldY + theme.dome.cy * faceH;
         const hcZ = center.z;
-        dome = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 72), domeMaterial());
-        dome.scale.set(hw * theme.dome.sx, hh * theme.dome.sy, hd * theme.dome.sz);
-        dome.position.set(0, hcY, hcZ);
-        dome.renderOrder = 6;                // after every opaque surface
-        dome.frustumCulled = false;
-        holo.add(dome);
+        if (SHOW_DOME) {
+          dome = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 72), domeMaterial());
+          dome.scale.set(hw * theme.dome.sx, hh * theme.dome.sy, hd * theme.dome.sz);
+          dome.position.set(0, hcY, hcZ);
+          dome.renderOrder = 6;              // after every opaque surface
+          dome.frustumCulled = false;
+          holo.add(dome);
+        }
         // Eye line (world y = 0) in the dome's local unit-sphere V. The
         // -0.12 nudge accounts for the stereographic projection reading a
         // touch high on the sphere's front face (calibrated on render).
