@@ -155,16 +155,36 @@ class TestMultipartyMeeting:
 
 
 class TestOneOnOneMeeting:
-    def test_one_on_one_stays_out_of_strict_mode(self, client, monkeypatch):
-        """A single human must keep today's fluid 1:1 (no name needed) —
-        strict never engages, writes stay open."""
+    def test_one_on_one_runs_the_same_rules_as_a_group(self, client, monkeypatch):
+        """Owner call 2026-07-28, replacing "1:1 stays fluid, groups are gated".
+
+        The split was the bug, not the feature: the roster only learns a SILENT
+        participant from Recall's participant events, so a real 2-person call
+        ran ungated until the second human happened to SPEAK (~2 minutes, live
+        2026-07-28) and then switched rules mid-conversation. One rule
+        everywhere — named, plus the follow-up window — is predictable, and
+        predictable is what the room actually experiences as good."""
         sent = _signals(monkeypatch)
         s = _el_session("bot_regA1")
         _say(client, "bot_regA1", "okay let us plan the week", "Duccio", 1)
-        _say(client, "bot_regA1", "first the pilot report then the deck", "Duccio", 1)
-        assert s.voice_strict_mode is False
-        assert not any(p.get("type") == "mode" for p in sent)
+        assert s.voice_strict_mode is True
+        assert {"type": "mode", "strict": True} in sent
         store.remove("bot_regA1")
+
+    def test_the_old_fluid_one_on_one_is_still_one_env_var_away(
+        self, client, monkeypatch
+    ):
+        """VOICE_STRICT_MIN_HUMANS=2 restores the previous split, with no
+        deploy — the knob has to be real, or the rollback is a code change."""
+        from app.config import settings as _settings
+
+        monkeypatch.setattr(_settings, "voice_strict_min_humans", 2)
+        sent = _signals(monkeypatch)
+        s = _el_session("bot_regA1b")
+        _say(client, "bot_regA1b", "okay let us plan the week", "Duccio", 1)
+        assert s.voice_strict_mode is False
+        assert not any(p.get("type") == "mode" and p.get("strict") for p in sent)
+        store.remove("bot_regA1b")
 
     def test_queued_email_carries_the_requesting_speaker(self, client, bearer):
         """Live: 'email it to Anant' minted an INVENTED recipient with no

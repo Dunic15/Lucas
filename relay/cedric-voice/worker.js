@@ -15,8 +15,8 @@
 // this worker.
 //
 // TURN-TAKING lives here, and it is the whole product on a group call:
-//   * strict mode (≥2 humans) — nothing reaches the model unless the room is
-//     talking TO her; human-to-human talk dies in this file, by construction.
+//   * strict mode (armed from the first human) — nothing reaches the model
+//     unless the room is talking TO her; human-to-human talk dies here.
 //   * the conversational lock — being named is how you ENTER the conversation;
 //     the person she just answered can keep talking to her without the name
 //     until someone else takes the floor, they turn to a colleague, or the
@@ -85,7 +85,7 @@ const PREBUFFER_MAX_B64 = 52_000;
 // being with her: someone else takes the floor, she is silent past the window,
 // or the backend hears a vocative aimed at another human ("Ananth, can you
 // take two?" → /control gate_close).
-const FOLLOWUP_WINDOW_MS = 12_000;
+const FOLLOWUP_WINDOW_MS = 10_000;
 // Turn end WITHIN an ask (she has not answered yet): the addresser trailing off
 // for this long ends their turn.
 const GATE_SILENCE_MS = 5000;
@@ -139,7 +139,7 @@ export class VoiceSession {
     this.tFirstChunk = 0; // first audio chunk of the current reply
     this.currentSpeaker = ""; // last VOICED participant (separate streams)
     // ── Meeting Director gate (owner plan P1) ──
-    // strictMode: humans >= 2 (backend tells us via /control). While strict,
+    // strictMode: the backend tells us via /control (and on bootstrap).
     // audio reaches ElevenLabs ONLY during an addressed turn: the backend
     // detects the wake word on its transcript stream and opens the gate;
     // the DO replays the addresser's buffered sentence and forwards their

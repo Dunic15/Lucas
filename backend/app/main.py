@@ -2434,6 +2434,19 @@ def _el_voice_owned(session: store.Session) -> bool:
     )
 
 
+def director_strict_for(session: store.Session, avatar: avatars.Avatar) -> bool:
+    """Whether the Director gate is armed for this session.
+
+    ONE rule everywhere (owner call 2026-07-28). The old threshold of 2 meant a
+    call ran ungated until the second human happened to SPEAK — the roster only
+    learns a silent participant from Recall's participant events, and in the
+    first real 2-person test that arrived ~2 minutes in. The room got fluid,
+    answer-anything behaviour, then a different set of rules mid-conversation,
+    which reads as an avatar that cannot make up its mind. Shared by the
+    webhook sync and the bridge's bootstrap so both can never disagree."""
+    return _human_count(session, avatar) >= max(1, settings.voice_strict_min_humans)
+
+
 def _director_sync_mode(session: store.Session, avatar: avatars.Avatar) -> None:
     """Keep the relay bridge's strict-multiparty mode in step with the roster.
 
@@ -2443,7 +2456,7 @@ def _director_sync_mode(session: store.Session, avatar: avatars.Avatar) -> None:
     threshold CROSSINGS, on the same webhook stream the roster rides."""
     if not _el_voice_owned(session) or not getattr(session, "voice_capability", ""):
         return
-    strict = _human_count(session, avatar) >= 2
+    strict = director_strict_for(session, avatar)
     now = time.time()
     # Crossings are the signal; the periodic re-assert is the SAFETY NET.
     # signal_relay is fire-and-forget over the network, and the bridge's state

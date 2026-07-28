@@ -141,6 +141,16 @@ def build_init_payload(session, avatar) -> dict:
             "  it directly, never ask them to address you first. A meeting",
             "  director decides what audio reaches you at all, so what you hear",
             "  is nearly always meant for you; judge the SENTENCE, not the name.",
+            "  These rules are the SAME whether there are two people in the",
+            "  call or six — never behave differently because it feels like a",
+            "  one-to-one.",
+            "- HAVE SOMETHING TO ADD THAT NOBODY ASKED FOR? Do NOT say it.",
+            "  Call note_in_chat with one short line — it posts to the meeting",
+            "  chat and raises your hand, and the room invites you in if they",
+            "  want it. A wrong date, a risk, a contradiction, a useful fact:",
+            "  chat, never voice. The floor is offered to you, never taken by",
+            "  you. After calling it, stay silent — do not narrate that you",
+            "  wrote something.",
             '- Never treat "yeah", "okay", "mhmm" or similar backchannels as requests.',
             '- Never take a bare "yes"/"okay"/"va bene" as approval of any action.',
             "",
@@ -356,9 +366,9 @@ async def voice_agent_bootstrap(capability: str, request: Request) -> JSONRespon
     # mode back on the bridge's own bootstrap makes the state self-healing:
     # whenever the DO re-bootstraps it re-learns the truth.
     try:
-        from ..main import _human_count
+        from ..main import director_strict_for
 
-        session.voice_strict_mode = _human_count(session, avatar) >= 2
+        session.voice_strict_mode = director_strict_for(session, avatar)
     except Exception:  # noqa: BLE001 — never fail a bootstrap over the roster
         pass
     return JSONResponse(
@@ -375,6 +385,54 @@ async def voice_agent_bootstrap(capability: str, request: Request) -> JSONRespon
             "init": build_init_payload(session, avatar),
         }
     )
+
+
+async def _tool_note_in_chat(session, params: dict) -> dict:
+    """His only unprompted channel: the meeting chat + the hand-raise gesture.
+
+    Owner spec 2026-07-28. The voice gate is absolute — he speaks when named
+    and during the follow-up window, never otherwise — but "silent unless
+    spoken to" also throws away the thing that makes him worth having in the
+    room: he notices the date that contradicts what was just said. So the
+    contribution goes to a channel that costs the room NOTHING to ignore.
+    Written to chat (everyone sees it) and his tile raises its hand, so the
+    floor is offered, never taken.
+
+    Best-effort by design: Recall's chat endpoint can hang for tens of seconds,
+    so it is detached — the agent gets its result immediately and keeps talking.
+    """
+    text = " ".join(str((params or {}).get("text") or "").split())[:500]
+    if not text:
+        return {"status": "empty", "note": "nothing to post"}
+    from ..main import _send_avatar_control
+
+    try:
+        await _send_avatar_control(session, {"type": "raise_hand"})
+    except Exception:  # noqa: BLE001 — the gesture is the cosmetic half
+        pass
+    if settings.recall_api_key:
+        import asyncio
+
+        from ..integrations import recall_client
+
+        task = asyncio.create_task(
+            run_in_threadpool(recall_client.send_chat_message, session.bot_id, text)
+        )
+        _control_tasks.add(task)
+        task.add_done_callback(_control_tasks.discard)
+    # The artifact should show what he contributed, not just what he said out
+    # loud — a chat note IS a meeting contribution.
+    try:
+        name = avatars.load(session.avatar_id).name
+    except Exception:  # noqa: BLE001
+        name = (session.avatar_id or "avatar").title()
+    session.add_utterance(
+        name, f"[chat] {text}", participant_id="agent:self", speaker_kind="agent"
+    )
+    return {
+        "status": "posted",
+        "note": "in the meeting chat, hand raised — do NOT say it out loud",
+    }
 
 
 def _tool_meeting_context(session) -> dict:
@@ -814,6 +872,8 @@ async def voice_agent_tool(capability: str, request: Request) -> JSONResponse:
             )
         elif tool_name == "withdraw_pending_action":
             result = await run_in_threadpool(_tool_withdraw_pending, session, params)
+        elif tool_name == "note_in_chat":
+            result = await _tool_note_in_chat(session, params)
         elif tool_name == "leave_meeting":
             # Semantic leave: the agent understood the dismissal (works for
             # "go out the meeting, Saj" and every ASR mangling the legacy
