@@ -704,36 +704,49 @@
   .ac-open{border:0;background:transparent;color:var(--faint);font-size:.76rem;cursor:pointer;padding:4px 2px;margin-top:6px;}
   .ac-open:hover{color:var(--text);}
 
-  /* ── OpenClaw experiment ── */
-  .oc-status{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px;}
-  @media (max-width:900px){ .oc-status{grid-template-columns:repeat(2,minmax(0,1fr));} }
-  @media (max-width:560px){ .oc-status{grid-template-columns:1fr;} }
-  .oc-stat{border:1px solid var(--line-soft);border-radius:14px;background:var(--panel);padding:12px 14px;min-height:74px;}
-  .oc-stat .k{font-family:var(--mono);font-size:.58rem;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;}
-  .oc-stat .v{font-weight:650;font-size:.96rem;letter-spacing:-.02em;}
-  .oc-grid{display:grid;grid-template-columns:minmax(240px,.45fr) minmax(0,1fr);gap:14px;align-items:start;}
-  @media (max-width:860px){ .oc-grid{grid-template-columns:1fr;} }
-  .oc-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;}
-  .oc-tools input{min-width:220px;flex:1;padding:10px 13px;border-radius:12px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font-size:.86rem;}
-  .oc-runs{display:flex;flex-direction:column;gap:8px;}
-  .oc-run{width:100%;text-align:left;border:1px solid var(--line-soft);border-radius:12px;background:var(--panel-2);padding:10px 11px;display:block;}
-  .oc-run:hover,.oc-run.on{border-color:rgba(126,182,255,.45);}
-  .oc-run .top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
-  .oc-run .id{font-family:var(--mono);font-size:.68rem;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .oc-run .when{font-size:.72rem;color:var(--faint);margin-top:5px;}
-  .oc-detail{min-height:160px;}
-  .oc-actions{display:flex;flex-direction:column;gap:8px;margin:12px 0;}
-  .oc-action{border:1px solid var(--line-soft);border-radius:12px;background:var(--panel-2);padding:10px 11px;}
-  .oc-action .goal{font-weight:600;font-size:.88rem;line-height:1.35;letter-spacing:-.01em;}
-  .oc-action .res{font-size:.78rem;color:var(--dim);margin-top:5px;}
-  .oc-catalog{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
-  .oc-tool{font-family:var(--mono);font-size:.62rem;border:1px solid var(--line);border-radius:999px;padding:3px 8px;color:var(--faint);}
-  .oc-tool.ok{color:var(--ok);border-color:rgba(79,192,138,.45);background:var(--ok-soft);}
-  .oc-events{margin-top:10px;border-top:1px solid var(--line-soft);padding-top:10px;max-height:220px;overflow:auto;}
-  .oc-event{display:grid;grid-template-columns:112px 1fr;gap:9px;padding:6px 0;border-bottom:1px solid var(--line-soft);font-size:.76rem;}
-  .oc-event:last-child{border-bottom:0;}
-  .oc-event .t{font-family:var(--mono);color:var(--faint);}
-  .oc-event .s{color:var(--dim);}
+  /* ── OpenClaw agent chat ── */
+  .oc-task-head{display:flex;align-items:end;justify-content:space-between;gap:12px;margin-bottom:9px;}
+  .oc-task-head h2{margin:0;font-size:.94rem;}
+  .oc-task-count{font-family:var(--mono);font-size:.68rem;color:var(--faint);}
+  .oc-task-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:16px;}
+  .oc-task{min-height:88px;text-align:left;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel);
+    color:var(--text);padding:11px;cursor:pointer;transition:border-color .16s ease,background .16s ease;}
+  .oc-task:hover,.oc-task:focus-visible{border-color:rgba(126,182,255,.55);background:var(--panel-2);outline:none;}
+  .oc-task .n{font-family:var(--mono);font-size:.62rem;color:var(--faint);margin-bottom:7px;}
+  .oc-task .t{font-size:.8rem;font-weight:620;line-height:1.35;}
+  .oc-task .m{font-size:.68rem;color:var(--faint);margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .oc-chat{padding:0;overflow:hidden;}
+  .oc-chat-log{height:min(52vh,560px);min-height:340px;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:13px;}
+  .oc-msg{display:flex;gap:9px;align-items:flex-start;max-width:88%;}
+  .oc-msg.user{align-self:flex-end;flex-direction:row-reverse;}
+  .oc-msg .who{width:26px;height:26px;flex:0 0 26px;border:1px solid var(--line);border-radius:50%;display:grid;place-items:center;
+    font-family:var(--mono);font-size:.62rem;font-weight:700;color:var(--dim);background:var(--panel-2);}
+  .oc-msg .body{font-size:.84rem;line-height:1.55;color:var(--dim);border:1px solid var(--line-soft);border-radius:8px;padding:10px 12px;background:var(--panel-2);white-space:pre-wrap;}
+  .oc-msg.user .body{background:rgba(126,182,255,.1);color:var(--text);}
+  .oc-workflow{margin-top:10px;border-top:1px solid var(--line);padding-top:10px;white-space:normal;}
+  .oc-workflow .wh{display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:700;color:var(--text);margin-bottom:7px;}
+  .oc-step{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:start;padding:7px 0;border-bottom:1px solid var(--line-soft);}
+  .oc-step:last-of-type{border-bottom:0;}
+  .oc-step .sn{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:var(--line-soft);font-family:var(--mono);font-size:.62rem;}
+  .oc-step .sd{font-size:.78rem;color:var(--dim);line-height:1.4;}
+  .oc-step .sr{font-family:var(--mono);font-size:.58rem;text-transform:uppercase;color:var(--faint);}
+  .oc-workflow .btn{margin-top:10px;}
+  .oc-runstate{font-size:.74rem;color:var(--faint);margin-top:8px;}
+  .oc-compose{border-top:1px solid var(--line);padding:11px;background:var(--panel-2);}
+  .oc-context{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+  .oc-context select{max-width:330px;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--text);font-size:.76rem;}
+  .oc-inputrow{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end;}
+  .oc-inputrow textarea{width:100%;min-height:64px;max-height:160px;resize:vertical;border:1px solid var(--line);border-radius:8px;
+    background:var(--panel);color:var(--text);font:inherit;font-size:.86rem;line-height:1.45;padding:10px 12px;}
+  .oc-inputrow textarea:focus{outline:none;border-color:rgba(126,182,255,.6);}
+  @media (max-width:980px){.oc-task-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
+  @media (max-width:560px){
+    .oc-task-grid{grid-template-columns:1fr;}
+    .oc-chat-log{min-height:300px;height:50vh;padding:12px;}
+    .oc-msg{max-width:96%;}
+    .oc-inputrow{grid-template-columns:1fr;}
+    .oc-inputrow .btn{width:100%;}
+  }
 
   /* ── Inline missing-details form (modal, replaces window.prompt chains) ── */
   .scrim{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.55);display:grid;place-items:center;padding:16px;}
@@ -823,8 +836,8 @@
       <button type="button" data-view="avatars"><span class="ic">◐</span> Avatars</button>
       <button type="button" data-view="brain"><span class="ic">◎</span> Brain</button>
       <button type="button" data-view="meetings"><span class="ic">▤</span> Meetings</button>
-      <button type="button" data-view="actions"><span class="ic">✓</span> Action Center<span class="navbadge" id="nav-actions-badge" hidden aria-label="actions needing attention"></span></button>
-      <button type="button" data-view="openclaw"><span class="ic">⌁</span> OpenClaw Actions or Agents</button>
+      <button type="button" data-view="actions"><span class="ic">✓</span> OpenClaw Action Center<span class="navbadge" id="nav-actions-badge" hidden aria-label="actions needing attention"></span></button>
+      <button type="button" data-view="openclaw"><span class="ic">⌁</span> OpenClaw Chat</button>
       <button type="button" data-view="connections"><span class="ic">⇄</span> Connections</button>
       <button type="button" data-view="syscheck"><span class="ic">♥</span> System Check</button>
       <button type="button" data-view="settings"><span class="ic">⚙</span> Settings</button>
@@ -981,7 +994,7 @@
          record from GET /dashboard/actions/{id}. Approval/rejection reuse the
          exact same doors the meeting rows use — nothing is duplicated. -->
     <section class="view" id="view-actions" hidden>
-      <div class="head"><div><h1>Action Center</h1><div class="sub">Review and follow what your avatars need to do</div></div></div>
+      <div class="head"><div><h1>OpenClaw Action Center</h1><div class="sub">Review meeting actions before OpenClaw runs them</div></div></div>
       <div class="acbar">
         <div class="tabs" id="ac-tabs" role="tablist">
           <button class="on" data-ab="attn" role="tab" aria-selected="true">Needs attention</button>
@@ -995,27 +1008,29 @@
       <div class="aclist" id="ac-list"></div>
     </section>
 
-    <!-- OPENCLAW ACTIONS / AGENTS — isolated executor experiment. The normal
-         Action Center remains the canonical action list; this view shows the
-         OpenClaw run that owns execution for allowlisted test orgs. -->
+    <!-- OPENCLAW CHAT — agentic planner for meeting questions, product help,
+         connected-app tasks and explicit-start multi-step workflows. -->
     <section class="view" id="view-openclaw" hidden>
       <div class="head">
-        <div><h1>OpenClaw Actions or Agents</h1><div class="sub">Experimental post-meeting executor for this test workspace</div></div>
-        <button class="btn" id="oc-refresh" type="button">↻ Refresh</button>
+        <div><h1>OpenClaw Chat</h1><div class="sub">Ask about meetings, Laura, or work across your connected apps</div></div>
       </div>
-      <div id="oc-status" class="oc-status"></div>
-      <div class="oc-tools">
-        <input id="oc-replay-id" type="text" autocomplete="off" placeholder="Meeting ID for replay" aria-label="Meeting ID for replay" />
-        <button class="btn" id="oc-replay" type="button">Replay meeting</button>
+      <div class="oc-task-head">
+        <h2>Tasks ready to work on</h2>
+        <span class="oc-task-count" id="oc-task-count">0 available</span>
       </div>
-      <div class="oc-grid">
-        <div class="panel">
-          <h2>Recent runs</h2><div class="ph">One run per finalized meeting</div>
-          <div id="oc-runs" class="oc-runs"><div class="empty" style="padding:14px">Loading…</div></div>
-        </div>
-        <div class="panel">
-          <h2>Run detail</h2><div class="ph">Progress, tools, receipts and attention items</div>
-          <div id="oc-detail" class="oc-detail"><div class="empty" style="padding:14px">Select a run.</div></div>
+      <div class="oc-task-grid" id="oc-task-list"></div>
+      <div class="panel oc-chat">
+        <div class="oc-chat-log" id="oc-chat-log" aria-live="polite"></div>
+        <div class="oc-compose">
+          <div class="oc-context">
+            <select id="oc-meeting" aria-label="Meeting context">
+              <option value="">Recent meetings</option>
+            </select>
+          </div>
+          <div class="oc-inputrow">
+            <textarea id="oc-message" maxlength="6000" placeholder="Message OpenClaw…" aria-label="Message OpenClaw"></textarea>
+            <button class="btn primary" id="oc-send" type="button">Send</button>
+          </div>
         </div>
       </div>
     </section>
@@ -1382,116 +1397,124 @@
       .then(function(b){ if(b) renderBilling(b); })
       .catch(function(){ $("#billing-state").textContent="Billing temporarily unavailable"; });
   }
-  var OC_SELECTED="", OC_TIMER=null;
-  function fmtOcTime(v){
-    if(!v) return "—";
-    var d=typeof v==="number"?new Date(v*1000):new Date(v);
-    if(isNaN(d.getTime())) return String(v);
-    var diff=(Date.now()-d.getTime())/1000;
-    if(diff>=0&&diff<3600) return Math.max(1,Math.round(diff/60))+"m ago";
-    if(diff>=0&&diff<86400) return Math.round(diff/3600)+"h ago";
-    return d.toLocaleString();
+  var OC_CHAT_HISTORY=[], OC_CHAT_READY=false;
+  function ocTaskRows(){
+    return actionIndex().filter(function(x){
+      var s=stateOf(x.a);
+      return x.a.action_id && ["ready_to_approve","proposed","needs_details","failed"].indexOf(s)>=0 && !trackedOnly(x.a);
+    }).slice(0,8);
   }
-  function ocClass(s){
-    return s==="done"?"ok":(s==="failed"||s==="cancelled")?"bad":s==="needs_attention"?"attn":"run";
+  function renderOpenClawTasks(){
+    var box=$("#oc-task-list"), count=$("#oc-task-count"); if(!box) return;
+    var rows=ocTaskRows();
+    if(count) count.textContent=rows.length+" available";
+    box.innerHTML=rows.length?rows.map(function(x,i){
+      var a=x.a,m=x.m;
+      return '<button type="button" class="oc-task" data-octask="'+i+'" data-ocmeeting="'+esc(m.bot_id||"")+'">'+
+        '<div class="n">TASK '+(i+1)+'</div><div class="t">'+esc(a.title||a.item||a.action||"Untitled action")+'</div>'+
+        '<div class="m">'+esc(avNameOf(m.avatar_id))+' · '+esc(fmtWhen(m.saved_at))+'</div></button>';
+    }).join(""):'<div class="empty" style="grid-column:1/-1;padding:18px">No pending meeting tasks.</div>';
+    box.querySelectorAll("[data-octask]").forEach(function(button){
+      button.addEventListener("click",function(){
+        var row=rows[parseInt(button.getAttribute("data-octask"),10)], input=$("#oc-message");
+        if(!row||!input) return;
+        var meeting=button.getAttribute("data-ocmeeting")||"";
+        if($("#oc-meeting")) $("#oc-meeting").value=meeting;
+        input.value="Help me complete this task: "+(row.a.title||row.a.item||row.a.action||"");
+        input.focus();
+      });
+    });
   }
-  function ocChip(s){
-    var label={queued:"Queued",planning:"Planning",running:"Running",needs_attention:"Needs attention",done:"Done",failed:"Failed",cancelled:"Cancelled"}[s]||s||"Unknown";
-    return '<span class="st '+ocClass(s)+'">'+esc(label)+'</span>';
+  function renderOpenClawMeetings(){
+    var select=$("#oc-meeting"); if(!select||!DATA) return;
+    var previous=select.value;
+    select.innerHTML='<option value="">Recent meetings</option>'+(DATA.meetings||[]).slice(0,30).map(function(m){
+      return '<option value="'+esc(m.bot_id||"")+'">'+esc((m.platform||"Meeting")+" · "+fmtWhen(m.saved_at))+'</option>';
+    }).join("");
+    if(previous&&Array.from(select.options).some(function(o){return o.value===previous;})) select.value=previous;
   }
-  function ocCounts(c){
-    c=c||{}; var keys=["queued","planning","running","needs_attention","done","failed","cancelled"];
-    return keys.filter(function(k){return c[k];}).map(function(k){return esc(k.replace("_"," "))+" "+c[k];}).join(" · ")||"No actions";
+  function ocWorkflowHTML(workflow){
+    if(!workflow) return "";
+    var steps=workflow.steps||[];
+    return '<div class="oc-workflow"><div class="wh"><span>'+esc(workflow.title||"Workflow")+'</span><span class="st '+(workflow.ready?"ok":"attn")+'">'+(workflow.ready?"Ready":"Needs details")+'</span></div>'+
+      (workflow.summary?'<div style="font-size:.76rem;color:var(--faint);margin-bottom:5px">'+esc(workflow.summary)+'</div>':'')+
+      steps.map(function(step,i){
+        return '<div class="oc-step"><span class="sn">'+(i+1)+'</span><span class="sd">'+esc(step.description||step.action_type||"Action")+
+          ((step.missing_params||[]).length?'<br><span style="color:var(--warn)">Needs '+esc(step.missing_params.join(", "))+'</span>':'')+
+          '</span><span class="sr">'+esc(step.risk||"")+'</span></div>';
+      }).join("")+
+      (workflow.ready?'<button type="button" class="btn primary" data-ocstart>Start workflow</button>':'')+
+      '<div class="oc-runstate" data-ocrunstate></div></div>';
+  }
+  function addOpenClawMessage(role,text,workflow){
+    var log=$("#oc-chat-log"); if(!log) return null;
+    OC_CHAT_HISTORY=OC_CHAT_HISTORY||[];
+    var node=document.createElement("div"); node.className="oc-msg "+(role==="user"?"user":"assistant");
+    node.innerHTML='<span class="who">'+(role==="user"?"You":"OC")+'</span><div class="body">'+esc(text||"")+ocWorkflowHTML(workflow)+'</div>';
+    log.appendChild(node); log.scrollTop=log.scrollHeight;
+    if(role!=="pending") OC_CHAT_HISTORY.push({
+      role:role,
+      text:String(text||"").slice(0,1200),
+      workflow:workflow||null
+    });
+    if(OC_CHAT_HISTORY.length>12) OC_CHAT_HISTORY=OC_CHAT_HISTORY.slice(-12);
+    var start=node.querySelector("[data-ocstart]");
+    if(start) start.addEventListener("click",function(){ startOpenClawWorkflow(start,workflow); });
+    return node;
   }
   function loadOpenClaw(){
-    if(OC_TIMER){ clearTimeout(OC_TIMER); OC_TIMER=null; }
-    var st=$("#oc-status"), runs=$("#oc-runs");
-    if(st&&!st.innerHTML) st.innerHTML='<div class="oc-stat"><div class="k">Status</div><div class="v">Loading…</div></div>';
-    fetch("/dashboard/openclaw/runs",{headers:headers(),cache:"no-store"})
-      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,status:r.status,j:j};}); })
+    OC_CHAT_HISTORY=OC_CHAT_HISTORY||[];
+    renderOpenClawTasks(); renderOpenClawMeetings();
+    if(!OC_CHAT_READY){
+      OC_CHAT_READY=true;
+      addOpenClawMessage("assistant","Which task should we work on? I can also answer questions about a meeting or Laura.");
+    }
+  }
+  function sendOpenClawChat(){
+    var input=$("#oc-message"), button=$("#oc-send"), text=(input&&input.value||"").trim();
+    if(!text||!button) return;
+    addOpenClawMessage("user",text); input.value=""; button.disabled=true; button.textContent="Working…";
+    var pending=addOpenClawMessage("pending","Thinking…");
+    fetch("/dashboard/openclaw/chat",{
+      method:"POST",headers:headers(),body:JSON.stringify({
+        message:text,meeting_id:($("#oc-meeting")||{value:""}).value,
+        history:OC_CHAT_HISTORY.slice(-8)
+      })
+    }).then(function(r){return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,status:r.status,j:j};});})
+      .then(function(res){
+        if(pending) pending.remove();
+        if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
+        addOpenClawMessage("assistant",res.j.reply||"I prepared the result.",res.j.workflow||null);
+      })
+      .catch(function(e){if(pending) pending.remove();addOpenClawMessage("assistant","I couldn't complete that request: "+e.message);})
+      .finally(function(){button.disabled=false;button.textContent="Send";input.focus();});
+  }
+  function startOpenClawWorkflow(button,workflow){
+    var state=button.parentElement.querySelector("[data-ocrunstate]");
+    button.disabled=true; button.textContent="Starting…";
+    fetch("/dashboard/openclaw/workflows/start",{
+      method:"POST",headers:headers(),body:JSON.stringify({workflow:workflow})
+    }).then(function(r){return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,status:r.status,j:j};});})
       .then(function(res){
         if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
-        renderOpenClaw(res.j||{});
+        button.remove(); if(state) state.textContent="Approved and running.";
+        trackOpenClawWorkflow(res.j.run_id,state,0);
       })
-      .catch(function(e){
-        if(runs) runs.innerHTML='<div class="empty" style="padding:14px">Could not load OpenClaw runs.</div>';
-        toast("Could not load OpenClaw: "+e.message,true);
-      });
+      .catch(function(e){button.disabled=false;button.textContent="Start workflow";if(state) state.textContent="Could not start: "+e.message;});
   }
-  function renderOpenClaw(j){
-    var st=$("#oc-status"), runs=$("#oc-runs");
-    if(st){
-      st.innerHTML=[
-        ['Experiment',j.active?'Active':(j.enabled?'Allowlist needed':'Off')],
-        ['Auto-run',j.auto_run?'On':'Off'],
-        ['Gateway',j.gateway_configured?'Configured':'Local seam'],
-        ['Browser fallback',j.browser_enabled?'Available':'Off']
-      ].map(function(x){return '<div class="oc-stat"><div class="k">'+esc(x[0])+'</div><div class="v">'+esc(x[1])+'</div></div>';}).join("");
-    }
-    var list=j.runs||[];
-    if(list.length&&(!OC_SELECTED||!list.some(function(r){return r.run_id===OC_SELECTED;}))) OC_SELECTED=list[0].run_id;
-    if(runs){
-      runs.innerHTML=list.length?list.map(function(r){
-        return '<button type="button" class="oc-run '+(r.run_id===OC_SELECTED?'on':'')+'" data-ocrun="'+esc(r.run_id)+'">'+
-          '<div class="top"><span class="id">'+esc(r.run_id)+'</span>'+ocChip(r.status)+'</div>'+
-          '<div class="when">'+esc(fmtOcTime(r.created_at))+' · '+esc(ocCounts(r.action_counts))+'</div>'+
-          '<div class="when">'+esc(r.meeting_id||"")+'</div></button>';
-      }).join(""):'<div class="empty" style="padding:14px">No OpenClaw runs yet.</div>';
-      runs.querySelectorAll("[data-ocrun]").forEach(function(b){b.addEventListener("click",function(){
-        OC_SELECTED=b.getAttribute("data-ocrun"); renderOpenClaw(j); loadOpenClawDetail(OC_SELECTED);
-      });});
-    }
-    if(OC_SELECTED) loadOpenClawDetail(OC_SELECTED);
-    else $("#oc-detail").innerHTML='<div class="empty" style="padding:14px">Finalize or replay a meeting to create a run.</div>';
-    if(list.some(function(r){return ["queued","planning","running"].indexOf(r.status)>=0;})){
-      OC_TIMER=setTimeout(function(){ if(!$("#view-openclaw").hidden) loadOpenClaw(); },3500);
-    }
-  }
-  function loadOpenClawDetail(runId){
-    if(!runId) return;
-    fetch("/dashboard/openclaw/runs/"+encodeURIComponent(runId),{headers:headers(),cache:"no-store"})
-      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,status:r.status,j:j};}); })
-      .then(function(res){
-        if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
-        renderOpenClawDetail(res.j.run||{});
-      })
-      .catch(function(e){ $("#oc-detail").innerHTML='<div class="empty" style="padding:14px">Could not load run detail.</div>'; });
-  }
-  function renderOpenClawDetail(run){
-    var box=$("#oc-detail"); if(!box) return;
-    var actions=run.actions||[], events=run.events||[], tools=run.tool_catalog||[];
-    box.innerHTML=
-      '<div class="ac-kv">'+
-        '<dt>Status</dt><dd>'+ocChip(run.status)+'</dd>'+
-        '<dt>Meeting</dt><dd class="mono">'+esc(run.meeting_id||"")+'</dd>'+
-        '<dt>Started</dt><dd>'+esc(fmtOcTime(run.started_at||run.created_at))+'</dd>'+
-        (run.error?'<dt>Attention</dt><dd>'+esc(run.error)+'</dd>':'')+
-        (run.gateway_run_id?'<dt>Gateway run</dt><dd class="mono">'+esc(run.gateway_run_id)+'</dd>':'')+
-      '</div>'+
-      (["done","failed","cancelled","needs_attention"].indexOf(run.status)<0?'<div style="margin-top:10px"><button class="btn danger" data-occancel="'+esc(run.run_id)+'">Cancel run</button></div>':'')+
-      '<div class="oc-actions">'+(actions.length?actions.map(function(a){
-        var ref=a.receipt&&a.receipt.ref;
-        return '<div class="oc-action">'+
-          '<div class="ac-top"><div class="goal">'+esc(a.goal||a.action_id)+'</div>'+ocChip(a.status)+'</div>'+
-          (a.result_summary?'<div class="res">'+esc(a.result_summary)+'</div>':'')+
-          (a.error?'<div class="res">'+esc(a.error)+'</div>':'')+
-          (ref?'<div class="res mono" style="font-family:var(--mono)">'+esc(String(ref))+'</div>':'')+
-        '</div>';
-      }).join(""):'<div class="empty" style="padding:10px">No action rows.</div>')+'</div>'+
-      '<div class="lbl" style="padding:0;margin-top:12px">Tool catalog</div>'+
-      '<div class="oc-catalog">'+(tools.length?tools.slice(0,40).map(function(t){
-        return '<span class="oc-tool '+(t.connected?'ok':'')+'">'+esc(t.label||t.tool||t.action_type||"tool")+'</span>';
-      }).join(""):'<span class="oc-tool">No tools reported</span>')+'</div>'+
-      '<div class="oc-events">'+(events.length?events.map(function(e){
-        return '<div class="oc-event"><div class="t">'+esc(fmtOcTime(e.created_at))+'</div><div class="s">'+esc((e.kind?e.kind+": ":"")+(e.summary||e.status||""))+'</div></div>';
-      }).join(""):'<div class="empty" style="padding:8px">No events yet.</div>')+'</div>';
-    var cancel=box.querySelector("[data-occancel]");
-    if(cancel) cancel.addEventListener("click",function(){
-      fetch("/dashboard/openclaw/runs/"+encodeURIComponent(cancel.getAttribute("data-occancel"))+"/cancel",{
-        method:"POST",headers:headers(),body:JSON.stringify({reason:"cancelled from dashboard"})
-      }).then(function(r){ if(!r.ok) throw new Error("cancel failed"); toast("OpenClaw run cancelled."); loadOpenClaw(); })
-        .catch(function(e){ toast("Could not cancel OpenClaw run: "+e.message,true); });
-    });
+  function trackOpenClawWorkflow(runId,state,attempt){
+    if(!runId||attempt>50) return;
+    setTimeout(function(){
+      fetch("/dashboard/openclaw/runs/"+encodeURIComponent(runId),{headers:headers(),cache:"no-store"})
+        .then(function(r){return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,j:j};});})
+        .then(function(res){
+          if(!res.ok||!res.j.run) throw new Error("status unavailable");
+          var status=res.j.run.status||"running";
+          if(state) state.textContent=status==="done"?"Completed.":status==="needs_attention"?"Needs attention in Action Center.":status==="failed"?"Workflow failed.":"OpenClaw is "+status.replace("_"," ")+".";
+          if(["done","needs_attention","failed","cancelled"].indexOf(status)>=0){load();return;}
+          trackOpenClawWorkflow(runId,state,attempt+1);
+        }).catch(function(){trackOpenClawWorkflow(runId,state,attempt+1);});
+    },2500);
   }
   function secondsOf(b,key){
     var direct=Number(b[key+"_seconds"]);
@@ -2808,7 +2831,7 @@
     var route=act.route||"";
     var routeLabel=route==="native"?"Laura — your connected account"
       :route==="pipedream"?"Pipedream — your organisation's connected account"
-      :route==="openclaw"?"OpenClaw — experimental agent executor"
+      :route==="openclaw"?"OpenClaw"
       :route==="cedric"?"Cedric — Slack agent"
       :route==="manual"?"Tracked only — no automatic execution"
       :route==="browser"?"Guarded browser session":route;
@@ -2895,9 +2918,9 @@
         if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
         var j=res.j, st=j.status||null;
         if(j.openclaw){
-          if(btn) btn.outerHTML='<span class="exec approved" title="Approved — OpenClaw owns execution for this workspace.">approved · OpenClaw</span>';
-          toast("Approved — OpenClaw owns this action.");
-          patchActionState(aid,st||{status:"approved",detail:"OpenClaw owns execution"});
+          if(btn) btn.outerHTML='<span class="exec approved" title="Approved — OpenClaw is executing this action.">running · OpenClaw</span>';
+          toast("Approved — OpenClaw started the action.");
+          patchActionState(aid,st||{status:"executing",detail:"OpenClaw is executing"});
           return;
         }
         // Routed to Cedric: approved here, executing over there — the chip
@@ -3334,7 +3357,7 @@
     if(act.route) row("Runs through",esc(act.route==="native"?"Laura — your own connected account"
       :act.route==="cedric"?"Cedric — the Slack agent"
       :act.route==="pipedream"?"Pipedream — the org's connected account"
-      :act.route==="openclaw"?"OpenClaw — experimental agent executor"
+      :act.route==="openclaw"?"OpenClaw"
       :act.route==="manual"?"Nobody — tracked for you, nothing runs automatically"
       :act.route==="browser"?"Browser demonstration — a guarded browser session; the live view sits in the meeting's Browser demonstration panel"
       :act.route));
@@ -3894,24 +3917,13 @@
     svg.innerHTML=g;
   }
 
-  var ocRefreshBtn=$("#oc-refresh");
-  if(ocRefreshBtn) ocRefreshBtn.addEventListener("click",function(){ loadOpenClaw(); });
-  var ocReplayBtn=$("#oc-replay");
-  if(ocReplayBtn) ocReplayBtn.addEventListener("click",function(){
-    var inp=$("#oc-replay-id"), meetingId=(inp&&inp.value||"").trim();
-    if(!meetingId){ if(inp) inp.focus(); return; }
-    ocReplayBtn.disabled=true; ocReplayBtn.textContent="Replaying…";
-    fetch("/dashboard/openclaw/replay",{
-      method:"POST",headers:headers(),body:JSON.stringify({meeting_id:meetingId})
-    }).then(function(r){ return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,status:r.status,j:j};}); })
-      .then(function(res){
-        if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
-        var run=res.j.run||{}; if(run.run_id) OC_SELECTED=run.run_id;
-        toast("OpenClaw run queued.");
-        loadOpenClaw();
-      })
-      .catch(function(e){ toast("Could not replay meeting: "+e.message,true); })
-      .finally(function(){ ocReplayBtn.disabled=false; ocReplayBtn.textContent="Replay meeting"; });
+  var ocSendBtn=$("#oc-send"), ocMessage=$("#oc-message");
+  if(ocSendBtn) ocSendBtn.addEventListener("click",sendOpenClawChat);
+  if(ocMessage) ocMessage.addEventListener("keydown",function(event){
+    if(event.key==="Enter"&&!event.shiftKey){
+      event.preventDefault();
+      sendOpenClawChat();
+    }
   });
 
   $("#dsp-go").addEventListener("click",function(){

@@ -264,6 +264,32 @@ PARAMS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
         _FIELD(name="folder", type="string", required=True,
                label="destination folder", label_it="cartella di destinazione"),
     ],
+    "notion.create_page": [
+        _FIELD(name="parent", type="string", required=False,
+               description="workspace (default), or exact title/ID of a shared page/data source",
+               label="parent page or database", label_it="pagina o database padre"),
+        _FIELD(name="title", type="string", required=True,
+               label="page title", label_it="titolo pagina"),
+        _FIELD(name="content", type="string", required=False,
+               label="page content", label_it="contenuto pagina"),
+    ],
+    "pipedream.proxy_request": [
+        _FIELD(name="app", type="string", required=True,
+               description="connected Pipedream app slug",
+               label="connected app", label_it="app collegata"),
+        _FIELD(name="method", type="string", required=True,
+               description="GET | HEAD | POST | PUT | PATCH | DELETE",
+               label="API method", label_it="metodo API"),
+        _FIELD(name="url", type="string", required=True,
+               description="HTTPS URL on the registered API host for this app",
+               label="API URL", label_it="URL API"),
+        _FIELD(name="body", type="object", required=False,
+               description="JSON request body",
+               label="request body", label_it="contenuto richiesta"),
+        _FIELD(name="headers", type="object", required=False,
+               description="safe vendor headers only; authorization is never accepted",
+               label="request headers", label_it="header richiesta"),
+    ],
 }
 
 RISK_BY_TYPE: dict[str, str] = {
@@ -288,6 +314,8 @@ RISK_BY_TYPE: dict[str, str] = {
     "drive.create_doc": "low",
     "drive.rename_file": "low",
     "drive.move_file": "low",
+    "notion.create_page": "low",
+    "pipedream.proxy_request": "high",
 }
 
 

@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app.main as main_module
 from app import pipedream_executor, store
-from app.actions import executor, ledger, outbox
+from app.actions import action_plane, executor, ledger, outbox
 from app.config import settings
 from app.meeting import lifecycle
 from app.openclaw import gates, runtime
@@ -89,6 +89,16 @@ def test_openclaw_gate_requires_global_flag_and_allowlist(monkeypatch):
     monkeypatch.setattr(settings, "openclaw_experiment_orgs", f"other,{org}")
     assert gates.experiment_enabled_for_org(org) is True
     assert gates.experiment_enabled_for_org("other-org") is False
+
+
+def test_openclaw_gate_supports_explicit_all_orgs_wildcard(monkeypatch):
+    monkeypatch.setattr(settings, "openclaw_experiment_enabled", True)
+    monkeypatch.setattr(settings, "openclaw_experiment_orgs", "*")
+
+    assert gates.experiment_enabled_for_org("external-org-a") is True
+    assert gates.experiment_enabled_for_org("external-org-b") is True
+    assert gates.experiment_enabled_for_org("") is False
+    assert gates.snapshot("external-org-a")["allowlisted"] is True
 
 
 def test_openclaw_route_wins_for_allowlisted_org(active_openclaw):
@@ -189,7 +199,7 @@ def test_create_run_stays_queued_when_auto_run_is_off(active_openclaw, monkeypat
     assert runtime.list_runs(active_openclaw)[0]["run_id"] == run["run_id"]
 
 
-def test_auto_run_without_gateway_needs_attention_and_no_fallback(active_openclaw, monkeypatch):
+def test_auto_run_flag_cannot_bypass_explicit_approval(active_openclaw, monkeypatch):
     monkeypatch.setattr(settings, "openclaw_auto_run", True)
     monkeypatch.setattr(settings, "openclaw_gateway_url", "")
     calls: list[dict] = []
@@ -202,6 +212,15 @@ def test_auto_run_without_gateway_needs_attention_and_no_fallback(active_opencla
     result = runtime.create_meeting_run("bot_openclaw_gateway", _artifact("oc_gateway"), active_openclaw)
     run_id = result["run"]["run_id"]
 
+    assert result["run"]["status"] == "queued"
+    assert result["run"]["actions"][0]["status"] == "queued"
+    assert ledger.action_statuses(
+        ["oc_gateway"], org_id=active_openclaw
+    )["oc_gateway"]["status"] == "proposed"
+    assert calls == []
+
+    approved = runtime.approve_action(active_openclaw, "oc_gateway")
+    assert approved["ok"] is True
     assert _wait_until(
         lambda: (runtime.get_run(active_openclaw, run_id) or {}).get("status")
         == "needs_attention"
@@ -321,6 +340,104 @@ def test_tool_bridge_rejects_foreign_action_and_wrong_tool(
     assert wrong_tool["status"] == 403
 
 
+def test_approving_one_action_never_exposes_unapproved_siblings(
+    active_openclaw, monkeypatch
+):
+    artifact = _artifact("oc_approved_only")
+    artifact["actions"].append(
+        {
+            "action_id": "oc_still_waiting",
+            "item": "Send a separate follow-up",
+            "typed": {
+                "type": "email.send",
+                "args": {
+                    "to": ["other@example.com"],
+                    "subject": "Separate follow-up",
+                    "body": "This action is not approved yet.",
+                },
+            },
+        }
+    )
+    requests: list[dict] = []
+
+    class GatewayResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
+        def __init__(self, body):
+            self.body = body
+
+        def json(self):
+            return self.body
+
+    def fake_post(url, *, json, headers, timeout):
+        requests.append(json)
+        if len(requests) == 1:
+            return GatewayResponse(
+                {
+                    "id": "resp_approved_only",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_approved_only",
+                            "name": "gmail_send",
+                            "arguments": {
+                                "action_id": "oc_approved_only",
+                                "step_id": "approved-only-1",
+                            },
+                        }
+                    ],
+                }
+            )
+        return GatewayResponse(
+            {
+                "id": "resp_approved_done",
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {"type": "output_text", "text": "Completed."}
+                        ],
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(settings, "openclaw_gateway_url", "http://openclaw.test")
+    monkeypatch.setattr(main_module.httpx, "post", fake_post)
+    monkeypatch.setattr(
+        executor.native_runtime,
+        "execute",
+        lambda *_args: {
+            "ok": True,
+            "kind": "Gmail message",
+            "ref": "msg_approved_only",
+        },
+    )
+    created = runtime.create_meeting_run(
+        "bot_openclaw_two_actions",
+        artifact,
+        active_openclaw,
+    )
+
+    approved = runtime.approve_action(active_openclaw, "oc_approved_only")
+
+    assert approved["ok"] is True
+    assert _wait_until(lambda: len(requests) == 2)
+    tool = next(t for t in requests[0]["tools"] if t["name"] == "gmail_send")
+    assert tool["parameters"]["properties"]["action_id"]["enum"] == [
+        "oc_approved_only"
+    ]
+    detail = runtime.run_detail(active_openclaw, created["run"]["run_id"])
+    assert detail is not None
+    assert detail["status"] == "queued"
+    statuses = {action["action_id"]: action["status"] for action in detail["actions"]}
+    assert statuses == {
+        "oc_approved_only": "done",
+        "oc_still_waiting": "queued",
+    }
+
+
 def test_pipedream_bridge_uses_openclaw_receipt_without_legacy_surface(
     active_openclaw, monkeypatch
 ):
@@ -376,6 +493,290 @@ def test_dashboard_openclaw_runs_endpoint_reports_demo_org(active_openclaw):
     assert body["org_id"] == active_openclaw
     assert body["active"] is True
     assert body["runs"] == []
+
+
+def test_openclaw_chat_answers_from_distilled_meeting_context_only(
+    active_openclaw, monkeypatch
+):
+    runtime.create_meeting_run(
+        "bot_openclaw_chat_context",
+        _artifact("oc_chat_context"),
+        active_openclaw,
+    )
+    requests: list[dict] = []
+
+    class GatewayResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
+        def json(self):
+            return {
+                "id": "resp_chat_answer",
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": json.dumps(
+                                    {
+                                        "reply": "The meeting decided to proceed with the pilot.",
+                                        "workflow": None,
+                                    }
+                                ),
+                            }
+                        ],
+                    }
+                ],
+            }
+
+    def fake_post(url, *, json, headers, timeout):
+        requests.append({"url": url, "json": json, "headers": headers})
+        return GatewayResponse()
+
+    monkeypatch.setattr(settings, "openclaw_gateway_url", "http://openclaw.test")
+    monkeypatch.setattr(main_module.httpx, "post", fake_post)
+    monkeypatch.setattr(
+        runtime,
+        "_connected_action_context",
+        lambda _org: (
+            ["gmail"],
+            {
+                "email.send": action_plane.params_schema(
+                    {"type": "email.send"}
+                )
+            },
+        ),
+    )
+
+    result = runtime.chat(
+        active_openclaw,
+        "What did we decide and how does Laura work?",
+        history=[
+            {
+                "role": "assistant",
+                "text": "Here is the current workflow.",
+                "workflow": {
+                    "title": "Send recap",
+                    "summary": "Draft to refine.",
+                    "steps": [
+                        {
+                            "description": "Send the recap",
+                            "action_type": "email.send",
+                            "args": {
+                                "to": ["customer@example.com"],
+                                "subject": "Recap",
+                                "body": "Thanks for meeting.",
+                            },
+                            "risk": "medium",
+                            "depends_on": [],
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+
+    assert result["ok"] is True
+    assert result["workflow"] is None
+    payload = json.loads(requests[0]["json"]["input"])
+    assert payload["meetings"][0]["summary"] == "Customer asked for a follow-up."
+    assert payload["recent_chat"][0]["workflow"]["ready"] is True
+    assert payload["recent_chat"][0]["workflow"]["steps"][0]["args"]["subject"] == "Recap"
+    assert payload["raw_transcript_included"] is False
+    assert "Customer: Please send the recap." not in requests[0]["json"]["input"]
+
+
+def test_chat_discovers_every_healthy_pipedream_account(
+    active_openclaw, monkeypatch
+):
+    monkeypatch.setattr(runtime.native_runtime, "catalog", lambda _org: [])
+    monkeypatch.setattr(settings, "pipedream_executor", True)
+    monkeypatch.setattr(runtime.pipedream_client, "enabled", lambda: True)
+    monkeypatch.setattr(
+        runtime.pipedream_client,
+        "list_accounts",
+        lambda _org: [
+            {"app": "notion", "healthy": True},
+            {"app": "linear", "healthy": True},
+            {"app": "old_crm", "healthy": False},
+        ],
+    )
+
+    apps, schemas = runtime._connected_action_context(active_openclaw)
+
+    assert apps == ["linear", "notion"]
+    assert list(schemas) == ["notion.create_page", "pipedream.proxy_request"]
+    assert [
+        field["name"] for field in schemas["notion.create_page"]
+    ] == ["parent", "title", "content"]
+    assert [
+        field["name"] for field in schemas["pipedream.proxy_request"]
+    ] == ["app", "method", "url", "body", "headers"]
+
+
+def test_chat_accepts_safe_connected_app_proxy_workflow(
+    active_openclaw, monkeypatch
+):
+    proxy_schema = action_plane.params_schema(
+        {"type": pipedream_executor.PROXY_ACTION_TYPE}
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_connected_action_context",
+        lambda _org: (
+            ["notion"],
+            {pipedream_executor.PROXY_ACTION_TYPE: proxy_schema},
+        ),
+    )
+    workflow = {
+        "title": "Update the Notion page",
+        "steps": [
+            {
+                "description": "Archive the approved Notion page",
+                "action_type": pipedream_executor.PROXY_ACTION_TYPE,
+                "args": {
+                    "app": "notion",
+                    "method": "PATCH",
+                    "url": "https://api.notion.com/v1/pages/page-1",
+                    "body": {"archived": True},
+                },
+            }
+        ],
+    }
+
+    normalized = runtime._normalize_chat_workflow(
+        active_openclaw, workflow
+    )
+
+    assert normalized is not None
+    assert normalized["ready"] is True
+    assert normalized["steps"][0]["risk"] == "high"
+
+    workflow["steps"][0]["args"]["url"] = "https://example.test/steal"
+    blocked = runtime._normalize_chat_workflow(active_openclaw, workflow)
+    assert blocked is not None
+    assert blocked["ready"] is False
+    assert "valid_proxy_request" in blocked["steps"][0]["missing_params"]
+
+
+def test_chat_accepts_prebuilt_actions_only_for_connected_pipedream_apps(
+    active_openclaw, monkeypatch
+):
+    monkeypatch.setattr(
+        runtime,
+        "_connected_action_context",
+        lambda _org: (["notion"], {}),
+    )
+    monkeypatch.setattr(
+        runtime.pipedream_client,
+        "get_component",
+        lambda key: {
+            "key": key,
+            "name": "Create page",
+            "configurable_props": [
+                {"name": "notion", "type": "app"},
+                {"name": "title", "type": "string", "optional": False},
+            ],
+        },
+    )
+    workflow = {
+        "title": "Update the workspace",
+        "steps": [
+            {
+                "description": "Create a Notion page",
+                "action_type": "pd.notion.run",
+                "args": {
+                    "action_key": "notion-create-page",
+                    "props": {
+                        "title": "Meeting recap",
+                        "notion": {"authProvisionId": "must-be-dropped"},
+                        "unknown": "must-be-dropped",
+                    },
+                },
+            },
+            {
+                "description": "Write to an unconnected app",
+                "action_type": "pd.salesforce.run",
+                "args": {
+                    "action_key": "salesforce-create-lead",
+                    "props": {},
+                },
+            },
+        ],
+    }
+
+    normalized = runtime._normalize_chat_workflow(active_openclaw, workflow)
+
+    assert normalized is not None
+    assert normalized["ready"] is True
+    assert [step["action_type"] for step in normalized["steps"]] == [
+        "pd.notion.run"
+    ]
+    assert normalized["steps"][0]["args"]["props"] == {
+        "title": "Meeting recap"
+    }
+
+
+def test_chat_workflow_starts_only_after_explicit_user_action(
+    active_openclaw, monkeypatch
+):
+    starts: list[tuple[str, str]] = []
+    schema = action_plane.params_schema({"type": "email.send"})
+    monkeypatch.setattr(
+        runtime,
+        "_connected_action_context",
+        lambda _org: (["gmail"], {"email.send": schema}),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "start_run_async",
+        lambda org, run_id: starts.append((org, run_id)),
+    )
+    workflow = {
+        "title": "Send the approved recap",
+        "summary": "One explicit email step.",
+        "steps": [
+            {
+                "description": "Send the recap email",
+                "action_type": "email.send",
+                "args": {
+                    "to": ["customer@example.com"],
+                    "subject": "Recap",
+                    "body": "Thanks for meeting.",
+                },
+                "risk": "medium",
+                "depends_on": [],
+            }
+        ],
+    }
+
+    normalized = runtime._normalize_chat_workflow(active_openclaw, workflow)
+    assert normalized is not None and normalized["ready"] is True
+    assert starts == []
+
+    result = runtime.start_chat_workflow(
+        active_openclaw,
+        normalized,
+        laura_user_id="test-user",
+    )
+
+    assert result["ok"] is True
+    assert starts == [(active_openclaw, result["run_id"])]
+    detail = runtime.run_detail(active_openclaw, result["run_id"])
+    assert detail is not None
+    assert detail["actions"][0]["status"] == "running"
+    action_id = detail["actions"][0]["action_id"]
+    canonical = ledger.action_statuses(
+        [action_id], org_id=active_openclaw
+    )[action_id]
+    assert canonical["status"] == "executing"
+    assert (
+        ledger.get_action_decision(action_id, org_id=active_openclaw)[
+            "decided_via"
+        ]
+        == "openclaw_chat"
+    )
 
 
 def test_direct_meeting_runs_openclaw_once_end_to_end(
@@ -522,6 +923,11 @@ def test_direct_meeting_runs_openclaw_once_end_to_end(
     assert artifact is not None
     assert artifact["actions"][0]["execution_route"] == "openclaw"
     assert fresh_store.get(bot_id) is None
+    assert gateway_requests == []
+    assert vendor_calls == []
+
+    approved = runtime.approve_action(active_openclaw, action_id)
+    assert approved["ok"] is True
     assert _wait_until(lambda: len(gateway_requests) == 2)
     runs = runtime.list_runs(active_openclaw)
     assert len(runs) == 1
