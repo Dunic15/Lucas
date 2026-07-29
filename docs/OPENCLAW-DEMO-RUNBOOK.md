@@ -48,6 +48,12 @@ uvicorn backend.app.main:app --port 8000
 Open <http://127.0.0.1:8000/dashboard>. With `.env` untouched the offline demo
 runs on the stub brain and hash embeddings — no keys, ever.
 
+The key-free page can render the Action Center and Chat shell, seeded meeting
+groups and thread controls. Expanding action details, approving, discarding and
+starting a workflow are owner operations and require a signed-in dashboard
+session. Use the authenticated AWS development dashboard or an authenticated
+local test session for those controls; do not weaken the owner gate for a demo.
+
 For a throwaway store (recommended when demoing, so you can reset by deleting
 one file):
 

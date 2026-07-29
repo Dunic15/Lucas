@@ -220,6 +220,30 @@ def test_connected_app_without_a_registered_api_explains_its_limit(
     assert entry["adapter_required"] is False and entry["can_write"] is True
 
 
+def test_graphql_only_apps_do_not_advertise_or_run_planner_reads(
+    openclaw, monkeypatch
+):
+    _install(monkeypatch, FakePipedream({ORG_A: ["linear", "monday"]}))
+
+    entries = {entry["slug"]: entry for entry in app_policy.catalog(ORG_A)}
+    for slug in ("linear", "monday"):
+        assert entries[slug]["can_read"] is False
+        assert entries[slug]["can_write"] is True
+        assert "Planner reads" in entries[slug]["limit"]
+        assert app_policy.verbs_for(slug) == ["create and update records"]
+
+    read = pipedream_executor.read_proxy_for_planner(
+        ORG_A,
+        {
+            "app": "linear",
+            "method": "GET",
+            "url": "https://api.linear.app/graphql",
+        },
+    )
+    assert read["ok"] is False
+    assert "Planner reads are therefore not available" in read["error"]
+
+
 # ── 2. an app the org has NOT connected is blocked ──────────────────────────
 
 def test_unconnected_app_is_blocked_in_planning_and_at_execution(

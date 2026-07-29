@@ -55,6 +55,10 @@ class AppSpec:
     # This is what lets the planner inspect a search API during planning
     # without that inspection counting as a side effect.
     read_ops: tuple[str, ...] = ()
+    # Whether the chat planner has a bounded read-only API surface at all.
+    # GraphQL APIs that multiplex queries and mutations on one POST endpoint
+    # cannot safely expose planner reads through an HTTP-method policy.
+    planner_reads: bool = True
     # Operations this app never allows, as "METHOD /path" globs.
     deny_ops: tuple[str, ...] = ()
     # Risk floor for writes on this app; the policy may raise it, never lower it.
@@ -178,6 +182,7 @@ _APPS: dict[str, AppSpec] = {
         _spec(
             "linear", "Linear", ("api.linear.app",),
             guides=("Queries and mutations: POST https://api.linear.app/graphql",),
+            planner_reads=False,
             note=(
                 "Linear exposes one GraphQL endpoint, so a read and a write are "
                 "the same HTTP operation. Planner reads are therefore not "
@@ -195,6 +200,7 @@ _APPS: dict[str, AppSpec] = {
         _spec(
             "monday", "monday.com", ("api.monday.com",),
             guides=("Queries and mutations: POST https://api.monday.com/v2",),
+            planner_reads=False,
             note=(
                 "monday.com exposes one GraphQL endpoint, so a read and a write "
                 "are the same HTTP operation. Planner reads are not available."
@@ -290,8 +296,8 @@ def _extra_specs() -> dict[str, AppSpec]:
 
     Shape: ``{"<slug>": {"label", "hosts": [...], "host_patterns": [...],
     "guides": [...], "headers": {..}, "read_ops": [...], "deny_ops": [...],
-    "note": "..."}}``. A malformed blob is ignored wholesale — a bad env var
-    must never take the connected-app catalog down.
+    "planner_reads": true, "note": "..."}}``. A malformed blob is ignored
+    wholesale — a bad env var must never take the connected-app catalog down.
     """
     raw = (getattr(settings, "connected_app_registry_extra", "") or "").strip()
     if not raw:
@@ -332,6 +338,11 @@ def _extra_specs() -> dict[str, AppSpec]:
             ),
             read_ops=tuple(str(o)[:200] for o in (value.get("read_ops") or [])[:20]),
             deny_ops=tuple(str(o)[:200] for o in (value.get("deny_ops") or [])[:20]),
+            planner_reads=(
+                value["planner_reads"]
+                if isinstance(value.get("planner_reads"), bool)
+                else True
+            ),
             note=str(value.get("note") or "")[:400],
         )
     return out

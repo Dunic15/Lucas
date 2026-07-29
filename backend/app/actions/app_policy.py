@@ -209,6 +209,10 @@ def validate_request(
     decision = evaluate(app, method, url)
     if not decision.allow:
         raise ValueError(decision.reason or f"{method} {path} is not permitted on {app}")
+    if read_only and not spec.planner_reads:
+        raise ValueError(
+            spec.note or f"{app} has no read-only API surface Laura may use"
+        )
     if read_only and not decision.is_read:
         raise ValueError("planner reads may not perform this API operation")
 
@@ -295,7 +299,7 @@ def _entry(slug: str, sources: list[str], deterministic: list[str]) -> dict:
     # pattern-host app like Jira is answered here exactly like an exact-host one.
     read = evaluate(slug, "GET", "/")
     write = evaluate(slug, "POST", "/")
-    can_read = read.allow
+    can_read = bool(spec and spec.planner_reads and read.allow)
     can_write = write.allow
     limit = ""
     if spec is None:
@@ -381,8 +385,11 @@ def verbs_for(app_slug: str, deterministic: list[str] | None = None) -> list[str
     # already has concrete deterministic verbs keeps naming those — the generic
     # sentence only rescues an app that would otherwise have nothing to say.
     spec = app_registry.spec_for(app_slug)
-    if not out and spec is not None and evaluate(spec.slug, "POST", "/").allow:
-        out = ["read data", "create and update records"]
+    if not out and spec is not None:
+        if spec.planner_reads and evaluate(spec.slug, "GET", "/").allow:
+            out.append("read data")
+        if evaluate(spec.slug, "POST", "/").allow:
+            out.append("create and update records")
     seen: list[str] = []
     for verb in out:
         if verb and verb not in seen:
