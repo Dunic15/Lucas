@@ -901,7 +901,12 @@ def replace_action_typed(
         )
         if updated is not None:
             return updated
-        return None
+        # Legacy actions can belong to a durable UUID org while still living
+        # only in the environment's SQLite artifact archive. Fall through to
+        # the typed overlay only when no canonical Postgres row exists; a
+        # present terminal/executing row must keep the durable refusal above.
+        if outbox_pg.get_action(org_id, aid) is not None:
+            return None
     current = (
         action_statuses([aid], org_id=org_id).get(aid) or {}
     ).get("status") or ""
