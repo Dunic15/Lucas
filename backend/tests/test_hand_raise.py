@@ -118,7 +118,7 @@ def _stub_stream(monkeypatch, sentences, top_score=0.0):
 def _capture_speech(monkeypatch):
     spoken = []
 
-    async def fake_speak_with_audio(session, text, *, force, generation, prev, t0=None):
+    async def fake_speak_with_audio(session, text, *, force, generation, prev, t0=None, gate=None):
         spoken.append(text)
         return True
 

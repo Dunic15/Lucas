@@ -65,3 +65,74 @@ def test_trailing_vocative_still_wakes():
 def test_vocative_wins_over_reported_mention_in_same_line():
     called, _ = detect_wake(_avatar(), "Laura, what did Laura mean by that?")
     assert called is True
+
+
+# ── third-party name-sake (the 2026-07-29 "other Cedric" incident) ──
+# The room discussed a DIFFERENT person named Cedric who was about to join;
+# the avatar must read every such line as talk ABOUT someone, never a wake.
+def _cedric(**over):
+    return _avatar(id="cedric", name="Cedric", wake_words=["cedric"], **over)
+
+
+def test_the_other_cedric_is_not_a_wake():
+    called, _ = detect_wake(_cedric(), "The other Cedric will join the call.")
+    assert called is False
+
+
+def test_another_cedric_is_not_a_wake():
+    called, _ = detect_wake(_cedric(), "There's another Cedric on the team.")
+    assert called is False
+
+
+def test_cedric_is_joining_is_not_a_wake():
+    called, _ = detect_wake(_cedric(), "Cedric is joining in five minutes.")
+    assert called is False
+
+
+def test_cedric_will_handle_is_not_a_wake():
+    called, _ = detect_wake(_cedric(), "Cedric will handle the rollout next week.")
+    assert called is False
+
+
+def test_comma_dropped_second_person_still_wakes():
+    # Live ASR loses the vocative comma: "Cedric is there…" must still wake
+    # when the continuation is unmistakably second-person.
+    called, q = detect_wake(_cedric(), "Cedric is there a way to fix this?")
+    assert called is True
+    assert "way to fix this" in q.lower()
+
+
+def test_cedric_can_you_still_wakes():
+    called, _ = detect_wake(_cedric(), "Cedric can you check the pipeline?")
+    assert called is True
+
+
+# ── roster collision: a HUMAN shares the wake word ──
+# With a real Cedric in the room every bare mention is ambiguous, so only a
+# clear vocative wakes the avatar.
+def test_bare_mention_with_human_namesake_does_not_wake():
+    # "loop in Cedric" is neither reported speech nor a vocative — without a
+    # name-sake it wakes (exact token); with a human Cedric present it must not.
+    called, _ = detect_wake(
+        _cedric(),
+        "Let's loop in Cedric on the pricing question.",
+        exclude_names=["Cedric Dupont"],
+    )
+    assert called is False
+
+
+def test_vocative_with_human_namesake_still_wakes():
+    called, q = detect_wake(
+        _cedric(),
+        "Hey Cedric, what does the onboarding SOP say?",
+        exclude_names=["Cedric Dupont"],
+    )
+    assert called is True
+    assert "onboarding" in q.lower()
+
+
+def test_no_collision_bare_mention_unchanged():
+    # Without a human name-sake the historical behavior stands: an exact token
+    # in a groundable line wakes (subject to the reported-speech filter).
+    called, _ = detect_wake(_cedric(), "Let's loop in Cedric on the pricing question.")
+    assert called is True

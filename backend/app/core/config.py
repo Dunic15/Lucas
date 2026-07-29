@@ -434,6 +434,31 @@ class Settings(BaseSettings):
     # cooldown and the deference wait (dialogue context is a first-class
     # addressee signal). 0 disables.
     followup_window_seconds: float = 15.0
+    # Address-only group mode (owner rule 2026-07-29, after the "other Cedric"
+    # talk-over): with this many or more HUMANS in the roster, she speaks ONLY
+    # when addressed by name — no follow-up window, no deference answers, no
+    # interjections, no spoken nudges/wrap-ups. Silent listening otherwise
+    # (tracking, actions, and the finalize artifact are unaffected). 1:1 rooms
+    # keep the fluent behaviour. 0 disables the mode entirely.
+    address_only_min_humans: int = 2
+    # Pre-speak silence gate (same owner rule): before the FIRST line of any
+    # speech turn she requires the room to have been quiet — no human partial
+    # in flight, no new human transcript line — for this long. The called
+    # variant applies when she was addressed BY NAME (the asker just stopped
+    # talking, so a short beat suffices and latency stays the product); the
+    # base variant covers everything unprompted (greeting, nudges, wrap-up,
+    # invited hand contributions). If the room never goes quiet within
+    # max_wait, the line is DROPPED (or diverted to meeting chat on the
+    # answer path) — she never speaks over anyone. 0 disables a gate.
+    speak_silence_gate_seconds: float = 3.0
+    speak_silence_gate_called_seconds: float = 1.0
+    speak_silence_gate_max_wait: float = 8.0
+    # In-call research goes to meeting CHAT, not voice: on a search question
+    # she speaks one fixed ack ("I'll post it in the chat") and the result
+    # lands as a Recall chat message — never a long spoken answer over the
+    # room. Falls back to a short spoken summary when there is no Recall key
+    # (the key-free demo) or the chat post fails.
+    search_results_to_chat: bool = True
     # Footing: greet a participant who joins an already-running meeting, and
     # nudge one silent participant once as the meeting wraps up.
     greet_joiners: bool = True

@@ -20,19 +20,56 @@ from ..avatars import Avatar
 
 # Third-person verbs that follow a wake word when someone is talking ABOUT the
 # avatar, not TO it: "Laura said…", "Laura mentioned…", "Laura ha detto…".
+# The future/present copulas ("Cedric will join…", "Cedric is joining…") cover
+# the 2026-07-29 live incident: the room discussed a DIFFERENT person named
+# Cedric who was about to enter the call, and the avatar took it as a wake.
 _REPORTED_TRAILING = (
     r"said|says|saying|mentioned|meant|means|told|thinks|thought|noted|"
     r"pointed|explained|suggested|asked|wanted|raised|flagged|had|was|were|'s|"
+    r"will|is|isn'?t|joins|joined|works|comes|arrives|"
     # Italian: "Laura ha detto…", "Laura diceva…", "Laura intendeva…"
-    r"ha|aveva|dice|diceva|intende|intendeva|pensa|pensava|sosteneva|suggeriva"
+    r"ha|aveva|dice|diceva|intende|intendeva|pensa|pensava|sosteneva|suggeriva|"
+    r"sarà|entrerà|arriverà|lavora|è"
 )
 # Subordinating / referential words that precede a wake word in reported speech:
 # "as Laura…", "what did Laura…", "secondo Laura…", "come diceva Laura…".
+# Determiners/qualifiers ("the other Cedric", "another Cedric", "our Cedric")
+# mark a THIRD PARTY who shares the name — never a vocative.
 _REPORTED_LEADING = (
     r"as|what|when|whatever|like|because|since|that|did|does|per|about|"
     r"regarding|according to|from|for|with|"
-    r"secondo|come (?:ha detto|diceva|dice)|quello che|cosa (?:ha detto|diceva)|di"
+    r"the other|another|other|our|this|"
+    r"secondo|come (?:ha detto|diceva|dice)|quello che|cosa (?:ha detto|diceva)|di|"
+    r"l'altro|un altro|un'altra|l'altra|quel|quella|il nostro|la nostra"
 )
+
+
+def _has_vocative(lower: str, wake: str) -> bool:
+    """True when the line carries a clear vocative signal aimed at `wake`:
+    a greeting prefix ("hey Laura"), a leading "Laura, …" / "Laura:", a
+    trailing "…, Laura?", or the comma-dropped ASR shape ("Laura can you…",
+    "Laura is there a way…") where the name is followed by an unmistakable
+    second-person question or imperative. This is what distinguishes
+    ADDRESSING the avatar from merely mentioning its name."""
+    w = re.escape(wake)
+    return bool(
+        re.search(rf"\b(?:hey|hi|hello|ok|okay|yo|ehi|ciao|senti|scusa)\s+{w}\b", lower)
+        or re.search(rf"(?:^|[,.;:!?]\s*){w}\s*[,:]", lower)   # "Laura, …" / "Laura:"
+        or re.search(rf",\s*{w}\b[^a-z]*$", lower)             # "…, Laura?" (end)
+        # Comma-dropped vocative: live ASR loses the pause, so "Laura, is
+        # there…" arrives as "Laura is there…". Only unmistakably second-person
+        # continuations count — "Laura is joining" stays a third-person report.
+        or re.search(
+            rf"(?:^|[.;:!?]\s+){w}\s+(?:"
+            rf"(?:can|could|would|will|do|did|are|were|have|has)\s+you\b|"
+            rf"(?:what|when|where|why|how)\b|"
+            rf"is\s+(?:there|it)\b|"
+            rf"(?:please|tell|show|give|take|send|share|confirm|check|explain)\b|"
+            rf"(?:per favore|puoi|potresti|potete|vuoi|volete|riesci|riuscite|cosa)\b"
+            rf")",
+            lower,
+        )
+    )
 
 
 def _is_reported_reference(lower: str, wake: str) -> bool:
@@ -41,6 +78,7 @@ def _is_reported_reference(lower: str, wake: str) -> bool:
 
     "Laura mentioned the deadline"      -> reported (do not wake)
     "as Laura said earlier, we should"  -> reported (do not wake)
+    "the other Cedric will join"         -> reported (do not wake)
     "Laura, what are we missing?"        -> vocative (wake)
     "Laura, what did Laura mean?"        -> vocative wins (wake)
     """
@@ -53,12 +91,7 @@ def _is_reported_reference(lower: str, wake: str) -> bool:
         return False
     # A vocative signal means the speaker is addressing the avatar directly, which
     # overrides an incidental third-person mention elsewhere in the same line.
-    vocative = bool(
-        re.search(rf"\b(?:hey|hi|hello|ok|okay|yo|ehi|ciao|senti|scusa)\s+{w}\b", lower)
-        or re.search(rf"(?:^|[,.;:!?]\s*){w}\s*[,:]", lower)   # "Laura, …" / "Laura:"
-        or re.search(rf",\s*{w}\b[^a-z]*$", lower)             # "…, Laura?" (end)
-    )
-    return not vocative
+    return not _has_vocative(lower, wake)
 
 
 # ── fuzzy name matching ──
@@ -156,7 +189,11 @@ def detect_wake(
 
     `exclude_names` (other meeting participants) suppresses only the FUZZY
     path: with a real Lara in the room, "Lara, …" is her turn — while an
-    exact wake word always wins.
+    exact wake word normally wins. The exception is a NAME COLLISION: when a
+    human in the roster shares the wake word itself (a real Cedric on the
+    call), every bare mention is ambiguous, so the exact match additionally
+    requires a clear vocative ("hey Cedric" / "Cedric, …" / "…, Cedric?") —
+    a bare "Cedric" token in that room never wakes the avatar.
     """
     lower = utterance.lower()
     excluded = {
@@ -172,6 +209,8 @@ def detect_wake(
             else (_fuzzy_wake_token(lower, wake, excluded) if fuzzy else "")
         )
         if matched:
+            if matched in excluded and not _has_vocative(lower, matched):
+                continue  # a human shares this name — bare mention is theirs
             if _is_reported_reference(lower, matched):
                 return False, ""
             return True, _strip_wake(utterance, matched)

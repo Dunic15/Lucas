@@ -47,6 +47,15 @@ def _keyfree_settings(monkeypatch):
     """Pin every setting to its code default for the duration of each test."""
     for name, field in Settings.model_fields.items():
         monkeypatch.setattr(settings, name, field.default)
+    # 2026-07-29 turn-taking hardening (address-only group mode + pre-speak
+    # silence gate) defaults ON in code, which would rewrite the semantics —
+    # and the wall-clock (real sleeps) — of the whole legacy webhook suite.
+    # The legacy tests pin the PRE-hardening behavior; the features have their
+    # own dedicated tests (test_silence_gate.py, test_address_only_group.py)
+    # that opt IN via monkeypatch, same doctrine as deference_seconds=0.
+    monkeypatch.setattr(settings, "address_only_min_humans", 0)
+    monkeypatch.setattr(settings, "speak_silence_gate_seconds", 0.0)
+    monkeypatch.setattr(settings, "speak_silence_gate_called_seconds", 0.0)
 
 
 def _clear_registries() -> None:

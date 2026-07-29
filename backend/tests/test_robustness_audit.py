@@ -92,7 +92,7 @@ def _capture_speech(monkeypatch):
     spoken ORDER is deterministic (sentence(s) first, recovery last)."""
     spoken: list[str] = []
 
-    async def fake_speak(session, text, *, force, generation, prev=None, t0=None):
+    async def fake_speak(session, text, *, force, generation, prev=None, t0=None, gate=None):
         if prev is not None:
             try:
                 await prev

@@ -538,6 +538,13 @@ _SEARCH_FAIL_RE = re.compile(
 )
 
 
+def web_search_answer(question: str, convo: str = "") -> str:
+    """Public seam for the search-to-chat path (main.py): one web-search answer
+    as plain text ("" when the search flaked). Same call the in-stream search
+    branch uses — kept as a thin alias so the two paths can never diverge."""
+    return _web_search_answer(question, convo)
+
+
 def _web_search_answer(question: str, convo: str = "") -> str:
     """One web-search answer via Claude's native web_search tool (live_search_model,
     default Sonnet — strong at search + dynamic result filtering).
