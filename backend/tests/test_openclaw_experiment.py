@@ -585,6 +585,11 @@ def test_openclaw_chat_answers_from_distilled_meeting_context_only(
     assert payload["recent_chat"][0]["workflow"]["steps"][0]["args"]["subject"] == "Recap"
     assert payload["raw_transcript_included"] is False
     assert "Customer: Please send the recap." not in requests[0]["json"]["input"]
+    planner_tool_names = {
+        tool["name"] for tool in requests[0]["json"]["tools"]
+    }
+    assert planner_tool_names == {"pipedream_proxy_read"}
+    assert "Never output a \"pd.<app>.run\" action" in requests[0]["json"]["instructions"]
 
 
 def test_chat_discovers_every_healthy_pipedream_account(

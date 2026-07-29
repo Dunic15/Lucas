@@ -1910,11 +1910,11 @@ def chat(
         "schemas. Never claim access to a transcript, secret, app or fact not present. "
         "A workflow is only a proposal: no action runs until the user presses Start "
         "workflow. Use literal user/context values and never invent recipients, dates, "
-        "IDs or file names. For Pipedream apps you may inspect pre-built actions with "
-        "the read-only catalog tool. An inspected pre-built action uses action_type "
-        "\"pd.<app>.run\" and args {\"action_key\":the catalog key,\"props\":{...}}. "
-        "If the pre-built catalog is unavailable, you may use the read-only proxy "
-        "tool to inspect an API and propose action_type \"pipedream.proxy_request\" "
+        "IDs or file names. Use only action types present in deterministic_actions, "
+        "or action_type \"pipedream.proxy_request\" for a supported connected app. "
+        "Never output a \"pd.<app>.run\" action: the pre-built Pipedream catalog is "
+        "not part of this workflow path. You may use the read-only proxy tool to "
+        "inspect an API and propose action_type \"pipedream.proxy_request\" "
         "with exact args {\"app\":string,\"method\":string,\"url\":HTTPS string,"
         "\"body\":JSON object,\"headers\":safe vendor headers}. Use only hosts listed "
         "in proxy_api_hosts. Never invent a resource ID: resolve it with a read first "
@@ -1933,34 +1933,6 @@ def chat(
         "step rather than guessing."
     )
     planner_tools = [
-        {
-            "type": "function",
-            "name": "pipedream_list_app_actions",
-            "description": "List available pre-built actions for one connected Pipedream app.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "app": {"type": "string", "enum": apps or ["none"]},
-                    "query": {"type": "string"},
-                },
-                "required": ["app"],
-                "additionalProperties": False,
-            },
-        },
-        {
-            "type": "function",
-            "name": "pipedream_get_action_schema",
-            "description": "Read the configurable fields for one Pipedream action.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "app": {"type": "string", "enum": apps or ["none"]},
-                    "action_key": {"type": "string"},
-                },
-                "required": ["app", "action_key"],
-                "additionalProperties": False,
-            },
-        },
         {
             "type": "function",
             "name": "pipedream_proxy_read",
@@ -2035,46 +2007,8 @@ def chat(
                     result = {"ok": False, "error": "App is not connected"}
                 elif call.get("name") == "pipedream_proxy_read":
                     result = pipedream_executor.read_proxy_for_planner(org, args)
-                elif call.get("name") == "pipedream_get_action_schema":
-                    component = pipedream_client.get_component(
-                        str(args.get("action_key") or "")
-                    )
-                    result = {
-                        "ok": bool(component),
-                        "action": {
-                            "key": component.get("key"),
-                            "name": component.get("name"),
-                            "fields": [
-                                {
-                                    "name": prop.get("name"),
-                                    "type": prop.get("type"),
-                                    "description": prop.get("description"),
-                                    "optional": bool(prop.get("optional")),
-                                    "options": prop.get("options")
-                                    if isinstance(prop.get("options"), list)
-                                    else None,
-                                }
-                                for prop in component.get("configurable_props") or []
-                                if isinstance(prop, dict)
-                                and prop.get("name")
-                                and str(prop.get("type") or "") != "app"
-                                and not prop.get("hidden")
-                            ],
-                        },
-                    }
                 else:
-                    try:
-                        result = {
-                            "ok": True,
-                            "actions": pipedream_client.list_actions(
-                                app or str(args.get("query") or ""), limit=30
-                            ),
-                        }
-                    except Exception as exc:  # noqa: BLE001
-                        result = {
-                            "ok": False,
-                            "error": f"Pipedream catalog unavailable ({type(exc).__name__})",
-                        }
+                    result = {"ok": False, "error": "Unknown planner tool"}
                 outputs.append(
                     {
                         "type": "function_call_output",
