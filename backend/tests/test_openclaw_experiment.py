@@ -231,6 +231,69 @@ def test_auto_run_flag_cannot_bypass_explicit_approval(active_openclaw, monkeypa
     assert calls == []
 
 
+def test_repaired_action_refreshes_stale_run_before_retry(active_openclaw):
+    action_id = "oc_stale_untyped_notion"
+    artifact = _artifact(action_id)
+    artifact["actions"][0]["typed"] = {"type": "", "args": {}}
+    created = runtime.create_meeting_run(
+        "bot_stale_untyped_notion", artifact, active_openclaw
+    )
+    run_id = created["run"]["run_id"]
+    runtime._set_action_run(
+        active_openclaw,
+        run_id,
+        action_id,
+        "needs_attention",
+        summary="OpenClaw execution did not complete",
+        error="no_executable_tools",
+    )
+    runtime._update_run(
+        active_openclaw,
+        run_id,
+        "needs_attention",
+        error="OpenClaw found no executable canonical tools.",
+    )
+    ledger.set_action_status(
+        action_id,
+        "executing",
+        "executing via openclaw",
+        org_id=active_openclaw,
+    )
+
+    assert runtime.reconcile_failed_actions(active_openclaw, [action_id]) == 1
+    assert ledger.action_statuses(
+        [action_id], org_id=active_openclaw
+    )[action_id]["status"] == "failed"
+
+    repaired = {
+        "type": "notion.create_page",
+        "args": {"title": "Meeting work", "content": "Summary\n\n- [ ] Next"},
+    }
+    refreshed = runtime.refresh_action_spec_for_approval(
+        active_openclaw, action_id, repaired
+    )
+
+    assert refreshed["updated"] is True
+    assert refreshed["retry_ready"] is True
+    run = runtime.get_run(active_openclaw, run_id)
+    assert run is not None
+    assert run["status"] == "queued"
+    assert run["input"]["actions"][0]["typed"] == repaired
+    assert runtime.run_detail(active_openclaw, run_id)["actions"][0]["status"] == "queued"
+
+    assert ledger.reopen_failed_action(
+        action_id, org_id=active_openclaw, detail="retrying repaired action"
+    )
+    approved = runtime.approve_action(
+        active_openclaw,
+        action_id,
+        start=False,
+        canonical_typed=repaired,
+    )
+    assert approved["ok"] is True
+    assert runtime.run_detail(active_openclaw, run_id)["actions"][0]["status"] == "running"
+
+
 def test_tool_bridge_replays_duplicate_side_effect(active_openclaw, monkeypatch):
     monkeypatch.setattr(settings, "openclaw_auto_run", False)
     result = runtime.create_meeting_run("bot_openclaw_tool", _artifact("oc_tool"), active_openclaw)

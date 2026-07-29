@@ -53,6 +53,7 @@ _ACTION_TOOL_BY_TYPE = {
 }
 _MAX_OPENRESPONSES_TURNS = 32
 _SCHEMA_READY = False
+_SCHEMA_STORE_PATH = ""
 _SCHEMA_LOCK = threading.Lock()
 _CHAT_PG_SCHEMA_READY: bool | None = None
 _CHAT_PG_SCHEMA_LOCK = threading.Lock()
@@ -124,11 +125,13 @@ def _chat_pg(org_id: str) -> bool:
 
 
 def _ensure_sqlite_schema() -> None:
-    global _SCHEMA_READY
-    if _SCHEMA_READY:
+    global _SCHEMA_READY, _SCHEMA_STORE_PATH
+    current_path = str(store.STORE_PATH)
+    if _SCHEMA_READY and _SCHEMA_STORE_PATH == current_path:
         return
     with _SCHEMA_LOCK:
-        if _SCHEMA_READY:
+        current_path = str(store.STORE_PATH)
+        if _SCHEMA_READY and _SCHEMA_STORE_PATH == current_path:
             return
         with store._LOCK, store._connect() as conn:
             conn.execute(
@@ -257,6 +260,7 @@ def _ensure_sqlite_schema() -> None:
                 """
             )
         _SCHEMA_READY = True
+        _SCHEMA_STORE_PATH = current_path
 
 
 def _pg_fetchone(conn, sql: str, params: dict) -> dict | None:
@@ -943,10 +947,20 @@ def tool_catalog(org_id: str) -> list[dict]:
 
 
 def _run_input(bot_id: str, artifact: dict, org_id: str) -> dict:
-    actions = [
-        _sanitize_action(a, bot_id, i)
-        for i, a in enumerate((artifact or {}).get("actions") or [], 1)
-    ]
+    actions: list[dict] = []
+    for index, raw in enumerate((artifact or {}).get("actions") or [], 1):
+        action = _sanitize_action(raw, bot_id, index)
+        effective = ledger.effective_typed(
+            action["action_id"], action.get("typed"), org_id=org_id
+        )
+        if isinstance(effective, dict) and effective.get("type"):
+            action["typed"] = {
+                "type": str(effective.get("type") or ""),
+                "args": dict(effective.get("args") or {}),
+            }
+            action["missing_params"] = action_plane.missing_params(effective)
+            action["risk"] = action_plane.risk_for(effective)
+        actions.append(action)
     return {
         "schema_version": "openclaw-poc-m0-m7",
         "org_id": org_id,
@@ -1478,6 +1492,298 @@ def _run_action_context(org_id: str, action_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def refresh_action_spec_for_approval(
+    org_id: str, action_id: str, typed: dict | None
+) -> dict:
+    """Refresh a pre-approval run from the current canonical typed override.
+
+    Meeting runs are created at finalize time, while a trusted read migration
+    or parameter edit can repair the Action later. The executor must consume
+    that current server-owned spec, not the stale snapshot captured in the
+    run. A run that already emitted a tool call is never rewritten.
+    """
+    org = str(org_id or "").strip()
+    aid = str(action_id or "").strip()
+    action_type = str((typed or {}).get("type") or "").strip()
+    if not (org and aid and action_type):
+        return {"ok": False, "error": "missing canonical action spec"}
+    normalized = {
+        "type": action_type,
+        "args": dict((typed or {}).get("args") or {}),
+    }
+    context = _run_action_context(org, aid)
+    if context is None:
+        return {"ok": False, "missing": True}
+    run_id = str(context.get("run_id") or "")
+
+    def update_payload(raw_payload: Any, status: str, has_tool_calls: bool):
+        payload = _json_loads(raw_payload, {})
+        actions = payload.get("actions") if isinstance(payload, dict) else None
+        if not isinstance(actions, list):
+            return None, "action is not part of this OpenClaw run", False
+        target = next(
+            (
+                action
+                for action in actions
+                if isinstance(action, dict)
+                and str(action.get("action_id") or "") == aid
+            ),
+            None,
+        )
+        if target is None:
+            return None, "action is not part of this OpenClaw run", False
+        current = target.get("typed") if isinstance(target.get("typed"), dict) else {}
+        current = {
+            "type": str(current.get("type") or ""),
+            "args": dict(current.get("args") or {}),
+        }
+        if current == normalized:
+            return payload, "", False
+        if status in ("running", "done", "cancelled") or has_tool_calls:
+            return None, "OpenClaw already started this action", False
+        target["typed"] = normalized
+        target["missing_params"] = action_plane.missing_params(normalized)
+        target["risk"] = action_plane.risk_for(normalized)
+        target["execution_route"] = "openclaw"
+        return payload, "", True
+
+    if _pg(org):
+        engine = control_plane._get_engine()
+        with engine.begin() as conn:
+            control_plane._set_org(conn, org)
+            row = _pg_fetchone(
+                conn,
+                """
+                SELECT r.input_json, ar.status,
+                       EXISTS (
+                         SELECT 1 FROM openclaw_tool_calls tc
+                         WHERE tc.org_id=ar.org_id
+                           AND tc.run_id=ar.run_id
+                           AND tc.action_id=ar.action_id
+                       ) AS has_tool_calls
+                FROM openclaw_action_runs ar
+                JOIN openclaw_runs r
+                  ON r.org_id=ar.org_id AND r.run_id=ar.run_id
+                WHERE ar.org_id=:org_id AND ar.run_id=:run_id
+                  AND ar.action_id=:action_id
+                FOR UPDATE OF r, ar
+                """,
+                {"org_id": org, "run_id": run_id, "action_id": aid},
+            )
+            if row is None:
+                return {"ok": False, "missing": True}
+            previous = str(row.get("status") or "")
+            payload, error, changed = update_payload(
+                row.get("input_json"), previous, bool(row.get("has_tool_calls"))
+            )
+            if payload is None:
+                return {"ok": False, "error": error, "conflict": True}
+            if not changed:
+                return {
+                    "ok": True,
+                    "updated": False,
+                    "run_id": run_id,
+                    "previous_status": previous,
+                }
+            reset = previous in ("needs_attention", "failed")
+            conn.execute(
+                _text(
+                    """
+                    UPDATE openclaw_runs
+                    SET input_json=CAST(:input_json AS jsonb),
+                        status=CASE WHEN :reset THEN 'queued' ELSE status END,
+                        error=CASE WHEN :reset THEN '' ELSE error END,
+                        finished_at=CASE WHEN :reset THEN NULL ELSE finished_at END,
+                        updated_at=clock_timestamp()
+                    WHERE org_id=:org_id AND run_id=:run_id
+                    """
+                ),
+                {
+                    "org_id": org,
+                    "run_id": run_id,
+                    "input_json": _json_dumps(payload),
+                    "reset": reset,
+                },
+            )
+            conn.execute(
+                _text(
+                    """
+                    UPDATE openclaw_action_runs
+                    SET status=CASE WHEN :reset THEN 'queued' ELSE status END,
+                        result_summary=CASE WHEN :reset THEN '' ELSE result_summary END,
+                        error=CASE WHEN :reset THEN '' ELSE error END,
+                        started_at=CASE WHEN :reset THEN NULL ELSE started_at END,
+                        finished_at=CASE WHEN :reset THEN NULL ELSE finished_at END,
+                        updated_at=clock_timestamp()
+                    WHERE org_id=:org_id AND run_id=:run_id
+                      AND action_id=:action_id
+                    """
+                ),
+                {
+                    "org_id": org,
+                    "run_id": run_id,
+                    "action_id": aid,
+                    "reset": reset,
+                },
+            )
+        return {
+            "ok": True,
+            "updated": True,
+            "run_id": run_id,
+            "previous_status": previous,
+            "retry_ready": reset,
+        }
+
+    _ensure_sqlite_schema()
+    with store._LOCK, store._connect() as conn:
+        row = conn.execute(
+            """
+            SELECT r.input_json, ar.status,
+                   EXISTS (
+                     SELECT 1 FROM openclaw_tool_calls tc
+                     WHERE tc.org_id=ar.org_id AND tc.run_id=ar.run_id
+                       AND tc.action_id=ar.action_id
+                   ) AS has_tool_calls
+            FROM openclaw_action_runs ar
+            JOIN openclaw_runs r
+              ON r.org_id=ar.org_id AND r.run_id=ar.run_id
+            WHERE ar.org_id=? AND ar.run_id=? AND ar.action_id=?
+            """,
+            (org, run_id, aid),
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "missing": True}
+        previous = str(row["status"] or "")
+        payload, error, changed = update_payload(
+            row["input_json"], previous, bool(row["has_tool_calls"])
+        )
+        if payload is None:
+            return {"ok": False, "error": error, "conflict": True}
+        if not changed:
+            return {
+                "ok": True,
+                "updated": False,
+                "run_id": run_id,
+                "previous_status": previous,
+            }
+        reset = previous in ("needs_attention", "failed")
+        conn.execute(
+            """
+            UPDATE openclaw_runs
+            SET input_json=?,
+                status=CASE WHEN ? THEN 'queued' ELSE status END,
+                error=CASE WHEN ? THEN '' ELSE error END,
+                finished_at=CASE WHEN ? THEN NULL ELSE finished_at END,
+                updated_at=?
+            WHERE org_id=? AND run_id=?
+            """,
+            (
+                _json_dumps(payload), reset, reset, reset, _now(), org, run_id,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE openclaw_action_runs
+            SET status=CASE WHEN ? THEN 'queued' ELSE status END,
+                result_summary=CASE WHEN ? THEN '' ELSE result_summary END,
+                error=CASE WHEN ? THEN '' ELSE error END,
+                started_at=CASE WHEN ? THEN NULL ELSE started_at END,
+                finished_at=CASE WHEN ? THEN NULL ELSE finished_at END,
+                updated_at=?
+            WHERE org_id=? AND run_id=? AND action_id=?
+            """,
+            (
+                reset, reset, reset, reset, reset, _now(), org, run_id, aid,
+            ),
+        )
+    return {
+        "ok": True,
+        "updated": True,
+        "run_id": run_id,
+        "previous_status": previous,
+        "retry_ready": reset,
+    }
+
+
+def reconcile_failed_actions(org_id: str, action_ids: list[str]) -> int:
+    """Mirror terminal OpenClaw failures into the canonical Action status."""
+    org = str(org_id or "").strip()
+    ids = [aid for aid in dict.fromkeys(str(v or "").strip() for v in action_ids) if aid]
+    if not org or not ids:
+        return 0
+    if _pg(org):
+        params = {"org_id": org}
+        marks: list[str] = []
+        for index, aid in enumerate(ids):
+            key = f"action_{index}"
+            params[key] = aid
+            marks.append(f":{key}")
+        engine = control_plane._get_engine()
+        with engine.begin() as conn:
+            control_plane._set_org(conn, org)
+            rows = _pg_fetchall(
+                conn,
+                f"""
+                SELECT DISTINCT ON (ar.action_id)
+                       ar.action_id, ar.status, ar.error,
+                       ar.result_summary, r.error AS run_error
+                FROM openclaw_action_runs ar
+                JOIN openclaw_runs r
+                  ON r.org_id=ar.org_id AND r.run_id=ar.run_id
+                WHERE ar.org_id=:org_id
+                  AND ar.action_id IN ({", ".join(marks)})
+                  AND ar.status IN ('needs_attention', 'failed')
+                ORDER BY ar.action_id, ar.created_at DESC
+                """,
+                params,
+            )
+    else:
+        _ensure_sqlite_schema()
+        marks = ",".join("?" * len(ids))
+        with store._LOCK, store._connect() as conn:
+            rows = [
+                dict(row)
+                for row in conn.execute(
+                    f"""
+                    SELECT ar.action_id, ar.status, ar.error,
+                           ar.result_summary, r.error AS run_error,
+                           ar.created_at
+                    FROM openclaw_action_runs ar
+                    JOIN openclaw_runs r
+                      ON r.org_id=ar.org_id AND r.run_id=ar.run_id
+                    WHERE ar.org_id=? AND ar.action_id IN ({marks})
+                      AND ar.status IN ('needs_attention', 'failed')
+                    ORDER BY ar.action_id, ar.created_at DESC
+                    """,
+                    [org, *ids],
+                ).fetchall()
+            ]
+        newest: dict[str, dict] = {}
+        for row in rows:
+            newest.setdefault(str(row.get("action_id") or ""), row)
+        rows = list(newest.values())
+    settled = 0
+    for row in rows:
+        code = str(row.get("error") or "")
+        if code.startswith("missing_params"):
+            continue
+        detail = str(
+            row.get("run_error")
+            or row.get("result_summary")
+            or code
+            or "OpenClaw execution did not complete"
+        )[:300]
+        if ledger.set_action_status(
+            str(row.get("action_id") or ""),
+            "failed",
+            detail,
+            org_id=org,
+            receipt={"kind": "OpenClaw", "route": "openclaw", "error": code},
+        ):
+            settled += 1
+    return settled
+
+
 def approve_action(
     org_id: str,
     action_id: str,
@@ -1486,19 +1792,20 @@ def approve_action(
     laura_user_id: str = "",
     record_decision: bool = False,
     start: bool = True,
+    canonical_typed: dict | None = None,
 ) -> dict:
     """Claim one explicitly approved action and hand only that action to OpenClaw."""
     org = str(org_id or "").strip()
     aid = str(action_id or "").strip()
     if not gates.experiment_enabled_for_org(org):
         return {"ok": False, "error": "OpenClaw is disabled for this workspace"}
+    refreshed: dict = {}
+    if canonical_typed:
+        refreshed = refresh_action_spec_for_approval(org, aid, canonical_typed)
     context = _run_action_context(org, aid)
     if context is None:
         return {"ok": False, "error": "OpenClaw action run was not found"}
     run_id = str(context.get("run_id") or "")
-    canonical = _action_for_run(org, run_id, aid)
-    if canonical is None:
-        return {"ok": False, "error": "Action is not part of this OpenClaw run"}
     current_status = str(context.get("status") or "")
     if current_status in ("running", "done"):
         return {
@@ -1510,6 +1817,16 @@ def approve_action(
         }
     if current_status == "cancelled":
         return {"ok": False, "error": "Action was cancelled"}
+    if refreshed.get("conflict"):
+        return {
+            "ok": False,
+            "error": str(
+                refreshed.get("error") or "OpenClaw action could not be refreshed"
+            ),
+        }
+    canonical = _action_for_run(org, run_id, aid)
+    if canonical is None:
+        return {"ok": False, "error": "Action is not part of this OpenClaw run"}
     typed = canonical.get("typed") if isinstance(canonical.get("typed"), dict) else {}
     action_type = str(typed.get("type") or "")
     missing = action_plane.missing_params(typed)

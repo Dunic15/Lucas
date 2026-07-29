@@ -21,9 +21,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app import auth, executor, ledger, store
+from app import auth, control_plane, executor, ledger, store
 from app.actions import outbox_pg
 from app.config import settings
+from app.openclaw import runtime as openclaw_runtime
 
 
 @pytest.fixture
@@ -431,6 +432,111 @@ def test_notion_repair_falls_back_for_legacy_action_without_durable_row(
     assert store.get_action_typed_override(
         user["org_id"], blocked_id
     ) is None
+
+
+def test_legacy_uuid_status_falls_back_when_durable_row_is_missing(
+    client, monkeypatch
+):
+    user = _login(client)
+    action_id = "legacy-status-without-pg-row"
+    monkeypatch.setattr(control_plane, "enabled", lambda: True)
+    monkeypatch.setattr(control_plane, "is_durable_org", lambda _org: True)
+    monkeypatch.setattr(
+        outbox_pg, "set_action_status", lambda *_args, **_kwargs: False
+    )
+    monkeypatch.setattr(outbox_pg, "get_action", lambda *_args: None)
+    monkeypatch.setattr(outbox_pg, "action_statuses", lambda *_args: {})
+    monkeypatch.setattr(outbox_pg, "resolve_action", lambda *_args: False)
+
+    assert ledger.set_action_status(
+        action_id,
+        "failed",
+        "OpenClaw found no executable canonical tools",
+        org_id=user["org_id"],
+    )
+    status = ledger.action_statuses(
+        [action_id], org_id=user["org_id"]
+    )[action_id]
+    assert status["status"] == "failed"
+    assert "no executable" in status["detail"]
+
+
+def test_openclaw_approval_refreshes_repaired_spec_in_stale_run(
+    client, monkeypatch
+):
+    user = _login(client)
+    action_id = "legacy-openclaw-stale-run"
+    bot_id = "bot_legacy_openclaw_stale_run"
+    wrong = {"type": "", "args": {}}
+    repaired = {
+        "type": "notion.create_page",
+        "args": {"title": "Meeting work", "content": "Summary\n\n- [ ] Next"},
+    }
+    action = {
+        "item": "Create a Notion page called Meeting work",
+        "owner": "Cedric",
+        "action_id": action_id,
+        "typed": wrong,
+    }
+    artifact = {
+        "summary": "Create the meeting summary page in Notion.",
+        "actions": [action],
+        "checklist": [action],
+        "org_id": user["org_id"],
+        "avatar_id": "cedric",
+        "meeting_url": "https://meet.google.com/openclaw-stale-run",
+    }
+    store.save_artifact(bot_id, artifact, org_id=user["org_id"])
+    monkeypatch.setattr(settings, "openclaw_experiment_enabled", True)
+    monkeypatch.setattr(settings, "openclaw_experiment_orgs", "*")
+    created = openclaw_runtime.create_meeting_run(
+        bot_id, artifact, user["org_id"], auto_start=False
+    )
+    run_id = created["run"]["run_id"]
+    store.set_action_typed_override(user["org_id"], action_id, repaired)
+    openclaw_runtime._set_action_run(
+        user["org_id"],
+        run_id,
+        action_id,
+        "needs_attention",
+        error="no_executable_tools",
+    )
+    openclaw_runtime._update_run(
+        user["org_id"],
+        run_id,
+        "needs_attention",
+        error="OpenClaw found no executable canonical tools.",
+    )
+    ledger.set_action_status(
+        action_id, "executing", "executing via openclaw", org_id=user["org_id"]
+    )
+    assert ledger.record_action_decision(
+        action_id,
+        org_id=user["org_id"],
+        decision="approve",
+        decided_via="dashboard",
+        laura_user_id=user["user_id"],
+        previous_status="proposed",
+        new_status="executing",
+    )
+    started: list[str] = []
+    monkeypatch.setattr(
+        openclaw_runtime,
+        "start_run_async",
+        lambda org, rid: started.append(f"{org}:{rid}"),
+    )
+
+    response = client.post(f"/dashboard/actions/{action_id}/approve")
+
+    assert response.status_code == 200
+    assert response.json()["openclaw"] is True
+    assert started == [f"{user['org_id']}:{run_id}"]
+    run = openclaw_runtime.get_run(user["org_id"], run_id)
+    assert run is not None
+    assert run["input"]["actions"][0]["typed"] == repaired
+    assert openclaw_runtime.run_detail(
+        user["org_id"], run_id
+    )["actions"][0]["status"] == "running"
 
 
 def test_flag_on_soft_failure_records_failed_receipt(client, monkeypatch):

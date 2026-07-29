@@ -497,12 +497,22 @@ def set_action_status(
         return False
     from .. import control_plane
 
-    durable_status = control_plane.enabled()
+    # Keep the historical control-plane routing here: browser/operator tests
+    # and service-owned UUID orgs can have durable Actions even when the org
+    # classifier is not available in that process.
+    durable_plane = control_plane.enabled()
+    durable_status = durable_plane
     if durable_status:
         from . import outbox_pg
 
         if not outbox_pg.set_action_status(org_id, aid, st, detail, receipt):
-            return False
+            # Old meeting artifacts can belong to a durable UUID org without
+            # ever having been indexed into queued_actions. Their execution
+            # claim already falls back to SQLite; status settlement must use
+            # the same authority or these actions remain "executing" forever.
+            if outbox_pg.get_action(org_id, aid) is not None:
+                return False
+            durable_status = False
     try:
         with store._LOCK, store._connect() as conn:
             current = conn.execute(
@@ -522,30 +532,38 @@ def set_action_status(
                      updated_at=excluded.updated_at""",
                 (org_id, aid, st, (detail or "").strip()[:300], time.time()),
             )
+    except sqlite3.OperationalError as exc:
+        # Some control-plane-only workers intentionally have no SQLite ledger
+        # schema. A pre-index status hint keeps the historical no-op behavior;
+        # real legacy artifacts run in the app process, whose store is
+        # initialized and therefore take the fallback above.
+        if durable_plane and "no such table" in str(exc).lower():
+            return False
+        if durable_status:
+            return True
+        raise
     except Exception:
         if durable_status:
             return True
         raise
     outcome = _TERMINAL_STATUS_OUTCOME.get(st)
     if outcome:
-        if durable_status:
-            try:
-                with store._LOCK, store._connect() as conn:
-                    conn.execute(
-                        """UPDATE ledger_items
-                           SET status=?, resolved_at=?, resolution_detail=?
-                           WHERE action_id=? AND org_id=? AND status='open'""",
-                        (
-                            outcome, time.time(), (detail or "").strip()[:300],
-                            aid, org_id,
-                        ),
-                    )
-            except Exception:
-                pass  # durable PG success never depends on the local cache
-        else:
-            resolve_by_action_id(
-                aid, "", outcome, (detail or "").strip()[:300], org_id=org_id
-            )
+        try:
+            with store._LOCK, store._connect() as conn:
+                conn.execute(
+                    """UPDATE ledger_items
+                       SET status=?, resolved_at=?, resolution_detail=?
+                       WHERE action_id=? AND org_id=? AND status='open'""",
+                    (
+                        outcome, time.time(), (detail or "").strip()[:300],
+                        aid, org_id,
+                    ),
+                )
+        except Exception:
+            if not durable_status:
+                raise
+            # A durable PG success never depends on the local cache.
+            pass
     if st == "done":
         # [M8] release: this action completing may unblock approvals parked on
         # it. THE weld point — every completion path lands here (native executor
@@ -973,7 +991,32 @@ def action_statuses(
     if control_plane.enabled() and control_plane.is_durable_org(org_id):
         from . import outbox_pg
 
-        return outbox_pg.action_statuses(org_id, ids)
+        durable = outbox_pg.action_statuses(org_id, ids)
+        missing = [aid for aid in ids if aid not in durable]
+        if not missing:
+            return durable
+        # Legacy actions in durable orgs may exist only in the environment's
+        # SQLite artifact archive. Merge only IDs absent from Postgres so a
+        # durable row always wins over a stale local mirror.
+        marks = ",".join("?" * len(missing))
+        with store._LOCK, store._connect() as conn:
+            rows = conn.execute(
+                f"""SELECT action_id, status, detail, updated_at
+                    FROM action_status
+                    WHERE org_id=? AND action_id IN ({marks})""",
+                [org_id, *missing],
+            ).fetchall()
+        durable.update(
+            {
+                r["action_id"]: {
+                    "status": r["status"],
+                    "detail": r["detail"],
+                    "updated_at": r["updated_at"],
+                }
+                for r in rows
+            }
+        )
+        return durable
     marks = ",".join("?" * len(ids))
     with store._LOCK, store._connect() as conn:
         rows = conn.execute(
