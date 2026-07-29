@@ -3452,6 +3452,64 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     typed = await run_in_threadpool(
         lambda: ledger.effective_typed(aid, action.get("typed"), org_id=org)
     )
+    # A rejected action is CLOSED. Read this before any retyping/self-heal so
+    # a stale malformed card can never be rewritten after rejection.
+    current = await run_in_threadpool(ledger.action_statuses, [aid], org_id=org)
+    _cur_status = (current.get(aid) or {}).get("status") or ""
+    if _cur_status in ("rejected", "withdrawn"):
+        return JSONResponse(
+            {"error": f"action was {_cur_status}", "action_id": aid,
+             "status": current.get(aid)},
+            status_code=409, headers=_NO_STORE,
+        )
+
+    # Narrow migration for the live Notion regression: an explicit
+    # "create a Notion page ... summary of this meeting" card was persisted as
+    # calendar.create_event because the word "meeting" won classification.
+    # Repair both old cards and fast-click untyped cards before the approval
+    # gate. The app-specific parser requires an explicit Notion page title, so
+    # unrelated calendar actions cannot be reclassified.
+    if _cur_status not in ("done", "failed", "executing"):
+        try:
+            from ..brain import engine as _notion_engine
+
+            _notion_item = str(
+                action.get("action") or action.get("item") or ""
+            )
+            _notion_brief = await run_in_threadpool(
+                _artifact_brief_for_action, org, aid
+            )
+            _notion_typed = _notion_engine.notion_create_spec(
+                {
+                    "item": _notion_item,
+                    "owner": str(action.get("owner") or ""),
+                    "deadline": str(action.get("deadline") or ""),
+                },
+                _notion_brief,
+            )
+            if (
+                _notion_typed
+                and str((typed or {}).get("type") or "") != "notion.create_page"
+            ):
+                typed = _notion_typed
+                await run_in_threadpool(
+                    lambda: store.set_action_typed_override(org, aid, typed)
+                )
+                if _cur_status == "needs_details":
+                    await run_in_threadpool(
+                        ledger.set_action_status,
+                        aid,
+                        "proposed",
+                        "reclassified as notion.create_page",
+                        org_id=org,
+                    )
+                    current = await run_in_threadpool(
+                        ledger.action_statuses, [aid], org_id=org
+                    )
+                    _cur_status = (current.get(aid) or {}).get("status") or ""
+        except Exception:  # noqa: BLE001 — narrow repair is best-effort
+            pass
+
     # Late typing (live 2026-07-21, action e974c47c): an action approved
     # BEFORE finalize typed it (fast click, or typing raced a deploy) reached
     # execution with no spec → legacy 'cedric' route → an org without the
@@ -3509,18 +3567,6 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
                 typed = _cand
         except Exception:  # noqa: BLE001 — typing is opportunistic, never a gate
             pass
-
-    # A rejected action is CLOSED. The monotonic status guard would keep the
-    # chip 'rejected' anyway, but without this check the executor below would
-    # still RUN the action — refuse outright; un-rejecting isn't a thing.
-    current = await run_in_threadpool(ledger.action_statuses, [aid], org_id=org)
-    _cur_status = (current.get(aid) or {}).get("status") or ""
-    if _cur_status in ("rejected", "withdrawn"):
-        return JSONResponse(
-            {"error": f"action was {_cur_status}", "action_id": aid,
-             "status": current.get(aid)},
-            status_code=409, headers=_NO_STORE,
-        )
 
     # Still untyped after the retype rescue? If the ask is CLEARLY a calendar /
     # email / task action, synthesise a minimal typed spec AND PERSIST it, so

@@ -197,15 +197,34 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
                 )
                 _skip = {"slack", "asana", "google",
                          "gmail", "google_calendar", "google_drive"}
+                try:
+                    _accounts = pipedream_client.list_accounts(org_id)
+                except Exception:  # noqa: BLE001 — catalog truth is best-effort
+                    _accounts = []
+                _connected = {
+                    str(a.get("app") or "")
+                    for a in _accounts
+                    if isinstance(a, dict) and a.get("app") and a.get("id")
+                }
                 for slug in sorted(
                     k for k, v in caps.items() if v and k not in _skip
                 )[:4]:
-                    if not pipedream_executor.app_connected(org_id, slug):
+                    if slug not in _connected and not (
+                        not _accounts
+                        and pipedream_executor.app_connected(org_id, slug)
+                    ):
                         continue
-                    names = [
-                        str(a.get("name") or "")
-                        for a in pipedream_client.list_actions(slug, limit=5)
-                    ]
+                    try:
+                        names = [
+                            str(a.get("name") or "")
+                            for a in pipedream_client.list_actions(slug, limit=5)
+                        ]
+                    except Exception:  # noqa: BLE001 — paid catalog is optional
+                        names = []
+                    # Deterministic proxy actions (notably Notion create_page)
+                    # remain usable when Pipedream's separately priced action
+                    # catalog is unavailable.
+                    names = [n for n in names if n] or family_verbs(slug)
                     pd_apps.append(
                         {"slug": slug, "actions": [n for n in names if n][:4]}
                     )
@@ -214,7 +233,7 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
                 # Notion, but I'm not enabled for it" instead of denying the
                 # tool exists (truthfulness gap seen live 2026-07-21).
                 enabled_slugs = {a["slug"] for a in pd_apps}
-                for acct in pipedream_client.list_accounts(org_id):
+                for acct in _accounts:
                     slug = str(acct.get("app") or "")
                     if (slug and slug not in _skip
                             and slug not in enabled_slugs
@@ -471,10 +490,23 @@ def search(reg: dict | None, query: str) -> str:
         hits.append(
             "Slack — connected to this org; runs through Cedric after owner approval"
         )
+    for app in reg.get("pd_apps") or []:
+        slug = str(app.get("slug") or "")
+        hay = " ".join([slug, *[str(a) for a in app.get("actions") or []]]).lower()
+        if q in hay:
+            hits.append(
+                f"{slug.replace('_', ' ').title()} — connected and enabled; "
+                "captured, then runs after owner approval"
+            )
+    for slug in reg.get("pd_org_available") or []:
+        if q in str(slug).lower():
+            hits.append(
+                f"{str(slug).replace('_', ' ').title()} — connected for this "
+                "workspace but NOT enabled for this avatar"
+            )
     if not hits:
         return (
             f"no tool matches '{query}'. If asked to do this, capture it with "
             "queue_action and say it will need the owner to set the tool up."
         )
     return "; ".join(hits[:5])
-

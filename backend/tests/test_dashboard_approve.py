@@ -282,6 +282,59 @@ def test_untyped_calendar_ask_goes_to_needs_details_not_tracked(
     assert typed and typed["type"] == "calendar.create_event"
 
 
+def test_approve_repairs_live_notion_card_misclassified_as_calendar(
+    client, monkeypatch
+):
+    """The exact live regression can self-heal without asking for a date/time."""
+    user = _login(client)
+    item = (
+        'Create a Notion page called "OpenClaw meeting workflow test", add a '
+        "short summary of this meeting, and include a checklist with the next "
+        "three steps. Subject: Meeting summary. Body: stale email-shaped data."
+    )
+    wrong = {"type": "calendar.create_event", "args": {}}
+    action = {
+        "item": item,
+        "owner": "Cedric",
+        "action_id": "notion-live-regression",
+        "typed": wrong,
+    }
+    store.save_artifact(
+        "bot_notion_live_regression",
+        {
+            "summary": "The team agreed to test the Notion approval workflow.",
+            "actions": [action],
+            "checklist": [action],
+            "org_id": user["org_id"],
+            "avatar_id": "cedric",
+            "meeting_url": "https://meet.google.com/notion-test",
+        },
+        org_id=user["org_id"],
+    )
+    ledger.set_action_status(
+        "notion-live-regression",
+        "needs_details",
+        "missing: title, start, end",
+        org_id=user["org_id"],
+    )
+    # This test covers classification/persistence only. Keep execution local
+    # and inert after the approval decision.
+    monkeypatch.setattr(executor, "effective_route", lambda *_a, **_k: "manual")
+
+    response = client.post(
+        "/dashboard/actions/notion-live-regression/approve"
+    )
+    assert response.status_code == 200
+    typed = ledger.effective_typed(
+        "notion-live-regression", wrong, org_id=user["org_id"]
+    )
+    assert typed["type"] == "notion.create_page"
+    assert typed["args"]["title"] == "OpenClaw meeting workflow test"
+    assert typed["args"]["content"].count("- [ ]") == 3
+    assert "stale email-shaped data" not in typed["args"]["content"]
+    assert "start" not in typed["args"] and "end" not in typed["args"]
+
+
 def test_flag_on_soft_failure_records_failed_receipt(client, monkeypatch):
     monkeypatch.setattr(settings, "native_executor", True)
     user = _login(client)

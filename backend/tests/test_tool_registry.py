@@ -96,6 +96,46 @@ def test_assemble_not_linked_sentinel(fresh_store, monkeypatch):
     assert reg["cedric"]["not_linked"] is True
 
 
+def test_enabled_notion_survives_unavailable_paid_action_catalog(
+    fresh_store, monkeypatch
+):
+    """Notion's deterministic proxy action does not require Connect's catalog."""
+    from app import pipedream_client, pipedream_executor
+
+    class _Cedric:
+        id = "cedric"
+        drive_folder_id = ""
+
+        @staticmethod
+        def uses_native_tool(_name):
+            return False
+
+    fresh_store.set_avatar_capability(
+        "cedric", "notion", True, org_id="org-x"
+    )
+    monkeypatch.setattr(pipedream_executor, "enabled", lambda: True)
+    monkeypatch.setattr(
+        pipedream_executor,
+        "app_connected",
+        lambda _org, app: app == "notion",
+    )
+    monkeypatch.setattr(
+        pipedream_client,
+        "list_accounts",
+        lambda _org: [{"id": "acct-synthetic", "app": "notion"}],
+    )
+
+    def unavailable_catalog(*_args, **_kwargs):
+        raise RuntimeError("catalog plan unavailable")
+
+    monkeypatch.setattr(pipedream_client, "list_actions", unavailable_catalog)
+    reg = tool_registry.assemble("org-x", _Cedric())
+    assert reg["pd_apps"] == [
+        {"slug": "notion", "actions": ["create page"]}
+    ]
+    assert "Notion (connected via Pipedream" in tool_registry.brief(reg)
+
+
 # ── brief ──────────────────────────────────────────────────────────────
 
 def test_brief_is_capped_and_honest(fresh_store, monkeypatch):

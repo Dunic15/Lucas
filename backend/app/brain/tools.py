@@ -170,6 +170,7 @@ _KIND_TASK = re.compile(
     r"\b(task|ticket|issue|attivit\w+|asana|jira|backlog|board)\b", re.IGNORECASE
 )
 _KIND_EMAIL = re.compile(r"\b(e-?mail\w*|gmail)\b", re.IGNORECASE)
+_KIND_NOTION = re.compile(r"\bnotion\b", re.IGNORECASE)
 _KIND_CALENDAR = re.compile(
     r"\b(meeting|riunione|call|invite|invito|appointment|appuntamento"
     r"|calendar|calendario|event[oi]?)\b",
@@ -226,12 +227,17 @@ _DETAIL_INVITE_CLOCK = re.compile(
 
 
 def ask_kind(text: str) -> str:
-    """What family of thing was asked for: task | email | calendar | other."""
+    """What family was asked for: task | email | notion | calendar | other."""
     t = text or ""
     if _KIND_TASK.search(t):
         return "task"
     if _KIND_EMAIL.search(t):
         return "email"
+    # "Create a Notion page with a summary of this meeting" names a meeting as
+    # CONTENT, not as a calendar write. App-specific intent must win before the
+    # broad meeting/call calendar vocabulary.
+    if _KIND_NOTION.search(t):
+        return "notion"
     if _KIND_CALENDAR.search(t):
         return "calendar"
     return "other"
@@ -312,6 +318,11 @@ def missing_action_details(text: str, kind: str = "task") -> list[str]:
         elif not (has_date and has_clock):
             missing.append("invite_when")
         return missing  # one combined ask, not slot-by-slot (2026-07-22 feel)
+    if kind == "notion":
+        # Notion's approval card validates the page title. Live voice should
+        # capture the complete request immediately instead of asking for a
+        # calendar time merely because the page contains a meeting summary.
+        return missing
     if kind == "other":
         # Free-form asks (Slack messages, "remind me to…") have no slot
         # schema — never interrogate, just confirm and queue.
@@ -1272,4 +1283,3 @@ def dispatch_for(session, *, live: bool = True):
         return dispatch(name, args, session=session, live=live)
 
     return _dispatch
-

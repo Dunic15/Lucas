@@ -2273,9 +2273,9 @@ def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dic
 # is NOT passed here — only already-distilled fields flow — so this adds no PII
 # surface beyond what post_meeting already sent to the post model.
 TYPED_ACTION_SYSTEM = """You convert a meeting's action items into typed, \
-executable specs, but ONLY when an item unambiguously maps to one of the two \
-supported actions AND every required field is present in the SOURCE TEXT given \
-for that item. The two types:
+executable specs, but ONLY when an item unambiguously maps to a supported \
+action AND every required field is present in the SOURCE TEXT given for that \
+item. The supported types:
 
 - "calendar.create_event": schedule a meeting/call. Required args: title, \
 start, end (both full ISO-8601 date-times, e.g. 2026-08-01T15:00:00). \
@@ -2284,6 +2284,11 @@ resolve a date/time the item itself states ("Friday 3pm"); if the item states \
 no concrete time, DO NOT emit this type.
 - "email.send": send an email. Required args: to (one or more email addresses \
 that LITERALLY appear in the item's source text), subject. body is optional.
+- "notion.create_page": create a page in the connected Notion workspace. \
+Required args: title. Optional args: parent (omit it to use the workspace) and \
+content. Use this ONLY when the item explicitly names Notion and asks to create \
+a page. When it asks for a meeting summary or checklist, content may be composed \
+only from the meeting summary supplied below; never invent meeting facts.
 
 HARD RULES (precision over recall):
 - NEVER invent a recipient, an email address, a date, or a time. Use ONLY \
@@ -2408,6 +2413,7 @@ _CAL_INTENT_RE = re.compile(
 CALENDAR_CREATE = "calendar.create_event"
 EMAIL_SEND = "email.send"
 ASANA_CREATE = "asana.create_task"
+NOTION_CREATE = "notion.create_page"
 _ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 
 # ── typing discipline (owner 2026-07-24: "non tornare sempre ad Asana") ──
@@ -2530,6 +2536,74 @@ def _action_source(action: dict, brief: str = "") -> str:
     return "\n".join(p for p in parts if p)
 
 
+_NOTION_CREATE_RE = re.compile(
+    r"(?:\b(?:create|make|add|open|draft|crea\w*|aggiung\w*)\b"
+    r".{0,45}\bnotion\b.{0,35}\b(?:page|pagina)\b"
+    r"|\bnotion\b.{0,35}\b(?:create|make|add|open|draft|crea\w*|aggiung\w*)\b"
+    r".{0,35}\b(?:page|pagina)\b"
+    r"|\b(?:create|make|add|open|draft|crea\w*|aggiung\w*)\b"
+    r".{0,35}\b(?:page|pagina)\b.{0,25}\b(?:in|on|su)\s+notion\b)",
+    re.IGNORECASE | re.DOTALL,
+)
+_NOTION_TITLE_RE = re.compile(
+    r"\b(?:page|pagina)\s+(?:called|named|titled|intitolat[ao]|chiamat[ao])"
+    r"\s+(?:"
+    r"(?P<quote>[\"'])(?P<quoted>.+?)(?P=quote)"
+    r"|(?P<plain>.+?)(?="
+    r",\s*(?:(?:and|then)\s+)*(?:add|include|put|with|populate)\b"
+    r"|\s+(?:(?:and|then)\s+)+(?:add|include|put|populate)\b"
+    r"|[.!?]|$))",
+    re.IGNORECASE | re.DOTALL,
+)
+_NOTION_SUMMARY_CUE = re.compile(
+    r"\b(?:summary|recap|meeting\s+notes?|riassunto|resoconto)\b",
+    re.IGNORECASE,
+)
+_NOTION_CHECKLIST_CUE = re.compile(
+    r"\b(?:checklist|next\s+(?:three|3)\s+steps?|prossim[ei]\s+"
+    r"(?:tre|3)\s+pass[io])\b",
+    re.IGNORECASE,
+)
+
+
+def notion_create_spec(action: dict, brief: str = "") -> dict | None:
+    """Deterministically type an explicit Notion page-create request.
+
+    "Summary of this meeting" describes page content, not a calendar write.
+    The title must be stated after called/named/titled; an ambiguous request
+    remains untyped for the approval form.
+    """
+    item = str(action.get("item") or action.get("action") or "")
+    if not _NOTION_CREATE_RE.search(item):
+        return None
+    match = _NOTION_TITLE_RE.search(item)
+    if not match:
+        return None
+    title = " ".join(
+        str(match.group("quoted") or match.group("plain") or "").split()
+    ).strip(" .'\"")[:200]
+    if not title:
+        return None
+
+    content = ""
+    summary = " ".join((brief or "").split()).strip()
+    if summary and _NOTION_SUMMARY_CUE.search(item):
+        content = f"Meeting summary\n\n{summary[:6000]}"
+    if _NOTION_CHECKLIST_CUE.search(item):
+        checklist = (
+            "Next steps\n\n"
+            "- [ ] Review and confirm the meeting summary\n"
+            "- [ ] Assign owners and due dates to the agreed follow-ups\n"
+            "- [ ] Share the completed page with the relevant participants"
+        )
+        content = f"{content}\n\n{checklist}".strip()
+
+    args = {"title": title}
+    if content:
+        args["content"] = content[:10000]
+    return {"type": NOTION_CREATE, "args": args}
+
+
 def _sanitize_typed(typed: object, action: dict, brief: str = "",
                     pd_apps: dict | None = None) -> dict | None:
     """Validate + normalise one model/stub-proposed typed spec against its
@@ -2568,6 +2642,19 @@ def _sanitize_typed(typed: object, action: dict, brief: str = "",
     # A clarify answer was folded into the action text ("… Body: Hi"); split it
     # out so each label routes to its real arg and the base text stays clean.
     item_base, item_fold = _fold_label_fields(str(action.get("item") or ""))
+    if t == NOTION_CREATE:
+        # Ignore model-invented Notion destinations/content. The deterministic
+        # parser proves the intent and title from the action itself; content is
+        # built only from the distilled meeting summary.
+        clean = notion_create_spec(action, brief)
+        if clean is None:
+            return None
+        parent = str(args.get("parent") or "").strip()[:300]
+        if parent and (
+            parent.lower() == "workspace" or parent.lower() in source.lower()
+        ):
+            clean["args"]["parent"] = parent
+        return clean
     if t == EMAIL_SEND:
         to = _grounded_emails(args.get("to"), source)
         if not to:  # the recipient may have arrived via a clarify fold
@@ -2702,6 +2789,10 @@ def _stub_type_actions(
     for i, a in indexed:
         item = str(a.get("item") or "")
         source = _action_source(a, brief)
+        notion = notion_create_spec(a, brief)
+        if notion:
+            out[i] = notion
+            continue
         if _EMAIL_INTENT_RE.search(item):
             emails = _grounded_emails(source, source)
             if emails:
@@ -2935,8 +3026,7 @@ def headline_actions(
 _SUMMARY_EMAIL_RE = re.compile(
     r"\b(?:e-?mail|send|manda|invia)\b.{0,60}?"
     r"\b(?:full\s+)?(?:summary|recap|riassunto|resoconto)\b"
-    r".{0,30}\b(?:meeting|call|incontro|riunione)\b"
-    r"|\b(?:summary|recap)\s+of\s+(?:this|the)\s+(?:meeting|call)\b",
+    r".{0,30}\b(?:meeting|call|incontro|riunione)\b",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -3013,6 +3103,12 @@ def type_actions(
                 indexed, brief, prov, allow_asana=allow_asana, pd_apps=pd_apps
             )
         )
+        # App-specific intent wins over a model that sees "meeting" in the
+        # requested page content and incorrectly emits Calendar.
+        for i, action in indexed:
+            notion = notion_create_spec(action, brief)
+            if notion and (mapping.get(i) or {}).get("type") != NOTION_CREATE:
+                mapping[i] = notion
     except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
         print(f"[type_actions] skipped ({type(e).__name__})", flush=True)
         return src
@@ -3172,4 +3268,3 @@ def _parse_json(text: str) -> dict:
         return json.loads(text)
     except json.JSONDecodeError:
         return {"answer": text, "confidence": 0.0, "sufficient_context": False}
-
