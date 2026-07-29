@@ -26,6 +26,7 @@ import uuid
 from typing import Any, Optional
 
 from .. import store
+from . import action_plane
 from .action_plane import ACTION_STATUSES
 from ..config import settings
 from ..meeting_state import humanize_step
@@ -872,6 +873,54 @@ def update_action_params(
     merged = {**base, "args": {**(base.get("args") or {}), **args}}
     store.set_action_typed_override(org_id, aid, merged)
     return merged
+
+
+def replace_action_typed(
+    action_id: str,
+    typed: dict,
+    *,
+    org_id: str = DEMO_ORG_ID,
+    detail: str = "",
+) -> Optional[dict]:
+    """Persist a trusted server-side reclassification before approval.
+
+    Durable actions are rewritten atomically under their Postgres row lock.
+    Key-free actions use the typed overlay. Both refuse terminal/executing
+    actions and move a now-complete needs-details action back to proposed.
+    """
+    aid = (action_id or "").strip()
+    action_type = str((typed or {}).get("type") or "").strip()
+    if not aid or not action_type:
+        return None
+    normalized = {"type": action_type, "args": dict(typed.get("args") or {})}
+    if _durable_actions(org_id):
+        from . import outbox_pg
+
+        updated = outbox_pg.replace_action_typed(
+            org_id, aid, normalized, detail=detail
+        )
+        if updated is not None:
+            return updated
+        return None
+    current = (
+        action_statuses([aid], org_id=org_id).get(aid) or {}
+    ).get("status") or ""
+    if current in _TERMINAL_STATUS_OUTCOME or current == "executing":
+        return None
+    store.set_action_typed_override(org_id, aid, normalized)
+    if current in ("", "needs_details"):
+        next_status = (
+            "needs_details"
+            if action_plane.missing_params(normalized)
+            else "proposed"
+        )
+        set_action_status(
+            aid,
+            next_status,
+            detail or f"reclassified as {action_type}",
+            org_id=org_id,
+        )
+    return normalized
 
 
 def effective_typed(

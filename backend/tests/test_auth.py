@@ -481,6 +481,25 @@ def test_first_party_origin_classification(monkeypatch):
     assert auth._first_party_origin("") is False
 
 
+def test_same_origin_allows_exact_local_development_origin(client, google_on):
+    user = store.upsert_user("local-dev@example.com")
+    client.cookies.set(auth.COOKIE_NAME, auth.make_cookie(user["user_id"]))
+
+    response = client.post(
+        "/auth/logout",
+        headers={"Origin": "http://testserver"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+
+    wrong_port = client.post(
+        "/auth/logout",
+        headers={"Origin": "http://testserver:8765"},
+        follow_redirects=False,
+    )
+    assert wrong_port.status_code == 403
+
+
 # ── review fixes: gate on write endpoints, allowlist, robustness ───────
 
 def test_anonymous_cannot_start_when_login_enabled(client, google_on):

@@ -448,7 +448,27 @@ def _same_origin(request: Request) -> bool:
     same-origin request."""
     origin = request.headers.get("origin", "")
     if origin:
-        return _first_party_origin(origin)
+        if _first_party_origin(origin):
+            return True
+        # Local development uses http://localhost or 127.0.0.1, which must not
+        # be added to the production first-party allowlist. Accept it only when
+        # it is the exact origin currently serving this request.
+        try:
+            parsed = urlsplit(origin.rstrip("/"))
+            request_port = request.url.port or (
+                443 if request.url.scheme == "https" else 80
+            )
+            origin_port = parsed.port or (
+                443 if parsed.scheme.lower() == "https" else 80
+            )
+            return (
+                parsed.scheme.lower() == request.url.scheme.lower()
+                and (parsed.hostname or "").lower()
+                == (request.url.hostname or "").lower()
+                and origin_port == request_port
+            )
+        except ValueError:
+            return False
     # No Origin header (older browsers / same-origin navigations): fall back to
     # the fetch-metadata site signal when present.
     site = request.headers.get("sec-fetch-site", "")

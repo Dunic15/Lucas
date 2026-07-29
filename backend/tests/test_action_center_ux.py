@@ -278,6 +278,10 @@ def test_dashboard_chat_is_chat_only_and_tasks_stay_in_action_center():
     assert "<h1>Action Center</h1>" in html
     assert "<h1>Chat</h1>" in html
     assert "If you want to know what I can do, just ask me." in html
+    assert 'id="oc-new-chat"' in html
+    assert 'id="oc-thread-list"' in html
+    assert "Refine in Chat" in html
+    assert "createOpenClawChat({workflow_id:workflowId})" in html
     assert "Tasks ready to work on" not in html
     assert "oc-task-list" not in html
     assert "renderOpenClawTasks" not in html

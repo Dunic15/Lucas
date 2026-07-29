@@ -721,15 +721,27 @@ def _canonical_action_view(org: str, action_id: str) -> dict | None:
         return None
     action, acting_avatar = found if found is not None else ({}, "")
     typed = ledger.effective_typed(action_id, action.get("typed"), org_id=org)
-    schema = action_plane.params_schema(typed)
-    missing = action_plane.missing_params(typed)
     srow = (ledger.action_statuses([action_id], org_id=org)
             .get(action_id) or {})
     status = str(
         (durable or {}).get("execution_status") or srow.get("status") or ""
     )
     if not status:
-        status = "needs_details" if (typed and missing) else "proposed"
+        status = (
+            "needs_details"
+            if (typed and action_plane.missing_params(typed))
+            else "proposed"
+        )
+    # The list, detail view and approval door all use this same narrow repair.
+    # It is explicit-Notion-only and refuses every terminal/executing action.
+    from . import dashboard
+
+    typed, status = dashboard._repair_misclassified_notion_action(
+        org, action_id, action, typed, status
+    )
+    durable = ledger.get_durable_action(action_id, org_id=org)
+    schema = action_plane.params_schema(typed)
+    missing = action_plane.missing_params(typed)
     receipt = (durable or {}).get("receipt_json")
     logs = (durable or {}).get("logs_json")
     # The card's "Runs through" label must match what actually executes. A card
@@ -786,6 +798,11 @@ def _canonical_action_view(org: str, action_id: str) -> dict | None:
         "correlation_id": str(action.get("correlation_id") or action_id),
         "proposal": action.get("proposal"),
         "dependencies": [str(x) for x in (action.get("dependencies") or [])],
+        "workflow_id": str(action.get("workflow_id") or ""),
+        "workflow_title": str(action.get("workflow_title") or ""),
+        "workflow_summary": str(action.get("workflow_summary") or ""),
+        "workflow_step_count": int(action.get("workflow_step_count") or 0),
+        "source_surface": str(action.get("source_surface") or ""),
         "updated_at": srow.get("updated_at")
         or (durable or {}).get("execution_updated_at"),
     }

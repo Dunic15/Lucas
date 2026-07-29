@@ -392,6 +392,16 @@ def _action_entry(action) -> dict:
             # link"), kept for the record — the UI renders it as a note with
             # no approve/details affordances (owner 2026-07-24).
             "human_followup": bool(action.get("human_followup")),
+            # Chat-created workflow provenance. The full definition stays in
+            # the org-scoped archive; the list gets only enough metadata to
+            # explain the group and open a server-seeded refinement chat.
+            "workflow_id": str(action.get("workflow_id") or "")[:128],
+            "workflow_title": str(action.get("workflow_title") or "")[:200],
+            "workflow_summary": str(action.get("workflow_summary") or "")[:600],
+            "workflow_step_count": int(
+                action.get("workflow_step_count") or 0
+            ),
+            "source_surface": str(action.get("source_surface") or "")[:32],
         }
     return {"action_id": "", "item": str(action)[:300], "owner": "",
             "unassigned": False, "gap": "", "done": False, "typed": False,
@@ -400,7 +410,9 @@ def _action_entry(action) -> dict:
             "needed": _action_needed({"item": str(action)}),
             "source": "explicit", "goal": "", "inferred_from": "",
             "card_state": _card_state({"item": str(action)}),
-            "family": _action_family({"item": str(action)})}
+            "family": _action_family({"item": str(action)}),
+            "workflow_id": "", "workflow_title": "", "workflow_summary": "",
+            "workflow_step_count": 0, "source_surface": ""}
 
 
 def _delivered(
@@ -467,6 +479,10 @@ def _meeting_row(row: dict, include_transcript: bool = False) -> dict:
         "avatar_id": art.get("avatar_id", ""),
         "org_id": art.get("org_id", ""),
         "platform": _platform(art.get("meeting_url", "")),
+        "source_surface": str(art.get("source_surface") or "")[:32],
+        "workflow_title": str(
+            (art.get("openclaw_workflow") or {}).get("title") or ""
+        )[:200],
         "meeting_type": art.get("meeting_type", ""),
         "duration_seconds": int(art.get("duration_seconds") or 0),
         "readiness_score": readiness,
@@ -759,11 +775,22 @@ def dashboard_summary(request: Request) -> JSONResponse:
         store.get_org_pref(caller_org or settings.demo_org_id, "show_transcripts")
         == "1"
     )
-    meetings = [
-        _meeting_row(r, include_transcript=show_transcripts)
+    visible_rows = [
+        r
         for r in artifact_rows
         if visible(str((r.get("artifact") or {}).get("org_id") or ""))
         and _user_attended(user, r.get("artifact") or {})
+    ]
+    # A narrow read migration repairs the live Cedric regression before the
+    # summary card is shaped. Without this, the canonical detail endpoint knew
+    # the action was Notion but the list still rendered its stale Calendar
+    # status and could only offer "Add details".
+    visible_rows = _project_repaired_notion_rows(
+        visible_rows, caller_org or settings.demo_org_id
+    )
+    meetings = [
+        _meeting_row(r, include_transcript=show_transcripts)
+        for r in visible_rows
     ]
 
     # Execution provenance: decorate each action with the state the brain
@@ -3326,6 +3353,91 @@ def _artifact_brief_for_action(caller_org: str, action_id: str) -> str:
     return ""
 
 
+def _repair_misclassified_notion_action(
+    org: str,
+    action_id: str,
+    action: dict,
+    typed: dict | None,
+    status: str,
+    *,
+    artifact_brief: str = "",
+) -> tuple[dict | None, str]:
+    """Repair the explicit Notion-page regression on every canonical read."""
+    current = str(status or "")
+    if current in (
+        "approved", "executing", "done", "failed", "rejected", "withdrawn"
+    ):
+        return typed, current
+    if str((typed or {}).get("type") or "") == "notion.create_page":
+        return typed, current
+    try:
+        from ..brain import engine as notion_engine
+
+        candidate = notion_engine.notion_create_spec(
+            {
+                "item": str(action.get("action") or action.get("item") or ""),
+                "owner": str(action.get("owner") or ""),
+                "deadline": str(
+                    action.get("deadline") or action.get("due") or ""
+                ),
+            },
+            artifact_brief or _artifact_brief_for_action(org, action_id),
+        )
+    except Exception:  # noqa: BLE001 - a read migration never breaks the list
+        candidate = None
+    if not candidate:
+        return typed, current
+    detail = "reclassified as notion.create_page"
+    updated = ledger.replace_action_typed(
+        action_id, candidate, org_id=org, detail=detail
+    )
+    if updated is None:
+        return typed, current
+    if current in ("", "needs_details") and not action_plane.missing_params(
+        updated
+    ):
+        current = "proposed"
+    return updated, current
+
+
+def _project_repaired_notion_rows(rows: list[dict], org: str) -> list[dict]:
+    """Overlay repaired Notion specs into summary rows without mutating archives."""
+    from . import org_api
+
+    projected: list[dict] = []
+    for row in rows:
+        artifact = row.get("artifact") or {}
+        changed = False
+        actions: list = []
+        for raw in artifact.get("actions") or []:
+            action = raw
+            if isinstance(raw, dict):
+                text = str(raw.get("action") or raw.get("item") or "").lower()
+                action_id = str(raw.get("action_id") or "")
+                if action_id and "notion" in text and "page" in text:
+                    try:
+                        view = org_api._canonical_action_view(org, action_id)
+                    except Exception:  # noqa: BLE001 - best-effort read repair
+                        view = None
+                    if view and view.get("tool") == "notion.create_page":
+                        action = {
+                            **raw,
+                            "typed": {
+                                "type": "notion.create_page",
+                                "args": dict(view.get("params") or {}),
+                            },
+                        }
+                        changed = True
+            actions.append(action)
+        if changed:
+            projected.append(
+                {**row, "artifact": {**artifact, "actions": actions}}
+            )
+        else:
+            projected.append(row)
+    return projected
+
+
 def _find_org_action(
     caller_org: str, action_id: str, user: dict | None = None
 ) -> tuple[dict, str] | None:
@@ -3463,52 +3575,17 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             status_code=409, headers=_NO_STORE,
         )
 
-    # Narrow migration for the live Notion regression: an explicit
-    # "create a Notion page ... summary of this meeting" card was persisted as
-    # calendar.create_event because the word "meeting" won classification.
     # Repair both old cards and fast-click untyped cards before the approval
-    # gate. The app-specific parser requires an explicit Notion page title, so
-    # unrelated calendar actions cannot be reclassified.
-    if _cur_status not in ("done", "failed", "executing"):
-        try:
-            from ..brain import engine as _notion_engine
-
-            _notion_item = str(
-                action.get("action") or action.get("item") or ""
-            )
-            _notion_brief = await run_in_threadpool(
-                _artifact_brief_for_action, org, aid
-            )
-            _notion_typed = _notion_engine.notion_create_spec(
-                {
-                    "item": _notion_item,
-                    "owner": str(action.get("owner") or ""),
-                    "deadline": str(action.get("deadline") or ""),
-                },
-                _notion_brief,
-            )
-            if (
-                _notion_typed
-                and str((typed or {}).get("type") or "") != "notion.create_page"
-            ):
-                typed = _notion_typed
-                await run_in_threadpool(
-                    lambda: store.set_action_typed_override(org, aid, typed)
-                )
-                if _cur_status == "needs_details":
-                    await run_in_threadpool(
-                        ledger.set_action_status,
-                        aid,
-                        "proposed",
-                        "reclassified as notion.create_page",
-                        org_id=org,
-                    )
-                    current = await run_in_threadpool(
-                        ledger.action_statuses, [aid], org_id=org
-                    )
-                    _cur_status = (current.get(aid) or {}).get("status") or ""
-        except Exception:  # noqa: BLE001 — narrow repair is best-effort
-            pass
+    # gate. The same helper runs on canonical reads so the list and this door
+    # cannot disagree.
+    typed, _cur_status = await run_in_threadpool(
+        _repair_misclassified_notion_action,
+        org,
+        aid,
+        action,
+        typed,
+        _cur_status,
+    )
 
     # Late typing (live 2026-07-21, action e974c47c): an action approved
     # BEFORE finalize typed it (fast click, or typing raced a deploy) reached

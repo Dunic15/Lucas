@@ -495,6 +495,125 @@ def test_dashboard_openclaw_runs_endpoint_reports_demo_org(active_openclaw):
     assert body["runs"] == []
 
 
+def test_openclaw_chat_threads_are_separate_and_org_scoped(
+    active_openclaw, monkeypatch
+):
+    monkeypatch.setattr(settings, "openclaw_experiment_orgs", "*")
+    first = runtime.create_chat_thread(active_openclaw)
+    second = runtime.create_chat_thread(active_openclaw)
+    assert first is not None and second is not None
+    assert first["thread_id"] != second["thread_id"]
+
+    runtime.add_chat_thread_message(
+        active_openclaw, first["thread_id"], "user", "First conversation"
+    )
+    runtime.add_chat_thread_message(
+        active_openclaw, second["thread_id"], "user", "Second conversation"
+    )
+
+    first_messages = runtime.list_chat_thread_messages(
+        active_openclaw, first["thread_id"]
+    )
+    second_messages = runtime.list_chat_thread_messages(
+        active_openclaw, second["thread_id"]
+    )
+    assert [message["text"] for message in first_messages] == [
+        runtime.CHAT_GREETING,
+        "First conversation",
+    ]
+    assert [message["text"] for message in second_messages] == [
+        runtime.CHAT_GREETING,
+        "Second conversation",
+    ]
+    assert runtime.get_chat_thread(
+        "00000000-0000-0000-0000-000000000999", first["thread_id"]
+    ) is None
+
+
+def test_openclaw_chat_falls_back_when_postgres_tables_are_unavailable(
+    active_openclaw, monkeypatch
+):
+    probes: list[str] = []
+
+    class _Result:
+        @staticmethod
+        def scalar_one():
+            return False
+
+    class _Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, _statement):
+            probes.append("schema")
+            return _Result()
+
+    class _Engine:
+        @staticmethod
+        def connect():
+            return _Connection()
+
+    monkeypatch.setattr(runtime, "_CHAT_PG_SCHEMA_READY", None)
+    monkeypatch.setattr(runtime, "_pg", lambda _org: True)
+    monkeypatch.setattr(
+        runtime.control_plane, "_get_engine", lambda: _Engine()
+    )
+
+    assert runtime._chat_pg(active_openclaw) is False
+    assert runtime._chat_pg(active_openclaw) is False
+    assert probes == ["schema"]
+
+
+def test_dashboard_chat_endpoint_persists_thread_history(
+    active_openclaw, monkeypatch
+):
+    client = TestClient(main_module.app)
+    monkeypatch.setattr(
+        runtime,
+        "chat",
+        lambda org, message, **kwargs: {
+            "ok": True,
+            "reply": f"Planned for {org}: {message}",
+            "workflow": None,
+        },
+    )
+
+    created = client.post(
+        "/dashboard/openclaw/chats",
+        json={"meeting_id": "bot_context"},
+    )
+    assert created.status_code == 200
+    thread = created.json()["thread"]
+
+    answered = client.post(
+        "/dashboard/openclaw/chat",
+        json={
+            "thread_id": thread["thread_id"],
+            "message": "Draft a Notion workflow",
+            "meeting_id": "bot_context",
+        },
+    )
+    assert answered.status_code == 200
+    assert answered.json()["thread"]["title"] == "Draft a Notion workflow"
+
+    detail = client.get(
+        f"/dashboard/openclaw/chats/{thread['thread_id']}"
+    ).json()["thread"]
+    assert detail["meeting_id"] == "bot_context"
+    assert [message["role"] for message in detail["messages"]] == [
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assert detail["messages"][0]["text"] == runtime.CHAT_GREETING
+    assert detail["messages"][-1]["text"].endswith(
+        "Draft a Notion workflow"
+    )
+
+
 def test_openclaw_chat_answers_from_distilled_meeting_context_only(
     active_openclaw, monkeypatch
 ):
@@ -888,12 +1007,63 @@ def test_chat_workflow_starts_only_after_explicit_user_action(
         [action_id], org_id=active_openclaw
     )[action_id]
     assert canonical["status"] == "executing"
+    replay = runtime.approve_action(
+        active_openclaw,
+        action_id,
+        decided_via="dashboard",
+        laura_user_id="test-user",
+        record_decision=True,
+    )
+    assert replay["ok"] is True
+    assert replay["replay"] is True
+    assert replay["status"] == "running"
+    assert starts == [(active_openclaw, result["run_id"])]
+    assert ledger.action_statuses(
+        [action_id], org_id=active_openclaw
+    )[action_id]["status"] == "executing"
     assert (
         ledger.get_action_decision(action_id, org_id=active_openclaw)[
             "decided_via"
         ]
         == "openclaw_chat"
     )
+    workflow_id = result["workflow_id"]
+    artifact = store.get_artifact(workflow_id, org_id=active_openclaw)
+    assert artifact is not None
+    assert artifact["source_surface"] == "openclaw_chat"
+    assert artifact["actions"][0]["workflow_id"] == workflow_id
+    monkeypatch.setattr(
+        runtime, "_connected_action_context", lambda _org: ([], {})
+    )
+    context = runtime.saved_chat_workflow_context(
+        active_openclaw, workflow_id
+    )
+    assert context is not None
+    assert context["workflow"]["title"] == "Send the approved recap"
+    assert context["workflow"]["steps"][0]["action_type"] == "email.send"
+    assert runtime.saved_chat_workflow_context(
+        "00000000-0000-0000-0000-000000000999", workflow_id
+    ) is None
+    refinement = runtime.create_chat_thread(
+        active_openclaw, seed_workflow=context["workflow"]
+    )
+    assert refinement is not None
+    seeded = runtime.list_chat_thread_messages(
+        active_openclaw, refinement["thread_id"]
+    )
+    assert seeded[0]["workflow"]["title"] == "Send the approved recap"
+    assert "from Action Center" in seeded[0]["text"]
+    summary = TestClient(main_module.app).get("/dashboard/summary").json()
+    workflow_meeting = next(
+        meeting
+        for meeting in summary["meetings"]
+        if meeting["bot_id"] == workflow_id
+    )
+    assert workflow_meeting["source_surface"] == "openclaw_chat"
+    card = workflow_meeting["actions"][0]
+    assert card["workflow_id"] == workflow_id
+    assert card["workflow_title"] == "Send the approved recap"
+    assert card["workflow_step_count"] == 1
 
 
 def test_direct_meeting_runs_openclaw_once_end_to_end(

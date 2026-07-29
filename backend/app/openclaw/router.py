@@ -95,6 +95,73 @@ async def dashboard_openclaw_replay(request: Request) -> JSONResponse:
     return JSONResponse(result, status_code=status_code, headers=_NO_STORE)
 
 
+@router.get("/dashboard/openclaw/chats")
+async def dashboard_openclaw_chats(request: Request, limit: int = 50) -> JSONResponse:
+    err, org = await _dashboard_org(request)
+    if err:
+        return err
+    threads = await run_in_threadpool(runtime.list_chat_threads, org, limit)
+    return JSONResponse({"ok": True, "threads": threads}, headers=_NO_STORE)
+
+
+@router.post("/dashboard/openclaw/chats")
+async def dashboard_openclaw_chat_create(request: Request) -> JSONResponse:
+    err, org = await _dashboard_org(request)
+    if err:
+        return err
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "same-origin required"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    body = body if isinstance(body, dict) else {}
+    workflow_id = str(body.get("workflow_id") or "").strip()
+    seed = None
+    meeting_id = str(body.get("meeting_id") or "")
+    title = str(body.get("title") or "")
+    if workflow_id:
+        context = await run_in_threadpool(
+            runtime.saved_chat_workflow_context, org, workflow_id
+        )
+        if context is None:
+            return JSONResponse(
+                {"error": "unknown workflow for this workspace"},
+                status_code=404,
+            )
+        seed = context["workflow"]
+        meeting_id = str(context.get("meeting_id") or meeting_id)
+    thread = await run_in_threadpool(
+        runtime.create_chat_thread,
+        org,
+        meeting_id=meeting_id,
+        title=title,
+        seed_workflow=seed,
+    )
+    if thread is None:
+        return JSONResponse(
+            {"error": "OpenClaw chat is unavailable"}, status_code=400
+        )
+    return JSONResponse({"ok": True, "thread": thread}, headers=_NO_STORE)
+
+
+@router.get("/dashboard/openclaw/chats/{thread_id}")
+async def dashboard_openclaw_chat_detail(
+    thread_id: str, request: Request
+) -> JSONResponse:
+    err, org = await _dashboard_org(request)
+    if err:
+        return err
+    thread = await run_in_threadpool(
+        runtime.chat_thread_detail, org, thread_id
+    )
+    if thread is None:
+        return JSONResponse(
+            {"error": "unknown chat for this workspace"}, status_code=404
+        )
+    return JSONResponse({"ok": True, "thread": thread}, headers=_NO_STORE)
+
+
 @router.post("/dashboard/openclaw/chat")
 async def dashboard_openclaw_chat(request: Request) -> JSONResponse:
     err, org = await _dashboard_org(request)
@@ -110,14 +177,55 @@ async def dashboard_openclaw_chat(request: Request) -> JSONResponse:
     message = str(body.get("message") or "").strip()
     if not message:
         return JSONResponse({"error": "message is required"}, status_code=400)
+    thread_id = str(body.get("thread_id") or "").strip()
+    thread = None
     history = body.get("history") if isinstance(body.get("history"), list) else []
+    meeting_id = str(body.get("meeting_id") or "")
+    if thread_id:
+        thread = await run_in_threadpool(
+            runtime.get_chat_thread, org, thread_id
+        )
+        if thread is None:
+            return JSONResponse(
+                {"error": "unknown chat for this workspace"}, status_code=404
+            )
+        history = await run_in_threadpool(
+            runtime.chat_thread_history, org, thread_id, 8
+        )
+        if "meeting_id" not in body:
+            meeting_id = str(thread.get("meeting_id") or "")
+        stored = await run_in_threadpool(
+            runtime.add_chat_thread_message,
+            org,
+            thread_id,
+            "user",
+            message,
+            meeting_id=meeting_id,
+        )
+        if stored is None:
+            return JSONResponse(
+                {"error": "unknown chat for this workspace"}, status_code=404
+            )
     result = await run_in_threadpool(
         runtime.chat,
         org,
         message,
-        meeting_id=str(body.get("meeting_id") or ""),
+        meeting_id=meeting_id,
         history=history,
+        thread_id=thread_id,
     )
+    if thread_id and result.get("ok"):
+        await run_in_threadpool(
+            runtime.add_chat_thread_message,
+            org,
+            thread_id,
+            "assistant",
+            str(result.get("reply") or "I prepared the result."),
+            workflow=result.get("workflow"),
+        )
+        result["thread"] = await run_in_threadpool(
+            runtime.get_chat_thread, org, thread_id
+        )
     return JSONResponse(
         result,
         status_code=200 if result.get("ok") else 400,
@@ -141,11 +249,24 @@ async def dashboard_openclaw_workflow_start(request: Request) -> JSONResponse:
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     body = body if isinstance(body, dict) else {}
     workflow = body.get("workflow") if isinstance(body.get("workflow"), dict) else {}
+    source_thread_id = str(body.get("thread_id") or "").strip()
+    source_meeting_id = ""
+    if source_thread_id:
+        thread = await run_in_threadpool(
+            runtime.get_chat_thread, org, source_thread_id
+        )
+        if thread is None:
+            return JSONResponse(
+                {"error": "unknown chat for this workspace"}, status_code=404
+            )
+        source_meeting_id = str(thread.get("meeting_id") or "")
     result = await run_in_threadpool(
         runtime.start_chat_workflow,
         org,
         workflow,
         laura_user_id=str(user.get("user_id") or ""),
+        source_thread_id=source_thread_id,
+        source_meeting_id=source_meeting_id,
     )
     return JSONResponse(
         result,
