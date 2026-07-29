@@ -739,6 +739,14 @@ def _canonical_action_view(org: str, action_id: str) -> dict | None:
     typed, status = dashboard._repair_misclassified_notion_action(
         org, action_id, action, typed, status
     )
+    from ..openclaw import runtime as openclaw_runtime
+
+    openclaw_runtime.reconcile_failed_actions(org, [action_id])
+    reconciled = (
+        ledger.action_statuses([action_id], org_id=org).get(action_id) or {}
+    )
+    if reconciled.get("status"):
+        status = str(reconciled["status"])
     durable = ledger.get_durable_action(action_id, org_id=org)
     schema = action_plane.params_schema(typed)
     missing = action_plane.missing_params(typed)

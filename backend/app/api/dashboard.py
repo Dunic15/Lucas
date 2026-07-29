@@ -802,6 +802,14 @@ def dashboard_summary(request: Request) -> JSONResponse:
 
     action_reconcile.maybe_reconcile(caller_org or settings.demo_org_id)
     all_ids = [a["action_id"] for m in meetings for a in m["actions"] if a["action_id"]]
+    if openclaw_gates.experiment_enabled_for_org(
+        caller_org or settings.demo_org_id
+    ):
+        from ..openclaw import runtime as openclaw_runtime
+
+        openclaw_runtime.reconcile_failed_actions(
+            caller_org or settings.demo_org_id, all_ids
+        )
     statuses = ledger.action_statuses(
         all_ids, org_id=caller_org or settings.demo_org_id
     )
@@ -3564,6 +3572,15 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
     typed = await run_in_threadpool(
         lambda: ledger.effective_typed(aid, action.get("typed"), org_id=org)
     )
+    if openclaw_gates.experiment_enabled_for_org(org):
+        from ..openclaw import runtime as openclaw_runtime
+
+        # A terminal OpenClaw run is authoritative evidence that an old
+        # key-free action is no longer executing. Mirror it before deciding
+        # whether this explicit click is a retry.
+        await run_in_threadpool(
+            openclaw_runtime.reconcile_failed_actions, org, [aid]
+        )
     # A rejected action is CLOSED. Read this before any retyping/self-heal so
     # a stale malformed card can never be rewritten after rejection.
     current = await run_in_threadpool(ledger.action_statuses, [aid], org_id=org)
@@ -3806,6 +3823,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
             decided_via="dashboard",
             laura_user_id=str(user.get("user_id") or ""),
             record_decision=False,
+            canonical_typed=typed,
         )
         if not started.get("ok") and started.get("error") == (
             "OpenClaw action run was not found"
@@ -3828,6 +3846,7 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
                     decided_via="dashboard",
                     laura_user_id=str(user.get("user_id") or ""),
                     record_decision=False,
+                    canonical_typed=typed,
                 )
         if not started.get("ok"):
             await run_in_threadpool(

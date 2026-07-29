@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import control_plane, ledger, outbox, outbox_pg, store, tools  # noqa: E402
 from app.cedric import callback, integration  # noqa: E402
 from app.config import settings  # noqa: E402
+from app.openclaw import runtime as openclaw_runtime  # noqa: E402
 
 pytestmark = pytest.mark.pg
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -182,6 +183,50 @@ def _enqueue(org: str, bot: str, key: str) -> int:
 def _due_after_settle(offset: float = 1.0) -> float:
     """Clock safely beyond the intentional live-action settle fence."""
     return time.time() + outbox._ACTION_SETTLE_SECONDS + offset
+
+
+def test_openclaw_refreshes_stale_action_spec_in_postgres(cp, monkeypatch):
+    org = _org(cp, "openclaw-refresh")
+    action_id = "oc-pg-stale-spec"
+    monkeypatch.setattr(settings, "openclaw_experiment_enabled", True)
+    monkeypatch.setattr(settings, "openclaw_experiment_orgs", org)
+    artifact = {
+        "summary": "Create a Notion recap.",
+        "actions": [
+            {
+                "action_id": action_id,
+                "item": "Create the Notion meeting page",
+                "typed": {"type": "", "args": {}},
+            }
+        ],
+        "avatar_id": "cedric",
+        "org_id": org,
+    }
+    created = openclaw_runtime.create_meeting_run(
+        "bot-pg-stale-spec", artifact, org, auto_start=False
+    )
+    run_id = created["run"]["run_id"]
+    openclaw_runtime._set_action_run(
+        org, run_id, action_id, "needs_attention", error="no_executable_tools"
+    )
+    openclaw_runtime._update_run(
+        org, run_id, "needs_attention", error="No executable tools"
+    )
+    repaired = {
+        "type": "notion.create_page",
+        "args": {"title": "Meeting recap", "content": "Summary"},
+    }
+
+    refreshed = openclaw_runtime.refresh_action_spec_for_approval(
+        org, action_id, repaired
+    )
+
+    assert refreshed["updated"] is True
+    assert refreshed["retry_ready"] is True
+    run = openclaw_runtime.get_run(org, run_id)
+    assert run is not None
+    assert run["status"] == "queued"
+    assert run["input"]["actions"][0]["typed"] == repaired
 
 
 def test_runtime_role_grants_and_force_rls(cp, pg):
