@@ -182,14 +182,20 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
                 "verbs": _family_verbs("asana"),
             })
 
-        # Generic Pipedream apps enabled for THIS avatar (Notion / GitHub / Jira
-        # / HubSpot / …), each with a few of its pre-built actions — so the
-        # avatar knows IN CONVERSATION what it can capture, not only at typing
-        # time. Opt-in per avatar (same toggle the approve door enforces).
+        # Generic connected apps for THIS avatar, driven by the accounts the
+        # ORG really connected (app_policy.catalog) rather than by a capability
+        # row that only exists once someone has toggled something. An app the
+        # owner connected a minute ago therefore reaches the meeting brief
+        # immediately, applying the repo-wide capability rule verbatim: default
+        # ON when the org has it connected, blocked only on an explicit False
+        # (store.capability_enabled). The verbs are derived from the executor's
+        # own mapper plus the app registry, so nothing here needs Pipedream's
+        # separately priced pre-built action catalog.
         pd_apps: list[dict] = []
         pd_org_available: list[str] = []
         try:
             from .. import pipedream_client, pipedream_executor
+            from ..actions import app_policy
 
             if pipedream_executor.enabled():
                 caps = store.get_avatar_capabilities(
@@ -197,22 +203,20 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
                 )
                 _skip = {"slack", "asana", "google",
                          "gmail", "google_calendar", "google_drive"}
-                try:
-                    _accounts = pipedream_client.list_accounts(org_id)
-                except Exception:  # noqa: BLE001 — catalog truth is best-effort
-                    _accounts = []
-                _connected = {
-                    str(a.get("app") or "")
-                    for a in _accounts
-                    if isinstance(a, dict) and a.get("app") and a.get("id")
-                }
-                for slug in sorted(
-                    k for k, v in caps.items() if v and k not in _skip
-                )[:4]:
-                    if slug not in _connected and not (
-                        not _accounts
-                        and pipedream_executor.app_connected(org_id, slug)
-                    ):
+                entries = [
+                    entry for entry in app_policy.catalog(org_id)
+                    if entry["slug"] not in _skip
+                ]
+                for entry in entries:
+                    slug = entry["slug"]
+                    if caps.get(slug) is False:
+                        # Explicitly toggled off for this avatar.
+                        if slug not in pd_org_available:
+                            pd_org_available.append(slug)
+                        continue
+                    if len(pd_apps) >= 4:
+                        if slug not in pd_org_available:
+                            pd_org_available.append(slug)
                         continue
                     try:
                         names = [
@@ -221,25 +225,19 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
                         ]
                     except Exception:  # noqa: BLE001 — paid catalog is optional
                         names = []
-                    # Deterministic proxy actions (notably Notion create_page)
-                    # remain usable when Pipedream's separately priced action
-                    # catalog is unavailable.
-                    names = [n for n in names if n] or family_verbs(slug)
-                    pd_apps.append(
-                        {"slug": slug, "actions": [n for n in names if n][:4]}
-                    )
-                # Org-connected apps this avatar is NOT enabled for — surfaced
-                # as their own brief bucket so the avatar can say "your org has
-                # Notion, but I'm not enabled for it" instead of denying the
-                # tool exists (truthfulness gap seen live 2026-07-21).
-                enabled_slugs = {a["slug"] for a in pd_apps}
-                for acct in _accounts:
-                    slug = str(acct.get("app") or "")
-                    if (slug and slug not in _skip
-                            and slug not in enabled_slugs
-                            and not caps.get(slug)
-                            and slug not in pd_org_available):
-                        pd_org_available.append(slug)
+                    names = [n for n in names if n] or app_policy.verbs_for(
+                        slug, entry["deterministic_types"]
+                    ) or family_verbs(slug)
+                    app_entry = {
+                        "slug": slug,
+                        "actions": [n for n in names if n][:4],
+                    }
+                    # Only a REAL limit is carried, so the avatar can say what
+                    # it cannot do instead of promising a generic API call. An
+                    # empty limit says nothing and stays out of the brief.
+                    if entry["limit"]:
+                        app_entry["limit"] = entry["limit"]
+                    pd_apps.append(app_entry)
         except Exception:  # noqa: BLE001 — never block a join over the catalog
             pd_apps = pd_apps or []
         reg["pd_apps"] = pd_apps
