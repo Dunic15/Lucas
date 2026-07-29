@@ -266,3 +266,20 @@ def test_summary_actions_carry_card_state_and_family(client, monkeypatch):
     assert by_id["a1"]["family"] == "gmail"
     assert by_id["a2"]["card_state"] == "ready_to_approve"
     assert by_id["a2"]["family"] == "google_calendar"
+
+
+def test_dashboard_chat_is_chat_only_and_tasks_stay_in_action_center():
+    html = (
+        Path(__file__).resolve().parents[2] / "frontend" / "dashboard.html"
+    ).read_text(encoding="utf-8")
+
+    assert '<span class="ic">✓</span> Action Center' in html
+    assert '<span class="ic">⌁</span> Chat</button>' in html
+    assert "<h1>Action Center</h1>" in html
+    assert "<h1>Chat</h1>" in html
+    assert "If you want to know what I can do, just ask me." in html
+    assert "Tasks ready to work on" not in html
+    assert "oc-task-list" not in html
+    assert "renderOpenClawTasks" not in html
+    assert "OpenClaw Action Center" not in html
+    assert "OpenClaw Chat" not in html

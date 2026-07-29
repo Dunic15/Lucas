@@ -704,19 +704,9 @@
   .ac-open{border:0;background:transparent;color:var(--faint);font-size:.76rem;cursor:pointer;padding:4px 2px;margin-top:6px;}
   .ac-open:hover{color:var(--text);}
 
-  /* ── OpenClaw agent chat ── */
-  .oc-task-head{display:flex;align-items:end;justify-content:space-between;gap:12px;margin-bottom:9px;}
-  .oc-task-head h2{margin:0;font-size:.94rem;}
-  .oc-task-count{font-family:var(--mono);font-size:.68rem;color:var(--faint);}
-  .oc-task-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:16px;}
-  .oc-task{min-height:88px;text-align:left;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel);
-    color:var(--text);padding:11px;cursor:pointer;transition:border-color .16s ease,background .16s ease;}
-  .oc-task:hover,.oc-task:focus-visible{border-color:rgba(126,182,255,.55);background:var(--panel-2);outline:none;}
-  .oc-task .n{font-family:var(--mono);font-size:.62rem;color:var(--faint);margin-bottom:7px;}
-  .oc-task .t{font-size:.8rem;font-weight:620;line-height:1.35;}
-  .oc-task .m{font-size:.68rem;color:var(--faint);margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  /* ── Chat ── */
   .oc-chat{padding:0;overflow:hidden;}
-  .oc-chat-log{height:min(52vh,560px);min-height:340px;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:13px;}
+  .oc-chat-log{height:min(64vh,680px);min-height:420px;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:13px;}
   .oc-msg{display:flex;gap:9px;align-items:flex-start;max-width:88%;}
   .oc-msg.user{align-self:flex-end;flex-direction:row-reverse;}
   .oc-msg .who{width:26px;height:26px;flex:0 0 26px;border:1px solid var(--line);border-radius:50%;display:grid;place-items:center;
@@ -739,9 +729,7 @@
   .oc-inputrow textarea{width:100%;min-height:64px;max-height:160px;resize:vertical;border:1px solid var(--line);border-radius:8px;
     background:var(--panel);color:var(--text);font:inherit;font-size:.86rem;line-height:1.45;padding:10px 12px;}
   .oc-inputrow textarea:focus{outline:none;border-color:rgba(126,182,255,.6);}
-  @media (max-width:980px){.oc-task-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
   @media (max-width:560px){
-    .oc-task-grid{grid-template-columns:1fr;}
     .oc-chat-log{min-height:300px;height:50vh;padding:12px;}
     .oc-msg{max-width:96%;}
     .oc-inputrow{grid-template-columns:1fr;}
@@ -836,8 +824,8 @@
       <button type="button" data-view="avatars"><span class="ic">◐</span> Avatars</button>
       <button type="button" data-view="brain"><span class="ic">◎</span> Brain</button>
       <button type="button" data-view="meetings"><span class="ic">▤</span> Meetings</button>
-      <button type="button" data-view="actions"><span class="ic">✓</span> OpenClaw Action Center<span class="navbadge" id="nav-actions-badge" hidden aria-label="actions needing attention"></span></button>
-      <button type="button" data-view="openclaw"><span class="ic">⌁</span> OpenClaw Chat</button>
+      <button type="button" data-view="actions"><span class="ic">✓</span> Action Center<span class="navbadge" id="nav-actions-badge" hidden aria-label="actions needing attention"></span></button>
+      <button type="button" data-view="openclaw"><span class="ic">⌁</span> Chat</button>
       <button type="button" data-view="connections"><span class="ic">⇄</span> Connections</button>
       <button type="button" data-view="syscheck"><span class="ic">♥</span> System Check</button>
       <button type="button" data-view="settings"><span class="ic">⚙</span> Settings</button>
@@ -994,7 +982,7 @@
          record from GET /dashboard/actions/{id}. Approval/rejection reuse the
          exact same doors the meeting rows use — nothing is duplicated. -->
     <section class="view" id="view-actions" hidden>
-      <div class="head"><div><h1>OpenClaw Action Center</h1><div class="sub">Review meeting actions before OpenClaw runs them</div></div></div>
+      <div class="head"><div><h1>Action Center</h1><div class="sub">Review meeting actions before OpenClaw runs them</div></div></div>
       <div class="acbar">
         <div class="tabs" id="ac-tabs" role="tablist">
           <button class="on" data-ab="attn" role="tab" aria-selected="true">Needs attention</button>
@@ -1008,17 +996,12 @@
       <div class="aclist" id="ac-list"></div>
     </section>
 
-    <!-- OPENCLAW CHAT — agentic planner for meeting questions, product help,
+    <!-- CHAT — agentic planner for meeting questions, product help,
          connected-app tasks and explicit-start multi-step workflows. -->
     <section class="view" id="view-openclaw" hidden>
       <div class="head">
-        <div><h1>OpenClaw Chat</h1><div class="sub">Ask about meetings, Laura, or work across your connected apps</div></div>
+        <div><h1>Chat</h1><div class="sub">Ask about meetings, Laura, or work across your connected apps</div></div>
       </div>
-      <div class="oc-task-head">
-        <h2>Tasks ready to work on</h2>
-        <span class="oc-task-count" id="oc-task-count">0 available</span>
-      </div>
-      <div class="oc-task-grid" id="oc-task-list"></div>
       <div class="panel oc-chat">
         <div class="oc-chat-log" id="oc-chat-log" aria-live="polite"></div>
         <div class="oc-compose">
@@ -1028,7 +1011,7 @@
             </select>
           </div>
           <div class="oc-inputrow">
-            <textarea id="oc-message" maxlength="6000" placeholder="Message OpenClaw…" aria-label="Message OpenClaw"></textarea>
+            <textarea id="oc-message" maxlength="6000" placeholder="Ask anything…" aria-label="Chat message"></textarea>
             <button class="btn primary" id="oc-send" type="button">Send</button>
           </div>
         </div>
@@ -1398,33 +1381,6 @@
       .catch(function(){ $("#billing-state").textContent="Billing temporarily unavailable"; });
   }
   var OC_CHAT_HISTORY=[], OC_CHAT_READY=false;
-  function ocTaskRows(){
-    return actionIndex().filter(function(x){
-      var s=stateOf(x.a);
-      return x.a.action_id && ["ready_to_approve","proposed","needs_details","failed"].indexOf(s)>=0 && !trackedOnly(x.a);
-    }).slice(0,8);
-  }
-  function renderOpenClawTasks(){
-    var box=$("#oc-task-list"), count=$("#oc-task-count"); if(!box) return;
-    var rows=ocTaskRows();
-    if(count) count.textContent=rows.length+" available";
-    box.innerHTML=rows.length?rows.map(function(x,i){
-      var a=x.a,m=x.m;
-      return '<button type="button" class="oc-task" data-octask="'+i+'" data-ocmeeting="'+esc(m.bot_id||"")+'">'+
-        '<div class="n">TASK '+(i+1)+'</div><div class="t">'+esc(a.title||a.item||a.action||"Untitled action")+'</div>'+
-        '<div class="m">'+esc(avNameOf(m.avatar_id))+' · '+esc(fmtWhen(m.saved_at))+'</div></button>';
-    }).join(""):'<div class="empty" style="grid-column:1/-1;padding:18px">No pending meeting tasks.</div>';
-    box.querySelectorAll("[data-octask]").forEach(function(button){
-      button.addEventListener("click",function(){
-        var row=rows[parseInt(button.getAttribute("data-octask"),10)], input=$("#oc-message");
-        if(!row||!input) return;
-        var meeting=button.getAttribute("data-ocmeeting")||"";
-        if($("#oc-meeting")) $("#oc-meeting").value=meeting;
-        input.value="Help me complete this task: "+(row.a.title||row.a.item||row.a.action||"");
-        input.focus();
-      });
-    });
-  }
   function renderOpenClawMeetings(){
     var select=$("#oc-meeting"); if(!select||!DATA) return;
     var previous=select.value;
@@ -1464,10 +1420,10 @@
   }
   function loadOpenClaw(){
     OC_CHAT_HISTORY=OC_CHAT_HISTORY||[];
-    renderOpenClawTasks(); renderOpenClawMeetings();
+    renderOpenClawMeetings();
     if(!OC_CHAT_READY){
       OC_CHAT_READY=true;
-      addOpenClawMessage("assistant","Which task should we work on? I can also answer questions about a meeting or Laura.");
+      addOpenClawMessage("assistant","If you want to know what I can do, just ask me.");
     }
   }
   function sendOpenClawChat(){
