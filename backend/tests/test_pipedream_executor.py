@@ -264,6 +264,18 @@ def test_proxy_planner_read_is_bounded_and_redacted(monkeypatch):
             "json": {
                 "results": [{"id": "page-1", "title": "Roadmap"}],
                 "next_cursor": "must-not-leak",
+                "nested": {
+                    "a": {
+                        "b": {
+                            "c": {
+                                "d": {
+                                    "plain_text": "Exact paragraph content",
+                                    "api_token": "must-not-leak",
+                                }
+                            }
+                        }
+                    }
+                },
             },
         },
     )
@@ -281,6 +293,10 @@ def test_proxy_planner_read_is_bounded_and_redacted(monkeypatch):
     assert result["ok"] is True
     assert result["data"]["results"][0]["id"] == "page-1"
     assert result["data"]["next_cursor"] == "[redacted]"
+    assert result["data"]["nested"]["a"]["b"]["c"]["d"]["plain_text"] == (
+        "Exact paragraph content"
+    )
+    assert result["data"]["nested"]["a"]["b"]["c"]["d"]["api_token"] == "[redacted]"
     blocked = pipedream_executor.read_proxy_for_planner(
         "org-a",
         {

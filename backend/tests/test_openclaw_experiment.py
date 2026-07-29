@@ -600,6 +600,9 @@ def test_openclaw_chat_answers_from_distilled_meeting_context_only(
     assert "Never tell the user you can only perform preconfigured actions" in (
         requests[0]["json"]["instructions"]
     )
+    assert "Never ask the user to paste API responses" in (
+        requests[0]["json"]["instructions"]
+    )
     assert "an omitted parent means a private workspace-root page" in (
         requests[0]["json"]["instructions"]
     )
