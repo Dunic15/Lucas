@@ -540,11 +540,15 @@ def test_openclaw_chat_answers_from_distilled_meeting_context_only(
         runtime,
         "_connected_action_context",
         lambda _org: (
-            ["gmail"],
+            ["gmail", "notion"],
             {
-                "email.send": action_plane.params_schema(
-                    {"type": "email.send"}
-                )
+                "email.send": action_plane.params_schema({"type": "email.send"}),
+                "notion.create_page": action_plane.params_schema(
+                    {"type": "notion.create_page"}
+                ),
+                pipedream_executor.PROXY_ACTION_TYPE: action_plane.params_schema(
+                    {"type": pipedream_executor.PROXY_ACTION_TYPE}
+                ),
             },
         ),
     )
@@ -585,11 +589,20 @@ def test_openclaw_chat_answers_from_distilled_meeting_context_only(
     assert payload["recent_chat"][0]["workflow"]["steps"][0]["args"]["subject"] == "Recap"
     assert payload["raw_transcript_included"] is False
     assert "Customer: Please send the recap." not in requests[0]["json"]["input"]
+    assert "validated deterministic actions" in payload["product"]["connections"]
+    assert "additional API operations" in payload["product"]["execution_paths"]
+    assert "not a runnable Laura/OpenClaw agent" in payload["product"]["agent_objects"]
     planner_tool_names = {
         tool["name"] for tool in requests[0]["json"]["tools"]
     }
     assert planner_tool_names == {"pipedream_proxy_read"}
     assert "Never output a \"pd.<app>.run\" action" in requests[0]["json"]["instructions"]
+    assert "Never tell the user you can only perform preconfigured actions" in (
+        requests[0]["json"]["instructions"]
+    )
+    assert "an omitted parent means a private workspace-root page" in (
+        requests[0]["json"]["instructions"]
+    )
 
 
 def test_chat_discovers_every_healthy_pipedream_account(
@@ -663,6 +676,102 @@ def test_chat_accepts_safe_connected_app_proxy_workflow(
     assert blocked is not None
     assert blocked["ready"] is False
     assert "valid_proxy_request" in blocked["steps"][0]["missing_params"]
+
+
+def test_chat_accepts_complex_notion_proxy_and_deterministic_workflow(
+    active_openclaw, monkeypatch
+):
+    monkeypatch.setattr(
+        runtime,
+        "_connected_action_context",
+        lambda _org: (
+            ["notion"],
+            {
+                "notion.create_page": action_plane.params_schema(
+                    {"type": "notion.create_page"}
+                ),
+                pipedream_executor.PROXY_ACTION_TYPE: action_plane.params_schema(
+                    {"type": pipedream_executor.PROXY_ACTION_TYPE}
+                ),
+            },
+        ),
+    )
+    page_id = "3ab01a33-6260-815f-b72b-c8d24473a51b"
+    workflow = {
+        "title": "Update the QA page and create a follow-up",
+        "steps": [
+            {
+                "description": "Mark the existing QA page with a rocket icon",
+                "action_type": pipedream_executor.PROXY_ACTION_TYPE,
+                "args": {
+                    "app": "notion",
+                    "method": "PATCH",
+                    "url": f"https://api.notion.com/v1/pages/{page_id}",
+                    "body": {"icon": {"type": "emoji", "emoji": "\U0001f680"}},
+                    "headers": {"Notion-Version": "2022-06-28"},
+                },
+            },
+            {
+                "description": "Append the workflow verification note",
+                "action_type": pipedream_executor.PROXY_ACTION_TYPE,
+                "args": {
+                    "app": "notion",
+                    "method": "PATCH",
+                    "url": f"https://api.notion.com/v1/blocks/{page_id}/children",
+                    "body": {
+                        "children": [
+                            {
+                                "object": "block",
+                                "type": "paragraph",
+                                "paragraph": {
+                                    "rich_text": [
+                                        {
+                                            "type": "text",
+                                            "text": {
+                                                "content": "Complex workflow verified."
+                                            },
+                                        }
+                                    ]
+                                },
+                            }
+                        ]
+                    },
+                    "headers": {"Notion-Version": "2022-06-28"},
+                },
+                "depends_on": [1],
+            },
+            {
+                "description": "Create the private follow-up page",
+                "action_type": "notion.create_page",
+                "args": {
+                    "title": "OpenClaw complex workflow QA",
+                    "content": "The connected-app workflow completed.",
+                },
+                "depends_on": [1, 2],
+            },
+        ],
+    }
+
+    normalized = runtime._normalize_chat_workflow(active_openclaw, workflow)
+
+    assert normalized is not None
+    assert normalized["ready"] is True
+    assert [step["action_type"] for step in normalized["steps"]] == [
+        pipedream_executor.PROXY_ACTION_TYPE,
+        pipedream_executor.PROXY_ACTION_TYPE,
+        "notion.create_page",
+    ]
+    assert [step["risk"] for step in normalized["steps"]] == [
+        "high",
+        "high",
+        "low",
+    ]
+    assert [step["depends_on"] for step in normalized["steps"]] == [
+        [],
+        [1],
+        [1, 2],
+    ]
+    assert normalized["steps"][2]["missing_params"] == []
 
 
 def test_chat_accepts_prebuilt_actions_only_for_connected_pipedream_apps(
