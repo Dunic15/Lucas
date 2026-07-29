@@ -3,6 +3,8 @@
 *.env
 .env.*
 !.env.example
+# Non-secret IaC parameter example is committed; the real params.env stays ignored.
+!infra/openclaw-gateway/config/params.example.env
 
 # Python
 __pycache__/

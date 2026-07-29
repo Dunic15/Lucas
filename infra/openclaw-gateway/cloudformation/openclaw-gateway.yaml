@@ -1,0 +1,277 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Laura OpenClaw gateway — DEVELOPMENT, single-tenant POC. One always-on EC2
+  instance running the pinned official OpenClaw image behind a Caddy TLS reverse
+  proxy, with a persistent encrypted EBS data volume, SSM SecureString secrets,
+  least-privilege IAM, a closed-by-default security group, CloudWatch logs with
+  retention, and instance auto-recovery. NOT a hostile multi-tenant deployment —
+  see docs/OPENCLAW-GATEWAY-AWS.md. Never target customer resources with this.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedPattern: "^dev[a-z0-9-]*$"
+    Description: Must start with 'dev'. This stack may only create dev resources.
+  NamePrefix:
+    Type: String
+    Default: laura-openclaw-gw-dev
+    AllowedPattern: "^laura-openclaw-gw-dev[a-z0-9-]*$"
+    Description: >-
+      Resource name prefix. The pattern forbids customer names (laura-backend,
+      frozen/v1) from ever being used here.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the gateway (a dev/default VPC is fine).
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet, in the SAME AZ as AvailabilityZone.
+  AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: AZ for the instance AND the persistent data volume (must match SubnetId).
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    AllowedValues: [t4g.small, t4g.medium, t3.small, t3.medium]
+    Description: ARM (t4g) is cheapest and matches ghcr arm64 images.
+  OpenClawImage:
+    Type: String
+    AllowedPattern: "^ghcr\\.io/openclaw/openclaw(:[A-Za-z0-9._-]+)?@sha256:[a-f0-9]{64}$"
+    Description: >-
+      Pinned OpenClaw image. MUST be an immutable digest
+      (ghcr.io/openclaw/openclaw:<version>@sha256:<64-hex>). Never :latest/:main.
+  DataVolumeSizeGb:
+    Type: Number
+    Default: 20
+    MinValue: 8
+    Description: Size of the persistent gp3 data volume (GiB).
+  DataVolumeSnapshotId:
+    Type: String
+    Default: ""
+    Description: Optional EBS snapshot id to restore the data volume from.
+  LogRetentionInDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 180, 365]
+    Description: CloudWatch log retention.
+  SecretsPathPrefix:
+    Type: String
+    Default: /laura/dev/openclaw
+    AllowedPattern: "^/laura/dev/[A-Za-z0-9/_-]+$"
+    Description: >-
+      SSM path holding the SecureString secrets. The pattern forces a /laura/dev
+      path so this stack can never read the customer /laura/prod/* secrets.
+  AllowedHttpsCidr:
+    Type: String
+    Default: 127.0.0.1/32
+    AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$"
+    Description: >-
+      CIDR allowed to reach 443. Default 127.0.0.1/32 keeps ingress CLOSED (use
+      the Cloudflare Tunnel path, which needs no inbound). Set to a specific
+      admin IP/32 only for the Caddy custom-domain path. Never 0.0.0.0/0.
+  LatestArm64Ami:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Resolved at deploy time; no hardcoded AMI id.
+
+Conditions:
+  HasHttpsIngress: !Not [!Equals [!Ref AllowedHttpsCidr, "127.0.0.1/32"]]
+  HasSnapshot: !Not [!Equals [!Ref DataVolumeSnapshotId, ""]]
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/laura/dev/${NamePrefix}"
+      RetentionInDays: !Ref LogRetentionInDays
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${NamePrefix} — closed by default; egress 443/DNS only"
+      VpcId: !Ref VpcId
+      # Explicit egress only (replaces the permissive default allow-all).
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: LLM API, ghcr image pull, Cloudflare/Let's Encrypt
+        - IpProtocol: udp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+          Description: DNS
+        - IpProtocol: tcp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+          Description: DNS over TCP
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-sg"
+        - Key: laura:environment
+          Value: !Ref EnvironmentName
+
+  # Ingress exists ONLY when an explicit admin CIDR is provided (Caddy path).
+  HttpsIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasHttpsIngress
+    Properties:
+      GroupId: !Ref SecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: !Ref AllowedHttpsCidr
+      Description: HTTPS from the allowlisted admin CIDR (Caddy custom-domain path)
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      # SSM Session Manager for admin access — no SSH port, no key pair.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: read-dev-secrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [ssm:GetParameter, ssm:GetParameters, ssm:GetParametersByPath]
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SecretsPathPrefix}/*"
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents, logs:CreateLogGroup, logs:DescribeLogStreams]
+                Resource:
+                  - !GetAtt LogGroup.Arn
+                  - !Sub "${LogGroup.Arn}:*"
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  DataVolume:
+    Type: AWS::EC2::Volume
+    # Backup on teardown, and never silently destroy the workspace/auth store.
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      Size: !Ref DataVolumeSizeGb
+      VolumeType: gp3
+      Encrypted: true
+      SnapshotId: !If [HasSnapshot, !Ref DataVolumeSnapshotId, !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-data"
+        - Key: laura:environment
+          Value: !Ref EnvironmentName
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestArm64Ami
+      InstanceType: !Ref InstanceType
+      AvailabilityZone: !Ref AvailabilityZone
+      SubnetId: !Ref SubnetId
+      SecurityGroupIds: [!Ref SecurityGroup]
+      IamInstanceProfile: !Ref InstanceProfile
+      Monitoring: true
+      # No KeyName on purpose — admin is via SSM Session Manager only.
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 2
+        InstanceMetadataTags: enabled
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 10
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: !Ref NamePrefix
+        - Key: laura:environment
+          Value: !Ref EnvironmentName
+        # Bootstrap configuration travels as tags (read via IMDS), so the
+        # user-data script stays literal and hardcodes nothing account-specific.
+        - Key: openclaw:image
+          Value: !Ref OpenClawImage
+        - Key: openclaw:secrets-prefix
+          Value: !Ref SecretsPathPrefix
+        - Key: openclaw:log-group
+          Value: !Ref LogGroup
+        - Key: openclaw:data-device
+          Value: /dev/sdf
+      # Injected by scripts/deploy.sh from scripts/user-data.sh (already base64).
+      UserData: "@@USER_DATA_B64@@"
+
+  VolumeAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref Instance
+      VolumeId: !Ref DataVolume
+      Device: /dev/sdf
+
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref Instance
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-eip"
+
+  AutoRecoveryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${NamePrefix}-system-check"
+      AlarmDescription: Recover the instance on a failed EC2 system status check.
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref Instance
+      AlarmActions:
+        - !Sub "arn:${AWS::Partition}:automate:${AWS::Region}:ec2:recover"
+
+Outputs:
+  InstanceId:
+    Value: !Ref Instance
+  PublicIp:
+    Description: Stable Elastic IP — point the dev DNS record here for the Caddy path.
+    Value: !Ref ElasticIp
+  SecurityGroupId:
+    Value: !Ref SecurityGroup
+  DataVolumeId:
+    Value: !Ref DataVolume
+  LogGroupName:
+    Value: !Ref LogGroup
+  HealthCheckHint:
+    Description: After DNS + TLS, smoke test with scripts/smoke.sh.
+    Value: !Sub "https://<OPENCLAW_PUBLIC_HOSTNAME>/healthz  (Laura sets OPENCLAW_GATEWAY_URL to https://<host>)"

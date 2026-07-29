@@ -1,0 +1,25 @@
+{
+	admin off
+	servers {
+		protocols h1 h2 h3
+	}
+}
+# Preferred (custom-domain) front door. OPENCLAW_PUBLIC_HOSTNAME is a dev
+# subdomain the team owns (e.g. openclaw-gw.dev.example.net) that resolves to
+# this instance's Elastic IP. Caddy provisions a publicly-trusted certificate
+# automatically so Laura's httpx client verifies it with no code change.
+{$OPENCLAW_PUBLIC_HOSTNAME} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+	# TLS terminates here; the OpenClaw gateway still enforces the bearer token
+	# on /v1/responses (we deliberately do NOT delegate auth to the proxy).
+	# Automatic HTTPS provisions + renews a publicly-trusted cert for the
+	# hostname above. To receive ACME expiry notices, add `email you@dev-zone`
+	# to the global options block. Never `tls internal` — Laura verifies certs.
+	reverse_proxy gateway:18789
+}

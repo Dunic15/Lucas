@@ -1,0 +1,38 @@
+# Cloudflare Tunnel overlay — the development front door that needs NO inbound
+# port and does NOT touch the customer domain.
+#
+# Use INSTEAD of the Caddy `proxy` service when you cannot (or do not want to)
+# open 443 or create a Route53 record on the customer zone. cloudflared makes
+# only OUTBOUND connections to Cloudflare's edge, so the instance security group
+# can stay fully closed on ingress (AllowedHttpsCidr left at its 127.0.0.1/32
+# default). Cloudflare terminates a publicly-trusted TLS cert at the edge for a
+# NAMED, persistent hostname on a *dev* Cloudflare zone the team controls — the
+# durable, credentialed replacement for the ephemeral trycloudflare URL.
+#
+# Put a Cloudflare Access policy (service token) in front of the hostname for a
+# second authentication factor on top of the OpenClaw bearer token.
+#
+# Usage on the box (the runbook wires this into user-data as an alternative):
+#   docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d
+# The tunnel token is a SecureString at <SecretsPathPrefix>/cloudflared_token,
+# written into /opt/openclaw/gateway.env as TUNNEL_TOKEN — never committed.
+services:
+  proxy:
+    # Disable the Caddy front door; the tunnel replaces it.
+    profiles: ["disabled"]
+  tunnel:
+    image: cloudflare/cloudflared:2026.2.1
+    container_name: openclaw-cloudflared
+    restart: unless-stopped
+    depends_on: [gateway]
+    command: ["tunnel", "--no-autoupdate", "run"]
+    # TUNNEL_TOKEN comes from the root-only gateway.env (SecureString-sourced).
+    env_file: [/opt/openclaw/gateway.env]
+    cap_drop: [NET_RAW, NET_ADMIN]
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_DEFAULT_REGION}
+        awslogs-group: ${LOG_GROUP}
+        awslogs-stream: cloudflared

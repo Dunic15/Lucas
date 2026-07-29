@@ -1,0 +1,61 @@
+# Canonical two-container definition for the OpenClaw dev gateway.
+# The EC2 bootstrap (scripts/user-data.sh) writes a byte-equivalent copy; the
+# security invariants here are asserted by tests/validate_infra.py.
+#
+# Isolation model:
+#   - gateway  -> port 18789 is `expose`d to compose peers only, NEVER published
+#                 to the host, so nothing outside Docker can reach it directly.
+#                 It keeps normal outbound so it can call the LLM API + pull its
+#                 image; inbound protection is "not published" + the closed SG.
+#   - proxy    -> the only service that publishes a host port (443), and reaches
+#                 the gateway by service name on the compose network.
+# The OpenClaw gateway keeps enforcing its bearer token; Caddy only adds TLS.
+name: laura-openclaw-gw-dev
+services:
+  gateway:
+    # Pin to an immutable digest. Set OPENCLAW_IMAGE to
+    # ghcr.io/openclaw/openclaw:<version>@sha256:<digest> — never :latest / :main.
+    image: ${OPENCLAW_IMAGE:?set to a pinned ghcr.io/openclaw/openclaw@sha256 digest}
+    container_name: openclaw-gateway
+    restart: unless-stopped
+    env_file: [/opt/openclaw/gateway.env]
+    expose: ["18789"]
+    volumes:
+      - /opt/openclaw/data/config:/home/node/.openclaw
+      - /opt/openclaw/data/auth:/home/node/.config/openclaw
+    cap_drop: [NET_RAW, NET_ADMIN]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:18789/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_DEFAULT_REGION}
+        awslogs-group: ${LOG_GROUP}
+        awslogs-stream: gateway
+  proxy:
+    # Pin the proxy too; the runbook shows how to append @sha256 for full pinning.
+    image: caddy:2.8.4-alpine
+    container_name: openclaw-caddy
+    restart: unless-stopped
+    depends_on: [gateway]
+    ports:
+      - "443:443"
+      - "443:443/udp"
+    # Only the non-secret hostname — the proxy never sees the LLM key or token.
+    env_file: [/opt/openclaw/proxy.env]
+    volumes:
+      - /opt/openclaw/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /opt/openclaw/data/caddy:/data
+    cap_drop: [NET_RAW, NET_ADMIN]
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_DEFAULT_REGION}
+        awslogs-group: ${LOG_GROUP}
+        awslogs-stream: caddy
