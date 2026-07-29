@@ -120,10 +120,9 @@ def org_connected_apps(org_id: str) -> dict[str, list[str]]:
         from ..actions import app_policy
 
         return {
-            entry["slug"]: [
-                action_type.split(".", 1)[-1].replace("_", " ")
-                for action_type in entry["deterministic_types"]
-            ]
+            entry["slug"]: app_policy.verbs_for(
+                entry["slug"], entry["deterministic_types"]
+            )
             for entry in app_policy.catalog(org)
             if entry.get("slug")
         }
