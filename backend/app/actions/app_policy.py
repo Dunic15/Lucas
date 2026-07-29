@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -32,7 +32,10 @@ from ..config import settings
 from . import app_registry
 
 _RISK_ORDER = ("low", "medium", "high")
-_SPLIT = re.compile(r"[\s,]+")
+# Commas and newlines only — NEVER whitespace: an operation rule carries a
+# space inside it ("github:DELETE *"), so splitting on spaces would silently
+# shred the rule into "github:DELETE" plus a bare "*" that denies everything.
+_SPLIT = re.compile(r"[,\n]+")
 _MAX_BODY_BYTES = 64 * 1024
 _MAX_URL_CHARS = 4000
 
@@ -92,8 +95,16 @@ def _denied(app: str, method: str, path: str) -> str:
     for slug, op in _rules(getattr(settings, "connected_app_deny", "")):
         if slug not in (app, "*"):
             continue
-        if not op or app_registry.operation_matches((op,), method, path):
+        if not op:
             return f"{app} is blocked by this workspace's connected-app policy"
+        if app_registry.operation_matches((op,), method, path):
+            # Name the OPERATION, not just the app: a receipt that says
+            # "github is blocked" when only DELETE is blocked reads as an
+            # outage rather than as the policy doing its job.
+            return (
+                f"{method} {path} is not permitted on {app} by this "
+                "workspace's connected-app policy"
+            )
     return ""
 
 

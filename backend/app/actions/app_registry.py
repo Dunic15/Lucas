@@ -18,7 +18,7 @@ the vendor controls.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from fnmatch import fnmatchcase
 
 from ..config import settings
