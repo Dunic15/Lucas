@@ -488,6 +488,27 @@ class Settings(BaseSettings):
     # (calendar/gmail/drive) always stays native; Slack always stays on Cedric.
     pipedream_executor: bool = False
 
+    # ── Connected-app policy (app/actions/app_registry + app_policy) ──────
+    # The generic connected-app plane is driven by the accounts an org really
+    # connected, bounded by the declarative registry in
+    # ``app/actions/app_registry.py``. These are the operator's controls over
+    # that plane; all three are empty by default, so the built-in table and
+    # "every connected app is in scope" are the defaults.
+    #
+    # CONNECTED_APP_ALLOW — when non-empty, ONLY these slugs may use the generic
+    #   API plane (deterministic adapters are unaffected). "notion, asana"
+    # CONNECTED_APP_DENY — slugs, or slug:"METHOD /path-glob" operations, never
+    #   allowed. "stripe, hubspot:DELETE *"
+    # CONNECTED_APP_REGISTRY_EXTRA — JSON adding/overriding registry rows so a
+    #   new app becomes usable without a deploy:
+    #   {"acme":{"label":"Acme","hosts":["api.acme.com"],"guides":["…"]}}
+    #
+    # Neither knob can grant an exemption from approval: every write through
+    # this plane stops at the approve door regardless of what is configured.
+    connected_app_allow: str = ""
+    connected_app_deny: str = ""
+    connected_app_registry_extra: str = ""
+
     # ── OpenClaw full executor experiment (POC M0-M7) ─────────────────────
     # OFF by default and tenant-allowlisted. An org is active only when BOTH
     # OPENCLAW_EXPERIMENT_ENABLED=true AND its org_id appears in
