@@ -283,3 +283,4 @@ def test_dashboard_chat_is_chat_only_and_tasks_stay_in_action_center():
     assert "renderOpenClawTasks" not in html
     assert "OpenClaw Action Center" not in html
     assert "OpenClaw Chat" not in html
+    assert html.index("var OC_CHAT_HISTORY") < html.index("var _hashView")

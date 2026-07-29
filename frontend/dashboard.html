@@ -1300,6 +1300,7 @@
   }
 
   var DATA=null, filterMt="all";
+  var OC_CHAT_HISTORY=[], OC_CHAT_READY=false;
 
   // Visible top-level navigation: Overview, Avatars, Brain,
   // Meetings, Action Center, OpenClaw, Connections, Settings. "usage" (Plan & billing,
@@ -1380,7 +1381,6 @@
       .then(function(b){ if(b) renderBilling(b); })
       .catch(function(){ $("#billing-state").textContent="Billing temporarily unavailable"; });
   }
-  var OC_CHAT_HISTORY=[], OC_CHAT_READY=false;
   function renderOpenClawMeetings(){
     var select=$("#oc-meeting"); if(!select||!DATA) return;
     var previous=select.value;
