@@ -412,6 +412,15 @@ class Settings(BaseSettings):
     # Rollout: alembic 0012 -> this flag -> upload backfill -> Drive opt-in.
     # Rollback = flag off (migration additive-only).
     data_foundation_enabled: bool = False
+    # Microsoft Graph is Data Foundation connector #1 (M365/SharePoint/OneDrive
+    # documents + Entra ID identities/groups). OFF (default) means the 'graph'
+    # connector kind is refused at create time, no records/identities are
+    # mirrored, and the whole DF plane is byte-identical to today. Needs
+    # DATA_FOUNDATION_ENABLED + LAURA_DATABASE_URL. The real Graph HTTP
+    # transport is credential-gated future work; a connector runs today only
+    # with a network-free deterministic fixture (config_json['graph_fixture']),
+    # exactly like the fake gdrive connector.
+    graph_connector_enabled: bool = False
 
     # ── Company Brain (durable org knowledge — M1) ──
     # Master switch for the durable knowledge plane: org-owned sources,
@@ -431,6 +440,29 @@ class Settings(BaseSettings):
     # extracted text one document may contribute (memory + prompt hygiene).
     knowledge_max_file_bytes: int = 10_000_000
     knowledge_max_extracted_chars: int = 400_000
+
+    # ── Meeting Memory (durable per-org meeting recall) ──
+    # Indexes ONLY distilled finalized-artifact fields (title/date/avatar/
+    # participants/summary/decisions/actions + stable meeting id) — NEVER the
+    # raw transcript — into a searchable per-org index, and exposes a
+    # permission-safe historical search (Chat + a read-only live brain tool).
+    # OFF (default) ⇒ no index write at finalize, no new tool offered, the
+    # key-free demo and existing meetings are byte-identical.
+    meeting_memory_enabled: bool = False
+    meeting_memory_max_results: int = 8
+
+    # ── Pre-meeting context assembler ──
+    # Before an avatar session starts, distills current meeting/calendar
+    # metadata + participants, related prior meetings, open decisions/actions
+    # and ACL-authorized Company Brain documents into the existing memory
+    # brief. OFF (default) ⇒ the assembler is never invoked and session start
+    # is byte-identical. Hard caps + a strict wall-clock budget keep it off the
+    # critical path; it ALWAYS fails open to empty context (a Brain/DB/network
+    # failure never blocks the meeting join or alters the live contract).
+    pre_meeting_context_enabled: bool = False
+    pre_meeting_context_max_items: int = 12
+    pre_meeting_context_max_chars: int = 4000
+    pre_meeting_context_budget_seconds: float = 2.5
     # OpenAI key for EMBEDDING_PROVIDER=openai (text-embedding-3-small at a
     # fixed 512 dims — the recommended durable Company Brain embedder). The
     # key is NEVER exposed to any browser page.

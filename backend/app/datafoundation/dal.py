@@ -27,6 +27,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 
 from .. import control_plane
+from ..config import settings
 from . import envelope as envelope_mod
 
 ORG_SUBJECT = "org"
@@ -55,7 +56,13 @@ def create_connector(
     credential_ref: str = "", trusted_email_issuer: bool = False,
     actor: str = "",
 ) -> Optional[dict[str, Any]]:
-    if kind not in ("upload", "gdrive", "slack", "notion", "crm", "custom"):
+    allowed = {"upload", "gdrive", "slack", "notion", "crm", "custom"}
+    # Graph (connector #1) is admitted only behind its own flag: with it off the
+    # 'graph' kind is refused here even though migration 0024 widened the DB
+    # CHECK, so an off deployment can never create or run a Graph connector.
+    if settings.graph_connector_enabled:
+        allowed.add("graph")
+    if kind not in allowed:
         return None
     engine = _engine()
     with engine.begin() as conn:

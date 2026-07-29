@@ -212,6 +212,12 @@ _REGISTRY: dict[str, Any] = {
 
 
 def get(kind: str):
+    # Graph is registered lazily to keep this module free of the graph import
+    # cycle (graph.py imports SyncBatch/ConnectorNotImplemented from here).
+    if str(kind) == "graph" and "graph" not in _REGISTRY:
+        from . import graph as graph_mod
+
+        _REGISTRY["graph"] = graph_mod.connector()
     connector = _REGISTRY.get(str(kind or ""))
     if connector is None:
         raise ConnectorNotImplemented(f"connector kind {kind!r} is deferred")

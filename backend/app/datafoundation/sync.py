@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from . import connectors as connectors_mod
 from . import dal
+from . import graph as graph_mod
 
 
 def _reconcile_retrieval(org_id: str, affected_docs: list[str]) -> None:
@@ -184,14 +185,26 @@ def process_due(max_orgs: int = 5, runs_per_org: int = 2) -> int:
                     quarantine_payload_ref=_payload_ref_writer(org_id),
                 )
                 affected = stats.pop("affected_docs", [])
-                if connector["kind"] == "gdrive":
-                    # An authoritative mirrored sync marks ACL as mirrored.
+                if connector["kind"] in ("gdrive", "graph"):
+                    # An authoritative mirrored sync (a connector that reads and
+                    # writes real permissions) marks ACL as mirrored — until
+                    # then, visible_heads keeps mirrored records fail-closed.
                     dal.set_connector_acl_mirrored(
                         org_id, run["connector_id"], True
                     )
                 dal.finish_run(org_id, run["id"], run["lease_token"],
                                outcome="done", stats=stats)
                 _reconcile_retrieval(org_id, affected)
+            except graph_mod.GraphThrottled as exc:
+                # HTTP 429: RESCHEDULE, never park. The batch never committed
+                # (the throttle fired mid-drain), so the cursor did not advance
+                # and the next attempt re-drives from the last committed delta
+                # checkpoint. A throttle is not a data problem — no park count,
+                # no needs_reconnect.
+                dal.finish_run(org_id, run["id"], run["lease_token"],
+                               outcome="retry",
+                               error=f"throttled_429 (retry_after={exc.retry_after})",
+                               attempts=int(run["attempts"]))
             except dal.ScopeLostError as exc:
                 # Contract: NOT reported successful-authoritative; connector
                 # leaves eligibility immediately (visibility rule).
