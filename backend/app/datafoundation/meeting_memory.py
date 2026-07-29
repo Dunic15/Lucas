@@ -197,11 +197,18 @@ _TERM = re.compile(r"[a-z0-9][a-z0-9'-]{1,}")
 def search(
     org_id: str, *, principal_ref: str = "", query: str = "",
     filters: Optional[dict] = None, k: int = 8,
+    include_body: bool = False,
 ) -> dict[str, Any]:
     """Bounded, cited, permission-filtered meeting evidence.
 
     principal_ref is the AUTHENTICATED caller. Empty means no principal, which
     yields only org-visible meetings — never everything.
+
+    ``include_body`` adds the full distilled record (structured sections) to
+    each hit. It does NOT widen anything: results are already ACL-filtered, so
+    this only returns more of a meeting the caller may already read. The
+    pre-meeting brief uses it to harvest open actions and risks, which live in
+    sections the query excerpt may not have selected.
     """
     filters = dict(filters or {})
     k = max(1, min(int(k or 8), 20))
@@ -238,7 +245,7 @@ def search(
         if terms and base <= 0.0:
             continue
         score = base + _recency(facet.get("occurred_at"))
-        scored.append((score, {
+        hit: dict[str, Any] = {
             "excerpt": _excerpt(body, terms) or str(head.get("title") or ""),
             "score": round(float(score), 4),
             "citation": {
@@ -253,7 +260,10 @@ def search(
             },
             "record_id": head["id"],
             "version_id": head["version_id"],
-        }))
+        }
+        if include_body:
+            hit["body"] = body
+        scored.append((score, hit))
     scored.sort(key=lambda pair: (-pair[0], pair[1]["citation"]["meeting_id"]))
     results = [item for _, item in scored[:k]]
     return {

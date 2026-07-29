@@ -71,6 +71,47 @@ def _query_for(event: dict, attendees: list[dict]) -> str:
     return " ".join(b for b in bits if b).strip()
 
 
+_STOP = {
+    "the", "and", "for", "with", "our", "your", "this", "that", "call",
+    "sync", "meeting", "weekly", "monthly", "review", "catch", "chat",
+    "about", "from", "into", "next", "team", "update", "discussion",
+}
+_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9'-]{2,}")
+
+
+def _document_queries(event: dict) -> list[str]:
+    """Queries to try against company documents, most specific first.
+
+    The document index is Postgres full text, and ``plainto_tsquery`` ANDs
+    every term — so one long concatenated query ("Acme weekly sync rollout
+    Ada") can never match anything. Instead: try the agenda/title phrase, then
+    the salient individual terms. Bounded to a handful of lookups so a
+    pre-meeting brief stays a brief, not a crawl.
+    """
+    candidates: list[str] = []
+    agenda = " ".join(str(event.get("agenda") or "").split())
+    title = " ".join(str(event.get("title") or "").split())
+    if agenda:
+        candidates.append(agenda)
+    if title and title != agenda:
+        candidates.append(title)
+    seen: set[str] = set()
+    terms: list[str] = []
+    for source in (event.get("customer"), event.get("project"), agenda, title):
+        for word in _WORD.findall(str(source or "")):
+            low = word.lower()
+            if low in _STOP or low in seen:
+                continue
+            seen.add(low)
+            terms.append(word)
+    candidates.extend(terms)
+    out: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in out:
+            out.append(candidate)
+    return out[:5]
+
+
 def build(
     org_id: str, *, principal_ref: str = "", event: Optional[dict] = None,
     avatar_key: str = "", now: Optional[float] = None,
@@ -129,7 +170,7 @@ def build(
             filters["series_key"] = series_key
         found = meeting_memory.search(
             org_id, principal_ref=principal_ref, query=query,
-            filters=filters, k=_MAX_PRIOR_MEETINGS * 2,
+            filters=filters, k=_MAX_PRIOR_MEETINGS * 2, include_body=True,
         )
         meetings = found.get("results") or []
         if not meetings and attendees:
@@ -143,7 +184,7 @@ def build(
                     org_id, principal_ref=principal_ref, query=query,
                     filters={"participant": who,
                              "since": now - _LOOKBACK_DAYS * 86400.0},
-                    k=_MAX_PRIOR_MEETINGS,
+                    k=_MAX_PRIOR_MEETINGS, include_body=True,
                 )
                 meetings.extend(by_person.get("results") or [])
                 if meetings:
@@ -187,36 +228,46 @@ def build(
     pack["relationship"]["prior_meetings"] = len(seen_meetings)
 
     # ── company knowledge (documents), through the ONE resolver boundary ──
-    if query:
+    seen_records: set[str] = set()
+    for doc_query in _document_queries(event):
+        if len(pack["company_knowledge"]) >= _MAX_DOCS:
+            break
         try:
             from . import resolver
 
             resolved = resolver.resolve(
-                org_id, avatar_key or "laura", query, k=_MAX_DOCS,
+                org_id, avatar_key or "laura", doc_query, k=_MAX_DOCS,
                 principal_id=principal_ref, purpose="premeeting",
             )
-            for chunk in (resolved.get("chunks") or [])[:_MAX_DOCS]:
-                cite = chunk.get("citation") or {}
-                if not chunk.get("record_id"):
-                    continue  # base-pack chunk: no citable company record
-                pack["company_knowledge"].append({
-                    "excerpt": str(chunk.get("text") or "")[:600],
-                    "source": cite.get("source_name") or "",
-                    "section": cite.get("section") or "",
-                    "url": cite.get("canonical_url") or "",
-                })
-                pack["citations"].append({
-                    "kind": "document",
-                    "title": cite.get("source_name") or "",
-                    "url": cite.get("canonical_url") or "",
-                    "record_id": chunk.get("record_id"),
-                })
-            if resolved.get("resolution", {}).get("degraded"):
-                pack["freshness"]["degraded"] = True
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — degrade, never widen
             print(f"[premeeting] document evidence degraded: "
                   f"{type(exc).__name__}", flush=True)
             pack["freshness"]["degraded"] = True
+            break
+        if resolved.get("resolution", {}).get("degraded"):
+            pack["freshness"]["degraded"] = True
+        for chunk in resolved.get("chunks") or []:
+            record_id = str(chunk.get("record_id") or "")
+            if not record_id or record_id in seen_records:
+                # No record id = a base-pack chunk, which carries no citable
+                # company record; duplicates come from the query fan-out.
+                continue
+            if len(pack["company_knowledge"]) >= _MAX_DOCS:
+                break
+            seen_records.add(record_id)
+            cite = chunk.get("citation") or {}
+            pack["company_knowledge"].append({
+                "excerpt": str(chunk.get("text") or "")[:600],
+                "source": cite.get("source_name") or "",
+                "section": cite.get("section") or "",
+                "url": cite.get("canonical_url") or "",
+            })
+            pack["citations"].append({
+                "kind": "document",
+                "title": cite.get("source_name") or "",
+                "url": cite.get("canonical_url") or "",
+                "record_id": record_id,
+            })
 
     pack["discussion_points"] = _points(pack)
     return pack
@@ -230,9 +281,11 @@ def _harvest(hit: dict, pack: dict) -> None:
 
     The distilled body has stable '## Actions' / '## Risks' / '## Open
     questions' sections, so this is parsing our own format, not guessing at
-    free text. Every harvested line keeps the meeting id that justifies it —
-    an uncited commitment never enters the pack."""
-    excerpt = str(hit.get("excerpt") or "")
+    free text. Prefers the full record over the query excerpt — the excerpt is
+    whichever section matched the query, which usually is not the one holding
+    the commitments. Every harvested line keeps the meeting id that justifies
+    it: an uncited commitment never enters the pack."""
+    excerpt = str(hit.get("body") or hit.get("excerpt") or "")
     cite = hit.get("citation") or {}
     mid = str(cite.get("meeting_id") or "")
     lowered = excerpt.lower()
