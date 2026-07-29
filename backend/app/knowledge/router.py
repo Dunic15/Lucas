@@ -35,9 +35,20 @@ def _disabled() -> JSONResponse:
 
 
 async def _org_gate(request: Request) -> tuple[JSONResponse | None, str]:
-    from .. import org_api
+    """Machine gate for the data plane — deliberately does NOT fall open to
+    the demo org. org_api._machine_gate maps an unauthenticated caller to
+    settings.demo_org_id (fine for the open demo surface); the Company Brain
+    holds real tenant knowledge, so an unrecognized/absent bearer must be
+    rejected. A per-org token resolves to its own org; the global bearer
+    still works (it resolves to the demo org, a real authenticated scope)."""
+    from ..cedric import integration as cedric
 
-    return await org_api._machine_gate(request)
+    org = await run_in_threadpool(cedric.resolve_machine_org, request)
+    if not org:
+        return JSONResponse(
+            {"error": "unauthorized"}, status_code=401, headers=_NO_STORE
+        ), ""
+    return None, org
 
 
 def _dash_org(request: Request) -> tuple[JSONResponse | None, str]:
@@ -59,13 +70,22 @@ def _create_source(org: str, body: dict) -> tuple[int, dict]:
     name = str((body or {}).get("name") or "").strip()
     kind = str((body or {}).get("kind") or "upload").strip()
     folder = str((body or {}).get("drive_folder_id") or "").strip()
-    if kind not in ("upload", "drive"):
-        return 400, {"error": "kind must be upload|drive"}
+    if kind not in ("upload", "drive", "msgraph"):
+        return 400, {"error": "kind must be upload|drive|msgraph"}
     if kind == "drive" and not folder:
         return 400, {"error": "drive sources need drive_folder_id"}
     source = dal.create_source(org, name, kind, folder)
     if source is None:
         return 400, {"error": "could not create source"}
+    if kind == "msgraph":
+        # Non-secret scope config only (drive allowlist, webhook client-state
+        # fingerprint). Tokens/client secrets NEVER live here (CONTRACTS.md).
+        config = (body or {}).get("config")
+        from . import datastore
+
+        datastore.set_source_config(
+            org, source["id"], config if isinstance(config, dict) else {}
+        )
     return 200, {"ok": True, "source": source}
 
 
@@ -176,7 +196,9 @@ async def org_sync_source(source_id: str, request: Request) -> JSONResponse:
     source = await run_in_threadpool(dal.get_source, org, source_id)
     if source is None:
         return JSONResponse({"error": "unknown source"}, status_code=404)
-    kind = "sync_drive" if source["kind"] == "drive" else "rebuild_index"
+    kind = {"drive": "sync_drive", "msgraph": "connector_sync"}.get(
+        source["kind"], "rebuild_index"
+    )
     await run_in_threadpool(dal.enqueue_job, org, source_id, kind)
     return JSONResponse({"ok": True, "queued": kind}, headers=_NO_STORE)
 
@@ -268,6 +290,181 @@ async def org_jobs(request: Request) -> JSONResponse:
     return JSONResponse({"jobs": jobs}, headers=_NO_STORE)
 
 
+# ── M2: ACL-filtered query, identity, status, revocation, webhook ───────────
+
+def _brain_query(org: str, body: dict, *, cookie_email: str = "") -> tuple[int, dict]:
+    from . import retrieval
+
+    q = str((body or {}).get("q") or "").strip()
+    if not q:
+        return 400, {"error": "q is required"}
+    k = max(1, min(int((body or {}).get("k") or 8), 20))
+    user_email = str(
+        (body or {}).get("user_email") or cookie_email or ""
+    ).strip().lower()
+    opted_in = (settings.knowledge_meeting_audience or "none").strip().lower() == "org-public"
+    if user_email:
+        audience: tuple[str, str | None] = ("user", user_email)
+    elif str((body or {}).get("audience") or "") == "org-public" and opted_in:
+        # org-public (tenant-wide-shared docs only) is served to an unbound
+        # caller ONLY when the org opted in via knowledge_meeting_audience —
+        # otherwise it falls through to default-deny, same as the tool path.
+        audience = ("org-public", None)
+    else:
+        # No identity, no opt-in audience ⇒ default deny (empty results,
+        # same response shape — denial is indistinguishable from absence).
+        audience = ("none", None)
+    payload = retrieval.query(org, audience=audience, q=q, k=k)
+    return 200, payload
+
+
+def _map_identity(org: str, source_id: str, body: dict) -> tuple[int, dict]:
+    from . import datastore
+
+    email = str((body or {}).get("email") or "").strip().lower()
+    principal_ext = str(
+        (body or {}).get("principal_external_id") or ""
+    ).strip()
+    if not email or not principal_ext:
+        return 400, {"error": "email and principal_external_id are required"}
+    ok = datastore.upsert_identity(org, source_id, email, principal_ext)
+    if not ok:
+        return 404, {"error": "unknown principal for this source"}
+    datastore.audit(org, "admin", "identity_mapped",
+                    {"source_id": source_id, "user_key": email})
+    return 200, {"ok": True}
+
+
+def _source_status(org: str, source_id: str) -> tuple[int, dict]:
+    from . import datastore
+
+    status = datastore.source_status(org, source_id)
+    if status is None:
+        return 404, {"error": "unknown source"}
+    return 200, status
+
+
+def _revoke_source(org: str, source_id: str) -> tuple[int, dict]:
+    from . import datastore
+
+    ok = datastore.set_connection_status(
+        org, source_id, "revoked", "revoked by admin"
+    )
+    if not ok:
+        return 404, {"error": "unknown source"}
+    datastore.audit(org, "admin", "source_revoked", {"source_id": source_id})
+    return 200, {"ok": True, "connection_status": "revoked"}
+
+
+@router.post("/org/knowledge/query")
+async def org_brain_query(request: Request) -> JSONResponse:
+    if not enabled():
+        return _disabled()
+    err, org = await _org_gate(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    code, payload = await run_in_threadpool(_brain_query, org, body)
+    return JSONResponse(payload, status_code=code, headers=_NO_STORE)
+
+
+@router.post("/org/knowledge/sources/{source_id}/identity")
+async def org_map_identity(source_id: str, request: Request) -> JSONResponse:
+    if not enabled():
+        return _disabled()
+    err, org = await _org_gate(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    code, payload = await run_in_threadpool(_map_identity, org, source_id, body)
+    return JSONResponse(payload, status_code=code, headers=_NO_STORE)
+
+
+@router.get("/org/knowledge/sources/{source_id}/status")
+async def org_source_status(source_id: str, request: Request) -> JSONResponse:
+    if not enabled():
+        return _disabled()
+    err, org = await _org_gate(request)
+    if err:
+        return err
+    code, payload = await run_in_threadpool(_source_status, org, source_id)
+    return JSONResponse(payload, status_code=code, headers=_NO_STORE)
+
+
+@router.post("/org/knowledge/sources/{source_id}/revoke")
+async def org_revoke_source(source_id: str, request: Request) -> JSONResponse:
+    if not enabled():
+        return _disabled()
+    err, org = await _org_gate(request)
+    if err:
+        return err
+    code, payload = await run_in_threadpool(_revoke_source, org, source_id)
+    return JSONResponse(payload, status_code=code, headers=_NO_STORE)
+
+
+@router.api_route("/webhooks/knowledge/graph", methods=["GET", "POST"])
+async def graph_webhook(request: Request):
+    """Change-notification receiver. ACCELERATION ONLY: a valid notification
+    merely enqueues a connector_sync job — sync always re-reads truth from
+    the source with our stored checkpoint, so correctness never depends on
+    webhook delivery or payload content. clientState carries
+    org:source:secret; the secret is compared against the source's stored
+    fingerprint. Anything invalid is swallowed with 202 (no existence leak)."""
+    from fastapi.responses import PlainTextResponse
+
+    if not enabled():
+        return _disabled()
+    validation = request.query_params.get("validationToken")
+    if validation is not None:
+        return PlainTextResponse(validation[:512])
+
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": True}, status_code=202)
+
+    def run() -> None:
+        import hmac as _hmac
+
+        from . import datastore
+
+        notes = (body or {}).get("value") if isinstance(body, dict) else None
+        for note in (notes or [])[:20]:
+            try:
+                if not isinstance(note, dict):
+                    continue
+                state = str(note.get("clientState") or "")
+                parts = state.split(":", 2)
+                if len(parts) != 3:
+                    continue
+                org, source_id, secret = parts
+                src = datastore.get_source_ext(org, source_id)
+                if src is None or src["kind"] != "msgraph":
+                    continue
+                expected = str(
+                    (src.get("config") or {}).get("client_state") or ""
+                )
+                # compare_digest on bytes never raises on non-ASCII input
+                # (a str comparison would 500 and leak a source-existence
+                # oracle); a mismatch is silently ignored.
+                if not expected or not _hmac.compare_digest(
+                    secret.encode(), expected.encode()
+                ):
+                    continue
+                dal.enqueue_job(org, source_id, "connector_sync")
+            except Exception:  # noqa: BLE001 — a bad note never breaks the 202
+                continue
+
+    await run_in_threadpool(run)
+    return JSONResponse({"ok": True}, status_code=202)
+
+
 # ── dashboard twins (login cookie; the Brain Sources section calls these) ──
 
 @router.api_route(
@@ -305,7 +502,9 @@ async def dashboard_knowledge(tail: str, request: Request) -> JSONResponse:
             source = dal.get_source(org, parts[1])
             if source is None:
                 return 404, {"error": "unknown source"}
-            kind = "sync_drive" if source["kind"] == "drive" else "rebuild_index"
+            kind = {"drive": "sync_drive", "msgraph": "connector_sync"}.get(
+                source["kind"], "rebuild_index"
+            )
             dal.enqueue_job(org, parts[1], kind)
             return 200, {"ok": True, "queued": kind}
         if len(parts) == 3 and parts[0] == "sources" and parts[2] == "assign":
@@ -319,6 +518,17 @@ async def dashboard_knowledge(tail: str, request: Request) -> JSONResponse:
             return 200, {"ok": bool(dal.unassign(org, parts[1], parts[3]))}
         if parts == ["search"] and request.method == "POST":
             return _test_search(org, body)
+        if parts == ["query"] and request.method == "POST":
+            # Dashboard door: the acting user IS the cookie session's user —
+            # a browser caller can never assert someone else's identity.
+            user = auth.current_user(request) or {}
+            body.pop("user_email", None)
+            return _brain_query(
+                org, body, cookie_email=str(user.get("email") or "")
+            )
+        if (len(parts) == 3 and parts[0] == "sources"
+                and parts[2] == "status" and request.method == "GET"):
+            return _source_status(org, parts[1])
         if parts == ["jobs"]:
             return 200, {"jobs": dal.job_rows(org)}
         return 404, {"error": "unknown knowledge route"}

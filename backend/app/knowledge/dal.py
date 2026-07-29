@@ -30,7 +30,7 @@ def _set_org(conn, org_id: str) -> None:
 def create_source(
     org_id: str, name: str, kind: str, drive_folder_id: str = ""
 ) -> Optional[dict[str, Any]]:
-    if kind not in ("upload", "drive"):
+    if kind not in ("upload", "drive", "msgraph"):
         return None
     from .. import embeddings
 
@@ -48,7 +48,7 @@ def create_source(
                   :provider, :model, 512
                 )
                 RETURNING id::text, name, kind, status, drive_folder_id,
-                          extract(epoch from created_at) AS created_at
+                          extract(epoch from created_at)::float8 AS created_at
                 """
             ),
             {
@@ -72,7 +72,7 @@ def list_sources(org_id: str) -> list[dict[str, Any]]:
                 """
                 SELECT s.id::text, s.name, s.kind, s.status, s.drive_folder_id,
                        s.embedding_provider, s.embedding_model,
-                       extract(epoch from s.created_at) AS created_at,
+                       extract(epoch from s.created_at)::float8 AS created_at,
                        COUNT(d.id) FILTER (
                          WHERE d.status = 'published'
                        ) AS published_documents,
@@ -274,7 +274,7 @@ def list_documents(org_id: str, source_id: str) -> list[dict[str, Any]]:
             text(
                 """
                 SELECT d.id::text, d.filename, d.mime, d.size_bytes, d.status,
-                       d.error, extract(epoch from d.updated_at) AS updated_at,
+                       d.error, extract(epoch from d.updated_at)::float8 AS updated_at,
                        COALESCE(MAX(v.version), 0) AS latest_version
                 FROM knowledge_documents d
                 LEFT JOIN knowledge_document_versions v
@@ -390,11 +390,11 @@ def publish_version(
                     """
                     INSERT INTO knowledge_chunks (
                       org_id, source_id, document_id, version_id, seq,
-                      source_name, section, text
+                      source_name, section, text, embedding_json
                     ) VALUES (
                       :org_id, CAST(:source_id AS uuid),
                       CAST(:doc_id AS uuid), CAST(:version_id AS uuid),
-                      :seq, :source_name, :section, :text
+                      :seq, :source_name, :section, :text, :embedding_json
                     )
                     """
                 ),
@@ -407,6 +407,7 @@ def publish_version(
                     "source_name": str(chunk.get("source") or doc["filename"])[:200],
                     "section": str(chunk.get("section") or "")[:200],
                     "text": str(chunk.get("text") or ""),
+                    "embedding_json": str(chunk.get("embedding_json") or ""),
                 },
             )
         conn.execute(
@@ -431,13 +432,22 @@ def assign(org_id: str, source_id: str, avatar_id: str) -> bool:
         _set_org(conn, org_id)
         src = conn.execute(
             text(
-                "SELECT 1 FROM knowledge_sources "
+                "SELECT kind FROM knowledge_sources "
                 "WHERE org_id=:org_id AND id=CAST(:source_id AS uuid) "
                 "AND status='active'"
             ),
             {"org_id": org_id, "source_id": source_id},
         ).first()
         if src is None:
+            return False
+        if src[0] not in ("upload", "drive"):
+            # Connector sources (msgraph, …) carry per-USER ACLs that the
+            # avatar-assignment bridge cannot express — it builds a flat
+            # per-(org,avatar) index with no notion of who is asking. Such
+            # sources are retrievable ONLY through the ACL-filtered
+            # retrieval.query path, never assigned onto an avatar. Refusing
+            # here is what stops a dashboard "assign" click from leaking a
+            # permissioned document onto the live meeting path.
             return False
         conn.execute(
             text(
@@ -512,6 +522,10 @@ def chunks_for_avatar(org_id: str, avatar_id: str) -> list[dict[str, Any]]:
                   ON d.org_id=c.org_id AND d.id=c.document_id
                 WHERE c.org_id=:org_id AND a.avatar_id=:avatar_id
                   AND s.status='active' AND d.status='published'
+                  -- ACL-bearing connector sources never enter this flat
+                  -- index; they retrieve only via retrieval.query (user-
+                  -- filtered). Only coarse org+avatar sources belong here.
+                  AND s.kind IN ('upload', 'drive')
                 ORDER BY c.source_id, c.document_id, c.seq
                 """
             ),
@@ -523,9 +537,11 @@ def chunks_for_avatar(org_id: str, avatar_id: str) -> list[dict[str, Any]]:
 def keyword_search(
     org_id: str, q: str, *, avatar_id: str = "", limit: int = 8
 ) -> list[dict[str, Any]]:
-    """Keyword half of hybrid search: Postgres full-text over the org's
-    published chunks (assignment-filtered when an avatar is named), with
-    citations. ACL first: every predicate narrows before ranking."""
+    """Keyword search over the org's UPLOAD/DRIVE chunks (assignment-filtered
+    when an avatar is named), with citations. This door carries no caller
+    identity, so it is deliberately restricted to coarse org+avatar sources;
+    ACL-bearing connector content is served only by the user-filtered
+    retrieval.query path."""
     query = " ".join(str(q or "").split())
     if not query:
         return []
@@ -551,6 +567,10 @@ def keyword_search(
                   ON d.org_id=c.org_id AND d.id=c.document_id
                 WHERE c.org_id=:org_id
                   AND s.status='active' AND d.status='published'
+                  -- This door has no caller identity, so it must never see
+                  -- ACL-bearing connector content (that goes through the
+                  -- user-filtered retrieval.query path only).
+                  AND s.kind IN ('upload', 'drive')
                   AND c.fts @@ plainto_tsquery('simple', :q)
                   {avatar_filter}
                 ORDER BY rank DESC, c.id
@@ -736,7 +756,7 @@ def job_rows(org_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
                 """
                 SELECT j.id, j.source_id::text, j.document_id::text, j.kind,
                        j.status, j.attempts, j.last_error,
-                       extract(epoch from j.updated_at) AS updated_at
+                       extract(epoch from j.updated_at)::float8 AS updated_at
                 FROM knowledge_sync_jobs j
                 WHERE j.org_id=:org_id
                 ORDER BY j.created_at DESC, j.id DESC

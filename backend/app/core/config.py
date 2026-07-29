@@ -306,6 +306,23 @@ class Settings(BaseSettings):
     # fixed 512 dims — the recommended durable Company Brain embedder). The
     # key is NEVER exposed to any browser page.
     openai_api_key: str = ""
+    # ── Company Brain M2 (connector data plane — msgraph etc.) ──
+    # ACL freshness bound: a connector document whose permissions were synced
+    # longer ago than this is NOT retrievable (stale ACL = deny, surfaced on
+    # the connector status page instead of answered around).
+    knowledge_acl_stale_seconds: int = 86_400
+    # Audience for the read-only company_brain_search meeting/agent tool AND
+    # the unbound-caller branch of /org/knowledge/query. Meeting sessions have
+    # no bound human user yet, so the safe default is "none" (retrieves
+    # nothing); "org-public" serves tenant-wide-shared documents only. NOTE:
+    # this is a DEPLOYMENT-WIDE switch, not a per-org opt-in — a true per-org
+    # setting (control-plane org config) is on the roadmap; until then flip it
+    # only when every tenant on the deployment should serve org-public docs.
+    knowledge_meeting_audience: str = "none"
+    # Backpressure: delta/crawl pages one connector_sync job may process
+    # before it re-enqueues a continuation (keeps runs inside the job lease
+    # and lets large tenants share the worker fairly).
+    knowledge_sync_max_pages_per_run: int = 20
 
     # ── Asana (project system of record — see docs/ASANA.md) ──
     # Personal Access Token for the workspace, single-tenant fallback: a per-org

@@ -305,6 +305,8 @@ def refresh_local_indexes(max_orgs: int = 50) -> int:
 
 def process_due(max_orgs: int = 5, jobs_per_org: int = 4) -> int:
     """One worker tick: claim and run due jobs. Returns jobs handled."""
+    from . import datastore, sync as connector_sync
+
     handled = 0
     for org_id in dal.due_orgs(max_orgs):
         for job in dal.claim_due_jobs(org_id, jobs_per_org):
@@ -319,6 +321,19 @@ def process_due(max_orgs: int = 5, jobs_per_org: int = 4) -> int:
                     sync_local_indexes(org_id, force=True)
                 elif job["kind"] == "sync_drive":
                     sync_drive(org_id, job["source_id"])
+                elif job["kind"] == "connector_sync":
+                    connector_sync.run_connector_sync(
+                        org_id, job["source_id"]
+                    )
+            except connector_sync.ThrottledSync as e:
+                # Throttle is scheduling, not failure: back to pending after
+                # Retry-After without burning a retry attempt.
+                datastore.reschedule_job(
+                    org_id, job["id"], job["lease_token"], e.retry_after,
+                    "throttled",
+                )
+                handled += 1
+                continue
             except Exception as e:  # noqa: BLE001 — distilled reason only
                 ok, error = False, f"{type(e).__name__}: {e}"[:200]
                 if job["kind"] == "ingest_document" and job["document_id"]:

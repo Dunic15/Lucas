@@ -41,6 +41,9 @@ _BUILTINS = [
      "kind": "native", "write": False, "approval": "auto"},
     {"name": "upcoming_meetings", "does": "the owner's upcoming calendar (read)",
      "kind": "native", "write": False, "approval": "auto"},
+    {"name": "company_brain_search",
+     "does": "search the org's indexed company knowledge (read-only, cited)",
+     "kind": "native", "write": False, "approval": "auto"},
 ]
 
 
