@@ -95,6 +95,65 @@ async def dashboard_openclaw_replay(request: Request) -> JSONResponse:
     return JSONResponse(result, status_code=status_code, headers=_NO_STORE)
 
 
+@router.post("/dashboard/openclaw/chat")
+async def dashboard_openclaw_chat(request: Request) -> JSONResponse:
+    err, org = await _dashboard_org(request)
+    if err:
+        return err
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "same-origin required"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    body = body if isinstance(body, dict) else {}
+    message = str(body.get("message") or "").strip()
+    if not message:
+        return JSONResponse({"error": "message is required"}, status_code=400)
+    history = body.get("history") if isinstance(body.get("history"), list) else []
+    result = await run_in_threadpool(
+        runtime.chat,
+        org,
+        message,
+        meeting_id=str(body.get("meeting_id") or ""),
+        history=history,
+    )
+    return JSONResponse(
+        result,
+        status_code=200 if result.get("ok") else 400,
+        headers=_NO_STORE,
+    )
+
+
+@router.post("/dashboard/openclaw/workflows/start")
+async def dashboard_openclaw_workflow_start(request: Request) -> JSONResponse:
+    err, org = await _dashboard_org(request)
+    if err:
+        return err
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "same-origin required"}, status_code=403)
+    user = auth.current_user(request)
+    if user is None:
+        return JSONResponse({"error": "login required"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    body = body if isinstance(body, dict) else {}
+    workflow = body.get("workflow") if isinstance(body.get("workflow"), dict) else {}
+    result = await run_in_threadpool(
+        runtime.start_chat_workflow,
+        org,
+        workflow,
+        laura_user_id=str(user.get("user_id") or ""),
+    )
+    return JSONResponse(
+        result,
+        status_code=200 if result.get("ok") else 400,
+        headers=_NO_STORE,
+    )
+
+
 @router.post("/openclaw/tools/{tool_name}")
 async def openclaw_tool(tool_name: str, request: Request) -> JSONResponse:
     try:

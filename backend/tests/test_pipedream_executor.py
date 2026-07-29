@@ -178,6 +178,171 @@ def test_calendar_update_patches_only_changes():
     assert b["start"]["dateTime"] == "2026-07-24T16:00:00" and "summary" not in b
 
 
+def test_notion_create_page_builder_is_deterministic(monkeypatch):
+    monkeypatch.setattr(
+        pipedream_executor,
+        "_notion_resolve_parent",
+        lambda *_args: ({"data_source_id": "source-123"}, "Name", "About"),
+    )
+    method, url, body, headers = pipedream_executor._build_notion_create_page(
+        "org",
+        "apn",
+        {
+            "parent": "People",
+            "title": "OpenClaw QA",
+            "content": "Created after explicit approval.",
+        },
+    )
+    assert method == "POST" and url == "https://api.notion.com/v1/pages"
+    assert headers == {"Notion-Version": "2026-03-11"}
+    assert body["parent"] == {"data_source_id": "source-123"}
+    assert body["properties"]["Name"]["title"][0]["text"]["content"] == "OpenClaw QA"
+    assert (
+        body["properties"]["About"]["rich_text"][0]["text"]["content"]
+        == "Created after explicit approval."
+    )
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"parent": "People"},
+    ],
+)
+def test_notion_create_page_requires_title(args):
+    with pytest.raises(ValueError):
+        pipedream_executor._build_notion_create_page("org", "apn", args)
+
+
+def test_notion_workspace_parent_needs_no_lookup():
+    assert pipedream_executor._notion_resolve_parent(
+        "org", "apn", "workspace"
+    ) == ({"type": "workspace", "workspace": True}, "title", "")
+
+
+def test_proxy_request_restricts_host_and_authorization_header():
+    valid = {
+        "app": "notion",
+        "method": "PATCH",
+        "url": "https://api.notion.com/v1/pages/page-1",
+        "body": {"archived": False},
+    }
+    app, method, url, body, headers = (
+        pipedream_executor.validate_proxy_request_args(valid)
+    )
+    assert (app, method, url, body) == (
+        "notion",
+        "PATCH",
+        valid["url"],
+        valid["body"],
+    )
+    assert headers["Notion-Version"] == "2026-03-11"
+
+    with pytest.raises(ValueError, match="approved API host"):
+        pipedream_executor.validate_proxy_request_args(
+            {**valid, "url": "https://example.test/collect"}
+        )
+    with pytest.raises(ValueError, match="not allowed"):
+        pipedream_executor.validate_proxy_request_args(
+            {**valid, "headers": {"Authorization": "Bearer model-token"}}
+        )
+
+
+def test_proxy_planner_read_is_bounded_and_redacted(monkeypatch):
+    _enable_pd(monkeypatch)
+    monkeypatch.setattr(
+        pipedream_client,
+        "list_accounts",
+        lambda org, app="": [{"id": "apn_notion", "app": app, "healthy": True}],
+    )
+    monkeypatch.setattr(
+        pipedream_client,
+        "proxy_request",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "status": 200,
+            "json": {
+                "results": [{"id": "page-1", "title": "Roadmap"}],
+                "next_cursor": "must-not-leak",
+            },
+        },
+    )
+
+    result = pipedream_executor.read_proxy_for_planner(
+        "org-a",
+        {
+            "app": "notion",
+            "method": "POST",
+            "url": "https://api.notion.com/v1/search",
+            "body": {"query": "Roadmap"},
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["results"][0]["id"] == "page-1"
+    assert result["data"]["next_cursor"] == "[redacted]"
+    blocked = pipedream_executor.read_proxy_for_planner(
+        "org-a",
+        {
+            "app": "notion",
+            "method": "DELETE",
+            "url": "https://api.notion.com/v1/blocks/block-1",
+        },
+    )
+    assert blocked["ok"] is False
+
+
+def test_proxy_request_executes_for_openclaw_with_canonical_receipt(
+    monkeypatch,
+):
+    _enable_pd(monkeypatch)
+    seen = _cap_ledger(monkeypatch)
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        pipedream_client,
+        "list_accounts",
+        lambda org, app="": [{"id": "apn_notion", "app": app, "healthy": True}],
+    )
+
+    def fake_proxy(org, account, method, url, json_body=None, headers=None):
+        calls.append(
+            {
+                "org": org,
+                "account": account,
+                "method": method,
+                "url": url,
+                "body": json_body,
+                "headers": headers,
+            }
+        )
+        return {
+            "ok": True,
+            "status": 200,
+            "json": {"id": "page-1", "url": "https://notion.so/page-1"},
+        }
+
+    monkeypatch.setattr(pipedream_client, "proxy_request", fake_proxy)
+    result = pipedream_executor.execute_for_openclaw(
+        "org-a",
+        "action-1",
+        {
+            "type": pipedream_executor.PROXY_ACTION_TYPE,
+            "args": {
+                "app": "notion",
+                "method": "PATCH",
+                "url": "https://api.notion.com/v1/pages/page-1",
+                "body": {"archived": False},
+            },
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["route"] == "openclaw"
+    assert result["kind"] == "notion API PATCH"
+    assert calls[0]["account"] == "apn_notion"
+    assert seen["receipt"]["route"] == "openclaw"
+
+
 # ── Asana request builders (faithful to asana_client) ───────────────────────
 
 def test_asana_create_with_project_gid_skips_workspace(monkeypatch):
@@ -624,7 +789,7 @@ def test_every_mapped_type_has_schema_risk_and_labels():
         for f in ap.PARAMS_SCHEMAS[t]:
             assert f.get("label"), f"{t}.{f.get('name')} missing label"
             assert f.get("label_it"), f"{t}.{f.get('name')} missing label_it"
-    assert len(pipedream_executor._MAPPER) == 20
+    assert len(pipedream_executor._MAPPER) == 21
 
 
 def test_asana_extra_builders():
@@ -741,6 +906,13 @@ def test_every_mapped_builder_accepts_a_direct_valid_case(monkeypatch):
         "_drive_parent_id",
         lambda org, acct, parent: "parent-1" if parent else "",
     )
+    monkeypatch.setattr(
+        pipedream_executor,
+        "_notion_resolve_parent",
+        lambda org, acct, parent: (
+            {"data_source_id": "source-1"}, "Name", "About"
+        ),
+    )
 
     def fake_lookup(org, acct, method, url, body=None):
         if "/messages/msg-1" in url:
@@ -790,6 +962,11 @@ def test_every_mapped_builder_accepts_a_direct_valid_case(monkeypatch):
         "drive.create_doc": {"name": "Recap", "parent": "Projects"},
         "drive.rename_file": {"file": "Recap", "name": "Recap final"},
         "drive.move_file": {"file": "Recap", "folder": "Archive"},
+        "notion.create_page": {
+            "parent": "People",
+            "title": "OpenClaw QA",
+            "content": "Created after explicit approval.",
+        },
     }
     assert set(cases) == set(pipedream_executor._MAPPER)
 

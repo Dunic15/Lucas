@@ -3674,17 +3674,59 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
         # Reopened: fall through to the normal execution/dispatch pipeline.
 
     if route == "openclaw":
-        if _cur_status not in ("approved", "executing", "done", "failed"):
+        from ..openclaw import runtime as openclaw_runtime
+
+        started = await run_in_threadpool(
+            openclaw_runtime.approve_action,
+            org,
+            aid,
+            decided_via="dashboard",
+            laura_user_id=str(user.get("user_id") or ""),
+            record_decision=False,
+        )
+        if not started.get("ok") and started.get("error") == (
+            "OpenClaw action run was not found"
+        ):
+            source = action.get("source") if isinstance(action.get("source"), dict) else {}
+            meeting_id = str(source.get("bot_id") or action.get("bot_id") or "")
+            artifact = await run_in_threadpool(store.get_artifact, meeting_id, org)
+            if artifact:
+                await run_in_threadpool(
+                    openclaw_runtime.create_meeting_run,
+                    meeting_id,
+                    artifact,
+                    org,
+                    auto_start=False,
+                )
+                started = await run_in_threadpool(
+                    openclaw_runtime.approve_action,
+                    org,
+                    aid,
+                    decided_via="dashboard",
+                    laura_user_id=str(user.get("user_id") or ""),
+                    record_decision=False,
+                )
+        if not started.get("ok"):
             await run_in_threadpool(
-                ledger.set_action_status, aid, "approved",
-                "approved via dashboard · OpenClaw owns execution",
+                ledger.set_action_status,
+                aid,
+                "failed",
+                str(started.get("error") or "OpenClaw could not start")[:300],
                 org_id=org,
+            )
+            return JSONResponse(
+                {
+                    "error": str(started.get("error") or "openclaw_start_failed"),
+                    "action_id": aid,
+                },
+                status_code=409,
+                headers=_NO_STORE,
             )
         await run_in_threadpool(
             lambda: ledger.set_action_decision_result(
                 aid, org_id=org,
-                new_status=_cur_status or "approved",
-                execution_job_id=None,
+                new_status="executing",
+                execution_job_id=str(started.get("run_id") or "") or None,
             )
         )
         latest = await run_in_threadpool(
@@ -3696,8 +3738,9 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
                 "action_id": aid,
                 "approved": True,
                 "executed": False,
-                "dispatched": False,
+                "dispatched": True,
                 "openclaw": True,
+                "openclaw_run_id": started.get("run_id"),
                 "capability_blocked": False,
                 "typed": bool(typed),
                 "execution_mode": "openclaw",

@@ -25,12 +25,14 @@ mappers below — never model-constructed for a core-app write.
 from __future__ import annotations
 
 import base64
+import json
 import threading
 import time
 import uuid
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from . import ledger, pipedream_client
 from .config import settings
@@ -152,6 +154,87 @@ def _asana_receipt(action_type: str, resp_json: dict) -> tuple:
 _GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
 _CAL_API = "https://www.googleapis.com/calendar/v3"
 _DRIVE_API = "https://www.googleapis.com/drive/v3"
+_NOTION_API = "https://api.notion.com/v1"
+_NOTION_VERSION = "2026-03-11"
+
+PROXY_ACTION_TYPE = "pipedream.proxy_request"
+_PROXY_HOSTS_BY_APP: dict[str, frozenset[str]] = {
+    "airtable": frozenset({"api.airtable.com"}),
+    "asana": frozenset({"app.asana.com"}),
+    "dropbox": frozenset({"api.dropboxapi.com", "content.dropboxapi.com"}),
+    "github": frozenset({"api.github.com"}),
+    "gmail": frozenset({"gmail.googleapis.com"}),
+    "google_calendar": frozenset({"www.googleapis.com"}),
+    "google_drive": frozenset({"www.googleapis.com"}),
+    "hubspot": frozenset({"api.hubapi.com"}),
+    "linear": frozenset({"api.linear.app"}),
+    "microsoft_teams": frozenset({"graph.microsoft.com"}),
+    "notion": frozenset({"api.notion.com"}),
+    "outlook": frozenset({"graph.microsoft.com"}),
+    "slack": frozenset({"slack.com"}),
+    "stripe": frozenset({"api.stripe.com"}),
+    "todoist": frozenset({"api.todoist.com"}),
+    "trello": frozenset({"api.trello.com"}),
+}
+_PROXY_GUIDES_BY_APP: dict[str, tuple[str, ...]] = {
+    "airtable": (
+        "List/create records: GET or POST https://api.airtable.com/v0/{baseId}/{tableIdOrName}",
+        "Update a record: PATCH https://api.airtable.com/v0/{baseId}/{tableIdOrName}/{recordId}",
+    ),
+    "asana": (
+        "List/create tasks: GET or POST https://app.asana.com/api/1.0/tasks",
+        "Update task: PUT https://app.asana.com/api/1.0/tasks/{taskGid}",
+        "Comment: POST https://app.asana.com/api/1.0/tasks/{taskGid}/stories",
+    ),
+    "github": (
+        "List/create issues: GET or POST https://api.github.com/repos/{owner}/{repo}/issues",
+        "Update issue: PATCH https://api.github.com/repos/{owner}/{repo}/issues/{number}",
+        "Create comment: POST https://api.github.com/repos/{owner}/{repo}/issues/{number}/comments",
+    ),
+    "gmail": (
+        "Search messages: GET https://gmail.googleapis.com/gmail/v1/users/me/messages?q={query}",
+        "Create draft: POST https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+        "Send MIME message: POST https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+    ),
+    "google_calendar": (
+        "List/create events: GET or POST https://www.googleapis.com/calendar/v3/calendars/primary/events",
+        "Update event: PATCH https://www.googleapis.com/calendar/v3/calendars/primary/events/{eventId}",
+    ),
+    "google_drive": (
+        "Search/create files: GET or POST https://www.googleapis.com/drive/v3/files",
+        "Update file metadata: PATCH https://www.googleapis.com/drive/v3/files/{fileId}",
+        "Share file: POST https://www.googleapis.com/drive/v3/files/{fileId}/permissions",
+    ),
+    "hubspot": (
+        "List/create CRM objects: GET or POST https://api.hubapi.com/crm/v3/objects/{objectType}",
+        "Update CRM object: PATCH https://api.hubapi.com/crm/v3/objects/{objectType}/{objectId}",
+    ),
+    "linear": (
+        "Queries and mutations: POST https://api.linear.app/graphql",
+    ),
+    "notion": (
+        "Search shared content: POST https://api.notion.com/v1/search",
+        "Create private page: POST https://api.notion.com/v1/pages with parent {type:'workspace',workspace:true}",
+        "Update page: PATCH https://api.notion.com/v1/pages/{pageId}",
+        "Append blocks: PATCH https://api.notion.com/v1/blocks/{blockId}/children",
+    ),
+    "slack": (
+        "Post message: POST https://slack.com/api/chat.postMessage",
+        "List channel history: GET https://slack.com/api/conversations.history?channel={channelId}",
+    ),
+    "todoist": (
+        "List/create tasks: GET or POST https://api.todoist.com/rest/v2/tasks",
+        "Update task: POST https://api.todoist.com/rest/v2/tasks/{taskId}",
+    ),
+    "trello": (
+        "List/create cards: GET or POST https://api.trello.com/1/cards",
+        "Update card: PUT https://api.trello.com/1/cards/{cardId}",
+    ),
+}
+_SAFE_PROXY_HEADERS = frozenset(
+    {"accept", "content-type", "notion-version", "consistencylevel"}
+)
+_PROXY_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"})
 
 
 def _emails(value: Any) -> list[str]:
@@ -613,6 +696,447 @@ def _cal_extra_receipt(action_type: str, resp_json: dict) -> tuple:
     return kind, ref
 
 
+def _build_notion_create_page(
+    org_id: str, account_id: str, args: dict
+) -> tuple:
+    parent_ref = str(
+        args.get("parent")
+        or args.get("data_source_id")
+        or args.get("parent_page_id")
+        or "workspace"
+    ).strip()
+    title = str(args.get("title") or "").strip()
+    content = str(args.get("content") or args.get("body") or "").strip()
+    if not title:
+        raise ValueError("Notion page needs a title")
+
+    parent, title_property, content_property = _notion_resolve_parent(
+        org_id, account_id, parent_ref
+    )
+    body: dict[str, Any] = {
+        "parent": parent,
+        "properties": {
+            title_property: {
+                "type": "title",
+                "title": [
+                    {
+                        "type": "text",
+                        "text": {"content": title[:200]},
+                    }
+                ],
+            }
+        },
+    }
+    if content:
+        chunks = [
+            content[i:i + 2000]
+            for i in range(0, min(len(content), 20000), 2000)
+        ]
+        rich_text = [
+            {
+                "type": "text",
+                "text": {"content": chunk},
+            }
+            for chunk in chunks
+        ]
+        if content_property:
+            body["properties"][content_property] = {
+                "type": "rich_text",
+                "rich_text": rich_text,
+            }
+        else:
+            body["children"] = [
+            {
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                        "rich_text": [item],
+                },
+            }
+                for item in rich_text
+            ]
+    return (
+        "POST",
+        f"{_NOTION_API}/pages",
+        body,
+        {"Notion-Version": _NOTION_VERSION},
+    )
+
+
+def _notion_rich_text(parts: Any) -> str:
+    return "".join(
+        str(
+            item.get("plain_text")
+            or (item.get("text") or {}).get("content")
+            or ""
+        )
+        for item in (parts or [])
+        if isinstance(item, dict)
+    ).strip()
+
+
+def _notion_object_title(item: dict) -> str:
+    if str(item.get("object") or "") == "data_source":
+        return _notion_rich_text(item.get("title"))
+    for prop in (item.get("properties") or {}).values():
+        if isinstance(prop, dict) and prop.get("type") == "title":
+            return _notion_rich_text(prop.get("title"))
+    return ""
+
+
+def _notion_data_source_parent(
+    org_id: str, account_id: str, data_source_id: str
+) -> tuple[dict, str, str]:
+    response = pipedream_client.proxy_request(
+        org_id,
+        account_id,
+        "GET",
+        f"{_NOTION_API}/data_sources/{data_source_id}",
+        headers={"Notion-Version": _NOTION_VERSION},
+    )
+    if not response.get("ok"):
+        raise ValueError(_api_error_detail("notion", response))
+    payload = response.get("json") or {}
+    title_property = next(
+        (
+            str(name)
+            for name, prop in (payload.get("properties") or {}).items()
+            if isinstance(prop, dict) and prop.get("type") == "title"
+        ),
+        "",
+    )
+    if not title_property:
+        raise ValueError("Notion data source has no title property")
+    content_property = next(
+        (
+            str(name)
+            for name, prop in (payload.get("properties") or {}).items()
+            if isinstance(prop, dict) and prop.get("type") == "rich_text"
+        ),
+        "",
+    )
+    return (
+        {"data_source_id": str(data_source_id)},
+        title_property,
+        content_property,
+    )
+
+
+def _notion_resolve_parent(
+    org_id: str, account_id: str, parent_ref: str
+) -> tuple[dict, str, str]:
+    target = " ".join(str(parent_ref or "").split()).strip()
+    if target.casefold() in {"workspace", "root", "private"}:
+        return {"type": "workspace", "workspace": True}, "title", ""
+    compact_id = target.replace("-", "")
+    if len(compact_id) == 32 and all(c in "0123456789abcdefABCDEF" for c in compact_id):
+        data_source = pipedream_client.proxy_request(
+            org_id,
+            account_id,
+            "GET",
+            f"{_NOTION_API}/data_sources/{target}",
+            headers={"Notion-Version": _NOTION_VERSION},
+        )
+        if data_source.get("ok"):
+            return _notion_data_source_parent(org_id, account_id, target)
+        page = pipedream_client.proxy_request(
+            org_id,
+            account_id,
+            "GET",
+            f"{_NOTION_API}/pages/{target}",
+            headers={"Notion-Version": _NOTION_VERSION},
+        )
+        if page.get("ok"):
+            return {"page_id": target}, "title", ""
+        raise ValueError("couldn't find that Notion parent")
+
+    response = pipedream_client.proxy_request(
+        org_id,
+        account_id,
+        "POST",
+        f"{_NOTION_API}/search",
+        json_body={"query": target, "page_size": 50},
+        headers={"Notion-Version": _NOTION_VERSION},
+    )
+    if not response.get("ok"):
+        raise ValueError(_api_error_detail("notion", response))
+    matches = [
+        item
+        for item in ((response.get("json") or {}).get("results") or [])
+        if isinstance(item, dict)
+        and _notion_object_title(item).casefold() == target.casefold()
+    ]
+    if not matches:
+        raise ValueError(f"couldn't find Notion parent {target!r}")
+    if len(matches) > 1:
+        raise ValueError(
+            f"Notion parent {target!r} matches {len(matches)} items; use its ID"
+        )
+    parent = matches[0]
+    parent_id = str(parent.get("id") or "")
+    if parent.get("object") == "data_source":
+        return _notion_data_source_parent(org_id, account_id, parent_id)
+    return {"page_id": parent_id}, "title", ""
+
+
+def _notion_receipt(action_type: str, resp_json: dict) -> tuple:
+    return "notion page", str(
+        (resp_json or {}).get("url") or (resp_json or {}).get("id") or ""
+    )
+
+
+def proxy_api_hosts() -> dict[str, list[str]]:
+    """Public, immutable view used to constrain OpenClaw's proxy planner."""
+    return {
+        app: sorted(hosts)
+        for app, hosts in sorted(_PROXY_HOSTS_BY_APP.items())
+    }
+
+
+def proxy_api_guides() -> dict[str, list[str]]:
+    return {
+        app: list(guides)
+        for app, guides in sorted(_PROXY_GUIDES_BY_APP.items())
+    }
+
+
+def validate_proxy_request_args(
+    args: dict,
+    *,
+    read_only: bool = False,
+) -> tuple[str, str, str, Any, dict[str, str]]:
+    """Validate a model-proposed request before it can reach Connect Proxy."""
+    values = args if isinstance(args, dict) else {}
+    app = str(values.get("app") or "").strip().lower()
+    method = str(values.get("method") or "").strip().upper()
+    url = str(values.get("url") or "").strip()
+    if app not in _PROXY_HOSTS_BY_APP:
+        raise ValueError(f"app {app!r} has no registered API host")
+    if method not in _PROXY_METHODS:
+        raise ValueError("API method must be GET, HEAD, POST, PUT, PATCH or DELETE")
+    if len(url) > 4000:
+        raise ValueError("API URL is too long")
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("API URL is invalid") from exc
+    host = str(parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme != "https"
+        or not host
+        or port not in (None, 443)
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
+        raise ValueError("API URL must be a plain HTTPS URL")
+    if host not in _PROXY_HOSTS_BY_APP[app]:
+        raise ValueError(f"{host!r} is not an approved API host for {app}")
+    if read_only and method not in {"GET", "HEAD"}:
+        notion_read = (
+            app == "notion"
+            and method == "POST"
+            and (
+                parsed.path == "/v1/search"
+                or (
+                    parsed.path.startswith("/v1/data_sources/")
+                    and parsed.path.endswith("/query")
+                )
+            )
+        )
+        if not notion_read:
+            raise ValueError("planner reads may not perform this API operation")
+
+    body = values.get("body")
+    if body is not None:
+        try:
+            encoded = json.dumps(body, separators=(",", ":"), ensure_ascii=True)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("request body must be valid JSON") from exc
+        if len(encoded.encode("utf-8")) > 64 * 1024:
+            raise ValueError("request body is too large")
+    raw_headers = values.get("headers")
+    raw_headers = raw_headers if isinstance(raw_headers, dict) else {}
+    headers: dict[str, str] = {}
+    for key, value in raw_headers.items():
+        name = str(key or "").strip()
+        if name.lower() not in _SAFE_PROXY_HEADERS:
+            raise ValueError(f"request header {name!r} is not allowed")
+        headers[name] = str(value or "")[:200]
+    if app == "notion" and not any(
+        key.lower() == "notion-version" for key in headers
+    ):
+        headers["Notion-Version"] = _NOTION_VERSION
+    return app, method, url, body, headers
+
+
+def _proxy_account(org_id: str, app: str) -> dict | None:
+    accounts = pipedream_client.list_accounts(org_id, app=app)
+    return next(
+        (
+            account
+            for account in accounts
+            if account.get("id") and account.get("healthy", True)
+        ),
+        None,
+    ) or next((account for account in accounts if account.get("id")), None)
+
+
+_SENSITIVE_RESPONSE_KEYS = (
+    "api_key", "authorization", "cookie", "credential", "cursor",
+    "password", "secret", "token",
+)
+
+
+def _safe_proxy_data(value: Any, *, depth: int = 0) -> Any:
+    """Bound and redact app data before returning a planner read to OpenClaw."""
+    if depth >= 6:
+        return "[truncated]"
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in list(value.items())[:80]:
+            name = str(key)[:160]
+            if any(marker in name.casefold() for marker in _SENSITIVE_RESPONSE_KEYS):
+                out[name] = "[redacted]"
+            else:
+                out[name] = _safe_proxy_data(item, depth=depth + 1)
+        return out
+    if isinstance(value, list):
+        return [_safe_proxy_data(item, depth=depth + 1) for item in value[:80]]
+    if isinstance(value, str):
+        return value[:2000]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:500]
+
+
+def read_proxy_for_planner(org_id: str, args: dict) -> dict:
+    """One bounded, read-only Connect Proxy call for workflow planning."""
+    if not enabled():
+        return {"ok": False, "error": "Pipedream executor is off"}
+    org = str(org_id or "").strip()
+    if not org:
+        return {"ok": False, "error": "missing org"}
+    try:
+        app, method, url, body, headers = validate_proxy_request_args(
+            args, read_only=True
+        )
+        account = _proxy_account(org, app)
+    except (ValueError, pipedream_client.PipedreamError) as exc:
+        return {"ok": False, "error": str(exc)[:300]}
+    if account is None:
+        return {"ok": False, "error": f"{app} isn't connected in Pipedream"}
+    try:
+        response = pipedream_client.proxy_request(
+            org,
+            str(account["id"]),
+            method,
+            url,
+            json_body=body,
+            headers=headers,
+        )
+    except pipedream_client.PipedreamError as exc:
+        return {"ok": False, "error": f"proxy read failed ({type(exc).__name__})"}
+    if not response.get("ok"):
+        return {
+            "ok": False,
+            "status": response.get("status"),
+            "error": _api_error_detail(app, response),
+        }
+    payload = (
+        response.get("json")
+        if response.get("json") is not None
+        else response.get("text")
+    )
+    return {
+        "ok": True,
+        "status": response.get("status"),
+        "data": _safe_proxy_data(payload),
+    }
+
+
+def _execute_proxy_request(
+    org: str,
+    action_id: str,
+    action_type: str,
+    args: dict,
+    *,
+    receipt_route: str,
+    mirror_surface: bool,
+) -> dict:
+    try:
+        app, method, url, body, headers = validate_proxy_request_args(args)
+        account = _proxy_account(org, app)
+    except (ValueError, pipedream_client.PipedreamError) as exc:
+        return _settle(
+            action_id,
+            org,
+            False,
+            action_type,
+            "",
+            str(exc)[:300],
+            route=receipt_route,
+            mirror_surface=mirror_surface,
+        )
+    if account is None:
+        return _settle(
+            action_id,
+            org,
+            False,
+            action_type,
+            "",
+            f"{app} isn't connected in Pipedream",
+            route=receipt_route,
+            mirror_surface=mirror_surface,
+        )
+    try:
+        response = pipedream_client.proxy_request(
+            org,
+            str(account["id"]),
+            method,
+            url,
+            json_body=body,
+            headers=headers,
+        )
+    except pipedream_client.PipedreamError as exc:
+        return _settle(
+            action_id,
+            org,
+            False,
+            action_type,
+            "",
+            f"proxy call failed ({type(exc).__name__})",
+            route=receipt_route,
+            mirror_surface=mirror_surface,
+        )
+    if not response.get("ok"):
+        return _settle(
+            action_id,
+            org,
+            False,
+            action_type,
+            "",
+            _api_error_detail(app, response),
+            route=receipt_route,
+            mirror_surface=mirror_surface,
+        )
+    response_json = response.get("json")
+    response_json = response_json if isinstance(response_json, dict) else {}
+    ref = str(response_json.get("url") or response_json.get("html_url") or url)[:1000]
+    return _settle(
+        action_id,
+        org,
+        True,
+        action_type,
+        ref,
+        "",
+        kind=f"{app} API {method}",
+        route=receipt_route,
+        mirror_surface=mirror_surface,
+    )
+
+
 
 _MAPPER: dict[str, tuple[str, Builder, ReceiptFn]] = {
     # Asana
@@ -639,6 +1163,9 @@ _MAPPER: dict[str, tuple[str, Builder, ReceiptFn]] = {
     "drive.create_doc": ("google_drive", _build_drive_create_doc, _drive_receipt),
     "drive.rename_file": ("google_drive", _build_drive_rename, _drive_receipt),
     "drive.move_file": ("google_drive", _build_drive_move, _drive_receipt),
+    # Notion uses the Connect Proxy directly so it works without Pipedream's
+    # separately priced pre-built action catalog.
+    "notion.create_page": ("notion", _build_notion_create_page, _notion_receipt),
 }
 
 
@@ -794,7 +1321,7 @@ def enabled() -> bool:
 
 
 def action_types() -> frozenset[str]:
-    return frozenset(_MAPPER)
+    return frozenset((*_MAPPER, PROXY_ACTION_TYPE))
 
 
 # ── connection probe (for the availability gates) ───────────────────────────
@@ -978,7 +1505,7 @@ def handles(action: dict | None) -> bool:
     if not enabled():
         return False
     t = _type_of(action)
-    return t in _MAPPER or bool(generic_app(t))
+    return t in _MAPPER or t == PROXY_ACTION_TYPE or bool(generic_app(t))
 
 
 def _args_of(action: dict | None) -> dict:
@@ -1032,6 +1559,15 @@ def _execute_approved(
     org = str(org_id or "").strip()
     if not org:
         return {"ok": False, "error": "missing org"}
+    if action_type == PROXY_ACTION_TYPE:
+        return _execute_proxy_request(
+            org,
+            action_id,
+            action_type,
+            _args_of(action),
+            receipt_route=receipt_route,
+            mirror_surface=mirror_surface,
+        )
     app = generic_app(action_type)
     if app and action_type not in _MAPPER:
         return _execute_generic(
@@ -1186,6 +1722,18 @@ def _verify_written(org: str, account_id: str, action_type: str,
                 org, account_id, "GET", f"{_GMAIL_API}/drafts/{did}",
             )
             return bool(check.get("ok"))
+        if action_type == "notion.create_page":
+            page_id = str((data or {}).get("id") or "")
+            if not page_id:
+                return False
+            check = pipedream_client.proxy_request(
+                org,
+                account_id,
+                "GET",
+                f"{_NOTION_API}/pages/{page_id}",
+                headers={"Notion-Version": _NOTION_VERSION},
+            )
+            return bool(check.get("ok"))
     except Exception:  # noqa: BLE001 — verification is optional evidence
         return False
     return False
@@ -1256,6 +1804,8 @@ def _api_error_detail(app_slug: str, resp: dict) -> str:
         msg = str(body["error"].get("message") or "")
     if not msg and isinstance(body.get("error"), str):
         msg = body["error"]
+    if not msg and isinstance(body.get("message"), str):
+        msg = body["message"]
     msg = " ".join(msg.split())[:180]
     return f"{base} — {msg}" if msg else base
 

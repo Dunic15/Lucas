@@ -70,8 +70,9 @@ def test_family_verbs_come_from_the_executor_mapper():
         )
         assert tool_registry.family_verbs(slug) == expected
         assert expected, f"executor maps no verbs for {slug}"
+    assert tool_registry.family_verbs("notion") == ["create page"]
     # An app the executor does not map claims nothing.
-    assert tool_registry.family_verbs("notion") == []
+    assert tool_registry.family_verbs("linear") == []
 
 
 def test_family_verbs_text_is_what_the_meeting_brief_speaks():
