@@ -31,6 +31,14 @@ from . import envelope as envelope_mod
 
 ORG_SUBJECT = "org"
 
+# Mirrors the df_connectors kind CHECK (0012, widened by 0024). Keep the two
+# in lockstep: a kind admitted here but absent from the constraint fails at
+# INSERT; the reverse is dead vocabulary.
+CONNECTOR_KINDS = (
+    "upload", "gdrive", "slack", "notion", "crm", "custom",
+    "msgraph", "meeting",
+)
+
 
 class BackpressureError(RuntimeError):
     """Open-quarantine cap reached — park the run, never delete data."""
@@ -55,7 +63,7 @@ def create_connector(
     credential_ref: str = "", trusted_email_issuer: bool = False,
     actor: str = "",
 ) -> Optional[dict[str, Any]]:
-    if kind not in ("upload", "gdrive", "slack", "notion", "crm", "custom"):
+    if kind not in CONNECTOR_KINDS:
         return None
     engine = _engine()
     with engine.begin() as conn:

@@ -184,8 +184,10 @@ def process_due(max_orgs: int = 5, runs_per_org: int = 2) -> int:
                     quarantine_payload_ref=_payload_ref_writer(org_id),
                 )
                 affected = stats.pop("affected_docs", [])
-                if connector["kind"] == "gdrive":
+                if getattr(impl, "mirrors_acl", connector["kind"] == "gdrive"):
                     # An authoritative mirrored sync marks ACL as mirrored.
+                    # Connectors declare this with `mirrors_acl`; gdrive keeps
+                    # its historical behaviour via the default.
                     dal.set_connector_acl_mirrored(
                         org_id, run["connector_id"], True
                     )

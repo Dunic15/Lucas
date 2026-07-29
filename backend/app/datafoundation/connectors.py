@@ -205,14 +205,37 @@ class FakeGDriveConnector:
         }
 
 
+def _msgraph():
+    # Imported lazily: connector_msgraph imports this module for SyncBatch /
+    # ConnectorNotImplemented, so a top-level import would be circular.
+    from .connector_msgraph import MSGraphConnector
+
+    return MSGraphConnector()
+
+
+def _meeting():
+    from .connector_meeting import MeetingConnector
+
+    return MeetingConnector()
+
+
 _REGISTRY: dict[str, Any] = {
     "upload": UploadConnector(),
     "gdrive": FakeGDriveConnector(),
 }
 
+_LAZY: dict[str, Any] = {
+    "msgraph": _msgraph,
+    "meeting": _meeting,
+}
+
 
 def get(kind: str):
-    connector = _REGISTRY.get(str(kind or ""))
+    key = str(kind or "")
+    connector = _REGISTRY.get(key)
+    if connector is None and key in _LAZY:
+        connector = _LAZY[key]()
+        _REGISTRY[key] = connector
     if connector is None:
         raise ConnectorNotImplemented(f"connector kind {kind!r} is deferred")
     return connector

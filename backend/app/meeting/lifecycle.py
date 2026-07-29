@@ -1280,6 +1280,20 @@ async def _finalize_session_locked(
         )
     except Exception:
         pass
+    # Meeting Memory: index the DISTILLED meeting (summary / decisions /
+    # actions / risks — never the transcript) as a Data Foundation record, so
+    # later meetings and the pre-meeting brief can cite it under its own ACL.
+    # Same best-effort contract as the ledger above: the artifact is saved and
+    # the meter already stopped, so memory must never fail finalize.
+    try:
+        from ..datafoundation import connector_meeting
+
+        await run_in_threadpool(
+            connector_meeting.emit_finalized, session.org_id, bot_id, artifact,
+            meeting_meta=(integration or {}).get("meeting") or {},
+        )
+    except Exception:  # noqa: BLE001 — never content, never a finalize failure
+        pass
     openclaw_started = False
     if openclaw_active:
         try:
