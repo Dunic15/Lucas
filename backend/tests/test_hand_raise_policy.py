@@ -161,7 +161,7 @@ def test_ignored_raise_backs_off_but_engaged_resets(tmp_path, monkeypatch):
     s.hand_raised_at = time.time()
     s.pending_contribution = "Queued point."
 
-    async def fake_speak(session, text, *, force, generation, prev, t0=None):
+    async def fake_speak(session, text, *, force, generation, prev, t0=None, gate=None):
         return True
 
     monkeypatch.setattr(main, "_speak_with_audio", fake_speak)

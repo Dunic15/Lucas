@@ -367,7 +367,7 @@ def test_reply_mode_speaks_gemini_draft_and_skips_the_brain(tmp_path, monkeypatc
     monkeypatch.setattr(main_module, "answer_question_stream", _brain_must_not_run)
     spoken = []
 
-    async def fake_speak(session, text, *, force, generation, prev, t0=None):
+    async def fake_speak(session, text, *, force, generation, prev, t0=None, gate=None):
         spoken.append(text)
         return True
 
@@ -410,7 +410,7 @@ def test_on_mode_synthesized_final_still_uses_the_brain(tmp_path, monkeypatch):
     monkeypatch.setattr(main_module, "answer_question_stream", _grounded_stream)
     spoken = []
 
-    async def fake_speak(session, text, *, force, generation, prev, t0=None):
+    async def fake_speak(session, text, *, force, generation, prev, t0=None, gate=None):
         spoken.append(text)
         return True
 
@@ -549,7 +549,7 @@ def test_webhook_relay_turn_attributes_speaker(tmp_path, monkeypatch):
     monkeypatch.setattr(main_module, "answer_question_stream", _brain_must_not_run)
     spoken = []
 
-    async def fake_speak(session, text, *, force, generation, prev, t0=None):
+    async def fake_speak(session, text, *, force, generation, prev, t0=None, gate=None):
         spoken.append(text)
         return True
 

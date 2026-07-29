@@ -114,7 +114,7 @@ def _post(payload: dict) -> dict:
 def _capture_speech(monkeypatch) -> list:
     spoken: list = []
 
-    async def fake_speak_with_audio(session, text, *, force, generation, prev, t0=None):
+    async def fake_speak_with_audio(session, text, *, force, generation, prev, t0=None, gate=None):
         spoken.append(text)
         return True
 

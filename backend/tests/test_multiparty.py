@@ -840,7 +840,7 @@ def test_called_line_after_lull_skips_proactive_path(tmp_path, monkeypatch):
     async def fake_speak(session, line, citations=None, **kw):
         return True
 
-    async def fake_speak_audio(session, text, *, force, generation, prev, t0=None):
+    async def fake_speak_audio(session, text, *, force, generation, prev, t0=None, gate=None):
         return True
 
     monkeypatch.setattr(main, "_make_avatar_speak", fake_speak)

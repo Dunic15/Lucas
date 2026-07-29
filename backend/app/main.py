@@ -97,6 +97,7 @@ from .brain.engine import (
     wants_action_capture,
     wants_deep_thought,
     wants_web_search,
+    web_search_answer,
     post_meeting,
     degraded_post_meeting,
     proactive_flag,
@@ -1515,6 +1516,19 @@ _THINK_LINES_IT = [
     "Un secondo che ci ragiono.",
 ]
 
+# Search ack when the result goes to MEETING CHAT (search_results_to_chat):
+# one short spoken line buys the web call its seconds honestly, and the result
+# lands in chat instead of a long spoken answer over the room. Fixed + short so
+# they're TTS-prewarmed.
+_SEARCH_CHAT_LINES = [
+    "Let me look that up — I'll post what I find in the meeting chat.",
+    "On it — I'll drop the results in the chat in a moment.",
+]
+_SEARCH_CHAT_LINES_IT = [
+    "Lo cerco subito — vi metto quello che trovo nella chat della riunione.",
+    "Ci penso io — tra un attimo mettete l'occhio in chat.",
+]
+
 # Spoken when the answer stream drops AFTER the first token (a fast-provider
 # blip that llm.stream_complete deliberately re-raises to avoid duplicate
 # output). She has already started talking, so one honest recovery beat beats a
@@ -1907,6 +1921,20 @@ def _active_draft(session: "store.Session") -> tuple[dict | None, str]:
     return None, ""
 
 
+def _address_only_active(session: store.Session, avatar) -> bool:
+    """Owner rule (2026-07-29, after the "other Cedric" talk-over): in a room
+    with address_only_min_humans or more humans she speaks ONLY when addressed
+    by name. Gates every unprompted spoken beat (backchannel, proactive
+    intervention, quiet nudge, deference answers, hand-raise/interjection);
+    silent tracking, action capture, and the finalize artifact are untouched.
+    0 disables the mode; 1:1 rooms keep the fluent behaviour. The DEFAULT-ON
+    complement of the opt-in per-avatar _wake_required: same silence, keyed on
+    room size instead of avatar config. Counts via _human_count so the
+    avatar's own Recall bot never inflates a 1:1 into a "group"."""
+    n = settings.address_only_min_humans
+    return n > 0 and _human_count(session, avatar) >= n
+
+
 def _should_backchannel(
     session: store.Session, text: str, avatar: "avatars.Avatar | None" = None
 ) -> bool:
@@ -2012,11 +2040,17 @@ async def _usage_warn(session: store.Session, deadline: float) -> None:
             session.usage_warned_1m = True
             session.usage_warned_5m = True  # never follow with the milder one
             line = _line_for(heard, _USAGE_WARN_1M_LINES, _USAGE_WARN_1M_LINES_IT)
-            await _make_avatar_speak(session, line, force=True)
+            await _make_avatar_speak(
+                session, line, force=True,
+                gate=settings.speak_silence_gate_seconds,
+            )
         elif left <= 300 and left > 75 and not session.usage_warned_5m:
             session.usage_warned_5m = True
             line = _line_for(heard, _USAGE_WARN_5M_LINES, _USAGE_WARN_5M_LINES_IT)
-            await _make_avatar_speak(session, line, force=True)
+            await _make_avatar_speak(
+                session, line, force=True,
+                gate=settings.speak_silence_gate_seconds,
+            )
     except Exception:  # noqa: BLE001 — a warning must never crash the pass
         pass
 
@@ -2067,6 +2101,8 @@ async def _prewarm_tts_cache() -> None:
         *_THINK_LINES_IT,
         *_STREAM_RECOVERY_LINES,
         *_STREAM_RECOVERY_LINES_IT,
+        *_SEARCH_CHAT_LINES,
+        *_SEARCH_CHAT_LINES_IT,
         *_QUEUE_LINES,
         *_QUEUE_LINES_IT,
         *_QUEUE_LINES_TASK,
@@ -2118,6 +2154,33 @@ def _is_repeat(session: store.Session, text: str) -> bool:
     return False
 
 
+async def _wait_for_quiet(
+    session: store.Session, gate_seconds: float, *, generation: int | None = None
+) -> bool:
+    """Pre-speak silence gate (owner rule 2026-07-29): block until the room has
+    been QUIET — no human partial in flight, no new human transcript line — for
+    `gate_seconds` continuously. Returns False (caller drops or diverts the
+    line) when the turn was superseded (barge-in / newer turn bumped the
+    generation) or the room never went quiet within
+    speak_silence_gate_max_wait. Checks HUMAN signals only, so her own audio
+    never blocks her next line. gate_seconds <= 0 disables (immediate True)."""
+    if gate_seconds <= 0:
+        return True
+    t0 = time.time()
+    while True:
+        if generation is not None and generation != session.speech_generation:
+            return False
+        transcript = session.human_transcript()
+        last_line_ts = transcript[-1].ts if transcript else 0.0
+        quiet_since = max(session.last_human_partial_at, last_line_ts)
+        now = time.time()
+        if now - quiet_since >= gate_seconds:
+            return True
+        if now - t0 > settings.speak_silence_gate_max_wait:
+            return False
+        await asyncio.sleep(min(0.15, max(0.05, gate_seconds - (now - quiet_since))))
+
+
 async def _make_avatar_speak(
     session: store.Session,
     text: str,
@@ -2128,6 +2191,7 @@ async def _make_avatar_speak(
     backchannel: bool = False,
     audio: dict | None = None,
     mood: str | None = None,
+    gate: float | None = None,
 ) -> bool:
     """Backend-as-brain: send the exact words for the avatar to speak (Anam talk).
 
@@ -2151,6 +2215,12 @@ async def _make_avatar_speak(
     rides along in the speak message and the page skips its whole /tts
     round-trip; pages that don't know the fields ignore them and POST /tts as
     before — the contract stays additive.
+
+    `gate` (seconds) applies the pre-speak silence gate (_wait_for_quiet) to
+    THIS line: callers pass it only on a turn's FIRST line — pipelined
+    continuation sentences of an in-flight answer must never re-gate (they'd
+    stutter the voice; barge-in already covers a human speaking mid-answer).
+    None = no gate (today's behaviour, and all continuation/page-driven paths).
     """
     # Silent notetaker mode: this avatar never speaks during the meeting — it
     # only listens, tracks state, and delivers the artifact at the end. One gate
@@ -2166,6 +2236,10 @@ async def _make_avatar_speak(
         return False  # turn was cancelled while this sentence was in flight
     if _is_repeat(session, text) and not force:
         return False
+    if gate is not None and not await _wait_for_quiet(
+        session, gate, generation=generation
+    ):
+        return False  # room never went quiet (or turn superseded): never talk over
     message = {
         "type": "speak",
         "text": text,
@@ -2243,6 +2317,7 @@ async def _speak_with_audio(
     generation: int,
     prev: "asyncio.Task | None",
     t0: float | None = None,
+    gate: float | None = None,
 ) -> bool:
     """Synthesize server-side, then speak — pipelined across sentences.
 
@@ -2272,7 +2347,7 @@ async def _speak_with_audio(
             flush=True,
         )
     return await _make_avatar_speak(
-        session, text, force=force, generation=generation, audio=payload
+        session, text, force=force, generation=generation, audio=payload, gate=gate
     )
 
 
@@ -2311,6 +2386,20 @@ async def _send_avatar_control(session: store.Session, message: dict) -> None:
         except Exception:
             session.ws = None
     store.queue_avatar_message(session, message)
+
+
+def _post_to_meeting_chat(session: store.Session, text: str) -> None:
+    """Post `text` into the meeting chat via Recall, chunked so long content
+    (search results, a diverted answer) survives platform message limits.
+    Fire-and-forget from the caller's perspective — schedule with
+    asyncio.create_task(run_in_threadpool(...)) off the live path; a chat
+    failure must never block or delay the meeting. No-op without a Recall key
+    (the key-free demo has no real bot to post as)."""
+    if not settings.recall_api_key or not session.bot_id:
+        return
+    chunk_size = 1500
+    for i in range(0, len(text), chunk_size):
+        recall_client.send_chat_message(session.bot_id, text[i : i + chunk_size])
 
 
 async def _raise_hand(session: store.Session, avatar, heard: str = "") -> None:
@@ -2653,7 +2742,9 @@ async def _self_introduce_after_delay(session: store.Session) -> None:
     # Normal speak path: _make_avatar_speak honours the silent-notetaker gate,
     # the repetition guard, and ws/HTTP delivery. force=True so the intro is
     # never dropped by the repeat guard.
-    await _make_avatar_speak(session, line, force=True)
+    await _make_avatar_speak(
+        session, line, force=True, gate=settings.speak_silence_gate_seconds
+    )
 
 
 def _is_echo(session: store.Session, text: str) -> bool:
@@ -3527,7 +3618,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # cached_payload: attach the voice only if it's already synthesized
             # (prewarmed at boot) — an ack must never wait on a vendor call.
             acked = await _make_avatar_speak(
-                session, line, force=True, audio=tts.cached_payload(line, _avatar_voice(session))
+                session, line, force=True,
+                audio=tts.cached_payload(line, _avatar_voice(session)),
+                gate=settings.speak_silence_gate_called_seconds,
             )
         # ── backchanneling ──
         # Nobody called her, someone is deep into a long point: one tiny
@@ -3543,6 +3636,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             # live double-voice bug (audit 2026-07-24).
             and not _el_voice_owned(session)
             and not _in_opening_grace(session)
+            and not _address_only_active(session, avatar)  # group room: silent listener
             and _should_backchannel(session, text, avatar)
         ):
             session.last_backchannel_at = time.time()
@@ -3620,7 +3714,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
                     line = _line_for(heard, _WELCOME_LINES, _WELCOME_LINES_IT).format(
                         name=label.split()[0]
                     )
-                    await _make_avatar_speak(session, line, force=True)
+                    await _make_avatar_speak(
+                        session, line, force=True,
+                        gate=settings.speak_silence_gate_seconds,
+                    )
         return JSONResponse({"ok": True})
 
     if event != "transcript.data":
@@ -3907,6 +4004,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         and not called  # a direct ask owns its turn — never add proactive latency
         and not session.proactive_done
         and not _in_opening_grace(session)  # never activated → stays a silent guest
+        and not _address_only_active(session, avatar)  # group room: silent listener
         and _closing_signal(session, text)
         and not session.in_cooldown(avatar.speak_cooldown_seconds)
     ):
@@ -3923,7 +4021,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
             session.proactive_done = True
             cits = flag.get("citations", [])
             line = flag["line"] + (f" — per {cits[0]}" if cits else "")
-            await _make_avatar_speak(session, line, cits)
+            await _make_avatar_speak(
+                session, line, cits, gate=settings.speak_silence_gate_seconds
+            )
             return JSONResponse({"ok": True, "spoke": True, "proactive": True, "line": line})
 
     # ── opening settle-in: wait to be called ──
@@ -4250,6 +4350,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                         force=True,
                         generation=clar_gen,
                         audio=tts.cached_payload(line, _avatar_voice(session)),
+                        gate=settings.speak_silence_gate_called_seconds,
                     )
                     return JSONResponse(
                         {
@@ -4283,6 +4384,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                         force=True,
                         generation=clar_gen,
                         audio=tts.cached_payload(line, _avatar_voice(session)),
+                        gate=settings.speak_silence_gate_called_seconds,
                     )
                     return JSONResponse(
                         {
@@ -4553,7 +4655,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
         try:
             goodbye = _line_for(question or text, _GOODBYE_LINES, _GOODBYE_LINES_IT)
             await _make_avatar_speak(
-                session, goodbye, force=True, audio=tts.cached_payload(goodbye, _avatar_voice(session))
+                session, goodbye, force=True,
+                audio=tts.cached_payload(goodbye, _avatar_voice(session)),
+                gate=settings.speak_silence_gate_called_seconds,
             )
             await asyncio.sleep(settings.leave_grace_seconds)
         except Exception:
@@ -4592,7 +4696,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
             await _lower_hand(session)
             turn_gen = store.bump_speech_generation(session)
             spoke = await _speak_with_audio(
-                session, pending, force=True, generation=turn_gen, prev=None
+                session, pending, force=True, generation=turn_gen, prev=None,
+                gate=settings.speak_silence_gate_called_seconds,
             )
             return JSONResponse(
                 {
@@ -4828,6 +4933,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         and not called
         and not session.quiet_nudge_done
         and not _in_opening_grace(session)  # never activated → stays a silent guest
+        and not _address_only_active(session, avatar)  # group room: silent listener
         and _closing_signal(session, text)
         and len(session.human_transcript()) >= 12
         and not session.in_cooldown(avatar.speak_cooldown_seconds)
@@ -4849,7 +4955,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
             nudge = _line_for(
                 text, _QUIET_NUDGE_LINES, _QUIET_NUDGE_LINES_IT
             ).format(name=quiet[0].split()[0])
-            await _make_avatar_speak(session, nudge, force=True)
+            await _make_avatar_speak(
+                session, nudge, force=True,
+                gate=settings.speak_silence_gate_seconds,
+            )
             return JSONResponse({"ok": True, "spoke": True, "quiet_nudge": True})
 
     # Tool-domain addressing (owner 2026-07-24, 3-person call): "can you check
@@ -4883,6 +4992,15 @@ async def recall_webhook(request: Request) -> JSONResponse:
     roster = session.roster(avatar.name)
     if not called and addressed_to_other(text, roster):
         return JSONResponse({"ok": True, "spoke": False, "reason": "addressed to other"})
+    # ── address-only group mode ──
+    # Owner rule (2026-07-29): with several humans in the room, ONLY a direct
+    # address gets speech — no follow-up window, no deference answers, no
+    # hand-raise/interjection. Placed BEFORE the followup computation so the
+    # engaged-follow-up bypass is dead in group rooms (name required always).
+    if not called and _address_only_active(session, avatar):
+        return JSONResponse(
+            {"ok": True, "spoke": False, "reason": "not addressed (group)"}
+        )
     # ── engaged follow-up ──
     # She JUST spoke and someone asks a question without her name — in a live
     # conversation that's almost always a follow-up to HER answer ("and what
@@ -5229,6 +5347,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 line,
                 force=True,
                 generation=turn_gen,
+                gate=settings.speak_silence_gate_called_seconds,
                 audio=tts.cached_payload(line, _avatar_voice(session)),
             )
             return JSONResponse(
@@ -5255,6 +5374,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
             line,
             force=True,
             generation=turn_gen,
+            gate=settings.speak_silence_gate_called_seconds,
             audio=tts.cached_payload(line, _avatar_voice(session)),
         )
         return JSONResponse({"ok": True, "spoke": bool(spoke), "action_capture": True})
@@ -5289,6 +5409,58 @@ async def recall_webhook(request: Request) -> JSONResponse:
             force=True,
             generation=turn_gen,
             audio=tts.cached_payload(line, _avatar_voice(session)),
+            gate=settings.speak_silence_gate_called_seconds,
+        )
+
+    # ── in-call research → meeting chat (owner rule 2026-07-29) ──
+    # A search question gets ONE short spoken line ("I'll post it in the chat")
+    # and the actual result lands as a Recall chat message, generated OFF the
+    # live path — never a multi-sentence spoken answer over the room. Only when
+    # a real bot can post (Recall key + bot id); the key-free demo and console
+    # keep the announced streamed answer below, exactly as before.
+    if (
+        called
+        and settings.search_results_to_chat
+        and wants_web_search(question)
+        and settings.recall_api_key
+        and session.bot_id
+    ):
+        ack_line = _line_for(question, _SEARCH_CHAT_LINES, _SEARCH_CHAT_LINES_IT)
+        session.last_ack_at = time.time()
+        spoke = await _make_avatar_speak(
+            session,
+            ack_line,
+            force=True,
+            generation=turn_gen,
+            audio=tts.cached_payload(ack_line, _avatar_voice(session)),
+            gate=settings.speak_silence_gate_called_seconds,
+        )
+        search_convo = session.recent_transcript(n=8)
+
+        async def _search_to_chat() -> None:
+            try:
+                result = await run_in_threadpool(
+                    web_search_answer, question, search_convo
+                )
+                if result:
+                    await run_in_threadpool(_post_to_meeting_chat, session, result)
+                    return
+            except Exception as e:  # noqa: BLE001 — chat is best-effort
+                print(f"[search] chat post failed ({type(e).__name__})", flush=True)
+                result = ""
+            # Search flaked or the chat post failed: fall back to speaking a
+            # SHORT line so the ask is never left dangling after the ack.
+            fallback = _line_for(
+                question, _STREAM_RECOVERY_LINES, _STREAM_RECOVERY_LINES_IT
+            )
+            await _make_avatar_speak(
+                session, fallback, force=True,
+                gate=settings.speak_silence_gate_seconds,
+            )
+
+        asyncio.create_task(_search_to_chat())
+        return JSONResponse(
+            {"ok": True, "spoke": bool(spoke), "search_to_chat": True}
         )
 
     # Backend is the brain: answer from OUR knowledge (RAG) with the recent
@@ -5465,6 +5637,11 @@ async def recall_webhook(request: Request) -> JSONResponse:
         and len(roster) >= settings.hand_raise_min_humans
     )
     hand_sentences: list[str] = []
+    # Pre-speak silence gate outcome: when the room never went quiet for the
+    # turn's first sentence, the whole answer collects here and is POSTED TO
+    # MEETING CHAT instead of spoken — never lost, never talked over anyone.
+    floor_lost = False
+    chat_sentences: list[str] = []
     # Grounding confidence the retrieval already computed (top surviving chunk
     # score), read back after the stream ends to gate the interjection escape —
     # no second model call. Only consulted on the hand-raise path below.
@@ -5547,6 +5724,30 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 _dropped_dup = True
                 suppressed_any = True
                 continue
+            if floor_lost:
+                chat_sentences.append(sentence)
+                continue
+            # ── pre-speak silence gate (owner rule 2026-07-29) ──
+            # Before the turn's FIRST spoken sentence, require the room quiet:
+            # a short beat when addressed by name (the asker just stopped
+            # talking), the full gate otherwise. If the room never goes quiet,
+            # the WHOLE answer diverts to meeting chat below — she never talks
+            # over anyone, and the answer is never lost. Later sentences skip
+            # the gate (mid-answer re-gating would stutter; barge-in covers a
+            # human speaking over her).
+            if not speak_tasks:
+                _gate = (
+                    settings.speak_silence_gate_called_seconds
+                    if (called or followup)
+                    else settings.speak_silence_gate_seconds
+                )
+                if not await _wait_for_quiet(session, _gate, generation=turn_gen):
+                    if session.speech_generation != turn_gen:
+                        interrupted = True
+                        break
+                    floor_lost = True
+                    chat_sentences.append(sentence)
+                    continue
             # Called by name -> answer even if it repeats a recent line; an
             # unaddressed duplicate is suppressed (and reported honestly below).
             # Speaking is pipelined: sentence N synthesizes server-side while
@@ -5663,6 +5864,21 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 {"ok": True, "spoke": bool(spoke), "search_ready": True}
             )
 
+    # ── floor never opened: divert the whole answer to meeting chat ──
+    # The silence gate timed out before the first sentence could be spoken —
+    # the room kept talking. Post the full answer as a chat message (off the
+    # live path) instead of dropping it or talking over anyone. Key-free demo
+    # (no Recall key/bot) simply stays silent — same as a dropped line today.
+    if floor_lost and not interrupted:
+        answer_text = " ".join(chat_sentences).strip()
+        if answer_text:
+            asyncio.create_task(
+                run_in_threadpool(_post_to_meeting_chat, session, answer_text)
+            )
+        return JSONResponse(
+            {"ok": True, "spoke": False, "reason": "floor busy", "chat": bool(answer_text)}
+        )
+
     if hand_mode:
         if interrupted or session.speech_generation != turn_gen:
             return JSONResponse({"ok": True, "spoke": False, "interrupted": True})
@@ -5755,7 +5971,8 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 session.hand_last_ignored = False
                 session.hand_last_contribution = contribution
                 spoke = await _speak_with_audio(
-                    session, contribution, force=True, generation=turn_gen, prev=None
+                    session, contribution, force=True, generation=turn_gen, prev=None,
+                    gate=settings.speak_silence_gate_seconds,
                 )
                 return JSONResponse(
                     {
@@ -5792,7 +6009,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
             )
         if _should_repair_silent_answer(called, text):
             line = _silent_answer_repair_line(avatar)
-            if await _make_avatar_speak(session, line):
+            if await _make_avatar_speak(
+                session, line, gate=settings.speak_silence_gate_called_seconds
+            ):
                 return JSONResponse(
                     {
                         "ok": True,
