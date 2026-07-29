@@ -162,6 +162,25 @@ async def dashboard_openclaw_chat_detail(
     return JSONResponse({"ok": True, "thread": thread}, headers=_NO_STORE)
 
 
+@router.delete("/dashboard/openclaw/chats/{thread_id}")
+async def dashboard_openclaw_chat_delete(
+    thread_id: str, request: Request
+) -> JSONResponse:
+    err, org = await _dashboard_org(request)
+    if err:
+        return err
+    if not auth._same_origin(request):
+        return JSONResponse({"error": "same-origin required"}, status_code=403)
+    deleted = await run_in_threadpool(
+        runtime.delete_chat_thread, org, thread_id
+    )
+    if not deleted:
+        return JSONResponse(
+            {"error": "unknown chat for this workspace"}, status_code=404
+        )
+    return JSONResponse({"ok": True}, headers=_NO_STORE)
+
+
 @router.post("/dashboard/openclaw/chat")
 async def dashboard_openclaw_chat(request: Request) -> JSONResponse:
     err, org = await _dashboard_org(request)

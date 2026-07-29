@@ -280,9 +280,18 @@ def test_dashboard_chat_is_chat_only_and_tasks_stay_in_action_center():
     assert "If you want to know what I can do, just ask me." in html
     assert 'id="oc-new-chat"' in html
     assert 'id="oc-thread-list"' in html
+    assert 'id="oc-delete-chat"' in html
+    assert 'method:"DELETE"' in html
+    assert "deleteOpenClawChat" in html
     assert "Refine in Chat" in html
     assert "createOpenClawChat({workflow_id:workflowId})" in html
     assert "Review &amp; retry" in html
+    assert 'data-ab="progress"' in html
+    assert 'class="ac-meeting"' in html
+    assert 'data-acchat="' in html
+    assert "discussOpenClawMeeting" in html
+    assert "renderOpenClawThreads();" in html
+    assert "option.value===activeThread.meeting_id" in html
     assert "Review the saved action before approving a retry." in html
     assert "Tasks ready to work on" not in html
     assert "oc-task-list" not in html

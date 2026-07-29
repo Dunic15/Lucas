@@ -594,6 +594,77 @@ def chat_thread_detail(org_id: str, thread_id: str) -> dict | None:
     return thread
 
 
+def delete_chat_thread(org_id: str, thread_id: str) -> bool:
+    """Permanently delete one active chat owned by this organization."""
+    org = str(org_id or "").strip()
+    tid = str(thread_id or "").strip()
+    if not org or not tid:
+        return False
+    if _chat_pg(org):
+        engine = control_plane._get_engine()
+        with engine.begin() as conn:
+            control_plane._set_org(conn, org)
+            owned = _pg_fetchone(
+                conn,
+                """
+                SELECT thread_id FROM openclaw_chat_threads
+                WHERE org_id=:org_id AND thread_id=:thread_id
+                  AND archived=false
+                FOR UPDATE
+                """,
+                {"org_id": org, "thread_id": tid},
+            )
+            if owned is None:
+                return False
+            conn.execute(
+                _text(
+                    """
+                    DELETE FROM openclaw_chat_messages
+                    WHERE org_id=:org_id AND thread_id=:thread_id
+                    """
+                ),
+                {"org_id": org, "thread_id": tid},
+            )
+            conn.execute(
+                _text(
+                    """
+                    DELETE FROM openclaw_chat_threads
+                    WHERE org_id=:org_id AND thread_id=:thread_id
+                    """
+                ),
+                {"org_id": org, "thread_id": tid},
+            )
+        return True
+    _ensure_sqlite_schema()
+    with store._LOCK, store._connect() as conn:
+        owned = conn.execute(
+            """
+            SELECT thread_id FROM openclaw_chat_threads
+            WHERE org_id=? AND thread_id=? AND archived=0
+            """,
+            (org, tid),
+        ).fetchone()
+        if owned is None:
+            return False
+        # SQLite foreign-key enforcement can vary between local connections.
+        # Delete the children explicitly so no transcript survives the thread.
+        conn.execute(
+            """
+            DELETE FROM openclaw_chat_messages
+            WHERE org_id=? AND thread_id=?
+            """,
+            (org, tid),
+        )
+        deleted = conn.execute(
+            """
+            DELETE FROM openclaw_chat_threads
+            WHERE org_id=? AND thread_id=?
+            """,
+            (org, tid),
+        )
+    return deleted.rowcount == 1
+
+
 def add_chat_thread_message(
     org_id: str,
     thread_id: str,
