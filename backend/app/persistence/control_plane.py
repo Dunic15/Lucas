@@ -1309,6 +1309,191 @@ def mark_superseded(
     return (result.rowcount or 0) > 0
 
 
+# ── Meeting Memory (migration 0025, meeting_memory) ────────────────────
+# Durable per-org recall of finalized meetings. DISTILLED fields only — the
+# raw transcript is NEVER written here (the table has no column for it), so the
+# memory index cannot leak it. Search is permission-safe and default-deny.
+
+_MEMORY_VISIBILITIES = frozenset({"participants", "org", "private"})
+
+
+def save_meeting_memory(org_id: str, meeting_id: str, record: dict) -> Optional[bool]:
+    """Upsert one meeting's distilled memory row inside its tenant. ``record``
+    carries only title/date/avatar/participants/summary/decisions/actions +
+    visibility/principal + a flat search_text — never a transcript. Returns
+    True on write, None when the control plane is disabled."""
+    if not enabled():
+        return None
+    org = (org_id or "").strip()
+    mid = (meeting_id or "").strip()
+    if not org or not mid:
+        raise ValueError("org_id and meeting_id are required for meeting memory")
+    visibility = str(record.get("visibility") or "participants")
+    if visibility not in _MEMORY_VISIBILITIES:
+        visibility = "participants"
+    date_epoch = record.get("meeting_date")
+
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        conn.execute(
+            text(
+                """
+                INSERT INTO public.meeting_memory AS m
+                  (org_id, meeting_id, avatar_id, title, meeting_date,
+                   participants, summary, decisions, actions, visibility,
+                   principal_id, search_text)
+                VALUES (
+                  CAST(:o AS uuid), :mid, :avatar, :title,
+                  CASE WHEN CAST(:date AS double precision) IS NULL THEN NULL
+                       ELSE to_timestamp(CAST(:date AS double precision)) END,
+                  CAST(:participants AS jsonb), :summary,
+                  CAST(:decisions AS jsonb), CAST(:actions AS jsonb),
+                  :visibility, :principal, :search_text
+                )
+                ON CONFLICT (org_id, meeting_id) DO UPDATE SET
+                  avatar_id = excluded.avatar_id,
+                  title = excluded.title,
+                  meeting_date = excluded.meeting_date,
+                  participants = excluded.participants,
+                  summary = excluded.summary,
+                  decisions = excluded.decisions,
+                  actions = excluded.actions,
+                  visibility = excluded.visibility,
+                  principal_id = excluded.principal_id,
+                  search_text = excluded.search_text,
+                  updated_at = now()
+                """
+            ),
+            {
+                "o": org, "mid": mid,
+                "avatar": str(record.get("avatar_id") or "")[:64],
+                "title": str(record.get("title") or "")[:300],
+                "date": float(date_epoch) if date_epoch is not None else None,
+                "participants": json.dumps(
+                    list(record.get("participants") or [])[:50]),
+                "summary": str(record.get("summary") or "")[:8000],
+                "decisions": json.dumps(list(record.get("decisions") or [])[:80]),
+                "actions": json.dumps(list(record.get("actions") or [])[:80]),
+                "visibility": visibility,
+                "principal": str(record.get("principal_id") or "")[:200],
+                "search_text": str(record.get("search_text") or "")[:16000],
+            },
+        )
+    return True
+
+
+def search_meeting_memory(
+    org_id: str, query: str, *, principal_ref: str = "", limit: int = 8,
+) -> Optional[list[dict]]:
+    """Permission-safe historical search over one tenant's meeting memory.
+
+    Default-deny visibility: a row is returned only when it is org-visible OR
+    the caller's authenticated principal ran it (participants/private collapse
+    to the runner — a transcript display name is not an identity). An empty
+    query returns the most recent authorized meetings (the pre-meeting
+    'related prior meetings' path). Never returns a transcript."""
+    if not enabled():
+        return None
+    org = (org_id or "").strip()
+    if not org:
+        return []
+    pid = str(principal_ref or "").strip()
+    q = " ".join(str(query or "").split())
+    from sqlalchemy import text
+
+    # The one permission predicate, applied BEFORE ranking. principal_id='' can
+    # never match an empty caller principal (both sides guarded), so an
+    # unauthenticated caller sees org-visible meetings only.
+    visible = "(m.visibility = 'org' OR (:pid <> '' AND m.principal_id = :pid))"
+    params: dict[str, Any] = {
+        "o": org, "pid": pid,
+        "lim": max(1, min(int(limit), 50)),
+    }
+    if q:
+        params["q"] = q
+        where = f"{visible} AND m.fts @@ plainto_tsquery('simple', :q)"
+        order = "ts_rank(m.fts, plainto_tsquery('simple', :q)) DESC, " \
+                "m.meeting_date DESC NULLS LAST"
+    else:
+        where = visible
+        order = "m.meeting_date DESC NULLS LAST, m.meeting_id"
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        rows = conn.execute(
+            text(
+                f"""
+                SELECT m.meeting_id, m.avatar_id, m.title,
+                       extract(epoch from m.meeting_date) AS meeting_date,
+                       m.participants, m.summary, m.decisions, m.actions,
+                       m.visibility
+                FROM public.meeting_memory m
+                WHERE m.org_id = CAST(:o AS uuid) AND {where}
+                ORDER BY {order}
+                LIMIT :lim
+                """
+            ),
+            params,
+        ).mappings().all()
+    return [_meeting_memory_row(r) for r in rows]
+
+
+def _meeting_memory_row(row) -> dict:
+    def _jsonlist(value: Any) -> list:
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except (TypeError, ValueError):
+                return []
+            return parsed if isinstance(parsed, list) else []
+        return []
+
+    return {
+        "meeting_id": str(row["meeting_id"]),
+        "avatar_id": str(row["avatar_id"] or ""),
+        "title": str(row["title"] or ""),
+        "meeting_date": (
+            float(row["meeting_date"]) if row["meeting_date"] is not None
+            else None
+        ),
+        "participants": _jsonlist(row["participants"]),
+        "summary": str(row["summary"] or ""),
+        "decisions": _jsonlist(row["decisions"]),
+        "actions": _jsonlist(row["actions"]),
+        "visibility": str(row["visibility"] or "participants"),
+    }
+
+
+def delete_meeting_memory(org_id: str, meeting_id: str) -> Optional[bool]:
+    """Revoke one meeting's memory row (the derived-projection revocation
+    primitive). Rebuildable from the artifact if ever needed."""
+    if not enabled():
+        return None
+    org = (org_id or "").strip()
+    mid = (meeting_id or "").strip()
+    if not org or not mid:
+        return False
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        _set_org(conn, org)
+        result = conn.execute(
+            text(
+                "DELETE FROM public.meeting_memory "
+                "WHERE org_id = CAST(:o AS uuid) AND meeting_id = :mid"
+            ),
+            {"o": org, "mid": mid},
+        )
+    return bool(result.rowcount)
+
+
 def org_plan(org_id: str) -> Optional[dict]:
     """``{plan, included_seconds}`` for an org's billing account (PR B's trial
     enforcement reads this), or None when disabled / no billing row."""

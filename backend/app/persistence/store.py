@@ -1419,6 +1419,25 @@ def save_artifact(bot_id: str, artifact: dict, *, org_id: str | None = None) -> 
                 flush=True,
             )
 
+    # Meeting Memory (0025): index the DISTILLED finalized meeting for durable,
+    # permission-safe historical recall — title/date/avatar/participants/
+    # summary/decisions/actions only, NEVER the transcript. Flag-gated + strictly
+    # best-effort: a memory-index failure must never turn a saved artifact (the
+    # meter stop) into a finalize loop, and never logs content.
+    try:
+        from ..meeting import meeting_memory
+
+        if meeting_memory.enabled():
+            meeting_memory.index_artifact(
+                str(row_org), bot_id, artifact, meeting_date=saved_at
+            )
+    except Exception as exc:  # noqa: BLE001 — memory indexing is non-fatal
+        print(
+            f"[save_artifact] meeting memory index skipped "
+            f"({type(exc).__name__})",
+            flush=True,
+        )
+
 
 def get_artifact(bot_id: str, org_id: str | None = None) -> dict | None:
     """Get a private artifact.
