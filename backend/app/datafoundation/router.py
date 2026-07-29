@@ -200,6 +200,74 @@ def _op_freshness(org: str) -> tuple[int, dict]:
     return 200, {"freshness": dal.freshness(org)}
 
 
+def _filters_from(source: dict) -> dict:
+    """Meeting-memory filters from a query string or JSON body. Absent keys
+    stay absent — a filter never defaults to something permissive."""
+    out: dict = {}
+    for key in ("participant", "customer", "project", "topic", "series_key"):
+        value = str(source.get(key) or "").strip()
+        if value:
+            out[key] = value
+    for key in ("since", "until"):
+        raw = str(source.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            out[key] = float(raw)
+        except ValueError:
+            continue
+    return out
+
+
+def _op_meeting_search(org: str, principal_id: str,
+                       source: dict) -> tuple[int, dict]:
+    """Read-only meeting memory search. principal_id is the AUTHENTICATED
+    caller; empty means org-visible meetings only (never everything)."""
+    from . import meeting_memory
+
+    query = str(source.get("q") or source.get("query") or "").strip()
+    try:
+        k = int(source.get("k") or 8)
+    except (TypeError, ValueError):
+        k = 8
+    result = meeting_memory.search(
+        org, principal_ref=principal_id, query=query,
+        filters=_filters_from(source), k=k,
+    )
+    return 200, result
+
+
+def _op_premeeting(org: str, principal_id: str,
+                   source: dict) -> tuple[int, dict]:
+    """Read-only pre-meeting context pack. Never writes, never proposes an
+    action — a write must go through the Action Center approval flow."""
+    from . import premeeting_context
+
+    attendees_raw = source.get("attendees")
+    if isinstance(attendees_raw, str):
+        attendees = [a.strip() for a in attendees_raw.split(",") if a.strip()]
+    elif isinstance(attendees_raw, list):
+        attendees = attendees_raw
+    else:
+        attendees = []
+    event = {
+        "title": str(source.get("title") or ""),
+        "agenda": str(source.get("agenda") or ""),
+        "starts_at": source.get("starts_at"),
+        "organizer": str(source.get("organizer") or ""),
+        "platform": str(source.get("platform") or ""),
+        "customer": str(source.get("customer") or ""),
+        "project": str(source.get("project") or ""),
+        "series_key": str(source.get("series_key") or ""),
+        "attendees": attendees,
+    }
+    pack = premeeting_context.build(
+        org, principal_ref=principal_id, event=event,
+        avatar_key=str(source.get("avatar_key") or "") or "laura",
+    )
+    return 200, {"context_pack": pack}
+
+
 def _op_bind(org: str, identity_id: str, body: dict,
              actor: str) -> tuple[int, dict]:
     principal = str((body or {}).get("principal_ref") or "").strip()
@@ -315,6 +383,28 @@ async def org_df_freshness(request: Request) -> JSONResponse:
     return await _machine(request, _op_freshness)
 
 
+@router.post("/org/data/meetings/search")
+async def org_df_meeting_search(request: Request) -> JSONResponse:
+    # Machine bearer = org authority, no human principal: org-visible
+    # meetings only, exactly like /org/data/resolve.
+    return await _machine(
+        request, lambda org, body: _op_meeting_search(org, "", body),
+        needs_body=True,
+    )
+
+
+@router.post("/org/data/premeeting")
+async def org_df_premeeting(request: Request) -> JSONResponse:
+    # READ-ONLY context pack. A machine caller carries no human identity, so
+    # the pack contains org-visible evidence only; the per-user pack comes
+    # from the cookie-authenticated dashboard twin below (or, for the meeting
+    # avatar, once its session carries a bound principal).
+    return await _machine(
+        request, lambda org, body: _op_premeeting(org, "", body),
+        needs_body=True,
+    )
+
+
 # ── dashboard twin (cookie + same-origin; admin writes; strict methods) ────
 
 @router.api_route("/dashboard/data/{tail:path}",
@@ -378,6 +468,14 @@ async def dashboard_data(tail: str, request: Request) -> JSONResponse:
             return _op_resolve(org, principal, body)
         if parts == ["freshness"] and method == "GET":
             return _op_freshness(org)
+        # Read-only, per-user surfaces: GET so an ordinary member (the person
+        # actually attending the meeting) can use them — the admin gate above
+        # covers mutations only, and both paths are strictly read-only.
+        if parts == ["meetings", "search"] and method == "GET":
+            return _op_meeting_search(org, principal,
+                                      dict(request.query_params))
+        if parts == ["premeeting"] and method == "GET":
+            return _op_premeeting(org, principal, dict(request.query_params))
         if (len(parts) == 3 and parts[0] == "identities"
                 and parts[2] == "bind" and method == "POST"):
             return _op_bind(org, parts[1], body, principal)

@@ -371,8 +371,35 @@ def emit_finalized(org_id: str, bot_id: str, artifact: dict,
                              new_cursor={"mode": "event"})
     # A mirrored-ACL connector only becomes visible once marked authoritative.
     dal.set_connector_acl_mirrored(org_id, connector["id"], True)
+    index_facets(org_id, connector["id"], bot_id, artifact or {},
+                 meeting_meta=meeting_meta, deleted=deleted)
     sync._reconcile_retrieval(org_id, stats.pop("affected_docs", []))
     return True
+
+
+def index_facets(org_id: str, connector_id: str, bot_id: str, artifact: dict,
+                 *, meeting_meta: dict | None = None,
+                 deleted: bool = False) -> None:
+    """Keep the filter projection in lockstep with the record. A tombstone
+    needs no facet row — the record cascade removes it — and facets never
+    grant visibility, so a miss here can only narrow results."""
+    if deleted:
+        return
+    from . import dal, meeting_memory
+
+    record_id = dal.record_id_for(org_id, connector_id, str(bot_id))
+    if not record_id:
+        return
+    fields = distill(artifact, bot_id=bot_id, meeting_meta=meeting_meta)
+    series = ""
+    try:
+        from ..actions import ledger
+
+        series = ledger.meeting_key(fields["source_reference"]) or ""
+    except Exception:  # noqa: BLE001
+        series = ""
+    meeting_memory.replace_facets(org_id, record_id, fields,
+                                  series_key=series)
 
 
 def _meta_of(artifact: dict) -> dict:

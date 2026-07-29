@@ -863,6 +863,28 @@ def visible_heads(
     return [dict(r) for r in rows]
 
 
+def record_id_for(org_id: str, connector_id: str, external_id: str) -> str:
+    """The head id for one (connector, external_id) — "" when absent. Lets a
+    caller attach derived projections (e.g. meeting facets) to the record it
+    just committed. Read-only and org-pinned; grants nothing."""
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                """
+                SELECT id::text FROM df_source_records
+                WHERE org_id=:org_id
+                  AND connector_id=CAST(:connector_id AS uuid)
+                  AND external_id=:external_id
+                """
+            ),
+            {"org_id": org_id, "connector_id": connector_id,
+             "external_id": str(external_id or "")[:300]},
+        ).first()
+    return str(row[0]) if row else ""
+
+
 def restricted_document_ids(org_id: str) -> set[str]:
     """knowledge document ids that must NOT be in the live per-org index:
     tombstoned heads, non-org_default ACL, or an ineligible connector."""
