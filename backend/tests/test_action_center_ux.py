@@ -282,6 +282,8 @@ def test_dashboard_chat_is_chat_only_and_tasks_stay_in_action_center():
     assert 'id="oc-thread-list"' in html
     assert "Refine in Chat" in html
     assert "createOpenClawChat({workflow_id:workflowId})" in html
+    assert "Review &amp; retry" in html
+    assert "Review the saved action before approving a retry." in html
     assert "Tasks ready to work on" not in html
     assert "oc-task-list" not in html
     assert "renderOpenClawTasks" not in html
