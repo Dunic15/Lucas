@@ -599,6 +599,18 @@ async def _start_avatar_session(
     # answer kept saying "no snapshot loaded" while she was reading tasks from
     # it (live 2026-07-24) — capabilities.py keys on THIS flag now.
     session.asana_brief_loaded = bool(asana_snapshot)
+    # Read-only enterprise knowledge tools (Company Brain + Meeting Memory) are
+    # offered this session only when the feature is on for the org. These are
+    # cheap flag checks (settings + control-plane configured — no DB call, no
+    # network), so tools.specs_for on the live path never touches config. With
+    # both flags off (the demo, existing deployments) no new tool is offered.
+    from .. import datafoundation, knowledge
+    from . import meeting_memory
+
+    session.company_brain_live = bool(
+        datafoundation.enabled() or knowledge.enabled()
+    )
+    session.meeting_memory_live = bool(meeting_memory.enabled())
     # Keep the RAW board text on the session. memory_brief (below) is consumed
     # only by the legacy brain — an ElevenLabs-Agent session returns long before
     # it (main.py `_el_voice_owned`), so without this the avatar on that runtime
