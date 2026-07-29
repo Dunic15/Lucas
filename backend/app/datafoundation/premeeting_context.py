@@ -38,6 +38,7 @@ PACK_VERSION = "premeeting@1"
 _MAX_PRIOR_MEETINGS = 5
 _MAX_COMMITMENTS = 8
 _MAX_DOCS = 4
+_RESOLVER_K = 12  # the ContextResolver's own ceiling
 _MAX_RISKS = 6
 _MAX_POINTS = 6
 _LOOKBACK_DAYS = 180
@@ -235,8 +236,11 @@ def build(
         try:
             from . import resolver
 
+            # Ask for more candidates than we keep: meeting bodies live in
+            # the same chunk store and are filtered out below, so a small k
+            # would let them crowd every document off the list.
             resolved = resolver.resolve(
-                org_id, avatar_key or "laura", doc_query, k=_MAX_DOCS,
+                org_id, avatar_key or "laura", doc_query, k=_RESOLVER_K,
                 principal_id=principal_ref, purpose="premeeting",
             )
         except Exception as exc:  # noqa: BLE001 — degrade, never widen
@@ -248,9 +252,16 @@ def build(
             pack["freshness"]["degraded"] = True
         for chunk in resolved.get("chunks") or []:
             record_id = str(chunk.get("record_id") or "")
+            cite_kind = str((chunk.get("citation") or {}).get("connector_kind")
+                            or "")
             if not record_id or record_id in seen_records:
                 # No record id = a base-pack chunk, which carries no citable
                 # company record; duplicates come from the query fan-out.
+                continue
+            if cite_kind == "meeting":
+                # Meeting bodies are materialized as knowledge documents, so
+                # they surface here too — but they are already the
+                # "previously" section. Company knowledge means documents.
                 continue
             if len(pack["company_knowledge"]) >= _MAX_DOCS:
                 break
@@ -276,6 +287,17 @@ def build(
 _ACTION_LINE = re.compile(r"^-\s+(.*)$", re.MULTILINE)
 
 
+def _section(body: str, heading: str) -> str:
+    """Just the named section of a distilled meeting — up to the NEXT '##'.
+    Splitting on the heading alone would swallow every following section, so
+    risks would be harvested as commitments."""
+    if heading not in body:
+        return ""
+    rest = body.split(heading, 1)[1]
+    end = rest.find("\n## ")
+    return rest if end == -1 else rest[:end]
+
+
 def _harvest(hit: dict, pack: dict) -> None:
     """Pull open commitments and risks out of a distilled meeting excerpt.
 
@@ -285,35 +307,37 @@ def _harvest(hit: dict, pack: dict) -> None:
     whichever section matched the query, which usually is not the one holding
     the commitments. Every harvested line keeps the meeting id that justifies
     it: an uncited commitment never enters the pack."""
-    excerpt = str(hit.get("body") or hit.get("excerpt") or "")
+    body = str(hit.get("body") or hit.get("excerpt") or "")
     cite = hit.get("citation") or {}
     mid = str(cite.get("meeting_id") or "")
-    lowered = excerpt.lower()
-    if "## actions" in lowered:
-        for line in _ACTION_LINE.findall(excerpt.split("## Actions", 1)[-1]):
-            if len(pack["open_commitments"]) >= _MAX_COMMITMENTS:
+    seen_risks = {item["text"] for item in pack["risks_and_open_questions"]}
+    for line in _ACTION_LINE.findall(_section(body, "## Actions")):
+        if len(pack["open_commitments"]) >= _MAX_COMMITMENTS:
+            break
+        owner, due = "", ""
+        parts = [p.strip() for p in line.split("—")]
+        title = parts[0]
+        for part in parts[1:]:
+            if part.lower().startswith("owner:"):
+                owner = part.split(":", 1)[1].strip()
+            elif part.lower().startswith("due:"):
+                due = part.split(":", 1)[1].strip()
+        pack["open_commitments"].append({
+            "title": title[:300], "owner": owner[:120], "due": due[:60],
+            "from_meeting_id": mid,
+        })
+    for heading, kind in (("## Risks", "risk"),
+                          ("## Open questions", "open_question")):
+        for line in _ACTION_LINE.findall(_section(body, heading)):
+            if len(pack["risks_and_open_questions"]) >= _MAX_RISKS:
                 break
-            owner, due = "", ""
-            parts = [p.strip() for p in line.split("—")]
-            title = parts[0]
-            for part in parts[1:]:
-                if part.lower().startswith("owner:"):
-                    owner = part.split(":", 1)[1].strip()
-                elif part.lower().startswith("due:"):
-                    due = part.split(":", 1)[1].strip()
-            pack["open_commitments"].append({
-                "title": title[:300], "owner": owner[:120], "due": due[:60],
-                "from_meeting_id": mid,
+            text = line.strip()[:300]
+            if text in seen_risks:
+                continue  # the same risk carried across meetings, listed once
+            seen_risks.add(text)
+            pack["risks_and_open_questions"].append({
+                "text": text, "from_meeting_id": mid, "kind": kind,
             })
-    for heading in ("## Risks", "## Open questions"):
-        if heading.lower() in lowered:
-            for line in _ACTION_LINE.findall(excerpt.split(heading, 1)[-1]):
-                if len(pack["risks_and_open_questions"]) >= _MAX_RISKS:
-                    break
-                pack["risks_and_open_questions"].append({
-                    "text": line.strip()[:300], "from_meeting_id": mid,
-                    "kind": "risk" if heading == "## Risks" else "open_question",
-                })
 
 
 def _points(pack: dict) -> list[dict[str, str]]:

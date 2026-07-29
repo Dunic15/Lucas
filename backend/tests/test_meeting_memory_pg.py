@@ -478,6 +478,60 @@ def test_premeeting_pack_combines_history_and_company_documents(cp):
     assert pack["freshness"]["generated_at"] > 0
 
 
+def test_pack_sections_do_not_bleed_into_each_other(cp):
+    """Each distilled section is harvested from its OWN block: risks must not
+    arrive as commitments, and a risk repeated across meetings is listed once."""
+    org = _org(cp, "mm-sections")
+    _index(org, "m-s1", _artifact(visibility="org"), _meta())
+    _index(org, "m-s2", _artifact(visibility="org",
+                                  actions=[{"title": "Second action",
+                                            "owner": "Bo", "due": ""}]),
+           _meta(title="Follow-up"))
+    pack = premeeting_context.build(
+        org, principal_ref="u_x",
+        event={"title": "Acme weekly sync", "customer": "Acme"},
+    )
+    commitments = [c["title"] for c in pack["open_commitments"]]
+    assert "Send the ACMEWIDGET DPA" in commitments
+    # risk / open-question text must never be filed as a commitment
+    assert not any("security review" in c for c in commitments)
+    assert not any("DPA signature outstanding" == c for c in commitments)
+    risks = pack["risks_and_open_questions"]
+    texts = [r["text"] for r in risks]
+    assert len(texts) == len(set(texts)), "same risk listed twice"
+    kinds = {r["text"]: r["kind"] for r in risks}
+    assert kinds.get("ACMEWIDGET security review not booked") == "risk"
+    assert kinds.get("DPA signature outstanding") == "open_question"
+
+
+def test_company_knowledge_excludes_meeting_bodies(cp):
+    """Meeting bodies are materialized as knowledge documents; they belong in
+    'previously', not in 'company knowledge'."""
+    org = _org(cp, "mm-docsonly")
+    _index(org, "m-doc", _artifact(visibility="org"), _meta())
+    doc_connector = dal.ensure_connector(org, "upload", "Docs")
+    body = "# ACMEWIDGET policy\n\nDiscounts need finance approval.\n"
+    env = {"external_id": "doc-only", "kind": "document",
+           "title": "Policy", "body_text": body, "mime": "text/markdown",
+           "acl_mode": "org_default", "acl": [], "deleted": False,
+           "checksum": body_checksum(body), "transform": "test@1"}
+    dal.commit_batch(org, doc_connector["id"],
+                     df_sync.materialize_bodies(org, doc_connector, [env]),
+                     new_cursor=None)
+    pack = premeeting_context.build(
+        org, principal_ref="u_x",
+        event={"title": "Acme sync", "agenda": "ACMEWIDGET", "customer": "Acme"},
+    )
+    assert pack["previously"], "the meeting still belongs in previously"
+    sources = [k["source"] for k in pack["company_knowledge"]]
+    assert sources, "the real document should be present"
+    assert not any(s.startswith("m-doc") for s in sources)
+    doc_cites = [c for c in pack["citations"] if c["kind"] == "document"]
+    assert doc_cites and not any(
+        str(c["title"]).startswith("m-doc") for c in doc_cites
+    )
+
+
 def test_premeeting_pack_excludes_meetings_the_requester_cannot_read(cp):
     org = _org(cp, "mm-packacl")
     _index(org, "m-hidden",
