@@ -225,6 +225,10 @@ async def dashboard_openclaw_chat(request: Request) -> JSONResponse:
             return JSONResponse(
                 {"error": "unknown chat for this workspace"}, status_code=404
             )
+    # The authenticated dashboard user scopes permission-safe cross-meeting
+    # recall (Meeting Memory). "" ⇒ org-visible meetings only (default-deny).
+    user = auth.current_user(request) or {}
+    principal_ref = str(user.get("user_id") or "")
     result = await run_in_threadpool(
         runtime.chat,
         org,
@@ -232,6 +236,7 @@ async def dashboard_openclaw_chat(request: Request) -> JSONResponse:
         meeting_id=meeting_id,
         history=history,
         thread_id=thread_id,
+        principal_ref=principal_ref,
     )
     if thread_id and result.get("ok"):
         await run_in_threadpool(

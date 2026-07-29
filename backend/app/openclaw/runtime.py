@@ -2575,6 +2575,49 @@ def _safe_meeting_context(org_id: str, meeting_id: str = "") -> list[dict]:
     return contexts
 
 
+def _historical_meeting_context(
+    org_id: str, query: str, *, principal_ref: str = "",
+    exclude_meeting_id: str = "", limit: int = 5,
+) -> list[dict]:
+    """Authorized cross-meeting recall for a chat turn — distilled, cited, and
+    permission-safe (Meeting Memory's default-deny search). Lets Chat answer
+    across past meetings, not only the one selected in the thread. Empty (and
+    the key omitted from context) when Meeting Memory is off, so chat behaviour
+    is byte-identical with the flag disabled. Never carries a transcript."""
+    from ..meeting import meeting_memory
+
+    if not meeting_memory.enabled():
+        return []
+    try:
+        results = meeting_memory.search(
+            org_id, query, principal_ref=principal_ref, limit=limit + 1
+        )
+    except Exception:  # noqa: BLE001 — chat never fails on recall
+        return []
+    out: list[dict] = []
+    for r in results:
+        if str(r.get("meeting_id")) == str(exclude_meeting_id):
+            continue
+        out.append({
+            "meeting_id": str(r.get("meeting_id") or ""),
+            "title": str(r.get("title") or ""),
+            "date": meeting_memory.format_date(r.get("meeting_date")),
+            "citation": meeting_memory.citation(r),
+            "summary": str(r.get("summary") or "")[:2000],
+            "decisions": [str(d)[:400] for d in (r.get("decisions") or [])[:20]],
+            "actions": [
+                {"action": str(a.get("action") or "")[:300],
+                 "owner": str(a.get("owner") or "")[:120],
+                 "deadline": str(a.get("deadline") or "")[:100]}
+                for a in (r.get("actions") or [])[:20]
+                if isinstance(a, dict)
+            ],
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _catalog_context(org_id: str) -> tuple[list[str], dict[str, list[dict]], list[dict]]:
     """One pass over this org's real connections → (apps, schemas, entries).
 
@@ -2792,8 +2835,13 @@ def chat(
     meeting_id: str = "",
     history: list[dict] | None = None,
     thread_id: str = "",
+    principal_ref: str = "",
 ) -> dict:
-    """Answer product/meeting questions or propose a reviewable workflow."""
+    """Answer product/meeting questions or propose a reviewable workflow.
+
+    ``principal_ref`` is the authenticated dashboard user; it scopes the
+    permission-safe cross-meeting recall (Meeting Memory) to what that user is
+    allowed to see. Empty ⇒ org-visible meetings only (default-deny)."""
     org = str(org_id or "").strip()
     text = str(message or "").strip()
     if not gates.experiment_enabled_for_org(org):
@@ -2847,6 +2895,12 @@ def chat(
         if draft is not None:
             entry["workflow"] = draft
         recent_chat.append(entry)
+    # Authorized cross-meeting recall (Meeting Memory) — Chat can answer across
+    # past meetings, not only the one selected in the thread. Added only when
+    # non-empty (feature on + a hit), keeping the flag-off context byte-identical.
+    related_meetings = _historical_meeting_context(
+        org, text, principal_ref=principal_ref, exclude_meeting_id=meeting_id
+    )
     context = {
         "selected_meeting_id": str(meeting_id or "")[:200],
         "meetings": _safe_meeting_context(org, meeting_id),
@@ -2907,6 +2961,11 @@ def chat(
         "user_message": text[:6000],
         "raw_transcript_included": False,
     }
+    # Cross-meeting recall: distilled + cited summaries/decisions/actions from
+    # OTHER authorized past meetings (never transcripts). Present only when the
+    # feature is on and there was a hit, so the flag-off context is unchanged.
+    if related_meetings:
+        context["related_meetings"] = related_meetings
     instructions = (
         "You are OpenClaw inside Laura's dashboard. Reply in the user's language. "
         "You can: answer questions about the supplied meeting summaries and decisions; "
