@@ -91,10 +91,11 @@ _NATIVE_ROW_SLUGS = frozenset(
 def org_connected_apps(org_id: str) -> dict[str, list[str]]:
     """The ORG's connected-app catalog: ``{app_slug: [executable verbs]}``.
 
-    Derived from the EXECUTION PLANE itself — the native adapters this org has
-    connected, plus every typed action ``pipedream_executor`` maps for an app
-    the org actually linked — which is the same truth
-    ``openclaw.runtime._connected_action_context`` sends to OpenClaw.
+    Sourced from ``app_policy.catalog`` — the ONE place that turns "which
+    accounts did this org actually connect" into a capability answer. The
+    avatar's self-knowledge, OpenClaw Chat and the proxy executor therefore
+    read the same catalog, so none of them can claim a capability another one
+    would refuse.
 
     This exists because the avatar's self-knowledge used to come from somewhere
     else entirely: a hardcoded Gmail/Calendar/Drive/Asana list plus whichever
@@ -103,86 +104,53 @@ def org_connected_apps(org_id: str) -> dict[str, list[str]]:
     avatar, which then told the room Notion was not connected (live
     2026-07-29). One catalog, one answer.
 
+    The verbs are derived from the executor's own mapper plus the app registry,
+    so nothing here needs Pipedream's separately priced pre-built action
+    catalog. An app the org connected but for which Laura has no registered API
+    surface still appears with no verbs — present and honestly bounded, never
+    denied.
+
     SYNC + best-effort: called once at session start (never on the live path),
     and any failure yields ``{}`` so a join is never blocked by a catalog GET.
     """
     org = str(org_id or "").strip()
     if not org:
         return {}
-    catalog: dict[str, list[str]] = {}
-
-    def _add(slug: str, verbs: list[str]) -> None:
-        key = str(slug or "").strip().lower()
-        if not key:
-            return
-        have = catalog.setdefault(key, [])
-        for v in verbs:
-            if v and v not in have:
-                have.append(v)
-
     try:
-        from .. import native_runtime, pipedream_executor
+        from ..actions import app_policy
 
-        # 1. Native adapters this org has actually connected.
-        try:
-            for item in native_runtime.catalog(org):
-                if not item.get("connected"):
-                    continue
-                action_type = str(item.get("type") or "")
-                slug = pipedream_executor.app_for_type(action_type)
-                if slug and action_type:
-                    _add(slug, [action_type.split(".", 1)[-1].replace("_", " ")])
-        except Exception:  # noqa: BLE001 — a native probe never blocks the rest
-            pass
-
-        # 2. Every app the Pipedream executor maps. ONE accounts listing
-        #    answers "is it connected?" for all of them — this runs at join,
-        #    and a per-app probe would be one HTTP round trip each. Per-app
-        #    probing stays as the fallback when the listing is unavailable
-        #    (it is separately cached, so it is not a second full cost).
-        if pipedream_executor.enabled():
-            by_app: dict[str, list[str]] = {}
-            for action_type in pipedream_executor.action_types():
-                slug = pipedream_executor.app_for_type(action_type)
-                if not slug or slug == "*":
-                    continue
-                by_app.setdefault(slug, []).append(action_type)
-
-            linked: set[str] | None = None
-            try:
-                from .. import pipedream_client
-
-                linked = {
-                    str(a.get("app") or "")
-                    for a in pipedream_client.list_accounts(org)
-                    if isinstance(a, dict) and a.get("id") and a.get("healthy", True)
-                }
-            except Exception:  # noqa: BLE001 — fall back to per-app probes
-                linked = None
-
-            for slug, types in by_app.items():
-                try:
-                    connected = (
-                        slug in linked if linked is not None
-                        else pipedream_executor.app_connected(org, slug)
-                    )
-                except Exception:  # noqa: BLE001 — one bad probe, not the set
-                    continue
-                if connected:
-                    _add(
-                        slug,
-                        sorted(
-                            t.split(".", 1)[-1].replace("_", " ") for t in types
-                        ),
-                    )
-
-            # 3. Linked accounts with no mapped typed action of their own: the
-            #    org connected them, so name them honestly (proxy/long-tail).
-            for slug in linked or ():
-                _add(slug, [])
+        return {
+            entry["slug"]: [
+                action_type.split(".", 1)[-1].replace("_", " ")
+                for action_type in entry["deterministic_types"]
+            ]
+            for entry in app_policy.catalog(org)
+            if entry.get("slug")
+        }
     except Exception:  # noqa: BLE001 — never block a join over the catalog
         return {}
-    return catalog
+
+
+def org_connected_app_limits(org_id: str) -> dict[str, str]:
+    """``{slug: limit}`` for connected apps whose capability is bounded.
+
+    Only apps with a REAL limit appear, so the brief stays quiet about the
+    ordinary case and the avatar can name what it cannot do instead of
+    promising a generic API call it would then fail to make.
+    """
+    org = str(org_id or "").strip()
+    if not org:
+        return {}
+    try:
+        from ..actions import app_policy
+
+        return {
+            entry["slug"]: entry["limit"]
+            for entry in app_policy.catalog(org)
+            if entry.get("slug") and entry.get("limit")
+        }
+    except Exception:  # noqa: BLE001 — never block a join over the catalog
+        return {}
 
 
 def _connected_app_buckets(
@@ -200,6 +168,7 @@ def _connected_app_buckets(
     from .. import store
 
     avatar_id = str(getattr(avatar, "id", "") or "")
+    limits = org_connected_app_limits(org_id)
     enabled_apps: list[dict] = []
     org_available: list[str] = []
     for slug, verbs in sorted(org_connected_apps(org_id).items()):
@@ -212,9 +181,15 @@ def _connected_app_buckets(
         except Exception:  # noqa: BLE001 — a toggle read never blocks the join
             allowed = True
         if allowed:
-            enabled_apps.append(
-                {"slug": slug, "actions": list(verbs or family_verbs(slug))[:4]}
-            )
+            entry = {
+                "slug": slug,
+                "actions": list(verbs or family_verbs(slug))[:4],
+            }
+            # Only a REAL limit is carried. An empty one says nothing and stays
+            # out of the brief, which rides in every live turn under a cap.
+            if limits.get(slug):
+                entry["limit"] = limits[slug]
+            enabled_apps.append(entry)
         elif slug not in org_available:
             org_available.append(slug)
     return enabled_apps[:6], org_available[:6]
