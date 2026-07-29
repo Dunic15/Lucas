@@ -605,7 +605,7 @@ async def _start_avatar_session(
     # network), so tools.specs_for on the live path never touches config. With
     # both flags off (the demo, existing deployments) no new tool is offered.
     from .. import datafoundation, knowledge
-    from . import meeting_memory
+    from . import meeting_memory, pre_meeting  # noqa: F401 (pre_meeting used below)
 
     session.company_brain_live = bool(
         datafoundation.enabled() or knowledge.enabled()
@@ -679,6 +679,20 @@ async def _start_avatar_session(
             f"[Owner's calendar — upcoming meetings]\n{cal_brief}\n\n"
             + (session.memory_brief or "")
         )
+    # Pre-meeting context assembler (flag-gated, off by default). One more
+    # bounded, best-effort read folded into the SAME memory-brief channel:
+    # related prior meetings, open decisions, and ACL-authorized Brain docs,
+    # under a strict wall-clock budget. It ALWAYS fails open to "" (via _quiet +
+    # its own guards), so a Brain/DB/network failure never blocks the join or
+    # touches the live contract. Prepended so it leads the brief.
+    if pre_meeting.enabled():
+        pre_ctx = await _quiet(run_in_threadpool(
+            pre_meeting.assemble, org_id, avatar.id,
+            meeting_url=meeting_url, calendar_brief=cal_brief or "",
+            principal_id=getattr(session, "principal_id", ""),
+        ))
+        if pre_ctx:
+            session.memory_brief = pre_ctx + "\n\n" + (session.memory_brief or "")
     if settings.autopilot_brief and session.memory_brief:
         # Autopilot: mail/Slack "what's still open from last time" to the
         # owner as the bot joins. Fire-and-forget — never delays the join.
