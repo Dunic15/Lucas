@@ -3221,7 +3221,7 @@
     if(s==="approved") return "Approved — starting now.";
     if(s==="executing") return "Running now.";
     if(s==="done") return "Completed — the receipt links to what was created.";
-    if(s==="failed") return "It couldn’t complete — open details for the receipt.";
+    if(s==="failed") return "It couldn’t complete. Review the saved action before approving a retry.";
     if(s==="rejected") return "Rejected — it will not run.";
     if(s==="withdrawn") return "Withdrawn — preserved in history and it cannot run.";
     return "Needs more details to approve.";
@@ -3295,6 +3295,11 @@
               (a.typed?'<button class="btn" data-acdetailsbtn="'+esc(a.action_id)+'">Add details</button>':'')+
               '<button class="btn danger" data-withdraw="'+esc(a.action_id)+'">Discard</button>';
         }
+      } else if(s==="failed"&&a.action_id&&a.executable!==false){
+        // A failed receipt remains historical, but it is not a dead end. The
+        // normal review door reloads the current canonical spec and still
+        // requires an explicit confirmation before OpenClaw retries it.
+        ctl='<button class="btn primary" data-approve="'+esc(a.action_id)+'">Review &amp; retry</button>';
       } else if(s==="approved"&&!trackedOnly(a)&&a.action_id){
         ctl='<button class="btn danger" data-withdraw="'+esc(a.action_id)+'">Withdraw…</button>';
       } else if(s==="done"&&a.execution){
